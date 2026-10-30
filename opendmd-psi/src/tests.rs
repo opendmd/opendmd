@@ -2867,6 +2867,64 @@ fn the_held_picture_draws_the_frames_drawn_from_nothing() {
     }
 }
 
+/// Racing the beam through a `rate` formula: the slow layers held, the
+/// fast part raced over them in pair order — the bytes and changed groups
+/// of [`render_held`]'s frame, each pair told once, in order, while the
+/// rows still to come hold the frame before.
+#[test]
+fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
+    let mut srcs: alloc::vec::Vec<(String, String)> = [
+        "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
+        "loop 60\nlayer rate 50 { gray(digit(minute % 10, floor(px/8) % 8, ty % 8, bold) + b*0) }\nlayer min { hsv(x + t/10, 1, 1) }",
+        "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, y, t, 0.5) }",
+    ]
+    .iter()
+    .map(|s| (String::from("sketch"), String::from(*s)))
+    .collect();
+    srcs.extend(every_formula().into_iter().filter(|(_, src)| compile(src).is_ok_and(|p| p.rate().is_some())));
+    let mut n = 0;
+    for (name, src) in srcs {
+        let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        let (mut held_a, mut held_b) = (Held::try_boxed().unwrap(), Held::try_boxed().unwrap());
+        let (mut sa, mut sb) = (Scratch::<128>::new(), Scratch::<128>::new());
+        let mut want_w = alloc::vec![0u32; W * H * 3 / 4];
+        let mut got_w = alloc::vec![0u32; W * H * 3 / 4];
+        let mut i = golden::inputs(0);
+        for step in 0..24u64 {
+            let ms = step * 20 + (step % 5) * 40;
+            i.set_ms(&p, ms);
+            i.second = ((ms / 1000) % 60) as u8;
+            let want = words_as_bytes(&mut want_w);
+            let before = want.to_vec();
+            let mut want_ch = [0u32; H];
+            render_held::<128>(&p, &mut sa, None, None, &mut held_a, &i, &OWN, want, Some(&mut want_ch));
+            let want = want.to_vec();
+            let got = words_as_bytes(&mut got_w);
+            assert_eq!(&got[..], &before[..]);
+            held_b.update::<128>(&p, &mut sb, &i, &OWN);
+            let mut got_ch = [0u32; H];
+            let mut told = alloc::vec::Vec::new();
+            let mut sink = |q: usize, out: &[u8], a: u32, b: u32| {
+                let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
+                for r in 0..H / 2 {
+                    let pic = if q != BEAM_START && r <= q { &want[..] } else { &before[..] };
+                    assert!(row(r, out) == row(r, pic) && row(r + H / 2, out) == row(r + H / 2, pic),
+                        "{name} at {ms} ms: pair {r} when pair {q} was told");
+                }
+                told.push((q, a, b));
+            };
+            render_rows_beam::<128>(&p, &mut sb, None, None, &i, &OWN, Some(held_b.picture()), got, Some(&mut got_ch), &mut sink);
+            assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
+            assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
+            let want_told: alloc::vec::Vec<_> =
+                [(BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|q| (q, want_ch[q], want_ch[q + H / 2]))).collect();
+            assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
+            n += 1;
+        }
+    }
+    assert!(n >= 72, "only {n} frames raced");
+}
+
 /// The errors (E941-E947), and `rate` inside a part left out.
 #[test]
 fn rate_error_messages() {
@@ -3117,7 +3175,7 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
                         }
                         told.push((p, a, b));
                     };
-                    render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s2.as_deref_mut(), &inputs, &OWN, got, Some(&mut got_ch), &mut sink);
+                    render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s2.as_deref_mut(), &inputs, &OWN, None, got, Some(&mut got_ch), &mut sink);
                     assert_eq!(&got[..], &want[..], "{name} at {ms} ms, still {still_on} pass {pass}");
                     assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
                     let want_told: Vec<_> =
@@ -3132,7 +3190,7 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
             let mut got = vec![0u8; W * H * 3];
             let mut told = 0;
             let mut started = false;
-            render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, &mut got, None, &mut |p, _, a, b| {
+            render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, None, &mut got, None, &mut |p, _, a, b| {
                 if p == BEAM_START {
                     assert!(!started && told == 0);
                     started = true;

@@ -274,7 +274,7 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
-/// Racing the beam (`formula_beam`): may this tick's Formula frame write
+/// Racing the beam: may this tick's Formula frame write
 /// its pairs as it draws them? Not with the panel dark, under the glow or
 /// a formula look, nor while a transition runs. (Out of line: once a tick,
 /// and `main` is big enough.)
@@ -404,7 +404,6 @@ fn main() -> Result<()> {
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
     panel.set_sync(settings.panel_sync, settings.panel_split);
-    panel.set_beam(settings.formula_beam);
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_jit(settings.formula_jit);
     clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -930,7 +929,6 @@ fn main() -> Result<()> {
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
                             panel.set_sync(settings.panel_sync, settings.panel_split);
-                            panel.set_beam(settings.formula_beam);
                             #[cfg(feature = "psi")]
                             opendmd_core::fx_psi::set_jit(settings.formula_jit);
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
@@ -1537,12 +1535,12 @@ fn main() -> Result<()> {
             None
         };
         probe::tick_due(due_in_us);
-        // The file's frame this tick is for (its successor's due time less
-        // this gives a fast source's frame delay, for `scan::Budget`).
+        // The file's frame this tick is for (the probe's start time).
+        #[cfg(feature = "psi-probe")]
         let due_before = eng.frame_due();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
-        // Racing the beam (`formula_beam`): a Formula's frame this tick may
+        // Racing the beam: a Formula's frame this tick may
         // write its pairs as it draws them — not under the glow or a
         // formula look (each composites the whole picture) nor while a
         // transition runs (its steps are paced whole); `fx_psi` also
@@ -1602,21 +1600,16 @@ fn main() -> Result<()> {
                 let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 // With `panel_sync` the blit may wait for the scan, as
-                // long as that leaves the next frame on time — or, for one
-                // of a fast source's frames on its schedule (an effect's
-                // 10 ms), a little past it (`scan::Budget`: landed on a
-                // refresh boundary, not torn).
+                // long as that leaves the next frame on time (`scan::Budget`).
+                // (A raced Formula frame wrote its pairs in the tick: the
+                // canvas is clean and the blit returns at once.)
                 let decoded = (playing.ordinal, playing.frame) != published;
                 let blit_start = Instant::now();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
                     .saturating_sub(us(tick_start.elapsed()));
-                // (Only an effect's: the engine keeps its schedule through
-                // a late tick; a GIF's would slow down.)
+                let blit_px = panel.blit_within(pic, Budget::frame(left_us));
+                #[cfg(feature = "psi-probe")]
                 let fx = opendmd_core::synth::is_formula(&playing.path);
-                let delay_us = due_before
-                    .filter(|_| fx && decoded && !transitioning && !is_new)
-                    .map(|d| us(next_frame_at.saturating_sub(d)));
-                let blit_px = panel.blit_within(pic, Budget::frame(left_us, delay_us));
                 // The blit's own time: a wait for the scan (`panel_sync`,
                 // inside the frame's slack) is not part of it.
                 let blit_us = us(blit_start.elapsed()).saturating_sub(panel.last_wait_us());
@@ -1704,17 +1697,9 @@ fn main() -> Result<()> {
                 #[cfg(feature = "psi-probe")]
                 if (fx || look_on) && decoded && !transitioning && !is_new {
                     let wait = panel.last_wait_us();
-                    let excused = now > deadline
-                        && panel.last_stretched()
-                        && now.saturating_sub(Duration::from_micros(u64::from(wait))) <= deadline;
                     let start = due_before.map_or(0, |d| us(tick_now.saturating_sub(d)));
                     let post = us(blit_start.elapsed()).saturating_sub(blit_us + wait);
-                    psi_probe::play::note(
-                        [wake_us, pre_us, start, tick_us, blit_us, wait, post, blit_px],
-                        now > deadline && !excused,
-                        excused,
-                        panel.last_stretched(),
-                    );
+                    psi_probe::play::note([wake_us, pre_us, start, tick_us, blit_us, wait, post, blit_px], now > deadline);
                 }
                 let glow_between = std::mem::take(&mut glow_us);
                 // A dot fading (glow), or the formula look's own frame:
@@ -1731,20 +1716,6 @@ fn main() -> Result<()> {
                 match next_frame_at.checked_sub(now) {
                     Some(remaining) => glow_wait.map_or(remaining, |w| remaining.min(w)),
                     None if now <= deadline => config::CATCHUP_SLEEP,
-                    // Late only because the blit stretched its wait for
-                    // the scan on purpose (`scan::Budget`): not a miss
-                    // (`scan` `late`), and no catch-up sleep: the blit
-                    // usually slept through most of its wait (a tick at
-                    // a time, spinning only the last stretch), and the
-                    // next frame starts late enough already.
-                    None if panel.last_stretched()
-                        && now.saturating_sub(Duration::from_micros(u64::from(
-                            panel.last_wait_us(),
-                        ))) <= deadline =>
-                    {
-                        panel.note_late();
-                        Duration::ZERO
-                    }
                     None => {
                         // Already late. This is the acceptance metric: count it
                         // and remember the worst, then yield a tick so the
@@ -1811,9 +1782,9 @@ fn main() -> Result<()> {
                     look_us += us(t.elapsed());
                 }
                 // (Synchronised, it may wait for the scan as long as that
-                // leaves the next frame on time; never stretched.)
+                // leaves the next frame on time.)
                 let budget = eng.frame_due().map_or(Budget::NONE, |d| {
-                    Budget::frame(us(d.saturating_sub(epoch.elapsed())), None)
+                    Budget::frame(us(d.saturating_sub(epoch.elapsed())))
                 });
                 glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)), budget);
                 // A wake before the file's frame (a glow step's) sleeps no

@@ -69,8 +69,6 @@ const KEY_PANEL_SYNC: &str = "panel_sync";
 /// With it, the bottom half a refresh after the top (`Panel::set_sync`), 0/1.
 const KEY_PANEL_SPLIT: &str = "panel_split";
 const KEY_FORMULA_JIT: &str = "formula_jit";
-/// Racing the beam for Formulas (`Panel::set_beam`, the spike), 0/1.
-const KEY_FORMULA_BEAM: &str = "formula_beam";
 /// How long a Formula sent to the panel stays (`FormulaKeep::name`).
 const KEY_FORMULA_KEEP: &str = "formula_keep";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
@@ -180,11 +178,6 @@ pub struct Settings {
     /// The narrow JIT for Formulas (`opendmd_core::fx_psi::set_jit`): on by
     /// default; off, every Formula plays on the VM. The kill switch.
     pub formula_jit: bool,
-    /// Racing the beam for Formulas (`Panel::set_beam`; console-lessons
-    /// §2.6, the spike): a Formula's frames drawn in the panel's pair
-    /// order and written behind the scan, on its refresh grid. Off by
-    /// default.
-    pub formula_beam: bool,
     /// How long a Formula sent to the panel (`/api/play`) stays on it: one
     /// turn (the default), a minute, five, or until something else plays.
     pub formula_keep: FormulaKeep,
@@ -251,7 +244,6 @@ impl Default for Settings {
             panel_sync: true,
             panel_split: true,
             formula_jit: true,
-            formula_beam: false,
             formula_keep: FormulaKeep::Turn,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
@@ -444,13 +436,6 @@ impl Config {
                 .flatten()
                 .map(|v| v != 0)
                 .unwrap_or(d.formula_jit),
-            formula_beam: self
-                .nvs
-                .get_u8(KEY_FORMULA_BEAM)
-                .ok()
-                .flatten()
-                .map(|v| v != 0)
-                .unwrap_or(d.formula_beam),
             formula_keep: self
                 .get_string(KEY_FORMULA_KEEP)
                 .and_then(|s| FormulaKeep::from_name(&s))
@@ -504,7 +489,6 @@ impl Config {
         self.nvs.set_u8(KEY_PANEL_SYNC, u8::from(s.panel_sync))?;
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;
-        self.nvs.set_u8(KEY_FORMULA_BEAM, u8::from(s.formula_beam))?;
         self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;

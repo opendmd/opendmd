@@ -116,9 +116,6 @@ pub struct Panel {
     sync: ScanSync,
     /// What the last blit waited for the scan, µs.
     last_wait_us: u32,
-    /// The last blit's waits ran past its budget's `fit_us` on purpose
-    /// ([`Budget`]: a fast source's frame kept on a refresh boundary).
-    last_stretched: bool,
 }
 
 /// The scan, for refresh-synchronised blits ([`opendmd_core::scan`]):
@@ -139,9 +136,7 @@ struct ScanSync {
 /// seam (a row pair first shown complete a refresh after another) and the
 /// ones that wrote a pair while it was being scanned; with `panel_sync`
 /// on, how many waited, for how long in all (µs, wrapping) and at most,
-/// and how many could not (no clear start within the frame's budget);
-/// how many stretched past the next frame's time on purpose ([`Budget`])
-/// and how many frames were late only for that (not deadline misses).
+/// and how many could not (no clear start within the frame's budget).
 /// Relaxed atomics: the main
 /// task writes them, `GET /api/status` reads them.
 mod counters {
@@ -157,8 +152,6 @@ mod counters {
     pub static SPLIT_OK: AtomicU32 = AtomicU32::new(0);
     pub static UNSPLIT: AtomicU32 = AtomicU32::new(0);
     pub static SPIN_US: AtomicU32 = AtomicU32::new(0);
-    pub static STRETCHED: AtomicU32 = AtomicU32::new(0);
-    pub static LATE: AtomicU32 = AtomicU32::new(0);
     pub static SPLIT_ON: AtomicU32 = AtomicU32::new(0);
     pub static ROW_US: AtomicU32 = AtomicU32::new(0);
     pub static SYNC_ON: AtomicU32 = AtomicU32::new(0);
@@ -167,7 +160,7 @@ mod counters {
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",
-/// "spin_us","stretched","late","retimed","beam"}`
+/// "spin_us","retimed","beam"}`
 /// (counts since boot; `beam` [`beam::json`]).
 pub fn scan_json() -> String {
     use counters::*;
@@ -176,7 +169,7 @@ pub fn scan_json() -> String {
         return "null".into();
     }
     format!(
-        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{},"retimed":{},"beam":{}}}"#,
+        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"retimed":{},"beam":{}}}"#,
         SYNC_ON.load(Relaxed) != 0,
         BLITS.load(Relaxed),
         TORN.load(Relaxed),
@@ -190,8 +183,6 @@ pub fn scan_json() -> String {
         SPLIT_OK.load(Relaxed),
         UNSPLIT.load(Relaxed),
         SPIN_US.load(Relaxed),
-        STRETCHED.load(Relaxed),
-        LATE.load(Relaxed),
         opendmd_core::engine::FX_RETIMED.load(Relaxed),
         beam::json(),
     )
@@ -297,7 +288,6 @@ impl Panel {
             repaint: false,
             glow_stats: GlowStats::default(),
             last_wait_us: 0,
-            last_stretched: false,
             sync: ScanSync {
                 on: true,
                 split: true,
@@ -309,9 +299,26 @@ impl Panel {
             },
         };
         counters::ROW_US.store(panel.sync.row_us, Relaxed);
+        panel.race_formulas();
         panel.set_brightness(cfg.brightness);
         panel.clear();
         Ok(panel)
+    }
+
+    /// Racing the beam (console-lessons §2.6, §8): the way Formulas play,
+    /// the player's hooks installed in `fx_psi` once the scan can be read
+    /// (else Formulas go up through the pacer as GIFs do).
+    #[inline(never)]
+    #[optimize(size)] // (boot: no frame runs it)
+    fn race_formulas(&mut self) {
+        beam::set(self.sync.row_us, self.look);
+        #[cfg(feature = "psi")]
+        opendmd_core::fx_psi::set_beam((self.sync.row_us > 0).then_some(opendmd_core::fx_psi::BeamHooks {
+            begin: beam::begin,
+            start: beam::start,
+            pair: beam::pair,
+            end: beam::end,
+        }));
     }
 
     /// Push what changed on the canvas into the panel's DMA buffer, then
@@ -346,10 +353,10 @@ impl Panel {
     /// a tick's sleep at a time and spinning only the last 200 µs (1.5 ms
     /// for the last pair). With `panel_split` the bottom rows follow a
     /// refresh later (up to ~16 ms in all), when that fits `budget`'s
-    /// `fit_us`. If the waits would run past the budget (with a fast
-    /// source's stretch, [`Budget::limit_us`]) it writes at once, as
-    /// unsynchronised; the wait is [`Panel::last_wait_us`], a stretch
-    /// [`Panel::last_stretched`]. The budget counts from the call (a glow
+    /// `fit_us`. If the waits would run past the budget it writes at once,
+    /// as unsynchronised; the wait is [`Panel::last_wait_us`]. (A
+    /// Formula's frames race the beam instead: [`beam`].) The budget
+    /// counts from the call (a glow
     /// step's work inside it comes out of it).
     #[inline(never)]
     pub fn blit_within(&mut self, canvas: &mut Canvas, budget: Budget) -> u32 {
@@ -418,8 +425,7 @@ impl Panel {
             }
         };
         canvas.dirty_mut().clear();
-        self.last_wait_us = waited.us;
-        self.last_stretched = waited.stretched;
+        self.last_wait_us = waited;
         pushed
     }
 
@@ -427,20 +433,6 @@ impl Panel {
     /// (part of its time; the rest is writing).
     pub fn last_wait_us(&self) -> u32 {
         self.last_wait_us
-    }
-
-    /// The last [`Panel::blit_within`] waited past its budget's `fit_us`
-    /// on purpose (a fast source's frame kept on a refresh boundary,
-    /// [`Budget`]).
-    pub fn last_stretched(&self) -> bool {
-        self.last_stretched
-    }
-
-    /// A frame was late only because its blit stretched (the main loop's
-    /// judgement: on time but for the wait): counted as `scan` `late`,
-    /// not as a deadline miss.
-    pub fn note_late(&self) {
-        counters::LATE.fetch_add(1, Relaxed);
     }
 
     /// The tint and the glow (`/api/config` `look`, `glow`). True when what
@@ -509,9 +501,8 @@ impl Panel {
                 budget,
                 start,
             ),
-            None => (0, Waited::default()),
+            None => (0, 0),
         };
-        let waited = waited.us;
         // The step's own cost: without the wait for the scan.
         let us = (t.elapsed().as_micros() as u32).saturating_sub(waited);
         let g = &mut self.glow_stats;
@@ -593,21 +584,6 @@ impl Panel {
         self.sync.split = split;
         counters::SPLIT_ON.store(u32::from(on && split), Relaxed);
         counters::SYNC_ON.store(u32::from(on), Relaxed);
-    }
-
-    /// Racing the beam for Formulas (`/api/config` `formula_beam`, the
-    /// spike; console-lessons §2.6): the player's hooks installed in
-    /// `fx_psi` (or taken out). Only with the scan readable.
-    pub fn set_beam(&mut self, on: bool) {
-        let on = on && self.sync.row_us > 0;
-        beam::set(on, self.sync.row_us, self.look);
-        #[cfg(feature = "psi")]
-        opendmd_core::fx_psi::set_beam(on.then_some(opendmd_core::fx_psi::BeamHooks {
-            begin: beam::begin,
-            start: beam::start,
-            pair: beam::pair,
-            end: beam::end,
-        }));
     }
 
     /// Whether a Formula's frame may be raced as far as the panel goes:
@@ -782,7 +758,7 @@ impl Panel {
 /// `sync.on` and a `budget` (counted from `start`, the clock when the
 /// blit began), each pair waits for the [`Pacer`] (the scan to leave its
 /// slot before the target refresh), unless the waits would run past the
-/// budget's limit (its `fit_us`, or for a fast source its stretch too).
+/// budget's `fit_us`.
 fn push(
     bytes: &[u8],
     map: &DirtyMap,
@@ -790,11 +766,11 @@ fn push(
     sync: &mut ScanSync,
     budget: Budget,
     start: u32,
-) -> (u32, Waited) {
+) -> (u32, u32) {
     debug_assert_eq!(bytes.len(), WIDTH * HEIGHT * 3);
     let rows = map.row_mask();
     if rows == 0 {
-        return (0, Waited::default());
+        return (0, 0);
     }
     const HALF: usize = HEIGHT / 2;
     let (top_rows, bottom_rows) = (rows & 0xFFFF, rows >> HALF);
@@ -803,27 +779,19 @@ fn push(
     let scan = sync.row_us > 0;
     // What is left of the budget now (a glow step may have spent some).
     let spent = now_us().wrapping_sub(start);
-    let cycle = sync.row_us * opendmd_core::scan::PAIRS as u32;
     let fit_us = budget.fit_us().saturating_sub(spent);
-    let limit_us = budget.limit_us(cycle).saturating_sub(spent);
     let plan = if !(scan && sync.on && budget.sync) {
         None
-    } else if limit_us > 0 {
-        pace_plan(pairs, tinted, sync.row_us, limit_us)
+    } else if fit_us > 0 {
+        pace_plan(pairs, tinted, sync.row_us, fit_us)
     } else {
         // A frame with no time left at all: not in budget either.
         counters::GAVE_UP.fetch_add(1, Relaxed);
         None
     };
-    // Past `fit_us`: a fast source's frame kept on a refresh boundary,
-    // the next frame late on purpose ([`Budget`]).
-    let stretched = plan.is_some_and(|(_, took)| took > fit_us);
-    if stretched {
-        counters::STRETCHED.fetch_add(1, Relaxed);
-    }
     let pacer = plan.map(|(p, _)| p);
     // Split: the top half now (for refresh T), the bottom half paced to
-    // T + 1 — if that still ends inside the budget (never stretched).
+    // T + 1 — if that still ends inside the budget.
     let bottom = pacer
         .filter(|_| sync.split && bottom_rows != 0)
         .and_then(|top| {
@@ -906,21 +874,7 @@ fn push(
     unsafe { hub75::hub75_flip() };
     #[cfg(feature = "probe")]
     crate::state::PIXELS_PUSHED.fetch_add(pushed, Relaxed);
-    (
-        pushed,
-        Waited {
-            us: waited,
-            stretched,
-        },
-    )
-}
-
-/// What a [`push`] spent waiting for the scan (µs), and whether that ran
-/// past its budget's `fit_us` on purpose.
-#[derive(Default, Clone, Copy, Debug)]
-struct Waited {
-    us: u32,
-    stretched: bool,
+    (pushed, waited)
 }
 
 /// The dirty pixels of row `y` alone (its half of the pair's DMA words),
@@ -1048,7 +1002,7 @@ fn pace(pacer: &Pacer, pair: usize, last: bool) -> u32 {
     end.wrapping_sub(t)
 }
 
-/// Racing the beam (`formula_beam`; console-lessons §2.6, §8;
+/// Racing the beam (console-lessons §2.6, §8;
 /// `opendmd_core::scan::Beam`): `fx_psi`'s hooks. A Formula's frame is
 /// drawn in the panel's pair order and each pair written here as soon as
 /// it is drawn, after the scan has left its slot in the refresh before the
@@ -1072,7 +1026,8 @@ mod beam {
     const MARGIN_US: u32 = 30;
 
     struct State {
-        on: bool,
+        /// One row pair's scan time (0: the scan can't be read, nothing
+        /// raced).
         row_us: u32,
         look: Look,
         frame: Option<Frame>,
@@ -1104,7 +1059,6 @@ mod beam {
     unsafe impl Sync for Cell {}
 
     static STATE: Cell = Cell(UnsafeCell::new(State {
-        on: false,
         row_us: 0,
         look: Look::Colour,
         frame: None,
@@ -1140,26 +1094,23 @@ mod beam {
     static UNREAD: AtomicU32 = AtomicU32::new(0);
     static LATE_STARTS: AtomicU32 = AtomicU32::new(0);
     static RETARGETS: AtomicU32 = AtomicU32::new(0);
-    static ON: AtomicU32 = AtomicU32::new(0);
     static FIRST_US: AtomicU32 = AtomicU32::new(0);
     static LAST_US: AtomicU32 = AtomicU32::new(0);
 
-    pub(super) fn set(on: bool, row_us: u32, look: Look) {
+    pub(super) fn set(row_us: u32, look: Look) {
         let st = state();
-        st.on = on;
         st.row_us = row_us;
         st.look = look;
         st.frame = None;
         st.first_us = 0;
         st.last_us = 0;
-        ON.store(u32::from(on), Relaxed);
     }
 
     pub(super) fn set_look(look: Look) {
         state().look = look;
     }
 
-    /// `{"on","frames","late_frames","late_pairs","waits","pair_waits",
+    /// `{"frames","late_frames","late_pairs","waits","pair_waits",
     /// "wait_us","write_us","pair_us","first_us","last_us","unread"}`:
     /// raced frames since boot, those with a pair written past its window
     /// (`late_pairs` in all: each shows a refresh late, a seam for that
@@ -1174,8 +1125,7 @@ mod beam {
     /// scan could not be read.
     pub(super) fn json() -> String {
         format!(
-            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"late_starts":{},"retargets":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
-            ON.load(Relaxed) != 0,
+            r#"{{"frames":{},"late_frames":{},"late_pairs":{},"late_starts":{},"retargets":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
             FRAMES.load(Relaxed),
             LATE_FRAMES.load(Relaxed),
             LATE_PAIRS.load(Relaxed),
@@ -1215,7 +1165,7 @@ mod beam {
     pub(super) fn begin() -> Option<u32> {
         let st = state();
         st.frame = None;
-        if !st.on || st.row_us == 0 {
+        if st.row_us == 0 {
             return None;
         }
         if read_scan().is_none() {
