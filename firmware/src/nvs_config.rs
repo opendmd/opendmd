@@ -309,6 +309,8 @@ impl Config {
     }
 
     /// Read everything, falling back to [`Settings::default`] field by field.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn load(&self) -> Settings {
         let d = Settings::default();
         // A device without the key gets the default ceiling; a saved
@@ -452,6 +454,8 @@ impl Config {
 
     /// Write every field back. Cheap enough (NVS only rewrites what changed)
     /// and it keeps the "PUT replaces the config" semantics honest.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn save(&mut self, s: &Settings) -> anyhow::Result<()> {
         self.nvs.set_str(KEY_WIFI_SSID, &s.wifi_ssid)?;
         self.nvs.set_str(KEY_WIFI_PASS, &s.wifi_pass)?;

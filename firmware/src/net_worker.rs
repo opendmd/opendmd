@@ -204,6 +204,8 @@ fn save_wifi(
     }
 }
 
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn run(worker: NetWorker) {
     let NetWorker {
         modem,

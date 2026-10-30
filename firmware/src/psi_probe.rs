@@ -2071,8 +2071,13 @@ pub fn run(root: &str) {
     let start = Instant::now();
     let stack0 = stack_unused();
     if BEAM_ONLY {
+        psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+        let mut out = vec![0u8; psi::W * psi::H * 3];
+        beam::goldens(&mut out);
+        beam::split(&mut out);
         play::start(format!("{root}/{REPORT_NAME}"));
-        say!(info, "{DONE}: beam only (play lines from now), main stack {stack0} B unused, heap {} B free", heap());
+        say!(info, "{DONE}: beam (play lines from now), main stack {} B unused (was {stack0}), heap {} B free, {} ms in all",
+            stack_unused(), heap(), start.elapsed().as_millis());
         return;
     }
     if BUNDLED_ONLY {
@@ -2172,6 +2177,7 @@ pub fn run(root: &str) {
         "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
         if bad == 0 { " (bit-identical)" } else { "" }
     );
+    beam::goldens(&mut out);
 
     // The formula look as the main loop runs it (`FormulaLook::apply` over
     // a picture, every row: a frame of its own), with the heap its
@@ -2519,5 +2525,147 @@ pub(crate) mod jit2 {
         );
         *REPORT.lock().unwrap() = None;
         play::start(format!("{root}/{REPORT_NAME}"));
+    }
+}
+
+/// Racing the beam (console-c): the golden frames drawn in the panel's pair
+/// order (VM, and through kernels), each pair told once and in order, the
+/// same hashes as drawn at once; and the raced frame's split for the
+/// bundled Formulas (a frame at once against raced with a sink that only
+/// counts: the pair order's own cost; the writes are the play lines').
+pub(crate) mod beam {
+    use super::*;
+
+    /// A sink that checks the pairs come once and in order.
+    struct Order {
+        next: usize,
+        bad: bool,
+    }
+
+    impl Order {
+        fn tell(&mut self, p: usize) {
+            self.bad |= p != self.next;
+            self.next += 1;
+        }
+        fn done(&self) -> bool {
+            !self.bad && self.next == psi::H / 2
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn goldens(out: &mut [u8]) -> (u32, u32) {
+        let t = fx_psi::tables();
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut prog = zeroed::<psi::Program>();
+        let mut ink = psi::Ink::boxed();
+        let (mut ok, mut bad, mut kernels) = (0u32, 0u32, 0u32);
+        // (Raced frames have nothing under them: the goldens over a
+        // picture are not the player's.)
+        let plain = psi::golden::FRAMES.iter().map(|&(n, src, ms, want)| (n, src, ms, want, false));
+        let drawn = psi::golden::DRAWN.iter().filter(|g| !g.3).map(|&(n, src, ms, _, want)| (n, src, ms, want, true));
+        for (name, src, ms, want, draws) in plain.chain(drawn) {
+            if heap_low("raced golden frames") {
+                break;
+            }
+            if compile(src, &mut prog, true, true).is_err() {
+                bad += 1;
+                say!(error, "psi-probe: beam: golden {name}: does not compile");
+                continue;
+            }
+            let inputs = psi::golden::inputs(ms);
+            let mut order = Order { next: 0, bad: false };
+            psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
+                &mut |p, _, _, _| order.tell(p));
+            let mut check = |pass: &str, got: u64, told: bool| {
+                if got == want && told {
+                    ok += 1;
+                } else {
+                    bad += 1;
+                    say!(error, "psi-probe: beam: golden {name} ({pass}) at {ms} ms: {got:#018x}, host/wasm {want:#018x}, pairs {}",
+                        if told { "in order" } else { "out of order" });
+                }
+            };
+            check("VM", psi::golden::fnv(out), order.done());
+            #[cfg(feature = "jit")]
+            if let Ok(mut k) = psi::jit::emit(&prog) {
+                let mut order = Order { next: 0, bad: false };
+                k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
+                    &mut |p, _, _, _| order.tell(p));
+                check("kernel", psi::golden::fnv(out), order.done());
+                kernels += 1;
+            }
+        }
+        say!(info,
+            "psi-probe: beam: raced golden frames: {ok} match the host/wasm hashes, {bad} differ{} ({kernels} through kernels)",
+            if bad == 0 { " (bit-identical)" } else { "" }
+        );
+        (ok, bad)
+    }
+
+    /// p50 (µs) of `n` runs of `f`.
+    fn p50(n: usize, mut f: impl FnMut()) -> u32 {
+        let mut v: Vec<u32> = (0..n)
+            .map(|_| {
+                let t = Instant::now();
+                f();
+                t.elapsed().as_micros() as u32
+            })
+            .collect();
+        v.sort_unstable();
+        v[n / 2]
+    }
+
+    /// The bundled Formulas' frames at once against raced (a sink that
+    /// only counts): VM, and kernel where one is made; p50 µs of 15 frames
+    /// at moving times, each over the frame before (the compare runs).
+    #[inline(never)]
+    pub(crate) fn split(out: &mut [u8]) {
+        const NAMES: [&str; 6] = ["endless-road", "big-clock", "time-gate", "starfield", "matrix", "glitter"];
+        let t = fx_psi::tables();
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut prog = zeroed::<psi::Program>();
+        let mut ink = psi::Ink::boxed();
+        for name in NAMES {
+            if compile(bundled_src(name), &mut prog, true, true).is_err() {
+                say!(error, "psi-probe: beam: {name}: does not compile");
+                continue;
+            }
+            let draws = prog.draws();
+            let mut ms = 0u32;
+            let mut ch = [0u32; psi::H];
+            let mut at_once = |s: &mut psi::Scratch<128>, out: &mut [u8]| {
+                ms += 10;
+                psi::render_rows_changed::<128>(&prog, s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, None, u32::MAX, out, &mut ch);
+            };
+            let whole = p50(15, || at_once(&mut s, out));
+            let mut ms = 0u32;
+            let mut ch = [0u32; psi::H];
+            let mut told = 0u32;
+            let raced = p50(15, || {
+                ms += 10;
+                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
+                    Some(&mut ch), &mut |_, _, _, _| told += 1);
+            });
+            #[allow(unused_mut)]
+            let mut line = format!("psi-probe: beam: {name}: VM at once {whole} us, raced {raced} us");
+            #[cfg(feature = "jit")]
+            if let Ok(mut k) = psi::jit::emit(&prog) {
+                let mut ms = 0u32;
+                let kw = p50(15, || {
+                    ms += 10;
+                    k.render(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, None, u32::MAX, out, Some(&mut ch));
+                });
+                let mut ms = 0u32;
+                let kr = p50(15, || {
+                    ms += 10;
+                    k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
+                        Some(&mut ch), &mut |_, _, _, _| told += 1);
+                });
+                line.push_str(&format!("; kernel at once {kw} us, raced {kr} us"));
+            }
+            say!(info, "{line} ({told} pairs told)");
+        }
     }
 }

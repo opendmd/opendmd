@@ -36,6 +36,9 @@
 //! the worst lateness seen, and the sampled heap floor. If serving files costs
 //! the panel anything, those are where it shows.
 
+// Size, not speed, for code no frame runs (`#[optimize(size)]`: the
+// network worker, the HTTP status, boot, config; console-c).
+#![feature(optimize_attribute)]
 mod ahead;
 mod boot;
 mod cache;
@@ -269,6 +272,16 @@ pub fn still_gate(take: usize) -> bool {
         }
     }
     ok
+}
+
+/// Racing the beam (`formula_beam`): may this tick's Formula frame write
+/// its pairs as it draws them? Not with the panel dark, under the glow or
+/// a formula look, nor while a transition runs. (Out of line: once a tick,
+/// and `main` is big enough.)
+#[cfg(feature = "psi")]
+#[inline(never)]
+fn arm_beam(off: bool, panel: &panel::Panel, looks: &formula_look::Looks, eng: &opendmd_core::engine::Engine) {
+    opendmd_core::fx_psi::arm_beam(!off && panel.beam_ok() && !looks.is_on() && !eng.is_transitioning());
 }
 
 fn main() -> Result<()> {
@@ -1520,9 +1533,7 @@ fn main() -> Result<()> {
         // transition runs (its steps are paced whole); `fx_psi` also
         // leaves out a Formula's first frame and its JIT trial.
         #[cfg(feature = "psi")]
-        opendmd_core::fx_psi::arm_beam(
-            !off && panel.beam_ok() && !looks.is_on() && !eng.is_transitioning(),
-        );
+        arm_beam(off, &panel, &looks, eng);
         let outcome = if off {
             TickOutcome::Idle
         } else {

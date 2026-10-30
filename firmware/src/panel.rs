@@ -1047,7 +1047,7 @@ fn pace(pacer: &Pacer, pair: usize, last: bool) -> u32 {
     end.wrapping_sub(t)
 }
 
-/// Racing the beam (`formula_beam`, the spike; console-lessons §2.6;
+/// Racing the beam (`formula_beam`; console-lessons §2.6, §8;
 /// `opendmd_core::scan::Beam`): `fx_psi`'s hooks. A Formula's frame is
 /// drawn in the panel's pair order and each pair written here as soon as
 /// it is drawn, after the scan has left its slot in the refresh before the
@@ -1056,11 +1056,11 @@ fn pace(pacer: &Pacer, pair: usize, last: bool) -> u32 {
 /// (Without Formulas, `psi`, only its counters are read.)
 #[cfg_attr(not(feature = "psi"), allow(dead_code))]
 mod beam {
-    use super::{now_us, read_scan, write_pair, Beam, Judge, Look, Relaxed};
+    use super::{now_us, read_scan, write_pair, Beam, Look, Relaxed};
     use opendmd_core::canvas::DirtyMap;
     use opendmd_core::scan::PAIRS;
+    use std::cell::UnsafeCell;
     use std::sync::atomic::AtomicU32;
-    use std::sync::Mutex;
 
     /// What one pair's write is allowed in the plan (µs): ~74 measured for
     /// a full pair from flash, plus the scan reading's error (a descriptor,
@@ -1085,7 +1085,6 @@ mod beam {
     #[derive(Clone, Copy)]
     struct Frame {
         beam: Beam,
-        judge: Judge,
         err: i32,
         /// The clock when drawing started (after any wait for the window).
         start: u32,
@@ -1095,17 +1094,30 @@ mod beam {
         first: u32,
         last: u32,
         late: bool,
-        judged: bool,
     }
 
-    static STATE: Mutex<State> = Mutex::new(State {
+    /// The main task's alone (the display loop calls every function here
+    /// but [`json`], which reads only the atomics): no lock a pair.
+    struct Cell(UnsafeCell<State>);
+    // SAFETY: only the main task touches the state (see above).
+    unsafe impl Sync for Cell {}
+
+    static STATE: Cell = Cell(UnsafeCell::new(State {
         on: false,
         row_us: 0,
         look: Look::Colour,
         frame: None,
         first_us: 0,
         last_us: 0,
-    });
+    }));
+
+    /// The state. Main task only, and no two of these alive at once (each
+    /// function here takes it once and calls nothing that takes it).
+    #[allow(clippy::mut_from_ref)]
+    fn state() -> &'static mut State {
+        // SAFETY: as above.
+        unsafe { &mut *STATE.0.get() }
+    }
 
     fn mean(m: u32, v: u32) -> u32 {
         if m == 0 {
@@ -1119,17 +1131,18 @@ mod beam {
     static FRAMES: AtomicU32 = AtomicU32::new(0);
     static LATE_FRAMES: AtomicU32 = AtomicU32::new(0);
     static LATE_PAIRS: AtomicU32 = AtomicU32::new(0);
-    static TORN: AtomicU32 = AtomicU32::new(0);
-    static IN_PAIR: AtomicU32 = AtomicU32::new(0);
     static WAITS: AtomicU32 = AtomicU32::new(0);
     static PAIR_WAITS: AtomicU32 = AtomicU32::new(0);
     static WAIT_US: AtomicU32 = AtomicU32::new(0);
     static WRITE_TOTAL_US: AtomicU32 = AtomicU32::new(0);
+    static PAIR_TOTAL_US: AtomicU32 = AtomicU32::new(0);
     static UNREAD: AtomicU32 = AtomicU32::new(0);
     static ON: AtomicU32 = AtomicU32::new(0);
+    static FIRST_US: AtomicU32 = AtomicU32::new(0);
+    static LAST_US: AtomicU32 = AtomicU32::new(0);
 
     pub(super) fn set(on: bool, row_us: u32, look: Look) {
-        let mut st = STATE.lock().unwrap();
+        let st = state();
         st.on = on;
         st.row_us = row_us;
         st.look = look;
@@ -1140,36 +1153,40 @@ mod beam {
     }
 
     pub(super) fn set_look(look: Look) {
-        STATE.lock().unwrap().look = look;
+        state().look = look;
     }
 
-    /// `{"on","frames","late_frames","late_pairs","torn","in_pair","waits",
-    /// "pair_waits","wait_us","write_us","unread"}`: raced frames since
-    /// boot, those with a pair written past its window (`late_pairs` in
-    /// all), those the judge saw first shown over two refreshes or written
-    /// under the scan, the frames that waited for their window at the start
-    /// and the pairs that waited for theirs (µs in all, wrapping), the µs
-    /// spent writing pairs (wrapping), and the frames not raced because the
+    /// `{"on","frames","late_frames","late_pairs","waits","pair_waits",
+    /// "wait_us","write_us","pair_us","first_us","last_us","unread"}`:
+    /// raced frames since boot, those with a pair written past its window
+    /// (`late_pairs` in all: each shows a refresh late, a seam for that
+    /// refresh), the frames that waited for their window at the start and
+    /// the pairs that waited for theirs (µs in all, wrapping), the µs spent
+    /// writing pairs and in the pair hook in all (writes included;
+    /// wrapping), the running means of when a frame's first and last pair
+    /// are drawn (µs after its start), and the frames not raced because the
     /// scan could not be read.
     pub(super) fn json() -> String {
         format!(
-            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"torn":{},"in_pair":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"unread":{}}}"#,
+            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
             ON.load(Relaxed) != 0,
             FRAMES.load(Relaxed),
             LATE_FRAMES.load(Relaxed),
             LATE_PAIRS.load(Relaxed),
-            TORN.load(Relaxed),
-            IN_PAIR.load(Relaxed),
             WAITS.load(Relaxed),
             PAIR_WAITS.load(Relaxed),
             WAIT_US.load(Relaxed),
             WRITE_TOTAL_US.load(Relaxed),
+            PAIR_TOTAL_US.load(Relaxed),
+            FIRST_US.load(Relaxed),
+            LAST_US.load(Relaxed),
             UNREAD.load(Relaxed),
         )
     }
 
     /// Wait `us`: whole ticks asleep while more than 1.5 ms is left, then a
     /// spin on the clock. Returns the µs waited.
+    #[cold]
     fn wait_for(us: u32) -> u32 {
         let t = now_us();
         loop {
@@ -1188,7 +1205,7 @@ mod beam {
 
     /// `fx_psi::BeamHooks::begin`.
     pub(super) fn begin(est_us: u32) -> Option<u32> {
-        let mut st = STATE.lock().unwrap();
+        let st = state();
         if !st.on || st.row_us == 0 {
             return None;
         }
@@ -1210,7 +1227,6 @@ mod beam {
         }
         st.frame = Some(Frame {
             beam: plan.beam,
-            judge: Judge::with_clock(plan.beam.clock()),
             err: plan.err,
             start: now_us(),
             waited,
@@ -1218,77 +1234,74 @@ mod beam {
             first: 0,
             last: 0,
             late: false,
-            judged: false,
         });
         Some(st.row_us * PAIRS as u32)
     }
 
-    /// `fx_psi::BeamHooks::pair`.
+    /// A pair early for its window: spin on the scan until it opens.
+    /// Returns the µs waited.
+    #[cold]
+    #[inline(never)]
+    fn wait_window(beam: &Beam, p: usize, w: u32) -> u32 {
+        let t = now_us();
+        while read_scan().is_some_and(|r| beam.wait(p, r) > 0) && now_us().wrapping_sub(t) < w + 1_000 {
+            core::hint::spin_loop();
+        }
+        let waited = now_us().wrapping_sub(t);
+        PAIR_WAITS.fetch_add(1, Relaxed);
+        WAIT_US.fetch_add(waited, Relaxed);
+        waited
+    }
+
+    /// `fx_psi::BeamHooks::pair`: one scan reading before (is its window
+    /// open?) and one after (did the write end inside it?).
     pub(super) fn pair(p: usize, bytes: &[u8], dirty: &DirtyMap) {
-        let mut st = STATE.lock().unwrap();
+        let t = now_us();
+        let st = state();
         let look = st.look;
-        let rows = (1u32 << p) | (1 << (p + PAIRS));
         let Some(f) = st.frame.as_mut() else {
             write_pair(bytes, dirty, p, look);
             return;
         };
-        let ready = now_us().wrapping_sub(f.start).saturating_sub(f.pair_waited);
+        let ready = t.wrapping_sub(f.start).saturating_sub(f.pair_waited);
         if p == 0 {
             f.first = ready;
         } else if p == PAIRS - 1 {
             f.last = ready;
         }
-        if dirty.row_mask() & rows == 0 {
+        if dirty.row_mask() & ((1u32 << p) | (1 << (p + PAIRS))) == 0 {
             return;
         }
-        if let Some(now) = read_scan() {
-            let w = f.beam.wait(p, now);
-            if w > 0 {
-                // (Spinning on the scan: a pair early for its window.)
-                let t = now_us();
-                while read_scan().is_some_and(|r| f.beam.wait(p, r) > 0) && now_us().wrapping_sub(t) < w + 1_000 {
-                    core::hint::spin_loop();
-                }
-                let waited = now_us().wrapping_sub(t);
-                f.waited += waited;
-                f.pair_waited += waited;
-                PAIR_WAITS.fetch_add(1, Relaxed);
-                WAIT_US.fetch_add(waited, Relaxed);
-            }
+        if let Some(w) = read_scan().map(|r| f.beam.wait(p, r)).filter(|&w| w > 0) {
+            let waited = wait_window(&f.beam, p, w);
+            f.waited += waited;
+            f.pair_waited += waited;
         }
-        let before = read_scan();
-        let t = now_us();
+        let w0 = now_us();
         write_pair(bytes, dirty, p, look);
-        WRITE_TOTAL_US.fetch_add(now_us().wrapping_sub(t), Relaxed);
-        let after = read_scan();
-        if let (Some(b), Some(a)) = (before, after) {
-            f.judge.pair(p, b, a);
-            f.judged = true;
-            if f.beam.late(p, a) {
-                f.late = true;
-                LATE_PAIRS.fetch_add(1, Relaxed);
-            }
+        let w1 = now_us();
+        WRITE_TOTAL_US.fetch_add(w1.wrapping_sub(w0), Relaxed);
+        if read_scan().is_some_and(|a| f.beam.late(p, a)) {
+            f.late = true;
+            LATE_PAIRS.fetch_add(1, Relaxed);
         }
+        PAIR_TOTAL_US.fetch_add(now_us().wrapping_sub(t), Relaxed);
     }
 
     /// `fx_psi::BeamHooks::end`.
     pub(super) fn end() -> (i32, u32) {
-        let mut st = STATE.lock().unwrap();
+        let st = state();
         let Some(f) = st.frame.take() else {
             return (0, 0);
         };
         if f.last > 0 {
             st.first_us = mean(st.first_us, f.first);
             st.last_us = mean(st.last_us, f.last);
+            FIRST_US.store(st.first_us, Relaxed);
+            LAST_US.store(st.last_us, Relaxed);
         }
         FRAMES.fetch_add(1, Relaxed);
         LATE_FRAMES.fetch_add(u32::from(f.late), Relaxed);
-        if f.judged {
-            TORN.fetch_add(u32::from(f.judge.straddled), Relaxed);
-            IN_PAIR.fetch_add(u32::from(f.judge.in_pair), Relaxed);
-        }
-        // SAFETY: no arguments; a no-op when single-buffered.
-        unsafe { esp_idf_sys::hub75::hub75_flip() };
         (f.err, f.waited)
     }
 }

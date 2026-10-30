@@ -309,6 +309,7 @@ pub fn reset_note() -> Option<&'static str> {
 
 /// `"restarts":[…]`, newest first.
 #[inline(never)]
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 pub fn status_json() -> String {
     let mut out = String::from(r#""restarts":["#);
     for (i, e) in ring::newest_first(&Rtc).enumerate() {

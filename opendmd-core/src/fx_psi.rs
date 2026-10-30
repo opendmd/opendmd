@@ -1081,92 +1081,33 @@ impl PsiFx {
         }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let (trial, t1) = (self.jit.trialing(), clock.map_or(0, |c| c()));
-        if let Some(h) = hooks {
-            // Each pair marked and written as it is drawn, then forgotten:
-            // the blit after the tick finds nothing (a mark from before,
-            // a new tint's, is written with its pair).
-            let mut marked = 0u32;
-            let mut tell = |p: usize, out: &[u8], a: u32, b: u32| {
-                const HALF: usize = psi::H / 2;
-                marked += if compare {
-                    mark_pair(dirty, p, a, b)
-                } else {
-                    dirty.mark_span(p, 0, crate::canvas::WIDTH);
-                    dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
-                    2 * crate::canvas::WIDTH as u32
+        let mut marked = 0u32;
+        let drawn = match hooks {
+            Some(h) => {
+                // Racing the beam: each pair marked and written as it is
+                // drawn, then forgotten: the blit after the tick finds
+                // nothing (a mark from before, a new tint's, is written
+                // with its pair).
+                let mut tell = |p: usize, out: &[u8], a: u32, b: u32| {
+                    const HALF: usize = psi::H / 2;
+                    marked += if compare {
+                        mark_pair(dirty, p, a, b)
+                    } else {
+                        dirty.mark_span(p, 0, crate::canvas::WIDTH);
+                        dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
+                        2 * crate::canvas::WIDTH as u32
+                    };
+                    (h.pair)(p, out, dirty);
+                    dirty.clear_row(p);
+                    dirty.clear_row(p + HALF);
                 };
-                (h.pair)(p, out, dirty);
-                dirty.clear_row(p);
-                dirty.clear_row(p + HALF);
-            };
-            #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-            let drawn = self.jit_render(bytes, compare.then_some(&mut changed), Some(&mut tell));
-            #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
-            let drawn = false;
-            if !drawn {
-                psi::render_rows_beam::<LANES>(
-                    &self.prog,
-                    &mut self.scratch,
-                    self.ink.as_deref_mut(),
-                    Some(&mut self.still),
-                    &self.inputs,
-                    &tables(),
-                    bytes,
-                    compare.then_some(&mut changed),
-                    &mut tell,
-                );
-                #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-                self.jit_check(bytes);
+                self.draw(bytes, compare.then_some(&mut changed), Some(&mut tell))
             }
-            self.counted(compare, marked);
-            return self.beam_end(h, cycle.unwrap_or(0), clock, t0, grid);
-        }
-        BEAM_US.store(0, Ordering::Relaxed);
-        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-        let drawn = self.jit_render(bytes, compare.then_some(&mut changed), None);
-        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
-        let drawn = false;
-        if drawn {
-        } else if let Some(h) = self.held.as_deref().filter(|_| self.prog.rate().is_some()) {
-            // A `rate` formula: the rest over the slow rows held.
-            psi::render_fast::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                Some(h.picture()),
-                u32::MAX,
-                bytes,
-                compare.then_some(&mut changed),
-            );
-        } else if compare {
-            psi::render_rows_changed::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                None,
-                u32::MAX,
-                bytes,
-                &mut changed,
-            );
-        } else {
-            psi::render_rows_still::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                None,
-                u32::MAX,
-                bytes,
-            );
-        }
+            None => {
+                BEAM_US.store(0, Ordering::Relaxed);
+                self.draw(bytes, compare.then_some(&mut changed), None)
+            }
+        };
         #[cfg(feature = "psi-stats")]
         if self.prog.rate().is_some() {
             let k = if self.held.is_none() { 2 } else { 0 };
@@ -1177,7 +1118,9 @@ impl PsiFx {
         }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let t2 = clock.map_or(0, |c| c());
-        if compare {
+        if hooks.is_some() {
+            self.counted(compare, marked);
+        } else if compare {
             let marked = mark_changed(dirty, &changed);
             self.counted(true, marked);
         } else {
@@ -1186,6 +1129,7 @@ impl PsiFx {
         }
         // After a VM frame: a trial's frame is timed, else a kernel not yet
         // checked is checked against it; a kernel's trial frame is timed.
+        // (A raced frame is never a trial's.)
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         if trial {
             if clock.is_some() {
@@ -1193,6 +1137,11 @@ impl PsiFx {
             }
         } else if !drawn {
             self.jit_check(bytes);
+        }
+        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
+        let _ = drawn;
+        if let Some(h) = hooks {
+            return self.beam_end(h, cycle.unwrap_or(0), clock, t0, grid);
         }
         let Some(c) = clock else {
             return self.delay();
@@ -1212,6 +1161,69 @@ impl PsiFx {
         set_stat(0, self.gov.avg_us());
         set_stat(1, ms << 16 | grid);
         Duration::from_millis(u64::from(ms))
+    }
+
+    /// Draw the frame of `self.inputs` into `bytes`, what changed into
+    /// `changed` when given: the kernel if it draws this frame (`true`),
+    /// else the VM — racing the beam with `sink`, over a `rate` formula's
+    /// held slow rows, or whole. One call for every way (out of line:
+    /// each way's ~10-argument call written once, not per path in
+    /// `render`).
+    #[inline(never)]
+    fn draw(&mut self, bytes: &mut [u8], mut changed: Option<&mut [u32; psi::H]>, sink: Option<psi::PairSink<'_>>) -> bool {
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        let mut sink = sink;
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        if self.jit_render(bytes, changed.as_deref_mut(), sink.as_deref_mut().map(|s| s as psi::PairSink<'_>)) {
+            return true;
+        }
+        let tables = tables();
+        let ink = self.ink.as_deref_mut();
+        let still = Some(&mut self.still);
+        match (sink, self.held.as_deref().filter(|_| self.prog.rate().is_some())) {
+            (Some(s), _) => {
+                psi::render_rows_beam::<LANES>(&self.prog, &mut self.scratch, ink, still, &self.inputs, &tables, bytes, changed, s)
+            }
+            // A `rate` formula: the rest over the slow rows held.
+            (None, Some(h)) => psi::render_fast::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                ink,
+                still,
+                &self.inputs,
+                &tables,
+                Some(h.picture()),
+                u32::MAX,
+                bytes,
+                changed,
+            ),
+            (None, None) => match changed.take() {
+                Some(c) => psi::render_rows_changed::<LANES>(
+                    &self.prog,
+                    &mut self.scratch,
+                    ink,
+                    still,
+                    &self.inputs,
+                    &tables,
+                    None,
+                    u32::MAX,
+                    bytes,
+                    c,
+                ),
+                None => psi::render_rows_still::<LANES>(
+                    &self.prog,
+                    &mut self.scratch,
+                    ink,
+                    still,
+                    &self.inputs,
+                    &tables,
+                    None,
+                    u32::MAX,
+                    bytes,
+                ),
+            },
+        }
+        false
     }
 
     /// The compare's bookkeeping after a frame that marked `marked` pixels

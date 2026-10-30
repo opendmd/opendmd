@@ -338,6 +338,8 @@ impl WifiManager {
     /// should not count that. With a `deadline` (WiFi details sent over
     /// USB, which the installer waits 45 s for) nothing runs past it and
     /// nothing gives way.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn connect_sta(
         &mut self,
         ssid: &str,
@@ -438,6 +440,8 @@ impl WifiManager {
     }
 
     /// Raise the open setup network and point its DHCP server at ourselves.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn start_ap(&mut self) -> anyhow::Result<()> {
         info!("starting AP mode: {}", config::AP_SSID);
 
