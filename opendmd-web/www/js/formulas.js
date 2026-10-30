@@ -1,4 +1,4 @@
-// The Formulas view (`#formulas`, `#formula=` links): maths that draws on
+// The Formulas view (`#formulas`; `#gallery=`/`#remix` from the site): maths that draws on
 // the panel, in Psi (Ψ). The bundled ones (formulas.json: `[{src}]`, written
 // by make web from opendmd-web/formulas/'s `-- bundle` files; each says its
 // own name and about), a link to the site's gallery for the rest, the ones saved here,
@@ -10,16 +10,22 @@
 // (decoded by pkg-art), else a sample picture; on a device it can be shown
 // over the panel's GIF. A Formula's settings (js/fsheet.js: its name, about,
 // controls and look, as edits of its declaration lines) make it one that
-// can be the panel's look (js/looks.js).
+// can be the panel's look (js/looks.js). The site's Formula page (/f/)
+// mounts the editor alone (`editorPage`), with its own actions.
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSelect } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
+import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
 import * as S from './fstore.js';
 
 let P = null, mod = null, gen = 0;
+// The site's Formula page's options (`editorPage`), else null: the web app.
+let PAGE = null;
+// The site whose gallery and reference these are: the demo's and /f/'s
+// own, else opendmd.dev.
+const ROOT = () => (app.demo || PAGE ? new URL('../', location.href).href : SITE);
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
   .catch((e) => { mod = null; throw e; }));
 // A trap (a bug) leaves the module unusable: a fresh instance takes over.
@@ -163,7 +169,7 @@ const NOTE = () => (app.device ? 'Show on panel plays it there until the playlis
 let PS = null;
 // An error's code and the reference's entry for it (js/psierr.js, imported
 // at the first error); the demo's reference is its own site's.
-const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, app.demo ? new URL('../', location.href).href : SITE), () => null);
+const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, ROOT()), () => null);
 // Use as the look: a player's, or the demo's (js/demo.js).
 const LOOK = () => app.device || !!app.demo;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
@@ -219,14 +225,13 @@ const stored = () => { const d = store.get('psi.draft', null); return typeof d?.
 const sig = (f) => f.src + '\n\0' + (f.name || '');
 const dirty = (d) => d?.base != null && sig(d) !== d.base;
 
-// Share links (js/psikit.js: one encoder and decoder for here and the site's share page).
-const link = (f, base = location.origin + location.pathname) => mklink(f, base, ctlOf(f));
-// `#formula=…&name=…&a=…` (app.js keeps it in app.formula).
-function fromLink(s) {
-  const { f, cut } = parse(s), c = P && ctlOf(f);
+// A Formula as `{name, src, a, b, c}` ready for the editor: its values held
+// to its controls, its `name` line its name.
+function opened(x) {
+  const f = { name: (x.name || '').slice(0, MAX_NAME), src: (x.src || '').slice(0, MAX_SRC) }, c = P && controls(P, f.src);
+  for (const k of 'abc') if (x[k] != null) f[k] = x[k];
   fit(c, f);
   if (c?.name) f.name = c.name;
-  if (cut) toast('The shared formula was too long: only its first 16,384 characters are here', 'bad');
   f.base = sig(f);
   return f;
 }
@@ -239,23 +244,17 @@ async function copy(text) {
   t.remove();
   return ok;
 }
-// The formula's own page on the site (/f/: a preview, its code, Open on my
-// display, Try it in the demo); the demo's links stay on its own site.
-const SHARE = () => (app.demo ? new URL('../f/', location.href).href : SITE + 'f/');
 // The online gallery: every Formula OpenDMD has made (the panel bundles ten)
-// and the ones people share. The demo's is its own site's.
-const GALLERY = () => (app.demo ? new URL('../formulas/', location.href).href : SITE + 'formulas/');
-function share(btn, f) {
-  // A bundled one by name on the site; to this display and to the gallery, its text.
-  const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link({ ...f, stem: null }), sub = link({ ...f, stem: null }, SHARE());
-  const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });
-  const go = (u) => async () => { closeMenu(); toast((await copy(u)) ? 'Link copied' : 'Select the link and copy it', 'ok'); };
-  popup(h('div.menu.wide', { id: 'psi-share', role: 'dialog', 'aria-label': 'Share' }, h('div.mh', 'Share this formula'), field,
-    h('button.mi', { id: 'psi-copy', onclick: go(url) }, 'Copy link'),
-    h('p.cap', 'Anyone can open it: the formula’s own page, to try it or open it on their display.'),
-    url.length > 1500 && h('p.cap.bad', `This link is long (${url.length.toLocaleString()} characters): some apps cut long links`),
-    here && h('button.mi', { id: 'psi-copy-here', 'data-url': here, onclick: go(here) }, 'Copy a link to this display'),
-    h('a.btn.mi', { id: 'psi-submit', href: sub + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
+// and the ones people share.
+const GALLERY = () => ROOT() + 'formulas/';
+// Copy code: the text, as it is.
+const copyCode = async (f) => { const ok = await copy(f.src); toast(ok ? 'Code copied' : 'Couldn’t copy it: select the code and copy it', ok ? 'ok' : 'bad'); };
+// Submit to the gallery (js/fsubmit.js, the site's page's own form): in a sheet.
+async function submit(btn, f) {
+  const r = btn.getBoundingClientRect(), x = () => ({ ...f, ok: !!info(f.src).length, info: info(f.src), ctl: ctlOf(f) });
+  const m = await import('./fsubmit.js');
+  const s = m.form(P, x);
+  popup(h('div.menu.wide', { id: 'psi-submit-sheet', role: 'dialog', 'aria-label': 'Submit to the gallery' }, h('div.mh', 'Submit to the gallery'), s.el), r.left, r.bottom + 4);
 }
 
 // "Save as GIF…": one loop into Create Art: 20 ms frames (a GIF can't do 10: `fps 100`
@@ -290,49 +289,51 @@ export async function mount(el) {
   build(el);
   await B.ready;
   return {
-    show() { if (!B.editing) B.tiles(); kick(); bundledLink(); adding(); },
+    show() { if (!B.editing) B.tiles(); kick(); remixed(); },
     sub(s) {
-      if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.formula || app.psiEdit) edit();
+      if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.psiOpen || app.psiEdit) edit();
       kick();
-      bundledLink();
-      adding();
+      remixed();
     },
   };
 }
 
-// `#bundled=<stem>&a=…` (a gallery's "Open on my display", app.js keeps it
-// in app.bundled): that bundled Formula's details, its values as linked.
-function bundledLink() {
-  const b = app.bundled;
-  if (!b) return;
-  app.bundled = null;
+// `#gallery=<slug>` or `#remix` (the site's Open on my panel, app.js keeps
+// it in app.remix): the Formula into the editor, the remix: change it, save
+// it, show it, add it to a playlist. A gallery one by name (a bundled one
+// is here already, else fetched from the site); an edited one sent by the
+// site's page that opened this one (postMessage: its origin opendmd.dev, or
+// this page's own for the demo and the tests), never in the link.
+async function remixed() {
+  const r = app.remix;
+  if (!r) return;
+  app.remix = null;
   location.replace('#formulas');
-  const f = EX.find((x) => x.stem === b.bundled);
-  if (!f) { toast('This panel doesn’t come with that Formula: update it to get it', 'bad'); return; }
-  for (const k of 'abc') if (b.f[k] != null) f[k] = b.f[k];
-  fit(ctlOf(f), f);
-  B.pick(f, false);
+  const ex = r.gallery && EX.find((x) => x.stem === r.gallery);
+  let f;
+  try { f = ex ? { name: ex.name, src: ex.src } : r.gallery ? await fetchFormula(ROOT(), r.gallery) : await sent(); } catch (e) { toast(`Couldn’t open that Formula: ${e.message || e}`, 'bad'); return; }
+  app.psiOpen = { ...f, ...r.f };
+  app.go('formulas/edit');
 }
-
-// `#formula=…&add=1` or `#bundled=<stem>&add=1` (the site's Add to my
-// panel, app.js keeps it in app.adding): saved on the panel, then a sheet
-// with Play now, Add to a playlist and Use as the look (js/fadd.js). Not a
-// panel (the demo, local mode): the editor or the details, as a plain link.
-function adding() {
-  const a = app.adding;
-  if (!a) return;
-  app.adding = null;
-  if (!app.device || !P) {
-    if (a.bundled) { app.bundled = a; bundledLink(); } else { app.formula = a.hash.replace(/&add=1\b/, ''); app.go('formulas/edit'); }
-    return;
-  }
-  location.replace('#formulas');
-  import('./fadd.js').then((m) => m.add(a, {
-    P, EX, info, ctlOf, nameOf, fit, toList, setLook, path: mklink,
-    // Its details behind the sheet: yours (the list as saved) or a bundled one.
-    show(f, mineToo) { if (B.editing) close(false); B.tiles(); B.pick(f, mineToo); },
-    edit(f) { app.formula = mklink(f, '').slice(1); app.go('formulas/edit'); },
-  }), (e) => toast('Couldn’t add it: ' + (e.message || e), 'bad'));
+// The edited Formula from the page that opened this one: READY to it, then
+// its answer, `{type: REMIX, name, src, a, b, c}`, from opendmd.dev only.
+function sent() {
+  const from = [new URL(SITE).origin, location.origin], o = window.opener;
+  if (!o) return Promise.reject(new Error('open it again from opendmd.dev'));
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => { removeEventListener('message', on); rej(new Error('opendmd.dev didn’t send it: open it again from there')); }, 10000);
+    function on(e) {
+      const d = e.data;
+      if (e.source !== o || !from.includes(e.origin) || d?.type !== REMIX || typeof d.src != 'string' || (d.name != null && typeof d.name != 'string')) return;
+      clearTimeout(t);
+      removeEventListener('message', on);
+      const f = { name: (d.name || '').slice(0, MAX_NAME), src: d.src.slice(0, MAX_SRC) };
+      for (const k of 'abc') if (typeof d[k] == 'number' && Number.isFinite(d[k]) && Math.abs(d[k]) < 32768) f[k] = d[k];
+      res(f);
+    }
+    addEventListener('message', on);
+    o.postMessage({ type: READY }, '*');
+  });
 }
 
 // An in-page question (a sheet on a phone): `yes` or `no`, Escape is neither.
@@ -350,7 +351,7 @@ function build(root) {
   const title = h('h2', { id: 'psi-d-title' }), desc = h('p.cap', { id: 'psi-d-desc' });
   const sl = h('div.psi-sls', { id: 'psi-sl' });
   const main = h('button.pri', { id: 'psi-edit' }), gifBtn = h('button', { id: 'psi-gif' }, 'Save as GIF…');
-  const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
+  const codeBtn = h('button', { id: 'psi-code-btn' }, 'Copy code'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
   let cur = null;
   const show = showBtn('psi-show', () => cur);
   const look = LOOK() && h('button', { id: 'psi-look', onclick: () => setLook({ ...cur, name: nameOf(cur) }) }, 'Set as the panel’s look');
@@ -367,7 +368,7 @@ function build(root) {
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
     h('div.row.acts', show, main, gifBtn), keep && h('label.row', { id: 'psi-keep-row' }, 'Keep on the panel', keep),
-    h('div.row.acts', pl, look, sets, shareBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', pl, look, sets, codeBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
@@ -393,7 +394,7 @@ function build(root) {
     sets.onclick = (e) => go(mk(), e.currentTarget, 1);
     sets.hidden = !i.length;
     gifBtn.onclick = () => toGif(f);
-    shareBtn.onclick = (e) => share(e.currentTarget, f);
+    codeBtn.onclick = () => copyCode(f);
     del.hidden = !mineToo;
     del.onclick = (e) => ask(`Delete “${f.name}”?`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
     for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f === f);
@@ -519,8 +520,9 @@ function editor() {
   // The name is the formula's `name` line (typed here, written there).
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; named(name.value); stash(); } });
   const setBtn = h('button', { id: 'psi-set-btn', 'aria-haspopup': 'dialog', title: 'Formula settings: name, about, controls, look', onclick: (e) => settings(e.currentTarget) }, '⚙ Settings');
-  const head = h('div.card.psi-edhead', h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name, setBtn,
-    h('button.pri', { id: 'psi-save', onclick: () => save().catch(() => {}) }, 'Save'));
+  // (The site's page: no way back to a gallery, nothing saved there.)
+  const head = h('div.card.psi-edhead', !PAGE && h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name, setBtn,
+    !PAGE && h('button.pri', { id: 'psi-save', onclick: () => save().catch(() => {}) }, 'Save'));
   const said = saver(head);
   const ta = h('textarea', { id: 'psi-src', spellcheck: false, autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': 'Formula', 'aria-describedby': 'psi-err' });
   ta.setAttribute('autocorrect', 'off');
@@ -544,13 +546,15 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
-      h('button', { id: 'psi-ed-share', onclick: (e) => { if (ready()) share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
+    h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
+      h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
+      h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
   const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
 
-  const stash = debounce(() => store.set('psi.draft', B.draft), 300);
+  // The draft kept in this browser (the web app's; the site's page tells its own of each change).
+  const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
   // Numbers (a unary minus included), comments and the error, drawn under the (transparent) text.
   function paint() {
     const s = ta.value, m = marks(s, bad);
@@ -836,9 +840,27 @@ function editor() {
     },
     // After a restart: the module is new, compile the text again.
     again() { if (B.editing) compile(); },
+    // The site's page: the text as typed (`paste`: every `use` line pasted
+    // first, null when one can't be), whether it works, its info() and controls().
+    now(paste) { if (paste && !ready()) return null; const src = ta.value, ok = good === src; return { name: B.draft.name, src, a: B.draft.a, b: B.draft.b, c: B.draft.c, ok, info: ok ? info(src) : [], ctl: ok ? ctlOf({ src }) : null }; },
     // Its settings sheet (Settings › Look's Change…).
     settings: () => settings(setBtn),
   };
+}
+
+// The site's Formula page (/f/): the editor alone, on the demo's files,
+// with `f` in it. `o`: {acts (its buttons), note (the line under them),
+// changed() (on every edit)}. Returns {P, now(paste)} (pkg-psi; the text now).
+export async function editorPage(el, f, o) {
+  PAGE = o;
+  await psi();
+  EX = await fetch(new URL('../demo/formulas.json', location.href)).then((r) => r.json()).then((x) => (Array.isArray(x) ? x.filter((e) => typeof e?.src == 'string') : []), () => []);
+  B = { root: el, editing: true, tiles() {}, draft: null };
+  B.ed = editor();
+  el.append(B.ed.el);
+  el.classList.add('psied');
+  B.ed.open(B.draft = opened(f));
+  return { P, now: (paste) => B.ed.now(paste) };
 }
 
 // Into the editor from the gallery (the way back is the browser's); a
@@ -857,13 +879,13 @@ function edit() {
   const pe = app.psiEdit, m = pe?.f.mine && mine().find((x) => x.id === pe.f.id);
   app.psiEdit = null;
   if (pe) B.sheet = 1;
-  if (app.formula || pe) {
-    const f = m ? { ...m } : fromLink(app.formula || link(pe.f, '')), d = unsaved();
+  const ext = app.psiOpen;
+  app.psiOpen = null;
+  if (ext || pe) {
+    const f = m ? { ...m } : opened(ext || pe.f), d = unsaved();
     f.base ??= sig(f);
-    app.formula = null;
     B.pushed = !!pe;
-    if (location.hash.startsWith('#formula=')) location.replace('#formulas/edit');
-    if (d && sig(d) !== sig(f)) later = () => ask(`Open ${pe ? `“${f.name}”` : 'the shared formula'}? “${d.name || 'Untitled formula'}” isn’t saved yet and will be replaced.`, ['Open it', () => { B.ed.open(f); if (pe) B.ed.settings(); }], ['Keep mine', () => {}]);
+    if (d && sig(d) !== sig(f)) later = () => ask(`Open “${f.name}”? “${d.name || 'Untitled formula'}” isn’t saved yet and will be replaced.`, ['Open it', () => { B.ed.open(f); if (pe) B.ed.settings(); }], ['Keep mine', () => {}]);
     else B.draft = f;
     if (later) B.sheet = 0;
   }

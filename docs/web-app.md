@@ -415,14 +415,21 @@ serves it on :8081; `make site-deploy` puts it on
 [opendmd.dev](https://opendmd.dev/) (the `opendmd-site` Worker on
 Cloudflare, `site/worker/`; see [deploying.md](deploying.md)).
 
-**A formula's page** (`/f/#formula=…&name=…&a=…`, from
-`opendmd-web/share/f/`) is what the app's **Copy share link** gives: the
-formula in the app's LED preview, its code, sliders (a slider with
-choices, `-- a: shape = cube, ball`, as buttons), Open on my display
-(`http://<address>/#formula=…`, which the player's app opens in its
-editor), Try it in the demo, Copy code / Copy link, a QR code, and Submit
-to the gallery. It runs on the demo's own files (`js/psikit.js`, the share
-link's one encoder and decoder; `js/preview.js` and the wasm; `pkg-psi`).
+**A formula's page** (`/f/#gallery=<slug>`, from `opendmd-web/share/f/`)
+is the app's own Formulas editor on the demo's files (`js/formulas.js`
+`editorPage`: the live preview, errors, sliders, cheat sheet and settings),
+with Open on my panel, Copy code and Submit to the gallery
+(`js/fsubmit.js`, the app's form too). A link names a Formula, never
+carries its text: `#gallery=<slug>` (the gallery's tiles), or `#open` (the
+Psi reference's Open in editor, which leaves the example in the site's own
+storage). **Open on my panel** opens the player's app in its editor:
+`http://<address>/#gallery=<slug>` for a gallery Formula as it is (the app
+has the bundled ones, else fetches `opendmd.dev/formulas/src/<slug>.psi`,
+CORS `*`), or, once changed, a window on `http://<address>/#remix` that
+says it is ready to the page that opened it and gets `{name, src, a, b, c}`
+back by `postMessage` (accepted only from `https://opendmd.dev`, or the
+app's own origin for the demo). There are no anonymous short links:
+sharing is submitting to the gallery.
 
 **The formula gallery** (`/formulas/`) is the app's examples plus the
 files merged into the public gallery repository's `gallery/`

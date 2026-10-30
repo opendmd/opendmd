@@ -1,23 +1,26 @@
 // Formulas' shared parts, one copy for the web app's Formulas view
-// (js/formulas.js) and the site's share page (/f/, which imports this file
-// from the demo): the share link's encoder and decoder, the controls a
+// (js/formulas.js) and the site's Formula page (/f/, which imports this file
+// from the demo): where a link says a Formula comes from, the controls a
 // formula declares (read from the compiler: pkg-psi's controls()), what a
 // formula is in a sentence, the code's highlighting and the sample
 // picture. No imports; the DOM only in `picker` and `control`.
 
 export const MAX_SRC = 16384, MAX_NAME = 60;
 
-// A share link: `<base>#formula=<src>&name=<name>&a=…` (URLSearchParams),
-// with the values set that differ from their control's default (`ctl`:
-// controls(); a slot left out plays at the default) of the controls the
-// formula declares or reads (without `ctl`: every value set).
-// A bundled Formula (`f.stem`) goes by name, `#bundled=<stem>`: the site's
-// /f/ page reads it from the gallery's copy (formulas/src/<stem>.psi).
-export function link(f, base, ctl) {
-  const q = new URLSearchParams(f.stem ? { bundled: f.stem } : { formula: f.src });
-  if (f.name && !f.stem) q.set('name', f.name);
-  for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) q.set(k, +(+f[k]).toFixed(2));
-  return base + '#' + q;
+// Where a Formula comes from in a link: by name, never its text (a link
+// anyone can craft must not put code in front of someone). The site's
+// gallery, `#gallery=<slug>` (a bundled one the panel has built in), or
+// `#remix`: an edited one the site's page that opened this one sends by
+// postMessage (js/formulas.js `remixed`). With the slider values that
+// moved, `&a=…`. `{gallery, f: {a, b, c}}` or `{remix: true, f}`, or null.
+export const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export function from(s) {
+  const q = new URLSearchParams(s.replace(/^[#?]/, '')), g = q.get('gallery') || '';
+  const f = {};
+  for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
+  if (g.length <= 48 && SLUG.test(g)) return { gallery: g, f };
+  if (q.has('remix')) return { remix: true, f };
+  return null;
 }
 // Whether `f[k]` is worth sending: its slot is read and the value isn't the
 // declared default (to 4 places, as a path writes it). Without `ctl`, yes.
@@ -26,18 +29,23 @@ const moved = (ctl, f, k) => {
   const c = ctl.controls.find((c) => c.slot == k);
   return !!c && +(+f[k]).toFixed(4) !== +(+c.default).toFixed(4);
 };
-// And back: `{f, cut, has}` — the source and the name cut to what a
-// formula can have (`cut` says the source was), the values as numbers
-// (`fit` holds them to the formula's ranges), `has` whether there was a
-// formula at all.
-// `bundled`: a bundled one's name (`#bundled=<stem>`, no source in the link).
-export function parse(s) {
-  const q = new URLSearchParams(s.replace(/^#/, '')), src = q.get('formula') || '', name = q.get('name') || 'Shared formula';
-  const f = { name: name.slice(0, MAX_NAME), src: src.slice(0, MAX_SRC) };
-  for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
-  const b = /^[a-z0-9-]{1,40}$/.test(q.get('bundled') || '') ? q.get('bundled') : null;
-  return { f, cut: f.src !== src, has: q.has('formula') || !!b, bundled: b };
+// A gallery file's text without its header (`-- author:`, `-- licence:`, `-- bundle`).
+export const unheader = (t) => { const l = t.split('\n'); let n = 0; while (n < l.length && /^-- (author|licen[cs]e|bundle)/.test(l[n])) n++; return l.slice(n).join('\n'); };
+// A gallery Formula's text from a site (`site`: its root, `https://opendmd.dev/`
+// or the demo's own; formulas/src/<slug>.psi, CORS *): `{name, src}`. Fails
+// with a sentence.
+export async function fetchFormula(site, slug) {
+  let r;
+  try { r = await fetch(`${site}formulas/src/${slug}.psi`); } catch { throw new Error('opendmd.dev couldn’t be reached: is this device online?'); }
+  if (r.status === 404) throw new Error('the gallery has no Formula by that name');
+  if (!r.ok) throw new Error(`opendmd.dev answered ${r.status}`);
+  return { name: '', src: unheader(await r.text()).slice(0, MAX_SRC) };
 }
+// The postMessage hand-over of an edited Formula, site page -> the panel's
+// app it opened: the app says `READY` to its opener; the page answers
+// `{type: REMIX, name, src, a, b, c}`.
+export const READY = 'opendmd-remix-ready', REMIX = 'opendmd-remix';
+
 // Text for a declaration's quotes (`name`, `about`, a label): without `" <
 // > \`, control characters or ones that hide or reorder text (the compiler
 // refuses them), cut to `n` characters.
