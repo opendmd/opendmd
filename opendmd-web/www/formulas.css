@@ -41,6 +41,7 @@
 .psi-src:focus-within{border-color:var(--acc)}
 #psi-err{margin:0;font-size:14px}
 #psi-err code{color:var(--fg)}
+#psi-err .ecode{font:12px ui-monospace,Menlo,Consolas,monospace;white-space:nowrap}
 .psi-strip{display:flex;gap:8px;align-items:center;margin-top:8px}
 .psi-strip button{min-width:44px;min-height:44px;justify-content:center;font-size:18px}
 .psi-pad{flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--acc);border-radius:var(--r);color:var(--mut);cursor:ew-resize;touch-action:none;user-select:none}
