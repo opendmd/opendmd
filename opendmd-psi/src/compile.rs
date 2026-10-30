@@ -1486,7 +1486,7 @@ fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usiz
             }
         }
         let n = &dag.nodes[m as usize];
-        if n.code == K_INPUT || (code::U_R..=code::INK).contains(&n.code) {
+        if n.code == K_INPUT || (code::U_R..=code::INKN).contains(&n.code) {
             return (None, m);
         }
         let split = [n.a, n.b];
@@ -2544,6 +2544,9 @@ impl<'s> Parser<'s> {
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
             }
+            if name == "ink" && self.lookup_local(name).is_none() {
+                return self.ink_levels(t);
+            }
             if let Some(&(_, ar, f)) = FUNCS.iter().find(|e| e.0 == name) {
                 if let F::Glyph(c) = f {
                     let (args, font) = self.glyph_args(t, name)?;
@@ -2630,6 +2633,44 @@ impl<'s> Parser<'s> {
             format!("unknown name `{name}`{}", did_you_mean(s))
         };
         self.fail_at(t, msg)
+    }
+
+    /// `ink(n)` at `t` (`ink`): the canvas in `n` levels, 1..=255, a
+    /// whole number (`INKN`, never folded: it reads the canvas).
+    #[inline(never)]
+    fn ink_levels(&mut self, t: Token) -> Result<Id, Error> {
+        // E214.
+        const HOW: &str = "`ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels";
+        self.next();
+        let num = self.next();
+        let close = self.next();
+        let n = match (num.tok, close.tok) {
+            (Tok::Num(v), Tok::RParen) if v & 0xffff == 0 && (ONE..=255 * ONE).contains(&v) => v,
+            _ => return self.err(num, HOW),
+        };
+        let at = (t.start, close.end);
+        let c = self.dag.constant(n, at)?;
+        let why = INPUTS.iter().position(|e| e.1 == Input::Ink).unwrap_or(0) as u8;
+        self.dag.push(
+            Node {
+                code: code::INKN,
+                a: c,
+                b: 0,
+                c: 0,
+                val: 0,
+                level: LV_PIXEL,
+                why,
+            },
+            at,
+        )
+    }
+
+    /// The formula's own value `name` seen here (the latest set).
+    fn lookup_local(&self, name: &str) -> Option<&Local<'s>> {
+        self.locals
+            .iter()
+            .rev()
+            .find(|l| l.name == name && self.visible(l.scope))
     }
 
     #[inline(never)]
@@ -5511,7 +5552,7 @@ fn finish(
     };
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
     // `ink` with nothing drawn: always a mistake (unlike `ur` alone).
-    if p.drawn.is_none() && p.dag.nodes.iter().any(|m| m.code == code::INK) {
+    if p.drawn.is_none() && p.dag.nodes.iter().any(|m| matches!(m.code, code::INK | code::INKN)) {
         let t = (0..p.toks.len())
             .map(|k| p.toks[k].get())
             .find(|&t| t.tok == Tok::Name && p.text(t) == "ink")
@@ -5811,7 +5852,7 @@ impl<'s> Parser<'s> {
             };
             let root = cause(&self.dag, l.id, &|_| None).1;
             let n = &self.dag.nodes[root as usize];
-            let input = if n.code == K_INPUT || (code::U_R..=code::INK).contains(&n.code) {
+            let input = if n.code == K_INPUT || (code::U_R..=code::INKN).contains(&n.code) {
                 input_word(n).0
             } else {
                 ""
@@ -6003,7 +6044,7 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
             continue;
         }
         let mut c = dag.nodes[i];
-        if (code::U_R..=code::INK).contains(&c.code) {
+        if (code::U_R..=code::INKN).contains(&c.code) {
             // E944.
             return Err(Error::new(0, 0, "a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`"));
         }
@@ -6105,7 +6146,7 @@ fn emit(
     close(&mut need);
     // The draw stage only when something shown reads `ink` (else, like a
     // value nothing uses, it is left out).
-    let inked = (0..n).any(|i| need[i] != NONE && nodes[i].code == code::INK);
+    let inked = (0..n).any(|i| need[i] != NONE && matches!(nodes[i].code, code::INK | code::INKN));
     let draw = if inked { draw } else { &[] };
     for item in draw {
         let ids: &[Id] = match item {
@@ -6924,7 +6965,7 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
             }
             K_COUNTER | K_SPLIT => false,
             // (A wide noise's offsets move every frame.)
-            c if (code::U_R..=code::INK).contains(&c) || is_noise_o(c) => false,
+            c if (code::U_R..=code::INKN).contains(&c) || is_noise_o(c) => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }
@@ -7197,7 +7238,7 @@ fn column_nodes(dag: &Dag) -> Vec<bool> {
                 }
                 K_CONST => true,
                 K_COUNTER => false,
-                c if (code::U_R..=code::INK).contains(&c) => false,
+                c if (code::U_R..=code::INKN).contains(&c) => false,
                 _ => reads(dag, i).all(|x| col[x as usize]),
             },
             _ => false,

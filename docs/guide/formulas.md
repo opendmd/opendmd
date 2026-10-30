@@ -476,6 +476,10 @@ hsv(x, 0.6, ink)
   little picture of your own. It works anywhere, not only in `draw`.
 - The colour comes from the last line, as always: `pal(ice, ink)`,
   `#40c0ff * ink`, or over a GIF `layer screen { gray(ink) }`.
+- To tell drawn things apart, draw each with its own ink `k/16` (the
+  hills `6/16`, the sun `5/16`) and read `ink(16)`: the whole number `k`
+  that was drawn there, exactly, so `pick(ink(16), sky, …, hills, sun)`
+  colours each. Any number of levels from 1 to 255 works the same way.
 - Every frame starts empty: nothing is left over from the frame before.
 
 **Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.

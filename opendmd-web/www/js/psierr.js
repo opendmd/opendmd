@@ -46,6 +46,7 @@ const C = [
   [211, 17, "unknown palette `"],
   [212, 36, "the first value of `", "` is a palette: "],
   [213, 15, "unknown blend `"],
+  [214, 43, "`ink(n)` takes a whole number from 1 to 255"],
   [301, 62, "inside frame { } only values that are the same for every pixel"],
   [302, 25, "a colour can't be a value"],
   [303, 41, "with layers, every colour goes inside one"],

@@ -301,6 +301,13 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["unknown blend `"],
     },
     ErrorDoc {
+        code: 214,
+        title: "`ink(n)` without a whole number",
+        sentence: "`ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels",
+        fix: "Write the number of levels, as `ink(16)`, and draw with inks `k/16`.",
+        matches: &["`ink(n)` takes a whole number from 1 to 255"],
+    },
+    ErrorDoc {
         code: 301,
         title: "a per-pixel value in `frame { }`",
         sentence: "inside frame { } only values that are the same for every pixel can be used, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",

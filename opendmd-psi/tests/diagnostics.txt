@@ -219,6 +219,11 @@ pal(1, x)
 layer nope { gray(x) }
 --- 1:7 unknown blend `nope` (a layer goes over, add, multiply, screen, max or min)
 
+=== E214
+draw { dot(1, 1) }
+gray(ink(1.5))
+--- 2:10 `ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels
+
 === E301
 frame {
 k = x

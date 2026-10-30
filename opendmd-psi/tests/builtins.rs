@@ -369,7 +369,9 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     || builtins::COLOURS.iter().any(|e| e.0 == head)
                     || builtins::PRIMITIVES.contains(&head.as_str())
                     // a part drawn at a place, as the row's example says
-                    || head == "p";
+                    || head == "p"
+                    // `ink(n)`: the canvas in n levels (a special form)
+                    || head == "ink";
                 assert!(known, "`{head}(…)` in the cheat sheet is not a built-in ({label})");
             }
         }

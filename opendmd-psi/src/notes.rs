@@ -183,7 +183,7 @@ impl<'s> Parser<'s> {
                     .map(|x| sub_ns[x as usize])
                     .fold(0u32, u32::saturating_add);
             almost[i] = !still[i]
-                && !(code::U_R..=code::INK).contains(&m.code)
+                && !(code::U_R..=code::INKN).contains(&m.code)
                 && !is_noise_o(m.code)
                 && reads(dag, i).all(|x| {
                     let x = x as usize;

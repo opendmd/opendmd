@@ -1789,6 +1789,41 @@ fn lines_and_dots_land_where_they_should() {
     assert_eq!(at(&ink, 0, 0), fixed::chan(q(0.5)));
 }
 
+/// `ink(n)` is the canvas byte in `n` levels, round(b·n/255), exactly:
+/// every byte and level, and an ink written `k/n` reads back as `k` for
+/// every k ≤ n (the byte is `chan(k/n)`, the constant `k/n` folded as the
+/// compiler folds it).
+#[test]
+fn ink_levels_are_exact() {
+    for n in 1..=255i32 {
+        for b in 0..=255u8 {
+            assert_eq!(fixed::ink_levels(b, n) >> 16, (2 * b as i32 * n + 255) / 510, "b {b} n {n}");
+        }
+        for k in 0..=n {
+            let v = crate::program::eval(code::DIV, k << 16, n << 16, 0, None);
+            assert_eq!(fixed::ink_levels(fixed::chan(v), n), k << 16, "{k}/{n}");
+        }
+    }
+    // Through the compiler and the draw stage: lines of ink k/n at column
+    // k read back as k.
+    for n in [1, 2, 3, 7, 16, 100, 127] {
+        let src = format!("draw {{ for k < {} {{ line(k, 0, k, 31, k/{n}) }} }}\ngray(px > {n} or ink({n}) == px)", n + 1);
+        let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        let mut ink = Ink::boxed();
+        let mut out = [0u8; W * H * 3];
+        render_rows_ink::<128>(&p, &mut Scratch::new(), Some(&mut ink), &Inputs::default(), &OWN, None, u32::MAX, &mut out);
+        assert!(out.iter().all(|&c| c == 255), "ink({n})");
+    }
+    // Only a whole number from 1 to 255.
+    for bad in ["ink(0)", "ink(256)", "ink(1.5)", "ink(x)", "ink(16, 2)"] {
+        let src = format!("draw {{ dot(1, 1) }}\ngray({bad})");
+        let e = compile(&src).unwrap_err();
+        assert!(e.msg.contains("`ink(n)` takes a whole number from 1 to 255"), "{bad}: {}", e.msg);
+    }
+    // A name set `ink` is that name.
+    assert!(compile("draw { dot(1, 1) }\nink = 3\ngray(ink/4)").is_ok());
+}
+
 /// Over the caps the VM stops the same way everywhere, and a program that
 /// draws without a canvas draws nothing.
 #[test]

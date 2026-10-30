@@ -494,6 +494,11 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   seen) is left out. One `draw { }` per formula (the formula's, or one
   part's: there is one canvas). Inside a part drawn elsewhere, `ink` is
   still the real pixel's: the canvas is not moved.
+- **`ink(n)`** (n a whole number, 1 to 255) is the canvas in `n` levels, a
+  whole number: what was drawn with ink `k/n` reads `k`, exactly, for every
+  k ≤ n. Draw each kind of thing with its own tag and colour them with a
+  `pick`: `line(…, 6/16)` for the hills, then `pal(P, pick(ink(16), …))`.
+  One step a pixel (~90 ns), no `+ ½` offsets, no `floor`.
 - **Tables**: `table V = -1, 1, 0.5` at the top of the formula (or a part),
   numbers only, 256 in all; `V[k]` is number `floor(k)` counting from 0, and
   0 outside the table. Any level: per pixel `V[px % 3]` is one step, like

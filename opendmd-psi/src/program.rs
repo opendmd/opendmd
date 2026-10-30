@@ -204,6 +204,9 @@ pub(crate) mod code {
     pub const U_L: u8 = 83;
     // nullary, per pixel: what the draw stage put at the pixel, 0..1
     pub const INK: u8 = 84;
+    // `ink(n)`: the canvas at the pixel in `n` levels, round(byte·n/255)
+    // (`fixed::ink_levels`); `a` the constant n. Per pixel, never folded.
+    pub const INKN: u8 = 85;
     // `cycle(P, v, s)`'s turn (a row step, the row section's last steps):
     // `TURN d, a, b`: the formula's palette slot `d` (0..=2, palette 5 + d)
     // is palette `b` turned by `a`: entry e is `b`'s entry (e + floor(a·32))
@@ -322,6 +325,7 @@ pub(crate) mod code {
             W_FIRST..=W_LAST => wide_ops(c).1,
             64..=LAST_TERN => 3,
             U_R..=INK => 0,
+            INKN => 1,
             TURN => 1,
             SLOW => 0,
             FOR => 1,
@@ -424,7 +428,7 @@ pub(crate) mod code {
             32..=LAST_UN => U[(c - 32) as usize],
             W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
-            U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
+            U_R..=INKN => ["ur", "ug", "ub", "ul", "ink", "inkn"][(c - U_R) as usize],
             TURN => "turn",
             SLOW => "slow",
             FOR..=FUSE => [
@@ -1767,6 +1771,9 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         MULR => 110,
         DIGIT..=DIGIT_B => 240,
         U_R | U_G | U_B | INK => 70,
+        // `ink`'s read, a multiply and three adds and shifts (a guess until
+        // psi-probe measures it).
+        INKN => 90,
         U_L => 140,
         _ => 0,
     }
@@ -1806,6 +1813,7 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         SIN => 60,
         COS => 65,
         INK | U_R | U_G | U_B => 26,
+        INKN => 34,
         U_L => 70,
         c => value_ns(c).saturating_sub(60).max(60),
     }
