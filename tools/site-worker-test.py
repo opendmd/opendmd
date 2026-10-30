@@ -442,6 +442,19 @@ def pages(base: str, site: Path) -> None:
     st, h, body = get(base, "/no/such/page")
     check(st == 404 and b"<title>Not found" in body and b'href="/site.css"' in body,
           f"an address with nothing there: the 404 page with absolute links ({st})")
+    # The menus and the footer as served: every link answers, straight away
+    # (a folder's index is linked as the folder, so no redirect).
+    st, h, body = get(base, "/guide/web-app")
+    chrome = re.findall(r'<(?:header|nav|footer)\b.*?</(?:header|nav|footer)>', body.decode(), re.S)
+    links = sorted({urllib.parse.urljoin("/guide/web-app", u) for c in chrome for u in re.findall(r'href="([^"#]+)"', c)
+                    if not re.match(r"[a-z]+:", u)})
+    slow = []
+    for u in links:
+        st_u, _, _, hops = follow(base, u)
+        # (x.html 307s once to /x: the docs' own links, as a plain server needs them)
+        if st_u != 200 or (hops and not u.endswith(".html")):
+            slow.append(f"{u} {st_u} after {hops}")
+    check(st == 200 and len(links) >= 15 and not slow, f"the menus' and the footer's {len(links)} links answer 200{': ' + ', '.join(slow[:6]) if slow else ''}")
     hidden = [f for f in ("/_headers", "/_redirects", "/.assetsignore") if get(base, f)[0] != 404]
     check(not hidden, f"the Cloudflare files are not served {hidden}")
 
@@ -456,6 +469,10 @@ def redirects(base: str, site: Path) -> None:
             continue
         if get(base, new)[0] != 200:  # straight to the served address: no second hop
             bad.append(f"{old} -> {new}: not 200")
+    guessed = {"/gallery": "/formulas/", "/guide/install": "/install/", "/docs/index.html": "/guide/"}
+    for old, new in guessed.items():
+        if [old, new, "301"] not in lines:
+            bad.append(f"{old}: not redirected to {new}")
     check(lines and not bad, f"_redirects: {len(lines)} old addresses, each a 301 to a page that answers 200"
                              f"{': ' + '; '.join(bad[:6]) if bad else ''}")
 
@@ -465,6 +482,7 @@ def headers(base: str, site: Path) -> None:
     want = {  # path: (CSP must contain, must not contain, CORS, Cache-Control)
         "/": ("script-src 'self';", "wasm", None, "public, max-age=600"),
         "/guide/web-app": ("script-src 'self';", "wasm", None, "public, max-age=600"),
+        "/guide/": ("script-src 'self';", "wasm", None, "public, max-age=600"),
         # (60 s once the gallery store serves it; 600 s as built)
         "/formulas/": ("script-src 'self';", "jsdelivr", None, ("public, max-age=60", "public, max-age=600")),
         "/install/": ("script-src 'self' https://cdn.jsdelivr.net", "wasm", "*", "public, max-age=600"),
@@ -508,7 +526,8 @@ def headers(base: str, site: Path) -> None:
 
 def csp_in_browser(base: str, short_id: str) -> None:
     from playwright.sync_api import sync_playwright
-    paths = ["/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/api", "/no/such/page", "/demo/",
+    paths = ["/", "/guide/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/", "/dev/api", "/dev/psi/",
+             "/no/such/page", "/demo/",
              "/f/#" + urllib.parse.urlencode({"formula": "loop 4\npal(rainbow, frac(x + t/4))", "name": "Rainbow"}),
              f"/f/{short_id}"]
     with sync_playwright() as p:

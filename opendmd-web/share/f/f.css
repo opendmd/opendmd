@@ -1,53 +1,51 @@
-/* The share page: the web app's colours and preview, the site's headings. */
-:root{--bg:#0e0f11;--bg2:#16181b;--bg3:#1e2125;--line:#2a2e33;--fg:#dde1e6;--mut:#8b939c;--acc:#f0a030;--bad:#e55;--r:6px;color-scheme:dark}
-@font-face{font-family:Silkscreen;src:url(../fonts/silkscreen.woff2) format("woff2");font-display:swap}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-a{color:var(--acc)}
-h1,h2,.brand{font:400 24px/1.25 Silkscreen,system-ui,sans-serif;color:var(--acc);text-rendering:geometricPrecision;overflow-wrap:anywhere;margin:0 0 12px}
-h2{font-size:16px}
-#f-about{margin:-6px 0 12px;color:var(--mut);overflow-wrap:anywhere}
-.top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg2)}
-.brand{font-size:16px;margin:0;text-decoration:none}
-.top nav{display:flex;flex-wrap:wrap;gap:4px 16px}.top nav a{color:var(--mut);text-decoration:none}.top nav a:hover{color:var(--fg)}
-main{max-width:880px;margin:0 auto;padding:20px 16px 40px}
-.card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px;margin:0 0 14px}
-.stage{background:#000}
-.panel{display:block;width:100%;margin:0 auto;aspect-ratio:4/1;image-rendering:pixelated;background:#000;border-radius:var(--r)}
+/* The share page: on the site's site.css (its colours, light and dark, its header and footer),
+   with the web app's preview. */
+.fpage{--bad:#d33}
+@media (prefers-color-scheme:dark){.fpage{--bad:#e55}}
+.fpage main{max-width:880px;padding-top:28px}
+.fpage main>*{max-width:none}
+.fpage h1{font-size:24px;overflow-wrap:anywhere;margin:0 0 12px}
+.fpage h2{font-size:16px;margin:0 0 12px;padding:0;border:0}
+#f-about{margin:-6px 0 14px;color:var(--mut);overflow-wrap:anywhere;font-size:17px}
+.fpage .card{padding:14px;margin:0 0 14px}
+.fpage .stage{background:#000;border-color:#26282d}
+#f-panel{display:block;width:100%;margin:0 auto;aspect-ratio:4/1;image-rendering:pixelated;background:#000;border-radius:6px}
 .cap{color:var(--mut);font-size:13px;margin:8px 0 0}
+.stage .cap,.stage .sls span{color:#a0a2a9}
+.stage .sls output{color:#ecebe7}
 .bad{color:var(--bad)}
 .sls{margin-top:6px}
 .sls>*{display:flex;align-items:center;gap:12px;min-height:36px}
-.psi-pick{display:flex;flex-wrap:wrap;gap:4px}.psi-pick button{min-height:36px;padding:4px 12px;color:var(--mut)}.psi-pick [aria-checked=true]{border-color:var(--acc);color:var(--fg)}
-.sls span{min-width:56px;color:var(--mut);font-size:13px}
+.psi-pick{display:flex;flex-wrap:wrap;gap:4px}
+.fpage .psi-pick button{min-height:36px;padding:4px 12px;color:#a0a2a9;background:#1e2025;border-color:#2a2d33}
+.fpage .psi-pick [aria-checked=true]{border-color:var(--acc);color:#ecebe7}
+.sls span{min-width:56px;font-size:13px}
 .sls input{flex:1;accent-color:var(--acc)}
 .sls output{font:13px ui-monospace,Menlo,monospace;min-width:3em;text-align:right}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
-button,.btn,input,select{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:var(--r);min-height:40px;padding:8px 14px}
-button,.btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
-button:hover,.btn:hover{border-color:var(--acc)}
-.pri{background:var(--acc);border-color:var(--acc);color:#111;font-weight:600}
+.fpage main button,.fpage main .btn,.fpage main input,.fpage main select{font:inherit;font-size:15px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 14px}
+.fpage main button,.fpage main .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.fpage main button:hover,.fpage main .btn:hover{border-color:var(--acc)}
+.fpage main .pri{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:700}
 .btn[aria-disabled]{opacity:.5;cursor:not-allowed}
-button.txt{background:none;border:0;padding:0 2px;min-height:0;color:var(--acc);font-size:inherit}
-:focus-visible{outline:2px solid #33d1ff;outline-offset:2px}
+.fpage main button.txt{background:none;border:0;padding:0 2px;min-height:0;color:var(--ink);font-size:inherit}
 .row{display:flex;gap:8px;margin-top:6px}.row input{flex:1;min-width:0}
+#f-ask label{font-weight:600}
 #f-where{margin:-6px 0 14px}
-pre{margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:#0a0b0c;overflow:auto;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}
-.psi-hl .n{color:var(--acc)}.psi-hl .c{color:var(--mut)}.psi-hl .e{text-decoration:underline wavy var(--bad);background:#e5555530}
+.fpage pre{margin:0;padding:10px 12px;border-radius:8px;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}
+.psi-hl .e{text-decoration:underline wavy var(--bad);background:#e5555530}
 .sub .grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;align-items:center;margin:12px 0}
 .sub label{color:var(--mut);font-size:13px}
-.file{display:flex;align-items:center;gap:4px;font:14px ui-monospace,Menlo,monospace;color:var(--mut)}.file input{flex:1;min-width:0;font:inherit;color:var(--fg)}
+.file{display:flex;align-items:center;gap:4px;font:14px ui-monospace,Menlo,monospace;color:var(--mut)}.fpage .file input{flex:1;min-width:0;font:inherit;color:var(--fg)}
 .psi-file{margin:10px 0 12px;font-size:13px;max-height:16em}
 .qr{display:flex;align-items:center;gap:16px}
-#f-qr{flex:none;width:168px;background:#fff;border-radius:var(--r);line-height:0}#f-qr svg{width:100%;height:auto}
+#f-qr{flex:none;width:168px;background:#fff;border-radius:8px;line-height:0;box-shadow:0 0 0 1px var(--line)}#f-qr svg{width:100%;height:auto}
 .qr .cap{margin:0}
-footer{max-width:880px;margin:0 auto;padding:0 16px 32px;color:var(--mut);font-size:13px}
 @media (max-width:600px){
-  h1{font-size:16px}
+  .fpage h1{font-size:16px}
   .sub .grid{grid-template-columns:minmax(0,1fr)}
   .sub .grid label{margin-top:6px}
   .acts>*{flex:1 1 auto;justify-content:center}
   .qr{display:none} /* a phone is what scans it */
-  input,select{font-size:16px}
+  .fpage main input,.fpage main select{font-size:16px}
 }

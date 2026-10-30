@@ -14,6 +14,15 @@ the folder is still read for what the site should hold, so it must be the
 build URL serves. There the art index must also carry
 `Access-Control-Allow-Origin: *` (target/site/_headers).
 
+- the site's structure: every page reachable from the home page by its
+  links, the old addresses (_redirects) leading to pages that exist; the
+  menu (the top bar on a laptop, the Menu button on a phone, the guide's and
+  the developers' side menus, folded above the page on a phone); the home
+  page's buttons, doors and art; on the key pages at laptop and phone
+  sizes, light and dark: the theme, no sideways scroll, no CSP violation
+  under the page's _headers policy; and none of the words users never see
+  (cache, ODM, bucket, manifest, pack, bundle) on the home, install, guide
+  and gallery pages;
 - /f/ (a formula's own page): the name and the code shown as text (a link's
   markup stays text), the preview lit and moving, a slider, the QR code
   decoding to the page's link, Copy link / Copy code, Try it in the demo
@@ -60,7 +69,9 @@ build URL serves. There the art index must also carry
   not into a new session; every tab at laptop and phone sizes (in --shots,
   else target/site-smoke/).
 
-Screenshots of /f/ and the gallery at laptop and phone sizes with --shots.
+With --shots: the key pages, /f/, the gallery and the 404 page at laptop and
+phone sizes, light and dark (whole page, and the first screen as -top), and
+the phone's open Menu.
 Needs, once, `uv run --with playwright playwright install chromium`.
 """
 
@@ -70,6 +81,7 @@ import functools
 import http.server
 import io
 import json
+import posixpath
 import re
 import shutil
 import subprocess
@@ -105,11 +117,11 @@ def serve(root: Path) -> str:
     return f"http://127.0.0.1:{srv.server_port}"
 
 
-def new_page(browser, size: str, errors: list[str]) -> Page:
+def new_page(browser, size: str, errors: list[str], scheme: str | None = None) -> Page:
     w, h = SIZES[size]
     phone = size == "phone"
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3 if phone else 1,
-                              is_mobile=phone, has_touch=phone)
+                              is_mobile=phone, has_touch=phone, color_scheme=scheme)
     ctx.grant_permissions(["clipboard-read", "clipboard-write"])
     page = ctx.new_page()
     # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.
@@ -730,7 +742,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
             looks = page.locator("#examples ~ ul .ftile h3 .fbadge", has_text="look").count()
             check(marked == [e["name"] for e in every if e["bundle"]] and looks >= 8,
                   f"gallery: the bundled ten marked ({marked}), {looks} looks badged")
-            check(page.locator("nav a.on").inner_text() == "Formula gallery", "gallery: in the menu")
+            check(page.locator(".topnav a.on").inner_text() == "Formulas", "gallery: Formulas marked in the top bar")
             community = page.eval_on_selector_all("#community + ul .ftile h3", "els => els.map(e => e.textContent)")
             print(f"  ..   gallery: {len(community)} from the community {community[:5]}")
             page.evaluate("document.querySelectorAll('.ftile img').forEach(i => i.loading = 'eager')")
@@ -764,23 +776,163 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
         page.context.close()
 
 
-def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
-    """/f/ (an example, as the gallery's Open gives it) and the gallery, at
-    both sizes: the viewport and the whole page."""
-    e = next(x for x in examples() if x["name"] == "Stripes")  # a slider
+# The site's structure (the design pass): the pages every visitor sees.
+KEY_PAGES = {  # shot name: path
+    "home": "/", "install": "/install/", "guide": "/guide/", "guide-web-app": "/guide/web-app.html",
+    "formulas": "/formulas/", "dev": "/dev/", "dev-psi": "/dev/psi/", "licences": "/licenses/",
+}
+TOP_LABELS = ["Guide", "Formulas", "Demo", "For developers", "Install"]
+# Words users never see (CLAUDE.md, "Product model"); "pack" only as the DMDoS GIF pack's name.
+HIDDEN_WORDS = re.compile(r"\b(cache[sd]?|caching|ODM|odm|buckets?|manifests?|bundles?|bundled)\b|(?<!GIF )\bpack\b", re.I)
+
+
+def page_links(site: Path, page: str) -> set[str]:
+    """The published pages a built page links to (site paths, as files)."""
+    text = (site / page).read_text(encoding="utf-8", errors="replace")
+    out = set()
+    for url in re.findall(r'href="([^"#?]*)', text):
+        if not url or re.match(r"[a-z]+:", url):
+            continue
+        path = posixpath.normpath(url if url.startswith("/") else posixpath.join("/" + posixpath.dirname(page), url)).lstrip("/")
+        if url.endswith("/") or (site / path).is_dir():
+            path = (path + "/index.html").lstrip("/")
+        if path.endswith(".html") and (site / path).is_file():
+            out.add(path)
+    return out
+
+
+def reachable(site: Path) -> None:
+    """Every page reachable from the home page by its links; the old
+    addresses' redirect pages lead to pages that exist."""
+    seen, todo = {"index.html"}, ["index.html"]
+    while todo:
+        for nxt in page_links(site, todo.pop()) - seen:
+            seen.add(nxt)
+            if not nxt.startswith("demo/"):
+                todo.append(nxt)
+    moved = {ln.split()[0].lstrip("/") for ln in (site / "_redirects").read_text().splitlines() if ln.strip()}
+    pages = {p.relative_to(site).as_posix() for p in site.rglob("*.html")}
+    want = {p for p in pages if not p.startswith("demo/") and p != "404.html" and p not in moved}
+    missing = sorted(want - seen)
+    check(not missing and len(want) > 15, f"every page reachable from the home page by its links ({len(want)} pages){': ' + ', '.join(missing[:8]) if missing else ''}")
+    bad = []
+    for ln in (site / "_redirects").read_text().splitlines():
+        old, new, code = ln.split()
+        file = new.lstrip("/") + ("index.html" if new.endswith("/") else ".html")
+        stub = site / old.lstrip("/")
+        if code != "301" or not (site / file).is_file() or (old.endswith(".html") and not stub.is_file()):
+            bad.append(ln)
+    check(not bad, f"old addresses: every _redirects line a 301 to a page that exists, with its redirect page "
+                   f"for a plain server{': ' + '; '.join(bad[:4]) if bad else ''}")
+    for old in ("/gallery", "/guide/install", "/docs/index.html"):
+        check(any(ln.split()[0] == old for ln in (site / "_redirects").read_text().splitlines()), f"old addresses: {old} is redirected")
+
+
+def csp_pattern(path: str) -> str:
+    for pat in ("/install/*", "/f/*", "/dev/psi/*"):
+        if path.startswith(pat[:-1]):
+            return pat
+    return "/*"
+
+
+def structure(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The menu (the top bar on a laptop, the Menu button on a phone; the
+    guide's and the developers' side menus, folded on a phone), the home
+    page's way in, light and dark, no sideways scroll at phone width and no
+    CSP violation (each page under its _headers policy) on the key pages,
+    and the words users never see kept off their pages."""
+    reachable(site)
     for size in SIZES:
-        page = new_page(browser, size, errors)
-        page.goto(share_link(base, e["src"], e["name"]))
-        wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
-        page.wait_for_timeout(600)
-        page.screenshot(path=str(shots / f"f-{size}.png"))
-        page.screenshot(path=str(shots / f"f-{size}-full.png"), full_page=True)
-        page.goto(f"{base}/formulas/")
-        page.evaluate("document.querySelectorAll('.ftile img').forEach(i => i.loading = 'eager')")
-        wait_js(page, "[...document.querySelectorAll('.ftile img')].every(i => i.complete && i.naturalWidth == 128)", timeout=20000)
-        page.screenshot(path=str(shots / f"gallery-{size}.png"))
-        page.screenshot(path=str(shots / f"gallery-{size}-full.png"), full_page=True)
-        page.context.close()
+        for scheme in ("light", "dark"):
+            page = new_page(browser, size, errors, scheme=scheme)
+            violations: list[str] = []
+            page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+                (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+            page.on("console", lambda m: "Content Security Policy" in m.text and violations.append(m.text[:160]))
+
+            def with_csp(route):
+                r = route.fetch()
+                path = urllib.parse.urlsplit(route.request.url).path
+                route.fulfill(response=r, headers={**r.headers, "content-security-policy": csp_for(site, csp_pattern(path))})
+            page.route(lambda u: urllib.parse.urlsplit(u).path.endswith(("/", ".html")), with_csp)
+            for name, path in KEY_PAGES.items():
+                page.goto(base + path, wait_until="load")
+                page.wait_for_timeout(150)
+                what = f"{name} ({size}, {scheme})"
+                wide = page.evaluate("document.documentElement.scrollWidth - innerWidth")
+                check(wide <= 0, f"{what}: no sideways scroll ({wide} px)")
+                seen = page.evaluate("window.__csp || []") + violations
+                check(not seen, f"{what}: no CSP violation {seen[:2]}")
+                violations.clear()
+                bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+                lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
+                check(lum > 600 if scheme == "light" else lum < 120, f"{what}: the {scheme} theme ({bg})")
+                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas"):
+                    text = page.inner_text("body")
+                    hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
+                    check(not hit, f"{name}: none of the words users never see {hit}")
+            # The menu.
+            page.goto(base + "/guide/web-app.html")
+            if size == "laptop":
+                labels = page.eval_on_selector_all(".topnav a", "els => els.map(e => e.textContent)")
+                check(labels == TOP_LABELS and page.is_visible(".topnav") and not page.is_visible(".mnav"),
+                      f"menu ({scheme}): the top bar's {labels}")
+                check(page.locator(".topnav a.on").inner_text() == "Guide" and page.locator(".side a.on").inner_text() == "The web app"
+                      and not page.is_visible(".subnav"), "menu: the guide marked in the top bar, the page in the side menu")
+                page.click(".topnav a:has-text('For developers')")
+                page.wait_for_url("**/dev/")
+                check(page.locator(".side a.on").inner_text() == "Building from source", "menu: For developers opens their side menu")
+            else:
+                check(not page.is_visible(".topnav") and page.is_visible(".mnav summary") and not page.is_visible(".side")
+                      and page.is_visible(".subnav summary"), f"menu (phone, {scheme}): a Menu button; the guide's menu folded above the page")
+                check("The web app" in page.inner_text(".subnav summary"), "menu (phone): the folded menu names the page")
+                page.click(".mnav summary")
+                labels = [t.strip() for t in page.eval_on_selector_all(".mnav nav a", "els => els.map(e => e.innerText)")]
+                check(labels == TOP_LABELS and page.is_visible(".mnav nav a:has-text('Formulas')"), f"menu (phone): Menu opens the links {labels}")
+                page.click(".mnav nav a:has-text('Formulas')")
+                page.wait_for_url("**/formulas/")
+                check(page.locator(".ftile").count() > 30, "menu (phone): Formulas opens the gallery")
+            # The home page's way in.
+            if scheme == "light":
+                page.goto(base + "/")
+                hrefs = page.eval_on_selector_all(".hero .cta", "els => els.map(e => e.getAttribute('href'))")
+                doors = page.eval_on_selector_all(".door", "els => els.map(e => e.getAttribute('href'))")
+                check(hrefs == ["install/", "demo/", "formulas/"] and doors == ["install/", "guide/", "formulas/"],
+                      f"home ({size}): Install, the demo and Formulas up top {hrefs}; Install, the guide and the gallery below {doors}")
+                lit_tiles = page.eval_on_selector_all(".tiles img, .hero img", "els => els.filter(i => i.getAttribute('src').startsWith('art/')).length")
+                check(lit_tiles >= 8 and page.inner_text("h1").strip() != "", f"home ({size}): a heading, the panel and {lit_tiles} pieces of art")
+                if size == "phone":
+                    hero = page.evaluate("document.querySelector('.hero-panel').getBoundingClientRect().top < document.querySelector('.hero h1').getBoundingClientRect().top")
+                    check(hero, "home (phone): the panel comes first")
+            page.context.close()
+
+
+def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
+    """The key pages, /f/ (an example, as the gallery's Open gives it) and
+    the gallery, at both sizes in both themes: the whole page
+    (<name>-<size>-<theme>.png), plus the first screen of each at laptop and
+    phone sizes (-top) and the phone's open Menu."""
+    e = next(x for x in examples() if x["name"] == "Stripes")  # a slider
+    pages = {**KEY_PAGES, "f": share_link(base, e["src"], e["name"])[len(base):], "not-found": "/no/such/page"}
+    for size in SIZES:
+        for scheme in ("light", "dark"):
+            page = new_page(browser, size, [], scheme=scheme)  # (the 404 page answers 404)
+            for name, path in pages.items():
+                page.goto("about:blank")
+                page.goto(base + path)
+                if name == "f":
+                    wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
+                page.evaluate("document.querySelectorAll('img[loading=lazy]').forEach(i => i.loading = 'eager')")
+                wait_js(page, "[...document.images].every(i => i.complete)", timeout=20000)
+                page.wait_for_timeout(600)
+                page.screenshot(path=str(shots / f"{name}-{size}-{scheme}-top.png"))
+                page.screenshot(path=str(shots / f"{name}-{size}-{scheme}.png"), full_page=True)
+            if size == "phone":
+                page.goto(base + "/guide/web-app.html")
+                page.click(".mnav summary")
+                page.wait_for_timeout(200)
+                page.screenshot(path=str(shots / f"menu-{size}-{scheme}.png"))
+            page.context.close()
     print(f"  shots in {shots}")
 
 
@@ -827,11 +979,11 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
         page.goto(base + "/dev/api.html")
         page.click(f'p.vers a[href="api/v{ver}.html"]')
         page.wait_for_url(f"**/dev/api/v{ver}.html")
-        check(f"OpenDMD {ver}" in page.inner_text("p.vers") and page.locator("h2").count() > 10,
-              f"api: dev/api.html's link opens the frozen page ({page.locator('h2').count()} sections)")
+        check(f"OpenDMD {ver}" in page.inner_text("p.vers") and page.locator("main h2").count() > 10,
+              f"api: dev/api.html's link opens the frozen page ({page.locator('main h2').count()} sections)")
         page.click("p.vers a")
         page.wait_for_url("**/dev/api.html")
-        check(page.locator('nav a.on[href="api.html"]').count() == 1, "api: the frozen page's link leads back to the latest")
+        check(page.locator('.side a.on[href="api.html"]').count() == 1, "api: the frozen page's link leads back to the latest")
         page.context.close()
         # Off a tag (`git describe` is not v<version>), auto freezes nothing.
         desc = subprocess.run(["git", "describe", "--always", "--dirty", "--tags", "--match", "v*"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
@@ -868,7 +1020,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
           "psi reference: its CSP is the docs' and 'wasm-unsafe-eval', nothing more")
     check((site / "dev/psi/index.html").is_file() and (site / "dev/psi/psiref.js").is_file(),
           "psi reference: dev/psi/index.html and its script are in the site")
-    check('href="../dev/psi/index.html"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from the guide's menu")
+    check('href="../dev/psi/"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from every page (the footer)")
     for size in SIZES:
         page = new_page(browser, size, errors)
         violations: list[str] = []
@@ -888,7 +1040,8 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             early = [u for u in asked if "pkg-psi" in u]
             check(not early, f"psi reference: Psi doesn't load with the page, only when an example is near ({early[:1]})")
             check(page.title().startswith("Psi language reference"), f"psi reference: its title ({page.title()})")
-            check(page.locator("nav a.on").inner_text() == "Psi language", "psi reference: in the menu, marked")
+            check(page.locator(".side a.on").inner_text() == "Psi language" and page.locator(".topnav a.on").inner_text() == "For developers",
+                  "psi reference: in the developers' menu, marked")
             codes = page.eval_on_selector_all("h4[id^=E]", "els => els.map(e => e.id)")
             check(len(codes) >= 100 and "E202" in codes and "E601" in codes, f"psi reference: the error index ({len(codes)} codes, each an anchor)")
             top = page.evaluate("document.getElementById('E202').getBoundingClientRect().top")
@@ -1049,6 +1202,8 @@ def main() -> int:
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
+        structure(browser, base, a.site, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
         print("the demo's Settings")

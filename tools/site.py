@@ -7,7 +7,9 @@
     uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card \
         --art target/site-art --dist dist
 
-- /            the README, as the landing page
+- /            the home page (site/pages/home.html: what OpenDMD is, the
+               panel and its art, and the way to Install, the guide and the
+               Formula gallery); the README stays GitHub's front page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
                Tools' button for the DevKit; the 8 MB build's (8 MB) is
                hidden for now, see INSTALL_BOARDS) and, under
@@ -16,7 +18,8 @@
                update bundles (every layout's: release.json points at them),
                plus install/release.json (what the web app's update check
                reads)
-- /guide/      the user guide (docs/guide/)
+- /guide/      the user guide (docs/guide/), with its own index
+               (site/pages/guide.md) and a side menu
 - /dev/        the developer pages: an overview and a few clean references
                (the detailed notes in docs/ stay in the repo), among them
                /dev/psi/, the Psi language reference (docs/psi-spec.md:
@@ -71,9 +74,15 @@
                serves this tree as its static assets): headers per path (CORS,
                caching, CSP), MOVED as 301s, what not to upload
 
+Every page has the same chrome, from site/theme/: page.html around it,
+header.html (the wordmark and the top bar: Guide, Formulas, Demo, For
+developers and Install; a Menu button on a phone), footer.html, and
+site.css (light and dark follow the system). A page in a SECTION (the guide,
+the developers' pages) also gets that section's menu: down the side on a
+wide screen, a folded list above the page on a phone. /f/ gets the same
+header and footer (f_page), around its own f.css.
+
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
-`<!-- site:hero -->` ends the README's GitHub header (the site draws its
-own), `<!-- site:tiles -->` places the landing page's tiles, and
 `site:features`, `site:steps` and `site:cards` ... `site:cards-end` style
 the list or the h3 sections after them as cards or numbered steps.
 
@@ -100,7 +109,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Source (repo path) -> published path, in the order of the docs menu.
 PAGES = {
-    "README.md": "index.html",
+    "site/pages/home.html": "index.html",
+    "site/pages/guide.md": "guide/index.html",
     "docs/guide/hardware.md": "guide/hardware.html",
     "docs/guide/install.md": "install/index.html",
     "docs/guide/web-app.md": "guide/web-app.html",
@@ -135,27 +145,67 @@ MOVED = {
     # MOVED are the only files at these paths.
     "guide/effects.html": "guide/formulas.html",
     "dev/effects.html": "guide/formulas.html",
+    # Addresses people guess: the gallery by the public repo's name, the
+    # installer under the guide, the docs' old folder.
+    "gallery.html": "formulas/index.html",
+    "guide/install.html": "install/index.html",
+    "docs/index.html": "guide/index.html",
 }
-MENU = [
-    ("Overview", "index.html"),
-    ("Try the demo", "demo/"),
-    ("Formula gallery", "formulas/index.html"),
-    (None, "Guide"),
-    ("What you need", "guide/hardware.html"),
-    ("Install", "install/index.html"),
-    ("The web app", "guide/web-app.html"),
-    ("Create Art", "guide/create-art.html"),
-    ("Formulas", "guide/formulas.html"),
-    ("The SD card", "guide/card.html"),
-    ("Updating", "guide/updating.html"),
-    ("Troubleshooting", "guide/troubleshooting.html"),
-    (None, "For developers"),
-    ("Building from source", "dev/index.html"),
-    ("HTTP API", "dev/api.html"),
-    ("Psi language", "dev/psi/index.html"),
-    ("The simulator", "dev/simulator.html"),
-    ("Hardware pinout", "dev/pinout.html"),
+# Other names a published page goes by in the docs' links.
+ALIASES = {"README.md": "index.html"}
+# The top bar: label, target, the section it marks. The home page is the
+# wordmark; Install, last, is drawn as a button.
+TOP = [
+    ("Guide", "guide/index.html", "guide"),
+    ("Formulas", "formulas/index.html", "formulas"),
+    ("Demo", "demo/", "demo"),
+    ("For developers", "dev/index.html", "dev"),
+    ("Install", "install/index.html", "install"),
 ]
+# The side menus: section -> (its heading, entries). None starts a group (a
+# little space). Pages outside them are reached from the top bar, the footer
+# or another page.
+SECTIONS = {
+    "guide": ("The guide", [
+        ("Start here", "guide/index.html"),
+        None,
+        ("What you need", "guide/hardware.html"),
+        ("Install", "install/index.html"),
+        None,
+        ("The web app", "guide/web-app.html"),
+        ("Create Art", "guide/create-art.html"),
+        ("Formulas", "guide/formulas.html"),
+        ("The SD card", "guide/card.html"),
+        None,
+        ("Updating", "guide/updating.html"),
+        ("Troubleshooting", "guide/troubleshooting.html"),
+    ]),
+    "dev": ("For developers", [
+        ("Building from source", "dev/index.html"),
+        ("HTTP API", "dev/api.html"),
+        ("Psi language", "dev/psi/index.html"),
+        ("The simulator", "dev/simulator.html"),
+        ("Hardware pinout", "dev/pinout.html"),
+        None,
+        ("Licences", "licenses/index.html"),
+    ]),
+}
+# What a link named after a file (`card.md`) is called instead.
+TITLES = {e[1]: e[0] for _, entries in SECTIONS.values() for e in entries if e}
+
+
+def section(page: str) -> tuple[str | None, str | None]:
+    """(the top bar entry it marks, the side menu it shows) for a published page."""
+    first = page.split("/")[0]
+    if first == "install":
+        return "install", "guide"
+    if first in ("guide", "dev"):
+        return first, first
+    if first == "licenses":
+        return None, "dev"
+    if first in ("formulas", "f"):
+        return "formulas", None
+    return None, None
 # The installer page: ESP Web Tools, pinned (the flashing itself is
 # esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
 INSTALL_PAGE = "install/index.html"
@@ -253,208 +303,8 @@ The demo's and this site's animations are recordings of OpenDMD's own Formulas, 
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 """
 
-CSS = """
-:root{--bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
---acc:#f7a531;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;color-scheme:dark}
-@font-face{font-family:Silkscreen;src:url(fonts/silkscreen.woff2) format("woff2");font-display:swap}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
-a{color:var(--acc)}
-a:focus-visible,button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
-.skip{position:absolute;left:-9999px}.skip:focus{left:12px;top:12px;z-index:9;background:var(--bg3);padding:6px 10px;border-radius:6px}
-
-/* LEDs: a 128x32 picture scaled up crisply, with a dot mask over it */
-/* (the unlit LEDs show through the picture's black: it is blended "lighten" over a grid of dim dots) */
-.led{position:relative;display:block;line-height:0;isolation:isolate;--cols:128;--rows:32;
-background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/calc(100% / var(--cols)) calc(100% / var(--rows))}
-.led img{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges;border-radius:0;mix-blend-mode:lighten}
-.led::after{content:"";position:absolute;inset:0;pointer-events:none;
-background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
-background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
-
-.banner{padding:9px 16px;text-align:center;font-size:14px;line-height:1.45;color:#111;background:var(--acc)}
-.banner strong{font-weight:800}
-.wrap{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1260px;margin:0 auto}
-nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line)}
-nav .brand{display:inline-block;margin:0 8px 18px;padding:8px 10px;border-radius:8px;background:#000;box-shadow:0 0 0 1px var(--line),0 0 24px rgba(247,165,49,.15)}
-nav .brand .led{width:140px}
-nav a{display:block;padding:5px 10px;border-radius:6px;color:var(--mut);text-decoration:none;font-size:14px}
-nav a:hover{color:var(--fg);background:var(--bg3)}
-nav a.on{color:var(--fg);background:var(--bg3);font-weight:600;box-shadow:inset 3px 0 0 var(--acc)}
-nav a.demo{color:#111;background:var(--acc);font-weight:700;margin:4px 0 8px}
-nav h4{margin:18px 10px 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
-main{padding:36px 44px 72px;min-width:0}
-main>*{max-width:860px}
-/* Headings: Silkscreen, a pixel font on an 8 px grid, crisp only at 16/24/32 px, weight 400,
-   no fractional letter-spacing; geometricPrecision keeps FreeType's hinting off its edges */
-h1,h2,h3{font-family:Silkscreen,system-ui,sans-serif;font-weight:400;line-height:1.25;text-wrap:balance;
-overflow-wrap:break-word;text-rendering:geometricPrecision}
-h1,h2{color:var(--acc)}
-h1{font-size:32px;margin:4px 0 16px}
-h2{font-size:24px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
-h3{font-size:16px;margin:28px 0 8px}
-h1 .headerlink{display:none}
-h2 .headerlink,h3 .headerlink,h4 .headerlink{opacity:0;margin-left:6px;text-decoration:none;color:var(--mut)}
-h2:hover .headerlink,h3:hover .headerlink,h4:hover .headerlink{opacity:1}
-code{font:14px ui-monospace,Menlo,Consolas,monospace;background:var(--bg3);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
-pre{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow:auto}
-pre code{background:none;padding:0;font-size:13px;line-height:1.5;overflow-wrap:normal}
-table{border-collapse:collapse;display:block;overflow:auto;margin:16px 0}
-th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
-th{background:var(--bg2)}
-img{max-width:100%;height:auto;border-radius:6px}
-blockquote{margin:20px 0;padding:12px 18px;border:1px solid var(--line);border-left:4px solid var(--cyan);border-radius:8px;background:var(--bg2);color:var(--fg)}
-blockquote>:first-child{margin-top:0}blockquote>:last-child{margin-bottom:0}
-blockquote ul{padding-left:20px}
-hr{border:0;border-top:1px solid var(--line)}
-
-/* The installer */
-.install{margin:8px 0 24px;padding:20px;border:1px solid var(--line);border-radius:12px;
-background:linear-gradient(135deg,rgba(247,165,49,.12),rgba(255,79,139,.08) 60%,transparent),var(--bg2)}
-.install .boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
-.install .board h3{margin:0 0 4px}
-.install .board p{margin:0 0 14px;color:var(--mut)}
-.install button{font:inherit;font-weight:700;padding:11px 24px;border-radius:8px;border:0;background:var(--acc);color:#111;cursor:pointer;box-shadow:0 0 22px rgba(247,165,49,.35)}
-.install .ver{color:var(--mut);font-size:14px;margin:16px 0 0}
-
-/* Buttons, the landing page */
-.cta{display:inline-block;margin:6px 8px 6px 0;padding:10px 18px;border-radius:8px;background:var(--acc);color:#111;font-weight:700;text-decoration:none}
-.cta.alt{background:none;color:var(--fg);box-shadow:inset 0 0 0 2px var(--line)}
-.cta.alt:hover{box-shadow:inset 0 0 0 2px var(--acc)}
-.hero{margin:0 0 28px}
-.hero h1{margin:0 0 18px}
-.hero .plate{display:inline-block;padding:18px 22px;border-radius:14px;background:#000;
-box-shadow:0 0 0 1px var(--line),0 0 60px rgba(247,165,49,.18)}
-.hero .plate .led{width:420px;max-width:100%}
-.hero .tag{font-size:21px;line-height:1.45;margin:0 0 12px;max-width:640px}
-.chip{display:inline-block;font-size:13px;font-weight:600;color:var(--cyan);border:1px solid rgba(51,209,255,.4);border-radius:999px;padding:2px 10px;margin:0 0 14px;text-decoration:none}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin:28px 0 8px;padding:0}
-.tiles figure{margin:0;padding:8px 8px 6px;background:#000;border:1px solid var(--line);border-radius:10px}
-.tiles figcaption{font-size:13px;color:var(--mut);line-height:1.3;padding:8px 2px 2px}
-.tiles-note{font-size:13px;color:var(--mut)}
-
-/* The formula gallery */
-.lead{font-size:17px;max-width:720px}
-ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin:18px 0}
-.ftile{display:flex;flex-direction:column;padding:10px 12px 12px;background:var(--bg2);border:1px solid var(--line);border-radius:10px}
-.ftile .fpic{display:block;padding:6px;margin:0 0 4px;background:#000;border-radius:8px}
-.ftile h3{margin:8px 0 2px;overflow-wrap:anywhere}
-.ftile p{margin:0;font-size:14px;overflow-wrap:anywhere}
-.ftile .fdesc{flex:1}
-.ftile .fby{color:var(--mut);font-size:13px;margin:6px 0 4px}
-.ftile .fctl{color:var(--mut);font-size:13px;margin-top:4px}
-.ftile .fbadge{display:inline-block;vertical-align:middle;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;font-weight:normal;color:var(--mut)}
-.ftile .facts .cta{padding:6px 14px;font-size:14px}
-.ftile .facts .add{display:block;text-align:center;margin:6px 0 2px}
-
-/* Cards: feature lists, the hardware page */
-ul.features{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:18px 0}
-ul.features li{margin:0;padding:14px 16px;background:var(--bg2);border:1px solid var(--line);border-top:3px solid var(--c,var(--acc));border-radius:10px;font-size:15px}
-ul.features li>strong:first-child{display:block;color:var(--fg);font-size:16px;margin-bottom:2px}
-.features li:nth-child(5n+2),.cards .card:nth-child(5n+2){--c:var(--pink)}
-.features li:nth-child(5n+3),.cards .card:nth-child(5n+3){--c:var(--cyan)}
-.features li:nth-child(5n+4),.cards .card:nth-child(5n+4){--c:var(--green)}
-.features li:nth-child(5n+5),.cards .card:nth-child(5n+5){--c:var(--violet)}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:24px 0}
-.card{padding:18px 20px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;--c:var(--acc)}
-.card h3{display:flex;align-items:center;gap:10px;margin:0 0 10px}
-.card .num{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#000;color:var(--c);
-font:800 15px ui-monospace,Menlo,Consolas,monospace;box-shadow:0 0 0 2px var(--c),0 0 14px var(--c)}
-.card p{margin:0 0 10px;font-size:15px}
-.card p.where{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--line);font-size:14px;color:var(--mut)}
-.card p.where strong{color:var(--fg)}
-
-/* Numbered steps */
-ol.steps{list-style:none;padding:0;margin:18px 0;counter-reset:step}
-ol.steps>li{counter-increment:step;position:relative;margin:12px 0;padding:14px 18px 14px 66px;background:var(--bg2);border:1px solid var(--line);border-radius:12px}
-ol.steps>li::before{content:counter(step);position:absolute;left:16px;top:13px;width:34px;height:34px;display:grid;place-items:center;
-border-radius:50%;background:var(--acc);color:#111;font-weight:800;box-shadow:0 0 16px rgba(247,165,49,.4)}
-ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
-
-p.vers{font-size:14px;color:var(--mut)}
-
-footer{grid-column:2;padding:0 44px 40px;color:var(--mut);font-size:13px}
-footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
-
-/* The Psi language reference (dev/psi/, psiref.js): search, the cheat sheet, live examples */
-main [hidden]{display:none!important}
-.psi-tools{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px;padding:10px 0;background:var(--bg)}
-.psi-tools input{flex:1 1 220px;min-width:0;font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg2);color:var(--fg)}
-.psi-tools .btn{font:inherit;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg3);color:var(--fg);cursor:pointer}
-.psi-tools .btn[aria-pressed=true]{background:var(--acc);color:#111;border-color:var(--acc)}
-.psi-tools .cap{font-size:13px;color:var(--mut)}
-code.psi-ex{white-space:pre-wrap}
-table.psi-ex-t td:first-child code{overflow-wrap:normal}
-.psi-live{margin:8px 0 2px}
-.psi-live .led{width:384px;max-width:100%}
-.psi-live.big .led{width:512px}
-.led canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges;mix-blend-mode:lighten}
-.psi-open{font-size:13px}
-.psi-hl .n{color:var(--acc)}.psi-hl .c{color:var(--mut)}.psi-hl .w{color:var(--pink)}.psi-hl .s{color:var(--green)}
-.psi-hl .k{color:var(--cyan)}.psi-hl .p{color:var(--violet)}
-h4[id^=E]{scroll-margin-top:64px}
-h4[id^=E]:target{color:var(--acc)}
-.badge{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--pink);border-radius:6px;font-size:12px;font-weight:400;color:var(--pink);vertical-align:middle}
-main.cheat .psi-err>:not(h4){display:none}
-main.cheat .psi-err h4{margin:0;padding:2px 0;font-size:14px;font-weight:400;cursor:pointer}
-main.cheat .psi-err h4:hover{color:var(--acc)}
-main.cheat td:nth-child(3),main.cheat th:nth-child(3),main.cheat .psi-live{display:none}
-main.cheat table{font-size:14px;margin:8px 0}
-main.cheat td{padding:3px 8px}
-@media (max-width:600px){
-  table.psi-ex-t thead{display:none}
-  table.psi-ex-t tbody,table.psi-ex-t tr,table.psi-ex-t td{display:block}
-  table.psi-ex-t tr{border:1px solid var(--line);border-radius:8px;margin:0 0 10px;padding:4px 0}
-  table.psi-ex-t td{border:0;padding:3px 10px}
-}
-
-@media (max-width:860px){
-  .wrap{display:block}
-  nav{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line);padding:16px}
-  nav .brand{margin:0 0 12px}
-  nav .links{display:flex;flex-wrap:wrap;gap:4px}nav h4{display:none}
-  nav a.on{box-shadow:inset 0 -2px 0 var(--acc)}
-  main{padding:22px 16px 56px}
-  footer{padding:0 16px 32px}
-  h1{font-size:24px}
-  .hero .plate{padding:12px 14px}
-  .hero .plate .led{width:280px}
-  .hero .tag{font-size:18px}
-  ol.steps>li{padding:12px 14px 12px 56px}
-  ol.steps>li::before{left:12px;width:30px;height:30px}
-  .cards{grid-template-columns:minmax(0,1fr)}
-}
-"""
-
-PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
-<meta name="description" content="{description}">
-<title>{title}</title>
-<link rel="preload" href="{up}fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="{up}site.css">{head}
-</head>
-<body>
-<a class="skip" href="#main">Skip to the page</a>
-{banner}<div class="wrap">
-<nav aria-label="Site"><a class="brand" href="{up}index.html">{brand}</a><div class="links">{menu}</div></nav>
-<main id="main">
-{body}
-</main>
-<footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
-<a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
-the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
-OpenDMD's own Formulas and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
-Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.txt">Apache 2.0</a>;
-<a href="{up}licenses/">third-party licences</a>.</p></footer>
-</div>
-</body>
-</html>
-"""
+# The pages' chrome and styles (see the docstring).
+THEME = ROOT / "site/theme"
 # Until the public launch: a line across the top of every page. Set to "" to drop it.
 BANNER = ("<strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, "
           "but it may change, and the source code isn't public yet.")
@@ -556,14 +406,20 @@ ASSETS_IGNORE = (".assetsignore",)
 NOT_FOUND_PAGE = "404.html"
 NOT_FOUND = """# Not found
 
-There's nothing at this address. It may have moved: start from the [overview](/), the
-[guide](/guide/hardware.html) or the [Formula gallery](/formulas/).
+There's nothing at this address. It may have moved: start from the [home page](/), the
+[guide](/guide/) or the [Formula gallery](/formulas/).
 """
 
 
 def rel(from_page: str, to: str) -> str:
     """A link from one published page to another published path."""
     return posixpath.relpath(to, posixpath.dirname(from_page) or ".") + ("/" if to.endswith("/") else "")
+
+
+def href(page: str, to: str) -> str:
+    """A link from `page` to a published page, a folder's index as the folder
+    (where Cloudflare serves it, and a plain static server too)."""
+    return rel(page, to.removesuffix("index.html") or "./") if to.endswith("index.html") else rel(page, to)
 
 
 def rewrite(src: str, page: str, text: str, assets: set[str]) -> str:
@@ -573,6 +429,7 @@ def rewrite(src: str, page: str, text: str, assets: set[str]) -> str:
             return m.group(0)
         path, _, frag = url.partition("#")
         target = posixpath.normpath(posixpath.join(posixpath.dirname(src), path))
+        target = next((s for s, d in PAGES.items() if d == ALIASES[target]), target) if target in ALIASES else target
         if target in PAGES:
             out = rel(page, PAGES[target])
         elif target in FILES:
@@ -585,27 +442,88 @@ def rewrite(src: str, page: str, text: str, assets: set[str]) -> str:
         return lead + out + ("#" + frag if frag else "")
 
     # A link named after a file (`card.md`) is named after its page instead.
-    names = {page: label for label, page in MENU if label}
     def title(m: re.Match) -> str:
         target = posixpath.normpath(posixpath.join(posixpath.dirname(src), m.group(2).partition("#")[0]))
-        return f"[{names[PAGES[target]]}]({m.group(2)})" if PAGES.get(target) in names else m.group(0)
+        return f"[{TITLES[PAGES[target]]}]({m.group(2)})" if PAGES.get(target) in TITLES else m.group(0)
     text = re.sub(r"\[`([^`\]]+\.md)`\]\(([^)\s]+)\)", title, text)
     text = LINK.sub(fix, text)
     # Markdown links to unpublished files: keep the text, drop the link.
     return re.sub(r"\[([^\]]+)\]\(#unpublished:[^)]*\)", r"\1", text)
 
 
-def menu(page: str, on: str | None = None) -> str:
-    """The docs menu for `page`, with `on` (default: the page itself) marked."""
+def _a(page: str, label: str, target: str, on: bool, cls: str = "") -> str:
+    c = " ".join(x for x in (cls, "on" if on else "") if x)
+    return (f'<a href="{href(page, target)}"{f" class={c!r}" if c else ""}{" aria-current=page" if on else ""}>'
+            f'{html.escape(label)}</a>')
+
+
+def top_links(page: str) -> str:
+    """The top bar's links, the page's section marked."""
+    mark, _ = section(page)
+    return "".join(_a(page, label, t, sec == mark, "go" if sec == "install" else "") for label, t, sec in TOP)
+
+
+def side_menu(page: str, on: str | None = None) -> tuple[str, str]:
+    """The page's section menu, `on` (default: the page itself) marked: (the
+    side one for wide screens, the folded one for phones); empty outside a section."""
+    _, sec = section(on or page)
+    if sec is None:
+        return "", ""
     on = on or page
-    out = []
-    for label, target in MENU:
-        if label is None:
-            out.append(f"<h4>{html.escape(target)}</h4>")
+    head, entries = SECTIONS[sec]
+    links, gap, here = [], False, ""
+    for e in entries:
+        if e is None:
+            gap = True
             continue
-        cls = "demo" if target == "demo/" else "on" if target == on else ""
-        out.append(f'<a href="{rel(page, target)}"{f" class={cls!r}" if cls else ""}>{html.escape(label)}</a>')
-    return "".join(out)
+        label, t = e
+        here = label if t == on else here
+        links.append(_a(page, label, t, t == on, "gap" if gap else ""))
+        gap = False
+    links_html = "".join(links)
+    side = f'<nav class="side" aria-label="{html.escape(head)}"><p class="side-h">{html.escape(head)}</p>{links_html}</nav>'
+    fold = (f'<details class="subnav"><summary>{html.escape(head)}{": <b>" + html.escape(here) + "</b>" if here else ""}</summary>'
+            f'<nav aria-label="{html.escape(head)} (menu)">{links_html}</nav></details>\n')
+    return side, fold
+
+
+@functools.cache
+def theme(name: str) -> str:
+    return (THEME / name).read_text(encoding="utf-8")
+
+
+def wordmark(up: str, wm: dict) -> str:
+    return (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
+            f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
+
+
+def header(page: str, wm: dict) -> str:
+    """The banner, the wordmark and the top bar (site/theme/header.html)."""
+    up = "../" * page.count("/")
+    return theme("header.html").strip().format(
+        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else "",
+        home="/" if page == NOT_FOUND_PAGE else up or "./", wordmark=wordmark(up, wm), links=top_links(page))
+
+
+def footer(page: str) -> str:
+    return theme("footer.html").strip().format(up="../" * page.count("/"))
+
+
+ABSOLUTE = functools.partial(re.sub, r'((?:href|src|srcset)=")(?![a-z]+:|/|#)', r"\1/")
+
+
+def render(page: str, title: str, body: str, wm: dict, description: str = DESCRIPTION, head: str = "",
+           on: str | None = None, kind: str = "doc") -> str:
+    """A whole page: the chrome (site/theme/) around `body`. `on`: the menu
+    entry to mark, when not the page itself."""
+    up = "../" * page.count("/")
+    side, fold = side_menu(page, on)
+    doc = theme("page.html").format(
+        title=html.escape(title), description=html.escape(description), up=up, head=head, kind=kind,
+        header=header(page, wm), wrap="wrap sided" if side else "wrap", side=side, subnav=fold, body=body,
+        footer=footer(page))
+    # The 404 page answers at any depth: its links are absolute.
+    return ABSOLUTE(doc) if page == NOT_FOUND_PAGE else doc
 
 
 LAZY = ' loading="lazy"'
@@ -624,27 +542,35 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
 def tiles(art: dict) -> str:
     figs = "".join(f'<figure>{led("", i, lazy=True)}<figcaption>{html.escape(i["caption"])}</figcaption></figure>'
                    for i in art["items"] if "tiles" in i["where"])
-    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from the simulator: OpenDMD\'s own '
-            f'Formulas and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them '
-            f'with Create Art.</p>')
+    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from OpenDMD: its own Formulas, the clock '
+            f'and scrolling text, and the CC0 Kenney Pixel Platformer sprites. Your own GIFs play the same way, '
+            f'and Create Art makes new ones.</p>')
 
 
-def hero(body: str, art: dict) -> str:
-    """The landing page's top: the README's GitHub header (its title,
-    badge, hero picture and links, up to <!-- site:hero -->) becomes the
-    wordmark, the tagline and the buttons."""
-    m = re.search(r'<p align="center">(.*?)</p>', body, re.S)
-    tag = m.group(1).strip() if m else ""
-    wm = art["wordmark"]
-    word = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="art/{wm["src"]}" '
-            f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
-    top = (f'<section class="hero">\n<h1><span class="plate">{word}</span></h1>\n'
-           f'<a class="chip" href="guide/hardware.html">For the DMDoS display</a>\n'
-           f'<p class="tag">{tag}</p>\n'
-           f'<p><a class="cta" href="demo/">Try the demo in your browser →</a>'
-           f'<a class="cta alt" href="install/">Install on your display</a>'
-           f'<a class="cta alt" href="guide/hardware.html">What you need</a></p>\n</section>')
-    return top + body[body.index("<!-- site:hero -->") + len("<!-- site:hero -->"):]
+# The home page (site/pages/home.html).
+HOME = "site/pages/home.html"
+HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
+
+
+def home(art: dict, assets: set[str]) -> str:
+    """The home page's body: its {{led:NAME}} (`{{led:NAME:}}`: no alt
+    text) and {{tiles}} filled in, its comment dropped, its pictures noted."""
+    items = {i["name"]: i for i in art["items"]}
+    text = re.sub(r"<!--.*?-->\s*", "", (ROOT / HOME).read_text(encoding="utf-8"), count=1, flags=re.S)
+
+    def fill(m: re.Match) -> str:
+        what, name, alt = m.group(1), m.group(2), m.group(3)
+        if what == "tiles":
+            return tiles(art)
+        if name not in items:
+            raise SystemExit(f"{HOME}: no animation {name!r} in the site's art")
+        return led("", items[name], alt=None if alt is None else "")
+    text = re.sub(r"\{\{(tiles|led):?([\w-]*)(:)?\}\}", fill, text)
+    for m in HOME_IMAGES.finditer(text):
+        if not (ROOT / m.group(1)).is_file():
+            raise SystemExit(f"{HOME}: no {m.group(1)}")
+        assets.add(m.group(1))
+    return text
 
 
 def decorate(body: str) -> str:
@@ -803,21 +729,36 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
         for p in sorted(examples.glob("*.psi")):
             shutil.copyfile(p, page_dir / "src" / p.name)
     body = gallery_page.build(page_dir, page_dir / "src", contrib, tool)
-    (out / GALLERY_PAGE).write_text(PAGE.format(
-        title="Formula gallery · OpenDMD", description=html.escape("Formulas for the OpenDMD LED display: open one, "
-                                                                     "try it, add it to your display."),
-        up=up, head="",
-        brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
-               f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
-        menu=menu(GALLERY_PAGE), body=gallery_page.marked(body),
-        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""), encoding="utf-8")
+    (out / GALLERY_PAGE).write_text(render(
+        GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery",
+        description="Formulas for the OpenDMD LED display: try one here, then add it to your display."), encoding="utf-8")
+
+
+# A Formula's page (opendmd-web/share/f/index.html): the site's header and
+# footer around it, the site's styles under its own f.css.
+F_PAGE = "f/index.html"
+
+
+def f_page(dest: Path, wm: dict) -> None:
+    text = dest.read_text(encoding="utf-8")
+    subs = [
+        (r'<meta name="color-scheme" content="dark">', '<meta name="color-scheme" content="light dark">'),
+        (r'(<link rel="stylesheet" href="f\.css">)', '<link rel="stylesheet" href="../site.css">\n\\1'),
+        (r'<body>\s*<header class="top">.*?</header>\s*', lambda m: '<body class="fpage">\n' + header(F_PAGE, wm) + '\n<div class="wrap">\n'),
+        (r'</main>\s*<footer>.*?</footer>', lambda m: '</main>\n</div>\n' + footer(F_PAGE)),
+    ]
+    for pat, to in subs:
+        text, n = re.subn(pat, to, text, count=1, flags=re.S)
+        if n != 1:
+            raise SystemExit(f"opendmd-web/share/f/index.html: no {pat!r} to replace (the page changed: change f_page too)")
+    dest.write_text(text, encoding="utf-8")
 
 
 def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set[str], extra: str = "",
               on: str | None = None, title_note: str = "") -> str:
     """One doc (`src`) as the published `page`, with `extra` after its
     heading; returns its body."""
-    text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info)
+    text = markers(page, rewrite(src, page, (ROOT / src).read_text(encoding="utf-8"), assets), info)
     md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
                            extension_configs={"toc": {"permalink": "#"}})
     body = md.convert(text)
@@ -825,19 +766,14 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     # Without the heading's permalink, whose text is "#".
     title = re.sub(r'<a class="headerlink".*?</a>|<[^>]+>', "", m.group(1)).strip() if m else "OpenDMD"
     title = "OpenDMD" if title == "OpenDMD" else f"{title}{title_note} · OpenDMD"
-    if page == "index.html":
-        body = hero(body, art).replace("<!-- site:tiles -->", tiles(art))
+    if src == HOME:
+        body, title = home(art, assets), "OpenDMD: open firmware and a web app for the DMDoS LED display"
     body = after_h1(decorate(body), extra)
-    up = "../" * page.count("/")
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
     head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else "\n" + PSI_HEAD if page == PSI_PAGE else ""
-    wm = art["wordmark"]
-    brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
-             f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
-    dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
-                                brand=brand, menu=menu(page, on), body=body,
-                                banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    dest.write_text(render(page, title, body, art["wordmark"], head=head, on=on,
+                           kind="home" if src == HOME else "doc"), encoding="utf-8")
     return body
 
 
@@ -920,12 +856,13 @@ def main() -> None:
     shutil.copytree(a.card, out / "demo/demo")
     # A formula's own page; it runs on the demo's files.
     shutil.copytree(ROOT / "opendmd-web/share/f", out / "f")
+    art = json.loads((a.art / "art.json").read_text())
+    f_page(out / F_PAGE, art["wordmark"])
     # The Psi reference's script (the page itself is a doc, written below).
     (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
     info = release(a.dist, out)
     write_art_index(out)
-    art = json.loads((a.art / "art.json").read_text())
     (out / "art/strip").mkdir(parents=True)
     for i in art["items"]:
         for k in ("gif", "still"):
@@ -940,17 +877,10 @@ def main() -> None:
         bodies.append(write_doc(out, src, page, info, art, assets, extra))
     # The formula gallery: generated, in the menu.
     write_gallery(out, EXAMPLES, a.gallery, a.gallery_tool, art["wordmark"])
-    # The licences page: not a doc, so not in the menu; the footer links it.
+    # The licences page: not a doc; the footer and the developers' menu link it.
     body = markdown.Markdown(extensions=["sane_lists"]).convert(LICENCES)
-    up = "../" * LICENCES_PAGE.count("/")
-    wm = art["wordmark"]
     (out / LICENCES_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    (out / LICENCES_PAGE).write_text(PAGE.format(
-        title="Licences · OpenDMD", description=html.escape(DESCRIPTION), up=up, head="",
-        brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
-               f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
-        menu=menu(LICENCES_PAGE), body=body,
-        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    (out / LICENCES_PAGE).write_text(render(LICENCES_PAGE, "Licences · OpenDMD", body, art["wordmark"]), encoding="utf-8")
     # Pictures only the GitHub copy of a doc shows (the README's hero) stay off the site.
     assets = {a for a in assets if any(posixpath.basename(a) in b for b in bodies)}
     for target in sorted(assets):
@@ -959,18 +889,13 @@ def main() -> None:
     for src, dst in FILES.items():
         (out / dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / src, out / dst)
-    # The 404 page: links absolute (it answers at any depth), nothing marked in the menu.
-    absolute = functools.partial(re.sub, r'((?:href|src)=")(?![a-z]+:|/|#)', r"\1/")
-    (out / NOT_FOUND_PAGE).write_text(PAGE.format(
-        title="Not found · OpenDMD", description=html.escape(DESCRIPTION), up="/", head="",
-        brand=absolute(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="art/{wm["src"]}" '
-                       f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
-        menu=absolute(menu(NOT_FOUND_PAGE)), body=markdown.Markdown().convert(NOT_FOUND),
-        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    # The 404 page: links absolute (it answers at any depth), nothing marked.
+    (out / NOT_FOUND_PAGE).write_text(render(NOT_FOUND_PAGE, "Not found · OpenDMD", markdown.Markdown().convert(NOT_FOUND),
+                                             art["wordmark"]), encoding="utf-8")
     (out / "_headers").write_text(headers_file())
     (out / "_redirects").write_text(redirects_file())
     (out / ".assetsignore").write_text("".join(f"{n}\n" for n in ASSETS_IGNORE))
-    (out / "site.css").write_text(CSS.strip() + "\n")
+    shutil.copyfile(THEME / "site.css", out / "site.css")
     for src, dst in MOVED.items():
         to = html.escape(rel(src, dst))
         (out / src).parent.mkdir(parents=True, exist_ok=True)
