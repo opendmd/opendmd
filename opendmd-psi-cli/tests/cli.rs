@@ -36,10 +36,10 @@ fn check_says_what_a_formula_costs() {
 
 #[test]
 fn check_gives_an_errors_code_and_place() {
-    let (code, out, _) = psi(&["check", "-"], "loop 4\nv = 1\nv = 2\ngray(v)\n");
+    let (code, out, _) = psi(&["check", "-"], "loop 4\ntable T = 1\nT = 2\ngray(T)\n");
     assert_eq!(code, 1);
-    assert!(out.starts_with("error[E203]: line 3, column 1: `v` is already set on line 2"), "{out}");
-    assert!(out.contains("\n  v = 2\n  ^\n"), "{out}");
+    assert!(out.starts_with("error[E203]: line 3, column 1: `T` is already the name of a table (line 2)"), "{out}");
+    assert!(out.contains("\n  T = 2\n  ^\n"), "{out}");
 }
 
 #[test]

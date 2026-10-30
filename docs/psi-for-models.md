@@ -67,7 +67,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
-          | NAME "=" expr                     -- each name set once in its scope
+          | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
           | "part" NAME "{" formula-body "}"  -- another formula inside this one
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
@@ -818,14 +818,17 @@ gray(pow(x, 2))
 gray(2x)
 ```
 
-```psi error
--- error: `v` is already set on line 2
-v = x
-v = v * 2
-gray(v)
-```
+A value may be set again, and each use reads the latest above it: `v = x`
+then `v = v * 2` is `x * 2` from there on (a layer, a part or a loop may
+set a name from outside too: its own until it closes; `p.v` is the last `v`
+on the part's own lines, its layers' left out). Parts, tables, sprites, palettes and controls keep their names:
 
-Each name is set once: pick a new name for each step.
+```psi error
+-- error: is already the name of a table
+table T = 0.5, 1
+T = 2
+gray(T[0])
+```
 
 ```psi error
 -- error: inside frame { } only values that are the same for every pixel

@@ -64,7 +64,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
-          | NAME "=" expr                     -- each name set once in its scope
+          | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
           | "part" NAME "{" formula-body "}"  -- another formula inside this one
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
@@ -317,9 +317,9 @@ length: 541 B as written (16,384 at most), 364 B as the panel keeps it saved (8,
 note: line 14: `d` is worked out for every pixel each frame (~666 ns a pixel): it would be kept in the still cache but it reads `fall`, which changes from frame to frame
 
 $ psi check broken.psi
-error[E203]: line 3, column 1: `v` is already set on line 2 — each name can be set once
-  v = 2
-  ^
+error[E202]: line 3, column 6: unknown function `sine` — did you mean `sin`?
+  gray(sine(v))
+       ^^^^
 ```
 
 `psi check` also writes a PNG contact sheet of frames across one loop
@@ -853,28 +853,28 @@ After:
 gray(sin(x))
 ```
 
-<h4 id="E203">E203 · a name set twice</h4>
+<h4 id="E203">E203 · a name that is already a part, table, sprite, palette or control</h4>
 
-> `…` is already set on line … — each name can be set once
+> `…` is already the name of a … (line …) — pick another name
 
-A name is set once in its block: it is a definition, not a variable that changes. Give the second value a name of its own.
+A value may be set again (`v = v * 2` reads the `v` before it), but parts, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
 
-Use a different name for the second one.
+Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or part may set a name from outside: only parts, tables, sprites, palettes and controls keep theirs.)
 
 Before:
 
 ```psi
-v = x
-v = v * 2
-gray(v)
+table T = 0.5, 1
+T = 2
+gray(T[0])
 ```
 
 After:
 
 ```psi
-v = x
-v2 = v * 2
-gray(v2)
+table T = 0.5, 1
+k = 2
+gray(T[0] * k)
 ```
 
 <h4 id="E204">E204 · a name that is built in</h4>
@@ -1143,11 +1143,11 @@ Use a loop between 0.1 and 3600 seconds.
 
 Report it with the formula.
 
-<h4 id="E408">E408 · not enough memory <span class="badge">internal</span></h4>
+<h4 id="E408">E408 · not enough memory</h4>
 
 > not enough memory for this Formula right now
 
-**Internal:** a bug in Psi: please report it, with the formula. It is never the formula's fault.
+The panel didn't have the memory to compile this Formula just then (a GIF, a look or a transition was holding it): not the formula's fault. It plays when it is next due; a shorter formula needs less.
 
 Try again, or make the Formula smaller.
 

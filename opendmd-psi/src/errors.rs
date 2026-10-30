@@ -225,10 +225,10 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 203,
-        title: "a name set twice",
-        sentence: "`…` is already set on line … — each name can be set once",
-        fix: "Use a different name for the second one.",
-        matches: &["is already set on line", "each name can be set once"],
+        title: "a name that is already a part, table, sprite, palette or control",
+        sentence: "`…` is already the name of a … (line …) — pick another name",
+        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or part may set a name from outside: only parts, tables, sprites, palettes and controls keep theirs.)",
+        matches: &["is already the name of a "],
     },
     ErrorDoc {
         code: 204,

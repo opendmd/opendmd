@@ -35,7 +35,7 @@ const C = [
   [120, 47, "how much a colour covers goes on the whole line"],
   [201, 14, "unknown name `"],
   [202, 18, "unknown function `"],
-  [203, 47, "is already set on line", "each name can be set once"],
+  [203, 25, "is already the name of a "],
   [204, 28, "is built in", "pick another name"],
   [205, 24, "` is a function: write `"],
   [206, 31, "` is a palette: use it as `pal("],
