@@ -190,6 +190,8 @@ enum Mount {
 /// `quiet_for`: the serial of a card that could not be read and was just
 /// unmounted to be tried again — the same card, still unreadable, is not
 /// logged again (once a minute, for as long as it stays in).
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn mount(
     bus: &mut SdBus,
     health: &sdhealth::Boot,

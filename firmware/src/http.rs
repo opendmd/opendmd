@@ -132,6 +132,8 @@ pub enum NetCommand {
 /// waiting at most [`config::NAME_CHECK_WAIT`] on the httpd task: a worker
 /// that is busy for longer (a connect) or gone makes it `Check::Unknown`,
 /// never a hang.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn name_check(c: &Ctx, name: &str) -> Check {
     let until = Instant::now() + config::NAME_CHECK_WAIT;
     let (tx, rx) = mpsc::channel();

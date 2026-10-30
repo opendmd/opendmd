@@ -627,6 +627,8 @@ pub fn move_copy(old: &str, new: &str) -> &'static str {
 /// `Ok(false)` if the file or the
 /// line is not there. Read once to look, then written to `<file>.part` a
 /// line at a time and swapped in: nothing bigger than a line is held.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 pub fn rename_line(file: &str, from: &str, to: Option<&str>) -> std::io::Result<bool> {
     use std::io::BufRead;
     let key = |line: &[u8]| -> bool {
