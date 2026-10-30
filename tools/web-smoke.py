@@ -3785,9 +3785,9 @@ def psi_error_links(page: Page) -> None:
     check(a.inner_text() == "E201" and a.get_attribute("href") == "https://opendmd.dev/dev/psi/#E201"
           and a.get_attribute("target") == "_blank" and "noopener" in (a.get_attribute("rel") or ""),
           f"formulas: the error's code links the reference ({a.get_attribute('href')})")
-    page.fill("#psi-src", "v = 1\nv = 2\ngray(v)")
-    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E203'", timeout=10000)
-    check(page.locator("#psi-err a.ecode").count() == 1 and page.get_attribute("#psi-err a.ecode", "href").endswith("#E203"),
+    page.fill("#psi-src", "gray(sine(x))")
+    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E202'", timeout=10000)
+    check(page.locator("#psi-err a.ecode").count() == 1 and page.get_attribute("#psi-err a.ecode", "href").endswith("#E202"),
           "formulas: a new error, its own code (one link)")
     cases = re.findall(r"^=== E(\d+)\n(?:.*\n)*?--- \d+:\d+ (.*)$",
                        (REPO / "opendmd-psi/tests/diagnostics.txt").read_text(encoding="utf-8"), re.M)
