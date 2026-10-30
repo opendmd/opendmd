@@ -2540,11 +2540,18 @@ pub(crate) mod beam {
     struct Order {
         next: usize,
         bad: bool,
+        started: bool,
     }
 
     impl Order {
         fn tell(&mut self, p: usize) {
-            self.bad |= p != self.next;
+            // (The start, once, before the first pair.)
+            if p == psi::BEAM_START {
+                self.bad |= self.started || self.next != 0;
+                self.started = true;
+                return;
+            }
+            self.bad |= p != self.next || !self.started;
             self.next += 1;
         }
         fn done(&self) -> bool {
@@ -2574,7 +2581,7 @@ pub(crate) mod beam {
                 continue;
             }
             let inputs = psi::golden::inputs(ms);
-            let mut order = Order { next: 0, bad: false };
+            let mut order = Order { next: 0, bad: false, started: false };
             psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
                 &mut |p, _, _, _| order.tell(p));
             let mut check = |pass: &str, got: u64, told: bool| {
@@ -2589,7 +2596,7 @@ pub(crate) mod beam {
             check("VM", psi::golden::fnv(out), order.done());
             #[cfg(feature = "jit")]
             if let Ok(mut k) = psi::jit::emit(&prog) {
-                let mut order = Order { next: 0, bad: false };
+                let mut order = Order { next: 0, bad: false, started: false };
                 k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
                     &mut |p, _, _, _| order.tell(p));
                 check("kernel", psi::golden::fnv(out), order.done());
@@ -2646,7 +2653,7 @@ pub(crate) mod beam {
             let raced = p50(15, || {
                 ms += 10;
                 psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
-                    Some(&mut ch), &mut |_, _, _, _| told += 1);
+                    Some(&mut ch), &mut |p, _, _, _| told += u32::from(p != psi::BEAM_START));
             });
             #[allow(unused_mut)]
             let mut line = format!("psi-probe: beam: {name}: VM at once {whole} us, raced {raced} us");
@@ -2661,7 +2668,7 @@ pub(crate) mod beam {
                 let kr = p50(15, || {
                     ms += 10;
                     k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
-                        Some(&mut ch), &mut |_, _, _, _| told += 1);
+                        Some(&mut ch), &mut |p, _, _, _| told += u32::from(p != psi::BEAM_START));
                 });
                 line.push_str(&format!("; kernel at once {kw} us, raced {kr} us"));
             }
