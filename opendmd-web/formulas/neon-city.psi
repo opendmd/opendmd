@@ -8,11 +8,12 @@ fps 100
 -- Neon city: Endless road's pseudo-3D road, through a megacity at night.
 -- Dark towers crowd the road, tall enough to leave the top of the panel,
 -- with a hazy violet row behind them and a magenta glow over it all;
--- vertical neon strips of made-up glyphs flicker on the towers, a holo
--- panel scrolls its colours, and the wet road catches the haze and the
--- neon. Four lanes, a dashed cyan middle line and neon kerbs; street
--- lights pass on both pavements; the car is dark, with a red light bar
--- and a cyan glow under it. Each play starts elsewhere, in another city.
+-- neon signs of made-up glyphs hang on the towers, flickering, a holo
+-- panel scrolls its colours, and the wet road catches the haze. Four
+-- lanes, a dashed cyan middle line and neon kerbs; the car is dark, with
+-- a red light bar and a cyan glow under it. Now and then a shower comes
+-- through: rain streaks over everything, the road wetter. Each play
+-- starts elsewhere, in another city.
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
@@ -21,10 +22,9 @@ fps 100
 palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   #6a1658, #a02870, farTower #3a1450, nearTower #08060e, window #90e8ff,
   pavement #120c1c, #1a1224, asphalt #0e0a16, #130e1c, wet #2a0e30,
-  #34123a, lane #8090b0, kerb #e0207a, pole #2a2a3a, reflPink #5a1040,
-  reflCyan #0c4050, violet #a040ff, magenta #ff40ff, pink #ff2a9a,
-  cyan #20f0ff, lamp #ffc0f0, car #303850, glass #5878a8, red #ff2030,
-  white #fff
+  #34123a, lane #8090b0, kerb #e0207a, violet #a040ff, magenta #ff40ff,
+  pink #ff2a9a, cyan #20f0ff, glyph #120818, car #303850, glass #5878a8,
+  red #ff2030, rain #a0b8e0
 
 -- Across the road, left to right, in 30ths of its half width (the middle
 -- at 31): 3 kerb, 1 asphalt, 2 a lane line, 4 the middle line; past
@@ -38,8 +38,8 @@ table twos = 1, 2, 4, 8, 16, 32, 64
 
 -- The car from behind: 11 spans, each `from + (to + (row + colour)/16)/64`
 -- with colour its place in the palette (car, glass, red, the cyan glow)
-table car = 10.335846, 8.366119, 9.350525, 5.412018, 2.457916, 3.442352,
-  2.45694, 2.455963, 3.111237, 24.439362, 1.469559
+table car = 10.335831, 8.366104, 9.35051, 5.412003, 2.457901, 3.442352,
+  2.456924, 2.455948, 3.111221, 24.439346, 1.469543
 
 frame {
   -- How far we have driven, in bends (from somewhere else each play);
@@ -56,45 +56,37 @@ frame {
   -- near row repeats every 176 columns; `seed` picks another city)
   nearShift = heading*-90
 
-  -- The street lights' round (every 1.2 s), the neon's flicker, the
-  -- glyphs' and the holo panel's changes
-  lamps = frac(t*.8333)
+  -- The neon's flicker, the glyphs' and the holo panel's changes
   flicker = floor(t*8)
   glyphs = floor(t*1.5)
   holo = floor(t*3)
+
+  -- Showers come and go (none, then a drizzle, then a downpour): how
+  -- much of the rain is falling now
+  shower = clamp(noise(t/40 + seed*50, 4, 0)*3 - 1.1, 0, 1)
 }
 
 draw {
   -- What is drawn is its colour's place in the palette, so the later
-  -- colours win where things cross. A street light `ahead` stripes away
-  -- (near = 1/ahead) stands on row 19.5 - 15*near, where the road's half
-  -- width is 54*near and the road has bent to its noise there; we are .3
-  -- of a half width right of its middle.
+  -- colours win where things cross. (Small things are dots: a line costs
+  -- a dozen pixels' walk however short it is.)
 
-  -- Street lights: four, three stripes apart, on alternate sides; a pole
-  -- and its lamp
+  -- Neon signs on four towers of the near row, hanging under the roof
+  -- (as the pixels work it out) and moving with them: a lit panel three
+  -- columns wide in violet, magenta, pink or cyan (two of them changing
+  -- colour), flickering, with made-up glyphs on it, a dark stroke or two
+  -- a glyph, changing
   for k < 4 {
-    near = 1 / (12.7 - frac(lamps + k/4)*12)
-    poleX = straight + noise(driven + .0075/near, 0, 0)*2000 + (cos(k/2)*70 - 16)*near
-    topY = 19.5 + 15*near
-    line(poleX, 19.5 - 15*near, poleX, topY, city.pole)
-    line(poleX, topY, poleX, topY + 1, city.lamp)
-  }
-
-  -- Neon strips on six towers of the near row, from under the roof (as
-  -- the pixels work it out) down to the street, in violet, magenta, pink
-  -- or cyan, flickering; beside each, made-up glyphs, a stroke or two
-  -- each, changing; and its reflection on the wet road
-  for k < 6 {
-    spot = k*24 + 3
-    signX = (spot - nearShift + 20)%176 - 20
-    roof = 20 + hash(floor(spot/8)%22, seed)*13
-    neon = (hash(k, flicker) > .08) * (city.violet + k%4*city.step)
-    line(signX, roof, signX, 20, neon)
-    line(signX, 18, signX, 12, city.reflPink + k%2*city.step)
+    signX = (k*44 + 1 - nearShift + 20)%176 - 20
+    roof = 20 + hash(floor((k*44 + 1) / 8) % 22, seed)*13
+    neon = (hash(k, flicker) > .06) * (city.violet + (k + glyphs%4*(k%2))%4*city.step)
     for j < 3 {
-      glyphY = roof - 1 - j*3
-      line(signX + 1, glyphY, signX + 1 + (hash(k*3 + j, glyphs) > .4), glyphY - (hash(k*3 + j + 50, glyphs) > .5), neon)
+      line(signX + j, roof - 1, signX + j, roof - 9, neon)
+    }
+    for j < 3 {
+      glyphY = roof - 2 - j*3
+      dot(signX + hash(k*3 + j, glyphs)*3, glyphY, city.glyph)
+      dot(signX + 1, glyphY - 1, city.glyph)
     }
   }
 
@@ -110,6 +102,17 @@ draw {
     span = frac(car[k])*64
     rowInk = frac(span)*16
     line(floor(car[k]) - carLeft, floor(rowInk), floor(span) - carLeft, floor(rowInk), frac(rowInk))
+  }
+
+  -- Rain: 28 streaks falling and drifting with the wind, over everything,
+  -- as many as the shower brings
+  for k < 28 {
+    dropX = frac(hash(k, 3) + t*.37)*140 - 6
+    dropY = 34 - frac(t*2.5 + hash(k, 2))*36
+    drop = (hash(k, 5) < shower) * city.rain
+    dot(dropX, dropY, drop)
+    dot(dropX, dropY - 1, drop)
+    dot(dropX - 1, dropY - 2, drop)
   }
 }
 
@@ -145,6 +148,6 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
 pal(city, max(pick(across[px*scale + start] + towers,
       below ? city.pavement + stripe*city.step : (33 - py) / 2 * city.step,
-      below ? (py > 12 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
+      below ? (py > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
       below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
       below ? (stripe ? city.kerb : city.cyan) : city.window, stripe ? city.cyan : city.asphalt), ink))
