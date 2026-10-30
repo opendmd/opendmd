@@ -52,7 +52,12 @@ If you leave the editor without saving, the gallery offers **Continue
 editing** at the top, and the app asks before anything replaces it.
 
 On your player, **Show on panel** plays a formula there until the
-playlist moves on. **Add to playlist…** puts it in one of your playlists
+playlist moves on: one turn, like any GIF. To watch one for longer, set
+**Keep on the panel** (beside Show on panel, and in Settings › Playback) to
+1 minute, 5 minutes or *Until I change it*; Now then says it is being kept,
+and **Back to the playlist** (or Skip, Previous, another Formula, a playlist
+chosen) ends it. Formulas in a playlist play their usual turn.
+**Add to playlist…** puts it in one of your playlists
 (the same list of playlists the Library offers), where the player draws it
 itself: it follows the clock, loops for as long as it plays and takes a
 line of the playlist, not the space of a GIF. The playlist shows it by its
@@ -656,7 +661,8 @@ gallery](#the-formula-gallery) and on every formula's own page (a share
 link, long or short). Press it and your panel's app opens with the formula
 saved on the panel, under *Your formulas*, and a small box:
 
-- **Play now**: on the panel straight away, until the playlist moves on.
+- **Play now**: on the panel straight away, for as long as **Keep on the
+  panel** says (one turn, unless you set it longer).
 - **Add to a playlist…**: pick which; the playlist names the formula, so a
   later change to it shows there too.
 - **Use as the look**: for a formula that can be a look (marked *look*),

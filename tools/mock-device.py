@@ -651,11 +651,15 @@ DEFAULT_SETTINGS = {
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
     "formula_beam": False,      # racing the beam for Formulas (console-c's spike)
+    "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
     "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
 BOOT_SHOWS = ("off", "short", "full")
+# opendmd_core::FormulaKeep: a Formula sent to the panel (POST /api/play)
+# stays its seconds (0: until something else plays; None: one turn).
+FORMULA_KEEP = {"turn": None, "1m": 60, "5m": 300, "hold": 0}
 # The start-up show as a live item (`@boot[?len=short|full|card&..]`,
 # opendmd_core::boot): the show once (1300 / 5600 ms) or one loop of the
 # status card (16384 ms), in 10 ms frames.
@@ -697,6 +701,7 @@ FIELD_TYPES = {
     "panel_split": "bool",
     "formula_jit": "bool",
     "formula_beam": "bool",
+    "formula_keep": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
@@ -1949,6 +1954,9 @@ class Player:
         self.manifest_last_set: str | None = None
         self.index_state = "building"
         self.played: str | None = None  # an off-playlist POST /api/play
+        # A Formula sent to the panel and kept there (`formula_keep`): the
+        # ordinal of its start and its seconds (0: until something else plays).
+        self.kept: tuple[int, int] | None = None
         self.overrides_count = 0
         self.hidden_count = 0
         # The file's own clock: its position is (now or frozen_at) - file_t0,
@@ -2062,9 +2070,10 @@ class Player:
 
     def retune(self, path: str):
         """Engine::retune: a formula over the formula on screen, in place
-        (the same ordinal, a fresh dwell)."""
+        (the same ordinal, a fresh dwell, kept as `formula_keep` says)."""
         self.played = path
         self.last_advance = time.monotonic()
+        self.keep(path)
 
     def play_now(self, path: str):
         self.played = path
@@ -2072,6 +2081,16 @@ class Player:
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
         self.started(path)
+        self.keep(path)
+
+    def keep(self, path: str):
+        """main.rs PlayNow: a Formula stays as long as `formula_keep` says."""
+        secs = FORMULA_KEEP[self.ctx.settings["formula_keep"]] if is_formula_ref(path) else None
+        self.kept = None if secs is None else (self.ordinal, secs)
+
+    def kept_s(self) -> int | None:
+        """Status `now_playing.kept_s` while the kept start is on screen."""
+        return self.kept[1] if self.kept and self.kept[0] == self.ordinal else None
 
     def started(self, path: str):
         """History::started: the panel started `path`."""
@@ -2199,7 +2218,9 @@ class Player:
     def tick(self):
         if self._frozen() or not self.playlist or self.virtual_hold:
             return
-        if time.monotonic() - self.last_advance >= self.ctx.dwell:
+        kept = self.kept_s()
+        dwell = self.ctx.dwell if kept is None else kept or float("inf")
+        if time.monotonic() - self.last_advance >= dwell:
             self.advance()
 
     def current(self):
@@ -3200,6 +3221,7 @@ def make_handler(ctx: Context, quiet: bool):
                         "title": (virtual_title(cur) if cur and cur.startswith("@") else self.formula_file_title(cur) if FORMULA_FILE_RE.match(cur) else derive_title(cur, ctx.settings)) if cur else "",
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
+                        **({} if player.kept_s() is None else {"kept_s": player.kept_s()}),
                     },
                     "paused": player.paused,
                     "entries": len(player.playlist),
@@ -3323,6 +3345,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
                     "formula_beam": s["formula_beam"],
+                    "formula_keep": s["formula_keep"],
                     "api_key_set": bool(s["api_key"]),
                 }
                 self.panel_poll()
@@ -3449,6 +3472,9 @@ def make_handler(ctx: Context, quiet: bool):
                         return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
+                        return
+                    if field == "formula_keep" and v not in FORMULA_KEEP:
+                        self.send_error_json(400, "formula_keep must be turn, 1m, 5m or hold")
                         return
                     if field == "boot_show" and v not in BOOT_SHOWS:
                         self.send_error_json(400, "boot_show must be off, short or full")

@@ -683,7 +683,17 @@ fn main() -> Result<()> {
                         // then the file takes the screen at the next tick
                         // under the usual dwell. A formula over a formula
                         // is a live edit, in place.
-                        match retune(engine.as_mut(), &path, epoch.elapsed()) {
+                        // A Formula stays as long as `formula_keep` says
+                        // (a one-off dwell: it keeps animating; a live edit
+                        // keeps it kept).
+                        let keep = if opendmd_core::synth::is_formula(&path)
+                            || opendmd_core::synth::formula_file(&path).is_some()
+                        {
+                            settings.formula_keep
+                        } else {
+                            opendmd_core::FormulaKeep::Turn
+                        };
+                        let r = match retune(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()) {
                             Some(r) => {
                                 // No new start (the ordinal stays), but
                                 // status names the formula now on the panel:
@@ -699,8 +709,13 @@ fn main() -> Result<()> {
                             }
                             None if engine.is_none() => Err(PlayError::NoPlaylist),
                             None if live => Err(PlayError::MovedOn),
-                            None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                            None => play_now(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()),
+                        };
+                        if r.is_ok() {
+                            let ordinal = engine.as_ref().and_then(|e| e.now_playing()).map(|p| p.ordinal);
+                            status.lock().unwrap().kept = keep.secs().zip(ordinal).map(|(secs, o)| (o, secs));
                         }
+                        r
                     };
                     let what = if over { "over the GIF" } else { "play now" };
                     match &outcome {
@@ -716,7 +731,7 @@ fn main() -> Result<()> {
                     let target = status.lock().unwrap().recent.back();
                     let outcome = match target {
                         Some(path) => {
-                            let r = play_now(engine.as_mut(), &path, epoch.elapsed());
+                            let r = play_now(engine.as_mut(), &path, epoch.elapsed(), None);
                             match &r {
                                 Ok(()) => log::info!("previous: {path}"),
                                 Err(e) => log::warn!("previous: {e:?}"),
@@ -1114,7 +1129,7 @@ fn main() -> Result<()> {
                     if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
                         let hidden = read_meta(&dest).get(&on_screen).is_some_and(|o| o.never);
                         if !hidden {
-                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed()) {
+                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
                                 log::warn!("overrides: {on_screen} did not carry on: {e:?}");
                             }
                         }
@@ -1885,6 +1900,10 @@ fn main() -> Result<()> {
             s.misses = misses;
             if let Some(playing) = new_file {
                 s.recent.started(&playing.path);
+                // Any other start ends a kept Formula's report.
+                if s.kept.is_some_and(|(o, _)| o != playing.ordinal) {
+                    s.kept = None;
+                }
                 s.ordinal = playing.ordinal;
                 s.path = playing.path;
                 s.title = playing.title;
@@ -2417,11 +2436,17 @@ fn apply_schedule(
 /// only costs the formatting (`logring`), and the heap walk behind
 /// `largest_free_block`.
 /// `Engine::play_now`, its error as `/api/play` reports it (404 / 415 / 503).
-fn play_now(engine: Option<&mut Engine>, path: &str, now: Duration) -> Result<(), PlayError> {
+/// `keep`: a kept Formula's one-off dwell (`FormulaKeep::dwell`).
+fn play_now(
+    engine: Option<&mut Engine>,
+    path: &str,
+    now: Duration,
+    keep: Option<overrides::Override>,
+) -> Result<(), PlayError> {
     let Some(e) = engine else {
         return Err(PlayError::NoPlaylist);
     };
-    e.play_now(path, now).map_err(|err| play_error(path, err))
+    e.play_now_with(path, now, keep).map_err(|err| play_error(path, err))
 }
 
 fn play_error(path: &str, err: std::io::Error) -> PlayError {
@@ -2436,12 +2461,17 @@ fn play_error(path: &str, err: std::io::Error) -> PlayError {
 /// A formula over the formula on screen: in place (`Engine::retune`).
 /// `None` when either is not a formula.
 #[cfg(feature = "psi")]
-fn retune(engine: Option<&mut Engine>, path: &str, now: Duration) -> Option<Result<(), PlayError>> {
-    Some(engine?.retune(path, now)?.map_err(|e| play_error(path, e)))
+fn retune(
+    engine: Option<&mut Engine>,
+    path: &str,
+    now: Duration,
+    keep: Option<overrides::Override>,
+) -> Option<Result<(), PlayError>> {
+    Some(engine?.retune(path, now, keep)?.map_err(|e| play_error(path, e)))
 }
 
 #[cfg(not(feature = "psi"))]
-fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), PlayError>> {
+fn retune(_: Option<&mut Engine>, _: &str, _: Duration, _: Option<overrides::Override>) -> Option<Result<(), PlayError>> {
     None
 }
 

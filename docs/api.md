@@ -68,6 +68,12 @@ takes it off. `"over"` skips the card-path check (the path is a formula or
 entirely (it reads none of `ur ug ub ul` and nothing shows through it) or is
 too heavy to draw over GIFs is a `400` with the reason.
 
+A Formula played this way (not `"over"`) stays as long as `formula_keep`
+says: one turn of the dwell (the default), a minute, five, or until
+something else plays (another `/api/play`, `/api/skip` or Previous, a
+playlist change). A live edit keeps it kept. While it is kept, `/api/status`
+`now_playing.kept_s` says for how long (`0`: until changed).
+
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
 Errors: `400` neither card-absolute nor a live item, or a bad formula;
@@ -121,7 +127,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `t_ms` | the player's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
-| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based |
+| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
 | `paused` | bool |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each; the index of the one on screen |
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
@@ -245,6 +251,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
 | `formula_jit` | `true` | the narrow JIT for Formulas on the ESP32 (`docs/research/psi-jit-esp32.md`): a Formula's pixel stage compiled to machine code at its first frame, checked against the VM there, then drawing the same bytes faster. `false` is the kill switch: every Formula plays on the VM (a kernel held is let go at its next frame). `/api/status` `now_playing.formula.jit` says which draws |
 | `formula_beam` | `false` | racing the beam for Formulas (a spike; `docs/research/console-lessons.md` §2.6 and "Phase C spike results"): a Formula's frames drawn in the panel's row-pair order and each pair written to the panel as soon as it is drawn, behind the scan — no waiting for the scan, no stretched frames, no tearing. Its frames then follow the panel's refresh (every refresh, ~125 Hz, for a 100 fps Formula; every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …), each frame one `t`. Not under the glow, a formula look or a transition (those frames go up as before); GIFs never. Applied at once. `/api/status` `scan.beam` counts the raced frames, `now_playing.formula.beam_us` is the raced frame time |
+| `formula_keep` | `turn` | how long a Formula sent with `/api/play` stays on the panel: `turn` (one turn of the dwell, as any file), `1m`, `5m` or `hold` (until something else plays: another `/api/play`, `/api/skip` or Previous, a playlist change). Formulas in a playlist are not affected. From the next one sent |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |
