@@ -3,10 +3,20 @@
 -- bundle
 name "Matrix"
 about "Green code raining down the screen"
-loop 8
--- 32 columns of little 3x5 characters, each column falling at its own speed
-r = frac(floor(px/4)*0.618)
-fall = frac(y*0.5 + t*(floor(r*3) + 1)/4 + r)
-glyph = step(0.35, frac(px * (py*0.3719 + 0.13))) * step(px%4, 2.5) * step(py%6, 4.5)
-head = step(fall, 0.04)*glyph
-rgb(head, glyph*(1 - fall*1.8) + head, head)
+loop 30
+-- 32 columns of little 3x5 characters; each column has its own speed,
+-- trail length and start (a whole number of falls a loop, so it repeats
+-- cleanly), and the characters keep changing
+col = floor(px/4)
+s = floor(5 + hash(col, 1)*16)/30
+tail = 0.3 + hash(col, 2)*0.9
+fade = 0.9/tail
+start = hash(col, 3)
+rate = floor(2 + hash(col, 4)*6)
+off = hash(col, 5)*7
+d = frac(t*s + start)*(1 + tail) - y
+k = floor(t*rate + off + floor(py/6)*0.37)
+glyph = step(0.35, frac(px*(py*0.3719 + 0.13) + k*0.618)) * step(px%4, 2.5) * step(py%6, 4.5)
+trail = step(0, d)*step(d, tail)*glyph
+head = step(0, d)*step(d, 0.06)*glyph
+rgb(head*0.8, trail*(0.9 - d*fade) + head, head*0.8)
