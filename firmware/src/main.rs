@@ -681,7 +681,9 @@ fn main() -> Result<()> {
                         // ~6 ms in a bucket, ~330 ms in `gifs/Consoles`),
                         // then the file takes the screen at the next tick
                         // under the usual dwell. A formula over a formula
-                        // is a live edit, in place.
+                        // is a live edit, in place; one the heap can't
+                        // compile beside it lets it go and is played from
+                        // nothing (`Engine::retune`).
                         // A Formula stays as long as `formula_keep` says
                         // (a one-off dwell: it keeps animating; a live edit
                         // keeps it kept).

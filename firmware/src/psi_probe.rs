@@ -1654,6 +1654,158 @@ fn refs(root: &str, canvas: &mut Canvas) {
     );
 }
 
+/// A formula sent over a formula, as `/api/play` sends it (`Engine::retune`
+/// through the real engine, `SdSource` and `psi_stack::compile` with its
+/// heap check): Time gate on screen, the heap made short so that Endless
+/// road's compile fits only once Time gate is let go (the owner's panel,
+/// 558416c: refused until a GIF or a lighter formula had played). Then a
+/// heap short even without Time gate: refused, nothing on screen, the
+/// playlist's GIF next. First, Time gate and a GIF in turn, the heap after
+/// each GIF (a leak would fall). `make emu-probe` requires the summary line.
+#[inline(never)]
+fn swap(root: &str, canvas: &mut Canvas) {
+    use opendmd_core::{DwellPolicy, Engine, FileCatalog, Filter, Mode, Scheduler};
+    const GATE: &str = "@formula:time-gate";
+    const ROAD: &str = "@formula:endless-road";
+    let gif = std::fs::read_to_string(format!("{root}/filelist.txt"))
+        .ok()
+        .and_then(|l| l.lines().map(str::trim).find(|p| p.ends_with(".gif")).map(str::to_string));
+    let Some(gif) = gif else {
+        say!(error, "psi-probe: formula over formula: no GIF in filelist.txt");
+        return;
+    };
+    let Ok(cat) = FileCatalog::build(std::io::Cursor::new(format!("{gif}\n").into_bytes()), &Filter::new()) else {
+        say!(error, "psi-probe: formula over formula: no catalog");
+        return;
+    };
+    let mut e = Engine::new(Box::new(cat), Scheduler::new(1, Mode::Sequential, 0), DwellPolicy::default(), Box::new(crate::sd::SdSource));
+    // The engine's own clock: ticks 20 ms apart, past any transition.
+    let mut t = Duration::ZERO;
+    let mut run = |e: &mut Engine, canvas: &mut Canvas, ms: u64| {
+        let end = t + Duration::from_millis(ms);
+        while t < end {
+            t += Duration::from_millis(20);
+            if let Err(err) = e.tick(t, canvas) {
+                say!(error, "psi-probe: formula over formula: tick: {err}");
+            }
+        }
+        t
+    };
+    let keep = opendmd_core::FormulaKeep::Hold.dwell();
+    let h0 = heap();
+    let mut after_gif = Vec::new();
+    for _ in 0..4 {
+        let now = run(&mut e, canvas, 0);
+        if let Err(err) = e.play_now_with(GATE, now, keep) {
+            say!(error, "psi-probe: formula over formula: Time gate: {err}");
+            return;
+        }
+        run(&mut e, canvas, 1_000);
+        let now = run(&mut e, canvas, 0);
+        if let Err(err) = e.play_now(&gif, now) {
+            say!(error, "psi-probe: formula over formula: {gif}: {err}");
+            return;
+        }
+        run(&mut e, canvas, 600);
+        after_gif.push(heap());
+    }
+    say!(info, "psi-probe: formula over formula: Time gate and a GIF in turn: heap {h0} B, after each GIF {after_gif:?} B");
+
+    // Time gate on screen; what it holds.
+    let h1 = heap();
+    let now = run(&mut e, canvas, 0);
+    let _ = e.play_now_with(GATE, now, keep);
+    run(&mut e, canvas, 1_000);
+    let held = h1.saturating_sub(heap()) as usize;
+    let need = crate::config::PSI_COMPILE_STACK
+        + 512
+        + psi::compile_heap_estimate(opendmd_core::synth::bundled("endless-road").unwrap_or(""))
+        + crate::config::PSI_COMPILE_RESERVE;
+    // The heap down to `left` B free, most of it one block (the compile
+    // needs a 16 KB one): that block held while the rest is filled with
+    // 4 KB, then 256 B pieces (4 KB left over for the system), then let go.
+    let short = |left: usize| -> Option<Vec<Vec<u8>>> {
+        let mut hold: Vec<u8> = Vec::new();
+        hold.try_reserve_exact(left.checked_sub(4096)?).ok()?;
+        hold.push(1);
+        let hold = core::hint::black_box(hold);
+        let mut b: Vec<Vec<u8>> = Vec::new();
+        b.try_reserve(1024).ok()?;
+        for size in [4096usize, 256] {
+            while heap() as usize > 4096 + size && b.len() < b.capacity() {
+                let mut v = Vec::new();
+                if v.try_reserve_exact(size).is_err() {
+                    break;
+                }
+                v.resize(size, 1u8);
+                b.push(v);
+            }
+        }
+        drop(hold);
+        Some(b)
+    };
+    let gate_on = |e: &Engine| e.now_playing().is_some_and(|p| p.path == GATE);
+    let road_on = |e: &Engine| e.now_playing().is_some_and(|p| p.path == ROAD);
+    // 1. Short beside Time gate, room once it goes: played.
+    let mut first = "NOT tried".to_string();
+    if gate_on(&e) && held > 4096 + 2048 {
+        // (Under the check's figure already beside Time gate, as in the
+        // emulator: nothing more to take.)
+        let left = need - 2048;
+        let ballast = if (heap() as usize) < left { Some(Vec::new()) } else { short(left) };
+        match ballast {
+            None => first = format!("NOT tried (no {left} B to keep)"),
+            Some(b) => {
+                let h = heap();
+                let now = run(&mut e, canvas, 0);
+                let r = e.retune(ROAD, now, keep);
+                let r = match r {
+                    None => "NOT a retune".to_string(),
+                    Some(Ok(())) if road_on(&e) => "played".to_string(),
+                    Some(Ok(())) => "NOT on screen".to_string(),
+                    Some(Err(err)) => format!("NOT played ({err})"),
+                };
+                run(&mut e, canvas, 200);
+                drop(b);
+                first = r;
+                say!(info, "psi-probe: formula over formula: Time gate holding {held} B, {h} B free (the check needs {need}): Endless road: {first}");
+            }
+        }
+    }
+    // 2. Short even without Time gate: refused, the playlist goes on.
+    let now = run(&mut e, canvas, 0);
+    let _ = e.play_now_with(GATE, now, keep);
+    run(&mut e, canvas, 1_000);
+    let mut second = "NOT tried".to_string();
+    if gate_on(&e) {
+        let held = h1.saturating_sub(heap()) as usize;
+        let left = need.saturating_sub(held + 4096).max(8192);
+        match short(left) {
+            None => second = format!("NOT tried (no {left} B to keep)"),
+            Some(b) => {
+                let h = heap();
+                let now = run(&mut e, canvas, 0);
+                let r = e.retune(ROAD, now, keep);
+                let gone = e.now_playing().is_none();
+                drop(b);
+                run(&mut e, canvas, 600);
+                let next = e.now_playing().is_some_and(|p| p.path == gif);
+                second = match r {
+                    Some(Err(err)) if fx_psi::is_no_memory(&err) && gone && next => "refused, the playlist on".to_string(),
+                    Some(Err(err)) => format!("NOT as asked ({err}; nothing on screen {gone}, the GIF next {next})"),
+                    _ => "NOT refused".to_string(),
+                };
+                say!(info, "psi-probe: formula over formula: {h} B free, Time gate holding {held} B (the check needs {need}): Endless road: {second}");
+            }
+        }
+    }
+    drop(e);
+    say!(info,
+        "psi-probe: formula over formula: short beside Time gate: {first}; short without it: {second}; heap {} B free after (was {h0})",
+        heap()
+    );
+}
+
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
 /// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
 /// reporting the bytes it used; then on the player's compile stack and
@@ -2140,6 +2292,8 @@ pub fn run(root: &str) {
     bundled(&mut canvas);
     // Formulas by reference, as the engine opens them.
     refs(root, &mut canvas);
+    // A formula over a formula with the heap short, through the engine.
+    swap(root, &mut canvas);
 
     // (The examples as effects, with and without the still cache, timed, are
     // not in the full probe: it is the emulator lane's correctness run, and
