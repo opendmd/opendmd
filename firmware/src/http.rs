@@ -1658,6 +1658,8 @@ const NOT_RELEASED: &str = "the player did not let go of the file; try again";
 /// builder is held off and a copy the player is reading is skipped first.
 /// `{"ok","path","removed","done"}`; `done` false means the time budget ran
 /// out and the client should ask again.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     let allowed = [config::CACHE_ROOT, config::LEGACY_ROOT]
         .iter()
@@ -1919,6 +1921,8 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
 
 /// Stream a manifest upload to a temp file, then hand the swap to the main
 /// task, which drops the engine before the file underneath it changes.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn install_manifest(req: &mut Upload, ctx: &Ctx, dest: String) -> Result<()> {
     let temp = format!("{dest}.part");
     files::stream_body_to(req, &temp)?;
@@ -2073,6 +2077,8 @@ fn applied_json(a: &Applied) -> String {
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
 /// with the panel, correcting for its own request latency the NTP way.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let t = s.epoch.elapsed();
     // `?recent=1`: Recently played, newest first, and which is on screen.
@@ -2319,6 +2325,8 @@ fn panel_json(st: &Status) -> String {
 
 /// The saved configuration. The WiFi password and the RePlayOS code are never
 /// returned — only whether one is set.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
