@@ -1,122 +1,148 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Wormhole run"
-about "A little ship flies through space past stars and planets, and into a wormhole to somewhere new"
+about "A ring ship flies from Earth to Jupiter and back through a wormhole, each planet swelling from a dot"
 loop forever
 fps 100
 
--- Wormhole run: a ship seen from behind, cruising through a nebula with
--- the stars streaming past and now and then a planet (some with rings)
--- drifting by. Every 24 seconds a wormhole opens ahead: the stars
--- stretch, rings rush at us, and we come out somewhere else, under
--- another colour of sky. Each play starts in another place and time.
+-- Wormhole run: a ring ship seen from behind (twelve modules turning
+-- round a hub on four spokes) flies to the Earth and the Moon, then to
+-- Jupiter, and round again. Each planet starts as a dot among the still
+-- stars and swells as we close in, Jupiter far bigger than the Earth.
+-- Then a wormhole opens ahead: a black sphere with a thin bright rim and
+-- a lensed glow across it. The ship flies into it; inside, light streaks
+-- round the middle in a spiral, and we come out under the next sky.
+-- Each play starts somewhere else on the trip.
 
--- Colours of what is drawn, each drawn as its place in the palette so
--- the later win where things cross: star streaks (dim to bright), two
--- planets (lit side last), a planet's ring, the wormhole's rings (far
--- to near), then the ship
-palette space = black #000, #203050, #5070a0, #a0c0ff, #fff, #301008,
-  #702818, #b04820, #e07830, #ffb860, #081830, #104060, #2080a0,
-  #40c0d0, #a0f0f0, ring #c0a080, tunnel #301060, #8020c0, #e040ff,
-  #ffd0ff, hullDark #384050, hull #8090a0, hullLight #d0d8e0, glass #30a0ff,
-  red #ff3030, engine #ff9020, flame #ffffa0
+-- Colours, each drawn as its place in the palette (n/31) so the later
+-- win where things cross. Not drawn: 0-3 the Earth's sky (black, haze,
+-- haze, a star), 4-7 Jupiter's. Drawn: 8-11 the wormhole's streaks, dark
+-- to bright (10 its glow); 12-15 the ocean, dark to lit; 16 land; 17-20
+-- ice and cloud, dark to white; 21-23 Jupiter's belts, 24-26 its zones,
+-- 27 the Great Red Spot; 28-30 the ship's truss and modules (the Moon's
+-- greys too); 31 its hub and the wormhole's rim
+palette space = #000, #08102a, #142050, #c8d4ff, #000, #1c0e06, #34200c, #ffe8c8,
+  #2a1880, #4a50e0, #50c0ff, #e8f8ff,
+  #061838, #0e3478, #1c56b8, #3a80e8, #6a7a34, #283040, #586070, #a0a8b8, #f4f6ff,
+  #3a2010, #7a4a2a, #b07a50, #6a5a48, #c0a880, #f0e4c8, #c84a28,
+  #4c5668, #8a94a4, #d0d8e4, #fff4d8
 
--- The ship from behind: 14 spans (its flames the last two), each `from + (to + (row + colour)/16)/64`
--- with colour its place in the palette
-table ship = 8.13266, 7.147308, 6.161926, 7.146378, 3.207825,
-  0.253677, 2.221497, 0.018478, 15.252853, 4.189224,
-  5.095673, 10.173798, 5.094711, 10.172836
+-- Earth, then Jupiter: 1 over its radius at the closest (px: 15 and 62,
+-- their sizes squeezed), where it passes (across, in its radii); the lit
+-- end of its shade ramp, the other ramp its bands take, how far the ramp
+-- runs; its feature (Africa and Europe, the Great Red Spot): how far up,
+-- how tall, how far across, its colour; its clouds' colour
+table closest = .0667, .0161
+table passX = 1.5, .9
+table top = .4839, .8387
+table shift = 0, -.0968
+table span = .0968, .0645
+table yA = .05, -.3
+table hA = .75, .12
+table xA = -.25, -.1
+table inkA = .5161, .871
+table inkC = .6452, .8387
 
 frame {
-  -- Where we are in this stretch of space (0 to 1 over 24 s) and which
-  -- stretch it is; the wormhole: opening from .78, through it until we
-  -- come out at .06 of the next; its pull on the stars
-  leg = t/24 + seed*100
-  place = hash(floor(leg), 5)
-  leg = frac(leg)
-  tunnel = clamp((leg - .78) * 12, 0, 1)*clamp((1.06 - leg) * 12, 0, 1) + clamp((.06 - leg) * 12, 0, 1)
-  rush = clamp((leg - .7) * 6, 0, 1)
-  travel = frac(t*.35 + rush*rush*3)
+  -- Where we are: legs of 24 s, which planet
+  tour = t/24 + seed*100
+  f = frac(tour)
+  planet = floor(tour)%2
 
-  -- The ship sways and bobs, and shakes in the wormhole
-  shipX = 56 + sin(frac(t*.07))*20 + tunnel*(hash(floor(t*30), 1) - .5)*2
-  shipY = 3.5 + sin(frac(t*.23))*1.5
+  -- The planet swells from a dot (the big one shows sooner), slowing at
+  -- the closest, further out as it grows; gone into the wormhole. The
+  -- Moon by the Earth
+  away = 1 - min(f*1.25, 1)
+  R = (f < .84) / (away*away*1.5 + closest[planet])
+  pX = passX[planet]*R + 64
+  pY = R*.25 + 16
+  moonR = (planet < 1) * .07 * R * R
+  mX = pX - R*2.6
 
-  -- The wormhole's rings come round every 0.83 s, swinging and turning;
-  -- the clouds drift
-  rings = frac(t*1.2)
-  swing = frac(t*.1)
-  drift = frac(t/500)*10
+  -- The wormhole, from .75 of a leg (g from 0): the black sphere opening
+  -- ahead (wR), all round us from .87 to .02 of the next leg (the
+  -- streaks), then the next sky opening out from the middle (hR)
+  g = frac(f + .25)
+  wR = (g < .4) * g * g * g * 1000 * 40
+  hR = (g < .4) * max(g - .25, 0) * 1200
+  rimY = abs(wR - 45) < 44.5 ? 16 : -999
+  tunnel = abs(g - .2) < .1
+  -- the streak loop draws the rim when not inside: its lean, width,
+  -- tail and row
+  lean = tunnel ? .35 : -.08
+  wide = tunnel ? 2.4 : 1
+  shrink = tunnel ? .93 : 1
+  rowY = tunnel ? 16 : rimY
 
-  -- This stretch's planet: where it drifts (in from the right over the
-  -- first part of the stretch), how big, which colours, a ring or not
-  planetX = 150 - leg*160
-  planetY = 18 + place*10
-  planetR = 4 + place*5
-  planetLit = (frac(place*7) > .5)*5*space.step + space.step*9
-  ringOn = frac(place*13) > .45
+  -- The ship sways; flying in, it climbs to the middle
+  into = clamp(g*10, 0, 1) * (g < .2)
+  shipX = sin(f)*12*(1 - into) + 64
+  shipY = into*3 + 8
 }
 
 draw {
-  -- Stars: 64, flying at us from far off and streaking past; longer as
-  -- the wormhole pulls
-  for k < 64 {
-    starX = hash(k, 7)*64 - 32
-    starY = hash(k, 3)*16 - 8
-    near = frac(travel - hash(k, 11))
-    head = 1 / (65/64 - near)
-    tail = 1 / (65/64 + .04 + rush*.25 - near)
-    row = abs(starX*head) > 64 or abs(starY*head) > 16 ? -999 : 16
-    lit = (near*near*3 + 1) * (1 - tunnel*.6) * space.step
-    line(64 + starX*tail, row + starY*tail, 64 + starX*head, row + starY*head, lit*.3, lit)
+  -- The planet, a line a panel row, lit from the left (its bands, the
+  -- Earth's ice); its feature, centred at a wandering longitude and widest
+  -- at its middle; wisps of cloud (Jupiter's in its zones' colour); the
+  -- Moon
+  for k < 32 {
+    dy = k - pY
+    half = sqrt(R*R - dy*dy)
+    y0 = half > 0 ? k : -999
+    ny = dy/R
+    lit = abs(ny) > .86 + planet ? .6452 : (noise(ny*9, 3, 0) > .5)*shift[planet] + top[planet]
+    line(pX - half, y0, pX + half, y0, lit, lit - span[planet])
+    reach = hA[planet] - abs(ny - yA[planet])
+    mid = (noise(ny*3, 5, 0)*.4 + xA[planet])*half + pX
+    across = R*.38*sqrt(reach)
+    y1 = reach > 0 ? y0 : -999
+    line(mid - across, y1, mid + across, y1, inkA[planet])
+    mid = (noise(ny*13, 17, 0)*1.8 - .9)*half + pX
+    across = max(noise(ny*13, 13, 0)*1.2 - .76, 0) * half
+    line(mid - across, y0, mid + across, y0, inkC[planet])
+    dy = k - (pY + R*.6)
+    half = sqrt(moonR - dy*dy)
+    y3 = half > 0 ? k : -999
+    line(mX - half, y3, mX + half, y3, .9677, .9032)
   }
 
-  -- The planet, a line a row, lit from the left, and its ring in front
-  for k < 19 {
-    e = k - 9
-    halfRow = sqrt(planetR*planetR - e*e)
-    shown = (halfRow > 0) * (tunnel < .5)
-    line(planetX - halfRow, planetY + e, planetX + halfRow, planetY + e, planetLit*shown, (planetLit - space.step*4) * shown)
+  -- The wormhole: the lensed glow across it; its rim, a circle of 80
+  -- chords; inside, 80 streaks on six arms, spiralling out as they come
+  -- and turning, brighter as they near
+  line(64 - wR*1.9, rimY, 64 + wR*1.9, rimY, .3226)
+  for k < 80 {
+    near = frac(hash(k, 11) + f*9)
+    turn = tunnel ? k%6/6 + near*1.4 + f*4 : k/80
+    r1 = tunnel ? 6 / (1.06 - near) : wR
+    r0 = r1*shrink
+    row = r1 < 70 ? rowY : -999
+    co = cos(turn)
+    si = sin(turn)
+    line((co + si*lean)*r0*wide + 64, (si - co*lean)*r0 + row, co*r1*wide + 64, si*r1 + row, tunnel ? near*.11 + .258 : 1)
   }
+
+  -- The ship from behind: twelve boxy modules turning on a ring (the far
+  -- side darker), the truss between them, four spokes to the hub; the
+  -- hub and its engine
   for k < 12 {
-    a0 = k/12
-    ringX = cos(a0)*planetR*1.9
-    ringY = sin(a0)*planetR*.35
-    front = ringY < 0 or abs(ringX) > planetR
-    line(planetX + ringX, planetY + ringY, planetX + cos(a0 + 1/12)*planetR*1.9, planetY + sin(a0 + 1/12)*planetR*.35, front * ringOn * (tunnel < .5) * space.ring)
+    co = cos(k/12 + f/6)
+    si = sin(k/12 + f/6)
+    mx = co*11 + shipX
+    my = si*5.5 + shipY
+    line(mx, my, mx - si*5.8, my + co*2.9, .9355)
+    line(shipX, shipY, mx, my, (k%3 == 0) * .9032)
+    line(mx, my, mx + 1, my, .952 - si*.026)
+    line(mx, my + 1, mx + 1, my + 1, .952 - si*.026)
   }
-
-  -- The wormhole: its far end glowing, and five rings rushing at us,
-  -- swinging as it bends
-  for k < 5 {
-    glow = sqrt(6.5 - (k - 2)*(k - 2)) * 1.5 * tunnel
-    line(64 + sin(swing*4)*14 - glow, 14 + k + sin(swing*3)*4, 64 + sin(swing*4)*14 + glow, 14 + k + sin(swing*3)*4, (tunnel > 0) * (space.tunnel + space.step*3))
-  }
-  for k < 5 {
-    near = frac(rings + k/5)
-    size = 2 / (1.04 - near)
-    midX = 64 + sin(swing*4 + near*.06)*14
-    midY = 16 + sin(swing*3 + near*.06)*4
-    lit = (tunnel > 0) * (space.tunnel + near*tunnel*3*space.step)
-    for j < 8 {
-      line(midX + cos(j/8 + swing)*size*2, midY + sin(j/8 + swing)*size, midX + cos(j/8 + .125 + swing)*size*2, midY + sin(j/8 + .125 + swing)*size, lit)
-    }
-  }
-
-  -- The ship, span by span
-  for k < 14 {
-    span = frac(ship[k])*64
-    rowInk = frac(span)*16
-    line(shipX + floor(ship[k]), shipY + floor(rowInk), shipX + floor(span), shipY + floor(rowInk), frac(rowInk))
-  }
+  line(shipX - 2, shipY + 1, shipX + 2, shipY + 1, .9677)
+  line(shipX - 2, shipY, shipX + 2, shipY, .9677)
+  dot(shipX, shipY, 1)
 }
 
--- The nebula, redrawn every eighth frame: soft clouds drifting, in this
--- stretch's colour, dimming in the wormhole; the drawn things over it
-layer rate 8 {
-  cloud = noise(px*.05 + drift, py*.1, 0)
-  hsv(place + cloud*.2, .8, cloud * cloud * (.55 - tunnel*.4))
-}
-layer max {
-  pal(space, ink)
-}
+-- The sky, still (both values are the panel's still cache): a dithered
+-- haze and the stars, in this leg's colours; black in the wormhole's
+-- sphere, and back as the next sky opens out from the middle; what is
+-- drawn over it
+d = len(px - 63.5, py - 15.5)
+stars = max(noise(px*.05, py*.12, 0)*.0968 - .0355 + hash(py, px)*.0161, (hash(px, py) > .985) * .0968)
+pal(space, max(ink, ((d > wR) + (d < hR)) * (stars + planet*.129)))
