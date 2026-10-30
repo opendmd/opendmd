@@ -3775,6 +3775,27 @@ def psi_memory_checks(page: Page) -> None:
     check(grown[0] == grown[1], f"formulas: 6,000 compiles leave the module's memory as it was ({grown})")
 
 
+def psi_error_links(page: Page) -> None:
+    """The editor's error code: the link to the language reference's entry
+    on the project site (a new tab), the code following each new error;
+    and js/psierr.js's codeOf giving every golden case in
+    opendmd-psi/tests/diagnostics.txt the code the compiler's own index
+    gives it (`=== E…`), so the JS table and its weighing are the Rust's."""
+    a = page.locator("#psi-err a.ecode")
+    check(a.inner_text() == "E201" and a.get_attribute("href") == "https://opendmd.dev/dev/psi/#E201"
+          and a.get_attribute("target") == "_blank" and "noopener" in (a.get_attribute("rel") or ""),
+          f"formulas: the error's code links the reference ({a.get_attribute('href')})")
+    page.fill("#psi-src", "v = 1\nv = 2\ngray(v)")
+    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E203'", timeout=10000)
+    check(page.locator("#psi-err a.ecode").count() == 1 and page.get_attribute("#psi-err a.ecode", "href").endswith("#E203"),
+          "formulas: a new error, its own code (one link)")
+    cases = re.findall(r"^=== E(\d+)\n(?:.*\n)*?--- \d+:\d+ (.*)$",
+                       (REPO / "opendmd-psi/tests/diagnostics.txt").read_text(encoding="utf-8"), re.M)
+    bad = page.evaluate("""async (cases) => { const m = await import('./js/psierr.js');
+        return cases.filter(([c, msg]) => m.codeOf(msg) !== +c).slice(0, 5); }""", cases)
+    check(len(cases) >= 150 and not bad, f"formulas: psierr.js codes all {len(cases)} golden messages as the compiler's index does ({bad})")
+
+
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
     """Library → Formulas: the module loads only then; the examples render;
     a plain error with its line; a number scrubbed changes the text, the
@@ -3819,11 +3840,13 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
 
     # An error: a plain sentence with its line; the last version keeps playing.
     formula_editor(page, "loop 4\nv = sin(x*2 + t/4)\ngray(tme)")
+    page.wait_for_selector("#psi-err a.ecode", timeout=10000)
     err = page.inner_text("#psi-err")
-    check(err == "Line 3: unknown name tme — did you mean t?" and page.get_attribute("#psi-ed", "data-err") == "3"
+    check(err == "Line 3: unknown name tme — did you mean t? E201" and page.get_attribute("#psi-ed", "data-err") == "3"
           and page.locator(".psi-hl .e").inner_text() == "tme" and page.locator(".psi-gut b").inner_text() == "3",
           f"formulas: an error says '{err}' and marks the word and the line")
     shot(page, "formulas-error", "laptop")
+    psi_error_links(page)
     # A still formula: a scrubbed number changes the text and the picture.
     page.fill("#psi-src", "gray(x*0.5)")
     page.wait_for_timeout(400)
@@ -4472,8 +4495,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-src", "use No such thing as q\nq")
     page.wait_for_timeout(400)
     err = page.inner_text("#psi-err")
-    check(page.get_attribute("#psi-ed", "data-err") == "1" and "no formula called “No such thing”" in err,
-          f"formulas: a use line naming nothing says so ({err!r})")
+    page.wait_for_timeout(300)
+    check(page.get_attribute("#psi-ed", "data-err") == "1" and "no formula called “No such thing”" in err
+          and page.locator("#psi-err a.ecode").count() == 0,
+          f"formulas: a use line naming nothing says so, with no code (the editor's own message) ({err!r})")
     mine = lambda: page.evaluate("JSON.parse(localStorage.getItem('odmd.psi.mine') || '[]').map(f => f.name)")
     before = mine()
     page.click("#psi-save")

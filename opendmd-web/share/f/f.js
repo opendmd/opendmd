@@ -107,8 +107,17 @@ async function start() {
     $('f-cap').title = TIP(i);
   } else {
     const line = f.src.slice(0, bad[0]).split('\n').length;
-    $('f-cap').textContent = `This formula doesn’t work: line ${line}: ${P.error().replace(/`/g, '')}`;
+    const msg = P.error();
+    $('f-cap').textContent = `This formula doesn’t work: line ${line}: ${msg.replace(/`/g, '')}`;
     $('f-cap').classList.add('bad');
+    // Its code, linked to the language reference's entry.
+    import('../demo/js/psierr.js').then((m) => {
+      const r = m.refOf(msg, new URL('../', here()).href);
+      if (!r) return;
+      const a = document.createElement('a');
+      a.className = 'ecode'; a.href = r.href; a.textContent = r.code; a.title = 'What this error means';
+      $('f-cap').append(' ', a);
+    }).catch(() => {});
   }
 
   // The preview: the frame at a whole number of 20 ms frames into the loop.

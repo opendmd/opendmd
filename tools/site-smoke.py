@@ -44,8 +44,14 @@ build URL serves. There the art index must also carry
   the frozen page says which release it describes and links the latest;
   with `--api-freeze auto` off a tag, nothing new is frozen;
 - /dev/psi/ (the Psi language reference): in the menu, its generated
-  tables, grammar and error index (every code an anchor), under the docs'
-  CSP with no violation, no sideways scroll on a phone;
+  tables, grammar and error index (every code an anchor, the common ones
+  with a before and an after, E407/E408 internal), under its own CSP (the
+  docs' and 'wasm-unsafe-eval') with no violation; Psi loaded only when an
+  example is near, then every live example drawn and lit, Open in editor
+  opening the demo's editor; the search and the cheat sheet; no sideways
+  scroll on a phone;
+- an error's code linked to the reference: /f/'s caption and the demo's
+  editor;
 - the demo's Settings, against its player in the page (js/demo.js): every
   tab; brightness, the colour, the Formula look, each GIF's stay, the
   playlist, night mode and a rule shown on its panel and in Now's banner;
@@ -835,20 +841,40 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
             check(names == ["v0.0.1.html"], f"api: off the tag ({desc}), --api-freeze auto freezes nothing new {names}")
 
 
-def psi_reference(browser, base: str, site: Path, errors: list[str]) -> None:
+def csp_for(site: Path, pattern: str) -> str:
+    """The Content-Security-Policy _headers sets for `pattern`'s rule (one
+    CSP per path: a rule of its own replaces the docs' one)."""
+    for rule in (site / "_headers").read_text().split("\n\n"):
+        lines = rule.splitlines()
+        if lines and lines[0] == pattern:
+            return next(l.split(": ", 1)[1] for l in lines if l.strip().startswith("Content-Security-Policy:"))
+    raise SystemExit(f"_headers: no rule for {pattern}")
+
+
+def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path) -> None:
     """/dev/psi/, the Psi language reference: in the menu (and linked from
     every page's), its generated tables and error index there, each code an
-    anchor; under the site's own CSP (the docs' policy from _headers, set on
-    the page's responses here too, so a violation shows without --base);
-    no sideways scroll on a phone."""
-    rules = (site / "_headers").read_text().split("\n\n")
-    csp = next(l.split(": ", 1)[1] for l in rules[0].splitlines() if l.strip().startswith("Content-Security-Policy:"))
-    check((site / "dev/psi/index.html").is_file(), "psi reference: dev/psi/index.html is in the site")
+    anchor; the common errors' help (a before and an after), E407/E408
+    marked internal; under its own CSP from _headers (the docs' policy and
+    'wasm-unsafe-eval', set on the page's responses here too, so a violation
+    shows without --base); nothing of Psi loaded until an example scrolls
+    near; every live example (a cheat-sheet row's, a cookbook recipe's)
+    drawn and lit once on screen, its Open in editor link opening the demo's
+    editor with that formula; the search filtering rows and errors, the
+    cheat sheet folding the page; no sideways scroll on a phone.
+    Screenshots of it at both sizes in `shots`."""
+    csp = csp_for(site, "/dev/psi/*")
+    check("'wasm-unsafe-eval'" in csp and "connect-src" not in csp and "blob:" not in csp,
+          "psi reference: its CSP is the docs' and 'wasm-unsafe-eval', nothing more")
+    check((site / "dev/psi/index.html").is_file() and (site / "dev/psi/psiref.js").is_file(),
+          "psi reference: dev/psi/index.html and its script are in the site")
     check('href="../dev/psi/index.html"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from the guide's menu")
     for size in SIZES:
         page = new_page(browser, size, errors)
         violations: list[str] = []
+        asked: list[str] = []
         page.on("console", lambda m: "Content Security Policy" in m.text and violations.append(m.text))
+        page.on("request", lambda r: asked.append(r.url))
 
         def with_csp(route):
             r = route.fetch()
@@ -856,22 +882,139 @@ def psi_reference(browser, base: str, site: Path, errors: list[str]) -> None:
         page.route("**/dev/psi/**", with_csp)
         page.goto(f"{base}/dev/psi/#E203")
         page.wait_for_selector("h1")
+        wait_js(page, "document.querySelector('main').dataset.psiRef == 'ready'")
         if size == "laptop":
+            page.wait_for_timeout(600)
+            early = [u for u in asked if "pkg-psi" in u]
+            check(not early, f"psi reference: Psi doesn't load with the page, only when an example is near ({early[:1]})")
             check(page.title().startswith("Psi language reference"), f"psi reference: its title ({page.title()})")
             check(page.locator("nav a.on").inner_text() == "Psi language", "psi reference: in the menu, marked")
             codes = page.eval_on_selector_all("h4[id^=E]", "els => els.map(e => e.id)")
             check(len(codes) >= 100 and "E203" in codes and "E601" in codes, f"psi reference: the error index ({len(codes)} codes, each an anchor)")
             top = page.evaluate("document.getElementById('E203').getBoundingClientRect().top")
             check(0 <= top < 400, f"psi reference: #E203 opens at its entry ({top:.0f} px from the top)")
+            e203 = page.locator(".psi-err:has(#E203)").inner_text()
+            check("Before:" in e203 and "After:" in e203 and "v2 = v * 2" in e203, "psi reference: E203 has a before and an after")
+            internal = page.eval_on_selector_all("h4[id^=E]:has(.badge)", "els => els.map(e => e.id)")
+            e407 = page.locator(".psi-err:has(#E407)").inner_text()
+            check(internal == ["E407", "E408"] and "a bug in Psi: please report it" in e407,
+                  f"psi reference: E407 and E408 marked internal ({internal})")
             cells = page.eval_on_selector_all("table code", "els => els.map(e => e.textContent)")
             check(all(any(n in c for c in cells) for n in ("atan2", "rainbow", "screen", "control")),
                   f"psi reference: the generated tables ({len(cells)} names)")
             check(page.locator("pre code", has_text="formula   =").count() == 1, "psi reference: the grammar")
             check(page.locator("pre code", has_text="psi check").count() >= 1, "psi reference: the psi command's example")
+            # Every example, scrolled to: drawn and lit.
+            n = page.locator(".psi-live").count()
+            recipes = page.locator(".psi-live.big").count()
+            dark, undrawn, links = [], [], []
+            for k in range(n):
+                box = page.locator(".psi-live").nth(k)
+                box.scroll_into_view_if_needed()
+                try:
+                    wait_js(page, f"document.querySelectorAll('.psi-live canvas')[{k}].dataset.frames > 0", 10000)
+                except PlaywrightTimeout:
+                    undrawn.append(k)
+                    continue
+                lit_n = page.evaluate(f"""() => {{ const c = document.querySelectorAll('.psi-live canvas')[{k}];
+                    const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+                    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n; }}""")
+                if lit_n < 12:
+                    dark.append(k)
+                links.append(box.locator("a.psi-open").get_attribute("href"))
+            check(n >= 60 and recipes >= 7 and not undrawn and not dark,
+                  f"psi reference: {n} live examples ({recipes} recipes), each drawn ({undrawn[:3]} not) and lit ({dark[:3]} dark)")
+            check(all(urllib.parse.urlsplit(u).path == "/demo/" and "formula" in params(u) for u in links),
+                  f"psi reference: every example opens in the demo's editor ({links[:1]})")
+            moving = page.locator(".psi-live.big canvas").first
+            moving.scroll_into_view_if_needed()
+            f0 = int(moving.get_attribute("data-frames") or 0)
+            page.wait_for_timeout(500)
+            check(int(moving.get_attribute("data-frames") or 0) > f0, "psi reference: a recipe on screen moves")
+            if shots:
+                page.locator("#cookbook").scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+                page.screenshot(path=str(shots / "psi-reference-cookbook-laptop.png"))
+                page.locator("#what-each-does").scroll_into_view_if_needed()
+                page.wait_for_timeout(500)
+                page.screenshot(path=str(shots / "psi-reference-examples-laptop.png"))
+            # Search: rows and errors.
+            page.fill("#psi-q", "cycle")
+            page.wait_for_timeout(200)
+            rows = page.eval_on_selector_all("table.psi-ex-t tbody tr:not([hidden])", "els => els.map(e => e.cells[0].textContent)")
+            errs = page.eval_on_selector_all(".psi-err:not([hidden]) h4", "els => els.map(e => e.id)")
+            shown_cook = page.locator("#cookbook").is_visible() or page.evaluate(
+                "[...document.querySelectorAll('.psi-live.big, #cookbook ~ pre')].some(e => e.checkVisibility())")
+            check(rows and all("cycle" in page.locator("table.psi-ex-t tbody tr:not([hidden])").nth(i).inner_text() for i in range(len(rows)))
+                  and "cycle(fire, v, s)" in rows and "E931" in errs and "E203" not in errs and not shown_cook
+                  and "built-in" in page.inner_text("#psi-n"),
+                  f"psi reference: search 'cycle' leaves {len(rows)} rows and {len(errs)} errors, the rest hidden ({page.inner_text('#psi-n')})")
+            if shots:
+                page.evaluate("scrollTo(0, 0)")
+                page.screenshot(path=str(shots / "psi-reference-search-laptop.png"))
+            page.fill("#psi-q", "")
+            page.click("#psi-cheat")
+            page.wait_for_timeout(200)
+            sheet = page.evaluate("""() => ({ cook: !!document.querySelector('#cookbook')?.checkVisibility(),
+                rows: document.querySelectorAll('table.psi-ex-t tbody tr:not([hidden])').length,
+                ex: [...document.querySelectorAll('.psi-live')].some(e => e.checkVisibility()),
+                blocks: [...document.querySelectorAll('.psi-err blockquote')].some(e => e.checkVisibility()),
+                titles: [...document.querySelectorAll('.psi-err h4')].filter(e => e.checkVisibility()).length })""")
+            check(not sheet["cook"] and sheet["rows"] >= 60 and not sheet["ex"] and not sheet["blocks"] and sheet["titles"] >= 100,
+                  f"psi reference: the cheat sheet keeps the rows and the error titles only ({sheet})")
+            if shots:
+                page.evaluate("scrollTo(0, 0)")
+                page.screenshot(path=str(shots / "psi-reference-cheat-laptop.png"))
+            page.click("#E931")
+            page.wait_for_timeout(300)
+            check(page.get_attribute("#psi-cheat", "aria-pressed") == "false" and page.locator(".psi-err:has(#E931) blockquote").is_visible()
+                  and page.url.endswith("#E931"), "psi reference: an error's title in the cheat sheet opens its entry")
+            # Open in editor: the demo's editor with that formula.
+            src = params(links[0])["formula"][0]
+            page.goto(links[0])
+            page.wait_for_selector("#psi-ed #psi-src", timeout=30000)
+            check(page.input_value("#psi-src") == src, f"psi reference: Open in editor opens the demo's editor with it ({src!r})")
         else:
+            page.wait_for_timeout(300)
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "psi reference (phone): no sideways scroll")
+            page.locator("#what-each-does").scroll_into_view_if_needed()
+            wait_js(page, "[...document.querySelectorAll('.psi-live canvas')].some(c => c.dataset.frames > 0)", 15000)
+            box = page.locator(".psi-live .led").first.bounding_box()
+            check(page.evaluate("document.documentElement.scrollWidth <= innerWidth") and box and box["x"] + box["width"] <= 390,
+                  "psi reference (phone): the examples fit, no sideways scroll")
+            if shots:
+                page.wait_for_timeout(400)
+                page.screenshot(path=str(shots / "psi-reference-examples-phone.png"))
+                page.locator("#cookbook").scroll_into_view_if_needed()
+                page.wait_for_timeout(600)
+                page.screenshot(path=str(shots / "psi-reference-cookbook-phone.png"))
         check(not violations, f"psi reference [{size}]: no CSP violations {violations[:2]}")
         page.context.close()
+
+
+def psi_error_links(browser, base: str, errors: list[str]) -> None:
+    """An error's code links the language reference's entry, on the site's
+    own copy: /f/'s caption (a broken formula) and the demo's editor; the
+    entry is there."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(share_link(base, "v = 1\nv = 2\ngray(v)", "Broken"))
+    page.wait_for_selector("#f-cap a.ecode", timeout=20000)
+    a = page.locator("#f-cap a.ecode")
+    href = a.get_attribute("href")
+    check(a.inner_text() == "E203" and urllib.parse.urljoin(page.url, href) == f"{base}/dev/psi/#E203"
+          and "doesn’t work" in page.inner_text("#f-cap"), f"/f/: a broken formula's code links the reference ({href})")
+    a.click()
+    page.wait_for_selector("#E203")
+    check(page.url == f"{base}/dev/psi/#E203", f"/f/: the code's link leads to its entry ({page.url})")
+    page.goto(f"{base}/demo/#formulas")
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
+    page.click("#psi-new")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    page.fill("#psi-src", "gray(tme)")
+    page.wait_for_selector("#psi-err a.ecode", timeout=10000)
+    href = page.get_attribute("#psi-err a.ecode", "href")
+    check(href == f"{base}/dev/psi/#E201", f"demo: the editor's error code links the site's own reference ({href})")
+    page.context.close()
 
 
 def install_links(site: Path) -> None:
@@ -921,7 +1064,9 @@ def main() -> int:
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
         print("the Psi language reference (dev/psi/)")
-        psi_reference(browser, base, a.site, errors)
+        psi_reference(browser, base, a.site, errors, a.shots)
+        print("error codes linked to the reference (/f/, the demo)")
+        psi_error_links(browser, base, errors)
         print("install page")
         install_links(a.site)
         if a.shots:

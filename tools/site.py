@@ -20,7 +20,9 @@
 - /dev/        the developer pages: an overview and a few clean references
                (the detailed notes in docs/ stay in the repo), among them
                /dev/psi/, the Psi language reference (docs/psi-spec.md:
-               its tables and error codes generated from the compiler's)
+               its tables and error codes generated from the compiler's;
+               live examples, search and a cheat sheet by
+               opendmd-web/share/ref/psiref.js, on the demo's Psi)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
@@ -157,6 +159,11 @@ MENU = [
 # The installer page: ESP Web Tools, pinned (the flashing itself is
 # esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
 INSTALL_PAGE = "install/index.html"
+# The Psi language reference: its live examples, highlighting, search and
+# cheat sheet (opendmd-web/share/ref/psiref.js, copied beside the page; it
+# imports the demo's Psi, so its CSP allows wasm: CSP["psi"]).
+PSI_PAGE = "dev/psi/index.html"
+PSI_HEAD = '<script type="module" src="psiref.js"></script>'
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
 # Every flash layout (the firmware's `variant`): the board, the words on its
@@ -288,8 +295,8 @@ h1{font-size:32px;margin:4px 0 16px}
 h2{font-size:24px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
 h3{font-size:16px;margin:28px 0 8px}
 h1 .headerlink{display:none}
-h2 .headerlink,h3 .headerlink{opacity:0;margin-left:6px;text-decoration:none;color:var(--mut)}
-h2:hover .headerlink,h3:hover .headerlink{opacity:1}
+h2 .headerlink,h3 .headerlink,h4 .headerlink{opacity:0;margin-left:6px;text-decoration:none;color:var(--mut)}
+h2:hover .headerlink,h3:hover .headerlink,h4:hover .headerlink{opacity:1}
 code{font:14px ui-monospace,Menlo,Consolas,monospace;background:var(--bg3);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
 pre{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow:auto}
 pre code{background:none;padding:0;font-size:13px;line-height:1.5;overflow-wrap:normal}
@@ -370,6 +377,38 @@ p.vers{font-size:14px;color:var(--mut)}
 footer{grid-column:2;padding:0 44px 40px;color:var(--mut);font-size:13px}
 footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
 
+/* The Psi language reference (dev/psi/, psiref.js): search, the cheat sheet, live examples */
+main [hidden]{display:none!important}
+.psi-tools{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px;padding:10px 0;background:var(--bg)}
+.psi-tools input{flex:1 1 220px;min-width:0;font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg2);color:var(--fg)}
+.psi-tools .btn{font:inherit;font-size:14px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg3);color:var(--fg);cursor:pointer}
+.psi-tools .btn[aria-pressed=true]{background:var(--acc);color:#111;border-color:var(--acc)}
+.psi-tools .cap{font-size:13px;color:var(--mut)}
+code.psi-ex{white-space:pre-wrap}
+table.psi-ex-t td:first-child code{overflow-wrap:normal}
+.psi-live{margin:8px 0 2px}
+.psi-live .led{width:384px;max-width:100%}
+.psi-live.big .led{width:512px}
+.led canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges;mix-blend-mode:lighten}
+.psi-open{font-size:13px}
+.psi-hl .n{color:var(--acc)}.psi-hl .c{color:var(--mut)}.psi-hl .w{color:var(--pink)}.psi-hl .s{color:var(--green)}
+.psi-hl .k{color:var(--cyan)}.psi-hl .p{color:var(--violet)}
+h4[id^=E]{scroll-margin-top:64px}
+h4[id^=E]:target{color:var(--acc)}
+.badge{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--pink);border-radius:6px;font-size:12px;font-weight:400;color:var(--pink);vertical-align:middle}
+main.cheat .psi-err>:not(h4){display:none}
+main.cheat .psi-err h4{margin:0;padding:2px 0;font-size:14px;font-weight:400;cursor:pointer}
+main.cheat .psi-err h4:hover{color:var(--acc)}
+main.cheat td:nth-child(3),main.cheat th:nth-child(3),main.cheat .psi-live{display:none}
+main.cheat table{font-size:14px;margin:8px 0}
+main.cheat td{padding:3px 8px}
+@media (max-width:600px){
+  table.psi-ex-t thead{display:none}
+  table.psi-ex-t tbody,table.psi-ex-t tr,table.psi-ex-t td{display:block}
+  table.psi-ex-t tr{border:1px solid var(--line);border-radius:8px;margin:0 0 10px;padding:4px 0}
+  table.psi-ex-t td{border:0;padding:3px 10px}
+}
+
 @media (max-width:860px){
   .wrap{display:block}
   nav{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line);padding:16px}
@@ -447,6 +486,11 @@ CSP = {
     # display on the LAN (http:, which CSP cannot narrow to private ranges).
     "f": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'") + "; connect-src 'self' http:",
+    # The Psi language reference: its live examples run the demo's Psi
+    # (pkg-psi, same-origin), which needs only 'wasm-unsafe-eval' on top of
+    # the docs' policy: no blob:, no connect-src beyond 'self' (the wasm is
+    # fetched from the site itself), no inline script.
+    "psi": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
     # update check (util.js SITE).
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
@@ -470,7 +514,7 @@ def headers_file() -> str:
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
-    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo")):
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
     for name in ("release.json", "beta.json"):
         rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))
@@ -787,7 +831,7 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     up = "../" * page.count("/")
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
-    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else ""
+    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else "\n" + PSI_HEAD if page == PSI_PAGE else ""
     wm = art["wordmark"]
     brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
              f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
@@ -876,6 +920,9 @@ def main() -> None:
     shutil.copytree(a.card, out / "demo/demo")
     # A formula's own page; it runs on the demo's files.
     shutil.copytree(ROOT / "opendmd-web/share/f", out / "f")
+    # The Psi reference's script (the page itself is a doc, written below).
+    (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
     info = release(a.dist, out)
     write_art_index(out)
     art = json.loads((a.art / "art.json").read_text())

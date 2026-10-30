@@ -90,6 +90,10 @@ line nor the Formulas line carries it.
 The API reference is not packed (until 2026-10-23 it was `api.html`, its
 own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
+The Formulas editor's error codes (`js/psierr.js`, imported at a formula's
+first error) have a line of their own, <= 4 KB, and so does the site's Psi
+language reference script (`--share`'s `ref/psiref.js`, outside the share
+line), <= 6 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
@@ -377,6 +381,27 @@ TREE = {"js/tree.js", "js/thumbs.js", "tree.css"}
 # The playlist editor (#sets/edit), imported the first time a playlist opens.
 EDITOR_GZ_BUDGET = 6 * 1024
 EDITOR = {"js/pledit.js"}
+# The error codes of the Formulas editor's messages (`js/psierr.js`: the
+# compiler's sentence fragments for each code, generated from
+# opendmd-psi/src/errors.rs, and the link to the language reference's
+# entry; imported the first time a formula shows an error, by js/formulas.js
+# and the site's /f/ page): a line of its own, <= 4 KB (2026-10-30, branch
+# ref-ergo: 3,001 B gz for 137 codes). Not with the Formulas line (1.3 KB
+# left) nor the page's 60 KB line, as it never loads with either.
+PSIERR_GZ_BUDGET = 4 * 1024
+PSIERR = {"js/psierr.js"}
+# The site's Psi language reference script (`--share`'s ref/psiref.js,
+# copied to dev/psi/: the live examples, highlighting, search and the cheat
+# sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
+# ref-ergo: ~4.1 KB gz), apart from /f/'s share line, which it never loads
+# with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
+# own lines, loaded only when the first example scrolls near.
+PSIREF_GZ_BUDGET = 6 * 1024
+
+
+def q_ref(p: Path, share: Path) -> bool:
+    """A file of the Psi reference's script (share/ref/), not /f/'s."""
+    return p.relative_to(share).parts[0] == "ref"
 
 
 def main() -> int:
@@ -455,6 +480,8 @@ def main() -> int:
             kind = "tree"
         elif rel in EDITOR:
             kind = "editor"
+        elif rel in PSIERR:
+            kind = "psierr"
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -467,7 +494,15 @@ def main() -> int:
         import gzip
         share = Path(args.share)
         sraw = sgz = 0
+        rraw = rgz = 0
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
+            if q_ref(p, share):
+                b = p.read_bytes()
+                g = len(gzip.compress(b, 9, mtime=0))
+                rraw += len(b)
+                rgz += g
+                print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
+                continue
             b = p.read_bytes()
             g = len(gzip.compress(b, 9, mtime=0))
             sraw += len(b)
@@ -478,8 +513,10 @@ def main() -> int:
         verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
         print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {sgz + uses:,} B gz)")
+        verdict = "ok" if rgz <= PSIREF_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'psiref':<10} raw {rraw:>9,}           gz {rgz:>9,} / {PSIREF_GZ_BUDGET // 1024} KB {verdict}")
         print()
-        ok &= sgz <= SHARE_GZ_BUDGET
+        ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
@@ -489,7 +526,7 @@ def main() -> int:
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fadd", FADD_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
-                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
+                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

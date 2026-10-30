@@ -477,6 +477,8 @@ def headers(base: str, site: Path) -> None:
         "/demo/": ("connect-src 'self' https://gifcities.archive.org", None, None, "public, max-age=600"),
         "/demo/app.js": (None, None, None, "public, max-age=600"),
         "/f/": ("'wasm-unsafe-eval'", "jsdelivr", "*", "public, max-age=600"),
+        # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
+        "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
     }
     bad = []
     for path, (has, hasnt, cors, cache) in want.items():

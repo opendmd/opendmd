@@ -161,6 +161,9 @@ const plBtn = (id, f, keep) => app.src && h('button', { id, onclick: (e) => toLi
 const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 let PS = null;
+// An error's code and the reference's entry for it (js/psierr.js, imported
+// at the first error); the demo's reference is its own site's.
+const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, app.demo ? new URL('../', location.href).href : SITE), () => null);
 // Use as the look: a player's, or the demo's (js/demo.js).
 const LOOK = () => app.device || !!app.demo;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
@@ -609,7 +612,12 @@ function editor() {
       top.classList.toggle('stale', good != null);
       const line = ta.value.slice(0, bad[0]).split('\n').length;
       el.dataset.err = line;
-      clear(err, `Line ${line}: `, (miss ? miss.why : T(() => P.error(), '')).split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
+      const msg = miss ? miss.why : T(() => P.error(), '');
+      clear(err, `Line ${line}: `, msg.split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
+      // Its code, linked to the language reference's entry (the editor's
+      // own messages, `miss`, have none).
+      const shown = err.textContent;
+      if (!miss) errRef(msg).then((r) => { if (r && err.textContent === shown) err.append(' ', h('a.ecode', { href: r.href, target: '_blank', rel: 'noopener', title: 'What this error means' }, r.code)); });
       paint();
     }
     stash();
