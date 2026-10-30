@@ -489,8 +489,8 @@ def headers(base: str, site: Path) -> None:
     want = {  # path: (CSP must contain, must not contain, CORS, Cache-Control)
         # The home page's live panels and the gallery's tiles on hover: Psi's wasm, nothing more.
         "/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
-        "/guide/web-app": ("script-src 'self';", "wasm", None, "public, max-age=600"),
-        "/guide/": ("script-src 'self';", "wasm", None, "public, max-age=600"),
+        "/guide/web-app": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
+        "/guide/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
         # (60 s once the gallery store serves it; 600 s as built)
         "/formulas/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, ("public, max-age=60", "public, max-age=600")),
         "/install/": ("script-src 'self' https://cdn.jsdelivr.net", "wasm", "*", "public, max-age=600"),

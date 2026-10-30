@@ -337,8 +337,13 @@ LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 CSP_BASE = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 CSP = {
-    # The docs, the gallery, the licences, the 404 page.
-    "docs": CSP_BASE,
+    # Every page by default (the docs, the licences, the 404 page) and the
+    # home page: the home page's live Formulas run the demo's Psi, which
+    # needs 'wasm-unsafe-eval'. It is in the default policy because a rule
+    # for "/" alone does not detach the "/*" header on Cloudflare (both were
+    # sent and the stricter won); it only lets same-origin scripts compile
+    # wasm.
+    "docs": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The installer: ESP Web Tools (and the modules it imports) from jsDelivr.
     "install": CSP_BASE.replace("script-src 'self'", "script-src 'self' https://cdn.jsdelivr.net")
     + "; connect-src 'self' https://cdn.jsdelivr.net",
@@ -377,7 +382,7 @@ def headers_file() -> str:
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
-    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/", "home"), ("/formulas/*", "home")):
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
     for name in ("release.json", "beta.json"):
         rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))

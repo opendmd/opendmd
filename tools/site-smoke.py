@@ -829,8 +829,6 @@ def reachable(site: Path) -> None:
 
 
 def csp_pattern(path: str) -> str:
-    if path in ("/", "/index.html"):
-        return "/"
     for pat in ("/install/*", "/f/*", "/dev/psi/*", "/formulas/*"):
         if path.startswith(pat[:-1]):
             return pat
