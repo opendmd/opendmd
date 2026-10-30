@@ -297,7 +297,12 @@ end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
 i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
 second of four), and k in between gives the nearest — bands, not a blend,
 so a smooth ramp needs its steps written out. One step a pixel, the cost of
-a built-in palette: a scene's colours by index without `pick`s.
+a built-in palette: a scene's colours by index without `pick`s. A colour
+may have a name before it, `palette road = black #000, kerb #806, sky
+#f48`: then `road.kerb` is exactly the k of that colour (i/(n−1)),
+`road.step` is 1/(n−1) (one colour on: `road.kerb + road.step`) and
+`road.n` the count — constants, no steps, and adding a colour renumbers
+nothing you wrote.
 
 ```psi
 palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
@@ -748,10 +753,11 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
   particle's start from `hash(k, …)` and its place from `t`: `frac(hash(k,
   1) + t/L)` cycles it once a loop. A streak is a `line` from where it was
   a moment ago to where it is, its ink fading towards the tail; a point is
-  a `dot`. Skip a particle that has left the panel by moving both ends of
-  its line to x = −999: a line wholly off one side of the panel walks no
-  steps, but one partly on it walks all of them, off the panel too, and
-  they count against the 16,384 a frame. Example 31.
+  a `dot`. Hide a particle that has left the panel with ink 0 at both
+  ends (`line(…, lit*shown, lit*shown)`): such a line, like one wholly off
+  one side of the panel, walks no steps, but one partly on it walks all of
+  them, off the panel too, and they count against the 16,384 a frame.
+  Example 31.
 - **A wireframe**: the corners in one `table` (x, y, z after each other),
   the edges in another (pairs of corner numbers); `for e < EDGES`, read the
   two corners (`V[E[e*2]*3 + 1]` is the first corner's y), turn them with
@@ -951,7 +957,8 @@ gray(ink)
 ```
 
 A loop's count is a number written out (the cost must be known): loop to
-the most and leave some out (`dot(k, 1, k < n)`: ink 0 draws nothing).
+the most and leave some out (`dot(k, 1, k < n)`: ink 0 draws nothing and
+costs no steps).
 
 ```psi error
 -- error: is a loop counter: it can't be set

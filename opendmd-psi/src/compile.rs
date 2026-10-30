@@ -2005,6 +2005,12 @@ struct Palette<'s> {
     at: usize,
     scope: u16,
     j: usize,
+    /// Its colours, and where its entries are written (tokens `from..to`:
+    /// a name may come before a colour, `kerb #806`; `NAME.kerb` finds it
+    /// there).
+    n: u16,
+    from: u32,
+    to: u32,
 }
 
 /// `sprite NAME { … }`: its header is `Parser::tables[start]`.
@@ -2550,6 +2556,11 @@ impl<'s> Parser<'s> {
         self.note_read(t);
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
+        }
+        if self.peek().tok == Tok::Dot {
+            if let Some(k) = self.palette_named(name) {
+                return self.palette_entry(t, k);
+            }
         }
         if self.reads_table(name) {
             return self.table_read(t);
@@ -3995,6 +4006,49 @@ impl<'s> Parser<'s> {
     /// The palette of the formula's own called `name` that can be seen
     /// here.
     #[inline(never)]
+    /// The entry named `w` among the palette tokens `from..to`.
+    fn entry_at(&self, from: u32, to: u32, w: &str) -> Option<u16> {
+        let mut e = 0;
+        for k in from as usize..to as usize {
+            let t = self.tok(k);
+            match t.tok {
+                Tok::Hex(_) => e += 1,
+                Tok::Name if self.text(t) == w => return Some(e),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `NAME.kerb` at `t` (the palette's name; the `.` next): the
+    /// fraction `pal` maps back to that colour, i/(n − 1) as `i/(n − 1)`
+    /// is written; `NAME.step` 1/(n − 1); `NAME.n` the count. Constants.
+    #[inline(never)]
+    fn palette_entry(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        self.next();
+        let w = self.expect(Tok::Name, "the name of one of the palette's colours, `n` or `step`")?;
+        let wn = self.text(w);
+        let p = &self.palette_names[k];
+        let (n, at) = (i32::from(p.n), (t.start, w.end));
+        let i = match wn {
+            "n" => return self.dag.constant(n << 16, at),
+            "step" => 1,
+            _ => match self.entry_at(p.from, p.to, wn) {
+                Some(i) => i32::from(i),
+                None => {
+                    // E927.
+                    let pn = p.name;
+                    return self.err(
+                        w,
+                        format!("palette `{pn}` has no colour named `{wn}`: name it in its line, as `{wn} #f80`"),
+                    );
+                }
+            },
+        };
+        let v = if n > 1 { eval(code::DIV, i << 16, (n - 1) << 16, 0, None) } else { 0 };
+        self.dag.constant(v, at)
+    }
+
     fn palette_named(&self, name: &str) -> Option<usize> {
         self.palette_names
             .iter()
@@ -4047,7 +4101,26 @@ impl<'s> Parser<'s> {
         let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `=`
         let mut cols: Vec<u32> = Vec::new();
+        let from = self.pos as u32;
         loop {
+            // A colour may have a name first (`kerb #806`): one of its
+            // own, not `n` or `step` (E925).
+            let w = self.peek();
+            if w.tok == Tok::Name && matches!(self.tok(self.pos + 1).tok, Tok::Hex(_)) {
+                let wn = self.text(w);
+                if wn == "n" || wn == "step" {
+                    // E926.
+                    return self.err(
+                        w,
+                        format!("`n` and `step` are every palette's own (`{name}.n`, `{name}.step`): name this colour another way"),
+                    );
+                }
+                if self.entry_at(from, self.pos as u32, wn).is_some() {
+                    // E925.
+                    return self.err(w, format!("`{wn}` already names a colour of `{name}`: give this one another name"));
+                }
+                self.next();
+            }
             let c = self.peek();
             let Tok::Hex(v) = c.tok else {
                 // E922.
@@ -4094,6 +4167,9 @@ impl<'s> Parser<'s> {
             at: n.start,
             scope: self.scope,
             j,
+            n: cols.len() as u16,
+            from,
+            to: self.pos as u32,
         })?;
         self.end_of_statement()
     }

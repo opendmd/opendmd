@@ -275,6 +275,7 @@ pub mod cheat {
         ("rgb(r, g, b)", "red, green, blue: 0 to 1", ""),
         ("pal(fire, v)", "a palette: fire, ice, ocean, chrono, amber, rainbow, gray", ""),
         ("palette sea = #024, #08c, #fff", "your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one", "palette p = #000, #f80, #fff\n"),
+        ("palette sea = deep #024, foam #fff", "a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many)", ""),
         ("pal(fire, v) * k", "a palette colour, dimmed (or lit) by k", ""),
         ("cycle(fire, v, s)", "palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame", ""),
         ("gray(v)", "white, 0 to 1", ""),

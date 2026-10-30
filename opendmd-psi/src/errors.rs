@@ -770,6 +770,27 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["tables, sprites and palettes hold"],
     },
     ErrorDoc {
+        code: 925,
+        title: "a palette's colour named twice",
+        sentence: "`…` already names a colour of `…`: give this one another name",
+        fix: "Give each named colour of a palette its own name.",
+        matches: &["already names a colour of `"],
+    },
+    ErrorDoc {
+        code: 926,
+        title: "a palette's colour named `n` or `step`",
+        sentence: "`n` and `step` are every palette's own (`….n`, `….step`): name this colour another way",
+        fix: "Pick another name for the colour: `P.n` is the palette's count and `P.step` the step between colours.",
+        matches: &["are every palette's own"],
+    },
+    ErrorDoc {
+        code: 927,
+        title: "an unknown colour of a palette",
+        sentence: "palette `…` has no colour named `…`: name it in its line, as `… #f80`",
+        fix: "Name the colour on the palette's line (`palette road = black #000, kerb #806`), or use another of its names.",
+        matches: &["has no colour named `"],
+    },
+    ErrorDoc {
         code: 931,
         title: "`cycle` turned by a value that changes along a row",
         sentence: "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but … (a value of x or px)",
