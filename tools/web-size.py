@@ -92,8 +92,10 @@ own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
 The Formulas editor's error codes (`js/psierr.js`, imported at a formula's
 first error) have a line of their own, <= 4 KB, and so does the site's Psi
-language reference script (`--share`'s `ref/psiref.js`, outside the share
-line), <= 6 KB.
+language reference script (`--share`'s `ref/psiref.js` with the drawing it
+shares, `ref/psiled.js`, outside the share line), <= 6 KB; the home page's
+live panels (`ref/home.js`) and the gallery's tiles on hover
+(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
@@ -402,6 +404,12 @@ PSIERR = {"js/psierr.js"}
 # with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
 # own lines, loaded only when the first example scrolls near.
 PSIREF_GZ_BUDGET = 6 * 1024
+# The site's other live Formulas, on the same psiled.js: the home page's
+# panels (ref/home.js) and the gallery's tiles on hover (ref/ftiles.js),
+# a line each with psiled.js, <= 4 KB (2026-10-30: ~3.1 KB gz each).
+LIVE_REF = {"home.js": "home", "ftiles.js": "gallery"}
+LIVE_REF_GZ_BUDGET = 4 * 1024
+SHARED_REF = "psiled.js"
 
 
 def q_ref(p: Path, share: Path) -> bool:
@@ -500,13 +508,20 @@ def main() -> int:
         share = Path(args.share)
         sraw = sgz = 0
         rraw = rgz = 0
+        live: dict[str, tuple[int, int]] = {}
+        shared = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
                 b = p.read_bytes()
                 g = len(gzip.compress(b, 9, mtime=0))
+                print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
+                if p.name in LIVE_REF:
+                    live[LIVE_REF[p.name]] = (len(b), g)
+                    continue
+                if p.name == SHARED_REF:
+                    shared = (len(b), g)
                 rraw += len(b)
                 rgz += g
-                print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
                 continue
             b = p.read_bytes()
             g = len(gzip.compress(b, 9, mtime=0))
@@ -520,6 +535,11 @@ def main() -> int:
               f"(first visit with the demo's files: {sgz + uses:,} B gz)")
         verdict = "ok" if rgz <= PSIREF_GZ_BUDGET else "OVER BUDGET"
         print(f"{'psiref':<10} raw {rraw:>9,}           gz {rgz:>9,} / {PSIREF_GZ_BUDGET // 1024} KB {verdict}")
+        for name, (raw, gz) in sorted(live.items()):
+            raw, gz = raw + shared[0], gz + shared[1]
+            verdict = "ok" if gz <= LIVE_REF_GZ_BUDGET else "OVER BUDGET"
+            print(f"{name:<10} raw {raw:>9,}           gz {gz:>9,} / {LIVE_REF_GZ_BUDGET // 1024} KB {verdict}")
+            ok &= gz <= LIVE_REF_GZ_BUDGET
         print()
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
