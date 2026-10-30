@@ -3,7 +3,7 @@
 name "Neon city"
 about "A night drive through a neon megacity: crowding towers lined with neon, a holo screen, rain on a wet road"
 loop forever
-fps 50
+fps 100
 
 -- Neon city: Endless road's pseudo-3D road, through a megacity at night.
 -- Dark towers crowd the road, tall enough to leave the top of the panel,
@@ -11,10 +11,10 @@ fps 50
 -- each tower is lined with neon, a lit roof or a lit edge, in its own
 -- colour (some changing), one carries a holo screen, and the wet road
 -- catches the haze. Four lanes, a dashed cyan middle line and neon kerbs;
--- the car is dark, with a red light bar and a cyan glow under it. Now and
--- then a shower comes through: a sheet of slanted rain streaks, as 16-bit
--- consoles drew it, and the road wetter. Each play starts elsewhere, in
--- another city. (50 frames a second: the rain sheet costs 100's budget.)
+-- the car is dark, with a red light bar and a cyan glow under it. It
+-- always drizzles, and now and then a shower comes through: slanted rain
+-- streaks, as 16-bit consoles drew it, and the road wetter. Each play starts elsewhere, in
+-- another city.
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
@@ -23,7 +23,7 @@ fps 50
 palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   #6a1658, #a02870, farTower #3a1450, nearTower #08060e, window #90e8ff,
   pavement #120c1c, #1a1224, asphalt #0e0a16, #130e1c, wet #2a0e30,
-  #34123a, lane #8090b0, kerb #e0207a, rain #4c5884, car #303850,
+  #34123a, lane #8090b0, kerb #e0207a, rain #6878a8, car #303850,
   glass #5878a8, red #ff2030, violet #a040ff, magenta #ff40ff,
   pink #ff2a9a, cyan #20f0ff, white #fff
 
@@ -65,9 +65,9 @@ frame {
   turn = floor(t*1.5)
   holo = floor(t*3)
 
-  -- Showers come and go (none, then a drizzle, then a downpour): how
+  -- Showers come and go (a drizzle at least, up to a downpour): how
   -- much of the rain is falling now
-  shower = clamp(noise(t/40 + seed*50, 4, 0)*3 - 1.1, 0, 1)
+  shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
 }
 
 draw {
@@ -106,13 +106,16 @@ draw {
     line(floor(car[k]) - carLeft, floor(rowInk), floor(span) - carLeft, floor(rowInk), frac(rowInk))
   }
 
-  -- Rain, as 16-bit consoles drew it: 96 thin streaks at one slant,
-  -- spread evenly (golden-ratio steps) and falling as one sheet, down
-  -- and to the right; as many as the shower brings
-  for k < 96 {
-    dropX = frac(k*.618 + t*.49)*150 - 12
-    dropY = frac(k*.7549 - t*4) * 44
-    line(dropX, dropY, dropX + 2.5, dropY - 6, (hash(k, 5) < shower) * city.rain)
+  -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
+  -- one slant, spread evenly across and each at its own height, falling
+  -- down and to the right; as many as the shower brings
+  for k < 21 {
+    dropX = frac(k/21 + t*.49)*150 - 12
+    dropY = frac(hash(k, 3) - t*4) * 44
+    rainInk = (k/21 < shower) * city.rain
+    dot(dropX, dropY, rainInk)
+    dot(dropX + .5, dropY - 1, rainInk)
+    dot(dropX + 1, dropY - 2, rainInk)
   }
 }
 
@@ -144,10 +147,11 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 -- there; above it, the towers: 0 sky, 1 the far row, 2 the near row, 3 a
 -- lit window. Each number's colour is the street's below the horizon
 -- (the asphalt wet near the horizon, where it shows the haze) and the
--- sky's above it; what was drawn goes over it.
+-- sky's above it; what was drawn goes over it (the road's cyan lines
+-- are the window's colour, low in the palette, so the car covers them).
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
 pal(city, max(pick(across[px*scale + start] + towers,
       below ? city.pavement + stripe*city.step : (33 - py) / 2 * city.step,
       below ? (py > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
       below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
-      below ? (stripe ? city.kerb : city.cyan) : city.window, stripe ? city.cyan : city.asphalt), ink))
+      below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt), ink))
