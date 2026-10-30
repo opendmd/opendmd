@@ -59,6 +59,8 @@ fn window(from: &str, to: &str, what: &str) -> Result<Window, String> {
 /// Parse and validate a schedule. An empty string is the empty schedule.
 /// Whether each rule's playlist exists is not checked here (see
 /// [`missing_sets`]).
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 pub fn parse(json: &[u8]) -> Result<Schedule, String> {
     if json.iter().all(u8::is_ascii_whitespace) {
         return Ok(Schedule::default());

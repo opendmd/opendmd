@@ -514,6 +514,8 @@ fn crc_of<E>(
 /// header's is the header written into those erased bytes: a pack header in
 /// flash always means a whole pack whose CRC verified. A failure at any
 /// point leaves the header erased.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn write_pack(
     part: &sys::esp_partition_t,
     head: &[u8; HEADER_LEN],
@@ -624,6 +626,8 @@ fn write_pack(
 /// staged and good. `Err`: answered (or the client went away); nothing in
 /// flash has been touched.
 #[allow(clippy::type_complexity)]
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn stage_on_card(
     up: &mut Upload,
     head: &[u8; HEADER_LEN],
