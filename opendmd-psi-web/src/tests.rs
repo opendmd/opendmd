@@ -237,8 +237,8 @@ fn the_examples_are_light_enough_for_the_panel() {
         // quantity (19 lines of code, 6.1 ms with its still cache).
         // Endless road is a showcase too: its tables (the car, the peaks,
         // the palm) and five draw loops, written tight for the path; and
-        // so are its two alternatives, Night city drive and Wormhole run.
-        let most = if ["Endless road", "Night city drive", "Wormhole run"].contains(&e.name.as_str()) {
+        // so are its two alternatives, Neon city and Wormhole run.
+        let most = if ["Endless road", "Neon city", "Wormhole run"].contains(&e.name.as_str()) {
             52
         } else if e.name == "Time gate" {
             // 20 since `psi fmt` (2026-10-29): one statement a line.
@@ -523,9 +523,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Storm front", 1730, 0x61b0d4e51c3a6693),
     ("Storm front", 6420, 0x1d518c5020f2eb93),
     // road-alts (2026-10-30): Endless road's alternatives.
-    ("Night city drive", 0, 0x2f8b1af92782e520),
-    ("Night city drive", 1730, 0x3cda1e490255fd78),
-    ("Night city drive", 6420, 0xca26e35d60f6d091),
+    ("Neon city", 0, 0xdd8d76d95e063f16),
+    ("Neon city", 1730, 0x55d20ef119e3d3cc),
+    ("Neon city", 6420, 0x8524e6429d345e87),
     ("Wormhole run", 0, 0x2071af4450a60587),
     ("Wormhole run", 1730, 0xa5400da6ff221e59),
     ("Wormhole run", 6420, 0xe43faaf20b1d4d02),
