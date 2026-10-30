@@ -3040,6 +3040,7 @@ fn ink_zero_walks_nothing() {
     let a = draw("draw { line(0, 0, 127, 31, 0, 1); line(0, 31, 127, 0, 0); dot(3, 3, 0) }\ngray(ink)");
     let b = draw("draw { line(0, 0, 127, 31, 0, 1) }\ngray(ink)");
     assert!(a == b);
+}
 
 /// Every formula the tests know: the goldens' sources, the formulas here
 /// and the web app's (bundled and gallery).
