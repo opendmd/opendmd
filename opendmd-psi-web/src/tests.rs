@@ -242,7 +242,7 @@ fn the_examples_are_light_enough_for_the_panel() {
         } else if e.name == "Time gate" {
             // 20 since `psi fmt` (2026-10-29): one statement a line.
             20
-        } else if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor"].contains(&e.name.as_str()) {
+        } else if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor", "Matrix"].contains(&e.name.as_str()) {
             16
         } else {
             7
@@ -442,9 +442,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Rain", 0, 0xbda039267e727a4e),
     ("Rain", 1730, 0x8e61dd4784375452),
     ("Rain", 6420, 0x77570f4a476294a7),
-    ("Matrix", 0, 0x7bdb4ff5caa79867),
-    ("Matrix", 1730, 0x498bebeaf2536936),
-    ("Matrix", 6420, 0x93001b452ba06964),
+    ("Matrix", 0, 0xeb6e1a0ab23cd018),
+    ("Matrix", 9730, 0xf47dd0217060e629),
+    ("Matrix", 21420, 0x8947addc5d592d19),
     ("Lava lamp", 0, 0x1c70828a94fa5c82),
     ("Lava lamp", 1730, 0x3912ecb2c5c51b43),
     ("Lava lamp", 6420, 0xe2da3e4b13b05630),
