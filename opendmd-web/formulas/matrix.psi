@@ -4,7 +4,8 @@
 name "Matrix"
 about "Green code raining down the screen"
 loop 30
--- 32 columns of little 3x5 characters; each column has its own speed,
+-- 32 columns of little 3x5 characters falling (y is 0 at the bottom);
+-- each column has its own speed,
 -- trail length and start (a whole number of falls a loop, so it repeats
 -- cleanly), and the characters keep changing
 col = floor(px/4)
@@ -14,7 +15,7 @@ fade = 0.9/tail
 start = hash(col, 3)
 rate = floor(2 + hash(col, 4)*6)
 off = hash(col, 5)*7
-d = frac(t*s + start)*(1 + tail) - y
+d = frac(t*s + start)*(1 + tail) - (1 - y)
 k = floor(t*rate + off + floor(py/6)*0.37)
 glyph = step(0.35, frac(px*(py*0.3719 + 0.13) + k*0.618)) * step(px%4, 2.5) * step(py%6, 4.5)
 trail = step(0, d)*step(d, tail)*glyph
