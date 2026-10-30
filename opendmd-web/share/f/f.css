@@ -1,30 +1,39 @@
-/* The share page: on the site's site.css (its colours, light and dark, its header and footer),
-   with the web app's preview. */
-.fpage{--bad:#d33}
-@media (prefers-color-scheme:dark){.fpage{--bad:#e55}}
-.fpage main{max-width:880px;padding-top:28px}
+/* A Formula's page: on the site's site.css (its colours, light and dark, its header and footer),
+   with the web app's Formulas editor in it. The app's stylesheets come in a layer of their own,
+   so the site's rules (unlayered) win where both speak. */
+@import url("../demo/app.css") layer(app);
+@import url("../demo/formulas.css") layer(app);
+/* The app's full-height page (its fixed nav) would squeeze the site's header and footer. */
+html,body.fpage{height:auto}
+/* The app's progress .bar is the site header's row; its .banner the site's notice. */
+.top .bar{height:auto;background:none;border-radius:0;overflow:visible}
+body>.banner{border:0;border-radius:0;margin:0}
+.fpage{--bad:#d33;--ok:#1b8a4b}
+@media (prefers-color-scheme:dark){.fpage{--bad:#e55;--ok:#6c6}}
+.fpage main{max-width:1000px;padding-top:28px}
 .fpage main>*{max-width:none}
 .fpage h1{font-size:24px;overflow-wrap:anywhere;margin:0 0 12px}
 .fpage h2{font-size:16px;margin:0 0 12px;padding:0;border:0}
 #f-about{margin:-6px 0 14px;color:var(--mut);overflow-wrap:anywhere;font-size:17px}
 .fpage .card{padding:14px;margin:0 0 14px}
-.fpage .stage{background:#000;border-color:#26282d}
-#f-panel{display:block;width:100%;margin:0 auto;aspect-ratio:4/1;image-rendering:pixelated;background:#000;border-radius:6px}
 .cap{color:var(--mut);font-size:13px;margin:8px 0 0}
-.stage .cap,.stage .sls span{color:#a0a2a9}
-.stage .sls output{color:#ecebe7}
 .bad{color:var(--bad)}
-.sls{margin-top:6px}
-.sls>*{display:flex;align-items:center;gap:12px;min-height:36px}
-.psi-pick{display:flex;flex-wrap:wrap;gap:4px}
-.fpage .psi-pick button{min-height:36px;padding:4px 12px;color:#a0a2a9;background:#1e2025;border-color:#2a2d33}
-.fpage .psi-pick [aria-checked=true]{border-color:var(--acc);color:#ecebe7}
-.sls span{min-width:56px;font-size:13px}
-.sls input{flex:1;accent-color:var(--acc)}
-.sls output{font:13px ui-monospace,Menlo,monospace;min-width:3em;text-align:right}
+#f-cap{margin:0 0 12px}
+/* The editor's own text sizes, not the site's 17px body. */
+#f-ed{font-size:15px;line-height:1.45}
+#f-ed .psi-edhead{display:flex;gap:8px;align-items:center}
+#f-ed .psi-edhead input{flex:1}
+/* The site's pre, code and card text, undone where the editor draws (its highlighting lies
+   exactly under the text being typed) and in its menus. */
+#f-ed pre.psi-hl{background:none;border:1px solid transparent;border-radius:0;padding:8px;margin:0;overflow:hidden}
+#f-ed code,.menu code{background:none;padding:0;border-radius:0;font-size:13px}
+#f-ed p.cap,#f-ed .card p.cap{font-size:13px;margin:8px 0 0;color:var(--mut)}
+#f-ed p.cap.bad{color:var(--bad)}
+.menu h3{font-size:16px;margin:16px 0 8px;padding:0;border:0}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
-.fpage main button,.fpage main .btn,.fpage main input,.fpage main select{font:inherit;font-size:15px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 14px}
+.fpage main button,.fpage main .btn,.fpage main input[type=text],.fpage main select{font:inherit;font-size:15px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 14px}
 .fpage main button,.fpage main .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.fpage main button.sm{min-height:32px;padding:4px 10px;font-size:13px}
 .fpage main button:hover,.fpage main .btn:hover{border-color:var(--acc)}
 .fpage main .pri{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:700}
 .btn[aria-disabled]{opacity:.5;cursor:not-allowed}
@@ -32,20 +41,17 @@
 .row{display:flex;gap:8px;margin-top:6px}.row input{flex:1;min-width:0}
 #f-ask label{font-weight:600}
 #f-where{margin:-6px 0 14px}
-.fpage pre{margin:0;padding:10px 12px;border-radius:8px;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}
-.psi-hl .e{text-decoration:underline wavy var(--bad);background:#e5555530}
+.fpage .psi-file{padding:10px 12px;border-radius:8px;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}
 .sub .grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;align-items:center;margin:12px 0}
 .sub label{color:var(--mut);font-size:13px}
 .file{display:flex;align-items:center;gap:4px;font:14px ui-monospace,Menlo,monospace;color:var(--mut)}.fpage .file input{flex:1;min-width:0;font:inherit;color:var(--fg)}
 .psi-file{margin:10px 0 12px;font-size:13px;max-height:16em}
-.qr{display:flex;align-items:center;gap:16px}
-#f-qr{flex:none;width:168px;background:#fff;border-radius:8px;line-height:0;box-shadow:0 0 0 1px var(--line)}#f-qr svg{width:100%;height:auto}
-.qr .cap{margin:0}
 @media (max-width:600px){
   .fpage h1{font-size:16px}
   .sub .grid{grid-template-columns:minmax(0,1fr)}
   .sub .grid label{margin-top:6px}
   .acts>*{flex:1 1 auto;justify-content:center}
-  .qr{display:none} /* a phone is what scans it */
   .fpage main input,.fpage main select{font-size:16px}
 }
+/* The code: always on the app's dark ground, in the app's dark colours. */
+#f-ed .psi-src{--fg:#dde1e6;--mut:#8b939c;--line:#2a2e33;--ok:#6c6}

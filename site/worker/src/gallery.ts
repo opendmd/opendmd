@@ -370,12 +370,9 @@ interface Tile {
   src: string;
 }
 
-/** gallery_page.py `share_hash`. */
-function shareHash(e: Tile, name?: string): string {
-  if (name === undefined && e.bundle) return "#" + urlencoded([["bundled", e.slug]]);
-  let src = e.src;
-  if (name !== undefined) src = src.replace(/^name "[^"\n]*"/m, () => `name "${name}"`);
-  return "#" + urlencoded([["formula", src], ["name", name ?? e.name]]);
+/** gallery_page.py `share_hash`: by name, never the text. */
+function shareHash(e: Tile): string {
+  return "#" + urlencoded([["gallery", e.slug]]);
 }
 
 /** gallery_page.py `tile`. */
@@ -386,23 +383,21 @@ function tile(e: Tile, pic: string): string {
     ["on the panel", "The web app comes with it: in Formulas, under Bundled", e.bundle],
   ] as const).filter(([, , on]) => on).map(([b, why]) => `<span class="fbadge" title="${esc(why)}">${esc(b)}</span>`).join("");
   const h = esc(shareHash(e));
-  const remix = Array.from(e.name + " remix").slice(0, 60).join("");
   return (
     `<li class="ftile"><a class="fpic" href="../f/${h}" tabindex="-1" aria-hidden="true">` +
     `<picture class="led"><img src="${esc(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>` +
     `<h3>${esc(e.name)}${badges}</h3><p class="fdesc">${esc(e.about)}</p>` +
     (e.controls.length ? `<p class="fctl">Controls: ${esc(e.controls.join(", "))}</p>` : "") +
     `<p class="fby">by ${esc(e.author)} · <a href="${url}" rel="license">${lic}</a></p>` +
-    `<p class="facts"><a class="cta add" href="../f/${h}&amp;add=1">Add to my panel</a>` +
-    `<a class="cta alt" href="../f/${h}">Open</a>` +
-    `<a class="cta alt" href="../demo/${esc(shareHash(e, remix))}">Remix</a></p></li>`
+    `<p class="facts"><a class="cta add" href="../f/${h}&amp;panel=1">Open on my panel</a>` +
+    `<a class="cta alt" href="../f/${h}">Open</a></p></li>`
   );
 }
 
 // gallery_page.py EMPTY: the community list with nothing in it.
 const EMPTY =
   '<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, ' +
-  "then Copy share link, and on its page, Submit to the gallery.</p>\n";
+  "then Submit to the gallery from its editor.</p>\n";
 
 /** Python's sort key (name.casefold(), slug), near enough: lower case with
  * casefold's few extra foldings, compared by code point. */

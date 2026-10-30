@@ -154,7 +154,7 @@ title makes the GIF on screen a favourite in the playlist that's playing.
 ## Formulas
 
 A few lines of maths that draw on the panel, with examples to remix, a
-live editor, share links and Save as GIF. See [Formulas](formulas.md).
+live editor, the gallery and Save as GIF. See [Formulas](formulas.md).
 
 ## Settings
 

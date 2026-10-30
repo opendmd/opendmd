@@ -2,7 +2,7 @@
   "name": "opendmd-site",
   "private": true,
   "type": "module",
-  "description": "The opendmd-site Worker: make site's output as static assets, plus /f/* and /api/*",
+  "description": "The opendmd-site Worker: make site's output as static assets, plus /api/* and /formulas/*",
   "devDependencies": {
     "cf": "1.0.0-beta.24",
     "wrangler": "4.154.0"

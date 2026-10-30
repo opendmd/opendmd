@@ -290,9 +290,11 @@ GIF as a look, and for the gallery).
 
 ## How a formula travels
 
-- **A share link** carries the text: `https://opendmd.dev/f/#formula=…`
-  (and the name and control values). The panel's built-in Formulas travel by
-  name: `#bundled=<name>`.
+- **No link carries a formula's text.** The gallery's travel by name
+  (`https://opendmd.dev/f/#gallery=<name>`, and to a panel's app
+  `#gallery=<name>`); one changed on the site goes to the panel's app by
+  `postMessage` from the page that opened it. Sharing is submitting to the
+  gallery.
 - **On the panel** a playlist line or the look names a built-in Formula
   (`@formula:<name>`) or one saved on the panel; a formula sent to show it
   at once goes as its text on one line, comments left out

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["playwright>=1.45", "pillow", "zxing-cpp>=2.2"]
+# dependencies = ["playwright>=1.45", "pillow"]
 # ///
 """Headless-Chromium smoke test of the site's formula pages, over a built
 site (make site):
@@ -23,19 +23,20 @@ build URL serves. There the art index must also carry
   under the page's _headers policy; and none of the words users never see
   (cache, ODM, bucket, manifest, pack, bundle) on the home, install, guide
   and gallery pages;
-- /f/ (a formula's own page): the name and the code shown as text (a link's
-  markup stays text), the preview lit and moving, a slider, the QR code
-  decoding to the page's link, Copy link / Copy code, Try it in the demo
-  (the demo's editor opens it), Open on my display (asked once: a bad
-  address refused, then the display's `http://<address>/#formula=…`, then
-  remembered), Submit to the gallery (GitHub's new-file address, whose file
-  the gallery's own checker accepts; a too-long one falls back to copying),
-  and a link with no formula;
-- Add to my panel: /f/'s (the same hand-off with `&add=1`), every gallery
-  tile's (a bundled one by name; asked once, then one press to the
-  display; Back never hands on again) and a short link's page (its text
-  and `?a=`; `?add=1` hands on at once);
-- the demo's Copy share link gives a /f/ link that opens there;
+- /f/ (a Formula's page, the web app's editor): opened as the Psi
+  reference leaves one (`#open`): the name as text (markup stays text), the
+  code highlighted, the preview lit and moving, a slider, live edits, none
+  of the panel's own buttons, no QR code and no links with code; Copy
+  code; Submit to the gallery (GitHub's new-file address, whose file the
+  gallery's own checker accepts; a too-long one falls back to copying);
+  Open on my panel (asked once: a bad address refused, one on the internet
+  asked about; an edited Formula goes to the panel's window it opens, by
+  postMessage, to a stand-in there; remembered); a gallery Formula by name
+  (`#gallery=<slug>`, to the panel by name too); a choice; nothing to show
+  three ways;
+- Open on my panel from every gallery tile (by name; asked once, then one
+  press to the panel; Back never hands on again);
+- the demo's Formulas: no share link, Copy code and Submit;
 - /art-index/v1/ (Create Art's game name index, not in the www pack): every
   platform's file published, the committed file byte for byte, served as
   JSON (the CORS header a player's web app needs is the site's _headers',
@@ -43,7 +44,7 @@ build URL serves. There the art index must also carry
   Game art searches it same-origin (nothing asked of opendmd.dev; the
   pictures' requests answered locally);
 - /formulas/ (the gallery): every example listed with its thumbnail, Open
-  and Remix leading to the formula;
+  leading to the Formula in the editor;
 - the HTTP API: dev/api.html in the site, linking every frozen copy it
   carries (dev/api/v<version>.html); then a publish-like build of the API
   pages (`site.py --api-only` into a copy of the site's dev/ and styles)
@@ -57,10 +58,9 @@ build URL serves. There the art index must also carry
   with a before and an after, E407/E408 internal), under its own CSP (the
   docs' and 'wasm-unsafe-eval') with no violation; Psi loaded only when an
   example is near, then every live example drawn and lit, Open in editor
-  opening the demo's editor; the search and the cheat sheet; no sideways
+  opening the site's editor (/f/#open, the example never in the link); the search and the cheat sheet; no sideways
   scroll on a phone;
-- an error's code linked to the reference: /f/'s caption and the demo's
-  editor;
+- an error's code linked to the reference: /f/'s editor and the demo's;
 - the demo's Settings, against its player in the page (js/demo.js): every
   tab; brightness, the colour, the Formula look, each GIF's stay, the
   playlist, night mode and a rule shown on its panel and in Now's banner;
@@ -93,7 +93,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import zxingcpp
 from PIL import Image
 from playwright.sync_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
@@ -124,13 +123,13 @@ def new_page(browser, size: str, errors: list[str], scheme: str | None = None) -
                               is_mobile=phone, has_touch=phone, color_scheme=scheme)
     ctx.grant_permissions(["clipboard-read", "clipboard-write"])
     page = ctx.new_page()
-    # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.
-    # /f/'s Copy link posts to /api/f: a static server refuses it, and /f/ copies the long link.)
-    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/api/f"))
+    # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.)
+    # (/f/#gallery=no-such-formula asks for a file that isn't there, on purpose.)
+    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/formulas/src/no-such-formula"))
             and errors.append(f"[{size}] console: {m.text} ({m.location.get('url')})"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     page.on("response", lambda r: r.status >= 400 and "/demo/api/" not in r.url and "/api/status" not in r.url
-            and not r.url.endswith("/api/f") and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
+            and "/formulas/src/no-such-formula" not in r.url and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
     return page
 
 
@@ -182,102 +181,74 @@ def examples(bundled_only: bool = False) -> list[dict]:
     return sorted(out, key=lambda e: (e["name"].casefold(), e["slug"]))
 
 
-def share_link(base: str, src: str, name: str, **sliders) -> str:
-    q = {"formula": src, "name": name, **{k: str(v) for k, v in sliders.items()}}
-    return f"{base}/f/#" + urllib.parse.urlencode(q)
+def gallery_link(base: str, slug: str, **sliders) -> str:
+    """A gallery Formula's page, as the gallery's tiles link it (by name)."""
+    q = urllib.parse.urlencode({"gallery": slug, **{k: str(v) for k, v in sliders.items()}})
+    return f"{base}/f/#{q}"
 
 
-def is_short(base: str, u: str) -> bool:
-    """A short link (/f/<id>, maybe ?a=…), as /f/ copies one on a site with its Worker."""
-    return re.fullmatch(re.escape(base) + r"/f/[0-9a-hjkmnp-tv-z]{10,}(\?.*)?", u) is not None
+def open_text(page: Page, base: str, src: str, name: str = "", more: str = "") -> None:
+    """/f/ with `src` in it, as the Psi reference's Open in editor leaves it
+    (this site's storage, `/f/#open`): the way to any text, as no link
+    carries one."""
+    page.goto(f"{base}/f/")
+    page.evaluate("([s, n]) => localStorage.setItem('odmd.psi.open', JSON.stringify({src: s, name: n}))", [src, name])
+    page.goto("about:blank")
+    page.goto(f"{base}/f/#open{more}")
+    page.wait_for_selector(F_READY, timeout=20000)
 
 
 def params(u: str) -> dict:
     return urllib.parse.parse_qs(urllib.parse.urlsplit(u).fragment, keep_blank_values=True)
 
 
+def frames(page: Page) -> int:
+    return int(page.get_attribute("#psi-ed-panel", "data-frames") or 0)
+
+
+# A stand-in for the panel's web app at 192.168.1.50: says it is ready to
+# the page that opened it, and keeps what comes back (in its title).
+PANEL_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { "
+              "document.title = JSON.stringify({origin: e.origin, data: e.data}); });"
+              "if (opener) opener.postMessage({type: 'opendmd-remix-ready'}, '*');</script>")
+
+
+def panel_route(ctx, seen: list[str]) -> None:
+    ctx.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=PANEL_STUB, content_type="text/html")))
+
+
+def sent(popup: Page) -> dict:
+    """What the stand-in panel got: {origin, data}."""
+    popup.wait_for_function("document.title !== 'waiting'", timeout=20000)
+    return json.loads(popup.title())
+
+
 def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path | None) -> None:
     src = "control size = 0 \"Size\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*(1 + size) - t/2))"
     name = 'Rings <img src=x onerror="window.pwned=1">'
-    url = share_link(base, src, name, a=0.25)
     for size in SIZES:
         page = new_page(browser, size, errors)
-        page.goto(url)
-        page.wait_for_selector(F_READY, timeout=20000)
-        wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
+        open_text(page, base, src, name)
+        wait_js(page, "+(document.querySelector('#psi-ed-panel').dataset.frames || 0) > 5", timeout=20000)
         if size == "laptop":
-            check(page.inner_text("#f-name") == name and page.evaluate("!window.pwned && !document.querySelector('#f-name img')"),
+            check(page.inner_text("#f-name") == name and page.evaluate("!window.pwned && !document.querySelector('#f-name img, #f-ed img')"),
                   "/f/: the name is shown as text")
-            check(page.locator("#f-code").inner_text().rstrip("\n") == src and page.locator("#f-code .n").count() > 3
-                  and page.locator("#f-code .s").inner_text() == '"Size"', "/f/: the code, highlighted")
-            a0 = lit(page, "#f-panel")
-            f0 = page.evaluate("+document.querySelector('#f-panel').dataset.frames")
+            check(page.input_value("#psi-src") == src and page.locator("#f-ed .psi-hl .n").count() > 3,
+                  "/f/: the web app's editor with the code, highlighted")
+            check(page.locator("#f-qr, #f-qr-box, #f-copy-link, #f-demo, #f-add, #psi-back, #psi-save, #psi-ed-gif, #psi-ed-pl, #psi-ed-show").count() == 0,
+                  "/f/: no QR code, no links with code, none of the panel's own buttons")
+            a0 = lit(page, "#psi-ed-panel")
+            f0 = frames(page)
             page.wait_for_timeout(400)
-            check(a0 > 1000 and page.evaluate("+document.querySelector('#f-panel').dataset.frames") > f0,
-                  f"/f/: the preview is lit ({a0} px) and moving")
-            check(page.inner_text("#f-sl span") == "Size" and page.input_value("#f-sl-a") == "0.25"
-                  and "Loops every 4 s" in page.inner_text("#f-cap"), "/f/: a slider labelled by its control line, the caption")
-            page.wait_for_timeout(400)
-            # The QR code decodes to the page's link.
-            png = page.locator("#f-qr svg").screenshot()
-            img = Image.open(io.BytesIO(png))
-            r = zxingcpp.read_barcodes(img)
-            own = page.evaluate("location.href")
-            check(bool(r) and r[0].text.split("#")[0] == own.split("#")[0] and params(r[0].text) == params(own), f"/f/: the QR code reads back the link ({r[0].text[:60] if r else None}…)")
-            page.click("#f-copy-link")
-            page.wait_for_timeout(500)
-            clip = page.evaluate("navigator.clipboard.readText()")
-            # (Served by the site's Worker, a short link: tools/site-worker-test.py checks those.)
-            check(clip.startswith(f"{base}/f/#formula=") and params(clip) == params(url) or is_short(base, clip),
-                  f"/f/: Copy link copies the page's link ({clip[:60]})")
+            check(a0 > 1000 and frames(page) > f0, f"/f/: the preview is lit ({a0} px) and moving")
+            check(page.inner_text("#psi-ed-sl .psi-sl span") == "Size" and "Loops every 4 s" in page.inner_text("#psi-ed-cap"),
+                  "/f/: a slider labelled by its control line, the caption")
             page.click("#f-copy-code")
             check(page.evaluate("navigator.clipboard.readText()") == src, "/f/: Copy code copies the formula")
-            demo = page.get_attribute("#f-demo", "href")
-            check(demo.startswith(f"{base}/demo/#formula=") and params(demo) == params(url), f"/f/: Try it in the demo -> {demo[:70]}…")
-            # A slider moved: the links follow it.
-            page.eval_on_selector("#f-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
-            page.click("#f-copy-link")
-            page.wait_for_timeout(300)
-            check(re.search(r"[&?]a=0\.5$", page.evaluate("navigator.clipboard.readText()")), "/f/: the link carries the slider")
-            # Open on my display: asked once, a bad address refused, then remembered.
-            seen: list[str] = []
-            page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body="<p>display</p>", content_type="text/html")))
-            page.click("#f-open")
-            check(page.is_visible("#f-ask") and page.input_value("#f-addr") == "opendmd.local", "/f/: Open on my display asks for the address (opendmd.local)")
-            page.fill("#f-addr", "evil.example/x?")
-            page.click("#f-go")
-            check(page.is_visible("#f-addr-err") and not seen, "/f/: a bad address is refused")
-            page.fill("#f-addr", "example.com")
-            page.click("#f-go")
-            check(page.is_visible("#f-addr-err") and "Press Open again" in page.inner_text("#f-addr-err") and not seen
-                  and page.url.startswith(base), "/f/: an address on the internet is asked about first")
-            page.fill("#f-addr", "http://192.168.1.50/")
-            with page.expect_navigation():
-                page.click("#f-go")
-            want = {**params(url), "a": ["0.5"]}
-            check(page.url.startswith("http://192.168.1.50/#formula=") and params(page.url) == want, f"/f/: it opens the display's editor: {page.url[:80]}…")
-            page.go_back()
-            page.wait_for_selector("#f-where:not([hidden])", timeout=20000)
-            check(page.inner_text("#f-where-addr") == "192.168.1.50", "/f/: the address is remembered")
-            with page.expect_navigation():
-                page.click("#f-open")
-            check(page.url.startswith("http://192.168.1.50/#formula="), "/f/: and used straight away the next time")
-            page.go_back()
-            page.wait_for_selector(F_READY, timeout=20000)
-            # Add to my panel: the same hand-off, marked for the panel to save it.
-            check(page.get_attribute("#f-add", "class") == "pri" and page.get_attribute("#f-open", "class") is None
-                  and page.inner_text("#f-add") == "Add to my panel", "/f/: Add to my panel is the first button, Open on my display beside it")
-            with page.expect_navigation():
-                page.click("#f-add")
-            got = params(page.url)
-            check(page.url.startswith("http://192.168.1.50/#formula=") and got["add"] == ["1"]
-                  and (got["formula"], got["name"]) == (want["formula"], want["name"]),
-                  f"/f/: Add to my panel hands it to the display to be saved ({page.url[:60]}…&add=1)")
-            page.go_back()
-            page.wait_for_selector(F_READY, timeout=20000)
             # Submit to the gallery: GitHub's new-file page with the file, which the checker accepts.
             page.click("#f-submit")
-            check(page.is_visible("#f-sub") and page.input_value("#s-file") == "rings-img-src-x-onerror-window-pwned-1",
+            page.wait_for_selector("#f-sub:not([hidden]) #s-file", timeout=10000)
+            check(page.input_value("#s-file") == "rings-img-src-x-onerror-window-pwned-1",
                   f"/f/: Submit opens its form ({page.input_value('#s-file')})")
             check("name" in page.inner_text("#s-err"), "/f/: the name with < > is refused")
             page.fill("#s-name", "Smoke rings")
@@ -290,8 +261,6 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(href.startswith("https://github.com/opendmd/opendmd.github.io/new/main/gallery?filename=smoke-rings.psi&value=")
                   and page.inner_text("#s-err") == "" and page.is_hidden("#s-long"), "/f/: Open on GitHub, file name and text in the address")
             shown = page.evaluate("document.querySelector('#s-text').textContent")
-            # The header is the author and the licence; the name and the line
-            # about it are the formula's own first lines (pkg-psi declare).
             check(text == "-- author: @smoke\n-- licence: CC-BY-4.0\nname \"Smoke rings\"\nabout \"Rings that ripple out\"\n" + src + "\n"
                   and shown == text, f"/f/: the file has the gallery's header and its own name and about lines {text!r}")
             if tool:
@@ -303,27 +272,86 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             if shots:
                 page.locator("#f-sub").scroll_into_view_if_needed()
                 page.screenshot(path=str(shots / "f-submit-laptop.png"))
+            # Live: an edit plays at once, its name line names the page.
+            page.fill("#psi-src", 'name "Edited rings"\n' + src.replace("t/2", "t/4"))
+            page.wait_for_function("document.querySelector('#f-name').textContent === 'Edited rings'", timeout=5000)
+            check(page.get_attribute("#psi-ed", "data-err") is None and page.input_value("#psi-name") == "Edited rings",
+                  "/f/: edited live, the name follows its name line")
+            page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
+            # Open on my panel: asked once, a bad address refused, then remembered;
+            # an edited one goes by postMessage to the window it opens.
+            seen: list[str] = []
+            panel_route(page.context, seen)
+            page.click("#f-open")
+            check(page.is_visible("#f-ask") and page.input_value("#f-addr") == "opendmd.local", "/f/: Open on my panel asks for the address (opendmd.local)")
+            page.fill("#f-addr", "evil.example/x?")
+            page.click("#f-go")
+            check(page.is_visible("#f-addr-err") and not seen, "/f/: a bad address is refused")
+            page.fill("#f-addr", "example.com")
+            page.click("#f-go")
+            check(page.is_visible("#f-addr-err") and "Press Open again" in page.inner_text("#f-addr-err") and not seen
+                  and page.url.startswith(base), "/f/: an address on the internet is asked about first")
+            page.fill("#f-addr", "http://192.168.1.50/")
+            with page.context.expect_page() as info:
+                page.click("#f-go")
+            popup = info.value
+            got = sent(popup)
+            want = {"type": "opendmd-remix", "name": "Edited rings", "src": 'name "Edited rings"\n' + src.replace("t/2", "t/4"), "a": 0.5}
+            check(popup.url == "http://192.168.1.50/#remix" and got["origin"] == base and {k: got["data"].get(k) for k in want} == want,
+                  f"/f/: an edited one opens the panel's page, nothing in its link, and is sent to it ({popup.url}, {str(got)[:90]})")
+            popup.close()
+            check(page.inner_text("#f-where-addr") == "192.168.1.50", "/f/: the address is remembered")
+            with page.context.expect_page() as info:
+                page.click("#f-open")
+            check(info.value.url == "http://192.168.1.50/#remix", "/f/: and used straight away the next time")
+            info.value.close()
         else:
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "/f/ (phone): no sideways scroll")
         page.context.close()
 
-    # A choice (`control shape = word, …`): buttons, the value is the choice's number, in the link.
+    # A gallery Formula as it is: to the panel by its name, a top-level
+    # navigation (the slider that moved with it).
+    every = examples()
+    e = next(x for x in every if not x["bundle"] and "control" in x["src"])
     page = new_page(browser, "laptop", errors)
-    page.goto(share_link(base, "control shape = dot, ring, bar\ngray(shape/2)", "Picker", a=2))
-    page.wait_for_selector("#f-sl-a[role=radiogroup]", timeout=20000)
-    was = page.eval_on_selector_all("#f-sl-a [aria-checked=true]", "els => els.map(e => e.textContent)")
-    page.click("#f-sl-a [role=radio] >> text=ring")
-    page.click("#f-copy-link")
-    page.wait_for_timeout(500)
-    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and re.search(r"[&?]a=1$", page.evaluate("navigator.clipboard.readText()")),
-          f"/f/: a choice's buttons ({was} at a=2), ring -> a=1 in the link")
+    seen: list[str] = []
+    panel_route(page.context, seen)
+    page.goto(f"{base}/f/")
+    page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+    page.goto(gallery_link(base, e["slug"]))
+    page.wait_for_selector(F_READY, timeout=20000)
+    check(page.input_value("#psi-src").rstrip("\n") == e["src"].rstrip("\n") and page.inner_text("#f-name") == e["name"],
+          f"/f/: a gallery Formula by name, its text from the gallery ({e['name']})")
+    page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = r.max; r.dispatchEvent(new Event('input')); }")
+    page.wait_for_timeout(300)
+    with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/")):
+        page.click("#f-open")
+    q = params(page.url)
+    check(q.get("gallery") == [e["slug"]] and "a" in q and "src" not in q and "formula" not in q,
+          f"/f/: as it came, it goes to the panel by name ({page.url})")
+    page.context.close()
+
+    # A choice (`control shape = word, …`): buttons, the value is the choice's number.
+    page = new_page(browser, "laptop", errors)
+    seen = []
+    panel_route(page.context, seen)
+    open_text(page, base, "control shape = dot, ring, bar\ngray(shape/2)", "Picker")
+    page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+    page.wait_for_selector("#psi-ed-sl-a[role=radiogroup]", timeout=20000)
+    page.click("#psi-ed-sl-a [role=radio] >> text=ring")
+    with page.context.expect_page() as info:
+        page.click("#f-open")
+    got = sent(info.value)
+    check(page.inner_text("#psi-ed-sl > div > span") == "shape" and got["data"].get("a") == 1,
+          f"/f/: a choice's buttons, ring -> a=1 sent to the panel ({got['data'].get('a')})")
     page.context.close()
 
     # A long formula: GitHub can't take it in an address, so the file is copied.
     page = new_page(browser, "laptop", errors)
     long_src = "loop 4\n" + "".join(f"-- {',' * 60}\n" for k in range(50)) + "gray(x)"
-    page.goto(share_link(base, long_src, "Long one") + "&submit")
-    page.wait_for_selector("#f-sub:not([hidden])", timeout=20000)
+    open_text(page, base, long_src, "Long one", "&submit")
+    page.wait_for_selector("#f-sub:not([hidden]) #s-desc", timeout=20000)
+    page.fill("#s-name", "Long one")
     page.fill("#s-desc", "Long")
     page.fill("#s-author", "me")
     href = page.get_attribute("#s-go", "href")
@@ -331,64 +359,52 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
           f"/f/: a formula too long for GitHub's address: copy the file instead ({href[:90]}, {page.inner_text('#s-err')})")
     page.click("#s-copy")
     check(page.evaluate("navigator.clipboard.readText()").endswith(long_src + "\n"), "/f/: Copy the file")
-    # No formula in the link.
-    page.goto(f"{base}/f/")
-    page.wait_for_timeout(500)
-    check(page.is_visible("#f-none") and page.is_hidden("#f"), "/f/: a link with no formula says so")
-    # Try it in the demo: the demo's editor has it.
-    page.goto("about:blank")
-    page.goto(url)
-    page.wait_for_selector(F_READY, timeout=20000)
-    page.click("#f-demo")
-    page.wait_for_selector("#psi-ed #psi-src", timeout=30000)
-    page.wait_for_timeout(500)
-    check(page.input_value("#psi-src") == src and page.input_value("#psi-name") == name[:60],
-          "/f/ -> the demo: the editor opens the formula")
+    # Nothing named, or a name the gallery doesn't have, or nothing left to open.
+    for u, what in ((f"{base}/f/", "no formula"), (f"{base}/f/#gallery=no-such-formula", "a name the gallery doesn't have"),
+                    (f"{base}/f/#open", "nothing left to open")):
+        page.goto("about:blank")
+        page.goto(u)
+        page.wait_for_selector("#f-none:not([hidden])", timeout=20000)
+        check(page.is_hidden("#f"), f"/f/: {what} says so ({page.inner_text('#f-none-why')[:60]})")
     page.context.close()
 
 
-def add_to_panel(browser, base: str, site: Path, errors: list[str]) -> None:
-    """Add to my panel, one press: every gallery tile has it (a bundled
-    Formula by name, `#bundled=<stem>&add=1`; the rest with their text),
-    leading through the Formula's page, which asks for the display's
-    address the first time and afterwards hands straight on (a top-level
-    navigation, `http://<addr>/#…&add=1`); the way back is the page without
-    the mark. A short link's page (/f/<id>, its Formula in #f-data, as the
-    Worker writes it: here a route) hands over its text and sliders, and
-    `?add=1` on it hands on at once."""
+def open_on_panel(browser, base: str, errors: list[str]) -> None:
+    """Open on my panel, one press: every gallery tile has it (by name,
+    `../f/#gallery=<slug>&panel=1`), leading through the Formula's page,
+    which asks for the panel's address the first time and afterwards hands
+    straight on (a top-level navigation, `http://<addr>/#gallery=<slug>`);
+    the way back is the page without the mark."""
     every = examples()
     page = new_page(browser, "laptop", errors)
     seen: list[str] = []
-    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body="<p>display</p>", content_type="text/html")))
+    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body="<p>panel</p>", content_type="text/html")))
     page.goto(f"{base}/formulas/")
     page.wait_for_selector(".ftile", timeout=20000)
-    adds = page.eval_on_selector_all("#examples ~ ul .ftile .facts a.add", "els => els.map(e => [e.textContent, e.getAttribute('href')])")
-    good = len(adds) == len(every) and all(
-        t == "Add to my panel" and (h == f"../f/#bundled={e['slug']}&add=1" if e["bundle"]
-                                    else h.startswith("../f/#formula=") and h.endswith("&add=1"))
-        for (t, h), e in zip(adds, every))
+    acts = page.eval_on_selector_all("#examples ~ ul .ftile", """els => els.map(e => [e.querySelector('a.fpic').getAttribute('href'),
+        [...e.querySelectorAll('.facts a')].map(a => [a.textContent, a.getAttribute('href')])])""")
+    good = len(acts) == len(every) and all(
+        pic == f"../f/#gallery={e['slug']}" and links == [["Open on my panel", f"../f/#gallery={e['slug']}&panel=1"], ["Open", f"../f/#gallery={e['slug']}"]]
+        for (pic, links), e in zip(acts, every))
     community = page.eval_on_selector_all("#community + ul .ftile", "els => els.map(e => e.querySelector('.facts a.add')?.getAttribute('href') || '')")
-    check(good and all(h.endswith("&add=1") for h in community),
-          f"gallery: Add to my panel on every tile ({len(adds)} examples, {len(community)} from the community), a bundled one by name")
+    check(good and all(re.fullmatch(r"\.\./f/#gallery=[a-z0-9-]+&panel=1", h) for h in community),
+          f"gallery: Open on my panel and Open on every tile, by name ({len(acts)} examples, {len(community)} from the community)")
     i = next(k for k, e in enumerate(every) if e["bundle"])
     page.locator("#examples ~ ul .ftile").nth(i).locator("a.add").click()
     page.wait_for_selector("#f-ask:not([hidden])", timeout=20000)
-    check(page.inner_text("#f-go") == "Add" and page.input_value("#f-addr") == "opendmd.local" and not seen
-          and "saved on your display" in page.inner_text("#f-ask"),
-          "gallery -> Add to my panel, no address yet: the Formula's page asks for it (opendmd.local)")
+    check(page.inner_text("#f-go") == "Open" and page.input_value("#f-addr") == "opendmd.local" and not seen,
+          "gallery -> Open on my panel, no address yet: the Formula's page asks for it (opendmd.local)")
     page.fill("#f-addr", "192.168.1.50")
     with page.expect_navigation():
         page.click("#f-go")
-    check(page.url == f"http://192.168.1.50/#bundled={every[i]['slug']}&add=1",
-          f"gallery -> Add to my panel: a bundled one goes to the display by name ({page.url})")
+    check(page.url == f"http://192.168.1.50/#gallery={every[i]['slug']}", f"gallery -> Open on my panel: to the panel by name ({page.url})")
     page.goto(f"{base}/formulas/")
     page.wait_for_selector(".ftile", timeout=20000)
     j = next(k for k, e in enumerate(every) if not e["bundle"])
     with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
         page.locator("#examples ~ ul .ftile").nth(j).locator("a.add").click()
-    q = params(page.url)
-    check(q.get("formula", [""])[0].strip() == every[j]["src"].strip() and q.get("name") == [every[j]["name"]] and q.get("add") == ["1"],
-          f"gallery -> Add to my panel, the address known: one press to the display, with the text ({every[j]['name']})")
+    check(page.url == f"http://192.168.1.50/#gallery={every[j]['slug']}",
+          f"gallery -> Open on my panel, the address known: one press to the panel ({page.url})")
     # Back: the gallery (the hand-off replaced the Formula's page, a
     # navigation before it had loaded) or that page without the mark; never
     # handed on again.
@@ -396,48 +412,28 @@ def add_to_panel(browser, base: str, site: Path, errors: list[str]) -> None:
     page.go_back()
     page.wait_for_load_state()
     page.wait_for_timeout(1000)
-    check(page.url.startswith(base) and "add=1" not in page.url and len(seen) == n,
-          f"gallery -> Add to my panel: back is the site, not handed on again ({page.url[len(base):][:40]})")
-    # A short link's page.
-    sid, src = "abcdefghjk", 'name "Short ramp"\ncontrol level 0..1 = 0.3 "Level"\nloop 4\ngray(saw(x - t/4) * level)'
-    data = json.dumps({"id": sid, "src": src, "name": "Short ramp"}).replace("<", "\\u003c")
-    html_text = (site / "f/index.html").read_text().replace("</head>", f'<script type="application/json" id="f-data">{data}</script></head>')
-    page.route(re.compile(re.escape(f"{base}/f/{sid}") + r"(\?.*)?$"), lambda r: r.fulfill(body=html_text, content_type="text/html"))
-    page.goto(f"{base}/f/{sid}?a=0.5")
-    page.wait_for_selector(F_READY, timeout=20000)
-    with page.expect_navigation():
-        page.click("#f-add")
-    check(params(page.url) == {"formula": [src], "name": ["Short ramp"], "a": ["0.5"], "add": ["1"]},
-          f"short link: Add to my panel hands over its text and slider ({page.url[:70]}…)")
-    page.goto(f"{base}/f/{sid}")
-    page.wait_for_selector(F_READY, timeout=20000)
-    with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
-        page.goto(f"{base}/f/{sid}?add=1", wait_until="commit")
-    check(params(page.url) == {"formula": [src], "name": ["Short ramp"], "add": ["1"]}, "short link: ?add=1 hands on at once")
-    page.go_back()
-    page.wait_for_selector(F_READY, timeout=20000)
-    check(page.url == f"{base}/f/{sid}", f"short link: back is its page, without the mark ({page.url})")
+    check(page.url.startswith(base) and "panel=1" not in page.url and len(seen) == n,
+          f"gallery -> Open on my panel: back is the site, not handed on again ({page.url[len(base):][:40]})")
     page.context.close()
 
 
 def demo_share(browser, base: str, errors: list[str]) -> None:
-    """The demo's Copy share link gives a /f/ link: a bundled Formula by
-    name (`#bundled=<stem>`, /f/ reads the gallery's copy), Submit with its
-    text."""
+    """The demo's Formulas have no share link: Copy code, and in the
+    editor Submit to the gallery."""
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-ex .psi-tile >> nth=0")
-    page.click("#psi-share-btn")
-    link = page.input_value("#psi-link")
-    sub = page.get_attribute("#psi-submit", "href")
     first = examples(bundled_only=True)[0]
-    check(link == f"{base}/f/#bundled={first['slug']}" and sub.startswith(f"{base}/f/#formula=") and sub.endswith("&submit"),
-          f"demo: Copy share link -> {link[:60]}… (Submit {sub[:40]}…)")
-    page.goto(link)
-    page.wait_for_selector(F_READY, timeout=20000)
-    check(page.inner_text("#f-name") == first["name"] and page.locator("#f-code").inner_text().rstrip("\n") == first["src"].rstrip("\n"),
-          f"demo: the link opens {first['name']} on its page, its text from the gallery's copy")
+    page.click("#psi-code-btn")
+    page.wait_for_timeout(300)
+    check(page.locator("#psi-share-btn, #psi-ed-share").count() == 0 and page.evaluate("navigator.clipboard.readText()") == first["src"],
+          "demo: no share link; Copy code copies the Formula")
+    page.click("#psi-edit")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    page.click("#psi-ed-submit")
+    page.wait_for_selector("#psi-submit-sheet #s-text", timeout=10000)
+    check(page.inner_text("#s-text").startswith("-- author: "), "demo: Submit to the gallery opens its form")
     page.context.close()
 
 
@@ -751,25 +747,22 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                 const c = document.createElement('canvas'); c.width = 128; c.height = 32; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
                 const d = x.getImageData(0, 0, 128, 32).data; for (let k = 0; k < d.length; k += 4) if (d[k] + d[k+1] + d[k+2] > 90) return false; return true; }).length""")
             check(dark == 0, f"gallery: every thumbnail lit ({dark} dark)")
-            remix = page.locator("#examples ~ ul .ftile").nth(0).locator(".facts a.alt", has_text="Remix").get_attribute("href")
-            check(remix.startswith("../demo/#formula=") and "remix" in urllib.parse.unquote_plus(remix),
-                  "gallery: Remix opens it in the demo")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a.alt", has_text="Open").click()
             page.wait_for_selector(F_READY, timeout=20000)
             e = every[5]
             about = re.search(r'^about "([^"]*)"', e["src"], re.M).group(1)
             check(page.inner_text("#f-name") == e["name"] and page.inner_text("#f-about") == about
-                  and page.locator("#f-code").inner_text().rstrip("\n") == e["src"].rstrip("\n"),
-                  f"gallery: Open leads to {e['name']}'s page, its name and about lines shown")
-            # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
+                  and page.input_value("#psi-src").rstrip("\n") == e["src"].rstrip("\n"),
+                  f"gallery: Open leads to {e['name']} in the editor, its name and about lines shown")
+            # A Formula that draws over a GIF: shown over the sample picture, not black.
             e = next(x for x in every if x["name"] == "Scanlines")
             # From /f/ to /f/#…: only the hash changes, and f.js reloads on
             # hashchange, so the old page would answer the wait and vanish
             # under the next evaluate. Start from a blank page instead.
             page.goto("about:blank")
-            page.goto(share_link(base, e["src"], e["name"]))
-            wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
-            n = lit(page, "#f-panel")
+            page.goto(gallery_link(base, e["slug"]))
+            wait_js(page, "+(document.querySelector('#psi-ed-panel')?.dataset.frames || 0) > 5", timeout=20000)
+            n = lit(page, "#psi-ed-panel")
             check(n > 1000, f"/f/: {e['name']} (over a GIF) is lit, over the sample picture ({n} px)")
         else:
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "gallery (phone): no sideways scroll")
@@ -916,7 +909,7 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     (<name>-<size>-<theme>.png), plus the first screen of each at laptop and
     phone sizes (-top) and the phone's open Menu."""
     e = next(x for x in examples() if x["name"] == "Stripes")  # a slider
-    pages = {**KEY_PAGES, "f": share_link(base, e["src"], e["name"])[len(base):], "not-found": "/no/such/page"}
+    pages = {**KEY_PAGES, "f": gallery_link(base, e["slug"])[len(base):], "not-found": "/no/such/page"}
     for size in SIZES:
         for scheme in ("light", "dark"):
             page = new_page(browser, size, [], scheme=scheme)  # (the 404 page answers 404)
@@ -924,7 +917,7 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
                 page.goto("about:blank")
                 page.goto(base + path)
                 if name == "f":
-                    wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
+                    wait_js(page, "+(document.querySelector('#psi-ed-panel')?.dataset.frames || 0) > 20", timeout=20000)
                 page.evaluate("document.querySelectorAll('img[loading=lazy]').forEach(i => i.loading = 'eager')")
                 wait_js(page, "[...document.images].every(i => i.complete)", timeout=20000)
                 page.wait_for_timeout(600)
@@ -1081,8 +1074,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
                 links.append(box.locator("a.psi-open").get_attribute("href"))
             check(n >= 60 and recipes >= 7 and not undrawn and not dark,
                   f"psi reference: {n} live examples ({recipes} recipes), each drawn ({undrawn[:3]} not) and lit ({dark[:3]} dark)")
-            check(all(urllib.parse.urlsplit(u).path == "/demo/" and "formula" in params(u) for u in links),
-                  f"psi reference: every example opens in the demo's editor ({links[:1]})")
+            check(all(u == f"{base}/f/#open" for u in links), f"psi reference: every example opens in the site's editor, no code in the link ({links[:1]})")
             moving = page.locator(".psi-live.big canvas").first
             moving.scroll_into_view_if_needed()
             f0 = int(moving.get_attribute("data-frames") or 0)
@@ -1126,11 +1118,15 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             page.wait_for_timeout(300)
             check(page.get_attribute("#psi-cheat", "aria-pressed") == "false" and page.locator(".psi-err:has(#E931) blockquote").is_visible()
                   and page.url.endswith("#E931"), "psi reference: an error's title in the cheat sheet opens its entry")
-            # Open in editor: the demo's editor with that formula.
-            src = params(links[0])["formula"][0]
-            page.goto(links[0])
-            page.wait_for_selector("#psi-ed #psi-src", timeout=30000)
-            check(page.input_value("#psi-src") == src, f"psi reference: Open in editor opens the demo's editor with it ({src!r})")
+            # Open in editor: the site's editor with that formula (left in this site's storage).
+            page.evaluate("scrollTo(0, 0)")
+            first = page.locator(".psi-live a.psi-open").first
+            first.scroll_into_view_if_needed()
+            first.click()
+            page.wait_for_selector(F_READY, timeout=30000)
+            stored = page.evaluate("localStorage.getItem('odmd.psi.open')")
+            check(page.url == f"{base}/f/#open" and page.input_value("#psi-src").strip() != "" and stored is None,
+                  f"psi reference: Open in editor opens the site's editor with it, read once ({page.input_value('#psi-src')[:40]!r})")
         else:
             page.wait_for_timeout(300)
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "psi reference (phone): no sideways scroll")
@@ -1151,16 +1147,16 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
 
 def psi_error_links(browser, base: str, errors: list[str]) -> None:
     """An error's code links the language reference's entry, on the site's
-    own copy: /f/'s caption (a broken formula) and the demo's editor; the
-    entry is there."""
+    own copy: /f/'s editor (a broken formula) and the demo's; the entry is
+    there."""
     page = new_page(browser, "laptop", errors)
-    page.goto(share_link(base, "gray(sine(x))", "Broken"))
-    page.wait_for_selector("#f-cap a.ecode", timeout=20000)
-    a = page.locator("#f-cap a.ecode")
+    open_text(page, base, "gray(sine(x))", "Broken")
+    page.wait_for_selector("#psi-err a.ecode", timeout=20000)
+    a = page.locator("#psi-err a.ecode")
     href = a.get_attribute("href")
-    check(a.inner_text() == "E202" and urllib.parse.urljoin(page.url, href) == f"{base}/dev/psi/#E202"
-          and "doesn’t work" in page.inner_text("#f-cap"), f"/f/: a broken formula's code links the reference ({href})")
-    a.click()
+    check(a.inner_text() == "E202" and href == f"{base}/dev/psi/#E202" and "Line 1" in page.inner_text("#psi-err"),
+          f"/f/: a broken formula's code links the reference ({href})")
+    page.goto(href)
     page.wait_for_selector("#E202")
     check(page.url == f"{base}/dev/psi/#E202", f"/f/: the code's link leads to its entry ({page.url})")
     page.goto(f"{base}/demo/#formulas")
@@ -1212,14 +1208,14 @@ def main() -> int:
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
-        print("the demo's share link")
+        print("the demo's Copy code and Submit")
         demo_share(browser, base, errors)
         print("the art index (/art-index/)")
         art_index(browser, base, a.site, errors, cors_expected=bool(a.base))
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
-        print("Add to my panel (the gallery, /f/, a short link)")
-        add_to_panel(browser, base, a.site, errors)
+        print("Open on my panel (the gallery's tiles)")
+        open_on_panel(browser, base, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
         print("the Psi language reference (dev/psi/)")

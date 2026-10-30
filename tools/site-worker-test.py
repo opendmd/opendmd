@@ -15,25 +15,16 @@ runs against the same server (--base).
 
 - /api/health: 200 JSON {ok, site, version}, CORS *, not cached; HEAD,
   OPTIONS 204, POST 405 with Allow; another /api/ path 404 JSON;
-- /f/ (the static Formula page) served through the Worker with its CORS and
-  its CSP; an unknown short id /f/<id> answers the 404 page, never cached;
-- short links: POST /api/f stores a Formula (201, its content address as
-  the id, computed here too), the same source again (CRLF, trailing lines)
-  200 with the same id; /api/f/<id> JSON with CORS *; /f/<id> the page with
-  the Formula in #f-data, its name as the title and og:title, markup in the
-  source only ever as text, the /f/ CSP; /f/<id>.psi the source; over
-  4,096 bytes 413, not compiling 422 with the line, an invisible character
-  422, not UTF-8 400, GET 405; another site's page 403 and no CORS on
-  POST; in Chromium, /f/'s Copy link makes and copies the short link (and
-  copies the long one when the site can't be reached), the short page
-  plays it; past the rate limit 429 with Retry-After (last). Against a
-  live site the Formulas posted are fixed ones (a rerun finds them: 200),
-  locally each run's are new;
+- /f/ (the Formula page) a static asset with its CSP, the Worker not in
+  the way; no anonymous short links: POST /api/f and /api/f/<id> 404 JSON,
+  /f/<id> and /f/<id>.psi the 404 page; the gallery's files,
+  /formulas/src/<slug>.psi, CORS * (a panel's web app fetches them: Open on
+  my panel);
 - every HTML page the site holds answers 200 (x.html after its one 307 to
   /x); an address with nothing there gets the 404 page with a 404;
 - _redirects: every line a 301 to where it says, which answers 200;
 - _headers: one CSP on every response, the right one per path; nosniff;
-  no COOP/COEP; CORS * on install/, art-index/, f/; release.json for 60 s,
+  no COOP/COEP; CORS * on install/, art-index/, formulas/src/; release.json for 60 s,
   the version-named release files immutable, the rest 600 s;
 - www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (against
   opendmd.dev only; skipped under cf dev and against a workers.dev URL);
@@ -49,7 +40,7 @@ runs against the same server (--base).
   too, one at a time; screenshots in target/site-worker-test/ (--shots);
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
-  and /f/ with a Formula;
+  and /f/ with a gallery Formula;
 - the gallery store (S6): locally, against a fixture of the public repo
   served here (git's info/refs and a tarball, as GitHub serves them; cf dev
   pointed at it with SITE_TEST_GALLERY_SOURCE) and a wiped local store:
@@ -221,188 +212,27 @@ def api(base: str) -> None:
 
 def formula(base: str) -> None:
     st, h, body = get(base, "/f/")
-    check(st == 200 and b'src="f.js"' in body, f"/f/: the static Formula page through the Worker ({st})")
+    check(st == 200 and b'src="f.js"' in body, f"/f/: the Formula page ({st})")
     csp = csp_of(h)
-    check(h.get("Access-Control-Allow-Origin") == "*" and len(csp) == 1 and "'wasm-unsafe-eval'" in csp[0]
-          and "connect-src 'self' http:" in csp[0], f"/f/: CORS * and its CSP {csp}")
-    st, h, _ = get(base, "/f/f.js")
-    check(st == 200 and h.get("Access-Control-Allow-Origin") == "*", f"/f/f.js: {st}, CORS {h.get('Access-Control-Allow-Origin')}")
-    st, h, body = get(base, "/f/8m4kq2v9tz")
-    check(st == 404 and b"Not found" in body and h.get("Cache-Control") == "no-store" and h.get("X-Robots-Tag") == "noindex",
-          f"/f/<id> with nothing stored: the 404 page, never cached ({st}, {h.get('Cache-Control')})")
-    st, h, body = get(base, "/f/no-such-file.js")
-    check(st == 404 and h.get("Cache-Control") != "no-store", f"/f/<not an id>: a plain 404 ({st}, {h.get('Cache-Control')})")
+    check(h.get("Access-Control-Allow-Origin") is None and len(csp) == 1 and "'wasm-unsafe-eval'" in csp[0]
+          and "connect-src" not in csp[0], f"/f/: its CSP, no CORS, nothing to connect to {csp}")
+    # No anonymous short links (2026-10-30): nothing posts, nothing is stored.
+    st, h, d = post(base, "/api/f", b"gray(x)\n")
+    check(st == 404 and d == {"error": "not found"}, f"POST /api/f: 404, no short links ({st} {d})")
+    st, h, body = get(base, "/api/f/8m4kq2v9tz")
+    check(st == 404 and json.loads(body) == {"error": "not found"}, f"/api/f/<id>: 404 ({st})")
+    for path in ("/f/8m4kq2v9tz", "/f/8m4kq2v9tz.psi"):
+        st, h, body = get(base, path)
+        check(st == 404 and b"Not found" in body, f"{path}: the 404 page ({st})")
+    st, h, body = get(base, "/formulas/src/fire.psi")
+    check(st == 200 and h.get("Access-Control-Allow-Origin") == "*" and body.startswith(b"-- author:"),
+          f"/formulas/src/<slug>.psi: the file, CORS * ({st}, {h.get('Access-Control-Allow-Origin')})")
     www(base)
-
-
-ID_RE = r"[0-9a-hjkmnp-tv-z]{10,}"
-CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
-
-
-def content_id(src: str) -> str:
-    """The id POST /api/f gives a source: 10 Crockford base32 characters of
-    the SHA-256 of the source as stored (CRLF -> LF, trailing blank space cut)."""
-    norm = re.sub(r"\s+$", "", src.replace("\r\n", "\n").replace("\r", "\n"))
-    bits = "".join(f"{b:08b}" for b in hashlib.sha256(norm.encode()).digest())
-    return "".join(CROCKFORD[int(bits[i:i + 5], 2)] for i in range(0, 50, 5))
-
-
-class Short:
-    """The Formulas this run posts: fixed ones against a live site (a rerun
-    finds them stored: 200), new ones for each local run (201)."""
-
-    def __init__(self, live: bool):
-        self.live = live
-        tag = "" if live else f"\n-- run {time.time_ns()}"
-        self.a = 'name "Site test rings"\nloop 4\npal(rainbow, frac(len(x - 0.5, (y - 0.5)/4)*3 - t/4))' + tag
-        self.markup = 'name "Site test markup"\nloop 4\ngray(x) -- </script><img src=x onerror="window.pwned=1"> & done' + tag
-        self.b = 'control size = 0.3 "Size"\nloop 4\npal(fire, frac(len(x - 0.5, y - 0.5)*(1 + size) - t/4))' + tag
-        self.b_name = "Site test slider"
-        self.id_a = ""
-
-
-def shortlinks(base: str, sh: Short) -> None:
-    st, h, d = post(base, "/api/f", sh.a.encode())
-    if st == 429 and sh.live:  # a run a moment ago used this minute's posts up
-        print("  (rate limited by an earlier run: waiting a minute)")
-        time.sleep(61)
-        st, h, d = post(base, "/api/f", sh.a.encode())
-    want = content_id(sh.a)
-    new_ok = st == 201 and d.get("new") is True if not sh.live else (st, d and d.get("new")) in ((201, True), (200, False))
-    check(new_ok and d["id"] == want and d.get("name") in ("Site test rings", None) and d["url"].endswith("/f/" + want)
-          and h.get("Access-Control-Allow-Origin") is None, f"POST /api/f: {st} {d}, the content address {want}")
-    sh.id_a = i = (d or {}).get("id", want)
-    st, h, d = post(base, "/api/f", (sh.a.replace("\n", "\r\n") + "\r\n\n\n").encode())
-    check(st == 200 and d == {"id": i, "url": d.get("url"), "new": False}, f"POST /api/f again (CRLF, blank lines after): 200, the same id ({st} {d})")
-    st, h, body = get(base, f"/api/f/{i}")
-    j = json.loads(body) if st == 200 else {}
-    check(st == 200 and j.get("src") == sh.a and j.get("name") == "Site test rings" and j.get("id") == i and isinstance(j.get("esp32_us"), int)
-          and h.get("Access-Control-Allow-Origin") == "*" and "json" in h.get("Content-Type", ""),
-          f"/api/f/<id>: 200 JSON, CORS * ({st}, {sorted(j)})")
-    st, h, _ = get(base, f"/api/f/{i}", "OPTIONS")
-    check(st == 204 and h.get("Access-Control-Allow-Origin") == "*", f"/api/f/<id>: OPTIONS {st}, CORS *")
-    st, h, body = get(base, f"/f/{i}.psi")
-    check(st == 200 and body.decode() == sh.a + "\n" and h.get("Content-Type", "").startswith("text/plain")
-          and h.get("Access-Control-Allow-Origin") == "*", f"/f/<id>.psi: the source as text ({st})")
-    # The page: the Formula in it, its name the title, markup only as text.
-    st, h, d = post(base, "/api/f", sh.markup.encode())
-    m = (d or {}).get("id", "")
-    st, h, body = get(base, f"/f/{m}")
-    html = body.decode(errors="replace")
-    csp = csp_of(h)
-    check(st == 200 and "<title>Site test markup · OpenDMD</title>" in html and 'property="og:title" content="Site test markup"' in html
-          and 'id="f-data"' in html and 'src="f.js"' in html, f"/f/<id>: the page with the Formula, its name the title ({st})")
-    check("</script><img" not in html and "\\u003c/script>" in html and "&lt;/script&gt;&lt;img" in html,
-          "/f/<id>: markup in the source only ever as text")
-    check(len(csp) == 1 and "'wasm-unsafe-eval'" in csp[0] and h.get("Cache-Control") == "public, max-age=600"
-          and h.get("X-Robots-Tag") == "noindex" and not h.get("ETag"), f"/f/<id>: the /f/ CSP, cached 600 s, noindex ({h.get('Cache-Control')})")
-    # Refusals.
-    big = sh.a + "\n-- " + "x" * 4096
-    st, h, d = post(base, "/api/f", big.encode())
-    check(st == 413 and "4096" in (d or {}).get("error", ""), f"POST /api/f over 4,096 bytes: 413 ({st} {d})")
-    st, h, d = post(base, "/api/f", b"loop 4\ngray(x +)\n")
-    check(st == 422 and (d or {}).get("line") == 2 and "line 2" in d.get("error", ""), f"POST /api/f that doesn't compile: 422, line 2 ({st} {d})")
-    st, h, d = post(base, "/api/f", "loop 4\ngray(x) -- \u202eevil\n".encode())
-    check(st == 422 and (d or {}).get("line") == 2, f"POST /api/f with a direction-changing character: 422 ({st} {d})")
-    st, h, d = post(base, "/api/f", b"gray(x) -- \xff\xfe")
-    check(st == 400, f"POST /api/f not UTF-8: 400 ({st} {d})")
-    st, h, _ = get(base, "/api/f")
-    check(st == 405 and h.get("Allow") == "POST", f"GET /api/f: 405, Allow: {h.get('Allow')}")
-    # Another site's page: refused before the rate limit, and no CORS.
-    st, h, d = post(base, "/api/f", sh.a.encode(), {"Origin": "http://opendmd.local", "Sec-Fetch-Site": "cross-site"})
-    check(st == 403 and h.get("Access-Control-Allow-Origin") is None, f"POST /api/f from another site's page: 403, no CORS ({st})")
-    st, h, _ = get(base, "/api/f", "OPTIONS", {"Origin": "http://opendmd.local", "Access-Control-Request-Method": "POST"})
-    check(st == 204 and h.get("Access-Control-Allow-Origin") is None, f"OPTIONS /api/f: {st}, no CORS")
-    st, h, body = get(base, "/f/zzzzzzzzzz")
-    check(st == 404 and b"Not found" in body and h.get("Cache-Control") == "no-store", f"/f/<unknown id>: the 404 page, no-store ({st})")
-    st, h, body = get(base, "/api/f/zzzzzzzzzz")
-    check(st == 404 and json.loads(body).get("error"), f"/api/f/<unknown id>: 404 JSON ({st})")
-
-
-def short_in_browser(base: str, sh: Short) -> None:
-    """/f/'s Copy link makes the short link; the short page plays it."""
-    from playwright.sync_api import sync_playwright
-    long = f"{base}/f/#" + urllib.parse.urlencode({"formula": sh.b, "name": sh.b_name})
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context()
-        ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=base)
-        page = ctx.new_page()
-        page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
-            (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
-        errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(long)
-        page.wait_for_selector("#f:not([hidden]):not([aria-busy])", timeout=20000)
-        page.click("#f-copy-link")
-        clip = ""
-        for _ in range(100):
-            clip = page.evaluate("navigator.clipboard.readText()")
-            if clip != "" and "#formula" not in clip:
-                break
-            page.wait_for_timeout(100)
-        sid = clip.rsplit("/", 1)[-1]
-        check(re.fullmatch(re.escape(base) + "/f/" + ID_RE, clip) is not None, f"/f/ in Chromium: Copy link copies a short link ({clip[:70]})")
-        st, h, body = get(base, f"/api/f/{sid}")
-        stored = json.loads(body).get("src", "") if st == 200 else ""
-        check(stored == f'name "{sh.b_name}"\n' + sh.b, f"the short link's Formula is the page's, named by a name line ({stored[:40]!r}…)")
-        page.goto(clip + "?a=0.7")
-        page.wait_for_selector("#f:not([hidden]):not([aria-busy])", timeout=20000)
-        for _ in range(100):
-            if page.evaluate("+(document.querySelector('#f-panel').dataset.frames || 0) > 5"):
-                break
-            page.wait_for_timeout(100)
-        check(page.inner_text("#f-name") == sh.b_name and page.locator("#f-code").inner_text().rstrip("\n") == stored
-              and page.input_value("#f-sl-a") == "0.7" and page.evaluate("+(document.querySelector('#f-panel').dataset.frames || 0)") > 5,
-              "the short page: the name, the code, the slider from ?a=, the preview playing")
-        page.eval_on_selector("#f-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
-        page.click("#f-copy-link")
-        page.wait_for_timeout(300)
-        clip2 = page.evaluate("navigator.clipboard.readText()")
-        check(clip2 == clip + "?a=0.5", f"the short page's Copy link: the short link with the slider ({clip2[len(base):]})")
-        page.wait_for_timeout(300)
-        seen = page.evaluate("window.__csp || []")
-        check(not seen and not errors and page.locator("#f-qr svg").count() == 1, f"the short page: no CSP violation or error {seen[:2]} {errors[:2]}")
-        # Add to my panel: a top-level navigation to the display (remembered
-        # here; never a real one) with the text, the slider and the mark.
-        page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
-        ctx.route("http://192.168.1.50/**", lambda r: r.fulfill(body="<p>display</p>", content_type="text/html"))
-        with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
-            page.click("#f-add")
-        q = urllib.parse.parse_qs(urllib.parse.urlsplit(page.url).fragment)
-        check(q == {"formula": [stored], "name": [sh.b_name], "a": ["0.5"], "add": ["1"]},
-              f"the short page: Add to my panel hands its Formula to the display ({page.url[:60]}…)")
-        ctx.close()
-        # The site out of reach: the long link, which needs nothing from it.
-        ctx = browser.new_context()
-        ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=base)
-        ctx.route("**/api/f", lambda r: r.abort())
-        page = ctx.new_page()
-        page.goto(long)
-        page.wait_for_selector("#f:not([hidden]):not([aria-busy])", timeout=20000)
-        page.click("#f-copy-link")
-        page.wait_for_timeout(500)
-        clip = page.evaluate("navigator.clipboard.readText()")
-        check(clip.startswith(f"{base}/f/#formula=") and page.inner_text("#f-copy-link") == "Copied a long link",
-              f"/f/ offline: Copy link copies the long link ({clip[:50]}…, {page.inner_text('#f-copy-link')!r})")
-        ctx.close()
-        browser.close()
-
-
-def rate_limit(base: str, sh: Short) -> None:
-    """Last: POST until the limiter says no (10 a minute per address; on
-    Cloudflare per location and eventually consistent, so up to 60 tries)."""
-    for n in range(1, 61):
-        st, h, d = post(base, "/api/f", sh.a.encode())
-        if st != 200:
-            break
-    check(st == 429 and h.get("Retry-After") == "60" and "minute" in (d or {}).get("error", ""),
-          f"POST /api/f past the rate limit: 429 with Retry-After after {n} more posts ({st} {d})")
 
 
 def www(base: str) -> None:
     """www.opendmd.dev -> the apex, on Cloudflare only: the zone's redirect
-    rule answers every www path, and the Worker the /f/* and /api/* ones.
+    rule answers every www path, and the Worker the /api/* and /formulas/* ones.
     cf dev cannot be asked as www (with `domains` set it serves every
     request as the first domain, whatever the Host), nor can a workers.dev
     preview: skipped there."""
@@ -413,8 +243,8 @@ def www(base: str) -> None:
         print(f"  skip www.opendmd.dev -> opendmd.dev: {host} is not opendmd.dev")
         return
     for b, hdr in cases:
-        st, h, _ = get(b, "/f/8m4kq2v9tz", headers=hdr)
-        check(st == 301 and h.get("Location") == "https://opendmd.dev/f/8m4kq2v9tz", f"www.opendmd.dev/f/…: 301 -> {h.get('Location')}")
+        st, h, _ = get(b, "/formulas/src/fire.psi", headers=hdr)
+        check(st == 301 and h.get("Location") == "https://opendmd.dev/formulas/src/fire.psi", f"www.opendmd.dev/formulas/…: 301 -> {h.get('Location')}")
         st, h, _ = get(b, "/api/health?x=1", headers=hdr)
         check(st == 301 and h.get("Location") == "https://opendmd.dev/api/health?x=1", f"www.opendmd.dev/api/…: 301 -> {h.get('Location')}")
 
@@ -502,7 +332,7 @@ def headers(base: str, site: Path) -> None:
         "/art-index/v1/GB.json": (None, None, "*", "public, max-age=600"),
         "/demo/": ("connect-src 'self' https://gifcities.archive.org", None, None, "public, max-age=600"),
         "/demo/app.js": (None, None, None, "public, max-age=600"),
-        "/f/": ("'wasm-unsafe-eval'", "jsdelivr", "*", "public, max-age=600"),
+        "/f/": ("'wasm-unsafe-eval'", "connect-src", None, "public, max-age=600"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
         "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
     }
@@ -532,12 +362,11 @@ def headers(base: str, site: Path) -> None:
     check(not bad, f"_headers: CSP, CORS, caching and the rest on {len(want)} paths{': ' + '; '.join(bad) if bad else ''}")
 
 
-def csp_in_browser(base: str, short_id: str) -> None:
+def csp_in_browser(base: str) -> None:
     from playwright.sync_api import sync_playwright
     paths = ["/", "/guide/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/", "/dev/api", "/dev/psi/",
              "/no/such/page", "/demo/",
-             "/f/#" + urllib.parse.urlencode({"formula": "loop 4\npal(rainbow, frac(x + t/4))", "name": "Rainbow"}),
-             f"/f/{short_id}"]
+             "/f/#gallery=fire"]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         for path in paths:
@@ -660,7 +489,7 @@ def live_panels(base: str, shots: Path) -> None:
         page.goto(base + "/formulas/", wait_until="load")
         page.wait_for_timeout(1500)
         check(not psi, f"gallery: no wasm before a hover ({len(psi)} requests)")
-        tile = page.locator("li.ftile:has(a.fpic[href*='bundled=matrix'])")
+        tile = page.locator("li.ftile:has(a.fpic[href*='gallery=matrix'])")
         tile.scroll_into_view_if_needed()
         tile.hover()
         live = "li.ftile[data-live=on] canvas"
@@ -672,9 +501,9 @@ def live_panels(base: str, shots: Path) -> None:
               f"gallery: hovering Matrix's tile plays it ({a and a['frames']} -> {b and b['frames']} frames, one canvas)")
         page.mouse.move(2, 2)
         page.wait_for_timeout(200)
-        back = page.evaluate("[document.querySelectorAll('li.ftile canvas').length, document.querySelector(\"li.ftile:has(a.fpic[href*='bundled=matrix']) .led img\").closest('.led').hidden]")
+        back = page.evaluate("[document.querySelectorAll('li.ftile canvas').length, document.querySelector(\"li.ftile:has(a.fpic[href*='gallery=matrix']) .led img\").closest('.led').hidden]")
         check(back == [0, False], f"gallery: leaving it brings the thumbnail back {back}")
-        other = page.locator("li.ftile:has(a.fpic[href*='bundled=starfield'])")
+        other = page.locator("li.ftile:has(a.fpic[href*='gallery=starfield'])")
         other.locator("a.cta.alt").first.focus()
         f = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{live}'); return x && x.frames >= 5 && x; }}")
         check(bool(f) and page.locator("li.ftile canvas").count() == 1 and other.get_attribute("data-live") == "on",
@@ -910,7 +739,7 @@ def examples_from_store(base: str, site: Path) -> None:
         st, h, body = get(base, f"/formulas/src/{e['slug']}.psi")
         if st != 200 or body != (site / "formulas/src" / f"{e['slug']}.psi").read_bytes() or h.get("X-Gallery") != "store":
             wrong.append(f"{e['slug']} {st} {h.get('X-Gallery')}")
-    check(not wrong, f"/formulas/src/<stem>.psi of every example from the store, as built (#bundled= reads it) {wrong[:4]}")
+    check(not wrong, f"/formulas/src/<stem>.psi of every example from the store, as built (/f/ and the panel read it) {wrong[:4]}")
 
 
 def wait_synced(base: str, commit: str, timeout: float = 30) -> dict:
@@ -1090,10 +919,6 @@ def main() -> int:
         api(base)
         formula(base)
         live = urllib.parse.urlsplit(base).hostname not in ("127.0.0.1", "localhost")
-        sh = Short(live)
-        print(f"short links ({'live: fixed Formulas' if live else 'local: new Formulas'})")
-        shortlinks(base, sh)
-        short_in_browser(base, sh)
         print(f"the gallery store ({'live: the public repo' if live else 'local: a fixture repo'})")
         if repo:
             gallery_local(base, a.site, a.gallery_tool, repo)
@@ -1104,11 +929,9 @@ def main() -> int:
         redirects(base, a.site)
         headers(base, a.site)
         print("CSP in the browser")
-        csp_in_browser(base, sh.id_a)
+        csp_in_browser(base)
         print("live Formulas: the home page's panels, the gallery's tiles")
         live_panels(base, a.shots)
-        print("the rate limit")
-        rate_limit(base, sh)
         print(f"site-worker-test: {'ok' if not failures else f'{len(failures)} failures'}")
         if a.smoke:
             print(f"site-smoke --base {base}")

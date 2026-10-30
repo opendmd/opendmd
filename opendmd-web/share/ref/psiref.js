@@ -4,7 +4,8 @@
 //   cheat-sheet row, opendmd-psi/src/reference.rs) and every ```psi block
 //   of the Cookbook, drawn as the panel draws them by the demo's Psi
 //   (pkg-psi, through ../../psiled.js, as the home page's panel is), each
-//   with an "Open in editor" link to the demo's editor.
+//   with an "Open in editor" link to the site's editor (/f/#open: the
+//   example left in this site's storage, never in the link).
 //   Nothing loads until the first one scrolls near: then the wasm, once,
 //   and only the examples on screen are drawn (one frame for a still one,
 //   or for every one when the reader prefers less motion);
@@ -74,13 +75,16 @@ const seen = new IntersectionObserver((es) => {
 
 // A code element's text, its <br>s as line ends.
 const text = (code) => [...code.childNodes].map((n) => (n.nodeName === 'BR' ? '\n' : n.textContent)).join('');
-const editor = (src, name) => SITE + 'demo/#' + new URLSearchParams(name ? { formula: src, name } : { formula: src });
+// Open in editor: the example in this site's own storage for /f/ to read once.
+const editor = (src, name) => (e) => {
+  try { localStorage.setItem('odmd.psi.open', JSON.stringify({ src, name: name || '' })); } catch { e.preventDefault(); }
+};
 
 const examples = [];
 function live(src, name, at, big) {
   const x = panel('What this formula draws');
   const box = el('div', { className: 'psi-live' + (big ? ' big' : '') },
-    x.led, el('a', { className: 'psi-open', href: editor(src, name) }, 'Open in editor'));
+    x.led, el('a', { className: 'psi-open', href: SITE + 'f/#open', onclick: editor(src, name), onauxclick: editor(src, name) }, 'Open in editor'));
   at(box);
   Object.assign(x, { src, box, info: null, drawn: false });
   examples.push(x);

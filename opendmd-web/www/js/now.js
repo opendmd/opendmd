@@ -41,9 +41,11 @@ function editFor(p) {
   if (q) return q.get('src') && ['Formulas', async () => {
     const { fpath } = await import('./psishow.js');
     const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && fpath({ src: x.src }) == p.split('&')[0]);
-    const l = new URLSearchParams({ formula: f?.src ?? q.get('src'), name: f?.name || 'Formula' });
-    for (const k of 'abc') if (q.has(k)) l.set(k, q.get(k));
-    location.hash = l;
+    // (In memory, never in the address: js/formulas.js opens app.psiOpen.)
+    const { num } = await import('./psikit.js');
+    app.psiOpen = { src: f?.src ?? q.get('src'), name: f?.name || 'Formula' };
+    for (const k of 'abc') if (num(q.get(k)) != null) app.psiOpen[k] = num(q.get(k));
+    app.go('formulas/edit');
   }];
   const e = p?.[0] == '/' && app.wasm.parsePath(p);
   return e && ['Create Art', () => { app.artFrom = { path: p, e }; app.go('create'); }];

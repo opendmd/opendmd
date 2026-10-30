@@ -30,11 +30,11 @@
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
-- /f/          a formula's own page (`/f/#formula=…&name=…&a=…`, the share
-               links the web app's Formulas make): opendmd-web/share/f/, which
-               runs on the demo's files (the link's decoder, the LED preview,
-               Psi); the site's Worker also serves it as a short link's page,
-               /f/<id> (site/worker/src/index.ts)
+- /f/          a Formula's page, the web app's own editor on the demo's files
+               (opendmd-web/share/f/; js/formulas.js `editorPage`): a gallery
+               Formula by name (`/f/#gallery=<slug>`, the gallery's tiles) or
+               one the Psi reference opened (`/f/#open`); never its text in
+               the link
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
                *.psi, CC0, copied to formulas/src/; the ten marked
                `-- bundle` are also the web app's formulas.json) and the contributions merged into the public
@@ -347,10 +347,10 @@ CSP = {
     # The installer: ESP Web Tools (and the modules it imports) from jsDelivr.
     "install": CSP_BASE.replace("script-src 'self'", "script-src 'self' https://cdn.jsdelivr.net")
     + "; connect-src 'self' https://cdn.jsdelivr.net",
-    # A Formula's page: the demo's wasm; "Show on my panel" will talk to a
-    # display on the LAN (http:, which CSP cannot narrow to private ranges).
+    # A Formula's page: the demo's wasm and the editor's GIF picker (blob:);
+    # Open on my panel navigates to or opens the panel's page, never fetches.
     "f": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob:")
-    .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'") + "; connect-src 'self' http:",
+    .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The Psi language reference: its live examples run the demo's Psi
     # (pkg-psi, same-origin), which needs only 'wasm-unsafe-eval' on top of
     # the docs' policy: no blob:, no connect-src beyond 'self' (the wasm is
@@ -370,7 +370,7 @@ CSP = {
 CACHE_DEFAULT = "public, max-age=600"   # what GitHub Pages sent (the art index's ETag behaviour)
 CACHE_SHORT = "public, max-age=60"      # install/release.json, beta.json: the update check
 CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release files
-CORS_PATHS = ("/install/*", "/art-index/*", "/f/*")       # fetched from a player's http:// web app
+CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
 
 def headers_file() -> str:
@@ -757,7 +757,7 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
     shutil.copyfile(ROOT / "opendmd-web/share/ref/ftiles.js", page_dir / "ftiles.js")
     (out / GALLERY_PAGE).write_text(render(
         GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery", head="\n" + GALLERY_HEAD,
-        description="Formulas for the OpenDMD LED display: try one here, then add it to your display."), encoding="utf-8")
+        description="Formulas for the OpenDMD LED display: change one here, then open it on your panel."), encoding="utf-8")
 
 
 # A Formula's page (opendmd-web/share/f/index.html): the site's header and

@@ -59,22 +59,11 @@ def urlencoded(pairs: list[tuple[str, str]]) -> str:
     return "&".join(f"{enc(k)}={enc(v)}" for k, v in pairs)
 
 
-# A formula's own `name "…"` line (the declarations come first, unindented).
-NAME_LINE = re.compile(r'^name "[^"\n]*"', re.M)
-
-
-def share_hash(e: dict, name: str | None = None) -> str:
-    """`#formula=…&name=…`, as the web app's `link` writes it for a formula
-    with its controls at their defaults (which it leaves out). With `name`
-    (a remix), the formula's `name` line says it too. A bundled one (not a
-    remix) goes by name, `#bundled=<slug>`, as the web app's link writes it
-    too: /f/ reads it from formulas/src/, a panel has it built in."""
-    if name is None and e.get("bundle"):
-        return "#" + urlencoded([("bundled", e["slug"])])
-    src = e["src"]
-    if name is not None:
-        src = NAME_LINE.sub(lambda _: f'name "{name}"', src, count=1)
-    return "#" + urlencoded([("formula", src), ("name", name if name is not None else e["name"])])
+def share_hash(e: dict) -> str:
+    """`#gallery=<slug>`: a Formula goes by name, never by its text in a
+    link (the web app reads the same: psikit `from`). /f/ reads it from
+    formulas/src/, a panel fetches it from there (or has it built in)."""
+    return "#" + urlencoded([("gallery", e["slug"])])
 
 
 def recompress_png(data: bytes) -> bytes:
@@ -181,30 +170,28 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
                 f'<h3>{t(name)}{badges}</h3><p class="fdesc">{t(e["about"])}</p>'
                 + (f'<p class="fctl">Controls: {t(", ".join(ctl))}</p>' if ctl else "")
                 + f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
-                # Add to my panel: the Formula's page with the mark, which hands it to
-                # the panel at once once its address is known (else asks for it).
-                f'<p class="facts"><a class="cta add" href="../f/{t(share_hash(e))}&amp;add=1">Add to my panel</a>'
-                f'<a class="cta alt" href="../f/{t(share_hash(e))}">Open</a>'
-                f'<a class="cta alt" href="../demo/{t(share_hash(e, (name + " remix")[:60]))}">Remix</a></p></li>')
+                # Open on my panel: the Formula's page with the mark, which hands it to
+                # the panel's editor at once once its address is known (else asks for it).
+                f'<p class="facts"><a class="cta add" href="../f/{t(share_hash(e))}&amp;panel=1">Open on my panel</a>'
+                f'<a class="cta alt" href="../f/{t(share_hash(e))}">Open</a></p></li>')
     community = "".join(tile(e, f"thumbs/{e['slug']}.png") for e in entries)
     ex = "".join(tile(e, f"examples/{e['slug']}.png") for e in seeds)
     how = (f'<a href="{REPO}/tree/main/gallery">how to add yours</a>')
     return (f'<h1>Formula gallery</h1>\n<p class="lead">Formulas are little animations and looks for your display, each '
-            f'drawn by a few lines of maths. Find one you like and press <strong>Add to my panel</strong>: it goes onto your '
-            f'display, ready to play, to put in a playlist, or to lay over your GIFs as the look.</p>\n'
-            f'<p><strong>Open</strong> plays it here, with its sliders and its code. <strong>Remix</strong> opens it in the '
-            f'demo\'s editor, so you can change it. Made one you like? Its page has <strong>Submit to the gallery</strong>, '
-            f'or read {how}.</p>\n'
+            f'drawn by a few lines of maths. Find one you like and press <strong>Open on my panel</strong>: it opens in your '
+            f'panel\'s editor, where you can change it, save it, play it, put it in a playlist or lay it over your GIFs as the look.</p>\n'
+            f'<p><strong>Open</strong> plays it here in the editor, with its sliders and its code, ready to change. Made one you '
+            f'like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
             f'<h2 id="community">From the community</h2>\n'
             + listed("community", f'<ul class="ftiles">{community}</ul>\n' if community else EMPTY)
             + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
-            f'the panel and need no saving; the others are saved on your display when you add them.</p>\n'
+            f'the panel.</p>\n'
             + listed("examples", f'<ul class="ftiles">{ex}</ul>\n'))
 
 
 # The community list when it is empty.
 EMPTY = ('<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
-         'then Copy share link, and on its page, Submit to the gallery.</p>\n')
+         'then Submit to the gallery from its editor.</p>\n')
 
 
 def listed(part: str, inner: str) -> str:

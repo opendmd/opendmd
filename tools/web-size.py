@@ -62,7 +62,7 @@ part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 The Library's Formulas (the editor, the examples and the gallery:
 `js/formulas.js`, `formulas.css` and the bundled ones, `formulas.json`,
 which make web writes from opendmd-web/formulas/'s `-- bundle` files;
-imported when the Formulas tab is first chosen or a `#formula=` link
+imported when the Formulas tab is first chosen or a `#gallery=`/`#remix` link
 opens) have a line of their own, <= 21 KB (16 until Psi phase 2, 17 until
 layers and drawing over a GIF, 20 until parts), and so does their wasm module
 (`pkg-psi/`: Psi, the language formulas are written in — its compiler and
@@ -72,14 +72,15 @@ formula inside another, drawn at other places: the compiler's scopes,
 re-reading and messages, ~+3 KB): the spike's 24.7 KB measured a module that never read an error
 message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
-The formula page on the site (`--share opendmd-web/share`: `f/`'s page,
-script, style and QR encoder, gzipped here since `make web` does not
-compress them; never packed) has a line of its own, <= 13 KB (the in-house
-QR encoder is ~2.9 KB of it); it runs on the
-demo's files (the main wasm, js/preview.js and its imports, js/psikit.js,
-pkg-psi), which are counted in their own lines and printed as the page's
-first-visit total for information. js/psikit.js (the share link's encoder
-and decoder, the highlighting) counts with the Formulas line. Their "Show
+The Formula page on the site (`--share opendmd-web/share`: `f/`'s page,
+script and style, gzipped here since `make web` does not compress them;
+never packed) has a line of its own, <= 8 KB; it is the web app's editor on
+the demo's files (the main wasm, js/formulas.js and its imports, pkg-psi,
+app.css and formulas.css), which are counted in their own lines and printed
+as the page's first-visit total for information. js/psikit.js (where a
+link says a Formula comes from, the highlighting) counts with the Formulas
+line; Submit to the gallery (`js/fsubmit.js`, the editor's and the page's
+form) has a line of its own, <= 4 KB. Their "Show
 on panel" (`js/psishow.js`: the formula's path, the throttled live edits
 and their errors; imported with the view on a device only) has a line of
 its own, <= 2 KB. Any Formula as the panel's look (`js/looks.js`: the
@@ -339,7 +340,7 @@ PSI_WASM_GZ_BUDGET = 96 * 1024  # 91 until psi-ergo-1; 87 until console-b; 85 un
 # 32 KB since formula-refs (2026-10-29): Endless road readable again (names,
 # comments: its text no longer has to fit a 2 KB path), +~0.8 KB gz of
 # formulas.json; bundled links and their details, +~0.2 KB.
-FORMULAS_GZ_BUDGET = 32 * 1024  # 30 until formula-refs; 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+FORMULAS_GZ_BUDGET = 33 * 1024  # 32 until f-editor (the site's editor page mounts it alone, Open on my panel's arrival by name or postMessage: ~+0.2 KB); 30 until formula-refs; 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
@@ -359,14 +360,19 @@ FSHEET = {"js/fsheet.js"}
 # Look, a line of its own.
 FSTORE_GZ_BUDGET = 3 * 1024
 FSTORE = {"js/fstore.js"}
-# Add to my panel's arrival (js/fadd.js, branch add-to-panel, 2026-10-29):
-# the site hands a Formula over with `&add=1`; saved, then the sheet (Play
-# now, Add to a playlist, Use as the look). Imported only then: its own line.
-FADD_GZ_BUDGET = 3 * 1024
-FADD = {"js/fadd.js"}
-SHARE_GZ_BUDGET = 14 * 1024  # 12 -> 13 KB with short links (S5: Copy link posts /api/f, 11,548 -> 12,481 B); 14 with Add to my panel (the hand-off, its mark, the form's two modes: ~13.3 KB)
+# Submit to the gallery (js/fsubmit.js, branch f-editor, 2026-10-30): the
+# form, for the web app's editor and the site's Formula page; imported when
+# it first opens (the site's page: once the editor is up). ~3.0 KB gz.
+FSUBMIT_GZ_BUDGET = 4 * 1024
+FSUBMIT = {"js/fsubmit.js"}
+# 8 KB since f-editor (2026-10-30): the page is the web app's editor
+# (formulas.js, counted in its own line), with no QR code, no preview of its
+# own, no short links and the Submit form in js/fsubmit.js: ~6.0 KB. It was
+# 14 (Add to my panel), 13 (short links), 12.
+SHARE_GZ_BUDGET = 8 * 1024
 # What the formula page loads from the demo (its own files aside).
-SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
+SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
+              "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,
@@ -455,8 +461,8 @@ def main() -> int:
             kind = "fsheet"
         elif rel in FSTORE:
             kind = "fstore"
-        elif rel in FADD:
-            kind = "fadd"
+        elif rel in FSUBMIT:
+            kind = "fsubmit"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -549,7 +555,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
-                         ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fadd", FADD_GZ_BUDGET),
+                         ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET),
                          ("other", None)):
