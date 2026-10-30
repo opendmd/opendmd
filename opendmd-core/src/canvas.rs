@@ -131,6 +131,14 @@ impl DirtyMap {
         self.rows = u32::MAX >> (32 - HEIGHT);
     }
 
+    /// Forget row `y` (written to the panel on its own: racing the beam).
+    pub fn clear_row(&mut self, y: usize) {
+        if y < HEIGHT {
+            self.bits[y * WORDS_PER_ROW..(y + 1) * WORDS_PER_ROW].fill(0);
+            self.rows &= !(1 << y);
+        }
+    }
+
     /// Forget everything; what the consumer calls once it has caught up.
     pub fn clear(&mut self) {
         self.bits = [0; PIXELS / 64];

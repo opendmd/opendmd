@@ -14,7 +14,7 @@
 //! new one at each open.
 //!
 //! **Memory.** The program (2,876 B) and the VM's working memory
-//! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
+//! ([`opendmd_psi::Scratch`], 8,204 B at 128 lanes) are one allocation made
 //! when the path is opened, zeroed and filled in place (never built on the
 //! main task's stack); a formula that draws (`draw { }`) also has its
 //! canvas ([`opendmd_psi::Ink`], 4 KB), a second allocation made then. No
@@ -83,6 +83,13 @@ pub struct PsiFx {
     /// returned): a `loop forever` formula's `t`, which a new pass (the
     /// engine's rewind) leaves running and a live edit keeps.
     played_ms: u64,
+    /// The µs of `played_ms`'s next millisecond (a raced frame is 7,98x µs).
+    played_us: u32,
+    /// Frames drawn since the open: the first is never raced (the canvas
+    /// may not be the panel's picture yet).
+    drawn: u32,
+    /// This frame is raced ([`set_beam`]): decided in `frame_inner`.
+    racing: bool,
     /// The JIT's kernel for the pixel stage (the ESP32 with `psi-jit`).
     #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
     jit: jit::Jit,
@@ -197,6 +204,14 @@ pub struct Governor {
     /// Frames left out of the mean: the first after an open or a live
     /// edit runs from a cold flash cache (the compiler just ran).
     skip: u8,
+    /// Racing the beam: late raced frames in the current window of
+    /// [`Governor::LATE_WINDOW`] (and the frames seen in it); over
+    /// [`Governor::LATE_MAX`] there, every 2nd refresh at least (`floor`)
+    /// for [`Governor::LATE_HOLD`] frames, then tried again.
+    late: u16,
+    seen: u16,
+    floor: u8,
+    floor_left: u16,
 }
 
 impl Governor {
@@ -231,6 +246,7 @@ impl Governor {
             calm: 0,
             avg_us: est_us,
             skip: Self::SKIP,
+            ..Governor::default()
         };
         while g.level < Self::MAX_LEVEL && est_us > Self::budget_us(grid << g.level) {
             g.level += 1;
@@ -280,6 +296,90 @@ impl Governor {
     }
 }
 
+/// What a raced frame may take (render and writes, µs) at a frame time
+/// of `frame_us` on a refresh of `cycle_us`: a refresh less
+/// [`BEAM_SLACK_US`] when every refresh is a frame (~6.5 ms at 125 Hz), else
+/// half the frame (8 ms at 62.6 Hz, as 20 ms frames had 8).
+pub fn beam_budget_us(frame_us: u32, cycle_us: u32) -> u32 {
+    if frame_us <= cycle_us {
+        cycle_us.saturating_sub(BEAM_SLACK_US)
+    } else {
+        frame_us / 2
+    }
+}
+
+/// A raced frame's time left out of a refresh: the loop's own work around
+/// it (the wake, the publishing) and the margin of its window.
+pub const BEAM_SLACK_US: u32 = 1_500;
+
+impl Governor {
+    /// [`Governor::observe`] for a raced frame: `unit_us` the frame time
+    /// its `fps` gets ([`crate::scan::beam_frames`] refreshes), each level
+    /// doubling it; the budget [`beam_budget_us`].
+    pub fn observe_beam(&mut self, us: u32, unit_us: u32, cycle_us: u32) -> bool {
+        let frame = unit_us << self.level;
+        if self.skip > 0 && us < frame {
+            self.skip -= 1;
+            return false;
+        }
+        self.avg_us = self.avg_us - self.avg_us / 8 + us / 8;
+        if self.level < Self::MAX_LEVEL && (self.avg_us > beam_budget_us(frame, cycle_us) || us >= frame) {
+            self.level += 1;
+            self.calm = 0;
+            return true;
+        }
+        if self.level > 0 && self.avg_us < beam_budget_us(frame >> 1, cycle_us) / 32 * 31 {
+            self.calm += 1;
+            if self.calm >= Self::CALM {
+                self.level -= 1;
+                self.calm = 0;
+                return true;
+            }
+        } else {
+            self.calm = 0;
+        }
+        false
+    }
+
+    /// The frames (refreshes) a raced picture is held for.
+    pub fn beam_frames(&self, unit: u32) -> u32 {
+        unit << self.level.max(self.floor)
+    }
+
+    /// Raced frames in a window (~8 s at 125 Hz).
+    pub const LATE_WINDOW: u16 = 1024;
+    /// More late frames than this in a window (over 0.1 %) …
+    pub const LATE_MAX: u16 = 1;
+    /// … hold every 2nd refresh for this many frames (~65 s), then try
+    /// every refresh again. (Held for two, a start too late for its window
+    /// waits for the next refresh instead: none are late.)
+    pub const LATE_HOLD: u16 = 4096;
+
+    /// A raced frame was (`late`) or wasn't late; `true` when that just
+    /// moved the formula to every 2nd refresh.
+    pub fn note_late(&mut self, late: bool) -> bool {
+        if self.floor > 0 {
+            self.floor_left = self.floor_left.saturating_sub(1);
+            if self.floor_left == 0 {
+                self.floor = 0;
+            }
+            return false;
+        }
+        self.late += u16::from(late);
+        self.seen += 1;
+        if self.late > Self::LATE_MAX {
+            (self.late, self.seen) = (0, 0);
+            self.floor = 1;
+            self.floor_left = Self::LATE_HOLD;
+            return self.level == 0;
+        }
+        if self.seen >= Self::LATE_WINDOW {
+            (self.late, self.seen) = (0, 0);
+        }
+        false
+    }
+}
+
 /// A clock in µs (wrapping) the governor times frames with.
 pub type Clock = fn() -> u32;
 
@@ -294,7 +394,28 @@ thread_local! {
 }
 /// The formula on screen: its mean render time (µs), and its frame time
 /// and the one it asked for (ms, high and low half).
+#[cfg(not(test))]
 static STATS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+// (Per thread in tests, as the clock: a raced test's frames are governed
+// beside the governor's tests.)
+#[cfg(test)]
+thread_local! {
+    static STATS_T: [AtomicU32; 3] = const { [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)] };
+}
+
+fn stat(i: usize) -> u32 {
+    #[cfg(not(test))]
+    return STATS[i].load(Ordering::Relaxed);
+    #[cfg(test)]
+    STATS_T.with(|s| s[i].load(Ordering::Relaxed))
+}
+
+fn set_stat(i: usize, v: u32) {
+    #[cfg(not(test))]
+    STATS[i].store(v, Ordering::Relaxed);
+    #[cfg(test)]
+    STATS_T.with(|s| s[i].store(v, Ordering::Relaxed));
+}
 
 /// How a formula is compiled: [`psi::compile_into`] in place, unless the
 /// firmware installs another with [`set_compiler`].
@@ -342,6 +463,76 @@ fn clock() -> Option<Clock> {
     }
 }
 
+/// Racing the beam (console-lessons §2.6, the spike; `formula_beam`): the
+/// player's side, installed by the firmware. A Formula's frame drawn in
+/// the panel's pair order, each pair written to the panel as it is drawn
+/// (`pair`), behind the scan, instead of a whole frame then a paced blit.
+#[derive(Clone, Copy, Debug)]
+pub struct BeamHooks {
+    /// A frame is about to be raced: the refresh (µs), or `None` when it
+    /// can't be raced now (the scan unreadable).
+    pub begin: fn() -> Option<u32>,
+    /// Its rows start (after the frame's steps and draw stage:
+    /// [`psi::BEAM_START`]), the frame expected to take `est_us` (render
+    /// and writes) and held for `frames` refreshes: plans the race from
+    /// here (and may wait for its window; with two refreshes or more, a
+    /// start too late for its window waits for the next refresh).
+    pub start: fn(est_us: u32, frames: u32),
+    /// Pair `p` (rows `p`, `p + 16`) is drawn in `bytes` (the canvas, packed
+    /// RGB888) and `dirty` marks what of it to write.
+    pub pair: fn(p: usize, bytes: &[u8], dirty: &crate::canvas::DirtyMap),
+    /// The frame is written: `(err, waited, late)` — how late (+) or early
+    /// (−) its start was for its window (µs; the next delay corrects it),
+    /// the µs it waited for the scan (left out of the governor's time), and
+    /// whether a pair was written past its window.
+    pub end: fn() -> (i32, u32, bool),
+}
+
+static BEAM: std::sync::Mutex<Option<BeamHooks>> = std::sync::Mutex::new(None);
+#[cfg(not(test))]
+static BEAM_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+thread_local! {
+    static BEAM_ARMED: std::sync::atomic::AtomicBool = const { std::sync::atomic::AtomicBool::new(false) };
+}
+/// The raced frame time (µs) of the formula on screen, 0 when not racing:
+/// `/api/status` `now_playing.formula.beam_us`.
+static BEAM_US: AtomicU32 = AtomicU32::new(0);
+
+/// Install (or remove) the beam's hooks: the firmware, with `formula_beam`
+/// on.
+pub fn set_beam(hooks: Option<BeamHooks>) {
+    *BEAM.lock().unwrap() = hooks;
+    if hooks.is_none() {
+        BEAM_US.store(0, Ordering::Relaxed);
+    }
+}
+
+/// The player's say for the next tick: a Formula's frame may be raced
+/// (no glow, no formula look, no transition running).
+pub fn arm_beam(on: bool) {
+    #[cfg(not(test))]
+    BEAM_ARMED.store(on, Ordering::Relaxed);
+    #[cfg(test)]
+    BEAM_ARMED.with(|a| a.store(on, Ordering::Relaxed));
+}
+
+fn beam_hooks() -> Option<BeamHooks> {
+    #[cfg(not(test))]
+    let armed = BEAM_ARMED.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let armed = BEAM_ARMED.with(|a| a.load(Ordering::Relaxed));
+    if !armed {
+        return None;
+    }
+    *BEAM.lock().unwrap()
+}
+
+/// The raced frame time now (µs; 0: not racing).
+pub fn beam_us() -> u32 {
+    BEAM_US.load(Ordering::Relaxed)
+}
+
 /// Whether `prog` reads the wall clock (`hour`, `minute`, `second`).
 fn reads_clock(prog: &psi::Program) -> bool {
     prog.inputs() & 16 != 0
@@ -350,12 +541,12 @@ fn reads_clock(prog: &psi::Program) -> bool {
 /// The last formula drawn: (mean render µs, frame time ms, asked ms, the
 /// last compile's µs) — for `/api/status`. Zeros before any.
 pub fn stats() -> (u32, u32, u32, u32) {
-    let d = STATS[1].load(Ordering::Relaxed);
+    let d = stat(1);
     (
-        STATS[0].load(Ordering::Relaxed),
+        stat(0),
         d >> 16,
         d & 0xffff,
-        STATS[2].load(Ordering::Relaxed),
+        stat(2),
     )
 }
 
@@ -521,7 +712,7 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> 
     let t0 = clock().map(|c| (c, c()));
     compile_into(&q.src, prog)?;
     if let Some((c, t0)) = t0 {
-        STATS[2].store(c().wrapping_sub(t0), Ordering::Relaxed);
+        set_stat(2, c().wrapping_sub(t0));
     }
     let est = prog.esp32_us();
     let delay = q
@@ -847,9 +1038,16 @@ impl PsiFx {
             .wrapping_mul(1000)
             .wrapping_add(t.subsec_millis());
         // The frame of the grid at or before `t`: held frames skip some, never
-        // draw between them.
-        let i = ms / grid % n;
-        self.inputs.t = psi::Inputs::at_ms(i * grid);
+        // draw between them. A raced frame is on the panel's refresh grid
+        // instead: its own `t` (one `t` a frame, the picture the browser
+        // draws for it).
+        self.racing = self.drawn > 0
+            && self.prog.rate().is_none()
+            && clock().is_some()
+            && !self.trialing()
+            && beam_hooks().is_some();
+        let i = if self.racing { ms % (n * grid) } else { ms / grid % n * grid };
+        self.inputs.t = psi::Inputs::at_ms(i);
         // (One that never repeats: its own time since it opened.)
         self.inputs.tw = psi::Inputs::wide_ms(self.played_ms);
         if let Some(now) = self.clock.then(crate::synth::wall_now).flatten() {
@@ -858,8 +1056,19 @@ impl PsiFx {
             self.inputs.second = now.second;
         }
         let d = self.render(canvas);
-        self.played_ms += d.as_millis() as u64;
+        self.drawn = self.drawn.saturating_add(1);
+        let us = d.as_micros() as u64 + u64::from(self.played_us);
+        self.played_ms += us / 1000;
+        self.played_us = (us % 1000) as u32;
         d
+    }
+
+    /// A JIT trial frame now (kernel against VM, timed): never raced.
+    fn trialing(&self) -> bool {
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        return self.jit.trialing();
+        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
+        false
     }
 
     /// Draw the frame of `self.inputs` and say how long it shows.
@@ -881,6 +1090,17 @@ impl PsiFx {
         }
         self.still_step(clock.is_some(), t0);
         self.held_step(clock.is_some(), t0);
+        // Racing the beam: planned (any wait for its window left out of
+        // the governor's time), else drawn as before.
+        let hooks = beam_hooks().filter(|_| self.racing);
+        let cycle = hooks.and_then(|h| (h.begin)());
+        let est = self.gov.avg_us();
+        let frames = self.gov.beam_frames(crate::scan::beam_frames(grid * 1000, cycle.unwrap_or(0)));
+        let hooks = hooks.filter(|_| cycle.is_some());
+        let t0 = match (hooks, clock) {
+            (Some(_), Some(c)) => c(),
+            _ => t0,
+        };
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
         // Only what changed is marked (the canvas holds the frame before:
         // the `Effect` contract; what differs from it is what the panel
@@ -911,51 +1131,36 @@ impl PsiFx {
         }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let (trial, t1) = (self.jit.trialing(), clock.map_or(0, |c| c()));
-        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-        let drawn = self.jit_render(bytes, compare.then_some(&mut changed));
-        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
-        let drawn = false;
-        if drawn {
-        } else if let Some(h) = self.held.as_deref().filter(|_| self.prog.rate().is_some()) {
-            // A `rate` formula: the rest over the slow rows held.
-            psi::render_fast::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                Some(h.picture()),
-                u32::MAX,
-                bytes,
-                compare.then_some(&mut changed),
-            );
-        } else if compare {
-            psi::render_rows_changed::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                None,
-                u32::MAX,
-                bytes,
-                &mut changed,
-            );
-        } else {
-            psi::render_rows_still::<LANES>(
-                &self.prog,
-                &mut self.scratch,
-                self.ink.as_deref_mut(),
-                Some(&mut self.still),
-                &self.inputs,
-                &tables(),
-                None,
-                u32::MAX,
-                bytes,
-            );
-        }
+        let mut marked = 0u32;
+        let drawn = match hooks {
+            Some(h) => {
+                // Racing the beam: each pair marked and written as it is
+                // drawn, then forgotten: the blit after the tick finds
+                // nothing (a mark from before, a new tint's, is written
+                // with its pair).
+                let mut tell = |p: usize, out: &[u8], a: u32, b: u32| {
+                    const HALF: usize = psi::H / 2;
+                    if p == psi::BEAM_START {
+                        return (h.start)(est, frames);
+                    }
+                    marked += if compare {
+                        mark_pair(dirty, p, a, b)
+                    } else {
+                        dirty.mark_span(p, 0, crate::canvas::WIDTH);
+                        dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
+                        2 * crate::canvas::WIDTH as u32
+                    };
+                    (h.pair)(p, out, dirty);
+                    dirty.clear_row(p);
+                    dirty.clear_row(p + HALF);
+                };
+                self.draw(bytes, compare.then_some(&mut changed), Some(&mut tell))
+            }
+            None => {
+                BEAM_US.store(0, Ordering::Relaxed);
+                self.draw(bytes, compare.then_some(&mut changed), None)
+            }
+        };
         #[cfg(feature = "psi-stats")]
         if self.prog.rate().is_some() {
             let k = if self.held.is_none() { 2 } else { 0 };
@@ -966,20 +1171,18 @@ impl PsiFx {
         }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let t2 = clock.map_or(0, |c| c());
-        if compare {
+        if hooks.is_some() {
+            self.counted(compare, marked);
+        } else if compare {
             let marked = mark_changed(dirty, &changed);
-            self.full = if marked >= FULL_PX {
-                self.full.saturating_add(1)
-            } else {
-                0
-            };
-            self.uncompared = 0;
+            self.counted(true, marked);
         } else {
             dirty.mark_all();
-            self.uncompared += 1;
+            self.counted(false, 0);
         }
         // After a VM frame: a trial's frame is timed, else a kernel not yet
         // checked is checked against it; a kernel's trial frame is timed.
+        // (A raced frame is never a trial's.)
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         if trial {
             if clock.is_some() {
@@ -987,6 +1190,11 @@ impl PsiFx {
             }
         } else if !drawn {
             self.jit_check(bytes);
+        }
+        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
+        let _ = drawn;
+        if let Some(h) = hooks {
+            return self.beam_end(h, cycle.unwrap_or(0), clock, t0, grid);
         }
         let Some(c) = clock else {
             return self.delay();
@@ -1003,9 +1211,118 @@ impl PsiFx {
         if self.prog.rate().is_some() && ms > grid {
             RATE_FRAMES[3].fetch_add(1, Ordering::Relaxed);
         }
-        STATS[0].store(self.gov.avg_us(), Ordering::Relaxed);
-        STATS[1].store(ms << 16 | grid, Ordering::Relaxed);
+        set_stat(0, self.gov.avg_us());
+        set_stat(1, ms << 16 | grid);
         Duration::from_millis(u64::from(ms))
+    }
+
+    /// Draw the frame of `self.inputs` into `bytes`, what changed into
+    /// `changed` when given: the kernel if it draws this frame (`true`),
+    /// else the VM — racing the beam with `sink`, over a `rate` formula's
+    /// held slow rows, or whole. One call for every way (out of line:
+    /// each way's ~10-argument call written once, not per path in
+    /// `render`).
+    #[inline(never)]
+    fn draw(&mut self, bytes: &mut [u8], mut changed: Option<&mut [u32; psi::H]>, sink: Option<psi::PairSink<'_>>) -> bool {
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        let mut sink = sink;
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        if self.jit_render(bytes, changed.as_deref_mut(), sink.as_deref_mut().map(|s| s as psi::PairSink<'_>)) {
+            return true;
+        }
+        let tables = tables();
+        let ink = self.ink.as_deref_mut();
+        let still = Some(&mut self.still);
+        match (sink, self.held.as_deref().filter(|_| self.prog.rate().is_some())) {
+            (Some(s), _) => {
+                psi::render_rows_beam::<LANES>(&self.prog, &mut self.scratch, ink, still, &self.inputs, &tables, bytes, changed, s)
+            }
+            // A `rate` formula: the rest over the slow rows held.
+            (None, Some(h)) => psi::render_fast::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                ink,
+                still,
+                &self.inputs,
+                &tables,
+                Some(h.picture()),
+                u32::MAX,
+                bytes,
+                changed,
+            ),
+            (None, None) => match changed.take() {
+                Some(c) => psi::render_rows_changed::<LANES>(
+                    &self.prog,
+                    &mut self.scratch,
+                    ink,
+                    still,
+                    &self.inputs,
+                    &tables,
+                    None,
+                    u32::MAX,
+                    bytes,
+                    c,
+                ),
+                None => psi::render_rows_still::<LANES>(
+                    &self.prog,
+                    &mut self.scratch,
+                    ink,
+                    still,
+                    &self.inputs,
+                    &tables,
+                    None,
+                    u32::MAX,
+                    bytes,
+                ),
+            },
+        }
+        false
+    }
+
+    /// The compare's bookkeeping after a frame that marked `marked` pixels
+    /// (`compare` false: not compared, all marked).
+    fn counted(&mut self, compare: bool, marked: u32) {
+        if compare {
+            self.full = if marked >= FULL_PX {
+                self.full.saturating_add(1)
+            } else {
+                0
+            };
+            self.uncompared = 0;
+        } else {
+            self.uncompared = self.uncompared.saturating_add(1);
+        }
+    }
+
+    /// A raced frame written: the governor told its time (render and
+    /// writes, less any wait for the scan) against its refresh grid, and
+    /// the delay to the next, locked onto the scan
+    /// ([`crate::scan::beam_delay_us`]).
+    fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, grid: u32) -> Duration {
+        let (err, waited, late) = (h.end)();
+        let unit = crate::scan::beam_frames(grid * 1000, cycle);
+        if self.gov.note_late(late) {
+            log::info!(
+                "formula: over 1 in 1,000 raced frames late -> every {} refreshes for a while",
+                self.gov.beam_frames(unit)
+            );
+        }
+        if let Some(c) = clock {
+            let us = c().wrapping_sub(t0).saturating_sub(waited);
+            if self.gov.observe_beam(us, unit * cycle, cycle) {
+                log::info!(
+                    "formula: {} us a frame raced -> every {} refreshes (asked {grid} ms)",
+                    self.gov.avg_us(),
+                    self.gov.beam_frames(unit)
+                );
+            }
+        }
+        let frames = self.gov.beam_frames(unit);
+        let frame_us = frames * cycle;
+        set_stat(0, self.gov.avg_us());
+        set_stat(1, (((frame_us + 500) / 1000) << 16) | grid);
+        BEAM_US.store(frame_us, Ordering::Relaxed);
+        Duration::from_micros(u64::from(crate::scan::beam_delay_us(frames, cycle, err)))
     }
 }
 
@@ -1067,6 +1384,18 @@ fn spans_cost(m: u32) -> u32 {
 /// Returns the pixels it marked.
 pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) -> u32 {
     const HALF: usize = psi::H / 2;
+    let mut marked = 0;
+    for p in 0..HALF {
+        marked += mark_pair(dirty, p, changed[p], changed[p + HALF]);
+    }
+    marked
+}
+
+/// [`mark_changed`] for row pair `p` alone (rows `p` and `p + 16`, their
+/// changed groups `a` and `b`): what racing the beam marks as each pair is
+/// drawn. Returns the pixels it marked.
+pub fn mark_pair(dirty: &mut crate::canvas::DirtyMap, p: usize, a: u32, b: u32) -> u32 {
+    const HALF: usize = psi::H / 2;
     let whole = spans_cost(u32::MAX);
     let w = crate::canvas::WIDTH as u32;
     let row = |dirty: &mut crate::canvas::DirtyMap, y: usize, m: u32| -> u32 {
@@ -1087,18 +1416,13 @@ pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]
         }
         px
     };
-    let mut marked = 0;
-    for p in 0..HALF {
-        let (a, b) = (changed[p], changed[p + HALF]);
-        if a != 0 && b != 0 && PAIR <= spans_cost(a).min(whole) + spans_cost(b).min(whole) {
-            dirty.mark_span(p, 0, crate::canvas::WIDTH);
-            dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
-            marked += 2 * w;
-        } else {
-            marked += row(dirty, p, a) + row(dirty, p + HALF, b);
-        }
+    if a != 0 && b != 0 && PAIR <= spans_cost(a).min(whole) + spans_cost(b).min(whole) {
+        dirty.mark_span(p, 0, crate::canvas::WIDTH);
+        dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
+        2 * w
+    } else {
+        row(dirty, p, a) + row(dirty, p + HALF, b)
     }
-    marked
 }
 
 /// A formula estimated to take longer than this a frame (µs on the ESP32)
@@ -1867,7 +2191,12 @@ mod jit {
     impl PsiFx {
         /// Draw the frame with the kernel if it draws this one (`true`),
         /// what changed into `changed` when given; else leave it to the VM.
-        pub(super) fn jit_render(&mut self, bytes: &mut [u8], changed: Option<&mut [u32; psi::H]>) -> bool {
+        pub(super) fn jit_render(
+            &mut self,
+            bytes: &mut [u8],
+            changed: Option<&mut [u32; psi::H]>,
+            beam: Option<psi::PairSink<'_>>,
+        ) -> bool {
             // (A `rate` formula's kernel draws its fast part over the held
             // slow layers: without them, the VM.)
             let rate = self.prog.rate().is_some();
@@ -1881,6 +2210,20 @@ mod jit {
             let under = self.held.as_deref().filter(|_| rate).map(|h| h.picture());
             // (False when the inputs were out of range and the VM drew it:
             // a trial frame counted as the VM's — Fable's review.)
+            if let Some(sink) = beam {
+                // (Racing the beam: never a `rate` formula's frame.)
+                return k.render_beam(
+                    &self.prog,
+                    &mut self.scratch,
+                    self.ink.as_deref_mut(),
+                    Some(&mut self.still),
+                    &self.inputs,
+                    &tables(),
+                    bytes,
+                    changed,
+                    sink,
+                );
+            }
             k.render(
                 &self.prog,
                 &mut self.scratch,
@@ -1967,6 +2310,7 @@ mod alloc_box {
             b.0.inputs = self.0.inputs;
             b.0.gov = self.0.gov;
             b.0.played_ms = self.0.played_ms;
+            b.0.played_us = self.0.played_us;
             b
         }
     }
@@ -2123,6 +2467,128 @@ mod tests {
         assert_eq!(d.row_spans(18).collect::<Vec<_>>(), [(0, 128)]);
         assert_eq!(d.row_spans(5).collect::<Vec<_>>(), [(4, 12)]);
         assert_eq!(d.count(), 256 + 8);
+    }
+
+    /// Racing the beam: over one late frame in a window of 1,024, every 2nd
+    /// refresh for 4,096 frames, then every refresh again.
+    #[test]
+    fn late_raced_frames_hold_every_second_refresh_for_a_while() {
+        let mut g = Governor::new(1_000, 10);
+        assert_eq!(g.beam_frames(1), 1);
+        // One late frame a window: fine.
+        for k in 0..3 * Governor::LATE_WINDOW {
+            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7));
+        }
+        assert_eq!(g.beam_frames(1), 1);
+        assert!(!g.note_late(true));
+        assert!(g.note_late(true), "two in a window");
+        assert_eq!(g.beam_frames(1), 2);
+        for _ in 0..Governor::LATE_HOLD {
+            assert_eq!(g.beam_frames(1), 2);
+            g.note_late(false);
+        }
+        assert_eq!(g.beam_frames(1), 1, "tried again");
+    }
+
+    thread_local! {
+        static PANEL: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; psi::W * psi::H * 3]);
+        static TOLD: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+        static SLOW: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static STARTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn slow_clock() -> u32 {
+        SLOW.with(|n| {
+            n.set(n.get().wrapping_add(100));
+            n.get()
+        })
+    }
+
+    fn beam_begin() -> Option<u32> {
+        Some(7_980)
+    }
+
+    fn beam_start(_est: u32, _frames: u32) {
+        TOLD.with(|t| assert!(t.borrow().is_empty(), "the start after a pair"));
+        STARTS.with(|n| n.set(n.get() + 1));
+    }
+
+    /// The panel's side: the marked pixels of rows p and p + 16 copied.
+    fn beam_pair(p: usize, bytes: &[u8], dirty: &crate::canvas::DirtyMap) {
+        TOLD.with(|t| t.borrow_mut().push(p));
+        PANEL.with(|pn| {
+            let mut pn = pn.borrow_mut();
+            for y in [p, p + psi::H / 2] {
+                for (x0, x1) in dirty.row_spans(y) {
+                    let r = (y * psi::W + x0) * 3..(y * psi::W + x1) * 3;
+                    pn[r.clone()].copy_from_slice(&bytes[r]);
+                }
+            }
+        });
+    }
+
+    fn beam_end() -> (i32, u32, bool) {
+        (0, 0, false)
+    }
+
+    /// Racing the beam: from the second frame each pair is written as it
+    /// is drawn, in the panel's order, and what was written makes the
+    /// panel the canvas; nothing is left for the blit; the frames are the
+    /// ones drawn at once (on the grid's times), and the delay is the
+    /// refresh.
+    #[test]
+    fn a_raced_formula_writes_each_pair_as_it_is_drawn() {
+        const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
+        const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+        const GATE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
+        set_clock(Some(slow_clock));
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end }));
+        for (name, src) in psi::sketches::ALL.iter().copied().chain([
+            ("Endless road", ROAD),
+            ("Starfield", STARS),
+            ("Time gate", GATE),
+        ]) {
+            let mut raced = Fx::parse(&path(src)).unwrap_or_else(|| panic!("{name}"));
+            let mut plain = Fx::parse(&path(src)).unwrap();
+            let (Fx::Psi(a), Fx::Psi(b)) = (&mut raced, &mut plain);
+            a.set_seed(12_345);
+            b.set_seed(12_345);
+            // (One that never repeats has its own time, `tw`: the frame
+            // times it returned, 7.98 ms raced; its bytes are the psi
+            // tests'.)
+            let forever = a.program().forever();
+            let (mut c, mut want) = (Canvas::new(), Canvas::new());
+            for k in 0..30u32 {
+                let t = plain.delay() * k;
+                arm_beam(false);
+                plain.frame(t, &mut want);
+                want.dirty_mut().clear();
+                arm_beam(true);
+                TOLD.with(|t| t.borrow_mut().clear());
+                let d = raced.frame(t, &mut c);
+                assert!(forever || c.as_bytes() == want.as_bytes(), "{name} frame {k}: the bytes");
+                if k == 0 {
+                    // Not raced: the blit's.
+                    assert!(TOLD.with(|t| t.borrow().is_empty()));
+                    PANEL.with(|p| p.borrow_mut().copy_from_slice(c.as_bytes()));
+                    c.dirty_mut().clear();
+                    continue;
+                }
+                assert_eq!(TOLD.with(|t| t.borrow().clone()), (0..16).collect::<Vec<_>>(), "{name} frame {k}");
+                assert_eq!(STARTS.with(|n| n.replace(0)), 1, "{name} frame {k}: started once");
+                assert!(c.dirty().is_clean(), "{name} frame {k}: left for the blit");
+                assert!(PANEL.with(|p| p.borrow().as_slice() == c.as_bytes()), "{name} frame {k}: the panel");
+                assert_eq!(d, Duration::from_micros(7_980 << raced_level(&raced)), "{name} frame {k}");
+            }
+        }
+        arm_beam(false);
+        set_beam(None);
+        set_clock(None);
+    }
+
+    fn raced_level(fx: &Fx) -> u32 {
+        let _ = fx;
+        u32::from(stats().1 > 12)
     }
 
     /// A Formula played as an effect marks every pixel its frame changed
@@ -2868,7 +3334,8 @@ mod tests {
         );
         assert_eq!(
             FormulaLook::BUFFER_BYTES,
-            8192 + 12288 + std::mem::size_of::<LookBuffers>()
+            // (The scratch: 8 KB and racing the beam's three words.)
+            8192 + 3 * std::mem::size_of::<usize>() + 12288 + std::mem::size_of::<LookBuffers>()
         );
     }
 

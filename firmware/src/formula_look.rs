@@ -339,6 +339,11 @@ mod with_psi {
             self.active_ref().map_or(0, FormulaLook::avg_us)
         }
 
+        /// A look is set (the setting's or the editor's).
+        pub fn is_on(&self) -> bool {
+            self.active_ref().is_some()
+        }
+
         /// Give the buffers back (night mode's dark panel, the panel
         /// test); taken again when it draws next.
         #[inline(never)]
@@ -432,6 +437,10 @@ mod without {
         }
         pub fn avg_us(&self) -> u32 {
             0
+        }
+        #[allow(dead_code)]
+        pub fn is_on(&self) -> bool {
+            false
         }
         pub fn release(&mut self, _: &mut Canvas) {}
         pub fn let_go(&mut self) {}

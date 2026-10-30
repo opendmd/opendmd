@@ -78,14 +78,24 @@ pub fn q16(num: i32, den: i32) -> i32 {
 /// The VM's working memory for a lane width `N` (64 or 128): the lane
 /// registers, the `i` lane, the scalar slots, and the `x`/`px` columns
 /// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,192 B
-/// at 128 lanes, 4,864 B at 64. Plain integers, so a zeroed allocation plus `reset` is a
-/// valid one.
+/// at 128 lanes, 4,864 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
+/// valid one. (`repr(C)`: the beam's fields after the VM's, which keep
+/// their offsets.)
+#[repr(C)]
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
     pub(crate) lanes: [[i32; N]; REGS + 1],
     pub(crate) sc: [i32; MAX_SCALARS],
     pub(crate) xs: [i32; W],
     pub(crate) pxs: [i32; W],
+    /// Racing the beam, while a frame is drawn ([`render_rows_beam`]):
+    /// the rows' order (0 top to bottom, 1 the panel's pair order), the
+    /// sink, and the row begun last (+ 1; 0 none). `next`: the frame
+    /// loop's place in the order (`Rows::begin`).
+    pub(crate) order: u8,
+    pub(crate) last: u8,
+    pub(crate) next: u8,
+    pub(crate) beam: BeamSink,
 }
 
 impl<const N: usize> Scratch<N> {
@@ -99,6 +109,10 @@ impl<const N: usize> Scratch<N> {
             sc: [0; MAX_SCALARS],
             xs: [0; W],
             pxs: [0; W],
+            order: 0,
+            last: 0,
+            next: 0,
+            beam: BeamSink::default(),
         };
         s.reset();
         s
@@ -610,6 +624,152 @@ pub fn render_rows_changed<const N: usize>(
     )
 }
 
+/// Racing the beam (console-lessons §2.6): told [`BEAM_START`] as the rows
+/// start, then each row pair as soon as both its rows are drawn — `sink(p, out, top, bottom)` for rows `p` and
+/// `p + 16` (`p` in 0..16, in order), `top` and `bottom` their changed
+/// groups as [`render_rows_changed`] gives them (all set without a
+/// compare). `out` then holds those two rows of the new frame, the rows
+/// told before them, and the old bytes of the rows still to come.
+pub type PairSink<'a> = &'a mut (dyn FnMut(usize, &[u8], u32, u32) + 'a);
+
+/// What a [`PairSink`] is told once, first, as the rows start (after the
+/// frame's steps and its draw stage, before the first row): `sink(BEAM_START,
+/// out, 0, 0)`. The player plans the race from there, so a heavy draw stage
+/// is not counted as the first pair's time (Starfield, beam-b).
+pub const BEAM_START: usize = usize::MAX;
+
+/// Row `i` of the pair order: 0, 16, 1, 17, … 15, 31 (the panel lights
+/// rows `r` and `r + 16` together, `r` = 0..15 down each refresh).
+#[inline(always)]
+pub fn pair_row(i: usize) -> usize {
+    (i >> 1) | ((i & 1) * (H / 2))
+}
+
+/// The rows in order (`Scratch::order` 0), and in the panel's pair order
+/// ([`pair_row`]; 1).
+static ORDERS: [[u8; H]; 2] = {
+    let mut t = [[0u8; H]; 2];
+    let mut i = 0;
+    while i < H {
+        t[0][i] = i as u8;
+        t[1][i] = ((i >> 1) | ((i & 1) * (H / 2))) as u8;
+        i += 1;
+    }
+    t
+};
+
+/// The frame loop's next row of `rows` in the scratch's order (`H`: none
+/// left). (Out of IRAM: once a row.)
+#[inline(never)]
+fn next_row<const N: usize>(scratch: &mut Scratch<N>, rows: u32) -> usize {
+    loop {
+        let i = usize::from(scratch.next);
+        if i >= H {
+            return H;
+        }
+        scratch.next += 1;
+        let r = usize::from(ORDERS[usize::from(scratch.order & 1)][i]);
+        if rows & (1 << r) != 0 {
+            return r;
+        }
+    }
+}
+
+/// Racing the beam's sink while a frame is drawn ([`render_rows_beam`]):
+/// in the scratch, not an argument of `frame` (one more cost the IRAM
+/// loop spills). `None` (all-zero) otherwise.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BeamSink(Option<core::ptr::NonNull<PairFn>>);
+
+/// What a [`PairSink`] points at.
+type PairFn = dyn FnMut(usize, &[u8], u32, u32);
+
+// SAFETY: only ever set for the length of one `frame` call on the calling
+// thread (`BeamGuard`); a scratch moved between threads holds `None`.
+unsafe impl Send for BeamSink {}
+unsafe impl Sync for BeamSink {}
+
+/// Clears the scratch's sink and order when the frame is done (or panics).
+struct BeamGuard<'s, const N: usize>(&'s mut Scratch<N>);
+
+impl<const N: usize> Drop for BeamGuard<'_, N> {
+    fn drop(&mut self) {
+        self.0.beam = BeamSink::default();
+        self.0.order = 0;
+        self.0.last = 0;
+    }
+}
+
+/// A whole frame as [`render_rows_still`] (with `changed`:
+/// [`render_rows_changed`]) draws it, the same bytes and the same changed
+/// groups, but its rows drawn in the panel's pair order with `sink` told
+/// of each pair as it is finished ([`PairSink`]), so the player can write
+/// it to the panel behind the scan. A `rate` formula is drawn whole first
+/// and the pairs told after.
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_beam<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    out: &mut [u8],
+    changed: Option<&mut [u32; H]>,
+    sink: PairSink<'_>,
+) {
+    if prog.slow_marker().is_some() {
+        let mut ch = [u32::MAX; H];
+        let tell = changed.is_some();
+        crate::rate::render_scratch::<N>(
+            prog,
+            scratch,
+            ink,
+            still,
+            inputs,
+            tables,
+            u32::MAX,
+            out,
+            true,
+            Some(&mut ch),
+        );
+        sink(BEAM_START, out, 0, 0);
+        for p in 0..H / 2 {
+            sink(p, out, ch[p], ch[p + H / 2]);
+        }
+        if let Some(c) = changed.filter(|_| tell) {
+            *c = ch;
+        }
+        return;
+    }
+    // SAFETY: the sink's lifetime is erased for the scratch; the guard
+    // clears it before `sink`'s borrow ends.
+    let erased = unsafe {
+        core::mem::transmute::<
+            core::ptr::NonNull<dyn FnMut(usize, &[u8], u32, u32) + '_>,
+            core::ptr::NonNull<dyn FnMut(usize, &[u8], u32, u32) + 'static>,
+        >(core::ptr::NonNull::from(sink))
+    };
+    let g = BeamGuard(scratch);
+    g.0.beam = BeamSink(Some(erased));
+    g.0.order = 1;
+    g.0.last = 0;
+    frame::<N>(
+        prog,
+        g.0,
+        ink,
+        still,
+        inputs,
+        tables,
+        None,
+        u32::MAX,
+        out,
+        true,
+        core::hint::black_box(changed),
+        core::hint::black_box(crate::rate::WHOLE),
+    )
+}
+
 /// [`render_rows_ink`] with every draw loop run a turn at a time (as before
 /// draw loops ran as lanes, `draw::run`): the same bytes, for the tests
 /// that compare the two.
@@ -751,13 +911,20 @@ pub(crate) fn frame<const N: usize>(
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
+    // Racing the beam: the rows in the panel's pair order, each pair told
+    // as soon as both its rows are drawn (`render_rows_beam`): the order
+    // and the sink are the scratch's, and `Rows::begin` tells the pair the
+    // row before it finished (nothing more in this loop, no argument more
+    // to it: every value it keeps live cost spills, 0.2-0.5 KB of IRAM).
     #[cfg(feature = "stats")]
     stats::stamp(2);
-    for row in 0..H {
-        if rows & (1 << row) == 0 {
-            continue;
+    scratch.next = 0;
+    loop {
+        // (The row, and its values and kept bytes: `Rows::begin`.)
+        let row = per_row.begin(prog, scratch, tables, out, rows, &mut own);
+        if row >= H {
+            break;
         }
-        per_row.begin(prog, scratch, tables, out, row, &mut own);
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
         let under_row = under.map(|u| &u[span.clone()]);
@@ -858,7 +1025,7 @@ pub(crate) fn frame<const N: usize>(
         }
         columns_kept = N == W;
     }
-    per_row.finish(out);
+    per_row.end(out, scratch);
     #[cfg(feature = "stats")]
     stats::stamp(3);
     if let Cache::Keep(st, _) = cache {
@@ -949,6 +1116,37 @@ impl<'a> Rows<'a> {
         }
     }
 
+    /// Racing the beam: the row drawn last compared, and if it was a
+    /// pair's second (`p + 16`), the pair told to the scratch's sink. (Out
+    /// of the IRAM loop: 16 pairs a frame.)
+    #[inline(never)]
+    fn tell<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
+        self.finish(out);
+        let last = core::mem::replace(&mut scratch.last, 0) as usize;
+        let Some(mut sink) = scratch.beam.0 else { return };
+        if last == 0 {
+            // SAFETY: as below.
+            unsafe { (sink.as_mut())(BEAM_START, out, 0, 0) };
+        } else if last > H / 2 {
+            let row = last - 1;
+            let p = row - H / 2;
+            let (a, b) = self.changed.as_deref().map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
+            // SAFETY: set by `render_rows_beam` around this frame's call
+            // only (`BeamGuard` clears it), so the closure is alive.
+            unsafe { (sink.as_mut())(p, out, a, b) };
+        }
+    }
+
+    /// After the last row: it compared (and, racing, its pair told).
+    #[inline(never)]
+    fn end<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
+        if scratch.beam.0.is_some() {
+            self.tell(out, scratch);
+        } else {
+            self.finish(out);
+        }
+    }
+
     /// Row `row`'s values in the slots the pixel steps read (`py` and `y`,
     /// then the row steps), and its bytes kept (the row drawn before it
     /// compared first).
@@ -962,10 +1160,19 @@ impl<'a> Rows<'a> {
         scratch: &mut Scratch<N>,
         tables: &Tables,
         out: &[u8],
-        row: usize,
+        rows: u32,
         own: &mut Pals,
-    ) {
-        self.finish(out);
+    ) -> usize {
+        let row = next_row(scratch, rows);
+        if row >= H {
+            return H;
+        }
+        if scratch.beam.0.is_some() {
+            self.tell(out, scratch);
+        } else {
+            self.finish(out);
+        }
+        scratch.last = row as u8 + 1;
         // y and py count from the bottom (y = 0 is the bottom row).
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
@@ -985,6 +1192,7 @@ impl<'a> Rows<'a> {
         } else if let Some(c) = self.changed.as_deref_mut().and_then(|ch| ch.get_mut(row)) {
             *c = u32::MAX;
         }
+        row
     }
 
     /// Which 4-pixel groups of the row `begin` kept differ from its bytes

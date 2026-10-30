@@ -190,6 +190,8 @@ enum Mount {
 /// `quiet_for`: the serial of a card that could not be read and was just
 /// unmounted to be tried again — the same card, still unreadable, is not
 /// logged again (once a minute, for as long as it stays in).
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn mount(
     bus: &mut SdBus,
     health: &sdhealth::Boot,
@@ -475,6 +477,8 @@ fn run(task: BootTask) {
 }
 
 /// The HTTP server (and the stream task): see the module docs.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn start_http(ctx: Arc<Ctx>) {
     match crate::http::start(ctx) {
         // Held for the life of the program: dropping it would stop the
@@ -497,6 +501,8 @@ fn start_network(net: net_worker::NetWorker) {
 /// A card just mounted: the boot's checks, then the playlist `settings`
 /// name opened or built — everything the main task used to do before its
 /// first frame, here.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn prepare(card: SdCard, settings: &Settings, status: &Mutex<Status>) -> Handover {
     let mut s = settings.clone();
     // A saved playlist that no longer opens (deleted off-device, another
