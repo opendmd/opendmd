@@ -14,7 +14,7 @@ import { timeCard, scheduleCard } from './schedule.js';
 import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
 import { popup, closeMenu } from './overrides.js';
-import { h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
+import { keepSelect, h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
 const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
@@ -42,6 +42,7 @@ export async function mount(el) {
     transition_ms: h('select', { id: 'st-trans-ms', 'data-num': 1 }, [[250, 'Quick'], [400, 'Normal'], [700, 'Slow']].map(([v, l]) => h('option', { value: v }, l))),
     look: h('select', { id: 'st-look' }, [['colour', 'Full colour'], ['amber', 'Amber'], ['red', 'Red'], ['green', 'Green'], ['blue', 'Blue'], ['white', 'White']].map(([v, l]) => h('option', { value: v }, l))),
     glow: h('select', { id: 'st-glow' }, [['off', 'Off'], ['short', 'Short'], ['long', 'Long']].map(([v, l]) => h('option', { value: v }, l))),
+    formula_keep: keepSelect('st-keep', c.formula_keep),
   };
   f.look.value = c.look ?? 'colour';
   f.glow.value = c.glow ?? 'off';
@@ -180,6 +181,8 @@ export async function mount(el) {
   on('config', (cf) => { f.platforms.value = cf.platforms; platRow(); });
   platRow();
   f.dwell_min.onchange = f.dwell_max.onchange = () => save(['dwell_min', 'dwell_max'], play);
+  f.formula_keep.onchange = () => save(['formula_keep'], play);
+  on('config', (cf) => { f.formula_keep.value = cf.formula_keep || 'turn'; });
   f.transition.onchange = f.transition_ms.onchange = () => save(['transition', 'transition_ms'], trans);
   on('config', (cf) => { bright.ceil(cf.max_brightness); if (!held) bright.set(cf.brightness); });
   // Now's preview of the panel: this browser's choice (it costs the player a download per GIF).
@@ -214,6 +217,7 @@ export async function mount(el) {
           h('label.stack', 'Playlist', f.set),
           h('div.stack', 'Platforms', h('div.row', platVal, h('button', { id: 'st-plat-btn', 'aria-haspopup': 'dialog', onclick: (e) => platSheet(e.currentTarget) }, 'Choose…'))),
           h('label.stack', 'Each GIF stays', h('div.row', f.dwell_min, '–', f.dwell_max, 's')),
+          h('label.stack', 'A Formula you show on the panel stays', f.formula_keep),
           h('label', f.shuffle, 'Shuffle'))))),
     look: () => {
       import('./boot.js').then((m) => m.bootCard(boot));

@@ -149,6 +149,10 @@ pub struct Status {
     pub ordinal: u64,
     pub path: String,
     pub title: String,
+    /// A Formula sent to the panel and kept there (`formula_keep`): the
+    /// ordinal of its start and its seconds (`0`: until something else
+    /// plays). Reported only while that start is on screen.
+    pub kept: Option<(u64, u32)>,
     pub paused: bool,
     /// The main loop's clock (`Duration`s below are since this); a handler
     /// reads it to stamp `t_ms` and to extrapolate the position.
@@ -260,6 +264,7 @@ impl Status {
             ordinal: 0,
             path: String::new(),
             title: String::new(),
+            kept: None,
             paused: false,
             epoch,
             frame_elapsed: Duration::ZERO,

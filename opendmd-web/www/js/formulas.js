@@ -14,7 +14,7 @@
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, store, toast, debounce, saver, base, SITE, drawn } from './util.js';
+import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSelect } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
 import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
 import * as S from './fstore.js';
@@ -357,10 +357,17 @@ function build(root) {
   const sets = h('button', { id: 'psi-settings' }, 'Settings…');
   const pl = plBtn('psi-pl', () => cur);
   const under = overRow('psi-under');
+  // How long Show on panel (and Play now) keeps a Formula there: the panel's `formula_keep`.
+  const keep = app.device && app.src.config && keepSelect('psi-keep', app.config?.formula_keep);
+  if (keep) {
+    keep.onchange = () => app.src.putConfig({ formula_keep: keep.value }).then(() => app.refreshConfig(), (e) => toast('Keep on the panel: ' + e.message, 'bad'));
+    on('config', (c) => { keep.value = c.formula_keep || 'turn'; });
+  }
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
-    h('div.row.acts', show, main, gifBtn), h('div.row.acts', pl, look, sets, shareBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', show, main, gifBtn), keep && h('label.row', { id: 'psi-keep-row' }, 'Keep on the panel', keep),
+    h('div.row.acts', pl, look, sets, shareBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
