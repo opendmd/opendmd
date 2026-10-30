@@ -23,6 +23,7 @@
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
 use opendmd_core::boot::ShowLength;
+use opendmd_core::FormulaKeep;
 use opendmd_core::card_speed::CardSpeed;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
@@ -70,6 +71,8 @@ const KEY_PANEL_SPLIT: &str = "panel_split";
 const KEY_FORMULA_JIT: &str = "formula_jit";
 /// Racing the beam for Formulas (`Panel::set_beam`, the spike), 0/1.
 const KEY_FORMULA_BEAM: &str = "formula_beam";
+/// How long a Formula sent to the panel stays (`FormulaKeep::name`).
+const KEY_FORMULA_KEEP: &str = "formula_keep";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
 const KEY_CARD_SPEED: &str = "card_speed";
 /// The longest `attract` value (`text:` and the message).
@@ -182,6 +185,9 @@ pub struct Settings {
     /// order and written behind the scan, on its refresh grid. Off by
     /// default.
     pub formula_beam: bool,
+    /// How long a Formula sent to the panel (`/api/play`) stays on it: one
+    /// turn (the default), a minute, five, or until something else plays.
+    pub formula_keep: FormulaKeep,
     /// The API key every API and card request must carry when set
     /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
     /// returned by the API (only `api_key_set`).
@@ -246,6 +252,7 @@ impl Default for Settings {
             panel_split: true,
             formula_jit: true,
             formula_beam: false,
+            formula_keep: FormulaKeep::Turn,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
         }
@@ -444,6 +451,10 @@ impl Config {
                 .flatten()
                 .map(|v| v != 0)
                 .unwrap_or(d.formula_beam),
+            formula_keep: self
+                .get_string(KEY_FORMULA_KEEP)
+                .and_then(|s| FormulaKeep::from_name(&s))
+                .unwrap_or(d.formula_keep),
             api_key: self
                 .get_string(KEY_API_KEY)
                 .filter(|k| opendmd_core::access::valid_key(k))
@@ -494,6 +505,7 @@ impl Config {
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;
         self.nvs.set_u8(KEY_FORMULA_BEAM, u8::from(s.formula_beam))?;
+        self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
         Ok(())

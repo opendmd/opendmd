@@ -261,6 +261,9 @@ struct ConfigPatch {
     formula_jit: Option<bool>,
     /// Racing the beam for Formulas (the spike); applied at once.
     formula_beam: Option<bool>,
+    /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
+    /// `hold` (until something else plays).
+    formula_keep: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
@@ -592,6 +595,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.formula_beam {
             next.formula_beam = v;
+        }
+        if let Some(v) = &patch.formula_keep {
+            match opendmd_core::FormulaKeep::from_name(v) {
+                Some(k) => next.formula_keep = k,
+                None => return req.bad_request("formula_keep must be turn, 1m, 5m or hold"),
+            }
         }
         if let Some(v) = &patch.api_key {
             if !v.is_empty() && !opendmd_core::access::valid_key(v) {
@@ -2094,7 +2103,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     format!(
         concat!(
             r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
-            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}}},"paused":{},{}"#,
+            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"#,
@@ -2118,6 +2127,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.position_at(t).as_millis(),
         s.frame,
         formula_json(&s.path),
+        kept_json(s),
         s.paused,
         recent,
         s.entries,
@@ -2168,6 +2178,16 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         crate::follow::status_json(),
         looks,
     )
+}
+
+/// `now_playing`'s `,"kept_s":N` while a Formula sent to the panel is kept
+/// there (`formula_keep`): for `N` seconds from its start (`elapsed_ms`),
+/// `0` until something else plays; empty otherwise.
+fn kept_json(s: &Status) -> String {
+    match s.kept {
+        Some((ordinal, secs)) if ordinal == s.ordinal => format!(r#","kept_s":{secs}"#),
+        _ => String::new(),
+    }
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
@@ -2337,7 +2357,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_beam":{},"api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_beam":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2367,6 +2387,7 @@ fn settings_json(s: &Settings) -> String {
         s.panel_split,
         s.formula_jit,
         s.formula_beam,
+        s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )

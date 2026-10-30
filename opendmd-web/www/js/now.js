@@ -103,6 +103,10 @@ function mountDevice(el) {
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
   const conn = h('span.dot', { id: 'now-conn' });
+  // A Formula kept on the panel (`now_playing.kept_s`, Formulas › Keep on the panel): how long, and the way back.
+  const keptText = h('span.grow', { id: 'now-kept-text' });
+  const keptRow = h('div.row', { id: 'now-kept', hidden: true, style: 'margin-top:8px' }, keptText,
+    h('button.sm', { id: 'now-unkeep', onclick: skip }, 'Back to the playlist'));
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
   // A card the panel can't read (exFAT, as most cards over 32 GB come): say
@@ -113,7 +117,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta, ed),
+      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta, ed, keptRow),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
@@ -214,6 +218,9 @@ function mountDevice(el) {
     followEl.hidden = !fl;
     followEl.textContent = followEl.title = fl ?? '';
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
+    const kept = np.kept_s, left = Math.ceil(Math.max(0, kept * 1000 - np.elapsed_ms) / 1000);
+    keptRow.hidden = kept == null;
+    keptText.textContent = kept == null ? '' : kept ? `Kept on the panel: ${(left / 60) | 0}:${String(left % 60).padStart(2, '0')} left` : 'Kept on the panel until you change it';
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);

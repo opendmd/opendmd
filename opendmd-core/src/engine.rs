@@ -283,6 +283,55 @@ impl DwellPolicy {
     }
 }
 
+/// How long a Formula sent to the panel (`/api/play`) stays on it: the
+/// panel's `formula_keep` setting. Played as a one-off dwell override
+/// ([`Engine::play_now_with`]), so the Formula keeps animating; Next, another
+/// play or a playlist change ends it as it would any file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FormulaKeep {
+    /// One turn of the configured dwell, as any file. The default.
+    #[default]
+    Turn,
+    Minute,
+    FiveMinutes,
+    /// Until something else is played (or Next).
+    Hold,
+}
+
+impl FormulaKeep {
+    pub fn from_name(s: &str) -> Option<FormulaKeep> {
+        Some(match s {
+            "turn" => FormulaKeep::Turn,
+            "1m" => FormulaKeep::Minute,
+            "5m" => FormulaKeep::FiveMinutes,
+            "hold" => FormulaKeep::Hold,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        ["turn", "1m", "5m", "hold"][self as usize]
+    }
+
+    /// The seconds it is kept for, `0` until changed; `None` for one turn.
+    pub fn secs(self) -> Option<u32> {
+        match self {
+            FormulaKeep::Turn => None,
+            FormulaKeep::Minute => Some(60),
+            FormulaKeep::FiveMinutes => Some(300),
+            FormulaKeep::Hold => Some(0),
+        }
+    }
+
+    /// The override to play it under (`Hold`: `u32::MAX` s, ~136 years).
+    pub fn dwell(self) -> Option<Override> {
+        self.secs().map(|s| Override {
+            dwell: Some(Dwell::Secs(if s == 0 { u32::MAX } else { s })),
+            ..Override::default()
+        })
+    }
+}
+
 impl Default for DwellPolicy {
     fn default() -> Self {
         DwellPolicy {
@@ -923,9 +972,15 @@ impl Engine {
     /// dwell, as [`play_now`](Self::play_now) would give it. `None` if what
     /// is on screen or `path` is not a formula (the caller plays it as
     /// usual); `Some(Err)` if it does not compile — what is on screen
-    /// carries on.
+    /// carries on. `ov` bends the fresh dwell as in
+    /// [`play_now_with`](Self::play_now_with) (a kept Formula stays kept).
     #[cfg(feature = "psi")]
-    pub fn retune(&mut self, path: &str, now: Duration) -> Option<io::Result<()>> {
+    pub fn retune(
+        &mut self,
+        path: &str,
+        now: Duration,
+        ov: Option<Override>,
+    ) -> Option<io::Result<()>> {
         let at = self.paused_since.unwrap_or(now);
         let p = self.current.as_mut()?;
         let r = p.gif.synth_mut()?.retune(path)?;
@@ -936,7 +991,7 @@ impl Engine {
             p.path = path.to_string();
             p.started_at = at;
             p.loops = 0;
-            p.timed = None;
+            p.timed = ov.filter(Override::affects_dwell);
             p.done = false;
             self.skip_requested = false;
             // As `play_now`: what comes next is picked again from here.
@@ -1670,7 +1725,7 @@ mod tests {
         e.tick(Duration::ZERO, &mut c).unwrap();
         let a = crate::fx_psi::path("rgb(a, x, 0)", "a=0.5");
         let b = crate::fx_psi::path("rgb(a, y, 0)", "a=1");
-        assert!(e.retune(&a, Duration::ZERO).is_none(), "a GIF on screen");
+        assert!(e.retune(&a, Duration::ZERO, None).is_none(), "a GIF on screen");
         e.play_now(&a, Duration::from_millis(100)).unwrap();
         let mut t = 100;
         while t < 9_000 {
@@ -1678,10 +1733,10 @@ mod tests {
             t += 20;
         }
         assert!(!e.is_transitioning());
-        e.retune(&b, Duration::from_millis(t)).unwrap().unwrap();
+        e.retune(&b, Duration::from_millis(t), None).unwrap().unwrap();
         assert!(!e.is_transitioning());
         let bad = crate::fx_psi::path("gray(nope)", "");
-        assert!(e.retune(&bad, Duration::from_millis(t)).unwrap().is_err());
+        assert!(e.retune(&bad, Duration::from_millis(t), None).unwrap().is_err());
         // The fresh dwell: still on at t + 9 s (past the first one's 10 s).
         let end = t + 9_000;
         while t < end {
@@ -1691,6 +1746,73 @@ mod tests {
         }
         assert_eq!(e.now_playing().unwrap().path, b);
         assert_eq!(c.get(0, 0).r, 255, "the new sliders");
+    }
+
+    /// A Formula kept on the panel (`FormulaKeep`): it outlives the
+    /// configured dwell and keeps animating (never held on a last frame);
+    /// a live edit keeps it kept; one minute ends at a minute; Next ends a
+    /// hold.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_kept_formula_outlives_the_dwell_and_keeps_animating() {
+        let gif = "/gifs/Consoles/NES_A_01.gif";
+        let mut e = engine_with(
+            &[(gif, one_pixel_gif(255, 0, 0))],
+            gif,
+            DwellPolicy {
+                min: Duration::from_secs(3),
+                max: Duration::from_secs(10),
+                min_loops: 1,
+            },
+        );
+        let mut c = Canvas::new();
+        // Runs the engine from `*t` to `end`: how many frames it drew, and
+        // whether `path` was on screen all the while.
+        let mut run = |e: &mut Engine, t: &mut u64, end: u64, path: &str| {
+            let mut frames = 0;
+            let mut stayed = true;
+            while *t < end {
+                if let TickOutcome::Frame { .. } = e.tick(Duration::from_millis(*t), &mut c).unwrap() {
+                    frames += 1;
+                }
+                stayed &= e.now_playing().is_some_and(|p| p.path == path);
+                assert!(!e.is_waiting(), "never held on a last frame ({t})");
+                *t += 50;
+            }
+            (frames, stayed)
+        };
+        assert_eq!(FormulaKeep::Turn.dwell(), None);
+        assert_eq!(FormulaKeep::from_name("5m"), Some(FormulaKeep::FiveMinutes));
+        assert_eq!(FormulaKeep::Hold.name(), "hold");
+
+        // One minute: on at 59 s, through a live edit at 30 s; gone by 62 s.
+        let a = crate::fx_psi::path("gray(t)", "");
+        let b = crate::fx_psi::path("rgb(t, 0, 0)", "");
+        let mut t = 0;
+        e.play_now_with(&a, Duration::ZERO, FormulaKeep::Minute.dwell()).unwrap();
+        let (frames, stayed) = run(&mut e, &mut t, 30_000, &a);
+        assert!(stayed && frames > 100, "{frames}");
+        let keep = FormulaKeep::Minute.dwell();
+        e.retune(&b, Duration::from_millis(t), keep).unwrap().unwrap();
+        let (frames, stayed) = run(&mut e, &mut t, 89_000, &b);
+        assert!(stayed && frames > 100, "kept through the live edit: {frames}");
+        run(&mut e, &mut t, 92_000, "");
+        assert_eq!(e.now_playing().unwrap().path, gif, "the playlist again");
+
+        // Until I change it: on after twenty minutes, still drawing; Next ends it.
+        e.play_now_with(&a, Duration::from_millis(t), FormulaKeep::Hold.dwell()).unwrap();
+        let end = t + 20 * 60_000;
+        let (frames, stayed) = run(&mut e, &mut t, end, &a);
+        assert!(stayed && frames > 1000, "{frames}");
+        e.skip();
+        run(&mut e, &mut t, end + 100, "");
+        assert_eq!(e.now_playing().unwrap().path, gif);
+
+        // Without a keep a Formula gets one turn (the hard cap, 10 s).
+        e.play_now(&a, Duration::from_millis(t)).unwrap();
+        let start = t;
+        run(&mut e, &mut t, start + 11_000, "");
+        assert_eq!(e.now_playing().unwrap().path, gif);
     }
 
     /// Formulas by reference: a bundled one by name and the user's `.psi`
@@ -1789,7 +1911,7 @@ mod tests {
         let ordinal = e.now_playing().unwrap().ordinal;
         let mut t = 140;
         for (path, name) in [(&tunnel, "Tunnel"), (&star, "Starfield"), (&plain, "Formula"), (&tunnel, "Tunnel")] {
-            e.retune(path, Duration::from_millis(t)).unwrap().unwrap();
+            e.retune(path, Duration::from_millis(t), None).unwrap().unwrap();
             e.tick(Duration::from_millis(t + 20), &mut c).unwrap();
             let np = e.now_playing().unwrap();
             assert_eq!((np.path.as_str(), np.title.as_str()), (path.as_str(), name));
@@ -1797,7 +1919,7 @@ mod tests {
             t += 40;
         }
         let bad = crate::fx_psi::path("gray(nope)", "name=Broken");
-        assert!(e.retune(&bad, Duration::from_millis(t)).unwrap().is_err());
+        assert!(e.retune(&bad, Duration::from_millis(t), None).unwrap().is_err());
         assert_eq!(e.now_playing().unwrap().title, "Tunnel");
     }
 

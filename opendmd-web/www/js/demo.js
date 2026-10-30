@@ -40,7 +40,7 @@ function zone() {
 const fresh = () => ({
   c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
     hostname: 'opendmd', ...zone(), transition: 'dissolve', transition_ms: 400, auto_prepare: 'idle', card_speed: 'safe', follow: false, follow_host: '',
-    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', panel_sync: true, panel_split: true, api_key_set: false },
+    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', panel_sync: true, panel_split: true, formula_keep: 'turn', api_key_set: false },
   sched: { rules: [], night: null },
   wake: 0,
   // Panel timing (opendmd_core::panel_timing's Tuner, as tools/mock-device.py
@@ -161,6 +161,7 @@ function putConfig(patch) {
     }
     else if (k == 'follow_code') c.follow_code_set = c.follow_code_set || !!v;
     else if (k == 'dwell_min' || k == 'dwell_max') c[k] = Math.max(1, +v || 1);
+    else if (k == 'formula_keep' && !['turn', '1m', '5m', 'hold'].includes(v)) bad('formula_keep must be turn, 1m, 5m or hold');
     else if (k == 'set' && v && !has(setPath(v))) throw new HttpError(404, 'set not found');
     else if (k in c && k != 'brightness' && k != 'max_brightness') c[k] = v;
     else if (!/^(brightness|max_brightness|panel|panel_confirm)$/.test(k)) bad(`unknown field ${k}`);
