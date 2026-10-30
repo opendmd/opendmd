@@ -27,16 +27,12 @@ async function route() {
   // Old addresses: the Studio's, and the editor's when Formulas were a Library tab.
   if (location.hash === '#studio') { location.replace('#create'); return; }
   if (location.hash === '#library/formula') { location.replace('#formulas/edit'); return; }
-  // Add to my panel (the site's, `&add=1` on either link below): Formulas
-  // saves it and offers what to do with it (js/fadd.js).
-  const add = /^#(formula|bundled)=/.test(location.hash) && /&add=1(&|$)/.test(location.hash);
-  if (add) app.adding = { ...(await import('./js/psikit.js')).parse(location.hash), hash: location.hash.slice(1) };
-  // A shared formula: the Formulas editor (js/formulas.js reads it, and
-  // replaces the address once the editor has it).
-  const f = !add && location.hash.startsWith('#formula=') && (app.formula = location.hash.slice(1));
-  // A bundled one by name (`#bundled=<stem>`): its details, in Formulas.
-  if (!add && location.hash.startsWith('#bundled=')) app.bundled = (await import('./js/psikit.js')).parse(location.hash);
-  const [v, sub = ''] = f ? ['formulas', 'edit'] : app.bundled || app.adding ? ['formulas', ''] : location.hash.slice(1).split('/');
+  // A Formula from the site (its Open on my panel: `#gallery=<slug>` or a
+  // short link's `#remix=<id>`, never the text itself): Formulas fetches it
+  // and opens it in the editor (js/formulas.js keeps it in app.remix).
+  const ref = /^#(gallery=|remix(&|$))/.test(location.hash) && (await import('./js/psikit.js')).from(location.hash);
+  if (ref) app.remix = ref;
+  const [v, sub = ''] = ref ? ['formulas', ''] : location.hash.slice(1).split('/');
   const name = VIEWS.includes(v) ? v : 'now';
   if (name !== current) {
     if (shown) ready[shown]?.hide?.();

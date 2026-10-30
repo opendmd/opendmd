@@ -5,7 +5,7 @@
 //
 // It also copies the site's Psi (SITE_DIR/demo/pkg-psi: the wasm the demo
 // and /f/ draw with) into ./psi/ (gitignored), which src/psi.ts bundles:
-// POST /api/f checks a Formula with the very compiler of the site it
+// the gallery sync checks a Formula with the very compiler of the site it
 // serves, whichever command (dev, deploy, a dry run) reads this file.
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";

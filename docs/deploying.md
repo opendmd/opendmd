@@ -351,16 +351,16 @@ There is no other host.
   fills the built gallery page, which is served until the gallery store
   below is ready. After the deploy, `make site-deploy-built` posts to
   `/api/gallery/sync` so the store holds the new build's examples at once.
-- **Short links** (`https://opendmd.dev/f/<id>`, made by the formula
-  page's Copy link) are stored in the D1 database `opendmd-site`, bound to
-  the Worker as `DB` in `site/worker/cloudflare.config.ts`. Its schema is
-  `site/worker/migrations/*.sql`, applied in order with `cf d1 migrations
-  apply` and recorded in the database's `d1_migrations` table: `make
-  site-d1-migrate` applies the new ones, and `make site-deploy-built`
-  runs it before every deploy, so a deploy whose Worker needs a new table
-  has it first. A schema change is a new numbered file, never an edit of
-  an applied one. An API token for the deploy needs D1 Edit as well as
-  Workers Scripts Edit.
+- **The gallery store** lives in the D1 database `opendmd-site`, bound
+  to the Worker as `DB` in `site/worker/cloudflare.config.ts`. Its schema
+  is `site/worker/migrations/*.sql`, applied in order with `cf d1
+  migrations apply` and recorded in the database's `d1_migrations` table:
+  `make site-d1-migrate` applies the new ones, and `make
+  site-deploy-built` runs it before every deploy, so a deploy whose
+  Worker needs a new table has it first (0003 drops the short links'
+  table: there are no anonymous short links since 2026-10-30). A schema
+  change is a new numbered file, never an edit of an applied one. An API
+  token for the deploy needs D1 Edit as well as Workers Scripts Edit.
 - **Locally**, `make site-dev` and `make site-worker-test` run offline:
   `cf dev` keeps its own D1 in a SQLite file under
   `site/worker/.wrangler/state` (the migrations are applied to it first)

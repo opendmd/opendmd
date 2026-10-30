@@ -8,8 +8,8 @@
 // The wasm loads at the first hover or focus, never before. Nothing
 // happens on a screen with no hover (touch: the thumbnails as they are)
 // or when the visitor prefers less motion. Nothing goes to the console.
-// A tile's source is in its picture's link: `#bundled=<slug>` (the file
-// beside this page, src/<slug>.psi) or `#formula=<source>`.
+// A tile's source is the file its picture's link names: `#gallery=<slug>`,
+// beside this page as src/<slug>.psi.
 
 import { psi, use, frameAt, panel, paint } from '../psiled.js';
 
@@ -24,8 +24,7 @@ let sample = null; // the picture a look draws over, once one is asked for
 async function source(tile) {
   const a = tile.querySelector('a.fpic');
   const q = new URLSearchParams((a && new URL(a.href).hash.slice(1)) || '');
-  if (q.has('formula')) return q.get('formula');
-  const slug = q.get('bundled');
+  const slug = q.get('gallery');
   if (!slug || !/^[\w-]+$/.test(slug)) return null;
   const r = await fetch(`src/${slug}.psi`);
   return r.ok ? r.text() : null;
