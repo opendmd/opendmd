@@ -234,6 +234,9 @@ pub(crate) fn report_line(level: log::Level, line: String) {
 /// starts the play lines when it is done.
 const ROAD_ONLY: bool = false;
 
+/// Only the formula-over-formula sections (`swap`, `swap_card`).
+const SWAP_ONLY: bool = false;
+
 /// Only the JIT spike's rows (jitspike-b: a's full probe ran out of heap
 /// in the looks, 225 s in, and the spike's own rows were done long before).
 const JIT_ONLY: bool = false;
@@ -1806,6 +1809,117 @@ fn swap(root: &str, canvas: &mut Canvas) {
     );
 }
 
+/// A card Formula sent over a card Formula, as the rig did it (owner,
+/// build 664d0ed): Neon city playing from `/formulas/neon-city.psi`, the
+/// file written anew (`PUT /api/files/…`), then `POST /api/play` of the
+/// same path; the same within 200 ms of a skip (what the `PUT` did until
+/// swap-mem2: the GIF's transition held its 24 KB through the compile,
+/// refused at 48 KB free); and Wormhole run and Neon city over each other. Each play goes the way the
+/// main loop sends it (`Engine::retune`, else `play_now_with`), with the
+/// heap made like the rig's (free with a GIF on screen as the owner saw
+/// it). `make emu-probe` requires the summary line.
+#[inline(never)]
+fn swap_card(root: &str, canvas: &mut Canvas) {
+    use opendmd_core::{DwellPolicy, Engine, FileCatalog, Filter, Mode, Scheduler};
+    const NEON: &str = "/formulas/neon-city.psi";
+    const WORM: &str = "/formulas/wormhole-run.psi";
+    const NEON_SRC: &str = include_str!("../../opendmd-web/formulas/neon-city.psi");
+    const WORM_SRC: &str = include_str!("../../opendmd-web/formulas/wormhole-run.psi");
+    // The owner's panel with a GIF on screen (build 664d0ed).
+    const RIG_FREE_WITH_GIF: u32 = 95_060;
+    let write = |file: &str, src: &str| std::fs::write(format!("{root}{file}"), src);
+    if write(NEON, NEON_SRC).and_then(|_| write(WORM, WORM_SRC)).is_err() {
+        say!(error, "psi-probe: card formula over card formula: could not write the files");
+        return;
+    }
+    let gif = std::fs::read_to_string(format!("{root}/filelist.txt"))
+        .ok()
+        .and_then(|l| l.lines().map(str::trim).find(|p| p.ends_with(".gif")).map(str::to_string));
+    let Some(gif) = gif else {
+        say!(error, "psi-probe: card formula over card formula: no GIF in filelist.txt");
+        return;
+    };
+    let Ok(cat) = FileCatalog::build(std::io::Cursor::new(format!("{gif}\n").into_bytes()), &Filter::new()) else {
+        return;
+    };
+    let mut e = Engine::new(Box::new(cat), Scheduler::new(1, Mode::Sequential, 0), DwellPolicy::default(), Box::new(crate::sd::SdSource));
+    e.set_transition_gate(Some(crate::transition_gate));
+    let mut t = Duration::ZERO;
+    let mut run = |e: &mut Engine, canvas: &mut Canvas, ms: u64| {
+        let end = t + Duration::from_millis(ms);
+        while t < end {
+            t += Duration::from_millis(20);
+            if let Err(err) = e.tick(t, canvas) {
+                say!(error, "psi-probe: card formula over card formula: tick: {err}");
+            }
+        }
+        t
+    };
+    let keep = opendmd_core::FormulaKeep::Hold.dwell();
+    // As main.rs's `PlayNow` sends it.
+    let play = |e: &mut Engine, canvas: &mut Canvas, path: &str, now: Duration| -> std::io::Result<()> {
+        crate::room_for_formula(Some(&mut *e), canvas);
+        match e.retune(path, now, keep) {
+            Some(r) => r,
+            None => e.play_now_with(path, now, keep),
+        }
+    };
+    let on = |e: &Engine, p: &str| e.now_playing().is_some_and(|n| n.path == p);
+    let blk = crate::state::largest_free_block;
+    // The rig's heap: a GIF on screen, then ballast in 4 KB pieces down to
+    // what the owner saw.
+    let now = run(&mut e, canvas, 0);
+    let _ = e.play_now(&gif, now);
+    run(&mut e, canvas, 800);
+    let mut ballast: Vec<Vec<u8>> = Vec::new();
+    let _ = ballast.try_reserve(64);
+    while heap() > RIG_FREE_WITH_GIF + 4096 && ballast.len() < ballast.capacity() {
+        let mut v = Vec::new();
+        if v.try_reserve_exact(4096 - 16).is_err() {
+            break;
+        }
+        v.resize(4096 - 16, 1u8);
+        ballast.push(v);
+    }
+    say!(info, "psi-probe: card formula over card formula: a GIF on screen, {} B free (largest {} B; the rig {RIG_FREE_WITH_GIF})", heap(), blk());
+    let mut rows: Vec<String> = Vec::new();
+    let mut step = |e: &mut Engine, canvas: &mut Canvas, what: &str, path: &str, skip_first: bool| {
+        let now = run(e, canvas, 0);
+        if skip_first {
+            // A skip 200 ms before (what `PUT` of the file on screen did
+            // until swap-mem2): the next file's transition still running.
+            e.skip();
+            run(e, canvas, 200);
+        }
+        let (h, b) = (heap(), blk());
+        let now = if skip_first { run(e, canvas, 0) } else { now };
+        let r = play(e, canvas, path, now);
+        run(e, canvas, 1_500);
+        let r = match r {
+            Ok(()) if on(e, path) => "played".to_string(),
+            Ok(()) => "NOT on screen".to_string(),
+            Err(err) => format!("NOT played ({err})"),
+        };
+        say!(info, "psi-probe: card formula over card formula: {what}: from {h} B free (largest {b} B): {r}; {} B free while it plays", heap());
+        rows.push(r);
+    };
+    step(&mut e, canvas, "Neon city over the GIF", NEON, false);
+    let _ = write(NEON, &format!("{NEON_SRC}-- v2\n"));
+    step(&mut e, canvas, "Neon city over itself, its file written anew", NEON, false);
+    let _ = write(NEON, NEON_SRC);
+    step(&mut e, canvas, "Neon city over the next file's transition (a skip 200 ms before)", NEON, true);
+    step(&mut e, canvas, "Wormhole run over Neon city", WORM, false);
+    step(&mut e, canvas, "Neon city over Wormhole run", NEON, false);
+    drop(ballast);
+    drop(e);
+    let all = rows.iter().all(|r| r == "played");
+    say!(info,
+        "psi-probe: card formula over card formula: {}; heap {} B free after",
+        if all { "all played".to_string() } else { format!("NOT all played: {rows:?}") },
+        heap()
+    );
+}
+
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
 /// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
 /// reporting the bytes it used; then on the player's compile stack and
@@ -2257,6 +2371,13 @@ pub fn run(root: &str) {
         consoleb_probe(start, stack0);
         return;
     }
+    if SWAP_ONLY {
+        let mut canvas = Canvas::new();
+        swap(root, &mut canvas);
+        swap_card(root, &mut canvas);
+        say!(info, "{DONE}: swap only, heap {} B free (largest {} B), lowest {} B, {} ms in all", heap(), crate::state::largest_free_block(), unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }, start.elapsed().as_millis());
+        return;
+    }
     if ROAD_ONLY {
         road_probe(root, start, stack0);
         return;
@@ -2286,7 +2407,9 @@ pub fn run(root: &str) {
     );
     // What the probe is for first: the compiler's stack.
     worst_stack();
-    let mut out = vec![0u8; psi::W * psi::H * 3];
+    // (Held through the sections below as before: `black_box`, or the
+    // allocation would be elided until its first use.)
+    let out = core::hint::black_box(vec![0u8; psi::W * psi::H * 3]);
     let mut canvas = Canvas::new();
     // Then its heap: every bundled Formula opens, a short heap refuses one.
     bundled(&mut canvas);
@@ -2294,6 +2417,13 @@ pub fn run(root: &str) {
     refs(root, &mut canvas);
     // A formula over a formula with the heap short, through the engine.
     swap(root, &mut canvas);
+    // A card Formula over a card Formula: Neon city's check asks 59.6 KB
+    // with nothing else on screen, so without the probe's 12 KB frame
+    // buffer (the rig has 95 KB free with a GIF on screen; here 73 KB with
+    // that buffer held). Taken again after, in the same place as a rule.
+    drop(out);
+    swap_card(root, &mut canvas);
+    let mut out = vec![0u8; psi::W * psi::H * 3];
 
     // (The examples as effects, with and without the still cache, timed, are
     // not in the full probe: it is the emulator lane's correctness run, and
