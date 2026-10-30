@@ -226,6 +226,12 @@ k = x
 gray(k)
 --- 2:5 inside frame { } only values that are the same for every pixel can be used, but this uses `x` (the pixel's position across, 0 to 1)
 
+=== E301
+k = x*2
+frame { s = k + t }
+gray(s)
+--- 2:13 inside frame { } only values that are the same for every pixel can be used, but `k` (line 1) is per pixel: it reads `x`
+
 === E302
 v = #f80
 gray(v)
@@ -489,6 +495,12 @@ draw { dot(x, 1) }
 gray(ink)
 --- 1:12 inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `x` (the pixel's position across, 0 to 1)
 
+=== E708
+k = py/31
+draw { dot(k, 1) }
+gray(ink)
+--- 2:12 inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but `k` (line 1) is per row: it reads `py`
+
 === E709
 draw { for k < 3 { k = 2
 dot(k, 1) } }
@@ -577,7 +589,7 @@ gray(<<16; + ;frac(w{k})>>)
 loop forever
 v = t + x
 gray(v)
---- 3:1 a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)
+--- 2:1 a colour can't take a value that grows without end and changes across the panel, as `v` (line 2) does: use frac(…) of it, or min(t/k, 1)
 
 === E906
 loop forever
@@ -701,7 +713,12 @@ pal(q, T[x])
 
 === E931
 cycle(fire, x, x)
---- 1:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px
+--- 1:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but this uses `x` (the pixel's position across, 0 to 1)
+
+=== E931
+s = x*2
+cycle(fire, y, s)
+--- 2:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but `s` (line 1) is per pixel: it reads `x`
 
 === E932
 cycle(gray, x, t)

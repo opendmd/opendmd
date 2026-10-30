@@ -41,7 +41,9 @@ mod compile;
 mod draw;
 pub mod fixed;
 mod fuse;
-#[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+// (With `docs` on the host too: `psi check` says whether the panel's JIT
+// takes a formula, and why not.)
+#[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
 pub mod jit;
 pub mod look;
 mod meta;

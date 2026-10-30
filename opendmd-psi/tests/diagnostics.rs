@@ -380,6 +380,8 @@ const NOT_SENTENCES: &[(&str, &str)] = &[
     (", the picture and the turn", "a piece of E934's sentence, an argument of its format!"),
     (" and one value", "a piece of E934's sentence, an argument of its format!"),
     (" ", "a separator in a format! argument"),
+    ("`{}` (line {}) is per {per}: it reads `{w}`", "the end of E301's, E708's and E931's sentences (`Parser::varies`), an argument of their format!"),
+    ("this uses `{w}` ({what})", "the end of E301's, E708's and E931's sentences (`Parser::varies`), an argument of their format!"),
     ("too long", "the lexer's own cap, for the language service's 64 KB sources: `compile` stops at E401 first"),
 ];
 

@@ -93,3 +93,98 @@ fn tokens_say_what_each_is() {
     assert!(kinds.contains(&(Kind::Operator, "*")));
     assert!(!kinds.iter().any(|k| k.1.contains('c') && k.0 == Kind::Name && k.1 == "c"));
 }
+
+/// A value's place, the place of the value that makes it vary, the input.
+type Why = ((usize, usize), Option<(usize, usize)>, String);
+
+/// What `why` and `note` tell, collected.
+#[derive(Default)]
+struct Notes {
+    defined: Vec<(String, (usize, usize), Level)>,
+    why: Vec<Why>,
+    notes: Vec<((usize, usize), String)>,
+}
+
+impl Sink for Notes {
+    fn defined(&mut self, name: &str, at: (usize, usize), _: Defined, _: u16, level: Level) {
+        self.defined.push((name.into(), at, level));
+    }
+    fn why(&mut self, at: (usize, usize), via: Option<(usize, usize)>, input: &str) {
+        self.why.push((at, via, input.into()));
+    }
+    fn note(&mut self, at: (usize, usize), text: &str) {
+        self.notes.push((at, text.into()));
+    }
+}
+
+fn notes(src: &str) -> Notes {
+    let mut n = Notes::default();
+    let mut p = Program::default();
+    compile_observed(src, &mut p, &mut n).unwrap_or_else(|e| panic!("{}", e.render(src)));
+    assert_eq!(p, compile(src).unwrap(), "a sink changed the program of {src:?}");
+    n
+}
+
+/// `why`: the nearest value of the formula's own that makes a value vary
+/// as it does (the chain `psi check --levels` prints), else the built-in.
+#[test]
+fn why_names_the_chain_to_the_input() {
+    let src = "off = px - 64\nbeam = abs(off)*2\nk = py/31\ngray(beam/64 + k)";
+    let n = notes(src);
+    let why = |name: &str| {
+        let d = n.defined.iter().find(|d| d.0 == name).unwrap();
+        let w = n.why.iter().find(|w| w.0 == d.1).unwrap();
+        (w.1.map(|v| &src[v.0..v.1]), w.2.clone(), d.2)
+    };
+    assert_eq!(why("off"), (None, "px".into(), Level::Pixel));
+    assert_eq!(why("beam"), (Some("off"), "px".into(), Level::Pixel));
+    assert_eq!(why("k"), (None, "py".into(), Level::Row));
+}
+
+/// The notes: each says where, and none for what a run already works out
+/// once (a pick or a sum in the column run).
+#[test]
+fn notes_say_where_a_formula_costs_more() {
+    // A per-pixel arm makes the whole pick per pixel.
+    let n = notes("k = px/8 + py\nv = pick(k, t, sin(t), y*x)\ngray(v)");
+    assert!(n.notes.iter().any(|x| x.1.starts_with("arm 3 of this `pick` (`y*x`) is per pixel")), "{:?}", n.notes);
+    // ... but not when the pick is in the column run (k and x by column).
+    let n = notes("k = px/8\nv = pick(k, t, sin(t), x)\ngray(v)");
+    assert!(!n.notes.iter().any(|x| x.1.contains("of this `pick`")), "{:?}", n.notes);
+    assert!(n.notes.iter().any(|x| x.1.starts_with("column run: `k`, `v`")), "{:?}", n.notes);
+    // A sum worked out per pixel that brackets better.
+    let n = notes("X = sin(t)*20\nd = px*py - 64 - X\ngray(d/64)");
+    assert!(
+        n.notes.iter().any(|x| x.1.starts_with("`px*py - 64 - X` works out `- X` for every pixel; bracketed, `px*py - (64 + X)`")),
+        "{:?}",
+        n.notes
+    );
+    // What the still cache kept, and what a moving value kept out.
+    let n = notes("d = sqrt(cx*cx + cy*cy)\nq = d*a + y\ngray(frac(q + t))");
+    assert!(n.notes.iter().any(|x| x.1.contains("it reads `a`, which changes")), "{:?}", n.notes);
+    let src = "near = 8/max(sqrt(cx*cx + cy*cy), 0.1)\ngray(frac(near + t))";
+    let n = notes(src);
+    assert!(n.notes.iter().any(|x| x.1.starts_with("still cache: `near`") && &src[x.0 .0..x.0 .1] == "near"), "{:?}", n.notes);
+    // A draw loop of 32 turns or more runs as lanes.
+    let n = notes("draw { for k < 48 { dot(hash(k, 1)*128, hash(k, 2)*32) } }\ngray(ink)");
+    assert!(n.notes.iter().any(|x| x.1.starts_with("this loop of 48 turns runs as lanes")), "{:?}", n.notes);
+}
+
+/// A sink changes no program: every bundled Formula and experiment.
+#[test]
+fn a_sink_changes_no_program() {
+    for dir in ["../opendmd-web/formulas", "../opendmd-web/experiments"] {
+        let mut stack = vec![std::path::PathBuf::from(dir)];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "psi") {
+                    let src = std::fs::read_to_string(&p).unwrap();
+                    let _ = notes(&src);
+                }
+            }
+        }
+    }
+}

@@ -19,8 +19,11 @@ use opendmd_psi::{compile, Error};
 const USAGE: &str = "usage: psi <command> …
   psi check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K]
                        [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]
+                       [--levels] [--same-as OTHER.psi [--seeds N]]
       does it compile (an error's code, line, column and carets); steps and values; the panel's
-      estimate on the VM and with its JIT; the compile's heap; its length; a PNG contact sheet
+      estimate on the VM and whether its JIT takes it (and why not); the compile's heap; its
+      length; the compiler's notes; a PNG contact sheet. --levels: how often each value is
+      worked out and why; --same-as: the same program and frames as another
   psi fmt [--check | --write] FILE.psi…|-
       the canonical layout: the same program, the comments kept; to stdout, or --write in
       place, or --check (exit 1 naming what isn't formatted)

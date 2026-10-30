@@ -310,9 +310,10 @@ ok: 41 of 256 steps (per frame 11, per row 5, per pixel 25), 2 layers, 3 of 12 r
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
-compiled: ~5.6 ms a frame with the panel's JIT (the VM's ~6.8 ms is what the limits count)
+JIT: yes, ~5.6 ms a frame compiled (the VM's ~6.8 ms is what the limits count)
 compile: 130 tokens, ~16.0 KB of heap; the panel asks for ~34.5 KB free first (about 63 KB is free between items)
 length: 541 B as written (16,384 at most), 364 B as the panel keeps it saved (8,192 at most), 397 B as a path (@formula?src=…: 6,144 to show it, 2,048 for an inline look)
+note: line 14: `d` is worked out for every pixel each frame (~666 ns a pixel): it would be kept in the still cache but it reads `fall`, which changes from frame to frame
 
 $ psi check broken.psi
 error[E203]: line 3, column 1: `v` is already set on line 2 — each name can be set once
@@ -322,6 +323,19 @@ error[E203]: line 3, column 1: `v` is already set on line 2 — each name can be
 
 `psi check` also writes a PNG contact sheet of frames across one loop
 (`--out`, `--frames`, `--a`/`--b`/`--c`, `--clock`, `--hash`, `--listing`).
+It says whether the panel's JIT takes the formula (and why not), and it
+prints the compiler's **notes**, each with its line: a `pick` worked out
+per pixel because one arm is, a sum or product that brackets better
+(`px - 64 - X` works `- X` out for every pixel; `px - (64 + X)` once a
+frame), what the still cache and the column run took, the heaviest value
+they couldn't take and the value that kept it out, and a draw loop run as
+lanes (32 turns or more, costed for 128 a lane). `--levels` lists every
+value with how often it is worked out and the chain that makes it so
+(`beam  per pixel: reads `off` (line 3) ← `px``). `--same-as other.psi`
+proves a rewrite: the same program, or else the same frames (three seeds
+× 120 frames over a loop, or a `loop forever` formula's first 5 minutes,
+the clock moving, and the sliders at 0 and at 1; `--seeds`, `--frames`);
+it exits 1 at the first frame that differs.
 `psi fmt FILE` prints the formula in the one canonical layout (`--write`
 rewrites the file, `--check` names the ones that aren't): one statement a
 line, two spaces inside `{ }`, spaces round `=`, comparisons and `+ -`, and
@@ -970,7 +984,7 @@ Use one of the listed blends.
 
 <h4 id="E301">E301 · a per-pixel value in <code>frame { }</code></h4>
 
-> inside frame { } only values that are the same for every pixel can be used, but this uses `…` (…)
+> inside frame { } only values that are the same for every pixel can be used, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
 
 `frame { }` is worked out once a frame, before any pixel, so it can't read a pixel's position or what is under it.
 
@@ -1276,7 +1290,7 @@ Write only numbers in the table.
 
 <h4 id="E708">E708 · a per-pixel value in <code>draw { }</code></h4>
 
-> inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `…` (…)
+> inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
 
 `draw { }` runs once a frame, before the pixels: there is no pixel position there. Work in pixels, with numbers and the time.
 
@@ -1520,7 +1534,7 @@ Make the tables, sprites and palettes smaller.
 
 <h4 id="E931">E931 · <code>cycle</code> turned by a value that changes along a row</h4>
 
-> `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px
+> `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but … (a value of x or px)
 
 `cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.
 

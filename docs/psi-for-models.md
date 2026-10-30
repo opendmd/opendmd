@@ -668,6 +668,16 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   bytes). `psi check` prints both estimates. So a tunnel's depth and angle
   are free, but `depth*a` is not still (a slider moves): keep the sliders
   out of the values you want kept (`twist = 1 -- try 0 to 3`).
+- **Ask the compiler.** `psi check` prints notes with their lines: what
+  the still cache and the column run took, the heaviest value they could
+  not take and what kept it out, a `pick` made per pixel by one per-pixel
+  arm (`pick(m, a, b, c*px)` is ~2n+2 steps a pixel; `pick(m, a, b, c) +
+  extra` is one), a left-to-right sum or product that works a frame or row
+  part out per pixel (`px - 64 - X` → `px - (64 + X)`; products may round
+  differently in the last bit), and a draw loop of 32+ turns run as lanes
+  (costed for 128 turns a lane). `psi check --levels` gives every value's
+  level and the chain to the input that set it; `psi check --same-as
+  old.psi` proves a rewrite draws the same frames.
 - **noise at a whole z** (`noise(x, y, 0)`, any whole constant third
   value) is ~470 ns, half the 855 of a moving one.
 

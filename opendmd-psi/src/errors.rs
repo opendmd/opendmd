@@ -303,7 +303,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 301,
         title: "a per-pixel value in `frame { }`",
-        sentence: "inside frame { } only values that are the same for every pixel can be used, but this uses `…` (…)",
+        sentence: "inside frame { } only values that are the same for every pixel can be used, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
         fix: "Use only values that are the same everywhere (such as `t`) inside `frame { }`.",
         matches: &["inside frame { } only values that are the same for every pixel"],
     },
@@ -562,7 +562,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 708,
         title: "a per-pixel value in `draw { }`",
-        sentence: "inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `…` (…)",
+        sentence: "inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
         fix: "Use only values that are the same everywhere inside `draw { }`.",
         matches: &["inside draw { } only values that are the same for every pixel"],
     },
@@ -765,7 +765,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 931,
         title: "`cycle` turned by a value that changes along a row",
-        sentence: "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px",
+        sentence: "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but … (a value of x or px)",
         fix: "Turn it by t, a `frame { }` value or py.",
         matches: &["`cycle`'s turn is the same along a row"],
     },
