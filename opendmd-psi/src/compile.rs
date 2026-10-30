@@ -1089,6 +1089,12 @@ const K_SPLIT: u8 = 203;
 /// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
 const WIDE_T: i32 = 0x100;
 
+/// E301, E708, E931, each followed by what makes the value vary
+/// (`Parser::varies_err`).
+const FRAME_ONLY: &str = "`frame { }` is worked out once a frame, before any pixel, but ";
+const DRAW_ONLY: &str = "`draw { }` runs once a frame, before any pixel, but ";
+const CYCLE_ROW: &str = "`cycle` turns a whole row at once (by t, a frame value or py), but ";
+
 /// E901: a value that grows without end where it can't go.
 const GROWS: &str = "`t` grows without end in `loop forever`, and this can't take it: \
 use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max";
@@ -2555,10 +2561,8 @@ impl<'s> Parser<'s> {
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
         }
-        if self.peek().tok == Tok::Dot {
-            if let Some(k) = self.palette_named(name) {
-                return self.palette_entry(t, k);
-            }
+        if let Some(r) = self.special(t, name) {
+            return r;
         }
         if self.reads_table(name) {
             return self.table_read(t);
@@ -2566,9 +2570,6 @@ impl<'s> Parser<'s> {
         if self.peek().tok == Tok::LParen {
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
-            }
-            if name == "ink" && self.lookup_local(name).is_none() {
-                return self.ink_levels(t);
             }
             if let Some(&(_, ar, f)) = FUNCS.iter().find(|e| e.0 == name) {
                 if let F::Glyph(c) = f {
@@ -2654,6 +2655,21 @@ impl<'s> Parser<'s> {
             format!("unknown name `{name}`{}", did_you_mean(s))
         };
         self.fail_at(t, msg)
+    }
+
+    /// The special forms read where a name is: `ink(n)` (unless the
+    /// formula set `ink`) and a palette's `NAME.colour`. Out of line: `name`
+    /// is on the parser's deepest path (the firmware's compile stack).
+    #[inline(never)]
+    fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
+        match self.peek().tok {
+            Tok::LParen if name == "ink" && self.lookup_local(name).is_none() => Some(self.ink_levels(t)),
+            Tok::Dot => {
+                let k = self.palette_named(name)?;
+                Some(self.palette_entry(t, k))
+            }
+            _ => None,
+        }
     }
 
     /// `ink(n)` at `t` (`ink`): the canvas in `n` levels, 1..=255, a
@@ -3047,14 +3063,7 @@ impl<'s> Parser<'s> {
             let at = (st.start, self.toks[self.pos.saturating_sub(1)].get().end.max(st.end));
             if self.dag.level(s) == LV_PIXEL {
                 // E931.
-                return Err(Error::new(
-                    at.0,
-                    at.1,
-                    format!(
-                        "`cycle` turns a whole row at once (by t, a frame value or py), but {}",
-                        self.varies(s)
-                    ),
-                ));
+                return Err(self.varies_err(at, CYCLE_ROW, s));
             }
             // The entry is (floor(v·32) + floor(s·32)) mod 32: the fraction
             // of each is all it reads (a value that grows without end too).
@@ -3316,14 +3325,7 @@ impl<'s> Parser<'s> {
         let id = self.expr(0)?;
         let end = self.toks[self.pos.saturating_sub(1)].get().end;
         if in_frame && self.dag.level(id) > LV_FRAME {
-            return Err(Error::new(
-                start,
-                end.max(start),
-                format!(
-                    "`frame {{ }}` is worked out once a frame, before any pixel, but {}",
-                    self.varies(id)
-                ),
-            ));
+            return Err(self.varies_err((start, end.max(start)), FRAME_ONLY, id));
         }
         if self.in_draw > 0 {
             self.drawable(id, start, end)?;
@@ -4540,14 +4542,17 @@ impl<'s> Parser<'s> {
         if self.dag.level(id) < LV_ROW {
             return Ok(());
         }
-        Err(Error::new(
-            start,
-            end.max(start),
-            format!(
-                "`draw {{ }}` runs once a frame, before any pixel, but {}",
-                self.varies(id)
-            ),
-        ))
+        Err(self.varies_err((start, end.max(start)), DRAW_ONLY, id))
+    }
+
+    /// E301, E708, E931: `head` and what makes `id` vary (out of line:
+    /// the callers are on the parser's deepest path).
+    #[cold]
+    #[inline(never)]
+    fn varies_err(&self, (a, b): (usize, usize), head: &str, id: Id) -> Error {
+        let mut m = String::from(head);
+        m.push_str(&self.varies(id));
+        Error::new(a, b, m)
     }
 
     /// What makes `id` vary across the panel, for an error: "`k` (line 2)
