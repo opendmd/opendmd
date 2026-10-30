@@ -1922,11 +1922,11 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-14:] == ["attract", "look", "glow", "look_formula", "boot_show",
-                              "panel_sync", "panel_split", "formula_jit", "formula_beam", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
+    check(list(cfg0)[-15:] == ["attract", "look", "glow", "look_formula", "boot_show",
+                              "panel_sync", "panel_split", "formula_jit", "formula_beam", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"formula_jit/formula_beam/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
+          f"formula_jit/formula_beam/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-16:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
@@ -3533,6 +3533,7 @@ def mock_pass(browser) -> None:
         studio_smooth_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
+        formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
         formulas_add_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
@@ -4057,6 +4058,83 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
         urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
 
 
+def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
+    """Keep on the panel (config `formula_keep`): on the Formulas page and in
+    Settings › Playback; a Formula shown on the panel stays past the mock's
+    dwell (`now_playing.kept_s`), through a live edit; Now says so and Back
+    to the playlist ends it; a GIF sent to the panel is never kept; one
+    minute shows the time left."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    open_formulas(page)
+    page.click("#psi-ex .psi-tile >> nth=0")
+    opts = page.eval_on_selector_all("#psi-keep option", "els => els.map(e => [e.value, e.textContent])")
+    check(opts == [["turn", "One turn"], ["1m", "1 minute"], ["5m", "5 minutes"], ["hold", "Until I change it"]]
+          and page.input_value("#psi-keep") == "turn" and page.inner_text("#psi-keep-row").startswith("Keep on the panel"),
+          f"keep: Keep on the panel in the Formula's details, one turn by default ({opts})")
+    page.select_option("#psi-keep", "hold")
+    deadline = time.time() + 5
+    while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "hold":
+        time.sleep(0.2)
+    check(get_json(base + "/api/config")["formula_keep"] == "hold", "keep: choosing Until I change it saves formula_keep=hold")
+    clear_toasts(page)
+    page.click("#psi-show")
+    last_toast(page, "ok")
+    st = get_json(base + "/api/status")["now_playing"]
+    ordinal, path = st["ordinal"], st["path"]
+    check(path.startswith("@formula") and st.get("kept_s") == 0, f"keep: Show on panel keeps it until changed (kept_s {st.get('kept_s')})")
+    # Past the mock's 4 s dwell, and through a live edit.
+    time.sleep(5)
+    live = path + "&a=0.25"
+    post_json(base + "/api/play", {"path": live, "live": True})
+    time.sleep(1)
+    st = get_json(base + "/api/status")["now_playing"]
+    check(st["ordinal"] == ordinal and st["path"] == live and st.get("kept_s") == 0,
+          f"keep: still on the panel past the dwell, kept through a live edit (ordinal {st['ordinal']} vs {ordinal}, kept_s {st.get('kept_s')})")
+    goto_view(page, "now")
+    page.wait_for_selector("#now-kept:not([hidden])", timeout=5000)
+    t = page.inner_text("#now-kept-text")
+    check(t == "Kept on the panel until you change it" and page.inner_text("#now-unkeep") == "Back to the playlist",
+          f"keep: Now says it is kept, with Back to the playlist ('{t}')")
+    shot(page, "now-kept", "laptop")
+    page.click("#now-unkeep")
+    page.wait_for_selector("#now-kept", state="hidden", timeout=5000)
+    st = get_json(base + "/api/status")["now_playing"]
+    check(st["ordinal"] != ordinal and not st["path"].startswith("@formula") and "kept_s" not in st,
+          f"keep: Back to the playlist moves on and the keep ends ({st['path'][:40]})")
+    # A GIF sent to the panel is never kept.
+    gif = card_gifs()[0]
+    post_json(base + "/api/play", {"path": gif})
+    st = get_json(base + "/api/status")["now_playing"]
+    check(st["path"] == gif and "kept_s" not in st, "keep: a GIF sent to the panel plays one turn as before")
+    # One minute: the time left on Now.
+    put_json(base + "/api/config", {"formula_keep": "1m"})
+    post_json(base + "/api/play", {"path": "@formula:starfield"})
+    page.wait_for_selector("#now-kept:not([hidden])", timeout=5000)
+    page.wait_for_function("/^Kept on the panel: [01]:\\d\\d left$/.test(document.querySelector('#now-kept-text').textContent)", timeout=5000)
+    t = page.inner_text("#now-kept-text")
+    check(get_json(base + "/api/status")["now_playing"].get("kept_s") == 60 and t in ("Kept on the panel: 1:00 left", "Kept on the panel: 0:59 left", "Kept on the panel: 0:58 left"),
+          f"keep: a minute shows the time left ('{t}')")
+    # Settings › Playback has the same setting (a fresh load: the minute was set by the API).
+    page.goto("about:blank")
+    page.goto(base + "/#settings/play")
+    page.wait_for_selector("#st-keep", timeout=10000)
+    check(page.input_value("#st-keep") == "1m", f"keep: Settings › Playback shows it ({page.input_value('#st-keep')})")
+    page.select_option("#st-keep", "turn")
+    deadline = time.time() + 5
+    while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "turn":
+        time.sleep(0.2)
+    check(get_json(base + "/api/config")["formula_keep"] == "turn", "keep: Settings › Playback saves it (back to one turn)")
+    try:
+        put_json(base + "/api/config", {"formula_keep": "forever"})
+        refused = False
+    except Exception as e:  # noqa: BLE001 (the mock's 400)
+        refused = "400" in str(e)
+    check(refused, "keep: formula_keep refuses a value it doesn't know")
+    post_json(base + "/api/skip", {})
+    page.context.close()
+
+
 def formulas_add_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Add to my panel: the site hands a Formula over as `#formula=…&add=1`
     (or `#bundled=<stem>&add=1`). One from the gallery is saved on the panel
@@ -4093,12 +4171,16 @@ def formulas_add_checks(browser, base: str, overlay: Path, errors: list[str]) ->
           "add to panel: the sheet offers Play now, Add to a playlist, Use as the look")
     shot(page, "formulas-added", "laptop")
     clear_toasts(page)
+    put_json(base + "/api/config", {"formula_keep": "5m"})
     page.click("#psi-added-play")
     t = last_toast(page, "ok")
     want = "/formulas/searchlight.psi?a=0.6"
     cur = wait_playing(base, want)
     check(t == "On the panel: Searchlight" and cur == want and page.locator("#psi-added").count() == 0,
           f"add to panel: Play now plays it by its file, with the slider ({cur}, '{t}')")
+    kept = get_json(base + "/api/status")["now_playing"].get("kept_s")
+    check(kept == 300, f"add to panel: Play now keeps it on the panel as Keep on the panel says (kept_s {kept})")
+    put_json(base + "/api/config", {"formula_keep": "turn"})
     # Again: the same text is not saved twice.
     arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
     head = page.inner_text("#psi-added .mh")

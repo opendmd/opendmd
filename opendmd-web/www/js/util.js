@@ -45,6 +45,8 @@ export const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
 export const isFormula = (p) => p.startsWith('@formula') || /^\/.*\.psi(\?|$)/i.test(p);
 // Drawn by the player, not read as a GIF: a live item or a Formula.
 export const drawn = (p) => p[0] == '@' || isFormula(p);
+// How long a Formula sent to the panel stays (config `formula_keep`): a select of the choices.
+export const keepSelect = (id, v) => h('select', { id }, [['turn', 'One turn'], ['1m', '1 minute'], ['5m', '5 minutes'], ['hold', 'Until I change it']].map(([k, l]) => h('option', { value: k, selected: k == (v || 'turn') }, l)));
 
 export const store = {
   get(key, fallback) {
