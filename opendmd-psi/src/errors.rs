@@ -583,9 +583,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 712,
         title: "the wrong values for `line` or `dot`",
-        sentence: "`line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
+        sentence: "`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
         fix: "Give `line` four values and `dot` two.",
-        matches: &["(pixels up from the bottom left)"],
+        matches: &["(pixels from the top left)"],
     },
     ErrorDoc {
         code: 713,

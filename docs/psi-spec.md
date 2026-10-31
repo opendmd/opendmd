@@ -130,7 +130,7 @@ to it.
 
 - **Levels.** Each value is worked out as rarely as what it reads changes:
   constants once, values of the time, the clock and the controls once a
-  frame (or in `frame { }`), values of `y`, `py`, `cy` and `ty` once a row,
+  frame, values of `y`, `py` and `cy` once a row,
   the rest once a pixel. This changes only the cost, never the result.
 - **Layers** (`layer [blend] [rate N] { … }`) are drawn bottom to top, each
   with its own names and colour, onto what is below with its blend (`over`,
@@ -399,7 +399,7 @@ cycle(glow, wave/6, t/8)
 ### A clock face
 
 `hour` and `minute` are the panel's clock. The hands' angles change once a
-minute, so they go in `frame { }`, worked out once a frame rather than for
+minute, so they are worked out once a frame rather than for
 every pixel. Each hand is a thin box turned by that angle; the dial is a
 ring where the distance from the middle is close to 15.
 
@@ -1322,7 +1322,7 @@ Name the table.
 
 <h4 id="E712">E712 · the wrong values for <code>line</code> or <code>dot</code></h4>
 
-> `line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: … given (`dot`: x, y and an ink)
+> `line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: … given (`dot`: x, y and an ink)
 
 Give `line` four values and `dot` two.
 

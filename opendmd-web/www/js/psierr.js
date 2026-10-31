@@ -86,7 +86,7 @@ const C = [
   [709, 12, "loop counter"],
   [710, 20, "reads a table, and `"],
   [711, 20, "a table needs a name"],
-  [712, 32, "(pixels up from the bottom left)"],
+  [712, 26, "(pixels from the top left)"],
   [713, 33, "inside draw { } go `name = value`"],
   [714, 30, "`ink` needs a `draw { }` block"],
   [715, 28, "`for` goes inside `draw { }`"],
