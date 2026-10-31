@@ -495,7 +495,7 @@ gray(1)
 === E712
 draw { line(0, 0, 9) }
 gray(ink)
---- 1:8 `line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: 3 given
+--- 1:8 `line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: 3 given
 
 === E713
 draw { gray(1) }

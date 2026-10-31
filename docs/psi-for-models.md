@@ -38,14 +38,14 @@ pixel decides for itself" — stars, wireframes, particles — a `draw { }` bloc
 runs **once a frame** before the pixels, loops over small `table`s and draws
 lines and dots into a canvas the pixels read back as `ink` (section 10).
 
-Coordinates: `x` is 0 at the left column to 1 at the right (`x = px/127`);
-`y` is 0 at the **bottom** row to 1 at the top (`y = py/31`). The panel is
-4 times wider than tall, so the built-ins about the middle measure in panel
+Coordinates count from the **top left**, as on a screen, in sprites and in
+fonts: `x` is 0 at the left column to 1 at the right (`x = px/127`); `y`
+is 0 at the **top** row to 1 at the bottom (`y = py/31`). The panel is 4
+times wider than tall, so the built-ins about the middle measure in panel
 heights: `cx` is −2 at the left edge to 2 at the right, `cy` −0.5 at the
-bottom to 0.5 at the top, and `r` (the distance from the middle) and
+top to 0.5 at the bottom, and `r` (the distance from the middle) and
 `angle` are round: `r < 0.4` is a disc, not an ellipse. Or work in pixels
-(`len(px - 63.5, py - 15.5)`). `ty` is the row counted from the top (0 to
-31), as the fonts count.
+(`len(px - 63.5, py - 15.5)`).
 
 Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
 Time `t` is seconds into the loop, always a whole number of frames: 20 ms
@@ -137,9 +137,9 @@ computer.
 
 | name | meaning | varies per |
 |---|---|---|
-| `x`, `y` | 0..1 across (left→right) and up (bottom→top) | pixel / row |
-| `px`, `py` | column 0..127, row 0..31 from the bottom (whole numbers) | pixel / row |
-| `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
+| `x`, `y` | 0..1 across (left→right) and down (top→bottom) | pixel / row |
+| `px`, `py` | column 0..127 from the left, row 0..31 from the top (whole numbers) | pixel / row |
+| `i` | pixel number 0..4095 from the top left: `py·128 + px` | pixel |
 | `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`); with `loop forever`, since the formula started, growing without end (section 11) | frame |
 | `seed` | `loop forever` only: 0..1, the same for a whole play, a new one each time it plays (section 11) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
@@ -148,20 +148,17 @@ computer.
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
 | `cx` | across from the middle in panel heights, −2..2: `(x − 0.5)·4` | pixel |
-| `cy` | up from the middle, −0.5..0.5: `y − 0.5` | row |
+| `cy` | down from the middle, −0.5..0.5: `y − 0.5` | row |
 | `r` | the distance from the middle, in panel heights: `len(cx, cy)` (0.5 touches the top and bottom) | pixel |
-| `angle` | the angle about the middle in turns, −½..½, 0 to the right, ¼ up: `atan2(cy, cx)` | pixel |
-| `ty` | the row from the **top**, 0..31 (whole numbers): `31 − py` | row |
+| `angle` | the angle about the middle in turns, −½..½, 0 to the right, ¼ down (clockwise): `atan2(cy, cx)` | pixel |
 | `ink` | what the `draw { }` block put at this pixel, 0..1 (section 10) | pixel |
 
-`cx cy r angle ty` are exactly the formulas after their colons: the same
+`cx cy r angle` are exactly the formulas after their colons: the same
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
-are 0. Built-in names, function names, palette names and keywords (`loop
-frame layer part use draw for table`) cannot be set (except `digit`,
-`glyph`, `bit`, `pick`, `cx`, `cy`, `r`, `angle`, `ty`, `ink`, `line`,
-`dot`, `seed` and `forever`, added later, so formulas saved with those names
-still work: a name a formula sets is that name; don't use them as names in
-new ones).
+are 0. **Any built-in value or function name may be set as your own**
+(`b = 0.5`, `r = 3`, `len = 2`): from then on the name is yours (a call,
+`len(…)`, is still the function). Only the words of the language (`loop
+layer part use draw for table`) and palette names can't be names.
 
 ### What a formula says it is: the declarations
 
@@ -248,7 +245,7 @@ gray(size)
 **Picking.** `pick(k, a, b, c)` is the chain `k < 0 ? 0 : k < 1 ? a : k <
 2 ? b : k < 3 ? c : 0`, byte for byte, but one step a pixel when `k` varies
 per pixel and the values it picks from don't (numbers, characters,
-`frame { }` values, anything per row): a digit's value from the clock, a
+per-frame values, anything per row): a digit's value from the clock, a
 letter of a word (`pick(cell, 'H', 'I')`), a colour (section 6). When the
 values vary per pixel it is that chain of compares and selects.
 
@@ -312,7 +309,7 @@ pal(dusk, floor(y*5)/4)      -- five bands, bottom to top
 **Palette cycling.** `cycle(P, v, s)` (also `* k` and `cycle(P, v, s,
 cover)`, as `pal`) is palette P turned by `s`: entry `(floor(v·32) +
 floor(s·32)) mod 32`, so both wrap (where `pal` clamps). `s` may not vary
-along a row (E931: a value of `t`, a `frame { }` value, or a row value
+along a row (E931: a value of `t`, another per-frame value, or a row value
 like `py/40`, which turns the palette per row: copper bars). P is a
 built-in palette or the formula's own, never `gray` (E932); each distinct
 (P, s) takes one of the formula's three palette slots, with its own
@@ -383,7 +380,7 @@ layer multiply { gray(py % 2 ? 1 : 0.6) }
 `over` by default. Per 8-bit channel, `d` below, `s` the layer's colour:
 over `s`; add `min(255, d + s)`; multiply `d·s/255`; screen `d + s − d·s/255`;
 max; min. Then coverage moves `d` towards that result. A layer has its own
-names (two layers may both set `v`) and may have its own `frame { }`; it
+names (two layers may both set `v`); it
 sees names set before it outside the layers, but may not set them again.
 `loop`, `fps` and `part` go outside layers. Layers do not nest. A layer under an
 opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
@@ -433,7 +430,7 @@ layer { p }
 layer add { p(1 - x, y, 0.5) }
 ```
 
-- `part NAME { … }` holds a whole formula: `loop`, `frame { }`, names,
+- `part NAME { … }` holds a whole formula: `loop`, names,
   layers, parts, and (optionally) a colour line. It draws nothing until
   used. It sees **only its own names** and the built-ins: outer names are
   invisible inside, and its names are invisible outside except as `p.v`.
@@ -478,9 +475,9 @@ draw {                      -- once a frame, before the pixels; the canvas start
 pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
 ```
 
-- **Coordinates are pixels**, x across from the left (0..127), y **up from
-  the bottom** (0..31), as `px` and `py`; fractions round to the nearest
-  pixel (½ goes up). Anything off the panel is clipped; ends are held to
+- **Coordinates are pixels**, x across from the left (0..127), y **down
+  from the top** (0..31), as `px` and `py`; fractions round to the nearest
+  pixel (½ goes up to the next whole number). Anything off the panel is clipped; ends are held to
   −512..639 × −512..543.
 - **Ink** is 0..1 (default 1; `line` with one ink uses it at both ends): a
   line's ink runs evenly from `v0` at its start to `v1` at its end in 1/255
@@ -488,12 +485,12 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   never darken and near edges beat far ones without sorting. No
   antialiasing: one pixel wide, as the Starfield and Wireframe cube examples draw.
 - **Inside `draw { }`** only values that are the same for every pixel: `t`,
-  the clock, the sliders, `frame { }` values, tables, loop counters. A loop
+  the clock, the sliders, values made from those, tables, loop counters. A loop
   counts with a literal number; loops nest two deep; the loops' turns in a
   frame (each run of a body counts one, an inner loop's every run) are at
   most 2,048. A value inside a loop that doesn't use its counter is worked
   out once a frame anyway (hoisting, as everywhere). Names set in `draw` but
-  outside its loops are seen after it, as `frame { }` values are.
+  outside its loops are seen after it.
 - **`ink`** is what was drawn at this pixel. `ink` with no `draw { }` is an
   error; a `draw { }` that nothing shows (no `ink` in a colour that can be
   seen) is left out. One `draw { }` per formula (the formula's, or one
@@ -715,8 +712,9 @@ arithmetic costs the same as `x` arithmetic.
   `(floor(px/8) + floor(py/8)) % 2`.
 - **Random per column/row/pixel**: `hash(px, 7)`, `hash(py, 3)`,
   `hash(px, py)`; changing over time in steps: `hash(px, py + floor(t*12)*61)`.
-- **Per-frame values**: put clock maths in `frame { }` (it's hoisted anyway,
-  but `frame` also catches mistakes and documents intent).
+- **Per-frame values**: a value made only from `t`, the clock and the
+  controls is worked out once a frame by itself (there are no `frame { }`
+  blocks).
 - **Lighten/darken a GIF**: `layer multiply { gray(k) }`; tint:
   `layer multiply { rgb(…) }`; glow: `layer add { … }` or `screen`.
 - **Shapes over a GIF**: `layer { rgb(r, g, b, shape) }` where `shape` is
@@ -725,7 +723,7 @@ arithmetic costs the same as `x` arithmetic.
   `layer { B(x, y, k) }`.
 - **Mirror / tile / zoom a part**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
   `p((x - 0.5)/2 + 0.5, (y - 0.5)/2 + 0.5)`.
-- **Digits and text**: work out, from `px` and `ty`, which cell the pixel
+- **Digits and text**: work out, from `px` and `py`, which cell the pixel
   is in, which character goes there (`pick`, character codes in quotes),
   and the column and row inside the cell; `digit`/`glyph` is the pixel, 0
   or 1, ready for `hsv`'s value, a coverage or `#…*`. Scale by dividing

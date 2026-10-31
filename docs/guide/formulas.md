@@ -165,7 +165,7 @@ Press **+ New formula**, clear the text, and build it up line by line.
    gray(sin(x*2 + t/8)*0.5 + 0.5)
    ```
 
-4. Add a second wave going up and down the panel (`y` is 0 at the bottom, 1
+4. Add a second wave going up and down the panel (`y` is 0 at the top, 1
    at the top), moving the other way and twice as fast. Give the sum a name:
 
    ```
@@ -208,16 +208,15 @@ The [language reference](../psi-spec.md) has all of it in one place.
 | name | what |
 | --- | --- |
 | `x`, `y` | where the pixel is: 0 to 1 across (left to right) and up (bottom to top) |
-| `px`, `py` | the pixel's column, 0–127, and row from the bottom, 0–31 |
+| `px`, `py` | the pixel's column from the left, 0–127, and row from the top, 0–31 |
 | `i` | the pixel's number, 0–4095, from the top left |
 | `t` | seconds into the loop (with `loop forever`, since the formula started) |
 | `seed` | with `loop forever`: 0 to 1, a new one each time it plays |
 | `hour`, `minute`, `second` | the time of day |
 | `a`, `b`, `c` | the controls, in the order the `control` lines declare them (0 to 1 when there is no `control` line) |
 | `w`, `h` | 128 and 32 |
-| `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the bottom to 0.5 at the top |
+| `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the top to 0.5 at the bottom |
 | `r`, `angle` | how far the pixel is from the middle (round, though the panel is 4 times wider than tall: `r < 0.4` is a disc), and its angle round the middle, in turns |
-| `ty` | the pixel's row counted from the top, 0–31 |
 
 **Functions.** Waves and angles are in *turns*, not degrees or radians:
 `sin(0.25)` is 1, and `sin` repeats every 1.
@@ -247,10 +246,9 @@ one the clock and the title cards use: a character is 5 columns by 7 rows
 columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
 Anything outside that, or a character the font hasn't, is 0, so a
 character drawn big is just its column and row worked out from the pixel:
-`digit(7, floor(px/4), floor(ty/4))` draws a 7 four times the size in the
-top-left corner (rows count down from the top here, as `ty` does; `py`
-counts up). `pick` chooses which character goes where:
-`glyph(pick(floor(px/5), 'H', 'I'), px % 5, ty)` writes HI in the top
+`digit(7, floor(px/4), floor(py/4))` draws a 7 four times the size in the
+top-left corner (rows count down from the top, as `py` does). `pick` chooses which character goes where:
+`glyph(pick(floor(px/5), 'H', 'I'), px % 5, py)` writes HI in the top
 left, and nothing after it. Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
 `digit(n, col, row, small)`, or `bold` for chunky 3 by 5 digits (digits
 only): `digit(n, col, row, bold)`; `normal`, the panel's own font, is
@@ -303,7 +301,7 @@ wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
 cycle(glow, wave/6, t/8)
 ```
 
-`s` must be the same along a row: the time, a value from `frame { }`, or
+`s` must be the same along a row: the time, a per-frame value, or
 one that changes with the row (`py`). Turning by the row is how the
 copper-bar skies of the 16-bit machines were made: `cycle(sunset, 0, t/6
 + py/40)` gives each row its own place in the palette. It takes `* k` and
@@ -473,7 +471,7 @@ hsv(x, 0.6, ink)
 ```
 
 - `line(x0, y0, x1, y1)` and `dot(x, y)` work in pixels: across from the
-  left, **up from the bottom** (as `px` and `py`). One more value or two is
+  left, **down from the top** (as `px` and `py`). One more value or two is
   the ink: `dot(x, y, 0.5)`, or `line(…, 1, 0.2)` fading from one end to
   the other. Where lines cross, the brighter one wins.
 - `for k < 12 { … }` runs its lines with `k` = 0, 1, … 11 (up to 1,024;
@@ -508,13 +506,13 @@ sprite ship {
   .WWWWWW.
   W.W..W.W
 }
-s = ship[px - 60, ty - 12]
+s = ship[px - 60, py - 12]
 mix(#000010, #80c0ff, s)
 ```
 
 `ship[u, v]` is the number of the character at column `u` and row `v`,
 counted from the sprite's top left (and 0 outside it), so moving it is
-adding to `px` and `ty`, and making it bigger is dividing them. The key
+adding to `px` and `py`, and making it bigger is dividing them. The key
 comes first; up to 16 characters (not spaces, or `; { } , - /`), rows up
 to 64 characters wide and 32 tall. Use the numbers for colours —
 `pick(k, #000, #f00, #ff0)` — or for brightness. A sprite's pixel costs a

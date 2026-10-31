@@ -4716,9 +4716,9 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 if line {
-                    format!("`line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: {k} given")
+                    format!("`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: {k} given")
                 } else {
-                    format!("`dot` takes x, y (pixels up from the bottom left) and an ink: {k} given")
+                    format!("`dot` takes x, y (pixels from the top left) and an ink: {k} given")
                 },
             );
         }
