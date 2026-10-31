@@ -1913,6 +1913,18 @@ const MAX_WORK: usize = 1536;
 /// brackets and operators around it): bounds the parser's stack.
 const PART_DEPTH: usize = 3;
 
+/// `fn NAME(a, b) = value` or `fn NAME(a, b) { … }`: a function, read
+/// again (its tokens `body..end`) with its values bound at each call.
+#[derive(Clone)]
+struct Func<'s> {
+    name: &'s str,
+    params: Vec<&'s str>,
+    body: usize,
+    end: usize,
+    /// `{ … }`: lines that draw (called on a line of their own in draw).
+    block: bool,
+}
+
 struct Local<'s> {
     name: &'s str,
     id: Id,
@@ -2065,6 +2077,10 @@ struct Parser<'s> {
     /// in loops), the loops' counts around it, loops numbered so far, and
     /// loop turns a frame.
     draw: Vec<DItem>,
+    /// The formula's functions, and the ones being read (a function can't
+    /// call itself).
+    funcs: Vec<Func<'s>>,
+    calling: Vec<usize>,
     /// The paint palette (0x00RRGGBB; entry 0 none) and where a palette's
     /// 32 entries start in it (palette id, start).
     paint: Vec<u32>,
@@ -2524,6 +2540,9 @@ impl<'s> Parser<'s> {
             return self.table_read(t);
         }
         if self.peek().tok == Tok::LParen {
+            if let Some(k) = self.func_named(name) {
+                return self.call_value(t, k);
+            }
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
             }
@@ -4614,6 +4633,8 @@ impl<'s> Parser<'s> {
                 self.for_loop(t)?;
             } else if word == "if" {
                 self.if_block(t)?;
+            } else if next == Tok::LParen && self.func_named(word).is_some() {
+                self.call_block(t)?;
             } else if next == Tok::LParen && (PAINT_CALLS.contains(&word) || INK_CALLS.contains(&word) && self.paints_with_colour()) {
                 self.paint_call(t)?;
             } else if INK_CALLS.contains(&word) && next == Tok::LParen {
@@ -4820,6 +4841,176 @@ impl<'s> Parser<'s> {
                 DItem::Dot([v[0], v[1], v[2]])
             })?;
         }
+        self.end_of_statement()
+    }
+
+    /// The function called `name`, if the formula has one.
+    fn func_named(&self, name: &str) -> Option<usize> {
+        self.funcs.iter().rposition(|f| f.name == name)
+    }
+
+    /// `fn NAME(a, b) = value` or `fn NAME(a, b) { … }` at `kw`: read
+    /// later, at each call.
+    #[inline(never)]
+    fn fn_def(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.next();
+        if n.tok != Tok::Name || self.tok(self.pos).tok != Tok::LParen {
+            return self.err(kw, "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw");
+        }
+        let name = self.new_name(n, Naming::Value)?;
+        if self.func_named(name).is_some() {
+            return self.err(n, format!("there is already a function `{name}`"));
+        }
+        self.next();
+        let mut params = Vec::new();
+        while self.peek().tok != Tok::RParen {
+            let p = self.next();
+            if p.tok != Tok::Name {
+                return self.err(p, "a function's values are names: `fn name(a, b) = …`");
+            }
+            try_push(&mut params, self.text(p))?;
+            if self.peek().tok == Tok::Comma {
+                self.next();
+            } else if self.peek().tok != Tok::RParen {
+                return Err(self.expected(self.peek(), "`,` or `)`"));
+            }
+        }
+        self.next();
+        let t = self.next();
+        let block = match t.tok {
+            Tok::Assign => false,
+            Tok::LBrace => true,
+            _ => return self.err(t, "after a function's values: `= value`, or `{ … }` for lines that draw"),
+        };
+        let body = self.pos;
+        // To the end of its line (a value) or its `}` (lines).
+        let mut depth = 0i32;
+        loop {
+            let t = self.peek();
+            match t.tok {
+                Tok::Eof if block => return self.err(kw, format!("this `fn {name} {{` is never closed — add `}}`")),
+                Tok::Eof => break,
+                Tok::LBrace | Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RBrace if block && depth == 0 => break,
+                Tok::RBrace | Tok::RParen | Tok::RBracket => depth -= 1,
+                Tok::Newline if !block && depth <= 0 => break,
+                _ => {}
+            }
+            self.next();
+        }
+        let end = self.pos;
+        if end == body {
+            return self.err(kw, format!("function `{name}` has nothing in it"));
+        }
+        try_push(&mut self.funcs, Func { name, params, body, end, block })?;
+        if block {
+            self.next();
+        }
+        self.end_of_statement()
+    }
+
+    /// A call's values at the cursor (after the name), as many as `f` takes.
+    fn call_args(&mut self, t: Token, k: usize) -> Result<Vec<Id>, Error> {
+        let name = self.funcs[k].name;
+        let want = self.funcs[k].params.len();
+        if self.calling.contains(&k) {
+            return self.err(t, format!("`{name}` calls itself: a function can't (there are no loops of calls)"));
+        }
+        let open = self.next();
+        let mut args = Vec::new();
+        if self.peek().tok != Tok::RParen {
+            loop {
+                try_push(&mut args, self.expr(0)?)?;
+                if self.peek().tok == Tok::Comma {
+                    self.next();
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, name));
+        }
+        self.next();
+        if args.len() != want {
+            return self.err(t, format!("`{name}` takes {want} values, but got {}", args.len()));
+        }
+        Ok(args)
+    }
+
+    /// Bind `f`'s values to `args` in a scope of their own (seen from the
+    /// call's), for reading its body; the scope the call was in.
+    fn bind(&mut self, t: Token, k: usize, args: &[Id]) -> Result<u16, Error> {
+        let outer = self.scope;
+        try_push(&mut self.scopes, (outer, false))?;
+        self.scope = (self.scopes.len() - 1) as u16;
+        for (i, &id) in args.iter().enumerate() {
+            let name = self.funcs[k].params[i];
+            try_push(&mut self.locals, Local {
+                name,
+                id,
+                at: t.start,
+                in_frame: false,
+                counter: false,
+                control: false,
+                scope: self.scope,
+            })?;
+        }
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        Ok(outer)
+    }
+
+    /// `name(…)` of a function in a value: its value.
+    #[inline(never)]
+    fn call_value(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        if self.funcs[k].block {
+            let name = self.funcs[k].name;
+            return self.err(t, format!("`{name}` draws: call it on a line of its own inside `draw {{ }}`"));
+        }
+        let args = self.call_args(t, k)?;
+        let outer = self.bind(t, k, &args)?;
+        let save = self.pos;
+        self.pos = self.funcs[k].body;
+        self.calling.push(k);
+        let v = self.expr(0);
+        let at_end = self.pos == self.funcs[k].end;
+        self.calling.pop();
+        self.pos = save;
+        self.scope = outer;
+        self.depth -= 1;
+        let v = v?;
+        if !at_end {
+            let name = self.funcs[k].name;
+            return self.err(t, format!("function `{name}` is one value: `fn {name}(…) = value` (for lines, `{{ … }}`)"));
+        }
+        Ok(v)
+    }
+
+    /// `name(…)` of a function on a line of its own in draw: its lines.
+    #[inline(never)]
+    fn call_block(&mut self, t: Token) -> Result<(), Error> {
+        let k = self.func_named(self.text(t)).unwrap_or(0);
+        if !self.funcs[k].block {
+            let name = self.funcs[k].name;
+            return self.err(t, format!("`{name}` is a value, not lines that draw: use it in one, `v = {name}(…)`"));
+        }
+        self.next();
+        let args = self.call_args(t, k)?;
+        let outer = self.bind(t, k, &args)?;
+        let save = self.pos;
+        self.pos = self.funcs[k].body;
+        self.calling.push(k);
+        let r = self.draw_lines(t);
+        self.calling.pop();
+        self.pos = save;
+        self.scope = outer;
+        self.depth -= 1;
+        r?;
         self.end_of_statement()
     }
 
@@ -5178,6 +5369,7 @@ impl<'s> Parser<'s> {
                 ));
             }
             match self.keyword() {
+                "fn" => self.fn_def(t)?,
                 "loop" => {
                     self.next();
                     if b.loop_v.is_some() {
@@ -5877,6 +6069,8 @@ fn compile_inner<'s>(
         palettes: Vec::new(),
         palette_names: Vec::new(),
         draw: Vec::new(),
+        funcs: Vec::new(),
+        calling: Vec::new(),
         paint: alloc::vec![0],
         paint_pals: Vec::new(),
         drawn: None,

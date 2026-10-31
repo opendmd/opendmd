@@ -72,6 +72,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("spr(s, x, y, flip)", "sprite heart {\n  key . 0, R #e24\n  .R.R.\n  RRRRR\n  .RRR.\n  ..R..\n}\ndraw { spr(heart, 60, 12); spr(heart, 70, 12, 2) }"),
     ("pal(fire, v), gray(v)", "draw { for k < 16 { rectfill(k*8, 0, k*8 + 7, 31, pal(fire, k/15)) } }"),
     ("if c { … } else { … }", "draw { for k < 16 { if k % 2 == 0 { rectfill(k*8, 4, k*8 + 6, 27, #f80) } else { circfill(k*8 + 3, 16, 3, #0ff) } } }"),
+    ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "loop 4\nfn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) < 1\nfn tree(x0, s) {\n  line(x0, 31, x0, 31 - 10*s, #a62)\n  circfill(x0, 31 - 10*s, 3*s, #2a4)\n}\ndraw { for k < 4 { tree(10 + k*30, 1 + k/4) } }\npal(ice, (ring(64 + sin(t/4)*30, 8) + ring(64, 12))*0.8)"),
     ("ink", "draw { line(0, 16, 127, 16) }; #40c0ff * ink"),
     ("ink(16)", "draw { for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)"),
     ("table T = 1, -2, 0.5", "table T = 0.2, 0.6, 1, 0.6; gray(T[floor(x*4)])"),

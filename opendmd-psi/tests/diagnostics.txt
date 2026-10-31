@@ -929,3 +929,51 @@ draw { print("A", 1, 1, #fff, huge) }
 === E727
 draw { pset(1, 1, #fff 2) }
 --- 1:24 `pset(x, y, colour)` (or `dot`): expected `)` here
+
+=== E740
+fn = 2
+gray(x)
+--- 0:0 x
+
+=== E741
+fn f(a) = a
+fn f(b) = b
+gray(f(x))
+--- 0:0 x
+
+=== E742
+fn f(2) = 1
+gray(x)
+--- 0:0 x
+
+=== E743
+fn f(a) a
+gray(x)
+--- 0:0 x
+
+=== E744
+fn f(a) =
+gray(x)
+--- 0:0 x
+
+=== E745
+fn f(a) = f(a)
+gray(f(x))
+--- 0:0 x
+
+=== E746
+fn p(a) { pset(a, 1, #fff) }
+gray(p(x))
+--- 0:0 x
+
+=== E747
+fn f(a) = a b
+gray(f(x))
+--- 0:0 x
+
+=== E748
+fn f(a) = a
+draw { f(1) }
+gray(x)
+--- 0:0 x
+

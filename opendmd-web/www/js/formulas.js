@@ -496,6 +496,7 @@ const DRAW = [
   ['spr(s, x, y, flip)', 'paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both'],
   ['pal(fire, v), gray(v)', 'colours to paint with besides #…: a palette\'s or a gray, v 0 to 1'],
   ['if c { … } else { … }', 'inside draw: only when c is not 0', 'if  {\n  \n}'],
+  ['fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1', 'a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw', 'fn f(a) = '],
   ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],
   ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '],
