@@ -59,29 +59,27 @@ pub const CARD_DWELL: Duration = Duration::from_millis(3000);
 /// A virtual path longer than this is refused (a formula's may be
 /// [`MAX_FORMULA_PATH`]).
 pub(crate) const MAX_PATH: usize = 512;
-/// A formula's inline path (`@formula?src=…`) may be this long: ~6 KB of
-/// compacted, lightly encoded source (`POST /api/play`'s body is 8 KB at
-/// most). `POST /api/play` refuses a longer one with a 413. Playlists and
-/// looks name Formulas by reference instead ([`formula_ref`]): a bundled one
-/// by name, one of the user's by its `.psi` file on the card.
+/// A formula's inline path (`@formula?psb=…`: the compiled Formula,
+/// base64url) may be this long (`POST /api/play`'s body is 8 KB at most).
+/// `POST /api/play` refuses a longer one with a 413. Playlists and looks
+/// name Formulas by reference instead ([`formula_ref`]): a bundled one by
+/// name, one of the user's by its `.psi` file on the card (played from the
+/// compiled `.psb` beside it).
 pub const MAX_FORMULA_PATH: usize = 6144;
 /// An inline formula as the Look setting (`look_formula`, kept in NVS) may be
 /// this long; the web app sets looks by reference.
 pub const MAX_LOOK_PATH: usize = 2048;
-/// A Formula read from a `.psi` file is compacted as it is read
-/// (`fx_psi::read_text`) and may be this long then; the file itself may be
-/// [`MAX_FORMULA_FILE`] (comments and indentation cost nothing).
-pub const MAX_FORMULA_SOURCE: usize = 8192;
-pub const MAX_FORMULA_FILE: usize = 64 * 1024;
+/// A compiled Formula's file (`.psb`, beside its `.psi`) may be this long.
+pub const MAX_FORMULA_FILE: usize = 16 * 1024;
 const MAX_READ: usize = if cfg!(feature = "psi") {
-    MAX_FORMULA_PATH + MAX_FORMULA_SOURCE + 16
+    MAX_FORMULA_PATH + MAX_FORMULA_FILE * 4 / 3 + 16
 } else {
     MAX_PATH
 };
 /// A Formula's name on its path (`&name=`) is cut to this many characters.
 pub const MAX_FORMULA_NAME: usize = 60;
-/// A formula's path starts with this: `@formula?src=<url-encoded
-/// source>[&a=&b=&c=][&fps=][&name=]` ([`crate::fx_psi`]).
+/// A formula's path starts with this: `@formula?psb=<the compiled
+/// Formula, base64url>[&a=&b=&c=][&fps=][&name=]` ([`crate::fx_psi`]).
 pub const FORMULA: &str = "@formula";
 
 /// Is `path` a built-in effect's path from before they were Formulas
@@ -104,13 +102,23 @@ pub fn is_formula(path: &str) -> bool {
 /// file's stem in `opendmd-web/formulas/` (`[a-z0-9-]`, 1-40).
 pub const FORMULA_REF: &str = "@formula:";
 /// A user's Formula on the card: a file with this extension, played as
-/// `/formulas/<stem>.psi[?a=&b=&c=&fps=]`.
+/// `/formulas/<stem>.psi[?a=&b=&c=&fps=]` from the compiled Formula beside
+/// it, [`COMPILED_EXT`] (the player never compiles: the web app writes both).
 pub const FORMULA_EXT: &str = ".psi";
+/// A compiled Formula's file: `<stem>.psb` beside `<stem>.psi`.
+pub const COMPILED_EXT: &str = ".psb";
+
+/// The compiled file for a Formula's `.psi` path (`/formulas/x.psi` ->
+/// `/formulas/x.psb`).
+pub fn compiled_path(file: &str) -> String {
+    let stem = &file[..file.len().saturating_sub(FORMULA_EXT.len())];
+    format!("{stem}{COMPILED_EXT}")
+}
 
 /// How a path names a Formula ([`formula_ref`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormulaRef<'a> {
-    /// `@formula?src=…`: the source on the path.
+    /// `@formula?psb=…`: the compiled Formula on the path.
     Inline,
     /// `@formula:<name>?<opts>`: one of the bundled Formulas (a name that
     /// is not a valid stem is still this: it names none, a 404).
@@ -155,10 +163,11 @@ pub fn valid_formula_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// The bundled Formulas, (name, compacted source), as the host built them in
-/// (the firmware's from `opendmd-web/formulas/`'s `-- bundle` files): what
-/// `@formula:<name>` plays. Nothing until [`set_bundled`].
-pub type Bundled = &'static [(&'static str, &'static str)];
+/// The bundled Formulas, (name, compiled Formula: `opendmd_psi::psb`), as
+/// the host built them in (the firmware's from `opendmd-web/formulas/`'s
+/// `-- bundle` files, compiled at build time): what `@formula:<name>`
+/// plays. Nothing until [`set_bundled`].
+pub type Bundled = &'static [(&'static str, &'static [u8])];
 static BUNDLED: std::sync::OnceLock<Bundled> = std::sync::OnceLock::new();
 
 /// Install the bundled Formulas (once; later calls are ignored).
@@ -166,8 +175,8 @@ pub fn set_bundled(list: Bundled) {
     let _ = BUNDLED.set(list);
 }
 
-/// A bundled Formula's source by name.
-pub fn bundled(name: &str) -> Option<&'static str> {
+/// A bundled Formula's compiled bytes by name.
+pub fn bundled(name: &str) -> Option<&'static [u8]> {
     BUNDLED
         .get()?
         .iter()
@@ -198,20 +207,75 @@ pub fn stem_title(stem: &str) -> String {
     }
 }
 
-/// A virtual stream holding a Formula's text (read from a `.psi` file) and
-/// its options: what the engine plays for a [`FormulaRef::File`]. The
+/// A virtual stream holding a compiled Formula (read from a `.psb` file)
+/// and its options: what the engine plays for a [`FormulaRef::File`]. The
 /// marker can't come from a path ([`open`] refuses control characters).
 pub(crate) const TEXT_MARK: &str = "@formula\u{1}";
 
-/// The in-memory stream for a Formula's `text` with `opts` (`a=0.5&fps=…`).
-pub fn open_formula_text(opts: &str, text: &str) -> Cursor<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(4 + TEXT_MARK.len() + opts.len() + 1 + text.len());
+/// The in-memory stream for a compiled Formula's bytes with `opts`
+/// (`a=0.5&fps=…`): base64url, so the stream stays text.
+pub fn open_formula_bytes(opts: &str, psb: &[u8]) -> Cursor<Vec<u8>> {
+    let b64 = to_base64(psb);
+    let mut bytes = Vec::with_capacity(4 + TEXT_MARK.len() + opts.len() + 1 + b64.len());
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(TEXT_MARK.as_bytes());
     bytes.extend_from_slice(opts.as_bytes());
     bytes.push(1);
-    bytes.extend_from_slice(text.as_bytes());
+    bytes.extend_from_slice(b64.as_bytes());
     Cursor::new(bytes)
+}
+
+/// Bytes as base64url without padding (a path's `psb=`).
+pub fn to_base64(b: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut s = String::with_capacity(b.len() * 4 / 3 + 3);
+    for ch in b.chunks(3) {
+        let n = ch.iter().enumerate().fold(0u32, |n, (i, &v)| n | (v as u32) << (16 - 8 * i));
+        for i in 0..=ch.len() {
+            s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+        }
+    }
+    s
+}
+
+/// [`to_base64`]'s inverse (`None` on anything else).
+pub fn from_base64(s: &[u8]) -> Option<Vec<u8>> {
+    let val = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let mut o = Vec::with_capacity(s.len() * 3 / 4);
+    for ch in s.chunks(4) {
+        if ch.len() == 1 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, &c) in ch.iter().enumerate() {
+            n |= val(c)? << (18 - 6 * i);
+        }
+        for i in 0..ch.len() - 1 {
+            o.push((n >> (16 - 8 * i)) as u8);
+        }
+    }
+    Some(o)
+}
+
+/// A compiled Formula's name, read from its header without loading it
+/// (`opendmd_psi::psb`'s format: "PSB", the ABI, flags, then the name).
+pub fn compiled_name(psb: &[u8]) -> Option<String> {
+    if psb.len() < 6 || &psb[..3] != b"PSB" {
+        return None;
+    }
+    let n = psb[5] as usize;
+    let name = std::str::from_utf8(psb.get(6..6 + n)?).ok()?;
+    let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_FORMULA_NAME).collect();
+    (!name.trim().is_empty()).then_some(name)
 }
 /// The live clock's path (options after `?`: see [`ClockSpec`]).
 pub const CLOCK: &str = "@clock";
@@ -513,17 +577,11 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 /// (its `name "…"` line; else `&name=` on its path, as an older playlist
 /// entry has it; else "Formula"). `None` for anything else.
 pub fn title(path: &str) -> Option<String> {
-    // Without compiling it (2-3 ms and 10 KB on the device), and in builds
+    // From the compiled Formula's header, without loading it, and in builds
     // without Psi (the web app's Recently played). The player ignores `name`.
     match formula_ref(path) {
         Some(FormulaRef::Bundled { name, .. }) => {
-            return Some(
-                bundled(name)
-                    .and_then(declared_name)
-                    .map(|n| n.chars().filter(|c| !c.is_control()).take(MAX_FORMULA_NAME).collect::<String>())
-                    .filter(|n| !n.trim().is_empty())
-                    .unwrap_or_else(|| stem_title(name)),
-            );
+            return Some(bundled(name).and_then(compiled_name).unwrap_or_else(|| stem_title(name)));
         }
         // A file's `name` line is read when it opens (the engine reports
         // it then: `FrameSource::formula_name`); till then, its stem.
@@ -544,9 +602,11 @@ pub fn title(path: &str) -> Option<String> {
             )
             .filter(|n| !n.trim().is_empty())
         };
+        // The name is in the first 330 characters of the base64.
         let name = q()
-            .find_map(|kv| kv.strip_prefix("src="))
-            .and_then(|v| declared_name(&url_decode(v.as_bytes())))
+            .find_map(|kv| kv.strip_prefix("psb="))
+            .and_then(|v| from_base64(&v.as_bytes()[..v.len().min(332) & !3]))
+            .and_then(|b| compiled_name(&b))
             .and_then(clean)
             .or_else(|| {
                 q().find_map(|kv| kv.strip_prefix("name="))
@@ -562,56 +622,6 @@ pub fn title(path: &str) -> Option<String> {
         Spec::Text(t) => Some(t.msg.iter().map(|&b| b as char).collect()),
         Spec::Fx(f) => Some(f.title().to_string()),
         Spec::Boot(_) => Some("Startup".to_string()),
-    }
-}
-
-/// A formula's `name "…"` line, read from its text without compiling it:
-/// the statements at its top whose first word is a declaration (`psi`,
-/// `name`, `about`, `control`, `look`; the compiler allows them nowhere
-/// else), past blank lines, `;` and comments. Text in quotes may hold `;`
-/// and `--`.
-pub(crate) fn declared_name(src: &str) -> Option<String> {
-    let b = src.as_bytes();
-    let mut i = 0;
-    loop {
-        while i < b.len() {
-            match b[i] {
-                b' ' | b'\t' | b'\r' | b'\n' | b';' => i += 1,
-                b'-' | b'/' if b.get(i + 1) == Some(&b[i]) => {
-                    while i < b.len() && b[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                _ => break,
-            }
-        }
-        let start = i;
-        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-            i += 1;
-        }
-        let word = &src[start..i];
-        if !matches!(word, "psi" | "name" | "about" | "control" | "look") {
-            return None;
-        }
-        while b.get(i) == Some(&b' ') || b.get(i) == Some(&b'\t') {
-            i += 1;
-        }
-        if word == "name" {
-            // `name = …` is a value of the formula's: no declarations follow.
-            let rest = src.get(i + 1..)?;
-            return (b.get(i) == Some(&b'"'))
-                .then(|| rest.split(['"', '\n']).next().map(str::to_string))
-                .flatten();
-        }
-        if b.get(i) == Some(&b'=') {
-            return None;
-        }
-        // To the statement's end, outside quotes.
-        let mut quote = false;
-        while i < b.len() && b[i] != b'\n' && (quote || b[i] != b';') {
-            quote ^= b[i] == b'"';
-            i += 1;
-        }
     }
 }
 
@@ -756,7 +766,7 @@ impl<R: Read> SynthSource<R> {
             .strip_prefix(&MAGIC)
             .and_then(|p| std::str::from_utf8(p).ok())
             .unwrap_or("");
-        // A Formula's text, read from its file (`open_formula_text`).
+        // A compiled Formula, read from its file (`open_formula_bytes`).
         if let Some(rest) = path.strip_prefix(TEXT_MARK) {
             let (opts, text) = rest.split_once('\u{1}').unwrap_or((rest, ""));
             #[cfg(not(feature = "psi"))]
@@ -766,10 +776,11 @@ impl<R: Read> SynthSource<R> {
             }
             #[cfg(feature = "psi")]
             {
-                let spec = crate::fx_psi::PsiFx::from_text(text, opts)
+                let psb = from_base64(text.as_bytes()).unwrap_or_default();
+                let spec = crate::fx_psi::PsiFx::from_bytes(&psb, opts)
                     .map(|f| Spec::Fx(crate::fx::Fx::Psi(f)))
                     .map_err(crate::fx_psi::io_error)?;
-                let name = declared_name(text);
+                let name = compiled_name(&psb);
                 return Ok(SynthSource {
                     reader,
                     spec,
@@ -1219,16 +1230,27 @@ fn glow(level: f32) -> Rgb {
     Rgb::new(c(0), c(1), c(2))
 }
 
-/// The bundled list every test installs (the list is set once per process).
-#[cfg(test)]
-pub(crate) const TEST_BUNDLED: Bundled = &[
-    ("red", "name \"Red one\"\nrgb(1, 0, 0)"),
-    ("slider", "control k = 0.25\nrgb(k, 0, 0)"),
-];
-
+/// The bundled list every test installs (the list is set once per
+/// process), compiled here.
 #[cfg(test)]
 pub(crate) fn install_test_bundled() {
-    set_bundled(TEST_BUNDLED);
+    #[cfg(feature = "psi")]
+    {
+        let list: Vec<(&'static str, &'static [u8])> = [
+            ("red", "name \"Red one\"\nrgb(1, 0, 0)"),
+            ("slider", "control k = 0.25\nrgb(k, 0, 0)"),
+        ]
+        .iter()
+        .map(|&(n, s)| (n, &*Box::leak(psi_build(s).into_boxed_slice())))
+        .collect();
+        set_bundled(Box::leak(list.into_boxed_slice()));
+    }
+}
+
+/// A source compiled for the player (tests).
+#[cfg(all(test, feature = "psi"))]
+pub(crate) fn psi_build(src: &str) -> Vec<u8> {
+    opendmd_psi::build(src).unwrap_or_else(|e| panic!("{}", e.render(src)))
 }
 
 #[cfg(test)]
@@ -1761,29 +1783,20 @@ mod tests {
         assert_eq!(frames(&plain), frames(&named));
     }
 
+    #[cfg(feature = "psi")]
     #[test]
     fn a_formulas_title_is_its_name_line() {
-        let p = |src: &str, rest: &str| format!("{FORMULA}?src={src}{rest}");
-        assert_eq!(title(&p("name+%22Big+clock%22%3B+gray(x)", "")).as_deref(), Some("Big clock"));
+        let p = |src: &str, rest: &str| crate::fx_psi::path(src, rest.trim_start_matches('&'));
+        assert_eq!(title(&p("name \"Big clock\"; gray(x)", "")).as_deref(), Some("Big clock"));
         // Before `&name=`, which older lines carry.
-        assert_eq!(title(&p("name+%22Mine%22%3B+gray(x)", "&name=Old")).as_deref(), Some("Mine"));
+        assert_eq!(title(&p("name \"Mine\"; gray(x)", "&name=Old")).as_deref(), Some("Mine"));
         assert_eq!(title(&p("gray(x)", "&name=Old")).as_deref(), Some("Old"));
-        // Below other declarations, with `;` and `--` in their quotes.
-        let src = "psi 1; control k = 0.5 \"a; b -- c\"; about \"x;y\"; name \"Ring; road\"; gray(k)";
-        let enc: String = src.bytes().map(|c| match c {
-            b' ' => "+".to_string(),
-            b'"' | b';' | b'&' | b'+' | b'%' => format!("%{c:02X}"),
-            _ => (c as char).to_string(),
-        }).collect();
-        assert_eq!(title(&p(&enc, "")).as_deref(), Some("Ring; road"));
-        // Not a declaration: below the formula's lines, a value, a comment.
-        assert_eq!(title(&p("gray(x)%3B+name+%22No%22", "")).as_deref(), Some("Formula"));
-        assert_eq!(title(&p("name+%3D+3%3B+gray(name)", "")).as_deref(), Some("Formula"));
-        assert_eq!(title(&p("--+name+%22No%22%0Agray(x)", "")).as_deref(), Some("Formula"));
+        assert_eq!(title(&p("psi 1; control k = 0.5 \"a; b -- c\"; name \"Ring; road\"; gray(k)", "")).as_deref(), Some("Ring; road"));
+        assert_eq!(title(&p("gray(x)", "")).as_deref(), Some("Formula"));
         // Empty or only spaces: the next answer.
-        assert_eq!(title(&p("name+%22+%22%3B+gray(x)", "&name=Kept")).as_deref(), Some("Kept"));
-        // Cut to 60 characters.
-        let long = p(&format!("name+%22{}%22%3B+gray(x)", "é".repeat(80)), "");
+        assert_eq!(title(&p("name \" \"; gray(x)", "&name=Kept")).as_deref(), Some("Kept"));
+        // Cut to 60 characters (the compiler refuses longer).
+        let long = p(&format!("name \"{}\"; gray(x)", "é".repeat(60)), "");
         assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
     }
 

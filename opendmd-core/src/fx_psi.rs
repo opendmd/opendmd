@@ -417,45 +417,36 @@ fn set_stat(i: usize, v: u32) {
     STATS_T.with(|s| s[i].store(v, Ordering::Relaxed));
 }
 
-/// How a formula is compiled: [`psi::compile_into`] in place, unless the
-/// firmware installs another with [`set_compiler`].
-pub type Compiler = fn(&str, &mut psi::Program) -> Result<psi::Info, psi::Error>;
-
-static COMPILER: std::sync::OnceLock<Compiler> = std::sync::OnceLock::new();
-
-/// Install how formulas are compiled (once). The firmware runs the compiler
-/// on a stack of its own: it recurses up to [`psi::MAX_DEPTH`] levels
-/// (~9 KB at the worst on the ESP32), more than the main task (16 KB, much
-/// of it used where a path opens) or the HTTP server (6.5 KB, which checks
-/// an attract effect) can spare.
-pub fn set_compiler(f: Compiler) {
-    let _ = COMPILER.set(f);
-}
-
-// Tests: refuse the next N compiles on this thread with [`psi::NO_MEMORY`]
-// (the firmware's heap check, without a heap to make short).
+// Tests: refuse the next N loads on this thread with [`psi::NO_MEMORY`]
+// (the player's heap, without a heap to make short).
 #[cfg(test)]
 thread_local! {
     static REFUSE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Tests: the next `n` compiles on this thread are refused for the heap.
+/// Tests: the next `n` loads on this thread are refused for the heap.
 #[cfg(test)]
-pub(crate) fn refuse_compiles(n: u32) {
+pub(crate) fn refuse_loads(n: u32) {
     REFUSE.with(|r| r.set(n));
 }
 
-/// Compile `src` into `prog` the installed way.
-pub fn compile_into(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
+/// What a Formula on the card says when its compiled file is not there.
+pub const NOT_PREPARED: &str =
+    "this Formula is not on the card, or not prepared for the panel yet: open the OpenDMD app";
+
+/// Load the compiled Formula `psb` (program `which`) into `prog`: checked
+/// and finished for the player ([`psi::psb::load_into`]).
+fn load_into(psb: &[u8], which: psi::psb::Which, prog: &mut psi::Program) -> Result<(), psi::Error> {
     #[cfg(test)]
     if REFUSE.with(|r| r.replace(r.get().saturating_sub(1)) > 0) {
         prog.clear();
         return Err(no_memory());
     }
-    match COMPILER.get() {
-        Some(f) => f(src, prog),
-        None => psi::compile_into(src, prog),
-    }
+    psi::psb::load_into(psb, which, prog).map_err(|m| psi::Error {
+        start: 0,
+        end: 0,
+        msg: m.to_string(),
+    })
 }
 
 /// Install the clock that turns the governor on (the firmware's
@@ -587,20 +578,11 @@ pub fn tables() -> psi::Tables<'static> {
     }
 }
 
-/// The `@formula?src=…` path for a formula: [`psi::compact`]ed, then
-/// URL-encoded lightly (a space is `+`; `% & + # ?` and anything outside
-/// printable ASCII are `%XX`), with `opts` (`a=0.5&fps=100`) after it.
-/// May be longer than a virtual path may be (512 B): check.
-pub fn path(src: &str, opts: &str) -> String {
-    let mut p = format!("{}?src=", crate::synth::FORMULA);
-    for b in psi::compact(src).bytes() {
-        match b {
-            b' ' => p.push('+'),
-            b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
-            0x21..=0x7e => p.push(b as char),
-            _ => p.push_str(&format!("%{b:02X}")),
-        }
-    }
+/// The `@formula?psb=…` path for a compiled Formula, with `opts`
+/// (`a=0.5&fps=100`) after it. May be longer than a virtual path may be
+/// (512 B): check.
+pub fn path_of(psb: &[u8], opts: &str) -> String {
+    let mut p = format!("{}?psb={}", crate::synth::FORMULA, crate::synth::to_base64(psb));
     if !opts.is_empty() {
         p.push('&');
         p.push_str(opts);
@@ -608,11 +590,19 @@ pub fn path(src: &str, opts: &str) -> String {
     p
 }
 
-/// An `@formula` query: the source, the frame time asked (`fps=`; `None`:
+/// The path for a formula's source, compiled here (the host's tools and
+/// tests; the player never compiles): a source that does not compile gives
+/// a path that does not open.
+#[cfg(any(test, feature = "psi-compiler"))]
+pub fn path(src: &str, opts: &str) -> String {
+    path_of(&psi::build(src).unwrap_or_else(|_| b"not compiled".to_vec()), opts)
+}
+
+/// An `@formula` query: the compiled Formula, the frame time asked (`fps=`; `None`:
 /// the formula's `fps N`, else 20 ms), the sliders (`None`: not on the
 /// path, so the formula's declared default: `psi::Meta::values`).
 struct Query<'a> {
-    src: std::borrow::Cow<'a, str>,
+    psb: std::borrow::Cow<'a, [u8]>,
     delay_ms: Option<u8>,
     sliders: [Option<i32>; 3],
 }
@@ -621,15 +611,15 @@ struct Query<'a> {
 /// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
 pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
 
-/// What follows `@formula` on a path: `?src=…&…` (or the query alone,
-/// `src=…`), or `:<name>?<opts>` for a bundled Formula (any `src=` there is
+/// What follows `@formula` on a path: `?psb=…&…` (or the query alone,
+/// `psb=…`), or `:<name>?<opts>` for a bundled Formula (any `psb=` there is
 /// ignored: the name says what plays).
 fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
     let Some(named) = rest.strip_prefix(':') else {
         return Ok(query(rest.trim_start_matches('?')));
     };
     let (name, opts) = named.split_once('?').unwrap_or((named, ""));
-    let src = crate::synth::valid_formula_name(name)
+    let psb = crate::synth::valid_formula_name(name)
         .then(|| crate::synth::bundled(name))
         .flatten()
         .ok_or_else(|| psi::Error {
@@ -638,66 +628,43 @@ fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
             msg: NO_SUCH_FORMULA.to_string(),
         })?;
     let mut q = query(opts);
-    q.src = std::borrow::Cow::Borrowed(src);
+    q.psb = std::borrow::Cow::Borrowed(psb);
     Ok(q)
 }
 
-/// A Formula's `text` (read from its file) with `opts` (`a=0.5&fps=100`).
-fn with_text<'a>(text: &'a str, opts: &str) -> Query<'a> {
+/// A compiled Formula (read from its file) with `opts`.
+fn with_bytes<'a>(psb: &'a [u8], opts: &str) -> Query<'a> {
     let mut q = query(opts);
-    q.src = std::borrow::Cow::Borrowed(text);
+    q.psb = std::borrow::Cow::Borrowed(psb);
     q
 }
 
-/// A `.psi` file's Formula as it is read, a line at a time: lines that are
-/// only a comment (`--`, `//`) or blank are left out and the rest trimmed,
-/// so comments and indentation mostly never reach the heap (a comment after
-/// code stays: the compiler skips it). Not `psi::compact`, whose code would
-/// cost the firmware 1.7 KB.
-/// `InvalidInput` ("too long for the panel") past
-/// [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE) compacted or
-/// [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE) read.
-pub fn read_text<R: std::io::BufRead>(mut r: R) -> std::io::Result<String> {
-    use crate::synth::{MAX_FORMULA_FILE, MAX_FORMULA_SOURCE};
-    let too_long = || {
-        std::io::Error::new(
+/// A compiled Formula's file (`.psb`), read whole; `InvalidInput` ("too
+/// long for the panel") past [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE).
+pub fn read_psb<R: std::io::Read>(r: R) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let max = crate::synth::MAX_FORMULA_FILE;
+    let mut b = Vec::new();
+    r.take(max as u64 + 1).read_to_end(&mut b)?;
+    if b.len() > max {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "this Formula is too long for the panel",
-        )
-    };
-    let (mut out, mut line, mut read) = (String::new(), String::new(), 0usize);
-    loop {
-        line.clear();
-        let n = r.read_line(&mut line)?;
-        if n == 0 {
-            return Ok(out);
-        }
-        read += n;
-        if read > MAX_FORMULA_FILE {
-            return Err(too_long());
-        }
-        let code = line.trim();
-        if code.is_empty() || code.starts_with("--") || code.starts_with("//") {
-            continue;
-        }
-        out.push_str(code);
-        out.push('\n');
-        if out.len() > MAX_FORMULA_SOURCE {
-            return Err(too_long());
-        }
+        ));
     }
+    Ok(b)
 }
 
 fn query(query: &str) -> Query<'static> {
     let mut q = Query {
-        src: std::borrow::Cow::Borrowed(""),
+        psb: std::borrow::Cow::Borrowed(&[]),
         delay_ms: None,
         sliders: [None; 3],
     };
     for kv in query.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
         match k {
-            "src" => q.src = std::borrow::Cow::Owned(crate::synth::url_decode(v.as_bytes())),
+            "psb" => q.psb = std::borrow::Cow::Owned(crate::synth::from_base64(v.as_bytes()).unwrap_or_default()),
             "fps" => {
                 q.delay_ms = match v {
                     "100" => Some(10),
@@ -722,13 +689,13 @@ fn query(query: &str) -> Query<'static> {
     q
 }
 
-/// Compile `q` into `prog` and hold it to what the [`Governor`] can keep in
+/// Load `q` into `prog` and hold it to what the [`Governor`] can keep in
 /// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
 /// slowest step 80 ms) 32 ms. The estimate and the frame time asked (ms:
 /// the path's `fps=`, else the formula's `fps N`, else 20).
 fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
-    compile_into(&q.src, prog)?;
+    load_into(&q.psb, psi::psb::Which::Play, prog)?;
     if let Some((c, t0)) = t0 {
         set_stat(2, c().wrapping_sub(t0));
     }
@@ -857,9 +824,9 @@ impl PsiFx {
         Self::open(&resolve(q)?)
     }
 
-    /// The effect for a Formula's text (read from its file) with `opts`.
-    pub fn from_text(text: &str, opts: &str) -> Result<PsiBox, psi::Error> {
-        Self::open(&with_text(text, opts))
+    /// The effect for a compiled Formula (read from its file) with `opts`.
+    pub fn from_bytes(psb: &[u8], opts: &str) -> Result<PsiBox, psi::Error> {
+        Self::open(&with_bytes(psb, opts))
     }
 
     fn open(q: &Query) -> Result<PsiBox, psi::Error> {
@@ -1566,10 +1533,10 @@ impl FormulaLook {
         Self::open(&resolve(Self::query_of(path))?)
     }
 
-    /// The look for a Formula's text (read from its `.psi` file, as
-    /// [`read_text`] gives it) with `opts`.
-    pub fn from_text(text: &str, opts: &str) -> Result<FormulaLook, psi::Error> {
-        Self::open(&with_text(text, opts))
+    /// The look for a compiled Formula (read from its `.psb` file) with
+    /// `opts`.
+    pub fn from_bytes(psb: &[u8], opts: &str) -> Result<FormulaLook, psi::Error> {
+        Self::open(&with_bytes(psb, opts))
     }
 
     fn open(q: &Query) -> Result<FormulaLook, psi::Error> {
@@ -1600,13 +1567,9 @@ impl FormulaLook {
     }
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
-        crate::fx_psi::compile_into(&q.src, prog)?;
-        // Its own `look screen 40` line: the look is that composition (the
-        // controls' defaults stay the formula's: the compiler takes the
-        // part's when the composed text declares none).
-        if let Some(text) = psi::look::declared(&q.src, prog) {
-            crate::fx_psi::compile_into(&text?, prog)?;
-        }
+        // Its look program: its own `look screen 40` line composed in by
+        // the compiler (else the program as it plays).
+        load_into(&q.psb, psi::psb::Which::Look, prog)?;
         if !prog.over() {
             prog.clear();
             return Err(psi::Error {
@@ -2794,7 +2757,7 @@ mod tests {
         assert!(Fx::parse(&path("loop 2\ngray(x)")).is_some());
         assert_eq!(
             PsiFx::from_query("src=gray(tme)").unwrap_err().msg,
-            "unknown name `tme` — did you mean `t`?"
+            psi::psb::NOT_PSB
         );
         // A clone is equal and renders the same.
         let a = Fx::parse(&path(psi::sketches::PLASMA)).unwrap();
@@ -2887,16 +2850,10 @@ mod tests {
             let p = path(src);
             assert!(p.len() <= crate::synth::MAX_PATH, "{name}: {} B", p.len());
         }
-        assert_eq!(
-            path("v = x % 2 + 1 & 3 # é"),
-            "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9"
-        );
-        // Characters in quotes, the URL's own among them, come back as they
-        // went.
+        // The compiled Formula comes back as it went.
         let src = "k = ' ' + '+' + '%' + '#' + '&' + '?' + ';' + '=' -- c\ngray(glyph(k, px % 5, 31 - py))";
         let q = query(path(src).strip_prefix("@formula?").unwrap());
-        assert_eq!(q.src, psi::compact(src));
-        assert_eq!(psi::compile(&q.src).unwrap(), psi::compile(src).unwrap());
+        assert_eq!(&*q.psb, &psi::build(src).unwrap()[..]);
     }
 
     #[test]
@@ -3064,7 +3021,7 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
-        assert_eq!(e.to_string(), "unknown name `tme` — did you mean `t`?");
+        assert_eq!(e.to_string(), psi::psb::NOT_PSB);
         assert!(src.retune("@clock").is_none());
         assert!(src.retune("@formulas").is_none());
         let mut clock =
@@ -3085,7 +3042,7 @@ mod tests {
             (e.kind(), e.to_string().as_str()),
             (
                 ErrorKind::InvalidInput,
-                "unknown name `tme` — did you mean `t`?"
+                psi::psb::NOT_PSB
             )
         );
         // Too heavy: ~48 ms a frame estimated.
@@ -3121,11 +3078,8 @@ mod tests {
             assert_eq!(open(p).unwrap_err().kind(), ErrorKind::InvalidData);
         }
         // A formula may be longer than other virtual paths, up to its limit.
-        let mut src = String::from("loop 8\n");
-        for k in 0..60 {
-            src.push_str(&format!("v{k} = x * {k}.125 + y\n"));
-        }
-        src.push_str("gray(frac(v59))");
+        let terms: Vec<String> = (0..40).map(|k| format!("sin(x*{k}.125 + y)")).collect();
+        let src = format!("loop 8\ngray(frac({}))", terms.join(" + "));
         let p = super::path(&src, "");
         assert!(
             p.len() > crate::synth::MAX_PATH && p.len() <= crate::synth::MAX_FORMULA_PATH,
@@ -3395,7 +3349,7 @@ mod tests {
             FormulaLook::from_path("@formula?src=gray(tme)")
                 .unwrap_err()
                 .msg,
-            "unknown name `tme` — did you mean `t`?"
+            psi::psb::NOT_PSB
         );
         assert_eq!(
             FormulaLook::BUFFER_BYTES,
@@ -3904,26 +3858,4 @@ mod tests {
         assert_eq!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0, before);
     }
 
-    /// A `.psi` file read a line at a time compiles to the same program as
-    /// the file (every example, header and comments too), with no comment
-    /// line or indentation kept.
-    #[test]
-    fn a_file_read_is_the_formula_without_its_comment_lines() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
-        let mut n = 0;
-        for e in std::fs::read_dir(dir).unwrap() {
-            let p = e.unwrap().path();
-            if p.extension().is_none_or(|x| x != "psi") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&p).unwrap();
-            let read = read_text(std::io::Cursor::new(text.replace('\n', "\r\n"))).unwrap();
-            let listing = |s: &str| psi::compile(s).map(|p| p.listing()).map_err(|e| e.msg);
-            assert_eq!(listing(&read), listing(&text), "{}", p.display());
-            assert!(read.lines().all(|l| !l.starts_with("--") && !l.starts_with(' ') && !l.is_empty()), "{}", p.display());
-            assert!(read.len() < text.len(), "{}", p.display());
-            n += 1;
-        }
-        assert!(n > 20);
-    }
 }

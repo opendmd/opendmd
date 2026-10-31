@@ -25,7 +25,7 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 # default (Formulas are the panel's only effects; the demo card and the
 # site's art are recorded from them). `--no-default-features` builds without.
 default = ["psi"]
-psi = ["opendmd-core/psi"]
+psi = ["opendmd-core/psi-compiler"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
