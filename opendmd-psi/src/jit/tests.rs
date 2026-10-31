@@ -893,3 +893,37 @@ fn rate_kernels_race_their_fast_part_over_the_held_picture() {
     }
     assert!(n >= 6, "only {n} frames raced");
 }
+
+/// Damaged programs the player's check takes ([`crate::psb::verify`]) are
+/// lowered and run in the emulator without a stray access (it panics on
+/// one). A kernel that draws differently from the VM is counted, not
+/// failed: the player checks rows of every kernel against the VM and
+/// keeps the VM then.
+#[test]
+fn damaged_programs_lower_safely() {
+    use crate::psb::fuzz::{mutate, sources, Rng};
+    use crate::psb::{load_into, Which};
+    let mut r = Rng(0x2545_f491_4f6c_dd1d);
+    let u = picture();
+    let (mut lowered, mut differ) = (0, 0);
+    for (_, src) in sources() {
+        let b = crate::build(&src).unwrap();
+        for _ in 0..150 {
+            let m = mutate(&mut r, &b);
+            let mut p = Program::default();
+            if load_into(&m, Which::Play, &mut p).is_err() {
+                continue;
+            }
+            let Ok(low) = lower(&p) else { continue };
+            lowered += 1;
+            let mut inputs = golden::inputs((r.next() % 8000) as u32);
+            inputs.set_ms(&p, 1000);
+            let with = With { under: Some(&u), ink: p.draws() };
+            let (got, _) = kernel_frame(&p, &low, &inputs, None, with);
+            if crate::range::inputs_in_range(&p, &inputs) && got != vm_frame(&p, &inputs, None, with) {
+                differ += 1;
+            }
+        }
+    }
+    println!("{lowered} damaged programs lowered, {differ} drew otherwise than the VM");
+}

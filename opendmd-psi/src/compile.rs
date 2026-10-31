@@ -5433,6 +5433,12 @@ pub fn compile_with(
     compile_impl(src, prog, runs, narrow, true, true)
 }
 
+/// [`compile_into`] as the player takes it ([`crate::psb`]): laid out, but
+/// not narrowed or fused (the player does both itself, from the program).
+pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_impl(src, prog, true, false, true, false)
+}
+
 /// [`compile_into`] without the fused runs' markers (`crate::fuse`; the
 /// same bytes): for the tests that compare, and psi-probe's before and
 /// after.
@@ -5526,14 +5532,7 @@ fn compile_full<'s>(
 /// as lanes, decided once. One place, so no way of compiling can miss one.
 #[inline(never)]
 fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
-    if narrow {
-        crate::range::narrow(prog);
-        if fuse {
-            crate::fuse::fuse(prog);
-        }
-    }
-    // The draw loops that run as lanes, decided once (`vector_loop`).
-    prog.mark_lane_loops();
+    prog.finish(narrow, fuse);
 }
 
 /// [`compile_into`], and where the formula's declarations are in `src`
