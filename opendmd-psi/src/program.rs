@@ -1494,6 +1494,21 @@ impl Program {
         Some(vl)
     }
 
+    /// What every program gets after it is laid out, by the compiler or by
+    /// the player after a portable program is loaded ([`crate::psb`]): the
+    /// narrowed steps (`narrow`), the fused runs (`fuse`), and the draw
+    /// loops that run as lanes, decided once.
+    #[inline(never)]
+    pub(crate) fn finish(&mut self, narrow: bool, fuse: bool) {
+        if narrow {
+            crate::range::narrow(self);
+            if fuse {
+                crate::fuse::fuse(self);
+            }
+        }
+        self.mark_lane_loops();
+    }
+
     /// Mark each draw loop that may run as lanes (its FOR's `c`,
     /// [`LANES`]): [`check_vector_loop`](Self::check_vector_loop) once a
     /// program, after the compiler has laid it out (and narrowed and fused

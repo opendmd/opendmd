@@ -48,6 +48,7 @@ pub mod jit;
 pub mod look;
 mod meta;
 mod program;
+pub mod psb;
 mod range;
 mod rate;
 mod still;
@@ -57,7 +58,7 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number, squeeze,
+    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, number, squeeze,
     Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
     MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE, NO_MEMORY,
 };
@@ -88,6 +89,29 @@ pub fn compile(src: &str) -> Result<Program, Error> {
     let mut p = Program::default();
     compile_into(src, &mut p)?;
     Ok(p)
+}
+
+/// A Formula compiled for the player ([`psb`]): its program, and when its
+/// `look` line composes a blend or an amount, its program as a look.
+pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
+    let mut d = Declared::default();
+    let mut tmp = Program::default();
+    compile_declared(src, &mut tmp).map(|x| d = x)?;
+    let name = d
+        .name
+        .and_then(|(a, b)| src.get(a as usize..b as usize))
+        .unwrap_or("");
+    let mut play = alloc::boxed::Box::new(Program::default());
+    compile_portable(src, &mut play)?;
+    let look = match look::declared(src, &play) {
+        Some(composed) => {
+            let mut l = alloc::boxed::Box::new(Program::default());
+            compile_portable(&composed?, &mut l)?;
+            Some(l)
+        }
+        None => None,
+    };
+    Ok(psb::encode(name, &play, look.as_deref()))
 }
 
 /// [`compile`] without the column run and the still cache's run (every
