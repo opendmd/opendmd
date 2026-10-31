@@ -111,9 +111,9 @@ export async function mount(el) {
   // How the chosen one goes on (its look line), or why the panel can't.
   function say() {
     const x = lfs[lf.value], a = x && L.as(M, x), l = x && L.decl(M, x.src);
-    lfEdit.hidden = !x;
-    const t = !x ? '' : a.why || [`${L.BLENDS.find(([v]) => v == l?.look?.[0])?.[1] || 'Over'} at ${l?.look?.[1] ?? 100}%`, a.i[5] & 8 && ((a.i[13] ?? a.i[6]) > 8000 ? 'moves about 25 times a second (a heavy look)' : '')].filter(Boolean).join(' · ');
-    lfWhy.hidden = !t; lfWhy.textContent = t; lfWhy.classList.toggle('bad', !!a?.why);
+    lfEdit.hidden = !x?.src;
+    const t = !x ? '' : x.saved && !x.src ? 'Set elsewhere: open it where it was made to change it' : a.why || [`${L.BLENDS.find(([v]) => v == l?.look?.[0])?.[1] || 'Over'} at ${l?.look?.[1] ?? 100}%`, a.i[5] & 8 && ((a.i[13] ?? a.i[6]) > 8000 ? 'moves about 25 times a second (a heavy look)' : '')].filter(Boolean).join(' · ');
+    lfWhy.hidden = !t; lfWhy.textContent = t; lfWhy.classList.toggle('bad', !!a?.why && !!x.src);
   }
   const saveLook = () => looks(async () => {
     const x = lfs[lf.value];

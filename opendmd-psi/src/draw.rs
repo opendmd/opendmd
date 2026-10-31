@@ -346,12 +346,12 @@ impl Pen {
     }
 }
 
-/// Lighten the pixel at `x`, `y` (up from the bottom) to `v`, if it is on
+/// Lighten the pixel at `x`, `y` (down from the top) to `v`, if it is on
 /// the panel.
 #[inline(always)]
 fn plot(ink: &mut Ink, x: i32, y: i32, v: u8) {
     if (0..W as i32).contains(&x) && (0..H as i32).contains(&y) {
-        let i = (H - 1 - y as usize) * W + x as usize;
+        let i = y as usize * W + x as usize;
         let p = &mut ink.0[i];
         *p = (*p).max(v);
     }

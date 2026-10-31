@@ -2671,7 +2671,8 @@ impl<'s> Parser<'s> {
         for (i, &(c, a, b)) in CENTRED.iter().enumerate() {
             v[6 + i] = self.dag.op(c, [v[a as usize], v[b as usize], 0], (0, 0))?;
         }
-        Ok(v[7 + k])
+        // cx, cy, r, angle (step 9, `ty`, is no name: rows count down).
+        Ok(v[7 + [0, 1, 3, 4][k]])
     }
 
     /// A built-in value here: inside a part, its own `t`, and where it is
@@ -3194,26 +3195,11 @@ impl<'s> Parser<'s> {
     /// not a name already set here (E203).
     fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
-        // (`ink` came after formulas were saved: a name set with it is that
-        // name, as `cx` and the rest.)
-        if let Some(e) = INPUTS.iter().find(|e| e.0 == name && e.0 != "ink") {
-            return self.err(
-                t,
-                format!("`{name}` is built in ({}); pick another name", e.2),
-            );
-        }
-        // Functions added after formulas were saved stay settable names
-        // (a call is still the function): a saved `glyph = …` compiles.
-        if CONSTS.iter().any(|e| e.0 == name)
-            || FUNCS
-                .iter()
-                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
-            || COLOURS
-                .iter()
-                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
-            || KEYWORDS.contains(&name)
-        {
-            return self.err(t, format!("`{name}` is built in; pick another name"));
+        // A built-in value or function's name may be the formula's own (it
+        // then reads as the formula's; a call is still the function): only
+        // the keywords are not names.
+        if KEYWORDS.contains(&name) {
+            return self.err(t, format!("`{name}` is a word of the language; pick another name"));
         }
         if PALETTES.iter().any(|e| e.0 == name) {
             return self.err(
@@ -3345,38 +3331,6 @@ impl<'s> Parser<'s> {
         self.scope != 0 && !self.scopes[self.scope as usize].1
     }
 
-    /// `frame { name = value … }` at `t` (one per formula or part, and one
-    /// per layer).
-    fn frame_block(&mut self, t: Token, seen: &mut bool) -> Result<(), Error> {
-        self.next();
-        if *seen {
-            return self.err(
-                t,
-                if self.in_layer() {
-                    "a layer can have one `frame { }` block"
-                } else {
-                    "there can be one `frame { }` block"
-                },
-            );
-        }
-        *seen = true;
-        self.expect(Tok::LBrace, "`{` (as in `frame { … }`)")?;
-        self.skip_newlines();
-        while self.peek().tok != Tok::RBrace {
-            if self.peek().tok == Tok::Eof {
-                let t = self.peek();
-                return self.err(t, "`frame {` is never closed: add `}`");
-            }
-            if !self.is_assignment() {
-                let t = self.peek();
-                return self.err(t, "only `name = value` lines can go inside frame { }");
-            }
-            self.assignment(true)?;
-            self.skip_newlines();
-        }
-        self.next();
-        self.end_of_statement()
-    }
 
     /// Whether the statement at the cursor is a name, maybe a bracket, and
     /// nothing else (`p` or `p(x*2, y)`: a part's colour, not `p.v + 1`).
@@ -3582,7 +3536,6 @@ impl<'s> Parser<'s> {
         let outer = self.scope;
         try_push(&mut self.scopes, (outer, false))?;
         self.scope = (self.scopes.len() - 1) as u16;
-        let mut seen_frame = false;
         let mut colour: Option<((Vec<Colour>, bool), Token)> = None;
         self.skip_newlines();
         loop {
@@ -3624,7 +3577,7 @@ impl<'s> Parser<'s> {
                         "`fps` is the whole formula's: put it on a line of its own, outside the layers",
                     )
                 }
-                "frame" => self.frame_block(t, &mut seen_frame)?,
+                _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
                 "draw" | "table" | "for" => return Err(self.misplaced(t)),
                 _ if self.is_sprite() || self.is_palette() => return Err(self.misplaced(t)),
                 _ if self.is_assignment() => self.assignment(false)?,
@@ -4808,7 +4761,6 @@ impl<'s> Parser<'s> {
             rates: Vec::new(),
         };
         let mut last: Option<Token> = None;
-        let mut seen_frame = false;
         self.skip_newlines();
         self.header(end == Tok::Eof)?;
         loop {
@@ -4857,7 +4809,7 @@ impl<'s> Parser<'s> {
                         return self.err(t, "`fps` is already set");
                     }
                 }
-                "frame" => self.frame_block(t, &mut seen_frame)?,
+                _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
                 "layer" => {
                     let (cs, ct, rate) = self.layer(t)?;
                     if rate > 0 {

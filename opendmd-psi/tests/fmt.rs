@@ -186,7 +186,7 @@ fn the_layout() {
         ("control k -1..1 = -0.5 \"K\"\ngray(k)", "control k -1..1 = -0.5 \"K\"\ngray(k)\n"),
         ("control m = calm,wild\ngray(m)", "control m = calm, wild\ngray(m)\n"),
         ("layer add {\n\n      v=x   -- a note\n\n\n   gray(v)\n\n}", "layer add {\n  v = x -- a note\n\n  gray(v)\n}\n"),
-        ("frame { h = hour%12; m = minute }\nlayer { gray(h) }", "frame {\n  h = hour%12\n  m = minute\n}\nlayer {\n  gray(h)\n}\n"),
+        ("h = hour%12; m = minute\nlayer { gray(h) }", "h = hour%12\nm = minute\nlayer {\n  gray(h)\n}\n"),
         ("q = px -- the column\nkk = floor(q/32)    -- which digit\n\nn = 1  -- one\ngray(n)", "q = px           -- the column\nkk = floor(q/32) -- which digit\n\nn = 1 -- one\ngray(n)\n"),
         ("-- top\n\n\nloop 4\n  -- own line\ngray(x)\n\n", "-- top\n\nloop 4\n-- own line\ngray(x)\n"),
         ("v = not x < 0.5 and !y\ngray(v)", "v = not x < 0.5 and !y\ngray(v)\n"),
@@ -196,9 +196,9 @@ fn the_layout() {
         ("v = 1 +\n2\ngray(v)", "v = 1 +\n  2\ngray(v)\n"),
         ("table t = 1, -2,\n3\ngray(t[0])", "table t = 1, -2,\n  3\ngray(t[0])\n"),
         ("part p {\nloop 2\ngray( x )\n}\np(x , y).v", "part p {\n  loop 2\n  gray(x)\n}\np(x, y).v\n"),
-        ("sprite s {   -- a sprite\n  key . 0, X 1\n.X.\n    X.X ; .X.\n}\ngray(s[px, ty])", "sprite s { -- a sprite\n  key . 0, X 1\n  .X.\n  X.X\n  .X.\n}\ngray(s[px, ty])\n"),
+        ("sprite s {   -- a sprite\n  key . 0, X 1\n.X.\n    X.X ; .X.\n}\ngray(s[px, py])", "sprite s { -- a sprite\n  key . 0, X 1\n  .X.\n  X.X\n  .X.\n}\ngray(s[px, py])\n"),
         ("draw {\nfor k < 4 {\ndot(k,k)\n}\n}\ngray(ink)", "draw {\n  for k < 4 {\n    dot(k, k)\n  }\n}\ngray(ink)\n"),
-        ("g = glyph('A',px%6,ty)\ngray(g)", "g = glyph('A', px%6, ty)\ngray(g)\n"),
+        ("g = glyph('A',px%6,py)\ngray(g)", "g = glyph('A', px%6, py)\ngray(g)\n"),
         ("name \"A  ;  b -- c\"  -- d\ngray(x)", "name \"A  ;  b -- c\" -- d\ngray(x)\n"),
     ];
     for (src, want) in cases {

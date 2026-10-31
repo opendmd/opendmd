@@ -6,7 +6,7 @@ control size = 0.4 "Light size"
 look
 loop 8
 dx = cx - 0.35*sin(t/8)*4
-dy = cy - 0.3*sin(t/4)
+dy = (-cy) - 0.3*sin(t/4)
 light = clamp(1.4 - (dx*dx + dy*dy)/(0.08 + size*0.5), 0.12, 1)
 layer multiply {
   gray(light)

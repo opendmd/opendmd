@@ -37,48 +37,27 @@ pub enum Input {
     Seed,
 }
 
+/// The values a formula reads by name. Any of them may also be set as a
+/// formula's own name (then that name is the formula's: `t = 3` is a value
+/// called `t`, `c = 0.5` no longer the third control).
 pub const INPUTS: [(&str, Input, &str); 17] = [
-    ("x", Input::X, "the pixel's position across, 0 to 1"),
-    (
-        "y",
-        Input::Y,
-        "the pixel's height, 0 at the bottom to 1 at the top",
-    ),
-    ("px", Input::Px, "the pixel's column, 0 to 127"),
-    ("py", Input::Py, "the pixel's row from the bottom, 0 to 31"),
-    ("i", Input::I, "the pixel's number, 0 to 4095"),
+    ("x", Input::X, "the pixel's position across, 0 at the left to 1 at the right"),
+    ("y", Input::Y, "the pixel's position down, 0 at the top to 1 at the bottom"),
+    ("px", Input::Px, "the pixel's column, 0 to 127 from the left"),
+    ("py", Input::Py, "the pixel's row, 0 to 31 from the top"),
+    ("i", Input::I, "the pixel's number, 0 to 4095 (py*128 + px)"),
     ("t", Input::T, "seconds into the loop"),
     ("hour", Input::Hour, "the hour, 0 to 23"),
     ("minute", Input::Minute, "the minute"),
     ("second", Input::Second, "the second"),
-    ("a", Input::A, "slider a"),
-    ("b", Input::B, "slider b"),
-    ("c", Input::C, "slider c"),
-    (
-        "ur",
-        Input::Ur,
-        "the red of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ug",
-        Input::Ug,
-        "the green of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ub",
-        Input::Ub,
-        "the blue of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ul",
-        Input::Ul,
-        "the brightness of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ink",
-        Input::Ink,
-        "what `draw { }` put at the pixel, 0 to 1",
-    ),
+    ("a", Input::A, "the first control"),
+    ("b", Input::B, "the second control"),
+    ("c", Input::C, "the third control"),
+    ("ur", Input::Ur, "the red of the picture under the formula, 0 to 1"),
+    ("ug", Input::Ug, "the green of the picture under the formula, 0 to 1"),
+    ("ub", Input::Ub, "the blue of the picture under the formula, 0 to 1"),
+    ("ul", Input::Ul, "the brightness of the picture under the formula, 0 to 1"),
+    ("ink", Input::Ink, "what `draw { }` put at the pixel, 0 to 1"),
 ];
 
 /// Values added once people had saved formulas (2026-10-26), about the
@@ -87,9 +66,9 @@ pub const INPUTS: [(&str, Input, &str); 17] = [
 /// written out ([`Parser::centred`]). A name set with one of these is that
 /// name ([`Parser::lookup_value`] finds the formula's names first), so a
 /// saved `r = …` means what it meant.
-pub const LATER: [&str; 5] = ["cx", "cy", "ty", "r", "angle"];
+pub const LATER: [&str; 4] = ["cx", "cy", "r", "angle"];
 
-/// `w` and `h`: constants.
+/// The panel's size: constants.
 pub const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,8 +146,8 @@ pub const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-pub const KEYWORDS: [&str; 8] = [
-    "loop", "frame", "layer", "part", "use", "draw", "for", "table",
+pub const KEYWORDS: [&str; 7] = [
+    "loop", "layer", "part", "use", "draw", "for", "table",
 ];
 
 /// The draw stage's primitives: statements inside `draw { }`, and names a

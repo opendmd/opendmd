@@ -6,5 +6,5 @@ about "Every other row dimmer, like an old TV, over the GIF"
 control dim = 0.4 "Dim rows"
 look
 layer multiply {
-  gray(py%2 ? 1 : 0.3 + dim*0.6)
+  gray((31 - py)%2 ? 1 : 0.3 + dim*0.6)
 }

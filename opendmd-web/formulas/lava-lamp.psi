@@ -3,8 +3,8 @@
 name "Lava lamp"
 about "Slow glowing blobs drifting up and down"
 loop 8
-blob1 = sin(x*3 + sin(t/8)*0.5) * sin(y*0.8 - t/8)
-blob2 = sin(x*5 - t/8) * sin(y*1.1 + t/4 + x)
+blob1 = sin(x*3 + sin(t/8)*0.5) * sin((1 - y)*0.8 - t/8)
+blob2 = sin(x*5 - t/8) * sin((1 - y)*1.1 + t/4 + x)
 goo = clamp((blob1 + blob2)*3 - 0.6, 0, 1)
 -- purple wax glowing orange
 mix(#400d59, #ff801a, goo)

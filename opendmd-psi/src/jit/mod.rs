@@ -375,7 +375,7 @@ pub(crate) fn frame<T: Target>(
         if rows & (1 << row) == 0 {
             continue;
         }
-        let py = ((H - 1 - row) as i32) << 16;
+        let py = (row as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         match low.rows_at {

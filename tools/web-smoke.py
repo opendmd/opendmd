@@ -4008,7 +4008,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.wait_for_selector("#psi-mine .psi-tile[data-name='Kept here']", timeout=10000)
     page.wait_for_timeout(500)
     again = page.locator("#toasts .toast:has-text('on the panel now')").count()
-    check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psi"],
+    check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psb", "kept-here.psi"],
           f"formulas on the panel: not copied again ({again} toasts)")
     # A bundled one's details: Add to playlist names it.
     page.click("#psi-ex .psi-tile[data-name='Starfield']")
@@ -4050,7 +4050,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.wait_for_timeout(300)
     page.click("#psi-save")
     page.wait_for_function("document.querySelector('#psi-ed .tick')?.dataset.n >= 2", timeout=10000)
-    check(f.read_text().endswith("-- changed") and sorted(p.name for p in (overlay / "formulas").glob("smoke-ramp*")) == ["smoke-ramp.psi"],
+    check(f.read_text().endswith("-- changed") and sorted(p.name for p in (overlay / "formulas").glob("smoke-ramp*")) == ["smoke-ramp.psb", "smoke-ramp.psi"],
           "formulas playlist: saved again, the same file")
     # The playlist editor: by name, as Formulas.
     goto_view(page, "sets")
@@ -4443,28 +4443,15 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.reload()
     page.wait_for_function("document.querySelector('#st-look-formula')?.selectedOptions[0]?.textContent == 'Gone'", timeout=20000)
     why = page.inner_text("#st-look-why")
-    check(c["look_formula"] == gone and "look_blend" not in c and why.startswith("Add at 25%"),
-          f"looks: a look saved elsewhere is listed by its name line ('{why}'; old fields ignored: {sorted(set(c) & {'look_blend', 'look_formula_name'})})")
-    # Change…: its settings, in the Formulas editor.
-    page.click("#st-look-change")
-    page.wait_for_selector("#psi-set #psi-set-look", timeout=20000)
-    got = (page.input_value("#psi-src"), page.input_value("#psi-set-name"), page.is_checked("#psi-set-look"),
-           page.input_value("#psi-set-lk-blend"), page.input_value("#psi-set-lk-amt"))
-    # (The path's text: its statements `; `-joined; the sheet edits them there.)
-    page.fill("#psi-set-about", "Kept")
-    page.wait_for_timeout(300)
-    edited = page.input_value("#psi-src")
-    check(got == ('name "Gone"; look add 25; loop 4; hsv(x + t/4, 1, 1)', "Gone", True, "add", "25")
-          and edited == 'name "Gone"; about "Kept"; look add 25; loop 4; hsv(x + t/4, 1, 1)' and page.get_attribute("#psi-ed", "data-err") is None,
-          f"looks: Change… opens its settings ({got}), edited in place ({edited!r})")
-    page.keyboard.press("Escape")
+    check(c["look_formula"] == gone and "look_blend" not in c and why == "Set elsewhere: open it where it was made to change it"
+          and page.is_hidden("#st-look-change"),
+          f"looks: a look saved elsewhere is listed by its name ('{why}'; old fields ignored: {sorted(set(c) & {'look_blend', 'look_formula_name'})})")
     # The sheet over Matrix (a remix): every change a line of the text.
     open_formulas(page)
     page.click("#psi-ex .psi-tile[data-name='Matrix']")
     page.click("#psi-settings")
-    # (Gone, edited above and not saved: replaced on the question.)
-    page.wait_for_selector("#psi-ask", timeout=5000)
-    page.click("#psi-ask button:has-text('Replace it')")
+    if page.locator("#psi-ask").count():
+        page.click("#psi-ask button:has-text('Replace it')")
     page.wait_for_selector("#psi-set #psi-set-name", timeout=10000)
     src0 = page.input_value("#psi-src")
     page.fill("#psi-set-name", "Matrix glow")
