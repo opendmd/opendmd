@@ -213,6 +213,7 @@ pub mod cheat {
         ("r, angle", "distance and angle (turns, clockwise from the right) from the middle", ""),
         ("ur, ug, ub", "the colour under the formula: the GIF it is drawn over, 0 to 1", ""),
         ("ul", "how bright that is", ""),
+        ("under(x, y)", "the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel's", ""),
     ];
 
     pub const FUNCS: &[Row] = &[

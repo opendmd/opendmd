@@ -418,6 +418,24 @@ blend and coverage, `part look { … }` then `layer screen { look(x, y, 0.4) }`
 formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
 `fps` line is not used over a GIF.
 
+**Moving the picture: `under(x, y)`.** In a colour expression (the last
+line, like `#f80`), `under(x, y)` is the picture under the formula at pixel
+(x, y), the nearest one, held to the panel's edges; `under` alone is this
+pixel's. So effects that move the GIF are one line:
+
+```psi
+look
+loop 2
+-- shake: the picture moved a pixel or two from side to side
+under(px + floor(sin(t*2)*2), py)
+```
+
+Pixelate: `under(floor(px/4)*4 + 2, floor(py/4)*4 + 2)`; mirror:
+`under(127 - px, py)`; a wave: `under(px + sin(py/16 + t/2)*3, py)`; a
+colour fringe: `rgb(under(px - 1, py) … )` is not allowed (rgb takes
+values): write `mix(under(px - 1, py), under(px + 1, py), 0.5)` or read the
+channels at the pixel with `ur ug ub`.
+
 ## 9. Parts: one formula inside another
 
 ```psi

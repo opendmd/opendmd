@@ -28,6 +28,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("r, angle", "loop 4; hsv(angle + t/4, 1, 1 - r/2)"),
     ("ur, ug, ub", "rgb(ub, ug, ur)"),
     ("ul", "pal(fire, ul)"),
+    ("under(x, y)", "loop 2; under(floor(px/4)*4 + 2 + floor(sin(t/2)*2), floor(py/4)*4 + 2)"),
     // Functions and statements
     ("sin(v) cos(v)", "loop 4; gray(abs(y - 0.5 - 0.4*sin(x*2 + t/4)) < 0.06)"),
     ("tri(v) saw(v) sqr(v)", "loop 4; k = floor(y*3); v = pick(k, tri(x*2 - t/4), saw(x*2 - t/4), sqr(x*2 - t/4)); hsv(k/3, 1, 0.5 + v/2)"),

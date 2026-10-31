@@ -1011,6 +1011,11 @@ pub(crate) fn frame<const N: usize>(
                     k += 1;
                     continue;
                 }
+                if op.code == code::UAT {
+                    under_at(scratch, &mut alias, op, base, under);
+                    k += 1;
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, &alias, op, base, tables, &own, px);
                 } else {
@@ -2206,4 +2211,27 @@ pub mod stats {
         };
         STILL1.store(still1, Relaxed);
     }
+}
+
+/// `under(x', y')`'s channel `op.c` for a lane: the picture under the
+/// formula at the pixel nearest (x', y'), held to the panel (0 without a
+/// picture). Out of line, in flash.
+#[inline(never)]
+fn under_at<const N: usize>(s: &mut Scratch<N>, al: &mut Alias, op: &Op, base: usize, under: Option<&[u8]>) {
+    let (a, b) = (s.arg(al, op.a, base), s.arg(al, op.b, base));
+    let at = |v: Arg, j: usize| match v {
+        // SAFETY: a lane operand points at N values (`Scratch::arg`).
+        Arg::Lane(p) => unsafe { *p.add(j) },
+        Arg::Sc(v) => v,
+    };
+    let ch = (op.c as usize).min(2);
+    let mut out = [0i32; N];
+    for (j, o) in out.iter_mut().enumerate() {
+        let x = (fixed::add(at(a, j), fixed::ONE / 2) >> 16).clamp(0, W as i32 - 1) as usize;
+        let y = (fixed::add(at(b, j), fixed::ONE / 2) >> 16).clamp(0, H as i32 - 1) as usize;
+        *o = fixed::byte(under.map_or(0, |u| u.get((y * W + x) * 3 + ch).copied().unwrap_or(0)));
+    }
+    let di = reg_index(op.d);
+    al[di] = core::ptr::null();
+    s.lanes[di] = out;
 }

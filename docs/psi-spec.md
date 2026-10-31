@@ -189,6 +189,7 @@ example is compiled by the tests.
 | `r, angle` | distance and angle (turns, clockwise from the right) from the middle | <code class="psi-ex">loop 4; hsv(angle + t/4, 1, 1 - r/2)</code> |
 | `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 | <code class="psi-ex">rgb(ub, ug, ur)</code> |
 | `ul` | how bright that is | <code class="psi-ex">pal(fire, ul)</code> |
+| `under(x, y)` | the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel's | <code class="psi-ex">loop 2; under(floor(px/4)&#42;4 + 2 + floor(sin(t/2)&#42;2), floor(py/4)&#42;4 + 2)</code> |
 
 #### Functions and statements
 
