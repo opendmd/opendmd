@@ -360,7 +360,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
             return bad;
         }
-        let known = matches!(c, 0..=LAST_BIN | ARGS..=JUMP | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
+        let known = matches!(c, 0..=LAST_BIN | ARGS..=UAT | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
             || matches!(c, U_R..=INKN | TURN | SLOW | FOR..=COLUMN)
             || is_colour(c) && colour_ok(c);
         if !known {
@@ -372,7 +372,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             PALIDX => !pixel,
             TURN => row,
             SLOW => k == re,
-            STILL | COLUMN | U_R..=INKN | PICK => pixel,
+            STILL | COLUMN | U_R..=INKN | PICK | UAT => pixel,
             W_FIRST..=W_LAST => !pixel && !row,
             _ if is_colour(c) => pixel,
             _ => true,
@@ -548,6 +548,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             }
             // `ink(n)`: n a constant slot (1..=255).
             INKN if !scalar(op.a) => return bad,
+            UAT if op.c > 2 => return bad,
             _ => {}
         }
         if is_colour(c) {

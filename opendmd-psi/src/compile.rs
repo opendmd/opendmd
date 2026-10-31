@@ -2375,6 +2375,9 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.peek().tok == Tok::LParen && self.text(t) == "pick" => {
                     self.pick(t)?
                 }
+                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && self.lookup_local("under").is_none() => {
+                    self.under_atom(t)?
+                }
                 Tok::Name => self.name(t)?,
                 Tok::Hex(v) if self.env.ch < NO_CH => self.dag.constant(
                     fixed::byte((v >> (16 - 8 * self.env.ch as u32)) as u8),
@@ -3096,6 +3099,7 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
+                Tok::Name if self.text(t) == "under" && self.lookup_local("under").is_none() => return true,
                 Tok::LParen => depth += 1,
                 Tok::RParen if depth > 0 => depth -= 1,
                 Tok::Comma if depth > 0 || !arg => {}
@@ -3104,6 +3108,45 @@ impl<'s> Parser<'s> {
             }
             k += 1;
         }
+    }
+
+    /// `under` (the picture under the formula at this pixel) or `under(x,
+    /// y)` (at pixel x, y), in a colour expression: the channel read now.
+    #[inline(never)]
+    fn under_atom(&mut self, t: Token) -> Result<Id, Error> {
+        let inp = [Input::Ur, Input::Ug, Input::Ub][(self.env.ch as usize).min(2)];
+        if self.peek().tok != Tok::LParen {
+            return self.input(inp);
+        }
+        let open = self.next();
+        let x = self.expr(0)?;
+        self.expect(Tok::Comma, "`,` (as in `under(px + 1, py)`)")?;
+        let y = self.expr(0)?;
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, "under"));
+        }
+        self.next();
+        let (mut level, mut why) = (LV_PIXEL, 0);
+        for v in [x, y] {
+            let m = &self.dag.nodes[v as usize];
+            if m.level > level {
+                (level, why) = (m.level, m.why);
+            }
+        }
+        let _ = level;
+        self.dag.push(
+            Node {
+                code: code::UAT,
+                a: x,
+                b: y,
+                c: self.env.ch as Id,
+                val: 0,
+                level: LV_PIXEL,
+                why,
+            },
+            (t.start, close.end),
+        )
     }
 
     /// A colour expression at the cursor, read once for each channel: its
@@ -6407,7 +6450,7 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
             continue;
         }
         let mut c = dag.nodes[i];
-        if (code::U_R..=code::INKN).contains(&c.code) {
+        if (code::U_R..=code::INKN).contains(&c.code) || c.code == code::UAT {
             // E944.
             return Err(Error::new(0, 0, "a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`"));
         }
@@ -6619,7 +6662,7 @@ fn emit(
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
             }
-        } else if is_op(i) && (code::U_R..=code::U_L).contains(&nodes[i].code) {
+        } else if is_op(i) && ((code::U_R..=code::U_L).contains(&nodes[i].code) || nodes[i].code == code::UAT) {
             prog.uses |= UNDER;
         }
     }
@@ -6662,7 +6705,7 @@ fn emit(
         if m.code == code::TAB || m.code == code::PALIDX {
             (b, c) = (m.b, m.c);
         }
-        if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR) {
+        if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR | code::UAT) {
             c = m.c;
         }
         if m.code == code::PICK {
@@ -7382,7 +7425,7 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
             }
             K_COUNTER | K_SPLIT => false,
             // (A wide noise's offsets move every frame.)
-            c if (code::U_R..=code::INKN).contains(&c) || is_noise_o(c) => false,
+            c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT || is_noise_o(c) => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }
@@ -7655,7 +7698,7 @@ fn column_nodes(dag: &Dag) -> Vec<bool> {
                 }
                 K_CONST => true,
                 K_COUNTER => false,
-                c if (code::U_R..=code::INKN).contains(&c) => false,
+                c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT => false,
                 _ => reads(dag, i).all(|x| col[x as usize]),
             },
             _ => false,

@@ -643,6 +643,14 @@ formula is edited or deleted here. When the player is short of memory
 (several downloads at once, say) it shows the GIFs without the formula for
 a while.
 
+
+**Moving the GIF.** `under(x, y)` is the picture under the formula at
+pixel x, y, as a colour: `under(px + 2, py)` shifts it two pixels,
+`under(127 - px, py)` mirrors it, `under(floor(px/4)*4 + 2, floor(py/4)*4 +
+2)` pixelates it into 4 × 4 blocks, and `under(px + floor(sin(t*2)*2), py)`
+shakes it. Use it like a colour: alone, scaled (`under(px, py + 1) * 0.5`)
+or mixed (`mix(under, under(px, py - 2), 0.5)`).
+
 ## Keeping them fast
 
 Formulas are made to run on the panel's own small processor too, which

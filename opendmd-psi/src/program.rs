@@ -123,6 +123,10 @@ pub(crate) mod code {
     pub const PAINT: u8 = 27;
     pub const IF: u8 = 28;
     pub const JUMP: u8 = 29;
+    // `under(x', y')`'s channel `c` (0 red, 1 green, 2 blue, an immediate)
+    // of the picture under the formula at pixel (round(a), round(b)),
+    // held to the panel; 0..1. Per pixel only.
+    pub const UAT: u8 = 30;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -335,6 +339,7 @@ pub(crate) mod code {
     pub fn arity(c: u8) -> usize {
         match c {
             ARGS | PAINT => 3,
+            UAT => 2,
             IF => 1,
             JUMP => 0,
             0..=LAST_BIN => 2,
@@ -445,6 +450,7 @@ pub(crate) mod code {
             PAINT => "paint",
             IF => "if",
             JUMP => "jump",
+            UAT => "under_at",
             PALIDX => "palidx",
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],

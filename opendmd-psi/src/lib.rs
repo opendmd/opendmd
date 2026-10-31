@@ -366,6 +366,9 @@ pub mod golden {
     /// Frames of formulas with layers, and of formulas drawn over
     /// [`picture`] (`over`: true) — what is under, blends, coverage.
     pub const OVER: &[(&str, &str, u32, bool, u64)] = &[
+        // `under(x, y)`: the picture under at another pixel (pixelated,
+        // shifted, held to the panel's edges), in a colour expression.
+        ("under-at", "loop 2\ndx = floor(sin(t/2)*3)\nmix(under(floor(px/4)*4 + 2 + dx, floor(py/4)*4 + 2), under(px - 40, py + 3), x < 0.3) * 0.9", 500, true, 0x78453c5a54159a10),
         ("identity", "rgb(ur, ug, ub)", 0, true, 0x2c7a29e300e4c8cf),
         ("luma", "gray(ul)", 0, true, 0xc7f57bec83c88cfe),
         ("grade", "rgb(ur*1.2 - 0.05, ug, ub*0.7 + ul*0.2)", 0, true, 0x56bbda81836b00e),
