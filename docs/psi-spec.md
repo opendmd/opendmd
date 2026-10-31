@@ -157,7 +157,7 @@ to it.
 | palettes | `fire`, `ice`, `ocean`, `chrono`, `amber`, `rainbow`, `gray` |
 | fonts | `normal`, `small`, `bold` |
 | blends | `over`, `add`, `multiply`, `screen`, `max`, `min` |
-| keywords | `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` |
+| keywords | `loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn` |
 | drawing | `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print` |
 | declarations | `psi`, `name`, `about`, `control`, `look` |
 | words that are keywords in one place only | `fps`, `forever`, `sprite`, `palette`, `key`, `rate` |
@@ -240,6 +240,7 @@ example is compiled by the tests.
 | `spr(s, x, y, flip)` | paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both | <code class="psi-ex">sprite heart {<br>  key . 0, R &#35;e24<br>  .R.R.<br>  RRRRR<br>  .RRR.<br>  ..R..<br>}<br>draw { spr(heart, 60, 12); spr(heart, 70, 12, 2) }</code> |
 | `pal(fire, v), gray(v)` | colours to paint with besides #…: a palette's or a gray, v 0 to 1 | <code class="psi-ex">draw { for k &lt; 16 { rectfill(k&#42;8, 0, k&#42;8 + 7, 31, pal(fire, k/15)) } }</code> |
 | `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
+| `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
 | `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
@@ -1407,6 +1408,60 @@ Write `normal`, `small` or, for a number, `bold`.
 > …: expected `)` here
 
 Close the call after its colour (and, for `print`, its font and digits).
+
+<h4 id="E740">E740 · a function written wrongly</h4>
+
+> a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw
+
+Write `fn name(a, b) = value`, or `fn name(a, b) { … }` around lines that draw.
+
+<h4 id="E741">E741 · two functions with one name</h4>
+
+> there is already a function `…`
+
+Give the second function another name.
+
+<h4 id="E742">E742 · a function's value that is not a name</h4>
+
+> a function's values are names: `fn name(a, b) = …`
+
+Name each value the function takes: `fn ring(cx, r) = …`.
+
+<h4 id="E743">E743 · a function with no body</h4>
+
+> after a function's values: `= value`, or `{ … }` for lines that draw
+
+Put `= value` after the brackets, or `{ … }` around lines that draw.
+
+<h4 id="E744">E744 · an empty function</h4>
+
+> function `…` has nothing in it
+
+Write what the function works out, or the lines it draws.
+
+<h4 id="E745">E745 · a function calling itself</h4>
+
+> `…` calls itself: a function can't (there are no loops of calls)
+
+Use a `for` loop in draw, or write the steps out.
+
+<h4 id="E746">E746 · a drawing function used as a value</h4>
+
+> `…` draws: call it on a line of its own inside `draw { }`
+
+Call it on its own line in `draw { }`: `palm(30, 31, 1)`.
+
+<h4 id="E747">E747 · more than one value in a function</h4>
+
+> function `…` is one value: `fn …(…) = value` (for lines, `{ … }`)
+
+Write one value after `=`, or use `{ … }` for lines that draw.
+
+<h4 id="E748">E748 · a value function called as lines</h4>
+
+> `…` is a value, not lines that draw: use it in one, `v = …(…)`
+
+Use it in a value, `v = name(…)`, or in a call's values.
 
 ### Frame rate (E8xx)
 
