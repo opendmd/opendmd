@@ -616,6 +616,6 @@ fn the_web_apps_path_is_the_players() {
     for (b, g) in progs.iter().zip(&got) {
         let want = format!("@formula?psb={}&a=0.5", opendmd_psi::psb::to_base64(b));
         assert_eq!(g, &want);
-        assert_eq!(opendmd_psi::psb::from_base64(want[13..want.len() - 6].as_bytes()).as_ref(), Some(b));
+        assert_eq!(opendmd_psi::psb::from_base64(&want.as_bytes()[13..want.len() - 6]).as_ref(), Some(b));
     }
 }
