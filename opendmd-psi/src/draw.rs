@@ -15,6 +15,7 @@
 use crate::fixed::{self, ONE};
 use crate::program::*;
 use crate::tables::Tables;
+use crate::program::glyphs;
 use crate::vm::Scratch;
 use alloc::boxed::Box;
 
@@ -36,16 +37,18 @@ const X_MAX: i32 = W as i32 + 511;
 const Y_MIN: i32 = -512;
 const Y_MAX: i32 = H as i32 + 511;
 
-/// The draw stage's canvas: 128 × 32 bytes, row-major from the top as the
-/// frame is; 0 where nothing was drawn, 255 at full ink. Plain bytes, so a
-/// zeroed allocation is a valid one. Only a program that
+/// The draw stage's canvases, 128 × 32 bytes each, row-major from the top
+/// as the frame is: **ink** (`.0`: 0 where nothing was drawn, 255 at full
+/// ink, the brighter wins) and **paint** (`.1`: a colour of the program's
+/// paint palette, 0 none, the last drawn wins), laid over every layer.
+/// Plain bytes, so a zeroed allocation is a valid one. Only a program that
 /// [`draws`](Program::draws) needs one.
 #[repr(C)]
-pub struct Ink(pub [u8; W * H]);
+pub struct Ink(pub [u8; W * H], pub [u8; W * H]);
 
 impl Ink {
     pub const fn new() -> Ink {
-        Ink([0; W * H])
+        Ink([0; W * H], [0; W * H])
     }
 
     /// A canvas on the heap, made zeroed in place (4 KB never passes
@@ -92,6 +95,9 @@ pub(crate) fn run<const N: usize>(
     lanes: bool,
 ) {
     ink.0.fill(0);
+    ink.1.fill(0);
+    let mut args = [0i32; 9];
+    let mut na = 0usize;
     let start = prog.frame_end as usize;
     let end = (prog.draw_end as usize).min(MAX_OPS);
     let m = |v: u8| (v & 0x7f) as usize;
@@ -140,6 +146,25 @@ pub(crate) fn run<const N: usize>(
                 pen.line(ink, to);
             }
             code::DOT => pen.dot(ink, sc[m(op.a)], sc[m(op.b)], sc[m(op.c)]),
+            code::ARGS | code::PAINT => {
+                for v in [op.a, op.b, op.c] {
+                    if na < args.len() {
+                        args[na] = sc[m(v)];
+                        na += 1;
+                    }
+                }
+                if op.code == code::PAINT {
+                    paint_prim(prog, t, &mut ink.1, &mut pen, op.d, &args);
+                    na = 0;
+                }
+            }
+            // Forward only (the verifier holds it): no loop can come of it.
+            code::IF => {
+                if sc[m(op.a)] == 0 {
+                    pc = (op.b as usize).max(pc);
+                }
+            }
+            code::JUMP => pc = (op.b as usize).max(pc),
             _ => super::vm::scalar(sc, &op, t, &prog.tables),
         }
     }
@@ -354,5 +379,233 @@ fn plot(ink: &mut Ink, x: i32, y: i32, v: u8) {
         let i = y as usize * W + x as usize;
         let p = &mut ink.0[i];
         *p = (*p).max(v);
+    }
+}
+
+/// A paint colour value (a whole number, Q16.16) as its canvas byte: an
+/// index of the paint palette, 0 none.
+#[inline]
+fn colour(v: i32) -> u8 {
+    ((v >> 16) as u32 & (MAX_PAINT as u32 - 1)) as u8
+}
+
+/// One paint primitive `kind` (`program::paint`) with its values `a` (its
+/// colour last), into the paint canvas `p`: the last drawn wins. Bounded
+/// as the lines and dots are: a primitive counts one of the frame's, and
+/// every pixel it covers one of its line steps.
+fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, kind: u8, a: &[i32; 9]) {
+    use crate::program::paint::*;
+    if kind > LAST || !pen.may() {
+        return;
+    }
+    let n = ARGS[kind as usize];
+    let c = colour(a[n - 1]);
+    let px = |v: i32| pixel(v, X_MIN, X_MAX);
+    let py = |v: i32| pixel(v, Y_MIN, Y_MAX);
+    match kind {
+        CLS => {
+            p.fill(c);
+            pen.steps = pen.steps.saturating_add(256);
+        }
+        PSET => put(p, px(a[0]), py(a[1]), c),
+        LINE => {
+            let mut x0 = px(a[0]);
+            let mut y0 = py(a[1]);
+            let (x1, y1) = (px(a[2]), py(a[3]));
+            let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+            let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+            let mut err = dx + dy;
+            for _ in 0..LINE_STEPS {
+                if pen.steps >= FRAME_STEPS {
+                    return;
+                }
+                pen.steps += 1;
+                put(p, x0, y0, c);
+                if x0 == x1 && y0 == y1 {
+                    break;
+                }
+                let e2 = 2 * err;
+                if e2 >= dy {
+                    err += dy;
+                    x0 += sx;
+                }
+                if e2 <= dx {
+                    err += dx;
+                    y0 += sy;
+                }
+            }
+        }
+        RECT | RECTFILL => {
+            let (x0, x1) = (px(a[0]).min(px(a[2])), px(a[0]).max(px(a[2])));
+            let (y0, y1) = (py(a[1]).min(py(a[3])), py(a[1]).max(py(a[3])));
+            for y in y0.max(0)..=y1.min(H as i32 - 1) {
+                for x in x0.max(0)..=x1.min(W as i32 - 1) {
+                    if kind == RECTFILL || y == y0 || y == y1 || x == x0 || x == x1 {
+                        put(p, x, y, c);
+                    }
+                }
+                pen.steps = pen.steps.saturating_add(1);
+            }
+        }
+        CIRC | CIRCFILL => {
+            // Pixels whose centre is within r + ½ of (x, y) (the ring: the
+            // outermost of them on each row and column).
+            let (cx, cy) = (a[0], a[1]);
+            let r = a[2].max(0) as i64 + (ONE as i64) / 2;
+            let r2 = r * r;
+            let inside = |x: i32, y: i32| {
+                let (dx, dy) = (((x as i64) << 16) - cx as i64, ((y as i64) << 16) - cy as i64);
+                dx * dx + dy * dy <= r2
+            };
+            let rr = (r >> 16) as i32 + 1;
+            let (x0, y0) = ((cx >> 16) - rr, (cy >> 16) - rr);
+            for y in (y0).max(0)..=(y0 + 2 * rr + 1).min(H as i32 - 1) {
+                for x in (x0).max(0)..=(x0 + 2 * rr + 1).min(W as i32 - 1) {
+                    if inside(x, y)
+                        && (kind == CIRCFILL
+                            || !(inside(x - 1, y) && inside(x + 1, y) && inside(x, y - 1) && inside(x, y + 1)))
+                    {
+                        put(p, x, y, c);
+                    }
+                }
+                pen.steps = pen.steps.saturating_add(1);
+            }
+        }
+        TRIFILL => {
+            // Pixels whose centre is inside the triangle (edges included),
+            // in whole-pixel steps of its bounding box on the panel.
+            let v = [(a[0], a[1]), (a[2], a[3]), (a[4], a[5])];
+            let edge = |(ax, ay): (i32, i32), (bx, by): (i32, i32), x: i64, y: i64| -> i64 {
+                ((bx as i64 - ax as i64) * (y - ay as i64) - (by as i64 - ay as i64) * (x - ax as i64)) >> 16
+            };
+            let area = edge(v[0], v[1], v[2].0 as i64, v[2].1 as i64);
+            if area == 0 {
+                return;
+            }
+            let (xs, ys) = (v.map(|q| q.0 >> 16), v.map(|q| q.1 >> 16));
+            let (xa, xb) = (xs.iter().min().unwrap() - 1, xs.iter().max().unwrap() + 1);
+            let (ya, yb) = (ys.iter().min().unwrap() - 1, ys.iter().max().unwrap() + 1);
+            for y in ya.max(0)..=yb.min(H as i32 - 1) {
+                for x in xa.max(0)..=xb.min(W as i32 - 1) {
+                    let (fx, fy) = ((x as i64) << 16, (y as i64) << 16);
+                    let e = [edge(v[0], v[1], fx, fy), edge(v[1], v[2], fx, fy), edge(v[2], v[0], fx, fy)];
+                    let inside = if area > 0 { e.iter().all(|&k| k >= 0) } else { e.iter().all(|&k| k <= 0) };
+                    if inside {
+                        put(p, x, y, c);
+                    }
+                }
+                pen.steps = pen.steps.saturating_add(1);
+            }
+        }
+        SPR => {
+            // A sprite whose key gives colours (its keys' numbers paint
+            // indices): a[0] its header's place in the tables, a[3] flip
+            // (1 across, 2 down, 3 both).
+            let at = ((a[0] >> 16) as u32 & (MAX_TABLE as u32 - 1)) as u8;
+            let h = SprHead::new(&prog.tables, at);
+            let (x0, y0) = (px(a[1]), py(a[2]));
+            let flip = (a[3] >> 16) & 3;
+            for v in 0..h.h as i32 {
+                for u in 0..h.w as i32 {
+                    let su = if flip & 1 != 0 { h.w as i32 - 1 - u } else { u };
+                    let sv = if flip & 2 != 0 { h.h as i32 - 1 - v } else { v };
+                    let k = colour(h.read(&prog.tables, su << 16, sv << 16));
+                    if k != 0 {
+                        put(p, x0 + u, y0 + v, k);
+                    }
+                }
+                pen.steps = pen.steps.saturating_add(1);
+            }
+        }
+        PRINT | PRINTNUM => {
+            // Text from the tables (a[0] where, a[1] how many characters)
+            // or a whole number (a[0], at least a[1] digits); a[2] the font
+            // (0 normal 5 × 7, 1 small 4 × 6, 2 bold digits).
+            let font = (a[2] >> 16).clamp(0, 2) as u8;
+            let gc = match font {
+                1 => code::GLYPH_S,
+                2 => code::DIGIT_B,
+                _ => code::GLYPH,
+            };
+            let (cw, ch) = if font == 0 { (5, 7) } else { (4, 6) };
+            let g = glyphs(t, gc);
+            let mut chars = [0i32; 32];
+            let n = if kind == PRINT {
+                let (at, len) = ((a[0] >> 16).max(0) as usize, (a[1] >> 16).clamp(0, 32) as usize);
+                for (k, c) in chars.iter_mut().take(len).enumerate() {
+                    *c = prog.tables[(at + k) & (MAX_TABLE - 1)];
+                }
+                len
+            } else {
+                let neg = a[0] < 0;
+                let mut v = ((a[0] >> 16) as i64).unsigned_abs();
+                let mut digits = [0i32; 12];
+                let mut nd = 0;
+                loop {
+                    digits[nd] = (v % 10) as i32;
+                    v /= 10;
+                    nd += 1;
+                    if v == 0 && nd as i32 >= (a[1] >> 16).clamp(1, 10) {
+                        break;
+                    }
+                }
+                let mut n = 0;
+                if neg {
+                    chars[0] = ('-' as i32) << 16;
+                    n = 1;
+                }
+                for k in (0..nd).rev() {
+                    chars[n] = if font == 2 { digits[k] << 16 } else { (('0' as i32) + digits[k]) << 16 };
+                    n += 1;
+                }
+                n
+            };
+            let (x0, y0) = (px(a[3]), py(a[4]));
+            for (k, &chv) in chars.iter().take(n).enumerate() {
+                for row in 0..ch {
+                    for col in 0..cw {
+                        if fixed::glyph(&g, chv, col << 16, row << 16) != 0 {
+                            put(p, x0 + k as i32 * cw + col, y0 + row, c);
+                        }
+                    }
+                }
+                pen.steps = pen.steps.saturating_add(1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Paint index `c` at `x`, `y` if it is on the panel.
+#[inline(always)]
+fn put(p: &mut [u8; W * H], x: i32, y: i32, c: u8) {
+    if (0..W as i32).contains(&x) && (0..H as i32).contains(&y) {
+        p[y as usize * W + x as usize] = c;
+    }
+}
+
+/// The paint canvas's colours over row `row` of the picture (`out`, its
+/// W × 3 bytes), when the program paints. Out of line, in flash.
+#[inline(never)]
+pub(crate) fn paint_row(prog: &Program, ink: Option<&Ink>, row: usize, out: &mut [u8]) {
+    if prog.uses & PAINTS == 0 {
+        return;
+    }
+    if let Some(k) = ink {
+        let px = out.as_chunks_mut::<3>().0;
+        overlay(prog, &k.1[row * W..(row + 1) * W], px);
+    }
+}
+
+/// The paint canvas's colours over a lane of the picture (`row` from
+/// `paint`, `px` its pixels): wherever something was painted. (Out of the
+/// frame loop: in flash.)
+#[inline(never)]
+pub(crate) fn overlay(prog: &Program, paint: &[u8], px: &mut [[u8; 3]]) {
+    for (o, &k) in px.iter_mut().zip(paint) {
+        if k != 0 {
+            let v = prog.paint[k as usize & (MAX_PAINT - 1)];
+            *o = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+        }
     }
 }

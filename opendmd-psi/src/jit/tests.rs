@@ -914,7 +914,11 @@ fn damaged_programs_lower_safely() {
             if load_into(&m, Which::Play, &mut p).is_err() {
                 continue;
             }
-            let Ok(low) = lower(&p) else { continue };
+            let low = match std::panic::catch_unwind(|| lower(&p)) {
+                Ok(Ok(l)) => l,
+                Ok(Err(_)) => continue,
+                Err(_) => panic!("lowering panicked on a verified program:\n{}", p.listing()),
+            };
             lowered += 1;
             let mut inputs = golden::inputs((r.next() % 8000) as u32);
             inputs.set_ms(&p, 1000);

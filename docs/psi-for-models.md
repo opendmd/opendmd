@@ -524,6 +524,61 @@ draw {
 hsv(x, 0.6, ink)
 ```
 
+### Painting: colours, the last painted wins
+
+The way to draw a **scene** (things with their own colours: a sun, a car, a
+score) is to paint. Paint calls go inside `draw { }` and end in a colour:
+`#rgb`/`#rrggbb`, `pal(P, v)` or `gray(v)` (never `rgb()` or a number). The
+paint canvas is laid **over** the colour line (and over every layer), and
+where two things are painted on the same pixel **the later wins**: paint
+back to front. Coordinates are pixels from the top left, rounded to the
+nearest pixel.
+
+| call | paints |
+|---|---|
+| `cls(c)` | every pixel |
+| `pset(x, y, c)`, `dot(x, y, c)` | one pixel |
+| `line(x0, y0, x1, y1, c)` | a line |
+| `rect(x0, y0, x1, y1, c)` / `rectfill(…)` | a box's edge / the filled box, corners included |
+| `circ(x, y, r, c)` / `circfill(…)` | pixels whose centre is within r + ½ (the edge / all) |
+| `trifill(x0, y0, x1, y1, x2, y2, c)` | pixels whose centre is inside the triangle |
+| `spr(s, x, y [, flip])` | sprite `s`, top left at x, y; flip 1 across, 2 down, 3 both; its key's numbers are colours (`key . 0, R #d22`), 0 nothing |
+| `print("TEXT", x, y, c [, font])` | text (32 characters at most), the 5×7 font, or `small` (4×6) |
+| `print(v, x, y, c [, font [, digits]])` | the whole number v, at least `digits` digits; font `small`, `normal` or `bold` (chunky digits) |
+
+- `if c { … } else { … }` inside `draw` paints (or inks) only some things.
+- A formula that paints may leave out its colour line: under the paint is
+  then the picture under the formula (the GIF; black alone).
+- 127 colours a formula: each `#…` one, each palette used in `pal` 32.
+- `line(…)` and `dot(…)` with a **number** last (or none) draw ink, as
+  above; with a colour last they paint.
+
+```psi
+name "Night drive"
+about "A red car on a road at dusk, the lane marks rushing past"
+loop 2
+fps 50
+sprite car {
+  key . 0, R #d22, W #9cf, K #111
+  ..RRRR..
+  .RWWWWR.
+  RRRRRRRR
+  .K....K.
+}
+draw {
+  circfill(100, 8, 6, #fc4)
+  trifill(0, 25, 34, 12, 70, 25, #264)
+  rectfill(0, 25, 127, 31, #333)
+  for k < 9 {
+    m = k*16 - frac(t/2)*16
+    rectfill(m, 28, m + 7, 28, #fff)
+  }
+  spr(car, 56, 21)
+  print("GO!", 4, 2, #fff)
+}
+mix(#124, #f84, y)
+```
+
 ## 11. Going on without repeating: `loop forever`
 
 `loop forever` (instead of `loop N`) is a formula with no loop: `t` is the

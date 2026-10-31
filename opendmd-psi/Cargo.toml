@@ -16,7 +16,7 @@ default = ["tables", "compiler"]
 # The compiler (text -> program). The player never compiles: it loads
 # programs the browser or the build compiled (`psb`), so the firmware
 # leaves this out.
-compiler = []
+compiler = ["tables"]
 # Psi's own copies of the sine and the five palettes, identical to
 # opendmd-core's `fx::SIN` / `PALETTES` (core's tests check it). The
 # firmware, the simulator and the web app get Psi through opendmd-core's

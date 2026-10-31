@@ -158,7 +158,7 @@ to it.
 | fonts | `normal`, `small`, `bold` |
 | blends | `over`, `add`, `multiply`, `screen`, `max`, `min` |
 | keywords | `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` |
-| drawing | `line`, `dot` |
+| drawing | `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print` |
 | declarations | `psi`, `name`, `about`, `control`, `look` |
 | words that are keywords in one place only | `fps`, `forever`, `sprite`, `palette`, `key`, `rate` |
 
@@ -230,6 +230,15 @@ example is compiled by the tests.
 | `for k < 12 { … }` | inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame | <code class="psi-ex">draw { for k &lt; 12 { line(k&#42;10 + 8, 4, k&#42;10 + 8, 27, 0.2, 1) } }; gray(ink)</code> |
 | `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1) | <code class="psi-ex">loop 4; draw { line(64, 16, 64 + 40&#42;cos(t/4), 16 + 15&#42;sin(t/4), 0.2, 1) }; pal(ice, ink)</code> |
 | `dot(x, y, v)` | one pixel of ink v | <code class="psi-ex">draw { for k &lt; 64 { dot(hash(k, 1)&#42;128, hash(k, 2)&#42;32, hash(k, 3)) } }; gray(ink)</code> |
+| `cls(#102)` | paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins) | <code class="psi-ex">draw { cls(&#35;102); circfill(64, 16, 10, &#35;f80) }</code> |
+| `pset(x, y, #f80)` | paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour | <code class="psi-ex">loop 4; draw { for k &lt; 64 { pset(hash(k, 1)&#42;128, frac(hash(k, 2) + t/4)&#42;32, &#35;fff) } }</code> |
+| `rect(x0, y0, x1, y1, c) rectfill(…)` | paint a box (its corners included), or a filled one | <code class="psi-ex">draw { rectfill(10, 6, 50, 25, &#35;048); rect(10, 6, 50, 25, &#35;fff) }</code> |
+| `circ(x, y, r, c) circfill(…)` | paint a circle, or a filled one | <code class="psi-ex">loop 4; draw { circfill(64 + 40&#42;sin(t/4), 16, 9, &#35;f80); circ(64, 16, 14, &#35;0ff) }</code> |
+| `trifill(x0, y0, x1, y1, x2, y2, c)` | paint a filled triangle | <code class="psi-ex">draw { trifill(40, 28, 64, 4, 88, 28, &#35;0c4) }</code> |
+| `print("TEXT", x, y, c)` | paint text in the panel's font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits | <code class="psi-ex">draw { print("HELLO", 4, 4, &#35;ff0); print(minute, 90, 20, &#35;0ff, small, 2) }</code> |
+| `spr(s, x, y, flip)` | paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both | <code class="psi-ex">sprite heart {<br>  key . 0, R &#35;e24<br>  .R.R.<br>  RRRRR<br>  .RRR.<br>  ..R..<br>}<br>draw { spr(heart, 60, 12); spr(heart, 70, 12, 2) }</code> |
+| `pal(fire, v), gray(v)` | colours to paint with besides #…: a palette's or a gray, v 0 to 1 | <code class="psi-ex">draw { for k &lt; 16 { rectfill(k&#42;8, 0, k&#42;8 + 7, 31, pal(fire, k/15)) } }</code> |
+| `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
 | `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
@@ -1328,9 +1337,9 @@ Give `line` four values and `dot` two.
 
 <h4 id="E713">E713 · a line that does not belong in <code>draw { }</code></h4>
 
-> inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only
+> inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`
 
-Use only those lines inside `draw { }`.
+Use only those lines inside `draw { }`; the colour line goes after it.
 
 <h4 id="E714">E714 · <code>ink</code> without <code>draw { }</code></h4>
 
@@ -1349,6 +1358,54 @@ Put the loop inside `draw { }`.
 > `…` is a table: read one of its numbers, `…[k]` (k from 0)
 
 Read a number of the table with `NAME[k]`.
+
+<h4 id="E720">E720 · too many colours to paint with</h4>
+
+> a formula paints with … colours at most (each of a palette's 32 counts)
+
+Paint with fewer colours: a palette used in `pal(P, v)` takes 32 of the 127.
+
+<h4 id="E721">E721 · not a colour to paint with</h4>
+
+> a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`
+
+End the call with a colour: `#f80`, `pal(fire, v)` or `gray(v)` (for brightness into ink, `line` and `dot` take a number).
+
+<h4 id="E722">E722 · <code>spr</code> of something that is not a sprite</h4>
+
+> `spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s
+
+Name a sprite block, as `spr(ship, x, y)`.
+
+<h4 id="E723">E723 · <code>spr</code> without its place</h4>
+
+> … takes a sprite and its place
+
+Give the sprite's place: `spr(ship, x, y)`, and maybe a flip (1 across, 2 down, 3 both).
+
+<h4 id="E724">E724 · a text too long to print</h4>
+
+> `print` writes 32 characters at most
+
+Split the text into two `print`s.
+
+<h4 id="E725">E725 · no room for a text</h4>
+
+> this text doesn't fit: tables, sprites and texts hold 256 numbers in all
+
+Use shorter texts, or fewer tables and sprites.
+
+<h4 id="E726">E726 · a font <code>print</code> doesn't have</h4>
+
+> `print`'s font is `normal`, `small` or (for a value) `bold`
+
+Write `normal`, `small` or, for a number, `bold`.
+
+<h4 id="E727">E727 · something after a paint call's values</h4>
+
+> …: expected `)` here
+
+Close the call after its colour (and, for `print`, its font and digits).
 
 ### Frame rate (E8xx)
 

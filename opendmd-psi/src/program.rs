@@ -114,6 +114,15 @@ pub(crate) mod code {
     // Any level; never folded (a constant u, v: once a frame).
     pub const SPR: u8 = 25;
     pub const LAST_BIN: u8 = 25;
+    // The draw stage's paint (`crate::draw`, scalar slots only): `ARGS a
+    // b c` adds three values to the primitive's arguments; `PAINT d, a, b,
+    // c` adds three more and draws primitive `d` (`paint::*`) with them;
+    // `IF a, b`: on to step `b` (forward, in the draw stage) when slot `a`
+    // is 0; `JUMP b`: on to step `b` (forward).
+    pub const ARGS: u8 = 26;
+    pub const PAINT: u8 = 27;
+    pub const IF: u8 = 28;
+    pub const JUMP: u8 = 29;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -140,6 +149,10 @@ pub(crate) mod code {
     // (`range::checked`) is `mul(a, b)` (`range::narrow`, per pixel only).
     pub const SHR: u8 = 46;
     pub const LAST_UN: u8 = 46;
+    // `PALIDX d, a, b`: a draw colour `pal(P, v)`'s paint index: `b` (an
+    // immediate, where P's 32 entries start in the paint palette) +
+    // `fixed::pal_index(a)`, as a whole number. Not per pixel.
+    pub const PALIDX: u8 = 47;
     // Wide values: `t` in a `loop forever` formula grows without end, so it
     // and the values made from it once a frame are Q48.16 in an i64
     // (`crate::fixed`'s `w_*`), in [`crate::Scratch`]'s wide slots, never
@@ -265,7 +278,7 @@ pub(crate) mod code {
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
     pub fn is_table(c: u8) -> bool {
-        matches!(c, SIN | COS | SPR | DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST)
+        matches!(c, SIN | COS | SPR | PALIDX | DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST)
     }
 
     /// A wide step (`W_*`): once a frame, its operands wide or scalar
@@ -296,6 +309,7 @@ pub(crate) mod code {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
             LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END | TURN | SLOW => false,
+            ARGS | PAINT | IF | JUMP => false,
             c => !is_colour(c),
         }
     }
@@ -320,8 +334,11 @@ pub(crate) mod code {
     /// of a layer not counted.
     pub fn arity(c: u8) -> usize {
         match c {
+            ARGS | PAINT => 3,
+            IF => 1,
+            JUMP => 0,
             0..=LAST_BIN => 2,
-            32..=LAST_UN => 1,
+            32..=LAST_UN | PALIDX => 1,
             W_FIRST..=W_LAST => wide_ops(c).1,
             64..=LAST_TERN => 3,
             U_R..=INK => 0,
@@ -424,6 +441,11 @@ pub(crate) mod code {
             "w_mod", "w_cmp", "w_minmax", "w_red", "w_lat", "w_noisex", "w_rem",
         ];
         match c {
+            ARGS => "args",
+            PAINT => "paint",
+            IF => "if",
+            JUMP => "jump",
+            PALIDX => "palidx",
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
             W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
@@ -473,6 +495,32 @@ pub(crate) const OWNPAL: u8 = 32;
 
 /// `table` entries a formula may hold in all.
 pub const MAX_TABLE: usize = 256;
+
+/// The program paints (`draw { }` with colours: the paint canvas, laid
+/// over every layer).
+pub(crate) const PAINTS: u8 = 64;
+
+/// Colours a formula may paint with (the paint palette; entry 0 is none).
+pub const MAX_PAINT: usize = 128;
+
+/// The paint primitives (`code::PAINT`'s `d`) and how many values each
+/// takes (its colour last).
+pub mod paint {
+    pub const CLS: u8 = 0;
+    pub const PSET: u8 = 1;
+    pub const LINE: u8 = 2;
+    pub const RECT: u8 = 3;
+    pub const RECTFILL: u8 = 4;
+    pub const CIRC: u8 = 5;
+    pub const CIRCFILL: u8 = 6;
+    pub const TRIFILL: u8 = 7;
+    pub const SPR: u8 = 8;
+    pub const PRINT: u8 = 9;
+    pub const PRINTNUM: u8 = 10;
+    pub const LAST: u8 = 10;
+    /// Values a primitive takes.
+    pub const ARGS: [usize; 11] = [1, 3, 5, 5, 5, 4, 4, 7, 4, 6, 6];
+}
 
 /// A formula's own palettes (`palette NAME = #…, …`): up to three, `pal`'s
 /// palettes 5, 6 and 7 after the five built-ins, each 32 entries
@@ -569,9 +617,11 @@ pub struct Program {
     pub(crate) tables: [i32; MAX_TABLE],
     /// What the formula declares (its controls, whether it is a look).
     pub(crate) meta: crate::meta::Meta,
+    /// The paint palette: colour `k` (0x00RRGGBB) of index `k` (0 none).
+    pub(crate) paint: [u32; MAX_PAINT],
 }
 
-const _: () = assert!(core::mem::size_of::<Program>() <= 2876);
+const _: () = assert!(core::mem::size_of::<Program>() <= 2876 + 4 * MAX_PAINT);
 
 impl core::fmt::Debug for Program {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -604,6 +654,7 @@ impl Default for Program {
             loop_ms: 8000,
             tables: [0; MAX_TABLE],
             meta: crate::meta::Meta::default(),
+            paint: [0; MAX_PAINT],
         }
     }
 }
@@ -662,7 +713,7 @@ impl Program {
     pub fn primitives(&self) -> u32 {
         let mut n = 0;
         self.draw_walk(|_, op, mult| {
-            if matches!(op.code, code::LINE_TO | code::DOT) {
+            if matches!(op.code, code::LINE_TO | code::DOT | code::PAINT) {
                 n += mult;
             }
         });
@@ -1256,6 +1307,10 @@ impl Program {
                     1_100 + 270 * len
                 }
                 code::DOT => 450,
+                // A paint primitive (a guess until the device measures them:
+                // a call and the pixels it covers, ~15 ns each natively).
+                code::PAINT => [62_000, 600, 4_000, 6_000, 12_000, 6_000, 10_000, 14_000, 8_000, 8_000, 8_000]
+                    [(op.d as usize).min(paint::LAST as usize)],
                 _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
@@ -1290,6 +1345,7 @@ impl Program {
         self.loop_ms = 8000;
         self.tables.fill(0);
         self.meta = crate::meta::Meta::default();
+        self.paint.fill(0);
     }
 
     /// What the formula declares: its controls (defaults for the slots a

@@ -152,7 +152,18 @@ pub const KEYWORDS: [&str; 7] = [
 
 /// The draw stage's primitives: statements inside `draw { }`, and names a
 /// formula may still set (`line = …`), as `ink` is a value it may.
-pub const PRIMITIVES: [&str; 2] = ["line", "dot"];
+pub const PRIMITIVES: [&str; 11] = [
+    "line", "dot", "pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print",
+];
+
+/// The ink primitives: `line` and `dot` with a number (a brightness) last
+/// draw ink; with a colour last they paint.
+pub const INK_CALLS: [&str; 2] = ["line", "dot"];
+
+/// The paint primitives: statements inside `draw { }` that draw in colour
+/// onto the paint canvas (the last drawn wins). `line` and `dot` paint too
+/// when their last value is a colour.
+pub const PAINT_CALLS: [&str; 9] = ["pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print"];
 
 /// How a layer goes onto what is below it (`layer add { … }`; `over` when
 /// none is named).
@@ -239,6 +250,15 @@ pub mod cheat {
         ("for k < 12 { … }", "inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame", "for k < 12 {\n  \n}"),
         ("line(x0, y0, x1, y1, v0, v1)", "a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)", ""),
         ("dot(x, y, v)", "one pixel of ink v", ""),
+        ("cls(#102)", "paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins)", ""),
+        ("pset(x, y, #f80)", "paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour", ""),
+        ("rect(x0, y0, x1, y1, c) rectfill(…)", "paint a box (its corners included), or a filled one", ""),
+        ("circ(x, y, r, c) circfill(…)", "paint a circle, or a filled one", ""),
+        ("trifill(x0, y0, x1, y1, x2, y2, c)", "paint a filled triangle", ""),
+        ("print(\"TEXT\", x, y, c)", "paint text in the panel's font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits", ""),
+        ("spr(s, x, y, flip)", "paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both", ""),
+        ("pal(fire, v), gray(v)", "colours to paint with besides #…: a palette's or a gray, v 0 to 1", ""),
+        ("if c { … } else { … }", "inside draw: only when c is not 0", "if  {\n  \n}"),
         ("ink", "what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink", ""),
         ("ink(16)", "the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels", ""),
         ("table T = 1, -2, 0.5", "numbers, 256 in all", "table T = "),
