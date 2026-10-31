@@ -4852,10 +4852,11 @@ def now_edit_checks(page: Page, base: str) -> None:
     check(b in asked and cache_path(b) not in asked and s["now_playing"]["path"] == a,
           f"now edit: a recent entry's ✎ opens {b.rsplit('/', 1)[-1]} in Create Art, without playing it")
     # A Formula: the example it is, in the editor.
-    # (Old photo: a path within the history's 200 B an entry, so it is listed.)
     e = next(x for x in bundled() if x["name"] == "Old photo")
-    path = page.evaluate("src => import('./js/psishow.js').then(m => m.fpath({ src }))", e["src"])
-    on_screen(path)
+    path = page.evaluate("src => import('./js/looks.js').then(l => l.psi()).then(() => import('./js/psishow.js')).then(m => m.fpath({ src }))", e["src"])
+    post_json(base + "/api/play", {"path": path})
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-edit')?.textContent === '✎ Edit in Formulas'", timeout=10000)
     check(page.inner_text("#now-edit") == "✎ Edit in Formulas", f"now edit: a Formula offers '{page.inner_text('#now-edit')}'")
     page.click("#now-edit")
     page.wait_for_selector("#view-formulas.on #psi-ed #psi-src", timeout=20000)
@@ -4864,9 +4865,8 @@ def now_edit_checks(page: Page, base: str) -> None:
     page.wait_for_function(f"document.querySelector('#psi-src').value === {json.dumps(e['src'])}", timeout=10000)
     check(page.input_value("#psi-name") == "Old photo" and location_hash(page) == "#formulas/edit",
           "now edit: the Formula opens in the editor as the example it is, comments and all")
-    goto_view(page, "now")
-    page.wait_for_selector("#now-recent > div button[aria-label='Edit in Formulas']", timeout=10000)
-    check(True, "now edit: a recent Formula has ✎ Edit in Formulas")
+    # (A Formula sent from the editor is longer than an entry of Recently
+    # played may be: the panel doesn't list it there.)
     # The clock: said, not offered.
     on_screen("@clock")
     page.wait_for_function("document.querySelector('#now-live').textContent !== ''", timeout=10000)
