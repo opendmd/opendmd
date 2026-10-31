@@ -386,6 +386,11 @@ pub mod golden {
     /// rule, dots, tables at every level, loops of 1 and 1,024 turns, loops
     /// nested, `ink` through a part and through a look.
     pub const DRAWN: &[(&str, &str, u32, bool, u64)] = &[
+        // Paint (the scene stage): every primitive, the palettes, a
+        // sprite in colours flipped, text and a number, an `if`/`else` in a
+        // loop, painted over a colour line and alone (over the picture).
+        ("paint", "loop 4\nsprite s {\n  key . 0, R #f00, W #fff\n  .RR.\n  RWWR\n}\ndraw {\n  cls(#102)\n  rectfill(10, 4, 40, 20, #f80)\n  rect(12, 6, 30, 18, pal(ice, 0.5))\n  circfill(64 + 30*sin(t/4), 16, 8, pal(fire, 0.7))\n  circ(64, 16, 12.5, #0f0)\n  trifill(90, 28, 110, 4, 126, 28, gray(0.4))\n  line(0, 31, 127, 0, #fff)\n  print(\"Hi! 42\", 4, 24, #0ff)\n  print(second - 40, 100, 2, #ff0, small, 3)\n  print(minute, 80, 2, #f0f, bold, 2)\n  spr(s, 50, 26)\n  spr(s, 56, 26, 3)\n  for k < 8 {\n    if k % 2 == 0 { pset(k*4, 2, #f0f) } else { pset(k*4, 3, gray(k/8)) }\n  }\n}\ngray(x)", 1000, false, 0x17f4f937f0881e04),
+        ("paint-alone", "draw { circfill(64, 16, 10, #f00); line(0, 0, 127, 31, #0f0); dot(5, 5, #fff) }", 0, true, 0x423ea6c55f0f8e58),
     ("octants", "draw {\n  for k < 16 {\n    an = k/16 + 1/64\n    ex = 64 + cos(an)*60; ey = 16 + sin(an)*15\n    rev = k % 2\n    line(mix(64, ex, rev), mix(16, ey, rev), mix(ex, 64, rev), mix(ey, 16, rev), 1, k/16)\n  }\n}\npal(rainbow, ink)", 0, false, 0xbca6efe0672e7e),
     ("ties", "draw {\n  dot(10.5, 3.5); dot(20.49, 3.5, 0.5); dot(-0.5, 0); dot(127.5, 31.5); dot(127.49, 31.49, 0.25)\n  line(0.5, 10.5, 20.5, 17.5); line(30.5, 20.5, 30.5, 20.5, 0.5); line(40, 5, 52, 5.5, 0, 1)\n}\ngray(ink)", 0, false, 0xadf5a3b2dcd16f49),
     ("clipping", "draw {\n  line(-20, 16, 140, 20); line(64, -10, 70, 40, 0.5)\n  line(-30000, -30000, 30000, 30000, 0.75); line(-5, -5, -1, 40); line(130, 0, 200, 31)\n  line(0, 31.6, 127, 31.4); line(10, -0.6, 120, -0.4)\n}\ngray(ink)", 0, false, 0x69688b0d838cfe57),

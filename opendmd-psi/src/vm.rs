@@ -1029,6 +1029,10 @@ pub(crate) fn frame<const N: usize>(
                 k += 1;
             }
         }
+        // The paint canvas over every layer (`draw { }` with colours): once
+        // a row, out of line (a test in the lane loop would have LLVM copy
+        // the loop: IRAM).
+        crate::draw::paint_row(prog, ink, row, &mut out[span]);
         columns_kept = N == W;
     }
     per_row.end(out, scratch);
@@ -1251,6 +1255,7 @@ pub(crate) fn scalar_value(
     match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
+        code::PALIDX => (op.b as i32 + fixed::pal_index(g(op.a)) as i32) << 16,
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
     }

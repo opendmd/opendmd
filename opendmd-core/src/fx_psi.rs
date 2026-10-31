@@ -3613,7 +3613,7 @@ mod tests {
         let under = picture();
         let src = psi::look::compose(STARS, "screen", 60).unwrap();
         let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
-        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + 4096);
+        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + core::mem::size_of::<psi::Ink>());
         assert!(look.take());
         let mut c = picture();
         let out = look.apply(Duration::ZERO, &mut c, 0);

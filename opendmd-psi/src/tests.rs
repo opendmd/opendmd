@@ -496,7 +496,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 2876);
+    assert!(core::mem::size_of::<Program>() <= 2876 + 4 * crate::program::MAX_PAINT);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -531,8 +531,8 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    assert_eq!(core::mem::size_of::<Program>(), 2876);
-    assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
+    assert_eq!(core::mem::size_of::<Program>(), 2876 + 4 * crate::program::MAX_PAINT);
+    assert_eq!(core::mem::size_of::<crate::Ink>(), 8192);
     // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
     let beam = 3 * core::mem::size_of::<usize>();
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192 + beam);

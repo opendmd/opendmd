@@ -494,6 +494,51 @@ hsv(x, 0.6, ink)
 
 **Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.
 
+**Painting a scene.** For a scene of things in their own colours (a sun,
+hills, a car, a score) draw with colours instead of ink. Paint goes on
+top of the colour line, and **the last thing painted wins**, as in a game
+console: paint the back first, the front last.
+
+```
+loop 4
+sprite car {
+  key . 0, R #d22, W #fff, K #222
+  ..RRRR..
+  .RWWWWR.
+  RRRRRRRR
+  .K....K.
+}
+draw {
+  circfill(100, 8, 6, #fc4)                -- the sun
+  trifill(0, 31, 30, 14, 60, 31, #264)     -- a hill
+  rectfill(0, 26, 127, 31, #333)           -- the road
+  for k < 8 {
+    rectfill(k*16 - frac(t/4)*16, 28, k*16 + 6 - frac(t/4)*16, 28, #fff)
+  }
+  spr(car, 50, 21)
+  print("GO!", 4, 2, #fff)
+}
+mix(#124, #f84, y)                          -- the sky, under the paint
+```
+
+- The painting calls, in pixels from the top left: `pset(x, y, c)`,
+  `line(x0, y0, x1, y1, c)`, `rect(x0, y0, x1, y1, c)` and `rectfill(…)`
+  (corners included), `circ(x, y, r, c)` and `circfill(…)`,
+  `trifill(x0, y0, x1, y1, x2, y2, c)`, `cls(c)` (everything one colour),
+  `spr(sprite, x, y)` (add `1` to flip it across, `2` down, `3` both) and
+  `print("TEXT", x, y, c)`, or a number, `print(minute, x, y, c, small, 2)`
+  (at least 2 digits; `small` or `normal` for the font, `bold` for chunky
+  digits).
+- A colour is `#f80`, a palette's `pal(fire, v)` or `gray(v)`. A sprite's
+  key may give colours: `key . 0, R #d22` (`0`: nothing, the paint under
+  shows).
+- `if k % 2 == 0 { … } else { … }` draws only some things.
+- With paint and no colour line, what is under shows: the picture under
+  the formula over a GIF (snow, a badge, a score), black when it plays
+  alone.
+- Ink and paint mix freely: ink is read by the colour line (`ink`), paint
+  is laid over everything.
+
 **Sprites.** A little picture can be written into the formula as it looks,
 one character a pixel, with a key saying what number each character
 stands for:

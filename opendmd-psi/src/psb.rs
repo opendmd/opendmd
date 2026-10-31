@@ -22,6 +22,7 @@
 //! ops     = pixel_end × (code d a b c)
 //! init    = (n_scalars − 9) × i32   (the inputs' slots are always 0)
 //! tables  = lo(u16) pals(u8)  lo × i32 (from 0)  pals × 32 × i32 (from the top)
+//! paint   = n(u8)  n × u32 (the paint palette from entry 0)
 //! meta    = kind[3] look amount (u8)  lo[3] hi[3] def[3] (i32)   (with flag bit 1)
 //! ```
 //!
@@ -117,6 +118,11 @@ fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
     o.push(pals as u8);
     for v in p.tables[..lo].iter().chain(&p.tables[top..]) {
         o.extend_from_slice(&v.to_le_bytes());
+    }
+    let np = p.paint.iter().rposition(|&c| c != 0).map_or(0, |k| k + 1);
+    o.push(np as u8);
+    for c in &p.paint[..np] {
+        o.extend_from_slice(&c.to_le_bytes());
     }
     let m = &p.meta;
     if !meta {
@@ -283,6 +289,13 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
     for k in MAX_TABLE - 32 * pals..MAX_TABLE {
         prog.tables[k] = r.i32()?;
     }
+    let np = r.u8()? as usize;
+    if np > crate::program::MAX_PAINT {
+        return Err(NOT_PSB);
+    }
+    for k in 0..np {
+        prog.paint[k] = r.u32()? & 0xff_ffff;
+    }
     let mut m = Meta::default();
     if flags & F_META == 0 {
         prog.meta = m;
@@ -322,7 +335,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
     if !(S_FIRST_FREE as usize..=MAX_SCALARS).contains(&ns) || p.regs as usize > REGS {
         return bad;
     }
-    if p.uses & !63 != 0 || !matches!(p.frame_ms, 0 | 10 | 20 | 40) || p.loop_ms > 3_600_000 {
+    if p.uses & !127 != 0 || !matches!(p.frame_ms, 0 | 10 | 20 | 40) || p.loop_ms > 3_600_000 {
         return bad;
     }
     if verify_meta(&p.meta).is_err() {
@@ -347,7 +360,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
             return bad;
         }
-        let known = matches!(c, 0..=LAST_BIN | 32..=LAST_UN | W_FIRST..=W_LAST | 64..=LAST_TERN)
+        let known = matches!(c, 0..=LAST_BIN | ARGS..=JUMP | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
             || matches!(c, U_R..=INKN | TURN | SLOW | FOR..=COLUMN)
             || is_colour(c) && colour_ok(c);
         if !known {
@@ -355,7 +368,8 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         }
         // Where a step may be.
         let placed = match c {
-            FOR | END | LINE_FROM | LINE_TO | DOT => draw,
+            FOR | END | LINE_FROM | LINE_TO | DOT | ARGS | PAINT | IF | JUMP => draw,
+            PALIDX => !pixel,
             TURN => row,
             SLOW => k == re,
             STILL | COLUMN | U_R..=INKN | PICK => pixel,
@@ -432,8 +446,39 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 line_open = false;
                 continue;
             }
-            DOT => {
+            DOT | ARGS => {
                 if ![op.a, op.b, op.c].iter().all(|&v| scalar(v)) {
+                    return bad;
+                }
+                continue;
+            }
+            PAINT => {
+                if op.d > crate::program::paint::LAST || ![op.a, op.b, op.c].iter().all(|&v| scalar(v)) {
+                    return bad;
+                }
+                continue;
+            }
+            IF | JUMP => {
+                // Forward, inside the draw stage, and not into or out of a
+                // loop (the loops' FOR and END balance between).
+                let to = op.b as usize;
+                if (c == IF && !scalar(op.a)) || to <= k || to > de {
+                    return bad;
+                }
+                let mut d = 0i32;
+                for o in &p.ops[k + 1..to] {
+                    d += i32::from(o.code == FOR) - i32::from(o.code == END);
+                    if d < 0 {
+                        return bad;
+                    }
+                }
+                if d != 0 {
+                    return bad;
+                }
+                continue;
+            }
+            PALIDX => {
+                if !scalar(op.a) || !scalar(op.d) || op.d < S_FIRST_FREE || op.b as usize + 32 > crate::program::MAX_PAINT {
                     return bad;
                 }
                 continue;
@@ -473,7 +518,6 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             let imm = match c {
                 PICK | TAB => i > 0,
                 SPR => i > 1,
-                INKN => true,
                 _ => false,
             };
             if imm {
@@ -502,7 +546,8 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                     return bad;
                 }
             }
-            INKN if op.a == 0 => return bad,
+            // `ink(n)`: n a constant slot (1..=255).
+            INKN if !scalar(op.a) => return bad,
             _ => {}
         }
         if is_colour(c) {

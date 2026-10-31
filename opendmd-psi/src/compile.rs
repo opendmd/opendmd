@@ -478,7 +478,7 @@ fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
                 "or" => Tok::Or,
                 "not" => Tok::Not,
                 w => {
-                    text |= first && text_line(w);
+                    text |= (first && text_line(w)) || w == "print";
                     Tok::Name
                 }
             };
@@ -759,6 +759,9 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Toks) -> usize {
 /// `name = …`, an assignment): where text in quotes may be. The first word,
 /// past anything but letters and digits, then anything but `=`.
 pub(crate) fn declaration_line(line: &str) -> bool {
+    if line.contains("print") {
+        return true;
+    }
     let b = line.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let Some(a) = b.iter().position(|&c| word(c)) else {
@@ -922,6 +925,19 @@ const CENTRED: [(u8, u8, u8); 6] = [
     (code::LEN, 7, 8),   // 10: r
     (code::ATAN2, 8, 7), // 11: angle
 ];
+
+/// `f80` or `ff8800` as 0xRRGGBB.
+fn hex_colour(h: &str) -> Option<u32> {
+    let mut v = 0u32;
+    for c in h.chars() {
+        v = v << 4 | c.to_digit(16)?;
+    }
+    match h.len() {
+        3 => Some(((v >> 8) & 15) * 0x11_0000 + ((v >> 4) & 15) * 0x1100 + (v & 15) * 0x11),
+        6 => Some(v),
+        _ => None,
+    }
+}
 
 /// Optimal string alignment distance (edits, adjacent swaps count one),
 /// in three rolling rows of bytes (it runs at the deepest point of an
@@ -1958,6 +1974,11 @@ enum DItem {
     End,
     Line([Id; 6]),
     Dot([Id; 3]),
+    /// A paint primitive (`program::paint`): its values, how many.
+    Paint(u8, [Id; 9], u8),
+    If(Id),
+    Else,
+    EndIf,
 }
 
 /// `part name { … }`: another formula inside this one, pasted in, with
@@ -2044,6 +2065,10 @@ struct Parser<'s> {
     /// in loops), the loops' counts around it, loops numbered so far, and
     /// loop turns a frame.
     draw: Vec<DItem>,
+    /// The paint palette (0x00RRGGBB; entry 0 none) and where a palette's
+    /// 32 entries start in it (palette id, start).
+    paint: Vec<u32>,
+    paint_pals: Vec<(u8, u8)>,
     drawn: Option<Token>,
     record: bool,
     in_draw: u8,
@@ -4277,11 +4302,19 @@ impl<'s> Parser<'s> {
                 ns += 1;
             }
             let neg = kb[ns] == b'-';
-            let Some(v) = number(sub(
-                self.src,
-                key.start + ns + usize::from(neg),
-                key.start + te,
-            )) else {
+            // `R #f00`: a colour, the paint index `spr` draws it in.
+            let hex = (kb[ns] == b'#')
+                .then(|| hex_colour(sub(self.src, key.start + ns + 1, key.start + te)))
+                .flatten();
+            let v = match hex {
+                Some(rgb) => Some((self.paint_index(rgb, key)? as i32) << 16),
+                None => number(sub(
+                    self.src,
+                    key.start + ns + usize::from(neg),
+                    key.start + te,
+                )),
+            };
+            let Some(v) = v else {
                 return Err(bad);
             };
             if chars.contains(&kb[s]) {
@@ -4536,7 +4569,11 @@ impl<'s> Parser<'s> {
                 self.assignment(false)?;
             } else if word == "for" {
                 self.for_loop(t)?;
-            } else if PRIMITIVES.contains(&word) && next == Tok::LParen {
+            } else if word == "if" {
+                self.if_block(t)?;
+            } else if next == Tok::LParen && (PAINT_CALLS.contains(&word) || INK_CALLS.contains(&word) && self.paints_with_colour()) {
+                self.paint_call(t)?;
+            } else if INK_CALLS.contains(&word) && next == Tok::LParen {
                 self.primitive(t)?;
             } else if !self.closed() {
                 return self.err(
@@ -4550,7 +4587,7 @@ impl<'s> Parser<'s> {
             } else {
                 return self.err(
                     t,
-                    "inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only",
+                    "inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`",
                 );
             }
             self.skip_newlines();
@@ -4739,6 +4776,328 @@ impl<'s> Parser<'s> {
             } else {
                 DItem::Dot([v[0], v[1], v[2]])
             })?;
+        }
+        self.end_of_statement()
+    }
+
+    /// Whether the call at the cursor (`line(` or `dot(`) ends in a colour
+    /// (`#…`, `pal(…)`, `gray(…)`): it paints, else it draws ink.
+    fn paints_with_colour(&self) -> bool {
+        let mut depth = 0;
+        let mut last = self.pos + 2;
+        let mut k = self.pos + 1;
+        loop {
+            let t = self.tok(k);
+            match t.tok {
+                Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RParen | Tok::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                Tok::Comma if depth == 1 => last = k + 1,
+                Tok::Eof => return false,
+                Tok::Newline if depth <= 1 => return false,
+                _ => {}
+            }
+            k += 1;
+        }
+        let t = self.tok(last);
+        matches!(t.tok, Tok::Hex(_))
+            || (t.tok == Tok::Name
+                && matches!(self.text(t), "pal" | "gray")
+                && self.tok(last + 1).tok == Tok::LParen)
+    }
+
+    /// Colour `rgb` in the paint palette (added once).
+    fn paint_index(&mut self, rgb: u32, at: Token) -> Result<u8, Error> {
+        if let Some(k) = self.paint.iter().skip(1).position(|&c| c == rgb) {
+            return Ok(k as u8 + 1);
+        }
+        if self.paint.len() >= MAX_PAINT {
+            return self.err(at, format!("a formula paints with {} colours at most (each of a palette's 32 counts)", MAX_PAINT - 1));
+        }
+        try_push(&mut self.paint, rgb)?;
+        Ok((self.paint.len() - 1) as u8)
+    }
+
+    /// Palette `pal`'s 32 entries in the paint palette (once): where they
+    /// start.
+    fn paint_palette(&mut self, pal: u8, at: Token) -> Result<u8, Error> {
+        if let Some(&(_, b)) = self.paint_pals.iter().find(|e| e.0 == pal) {
+            return Ok(b);
+        }
+        if self.paint.len() + 32 > MAX_PAINT {
+            return self.err(at, format!("a formula paints with {} colours at most (each of a palette's 32 counts)", MAX_PAINT - 1));
+        }
+        let base = self.paint.len() as u8;
+        for e in 0..32 {
+            let c = match pal {
+                255 => {
+                    let v = fixed::chan((e as i32) * ONE / 31) as u32;
+                    v << 16 | v << 8 | v
+                }
+                0..=4 => {
+                    let c = crate::tables::PALETTES[pal as usize][e];
+                    (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32
+                }
+                _ => self.palettes.get((pal - 5) as usize).map_or(0, |p| p[e] as u32),
+            };
+            try_push(&mut self.paint, c)?;
+        }
+        try_push(&mut self.paint_pals, (pal, base))?;
+        Ok(base)
+    }
+
+    /// A paint colour at the cursor: `#…`, `pal(P, v)` or `gray(v)` (its
+    /// index, a value the same for every pixel).
+    #[inline(never)]
+    fn paint_colour(&mut self) -> Result<Id, Error> {
+        let t = self.peek();
+        let at = (t.start, t.end);
+        if let Tok::Hex(rgb) = t.tok {
+            self.next();
+            let k = self.paint_index(rgb, t)?;
+            return self.dag.constant((k as i32) << 16, at);
+        }
+        let word = if t.tok == Tok::Name { self.text(t) } else { "" };
+        if !matches!(word, "pal" | "gray") || self.tok(self.pos + 1).tok != Tok::LParen {
+            return self.err(
+                t,
+                "a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`",
+            );
+        }
+        self.next();
+        self.next();
+        let pal = if word == "gray" {
+            255
+        } else {
+            let pt = self.next();
+            let pname = self.text(pt);
+            let own = self
+                .palette_named(pname)
+                .map(|k| 5 + self.palette_names[k].j as u8);
+            let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
+                return Err(self.unknown_palette(pt));
+            };
+            self.expect(Tok::Comma, "`,` after the palette")?;
+            pal
+        };
+        let start = self.peek().start;
+        let v = self.expr(0)?;
+        let end = self.toks[self.pos.saturating_sub(1)].get().end;
+        self.drawable(v, start, end)?;
+        self.expect(Tok::RParen, "`)`")?;
+        let base = self.paint_palette(pal, t)?;
+        let m = self.dag.nodes[v as usize];
+        self.dag.push(
+            Node {
+                code: code::PALIDX,
+                a: v,
+                b: base as Id,
+                c: 0,
+                val: 0,
+                level: m.level.max(LV_FRAME),
+                why: m.why,
+            },
+            at,
+        )
+    }
+
+    /// A paint primitive at `t` (`pset(x, y, c)`, `line(x0, y0, x1, y1,
+    /// c)`, `rect`/`rectfill(x0, y0, x1, y1, c)`, `circ`/`circfill(x, y, r,
+    /// c)`, `trifill(x0, y0, x1, y1, x2, y2, c)`, `cls(c)`, `spr(s, x, y
+    /// [, flip])`, `print(text or value, x, y, c [, font [, digits]])`).
+    #[inline(never)]
+    fn paint_call(&mut self, t: Token) -> Result<(), Error> {
+        use crate::program::paint;
+        let name = self.text(t);
+        let kind = match name {
+            "cls" => paint::CLS,
+            "pset" | "dot" => paint::PSET,
+            "line" => paint::LINE,
+            "rect" => paint::RECT,
+            "rectfill" => paint::RECTFILL,
+            "circ" => paint::CIRC,
+            "circfill" => paint::CIRCFILL,
+            "trifill" => paint::TRIFILL,
+            "spr" => paint::SPR,
+            _ => paint::PRINT,
+        };
+        self.next();
+        let open = self.next();
+        let mut v = [0 as Id; 9];
+        let mut n;
+        let mut kind = kind;
+        let usage = match kind {
+            paint::CLS => "`cls(colour)`",
+            paint::PSET => "`pset(x, y, colour)` (or `dot`)",
+            paint::LINE => "`line(x0, y0, x1, y1, colour)`",
+            paint::RECT | paint::RECTFILL => "`rect(x0, y0, x1, y1, colour)` (corners included; `rectfill` filled)",
+            paint::CIRC | paint::CIRCFILL => "`circ(x, y, radius, colour)` (`circfill` filled)",
+            paint::TRIFILL => "`trifill(x0, y0, x1, y1, x2, y2, colour)`",
+            paint::SPR => "`spr(sprite, x, y)` or `spr(sprite, x, y, flip)` (1 across, 2 down, 3 both)",
+            _ => "`print(\"TEXT\" or a value, x, y, colour)`, then maybe `small` or `bold` and the digits a value has at least",
+        };
+        let at = (t.start, open.end);
+        // The values before the colour, the colour, then what follows it.
+        let before = match kind {
+            paint::SPR | paint::PRINT => 0,
+            k => paint::ARGS[k as usize] - 1,
+        };
+        if kind == paint::SPR {
+            let st = self.next();
+            let Some(k) = (st.tok == Tok::Name).then(|| self.sprite_named(self.text(st))).flatten() else {
+                return self.err(st, "`spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s");
+            };
+            let at_tab = self.sprites[k].start;
+            v[0] = self.dag.constant((at_tab as i32) << 16, at)?;
+            n = 1;
+            for _ in 0..3 {
+                if self.peek().tok != Tok::Comma {
+                    break;
+                }
+                self.next();
+                v[n] = self.paint_value()?;
+                n += 1;
+            }
+            if n == 3 {
+                v[3] = self.dag.constant(0, at)?;
+                n = 4;
+            }
+            if n != 4 {
+                return self.err(t, format!("{usage} takes a sprite and its place"));
+            }
+        } else if kind == paint::PRINT {
+            // The text: in quotes (its characters into the tables), or a value.
+            let st = self.peek();
+            if st.tok == Tok::Str {
+                self.next();
+                let text = sub(self.src, st.start + 1, st.end.saturating_sub(1));
+                let vals: Vec<i32> = text.bytes().map(|c| (c as i32) << 16).collect();
+                if vals.len() > 32 {
+                    return self.err(st, "`print` writes 32 characters at most");
+                }
+                let start = match self.tables.windows(vals.len().max(1)).position(|w| w == vals.as_slice()) {
+                    Some(k) if !vals.is_empty() => k,
+                    _ => {
+                        if self.tables.len() + vals.len() + 32 * self.palettes.len() > MAX_TABLE {
+                            return self.err(st, "this text doesn't fit: tables, sprites and texts hold 256 numbers in all");
+                        }
+                        try_extend(&mut self.tables, &vals)?;
+                        self.tables.len() - vals.len()
+                    }
+                };
+                v[0] = self.dag.constant((start as i32) << 16, at)?;
+                v[1] = self.dag.constant((vals.len() as i32) << 16, at)?;
+            } else {
+                kind = paint::PRINTNUM;
+                v[0] = self.paint_value()?;
+                v[1] = self.dag.constant(ONE, at)?;
+            }
+            for slot in &mut v[3..5] {
+                self.expect(Tok::Comma, "`,` and where to write it")?;
+                *slot = self.paint_value()?;
+            }
+            self.expect(Tok::Comma, "`,` and the colour")?;
+            v[5] = self.paint_colour()?;
+            v[2] = self.dag.constant(0, at)?;
+            if self.peek().tok == Tok::Comma {
+                self.next();
+                let f = self.next();
+                let font = match (f.tok, self.text(f)) {
+                    (Tok::Name, "normal") => 0,
+                    (Tok::Name, "small") => 1,
+                    (Tok::Name, "bold") if kind == paint::PRINTNUM => 2,
+                    _ => return self.err(f, "`print`'s font is `normal`, `small` or (for a value) `bold`"),
+                };
+                v[2] = self.dag.constant(font << 16, at)?;
+                if kind == paint::PRINTNUM && self.peek().tok == Tok::Comma {
+                    self.next();
+                    v[1] = self.paint_value()?;
+                }
+            }
+            n = 6;
+        } else {
+            for (k, slot) in v.iter_mut().enumerate().take(before) {
+                if k > 0 {
+                    self.expect(Tok::Comma, "`,`")?;
+                }
+                if self.peek().tok == Tok::RParen {
+                    return self.err(t, format!("{usage}: a value is missing"));
+                }
+                *slot = self.paint_value()?;
+            }
+            if before > 0 {
+                self.expect(Tok::Comma, "`,` and the colour")?;
+            }
+            v[before] = self.paint_colour()?;
+            n = before + 1;
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return self.err(close, format!("{usage}: expected `)` here"));
+        }
+        self.next();
+        if self.record {
+            try_push(&mut self.draw, DItem::Paint(kind, v, n as u8))?;
+        }
+        self.end_of_statement()
+    }
+
+    /// A value a paint primitive takes (the same for every pixel).
+    fn paint_value(&mut self) -> Result<Id, Error> {
+        let start = self.peek().start;
+        let e = self.expr(0)?;
+        let end = self.toks[self.pos.saturating_sub(1)].get().end;
+        self.drawable(e, start, end)?;
+        if self.dag.grows(e) {
+            return Err(Error::new(
+                start,
+                end.max(start),
+                "a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)",
+            ));
+        }
+        Ok(e)
+    }
+
+    /// `if c { … } [else { … }]` at `kw`, inside draw.
+    #[inline(never)]
+    fn if_block(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let c = self.paint_value()?;
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return Err(self.expected(open, "`{` (as in `if k > 2 { … }`)"));
+        }
+        self.next();
+        if self.record {
+            try_push(&mut self.draw, DItem::If(c))?;
+        }
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        self.draw_lines(kw)?;
+        self.next();
+        // `else {` on the same line or the next.
+        let mut k = self.pos;
+        while self.tok(k).tok == Tok::Newline {
+            k += 1;
+        }
+        let e = self.tok(k);
+        if e.tok == Tok::Name && self.text(e) == "else" && self.tok(k + 1).tok == Tok::LBrace {
+            self.pos = k + 2;
+            if self.record {
+                try_push(&mut self.draw, DItem::Else)?;
+            }
+            self.draw_lines(e)?;
+            self.next();
+        }
+        self.depth -= 1;
+        if self.record {
+            try_push(&mut self.draw, DItem::EndIf)?;
         }
         self.end_of_statement()
     }
@@ -5475,6 +5834,8 @@ fn compile_inner<'s>(
         palettes: Vec::new(),
         palette_names: Vec::new(),
         draw: Vec::new(),
+        paint: alloc::vec![0],
+        paint_pals: Vec::new(),
         drawn: None,
         record: true,
         in_draw: 0,
@@ -5527,7 +5888,22 @@ fn finish(
         declarations(d, body.layered, prog, declared)?;
     }
     let mut layers = body.colours;
-    let (Some(ct), false) = (body.top, layers.is_empty()) else {
+    let mut top = body.top;
+    // A formula that only paints: under its paint, the picture under it
+    // (black when it plays alone), as a look over every GIF would want.
+    if top.is_none() && layers.is_empty() && p.draw.iter().any(|d| matches!(d, DItem::Paint(..))) {
+        let args = [p.input(Input::Ur)?, p.input(Input::Ug)?, p.input(Input::Ub)?];
+        try_push(&mut layers, Colour {
+            code: code::OUT_RGB,
+            args,
+            pal: 0,
+            alpha: None,
+            blend: fixed::BLEND_OVER,
+            scale: None,
+        })?;
+        top = p.drawn;
+    }
+    let (Some(ct), false) = (top, layers.is_empty()) else {
         let at = src.len();
         let msg = if p.locals.is_empty() && p.parts.is_empty() {
             "empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`"
@@ -5550,6 +5926,7 @@ fn finish(
         ));
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
+    prog.paint[..p.paint.len()].copy_from_slice(&p.paint);
     for (j, entries) in p.palettes.iter().enumerate() {
         prog.tables[user_palette_at(j)..][..32].copy_from_slice(entries);
     }
@@ -6133,11 +6510,18 @@ fn emit(
     // The draw stage only when something shown reads `ink` (else, like a
     // value nothing uses, it is left out).
     let inked = (0..n).any(|i| need[i] != NONE && matches!(nodes[i].code, code::INK | code::INKN));
-    let draw = if inked { draw } else { &[] };
+    let painted = draw.iter().any(|d| matches!(d, DItem::Paint(..)));
+    let draw = if inked || painted { draw } else { &[] };
     for item in draw {
+        let one;
         let ids: &[Id] = match item {
             DItem::Line(v) => v,
             DItem::Dot(v) => v,
+            DItem::Paint(_, v, n) => &v[..*n as usize],
+            DItem::If(c) => {
+                one = [*c];
+                &one
+            }
             _ => &[],
         };
         for &x in ids {
@@ -6147,6 +6531,9 @@ fn emit(
     close(&mut need);
     if inked {
         prog.uses |= INKED;
+    }
+    if painted {
+        prog.uses |= PAINTS;
     }
     let live = |i: usize| need[i] != NONE;
     // A value that grows without end with a part per pixel, where nothing
@@ -6272,7 +6659,7 @@ fn emit(
         }
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
-        if m.code == code::TAB {
+        if m.code == code::TAB || m.code == code::PALIDX {
             (b, c) = (m.b, m.c);
         }
         if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR) {
@@ -6343,8 +6730,52 @@ fn emit(
             // loop's values, its lines and inner loops; END back to just
             // after the FOR.
             let mut open: Vec<(usize, u16, u16)> = Vec::new();
+            // `if`: the IF (or the else's JUMP) whose target is the end.
+            let mut ifs: Vec<usize> = Vec::new();
             for item in draw {
                 match *item {
+                    DItem::Paint(kind, v, n) => {
+                        let l = |k: usize| loc[v[k.min(n as usize - 1)] as usize];
+                        let groups = (n as usize).div_ceil(3);
+                        for g in 0..groups {
+                            let k = 3 * g;
+                            ops.push(WOp {
+                                code: if g + 1 == groups { code::PAINT } else { code::ARGS },
+                                d: if g + 1 == groups { kind as u16 } else { 0 },
+                                a: l(k),
+                                b: l(k + 1),
+                                c: l(k + 2),
+                            });
+                        }
+                    }
+                    DItem::If(cond) => {
+                        ifs.push(ops.len());
+                        ops.push(WOp {
+                            code: code::IF,
+                            d: 0,
+                            a: loc[cond as usize],
+                            b: 0,
+                            c: 0,
+                        });
+                    }
+                    DItem::Else => {
+                        if let Some(at) = ifs.pop() {
+                            ifs.push(ops.len());
+                            ops.push(WOp {
+                                code: code::JUMP,
+                                d: 0,
+                                a: 0,
+                                b: 0,
+                                c: 0,
+                            });
+                            ops[at].b = ops.len().min(255) as u16;
+                        }
+                    }
+                    DItem::EndIf => {
+                        if let Some(at) = ifs.pop() {
+                            ops[at].b = ops.len().min(255) as u16;
+                        }
+                    }
                     DItem::For(ctr, count) => {
                         let cs = new_slot(&mut vs, Some((count as i32) << 16))?;
                         let ks = new_slot(&mut vs, None)?;

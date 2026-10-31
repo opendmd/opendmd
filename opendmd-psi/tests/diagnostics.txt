@@ -500,7 +500,7 @@ gray(ink)
 === E713
 draw { gray(1) }
 gray(ink)
---- 1:8 inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only
+--- 1:8 inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`
 
 === E801
 fps 60
@@ -891,3 +891,41 @@ k = t
 }
 gray(k)
 --- 1:1 there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block
+
+=== E720
+draw { pset(1, 1, pal(fire, 0)); pset(1, 1, pal(ice, 0)); pset(1, 1, pal(chrono, 0)); pset(1, 1, pal(amber, 0)) }
+--- 1:98 a formula paints with 127 colours at most (each of a palette's 32 counts)
+
+=== E721
+draw { pset(1, 1, 3) }
+--- 1:19 a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`
+
+=== E722
+draw { spr(q, 1, 1) }
+--- 1:12 `spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s
+
+=== E723
+sprite s {
+  key . 0
+  .
+}
+draw { spr(s) }
+--- 5:8 `spr(sprite, x, y)` or `spr(sprite, x, y, flip)` (1 across, 2 down, 3 both) takes a sprite and its place
+
+=== E724
+draw { print("0123456789012345678901234567890123", 1, 1, #fff) }
+--- 1:14 `print` writes 32 characters at most
+
+=== E725
+table T = <<253;, ;{k}>>
+draw { print("HELLO", 1, 1, #fff) }
+gray(T[0])
+--- 2:14 this text doesn't fit: tables, sprites and texts hold 256 numbers in all
+
+=== E726
+draw { print("A", 1, 1, #fff, huge) }
+--- 1:31 `print`'s font is `normal`, `small` or (for a value) `bold`
+
+=== E727
+draw { pset(1, 1, #fff 2) }
+--- 1:24 `pset(x, y, colour)` (or `dot`): expected `)` here
