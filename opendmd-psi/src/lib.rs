@@ -27,6 +27,9 @@
 // ESP32 (`#[optimize(size)]`: the app's flash is the scarce thing there).
 #![cfg_attr(target_arch = "xtensa", feature(optimize_attribute))]
 
+// Without the compiler (the player) some of its helpers go unused.
+#![cfg_attr(not(feature = "compiler"), allow(dead_code, unused_imports))]
+
 extern crate alloc;
 
 #[doc(hidden)]
@@ -37,7 +40,9 @@ pub mod errors;
 #[cfg(feature = "docs")]
 #[doc(hidden)]
 pub mod reference;
+#[cfg(feature = "compiler")]
 mod compile;
+mod error;
 mod draw;
 pub mod fixed;
 mod fuse;
@@ -45,10 +50,12 @@ mod fuse;
 // takes a formula, and why not.)
 #[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
 pub mod jit;
+#[cfg(feature = "compiler")]
 pub mod look;
 mod meta;
 mod program;
 pub mod psb;
+pub use error::{Error, NO_MEMORY};
 mod range;
 mod rate;
 mod still;
@@ -57,12 +64,13 @@ pub mod syntax;
 mod tables;
 mod vm;
 
+#[cfg(feature = "compiler")]
 pub use compile::{
-    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, number, squeeze,
-    Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
-    MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE, NO_MEMORY,
+    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, squeeze,
+    Declared, DeclaredControl, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
+    MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
-pub use meta::{Control, Meta};
+pub use meta::{Control, Meta, BLENDS};
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
@@ -80,9 +88,41 @@ pub use vm::{
     render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START, Q16_ONE,
 };
 
+/// A decimal number (digits, an optional `.` and more digits; no sign) as
+/// Q16.16, rounded to the nearest 1/65,536: how the compiler reads numbers,
+/// for the sliders' `a=` options too.
+pub fn number(s: &str) -> Option<i32> {
+    if s.is_empty()
+        || s == "."
+        || s.matches('.').count() > 1
+        || !s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+    {
+        return None;
+    }
+    let (int, frac) = s.split_once('.').unwrap_or((s, ""));
+    let mut v: i64 = 0;
+    for b in int.bytes() {
+        v = v * 10 + (b - b'0') as i64;
+        if v > 32767 {
+            return None;
+        }
+    }
+    // The fraction to 9 digits, rounded once.
+    let mut num: i64 = 0;
+    let mut den: i64 = 1;
+    for b in frac.bytes().take(9) {
+        num = num * 10 + (b - b'0') as i64;
+        den *= 10;
+    }
+    let f = (num * 65536 + den / 2) / den;
+    let r = (v << 16) + f;
+    (r <= i32::MAX as i64).then_some(r as i32)
+}
+
 /// The lane width the effect uses: one panel row.
 pub const LANES: usize = 128;
 
+#[cfg(feature = "compiler")]
 /// Compile `src` (a new [`Program`] by value: ~2.8 KB; on a small stack use
 /// [`compile_into`] on a zeroed allocation instead).
 pub fn compile(src: &str) -> Result<Program, Error> {
@@ -91,6 +131,7 @@ pub fn compile(src: &str) -> Result<Program, Error> {
     Ok(p)
 }
 
+#[cfg(feature = "compiler")]
 /// A Formula compiled for the player ([`psb`]): its program, and when its
 /// `look` line composes a blend or an amount, its program as a look.
 pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
@@ -114,6 +155,7 @@ pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
     Ok(psb::encode(name, &play, look.as_deref()))
 }
 
+#[cfg(feature = "compiler")]
 /// [`compile`] without the column run and the still cache's run (every
 /// pixel step on every pixel, the same bytes): `psi-probe`'s step costs
 /// and the estimate's tests.
@@ -362,6 +404,7 @@ pub mod golden {
     ];
 }
 
+#[cfg(feature = "compiler")]
 /// Formulas that make the compiler work hardest within what the panel
 /// accepted inline (a path of at most [`worst::PATH_MAX`], as `fx_psi::path` writes it: the
 /// source compacted, `+` as `%2B`): compile-time tests, the bench, the

@@ -621,7 +621,7 @@ fn verify_meta(m: &Meta) -> Result<(), ()> {
             _ => return Err(()),
         }
     }
-    if m.look as usize > crate::look::BLENDS.len() || m.amount > 100 {
+    if m.look as usize > crate::meta::BLENDS.len() || m.amount > 100 {
         return Err(());
     }
     Ok(())
@@ -729,7 +729,7 @@ pub(crate) mod fuzz {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compiler"))]
 mod tests {
     use super::fuzz::{mutate, sources, Rng};
     use super::*;

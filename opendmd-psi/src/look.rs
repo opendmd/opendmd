@@ -46,9 +46,7 @@
 use crate::{compile_into, Error, Program};
 use alloc::string::String;
 
-/// The blends a look may use, as `layer` names them (`max` and `min` are
-/// the web app's Lighten and Darken).
-pub const BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
+pub use crate::meta::BLENDS;
 
 /// The part's name in a composed look.
 const PART: &str = "look";
