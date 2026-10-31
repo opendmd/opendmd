@@ -68,6 +68,7 @@ mod probe;
 #[cfg(feature = "psi-probe")]
 mod psi_probe;
 #[cfg(feature = "psi")]
+#[cfg(feature = "psi-probe")]
 mod psi_stack;
 mod restarts;
 mod sched;
@@ -292,10 +293,6 @@ fn main() -> Result<()> {
     // allocation and overwrite its record; installs the panic hook.
     let reset = restarts::reset_now();
     restarts::boot(reset);
-    // Formulas compile on a stack of their own (`psi_stack::compile`): the
-    // compiler's worst case is more than the main task or httpd can spare.
-    #[cfg(feature = "psi")]
-    opendmd_core::fx_psi::set_compiler(psi_stack::compile);
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
 

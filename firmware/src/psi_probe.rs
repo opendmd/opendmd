@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 /// rows below look up rather than `include_str!` again. (Time-gate and
 /// Endless road are the roadprobe's pair; Endless road is also the
 /// psi-lang case for `loop forever`, a sprite and slot reuse.)
-use crate::formulas::BUNDLED;
+use crate::formulas::BUNDLED_SOURCES as BUNDLED;
 
 /// The examples that are not bundled (the drawing and plain ones the speed2
 /// and leak rows compile), likewise comment-free, from build.rs.

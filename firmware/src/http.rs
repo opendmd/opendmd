@@ -247,7 +247,7 @@ struct ConfigPatch {
     attract: Option<String>,
     look: Option<String>,
     glow: Option<String>,
-    /// The Formula look: a formula's `@formula?src=…` path, `""` = none
+    /// The Formula look: a formula's `@formula?psb=…` path, `""` = none
     /// (checked by the main task before anything is saved).
     /// Its name, blend and amount are the formula's own `name` and `look`
     /// lines (no fields of their own: unknown fields are ignored).
@@ -560,7 +560,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 Some(_) => {}
                 None => {
                     return req.bad_request(
-                        "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?src=…)",
+                        "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)",
                     )
                 }
             }
@@ -863,7 +863,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        // An inline formula (`@formula?src=…`) may be up to 6 KB; it is
+        // An inline formula (`@formula?psb=…`) may be up to 6 KB; it is
         // compiled on the main task as it opens (a compile error or one too
         // heavy for the panel is a 400 with the compiler's sentence; a
         // bundled name or a card file that isn't there, a 404).
@@ -886,13 +886,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(
                 415,
                 "415 Unsupported Media Type",
-                "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)",
+                "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)",
             );
         }
         // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
         // this build does not know is a 415 from the engine.
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
-            return req.bad_request("\"live\" is only for a formula (@formula?src=…)");
+            return req.bad_request("\"live\" is only for a formula (@formula?psb=…)");
         }
         let formula_file = opendmd_core::synth::formula_file(&play.path);
         if play.over
@@ -901,7 +901,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             && formula_file.is_none()
         {
             return req.bad_request(
-                "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off",
+                "\"over\" is only for a formula (@formula?psb=…), or \"\" to take it off",
             );
         }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
@@ -2102,7 +2102,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let www = crate::www::info();
     format!(
         concat!(
-            r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
+            r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
@@ -2115,6 +2115,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         ),
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
+        psi_abi(),
         s.uptime_secs,
         t.as_millis(),
         json_string(&s.ip),
@@ -2188,6 +2189,15 @@ fn kept_json(s: &Status) -> String {
         Some((ordinal, secs)) if ordinal == s.ordinal => format!(r#","kept_s":{secs}"#),
         _ => String::new(),
     }
+}
+
+/// The compiled Formulas this player plays (`opendmd_psi::psb::ABI`; null
+/// in a build without Formulas): the web app compiles for it.
+fn psi_abi() -> String {
+    #[cfg(feature = "psi")]
+    return opendmd_core::psi::psb::ABI.to_string();
+    #[cfg(not(feature = "psi"))]
+    return "null".to_string();
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
