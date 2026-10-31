@@ -61,11 +61,6 @@ layer {
 gray(x)
 --- 1:1 this `layer {` is never closed — add `}`
 
-=== E103
-frame {
-v = 1
---- 2:6 `frame {` is never closed: add `}`
-
 === E104
 gray(x)
 v = 1
@@ -171,16 +166,6 @@ T = 3
 gray(T)
 --- 2:1 `T` is already the name of a table (line 1) — pick another name
 
-=== E204
-x = 1
-gray(x)
---- 1:1 `x` is built in (the pixel's position across, 0 to 1); pick another name
-
-=== E204
-sin = 1
-gray(sin)
---- 1:1 `sin` is built in; pick another name
-
 === E205
 gray(sin)
 --- 1:6 `sin` is a function: write `sin(…)`
@@ -224,19 +209,6 @@ draw { dot(1, 1) }
 gray(ink(1.5))
 --- 2:10 `ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels
 
-=== E301
-frame {
-k = x
-}
-gray(k)
---- 2:5 `frame { }` is worked out once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 to 1)
-
-=== E301
-k = x*2
-frame { s = k + t }
-gray(s)
---- 2:13 `frame { }` is worked out once a frame, before any pixel, but `k` (line 1) is per pixel: it reads `x`
-
 === E302
 v = #f80
 gray(v)
@@ -267,18 +239,6 @@ gray(v)
 === E307
 rgb(0.5, #f00, 1)
 --- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
-
-=== E308
-frame { }
-frame { }
-gray(x)
---- 2:1 there can be one `frame { }` block
-
-=== E309
-frame {
-gray(x)
-}
---- 2:1 only `name = value` lines can go inside frame { }
 
 === E401
 <<8200*x >>
@@ -498,7 +458,7 @@ gray(T[0])
 === E708
 draw { dot(x, 1) }
 gray(ink)
---- 1:12 `draw { }` runs once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 to 1)
+--- 1:12 `draw { }` runs once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
 
 === E708
 k = py/31
@@ -733,7 +693,7 @@ pal(sea, sea.foam)
 
 === E931
 cycle(fire, x, x)
---- 1:16 `cycle` turns a whole row at once (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 to 1)
+--- 1:16 `cycle` turns a whole row at once (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
 
 === E931
 s = x*2
@@ -919,3 +879,15 @@ gray(x)
 name "a\u{202e}b"
 gray(x)
 --- 1:8 text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)
+
+=== E204
+layer = 1
+gray(x)
+--- 1:1 `layer` is a word of the language; pick another name
+
+=== E301
+frame {
+k = t
+}
+gray(k)
+--- 1:1 there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block

@@ -150,19 +150,19 @@ to it.
 | kind | names |
 | --- | --- |
 | values | `x`, `y`, `px`, `py`, `i`, `t`, `hour`, `minute`, `second`, `a`, `b`, `c`, `ur`, `ug`, `ub`, `ul`, `ink`, `seed` |
-| values about the middle | `cx`, `cy`, `ty`, `r`, `angle` |
+| values about the middle | `cx`, `cy`, `r`, `angle` |
 | constants | `w`, `h` |
 | functions (how many values) | `sin` (1), `cos` (1), `tri` (1), `saw` (1), `sqr` (1), `abs` (1), `floor` (1), `frac` (1), `fract` (1), `sqrt` (1), `min` (2), `max` (2), `step` (2), `hash` (2), `len` (2), `atan2` (2), `clamp` (3), `mix` (3), `smoothstep` (3), `noise` (3), `select` (3), `bit` (2), `digit(…)` (3 values and a font), `glyph(…)` (3 values and a font), `pick(k, a, b, …)` |
 | colours (how many values, before the coverage) | `rgb` (3), `hsv` (3), `pal` (2), `gray` (1), `cycle` (3) |
 | palettes | `fire`, `ice`, `ocean`, `chrono`, `amber`, `rainbow`, `gray` |
 | fonts | `normal`, `small`, `bold` |
 | blends | `over`, `add`, `multiply`, `screen`, `max`, `min` |
-| keywords | `loop`, `frame`, `layer`, `part`, `use`, `draw`, `for`, `table` |
+| keywords | `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` |
 | drawing | `line`, `dot` |
 | declarations | `psi`, `name`, `about`, `control`, `look` |
 | words that are keywords in one place only | `fps`, `forever`, `sprite`, `palette`, `key`, `rate` |
 
-A formula may set a name added after people had saved formulas, and then it is the formula's own: `cx`, `cy`, `ty`, `r`, `angle`, `bit`, `digit`, `glyph`, `pick`, `cycle` and `seed`, `ink`, `line`, `dot`, `forever`.
+A formula may set a name added after people had saved formulas, and then it is the formula's own: `cx`, `cy`, `r`, `angle`, `bit`, `digit`, `glyph`, `pick`, `cycle` and `seed`, `ink`, `line`, `dot`, `forever`.
 <!-- psi-builtins end -->
 
 ## What each does
@@ -178,16 +178,15 @@ example is compiled by the tests.
 
 | write | what it does | example |
 | --- | --- | --- |
-| `x, y` | where the pixel is: 0 to 1 across, and up from the bottom | <code class="psi-ex">rgb(x, y, 0.5)</code> |
-| `px, py` | the pixel’s column 0–127 and row 0–31 from the bottom | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
+| `x, y` | where the pixel is: 0 to 1 across from the left, and down from the top | <code class="psi-ex">rgb(x, y, 0.5)</code> |
+| `px, py` | the pixel’s column 0–127 from the left and row 0–31 from the top | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
 | `t` | seconds into the loop | <code class="psi-ex">loop 4; hsv(x + t/4, 1, 1)</code> |
 | `hour, minute, second` | the time of day | <code class="psi-ex">band = floor(y&#42;3); hsv(band/3, 0.8, x &lt; pick(band, second/60, minute/60, hour/24))</code> |
-| `a, b, c` | the controls, in the order the control lines declare them (0 to 1 when undeclared) | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
+| `a, b, c` | the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
 | `w, h` | 128 and 32 | <code class="psi-ex">gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)</code> |
 | `i` | the pixel’s number, 0–4095 | <code class="psi-ex">hsv(i/4096, 1, 1)</code> |
-| `cx, cy` | from the middle: −2 to 2 across, −0.5 to 0.5 up | <code class="psi-ex">rgb(abs(cx)/2, abs(cy)&#42;2, 0.3)</code> |
-| `r, angle` | distance and angle (turns) from the middle | <code class="psi-ex">loop 4; hsv(angle + t/4, 1, 1 - r/2)</code> |
-| `ty` | row 0–31 from the top | <code class="psi-ex">gray(ty/31)</code> |
+| `cx, cy` | from the middle: −2 to 2 across, −0.5 to 0.5 down | <code class="psi-ex">rgb(abs(cx)/2, abs(cy)&#42;2, 0.3)</code> |
+| `r, angle` | distance and angle (turns, clockwise from the right) from the middle | <code class="psi-ex">loop 4; hsv(angle + t/4, 1, 1 - r/2)</code> |
 | `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 | <code class="psi-ex">rgb(ub, ug, ur)</code> |
 | `ul` | how bright that is | <code class="psi-ex">pal(fire, ul)</code> |
 
@@ -208,16 +207,15 @@ example is compiled by the tests.
 | `hash(a, b)` | random 0 to 1 | <code class="psi-ex">gray(hash(px, py) &gt; 0.9)</code> |
 | `select(c, a, b)` | a when c is true (not 0), else b; or c ? a : b | <code class="psi-ex">gray(select(x &lt; 0.5, y, 1 - y))</code> |
 | `pick(k, a, b, …)` | a at k = 0, b at 1, …; else 0 | <code class="psi-ex">pal(rainbow, pick(floor(x&#42;4), 0, 0.3, 0.6, 0.9))</code> |
-| `digit(n, col, row)` | the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font | <code class="psi-ex">gray(digit(second % 10, floor(px/4) - 14, floor(ty/4)))</code> |
-| `glyph('A', col, row)` | the same for a character | <code class="psi-ex">gray(glyph('A', floor(px/4) - 14, floor(ty/4)))</code> |
-| `bit(n, i)` | bit i of a whole number: 1 or 0 | <code class="psi-ex">gray(bit(px, floor(ty/4)))</code> |
+| `digit(n, col, row)` | the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font | <code class="psi-ex">gray(digit(second % 10, floor(px/4) - 14, floor(py/4)))</code> |
+| `glyph('A', col, row)` | the same for a character | <code class="psi-ex">gray(glyph('A', floor(px/4) - 14, floor(py/4)))</code> |
+| `bit(n, i)` | bit i of a whole number: 1 or 0 | <code class="psi-ex">gray(bit(px, floor(py/4)))</code> |
 | `< <= > >= == !=` | compare: 1 or 0; and, or, not | <code class="psi-ex">rgb(x &lt; 0.5, y &gt;= 0.5, 0.2)</code> |
 | `%` | remainder: v % 1 is the fraction | <code class="psi-ex">gray((px % 16 &lt; 8) != (py % 16 &lt; 8))</code> |
 | `;` | a new line, on the same line | <code class="psi-ex">u = x; v = y; rgb(u, v, 0.5)</code> |
 | `loop 8` | the loop’s length in seconds (first line) | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
 | `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
 | `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
-| `frame { … }` | values worked out once a frame | <code class="psi-ex">loop 4; frame { k = sin(t/4)&#42;0.5 + 0.5 }; gray(x &lt; k)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
 | `layer rate 4 { … }` | a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
 | `use Plasma as p` | puts in one of your formulas or an example, as part p { … } | <code class="psi-ex">part p { hsv(x + t/8, 1, 1) }; p</code> |
@@ -230,14 +228,14 @@ example is compiled by the tests.
 | --- | --- | --- |
 | `draw { … }` | once a frame, before the pixels: values, loops, lines and dots into ink | <code class="psi-ex">draw { line(0, 0, 127, 31) }; pal(fire, ink)</code> |
 | `for k < 12 { … }` | inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame | <code class="psi-ex">draw { for k &lt; 12 { line(k&#42;10 + 8, 4, k&#42;10 + 8, 27, 0.2, 1) } }; gray(ink)</code> |
-| `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1) | <code class="psi-ex">loop 4; draw { line(64, 16, 64 + 40&#42;cos(t/4), 16 + 15&#42;sin(t/4), 0.2, 1) }; pal(ice, ink)</code> |
+| `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1) | <code class="psi-ex">loop 4; draw { line(64, 16, 64 + 40&#42;cos(t/4), 16 + 15&#42;sin(t/4), 0.2, 1) }; pal(ice, ink)</code> |
 | `dot(x, y, v)` | one pixel of ink v | <code class="psi-ex">draw { for k &lt; 64 { dot(hash(k, 1)&#42;128, hash(k, 2)&#42;32, hash(k, 3)) } }; gray(ink)</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
 | `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
 | `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
-| `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(ty/4) - 2&#93;)</code> |
-| `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, ty % 5&#93;</code> |
+| `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(py/4) - 2&#93;)</code> |
+| `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, py % 5&#93;</code> |
 
 #### Colours
 
@@ -373,7 +371,7 @@ table msg = 'H', 'E', 'L', 'L', 'O', ' ', 'P', 'A', 'N', 'E', 'L', ' '
 -- once a loop: 72 cells in 6 s
 u = floor(px/2 + t*12)
 k = floor(u/6) % 12
-row = floor((ty - 9)/2)
+row = floor((py - 9)/2)
 hsv(x/2 + t/6, 0.6, glyph(msg[k], u % 6, row))
 ```
 
@@ -393,7 +391,7 @@ loop 8
 fps 100
 palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
 -- three waves that never move (worked out once, then kept)
-wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
+wave = sin(x*2) + sin((1 - y)*1.5) + sin(x*1.5 + (1 - y))
 -- the palette turned once round in the loop
 cycle(glow, wave/6, t/8)
 ```
@@ -411,11 +409,9 @@ name "Clock"
 about "A clock face with hour and minute hands"
 -- Hands on a round dial; dx, dy: pixels from the middle
 dx = px - 63.5
-dy = py - 15.5
-frame {
-  hours = (hour%12 + minute/60) / 12
-  mins = minute/60
-}
+dy = (31 - py) - 15.5
+hours = (hour%12 + minute/60) / 12
+mins = minute/60
 hour_hand = step(max(abs(dx*cos(hours) - dy*sin(hours)), abs(dx*sin(hours) + dy*cos(hours) - 4) - 3), 1)
 minute_hand = step(max(abs(dx*cos(mins) - dy*sin(mins)), abs(dx*sin(mins) + dy*cos(mins) - 6.5) - 5.5), 0.8)
 dial = step(abs(dx*dx + dy*dy - 218), 22)
@@ -880,26 +876,26 @@ k = 2
 gray(T[0] * k)
 ```
 
-<h4 id="E204">E204 · a name that is built in</h4>
+<h4 id="E204">E204 · a word of the language as a name</h4>
 
-> `…` is built in; pick another name
+> `…` is a word of the language; pick another name
 
-Built-in values such as `x`, `t` and `a` can't be set; pick another name.
+The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`) can't be names; any built-in value or function's name can (it is then yours).
 
-Pick another name.
+Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for` and `table` are the language's own words (any built-in value or function's name may be yours).
 
 Before:
 
 ```psi
-x = 1
-gray(x)
+layer = 1
+gray(x * layer)
 ```
 
 After:
 
 ```psi
-x1 = 1
-gray(x1)
+level = 1
+gray(x * level)
 ```
 
 <h4 id="E205">E205 · a function used as a value</h4>
@@ -992,29 +988,27 @@ Write the number of levels, as `ink(16)`, and draw with inks `k/16`.
 
 ### Placement and levels (E3xx)
 
-<h4 id="E301">E301 · a per-pixel value in <code>frame { }</code></h4>
+<h4 id="E301">E301 · a <code>frame { }</code> block</h4>
 
-> `frame { }` is worked out once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
+> there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block
 
-`frame { }` is worked out once a frame, before any pixel, so it can't read a pixel's position or what is under it.
+There are no `frame { }` blocks: a value that reads only the time, the clock and the controls is worked out once a frame by itself.
 
-Use only values that are the same everywhere (such as `t`) inside `frame { }`.
+Take the lines out of the block, as they are.
 
 Before:
 
 ```psi
 frame {
-  k = x
+  k = t / 8
 }
-gray(k)
+gray(x * k)
 ```
 
 After:
 
 ```psi
-frame {
-  k = t / 8
-}
+k = t / 8
 gray(x * k)
 ```
 
@@ -1085,18 +1079,6 @@ Make it the whole last line.
 > `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 Give `rgb(r, g, b)` three numbers, or write the colour on its own.
-
-<h4 id="E308">E308 · a second <code>frame { }</code> block</h4>
-
-> there can be one `frame { }` block
-
-Merge the `frame { }` blocks into one.
-
-<h4 id="E309">E309 · a line that does not belong in <code>frame { }</code></h4>
-
-> only `name = value` lines can go inside frame { }
-
-Put only `name = value` lines inside `frame { }`.
 
 ### Limits (E4xx)
 

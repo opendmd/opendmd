@@ -440,16 +440,15 @@ function build(root) {
 // --- The editor (`#formulas/edit`)
 // psi-builtins: cheat sheet (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
 const VARS = [
-  ['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'],
-  ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
+  ['x, y', 'where the pixel is: 0 to 1 across from the left, and down from the top'],
+  ['px, py', 'the pixel’s column 0–127 from the left and row 0–31 from the top'],
   ['t', 'seconds into the loop'],
   ['hour, minute, second', 'the time of day'],
-  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared)'],
+  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own'],
   ['w, h', '128 and 32'],
   ['i', 'the pixel’s number, 0–4095'],
-  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
-  ['r, angle', 'distance and angle (turns) from the middle'],
-  ['ty', 'row 0–31 from the top'],
+  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 down'],
+  ['r, angle', 'distance and angle (turns, clockwise from the right) from the middle'],
   ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
   ['ul', 'how bright that is']
 ];
@@ -476,7 +475,6 @@ const FUNCS = [
   ['loop 8', 'the loop’s length in seconds (first line)'],
   ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'],
   ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
-  ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['layer rate 4 { … }', 'a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame', 'layer rate 4 {\n  \n}\n'],
   ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
@@ -486,7 +484,7 @@ const FUNCS = [
 const DRAW = [
   ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
   ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
-  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
+  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
   ['dot(x, y, v)', 'one pixel of ink v'],
   ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],

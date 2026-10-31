@@ -1008,7 +1008,6 @@ const WIDE_T: i32 = 0x100;
 
 /// E301, E708, E931, each followed by what makes the value vary
 /// (`Parser::varies_err`).
-const FRAME_ONLY: &str = "`frame { }` is worked out once a frame, before any pixel, but ";
 const DRAW_ONLY: &str = "`draw { }` runs once a frame, before any pixel, but ";
 const CYCLE_ROW: &str = "`cycle` turns a whole row at once (by t, a frame value or py), but ";
 
@@ -3251,9 +3250,6 @@ impl<'s> Parser<'s> {
         let start = self.peek().start;
         let id = self.expr(0)?;
         let end = self.toks[self.pos.saturating_sub(1)].get().end;
-        if in_frame && self.dag.level(id) > LV_FRAME {
-            return Err(self.varies_err((start, end.max(start)), FRAME_ONLY, id));
-        }
         if self.in_draw > 0 {
             self.drawable(id, start, end)?;
         }
