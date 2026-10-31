@@ -54,7 +54,7 @@ planet = floor(tour)%2
 away = 1 - min(f*1.25, 1)
 R = (f < .84) / (away*away*1.5 + closest[planet])
 pX = passX[planet]*R + 64
-pY = R*.25 + 16
+pY = 15 - R*.25
 moonR = (planet < 1) * .07 * R * R
 mX = pX - R*2.6
 
@@ -64,19 +64,19 @@ mX = pX - R*2.6
 g = frac(f + .25)
 wR = (g < .4) * g * g * g * 1000 * 40
 hR = (g < .4) * max(g - .25, 0) * 1200
-rimY = abs(wR - 45) < 44.5 ? 16 : -999
+rimY = abs(wR - 45) < 44.5 ? 15 : -999
 tunnel = abs(g - .2) < .1
 -- the streak loop draws the rim when not inside: its lean, width,
 -- tail and row
 lean = tunnel ? .35 : -.08
 wide = tunnel ? 2.4 : 1
 shrink = tunnel ? .93 : 1
-rowY = tunnel ? 16 : rimY
+rowY = tunnel ? 15 : rimY
 
 -- The ship sways; flying in, it climbs to the middle
 into = clamp(g*10, 0, 1) * (g < .2)
 shipX = sin(f)*12*(1 - into) + 64
-shipY = into*3 + 8
+shipY = 23 - into*3
 
 draw {
   -- The planet, a line a panel row, lit from the left (its bands, the
@@ -84,30 +84,30 @@ draw {
   -- at its middle; wisps of cloud (Jupiter's in its zones' colour); the
   -- Moon
   for k < 32 {
-    dy = k - pY
+    dy = pY - k
     half = sqrt(R*R - dy*dy)
     y0 = half > 0 ? k : -999
     ny = dy/R
     lit = abs(ny) > .86 + planet ? .6452 : (noise(ny*9, 3, 0) > .5)*shift[planet] + top[planet]
-    line(pX - half, 31 - (y0), pX + half, 31 - (y0), lit, lit - span[planet])
+    line(pX - half, y0, pX + half, y0, lit, lit - span[planet])
     reach = hA[planet] - abs(ny - yA[planet])
     mid = (noise(ny*3, 5, 0)*.4 + xA[planet])*half + pX
     across = R*.38*sqrt(reach)
     y1 = reach > 0 ? y0 : -999
-    line(mid - across, 31 - (y1), mid + across, 31 - (y1), inkA[planet])
+    line(mid - across, y1, mid + across, y1, inkA[planet])
     mid = (noise(ny*13, 17, 0)*1.8 - .9)*half + pX
     across = max(noise(ny*13, 13, 0)*1.2 - .76, 0) * half
-    line(mid - across, 31 - (y0), mid + across, 31 - (y0), inkC[planet])
-    dy = k - (pY + R*.6)
+    line(mid - across, y0, mid + across, y0, inkC[planet])
+    dy = pY - R*.6 - k
     half = sqrt(moonR - dy*dy)
     y3 = half > 0 ? k : -999
-    line(mX - half, 31 - (y3), mX + half, 31 - (y3), .9677, .9032)
+    line(mX - half, y3, mX + half, y3, .9677, .9032)
   }
 
   -- The wormhole: the lensed glow across it; its rim, a circle of 80
   -- chords; inside, 80 streaks on six arms, spiralling out as they come
   -- and turning, brighter as they near
-  line(64 - wR*1.9, 31 - (rimY), 64 + wR*1.9, 31 - (rimY), .3226)
+  line(64 - wR*1.9, rimY, 64 + wR*1.9, rimY, .3226)
   for k < 80 {
     near = frac(hash(k, 11) + f*9)
     turn = tunnel ? k%6/6 + near*1.4 + f*4 : k/80
@@ -116,7 +116,7 @@ draw {
     row = r1 < 70 ? rowY : -999
     co = cos(turn)
     si = sin(turn)
-    line((co + si*lean)*r0*wide + 64, 31 - ((si - co*lean)*r0 + row), co*r1*wide + 64, 31 - (si*r1 + row), tunnel ? near*.11 + .258 : 1)
+    line((co + si*lean)*r0*wide + 64, row - (si - co*lean)*r0, co*r1*wide + 64, row - si*r1, tunnel ? near*.11 + .258 : 1)
   }
 
   -- The ship from behind: twelve boxy modules turning on a ring (the far
@@ -126,21 +126,21 @@ draw {
     co = cos(k/12 + f/6)
     si = sin(k/12 + f/6)
     mx = co*11 + shipX
-    my = si*5.5 + shipY
-    line(mx, 31 - (my), mx - si*5.8, 31 - (my + co*2.9), .9355)
-    line(shipX, 31 - (shipY), mx, 31 - (my), (k%3 == 0) * .9032)
-    line(mx, 31 - (my), mx + 1, 31 - (my), .952 - si*.026)
-    line(mx, 31 - (my + 1), mx + 1, 31 - (my + 1), .952 - si*.026)
+    my = shipY - si*5.5
+    line(mx, my, mx - si*5.8, my - co*2.9, .9355)
+    line(shipX, shipY, mx, my, (k%3 == 0) * .9032)
+    line(mx, my, mx + 1, my, .952 - si*.026)
+    line(mx, my - 1, mx + 1, my - 1, .952 - si*.026)
   }
-  line(shipX - 2, 31 - (shipY + 1), shipX + 2, 31 - (shipY + 1), .9677)
-  line(shipX - 2, 31 - (shipY), shipX + 2, 31 - (shipY), .9677)
-  dot(shipX, 31 - (shipY), 1)
+  line(shipX - 2, shipY - 1, shipX + 2, shipY - 1, .9677)
+  line(shipX - 2, shipY, shipX + 2, shipY, .9677)
+  dot(shipX, shipY, 1)
 }
 
 -- The sky, still (both values are the panel's still cache): a dithered
 -- haze and the stars, in this leg's colours; black in the wormhole's
 -- sphere, and back as the next sky opens out from the middle; what is
 -- drawn over it
-d = len(px - 63.5, 15.5 - py)
+d = len(px - 63.5, py - 15.5)
 stars = max(noise(px*.05, py*.12, 0)*.0968 - .0355 + hash(py, px)*.0161, (hash(px, py) > .985) * .0968)
 pal(space, max(ink, ((d > wR) + (d < hR)) * (stars + planet*.129)))

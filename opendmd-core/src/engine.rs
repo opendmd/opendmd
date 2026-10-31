@@ -1995,7 +1995,7 @@ mod tests {
                 "kept past the 10 s dwell ({t})"
             );
         }
-        let px = c.get(3, 7);
+        let px = c.get(3, 24);
         assert!(
             px.r > 100 && px.g < 20,
             "the road's picture (red from y), not the gate's: {px:?}"
@@ -3099,7 +3099,7 @@ mod tests {
                         let left = due.unwrap() - t;
                         assert!(
                             delay != 20 && left > STEP / 2,
-                            "{delay} ms: a step at {:?} without a frame, the frame {left:?} on",
+                            "{delay} ms: a step at {:?} without a frame, the left:? on",
                             t - t0
                         );
                     }

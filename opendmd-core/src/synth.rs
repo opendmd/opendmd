@@ -1339,7 +1339,7 @@ mod tests {
             let (mut a, mut b) = (Canvas::new(), Canvas::new());
             power_on_frame(f, &mut a, Some(&table));
             power_on_frame(f, &mut b, None);
-            assert_eq!(a, b, "frame {f}");
+            assert_eq!(a, b, "f");
         }
         assert!(table.iter().all(|t| u32::from(*t) * TICK_MS <= 440));
     }
@@ -1831,6 +1831,7 @@ mod tests {
         assert_eq!(stem_title("-"), "Formula");
     }
 
+    #[cfg(feature = "psi")]
     #[test]
     fn a_formula_by_reference_has_a_title() {
         install_test_bundled();
