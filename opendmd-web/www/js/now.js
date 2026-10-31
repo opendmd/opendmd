@@ -38,12 +38,14 @@ function favButton() {
 // panel's one-line text); [where, go], or null for what the panel draws.
 function editFor(p) {
   const q = p?.startsWith('@formula?') && new URLSearchParams(p.slice(9));
-  if (q) return q.get('src') && ['Formulas', async () => {
-    const { fpath } = await import('./psishow.js');
-    const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && fpath({ src: x.src }) == p.split('&')[0]);
+  if (q) return q.get('psb') && ['Formulas', async () => {
+    // The saved or example Formula that compiles to what the panel plays.
+    await (await import('./looks.js')).psi();
+    const { path, num } = await import('./psikit.js');
+    const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && path({ src: x.src }) == p.split('&')[0]);
+    if (!f) { toast('That Formula isn’t saved here: open it where it was made'); return; }
     // (In memory, never in the address: js/formulas.js opens app.psiOpen.)
-    const { num } = await import('./psikit.js');
-    app.psiOpen = { src: f?.src ?? q.get('src'), name: f?.name || 'Formula' };
+    app.psiOpen = { src: f.src, name: f.name || 'Formula' };
     for (const k of 'abc') if (num(q.get(k)) != null) app.psiOpen[k] = num(q.get(k));
     app.go('formulas/edit');
   }];

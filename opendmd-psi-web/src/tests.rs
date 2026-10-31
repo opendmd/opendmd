@@ -566,67 +566,29 @@ fn every_example_draws_as_before_at_its_defaults() {
     }
 }
 
-/// The web app's path text (`js/psikit.js` `compact`, which `fpath` sends)
-/// is the compiler's `compact()`, for every example and the edge cases:
-/// text in quotes on declaration lines only, `'"'` a character, comments,
-/// runs of spaces, `;`-joined lines. Run under node.
+/// The web app's path for a Formula (`js/psikit.js` `path`, which Show on
+/// panel sends) is `fx_psi::path_of`: `@formula?psb=`, the compiled
+/// Formula in base64url (unpadded), then the values. Run under node, with
+/// the compiler stood in for by the bytes.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn the_web_apps_compact_is_the_compilers() {
-    let mut srcs: Vec<String> = crate::examples().into_iter().map(|e| e.src).collect();
-    for s in [
-        "name = '\"' -- a quote\ngray(name/100)",
-        "name \"a  b\"\ngray(x)",
-        "control k 0..1 = 0.5 \"a;b -- c\"\ngray(k)",
-        "name \"x\"  -- \"q\"\ngray(x)",
-        "name \"a\" ; control k = 0.5 ; gray(k)",
-        "psi 1\nlook screen 40 -- c\nloop 4\ngray(x)",
-        "psi 1; name \"a -- b; c\"; gray(x)",
-        "-- name \"x\"\n  v = 1   // c \"a  b\" \ngray( v )",
-        "k = ' ' + ';' + '-'-'/' -- c\ngray(glyph(k, px % 5, py))",
-        "about \"Moiré:\tx\" \r\nname \"unclosed -- x\ngray(x)",
-        "control  k   = 0  \"Ünï  cödé\"  // c\r\ngray(k)",
-        "v = x % 2 + 1 & 3 # é  // c",
-        "names \"x\" -- c\ngray(x)",
-        "sprite s {\n  key \" 1, . 0\n  .\"\".\n}\ngray(s[px, py])",
-    ] {
-        srcs.push(s.to_string());
-    }
-    // Over the panel's 6,144 B with its `about` line, under it without:
-    // the path leaves the line out (`;` and `--` in another's quotes).
-    let body = format!("gray({}1)", "x*".repeat(3010));
-    let about = format!("about \"{}\"", "A".repeat(110));
-    srcs.push(format!("name \"Long; -- one\"\n{about}\ncontrol k = 0.5 \"x; y\"\n{body}"));
-    srcs.push(format!("{about}\n{body}"));
-    // Over it either way: still without.
-    srcs.push(format!("{about}\n{body}{}", "+1".repeat(100)));
-    let input: String = {
-        let mut j = String::from("[");
-        for (k, s) in srcs.iter().enumerate() {
-            if k > 0 {
-                j.push(',');
-            }
-            j.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => j.push_str("\\\""),
-                    '\\' => j.push_str("\\\\"),
-                    '\n' => j.push_str("\\n"),
-                    '\r' => j.push_str("\\r"),
-                    '\t' => j.push_str("\\t"),
-                    c => j.push(c),
-                }
-            }
-            j.push('"');
-        }
-        j.push(']');
-        j
-    };
+fn the_web_apps_path_is_the_players() {
     let kit = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/www/js/psikit.js");
-    // Each formula's compact text, then its path (psikit `path`, what
-    // psishow's fpath sends).
+    let progs: Vec<Vec<u8>> = crate::examples()
+        .into_iter()
+        .map(|e| opendmd_psi::build(&e.src).unwrap())
+        .chain((0..40).map(|n| (0..n).map(|k| (k * 37 + n) as u8).collect()))
+        .collect();
+    let input: String = format!(
+        "[{}]",
+        progs
+            .iter()
+            .map(|p| format!("[{}]", p.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(",")))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let script = format!(
-        "import {{ compact, path }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const x of JSON.parse(s)) console.log(JSON.stringify(compact(x)) + '\\n' + path({{ src: x }})); }});"
+        "import {{ path, compiler }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const b of JSON.parse(s)) {{ compiler({{ program: () => new Uint8Array(b) }}); console.log(path({{ src: 'x', a: 0.5 }})); }} }});"
     );
     let mut child = std::process::Command::new("node")
         .args(["--input-type=module", "-e", &script])
@@ -639,49 +601,10 @@ fn the_web_apps_compact_is_the_compilers() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     let got: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect();
-    assert_eq!(got.len(), srcs.len() * 2);
-    // fx_psi's path: the compact text, lightly encoded; over 6,144 B
-    // (`synth::MAX_FORMULA_PATH`) without its `about` line.
-    let enc = |c: &str| {
-        let mut p = String::from("@formula?src=");
-        for b in c.bytes() {
-            match b {
-                b' ' => p.push('+'),
-                b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
-                0x21..=0x7e => p.push(b as char),
-                _ => p.push_str(&format!("%{b:02X}")),
-            }
-        }
-        p
-    };
-    // (`synth::MAX_FORMULA_PATH`, psikit `MAX_PATH`.)
-    const MAX_PATH: usize = 6144;
-    let mut dropped = 0;
-    for (src, g) in srcs.iter().zip(got.chunks(2)) {
-        let full = enc(&opendmd_psi::compact(src));
-        let want = if full.len() > MAX_PATH {
-            dropped += 1;
-            enc(&opendmd_psi::compact(&opendmd_psi::look::declare(src, "about", 0, "")))
-        } else {
-            full
-        };
-        assert_eq!(g[1], want, "path of {src:?}");
-        assert!(want.len() <= MAX_PATH || !src.starts_with("name"), "{}", want.len());
-    }
-    // (The three long cases. Endless road keeps its `about` since road-cost.)
-    assert_eq!(dropped, 3);
-    for (src, g) in srcs.iter().zip(got.into_iter().step_by(2)) {
-        let want = opendmd_psi::compact(src);
-        let mut w = String::from("\"");
-        for c in want.chars() {
-            match c {
-                '"' => w.push_str("\\\""),
-                '\\' => w.push_str("\\\\"),
-                '\t' => w.push_str("\\t"),
-                c => w.push(c),
-            }
-        }
-        w.push('"');
-        assert_eq!(g, w, "compact of {src:?}");
+    assert_eq!(got.len(), progs.len());
+    for (b, g) in progs.iter().zip(&got) {
+        let want = format!("@formula?psb={}&a=0.5", opendmd_psi::psb::to_base64(b));
+        assert_eq!(g, &want);
+        assert_eq!(opendmd_psi::psb::from_base64(want[13..want.len() - 6].as_bytes()).as_ref(), Some(b));
     }
 }

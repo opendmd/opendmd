@@ -17,7 +17,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSelect } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
+import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC, compiler } from './psikit.js';
 import * as S from './fstore.js';
 
 let P = null, mod = null, gen = 0;
@@ -26,7 +26,7 @@ let PAGE = null;
 // The site whose gallery and reference these are: the demo's and /f/'s
 // own, else opendmd.dev.
 const ROOT = () => (app.demo || PAGE ? new URL('../', location.href).href : SITE);
-const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
+const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; compiler(P); })
   .catch((e) => { mod = null; throw e; }));
 // A trap (a bug) leaves the module unusable: a fresh instance takes over.
 function restart() {
@@ -431,7 +431,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, pick, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(S.copyUp).then((n) => { B.copied = n; }, () => {})])
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(async () => { await psi(); B.copied = await S.copyUp(); await S.prepare(); }).catch(() => {})])
     // (Each says its own name: `[{src}]`.)
     .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); copied(B.copied); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
