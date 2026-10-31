@@ -1180,7 +1180,7 @@ impl<'a> Rows<'a> {
         }
         scratch.last = row as u8 + 1;
         // y and py count from the bottom (y = 0 is the bottom row).
-        let py = ((H - 1 - row) as i32) << 16;
+        let py = (row as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         row_steps(prog, scratch, tables, own);

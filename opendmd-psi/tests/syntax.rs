@@ -32,16 +32,7 @@ impl Sink for Seen {
     }
 }
 
-const SRC: &str = "name \"Spin\"
-control speed 0..4 = 1
-loop 4
-frame { k = sin(t/4*speed) }
-v = x*k + y
-part p {
-  gray(x)
-}
-layer { gray(v) }
-layer add { p(x, y, 0.5) }";
+const SRC: &str = "name \"Spin\"\ncontrol speed 0..4 = 1\nloop 4\nk = sin(t/4*speed)\nv = x*k + y\npart p {\n  gray(x)\n}\nlayer { gray(v) }\nlayer add { p(x, y, 0.5) }";
 
 #[test]
 fn the_sink_hears_what_the_compiler_saw() {

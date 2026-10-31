@@ -770,7 +770,7 @@ fn cycled_palettes_draw_the_same_through_kernels() {
 #[test]
 fn rate_formulas_draw_the_same_through_kernels() {
     let cases = [
-        "loop 60\nframe { h1 = floor(hour/10); m2 = minute % 10 }\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(ty/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
+        "loop 60\nh1 = floor(hour/10); m2 = minute % 10\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(py/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
         "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
         "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, len(cx, cy), t + py/32, 0.5) }",
         "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y) }\nlayer screen { hsv(t, 1, x) }",

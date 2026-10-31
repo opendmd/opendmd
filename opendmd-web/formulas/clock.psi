@@ -4,11 +4,9 @@ name "Clock"
 about "A clock face with hour and minute hands"
 -- Hands on a round dial; dx, dy: pixels from the middle
 dx = px - 63.5
-dy = py - 15.5
-frame {
-  hours = (hour%12 + minute/60) / 12
-  mins = minute/60
-}
+dy = (31 - py) - 15.5
+hours = (hour%12 + minute/60) / 12
+mins = minute/60
 hour_hand = step(max(abs(dx*cos(hours) - dy*sin(hours)), abs(dx*sin(hours) + dy*cos(hours) - 4) - 3), 1)
 minute_hand = step(max(abs(dx*cos(mins) - dy*sin(mins)), abs(dx*sin(mins) + dy*cos(mins) - 6.5) - 5.5), 0.8)
 dial = step(abs(dx*dx + dy*dy - 218), 22)

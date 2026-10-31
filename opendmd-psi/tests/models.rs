@@ -143,7 +143,7 @@ fn the_reference_matches_the_language() {
 fn the_reference_names_every_built_in() {
     let values = [
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
-        "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
+        "ug", "ub", "ul", "cx", "cy", "r", "angle", "py",
     ];
     assert!(DOC.contains("`seed`") && DOC.contains("`loop forever`"));
     compile("loop forever\ngray(frac(t + seed))").unwrap();

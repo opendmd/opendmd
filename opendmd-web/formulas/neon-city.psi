@@ -42,33 +42,31 @@ table twos = 1, 2, 4, 8, 16, 32, 64
 table car = 10.335678, 8.365952, 9.350372, 5.41185, 2.457748, 3.4422,
   2.456772, 2.455795, 3.111069, 24.439194, 1.469696
 
-frame {
-  -- How far we have driven, in bends (from somewhere else each play);
-  -- the road's heading here, and where its middle would be if it ran
-  -- straight on (each row and each thing on it adds its bend)
-  driven = t*.15 + seed*1000
-  heading = noise(driven, 0, 0)
-  straight = 64 - heading*2000
+-- How far we have driven, in bends (from somewhere else each play);
+-- the road's heading here, and where its middle would be if it ran
+-- straight on (each row and each thing on it adds its bend)
+driven = t*.15 + seed*1000
+heading = noise(driven, 0, 0)
+straight = 64 - heading*2000
 
-  -- The car's left edge, negated: it slides out in bends
-  carLeft = (heading - noise(driven + .03, 0, 0))*80 - 48
+-- The car's left edge, negated: it slides out in bends
+carLeft = (heading - noise(driven + .03, 0, 0))*80 - 48
 
-  -- The two rows of towers turn with the road, the near one faster (the
-  -- near row repeats every 176 columns; `seed` picks another city)
-  nearShift = heading*-90
+-- The two rows of towers turn with the road, the near one faster (the
+-- near row repeats every 176 columns; `seed` picks another city)
+nearShift = heading*-90
 
-  -- The towers in view (the first one's number, and where its first
-  -- column is less its number*8), the neon's colour changes, and the
-  -- holo screen's
-  firstTower = floor(nearShift/8)
-  towerLeft = .9999 - nearShift
-  turn = floor(t*1.5)
-  holo = floor(t*3)
+-- The towers in view (the first one's number, and where its first
+-- column is less its number*8), the neon's colour changes, and the
+-- holo screen's
+firstTower = floor(nearShift/8)
+towerLeft = .9999 - nearShift
+turn = floor(t*1.5)
+holo = floor(t*3)
 
-  -- Showers come and go (a drizzle at least, up to a downpour): how
-  -- much of the rain is falling now
-  shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
-}
+-- Showers come and go (a drizzle at least, up to a downpour): how
+-- much of the rain is falling now
+shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
 
 draw {
   -- What is drawn is its colour's place in the palette, so the later
@@ -87,7 +85,7 @@ draw {
     left = floor(id*8 + towerLeft)
     top = floor(hash(id%22, seed)*13 + 21.9999)
     edge = id%2 or top > 31
-    line(left + edge*6, top, left + 6, edge ? 20 : top, city.violet + (id + turn%4*(id%3 < 1))%4*city.step)
+    line(left + edge*6, 31 - (top), left + 6, 31 - (edge ? 20 : top), city.violet + (id + turn%4*(id%3 < 1))%4*city.step)
   }
 
   -- One tower carries a holo screen across its face, under its roof
@@ -96,14 +94,14 @@ draw {
   screenX = floor((156.9999 - nearShift) % 176) - 20
   screenTop = floor(hash(17, seed)*13 + 19.9999)
   for k < 4 {
-    line(screenX + 1, screenTop - k, screenX + 5, screenTop - k, (screenTop > 23) * (hash(k, holo) > .2) * (city.violet + (holo - k)%5*city.step))
+    line(screenX + 1, 31 - (screenTop - k), screenX + 5, 31 - (screenTop - k), (screenTop > 23) * (hash(k, holo) > .2) * (city.violet + (holo - k)%5*city.step))
   }
 
   -- The car, span by span
   for k < 11 {
     span = frac(car[k])*64
     rowInk = frac(span)*16
-    line(floor(car[k]) - carLeft, floor(rowInk), floor(span) - carLeft, floor(rowInk), frac(rowInk))
+    line(floor(car[k]) - carLeft, 31 - (floor(rowInk)), floor(span) - carLeft, 31 - (floor(rowInk)), frac(rowInk))
   }
 
   -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
@@ -113,9 +111,9 @@ draw {
     dropX = frac(k/21 + t*.49)*150 - 12
     dropY = frac(hash(k, 3) - t*4) * 44
     rainInk = (k/21 < shower) * city.rain
-    dot(dropX, dropY, rainInk)
-    dot(dropX + .5, dropY - 1, rainInk)
-    dot(dropX + 1, dropY - 2, rainInk)
+    dot(dropX, 31 - (dropY), rainInk)
+    dot(dropX + .5, 31 - (dropY - 1), rainInk)
+    dot(dropX + 1, 31 - (dropY - 2), rainInk)
   }
 }
 
@@ -124,13 +122,13 @@ draw {
 -- table's 30ths, from the road's middle there, bent to the noise that
 -- far on); from the horizon up, the sky's shade, and which row of
 -- windows this is (every other row from row 20)
-below = py < 19
-halfWidth = below * 3.6 * (19.5 - py)
+below = (31 - py) < 19
+halfWidth = below * 3.6 * (19.5 - (31 - py))
 stripe = frac(54/max(halfWidth, 1.3) + t*10) < .5
 scale = below ? clamp(30/halfWidth, 0, 9) : 0
-start = below ? 40 - (straight + noise(driven + .1125/(19.5 - py), 0, 0)*2000)*scale : -99
-skyRow = below ? 99 : py
-windowRow = (py - 20)/2 + py%2*20
+start = below ? 40 - (straight + noise(driven + .1125/(19.5 - (31 - py)), 0, 0)*2000)*scale : -99
+skyRow = below ? 99 : (31 - py)
+windowRow = ((31 - py) - 20)/2 + (31 - py)%2*20
 
 -- Each column: the near tower here (7 columns and a gap, its roof at row
 -- 22-35: some leave the panel) and the far one (6 wide, roof at 25-34,
@@ -151,7 +149,7 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 -- are the window's colour, low in the palette, so the car covers them).
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
 pal(city, max(pick(across[px*scale + start] + towers,
-      below ? city.pavement + stripe*city.step : (33 - py) / 2 * city.step,
-      below ? (py > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
+      below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
+      below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
       below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
       below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt), ink))

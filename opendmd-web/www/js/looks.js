@@ -75,10 +75,9 @@ export async function useSaid(f, keep) {
 export function fromPath(m, p) {
   // A name or a file not among those listed: named from it.
   if (!p.startsWith('@formula?')) return { src: '', saved: 1, name: stemTitle(p.replace(/^@formula:|\?.*$/g, '').replace(/^.*\/|\.psi$/gi, '')) };
-  const q = new URLSearchParams(p.slice(9)), f = { src: q.get('src') || '', saved: 1 };
-  for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
-  f.name = named(m, f);
-  return f;
+  // A compiled one sent from elsewhere: only its name is in it.
+  const q = new URLSearchParams(p.slice(9)), b = unb64(q.get('psb') || '');
+  return { src: '', saved: 1, name: (b && b[0] == 80 && new TextDecoder().decode(b.subarray(6, 6 + b[5]))) || q.get('name') || 'Formula' };
 }
 
 // The two controls, `id`-blend and `id`-amt; `change(blend, amount, settled)`
@@ -103,4 +102,9 @@ export function controls(id, change) {
       why.hidden = !t; why.textContent = t; why.classList.toggle('bad', !!x?.why);
     },
   };
+}
+
+// base64url (psikit `b64`) back to bytes, or null.
+function unb64(s) {
+  try { return Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)); } catch { return null; }
 }

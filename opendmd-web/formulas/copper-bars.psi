@@ -4,7 +4,7 @@ name "Copper bars"
 about "Shiny Amiga-style bars bouncing up and down"
 loop 4
 -- each bar is brightest in its middle, in steps like the old chips
-red = floor(max(0, 1 - abs(cy - 0.35*sin(t/4))*5) * 6) / 6
-gold = floor(max(0, 1 - abs(cy - 0.35*sin(t/4 - 0.12))*5) * 6) / 6
-blue = floor(max(0, 1 - abs(cy - 0.35*sin(t/4 - 0.24))*5) * 6) / 6
+red = floor(max(0, 1 - abs((-cy) - 0.35*sin(t/4))*5) * 6) / 6
+gold = floor(max(0, 1 - abs((-cy) - 0.35*sin(t/4 - 0.12))*5) * 6) / 6
+blue = floor(max(0, 1 - abs((-cy) - 0.35*sin(t/4 - 0.24))*5) * 6) / 6
 rgb(max(red, gold), max(gold*0.8, blue*0.6), blue)

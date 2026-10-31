@@ -6,6 +6,6 @@ loop 8
 fps 100
 palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
 -- three waves that never move (worked out once, then kept)
-wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
+wave = sin(x*2) + sin((1 - y)*1.5) + sin(x*1.5 + (1 - y))
 -- the palette turned once round in the loop
 cycle(glow, wave/6, t/8)

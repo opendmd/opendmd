@@ -13,7 +13,7 @@ part stripes {
   -- Stripes
   loop 4
   size = 8 + a*24
-  band = sin((px + py)/size - t/2)
+  band = sin((px + (31 - py))/size - t/2)
   s = clamp(band*1.5 + 0.5, 0, 1)
   rgb(1, s, s)
 }
@@ -22,5 +22,5 @@ layer {
   gray(0.08)
 }
 layer {
-  rings(x, y, stripes.s)
+  rings(x, (1 - y), stripes.s)
 }

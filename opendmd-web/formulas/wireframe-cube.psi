@@ -9,14 +9,12 @@ fps 100
 -- edges brighter. The colour is the last line's #40c0ff
 table V = -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1
 table E = 0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7
-frame {
-  sa = sin(t/4.8)
-  ca = cos(t/4.8)
-  sb = sin(t/4.8 + 1/6)
-  cb = cos(t/4.8 + 1/6)
-  size = 34 + scale*28
-  mid = 64 + sa*40
-}
+sa = sin(t/4.8)
+ca = cos(t/4.8)
+sb = sin(t/4.8 + 1/6)
+cb = cos(t/4.8 + 1/6)
+size = 34 + scale*28
+mid = 64 + sa*40
 draw {
   for e < 12 {
     m = E[e*2]*3
@@ -35,7 +33,7 @@ draw {
     zc = z1*ca - x1*sa
     yc = y1*cb - zc*sb
     zd = y1*sb + zc*cb
-    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),
+    line(mid + xa*36/(zb + 128), 31 - (16 + ya*36/(zb + 128)), mid + xc*36/(zd + 128), 31 - (16 + yc*36/(zd + 128)),
       clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))
   }
 }

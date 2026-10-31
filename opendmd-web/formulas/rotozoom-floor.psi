@@ -8,16 +8,14 @@ fps 100
 -- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon
 -- at the top, turning once a loop and gliding, each row scaled by its
 -- distance and the far rows fogged; rows and columns wobble.
-frame {
-  sn = sin(t/9.6)
-  cs = cos(t/9.6) -- the turn
-  zoom = 2        -- try 1 to 4
-  cu = t/0.6
-  cv = t/1.2                      -- the glide, in cells
-  amp = pick(wobble, 3, 4.5, 0)/8 -- the wobble, in texels
-}
+sn = sin(t/9.6)
+cs = cos(t/9.6) -- the turn
+zoom = 2        -- try 1 to 4
+cu = t/0.6
+cv = t/1.2                      -- the glide, in cells
+amp = pick(wobble, 3, 4.5, 0)/8 -- the wobble, in texels
 dx = px - 64
-ty = 31 - py
+ty = 31 - (31 - py)
 -- a row's distance: checker cells a pixel, smaller further down
 rs = 1 / ((ty + 2) * zoom)
 wob = sin(ty/32 + t/3.2) * amp
