@@ -1,7 +1,7 @@
 //! `psi check`: does a candidate Formula compile — and if not, its error's
 //! code, the line, the column and carets —, how heavy it is for the panel
 //! (on the VM and compiled by the panel's JIT), what it takes to compile
-//! on the panel, how long it is as a path, what it reads, and a PNG
+//! on the panel, how long it is compiled, what it reads, and a PNG
 //! contact sheet of its frames. The feedback loop `docs/psi-for-models.md`
 //! describes (it was opendmd-psi's `psi-check` example).
 //!
@@ -225,28 +225,15 @@ pub fn run(args: Vec<String>) -> i32 {
         ),
         None => println!("JIT: yes, but no faster by the estimate (the panel keeps whichever draws faster)"),
     }
-    // What compiling it takes on the panel: the compiler's heap at its peak
-    // (by tokens), and what the panel asks to have free first.
-    let heap = opendmd_psi::compile_heap_estimate(&src);
-    let asks = PANEL_COMPILE_STACK + 512 + heap + PANEL_COMPILE_RESERVE;
-    let tokens = opendmd_psi::syntax::tokens(&src).map_or(0, |t| t.len());
+    // How long it is, as written and compiled (the player never compiles:
+    // it plays the compiled Formula, a card's `.psb`, or `@formula?psb=…`).
+    let psb = opendmd_psi::build(&src).map_or(0, |b| b.len());
+    let p = "@formula?psb=".len() + psb.div_ceil(3) * 4;
     println!(
-        "compile: {} tokens, ~{:.1} KB of heap; the panel asks for ~{:.1} KB free first ({}about {} KB is free between items)",
-        n(tokens),
-        heap as f64 / 1024.0,
-        asks as f64 / 1024.0,
-        if asks > PANEL_FREE { "more than it has: " } else { "" },
-        PANEL_FREE / 1024
-    );
-    // How long it is, each way it travels.
-    let kept = kept_on_panel(&src);
-    let p = path_len(&opendmd_psi::compact(&src));
-    println!(
-        "length: {} B as written ({} at most), {} B as the panel keeps it saved ({} at most), {} B as a path (@formula?src=…: {} to show it, {} for an inline look){}",
+        "length: {} B as written ({} at most), {} B compiled ({} B as a path, @formula?psb=…: {} to show it, {} for an inline look){}",
         n(src.len()),
         n(opendmd_psi::MAX_SOURCE),
-        n(kept),
-        n(MAX_FORMULA_SOURCE),
+        n(psb),
         n(p),
         n(MAX_PATH),
         n(MAX_LOOK_PATH),
@@ -609,37 +596,11 @@ pub fn read(path: &str) -> String {
     }
 }
 
-// The panel's numbers (firmware/src/config.rs, opendmd-core/src/synth.rs,
-// js/psikit.js, opendmd-gallery): what `psi check` measures a Formula
-// against. `PANEL_FREE` is the heap measured free between items on the
-// DevKit (CLAUDE.md, "The compiler's heap").
-const PANEL_COMPILE_STACK: usize = 12 * 1024;
-const PANEL_COMPILE_RESERVE: usize = 6 * 1024;
-const PANEL_FREE: usize = 63 * 1024;
-const MAX_FORMULA_SOURCE: usize = 8192;
+// The panel's numbers (opendmd-core/src/synth.rs, js/psikit.js,
+// opendmd-gallery): what `psi check` measures a Formula against.
 const MAX_LOOK_PATH: usize = 2048;
 const MAX_PATH: usize = 6144;
 const GALLERY_MAX: usize = 4096;
-
-/// What the panel keeps of a saved Formula (opendmd-core `fx_psi::read_text`):
-/// its lines trimmed, blank and comment-only ones left out.
-fn kept_on_panel(src: &str) -> usize {
-    src.lines()
-        .map(str::trim)
-        .filter(|l| !(l.is_empty() || l.starts_with("--") || l.starts_with("//")))
-        .map(|l| l.len() + 1)
-        .sum()
-}
-
-/// `@formula?src=` and the compacted text as js/psikit.js `enc` writes it:
-/// a space `+`; `% & + # ?`, controls and non-ASCII as %XX.
-fn path_len(compact: &str) -> usize {
-    "@formula?src=".len()
-        + compact
-            .bytes()
-            .map(|b| if b == b' ' || (b > 32 && b < 127 && !b"%&+#?".contains(&b)) { 1 } else { 3 })
-            .sum::<usize>()
-}
 
 fn q(v: f64) -> i32 {
     q16((v.clamp(-32767.0, 32767.0) * 10000.0).round() as i32, 10000)
