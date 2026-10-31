@@ -26,7 +26,6 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("i", "hsv(i/4096, 1, 1)"),
     ("cx, cy", "rgb(abs(cx)/2, abs(cy)*2, 0.3)"),
     ("r, angle", "loop 4; hsv(angle + t/4, 1, 1 - r/2)"),
-    ("py", "gray(py/31)"),
     ("ur, ug, ub", "rgb(ub, ug, ur)"),
     ("ul", "pal(fire, ul)"),
     // Functions and statements
@@ -52,7 +51,6 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("loop 8", "loop 2; gray(frac(x - t/2))"),
     ("loop forever", "loop forever; hsv(frac(x + t/10), 1, 1)"),
     ("fps 100", "fps 100; loop 1; gray(abs(x - frac(t)) < 0.02)"),
-    ("…", "loop 4; k = sin(t/4)*0.5 + 0.5; gray(x < k)"),
     ("layer add { … }", "layer { gray(y*0.5) }; layer add { rgb(x, 0, 0) }"),
     ("layer rate 4 { … }", "loop 4; layer rate 4 { gray(noise(x*6, y*2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) < 0.01) }"),
     // (`use` is the editor's: it pastes the formula in as a part, as here.)
@@ -180,9 +178,9 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 204,
-        why: "Built-in values such as `x`, `t` and `a` can't be set; pick another name.",
-        before: "x = 1\ngray(x)",
-        after: "x1 = 1\ngray(x1)",
+        why: "The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`) can't be names; any built-in value or function's name can (it is then yours).",
+        before: "layer = 1\ngray(x * layer)",
+        after: "level = 1\ngray(x * level)",
     },
     Help {
         code: 205,
@@ -198,8 +196,8 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 301,
-        why: "`` is worked out once a frame, before any pixel, so it can't read a pixel's position or what is under it.",
-        before: "k = x\ngray(k)",
+        why: "There are no `frame { }` blocks: a value that reads only the time, the clock and the controls is worked out once a frame by itself.",
+        before: "frame {\n  k = t / 8\n}\ngray(x * k)",
         after: "k = t / 8\ngray(x * k)",
     },
     Help {

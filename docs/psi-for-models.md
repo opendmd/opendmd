@@ -563,7 +563,7 @@ Divided, it is an error (write `t/3 + x/3`); so is anything else: `t*x`, `sqrt(t
 ```psi
 loop forever
 fps 100
-frame { u = t*0.15 + seed*1000 }   -- a distance, in noise cells: grows without end
+u = t*0.15 + seed*1000   -- a distance, in noise cells: grows without end
 ahead = noise(u + y*0.5, 0, 0)     -- per row: the track a little further on
 glow = smoothstep(0, 5, t)         -- a fade-in over the first five seconds
 hsv(ahead + x*0.2, 0.8, glow*noise(x*8 + t, y*4, u))
@@ -734,7 +734,7 @@ arithmetic costs the same as `x` arithmetic.
 
 ```psi
 -- 5 letters x 10 px (the 5-px cell, doubled) = 50 px, from column 39
-u = px - 39; v = ty - 9              -- offsets from the text's top left
+u = px - 39; v = py - 9              -- offsets from the text's top left
 ch = pick(floor(u/10), 'H', 'E', 'L', 'L', 'O')   -- which letter (0 outside)
 gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
 ```
@@ -793,7 +793,7 @@ sprite s {
   key . 0, X 1
   .XY.
 }
-gray(s[px, ty])
+gray(s[px, py])
 ```
 
 Every character of a sprite's rows needs its number in the key line.
@@ -837,12 +837,6 @@ gray(T[0])
 ```
 
 ```psi error
--- error: `frame { }` is worked out once a frame
-frame { k = x * 2 }
-gray(k)
-```
-
-```psi error
 -- error: is a whole colour: it can only be the last line
 v = rgb(x, y, 0)
 gray(0)
@@ -869,7 +863,7 @@ gray(digit(3, px % 5, 31 - py, 2))
 
 ```psi error
 -- error: a character goes in quotes, one at a time
-gray(glyph('AB', px % 5, ty))
+gray(glyph('AB', px % 5, py))
 ```
 
 There are no strings: one `glyph` per character cell (the idiom above).
@@ -903,12 +897,6 @@ hsv(#ff8800)
 ```psi error
 -- error: `pick` takes a number, then the values to pick from
 gray(pick(x))
-```
-
-```psi error
--- error: `t` is built in
-t = 2
-gray(t)
 ```
 
 ```psi error
@@ -1095,7 +1083,7 @@ A shape whose position is worked out once a frame, with a soft edge.
 ```psi example=bouncing-ball
 loop 2
 -- the ball's centre in pixels: across and back with tri, two bounces with abs(sin)
-frame { bx = 63.5 + 55*tri(t/2); by = 4.5 + 22*abs(sin(t/2)) }
+bx = 63.5 + 55*tri(t/2); by = 4.5 + 22*abs(sin(t/2))
 d = len(px - bx, py - by)
 -- 1 inside 3.5 px, 0 past 4.5 px: a soft-edged disc
 ball = smoothstep(4.5, 3.5, d)
@@ -1133,7 +1121,7 @@ Following the clock: a bar filling every minute, with ticks.
 
 ```psi example=seconds-bar
 -- a bar that fills across the panel every minute; the ticks mark 5 s
-frame { s = second/60 }
+s = second/60
 fill = step(x, s)
 tick = step(px % 21, 0.5) * step(py, 3)
 rgb(fill*0.2 + tick, fill*0.8 + tick, fill + tick)
@@ -1145,7 +1133,7 @@ Hours as lit dots and minutes as a bar: comparisons as masks.
 
 ```psi example=dot-clock
 -- top: twelve dots, the hours lit; bottom: a bar, one pixel a minute
-frame { hr = hour % 12; mn = minute }
+hr = hour % 12; mn = minute
 dot = step(abs(px % 10 - 4.5), 2.5) * step(abs(py - 22), 3) * step(px, 119)
 lit = step(floor(px/10), hr - 0.5)
 bar = step(abs(py - 8), 2) * step(px - 4, mn) * step(4, px)
@@ -1158,7 +1146,7 @@ A whole-day cycle from `hour` and `minute`.
 
 ```psi example=day-sky
 -- follows the clock: dark at night, blue by day, warm near sunrise and sunset
-frame { day = (hour + minute/60)/24; sun = -cos(day) }
+day = (hour + minute/60)/24; sun = -cos(day)
 light = clamp(sun*1.5 + 0.3, 0, 1)
 warm = clamp(1 - abs(sun)*3, 0, 1) * (1 - y)
 rgb(0.02 + light*(0.6 - 0.4*y) + warm*0.9, 0.02 + light*(0.8 - 0.35*y) + warm*0.35, 0.1 + light*(0.9 - 0.1*y))
@@ -1325,7 +1313,7 @@ letter cost a comparison and a select).
 ```psi example=name-sign
 loop 4
 -- "OpenDMD" in the panel's font at twice the size, centred: 7 letters of 10 px
-u = px - 30; v = ty - 9               -- the pixel from the text's top left
+u = px - 30; v = py - 9               -- the pixel from the text's top left
 ch = pick(floor(u/10), 'O', 'p', 'e', 'n', 'D', 'M', 'D')   -- which letter
 lit = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
 hsv(x - t/4, 0.8, lit)                -- a rainbow sliding through, once a loop
@@ -1344,17 +1332,15 @@ is the pixel. In row 0 the seconds bar replaces the digits.
 ```psi example=big-clock
 loop 60
 -- Big clock: the time in four big digits, and a seconds bar along the bottom
-frame {
-  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits
-  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
-  end = (second + 1)*128/60                 -- where the seconds bar ends
-}
+h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits
+m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
+end = (second + 1)*128/60                 -- where the seconds bar ends
 -- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)
 q = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right
 k = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)
 n = pick(k, h1, h2, m1, m2)    -- and its value
 col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
-row = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)
+row = floor(py/6)              -- its row from the top, 0 to 4 (5: below)
 bar = py < 1                   -- the bottom row is the seconds bar
 lit = bar ? px < end : digit(n, col, row, bold)
 -- a rainbow drifting through the digits, tilted by row; the bar is white
@@ -1391,7 +1377,7 @@ glow = max(0, 1 - behind*3) * (cx*cx + cy*cy < 0.2)
 
 ```psi example=rgb-word
 -- "RGB" at twice the size, each letter its own colour
-u = px - 49; v = ty - 9
+u = px - 49; v = py - 9
 cell = floor(u/10)
 lit = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
 pick(cell, #ff3333, #33ff55, #3377ff) * lit
@@ -1415,7 +1401,7 @@ fps 100
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
 -- each a streak from where it was a moment ago
 -- a: streak length
-frame { back = 1 + 1/64 + (144 + a*240)/4096 }
+back = 1 + 1/64 + (144 + a*240)/4096
 draw {
   for k < 192 {
     sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up
@@ -1447,10 +1433,8 @@ fps 100
 -- a: size
 table V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1
 table E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
-frame {
-  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
-  size = 34 + a*28; mid = 64 + sa*40
-}
+sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
+size = 34 + a*28; mid = 64 + sa*40
 draw {
   for e < 12 {
     m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners
@@ -1520,15 +1504,13 @@ loop 9.6
 -- twice, gliding two checkers across and one down; under it a noise
 -- texture turning the other way twice as fast; rows and columns wobble.
 -- a: wobble = gentle, strong, off
-frame {
-  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
-  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
-  zoom = 2                                         -- try 1 to 4
-  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel
-  sc2 = sc*0.75
-  cu = t/0.6; cv = t/1.2                           -- the glide, in cells
-  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels
-}
+sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
+s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
+zoom = 2                                         -- try 1 to 4
+sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel
+sc2 = sc*0.75
+cu = t/0.6; cv = t/1.2                           -- the glide, in cells
+amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels
 dx = px - 64; dy = 15 - py
 -- the wobble: rows slide sideways, columns up and down, on travelling waves
 wob = sin((31 - py)/32 + t/3.2)*amp
@@ -1551,7 +1533,7 @@ and one per row (a haze band), and `seed` to start somewhere else.
 ```psi example=clouds-forever
 loop forever
 -- clouds drifting for ever, a new sky each time it plays
-frame { u = t*0.05 + seed*1000 }        -- grows without end
+u = t*0.05 + seed*1000        -- grows without end
 puff = noise(x*6 + u, y*3, u*0.3)        -- per pixel: the clouds
 haze = noise(u*2 + y, 9, 0)*0.3          -- per row: a band of haze
 k = smoothstep(0.45, 0.75, puff + haze*0.5)
@@ -1585,13 +1567,11 @@ sprite inv {
   ..X.....X..
   .X.......X.
 }
-frame {
-  sway = floor(tri(t/4)*6)               -- side to side, a pixel at a time
-  f = floor(t*2) % 2                     -- which frame
-}
+sway = floor(tri(t/4)*6)               -- side to side, a pixel at a time
+f = floor(t*2) % 2                     -- which frame
 u = px - 2 - sway
-k = inv[u % 14, ty - 10 + f*8] * (u >= 0) * (u < 123)   -- nine, 14 px apart
-hsv(0.33 - ty/100, 0.7, k)
+k = inv[u % 14, py - 10 + f*8] * (u >= 0) * (u < 123)   -- nine, 14 px apart
+hsv(0.33 - py/100, 0.7, k)
 ```
 
 ### 37. Night city (a palette of its own, a sprite for its index)
@@ -1609,11 +1589,11 @@ sprite block {
   .w.w.w.
   .......
 }
-frame { blink = floor(t*2) }
+blink = floor(t*2)
 col = floor(px/7); top = 10 + hash(col, 3)*16      -- each building's height
-on = hash(col*31 + floor(ty/2), blink) > 0.6       -- this window lit just now
-inside = ty > 31 - top
-k = inside ? block[px % 7, ty % 2]*on + (1 - on)*2 : (py > 24 ? 0 : 1)
+on = hash(col*31 + floor(py/2), blink) > 0.6       -- this window lit just now
+inside = py > 31 - top
+k = inside ? block[px % 7, py % 2]*on + (1 - on)*2 : (py > 24 ? 0 : 1)
 pal(city, k/4)
 ```
 

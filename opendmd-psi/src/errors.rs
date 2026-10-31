@@ -232,10 +232,10 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 204,
-        title: "a name that is built in",
-        sentence: "`…` is built in; pick another name",
-        fix: "Pick another name.",
-        matches: &["is built in", "pick another name"],
+        title: "a word of the language as a name",
+        sentence: "`…` is a word of the language; pick another name",
+        fix: "Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for` and `table` are the language's own words (any built-in value or function's name may be yours).",
+        matches: &["is a word of the language; pick another name"],
     },
     ErrorDoc {
         code: 205,
@@ -309,10 +309,10 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 301,
-        title: "a per-pixel value in `frame { }`",
-        sentence: "`frame { }` is worked out once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
-        fix: "Use only values that are the same everywhere (such as `t`) inside `frame { }`.",
-        matches: &["`frame { }` is worked out once a frame"],
+        title: "a `frame { }` block",
+        sentence: "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block",
+        fix: "Take the lines out of the block, as they are.",
+        matches: &["there are no `frame { }` blocks"],
     },
     ErrorDoc {
         code: 302,
@@ -355,20 +355,6 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "`rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`",
         fix: "Give `rgb(r, g, b)` three numbers, or write the colour on its own.",
         matches: &["takes three numbers, not colours"],
-    },
-    ErrorDoc {
-        code: 308,
-        title: "a second `frame { }` block",
-        sentence: "there can be one `frame { }` block",
-        fix: "Merge the `frame { }` blocks into one.",
-        matches: &["one `frame { }` block"],
-    },
-    ErrorDoc {
-        code: 309,
-        title: "a line that does not belong in `frame { }`",
-        sentence: "only `name = value` lines can go inside frame { }",
-        fix: "Put only `name = value` lines inside `frame { }`.",
-        matches: &["can go inside frame { }"],
     },
     ErrorDoc {
         code: 401,

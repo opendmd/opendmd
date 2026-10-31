@@ -30,17 +30,15 @@ table X0 = 0, 5, 5, 5, 0, 0, -6, -6
 table Y0 = 0, 22, 22, 22, 0, 26, 27, 26
 table X1 = 5, 16, -5, 8, 0, -6, -9, -8
 table Y1 = 22, 17, 17, 27, 26, 27, 26, 25
-frame {
-  u = t*.15 + seed*1000 -- distance driven, in bends
-  h0 = noise(u, 0, 0)
-  h1 = noise(u + .03, 0, 0) -- heading here, just ahead
-  v0 = noise(u, 5, 0)       -- height here, and its slope
-  dv = (noise(u + .01, 5, 0) - v0) * 100
-  cx = 50.99999 + (h1 - h0)*80 -- the car's left edge: out in bends
-  mx = (.5 - h0) * 60
-  sunx = 64 + mx -- the sky turns with the road
-  g = t*10/14    -- a place by the road every 14 stripes
-}
+u = t*.15 + seed*1000 -- distance driven, in bends
+h0 = noise(u, 0, 0)
+h1 = noise(u + .03, 0, 0) -- heading here, just ahead
+v0 = noise(u, 5, 0)       -- height here, and its slope
+dv = (noise(u + .01, 5, 0) - v0) * 100
+cx = 50.99999 + (h1 - h0)*80 -- the car's left edge: out in bends
+mx = (.5 - h0) * 60
+sunx = 64 + mx -- the sky turns with the road
+g = t*10/14    -- a place by the road every 14 stripes
 draw {
   for k < 3 {
     for j < 7 {
@@ -66,10 +64,10 @@ draw {
     sd = (k%2)*2 - 1
     bx = noise(n, k*5, 0) > .45 or d > 11 or by > 19 ? -999 :
       64 + (noise(u + .1125/max(19.5 - by, .5), 0, 0) - h0)*2000 + sd*s*47
-    ty = (noise(n, k*5 + 2, 0) > .5) * 4
+    py = (noise(n, k*5 + 2, 0) > .5) * 4
     ax = sd*s
     for j < 4 {
-      e = ty + j
+      e = py + j
       line(bx + X0[e]*ax, by + Y0[e]*s, bx + X1[e]*ax, by + Y1[e]*s, e > 5 ? .46 : .33)
     }
   }

@@ -20,30 +20,28 @@ table CQ = 271, 239, 241, 207, 209, 175, 143, 147, 145, 147, 111, 115, 113, 115,
 -- Three peaks: middle, half width
 table MC = 8, 70, 126
 table MW = 9, 13, 8
-frame {
-  -- distance in bends; heading here and just ahead; height and slope
-  u = t*.15 + seed*1000
-  h0 = noise(u, 0, 0)
-  h1 = noise(u + .03, 0, 0)
-  v0 = noise(u, 5, 0)
-  dv = (noise(u + .01, 5, 0) - v0) * 100
-  -- the car slides out in bends, the sky turns with the road
-  cx = 50.99999 + (h1 - h0)*80
-  mx = (.5 - h0) * 60
-  -- the light el (-1 night, 0 sunset, 1 day), night nt, day dy; the
-  -- sun's middle and radius; the sky's ramp at the horizon and its rise
-  -- a row; dw towards dawn; night's edge ne coming down the road
-  sn = sin(t/240 + seed)
-  el = clamp(sn*sn*sn*-3, -1, 1)
-  nt = clamp(-el, 0, 1)
-  dy = clamp(el, 0, 1)
-  sc = 23.5 + clamp(el*24, -20, 2.5)
-  sr = 8 - dy*3
-  sb = .5 - (nt + dy)/3
-  sk = 27.3 - 7*nt - 4*dy + 19*sb
-  dw = cos(t/240 + seed) < 0
-  ne = (nt - .5) * (dw ? -1.3 : 1.3)
-}
+-- distance in bends; heading here and just ahead; height and slope
+u = t*.15 + seed*1000
+h0 = noise(u, 0, 0)
+h1 = noise(u + .03, 0, 0)
+v0 = noise(u, 5, 0)
+dv = (noise(u + .01, 5, 0) - v0) * 100
+-- the car slides out in bends, the sky turns with the road
+cx = 50.99999 + (h1 - h0)*80
+mx = (.5 - h0) * 60
+-- the light el (-1 night, 0 sunset, 1 day), night nt, day dy; the
+-- sun's middle and radius; the sky's ramp at the horizon and its rise
+-- a row; dw towards dawn; night's edge ne coming down the road
+sn = sin(t/240 + seed)
+el = clamp(sn*sn*sn*-3, -1, 1)
+nt = clamp(-el, 0, 1)
+dy = clamp(el, 0, 1)
+sc = 23.5 + clamp(el*24, -20, 2.5)
+sr = 8 - dy*3
+sb = .5 - (nt + dy)/3
+sk = 27.3 - 7*nt - 4*dy + 19*sb
+dw = cos(t/240 + seed) < 0
+ne = (nt - .5) * (dw ? -1.3 : 1.3)
 draw {
   for k < 3 {
     for j < 7 {

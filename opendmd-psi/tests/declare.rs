@@ -80,7 +80,6 @@ const ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("look screen 140\ngray(x)", "`look` takes a blend", 1, 13, "E964"),
     ("look 40.5\ngray(x)", "`look` takes a blend", 1, 6, "E964"),
     ("look screen 40\nlayer { gray(x) }\nlayer add { gray(y) }", "a formula with layers goes over the GIF as a look", 1, 1, "E965"),
-    ("control x = 0.5\ngray(x)", "`x` is built in", 1, 9, "E204"),
     ("control k = 0.5\ncontrol k = 0.2\ngray(k)", "`k` is already the name of a control (line 1)", 2, 9, "E203"),
     ("gray(\"x\")", "there are no strings but on `name`, `about` and `control` lines", 1, 6, "E001"),
     ("loop 4 \"x\"\ngray(x)", "there are no strings", 1, 8, "E001"),
