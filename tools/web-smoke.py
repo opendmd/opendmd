@@ -309,6 +309,7 @@ Any console error or page error fails the run.
 """
 import argparse
 import atexit
+import base64
 import filecmp
 import gzip
 import http.server
@@ -4238,7 +4239,7 @@ def clear_toasts(page: Page) -> None:
 
 
 def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
-    """Show on panel: a formula plays on the (mock) panel as `@formula?src=…`;
+    """Show on panel: a formula plays on the (mock) panel as `@formula?psb=…`;
     slider changes follow it there, ~200 ms apart and one at a time, as live
     edits (the same ordinal); once the playlist moves on a change stops
     following (409, no toast); an older firmware (415), a formula it refuses
@@ -4252,14 +4253,17 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-ex .psi-tile >> nth=0")
     name = page.inner_text("#psi-d-title")
     check(page.inner_text("#psi-show") == "Show on panel", "formulas panel: Show on panel in Details")
-    # The path is the device's own (`fx_psi::path`, its test has the same string).
-    enc = page.evaluate("import('./js/psishow.js').then(m => m.fpath({src: '-- a: x\\nv = x % 2 + 1 & 3 # é  // c', a: 0.5}))")
-    check(enc == "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9&a=0.5", f"formulas panel: the formula's path as the device writes it ({enc})")
+    # The path is the device's own (`fx_psi::path_of`): the compiled Formula.
+    src = 'name "Ü"\nv = x % 2 + 1 // c\ngray(v)'
+    enc = page.evaluate("(s) => import('./js/psishow.js').then(m => m.fpath({src: s, a: 0.5}))", src)
+    psb = enc[len("@formula?psb="):-len("&a=0.5")] if enc.startswith("@formula?psb=") and enc.endswith("&a=0.5") else ""
+    raw = base64.urlsafe_b64decode(psb + "=" * (-len(psb) % 4)) if psb else b""
+    check(raw[:4] == b"PSB\x01" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
     clear_toasts(page)
     page.click("#psi-show")
     t = last_toast(page, "ok")
     st = get_json(base + "/api/status")["now_playing"]
-    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?src=name+") and st["title"] == name
+    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?psb=") and st["title"] == name
           and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
           f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
     shot(page, "formulas-panel-on", "laptop")
@@ -4344,7 +4348,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     fl = get_json(base + "/api/status")["formula_look"]
-    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?src=")
+    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?psb=")
           and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
           f"formulas over: shown over the panel's GIF ('{t}', {fl})")
     clear_toasts(page)
@@ -4509,6 +4513,8 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     check(c5["look_formula"] == "/formulas/matrix-glow.psi" and saved.startswith('name "Matrix glow"\nabout "Matrix, screened over the GIF"\n') and "\nlook screen 40\n" in saved
           and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
           f"looks: Set as the panel’s look saves it on the panel and names its file ('{t}'; {c5['look_formula']!r})")
+    compiled = urllib.request.urlopen(base + "/formulas/matrix-glow.psb", timeout=30).read() if saved else b""
+    check(compiled[:4] == b"PSB\x01", "looks: the saved Formula's compiled file is beside it")
     # Off: the line goes.
     page.click("#psi-set-btn")
     page.wait_for_selector("#psi-set #psi-set-look", timeout=10000)
@@ -4522,7 +4528,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(400)
     f0 = page.evaluate("""() => import('./js/psikit.js').then((k) => { const c = { controls: [{ slot: 'a', default: 0.5 }] };
         return [k.path({ src: 'gray(a)', a: 0.5 }, c), k.path({ src: 'gray(a)', a: 0.25 }, c), k.vals({ src: 'gray(a)', a: 0.5 }, c), k.vals({ src: 'gray(a)', a: 0.75 }, c)]; })""")
-    check(f0 == ["@formula?src=gray(a)", "@formula?src=gray(a)&a=0.25", "", "&a=0.75"],
+    check(f0[0].startswith("@formula?psb=") and "&" not in f0[0] and f0[1] == f0[0] + "&a=0.25" and f0[2:] == ["", "&a=0.75"],
           f"looks: a value at its default stays out of paths and the site's hand-over ({f0})")
     put_json(base + "/api/config", {"look_formula": ""})
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/matrix-glow.psi", method="DELETE"), timeout=30)

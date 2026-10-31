@@ -42,8 +42,9 @@ pub const ABI: u8 = 1;
 
 const MAGIC: &[u8; 3] = b"PSB";
 const F_LOOK: u8 = 1;
-/// A Formula's name, bytes at most (the compiler's `MAX_NAME_TEXT`).
-pub const MAX_NAME: usize = 60;
+/// A Formula's name: 60 characters (the compiler's `MAX_NAME_TEXT`), so
+/// at most this many bytes.
+pub const MAX_NAME: usize = 240;
 
 /// Why bytes are not a program the player can play.
 pub type Refusal = &'static str;
@@ -71,10 +72,7 @@ pub fn encode(name: &str, play: &Program, look: Option<&Program>) -> Vec<u8> {
     o.extend_from_slice(MAGIC);
     o.push(ABI);
     o.push(if look.is_some() { F_LOOK } else { 0 });
-    let mut cut = name.len().min(MAX_NAME);
-    while !name.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    let cut = name.char_indices().nth(60).map_or(name.len(), |(i, _)| i).min(MAX_NAME);
     o.push(cut as u8);
     o.extend_from_slice(&name.as_bytes()[..cut]);
     put_program(&mut o, play);
