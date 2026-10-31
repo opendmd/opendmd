@@ -36,9 +36,13 @@ names = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
-# Psi formulas, the panel's only effects, `@formula?src=…` (src/fx_psi.rs):
-# off by default here; the firmware and the simulator turn it on.
+# Psi formulas, the panel's only effects, `@formula?psb=…` (src/fx_psi.rs):
+# off by default here; the firmware and the simulator turn it on. The
+# player loads compiled Formulas only (opendmd-psi's `psb`).
 psi = ["dep:opendmd-psi"]
+# The compiler too, for the host's tools (the simulator, psi-probe's
+# builds): `fx_psi::path` of a source.
+psi-compiler = ["psi", "opendmd-psi/compiler"]
 # psi-probe's counters (`psi::stats`).
 psi-stats = ["psi", "opendmd-psi/stats"]
 # The narrow JIT (opendmd-psi's `jit`): a formula's pixel stage as Xtensa

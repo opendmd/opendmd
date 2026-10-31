@@ -729,9 +729,9 @@ impl Engine {
     }
 
     /// What `path` reads as: a virtual file in memory, a Formula's `.psi`
-    /// file read through the source (compacted as it is read, then closed:
-    /// [`crate::fx_psi::read_text`]) into a virtual file, else the source's
-    /// file.
+    /// path played from the compiled `.psb` beside it (read through the
+    /// source, then closed: [`crate::fx_psi::read_psb`]) as a virtual file,
+    /// else the source's file.
     fn open_reader(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         if let Some(bytes) = synth::open(path) {
             return Ok(Box::new(bytes));
@@ -739,9 +739,15 @@ impl Engine {
         if let Some((file, opts)) = synth::formula_file(path) {
             #[cfg(feature = "psi")]
             {
-                let f = self.source.open(file)?;
-                let text = crate::fx_psi::read_text(io::BufReader::with_capacity(512, f))?;
-                return Ok(Box::new(synth::open_formula_text(opts, &text)));
+                let f = self.source.open(&synth::compiled_path(file)).map_err(|e| {
+                    if e.kind() == io::ErrorKind::NotFound {
+                        io::Error::new(io::ErrorKind::NotFound, crate::fx_psi::NOT_PREPARED)
+                    } else {
+                        e
+                    }
+                })?;
+                let psb = crate::fx_psi::read_psb(f)?;
+                return Ok(Box::new(synth::open_formula_bytes(opts, &psb)));
             }
             #[cfg(not(feature = "psi"))]
             {
@@ -1839,7 +1845,10 @@ mod tests {
         crate::synth::install_test_bundled();
         let mine = "-- author: me\n-- a comment\nname \"Mine\"\ncontrol k = 0\n\n  rgb(0, k, 0)   -- green\n";
         let mut e = engine_with(
-            &[("/formulas/mine.psi", mine.as_bytes().to_vec())],
+            &[
+                ("/formulas/mine.psi", mine.as_bytes().to_vec()),
+                ("/formulas/mine.psb", crate::synth::psi_build(mine)),
+            ],
             "@formula:nope\n/formulas/gone.psi\n@formula:red\n/formulas/mine.psi?a=1\n",
             DwellPolicy {
                 min: Duration::from_secs(1),
@@ -1877,18 +1886,14 @@ mod tests {
         }
     }
 
-    /// A Formula's file over [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE)
-    /// compacted is refused with a sentence, never cut.
+    /// A compiled Formula's file over [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE)
+    /// is refused with a sentence, never cut.
     #[cfg(feature = "psi")]
     #[test]
     fn a_formula_file_too_long_is_refused() {
-        let mut long = String::from("v = 0\n");
-        while long.len() < crate::synth::MAX_FORMULA_SOURCE + 100 {
-            long += "v = v + x * 0.5\n";
-        }
-        long += "gray(v)\n";
+        let long = vec![b'P'; crate::synth::MAX_FORMULA_FILE + 1];
         let mut e = engine_with(
-            &[("/formulas/long.psi", long.into_bytes())],
+            &[("/formulas/long.psi", b"gray(x)".to_vec()), ("/formulas/long.psb", long)],
             "/formulas/long.psi",
             DwellPolicy::default(),
         );
@@ -1970,7 +1975,7 @@ mod tests {
         let first = e.now_playing().unwrap().ordinal;
 
         // In place it is refused; after the one on screen goes, it compiles.
-        crate::fx_psi::refuse_compiles(1);
+        crate::fx_psi::refuse_loads(1);
         e.retune(&road, Duration::from_millis(t), keep)
             .unwrap()
             .unwrap();
@@ -1997,12 +2002,12 @@ mod tests {
         );
 
         // Refused before and after: the error, nothing on screen, then the playlist.
-        crate::fx_psi::refuse_compiles(u32::MAX);
+        crate::fx_psi::refuse_loads(u32::MAX);
         let err = e
             .retune(&gate, Duration::from_millis(t), keep)
             .unwrap()
             .unwrap_err();
-        crate::fx_psi::refuse_compiles(0);
+        crate::fx_psi::refuse_loads(0);
         assert!(crate::fx_psi::is_no_memory(&err), "{err}");
         assert!(e.now_playing().is_none(), "the one on screen was let go");
         t += 20;
