@@ -57,7 +57,7 @@ one), then the playlist carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
-`/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?src=…`) or
+`/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?psb=…`) or
 a live item (see "Live items"). `"live":true`: only replace a formula on screen (`409` if
 none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
@@ -81,7 +81,7 @@ Errors: `400` neither card-absolute nor a live item, or a bad formula;
 (`there is no bundled Formula by that name`; what was playing carries on); `415` not a
 GIF, a live item this firmware does not know (`@nonsense`), or a retired
 `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
-Formulas replace them (play one as @formula?src=…)`); `503` no
+Formulas replace them (play one as @formula?psb=…)`); `503` no
 playlist running; `413` body over 8 KB, or an inline formula over 6,144 B.
 
 ```sh
@@ -123,6 +123,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | field | meaning |
 |---|---|
 | `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit; `"8mb"`, an 8 MB board in development) |
+| `psi_abi` | the compiled Formulas this player plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the player's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
@@ -245,7 +246,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?src=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
@@ -759,14 +760,16 @@ centred, if it fits). A loop is one pass across the panel.
 curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
 ```
 
-**`@formula`** — a formula (the app's Formulas): `src=<url-encoded
-formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default:
+**`@formula`** — a formula (the app's Formulas), **compiled**: the player
+never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
+the web app's pkg-psi `program(src)` makes, or `psi build`), `a=`, `b=`,
+`c=` (sliders), `fps=50|100|25` (default:
 the formula's `fps` line, else 50; as a look over the GIF the line is not
 used). A heavy one is shown at fewer frames a second; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms`,
 `beam_us` (the raced frame time on the panel's refresh, µs; 0 while
 its frames are not raced, see `scan.beam`),
-`compile_us`, `still` (the still cache's bytes) and `jit`:
+`compile_us` (the load's time, µs), `still` (the still cache's bytes) and `jit`:
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
 its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 `it reads the picture under it`, `it draws (ink)`, `off (setting)`,
@@ -775,15 +778,18 @@ its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 
 **By reference** (what playlists and the look use, so a Formula's length
 never matters there): `@formula:<stem>[?a=&b=&c=&fps=]` plays a bundled
-Formula (its file's stem in `opendmd-web/formulas/`, built into the
+Formula (its file's stem in `opendmd-web/formulas/`, compiled into the
 firmware: `endless-road`, `big-clock`, …); a card path ending `.psi`,
-`/formulas/<stem>.psi[?a=…]`, plays one of the user's, read from the card
-as it opens (comments and indentation left out as it is read; 8 KB of
-Formula after that, 64 KB of file). A name that is not bundled, or a file
-that is not there, is a `404`. Its title is its `name "…"` line.
+`/formulas/<stem>.psi[?a=…]`, plays one of the user's from the compiled
+file beside it, `/formulas/<stem>.psb` (16 KB at most), which the web app
+writes whenever it saves the `.psi`. A name that is not bundled, or a
+Formula with no compiled file, is a `404`; one compiled for another
+version of the player is a `400` (`/api/status` `psi_abi` is the version
+this player takes; the web app prepares its Formulas again for it). Its
+title is the compiled Formula's name (its `name "…"` line).
 
 ```sh
-curl -s $DMD/api/play --json '{"path":"@formula?src=gray(x)"}'
+curl -s $DMD/api/play --json "{\"path\":\"@formula?psb=$(psi build my.psi --base64)\"}"
 curl -s $DMD/api/play --json '{"path":"@formula:endless-road"}'
 curl -s $DMD/api/play --json '{"path":"/formulas/my-road.psi?a=0.4"}'
 ```

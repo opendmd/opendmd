@@ -12,16 +12,17 @@
 //! **The format** (little-endian):
 //!
 //! ```text
-//! "PSB" ABI(u8)  flags(u8: bit 0, a look program follows)
+//! "PSB" ABI(u8)  flags(u8: bit 0, a look program follows; bit 1, the
+//!                       programs declare controls or a look: their meta)
 //! name_len(u8) name(UTF-8, ≤ 60)
 //! program [look program]
 //! program = len(u16) header ops init tables meta   (len: the bytes after it)
 //! header  = frame_end draw_end row_end pixel_end (u16 each)
 //!           n_scalars regs uses frame_ms (u8 each)  loop_ms(u32)
 //! ops     = pixel_end × (code d a b c)
-//! init    = n_scalars × i32
+//! init    = (n_scalars − 9) × i32   (the inputs' slots are always 0)
 //! tables  = lo(u16) pals(u8)  lo × i32 (from 0)  pals × 32 × i32 (from the top)
-//! meta    = kind[3] look amount (u8)  lo[3] hi[3] def[3] (i32)
+//! meta    = kind[3] look amount (u8)  lo[3] hi[3] def[3] (i32)   (with flag bit 1)
 //! ```
 //!
 //! A program is *portable*: laid out by the compiler but not narrowed or
@@ -42,6 +43,7 @@ pub const ABI: u8 = 1;
 
 const MAGIC: &[u8; 3] = b"PSB";
 const F_LOOK: u8 = 1;
+const F_META: u8 = 2;
 /// A Formula's name: 60 characters (the compiler's `MAX_NAME_TEXT`), so
 /// at most this many bytes.
 pub const MAX_NAME: usize = 240;
@@ -71,18 +73,19 @@ pub fn encode(name: &str, play: &Program, look: Option<&Program>) -> Vec<u8> {
     let mut o = Vec::with_capacity(1024);
     o.extend_from_slice(MAGIC);
     o.push(ABI);
-    o.push(if look.is_some() { F_LOOK } else { 0 });
+    let meta = *play.meta() != Meta::default() || look.is_some_and(|l| *l.meta() != Meta::default());
+    o.push(if look.is_some() { F_LOOK } else { 0 } | if meta { F_META } else { 0 });
     let cut = name.char_indices().nth(60).map_or(name.len(), |(i, _)| i).min(MAX_NAME);
     o.push(cut as u8);
     o.extend_from_slice(&name.as_bytes()[..cut]);
-    put_program(&mut o, play);
+    put_program(&mut o, play, meta);
     if let Some(l) = look {
-        put_program(&mut o, l);
+        put_program(&mut o, l, meta);
     }
     o
 }
 
-fn put_program(o: &mut Vec<u8>, p: &Program) {
+fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
     let at = o.len();
     o.extend_from_slice(&[0, 0]);
     for v in [p.frame_end, p.draw_end, p.row_end, p.pixel_end] {
@@ -95,7 +98,8 @@ fn put_program(o: &mut Vec<u8>, p: &Program) {
         let c = if op.code == code::FOR { 0 } else { op.c };
         o.extend_from_slice(&[op.code, op.d, op.a, op.b, c]);
     }
-    for v in &p.init[..(p.n_scalars as usize).min(MAX_SCALARS)] {
+    debug_assert!(p.init[..S_FIRST_FREE as usize].iter().all(|&v| v == 0));
+    for v in &p.init[S_FIRST_FREE as usize..(p.n_scalars as usize).min(MAX_SCALARS)] {
         o.extend_from_slice(&v.to_le_bytes());
     }
     // The formula's own palettes sit at the top of the tables, the rest
@@ -115,6 +119,11 @@ fn put_program(o: &mut Vec<u8>, p: &Program) {
         o.extend_from_slice(&v.to_le_bytes());
     }
     let m = &p.meta;
+    if !meta {
+        let len = (o.len() - at - 2) as u16;
+        o[at..at + 2].copy_from_slice(&len.to_le_bytes());
+        return;
+    }
     o.extend_from_slice(&m.kind);
     o.push(m.look);
     o.push(m.amount);
@@ -154,7 +163,7 @@ impl<'a> Reader<'a> {
 
 /// The header: (whether it has a look program, its name, where its first
 /// program starts).
-fn head(b: &[u8]) -> Result<(bool, &str, usize), Refusal> {
+fn head(b: &[u8]) -> Result<(u8, &str, usize), Refusal> {
     if b.len() < 6 || &b[..3] != MAGIC {
         return Err(NOT_PSB);
     }
@@ -163,7 +172,7 @@ fn head(b: &[u8]) -> Result<(bool, &str, usize), Refusal> {
     }
     let mut r = Reader { b, at: 4 };
     let flags = r.u8()?;
-    if flags & !F_LOOK != 0 {
+    if flags & !(F_LOOK | F_META) != 0 {
         return Err(NOT_PSB);
     }
     let n = r.u8()? as usize;
@@ -171,7 +180,7 @@ fn head(b: &[u8]) -> Result<(bool, &str, usize), Refusal> {
         return Err(NOT_PSB);
     }
     let name = core::str::from_utf8(r.take(n)?).map_err(|_| NOT_PSB)?;
-    Ok((flags & F_LOOK != 0, name, r.at))
+    Ok((flags, name, r.at))
 }
 
 /// A compiled Formula's name ("" when it has none), or why the bytes are
@@ -182,7 +191,7 @@ pub fn name(b: &[u8]) -> Result<&str, Refusal> {
 
 /// Whether the bytes carry a look program of their own.
 pub fn has_look(b: &[u8]) -> Result<bool, Refusal> {
-    head(b).map(|h| h.0)
+    head(b).map(|h| h.0 & F_LOOK != 0)
 }
 
 /// Load program `which` of `b` into `prog`, check it ([`verify`]) and
@@ -214,7 +223,8 @@ pub fn load_portable(b: &[u8], which: Which, prog: &mut Program) -> Result<(), R
 }
 
 fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
-    let (look, _, at) = head(b)?;
+    let (flags, _, at) = head(b)?;
+    let look = flags & F_LOOK != 0;
     let mut r = Reader { b, at };
     let len = r.u16()? as usize;
     let play = r.take(len)?;
@@ -256,7 +266,10 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
             c: s[4],
         };
     }
-    for k in 0..prog.n_scalars as usize {
+    if (prog.n_scalars as usize) < S_FIRST_FREE as usize {
+        return Err(NOT_PSB);
+    }
+    for k in S_FIRST_FREE as usize..prog.n_scalars as usize {
         prog.init[k] = r.i32()?;
     }
     let lo = r.u16()? as usize;
@@ -271,6 +284,10 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
         prog.tables[k] = r.i32()?;
     }
     let mut m = Meta::default();
+    if flags & F_META == 0 {
+        prog.meta = m;
+        return if r.at == body.len() { Ok(()) } else { Err(NOT_PSB) };
+    }
     for k in 0..3 {
         m.kind[k] = r.u8()?;
     }

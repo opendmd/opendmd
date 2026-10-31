@@ -4,6 +4,7 @@
 //!
 //!     psi check FILE.psi|- [options]     does it compile; the panel's estimates; a contact sheet
 //!     psi fmt [--check|--write] FILE…|-  the canonical layout (same program, comments kept)
+//!     psi build FILE.psi [--base64|-o FILE.psb]  compiled for the player (it never compiles)
 //!     psi builtins --json                every name the language knows
 //!     psi errors --json                  the error codes
 //!
@@ -27,6 +28,9 @@ const USAGE: &str = "usage: psi <command> …
   psi fmt [--check | --write] FILE.psi…|-
       the canonical layout: the same program, the comments kept; to stdout, or --write in
       place, or --check (exit 1 naming what isn't formatted)
+  psi build FILE.psi|- [-o FILE.psb | --base64]
+      the Formula compiled for the player (which never compiles): beside it as FILE.psb,
+      to -o, or --base64 for a path (`@formula?psb=…`)
   psi builtins --json    every name the language knows, with the cheat sheet's words
   psi errors --json      the error codes: code, title, sentence, what to do
   psi help";
@@ -41,6 +45,7 @@ fn main() {
     let code = match cmd.as_str() {
         "check" => check::run(args),
         "fmt" => fmt(args),
+        "build" => build(args),
         "builtins" if args == ["--json"] => {
             println!("{}", json::builtins());
             0
@@ -69,6 +74,60 @@ pub fn render_error(e: &Error, src: &str) -> String {
     let rest = r.split_once('\n').map_or("", |x| x.1);
     let code = errors::code_of(&e.msg).map_or(String::new(), |c| format!("[{}]", errors::label(c)));
     format!("error{code}: line {line}, column {col}: {}\n{rest}\n", e.msg)
+}
+
+/// `psi build`: the compiled Formula (`opendmd_psi::psb`) beside the file,
+/// to `-o`, or as base64url on stdout.
+fn build(args: Vec<String>) -> i32 {
+    let (mut out, mut b64, mut path) = (None, false, None);
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-o" => out = it.next(),
+            "--base64" => b64 = true,
+            _ if a.starts_with("--") => {
+                eprintln!("psi build: unknown option {a}");
+                return 2;
+            }
+            _ => path = Some(a),
+        }
+    }
+    let Some(path) = path else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let src = check::read(&path);
+    let psb = match opendmd_psi::build(&src) {
+        Ok(b) => b,
+        Err(e) => {
+            eprint!("{path}: {}", render_error(&e, &src));
+            return 1;
+        }
+    };
+    if b64 {
+        println!("{}", opendmd_psi::psb::to_base64(&psb));
+        return 0;
+    }
+    let out = out.unwrap_or_else(|| {
+        if path == "-" {
+            "-".into()
+        } else {
+            std::path::Path::new(&path).with_extension("psb").to_string_lossy().into_owned()
+        }
+    });
+    let r = if out == "-" {
+        use std::io::Write;
+        std::io::stdout().write_all(&psb)
+    } else {
+        std::fs::write(&out, &psb)
+    };
+    match r {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("psi build: {out}: {e}");
+            1
+        }
+    }
 }
 
 /// `psi fmt`: prints, writes or checks the canonical layout, after making
