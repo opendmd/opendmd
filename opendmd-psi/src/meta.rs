@@ -18,6 +18,10 @@ pub enum Control {
     Choice { n: u8 },
 }
 
+/// The blends a look may use, as `layer` names them (`max` and `min` are
+/// the web app's Lighten and Darken).
+pub const BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
+
 pub(crate) const NONE: u8 = 0;
 pub(crate) const SLIDER: u8 = 1;
 pub(crate) const CHOICE: u8 = 2;
@@ -29,7 +33,7 @@ pub(crate) const CHOICE: u8 = 2;
 pub struct Meta {
     /// Each slot's (`a b c`) kind: none, a slider, a choice.
     pub(crate) kind: [u8; 3],
-    /// `look`: 0 none, else 1 + the blend's place in [`crate::look::BLENDS`].
+    /// `look`: 0 none, else 1 + the blend's place in [`BLENDS`].
     pub(crate) look: u8,
     /// `look`'s amount, 0 to 100.
     pub(crate) amount: u8,
@@ -89,11 +93,11 @@ impl Meta {
         ]
     }
 
-    /// `look [blend] [amount]`: the blend (one of [`crate::look::BLENDS`])
+    /// `look [blend] [amount]`: the blend (one of [`BLENDS`])
     /// and the amount (0 to 100), when the formula says it may be a look.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn look(&self) -> Option<(&'static str, u8)> {
-        let b = crate::look::BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
+        let b = BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
         Some((b, self.amount))
     }
 

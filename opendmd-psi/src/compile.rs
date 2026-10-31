@@ -16,6 +16,8 @@ use crate::meta::Meta;
 use crate::program::{code, *};
 use crate::builtins::*;
 use crate::tables;
+pub use crate::error::{Error, NO_MEMORY};
+use crate::number;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -40,61 +42,6 @@ pub const MAX_NODES: usize = 1024;
 /// compiler, by its frame sizes, more), ~430 B a level; at 18 ~9.2 KB.
 /// Every known formula needs at most 12 (the examples' parts 3 a level).
 pub const MAX_DEPTH: usize = 18;
-
-/// A compile error: a byte range of the source and a sentence.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    pub start: usize,
-    pub end: usize,
-    pub msg: String,
-}
-
-impl Error {
-    #[inline(never)]
-    fn new(start: usize, end: usize, msg: impl Into<String>) -> Error {
-        Error {
-            start,
-            end,
-            msg: msg.into(),
-        }
-    }
-
-    /// 1-based line and column of the start.
-    pub fn line_col(&self, src: &str) -> (usize, usize) {
-        let upto = sub(src, 0, self.start.min(src.len()));
-        let line = upto.matches('\n').count() + 1;
-        let col = upto.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
-        (line, col)
-    }
-
-    /// "line 2: msg", the line, and carets under the range.
-    pub fn render(&self, src: &str) -> String {
-        let (line, col) = self.line_col(src);
-        let text = src.lines().nth(line - 1).unwrap_or("");
-        let width = sub(src, self.start, self.end.min(src.len()))
-            .chars()
-            .take_while(|&c| c != '\n')
-            .count()
-            .max(1);
-        format!(
-            "line {line}: {}\n  {text}\n  {}{}",
-            self.msg,
-            " ".repeat(col - 1),
-            "^".repeat(width)
-        )
-    }
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-
-/// The sentence for a compile the heap can't hold just now (a list the
-/// compiler couldn't grow): the player refuses the Formula and goes on,
-/// as with any other compile error, instead of aborting.
-pub const NO_MEMORY: &str = "not enough memory for this Formula right now";
 
 // (Unused in the wasm build: it grows infallibly.)
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -310,36 +257,6 @@ fn describe(t: Tok) -> &'static str {
     }
 }
 
-/// A decimal number (digits, an optional `.` and more digits; no sign) as
-/// Q16.16, rounded to the nearest 1/65,536: how the compiler reads numbers,
-/// for the sliders' `a=` options too.
-pub fn number(s: &str) -> Option<i32> {
-    if s.is_empty()
-        || s == "."
-        || s.matches('.').count() > 1
-        || !s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-    {
-        return None;
-    }
-    let (int, frac) = s.split_once('.').unwrap_or((s, ""));
-    let mut v: i64 = 0;
-    for b in int.bytes() {
-        v = v * 10 + (b - b'0') as i64;
-        if v > 32767 {
-            return None;
-        }
-    }
-    // The fraction to 9 digits, rounded once.
-    let mut num: i64 = 0;
-    let mut den: i64 = 1;
-    for b in frac.bytes().take(9) {
-        num = num * 10 + (b - b'0') as i64;
-        den *= 10;
-    }
-    let f = (num * 65536 + den / 2) / den;
-    let r = (v << 16) + f;
-    (r <= i32::MAX as i64).then_some(r as i32)
-}
 
 #[inline(never)]
 pub(crate) fn lex(src: &str) -> Result<Vec<Packed>, Error> {

@@ -12,7 +12,11 @@ publish = false
 [dependencies]
 
 [features]
-default = ["tables"]
+default = ["tables", "compiler"]
+# The compiler (text -> program). The player never compiles: it loads
+# programs the browser or the build compiled (`psb`), so the firmware
+# leaves this out.
+compiler = []
 # Psi's own copies of the sine and the five palettes, identical to
 # opendmd-core's `fx::SIN` / `PALETTES` (core's tests check it). The
 # firmware, the simulator and the web app get Psi through opendmd-core's
@@ -25,10 +29,10 @@ tables = []
 stats = []
 # The editor's cheat-sheet rows in `builtins::cheat` (tests and tools; the
 # firmware never links them).
-docs = []
+docs = ["compiler"]
 # The language-service hook (`syntax`: the lexer's tokens and a `Sink` the
 # compiler tells what it saw). Off in the firmware: the calls are compiled out.
-syntax = []
+syntax = ["compiler"]
 # The narrow JIT (`jit`): Psi's pixel stage as Xtensa code in executable
 # heap, the VM for the rest. Compiled only for the ESP32 (xtensa, espidf);
 # its encoders are tested on the host against the GNU assembler.
@@ -72,10 +76,6 @@ required-features = ["tables"]
 
 [[example]]
 name = "bench"
-required-features = ["tables"]
-
-[[example]]
-name = "stack"
 required-features = ["tables"]
 
 
