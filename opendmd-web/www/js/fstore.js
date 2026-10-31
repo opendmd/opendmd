@@ -3,18 +3,22 @@
 //
 // On a device with a card a saved Formula lives on the panel, a file in
 // /formulas/ (`<stem>.psi`, the stem made from its name at the first save
-// and kept, so a rename never breaks a playlist); the player plays it from
-// there, `/formulas/<stem>.psi?a=…`. Elsewhere (local mode, the demo, a
+// and kept, so a rename never breaks a playlist), with `<stem>.psb` beside
+// it, the Formula compiled (the player never compiles: `prepare` makes any
+// that are missing or were compiled for another version of the player);
+// the player plays it from there, `/formulas/<stem>.psi?a=…`. Elsewhere (local mode, the demo, a
 // device with no card) this browser keeps them, as before. A bundled
 // Formula is named, `@formula:<stem>`; anything else goes inline,
-// `@formula?src=…` (psikit `path`). Users see "Formulas", never files.
+// `@formula?psb=…` (psikit `path`). Users see "Formulas", never files.
 
 import { app } from './state.js';
 import { store } from './util.js';
-import { vals } from './psikit.js';
+import { vals, program, abi } from './psikit.js';
 
 export const DIR = '/formulas';
 let card = false, cache = [];
+// The compiled files the listing showed (lowercased paths).
+const built = new Set();
 
 // This browser's own list (local mode, the demo, no card; and what is
 // copied onto a card once).
@@ -51,6 +55,9 @@ export async function load() {
   const rows = (await app.src.stat(DIR).catch(() => null))?.exists ? await app.src.list(DIR).catch(() => []) : [];
   const out = [];
   for (const r of rows) {
+    if (!r.dir && /\.psb$/i.test(r.name)) built.add(`${DIR}/${r.name}`.toLowerCase());
+  }
+  for (const r of rows) {
     if (r.dir || !/\.psi$/i.test(r.name)) continue;
     const file = `${DIR}/${r.name}`, src = await app.src.readText(file).catch(() => null);
     if (typeof src != 'string') continue;
@@ -82,6 +89,7 @@ export async function put(f) {
     for (let n = 2; used.has(file); n++) file = `${DIR}/${s}-${n}.psi`;
   }
   await app.src.writeFile(file, f.src);
+  await compile(file, f.src);
   const rec = { id: file, file, name: f.name, src: f.src, a: f.a, b: f.b, c: f.c };
   keepVals(rec);
   const k = cache.findIndex((x) => x.file === file);
@@ -93,6 +101,7 @@ export async function put(f) {
 export async function drop(f) {
   if (!card) { store.set('psi.mine', local().filter((x) => x.id !== f.id)); cache = local(); return; }
   await app.src.deleteFile(f.file);
+  await app.src.deleteFile(psb(f.file)).catch(() => {});
   cache = cache.filter((x) => x.file !== f.file);
 }
 
@@ -121,4 +130,30 @@ export function line(f, ctl, inline) {
   if (f.stem) return `@formula:${f.stem}${q}`;
   if (card && f.file) return f.file + q;
   return inline;
+}
+
+// A Formula's compiled file: `x.psi` -> `x.psb`.
+export const psb = (file) => file.replace(/\.psi$/i, '.psb');
+
+// Write `file`'s compiled Formula (empty when it does not compile: the
+// player then says it can't play it).
+async function compile(file, src) {
+  await app.src.writeFile(psb(file), new Blob([program(src)]));
+  built.add(psb(file).toLowerCase());
+}
+
+// The panel's compiled Formulas brought up to date: every one of yours with
+// no compiled file (copied onto the card by a computer), or all of them
+// when the player plays another version of compiled Formulas than this
+// app writes (`/api/status` `psi_abi`, after an update). How many.
+export async function prepare() {
+  if (!card) return 0;
+  const stale = app.status?.psi_abi != null && app.status.psi_abi !== abi();
+  if (stale && app.status.psi_abi > abi()) return 0;
+  let n = 0;
+  for (const f of cache) {
+    if (!f.file || (!stale && built.has(psb(f.file).toLowerCase()))) continue;
+    await compile(f.file, f.src).then(() => n++, () => {});
+  }
+  return n;
 }

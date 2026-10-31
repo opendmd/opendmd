@@ -113,6 +113,21 @@ pub fn compile(src: &str) -> bool {
     build(src)
 }
 
+/// `src` compiled for the player (`opendmd_psi::psb`: what a card's `.psb`
+/// file holds and `@formula?psb=` carries), or empty when it does not
+/// compile ([`compile`] says why). The player never compiles.
+#[wasm_bindgen(js_name = program)]
+pub fn program(src: &str) -> Vec<u8> {
+    opendmd_psi::build(src).unwrap_or_default()
+}
+
+/// The compiled Formulas' format ([`program`]): the player says its own in
+/// `/api/status` (`psi_abi`); bytes for another are refused there.
+#[wasm_bindgen]
+pub fn abi() -> u8 {
+    opendmd_psi::psb::ABI
+}
+
 /// [`compile`], once in the module ([`as_look`] calls it twice).
 #[inline(never)]
 fn build(src: &str) -> bool {

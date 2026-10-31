@@ -55,71 +55,35 @@ export const declText = (v, n) => Array.from(v.replace(/["<>\\\u0000-\u001f\u007
 // undefined — unset, so the formula's default.
 export const num = (v) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? +v : undefined);
 
-// The device's path text (opendmd_psi::compact, which psi-web's tests hold this
-// to): comments out, runs of spaces made one, lines joined with `; `; a
-// character in quotes ('"') one token; text in quotes on a declaration line
-// (`name "…"`, not `name = …`) kept as written.
-export function compact(src) {
-  let out = '';
-  for (const l of src.split('\n')) {
-    const text = /^[^\w]*(psi|name|about|control|look)\b(?![ \t\f\r\v]*=)/.test(l);
-    let code = '', sp = false;
-    for (let i = 0; i < l.length;) {
-      const c = l[i];
-      let t = c;
-      if (c == "'" && l[i + 2] == "'" && l[i + 1] >= ' ' && l[i + 1] <= '~') t = l.slice(i, i + 3);
-      else if (c == '"' && text) { const e = l.indexOf('"', i + 1); t = l.slice(i, e < 0 ? l.length : e + 1); }
-      else if ((c == '-' || c == '/') && l[i + 1] == c) break;
-      else if (' \t\f\r\v'.includes(c)) { sp = true; i++; continue; }
-      else t = String.fromCodePoint(l.codePointAt(i));
-      if (sp && code) code += ' ';
-      sp = false;
-      code += t;
-      i += t.length;
-    }
-    if (code) out += (out ? '; ' : '') + code;
-  }
-  return out;
+// The compiler the paths are made with (a pkg-psi instance: the Formulas
+// view's, or Settings' look instance; whichever loaded it last).
+let C = null;
+export const compiler = (m) => { C = m; };
+export const hasCompiler = () => !!C;
+// A Formula compiled for the player (pkg-psi `program`: the player never
+// compiles), empty when it does not compile.
+export const program = (src) => C.program(src);
+export const abi = () => C.abi();
+// Bytes as base64url, unpadded (fx_psi's `psb=`).
+export function b64(b) {
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-// The panel's path for a formula (fx_psi's `@formula?src=…`; what Show on
-// panel, a playlist line and the look send): compact(src) lightly encoded
-// (a space is `+`; `% & + # ?`, controls and non-ASCII as %XX), then the
-// values worth sending (`vals`). Over the panel's 6,144 B its `about` line
-// is left out first (psi-web's tests hold this to the compiler's compact).
-// Playlists and the look name a Formula instead (js/fstore.js `line`).
+// The panel's path for a formula (fx_psi's `@formula?psb=…`; what Show on
+// panel sends): the compiled Formula, then the values worth sending
+// (`vals`). Playlists and the look name a Formula instead (js/fstore.js
+// `line`).
 export const MAX_PATH = 6144;
 export function path(f, ctl) {
-  let c = compact(f.src), p = enc(c);
-  if (p.length > MAX_PATH) p = enc(noAbout(c));
-  return p + vals(f, ctl);
+  return '@formula?psb=' + b64(program(f.src)) + vals(f, ctl);
 }
 // `&a=0.5&b=1`: the values that differ from their declared defaults.
 export function vals(f, ctl) {
   let p = '';
   for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) p += `&${k}=${+(+f[k]).toFixed(4)}`;
   return p;
-}
-function enc(c) {
-  let p = '@formula?src=';
-  for (const b of new TextEncoder().encode(c)) {
-    const ch = String.fromCharCode(b);
-    p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(ch) ? ch : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
-  }
-  return p;
-}
-// Compact text without its `about "…"` statement: the declarations come
-// first, one statement each, their text in quotes holding no `"`.
-function noAbout(c) {
-  for (let i = 0; i < c.length;) {
-    const w = /^\w*/.exec(c.slice(i))[0];
-    if (!/^(psi|name|about|control|look)$/.test(w) || /^ ?=/.test(c.slice(i + w.length))) break;
-    let j = i, q = false;
-    while (j < c.length && (q || c.slice(j, j + 2) != '; ')) q = c[j++] == '"' ? !q : q;
-    if (w == 'about') return c.slice(0, i) + c.slice(j + 2);
-    i = j + 2;
-  }
-  return c;
 }
 
 // A slider's value for pkg-psi's frame(): Q16.16, or UNSET (the slot plays at
