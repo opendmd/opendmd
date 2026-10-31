@@ -2840,7 +2840,7 @@ fn the_held_picture_redraws_a_band_a_frame() {
     assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 32);
     for f in 1..20u64 {
         i.set_ms(&p, f * 20);
-        assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 8, "f");
+        assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 8, "frame {f}");
     }
     let p = compile("layer rate 50 { gray(second/60) }\nlayer add { gray(x*t) }").unwrap();
     held.forget();

@@ -502,11 +502,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                     return bad;
                 }
             }
-            INKN => {
-                if op.a == 0 {
-                    return bad;
-                }
-            }
+            INKN if op.a == 0 => return bad,
             _ => {}
         }
         if is_colour(c) {

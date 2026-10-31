@@ -1232,7 +1232,7 @@ fn glow(level: f32) -> Rgb {
 
 /// The bundled list every test installs (the list is set once per
 /// process), compiled here.
-#[cfg(test)]
+#[cfg(all(test, feature = "psi"))]
 pub(crate) fn install_test_bundled() {
     #[cfg(feature = "psi")]
     {
@@ -1339,7 +1339,7 @@ mod tests {
             let (mut a, mut b) = (Canvas::new(), Canvas::new());
             power_on_frame(f, &mut a, Some(&table));
             power_on_frame(f, &mut b, None);
-            assert_eq!(a, b, "f");
+            assert_eq!(a, b, "frame {f}");
         }
         assert!(table.iter().all(|t| u32::from(*t) * TICK_MS <= 440));
     }

@@ -99,7 +99,7 @@ fn still_same<const N: usize>(src: &str, p: &Program, ms: &[u32], under: Option<
         let want = frame_ink::<N>(p, m, under);
         assert!(
             out == want,
-            "{src:?} at {m} ms (k, {N} lanes): the still cache drew other bytes"
+            "{src:?} at {m} ms (frame {k}, {N} lanes): the still cache drew other bytes"
         );
         // Some rows again, from the kept values (the canvas as left).
         let mut part = out.clone();
@@ -2374,7 +2374,7 @@ fn what_changed_is_exactly_what_differs() {
             opendmd_psi::render_rows_changed::<128>(
                 &p, &mut s, Some(&mut ink), None, &inputs(ms), &OWN, Some(&under), rows, &mut got, &mut ch,
             );
-            assert!(got == want, "case {k} j: bytes differ");
+            assert!(got == want, "case {k} frame {j}: bytes differ");
             for (y, &bits) in ch.iter().enumerate() {
                 if rows & (1 << y) == 0 {
                     assert_eq!(bits, 0xdead_beef, "case {k}: row {y} not drawn but written");
@@ -2386,10 +2386,10 @@ fn what_changed_is_exactly_what_differs() {
                     // (A `rate` formula drawn from nothing says every row it
                     // drew changed: more than changed, never less.)
                     if p.rate().is_some() {
-                        assert!(bits & (1 << g) != 0 || !differs, "case {k} j: row {y} group {g}");
+                        assert!(bits & (1 << g) != 0 || !differs, "case {k} frame {j}: row {y} group {g}");
                         continue;
                     }
-                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} j: row {y} group {g}");
+                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
                 }
             }
             was = got;

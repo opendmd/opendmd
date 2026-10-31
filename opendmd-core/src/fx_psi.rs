@@ -2560,7 +2560,7 @@ mod tests {
                 arm_beam(true);
                 TOLD.with(|t| t.borrow_mut().clear());
                 let d = raced.frame(t, &mut c);
-                assert!(forever || c.as_bytes() == want.as_bytes(), "{name} k: the bytes");
+                assert!(forever || c.as_bytes() == want.as_bytes(), "{name} frame {k}: the bytes");
                 if k == 0 {
                     // Not raced: the blit's.
                     assert!(TOLD.with(|t| t.borrow().is_empty()));
@@ -2568,11 +2568,11 @@ mod tests {
                     c.dirty_mut().clear();
                     continue;
                 }
-                assert_eq!(TOLD.with(|t| t.borrow().clone()), (0..16).collect::<Vec<_>>(), "{name} k");
-                assert_eq!(STARTS.with(|n| n.replace(0)), 1, "{name} k: started once");
-                assert!(c.dirty().is_clean(), "{name} k: left for the blit");
-                assert!(PANEL.with(|p| p.borrow().as_slice() == c.as_bytes()), "{name} k: the panel");
-                assert_eq!(d, Duration::from_micros(7_980 << raced_level(&raced)), "{name} k");
+                assert_eq!(TOLD.with(|t| t.borrow().clone()), (0..16).collect::<Vec<_>>(), "{name} frame {k}");
+                assert_eq!(STARTS.with(|n| n.replace(0)), 1, "{name} frame {k}: started once");
+                assert!(c.dirty().is_clean(), "{name} frame {k}: left for the blit");
+                assert!(PANEL.with(|p| p.borrow().as_slice() == c.as_bytes()), "{name} frame {k}: the panel");
+                assert_eq!(d, Duration::from_micros(7_980 << raced_level(&raced)), "{name} frame {k}");
             }
         }
         a_rate_formula_is_not_raced_and_keeps_its_grid();
@@ -2609,11 +2609,11 @@ mod tests {
             arm_beam(true);
             TOLD.with(|t| t.borrow_mut().clear());
             let d = raced.frame(t, &mut c);
-            assert!(TOLD.with(|t| t.borrow().is_empty()), "k: raced");
-            assert_eq!(STARTS.with(|n| n.replace(0)), 0, "k: started");
-            assert_eq!(c.as_bytes(), want.as_bytes(), "k: the bytes");
-            assert!(k == 0 || !c.dirty().is_clean(), "k: nothing left for the blit");
-            assert_eq!((d, dw), (Duration::from_millis(20), Duration::from_millis(20)), "k: its grid");
+            assert!(TOLD.with(|t| t.borrow().is_empty()), "frame {k}: raced");
+            assert_eq!(STARTS.with(|n| n.replace(0)), 0, "frame {k}: started");
+            assert_eq!(c.as_bytes(), want.as_bytes(), "frame {k}: the bytes");
+            assert!(k == 0 || !c.dirty().is_clean(), "frame {k}: nothing left for the blit");
+            assert_eq!((d, dw), (Duration::from_millis(20), Duration::from_millis(20)), "frame {k}: its grid");
             c.dirty_mut().clear();
             want.dirty_mut().clear();
         }
@@ -2650,7 +2650,7 @@ mod tests {
                         if before[o..o + 3] != now[o..o + 3] {
                             assert!(
                                 c.dirty().is_dirty(x, y),
-                                "{name} k: ({x}, {y}) not marked"
+                                "{name} frame {k}: ({x}, {y}) not marked"
                             );
                         }
                     }
@@ -2678,15 +2678,15 @@ mod tests {
             let before = c.as_bytes().to_vec();
             c.dirty_mut().clear();
             fx.frame(Duration::from_millis(ms), &mut c);
-            assert!(fx.held.is_some(), "k: no held picture");
+            assert!(fx.held.is_some(), "frame {k}: no held picture");
             let mut want = vec![0u8; psi::W * psi::H * 3];
             psi::render_rows::<LANES>(&fx.prog, &mut psi::Scratch::new(), &fx.inputs, &tables(), None, u32::MAX, &mut want);
-            assert_eq!(c.as_bytes(), &want[..], "k at {ms} ms");
+            assert_eq!(c.as_bytes(), &want[..], "frame {k} at {ms} ms");
             for y in 0..psi::H {
                 for x in 0..psi::W {
                     let o = (y * psi::W + x) * 3;
                     if before[o..o + 3] != want[o..o + 3] {
-                        assert!(c.dirty().is_dirty(x, y), "k: ({x}, {y}) not marked");
+                        assert!(c.dirty().is_dirty(x, y), "frame {k}: ({x}, {y}) not marked");
                     }
                 }
             }
@@ -2715,7 +2715,7 @@ mod tests {
         for k in 1..40u32 {
             c.dirty_mut().clear();
             fx.frame(Duration::from_millis(u64::from(k) * 20), &mut c);
-            assert!(c.dirty().is_clean(), "k");
+            assert!(c.dirty().is_clean(), "frame {k}");
         }
     }
 
@@ -3728,8 +3728,8 @@ mod tests {
         };
         for (k, ms) in [0u32, 20, 40, 1000, 1980].into_iter().enumerate() {
             fx.frame(Duration::from_millis(ms.into()), &mut c);
-            assert!(fx.still.is_held() && still_held() == 16384, "k");
-            assert!(c.as_bytes() == want(ms).as_slice(), "k at {ms} ms");
+            assert!(fx.still.is_held() && still_held() == 16384, "frame {k}");
+            assert!(c.as_bytes() == want(ms).as_slice(), "frame {k} at {ms} ms");
         }
         // The gate says no: given back at the next frame, drawn the same.
         set_still_gate(Some(|_| false));

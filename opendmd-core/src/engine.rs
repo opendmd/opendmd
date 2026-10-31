@@ -3099,7 +3099,7 @@ mod tests {
                         let left = due.unwrap() - t;
                         assert!(
                             delay != 20 && left > STEP / 2,
-                            "{delay} ms: a step at {:?} without a frame, the left:? on",
+                            "{delay} ms: a step at {:?} without a frame, the frame {left:?} on",
                             t - t0
                         );
                     }
