@@ -478,9 +478,9 @@ const FUNCS = [
   ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['layer rate 4 { … }', 'a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame', 'layer rate 4 {\n  \n}\n'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
-  ['p.v', 'a value part p sets'],
-  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']
+  ['fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1', 'a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw', 'fn f(a) = '],
+  ['fn p(x, y) { … }', 'a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored', 'fn p(x, y) {\n  \n}\n'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as a function fn p(x, y) { … }', 'use Plasma as p\n']
 ];
 const DRAW = [
   ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
@@ -496,7 +496,6 @@ const DRAW = [
   ['spr(s, x, y, flip)', 'paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both'],
   ['pal(fire, v), gray(v)', 'colours to paint with besides #…: a palette\'s or a gray, v 0 to 1'],
   ['if c { … } else { … }', 'inside draw: only when c is not 0', 'if  {\n  \n}'],
-  ['fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1', 'a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw', 'fn f(a) = '],
   ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],
   ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '],
@@ -574,11 +573,11 @@ function editor() {
     ta.style.height = `calc(${Math.max(8, n + 1) * 1.5}em + 18px)`;
   }
   const build = debounce(() => compile(), 150);
-  // `use Plasma as p`: one of yours or an example pasted in as `part p { … }`
-  // (the shared text stands alone), once the caret is off the line — every
-  // one (`all`) before saving or sharing. Never the formula itself; `use`
-  // lines inside what is pasted are left as comments; at most 16 a time.
-  // One it can't paste: {s, e, why}.
+  // `use Plasma as p`: one of yours or an example put in as a function,
+  // `fn p(x, y) { … }` (pkg-psi asFunction; the shared text stands alone),
+  // once the caret is off the line — every one (`all`) before saving or
+  // sharing. Never the formula itself; at most 16 a time. One it can't put
+  // in: {s, e, why}.
   function paste(all) {
     for (let k = 0; ; k++) {
       const s = ta.value, cl = s.slice(0, ta.selectionStart).split('\n').length, me = name.value.trim().toLowerCase();
@@ -588,7 +587,9 @@ function editor() {
       const n = m[2].trim(), at = { s: m.index, e: m.index + m[0].length }, i = m[1];
       const f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase() && (x.id == null || x.id !== B.draft.id) && x.name.toLowerCase() !== me);
       if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the bundled ones` };
-      const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^(\s*)(use\s)/gm, '$1-- $2').replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
+      const fn = T(() => P.asFunction(f.src, m[3]), '');
+      if (!fn) return { ...at, why: `“${f.name}” can’t be put in as a function: only a formula with one colour line can (no layers, drawing, tables, sprites or palettes)` };
+      const t = `${i}-- ${f.name}\n${fn.replace(/^/gm, i)}`, c = ta.selectionStart;
       // Before saving or sharing: focused, so one undo takes it back. Not on
       // opening a draft or a link (no phone keyboard, the name keeps focus).
       if (all) ta.focus({ preventScroll: true });
@@ -596,9 +597,8 @@ function editor() {
       // The caret stays where it was (one undo takes the paste back).
       const q = c > m.index ? c + t.length - m[0].length : c;
       ta.setSelectionRange(q, q);
-      for (const k of 'abc') B.draft[k] ??= f[k];
       const lp = (x) => +(x.match(/^loop\s+([\d.]+)/m) || [0, 8])[1];
-      toast(`“${f.name}” is in as part ${m[3]}` + (lp(f.src) > lp(s) ? `: its loop (${lp(f.src)} s) is longer than this formula’s — try loop ${lp(f.src)}` : ''));
+      toast(`“${f.name}” is in as ${m[3]}(x, y): draw it with ${m[3]}(x, y) as a last line` + (lp(f.src) > lp(s) ? `; its loop (${lp(f.src)} s) is longer than this formula’s — try loop ${lp(f.src)}` : ''));
     }
   }
   // A use line it couldn't paste: said, and returned (nothing is saved or shared).

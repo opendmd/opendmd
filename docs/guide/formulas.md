@@ -398,8 +398,7 @@ only when what it does use changes: the clock, a control. A few rules:
 `rate` goes on the bottom layer (or the first few, with the same number),
 under at least one layer that isn't slow; the bottom one covers everything
 (no blend, no coverage); and a slow layer can't read `ink` or the GIF
-under it (`ur`, `ug`, `ub`, `ul`); in a formula pasted in as a part
-(`use … as p`) `rate` is left out, as `fps` is. Something that moves fast in a slow
+under it (`ur`, `ug`, `ub`, `ul`). Something that moves fast in a slow
 layer shows its bands moving at different times: `rate` is for what
 changes slowly. The browser's preview draws the same frames as the panel.
 The gallery's **Storm front** is made this way.
@@ -409,47 +408,49 @@ how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
 `hsv(h, s, v, k)`, `gray(v, k)`, `pal(fire, v, k)`. Where it covers less
 than all, what is below shows through.
 
-**Two formulas in one.** A formula can hold another one as a *part*:
+**Functions.** A piece you use more than once, or a picture you want to
+draw somewhere else, can be a *function*:
 
 ```
 loop 16
-part bars {
-  loop 4
+fn bars() {
   bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
   bar * #ff9933
 }
-part rings {
-  loop 4
-  d = r
-  pal(rainbow, frac(d*1.5 - t/2))
-}
+fn rings(k) = pal(rainbow, frac(r*1.5 - t/2), k)
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
-layer { bars }
-layer { rings(x, y, k) }
+layer { bars() }
+layer { rings(k) }
 ```
 
-You don't have to type a part out: in the editor, write
-`use Clock as ring` on a line of its own, with the name of one of your
-formulas or a bundled one (open a gallery one and save it to use it), and when you move to another line the editor puts
-that formula in as `part ring { … }`, ready to change. Everything you save or
-share then has the whole of it, so it works anywhere: if a `use` line names
-a formula there isn't (or the formula you're editing), the editor says so
-and won't save or share until it's fixed.
+- `fn name(a, b) = …` is one line; with `{ … }` it can set names on its
+  first lines, and its last line is what it gives: a value, or a colour.
+  Call it with values, `rings(0.5)`, and it works as if you had written its
+  lines out there.
+- A function whose values are called `x` and `y` draws at another place:
+  inside it, `px`, `py`, `r` and the others follow them. With
+  `fn p(x, y) { … }`, `p(1 - x, y)` mirrors it, `p(frac(x*4), y)` repeats it
+  four times, `p(abs(x - 0.5)*2, abs(y - 0.5)*2)` folds it like a
+  kaleidoscope.
+- A colour made with `#…` or `rgb(…)` can be mixed with another:
+  `mix(bars(), stars(), k)` fades one into the other as `k` moves.
+  `hsv`, `pal` and `gray` give a whole colour: use the function alone as
+  the last line (or a layer's), and give it how much it covers, as above.
+- Names a function sets are its own: it can use `d` or `wave` whatever the
+  rest of the formula uses.
+- Functions that draw (see Drawing, below) are called on a line of their
+  own inside `draw { }`: `palm(30, 31)` draws a palm there.
 
-- A part draws nothing until you use it. Its name on its own, as the last
-  line (of the formula or of a layer), draws it: `layer { rings }`.
-- `rings(x2, y2)` draws it as if each pixel were somewhere else:
-  `rings(1 - x, y)` mirrors it, `rings(frac(x*4), y)` repeats it four times,
-  `rings(abs(x - 0.5)*2, abs(y - 0.5)*2)` folds it like a kaleidoscope.
-- Like every colour, it takes one more value, how much of the pixel it
-  covers: `rings(x, y, k)`. Moving `k` with `t` fades one formula into
-  another (above).
-- `rings.d` is a value the part sets, here its `d`: use one formula's
-  values in another, for example as how much it covers, so one formula
-  decides where the other shows.
-- Names inside a part are its own: it can use `d` or `wave` whatever the
-  rest of the formula uses. Inside a part, `t` follows the part's own
-  `loop`; make the whole formula's loop a multiple of it.
+You don't have to type a function out: in the editor, write
+`use Clock as ring` on a line of its own, with the name of one of your
+formulas or a bundled one (open a gallery one and save it to use it), and
+when you move to another line the editor puts that formula in as
+`fn ring(x, y) { … }`, ready to change (its sliders become fixed values).
+Only a formula with one colour line can be put in this way (no layers or
+drawing). Everything you save or share then has the whole of it, so it
+works anywhere: if a `use` line names a formula there isn't (or the
+formula you're editing), the editor says so and won't save or share until
+it's fixed.
 
 The gallery's **Bars to stars**, **Rings through stripes** and
 **Kaleidoscope** are made this way.
@@ -674,8 +675,8 @@ milliseconds); all the examples are light or medium.
   worked out once a frame, whatever line it's on.
 - Each layer costs about as much as a `smoothstep`; `screen` and colours
   that cover only part of a pixel a little more.
-- A part costs what its formula costs, once for each place it is drawn
-  at: two formulas in one cost about as much as both.
+- A function costs what its lines cost, once for each call: called at
+  two places, about twice.
 - Drawing costs by the line, not by the pixel: a few hundred lines a frame
   is light. A loop's lines count as often as it turns.
 - Anything worked out from the pixel's column and the time only

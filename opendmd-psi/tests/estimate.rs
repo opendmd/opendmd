@@ -28,7 +28,12 @@ fn compile(src: &str) -> Result<opendmd_psi::Program, opendmd_psi::Error> {
     opendmd_psi::compile_with(src, &mut p, false, false)?;
     Ok(p)
 }
-use opendmd_psi::look::compose;
+/// `src` as a look, `blend` at `k` %, compiled as measured.
+fn compose(src: &str, blend: &str, k: u8) -> opendmd_psi::Program {
+    let mut p = opendmd_psi::Program::default();
+    opendmd_psi::compile_look_with(&opendmd_psi::look::set(src, blend, k).unwrap(), &mut p, false, false).unwrap();
+    p
+}
 
 #[test]
 fn the_estimate_is_within_15_percent_of_the_device() {
@@ -47,7 +52,7 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         }
     }
     for &(name, src, blend, k, us) in measured::LOOKS {
-        let p = compile(&compose(src, blend, k).unwrap()).unwrap();
+        let p = compose(src, blend, k);
         let est = p.esp32_us();
         let r = est as f64 / (us as f64 * 1.15);
         rows.push(format!(
@@ -170,8 +175,7 @@ fn the_jit_estimate_is_within_20_percent_of_the_device() {
         check(name.to_string(), p.esp32_us_jit_still(), us);
     }
     for &(name, src, blend, k, us) in measured::JIT_LOOKS {
-        let mut p = opendmd_psi::Program::default();
-        opendmd_psi::compile_into(&compose(src, blend, k).unwrap(), &mut p).unwrap();
+        let p = opendmd_psi::look::compose(src, blend, k).unwrap();
         check(format!("look {name} {blend} {k}"), p.esp32_us_jit(), us);
     }
     println!("{}", rows.join("\n"));

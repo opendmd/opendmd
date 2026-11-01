@@ -1,195 +1,145 @@
 //! Any Formula as a look: drawn over every GIF with a blend, at an amount.
 //!
 //! A formula says it can be a look with its own `look [blend] [amount]`
-//! line ([`declared`]; the web app's Formula settings sheet writes the line
-//! with [`set`], a text edit), and the player draws the composition that
-//! line asks for as any other formula: nothing in the firmware's drawing
-//! is new. The text stands alone, as shared Formulas do — the formula
-//! pasted in as a part:
+//! line (the web app's Formula settings sheet writes the line with
+//! [`set`], a text edit). The compiler draws it that way itself
+//! ([`crate::compile_look`]: its colour put on with the blend, covering
+//! that much; a formula with layers goes over only, each layer covering
+//! that much less), and [`crate::build`] stores that program beside the
+//! formula's own in its psb: the player draws the look as any other
+//! formula.
 //!
-//! ```text
-//! loop 8                         -- the formula's loop, when it isn't 8 s
-//!                                -- (`loop forever` for one that never repeats)
-//! part look {
-//!   <the formula, indented 2>
-//! }
-//! layer screen { look(x, y, 0.4) }   -- `look(x, y, 0.4)` alone for over
-//! ```
-//!
-//! - **over at 100%** is the formula itself, unchanged: a formula that
-//!   already draws over the GIF is the look it always was, byte for byte.
-//!   (One that covers the GIF entirely is still refused there, by the
-//!   player: `fx_psi::COVERS`.)
-//! - **The loop** goes outside too: inside a part `t` is `t % (its loop)`,
-//!   so a part with a loop longer than the formula's (8 s by default) would
-//!   never reach its end.
-//! - **The amount** is the coverage, `0` to `1` in hundredths; at 100% none
-//!   is written (`layer screen { look }`).
-//! - **A formula with layers of its own** keeps its blends: as a part it
-//!   can only go over (`layer { p }`, or the last line, with coverage: each
-//!   of its layers covers that much less). Another blend for one is the
-//!   compiler's error, which the web app does not offer.
-//! - **`ur ug ub ul`** inside the part read the real pixel's picture, the
-//!   GIF: a formula that reads them grades the GIF, then the blend puts
-//!   that onto the GIF again.
-//!
-//! **A formula's own `look` line** (`look screen 40`,
-//! docs/research/formula-apps.md §2.1) is this composition written in the
-//! formula: [`declared`] gives the composed text the line asks for (the
-//! player draws that as the look; played on its own the line is ignored).
-//! The line itself is left out of the part ([`wrap`] cuts it), so a look
-//! composed from a formula with one is the same text as from the formula
-//! without it, and the formula's `control` lines inside the part still
-//! describe the slots (the compiler takes a part's controls when the
-//! formula's own lines declare none).
+//! - **over at 100%** (`look`) is the formula itself, unchanged.
+//! - **`ur ug ub ul`** read the GIF: a formula that reads them grades the
+//!   GIF, then the blend puts that onto the GIF again.
+//! - **`layer rate N`**: a look with a blend or an amount redraws its
+//!   layers every frame.
 
-use crate::{compile_into, Error, Program};
+use crate::{Error, Program};
 use alloc::string::String;
 
 pub use crate::meta::BLENDS;
 
-/// The part's name in a composed look.
-const PART: &str = "look";
-
-/// The look's source: `src` drawn with `blend` (one of [`BLENDS`]) at
-/// `amount` percent (0..=100, clamped). Errors: `src` does not compile, or
-/// the blend is not one of [`BLENDS`]. The result is not compiled here
-/// (a layered formula with a blend other than over is the compiler's
-/// error, as is a look too long for the panel).
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn compose(src: &str, blend: &str, amount: u8) -> Result<String, Error> {
-    // Only its loop and declarations are wanted (boxed: ~2.9 KB).
-    let mut p = alloc::boxed::Box::<Program>::default();
-    compile_into(src, &mut p)?;
-    wrap(src, &p, blend, amount)
-}
-
-/// The look a formula's own `look` line asks for, composed as [`compose`]
-/// would: `None` when it has none, or it is `look` (over, 100: the formula
-/// itself). `prog` is `src` compiled.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn declared(src: &str, prog: &Program) -> Option<Result<String, Error>> {
-    let (blend, amount) = prog.meta().look()?;
-    (blend != "over" || amount < 100).then(|| wrap(src, prog, blend, amount))
-}
-
-/// [`compose`] for a formula already compiled into `prog` (its loop, and
-/// where a `look` line is, which is left out). The web module compiles
-/// once and calls this.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn wrap(src: &str, prog: &Program, blend: &str, amount: u8) -> Result<String, Error> {
-    let loop_ms = prog.loop_ms();
-    // Its `look` line, left out.
-    let cut = prog.meta().look().and_then(|_| look_statement(src));
-    let owned;
-    let src = match cut {
-        Some((a, e)) => {
-            // (Not `concat`: its generic join is ~1 KB of the web module.)
-            let mut o = String::with_capacity(src.len());
-            o.push_str(src.get(..a).unwrap_or(""));
-            o.push_str(src.get(e..).unwrap_or(""));
-            owned = o;
-            owned.as_str()
-        }
-        None => src,
-    };
-    // (No `format!`: core::fmt is ~8 KB gz of the web module.)
-    if !BLENDS.contains(&blend) {
+/// `src` as a look drawn with `blend` (one of [`BLENDS`]) at `amount`
+/// percent (0..=100, clamped): its `look` line set so ([`set`]) and
+/// compiled as the player draws it. Errors: the blend is not one of
+/// [`BLENDS`], or the formula does not compile so (layers with a blend
+/// other than over, too long for the panel).
+#[cfg(feature = "compiler")]
+pub fn compose(src: &str, blend: &str, amount: u8) -> Result<Program, Error> {
+    let Some(src) = set(src, blend, amount) else {
         return Err(Error {
             start: 0,
             end: 0,
             msg: String::from("a look's blend is one of over, screen, add, multiply, max, min"),
         });
-    }
-    let amount = amount.min(100);
-    if blend == "over" && amount == 100 {
-        return Ok(String::from(src));
-    }
-    let mut s = String::with_capacity(src.len() + 64);
-    if loop_ms == 0 {
-        // A formula that never repeats: so does its look.
-        s.push_str("loop forever\n");
-    } else if loop_ms != 8000 {
-        s.push_str("loop ");
-        decimal(&mut s, loop_ms / 1000, loop_ms % 1000, 3);
-        s.push('\n');
-    }
-    s.push_str("part look {\n");
-    // Its lines, blank ones left out (bytes: `trim` is Unicode's).
-    for l in src.split('\n') {
-        let l = l.strip_suffix('\r').unwrap_or(l);
-        if l.bytes().any(|b| !b.is_ascii_whitespace()) {
-            s.push_str("  ");
-            s.push_str(l);
-            s.push('\n');
-        }
-    }
-    s.push_str("}\n");
-    if blend != "over" {
-        s.push_str("layer ");
-        s.push_str(blend);
-        s.push_str(" { ");
-    }
-    s.push_str(PART);
-    if amount < 100 {
-        s.push_str("(x, y, ");
-        decimal(&mut s, 0, u32::from(amount), 2);
-        s.push(')');
-    }
-    if blend != "over" {
-        s.push_str(" }");
-    }
-    Ok(s)
+    };
+    let mut p = Program::default();
+    program(&src, &mut p)?;
+    Ok(p)
 }
 
-/// Where a formula's `look` line is (from `look` to its `;` or its line's
-/// end, a comment after it included): the formula compiled, so its
-/// declarations are the statements at its top whose first word is one
-/// (`name`, `about` and `control` lines may have text in quotes, with
-/// `;` or `--` inside).
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn look_statement(src: &str) -> Option<(usize, usize)> {
-    let b = src.as_bytes();
-    let mut i = 0;
-    loop {
-        // The next statement: past spaces, line ends, `;` and comments.
-        while i < b.len() {
-            match b[i] {
-                b' ' | b'\t' | b'\r' | b'\n' | b';' => i += 1,
-                b'-' | b'/' if b.get(i + 1) == Some(&b[i]) => {
-                    while i < b.len() && b[i] != b'\n' {
-                        i += 1;
+/// The look `src`'s own `look` line asks for (the formula itself when it
+/// has none, or `look` alone) compiled into `prog` as the player loads it
+/// (narrowed and fused): what the panel draws over every GIF.
+#[cfg(feature = "compiler")]
+pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
+    crate::compile_look(src, prog)?;
+    prog.finish(true, true);
+    Ok(())
+}
+
+/// `src` as a function, `fn name(x, y) { … }`, for another formula to call
+/// (the editor's `use Plasma as p`): its declarations, `loop` and `fps`
+/// lines left out, each `control` a name at its default (`speed = 1`).
+/// `None` for one that can't be a function — with layers, a draw stage,
+/// tables, sprites, palettes or functions of its own — or that doesn't
+/// compile as one.
+#[cfg(feature = "compiler")]
+pub fn function(src: &str, name: &str) -> Option<String> {
+    let mut body = String::new();
+    for st in statements(src) {
+        let st = st.trim();
+        let word: &str = st.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
+        let rest = st.get(word.len()..).unwrap_or("").trim_start();
+        let sets = rest.starts_with('=') && !rest.starts_with("==");
+        if st.is_empty() {
+            continue;
+        }
+        let line = match word {
+            _ if sets => String::from(st),
+            "psi" | "name" | "about" | "look" | "loop" | "fps" => continue,
+            "control" => {
+                let mut w = rest.split(|c: char| c.is_ascii_whitespace() || c == '=').filter(|w| !w.is_empty());
+                let n = w.next()?;
+                let after = rest.get(n.len()..).unwrap_or("").trim_start();
+                let def = if let Some(v) = after.strip_prefix('=') {
+                    // `= 0.4` or `= calm, wild` (the first word: 0).
+                    let v = v.trim_start();
+                    let num: &str = v.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).next().unwrap_or("");
+                    if num.is_empty() { "0" } else { num }
+                } else {
+                    // `lo..hi [= v]`
+                    match after.split_once('=') {
+                        Some((_, v)) => v.trim_start().split(|c: char| c.is_ascii_whitespace() || c == '"').next().unwrap_or("0"),
+                        None => after.split("..").next().unwrap_or("0").trim(),
                     }
-                }
-                _ => break,
+                };
+                let def = if def.is_empty() { "0" } else { def };
+                let mut l = String::from(n);
+                l.push_str(" = ");
+                l.push_str(def);
+                l
             }
+            "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part" | "use" => return None,
+            _ => String::from(st),
+        };
+        for l in line.split('\n') {
+            body.push_str("  ");
+            body.push_str(l);
+            body.push('\n');
         }
-        let start = i;
-        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-            i += 1;
-        }
-        let word = src.get(start..i)?;
-        if !crate::builtins::DECLARATIONS.contains(&word) {
-            return None;
-        }
-        // To the statement's end: `;` or the line's end outside quotes.
-        let mut quote = false;
-        while i < b.len() && b[i] != b'\n' && (quote || b[i] != b';') {
-            if b[i] == b'"' {
-                quote = !quote;
-            }
-            if !quote && (b[i] == b'-' || b[i] == b'/') && b.get(i + 1) == Some(&b[i]) {
+    }
+    let mut f = String::from("fn ");
+    f.push_str(name);
+    f.push_str("(x, y) {\n");
+    f.push_str(&body);
+    f.push('}');
+    let mut check = f.clone();
+    check.push('\n');
+    check.push_str(name);
+    check.push_str("(x, y)");
+    crate::compile(&check).ok()?;
+    Some(f)
+}
+
+/// `src`'s statements at its top level (split at line ends and `;` outside
+/// brackets, braces and quotes; a comment kept on its own).
+#[cfg(feature = "compiler")]
+fn statements(src: &str) -> alloc::vec::Vec<&str> {
+    let b = src.as_bytes();
+    let (mut out, mut start, mut depth, mut quote, mut i) = (alloc::vec::Vec::new(), 0, 0i32, false, 0);
+    while i < b.len() {
+        match b[i] {
+            b'"' => quote = !quote,
+            b'-' | b'/' if !quote && b.get(i + 1) == Some(&b[i]) => {
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
                 }
-                break;
+                continue;
             }
-            i += 1;
+            b'(' | b'[' | b'{' if !quote => depth += 1,
+            b')' | b']' | b'}' if !quote => depth -= 1,
+            b'\n' | b';' if !quote && depth <= 0 => {
+                out.push(src.get(start..i).unwrap_or(""));
+                start = i + 1;
+            }
+            _ => {}
         }
-        if word == "look" {
-            return Some((start, (i + usize::from(b.get(i) == Some(&b';'))).min(b.len())));
-        }
+        i += 1;
     }
+    out.push(src.get(start..).unwrap_or(""));
+    out
 }
 
 /// A formula's `look` line set to `blend` at `amount` percent (`look`

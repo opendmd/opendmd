@@ -220,7 +220,7 @@ fn spec_limits() -> String {
         ("steps (per frame, per row, per pixel, and one per layer)", n(p::MAX_OPS)),
         ("values held a pixel at once", n(p::REGS)),
         ("constants and per-frame and per-row values held at once", n(p::MAX_SCALARS)),
-        ("nesting of brackets and operators (a part counts 3)", n(p::MAX_DEPTH)),
+        ("nesting of brackets, operators and function calls", n(p::MAX_DEPTH)),
         ("`table`, `sprite` and `palette` numbers, in all", n(p::MAX_TABLE)),
         ("loop turns a frame in `draw { }`", n(p::TURNS as usize)),
         ("lines and dots a frame", n(p::PRIMITIVES as usize)),
@@ -371,7 +371,9 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     // a part drawn at a place, as the row's example says
                     || head == "p"
                     // `ink(n)`: the canvas in n levels (a special form)
-                    || head == "ink";
+                    || head == "ink"
+                    // a function the row itself defines (`fn ring(cx, r) = …`)
+                    || label.starts_with(&format!("fn {head}("));
                 assert!(known, "`{head}(…)` in the cheat sheet is not a built-in ({label})");
             }
         }

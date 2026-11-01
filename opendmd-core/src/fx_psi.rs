@@ -3140,14 +3140,22 @@ mod tests {
 
     /// The VM's frame of `src` at `ms` over `under`.
     fn over(src: &str, ms: u32, under: &Canvas) -> Vec<u8> {
-        let prog = psi::compile(src).unwrap();
+        over_prog(&psi::compile(src).unwrap(), ms, under)
+    }
+
+    /// `src` with its look line set to `blend` at `k` %.
+    fn as_look(src: &str, blend: &str, k: u8) -> String {
+        psi::look::set(src, blend, k).unwrap()
+    }
+
+    fn over_prog(prog: &psi::Program, ms: u32, under: &Canvas) -> Vec<u8> {
         let mut want = vec![0u8; psi::W * psi::H * 3];
         let inputs = psi::Inputs {
             t: psi::Inputs::at_ms(ms),
             ..Default::default()
         };
         psi::render_rows_ink(
-            &prog,
+            prog,
             &mut psi::Scratch::<128>::new(),
             Some(&mut psi::Ink::boxed()),
             &inputs,
@@ -3290,9 +3298,8 @@ mod tests {
         let body = "control k 0..1 = 0.5\nhsv(x, 1, k)";
         let mine =
             FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
-        let composed = psi::look::compose(body, "screen", 40).unwrap();
-        let theirs = FormulaLook::from_path(&super::path(&composed, "")).unwrap();
-        assert!(*mine.prog == *theirs.prog);
+        let theirs = psi::look::compose(body, "screen", 40).unwrap();
+        assert!(*mine.prog == theirs);
         assert_eq!(mine.inputs.a, 1 << 15);
         // `look` alone is the formula itself: one that covers the GIF is
         // still no look.
@@ -3322,13 +3329,13 @@ mod tests {
         // Composed with a blend or a lower amount (Settings' choices), it is.
         let under = picture();
         for (b, k) in [("screen", 40), ("over", 30), ("multiply", 100), ("max", 50)] {
-            let src = psi::look::compose("hsv(x, 1, 1)", b, k).unwrap();
+            let src = as_look("hsv(x, 1, 1)", b, k);
             let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
             assert!(look.take());
             let mut c = picture();
             let out = look.apply(Duration::ZERO, &mut c, 0);
             assert!(
-                out.as_bytes() == over(&src, 0, &under).as_slice(),
+                out.as_bytes() == over_prog(&psi::look::compose("hsv(x, 1, 1)", b, k).unwrap(), 0, &under).as_slice(),
                 "{b} {k}"
             );
             assert!(out.as_bytes() != under.as_bytes(), "{b} {k}: drawn");
@@ -3611,15 +3618,15 @@ mod tests {
     #[test]
     fn a_look_that_draws_takes_its_canvas() {
         let under = picture();
-        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let src = as_look(STARS, "screen", 60);
         let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
         assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + core::mem::size_of::<psi::Ink>());
         assert!(look.take());
         let mut c = picture();
         let out = look.apply(Duration::ZERO, &mut c, 0);
-        assert_eq!(out.as_bytes(), over(&src, 0, &under).as_slice());
+        assert_eq!(out.as_bytes(), over_prog(&psi::look::compose(STARS, "screen", 60).unwrap(), 0, &under).as_slice());
         // Retuned to a look that doesn't draw: the canvas goes.
-        let plain = psi::look::compose("gray(x)", "screen", 40).unwrap();
+        let plain = as_look("gray(x)", "screen", 40);
         look.retune(&super::path(&plain, "")).unwrap();
         assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES);
         assert!(look.held.as_ref().unwrap().ink.is_none());
@@ -3825,7 +3832,7 @@ mod tests {
     /// draw stage: its time is the rows', not the lines'.
     #[test]
     fn a_looks_partial_redraw_does_not_draw_again() {
-        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let src = as_look(STARS, "screen", 60);
         let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
         assert!(look.take());
         let mut c = picture();

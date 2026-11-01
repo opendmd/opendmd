@@ -63,10 +63,10 @@ decl      = "psi" NUMBER                      -- the language version, first lin
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
-          | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
           | NAME "=" expr                     -- may set a name again: a read sees the latest
-          | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
-          | "part" NAME "{" formula-body "}"  -- another formula inside this one
+          | "layer" [BLEND] "{" { assign } colourline "}"
+          | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
+          | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
@@ -78,7 +78,7 @@ colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
           | "pal" "(" PALETTE "," e [ "," cover ] ")"
           | "gray" "(" e [ "," cover ] ")"
-          | PART [ "(" e "," e [ "," cover ] ")" ]   -- a part's colour, maybe elsewhere
+          | FN "(" args ")"                    -- a function whose last line is a colour
           | ce                                 -- a colour expression (see 6)
           | e                                  -- a bare value: gray(e)
 ce        = an expr with a COLOUR or an "rgb(" e "," e "," e ")" in it, read
@@ -91,8 +91,8 @@ cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
-atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
-          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
+atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | FN "(" args ")"
+          | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
                                                -- pick: e "," e { "," e }
 sep       = newline | ";"                      -- newlines inside ( ) and [ ] are spaces
@@ -110,7 +110,7 @@ comment   = "--" or "//" to the end of the line
 
 The declarations (`decl`) come first, before every other line, each once
 (`control` up to three times). The colour line is the last line of the
-formula, of a part and of a layer; with layers, every colour is inside one.
+formula, of a function and of a layer; with layers, every colour is inside one.
 
 ## Numbers
 
@@ -136,8 +136,10 @@ to it.
   with its own names and colour, onto what is below with its blend (`over`,
   `add`, `multiply`, `screen`, `max`, `min`); a colour's last value says how
   much of the pixel it covers.
-- **Parts** (`part p { … }`) are formulas inside a formula: `p` is its
-  colour, `p.v` a value it sets, `p(x, y)` its colour drawn at another place.
+- **Functions** (`fn p(a, b) = …` or `fn p(a, b) { … }`) are written out
+  where they are called: a value, a colour, or lines that draw. A function
+  whose values are `x, y` is drawn at another place: `px py i cx cy r
+  angle` inside follow them.
 - **`draw { }`** runs once a frame before the pixels: loops (`for k < n`),
   lines and dots into a canvas the pixels read back as `ink`.
 - **Time.** `t` is seconds into the loop (`loop N`, 8 when left out), always
@@ -219,9 +221,9 @@ example is compiled by the tests.
 | `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
 | `layer rate 4 { … }` | a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
-| `use Plasma as p` | puts in one of your formulas or an example, as part p { … } | <code class="psi-ex">part p { hsv(x + t/8, 1, 1) }; p</code> |
-| `p.v` | a value part p sets | <code class="psi-ex">loop 4; part p { v = sin(x + t/4); gray(v) }; gray(p.v&#42;0.5 + 0.5)</code> |
-| `p(x, y, k)` | part p as a colour, drawn at another place; k: how much it covers | <code class="psi-ex">part p { gray(r &lt; 0.5) }; p(x + 0.2, y, 1)</code> |
+| `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
+| `fn p(x, y) { … }` | a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored | <code class="psi-ex">loop 8<br>fn p(x, y) {<br>  wave = sin(x&#42;2 + t/8) + sin(y&#42;1.5 - t/4)<br>  hsv(wave/4 + t/8, 0.9, r &lt; 0.6)<br>}<br>p(abs(x - 0.5)&#42;2, y)</code> |
+| `use Plasma as p` | puts in one of your formulas or an example, as a function fn p(x, y) { … } | <code class="psi-ex">fn p(x, y) = hsv(x + t/8, 1, 1)<br>p(1 - x, y)</code> |
 
 #### Drawing
 
@@ -240,7 +242,6 @@ example is compiled by the tests.
 | `spr(s, x, y, flip)` | paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both | <code class="psi-ex">sprite heart {<br>  key . 0, R &#35;e24<br>  .R.R.<br>  RRRRR<br>  .RRR.<br>  ..R..<br>}<br>draw { spr(heart, 60, 12); spr(heart, 70, 12, 2) }</code> |
 | `pal(fire, v), gray(v)` | colours to paint with besides #…: a palette's or a gray, v 0 to 1 | <code class="psi-ex">draw { for k &lt; 16 { rectfill(k&#42;8, 0, k&#42;8 + 7, 31, pal(fire, k/15)) } }</code> |
 | `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
-| `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
 | `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
@@ -283,7 +284,7 @@ example is compiled by the tests.
 | steps (per frame, per row, per pixel, and one per layer) | 256 |
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 128 |
-| nesting of brackets and operators (a part counts 3) | 18 |
+| nesting of brackets, operators and function calls | 48 |
 | `table`, `sprite` and `palette` numbers, in all | 256 |
 | loop turns a frame in `draw { }` | 2,048 |
 | lines and dots a frame | 2,048 |
@@ -637,7 +638,7 @@ gray(v / 2)
 
 > this `layer {` is never closed — add `}`
 
-A block (`layer`, `frame`, `draw`, `part`, `for`, `sprite`) runs to its `}`; the formula ended first.
+A block (`layer`, `draw`, `fn`, `for`, `if`, `sprite`) runs to its `}`; the formula ended first.
 
 Add the `}` that closes the block.
 
@@ -662,7 +663,7 @@ layer {
 
 The last line is the colour, and only the last: lines after it would never be used.
 
-Move the colour line to the end of the formula (or the layer or part).
+Move the colour line to the end of the formula (or the layer or function).
 
 Before:
 
@@ -748,9 +749,9 @@ Write `loop` and a number of seconds, or `loop forever`.
 
 <h4 id="E111">E111 · <code>use</code> left in a formula</h4>
 
-> `use` puts a formula in by its name, as `part p { … }`, when you leave the line
+> `use` puts a formula in by its name, as a function `fn p(x, y) { … }`, when you leave the line
 
-Finish the line or write the part out as `part p { … }`.
+Finish the line (the editor puts the formula in), or write the function out.
 
 <h4 id="E112">E112 · an empty formula</h4>
 
@@ -863,13 +864,13 @@ After:
 gray(sin(x))
 ```
 
-<h4 id="E203">E203 · a name that is already a part, table, sprite, palette or control</h4>
+<h4 id="E203">E203 · a name that is already a function, table, sprite, palette or control</h4>
 
 > `…` is already the name of a … (line …) — pick another name
 
-A value may be set again (`v = v * 2` reads the `v` before it), but parts, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
+A value may be set again (`v = v * 2` reads the `v` before it), but functions, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
 
-Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or part may set a name from outside: only parts, tables, sprites, palettes and controls keep theirs.)
+Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs.)
 
 Before:
 
@@ -891,9 +892,9 @@ gray(T[0] * k)
 
 > `…` is a word of the language; pick another name
 
-The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`) can't be names; any built-in value or function's name can (it is then yours).
+The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn`) can't be names; any built-in value or function's name can (it is then yours).
 
-Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for` and `table` are the language's own words (any built-in value or function's name may be yours).
+Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value or function's name may be yours).
 
 Before:
 
@@ -1149,54 +1150,6 @@ Try again, or make the Formula smaller.
 
 ### Parts and layers (E5xx)
 
-<h4 id="E501">E501 · a part without a colour</h4>
-
-> part `…` has no colour, only values: `….v`
-
-Use one of its values, as `p.v`.
-
-<h4 id="E502">E502 · a part without that value</h4>
-
-> part `…` sets no value `…` (did you mean `…`?)
-
-Use a name the part sets.
-
-<h4 id="E503">E503 · parts too deep</h4>
-
-> parts go too deep here — take one out of another
-
-Take one part out of another.
-
-<h4 id="E504">E504 · a part with layers</h4>
-
-> this part has layers of its own: it can only go over, as in `layer { p }`
-
-Draw it as `layer { p }`.
-
-<h4 id="E505">E505 · too many places</h4>
-
-> this formula draws its parts in too many places — simplify it
-
-Draw fewer parts, or each part in fewer places.
-
-<h4 id="E506">E506 · a part without a name</h4>
-
-> a part needs a name, as in `part p { … }`
-
-Name the part.
-
-<h4 id="E507">E507 · a part used as a value</h4>
-
-> `…` is a part: draw it as a whole last line, or read one of its values, as `….v`
-
-Draw it as the last line, or use `p.v`.
-
-<h4 id="E508">E508 · a part inside a layer</h4>
-
-> a part goes outside the layers (draw it in one with `layer { p }`)
-
-Move the part out of the layer.
-
 <h4 id="E509">E509 · a layer inside a layer</h4>
 
 > a layer can't go inside another — close this one with `}` first
@@ -1233,13 +1186,13 @@ Move `psi 1` to the first line.
 
 <h4 id="E701">E701 · <code>draw { }</code> or a table inside a layer</h4>
 
-> `draw { }` goes at the top of the formula (or a part), not inside a layer
+> `draw { }` goes at the top of the formula, not inside a layer
 
-Move it out of the layer, to the top of the formula or the part.
+Move it out of the layer, to the top of the formula.
 
 <h4 id="E702">E702 · a second <code>draw { }</code> block</h4>
 
-> there can be one `draw { }` block (the formula's or one part's: they share one canvas)
+> there can be one `draw { }` block (functions that draw are called inside it)
 
 Merge the `draw { }` blocks into one.
 
@@ -1415,12 +1368,6 @@ Close the call after its colour (and, for `print`, its font and digits).
 
 Write `fn name(a, b) = value`, or `fn name(a, b) { … }` around lines that draw.
 
-<h4 id="E741">E741 · two functions with one name</h4>
-
-> there is already a function `…`
-
-Give the second function another name.
-
 <h4 id="E742">E742 · a function's value that is not a name</h4>
 
 > a function's values are names: `fn name(a, b) = …`
@@ -1451,9 +1398,9 @@ Use a `for` loop in draw, or write the steps out.
 
 Call it on its own line in `draw { }`: `palm(30, 31, 1)`.
 
-<h4 id="E747">E747 · more than one value in a function</h4>
+<h4 id="E747">E747 · more than one value on a function's last line</h4>
 
-> function `…` is one value: `fn …(…) = value` (for lines, `{ … }`)
+> function `…`'s last line is one value: `fn …(…) = value`
 
 Write one value after `=`, or use `{ … }` for lines that draw.
 
@@ -1462,6 +1409,30 @@ Write one value after `=`, or use `{ … }` for lines that draw.
 > `…` is a value, not lines that draw: use it in one, `v = …(…)`
 
 Use it in a value, `v = name(…)`, or in a call's values.
+
+<h4 id="E749">E749 · too many calls</h4>
+
+> this formula calls its functions too many times over — simplify it
+
+Call a function fewer times, or set its value once as a name and use the name.
+
+<h4 id="E750">E750 · a part</h4>
+
+> there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`
+
+Write `fn p(x, y) { … }` with the part's lines; draw it with `p(x, y)` as the last line.
+
+<h4 id="E751">E751 · a value before a function's last line</h4>
+
+> only a function's last line is its value: set a name here (`v = …`), or move it last
+
+Set a name on each line but the last: `v = …`.
+
+<h4 id="E752">E752 · a whole-colour function inside a value</h4>
+
+> `…(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)
+
+Use it alone as the last line, or make its last line `#…` or `rgb(…)` so it can be mixed.
 
 ### Frame rate (E8xx)
 
@@ -1585,7 +1556,7 @@ Use at most 16 characters in the key.
 
 <h4 id="E911">E911 · a sprite inside a layer</h4>
 
-> a sprite goes at the top of the formula (or a part), not inside a layer
+> a sprite goes at the top of the formula, not inside a layer
 
 Move the sprite out of the layer.
 
@@ -1645,7 +1616,7 @@ Keep one entry for each character.
 
 <h4 id="E921">E921 · a palette inside a layer</h4>
 
-> a palette goes at the top of the formula (or a part), not inside a layer
+> a palette goes at the top of the formula, not inside a layer
 
 Move the palette out of the layer.
 
@@ -1691,7 +1662,7 @@ Name the colour on the palette's line (`palette road = black #000, kerb #806`), 
 
 `cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.
 
-Turn it by t, a `frame { }` value or py.
+Turn it by t, a value of t, or py.
 
 Before:
 
@@ -1753,12 +1724,6 @@ Give the slow layers the same `rate`.
 > a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`
 
 Do not read `ink`, `ur`, `ug`, `ub` or `ul` in a `rate` formula.
-
-<h4 id="E945">E945 · <code>rate</code> on a part</h4>
-
-> `rate` goes on the formula's own layers, not on a part's
-
-Put `rate` on the formula's own layers.
 
 <h4 id="E946">E946 · <code>rate</code> before the blend</h4>
 

@@ -54,10 +54,10 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("fps 100", "fps 100; loop 1; gray(abs(x - frac(t)) < 0.02)"),
     ("layer add { … }", "layer { gray(y*0.5) }; layer add { rgb(x, 0, 0) }"),
     ("layer rate 4 { … }", "loop 4; layer rate 4 { gray(noise(x*6, y*2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) < 0.01) }"),
-    // (`use` is the editor's: it pastes the formula in as a part, as here.)
-    ("use Plasma as p", "part p { hsv(x + t/8, 1, 1) }; p"),
-    ("p.v", "loop 4; part p { v = sin(x + t/4); gray(v) }; gray(p.v*0.5 + 0.5)"),
-    ("p(x, y, k)", "part p { gray(r < 0.5) }; p(x + 0.2, y, 1)"),
+    // (`use` is the editor's: it puts the formula in as a function, as here.)
+    ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "loop 4\nfn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) < 1\nfn tree(x0, s) {\n  line(x0, 31, x0, 31 - 10*s, #a62)\n  circfill(x0, 31 - 10*s, 3*s, #2a4)\n}\ndraw { for k < 4 { tree(10 + k*30, 1 + k/4) } }\npal(ice, (ring(64 + sin(t/4)*30, 8) + ring(64, 12))*0.8)"),
+    ("fn p(x, y) { … }", "loop 8\nfn p(x, y) {\n  wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)\n  hsv(wave/4 + t/8, 0.9, r < 0.6)\n}\np(abs(x - 0.5)*2, y)"),
+    ("use Plasma as p", "fn p(x, y) = hsv(x + t/8, 1, 1)\np(1 - x, y)"),
     // Drawing
     ("draw { … }", "draw { line(0, 0, 127, 31) }; pal(fire, ink)"),
     ("for k < 12 { … }", "draw { for k < 12 { line(k*10 + 8, 4, k*10 + 8, 27, 0.2, 1) } }; gray(ink)"),
@@ -72,7 +72,6 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("spr(s, x, y, flip)", "sprite heart {\n  key . 0, R #e24\n  .R.R.\n  RRRRR\n  .RRR.\n  ..R..\n}\ndraw { spr(heart, 60, 12); spr(heart, 70, 12, 2) }"),
     ("pal(fire, v), gray(v)", "draw { for k < 16 { rectfill(k*8, 0, k*8 + 7, 31, pal(fire, k/15)) } }"),
     ("if c { … } else { … }", "draw { for k < 16 { if k % 2 == 0 { rectfill(k*8, 4, k*8 + 6, 27, #f80) } else { circfill(k*8 + 3, 16, 3, #0ff) } } }"),
-    ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "loop 4\nfn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) < 1\nfn tree(x0, s) {\n  line(x0, 31, x0, 31 - 10*s, #a62)\n  circfill(x0, 31 - 10*s, 3*s, #2a4)\n}\ndraw { for k < 4 { tree(10 + k*30, 1 + k/4) } }\npal(ice, (ring(64 + sin(t/4)*30, 8) + ring(64, 12))*0.8)"),
     ("ink", "draw { line(0, 16, 127, 16) }; #40c0ff * ink"),
     ("ink(16)", "draw { for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)"),
     ("table T = 1, -2, 0.5", "table T = 0.2, 0.6, 1, 0.6; gray(T[floor(x*4)])"),
@@ -141,7 +140,7 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 103,
-        why: "A block (`layer`, `frame`, `draw`, `part`, `for`, `sprite`) runs to its `}`; the formula ended first.",
+        why: "A block (`layer`, `draw`, `fn`, `for`, `if`, `sprite`) runs to its `}`; the formula ended first.",
         before: "layer {\n  gray(x)",
         after: "layer {\n  gray(x)\n}",
     },
@@ -183,13 +182,13 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 203,
-        why: "A value may be set again (`v = v * 2` reads the `v` before it), but parts, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.",
+        why: "A value may be set again (`v = v * 2` reads the `v` before it), but functions, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.",
         before: "table T = 0.5, 1\nT = 2\ngray(T[0])",
         after: "table T = 0.5, 1\nk = 2\ngray(T[0] * k)",
     },
     Help {
         code: 204,
-        why: "The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`) can't be names; any built-in value or function's name can (it is then yours).",
+        why: "The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn`) can't be names; any built-in value or function's name can (it is then yours).",
         before: "layer = 1\ngray(x * layer)",
         after: "level = 1\ngray(x * level)",
     },

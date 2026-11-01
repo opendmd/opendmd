@@ -241,9 +241,9 @@ pub mod cheat {
         ("fps 100", "frames a second: 25, 50 (else) or 100, for fast motion; a light formula only", ""),
         ("layer add { … }", "a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min", ""),
         ("layer rate 4 { … }", "a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
-        ("use Plasma as p", "puts in one of your formulas or an example, as part p { … }", "use Plasma as p\n"),
-        ("p.v", "a value part p sets", ""),
-        ("p(x, y, k)", "part p as a colour, drawn at another place; k: how much it covers", ""),
+        ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw", "fn f(a) = "),
+        ("fn p(x, y) { … }", "a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored", "fn p(x, y) {\n  \n}\n"),
+        ("use Plasma as p", "puts in one of your formulas or an example, as a function fn p(x, y) { … }", "use Plasma as p\n"),
     ];
 
     pub const DRAW: &[Row] = &[
@@ -260,7 +260,6 @@ pub mod cheat {
         ("spr(s, x, y, flip)", "paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both", ""),
         ("pal(fire, v), gray(v)", "colours to paint with besides #…: a palette's or a gray, v 0 to 1", ""),
         ("if c { … } else { … }", "inside draw: only when c is not 0", "if  {\n  \n}"),
-        ("fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1", "a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw", "fn f(a) = "),
         ("ink", "what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink", ""),
         ("ink(16)", "the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels", ""),
         ("table T = 1, -2, 0.5", "numbers, 256 in all", "table T = "),

@@ -107,7 +107,7 @@ gray(x)
 === E111
 use foo
 gray(x)
---- 1:1 `use` puts a formula in by its name, as `part p { … }`, when you leave the line
+--- 1:1 `use` puts a formula in by its name, as a function `fn p(x, y) { … }`, when you leave the line
 
 === E112
 --- 1:1 empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`
@@ -260,107 +260,12 @@ gray(x<<140;; + {k}.37>>)
 === E405
 v = <<200*(>>x<<200*)>>
 gray(v)
---- 1:23 this is nested too deeply — split it into named steps
+--- 1:53 this is nested too deeply — split it into named steps
 
 === E406
 loop 4000
 gray(x)
 --- 1:6 the loop must be between 0.1 and 3600 seconds
-
-=== E501
-part p {
-v = 1
-}
-p
---- 4:1 part `p` has no colour, only values: `p.v`
-
-=== E502
-part p {
-v = 1
-gray(x)
-}
-gray(p.w)
---- 5:8 part `p` sets no value `w`
-
-=== E503
-part p7 {
-part p6 {
-part p5 {
-part p4 {
-part p3 {
-part p2 {
-part p1 {
-part p0 { gray(x) }
-layer { p0(x*0.5, y) }
-layer { p0(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p1(x*0.5, y) }
-layer { p1(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p2(x*0.5, y) }
-layer { p2(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p3(x*0.5, y) }
-layer { p3(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p4(x*0.5, y) }
-layer { p4(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p5(x*0.5, y) }
-layer { p5(x*0.25 + 0.1, y, 0.5) }
-}
-layer { p6(x*0.5, y) }
-layer { p6(x*0.25 + 0.1, y, 0.5) }
-}
-p7
---- 7:1 parts go too deep here — take one out of another
-
-=== E504
-part p {
-layer { gray(x) }
-layer add { gray(y) }
-}
-layer { gray(1) }
-layer add { p }
---- 6:7 this part has layers of its own: it can only go over, as in `layer { p }`
-
-=== E505
-part p3 {
-part p2 {
-part p1 {
-part p0 { v = x
-gray(v) }
-v = p0(x*0.5, y).v + p0(y, x).v + p0(x + 0.1, y).v + p0(x, y*2).v + p0(1 - x, y).v + p0(y, 1 - x).v + p0(x*2, y).v + p0(y*2, x).v
-gray(v)
-}
-v = p1(x*0.5, y).v + p1(y, x).v + p1(x + 0.1, y).v + p1(x, y*2).v + p1(1 - x, y).v + p1(y, 1 - x).v + p1(x*2, y).v + p1(y*2, x).v
-gray(v)
-}
-v = p2(x*0.5, y).v + p2(y, x).v + p2(x + 0.1, y).v + p2(x, y*2).v + p2(1 - x, y).v + p2(y, 1 - x).v + p2(x*2, y).v + p2(y*2, x).v
-gray(v)
-}
-p3
---- 12:5 this formula draws its parts in too many places — simplify it
-
-=== E506
-part {
-gray(x)
-}
---- 1:6 a part needs a name, as in `part p { … }`
-
-=== E507
-part p {
-gray(x)
-}
-v = p
-gray(v)
---- 4:5 `p` is a part: draw it as a whole last line, or read one of its values, as `p.v`
-
-=== E508
-layer {
-part p { gray(x) }
-}
---- 2:1 a part goes outside the layers (draw it in one with `layer { p }`)
 
 === E509
 layer {
@@ -396,18 +301,18 @@ layer {
 draw { dot(1, 1) }
 gray(ink)
 }
---- 2:1 `draw { }` goes at the top of the formula (or a part), not inside a layer
+--- 2:1 `draw { }` goes at the top of the formula, not inside a layer
 
 === E701
 layer { table T = 1
 gray(1) }
---- 1:9 a table goes at the top of the formula (or a part), not inside a layer
+--- 1:9 a table goes at the top of the formula, not inside a layer
 
 === E702
 draw { dot(1, 1) }
 draw { dot(2, 2) }
 gray(ink)
---- 2:1 there can be one `draw { }` block (the formula's or one part's: they share one canvas)
+--- 2:1 there can be one `draw { }` block (functions that draw are called inside it)
 
 === E703
 draw { for k 12 { dot(k, 1) } }
@@ -578,7 +483,7 @@ key . 0
 }
 gray(1)
 }
---- 2:1 a sprite goes at the top of the formula (or a part), not inside a layer
+--- 2:1 a sprite goes at the top of the formula, not inside a layer
 
 === E912
 sprite s {
@@ -654,7 +559,7 @@ layer {
 palette p = #fff
 pal(p, x)
 }
---- 2:1 a palette goes at the top of the formula (or a part), not inside a layer
+--- 2:1 a palette goes at the top of the formula, not inside a layer
 
 === E922
 palette p = #fff, 3
@@ -748,13 +653,6 @@ layer add { gray(y) }
 layer rate 4 { gray(x) }
 layer add { gray(ur) }
 --- 2:13 a formula with `rate` draws its own picture: it can't read `ur`, `ug`, `ub` or `ul`
-
-=== E945
-part p { layer { gray(x) }
-layer add { gray(y) } }
-layer rate 3 { p }
-layer add { gray(t) }
---- 3:7 `rate` goes on the formula's own layers, not on a part's
 
 === E946
 layer rate 4 add { gray(x) }
@@ -931,49 +829,77 @@ draw { pset(1, 1, #fff 2) }
 --- 1:24 `pset(x, y, colour)` (or `dot`): expected `)` here
 
 === E740
-fn = 2
+fn 2(a) = a
 gray(x)
---- 0:0 x
-
-=== E741
-fn f(a) = a
-fn f(b) = b
-gray(f(x))
---- 0:0 x
+--- 1:1 a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw
 
 === E742
 fn f(2) = 1
 gray(x)
---- 0:0 x
+--- 1:6 a function's values are names: `fn name(a, b) = …`
 
 === E743
 fn f(a) a
 gray(x)
---- 0:0 x
+--- 1:9 after a function's values: `= value`, or `{ … }` for lines that draw
 
 === E744
 fn f(a) =
 gray(x)
---- 0:0 x
+--- 1:1 function `f` has nothing in it
 
 === E745
 fn f(a) = f(a)
 gray(f(x))
---- 0:0 x
+--- 1:11 `f` calls itself: a function can't (there are no loops of calls)
 
 === E746
 fn p(a) { pset(a, 1, #fff) }
 gray(p(x))
---- 0:0 x
+--- 2:6 `p` draws: call it on a line of its own inside `draw { }`
 
 === E747
 fn f(a) = a b
 gray(f(x))
---- 0:0 x
+--- 2:6 function `f`'s last line is one value: `fn f(…) = value`
 
 === E748
 fn f(a) = a
 draw { f(1) }
 gray(x)
---- 0:0 x
+--- 2:8 `f` is a value, not lines that draw: use it in one, `v = f(…)`
 
+=== E749
+fn f0(a) = a
+fn f1(a) = max(f0(a), f0(a)) + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0
+fn f2(a) = max(f1(a), f1(a))
+fn f3(a) = max(f2(a), f2(a))
+fn f4(a) = max(f3(a), f3(a))
+fn f5(a) = max(f4(a), f4(a))
+fn f6(a) = max(f5(a), f5(a))
+fn f7(a) = max(f6(a), f6(a))
+fn f8(a) = max(f7(a), f7(a))
+fn f9(a) = max(f8(a), f8(a))
+fn f10(a) = max(f9(a), f9(a))
+fn f11(a) = max(f10(a), f10(a))
+fn f12(a) = max(f11(a), f11(a))
+gray(f12(x))
+--- 3:16 this formula calls its functions too many times over — simplify it
+
+=== E750
+part p { gray(x) }
+p
+--- 1:1 there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`
+
+=== E751
+fn f(a) {
+  gray(a)
+  v = 1
+}
+f(x)
+--- 2:3 only a function's last line is its value: set a name here (`v = …`), or move it last
+
+=== E752
+fn p(v) = hsv(v, 1, 1)
+gray(p(x))
+--- 2:6 `p(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)
