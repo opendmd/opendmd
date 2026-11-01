@@ -54,92 +54,104 @@ pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
 /// lines left out, each `control` a name at its default (`speed = 1`).
 /// `None` for one that can't be a function — with layers, a draw stage,
 /// tables, sprites, palettes or functions of its own — or that doesn't
-/// compile as one.
+/// compile as one. (Bytes, no `str` patterns or `trim`: each brought ~1 KB
+/// to the web module.)
 #[cfg(feature = "compiler")]
 pub fn function(src: &str, name: &str) -> Option<String> {
-    let mut body = String::new();
-    for st in statements(src) {
-        let st = st.trim();
-        let word: &str = st.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
-        let rest = st.get(word.len()..).unwrap_or("").trim_start();
-        let sets = rest.starts_with('=') && !rest.starts_with("==");
-        if st.is_empty() {
-            continue;
+    let b = src.as_bytes();
+    let word_at = |mut i: usize| {
+        let s = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
         }
-        let line = match word {
-            _ if sets => String::from(st),
-            "psi" | "name" | "about" | "look" | "loop" | "fps" => continue,
-            "control" => {
-                let mut w = rest.split(|c: char| c.is_ascii_whitespace() || c == '=').filter(|w| !w.is_empty());
-                let n = w.next()?;
-                let after = rest.get(n.len()..).unwrap_or("").trim_start();
-                let def = if let Some(v) = after.strip_prefix('=') {
-                    // `= 0.4` or `= calm, wild` (the first word: 0).
-                    let v = v.trim_start();
-                    let num: &str = v.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).next().unwrap_or("");
-                    if num.is_empty() { "0" } else { num }
-                } else {
-                    // `lo..hi [= v]`
-                    match after.split_once('=') {
-                        Some((_, v)) => v.trim_start().split(|c: char| c.is_ascii_whitespace() || c == '"').next().unwrap_or("0"),
-                        None => after.split("..").next().unwrap_or("0").trim(),
-                    }
-                };
-                let def = if def.is_empty() { "0" } else { def };
-                let mut l = String::from(n);
-                l.push_str(" = ");
-                l.push_str(def);
-                l
-            }
-            "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part" | "use" => return None,
-            _ => String::from(st),
-        };
-        for l in line.split('\n') {
-            body.push_str("  ");
-            body.push_str(l);
-            body.push('\n');
+        (s, i)
+    };
+    let skip = |mut i: usize, end: usize| {
+        while i < end && matches!(b[i], b' ' | b'\t' | b'\r') {
+            i += 1;
         }
-    }
+        i
+    };
     let mut f = String::from("fn ");
     f.push_str(name);
     f.push_str("(x, y) {\n");
-    f.push_str(&body);
-    f.push('}');
-    let mut check = f.clone();
-    check.push('\n');
-    check.push_str(name);
-    check.push_str("(x, y)");
-    crate::compile(&check).ok()?;
-    Some(f)
-}
-
-/// `src`'s statements at its top level (split at line ends and `;` outside
-/// brackets, braces and quotes; a comment kept on its own).
-#[cfg(feature = "compiler")]
-fn statements(src: &str) -> alloc::vec::Vec<&str> {
-    let b = src.as_bytes();
-    let (mut out, mut start, mut depth, mut quote, mut i) = (alloc::vec::Vec::new(), 0, 0i32, false, 0);
-    while i < b.len() {
-        match b[i] {
-            b'"' => quote = !quote,
-            b'-' | b'/' if !quote && b.get(i + 1) == Some(&b[i]) => {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
+    // Each statement at the top level: [start, end).
+    let (mut st, mut depth, mut quote, mut i) = (0usize, 0i32, false, 0usize);
+    while i <= b.len() {
+        let c = b.get(i).copied().unwrap_or(b'\n');
+        if !quote && matches!(c, b'-' | b'/') && b.get(i + 1) == Some(&c) {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
             }
+            continue;
+        }
+        match c {
+            b'"' => quote = !quote,
             b'(' | b'[' | b'{' if !quote => depth += 1,
             b')' | b']' | b'}' if !quote => depth -= 1,
             b'\n' | b';' if !quote && depth <= 0 => {
-                out.push(src.get(start..i).unwrap_or(""));
-                start = i + 1;
+                let a = skip(st, i);
+                let (ws, we) = word_at(a);
+                let w = src.get(ws..we).unwrap_or("");
+                let after = skip(we, i);
+                let sets = b.get(after) == Some(&b'=') && b.get(after + 1) != Some(&b'=');
+                let line = src.get(a..i).unwrap_or("");
+                if a < i {
+                    match w {
+                        _ if sets => push_line(&mut f, line),
+                        "psi" | "name" | "about" | "look" | "loop" | "fps" => {}
+                        "control" => {
+                            // `control NAME [lo..hi] [= v] …`: NAME = v (else
+                            // lo, else 0; a choice's first word, 0).
+                            let (ns, ne) = word_at(skip(we, i));
+                            if ns == ne {
+                                return None;
+                            }
+                            let mut k = skip(ne, i);
+                            let lo = k;
+                            while k < i && b[k] != b'=' && b[k] != b'"' {
+                                k += 1;
+                            }
+                            let num = |a: usize| {
+                                let mut e = a;
+                                while e < i && (b[e].is_ascii_digit() || b[e] == b'.' || (e == a && b[e] == b'-')) {
+                                    e += 1;
+                                }
+                                src.get(a..e).filter(|v| !v.is_empty() && *v != "-")
+                            };
+                            let v = if b.get(k) == Some(&b'=') { num(skip(k + 1, i)) } else { num(lo) };
+                            let mut l = String::from(src.get(ns..ne)?);
+                            l.push_str(" = ");
+                            l.push_str(v.unwrap_or("0"));
+                            push_line(&mut f, &l);
+                        }
+                        "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part" | "use" => return None,
+                        _ => push_line(&mut f, line),
+                    }
+                }
+                st = i + 1;
             }
             _ => {}
         }
         i += 1;
     }
-    out.push(src.get(start..).unwrap_or(""));
-    out
+    f.push('}');
+    let mut check = f.clone();
+    check.push('\n');
+    check.push_str(name);
+    check.push_str("(x, y)");
+    let mut p = alloc::boxed::Box::<Program>::default();
+    crate::compile_into(&check, &mut p).ok()?;
+    Some(f)
+}
+
+#[cfg(feature = "compiler")]
+fn push_line(f: &mut String, l: &str) {
+    for part in l.split('\n') {
+        f.push_str("  ");
+        f.push_str(part);
+        f.push('\n');
+    }
 }
 
 /// A formula's `look` line set to `blend` at `amount` percent (`look`
