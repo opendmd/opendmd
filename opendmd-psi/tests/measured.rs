@@ -195,20 +195,74 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
     // The road as bundled from road-life to road-full (Both), and Full as
     // measured: the bundled road since road-full is Full respelled for its
     // `about` (the same frames, two frame steps fewer), not measured itself.
-    ("Endless road Both", include_str!("../../opendmd-web/experiments/road-life/road-both.psi"), 2723),
-    ("Endless road Full", include_str!("../../opendmd-web/experiments/road-life/road-full.psi"), 3601),
-    ("Wireframe cube", include_str!("../../opendmd-web/formulas/wireframe-cube.psi"), 1691),
-    ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), 4793),
-    ("Rotozoom floor", include_str!("../../opendmd-web/formulas/rotozoom-floor.psi"), 1517),
-    ("Tunnel", include_str!("../../opendmd-web/formulas/tunnel.psi"), 2520),
-    ("Time gate", include_str!("../../opendmd-web/formulas/time-gate.psi"), 2816),
-    ("Fire", include_str!("../../opendmd-web/formulas/fire.psi"), 2392),
-    ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi"), 2657),
+    (
+        "Endless road Both",
+        include_str!("../../opendmd-web/experiments/road-life/road-both.psi"),
+        2723,
+    ),
+    (
+        "Endless road Full",
+        include_str!("../../opendmd-web/experiments/road-life/road-full.psi"),
+        3601,
+    ),
+    (
+        "Wireframe cube",
+        include_str!("../../opendmd-web/formulas/wireframe-cube.psi"),
+        1691,
+    ),
+    (
+        "Plasma letters",
+        include_str!("../../opendmd-web/formulas/plasma-letters.psi"),
+        4793,
+    ),
+    (
+        "Rotozoom floor",
+        include_str!("../../opendmd-web/formulas/rotozoom-floor.psi"),
+        1517,
+    ),
+    (
+        "Tunnel",
+        include_str!("../../opendmd-web/formulas/tunnel.psi"),
+        2520,
+    ),
+    (
+        "Time gate",
+        include_str!("../../opendmd-web/formulas/time-gate.psi"),
+        2816,
+    ),
+    (
+        "Fire",
+        include_str!("../../opendmd-web/formulas/fire.psi"),
+        2392,
+    ),
+    (
+        "Plasma",
+        include_str!("../../opendmd-web/formulas/plasma.psi"),
+        2657,
+    ),
 ];
 pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
-    ("Old TV", include_str!("../../opendmd-web/formulas/old-tv.psi"), "over", 100, 1873),
-    ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), "over", 100, 4895),
-    ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi"), "screen", 40, 4083),
+    (
+        "Old TV",
+        include_str!("../../opendmd-web/formulas/old-tv.psi"),
+        "over",
+        100,
+        1873,
+    ),
+    (
+        "Plasma letters",
+        include_str!("../../opendmd-web/formulas/plasma-letters.psi"),
+        "over",
+        100,
+        4895,
+    ),
+    (
+        "Plasma",
+        include_str!("../../opendmd-web/formulas/plasma.psi"),
+        "screen",
+        40,
+        4083,
+    ),
 ];
 
 // console-b on the spare (psi-probe CONSOLEB_ONLY, 1.0.0-beta.11-consoleb-a,
@@ -216,8 +270,24 @@ pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
 // p50 µs a frame, whichever the trial kept (JIT or VM; the still cache
 // taken, the held picture held). For `Program::esp32_us_jit_still`.
 pub const CONSOLEB: &[(&str, &str, u32)] = &[
-    ("Cycled plasma", include_str!("../../opendmd-web/formulas/cycled-plasma.psi"), 880),
-    ("Waterfall", include_str!("../../opendmd-web/formulas/waterfall.psi"), 1033),
-    ("Copper sky", include_str!("../../opendmd-web/formulas/copper-sky.psi"), 2093),
-    ("Big clock rate (bar in the mask)", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate-mask.psi"), 2571),
+    (
+        "Cycled plasma",
+        include_str!("../../opendmd-web/formulas/cycled-plasma.psi"),
+        880,
+    ),
+    (
+        "Waterfall",
+        include_str!("../../opendmd-web/formulas/waterfall.psi"),
+        1033,
+    ),
+    (
+        "Copper sky",
+        include_str!("../../opendmd-web/formulas/copper-sky.psi"),
+        2093,
+    ),
+    (
+        "Big clock rate (bar in the mask)",
+        include_str!("../../opendmd-web/experiments/console-b/big-clock-rate-mask.psi"),
+        2571,
+    ),
 ];

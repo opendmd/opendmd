@@ -26,7 +26,6 @@
 // Code that runs once a compile or once a frame, optimised for size on the
 // ESP32 (`#[optimize(size)]`: the app's flash is the scarce thing there).
 #![cfg_attr(target_arch = "xtensa", feature(optimize_attribute))]
-
 // Without the compiler (the player) some of its helpers go unused.
 #![cfg_attr(not(feature = "compiler"), allow(dead_code, unused_imports))]
 
@@ -34,21 +33,25 @@ extern crate alloc;
 
 #[doc(hidden)]
 pub mod builtins;
+#[cfg(feature = "compiler")]
+mod compile;
+mod draw;
+mod error;
 #[cfg(feature = "docs")]
 #[doc(hidden)]
 pub mod errors;
+pub mod fixed;
+mod fuse;
 #[cfg(feature = "docs")]
 #[doc(hidden)]
 pub mod reference;
-#[cfg(feature = "compiler")]
-mod compile;
-mod error;
-mod draw;
-pub mod fixed;
-mod fuse;
 // (With `docs` on the host too: `psi check` says whether the panel's JIT
 // takes a formula, and why not.)
-#[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+#[cfg(any(
+    test,
+    feature = "docs",
+    all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
+))]
 pub mod jit;
 #[cfg(feature = "compiler")]
 pub mod look;
@@ -66,26 +69,28 @@ mod vm;
 
 #[cfg(feature = "compiler")]
 pub use compile::{
-    compact, compile_declared, compile_look, compile_look_with, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, squeeze,
-    Declared, DeclaredControl, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
-    MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
+    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into,
+    compile_layout, compile_look, compile_look_with, compile_opts, compile_portable,
+    compile_unfused, compile_with, squeeze, Declared, DeclaredControl, Info, MAX_ABOUT_TEXT,
+    MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
-pub use meta::{Control, Meta, BLENDS};
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
+pub use meta::{Control, Meta, BLENDS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
-pub use tables::{Glyphs, Tables, ATAN};
 /// (psi-probe's references for `fixed::sqrt` and `len`.)
 #[doc(hidden)]
 pub use tables::SQRT;
+pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]
 pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
 pub use vm::stats;
 pub use vm::{
-    pair_row, q16, render_rows, render_rows_beam, render_rows_changed, render_rows_ink, render_rows_ink_turns,
-    render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START, Q16_ONE,
+    pair_row, q16, render_rows, render_rows_beam, render_rows_changed, render_rows_ink,
+    render_rows_ink_turns, render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START,
+    Q16_ONE,
 };
 
 /// A decimal number (digits, an optional `.` and more digits; no sign) as
@@ -325,7 +330,8 @@ pub mod golden {
 
     /// `cycle` golden formulas: a still index turned once a frame; per-row
     /// turns of a palette of its own, scaled and as a covered layer.
-    pub const CYCLE: &str = "loop 8\nwave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)\ncycle(rainbow, wave/6, t/8)";
+    pub const CYCLE: &str =
+        "loop 8\nwave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)\ncycle(rainbow, wave/6, t/8)";
     pub const CYCLE_ROWS: &str = "loop 5\npalette sky = #000, #024, #08c, #fc8, #fff\nlayer { cycle(sky, x*0.3 - y*2.5, t/5 + py/64) * (0.6 + x*0.4) }\nlayer screen { cycle(fire, len(cx, cy), -t + py/32, 0.5) }";
     /// `layer rate N` golden formulas.
     pub const RATE: &str = "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { pal(ice, frac(x - t), 0.5) }";
@@ -577,7 +583,11 @@ pub mod worst {
                 let j = k - 1;
                 s = format!("{s}fn p{k}(x, y) = p{j}(x*0.5, sin(y)) + p{j}(1 - x, y)*0.5\n");
             }
-            let src = format!("{s}layer {{ gray(p{}(x, y)) }}\nlayer add {{ gray(p{}(y, x), 0.5) }}", depth - 1, depth - 1);
+            let src = format!(
+                "{s}layer {{ gray(p{}(x, y)) }}\nlayer add {{ gray(p{}(y, x), 0.5) }}",
+                depth - 1,
+                depth - 1
+            );
             match crate::compile(&src) {
                 Err(e) if e.msg.starts_with("unknown name") => best = src,
                 _ => break,

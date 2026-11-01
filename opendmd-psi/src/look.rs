@@ -114,18 +114,27 @@ pub fn function(src: &str, name: &str) -> Option<String> {
                             }
                             let num = |a: usize| {
                                 let mut e = a;
-                                while e < i && (b[e].is_ascii_digit() || b[e] == b'.' || (e == a && b[e] == b'-')) {
+                                while e < i
+                                    && (b[e].is_ascii_digit()
+                                        || b[e] == b'.'
+                                        || (e == a && b[e] == b'-'))
+                                {
                                     e += 1;
                                 }
                                 src.get(a..e).filter(|v| !v.is_empty() && *v != "-")
                             };
-                            let v = if b.get(k) == Some(&b'=') { num(skip(k + 1, i)) } else { num(lo) };
+                            let v = if b.get(k) == Some(&b'=') {
+                                num(skip(k + 1, i))
+                            } else {
+                                num(lo)
+                            };
                             let mut l = String::from(src.get(ns..ne)?);
                             l.push_str(" = ");
                             l.push_str(v.unwrap_or("0"));
                             push_line(&mut f, &l);
                         }
-                        "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part" | "use" => return None,
+                        "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part"
+                        | "use" => return None,
                         _ => push_line(&mut f, line),
                     }
                 }

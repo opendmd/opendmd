@@ -1161,7 +1161,11 @@ fn scalar_cap_is_a_friendly_error() {
     let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
-    assert!(e.msg.contains("numbers and once-a-frame values"), "{}", e.msg);
+    assert!(
+        e.msg.contains("numbers and once-a-frame values"),
+        "{}",
+        e.msg
+    );
 }
 
 #[test]
@@ -2038,13 +2042,21 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
 /// (`include_str!`): the wasm run has no file system.
 macro_rules! example {
     ($slug:literal) => {
-        strip_header(include_str!(concat!("../../opendmd-web/formulas/", $slug, ".psi")))
+        strip_header(include_str!(concat!(
+            "../../opendmd-web/formulas/",
+            $slug,
+            ".psi"
+        )))
     };
 }
 
 fn strip_header(text: &str) -> String {
     text.split_inclusive('\n')
-        .skip_while(|l| ["-- author:", "-- licence:", "-- license:", "-- bundle"].iter().any(|h| l.starts_with(h)))
+        .skip_while(|l| {
+            ["-- author:", "-- licence:", "-- license:", "-- bundle"]
+                .iter()
+                .any(|h| l.starts_with(h))
+        })
         .collect()
 }
 
@@ -2366,13 +2378,35 @@ fn what_changed_is_exactly_what_differs() {
         let mut was = vec![0u8; W * H * 3];
         for j in 0..6u32 {
             let ms = [0, 20, 40, 1000, 1020, 33_333][j as usize];
-            let rows = if j % 3 == 2 { r.next() as u32 } else { u32::MAX };
+            let rows = if j % 3 == 2 {
+                r.next() as u32
+            } else {
+                u32::MAX
+            };
             let mut want = was.clone();
-            render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &inputs(ms), &OWN, Some(&under), rows, &mut want);
+            render_rows_ink::<128>(
+                &p,
+                &mut s,
+                Some(&mut ink),
+                &inputs(ms),
+                &OWN,
+                Some(&under),
+                rows,
+                &mut want,
+            );
             let mut got = was.clone();
             let mut ch = [0xdead_beefu32; H];
             opendmd_psi::render_rows_changed::<128>(
-                &p, &mut s, Some(&mut ink), None, &inputs(ms), &OWN, Some(&under), rows, &mut got, &mut ch,
+                &p,
+                &mut s,
+                Some(&mut ink),
+                None,
+                &inputs(ms),
+                &OWN,
+                Some(&under),
+                rows,
+                &mut got,
+                &mut ch,
             );
             assert!(got == want, "case {k} frame {j}: bytes differ");
             for (y, &bits) in ch.iter().enumerate() {
@@ -2386,10 +2420,17 @@ fn what_changed_is_exactly_what_differs() {
                     // (A `rate` formula drawn from nothing says every row it
                     // drew changed: more than changed, never less.)
                     if p.rate().is_some() {
-                        assert!(bits & (1 << g) != 0 || !differs, "case {k} frame {j}: row {y} group {g}");
+                        assert!(
+                            bits & (1 << g) != 0 || !differs,
+                            "case {k} frame {j}: row {y} group {g}"
+                        );
                         continue;
                     }
-                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
+                    assert_eq!(
+                        bits & (1 << g) != 0,
+                        differs,
+                        "case {k} frame {j}: row {y} group {g}"
+                    );
                 }
             }
             was = got;
@@ -2435,8 +2476,13 @@ fn random_cycles_are_the_folded_palette() {
         };
         let p = pals[r.below(pals.len())];
         let a = format!("loop {}\ncycle({p}, {v}, {s})", 1 + k % 9);
-        let b = format!("loop {}\npal({p}, frac(frac({v}) + floor(frac({s})*32)/32))", 1 + k % 9);
-        let (Ok(pa), Ok(pb)) = (compile(&a), compile(&b)) else { continue };
+        let b = format!(
+            "loop {}\npal({p}, frac(frac({v}) + floor(frac({s})*32)/32))",
+            1 + k % 9
+        );
+        let (Ok(pa), Ok(pb)) = (compile(&a), compile(&b)) else {
+            continue;
+        };
         ok += 1;
         for ms in [0, 777, 3210] {
             let fa = frame::<128>(&pa, ms);
@@ -2461,7 +2507,11 @@ fn random_rate_formulas_hold_the_same_frames() {
         let n = [2, 3, 4, 7, 16, 33, 50][r.below(7)];
         let slow = no_under(&expr(&mut r, 3));
         let fps = ["", "fps 100\n", "fps 25\n"][r.below(3)];
-        let head = if k % 5 == 0 { "loop forever\n".to_string() } else { format!("loop {}\n", 1 + k % 7) };
+        let head = if k % 5 == 0 {
+            "loop forever\n".to_string()
+        } else {
+            format!("loop {}\n", 1 + k % 7)
+        };
         let top = format!(
             "layer {} {{ rgb({}, {}, {}, {}) }}",
             blends[r.below(blends.len())],
@@ -2470,11 +2520,14 @@ fn random_rate_formulas_hold_the_same_frames() {
             no_under(&expr(&mut r, 2)),
             no_under(&expr(&mut r, 1)),
         );
-        let src = format!("{head}{fps}layer rate {n} {{ hsv({slow}, 1, frac({slow}*0.5)) }}\n{top}");
+        let src =
+            format!("{head}{fps}layer rate {n} {{ hsv({slow}, 1, frac({slow}*0.5)) }}\n{top}");
         let p = match compile(&src) {
             Ok(p) => p,
             // (Only a value of `t` where `loop forever` can't take it.)
-            Err(e) if e.msg.contains("grows without end") || e.msg.contains("a growing value") => continue,
+            Err(e) if e.msg.contains("grows without end") || e.msg.contains("a growing value") => {
+                continue
+            }
             Err(e) => panic!("{src}\n{}", e.msg),
         };
         if p.rate().is_none() {
@@ -2493,9 +2546,19 @@ fn random_rate_formulas_hold_the_same_frames() {
                 i.a = 1 << 13;
                 i.second = 31;
             }
-            opendmd_psi::render_held::<128>(&p, &mut s, None, None, &mut held, &i, &OWN, &mut out, None);
+            opendmd_psi::render_held::<128>(
+                &p, &mut s, None, None, &mut held, &i, &OWN, &mut out, None,
+            );
             let mut want = vec![0u8; W * H * 3];
-            render_rows::<64>(&p, &mut Scratch::<64>::new(), &i, &OWN, None, u32::MAX, &mut want);
+            render_rows::<64>(
+                &p,
+                &mut Scratch::<64>::new(),
+                &i,
+                &OWN,
+                None,
+                u32::MAX,
+                &mut want,
+            );
             assert!(out == want, "{src}\nat {ms} ms (step {step})");
         }
         if !slow.contains('t') {

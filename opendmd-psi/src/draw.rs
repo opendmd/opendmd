@@ -13,9 +13,9 @@
 //! partial picture on every target.
 
 use crate::fixed::{self, ONE};
+use crate::program::glyphs;
 use crate::program::*;
 use crate::tables::Tables;
-use crate::program::glyphs;
 use crate::vm::Scratch;
 use alloc::boxed::Box;
 
@@ -393,7 +393,14 @@ fn colour(v: i32) -> u8 {
 /// colour last), into the paint canvas `p`: the last drawn wins. Bounded
 /// as the lines and dots are: a primitive counts one of the frame's, and
 /// every pixel it covers one of its line steps.
-fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, kind: u8, a: &[i32; 9]) {
+fn paint_prim(
+    prog: &Program,
+    t: &Tables,
+    p: &mut [u8; W * H],
+    pen: &mut Pen,
+    kind: u8,
+    a: &[i32; 9],
+) {
     use crate::program::paint::*;
     if kind > LAST || !pen.may() {
         return;
@@ -454,7 +461,10 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
             let r = a[2].max(0) as i64 + (ONE as i64) / 2;
             let r2 = r * r;
             let inside = |x: i32, y: i32| {
-                let (dx, dy) = (((x as i64) << 16) - cx as i64, ((y as i64) << 16) - cy as i64);
+                let (dx, dy) = (
+                    ((x as i64) << 16) - cx as i64,
+                    ((y as i64) << 16) - cy as i64,
+                );
                 dx * dx + dy * dy <= r2
             };
             let rr = (r >> 16) as i32 + 1;
@@ -463,7 +473,10 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
                 for x in (x0).max(0)..=(x0 + 2 * rr + 1).min(W as i32 - 1) {
                     if inside(x, y)
                         && (kind == CIRCFILL
-                            || !(inside(x - 1, y) && inside(x + 1, y) && inside(x, y - 1) && inside(x, y + 1)))
+                            || !(inside(x - 1, y)
+                                && inside(x + 1, y)
+                                && inside(x, y - 1)
+                                && inside(x, y + 1)))
                     {
                         put(p, x, y, c);
                     }
@@ -476,7 +489,9 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
             // in whole-pixel steps of its bounding box on the panel.
             let v = [(a[0], a[1]), (a[2], a[3]), (a[4], a[5])];
             let edge = |(ax, ay): (i32, i32), (bx, by): (i32, i32), x: i64, y: i64| -> i64 {
-                ((bx as i64 - ax as i64) * (y - ay as i64) - (by as i64 - ay as i64) * (x - ax as i64)) >> 16
+                ((bx as i64 - ax as i64) * (y - ay as i64)
+                    - (by as i64 - ay as i64) * (x - ax as i64))
+                    >> 16
             };
             let area = edge(v[0], v[1], v[2].0 as i64, v[2].1 as i64);
             if area == 0 {
@@ -488,8 +503,16 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
             for y in ya.max(0)..=yb.min(H as i32 - 1) {
                 for x in xa.max(0)..=xb.min(W as i32 - 1) {
                     let (fx, fy) = ((x as i64) << 16, (y as i64) << 16);
-                    let e = [edge(v[0], v[1], fx, fy), edge(v[1], v[2], fx, fy), edge(v[2], v[0], fx, fy)];
-                    let inside = if area > 0 { e.iter().all(|&k| k >= 0) } else { e.iter().all(|&k| k <= 0) };
+                    let e = [
+                        edge(v[0], v[1], fx, fy),
+                        edge(v[1], v[2], fx, fy),
+                        edge(v[2], v[0], fx, fy),
+                    ];
+                    let inside = if area > 0 {
+                        e.iter().all(|&k| k >= 0)
+                    } else {
+                        e.iter().all(|&k| k <= 0)
+                    };
                     if inside {
                         put(p, x, y, c);
                     }
@@ -531,7 +554,10 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
             let g = glyphs(t, gc);
             let mut chars = [0i32; 32];
             let n = if kind == PRINT {
-                let (at, len) = ((a[0] >> 16).max(0) as usize, (a[1] >> 16).clamp(0, 32) as usize);
+                let (at, len) = (
+                    (a[0] >> 16).max(0) as usize,
+                    (a[1] >> 16).clamp(0, 32) as usize,
+                );
                 for (k, c) in chars.iter_mut().take(len).enumerate() {
                     *c = prog.tables[(at + k) & (MAX_TABLE - 1)];
                 }
@@ -555,7 +581,11 @@ fn paint_prim(prog: &Program, t: &Tables, p: &mut [u8; W * H], pen: &mut Pen, ki
                     n = 1;
                 }
                 for k in (0..nd).rev() {
-                    chars[n] = if font == 2 { digits[k] << 16 } else { (('0' as i32) + digits[k]) << 16 };
+                    chars[n] = if font == 2 {
+                        digits[k] << 16
+                    } else {
+                        (('0' as i32) + digits[k]) << 16
+                    };
                     n += 1;
                 }
                 n

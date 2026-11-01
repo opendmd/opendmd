@@ -605,7 +605,16 @@ pub fn render_rows_changed<const N: usize>(
 ) {
     if prog.slow_marker().is_some() {
         return crate::rate::render_scratch::<N>(
-            prog, scratch, ink, still, inputs, tables, rows, out, true, Some(changed),
+            prog,
+            scratch,
+            ink,
+            still,
+            inputs,
+            tables,
+            rows,
+            out,
+            true,
+            Some(changed),
         );
     }
     frame::<N>(
@@ -772,7 +781,11 @@ pub fn render_rows_beam<const N: usize>(
         out,
         true,
         core::hint::black_box(changed),
-        core::hint::black_box(if rate { crate::rate::FAST } else { crate::rate::WHOLE }),
+        core::hint::black_box(if rate {
+            crate::rate::FAST
+        } else {
+            crate::rate::WHOLE
+        }),
     )
 }
 
@@ -1063,7 +1076,13 @@ pub(crate) fn reg_index(v: u8) -> usize {
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
 /// pixel `at`.
 #[inline(never)]
-pub(crate) fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+pub(crate) fn keep<const N: usize>(
+    s: &Scratch<N>,
+    st: &mut Still,
+    regs: [u8; 2],
+    n: u8,
+    at: usize,
+) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref_mut() {
             l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
@@ -1138,14 +1157,19 @@ impl<'a> Rows<'a> {
     fn tell<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
         self.finish(out);
         let last = core::mem::replace(&mut scratch.last, 0) as usize;
-        let Some(mut sink) = scratch.beam.0 else { return };
+        let Some(mut sink) = scratch.beam.0 else {
+            return;
+        };
         if last == 0 {
             // SAFETY: as below.
             unsafe { (sink.as_mut())(BEAM_START, out, 0, 0) };
         } else if last > H / 2 {
             let row = last - 1;
             let p = row - H / 2;
-            let (a, b) = self.changed.as_deref().map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
+            let (a, b) = self
+                .changed
+                .as_deref()
+                .map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
             // SAFETY: set by `render_rows_beam` around this frame's call
             // only (`BeamGuard` clears it), so the closure is alive.
             unsafe { (sink.as_mut())(p, out, a, b) };
@@ -1230,7 +1254,8 @@ impl<'a> Rows<'a> {
                 let mut now = out.as_ptr().add(row * W * 3).cast::<u32>();
                 let mut was = self.before.as_ptr();
                 for g in 0..W / 4 {
-                    let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+                    let d =
+                        (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
                     m |= u32::from(d != 0) << g;
                     now = now.add(3);
                     was = was.add(3);
@@ -2217,7 +2242,13 @@ pub mod stats {
 /// formula at the pixel nearest (x', y'), held to the panel (0 without a
 /// picture). Out of line, in flash.
 #[inline(never)]
-fn under_at<const N: usize>(s: &mut Scratch<N>, al: &mut Alias, op: &Op, base: usize, under: Option<&[u8]>) {
+fn under_at<const N: usize>(
+    s: &mut Scratch<N>,
+    al: &mut Alias,
+    op: &Op,
+    base: usize,
+    under: Option<&[u8]>,
+) {
     let (a, b) = (s.arg(al, op.a, base), s.arg(al, op.b, base));
     let at = |v: Arg, j: usize| match v {
         // SAFETY: a lane operand points at N values (`Scratch::arg`).

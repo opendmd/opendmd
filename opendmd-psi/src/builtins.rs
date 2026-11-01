@@ -41,9 +41,21 @@ pub enum Input {
 /// formula's own name (then that name is the formula's: `t = 3` is a value
 /// called `t`, `c = 0.5` no longer the third control).
 pub const INPUTS: [(&str, Input, &str); 17] = [
-    ("x", Input::X, "the pixel's position across, 0 at the left to 1 at the right"),
-    ("y", Input::Y, "the pixel's position down, 0 at the top to 1 at the bottom"),
-    ("px", Input::Px, "the pixel's column, 0 to 127 from the left"),
+    (
+        "x",
+        Input::X,
+        "the pixel's position across, 0 at the left to 1 at the right",
+    ),
+    (
+        "y",
+        Input::Y,
+        "the pixel's position down, 0 at the top to 1 at the bottom",
+    ),
+    (
+        "px",
+        Input::Px,
+        "the pixel's column, 0 to 127 from the left",
+    ),
     ("py", Input::Py, "the pixel's row, 0 to 31 from the top"),
     ("i", Input::I, "the pixel's number, 0 to 4095 (py*128 + px)"),
     ("t", Input::T, "seconds into the loop"),
@@ -53,11 +65,31 @@ pub const INPUTS: [(&str, Input, &str); 17] = [
     ("a", Input::A, "the first control"),
     ("b", Input::B, "the second control"),
     ("c", Input::C, "the third control"),
-    ("ur", Input::Ur, "the red of the picture under the formula, 0 to 1"),
-    ("ug", Input::Ug, "the green of the picture under the formula, 0 to 1"),
-    ("ub", Input::Ub, "the blue of the picture under the formula, 0 to 1"),
-    ("ul", Input::Ul, "the brightness of the picture under the formula, 0 to 1"),
-    ("ink", Input::Ink, "what `draw { }` put at the pixel, 0 to 1"),
+    (
+        "ur",
+        Input::Ur,
+        "the red of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ug",
+        Input::Ug,
+        "the green of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ub",
+        Input::Ub,
+        "the blue of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ul",
+        Input::Ul,
+        "the brightness of the picture under the formula, 0 to 1",
+    ),
+    (
+        "ink",
+        Input::Ink,
+        "what `draw { }` put at the pixel, 0 to 1",
+    ),
 ];
 
 /// Values added once people had saved formulas (2026-10-26), about the
@@ -146,9 +178,7 @@ pub const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-pub const KEYWORDS: [&str; 8] = [
-    "loop", "layer", "part", "use", "draw", "for", "table", "fn",
-];
+pub const KEYWORDS: [&str; 8] = ["loop", "layer", "part", "use", "draw", "for", "table", "fn"];
 
 /// The draw stage's primitives: statements inside `draw { }`, and names a
 /// formula may still set (`line = …`), as `ink` is a value it may.
@@ -163,7 +193,9 @@ pub const INK_CALLS: [&str; 2] = ["line", "dot"];
 /// The paint primitives: statements inside `draw { }` that draw in colour
 /// onto the paint canvas (the last drawn wins). `line` and `dot` paint too
 /// when their last value is a colour.
-pub const PAINT_CALLS: [&str; 9] = ["pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print"];
+pub const PAINT_CALLS: [&str; 9] = [
+    "pset", "rect", "rectfill", "circ", "circfill", "trifill", "cls", "spr", "print",
+];
 
 /// How a layer goes onto what is below it (`layer add { … }`; `over` when
 /// none is named).
@@ -175,7 +207,6 @@ pub const BLENDS: [(&str, u8); fixed::BLENDS] = [
     ("max", fixed::BLEND_MAX),
     ("min", fixed::BLEND_MIN),
 ];
-
 
 /// The declarations (formula-apps.md §2.1): statements at the top of a
 /// formula that say what it is rather than draw. None is a keyword: each is

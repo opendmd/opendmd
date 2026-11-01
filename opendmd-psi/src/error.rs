@@ -1,8 +1,8 @@
 //! A compile or load error: a byte range of the source (0..0 when there
 //! is none) and a sentence.
 
-use alloc::string::String;
 use alloc::format;
+use alloc::string::String;
 
 /// A slice of `s` (empty where the range is not on a boundary).
 fn sub(s: &str, a: usize, b: usize) -> &str {
@@ -63,4 +63,3 @@ impl core::fmt::Display for Error {
 /// compiler couldn't grow): the player refuses the Formula and goes on,
 /// as with any other compile error, instead of aborting.
 pub const NO_MEMORY: &str = "not enough memory for this Formula right now";
-

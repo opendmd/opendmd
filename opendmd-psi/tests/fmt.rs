@@ -14,14 +14,19 @@ fn root() -> PathBuf {
 }
 
 fn psi_files(dir: &Path, out: &mut Vec<(String, String)>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut paths: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).collect();
     paths.sort();
     for p in paths {
         if p.is_dir() {
             psi_files(&p, out);
         } else if p.extension().is_some_and(|x| x == "psi") {
-            out.push((p.display().to_string(), std::fs::read_to_string(&p).unwrap()));
+            out.push((
+                p.display().to_string(),
+                std::fs::read_to_string(&p).unwrap(),
+            ));
         }
     }
 }
@@ -30,15 +35,25 @@ fn psi_files(dir: &Path, out: &mut Vec<(String, String)>) {
 fn corpus() -> Vec<(String, String)> {
     let r = root();
     let mut out = Vec::new();
-    for d in ["formulas", "../opendmd-web/formulas", "../opendmd-web/experiments"] {
+    for d in [
+        "formulas",
+        "../opendmd-web/formulas",
+        "../opendmd-web/experiments",
+    ] {
         psi_files(&r.join(d), &mut out);
     }
     if let Some(g) = std::env::var_os("PSI_GALLERY") {
         psi_files(Path::new(&g), &mut out);
     }
     // The docs' ```psi blocks (errors too: those must keep their error).
-    for doc in ["../docs/psi-for-models.md", "../docs/guide/formulas.md", "../docs/psi-spec.md"] {
-        let Ok(text) = std::fs::read_to_string(r.join(doc)) else { continue };
+    for doc in [
+        "../docs/psi-for-models.md",
+        "../docs/guide/formulas.md",
+        "../docs/psi-spec.md",
+    ] {
+        let Ok(text) = std::fs::read_to_string(r.join(doc)) else {
+            continue;
+        };
         let mut cur: Option<(usize, String)> = None;
         for (k, line) in text.lines().enumerate() {
             match &mut cur {
@@ -91,7 +106,8 @@ fn comments(src: &str) -> Vec<String> {
         let gap = &src[from..a];
         let mut j = 0;
         while j < gap.len() {
-            if matches!(b[from + j], b'-' | b'/') && gap.as_bytes().get(j + 1) == Some(&b[from + j]) {
+            if matches!(b[from + j], b'-' | b'/') && gap.as_bytes().get(j + 1) == Some(&b[from + j])
+            {
                 let end = gap[j..].find('\n').map_or(gap.len(), |k| j + k);
                 all.push(gap[j..end].trim_end().to_string());
                 j = end;
@@ -132,13 +148,27 @@ fn holds_as(what: &str, src: &str, same_error: bool) {
     let (a, b) = (program(src), program(&out));
     match (&a, &b) {
         (Ok(a), Ok(b)) => assert!(a == b, "{what}: another program:\n{out}"),
-        _ if same_error => assert_eq!(a.as_ref().err(), b.as_ref().err(), "{what}: another error:\n{out}"),
-        _ => assert!(a.is_err() && b.is_err(), "{what}: compiles one way only:\n{out}"),
+        _ if same_error => assert_eq!(
+            a.as_ref().err(),
+            b.as_ref().err(),
+            "{what}: another error:\n{out}"
+        ),
+        _ => assert!(
+            a.is_err() && b.is_err(),
+            "{what}: compiles one way only:\n{out}"
+        ),
     }
     assert_eq!(name(&out), name(src), "{what}");
-    assert_eq!(comments(&out), comments(src), "{what}: the comments changed:\n{out}");
+    assert_eq!(
+        comments(&out),
+        comments(src),
+        "{what}: the comments changed:\n{out}"
+    );
     let again = format(&out).unwrap();
-    assert_eq!(again, out, "{what}: formatting twice is not formatting once");
+    assert_eq!(
+        again, out,
+        "{what}: formatting twice is not formatting once"
+    );
     assert!(out.ends_with('\n') || out.is_empty(), "{what}");
     for l in out.lines() {
         assert_eq!(l, l.trim_end(), "{what}: a line ends in spaces:\n{out}");
@@ -166,7 +196,10 @@ fn every_formula_formats_to_the_same_program() {
 #[test]
 fn every_prefix_formats_or_is_refused() {
     for (what, src) in corpus().iter().take(60) {
-        let cut: Vec<usize> = (0..=src.len()).filter(|&k| src.is_char_boundary(k)).step_by(7).collect();
+        let cut: Vec<usize> = (0..=src.len())
+            .filter(|&k| src.is_char_boundary(k))
+            .step_by(7)
+            .collect();
         for k in cut {
             holds_as(&format!("{what} [..{k}]"), &src[..k], false);
         }
@@ -239,18 +272,28 @@ fn ws(r: &mut Rng, inside: bool) -> String {
 
 /// An expression of depth ≤ `d`, brackets only where needed or at random.
 fn expr(r: &mut Rng, d: u32, inside: bool) -> String {
-    const LEAVES: &[&str] = &["x", "y", "px", "t", "a", "0.5", "3", ".25", "w", "cx", "r", "'A'"];
+    const LEAVES: &[&str] = &[
+        "x", "y", "px", "t", "a", "0.5", "3", ".25", "w", "cx", "r", "'A'",
+    ];
     if d == 0 || r.below(4) == 0 {
         return LEAVES[r.below(LEAVES.len())].into();
     }
     let s = |r: &mut Rng| ws(r, inside);
     match r.below(9) {
         0..=3 => {
-            let op = ["+", "-", "*", "/", "%", "<", ">=", "==", "!=", "and", "or", "&&"][r.below(12)];
+            let op = [
+                "+", "-", "*", "/", "%", "<", ">=", "==", "!=", "and", "or", "&&",
+            ][r.below(12)];
             let (a, b) = (expr(r, d - 1, inside), expr(r, d - 1, inside));
             let (l, rr) = (s(r), s(r));
             // Words need a space; `- -` and `/ /` would be a comment.
-            let gap = |g: String| if g.is_empty() && (op.len() > 1 || op == "-" || op == "/") { " ".into() } else { g };
+            let gap = |g: String| {
+                if g.is_empty() && (op.len() > 1 || op == "-" || op == "/") {
+                    " ".into()
+                } else {
+                    g
+                }
+            };
             if r.below(2) == 0 {
                 format!("({a}{}{op}{}{b})", gap(l), gap(rr))
             } else {
@@ -258,10 +301,25 @@ fn expr(r: &mut Rng, d: u32, inside: bool) -> String {
             }
         }
         4 => format!("-{}", expr(r, d - 1, inside).replace("--", "- -")),
-        5 => format!("({} ? {} : {})", expr(r, d - 1, true), expr(r, d - 1, true), expr(r, d - 1, true)),
+        5 => format!(
+            "({} ? {} : {})",
+            expr(r, d - 1, true),
+            expr(r, d - 1, true),
+            expr(r, d - 1, true)
+        ),
         6 => format!("sin({}{})", s(r), expr(r, d - 1, true)),
-        7 => format!("min({},{}{})", expr(r, d - 1, true), s(r), expr(r, d - 1, true)),
-        _ => format!("mix({}, {}, {})", expr(r, d - 1, true), expr(r, d - 1, true), expr(r, d - 1, true)),
+        7 => format!(
+            "min({},{}{})",
+            expr(r, d - 1, true),
+            s(r),
+            expr(r, d - 1, true)
+        ),
+        _ => format!(
+            "mix({}, {}, {})",
+            expr(r, d - 1, true),
+            expr(r, d - 1, true),
+            expr(r, d - 1, true)
+        ),
     }
 }
 
@@ -274,18 +332,36 @@ fn random_formulas_format_to_the_same_program() {
         if r.below(3) == 0 {
             src.push_str("-- a random one\n");
         }
-        src.push_str(&format!("loop {}{}", 1 + k % 9, if r.below(2) == 0 { "; " } else { "\n" }));
+        src.push_str(&format!(
+            "loop {}{}",
+            1 + k % 9,
+            if r.below(2) == 0 { "; " } else { "\n" }
+        ));
         let n = 1 + r.below(3);
         for j in 0..n {
             let e = expr(&mut r, 4, false);
-            src.push_str(&format!("{}v{j}{}={}{e}", " ".repeat(r.below(3)), ws(&mut r, false), ws(&mut r, false)));
-            src.push_str(if r.below(4) == 0 { "   -- after\n" } else if r.below(3) == 0 { ";" } else { "\n" });
+            src.push_str(&format!(
+                "{}v{j}{}={}{e}",
+                " ".repeat(r.below(3)),
+                ws(&mut r, false),
+                ws(&mut r, false)
+            ));
+            src.push_str(if r.below(4) == 0 {
+                "   -- after\n"
+            } else if r.below(3) == 0 {
+                ";"
+            } else {
+                "\n"
+            });
             if r.below(5) == 0 {
                 src.push('\n');
             }
         }
         if r.below(2) == 0 {
-            src.push_str(&format!("layer add {{\n   u = v0*{}\n gray(u)\n}}\n", expr(&mut r, 2, false)));
+            src.push_str(&format!(
+                "layer add {{\n   u = v0*{}\n gray(u)\n}}\n",
+                expr(&mut r, 2, false)
+            ));
         } else {
             src.push_str(&format!("hsv(v0,1,{})\n", expr(&mut r, 2, true)));
         }

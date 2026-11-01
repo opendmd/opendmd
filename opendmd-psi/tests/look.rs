@@ -62,7 +62,12 @@ fn under() -> Vec<u8> {
 #[test]
 fn the_look_line_is_the_composition() {
     let u = under();
-    for (src, b, k) in [(PLASMA, "screen", 40), (FIRE, "over", 30), (PLASMA, "multiply", 100), (OLD_PHOTO, "min", 5)] {
+    for (src, b, k) in [
+        (PLASMA, "screen", 40),
+        (FIRE, "over", 30),
+        (PLASMA, "multiply", 100),
+        (OLD_PHOTO, "min", 5),
+    ] {
         let p = compose(src, b, k).unwrap();
         let line = opendmd_psi::look::set(src, b, k).unwrap();
         let mut q = Program::default();
@@ -70,12 +75,19 @@ fn the_look_line_is_the_composition() {
         assert!(frame_of(&p, 700, &u) == frame_of(&q, 700, &u), "{b} {k}");
     }
     // Clamped to 100; not a blend.
-    let (p, q) = (compose(PLASMA, "min", 250).unwrap(), compose(PLASMA, "min", 100).unwrap());
+    let (p, q) = (
+        compose(PLASMA, "min", 250).unwrap(),
+        compose(PLASMA, "min", 100).unwrap(),
+    );
     assert!(frame_of(&p, 0, &u) == frame_of(&q, 0, &u));
     assert!(compose(PLASMA, "lighten", 40).is_err(), "not a blend");
     assert!(compose("gray(", "screen", 40).is_err(), "does not compile");
     // One that never repeats: so does its look.
-    assert!(compose("loop forever\ngray(frac(t*0.15 + x))", "screen", 40).unwrap().forever());
+    assert!(
+        compose("loop forever\ngray(frac(t*0.15 + x))", "screen", 40)
+            .unwrap()
+            .forever()
+    );
 }
 
 #[test]
@@ -96,7 +108,11 @@ fn every_composition_compiles_to_a_look() {
                 // of a formula that covers it (the player refuses that one).
                 let covers = b == "over" && k == 100 && src != OLD_PHOTO;
                 assert_eq!(p.over(), !covers, "{b} {k} {src:.20}");
-                assert_eq!(p.loop_ms(), compile(src).unwrap().loop_ms(), "the formula's loop");
+                assert_eq!(
+                    p.loop_ms(),
+                    compile(src).unwrap().loop_ms(),
+                    "the formula's loop"
+                );
             }
         }
     }
@@ -106,7 +122,11 @@ fn every_composition_compiles_to_a_look() {
     // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit;
     // ~6.7 ms once its waves of x are worked out once a column; ~5.9 with
     // the narrowed steps.)
-    assert!((5_000..12_000).contains(&p.esp32_us()), "{} µs", p.esp32_us());
+    assert!(
+        (5_000..12_000).contains(&p.esp32_us()),
+        "{} µs",
+        p.esp32_us()
+    );
     // A formula with layers goes over only.
     let e = compose(SCANLINES, "screen", 40).unwrap_err();
     assert!(e.msg.contains("with layers goes over"), "{}", e.msg);

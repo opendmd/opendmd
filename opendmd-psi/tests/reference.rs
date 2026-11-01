@@ -16,7 +16,9 @@ use opendmd_psi::{compile, render_rows_ink, Ink, Inputs, Program, Scratch, H, OW
 use std::path::PathBuf;
 
 fn root(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(rel)
 }
 
 /// The web app's sample picture (js/psikit.js `sample`, as psi-check's):
@@ -31,7 +33,11 @@ fn picture() -> Vec<u8> {
         } else if (x - 98.0).powi(2) + 1.5 * (y - 10.0).powi(2) < 50.0 {
             [255, 215, 80]
         } else {
-            [(40 + yi * 6) as u8, (60 + yi * 4) as u8, (170 - yi * 3) as u8]
+            [
+                (40 + yi * 6) as u8,
+                (60 + yi * 4) as u8,
+                (170 - yi * 3) as u8,
+            ]
         };
         p[i * 3..i * 3 + 3].copy_from_slice(&c);
     }
@@ -47,7 +53,15 @@ fn lit(p: &Program) -> usize {
     let [a, b, c] = p.meta().values([None, None, None]);
     let mut best = 0;
     for ms in [0u64, 400, 1000, 1700, 2600, 3900] {
-        let mut inputs = Inputs { hour: 10, minute: 30, second: 45, a, b, c, ..Inputs::default() };
+        let mut inputs = Inputs {
+            hour: 10,
+            minute: 30,
+            second: 45,
+            a,
+            b,
+            c,
+            ..Inputs::default()
+        };
         inputs.set_ms(p, ms);
         let mut s = Scratch::<128>::new();
         let mut ink = Ink::boxed();
@@ -62,7 +76,10 @@ fn lit(p: &Program) -> usize {
             u32::MAX,
             &mut out,
         );
-        let n = out.chunks(3).filter(|px| px[0] as u32 + px[1] as u32 + px[2] as u32 > 90).count();
+        let n = out
+            .chunks(3)
+            .filter(|px| px[0] as u32 + px[1] as u32 + px[2] as u32 > 90)
+            .count();
         best = best.max(n);
     }
     best
@@ -70,25 +87,45 @@ fn lit(p: &Program) -> usize {
 
 #[test]
 fn every_cheat_sheet_row_has_an_example_and_every_example_a_row() {
-    let rows: Vec<&str> = [cheat::VARS, cheat::FUNCS, cheat::DRAW, cheat::COLS, cheat::DECLS]
-        .iter()
-        .flat_map(|r| r.iter().map(|e| e.0))
-        .collect();
+    let rows: Vec<&str> = [
+        cheat::VARS,
+        cheat::FUNCS,
+        cheat::DRAW,
+        cheat::COLS,
+        cheat::DECLS,
+    ]
+    .iter()
+    .flat_map(|r| r.iter().map(|e| e.0))
+    .collect();
     for row in &rows {
-        assert_eq!(EXAMPLES.iter().filter(|e| e.0 == *row).count(), 1, "the cheat-sheet row `{row}` needs one example");
+        assert_eq!(
+            EXAMPLES.iter().filter(|e| e.0 == *row).count(),
+            1,
+            "the cheat-sheet row `{row}` needs one example"
+        );
     }
     for (row, _) in EXAMPLES {
-        assert!(rows.contains(row), "the example for `{row}` is for no cheat-sheet row");
+        assert!(
+            rows.contains(row),
+            "the example for `{row}` is for no cheat-sheet row"
+        );
     }
 }
 
 #[test]
 fn every_example_compiles_and_lights_the_panel() {
     for (row, src) in EXAMPLES {
-        let p = compile(src).unwrap_or_else(|e| panic!("the example for `{row}` fails: {}\n{src}", e.msg));
+        let p = compile(src)
+            .unwrap_or_else(|e| panic!("the example for `{row}` fails: {}\n{src}", e.msg));
         let n = lit(&p);
-        assert!(n >= 24, "the example for `{row}` lights only {n} pixels\n{src}");
-        assert!(!src.contains('`') && !src.contains('\t'), "the example for `{row}`: no backticks or tabs");
+        assert!(
+            n >= 24,
+            "the example for `{row}` lights only {n} pixels\n{src}"
+        );
+        assert!(
+            !src.contains('`') && !src.contains('\t'),
+            "the example for `{row}`: no backticks or tabs"
+        );
     }
 }
 
@@ -98,9 +135,18 @@ fn every_errors_help_gives_its_code_and_its_fix_works() {
     for h in HELP {
         assert!(h.code > last, "HELP is ascending ({})", h.code);
         last = h.code;
-        assert!(errors::doc(h.code).is_some(), "help for {} which is not a code", errors::label(h.code));
+        assert!(
+            errors::doc(h.code).is_some(),
+            "help for {} which is not a code",
+            errors::label(h.code)
+        );
         assert!(!INTERNAL.contains(&h.code));
-        assert_eq!(h.before.is_empty(), h.after.is_empty(), "{}: a before needs an after", errors::label(h.code));
+        assert_eq!(
+            h.before.is_empty(),
+            h.after.is_empty(),
+            "{}: a before needs an after",
+            errors::label(h.code)
+        );
         if h.before.is_empty() {
             continue;
         }
@@ -108,12 +154,34 @@ fn every_errors_help_gives_its_code_and_its_fix_works() {
             Ok(_) => panic!("{}'s before compiles:\n{}", errors::label(h.code), h.before),
             Err(e) => e,
         };
-        assert_eq!(code_of(&e.msg), Some(h.code), "{}'s before fails with another error: {}", errors::label(h.code), e.msg);
+        assert_eq!(
+            code_of(&e.msg),
+            Some(h.code),
+            "{}'s before fails with another error: {}",
+            errors::label(h.code),
+            e.msg
+        );
         // (The same with the line end the page's copy has.)
         let e2 = compile(&format!("{}\n", h.before)).err().map(|e| e.msg);
-        assert_eq!(e2.as_deref().and_then(code_of), Some(h.code), "{}'s before, with a line end", errors::label(h.code));
-        let p = compile(h.after).unwrap_or_else(|e| panic!("{}'s after fails: {}\n{}", errors::label(h.code), e.msg, h.after));
-        assert!(lit(&p) > 0, "{}'s after draws nothing", errors::label(h.code));
+        assert_eq!(
+            e2.as_deref().and_then(code_of),
+            Some(h.code),
+            "{}'s before, with a line end",
+            errors::label(h.code)
+        );
+        let p = compile(h.after).unwrap_or_else(|e| {
+            panic!(
+                "{}'s after fails: {}\n{}",
+                errors::label(h.code),
+                e.msg,
+                h.after
+            )
+        });
+        assert!(
+            lit(&p) > 0,
+            "{}'s after draws nothing",
+            errors::label(h.code)
+        );
     }
     for c in INTERNAL {
         assert!(errors::doc(*c).is_some(), "internal code {c} is not a code");
@@ -125,13 +193,19 @@ fn every_errors_help_gives_its_code_and_its_fix_works() {
 /// with).
 fn cookbook(text: &str) -> Vec<(usize, String, Option<String>)> {
     let lines: Vec<&str> = text.lines().collect();
-    let a = lines.iter().position(|l| *l == "## Cookbook").expect("docs/psi-spec.md has a `## Cookbook`");
+    let a = lines
+        .iter()
+        .position(|l| *l == "## Cookbook")
+        .expect("docs/psi-spec.md has a `## Cookbook`");
     let mut out = Vec::new();
     let mut mark: Option<String> = None;
     let mut k = a + 1;
     while k < lines.len() && !lines[k].starts_with("## ") {
         let l = lines[k];
-        if let Some(stem) = l.strip_prefix("<!-- psi-gallery: ").and_then(|r| r.strip_suffix(" -->")) {
+        if let Some(stem) = l
+            .strip_prefix("<!-- psi-gallery: ")
+            .and_then(|r| r.strip_suffix(" -->"))
+        {
             mark = Some(stem.to_string());
         } else if l == "```psi" {
             let start = k + 1;
@@ -153,7 +227,11 @@ fn gallery(stem: &str) -> String {
     let text = std::fs::read_to_string(root(&format!("opendmd-web/formulas/{stem}.psi"))).unwrap();
     let body: Vec<&str> = text
         .lines()
-        .skip_while(|l| l.starts_with("-- author:") || l.starts_with("-- licence:") || l.starts_with("-- bundle"))
+        .skip_while(|l| {
+            l.starts_with("-- author:")
+                || l.starts_with("-- licence:")
+                || l.starts_with("-- bundle")
+        })
         .collect();
     body.join("\n")
 }
@@ -163,7 +241,11 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
     let path = root("docs/psi-spec.md");
     let mut text = std::fs::read_to_string(&path).unwrap();
     let blocks = cookbook(&text);
-    assert!(blocks.len() >= 7, "the cookbook has {} recipes", blocks.len());
+    assert!(
+        blocks.len() >= 7,
+        "the cookbook has {} recipes",
+        blocks.len()
+    );
     let mut stale = Vec::new();
     for (line, src, mark) in &blocks {
         if let Some(stem) = mark {
@@ -173,9 +255,17 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
                 continue;
             }
         }
-        let p = compile(src).unwrap_or_else(|e| panic!("docs/psi-spec.md line {line}: the recipe fails: {}", e.msg));
-        assert!(lit(&p) >= 24, "docs/psi-spec.md line {line}: the recipe lights almost nothing");
-        assert!(src.lines().any(|l| l.starts_with("name \"")), "docs/psi-spec.md line {line}: give the recipe a `name` line");
+        let p = compile(src).unwrap_or_else(|e| {
+            panic!("docs/psi-spec.md line {line}: the recipe fails: {}", e.msg)
+        });
+        assert!(
+            lit(&p) >= 24,
+            "docs/psi-spec.md line {line}: the recipe lights almost nothing"
+        );
+        assert!(
+            src.lines().any(|l| l.starts_with("name \"")),
+            "docs/psi-spec.md line {line}: give the recipe a `name` line"
+        );
     }
     if stale.is_empty() {
         return;
@@ -184,7 +274,9 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
         panic!("the cookbook's copy of {} is not the gallery's: PSI_BLESS=1 cargo test --features docs --test reference", stale[0].2);
     }
     for (have, want, stem) in stale {
-        let at = text.find(&format!("<!-- psi-gallery: {stem} -->\n```psi\n")).unwrap();
+        let at = text
+            .find(&format!("<!-- psi-gallery: {stem} -->\n```psi\n"))
+            .unwrap();
         text = format!("{}{}", &text[..at], text[at..].replacen(&have, &want, 1));
     }
     std::fs::write(&path, text).unwrap();

@@ -33,7 +33,9 @@
 
 use crate::fixed;
 use crate::meta::Meta;
-use crate::program::{code, Op, Program, LANE, L_REG0, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, S_FIRST_FREE, WIDE};
+use crate::program::{
+    code, Op, Program, LANE, L_REG0, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, S_FIRST_FREE, WIDE,
+};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -74,9 +76,14 @@ pub fn encode(name: &str, play: &Program, look: Option<&Program>) -> Vec<u8> {
     let mut o = Vec::with_capacity(1024);
     o.extend_from_slice(MAGIC);
     o.push(ABI);
-    let meta = *play.meta() != Meta::default() || look.is_some_and(|l| *l.meta() != Meta::default());
+    let meta =
+        *play.meta() != Meta::default() || look.is_some_and(|l| *l.meta() != Meta::default());
     o.push(if look.is_some() { F_LOOK } else { 0 } | if meta { F_META } else { 0 });
-    let cut = name.char_indices().nth(60).map_or(name.len(), |(i, _)| i).min(MAX_NAME);
+    let cut = name
+        .char_indices()
+        .nth(60)
+        .map_or(name.len(), |(i, _)| i)
+        .min(MAX_NAME);
     o.push(cut as u8);
     o.extend_from_slice(&name.as_bytes()[..cut]);
     put_program(&mut o, play, meta);
@@ -113,7 +120,10 @@ fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
         })
         .map_or(0, |j| j + 1);
     let top = MAX_TABLE - 32 * pals;
-    let lo = p.tables[..top].iter().rposition(|&v| v != 0).map_or(0, |k| k + 1);
+    let lo = p.tables[..top]
+        .iter()
+        .rposition(|&v| v != 0)
+        .map_or(0, |k| k + 1);
     o.extend_from_slice(&(lo as u16).to_le_bytes());
     o.push(pals as u8);
     for v in p.tables[..lo].iter().chain(&p.tables[top..]) {
@@ -147,7 +157,10 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], Refusal> {
-        let s = self.b.get(self.at..self.at.checked_add(n).ok_or(NOT_PSB)?).ok_or(NOT_PSB)?;
+        let s = self
+            .b
+            .get(self.at..self.at.checked_add(n).ok_or(NOT_PSB)?)
+            .ok_or(NOT_PSB)?;
         self.at += n;
         Ok(s)
     }
@@ -299,14 +312,22 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
     let mut m = Meta::default();
     if flags & F_META == 0 {
         prog.meta = m;
-        return if r.at == body.len() { Ok(()) } else { Err(NOT_PSB) };
+        return if r.at == body.len() {
+            Ok(())
+        } else {
+            Err(NOT_PSB)
+        };
     }
     for k in 0..3 {
         m.kind[k] = r.u8()?;
     }
     m.look = r.u8()?;
     m.amount = r.u8()?;
-    for v in m.lo.iter_mut().chain(m.hi.iter_mut()).chain(m.def.iter_mut()) {
+    for v in
+        m.lo.iter_mut()
+            .chain(m.hi.iter_mut())
+            .chain(m.def.iter_mut())
+    {
         *v = r.i32()?;
     }
     prog.meta = m;
@@ -382,7 +403,11 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         }
         if c == TURN {
             // The row section's last steps only.
-            if p.ops[k + 1..re].iter().any(|o| o.code != TURN) || op.d > 2 || op.b > 7 || !scalar(op.a) {
+            if p.ops[k + 1..re].iter().any(|o| o.code != TURN)
+                || op.d > 2
+                || op.b > 7
+                || !scalar(op.a)
+            {
                 return bad;
             }
             continue;
@@ -390,7 +415,11 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         if is_wide(c) {
             let (wide_out, n, w) = wide_ops(c);
             for (i, &v) in [op.a, op.b, op.c].iter().take(n).enumerate() {
-                let ok = if w & (1 << i) != 0 { (v as usize) < WIDE } else { scalar(v) };
+                let ok = if w & (1 << i) != 0 {
+                    (v as usize) < WIDE
+                } else {
+                    scalar(v)
+                };
                 if !ok {
                     return bad;
                 }
@@ -402,7 +431,10 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             } else {
                 scalar(op.d)
             };
-            if !d_ok || (c == W_CMP && !(LT..=NE).contains(&op.c)) || (c == W_MINMAX && !matches!(op.c, MIN | MAX)) {
+            if !d_ok
+                || (c == W_CMP && !(LT..=NE).contains(&op.c))
+                || (c == W_MINMAX && !matches!(op.c, MIN | MAX))
+            {
                 return bad;
             }
             continue;
@@ -418,7 +450,13 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 }
                 // Its END.
                 let e = op.b as usize;
-                if e <= k || e >= de || p.ops[e].code != END || p.ops[e].a != op.d || p.ops[e].b != op.a || p.ops[e].c as usize != k + 1 {
+                if e <= k
+                    || e >= de
+                    || p.ops[e].code != END
+                    || p.ops[e].a != op.d
+                    || p.ops[e].b != op.a
+                    || p.ops[e].c as usize != k + 1
+                {
                     return bad;
                 }
                 fors[depth] = k;
@@ -433,7 +471,10 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 continue;
             }
             LINE_FROM => {
-                if line_open || ![op.a, op.b, op.c].iter().all(|&v| scalar(v)) || p.ops.get(k + 1).map(|o| o.code) != Some(LINE_TO) {
+                if line_open
+                    || ![op.a, op.b, op.c].iter().all(|&v| scalar(v))
+                    || p.ops.get(k + 1).map(|o| o.code) != Some(LINE_TO)
+                {
                     return bad;
                 }
                 line_open = true;
@@ -453,7 +494,9 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 continue;
             }
             PAINT => {
-                if op.d > crate::program::paint::LAST || ![op.a, op.b, op.c].iter().all(|&v| scalar(v)) {
+                if op.d > crate::program::paint::LAST
+                    || ![op.a, op.b, op.c].iter().all(|&v| scalar(v))
+                {
                     return bad;
                 }
                 continue;
@@ -478,13 +521,20 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 continue;
             }
             PALIDX => {
-                if !scalar(op.a) || !scalar(op.d) || op.d < S_FIRST_FREE || op.b as usize + 32 > crate::program::MAX_PAINT {
+                if !scalar(op.a)
+                    || !scalar(op.d)
+                    || op.d < S_FIRST_FREE
+                    || op.b as usize + 32 > crate::program::MAX_PAINT
+                {
                     return bad;
                 }
                 continue;
             }
             SLOW => {
-                if !(2..=crate::rate::MAX_RATE as u8).contains(&op.d) || k + 1 + op.a as usize > pe || op.c & !15 != 0 {
+                if !(2..=crate::rate::MAX_RATE as u8).contains(&op.d)
+                    || k + 1 + op.a as usize > pe
+                    || op.c & !15 != 0
+                {
                     return bad;
                 }
                 continue;
@@ -502,7 +552,9 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 continue;
             }
             COLUMN => {
-                if k + 1 + op.a as usize > pe || p.ops[re..pe].iter().filter(|o| o.code == COLUMN).count() != 1 {
+                if k + 1 + op.a as usize > pe
+                    || p.ops[re..pe].iter().filter(|o| o.code == COLUMN).count() != 1
+                {
                     return bad;
                 }
                 continue;
@@ -542,7 +594,10 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             }
             PICK => {
                 let (b, n) = (op.b as usize, op.c as usize);
-                if n == 0 || b + n > ns || p.init[b..b + n].iter().any(|&s| s < 0 || s as usize >= ns) {
+                if n == 0
+                    || b + n > ns
+                    || p.init[b..b + n].iter().any(|&s| s < 0 || s as usize >= ns)
+                {
                     return bad;
                 }
             }
@@ -555,7 +610,9 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             let (kind, _) = colour_parts(c);
             if kind == OUT_PAL {
                 let shift = (op.d >> PAL_SHIFT) & 15;
-                if op.d & PAL_SCALED == 0 && op.d & !crate::program::code::PAL_MASK != 0 || shift > 16 {
+                if op.d & PAL_SCALED == 0 && op.d & !crate::program::code::PAL_MASK != 0
+                    || shift > 16
+                {
                     return bad;
                 }
             }
@@ -599,7 +656,9 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 if colours == 0
                     || colours != op.b as usize
                     || !run.last().is_some_and(|o| is_colour(o.code))
-                    || !p.ops[k + 1 + op.a as usize..pe].iter().any(|o| is_colour(o.code))
+                    || !p.ops[k + 1 + op.a as usize..pe]
+                        .iter()
+                        .any(|o| is_colour(o.code))
                 {
                     return bad;
                 }
@@ -631,7 +690,10 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         .map(|&k| k + 1 + p.ops[k].a as usize)
         .max()
         .unwrap_or(0);
-    if p.ops[p.fast_start()..runs_end.max(p.fast_start())].iter().any(|o| is_colour(o.code)) {
+    if p.ops[p.fast_start()..runs_end.max(p.fast_start())]
+        .iter()
+        .any(|o| is_colour(o.code))
+    {
         return bad;
     }
     // Nothing but values between the slow layers (or the row steps) and the
@@ -689,7 +751,10 @@ pub fn to_base64(b: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut s = String::with_capacity(b.len() * 4 / 3 + 3);
     for ch in b.chunks(3) {
-        let n = ch.iter().enumerate().fold(0u32, |n, (i, &v)| n | (v as u32) << (16 - 8 * i));
+        let n = ch
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &v)| n | (v as u32) << (16 - 8 * i));
         for i in 0..=ch.len() {
             s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
         }
@@ -745,11 +810,18 @@ pub(crate) mod fuzz {
             v.push((n.into(), s.into()));
         }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../opendmd-web/formulas");
-        let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
         files.sort();
         for f in files {
             if f.extension().is_some_and(|e| e == "psi") {
-                v.push((f.file_stem().unwrap().to_string_lossy().into(), std::fs::read_to_string(&f).unwrap()));
+                v.push((
+                    f.file_stem().unwrap().to_string_lossy().into(),
+                    std::fs::read_to_string(&f).unwrap(),
+                ));
             }
         }
         v
@@ -798,7 +870,10 @@ mod tests {
             let b = crate::build(&src).unwrap_or_else(|e| panic!("{name}: {}", e.render(&src)));
             let mut p = Program::default();
             load_into(&b, Which::Play, &mut p).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert!(p == compile(&src).unwrap(), "{name}: loaded program differs");
+            assert!(
+                p == compile(&src).unwrap(),
+                "{name}: loaded program differs"
+            );
             let mut l = Program::default();
             load_into(&b, Which::Look, &mut l).unwrap();
             match p.meta().look() {
@@ -832,12 +907,37 @@ mod tests {
         golden::picture(&mut under);
         for m in [ms, ms + 20] {
             let mut out = alloc::vec![0u8; W * H * 3];
-            render_rows_still::<128>(p, &mut s, Some(&mut ink), Some(&mut st), &golden::inputs(m), &crate::tables::OWN, Some(&under), u32::MAX, &mut out);
+            render_rows_still::<128>(
+                p,
+                &mut s,
+                Some(&mut ink),
+                Some(&mut st),
+                &golden::inputs(m),
+                &crate::tables::OWN,
+                Some(&under),
+                u32::MAX,
+                &mut out,
+            );
         }
         let mut s = Scratch::<64>::new();
         let mut out = alloc::vec![0u8; W * H * 3];
-        crate::render_rows_ink::<64>(p, &mut s, Some(&mut ink), &golden::inputs(ms), &crate::tables::OWN, None, u32::MAX, &mut out);
-        let _ = (p.esp32_us(), p.esp32_us_still(), p.esp32_us_jit(), p.rate_rows(), p.primitives());
+        crate::render_rows_ink::<64>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            &golden::inputs(ms),
+            &crate::tables::OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+        let _ = (
+            p.esp32_us(),
+            p.esp32_us_still(),
+            p.esp32_us_jit(),
+            p.rate_rows(),
+            p.primitives(),
+        );
     }
 
     /// Damaged bytes are refused or play without a panic: the VM, the

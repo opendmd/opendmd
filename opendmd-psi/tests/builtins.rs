@@ -12,7 +12,9 @@ use opendmd_psi::builtins::{self, cheat};
 use std::path::PathBuf;
 
 fn www(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../opendmd-web/www").join(rel)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../opendmd-web/www")
+        .join(rel)
 }
 
 const HOW: &str = "generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins";
@@ -27,7 +29,11 @@ fn highlighter() -> String {
         .chain(builtins::PRIMITIVES)
         .chain(["ink"])
         .collect();
-    let draws: Vec<&str> = builtins::PRIMITIVES.iter().copied().chain(["ink"]).collect();
+    let draws: Vec<&str> = builtins::PRIMITIVES
+        .iter()
+        .copied()
+        .chain(["ink"])
+        .collect();
     format!(
         "// psi-builtins: highlighter ({HOW})\nconst WORDS = /^({})$/, DRAWS = /^({})$/, DECLS = /^({})$/;\n// psi-builtins end\n",
         words.join("|"),
@@ -135,7 +141,10 @@ fn example_cell(src: &str) -> String {
 }
 
 fn code_list(v: &[&str]) -> String {
-    v.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+    v.iter()
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Every name the language knows, by kind.
@@ -148,8 +157,15 @@ fn spec_names() -> String {
             _ => format!("`{n}` ({arity})"),
         })
         .collect();
-    let colours: Vec<String> = builtins::COLOURS.iter().map(|(n, k, _)| format!("`{n}` ({k})")).collect();
-    let values: Vec<&str> = builtins::INPUTS.iter().map(|e| e.0).chain(["seed"]).collect();
+    let colours: Vec<String> = builtins::COLOURS
+        .iter()
+        .map(|(n, k, _)| format!("`{n}` ({k})"))
+        .collect();
+    let values: Vec<&str> = builtins::INPUTS
+        .iter()
+        .map(|e| e.0)
+        .chain(["seed"])
+        .collect();
     let consts: Vec<&str> = builtins::CONSTS.iter().map(|e| e.0).collect();
     let pals: Vec<&str> = builtins::PALETTES.iter().map(|e| e.0).collect();
     let fonts: Vec<&str> = builtins::FONTS.iter().map(|e| e.0).collect();
@@ -161,14 +177,20 @@ fn spec_names() -> String {
         ("values about the middle", code_list(&builtins::LATER)),
         ("constants", code_list(&consts)),
         ("functions (how many values)", funcs.join(", ")),
-        ("colours (how many values, before the coverage)", colours.join(", ")),
+        (
+            "colours (how many values, before the coverage)",
+            colours.join(", "),
+        ),
         ("palettes", code_list(&pals)),
         ("fonts", code_list(&fonts)),
         ("blends", code_list(&blends)),
         ("keywords", code_list(&builtins::KEYWORDS)),
         ("drawing", code_list(&builtins::PRIMITIVES)),
         ("declarations", code_list(&builtins::DECLARATIONS)),
-        ("words that are keywords in one place only", code_list(&builtins::CONTEXT_WORDS)),
+        (
+            "words that are keywords in one place only",
+            code_list(&builtins::CONTEXT_WORDS),
+        ),
     ] {
         s.push_str(&format!("| {kind} | {} |\n", cell(&names)));
     }
@@ -191,10 +213,18 @@ fn spec_reference() -> String {
         ("Colours", cheat::COLS),
         ("Declarations", cheat::DECLS),
     ] {
-        s.push_str(&format!("\n#### {title}\n\n| write | what it does | example |\n| --- | --- | --- |\n"));
+        s.push_str(&format!(
+            "\n#### {title}\n\n| write | what it does | example |\n| --- | --- | --- |\n"
+        ));
         for (what, does, _) in rows {
-            let ex = opendmd_psi::reference::example(what).expect("every row has an example (tests/reference.rs)");
-            s.push_str(&format!("| `{}` | {} | {} |\n", cell(what), cell(does), example_cell(ex)));
+            let ex = opendmd_psi::reference::example(what)
+                .expect("every row has an example (tests/reference.rs)");
+            s.push_str(&format!(
+                "| `{}` | {} | {} |\n",
+                cell(what),
+                cell(does),
+                example_cell(ex)
+            ));
         }
     }
     s.push_str("<!-- psi-builtins end -->\n");
@@ -216,19 +246,43 @@ fn spec_limits() -> String {
         o
     };
     let rows = [
-        ("a formula's text, comments included", format!("{} characters", n(p::MAX_SOURCE))),
-        ("steps (per frame, per row, per pixel, and one per layer)", n(p::MAX_OPS)),
+        (
+            "a formula's text, comments included",
+            format!("{} characters", n(p::MAX_SOURCE)),
+        ),
+        (
+            "steps (per frame, per row, per pixel, and one per layer)",
+            n(p::MAX_OPS),
+        ),
         ("values held a pixel at once", n(p::REGS)),
-        ("constants and per-frame and per-row values held at once", n(p::MAX_SCALARS)),
-        ("nesting of brackets, operators and function calls", n(p::MAX_DEPTH)),
-        ("`table`, `sprite` and `palette` numbers, in all", n(p::MAX_TABLE)),
+        (
+            "constants and per-frame and per-row values held at once",
+            n(p::MAX_SCALARS),
+        ),
+        (
+            "nesting of brackets, operators and function calls",
+            n(p::MAX_DEPTH),
+        ),
+        (
+            "`table`, `sprite` and `palette` numbers, in all",
+            n(p::MAX_TABLE),
+        ),
         ("loop turns a frame in `draw { }`", n(p::TURNS as usize)),
         ("lines and dots a frame", n(p::PRIMITIVES as usize)),
         ("line steps a frame", n(p::FRAME_STEPS as usize)),
         ("`layer rate N`", format!("N from 2 to {}", p::MAX_RATE)),
-        ("`name` / `about` / a control's label", format!("{} / {} / {} characters", p::MAX_NAME_TEXT, p::MAX_ABOUT_TEXT, p::MAX_LABEL_TEXT)),
+        (
+            "`name` / `about` / a control's label",
+            format!(
+                "{} / {} / {} characters",
+                p::MAX_NAME_TEXT,
+                p::MAX_ABOUT_TEXT,
+                p::MAX_LABEL_TEXT
+            ),
+        ),
     ];
-    let mut s = format!("<!-- psi-builtins: limits ({MD_HOW}) -->\n| limit | at most |\n| --- | --- |\n");
+    let mut s =
+        format!("<!-- psi-builtins: limits ({MD_HOW}) -->\n| limit | at most |\n| --- | --- |\n");
     for (what, v) in rows {
         s.push_str(&format!("| {what} | {v} |\n"));
     }
@@ -240,10 +294,14 @@ fn spec_limits() -> String {
 /// with `<!-- psi-builtins: <what> (` and ends after `<!-- psi-builtins
 /// end -->`'s line, replaced by `want` under PSI_BLESS.
 fn check_md_block(doc: &str, what: &str, want: &str) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(doc);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(doc);
     let text = std::fs::read_to_string(&path).unwrap();
     let head = format!("<!-- psi-builtins: {what} (");
-    let start = text.find(&head).unwrap_or_else(|| panic!("{doc}: no `{head}` block"));
+    let start = text
+        .find(&head)
+        .unwrap_or_else(|| panic!("{doc}: no `{head}` block"));
     let end_mark = "<!-- psi-builtins end -->\n";
     let end = start + text[start..].find(end_mark).expect("block end") + end_mark.len();
     if &text[start..end] == want {
@@ -266,23 +324,45 @@ fn the_reference_pages_tables_are_the_tables() {
 /// The reference's grammar is psi-for-models.md's, word for word.
 #[test]
 fn the_reference_pages_grammar_is_the_models() {
-    let read = |doc: &str| std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(doc)).unwrap();
+    let read = |doc: &str| {
+        std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(doc),
+        )
+        .unwrap()
+    };
     let grammar = |text: &str| -> String {
-        let a = text.find("```text\nformula   =").expect("the grammar block");
+        let a = text
+            .find("```text\nformula   =")
+            .expect("the grammar block");
         let e = a + text[a..].find("\n```\n").expect("its end");
         text[a..e].to_string()
     };
-    assert_eq!(grammar(&read("docs/psi-spec.md")), grammar(&read("docs/psi-for-models.md")));
+    assert_eq!(
+        grammar(&read("docs/psi-spec.md")),
+        grammar(&read("docs/psi-for-models.md"))
+    );
 }
 
 /// Every built-in is named in the guide's and the models' own words too
 /// (their tables are written by hand).
 #[test]
 fn the_guide_and_the_models_name_every_built_in() {
-    for doc in ["docs/guide/formulas.md", "docs/psi-for-models.md"] {
-        let text = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(doc)).unwrap();
-        let words: std::collections::HashSet<&str> =
-            text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).collect();
+    for doc in [
+        "docs/guide/formulas.md",
+        "docs/psi-for-models.md",
+        "docs/psi-card.md",
+    ] {
+        let text = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(doc),
+        )
+        .unwrap();
+        let words: std::collections::HashSet<&str> = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
         let names = builtins::FUNCS
             .iter()
             .map(|e| e.0)
@@ -321,15 +401,24 @@ fn named(label: &str) -> Vec<String> {
 
 #[test]
 fn every_built_in_has_a_cheat_sheet_row() {
-    let rows: Vec<&str> = [cheat::VARS, cheat::FUNCS, cheat::DRAW, cheat::COLS, cheat::DECLS]
-        .iter()
-        .flat_map(|r| r.iter().map(|e| e.0))
-        .collect();
+    let rows: Vec<&str> = [
+        cheat::VARS,
+        cheat::FUNCS,
+        cheat::DRAW,
+        cheat::COLS,
+        cheat::DECLS,
+    ]
+    .iter()
+    .flat_map(|r| r.iter().map(|e| e.0))
+    .collect();
     let words: Vec<String> = rows.iter().flat_map(|l| named(l)).collect();
     let has = |n: &str| words.iter().any(|w| w == n);
     for (name, _, _) in builtins::FUNCS {
         // (`fract` is `frac`'s other spelling.)
-        assert!(name == "fract" || has(name), "no cheat-sheet row for `{name}`");
+        assert!(
+            name == "fract" || has(name),
+            "no cheat-sheet row for `{name}`"
+        );
     }
     for (name, _, _) in builtins::COLOURS {
         assert!(has(name), "no cheat-sheet row for `{name}`");
@@ -342,7 +431,10 @@ fn every_built_in_has_a_cheat_sheet_row() {
     }
     for name in builtins::DECLARATIONS {
         // (`psi 1` is never written by the editor: unversioned is 1.)
-        assert!(name == "psi" || has(name), "no cheat-sheet row for `{name}`");
+        assert!(
+            name == "psi" || has(name),
+            "no cheat-sheet row for `{name}`"
+        );
     }
     for (name, _) in builtins::CONSTS {
         assert!(has(name), "no cheat-sheet row for `{name}`");
@@ -374,7 +466,10 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     || head == "ink"
                     // a function the row itself defines (`fn ring(cx, r) = …`)
                     || label.starts_with(&format!("fn {head}("));
-                assert!(known, "`{head}(…)` in the cheat sheet is not a built-in ({label})");
+                assert!(
+                    known,
+                    "`{head}(…)` in the cheat sheet is not a built-in ({label})"
+                );
             }
         }
     }
@@ -382,8 +477,15 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
 
 #[test]
 fn the_palettes_the_cheat_sheet_lists_are_the_compilers() {
-    let row = cheat::COLS.iter().find(|r| r.0 == "pal(fire, v)").unwrap().1;
+    let row = cheat::COLS
+        .iter()
+        .find(|r| r.0 == "pal(fire, v)")
+        .unwrap()
+        .1;
     for (name, _) in builtins::PALETTES {
-        assert!(row.contains(name), "the cheat sheet's palettes miss `{name}`");
+        assert!(
+            row.contains(name),
+            "the cheat sheet's palettes miss `{name}`"
+        );
     }
 }
