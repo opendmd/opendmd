@@ -66,7 +66,9 @@ impl Meta {
     /// `range::inputs_in_range`: not optimised for size.)
     #[inline]
     pub fn declared(&self) -> u8 {
-        (0..3).filter(|&k| self.kind[k] != NONE).fold(0, |m, k| m | 1 << k)
+        (0..3)
+            .filter(|&k| self.kind[k] != NONE)
+            .fold(0, |m, k| m | 1 << k)
     }
 
     /// Slot `k`'s default (Q16.16): the declared one, else 0.

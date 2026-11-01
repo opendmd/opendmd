@@ -261,6 +261,10 @@ pub fn run(args: Vec<String>) -> i32 {
     for (at, text) in &seen.notes {
         println!("note: line {}: {text}", line(at.0));
     }
+    // Past light: where the time goes (the steps a frame, by line).
+    if us > 5000 {
+        print!("heaviest lines (their share of the work a frame; make these lighter first):\n{}", seen.heaviest(&src));
+    }
     if levels {
         print!("{}", seen.levels(&src));
     }
@@ -403,6 +407,9 @@ pub fn run(args: Vec<String>) -> i32 {
 struct Seen {
     defs: Vec<Def>,
     notes: Vec<((usize, usize), String)>,
+    /// Each step the compiler made: where, and its cost a frame (ns: a
+    /// pixel's ×4,096, a row's ×32), for the heaviest lines.
+    ops: Vec<(usize, u64)>,
 }
 
 struct Def {
@@ -427,6 +434,41 @@ impl Sink for Seen {
     }
     fn note(&mut self, at: (usize, usize), text: &str) {
         self.notes.push((at, text.into()));
+    }
+    fn op(&mut self, at: (usize, usize), level: Level, _: u8, cost_ns: u32) {
+        let n = match level {
+            Level::Pixel => 4096,
+            Level::Row => 32,
+            _ => 1,
+        };
+        self.ops.push((at.0, u64::from(cost_ns) * n));
+    }
+}
+
+impl Seen {
+    /// The lines whose steps cost the most a frame (pixel steps 4,096
+    /// times, row steps 32), with their share: what to make lighter first.
+    fn heaviest(&self, src: &str) -> String {
+        let line = |at: usize| src[..at.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1;
+        let mut per: std::collections::BTreeMap<usize, u64> = Default::default();
+        for &(at, ns) in &self.ops {
+            *per.entry(line(at)).or_default() += ns;
+        }
+        let total: u64 = per.values().sum::<u64>().max(1);
+        let mut v: Vec<(usize, u64)> = per.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let lines: Vec<&str> = src.lines().collect();
+        let mut out = String::new();
+        for (l, ns) in v.into_iter().take(3) {
+            let text = lines.get(l - 1).map_or("", |t| t.trim());
+            let text: String = if text.chars().count() > 60 {
+                text.chars().take(57).chain("…".chars()).collect()
+            } else {
+                text.into()
+            };
+            out += &format!("  line {l} ({}%): {text}\n", ns * 100 / total);
+        }
+        out
     }
 }
 

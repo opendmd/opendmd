@@ -6,8 +6,8 @@
 //! composition `look::compose` makes.
 
 use opendmd_psi::{
-    compact, compile, compile_declared, compile_with, golden, look, render_rows_ink, Control,
-    Ink, Program, Scratch, OWN,
+    compact, compile, compile_declared, compile_with, golden, look, render_rows_ink, Control, Ink,
+    Program, Scratch, OWN,
 };
 
 const ONE: i32 = 1 << 16;
@@ -19,7 +19,16 @@ fn frame(p: &Program, ms: u32, abc: [i32; 3]) -> Vec<u8> {
     let mut out = vec![0u8; 128 * 32 * 3];
     let mut sc = Box::new(Scratch::<128>::new());
     let mut ink = Box::new(Ink::new());
-    render_rows_ink(p, &mut sc, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut out);
+    render_rows_ink(
+        p,
+        &mut sc,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
     out
 }
 
@@ -95,7 +104,11 @@ fn every_declaration_error_says_what_and_where() {
                 let lc = e.line_col(src);
                 // (With `docs`: the sentence's code, from `errors.rs`, is the row's.)
                 #[cfg(feature = "docs")]
-                if opendmd_psi::errors::code_of(&e.msg).map(opendmd_psi::errors::label).as_deref() != Some(code) {
+                if opendmd_psi::errors::code_of(&e.msg)
+                    .map(opendmd_psi::errors::label)
+                    .as_deref()
+                    != Some(code)
+                {
                     bad.push(format!(
                         "{code} {src:?}: classified as {:?}: {}",
                         opendmd_psi::errors::code_of(&e.msg),
@@ -125,7 +138,10 @@ fn the_codes_are_in_the_tooling_plan() {
     ))
     .unwrap();
     for &(_, _, _, _, code) in ERRORS {
-        assert!(plan.contains(code), "{code} is not in psi-tooling-plan.md §4");
+        assert!(
+            plan.contains(code),
+            "{code} is not in psi-tooling-plan.md §4"
+        );
     }
 }
 
@@ -147,12 +163,20 @@ fn what_the_declarations_compile_to() {
     let m = p.meta();
     assert_eq!(
         m.control(0),
-        Some(Control::Slider { lo: ONE, hi: 4 * ONE, default: 2 * ONE })
+        Some(Control::Slider {
+            lo: ONE,
+            hi: 4 * ONE,
+            default: 2 * ONE
+        })
     );
     assert_eq!(m.control(1), Some(Control::Choice { n: 3 }));
     assert_eq!(
         m.control(2),
-        Some(Control::Slider { lo: 0, hi: ONE, default: ONE / 4 })
+        Some(Control::Slider {
+            lo: 0,
+            hi: ONE,
+            default: ONE / 4
+        })
     );
     assert_eq!(m.declared(), 7);
     assert_eq!(m.look(), Some(("screen", 40)));
@@ -161,13 +185,23 @@ fn what_the_declarations_compile_to() {
     assert_eq!(at(d.name.unwrap()), "Rotozoom -- the; one");
     assert_eq!(at(d.about.unwrap()), "Mode 7:  a checker");
     let c0 = d.controls[0].unwrap();
-    assert_eq!((at(c0.name), c0.label.map(at), c0.words), ("zoom", Some("Zoom"), None));
+    assert_eq!(
+        (at(c0.name), c0.label.map(at), c0.words),
+        ("zoom", Some("Zoom"), None)
+    );
     let c1 = d.controls[1].unwrap();
-    assert_eq!((at(c1.name), c1.words.map(at)), ("wobble", Some("gentle, strong, off")));
+    assert_eq!(
+        (at(c1.name), c1.words.map(at)),
+        ("wobble", Some("gentle, strong, off"))
+    );
     assert_eq!(at(d.controls[2].unwrap().name), "c");
     // The program is the same as with the values written in.
     let lit = compile("loop 4\ngray(clamp(a, 1, 4)/4 + pick(floor(clamp(b, 0, 2)), 0, 0.25, 0.5) + clamp(c, 0, 1))").unwrap();
-    for abc in [[2 * ONE, 0, ONE / 4], [ONE / 2, 7 * ONE, -ONE], [i32::MAX, i32::MIN, 3 * ONE]] {
+    for abc in [
+        [2 * ONE, 0, ONE / 4],
+        [ONE / 2, 7 * ONE, -ONE],
+        [i32::MAX, i32::MIN, 3 * ONE],
+    ] {
         assert_eq!(frame(&p, 500, abc), frame(&lit, 500, abc), "{abc:?}");
     }
     // No declarations: nothing declared, the defaults 0.
@@ -188,7 +222,8 @@ fn compact_keeps_the_declarations_as_written() {
     let da = compile_declared(FULL, &mut a).unwrap();
     let db = compile_declared(&c, &mut b).unwrap();
     assert_eq!(a, b);
-    let text = |s: &str, r: Option<(u32, u32)>| r.map(|r| s[r.0 as usize..r.1 as usize].to_string());
+    let text =
+        |s: &str, r: Option<(u32, u32)>| r.map(|r| s[r.0 as usize..r.1 as usize].to_string());
     assert_eq!(text(FULL, da.name), text(&c, db.name));
     assert_eq!(text(FULL, da.about), text(&c, db.about));
     // `'"'` is a character, on a line that starts with `name` but sets it
@@ -209,15 +244,23 @@ fn the_words_stay_names_where_they_are_not_declarations() {
     // A function called `look`, its value the last line.
     assert!(compile("fn look(v) = v*0.5\ngray(look(x))").is_ok());
     // `psi 1`: accepted, the same program.
-    assert_eq!(compile("psi 1\ngray(x)").unwrap(), compile("gray(x)").unwrap());
+    assert_eq!(
+        compile("psi 1\ngray(x)").unwrap(),
+        compile("gray(x)").unwrap()
+    );
 }
 
 /// The slot letters read as the control: `a` is the first control's value
 /// (held to its range), in a function too.
 #[test]
 fn the_letters_read_as_the_controls() {
-    let named = compile("control size 1..3 = 2\nfn p() = a/3\nlayer { gray(size/3) }\nlayer add { gray(p(), 0.5) }").unwrap();
-    let lit = compile("layer { gray(clamp(a, 1, 3)/3) }\nlayer add { gray(clamp(a, 1, 3)/3, 0.5) }").unwrap();
+    let named = compile(
+        "control size 1..3 = 2\nfn p() = a/3\nlayer { gray(size/3) }\nlayer add { gray(p(), 0.5) }",
+    )
+    .unwrap();
+    let lit =
+        compile("layer { gray(clamp(a, 1, 3)/3) }\nlayer add { gray(clamp(a, 1, 3)/3, 0.5) }")
+            .unwrap();
     for v in [0, ONE, 2 * ONE, 9 * ONE] {
         assert_eq!(frame(&named, 0, [v, 0, 0]), frame(&lit, 0, [v, 0, 0]));
     }
@@ -228,7 +271,10 @@ fn the_letters_read_as_the_controls() {
 fn a_looks_controls() {
     let inner = "control dim 0..1 = 0.4 \"Dim rows\"\ngray(py % 2 ? 1 : 0.3 + dim*0.6)";
     let p = look::compose(inner, "screen", 40).unwrap();
-    assert_eq!(p.meta().control(0), compile(inner).unwrap().meta().control(0));
+    assert_eq!(
+        p.meta().control(0),
+        compile(inner).unwrap().meta().control(0)
+    );
     assert_eq!(p.meta().declared(), 1);
 }
 
@@ -319,7 +365,11 @@ fn the_look_line_is_the_composition() {
                 let mut l = Program::default();
                 opendmd_psi::compile_look(&src, &mut l).unwrap();
                 let mut lc = Program::default();
-                opendmd_psi::compile_look(&opendmd_psi::look::set(body, blend, amount).unwrap(), &mut lc).unwrap();
+                opendmd_psi::compile_look(
+                    &opendmd_psi::look::set(body, blend, amount).unwrap(),
+                    &mut lc,
+                )
+                .unwrap();
                 assert_eq!(l, lc, "{src:?}");
             }
         }

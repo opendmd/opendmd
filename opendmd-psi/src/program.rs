@@ -586,8 +586,17 @@ pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCA
 
 /// Every `TURN` of the row section (the JIT's driver, after its row
 /// function: they are the section's last steps, so the same as the VM's).
-#[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
-pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS]) {
+#[cfg(any(
+    test,
+    feature = "docs",
+    all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
+))]
+pub(crate) fn turn_rows(
+    prog: &Program,
+    t: &crate::tables::Tables,
+    own: &mut Pals,
+    sc: &[i32; MAX_SCALARS],
+) {
     for op in &prog.ops[prog.turns()] {
         turn(t, own, sc, op);
     }
@@ -893,7 +902,8 @@ impl Program {
     /// [`esp32_us_jit`](Self::esp32_us_jit) with a filled still cache, as
     /// [`esp32_us_still`](Self::esp32_us_still).
     pub fn esp32_us_jit_still(&self) -> u32 {
-        self.estimate_with(self.still_marker(), true, true).min(self.esp32_us_still())
+        self.estimate_with(self.still_marker(), true, true)
+            .min(self.esp32_us_still())
     }
 
     /// The first step a kernel draws: after the column run, and after the
@@ -938,7 +948,11 @@ impl Program {
             Some(m) => {
                 let op = &self.ops[m];
                 let n = u32::from(op.d.max(1));
-                let every = if op.c & crate::rate::READS_T != 0 { n } else { n.max(50) };
+                let every = if op.c & crate::rate::READS_T != 0 {
+                    n
+                } else {
+                    n.max(50)
+                };
                 (m + 1..m + 1 + op.a as usize, every)
             }
             None => (0..0, 1),
@@ -966,7 +980,11 @@ impl Program {
                     saved += crate::fuse::saved(op.d);
                 }
                 let ns = self.step_ns(k, op);
-                px += if col.contains(&k) { ns.div_ceil(H as u32) } else { ns };
+                px += if col.contains(&k) {
+                    ns.div_ceil(H as u32)
+                } else {
+                    ns
+                };
             }
             k += 1;
         }
@@ -987,7 +1005,10 @@ impl Program {
         // still lane read in place, the kernel's steps x1.3 (jit1-b as
         // effects against their rows' sum), its words a row.
         let (px, extra) = if jit {
-            (px + JIT_LANE_NS * cached + kp * JIT_PATH_PCT / 100, JIT_ROWS_US)
+            (
+                px + JIT_LANE_NS * cached + kp * JIT_PATH_PCT / 100,
+                JIT_ROWS_US,
+            )
         } else {
             (45 + px + STILL_COPY_NS * cached, 0)
         };
@@ -997,7 +1018,13 @@ impl Program {
             } else {
                 (45 + slow_ns).div_ceil(rate) + HELD_COPY_NS
             };
-        ((px * (W * H) as u32) / 1000 + row * 10 + turns + self.draw_cost(lanes, usize::MAX) + extra) * 115 / 100
+        ((px * (W * H) as u32) / 1000
+            + row * 10
+            + turns
+            + self.draw_cost(lanes, usize::MAX)
+            + extra)
+            * 115
+            / 100
     }
 
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
@@ -1243,7 +1270,10 @@ impl Program {
             .filter(|&k| self.ops[k].code == code::FOR)
             .map(|k| {
                 let count = (self.init[(self.ops[k].a & 0x7f) as usize] >> 16) as u32;
-                (count, self.vector_loop(k).map(|_| (all, self.draw_cost(true, k))))
+                (
+                    count,
+                    self.vector_loop(k).map(|_| (all, self.draw_cost(true, k))),
+                )
             })
             .collect()
     }
@@ -1315,8 +1345,9 @@ impl Program {
                 code::DOT => 450,
                 // A paint primitive (a guess until the device measures them:
                 // a call and the pixels it covers, ~15 ns each natively).
-                code::PAINT => [62_000, 600, 4_000, 6_000, 12_000, 6_000, 10_000, 14_000, 8_000, 8_000, 8_000]
-                    [(op.d as usize).min(paint::LAST as usize)],
+                code::PAINT => [
+                    62_000, 600, 4_000, 6_000, 12_000, 6_000, 10_000, 14_000, 8_000, 8_000, 8_000,
+                ][(op.d as usize).min(paint::LAST as usize)],
                 _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
@@ -1434,7 +1465,13 @@ impl Program {
             } else if op.code == code::TURN {
                 alloc::format!("{args}; palette {}", op.b)
             } else if op.code == code::SLOW {
-                alloc::format!("skip {} in the fast part; {} layers, rate {}, reads {:#x}", op.a, op.b, op.d, op.c)
+                alloc::format!(
+                    "skip {} in the fast part; {} layers, rate {}, reads {:#x}",
+                    op.a,
+                    op.b,
+                    op.d,
+                    op.c
+                )
             } else if op.code == code::COLUMN {
                 alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {

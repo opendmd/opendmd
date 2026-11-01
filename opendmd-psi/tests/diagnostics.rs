@@ -57,16 +57,21 @@ fn expand(line: &str) -> String {
             let end = r.find(">>").expect("an unclosed <<");
             let body = &r[..end];
             rest = &r[end + 2..];
-            let join = body.split_once(';').and_then(|(n, _)| n.parse::<usize>().ok());
+            let join = body
+                .split_once(';')
+                .and_then(|(n, _)| n.parse::<usize>().ok());
             if let Some(n) = join {
                 let mut p = body.splitn(3, ';').skip(1);
                 let sep = p.next().unwrap().replace("\\n", "\n");
                 let tpl = p.next().unwrap();
-                let items: Vec<String> =
-                    (1..=n).map(|k| tpl.replace("{k}", &k.to_string())).collect();
+                let items: Vec<String> = (1..=n)
+                    .map(|k| tpl.replace("{k}", &k.to_string()))
+                    .collect();
                 out += &items.join(&sep);
             } else {
-                let (n, text) = body.split_once('*').expect("<<N*TEXT>> or <<N;SEP;TEMPLATE>>");
+                let (n, text) = body
+                    .split_once('*')
+                    .expect("<<N*TEXT>> or <<N;SEP;TEMPLATE>>");
                 out += &text.repeat(n.parse().unwrap());
             }
         } else if let Some(r) = rest.strip_prefix("\\u{") {
@@ -87,11 +92,22 @@ fn cases(text: &str) -> Vec<Case> {
     let mut cur: Option<(u16, Vec<String>)> = None;
     for (n, line) in text.lines().enumerate() {
         if let Some(c) = line.strip_prefix("=== E") {
-            assert!(cur.is_none(), "line {}: a case without its `---` line", n + 1);
+            assert!(
+                cur.is_none(),
+                "line {}: a case without its `---` line",
+                n + 1
+            );
             cur = Some((c.trim().parse().expect("a code"), Vec::new()));
         } else if let Some(want) = line.strip_prefix("---") {
-            let (code, lines) = cur.take().unwrap_or_else(|| panic!("line {}: `---` outside a case", n + 1));
-            out.push(Case { code, src: lines.join("\n"), at: n, want: want.trim().to_string() });
+            let (code, lines) = cur
+                .take()
+                .unwrap_or_else(|| panic!("line {}: `---` outside a case", n + 1));
+            out.push(Case {
+                code,
+                src: lines.join("\n"),
+                at: n,
+                want: want.trim().to_string(),
+            });
         } else if let Some((_, lines)) = &mut cur {
             lines.push(expand(line));
         }
@@ -126,12 +142,18 @@ fn every_case_fails_with_its_code_and_sentence() {
                 let msg = got.split_once(' ').unwrap().1;
                 match errors::code_of(msg) {
                     Some(code) if code == c.code => {}
-                    other => bad.push(format!("E{:03} {shown:?}: classified as {other:?}: {msg}", c.code)),
+                    other => bad.push(format!(
+                        "E{:03} {shown:?}: classified as {other:?}: {msg}",
+                        c.code
+                    )),
                 }
                 if bless() {
                     lines[c.at] = format!("--- {got}");
                 } else if got != c.want {
-                    bad.push(format!("E{:03} {shown:?}:\n  got  {got}\n  want {}", c.code, c.want));
+                    bad.push(format!(
+                        "E{:03} {shown:?}:\n  got  {got}\n  want {}",
+                        c.code, c.want
+                    ));
                 }
             }
         }
@@ -148,7 +170,11 @@ fn every_case_fails_with_its_code_and_sentence() {
 
 /// Sentences no source can provoke: the code is checked on the text.
 const NO_CASE: &[(u16, &str, &str)] = &[
-    (407, "this formula could not be laid out (a bug in Psi) — please report it", "a compiler bug"),
+    (
+        407,
+        "this formula could not be laid out (a bug in Psi) — please report it",
+        "a compiler bug",
+    ),
     (408, opendmd_psi::NO_MEMORY, "needs the allocator to fail"),
 ];
 
@@ -164,7 +190,10 @@ fn every_code_has_a_case_and_every_case_a_code() {
     }
     for c in have {
         if errors::doc(c).is_none() {
-            bad.push(format!("a case names {}, which is not in ERRORS", errors::label(c)));
+            bad.push(format!(
+                "a case names {}, which is not in ERRORS",
+                errors::label(c)
+            ));
         }
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -187,7 +216,11 @@ fn the_sentences_nothing_can_provoke_are_classified() {
 fn the_index_is_well_formed() {
     assert!(!ERRORS.is_empty());
     for w in ERRORS.windows(2) {
-        assert!(w[0].code < w[1].code, "E{:03} is out of order or twice", w[1].code);
+        assert!(
+            w[0].code < w[1].code,
+            "E{:03} is out of order or twice",
+            w[1].code
+        );
     }
     for d in ERRORS {
         let l = errors::label(d.code);
@@ -199,10 +232,16 @@ fn the_index_is_well_formed() {
         for (what, s) in [("title", d.title), ("sentence", d.sentence), ("fix", d.fix)] {
             assert!(!s.is_empty(), "{l} has no {what}");
             assert!(!s.contains("color"), "{l} {what}: British spelling");
-            assert!(!s.contains(".rs") && !s.contains("cache"), "{l} {what} names an internal");
+            assert!(
+                !s.contains(".rs") && !s.contains("cache"),
+                "{l} {what} names an internal"
+            );
         }
         for m in d.matches {
-            assert!(d.sentence.contains(m), "{l}: the fragment {m:?} is not in its sentence");
+            assert!(
+                d.sentence.contains(m),
+                "{l}: the fragment {m:?} is not in its sentence"
+            );
         }
         assert_eq!(errors::doc(d.code).map(|x| x.code), Some(d.code));
     }
@@ -274,7 +313,9 @@ fn scan(src: &str) -> Scan {
                             'u' => {
                                 let end = (i..).find(|&k| b[k] == '}').unwrap();
                                 let hex: String = b[i + 2..end].iter().collect();
-                                s.push(char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap());
+                                s.push(
+                                    char::from_u32(u32::from_str_radix(&hex, 16).unwrap()).unwrap(),
+                                );
                                 i = end;
                             }
                             other => s.push(other),
@@ -315,7 +356,11 @@ fn scan(src: &str) -> Scan {
             i += 1;
         }
     }
-    Scan { code, lits, comments }
+    Scan {
+        code,
+        lits,
+        comments,
+    }
 }
 
 /// The literals (indices) between the markers in `s`.
@@ -437,7 +482,10 @@ fn sentences() -> Vec<(String, String)> {
             }
             // (A `format!`'s first literal is its template.)
             if pat == "format!(" {
-                if let Some(&l) = lits_in(&body).first().filter(|_| body.trim_start().starts_with(OPEN)) {
+                if let Some(&l) = lits_in(&body)
+                    .first()
+                    .filter(|_| body.trim_start().starts_with(OPEN))
+                {
                     templates.insert(l);
                 }
             }
@@ -474,7 +522,11 @@ fn sentences() -> Vec<(String, String)> {
 #[test]
 fn unclassified_sentences() {
     let all = sentences();
-    assert!(all.len() > 150, "the scan found only {} sentences", all.len());
+    assert!(
+        all.len() > 150,
+        "the scan found only {} sentences",
+        all.len()
+    );
     let bad: Vec<String> = all
         .iter()
         .filter(|(_, msg)| errors::code_of(msg).is_none())
@@ -485,8 +537,14 @@ fn unclassified_sentences() {
 
 /// Codes that appear in comments but are not an entry, and why.
 const COMMENT_ONLY: &[(u16, &str)] = &[
-    (907, "none: `loop` takes its own sentence at the line, which is E110"),
-    (917, "a table that the sprite's rows overflow says E924's sentence: the budget is one"),
+    (
+        907,
+        "none: `loop` takes its own sentence at the line, which is E110",
+    ),
+    (
+        917,
+        "a table that the sprite's rows overflow says E924's sentence: the budget is one",
+    ),
 ];
 
 #[test]
@@ -496,7 +554,10 @@ fn comment_codes_are_indexed() {
     for c in &sc.comments {
         let b = c.as_bytes();
         for k in 0..b.len().saturating_sub(3) {
-            if b[k] == b'E' && b[k + 1..k + 4].iter().all(u8::is_ascii_digit) && (k == 0 || !b[k - 1].is_ascii_alphanumeric()) {
+            if b[k] == b'E'
+                && b[k + 1..k + 4].iter().all(u8::is_ascii_digit)
+                && (k == 0 || !b[k - 1].is_ascii_alphanumeric())
+            {
                 seen.insert(c[k + 1..k + 4].parse::<u16>().unwrap());
             }
         }
@@ -507,7 +568,10 @@ fn comment_codes_are_indexed() {
         .filter(|&c| errors::doc(c).is_none() && !COMMENT_ONLY.iter().any(|o| o.0 == c))
         .map(errors::label)
         .collect();
-    assert!(bad.is_empty(), "codes in compile.rs comments but not in ERRORS: {bad:?}");
+    assert!(
+        bad.is_empty(),
+        "codes in compile.rs comments but not in ERRORS: {bad:?}"
+    );
 }
 
 // --- the language reference's index -------------------------------------------
@@ -564,7 +628,10 @@ const GROUPS: &[(u16, &str)] = &[
     (6, "Version"),
     (7, "The draw stage"),
     (8, "Frame rate"),
-    (9, "Growing values, sprites, palettes, slow layers and declarations"),
+    (
+        9,
+        "Growing values, sprites, palettes, slow layers and declarations",
+    ),
 ];
 
 fn index() -> String {
@@ -578,8 +645,16 @@ fn index() -> String {
         for d in ds {
             let l = errors::label(d.code);
             let internal = reference::INTERNAL.contains(&d.code);
-            let badge = if internal { " <span class=\"badge\">internal</span>" } else { "" };
-            s += &format!("<h4 id=\"{l}\">{l} · {}{badge}</h4>\n\n> {}\n\n", html(d.title), md(d.sentence));
+            let badge = if internal {
+                " <span class=\"badge\">internal</span>"
+            } else {
+                ""
+            };
+            s += &format!(
+                "<h4 id=\"{l}\">{l} · {}{badge}</h4>\n\n> {}\n\n",
+                html(d.title),
+                md(d.sentence)
+            );
             if internal {
                 s += "**Internal:** a bug in Psi: please report it, with the formula. It is never the formula's fault.\n\n";
             }
@@ -588,7 +663,10 @@ fn index() -> String {
             }
             s += &format!("{}\n\n", md(d.fix));
             if let Some(h) = reference::help(d.code).filter(|h| !h.before.is_empty()) {
-                s += &format!("Before:\n\n```psi\n{}\n```\n\nAfter:\n\n```psi\n{}\n```\n\n", h.before, h.after);
+                s += &format!(
+                    "Before:\n\n```psi\n{}\n```\n\nAfter:\n\n```psi\n{}\n```\n\n",
+                    h.before, h.after
+                );
             }
         }
     }
@@ -600,8 +678,14 @@ fn the_error_index_in_the_language_reference_is_current() {
     let file = path("../docs/psi-spec.md");
     let text = std::fs::read_to_string(&file).unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    let a = lines.iter().position(|l| l.starts_with("<!-- psi-errors (generated")).expect("the start marker");
-    let z = lines.iter().position(|l| *l == "<!-- psi-errors end -->").expect("the end marker");
+    let a = lines
+        .iter()
+        .position(|l| l.starts_with("<!-- psi-errors (generated"))
+        .expect("the start marker");
+    let z = lines
+        .iter()
+        .position(|l| *l == "<!-- psi-errors end -->")
+        .expect("the end marker");
     assert!(a < z);
     let want = index();
     let have = lines[a + 1..z].join("\n");
@@ -655,7 +739,9 @@ fn js_codes() -> String {
 fn the_web_apps_code_table_is_the_index() {
     let file = path("../opendmd-web/www/js/psierr.js");
     let text = std::fs::read_to_string(&file).unwrap();
-    let a = text.find("// psi-errors: codes").expect("js/psierr.js: the block's start");
+    let a = text
+        .find("// psi-errors: codes")
+        .expect("js/psierr.js: the block's start");
     let end = "// psi-errors end\n";
     let z = a + text[a..].find(end).expect("its end") + end.len();
     let want = js_codes();

@@ -141,7 +141,10 @@ fn flat_noise_is_noise_at_a_whole_z() {
     }
     // The VM takes it for a whole scalar z, the eight corners otherwise.
     let flat = compile("gray(noise(x*8, y*4, 3) + noise(px, py, -1)*0.25)").unwrap();
-    let full = compile("z = 3 + t*0 + floor(a*0.1)\ngray(noise(x*8, y*4, z) + noise(px, py, -1 + z*0)*0.25)").unwrap();
+    let full = compile(
+        "z = 3 + t*0 + floor(a*0.1)\ngray(noise(x*8, y*4, z) + noise(px, py, -1 + z*0)*0.25)",
+    )
+    .unwrap();
     let mut s = Scratch::<128>::new();
     let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
     render(&flat, &mut s, &Inputs::default(), &OWN, &mut o1);
@@ -527,7 +530,10 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    assert_eq!(core::mem::size_of::<Program>(), 2876 + 4 * crate::program::MAX_PAINT);
+    assert_eq!(
+        core::mem::size_of::<Program>(),
+        2876 + 4 * crate::program::MAX_PAINT
+    );
     assert_eq!(core::mem::size_of::<crate::Ink>(), 8192);
     // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
     let beam = 3 * core::mem::size_of::<usize>();
@@ -860,7 +866,12 @@ const LAYER_ERRORS: &[(&str, &str, usize, usize)] = &[
         1,
         1,
     ),
-    ("layer = 3\ngray(x)", "`layer` is a word of the language", 1, 1),
+    (
+        "layer = 3\ngray(x)",
+        "`layer` is a word of the language",
+        1,
+        1,
+    ),
     (
         "fn p(a) = a\nlayer { p = 2\ngray(p) }",
         "`p` is already the name of a function (line 1)",
@@ -906,19 +917,34 @@ fn functions_are_their_bodies_written_out() {
     };
     // A value; a body of lines; a colour by channel; a whole colour.
     same("fn f(a, b) = a*2 + b\ngray(f(x, y))", "gray(x*2 + y)");
-    same("fn f(a) {\n  k = a*a\n  k + 0.5\n}\ngray(f(x))", "gray(x*x + 0.5)");
-    same("fn sky(v) = mix(#102040, #ff8800, v)\nsky(y)", "mix(#102040, #ff8800, y)");
+    same(
+        "fn f(a) {\n  k = a*a\n  k + 0.5\n}\ngray(f(x))",
+        "gray(x*x + 0.5)",
+    );
+    same(
+        "fn sky(v) = mix(#102040, #ff8800, v)\nsky(y)",
+        "mix(#102040, #ff8800, y)",
+    );
     same("fn tint(c, k) = c * k\ntint(#f80, x)", "#f80 * x");
-    same("fn p(v) {\n  w = v*0.5\n  hsv(w, 1, 1)\n}\np(x)", "hsv(x*0.5, 1, 1)");
+    same(
+        "fn p(v) {\n  w = v*0.5\n  hsv(w, 1, 1)\n}\np(x)",
+        "hsv(x*0.5, 1, 1)",
+    );
     same("fn p(v) = pal(fire, v)\np(x)", "pal(fire, x)");
     // A function inside another; called twice; unused costs nothing.
-    same("fn sq(a) = a*a\nfn d(a, b) = sq(a) + sq(b)\ngray(d(x, y))", "gray(x*x + y*y)");
+    same(
+        "fn sq(a) = a*a\nfn d(a, b) = sq(a) + sq(b)\ngray(d(x, y))",
+        "gray(x*x + y*y)",
+    );
     same("fn u(a) = noise(a, y, t)\ngray(x)", "gray(x)");
     // Its values hide the formula's names of the same name; others it
     // sees as they are where it is called.
     same("k = 0.25\nfn f(x) = x + k\ngray(f(y))", "gray(y + 0.25)");
     // Its own names stay inside it.
-    same("v = y\nfn f(a) {\n  v = a\n  v*2\n}\ngray(f(x) + v)", "gray(x*2 + y)");
+    same(
+        "v = y\nfn f(a) {\n  v = a\n  v*2\n}\ngray(f(x) + v)",
+        "gray(x*2 + y)",
+    );
     // Drawing: lines called on a line of their own in draw.
     let same = |a: &str, b: &str| assert!(over(a, None, 0) == over(b, None, 0), "{a}\nvs\n{b}");
     same(
@@ -935,7 +961,10 @@ fn x_and_y_move_what_comes_from_them() {
     let same = |a: &str, b: &str| {
         assert!(over(a, None, 0) == over(b, None, 0), "{a}\nvs\n{b}");
     };
-    same("fn p(x, y) = rgb(x, y, 0)\np(1 - x, y*0.5)", "rgb(1 - x, y*0.5, 0)");
+    same(
+        "fn p(x, y) = rgb(x, y, 0)\np(1 - x, y*0.5)",
+        "rgb(1 - x, y*0.5, 0)",
+    );
     same(
         "fn p(x, y) = rgb(px % 3 / 2, py % 4 / 3, i % 7 / 6)\np(x*2, 1 - y)",
         "qx = floor(x*2*127 + 0.5); qy = floor((1 - y)*31 + 0.5)\nrgb(qx % 3 / 2, qy % 4 / 3, (qy*128 + qx) % 7 / 6)",
@@ -968,7 +997,11 @@ fn functions_stay_within_the_limits() {
     }
     s += "gray(f11(x))";
     let e = compile(&s).unwrap_err();
-    assert!(e.msg.contains("calls its functions too many times"), "{}", e.msg);
+    assert!(
+        e.msg.contains("calls its functions too many times"),
+        "{}",
+        e.msg
+    );
     // Itself: refused.
     let e = compile("fn f(a) = a + f(a)\ngray(f(x))").unwrap_err();
     assert!(e.msg.contains("calls itself"), "{}", e.msg);
@@ -976,15 +1009,60 @@ fn functions_stay_within_the_limits() {
 
 /// (source, message, line, column)
 const FN_ERRORS: &[(&str, &str, usize, usize)] = &[
-    ("fn f(a) = a\ngray(f(x, y))", "`f` takes 1 values, but got 2", 2, 6),
-    ("fn f(a) = a\nf = 2\ngray(x)", "`f` is already the name of a function (line 1)", 2, 1),
-    ("fn f(a) {\n  gray(a)\n  v = 1\n}\nf(x)", "only a function's last line is its value", 2, 3),
-    ("fn p(v) = hsv(v, 1, 1)\ngray(p(x))", "`p(…)` is a whole colour", 2, 6),
-    ("fn p(v) = hsv(v, 1, 1)\np(x) * 0.5", "`p(…)` is a whole colour: it can't go into a sum", 2, 6),
-    ("fn f(a) = gray(tme)\nf(x)", "unknown name `tme` — did you mean `t`?", 1, 16),
-    ("part p { gray(x) }\np", "there are no parts: write a function", 1, 1),
-    ("use Plasma as p\np", "`use` puts a formula in by its name", 1, 1),
-    ("part = 2\ngray(x)", "`part` is a word of the language", 1, 1),
+    (
+        "fn f(a) = a\ngray(f(x, y))",
+        "`f` takes 1 values, but got 2",
+        2,
+        6,
+    ),
+    (
+        "fn f(a) = a\nf = 2\ngray(x)",
+        "`f` is already the name of a function (line 1)",
+        2,
+        1,
+    ),
+    (
+        "fn f(a) {\n  gray(a)\n  v = 1\n}\nf(x)",
+        "only a function's last line is its value",
+        2,
+        3,
+    ),
+    (
+        "fn p(v) = hsv(v, 1, 1)\ngray(p(x))",
+        "`p(…)` is a whole colour",
+        2,
+        6,
+    ),
+    (
+        "fn p(v) = hsv(v, 1, 1)\np(x) * 0.5",
+        "`p(…)` is a whole colour: it can't go into a sum",
+        2,
+        6,
+    ),
+    (
+        "fn f(a) = gray(tme)\nf(x)",
+        "unknown name `tme` — did you mean `t`?",
+        1,
+        16,
+    ),
+    (
+        "part p { gray(x) }\np",
+        "there are no parts: write a function",
+        1,
+        1,
+    ),
+    (
+        "use Plasma as p\np",
+        "`use` puts a formula in by its name",
+        1,
+        1,
+    ),
+    (
+        "part = 2\ngray(x)",
+        "`part` is a word of the language",
+        1,
+        1,
+    ),
     ("fn = 2\ngray(x)", "`fn` is a word of the language", 1, 1),
 ];
 
@@ -1055,7 +1133,10 @@ fn centred_values_are_what_they_stand_for() {
         "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
     );
     // A function called `pick` is still the function.
-    same("fn pick(a, b) = a*b\ngray(pick(x, y))", "fn q(a, b) = a*b\ngray(q(x, y))");
+    same(
+        "fn pick(a, b) = a*b\ngray(pick(x, y))",
+        "fn q(a, b) = a*b\ngray(q(x, y))",
+    );
 }
 
 /// `pick(k, …)` against the chain of `?:` it replaces, byte for byte; one
@@ -1196,12 +1277,7 @@ fn colour_and_pick_errors() {
             9,
         ),
         ("mix(#000, #fff)", "`mix` takes 3 values, but got 2", 1, 1),
-        (
-            "rgb(1, #fff, 0)",
-            "takes three numbers, not colours",
-            1,
-            8,
-        ),
+        ("rgb(1, #fff, 0)", "takes three numbers, not colours", 1, 8),
         (
             "mix(rgb(1, #fff, 0), #000, x)",
             "takes three numbers, not colours",
@@ -1220,8 +1296,18 @@ fn colour_and_pick_errors() {
             1,
             5,
         ),
-        ("pal(fire, x) * #fff", "`pal(…)` is a whole colour: it can't go into a sum", 1, 14),
-        ("gray(x) * #fff", "`gray(…)` is a whole colour: it can't go into a sum", 1, 9),
+        (
+            "pal(fire, x) * #fff",
+            "`pal(…)` is a whole colour: it can't go into a sum",
+            1,
+            14,
+        ),
+        (
+            "gray(x) * #fff",
+            "`gray(…)` is a whole colour: it can't go into a sum",
+            1,
+            9,
+        ),
         (
             "x + 1 * rgb(1, 2)",
             "`,` (`rgb(r, g, b)` takes three values)",
@@ -1496,7 +1582,11 @@ fn lines_and_dots_land_where_they_should() {
 fn ink_levels_are_exact() {
     for n in 1..=255i32 {
         for b in 0..=255u8 {
-            assert_eq!(fixed::ink_levels(b, n) >> 16, (2 * b as i32 * n + 255) / 510, "b {b} n {n}");
+            assert_eq!(
+                fixed::ink_levels(b, n) >> 16,
+                (2 * b as i32 * n + 255) / 510,
+                "b {b} n {n}"
+            );
         }
         for k in 0..=n {
             let v = crate::program::eval(code::DIV, k << 16, n << 16, 0, None);
@@ -1510,14 +1600,28 @@ fn ink_levels_are_exact() {
         let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
         let mut ink = Ink::boxed();
         let mut out = [0u8; W * H * 3];
-        render_rows_ink::<128>(&p, &mut Scratch::new(), Some(&mut ink), &Inputs::default(), &OWN, None, u32::MAX, &mut out);
+        render_rows_ink::<128>(
+            &p,
+            &mut Scratch::new(),
+            Some(&mut ink),
+            &Inputs::default(),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
         assert!(out.iter().all(|&c| c == 255), "ink({n})");
     }
     // Only a whole number from 1 to 255.
     for bad in ["ink(0)", "ink(256)", "ink(1.5)", "ink(x)", "ink(16, 2)"] {
         let src = format!("draw {{ dot(1, 1) }}\ngray({bad})");
         let e = compile(&src).unwrap_err();
-        assert!(e.msg.contains("`ink(n)` takes a whole number from 1 to 255"), "{bad}: {}", e.msg);
+        assert!(
+            e.msg
+                .contains("`ink(n)` takes a whole number from 1 to 255"),
+            "{bad}: {}",
+            e.msg
+        );
     }
     // A name set `ink` is that name.
     assert!(compile("draw { dot(1, 1) }\nink = 3\ngray(ink/4)").is_ok());
@@ -2358,7 +2462,6 @@ fn palette_error_messages() {
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
 
-
 // --- `cycle`: palette cycling (console-lessons Phase B) -------------------------
 
 /// `cycle(P, v, s)` is entry (floor(v·32) + floor(s·32)) mod 32 of P: the
@@ -2431,7 +2534,9 @@ fn cycle_error_messages() {
     for &(src, want, code) in cases {
         match compile(src) {
             Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
-            Err(e) if !e.msg.contains(want) => bad.push(alloc::format!("{code} {src:?}: {}", e.msg)),
+            Err(e) if !e.msg.contains(want) => {
+                bad.push(alloc::format!("{code} {src:?}: {}", e.msg))
+            }
             Err(_) => {}
         }
     }
@@ -2470,7 +2575,12 @@ fn a_still_slow_layer_is_the_formula_without_rate() {
     for src in srcs {
         let a = compile(src).unwrap();
         assert!(a.rate().is_some(), "{src}\n{}", a.listing());
-        let b = compile(&src.replace(" rate 50", "").replace(" rate 4", "").replace(" rate 3", "")).unwrap();
+        let b = compile(
+            &src.replace(" rate 50", "")
+                .replace(" rate 4", "")
+                .replace(" rate 3", ""),
+        )
+        .unwrap();
         assert!(b.rate().is_none());
         for ms in [0, 20, 40, 980, 1000, 4321, 7980] {
             let i = golden::inputs(ms);
@@ -2493,7 +2603,10 @@ fn a_moving_slow_layer_is_drawn_band_by_band() {
         ("loop forever\n", 5, 20, None),
     ] {
         let bottom = "hsv(x + t/3, 1, frac(y + t))";
-        let a = compile(&alloc::format!("{head}layer rate {n} {{ {bottom} }}\nlayer max {{ gray(0*t) }}")).unwrap();
+        let a = compile(&alloc::format!(
+            "{head}layer rate {n} {{ {bottom} }}\nlayer max {{ gray(0*t) }}"
+        ))
+        .unwrap();
         let s = compile(&alloc::format!("{head}{bottom}")).unwrap();
         for ms in [0u64, 20, 60, 140, 990, 1000, 1010, 1990, 2020, 2990, 61_000] {
             let mut i = golden::inputs(0);
@@ -2548,7 +2661,17 @@ fn the_held_picture_draws_the_frames_drawn_from_nothing() {
                 i.b = 1 << 15;
             }
             let mut changed = [0u32; H];
-            render_held::<128>(&p, &mut sc, None, None, &mut held, &i, &OWN, &mut out, Some(&mut changed));
+            render_held::<128>(
+                &p,
+                &mut sc,
+                None,
+                None,
+                &mut held,
+                &i,
+                &OWN,
+                &mut out,
+                Some(&mut changed),
+            );
             assert_eq!(out, frame_of(&p, &i), "{src} at {ms} ms (step {step})");
         }
     }
@@ -2568,7 +2691,11 @@ fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
     .iter()
     .map(|s| (String::from("sketch"), String::from(*s)))
     .collect();
-    srcs.extend(every_formula().into_iter().filter(|(_, src)| compile(src).is_ok_and(|p| p.rate().is_some())));
+    srcs.extend(
+        every_formula()
+            .into_iter()
+            .filter(|(_, src)| compile(src).is_ok_and(|p| p.rate().is_some())),
+    );
     let mut n = 0;
     for (name, src) in srcs {
         let p = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
@@ -2584,7 +2711,17 @@ fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
             let want = words_as_bytes(&mut want_w);
             let before = want.to_vec();
             let mut want_ch = [0u32; H];
-            render_held::<128>(&p, &mut sa, None, None, &mut held_a, &i, &OWN, want, Some(&mut want_ch));
+            render_held::<128>(
+                &p,
+                &mut sa,
+                None,
+                None,
+                &mut held_a,
+                &i,
+                &OWN,
+                want,
+                Some(&mut want_ch),
+            );
             let want = want.to_vec();
             let got = words_as_bytes(&mut got_w);
             assert_eq!(&got[..], &before[..]);
@@ -2594,17 +2731,36 @@ fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
             let mut sink = |q: usize, out: &[u8], a: u32, b: u32| {
                 let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
                 for r in 0..H / 2 {
-                    let pic = if q != BEAM_START && r <= q { &want[..] } else { &before[..] };
-                    assert!(row(r, out) == row(r, pic) && row(r + H / 2, out) == row(r + H / 2, pic),
-                        "{name} at {ms} ms: pair {r} when pair {q} was told");
+                    let pic = if q != BEAM_START && r <= q {
+                        &want[..]
+                    } else {
+                        &before[..]
+                    };
+                    assert!(
+                        row(r, out) == row(r, pic) && row(r + H / 2, out) == row(r + H / 2, pic),
+                        "{name} at {ms} ms: pair {r} when pair {q} was told"
+                    );
                 }
                 told.push((q, a, b));
             };
-            render_rows_beam::<128>(&p, &mut sb, None, None, &i, &OWN, Some(held_b.picture()), got, Some(&mut got_ch), &mut sink);
+            render_rows_beam::<128>(
+                &p,
+                &mut sb,
+                None,
+                None,
+                &i,
+                &OWN,
+                Some(held_b.picture()),
+                got,
+                Some(&mut got_ch),
+                &mut sink,
+            );
             assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
             assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-            let want_told: alloc::vec::Vec<_> =
-                [(BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|q| (q, want_ch[q], want_ch[q + H / 2]))).collect();
+            let want_told: alloc::vec::Vec<_> = [(BEAM_START, 0, 0)]
+                .into_iter()
+                .chain((0..H / 2).map(|q| (q, want_ch[q], want_ch[q + H / 2])))
+                .collect();
             assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
             n += 1;
         }
@@ -2616,22 +2772,60 @@ fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
 #[test]
 fn rate_error_messages() {
     let cases: &[(&str, &str, &str)] = &[
-        ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "write the blend first", "—"),
-        ("layer { gray(x) }\nlayer add rate 4 { gray(y) }", "bottom layers only", "E941"),
-        ("layer rate 1 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
-        ("layer rate 2.5 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
-        ("layer rate 4 { gray(x) }\nlayer multiply rate 5 { gray(y) }\nlayer add { gray(t) }", "share one", "E943"),
-        ("layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }", "must cover the whole panel", "E944"),
-        ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
-        ("layer rate 4 { gray(x) }\nlayer add { gray(ur) }", "can't read", "E944"),
-        ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),
+        (
+            "layer { gray(x) }\nlayer rate 4 add { gray(y) }",
+            "write the blend first",
+            "—",
+        ),
+        (
+            "layer { gray(x) }\nlayer add rate 4 { gray(y) }",
+            "bottom layers only",
+            "E941",
+        ),
+        (
+            "layer rate 1 { gray(x) }\nlayer add { gray(y) }",
+            "2 to 200",
+            "E942",
+        ),
+        (
+            "layer rate 2.5 { gray(x) }\nlayer add { gray(y) }",
+            "2 to 200",
+            "E942",
+        ),
+        (
+            "layer rate 4 { gray(x) }\nlayer multiply rate 5 { gray(y) }\nlayer add { gray(t) }",
+            "share one",
+            "E943",
+        ),
+        (
+            "layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }",
+            "must cover the whole panel",
+            "E944",
+        ),
+        (
+            "layer rate 4 { gray(ul) }\nlayer add { gray(y) }",
+            "can't read",
+            "E944",
+        ),
+        (
+            "layer rate 4 { gray(x) }\nlayer add { gray(ur) }",
+            "can't read",
+            "E944",
+        ),
+        (
+            "draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }",
+            "can't read",
+            "E944",
+        ),
         ("layer rate 4 { gray(x) }", "add a layer above", "E947"),
     ];
     let mut bad = alloc::vec::Vec::new();
     for &(src, want, code) in cases {
         match compile(src) {
             Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
-            Err(e) if !e.msg.contains(want) => bad.push(alloc::format!("{code} {src:?}: {}", e.msg)),
+            Err(e) if !e.msg.contains(want) => {
+                bad.push(alloc::format!("{code} {src:?}: {}", e.msg))
+            }
             Err(_) => {}
         }
     }
@@ -2695,7 +2889,10 @@ fn names_may_be_set_again() {
         assert!(pa == pb, "{a:?} is not {b:?}");
     };
     same("v = x\nv = v*2\ngray(v)", "v = x*2\ngray(v)");
-    same("v = t\nv = v + x\nv = sin(v)\ngray(v)", "q = sin(t + x)\ngray(q)");
+    same(
+        "v = t\nv = v + x\nv = sin(v)\ngray(v)",
+        "q = sin(t + x)\ngray(q)",
+    );
     same(
         "v = x\nlayer { v = y\ngray(v) }\nlayer add { gray(v*0.5) }",
         "v = x\nlayer { q = y\ngray(q) }\nlayer add { gray(v*0.5) }",
@@ -2704,7 +2901,10 @@ fn names_may_be_set_again() {
         "v = x\nlayer { v = v*y\ngray(v) }\nlayer add { gray(v) }",
         "v = x\nlayer { q = v*y\ngray(q) }\nlayer add { gray(v) }",
     );
-    same("fn p(a) {\n  v = a\n  v = v*0.5\n  v\n}\ngray(p(x))", "gray(x*0.5)");
+    same(
+        "fn p(a) {\n  v = a\n  v = v*0.5\n  v\n}\ngray(p(x))",
+        "gray(x*0.5)",
+    );
     same(
         "k = 3\ndraw { for k < 4 { dot(k, 1) } }\ngray(ink*k/4)",
         "k = 3\ndraw { for j < 4 { dot(j, 1) } }\ngray(ink*k/4)",
@@ -2713,19 +2913,49 @@ fn names_may_be_set_again() {
         "draw { for k < 4 { v = k\nv = v*2\ndot(v, 1) } }\ngray(ink)",
         "draw { for k < 4 { dot(k*2, 1) } }\ngray(ink)",
     );
-    same(" s = t\ns = s*2 \ngray(frac(s + x))", "s = t*2\ngray(frac(s + x))");
+    same(
+        " s = t\ns = s*2 \ngray(frac(s + x))",
+        "s = t*2\ngray(frac(s + x))",
+    );
     same("cycle = 2\ncycle = cycle*x\ngray(cycle)", "gray(2*x)");
-    same("loop forever\nseed = 0.25\nseed = seed*2\ngray(seed)", "loop forever\ngray(0.5)");
+    same(
+        "loop forever\nseed = 0.25\nseed = seed*2\ngray(seed)",
+        "loop forever\ngray(0.5)",
+    );
     // Kinds that keep their names, and counters.
     for (src, want) in [
-        ("table T = 1\nT = 2\ngray(T)", "`T` is already the name of a table (line 1)"),
-        ("v = 1\ntable v = 2\ngray(v)", "`v` is already the name of a value (line 1)"),
-        ("fn p(a) = a\nlayer { p = 2\ngray(p) }", "`p` is already the name of a function (line 1)"),
-        ("control s 0..1\ncontrol s 0..2\ngray(s)", "`s` is already the name of a control (line 1)"),
-        ("control s 0..1 = 0.5\ns = s*2\ngray(s)", "`s` is already the name of a control (line 1)"),
-        ("control s 0..1\ndraw { for s < 4 { dot(s, 1) } }\ngray(ink*s)", "`s` is already the name of a control (line 1)"),
-        ("draw { for k < 4 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set"),
-        ("draw { for k < 4 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here"),
+        (
+            "table T = 1\nT = 2\ngray(T)",
+            "`T` is already the name of a table (line 1)",
+        ),
+        (
+            "v = 1\ntable v = 2\ngray(v)",
+            "`v` is already the name of a value (line 1)",
+        ),
+        (
+            "fn p(a) = a\nlayer { p = 2\ngray(p) }",
+            "`p` is already the name of a function (line 1)",
+        ),
+        (
+            "control s 0..1\ncontrol s 0..2\ngray(s)",
+            "`s` is already the name of a control (line 1)",
+        ),
+        (
+            "control s 0..1 = 0.5\ns = s*2\ngray(s)",
+            "`s` is already the name of a control (line 1)",
+        ),
+        (
+            "control s 0..1\ndraw { for s < 4 { dot(s, 1) } }\ngray(ink*s)",
+            "`s` is already the name of a control (line 1)",
+        ),
+        (
+            "draw { for k < 4 { k = 2\ndot(k, 1) } }\ngray(ink)",
+            "`k` is a loop counter: it can't be set",
+        ),
+        (
+            "draw { for k < 4 { for k < 2 { dot(k, 1) } } }\ngray(ink)",
+            "`k` is already a loop counter here",
+        ),
         ("v = v*2\ngray(v)", "unknown name `v`"),
     ] {
         let e = compile(src).unwrap_err();
@@ -2746,9 +2976,18 @@ fn palette_entries_have_names() {
         assert!(pa == pb, "{a:?} is not {b:?}");
     };
     let p = "palette road = black #000, #403, kerb #806, #ec0, sky #f48\n";
-    same(&format!("{p}pal(road, road.kerb)"), &format!("{p}pal(road, 2/4)"));
-    same(&format!("{p}pal(road, road.sky - road.step*x)"), &format!("{p}pal(road, 4/4 - 1/4*x)"));
-    same(&format!("{p}gray(road.n/8 + road.black)"), &format!("{p}gray(5/8)"));
+    same(
+        &format!("{p}pal(road, road.kerb)"),
+        &format!("{p}pal(road, 2/4)"),
+    );
+    same(
+        &format!("{p}pal(road, road.sky - road.step*x)"),
+        &format!("{p}pal(road, 4/4 - 1/4*x)"),
+    );
+    same(
+        &format!("{p}gray(road.n/8 + road.black)"),
+        &format!("{p}gray(5/8)"),
+    );
     same(
         "palette p = a #000, b #fff\npal(p, p.b)",
         "palette p = #000, #fff\npal(p, 1)",
@@ -2768,7 +3007,16 @@ fn ink_zero_walks_nothing() {
         let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
         let mut ink = Ink::boxed();
         let mut out = [0u8; W * H * 3];
-        render_rows_ink::<128>(&p, &mut Scratch::new(), Some(&mut ink), &Inputs::default(), &OWN, None, u32::MAX, &mut out);
+        render_rows_ink::<128>(
+            &p,
+            &mut Scratch::new(),
+            Some(&mut ink),
+            &Inputs::default(),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
         out
     };
     // 40 hidden lines of 812 steps each (32,480: twice the frame's 16,384),
@@ -2777,7 +3025,8 @@ fn ink_zero_walks_nothing() {
     let none = draw("draw { for j < 128 { dot(j, 31) } }\ngray(ink)");
     assert!(hidden == none);
     // Shown at one end: walked, as ever (the same picture as before).
-    let a = draw("draw { line(0, 0, 127, 31, 0, 1); line(0, 31, 127, 0, 0); dot(3, 3, 0) }\ngray(ink)");
+    let a =
+        draw("draw { line(0, 0, 127, 31, 0, 1); line(0, 31, 127, 0, 0); dot(3, 3, 0) }\ngray(ink)");
     let b = draw("draw { line(0, 0, 127, 31, 0, 1) }\ngray(ink)");
     assert!(a == b);
 }
@@ -2792,10 +3041,15 @@ fn every_formula() -> Vec<(String, String)> {
     v.dedup();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for dir in [root.join("formulas"), root.join("../opendmd-web/formulas")] {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         files.sort();
-        for f in files.into_iter().filter(|f| f.extension().is_some_and(|e| e == "psi")) {
+        for f in files
+            .into_iter()
+            .filter(|f| f.extension().is_some_and(|e| e == "psi"))
+        {
             let name = f.file_name().unwrap().to_string_lossy().into_owned();
             v.push((name, std::fs::read_to_string(&f).unwrap()));
         }
@@ -2822,7 +3076,16 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
             // The picture before (word-aligned, as the player's canvas).
             let mut before_w = vec![0u32; W * H * 3 / 4];
             let before = words_as_bytes(&mut before_w);
-            render_rows_ink::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), &before_in, &OWN, None, u32::MAX, before);
+            render_rows_ink::<LANES>(
+                &prog,
+                &mut Scratch::new(),
+                Some(&mut Ink::boxed()),
+                &before_in,
+                &OWN,
+                None,
+                u32::MAX,
+                before,
+            );
             let before = before.to_vec();
             for still_on in [false, true] {
                 // At once.
@@ -2832,12 +3095,31 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
                 want.copy_from_slice(&before);
                 let mut want_ch = [0u32; H];
                 {
-                    let s = if still_on && st.take(&prog) { Some(&mut st) } else { None };
-                    render_rows_changed::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s, &inputs, &OWN, None, u32::MAX, want, &mut want_ch);
+                    let s = if still_on && st.take(&prog) {
+                        Some(&mut st)
+                    } else {
+                        None
+                    };
+                    render_rows_changed::<LANES>(
+                        &prog,
+                        &mut Scratch::new(),
+                        Some(&mut Ink::boxed()),
+                        s,
+                        &inputs,
+                        &OWN,
+                        None,
+                        u32::MAX,
+                        want,
+                        &mut want_ch,
+                    );
                 }
                 // Raced: twice with the still cache (kept, then used).
                 let mut st2 = Still::new();
-                let mut s2 = if still_on && st2.take(&prog) { Some(&mut st2) } else { None };
+                let mut s2 = if still_on && st2.take(&prog) {
+                    Some(&mut st2)
+                } else {
+                    None
+                };
                 for pass in 0..1 + usize::from(s2.is_some()) {
                     let mut got_w = vec![0u32; W * H * 3 / 4];
                     let got = words_as_bytes(&mut got_w);
@@ -2851,36 +3133,81 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
                         // frame.)
                         let drawn = |q: usize| p != BEAM_START && q <= p;
                         for q in (0..H / 2).filter(|&q| drawn(q) || prog.rate().is_none()) {
-                            let (top, bottom) = if drawn(q) { (&want[..], &want[..]) } else { (&before[..], &before[..]) };
-                            assert!(row(q, out) == row(q, top) && row(q + H / 2, out) == row(q + H / 2, bottom),
-                                "{name} at {ms} ms: pair {q} when pair {p} was told");
+                            let (top, bottom) = if drawn(q) {
+                                (&want[..], &want[..])
+                            } else {
+                                (&before[..], &before[..])
+                            };
+                            assert!(
+                                row(q, out) == row(q, top)
+                                    && row(q + H / 2, out) == row(q + H / 2, bottom),
+                                "{name} at {ms} ms: pair {q} when pair {p} was told"
+                            );
                         }
                         told.push((p, a, b));
                     };
-                    render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s2.as_deref_mut(), &inputs, &OWN, None, got, Some(&mut got_ch), &mut sink);
-                    assert_eq!(&got[..], &want[..], "{name} at {ms} ms, still {still_on} pass {pass}");
+                    render_rows_beam::<LANES>(
+                        &prog,
+                        &mut Scratch::new(),
+                        Some(&mut Ink::boxed()),
+                        s2.as_deref_mut(),
+                        &inputs,
+                        &OWN,
+                        None,
+                        got,
+                        Some(&mut got_ch),
+                        &mut sink,
+                    );
+                    assert_eq!(
+                        &got[..],
+                        &want[..],
+                        "{name} at {ms} ms, still {still_on} pass {pass}"
+                    );
                     assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-                    let want_told: Vec<_> =
-                        [(BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
+                    let want_told: Vec<_> = [(BEAM_START, 0, 0)]
+                        .into_iter()
+                        .chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])))
+                        .collect();
                     assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
                     frames += 1;
                 }
             }
             // Without a compare: the bytes, every group said to change.
             let mut want = vec![0u8; W * H * 3];
-            render_rows_still::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, None, u32::MAX, &mut want);
+            render_rows_still::<LANES>(
+                &prog,
+                &mut Scratch::new(),
+                Some(&mut Ink::boxed()),
+                None,
+                &inputs,
+                &OWN,
+                None,
+                u32::MAX,
+                &mut want,
+            );
             let mut got = vec![0u8; W * H * 3];
             let mut told = 0;
             let mut started = false;
-            render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, None, &mut got, None, &mut |p, _, a, b| {
-                if p == BEAM_START {
-                    assert!(!started && told == 0);
-                    started = true;
-                    return;
-                }
-                assert_eq!((p, a, b), (told, u32::MAX, u32::MAX));
-                told += 1;
-            });
+            render_rows_beam::<LANES>(
+                &prog,
+                &mut Scratch::new(),
+                Some(&mut Ink::boxed()),
+                None,
+                &inputs,
+                &OWN,
+                None,
+                &mut got,
+                None,
+                &mut |p, _, a, b| {
+                    if p == BEAM_START {
+                        assert!(!started && told == 0);
+                        started = true;
+                        return;
+                    }
+                    assert_eq!((p, a, b), (told, u32::MAX, u32::MAX));
+                    told += 1;
+                },
+            );
             assert_eq!(got, want, "{name} at {ms} ms, no compare");
             assert!(started);
             assert_eq!(told, H / 2);

@@ -1133,7 +1133,10 @@ pub fn code_of(msg: &str) -> Option<u16> {
 
 /// The entry for `code`.
 pub fn doc(code: u16) -> Option<&'static ErrorDoc> {
-    ERRORS.binary_search_by_key(&code, |d| d.code).ok().map(|i| &ERRORS[i])
+    ERRORS
+        .binary_search_by_key(&code, |d| d.code)
+        .ok()
+        .map(|i| &ERRORS[i])
 }
 
 /// "E203".

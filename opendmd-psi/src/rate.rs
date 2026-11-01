@@ -148,7 +148,11 @@ fn slow_rows<const N: usize>(
                 mask |= 1 << j;
             }
         }
-        let i = if reads_t { inputs_at(prog, inputs, tm) } else { *inputs };
+        let i = if reads_t {
+            inputs_at(prog, inputs, tm)
+        } else {
+            *inputs
+        };
         frame::<N>(
             prog,
             scratch,
@@ -370,16 +374,44 @@ pub fn render_held<const N: usize>(
     if prog.slow_marker().is_none() {
         match changed {
             Some(ch) => crate::render_rows_changed::<N>(
-                prog, scratch, ink, still, inputs, tables, None, u32::MAX, out, ch,
+                prog,
+                scratch,
+                ink,
+                still,
+                inputs,
+                tables,
+                None,
+                u32::MAX,
+                out,
+                ch,
             ),
             None => crate::render_rows_still::<N>(
-                prog, scratch, ink, still, inputs, tables, None, u32::MAX, out,
+                prog,
+                scratch,
+                ink,
+                still,
+                inputs,
+                tables,
+                None,
+                u32::MAX,
+                out,
             ),
         }
         return;
     }
     held.update::<N>(prog, scratch, inputs, tables);
-    render_fast::<N>(prog, scratch, ink, still, inputs, tables, Some(&held.pic), u32::MAX, out, changed);
+    render_fast::<N>(
+        prog,
+        scratch,
+        ink,
+        still,
+        inputs,
+        tables,
+        Some(&held.pic),
+        u32::MAX,
+        out,
+        changed,
+    );
 }
 
 /// The fast part of a `rate` formula's frame over `under` (the slow
