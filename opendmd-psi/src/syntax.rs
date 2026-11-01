@@ -51,7 +51,8 @@ pub enum Defined {
     Value,
     /// A draw stage's `for k < n`.
     Counter,
-    Part,
+    /// `fn name(…)`.
+    Function,
     Table,
     Sprite,
     Palette,

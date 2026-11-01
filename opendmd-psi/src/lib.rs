@@ -66,7 +66,7 @@ mod vm;
 
 #[cfg(feature = "compiler")]
 pub use compile::{
-    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, squeeze,
+    compact, compile_declared, compile_look, compile_look_with, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_portable, compile_unfused, compile_with, squeeze,
     Declared, DeclaredControl, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
     MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
@@ -144,13 +144,13 @@ pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
         .unwrap_or("");
     let mut play = alloc::boxed::Box::new(Program::default());
     compile_portable(src, &mut play)?;
-    let look = match look::declared(src, &play) {
-        Some(composed) => {
+    let look = match play.meta().look() {
+        Some((blend, amount)) if blend != "over" || amount < 100 => {
             let mut l = alloc::boxed::Box::new(Program::default());
-            compile_portable(&composed?, &mut l)?;
+            compile_look(src, &mut l)?;
             Some(l)
         }
-        None => None,
+        _ => None,
     };
     Ok(psb::encode(name, &play, look.as_deref()))
 }
@@ -346,7 +346,7 @@ pub mod golden {
     pub const SPRITE_CAR: &str = "sprite car {\n  key . 0, R 1, D 2, L 3\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\nk = car[px - 50.5, py - 23]\npick(k, #203040, #e02020, #101010, #ffa020)";
 
     /// A golden formula with palettes of its own.
-    pub const PALETTES_OWN: &str = "loop 2\npalette sea = #001020, #0060a0, #40c0e0, #ffffff\npalette ember = #200000, #c02000,\n  #ffa020\nsprite dot {\n  key . 0, o 1, O 0.5\n  .oOo.\n  oOOOo\n  .oOo.\n}\npart glow {\n  palette ember = #200000, #c02000, #ffa020\n  pal(ember, frac(x*4 - t/2))\n}\nlayer { pal(sea, y + sin(x*2 + t/2)*0.2) * (0.6 + x*0.4) }\nlayer screen { glow(x, y, 0.5) }\nlayer add { pal(ember, dot[px % 6, py % 4]) }";
+    pub const PALETTES_OWN: &str = "loop 2\npalette sea = #001020, #0060a0, #40c0e0, #ffffff\npalette ember = #200000, #c02000,\n  #ffa020\nsprite dot {\n  key . 0, o 1, O 0.5\n  .oOo.\n  oOOOo\n  .oOo.\n}\nfn glow(x, y) = pal(ember, frac(x*4 - t/2), 0.5)\nlayer { pal(sea, y + sin(x*2 + t/2)*0.2) * (0.6 + x*0.4) }\nlayer screen { glow(x, y) }\nlayer add { pal(ember, dot[px % 6, py % 4]) }";
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
     /// every channel somewhere (a hash per pixel), with smooth ramps across
@@ -402,11 +402,10 @@ pub mod golden {
     ("tables", "table T = 0, 0.25, 0.5, 1, -1\ntable P = 3, 9, 27\nf = T[floor(t*2)]\ndraw {\n  for k < 5 { dot(P[k % 3]*4 + k, T[k]*20 + 5, T[k] + 0.5) }\n  dot(100, 10, f + 0.5)\n}\nrgb(T[px % 6] + ink, T[py % 4], f + T[-1] + T[2.9])", 1000, false, 0x1feb9c1298243e5f),
     ("loops", "loop 4\ndraw {\n  for k < 1 { line(0, 0, 127, 0) }\n  for j < 1024 { dot(j % 128, floor(j/128)*4 + 2, hash(j, floor(t))) }\n}\npal(fire, ink)", 2000, false, 0xb8a6a36408cde385),
     ("nested", "loop 4.8\ndraw {\n  for s < 12 {\n    th = s/12 + t/4.8\n    for r < 6 {\n      ph = r/6\n      rad = 30 + 10*cos(ph)\n      x0 = 64 + rad*cos(th); y0 = 16 + 10*sin(ph) + rad*sin(th)*0.2\n      x1 = 64 + rad*cos(th + 1/12); y1 = 16 + 10*sin(ph) + rad*sin(th + 1/12)*0.2\n      line(x0, y0, x1, y1, 0.3 + r/9, 1 - r/9)\n    }\n  }\n}\nhsv(x + t/4.8, 0.7, ink)", 1200, false, 0xdcef36f6fa52496b),
-    ("ink-part", "part p {\n  loop 2\n  draw { for k < 24 { dot(k*5 + t*2, 16 + sin(k/24 + t/2)*12) } }\n  gray(ink)\n}\nlayer { p(x*0.5, y) }\nlayer add { p(1 - x, y, 0.5) }", 500, false, 0x53f12da91378c8f9),
     ("forever-rows", super::golden::FOREVER_ROWS, 3_500, false, 0xb103becafa6ec425),
     ("forever-rows", super::golden::FOREVER_ROWS, 40_000_000, true, 0x19e63a938a8b8dc0),
     ("ink-levels", "loop 2\ndraw {\n  for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) }\n  for j < 3 { dot(t*60 + j, 16, j/3) }\n}\nn = ink(16)\nrgb(pick(n, 0, 0.1, 0.3, 0.5, 0.7, 0.9, 1, 0.8, 0.6, 0.4, 0.2, 0.15, 0.25, 0.35, 0.45, 0.55), ink(3)/3, ink(255)/255)", 700, false, 0x1c96c08131bb6ba0),
-    ("ink-look", "part look {\n  loop 4.8\n  draw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\n  #40c0ff * ink\n}\nloop 4.8\nlayer screen { look(x, y, 0.4) }", 600, true, 0x7712d62a80b1dbca),
+    ("ink-look", "loop 4.8\ndraw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\nlayer screen { rgb(#40c0ff * ink, 0.4) }", 600, true, 0x7712d62a80b1dbca),
     ];
 }
 
@@ -482,19 +481,18 @@ pub mod worst {
         format!("{s}\ngray(v)")
     }
 
-    /// Parts inside parts, each drawn at several places: the most reading
-    /// again (stopped by the compiler's bound on it).
-    pub fn parts() -> String {
-        let mut s = String::from("part p0 { v = sin(x*3 + t)*y\ngray(v) }\n");
+    /// Functions calling functions, each several times: the most reading
+    /// again (stopped by the compiler's bounds on it).
+    pub fn functions() -> String {
+        let mut s = String::from("fn f0(a, b) = sin(a*3 + t)*b\n");
         for k in 1.. {
             let j = k - 1;
             let next = format!(
-                "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
+                "{s}fn f{k}(a, b) = f{j}(a*0.5, b) + f{j}(b, a) + f{j}(a + 0.1, b) + f{j}(a, b*2) + f{j}(1 - a, b)\n"
             );
-            if path_len(&format!("{next}p{k}")) > PATH_MAX
-                || crate::compile(&format!("{next}p{k}")).is_err_and(|e| e.msg.contains("too deep"))
-            {
-                return format!("{s}p{j}");
+            let src = format!("{next}gray(f{k}(x, y))");
+            if path_len(&src) > PATH_MAX || crate::compile(&src).is_err() {
+                return format!("{s}gray(f{j}(x, y))");
             }
             s = next;
         }
@@ -569,17 +567,17 @@ pub mod worst {
         s
     }
 
-    /// Parts inside parts, each drawn in a layer at another place, as deep
-    /// as the cap allows, with a misspelt name at the bottom.
-    pub fn parts_in_layers() -> String {
+    /// Functions inside functions, each called in a layer at another place,
+    /// as deep as the cap allows, with a misspelt name at the bottom.
+    pub fn functions_in_layers() -> String {
         let mut best = String::new();
         for depth in 1..12 {
-            let mut s = String::from("part p0 {\nv = sin(cos(x*3 + tme))\ngray(v)\n}\n");
+            let mut s = String::from("fn p0(x, y) {\nv = sin(cos(x*3 + tme))\nv*y\n}\n");
             for k in 1..depth {
                 let j = k - 1;
-                s = format!("part p{k} {{\n{s}layer {{ p{j}(x*0.5, sin(y)) }}\nlayer {{ p{j}(1 - x, y, 0.5) }}\n}}\n");
+                s = format!("{s}fn p{k}(x, y) = p{j}(x*0.5, sin(y)) + p{j}(1 - x, y)*0.5\n");
             }
-            let src = format!("{s}layer {{ p{}(x, y) }}", depth - 1);
+            let src = format!("{s}layer {{ gray(p{}(x, y)) }}\nlayer add {{ gray(p{}(y, x), 0.5) }}", depth - 1, depth - 1);
             match crate::compile(&src) {
                 Err(e) if e.msg.starts_with("unknown name") => best = src,
                 _ => break,
@@ -657,35 +655,24 @@ pub mod worst {
         deepest_in(&head, ")", |s| format!("digit({s}, zoom, mode)"))
     }
 
-    /// A part whose own lines declare three controls (a formula pasted in),
-    /// inside a part, nested as deep as it goes inside.
-    pub fn declared_part() -> String {
-        deepest_in(
-            "part q {\npart p {\nname \"P\"\ncontrol k 0..2 = 1\ncontrol m = on, off\ncontrol n = 0.5\nlook\ngray(",
-            ")\n}\np\n}\nq",
-            |s| format!("sin({s} + k*m*n)"),
-        )
-    }
-
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 15] = [
+    pub const ALL: [Case; 14] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
-        ("parts", parts),
+        ("functions", functions),
         ("nested", nested),
         ("nested digit", nested_digit),
         ("nested mix", nested_mix),
         ("nested pick", nested_pick),
-        ("parts in layers", parts_in_layers),
+        ("functions in layers", functions_in_layers),
         ("draw", draw),
         ("nested sprite", nested_sprite),
         ("nested forever", nested_forever),
         ("nested palette", nested_palette),
         ("declared", declared),
-        ("declared part", declared_part),
     ];
 }
 

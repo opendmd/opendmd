@@ -66,10 +66,10 @@ decl      = "psi" NUMBER                      -- the language version, first lin
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
-          | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
           | NAME "=" expr                     -- may set a name again: a read sees the latest
-          | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
-          | "part" NAME "{" formula-body "}"  -- another formula inside this one
+          | "layer" [BLEND] "{" { assign } colourline "}"
+          | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
+          | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
@@ -81,7 +81,7 @@ colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
           | "pal" "(" PALETTE "," e [ "," cover ] ")"
           | "gray" "(" e [ "," cover ] ")"
-          | PART [ "(" e "," e [ "," cover ] ")" ]   -- a part's colour, maybe elsewhere
+          | FN "(" args ")"                    -- a function whose last line is a colour
           | ce                                 -- a colour expression (see 6)
           | e                                  -- a bare value: gray(e)
 ce        = an expr with a COLOUR or an "rgb(" e "," e "," e ")" in it, read
@@ -94,8 +94,8 @@ cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
-atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
-          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
+atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | FN "(" args ")"
+          | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
                                                -- pick: e "," e { "," e }
 sep       = newline | ";"                      -- newlines inside ( ) and [ ] are spaces
@@ -116,7 +116,7 @@ The declarations (`decl`) come first, before every other line; each once
 `and`/`or` bind looser than comparisons, `not` looser than comparisons too
 (`not x < 0.5` is `not (x < 0.5)`). An expression continues onto the next
 line after an operator or inside brackets. The colour line must be the last
-line (of the formula, of a part, or of a layer). With `layer` blocks, every
+line (of the formula, of a function, or of a layer). With `layer` blocks, every
 colour goes inside a layer.
 
 ## 3. Numbers
@@ -158,7 +158,7 @@ steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
 are 0. **Any built-in value or function name may be set as your own**
 (`b = 0.5`, `r = 3`, `len = 2`): from then on the name is yours (a call,
 `len(…)`, is still the function). Only the words of the language (`loop
-layer part use draw for table`) and palette names can't be names.
+layer part use draw for table fn`) and palette names can't be names.
 
 ### What a formula says it is: the declarations
 
@@ -200,8 +200,6 @@ gray(smoothstep(0.8, 1, k) * (r < 0.45))
   Played on its own (on the panel, in a playlist) the line is ignored.
 - **`psi 1`**, on the first line, says the formula is written for version 1
   of the language. Never needed: a formula without it is version 1.
-- A formula pasted into another as a part keeps its declarations; there only
-  its `control` lines do anything (its names read the same slots).
 
 ```psi error
 -- error: `name` goes at the top of the formula, before its other lines
@@ -288,7 +286,7 @@ The last line is the colour:
 | `rgb(c, k)` | colour expression `c` covering `k` of the pixel |
 
 **Palettes of your own.** `palette sea = #001020, #0060a0, #40c0e0, #fff`
-(a line at the top of the formula or a part; 1 to 32 colours, a `,` may
+(a line at the top of the formula; 1 to 32 colours, a `,` may
 end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
 `pal(sea, k) * v`, `pal(sea, k, cover)`. With n colours, `pal(sea,
 i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
@@ -382,7 +380,7 @@ over `s`; add `min(255, d + s)`; multiply `d·s/255`; screen `d + s − d·s/255
 max; min. Then coverage moves `d` towards that result. A layer has its own
 names (two layers may both set `v`); it
 sees names set before it outside the layers, but may not set them again.
-`loop`, `fps` and `part` go outside layers. Layers do not nest. A layer under an
+`loop` and `fps` go outside layers. Layers do not nest. A layer under an
 opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
 
 **Slow layers: `layer [blend] rate N { … }`** (N 2..200). The bottom
@@ -395,7 +393,7 @@ reads no `t` is redrawn only when what it reads changes (once a second for
 a clock's `second`). The layers above are drawn over it every frame. Rules
 (E941-E947): `rate` only on the bottom run, one N, at least one layer above
 it, the bottom one opaque (no blend, no coverage), no `ink` or `ur ug ub
-ul` in a slow layer; inside a part `rate` is left out (as `fps` is). Cost: the slow layers' pixel steps
+ul` in a slow layer. Cost: the slow layers' pixel steps
 ÷ N, plus a row copy; as a look the slow layers are drawn every frame.
 Commutative blends (`multiply`, `min`, `max`, `add`, `screen`) let a
 static mask sit at the bottom: Big clock's digits as `layer rate 50 {
@@ -412,10 +410,9 @@ pixel. A formula that does neither replaces the GIF (and is refused as a
 GIF look as it is). Alone, the picture under it is black. Looks are capped
 at 12 ms (a look over 8 ms moves at 25 frames a second). **Any** formula
 can be a look: a **`look screen 40`** line at its top (section 4) says how it
-goes on — the player pastes the formula in as a part and draws it with that
-blend and coverage, `part look { … }` then `layer screen { look(x, y, 0.4) }`
-(`opendmd_psi::look`) — so a model never writes that wrapper itself. A
-formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
+goes on — the compiler puts the formula's colour on with that blend and
+coverage (`opendmd_psi::compile_look`), so a model never writes that
+itself. A formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
 `fps` line is not used over a GIF.
 
 **Moving the picture: `under(x, y)`.** In a colour expression (the last
@@ -436,50 +433,49 @@ colour fringe: `rgb(under(px - 1, py) … )` is not allowed (rgb takes
 values): write `mix(under(px - 1, py), under(px + 1, py), 0.5)` or read the
 channels at the pixel with `ur ug ub`.
 
-## 9. Parts: one formula inside another
+## 9. Functions
 
 ```psi
-part p {
-  loop 8
-  wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
-  hsv(wave/4 + t/8, 0.9, 1)
+loop 8
+fn wave(x, y) = sin(x*2 + t/8) + sin(y*1.5 - t/4)
+fn plasma(x, y) {
+  w = wave(x, y)
+  hsv(w/4 + t/8, 0.9, 1)
 }
-layer { p }
-layer add { p(1 - x, y, 0.5) }
+-- folded: the same quarter in every corner, mirrored
+plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)
 ```
 
-- `part NAME { … }` holds a whole formula: `loop`, names,
-  layers, parts, and (optionally) a colour line. It draws nothing until
-  used. It sees **only its own names** and the built-ins: outer names are
-  invisible inside, and its names are invisible outside except as `p.v`.
-  So any formula can be pasted in unchanged. A part's `fps` line is
-  allowed and has no effect: the frame rate is the whole formula's.
-- **As a colour** (a whole last line of the formula or of a layer): `p`;
-  `p(x', y')` draws it as if this pixel were at (x', y') — inside, `x`, `y`
-  are those, `px = floor(x'·127 + ½)`, `py = floor(y'·31 + ½)`, `i` from
-  them; `p(x', y', k)` also covers `k` of the pixel (like every colour's
-  extra value). `p(x, y)` is just `p`.
-- **As values**: `p.v` is the value `v` set at the part's top level;
-  `p(x', y').v` the same at another place. A part used only for values needs
-  no colour line.
-- **Its own time**: inside a part, `t` is `t % (its loop)` (its `loop`, or
-  8 s like any formula), unless the formula's loop is no longer than the
-  part's. Make the formula's loop a multiple of its parts' loops.
-- A part with layers keeps its blends: draw it with `layer { p }` (no blend
-  name) or as the last line; with coverage, each of its layers covers that
-  much less.
-- `ur ug ub ul` inside a part read the picture at the real pixel.
-- Each place a part is drawn at is its own steps (counted in the 256);
-  drawn where the pixel is, a part costs what it cost alone.
-- In the web editor, the line `use Plasma as p` pastes the saved formula or
-  example called Plasma in as `part p { … }` (never the formula being
-  edited; `use` lines inside what it pastes become comments); anything
-  shared or saved is always the pasted, self-contained text. A model should write `part`
-  blocks directly.
+- `fn NAME(a, b) = …` is one line; `fn NAME(a, b) { … }` is lines: names
+  set (`v = …`), then its value or colour on the last line. A function
+  is **written out where it is called** (the compiler reads it again with
+  its values in place): no cost of its own, the same steps as the line
+  written out, and an unused function costs nothing.
+- Its values are names inside it, hiding names outside of the same name;
+  the names it sets stay inside. It sees the formula's other names (set
+  above the call) and every built-in.
+- **Values named `x` and `y`** move what comes from them: inside, `px`,
+  `py`, `i`, `cx`, `cy`, `r` and `angle` are those of the place (x, y). So
+  `p(1 - x, y)` draws `p` mirrored, `p(frac(x*4), y)` four times across.
+  (The same holds at the top: `y = y + sin(x*8 + t)*0.05` bends what
+  follows.) `ur ug ub ul` and `ink` stay the real pixel's.
+- **What it gives**: a value (`gray(f(x))`); a colour to mix
+  (`fn sky(v) = mix(#102040, #f80, v)`, then `mix(sky(y), #fff, k)`); or a
+  whole colour (`hsv`, `pal`, `gray` on its last line), used alone as the
+  formula's or a layer's last line.
+- **Lines that draw**: a function whose lines draw (`pset`, `line`,
+  `circfill`, `for`, `if`) is called on a line of its own inside `draw { }`
+  (section 10).
+- Functions don't call themselves; reading them again is bounded (a
+  function called many times over in nested functions is refused).
+- In the web editor, the line `use Plasma as p` puts the saved formula or
+  example called Plasma in as `fn p(x, y) { … }` (one with a single colour
+  line, no layers or draw). Anything shared or saved is the written-out
+  text. A model writes `fn` directly.
 
-Masks and crossfades need nothing more: a crossfade is a second layer whose
-coverage moves with `t`; a mask is a coverage taken from another part's
-value (examples 23 and 24).
+Masks and crossfades need nothing more: a crossfade is `mix(a, b, k)` of
+two colour functions, or a second layer whose coverage moves with `t`; a
+mask is a coverage taken from a function's value (examples 23 and 24).
 
 ## 10. Drawing: lines and dots, once a frame
 
@@ -511,15 +507,14 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   outside its loops are seen after it.
 - **`ink`** is what was drawn at this pixel. `ink` with no `draw { }` is an
   error; a `draw { }` that nothing shows (no `ink` in a colour that can be
-  seen) is left out. One `draw { }` per formula (the formula's, or one
-  part's: there is one canvas). Inside a part drawn elsewhere, `ink` is
-  still the real pixel's: the canvas is not moved.
+  seen) is left out. One `draw { }` per formula: functions that draw are
+  called inside it.
 - **`ink(n)`** (n a whole number, 1 to 255) is the canvas in `n` levels, a
   whole number: what was drawn with ink `k/n` reads `k`, exactly, for every
   k ≤ n. Draw each kind of thing with its own tag and colour them with a
   `pick`: `line(…, 6/16)` for the hills, then `pal(P, pick(ink(16), …))`.
   One step a pixel (~90 ns), no `+ ½` offsets, no `floor`.
-- **Tables**: `table V = -1, 1, 0.5` at the top of the formula (or a part),
+- **Tables**: `table V = -1, 1, 0.5` at the top of the formula,
   numbers only, 256 in all; `V[k]` is number `floor(k)` counting from 0, and
   0 outside the table. Any level: per pixel `V[px % 3]` is one step, like
   `pick`. A comma may end a line and the numbers go on.
@@ -639,10 +634,7 @@ glow = smoothstep(0, 5, t)         -- a fade-in over the first five seconds
 hsv(ahead + x*0.2, 0.8, glow*noise(x*8 + t, y*4, u))
 ```
 
-Without an envelope or a blend at a loop's seam, a drive here has none. A
-part pasted in with a `loop N` of its own still repeats every N seconds
-(its `t` is `t % N`); a `loop forever` part inside a looped formula reads
-the formula's `t`.
+Without an envelope or a blend at a loop's seam, a drive here has none.
 
 ## 12. Limits
 
@@ -652,22 +644,22 @@ the formula's `t`.
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
 | live per-pixel values at once | 12 | holds more than 12 values at once |
 | constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs more than 128 numbers and once-a-frame values |
-| nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
+| nesting | 48 levels of brackets, operators and function calls | nested too deeply |
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
 | `noise` of a growing value with a part per pixel or per row | 4 different growing values | four different ones at most |
 | `fps` | 25, 50 or 100 | `fps` is 25, 50 or 100 frames a second |
-| re-reading parts drawn at other places | bounded | draws its parts in too many places |
+| functions read again (each call, the calls inside it included) | 65,536 tokens in all | calls its functions too many times |
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
 | `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
 | `palette` (your own) | 1 to 32 colours, 3 palettes; each takes 32 of the 256 table numbers | a palette is 1 to 32 colours / 3 palettes of its own at most / tables, sprites and palettes hold 256 numbers |
 | `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables, sprites and palettes hold 256 numbers in all |
-| `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
+| `draw { }` blocks | one | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 
-Unused names and parts cost nothing; constants fold (`2*3` is 6; `x/8` is
+Unused names and functions cost nothing; constants fold (`2*3` is 6; `x/8` is
 a multiply).
 
 ## 13. The cost model
@@ -792,9 +784,9 @@ arithmetic costs the same as `x` arithmetic.
   `layer multiply { rgb(…) }`; glow: `layer add { … }` or `screen`.
 - **Shapes over a GIF**: `layer { rgb(r, g, b, shape) }` where `shape` is
   0..1: only the shape covers.
-- **Crossfade**: `k = smoothstep(0.25, 0.75, sin(t/N)*0.5 + 0.5)`; `layer { A }`,
-  `layer { B(x, y, k) }`.
-- **Mirror / tile / zoom a part**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
+- **Crossfade**: `k = smoothstep(0.25, 0.75, sin(t/N)*0.5 + 0.5)`, then
+  `mix(a(x, y), b(x, y), k)` of two colour functions (`#…`/`rgb` last lines).
+- **Mirror / tile / zoom a function `fn p(x, y)`**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
   `p((x - 0.5)/2 + 0.5, (y - 0.5)/2 + 0.5)`.
 - **Digits and text**: work out, from `px` and `py`, which cell the pixel
   is in, which character goes there (`pick`, character codes in quotes),
@@ -896,9 +888,8 @@ gray(2x)
 ```
 
 A value may be set again, and each use reads the latest above it: `v = x`
-then `v = v * 2` is `x * 2` from there on (a layer, a part or a loop may
-set a name from outside too: its own until it closes; `p.v` is the last `v`
-on the part's own lines, its layers' left out). Parts, tables, sprites, palettes and controls keep their names:
+then `v = v * 2` is `x * 2` from there on (a layer, a function or a loop may
+set a name from outside too: its own until it closes). Functions, tables, sprites, palettes and controls keep their names:
 
 ```psi error
 -- error: is already the name of a table
@@ -971,28 +962,26 @@ gray(pick(x))
 ```
 
 ```psi error
--- error: `p` is a part: draw it as a whole last line
+-- error: there are no parts: write a function
 part p { gray(x) }
-gray(p * 0.5)
-```
-
-To scale a part, give it coverage (`p(x, y, 0.5)` in a layer) or use one of
-its values (`p.v`).
-
-```psi error
--- error: unknown name `k`
-k = 0.5
-part p { gray(k) }
 p
 ```
 
-A part sees only its own names: put `k` inside it.
+```psi error
+-- error: is a whole colour: use it alone on the colour line
+fn p(v) = hsv(v, 1, 1)
+gray(p(x) * 0.5)
+```
+
+To scale a function's colour, end it with `#…` or `rgb(…)` instead
+(`fn p(v) = rgb(v, 0.5, 1)`, then `p(x) * 0.5`), or give the hsv coverage.
 
 ```psi error
--- error: this part has layers of its own
-part p { layer { gray(x) }
-  layer multiply { gray(y) } }
-layer add { p }
+-- error: draws: call it on a line of its own inside `draw { }`
+fn tree(x0) {
+  circfill(x0, 20, 4, #2a4)
+}
+gray(tree(10))
 ```
 
 ```psi error
@@ -1283,14 +1272,13 @@ k = smoothstep(3.5, 2.5, d)
 layer { rgb(#ff3333, k*(0.7 + 0.3*sin(t/2))) }
 ```
 
-### 21. Kaleidoscope (a part drawn elsewhere)
+### 21. Kaleidoscope (a function drawn elsewhere)
 
-A pasted formula drawn at folded coordinates.
+A function of `x, y` drawn at folded coordinates.
 
 ```psi example=mirrored
 loop 8
-part plasma {
-  loop 8
+fn plasma(x, y) {
   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
   hsv(wave/6 + t/8, 0.9, 1)
 }
@@ -1298,75 +1286,64 @@ part plasma {
 plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)
 ```
 
-### 22. Tiles (a part repeated)
+### 22. Tiles (a function repeated)
 
-`frac` repeats a part across the panel.
+`frac` repeats a function across the panel.
 
 ```psi example=tiled
 loop 4
-part ring {
-  loop 4
+fn ring(x, y) {
   d = len((x - 0.5)*1, y - 0.5)
   pal(ice, frac(d*3 - t/4))
 }
--- four square tiles across: frac repeats the part's 0..1 every quarter
+-- four square tiles across: frac repeats its 0..1 every quarter
 ring(frac(x*4), y)
 ```
 
-### 23. Mask (a part's value as coverage)
+### 23. Mask (a function's value as coverage)
 
-One part's value decides where another shows.
+One function's value decides where another's colour shows.
 
 ```psi example=masked
 loop 4
-part stripes {
-  loop 4
-  s = clamp(sin((px + py)/10 - t/2)*1.5 + 0.5, 0, 1)
-  gray(s)
-}
-part plasma {
-  loop 8
+fn stripes() = clamp(sin((px + py)/10 - t/2)*1.5 + 0.5, 0, 1)
+fn plasma(k) {
   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
-  hsv(wave/4 + t/8, 0.9, 1)
+  hsv(wave/4 + t/8, 0.9, 1, k)
 }
 -- the plasma shows where the stripes are white, dark blue elsewhere
 layer { #000033 }
-layer { plasma(x, y, stripes.s) }
+layer { plasma(stripes()) }
 ```
 
-### 24. Crossfade (two parts over time)
+### 24. Crossfade (two scenes over time)
 
 A second layer whose coverage moves with `t`.
 
 ```psi example=crossfade
 loop 16
-part bars {
-  loop 4
+fn bars() {
   bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
   bar * #ff9933
 }
-part rings {
-  loop 4
-  pal(rainbow, frac(r*1.5 - t/2))
-}
+fn rings(k) = pal(rainbow, frac(r*1.5 - t/2), k)
 -- 0 to 1 and back over the loop, resting at each end
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
-layer { bars }
-layer { rings(x, y, k) }
+layer { bars() }
+layer { rings(k) }
 ```
 
 ### 25. Picture in picture
 
-A part squeezed into a window, its `px`/`py` following.
+A function squeezed into a window, its `px`/`py` following.
 
 ```psi example=picture-in-picture
 loop 4
-part candy {
-  loop 4
+fn candy(x, y, k) {
   -- px and py inside follow the place it is drawn at
   band = sin((px + py)/12 - t/2)
   s = clamp(band*1.5 + 0.5, 0, 1)
-  rgb(1, s, s)
+  rgb(1, s, s, k)
 }
 -- a dark blue background, and the candy stripes in a window on the right
 inside = step(88, px) * step(px, 123) * step(4, py) * step(py, 27)

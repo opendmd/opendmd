@@ -801,9 +801,14 @@ mod tests {
             assert!(p == compile(&src).unwrap(), "{name}: loaded program differs");
             let mut l = Program::default();
             load_into(&b, Which::Look, &mut l).unwrap();
-            match crate::look::declared(&src, &p) {
-                Some(c) => assert!(l == compile(&c.unwrap()).unwrap(), "{name}: look differs"),
-                None => assert!(l == p),
+            match p.meta().look() {
+                Some((b, a)) if b != "over" || a < 100 => {
+                    let mut c = Program::default();
+                    crate::compile_look(&src, &mut c).unwrap();
+                    c.finish(true, true);
+                    assert!(l == c, "{name}: look differs");
+                }
+                _ => assert!(l == p),
             }
             let back = from_base64(to_base64(&b).as_bytes()).unwrap();
             assert_eq!(back, b);

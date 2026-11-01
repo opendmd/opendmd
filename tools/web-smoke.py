@@ -4527,15 +4527,15 @@ def psi_frames(page: Page, sel: str) -> int:
 
 
 def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
-    """`use <name> as p` pastes an example in as `part p { … }` once the
+    """`use <name> as p` puts an example in as `fn p(x, y) { … }` once the
     caret is off its line (the text stands alone), says plainly when there is
     no formula by that name, and the combined formula plays."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     formula_editor(page, "loop 8\nuse matrix as p\nlayer { p(1 - x, y) }")
     src = page.input_value("#psi-src")
-    check("part p {\n  -- Matrix\n  name \"Matrix\"\n  about \"" in src and "\n  loop 30\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
-          and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p pastes the example in as a part ({src[:60]!r})")
+    check("-- Matrix\nfn p(x, y) {\n" in src and "name \"Matrix\"" not in src and "loop 30" not in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
+          and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p puts the example in as a function ({src[:60]!r})")
     page.fill("#psi-src", "\nr")
     page.focus("#psi-src")
     page.keyboard.press("Control+Home")
@@ -4545,7 +4545,7 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     typing = typed == "use Big clock as r\nr" and "puts a formula in" in said
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(500)
-    moved = "part r {" in page.input_value("#psi-src")
+    moved = "fn r(x, y) {" in page.input_value("#psi-src")
     check(typing and moved, f"formulas: a use line waits while the caret is on it ({typed!r}, {said!r}) and pastes when it moves off ({moved})")
     page.fill("#psi-src", "use No such thing as q\nq")
     page.wait_for_timeout(400)
@@ -4569,15 +4569,15 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     check("can’t be put inside itself" in err and "Loopy" not in mine() and page.input_value("#psi-src") == "use Loopy as p\np",
           f"formulas: a formula naming itself isn't pasted or saved ({err!r}, {mine()})")
     page.context.close()
-    # A cycle in saved text (two formulas naming each other): one paste each,
-    # the inner use left as a comment, no runaway.
+    # A cycle in saved text (two formulas naming each other): a formula with
+    # a use line of its own is no function, said so, no runaway.
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
         {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
     app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
-    src = app.input_value("#psi-src")
-    check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
+    src, err = app.input_value("#psi-src"), app.inner_text("#psi-err")
+    check("fn " not in src and "can’t be put in as a function" in err, f"formulas: a cycle through saved formulas is refused ({src!r}, {err!r})")
     page.context.close()
 
 

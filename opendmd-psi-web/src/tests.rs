@@ -106,10 +106,7 @@ fn formulas() {
     // as text, then drawn as the panel draws it (asLook).
     let s = look("hsv(x, 1, 1)", "screen", 40);
     assert_eq!(s, "look screen 40\nhsv(x, 1, 1)");
-    assert_eq!(
-        as_look(&s),
-        "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
-    );
+    assert_eq!(as_look(&s), s);
     assert_eq!((info()[5] & 32, info()[7]), (32, 1));
     assert_eq!(look("gray(ul)", "over", 100), "look\ngray(ul)");
     assert_eq!(as_look("look\ngray(ul)"), "look\ngray(ul)");
@@ -296,23 +293,26 @@ fn every_example_compacts_to_the_same_program() {
     }
 }
 
-/// Every example pasted into another formula as a part (as the editor's
-/// `use … as p` does: indented, under a comment) and drawn whole: the same
-/// frames, over the golden picture too.
+/// Every example that can be a function (the editor's `use … as p`), put
+/// in as one and drawn at the same place under its own loop: the same
+/// frames at its defaults, over the golden picture too.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn every_example_pasted_in_as_a_part_draws_the_same() {
+fn every_example_put_in_as_a_function_draws_the_same() {
     use opendmd_psi::{golden, render_rows_ink, Scratch};
     let mut under = vec![0u8; W * H * 3];
     golden::picture(&mut under);
-    let draw = |src: &str, ms: u32| {
+    let draw = |src: &str, ms: u32, abc: [i32; 3]| {
         let p = opendmd_psi::compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
         let mut out = vec![0u8; W * H * 3];
+        let mut i = golden::inputs(ms);
+        [i.a, i.b, i.c] = abc;
+        i.set_ms(&p, u64::from(ms));
         render_rows_ink::<128>(
             &p,
             &mut Scratch::new(),
             Some(&mut opendmd_psi::Ink::boxed()),
-            &golden::inputs(ms),
+            &i,
             &OWN,
             Some(&under),
             u32::MAX,
@@ -320,27 +320,24 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
         );
         (out, p.loop_ms())
     };
+    let (mut put, mut not) = (Vec::new(), Vec::new());
     for e in crate::examples() {
-        // (`rate` is left out inside a part: a slow layer that moves draws
-        // every frame there, not as the formula does.)
-        if opendmd_psi::compile(&e.src).is_ok_and(|p| p.rate().is_some()) {
+        let Some(f) = opendmd_psi::look::function(&e.src, "p") else {
+            not.push(e.name.clone());
             continue;
-        }
-        let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
+        };
+        let p = opendmd_psi::compile(&e.src).unwrap();
+        let abc = p.meta().values([None; 3]);
         for ms in [0, 1730, 6420] {
-            let (want, lp) = draw(&e.src, ms);
-            let lp = if lp == 0 {
-                "forever".to_string()
-            } else {
-                format!("{}", lp as f64 / 1000.0)
-            };
-            let src = format!(
-                "loop {lp}\npart p {{\n  -- {}\n{inner}}}\nlayer {{ p }}",
-                e.name
-            );
-            assert!(draw(&src, ms).0 == want, "{} at {ms} ms", e.name);
+            let (want, lp) = draw(&e.src, ms, abc);
+            let lp = if lp == 0 { "forever".to_string() } else { format!("{}", lp as f64 / 1000.0) };
+            let src = format!("loop {lp}\n{f}\np(x, y)");
+            assert!(draw(&src, ms, [0; 3]).0 == want, "{} at {ms} ms:\n{src}", e.name);
         }
+        put.push(e.name.clone());
     }
+    assert!(put.len() >= 10, "put in: {put:?}; not: {not:?}");
+    std::println!("put in as functions: {put:?}\nnot: {not:?}");
 }
 
 /// Every example as a look, at the choice Settings starts it at (js/looks.js
@@ -381,16 +378,11 @@ fn every_example_as_a_look() {
                 "{} {b} {k}: lets the GIF show through",
                 e.name
             );
-            if over {
-                assert_eq!(s, look(&e.src, b, k), "{}: the formula itself", e.name);
-            } else {
-                assert_eq!(
-                    s,
-                    opendmd_psi::look::compose(&e.src, b, k).unwrap(),
-                    "{}: the line is the composition",
-                    e.name
-                );
-            }
+            assert!(
+                state().prog == opendmd_psi::look::compose(&e.src, b, k).unwrap(),
+                "{}: the line is the composition",
+                e.name
+            );
             i[6] <= 12_000
         });
         match fit {
@@ -479,15 +471,15 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Copper bars", 0, 0xd65a063a3b24a925),
     ("Copper bars", 1730, 0xf229f95cbec2ed25),
     ("Copper bars", 6420, 0xbd475933b7c45625),
-    ("Bars to stars", 0, 0x862d5be567aebd54),
+    ("Bars to stars", 0, 0x2dfb6d58d8b1ef10),
     ("Bars to stars", 1730, 0x2e1e0904e4748c3d),
     ("Bars to stars", 6420, 0xe0a25bef73e17289),
     ("Rings through stripes", 0, 0x0cce44831f18a402),
     ("Rings through stripes", 1730, 0xbd9030d90c96e5c8),
     ("Rings through stripes", 6420, 0x87e61aad5e38e649),
-    ("Kaleidoscope", 0, 0xc414c7245ecf81a0),
-    ("Kaleidoscope", 1730, 0x385590dddc6f72fe),
-    ("Kaleidoscope", 6420, 0x0ac44860ea5f2fa5),
+    ("Kaleidoscope", 0, 0x538b06650b0ada01),
+    ("Kaleidoscope", 1730, 0x5037e02efb59e8bf),
+    ("Kaleidoscope", 6420, 0xaff5d4c6f8828c2f),
     ("Scanlines", 0, 0x2e1c992bbc8c9f5a),
     ("Scanlines", 1730, 0x2e1c992bbc8c9f5a),
     ("Scanlines", 6420, 0x2e1c992bbc8c9f5a),

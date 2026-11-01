@@ -323,10 +323,6 @@ fn fps_line() {
     );
     assert_eq!(a.ops[..a.len()], b.ops[..b.len()]);
     assert_eq!(compile("fps = 3\ngray(x*fps)").unwrap().frame_ms(), None);
-    let p = compile("part p {\n  fps 100\n  gray(x)\n}\np").unwrap();
-    assert_eq!(p.frame_ms(), None, "a part's fps is left to the formula's");
-    let p = compile("fps 25\npart p { fps 100; gray(x) }\np").unwrap();
-    assert_eq!(p.frame_ms(), Some(40));
     for (src, want, line, col) in [
         (
             "fps 60\ngray(x)",
@@ -441,10 +437,10 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ("gray(digit)", "`digit` is a function: write `digit(…)`", 1, 6),
     ("fire = 2\ngray(fire)", "is a palette's name", 1, 1),
     (
-        "gray(((((((((((((((((((((((((((x)))))))))))))))))))))))))))",
+        "gray(((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((x)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))",
         "nested too deeply",
         1,
-        24,
+        54,
     ),
 ];
 
@@ -579,18 +575,17 @@ fn worst_case_formulas() {
         assert!(
             matches!(
                 name,
-                "parts"
+                "functions"
                     | "nested"
                     | "nested digit"
                     | "nested mix"
                     | "nested pick"
-                    | "parts in layers"
+                    | "functions in layers"
                     | "draw"
                     | "nested sprite"
                     | "nested forever"
                     | "nested palette"
                     | "declared"
-                    | "declared part"
             ) && n <= 2048
                 || (1900..=2048).contains(&n),
             "{name}: {n} B"
@@ -599,7 +594,7 @@ fn worst_case_formulas() {
             Ok(p) => assert!(p.len() <= crate::MAX_OPS, "{name}"),
             Err(e) => assert!(
                 e.msg.contains("too long for the panel")
-                    || e.msg.contains("too many places")
+                    || e.msg.contains("too many times")
                     || e.msg.starts_with("unknown name"),
                 "{name}: {}",
                 e.msg
@@ -867,8 +862,8 @@ const LAYER_ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     ("layer = 3\ngray(x)", "`layer` is a word of the language", 1, 1),
     (
-        "part p { gray(x) }\nlayer { p = 2\ngray(p) }",
-        "`p` is already the name of a part (line 1)",
+        "fn p(a) = a\nlayer { p = 2\ngray(p) }",
+        "`p` is already the name of a function (line 1)",
         2,
         9,
     ),
@@ -902,270 +897,101 @@ fn layer_error_messages() {
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
 
-// --- Parts: one formula inside another --------------------------------------------
+// --- Functions -------------------------------------------------------------------
 
-/// `src` pasted in as `part p { … }` and drawn whole (as the last line and
-/// as a layer), under a `loop` of its own length: the same bytes.
-fn pasted(src: &str) -> [String; 2] {
-    let lp = compile(src).unwrap().loop_ms();
-    let inner: String = src.lines().map(|l| alloc::format!("  {l}\n")).collect();
-    let lp = if lp == 0 {
-        "forever".into()
-    } else {
-        alloc::format!("{}", lp as f64 / 1000.0)
+#[test]
+fn functions_are_their_bodies_written_out() {
+    let same = |a: &str, b: &str| {
+        assert_eq!(compile(a).unwrap(), compile(b).unwrap(), "{a}\nvs\n{b}");
     };
-    let head = alloc::format!("loop {lp}\npart p {{\n{inner}}}\n");
-    [
-        alloc::format!("{head}p"),
-        alloc::format!("{head}layer {{ p }}"),
-    ]
-}
-
-#[test]
-fn a_part_drawn_whole_is_the_formula() {
-    let u = pic();
-    let all = sketches::ALL
-        .iter()
-        .map(|s| (s.1, 0u32))
-        .chain(golden::FRAMES.iter().map(|f| (f.1, f.2)))
-        .chain(golden::OVER.iter().map(|f| (f.1, f.2)))
-        // (`rate` is the formula's own: left out inside a part, its slow
-        // layers drawn every frame there.)
-        .filter(|(src, _)| !src.contains(" rate "));
-    for (src, ms) in all {
-        for ms in [ms, ms + 1230, ms + 7000] {
-            let want = over(src, Some(&u), ms);
-            for p in pasted(src) {
-                assert!(over(&p, Some(&u), ms) == want, "{p}\nat {ms} ms");
-            }
-        }
-    }
-    // Drawn where the pixel is, written out: the same program.
-    let p = "part p { v = sin(x*3 + t)\nhsv(v, 1, y) }\n";
-    assert_eq!(
-        compile(&alloc::format!("{p}p(x, y)")).unwrap(),
-        compile(&alloc::format!("{p}p")).unwrap()
+    // A value; a body of lines; a colour by channel; a whole colour.
+    same("fn f(a, b) = a*2 + b\ngray(f(x, y))", "gray(x*2 + y)");
+    same("fn f(a) {\n  k = a*a\n  k + 0.5\n}\ngray(f(x))", "gray(x*x + 0.5)");
+    same("fn sky(v) = mix(#102040, #ff8800, v)\nsky(y)", "mix(#102040, #ff8800, y)");
+    same("fn tint(c, k) = c * k\ntint(#f80, x)", "#f80 * x");
+    same("fn p(v) {\n  w = v*0.5\n  hsv(w, 1, 1)\n}\np(x)", "hsv(x*0.5, 1, 1)");
+    same("fn p(v) = pal(fire, v)\np(x)", "pal(fire, x)");
+    // A function inside another; called twice; unused costs nothing.
+    same("fn sq(a) = a*a\nfn d(a, b) = sq(a) + sq(b)\ngray(d(x, y))", "gray(x*x + y*y)");
+    same("fn u(a) = noise(a, y, t)\ngray(x)", "gray(x)");
+    // Its values hide the formula's names of the same name; others it
+    // sees as they are where it is called.
+    same("k = 0.25\nfn f(x) = x + k\ngray(f(y))", "gray(y + 0.25)");
+    // Its own names stay inside it.
+    same("v = y\nfn f(a) {\n  v = a\n  v*2\n}\ngray(f(x) + v)", "gray(x*2 + y)");
+    // Drawing: lines called on a line of their own in draw.
+    let same = |a: &str, b: &str| assert!(over(a, None, 0) == over(b, None, 0), "{a}\nvs\n{b}");
+    same(
+        "fn palm(x0, s) {\n  line(x0, 31, x0, 31 - 10*s, #a62)\n  circfill(x0, 31 - 10*s, 3*s, #2a4)\n}\ndraw { for k < 3 { palm(10 + k*30, 1) } }\ngray(0)",
+        "draw { for k < 3 {\n  line(10 + k*30, 31, 10 + k*30, 21, #a62)\n  circfill(10 + k*30, 21, 3, #2a4)\n} }\ngray(0)",
     );
 }
 
+/// A function's values named `x, y`: `px py i cx cy r angle` inside it are
+/// those of that place (the picture drawn elsewhere); set at the top, the
+/// same for what follows.
 #[test]
-fn parts_have_their_own_names_values_and_time() {
-    let same = |a: &str, b: &str, ms: u32| {
-        assert!(
-            over(a, None, ms) == over(b, None, ms),
-            "{a}\nvs\n{b}\nat {ms} ms"
-        )
+fn x_and_y_move_what_comes_from_them() {
+    let same = |a: &str, b: &str| {
+        assert!(over(a, None, 0) == over(b, None, 0), "{a}\nvs\n{b}");
     };
-    // The same names inside and outside; outside names unseen inside.
+    same("fn p(x, y) = rgb(x, y, 0)\np(1 - x, y*0.5)", "rgb(1 - x, y*0.5, 0)");
     same(
-        "v = y\npart p { v = x\ngray(v) }\nlayer { p }\nlayer add { gray(v, 0.5) }",
-        "layer { gray(x) }\nlayer add { gray(y, 0.5) }",
-        0,
-    );
-    let e = compile("k = 1\npart p { gray(k) }\np").unwrap_err();
-    assert!(e.msg.starts_with("unknown name `k`"), "{}", e.msg);
-    // Its values: `p.v`, and at another place `p(x', y').v`.
-    same("part p { v = x*2\ngray(v) }\ngray(p.v * 0.5)", "gray(x)", 0);
-    same(
-        "part p { v = x\ngray(v) }\ngray(p(1 - x, y).v)",
-        "gray(1 - x)",
-        0,
-    );
-    // Drawn elsewhere: x and y, and px, py, i from them.
-    same(
-        "part p { rgb(x, y, 0) }\np(1 - x, y*0.5)",
-        "rgb(1 - x, y*0.5, 0)",
-        0,
+        "fn p(x, y) = rgb(px % 3 / 2, py % 4 / 3, i % 7 / 6)\np(x*2, 1 - y)",
+        "qx = floor(x*2*127 + 0.5); qy = floor((1 - y)*31 + 0.5)\nrgb(qx % 3 / 2, qy % 4 / 3, (qy*128 + qx) % 7 / 6)",
     );
     same(
-        "part p { rgb(px % 3 / 2, py % 4 / 3, i % 7 / 6) }\np(x*2, 1 - y)",
-        "qx = floor(x*2*127 + 0.5); qy = floor((1 - y)*31 + 0.5)\nrgb(qx % 3 / 2, qy % 4 / 3, ((31 - qy)*128 + qx) % 7 / 6)",
-        0,
+        "fn p(x, y) = hsv(angle, 1, r)\np(1 - x, y)",
+        "hsv(atan2(y - 0.5, (1 - x - 0.5)*4), 1, len((1 - x - 0.5)*4, y - 0.5))",
     );
-    // Its own loop: `t` modulo it, unless the formula's is no longer.
-    same(
-        "loop 8\npart p { loop 2\ngray(t/2) }\np",
-        "loop 2\ngray(t/2)",
-        1000,
-    );
-    assert!(
-        over("loop 8\npart p { loop 2\ngray(t/2) }\np", None, 3000)
-            == over("loop 2\ngray(t/2)", None, 1000)
-    );
-    let plain = compile("loop 2\npart p { loop 4\ngray(t/4) }\np").unwrap();
-    assert_eq!(
-        plain,
-        compile("loop 2\ngray(t/4)").unwrap(),
-        "no modulo needed"
-    );
-    // Nested: the inner part's place is the outer's.
-    same(
-        "part q { part r { gray(x) }\nr(x*0.5, y) }\nq(1 - x, y)",
-        "gray((1 - x)*0.5)",
-        0,
-    );
-    // Coverage: a part's colour takes one more value, like every colour.
-    same(
-        "layer { gray(0.2) }\npart p { gray(x) }\nlayer { p(x, y, 0.5) }",
-        "layer { gray(0.2) }\nlayer { gray(x, 0.5) }",
-        0,
-    );
-    same(
-        "layer { gray(0.2) }\npart p { gray(x, y) }\nlayer add { p(x, y, 0.5) }",
-        "layer { gray(0.2) }\nlayer add { gray(x, y*0.5) }",
-        0,
-    );
-    // A part with layers keeps them (each covering that much less).
-    same("part p { layer { gray(x) }\nlayer multiply { gray(y) } }\nlayer { gray(1) }\nlayer { p(x, y, 0.5) }",
-        "layer { gray(1) }\nlayer { gray(x, 0.5) }\nlayer multiply { gray(y, 0.5) }", 0);
-    // Unused, it costs nothing.
-    assert_eq!(
-        compile("part p { gray(noise(x, y, t)) }\ngray(x)").unwrap(),
-        compile("gray(x)").unwrap()
-    );
-    // A part only for its values needs no colour.
-    same(
-        "part m { k = step(0.5, x) }\ngray(m.k)",
-        "gray(step(0.5, x))",
-        0,
-    );
+    same("y = y*0.5\ngray(py/31)", "gray(floor(y*0.5*31 + 0.5)/31)");
 }
 
 #[test]
-fn parts_stay_within_the_limits() {
-    // Drawn at many places: each is steps of its own, and the 256 hold.
-    let mut s = String::from("part p { hsv(sin(x*3 + y)*0.5 + noise(x*4, y, t), 1, 1) }\n");
-    for k in 0..40 {
-        s += &alloc::format!("layer add {{ p(x + {k}.5, y) }}\n");
+fn functions_stay_within_the_limits() {
+    // Called again and again, nested: bounded.
+    let mut s = String::from("fn f0(a) = a\n");
+    for k in 1..7 {
+        let j = k - 1;
+        s += &alloc::format!("fn f{k}(a) = f{j}(a) + f{j}(a*0.5) + f{j}(a*0.25) + f{j}(a*0.125) + f{j}(a*3) + f{j}(a*5) + f{j}(a*7) + f{j}(a*9)\n");
     }
+    s += "gray(f6(x))";
     let e = compile(&s).unwrap_err();
     assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
-    // Read again too often (nested, each drawn at two places).
-    let mut s = String::from("part p0 { gray(x) }\n");
-    for k in 1..8 {
-        s = alloc::format!("part p{k} {{\n{s}layer {{ p{}(x*0.5, y) }}\nlayer {{ p{}(x*0.25 + 0.1, y, 0.5) }}\n}}\n", k - 1, k - 1);
-    }
-    s += "p7";
-    let e = compile(&s).unwrap_err();
-    assert!(e.msg.contains("parts go too deep"), "{}", e.msg);
-    // Not as deep, but read again and again: bounded too.
-    let mut s = String::from("part p0 { v = x\ngray(v) }\n");
-    for k in 1..4 {
+    // Long bodies read again and again, each adding nothing new: the
+    // reading itself is bounded.
+    let mut s = String::from("fn f0(a) = a\n");
+    let pad = " + 0".repeat(60);
+    for k in 1..12 {
         let j = k - 1;
-        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v + p{j}(y, 1 - x).v + p{j}(x*2, y).v + p{j}(y*2, x).v\ngray(v)\n}}\n");
+        s += &alloc::format!("fn f{k}(a) = max(f{j}(a), f{j}(a)){pad}\n");
     }
-    s += "p3";
+    s += "gray(f11(x))";
     let e = compile(&s).unwrap_err();
-    assert!(e.msg.contains("too many places"), "{}", e.msg);
+    assert!(e.msg.contains("calls its functions too many times"), "{}", e.msg);
+    // Itself: refused.
+    let e = compile("fn f(a) = a + f(a)\ngray(f(x))").unwrap_err();
+    assert!(e.msg.contains("calls itself"), "{}", e.msg);
 }
 
 /// (source, message, line, column)
-const PART_ERRORS: &[(&str, &str, usize, usize)] = &[
-    (
-        "part { gray(x) }\ngray(x)",
-        "a part needs a name, as in `part p { … }`",
-        1,
-        6,
-    ),
-    (
-        "part p gray(x)",
-        "expected `{` here (as in `part p { … }`), found `gray`",
-        1,
-        8,
-    ),
-    ("part p {\ngray(x)\n", "this `part {` is never closed", 1, 1),
-    (
-        "v = 1\npart v { gray(x) }\ngray(x)",
-        "`v` is already the name of a value (line 1)",
-        2,
-        6,
-    ),
-    (
-        "part p { gray(x) }\np = 2\ngray(x)",
-        "`p` is already the name of a part (line 1)",
-        2,
-        1,
-    ),
-    (
-        "part p { gray(x) }\ngray(p)",
-        "`p` is a part: draw it as a whole last line",
-        2,
-        6,
-    ),
-    (
-        "part p { gray(x) }\ngray(p.w)",
-        "part `p` sets no value `w`",
-        2,
-        8,
-    ),
-    (
-        "part p { wave = x\ngray(x) }\ngray(p.wav)",
-        "did you mean `wave`?",
-        3,
-        8,
-    ),
-    (
-        "part p { gray(x) }\np(0.5)",
-        "`p` takes 2 values, where to draw it (x, y) (or 3: the last is how much",
-        2,
-        1,
-    ),
-    (
-        "part p { v = x\ngray(x) }\ngray(p(x, y, 1).v)",
-        "`p` takes 2 values, where to draw it (x, y), but got 3",
-        3,
-        6,
-    ),
-    ("part m { k = x }\nm", "part `m` has no colour", 2, 1),
-    (
-        "part p { gray(x)\nv = 1 }\np",
-        "the colour has to be the part's last line",
-        1,
-        10,
-    ),
-    (
-        "part p { gray(tme) }\np",
-        "unknown name `tme` — did you mean `t`?",
-        1,
-        15,
-    ),
-    (
-        "part p { layer { gray(x) }\nlayer add { gray(y) } }\nlayer add { p }",
-        "this part has layers of its own",
-        3,
-        7,
-    ),
-    (
-        "layer { part p { gray(x) } }",
-        "a part goes outside the layers",
-        1,
-        9,
-    ),
-    (
-        "part p { loop 2\nloop 3\ngray(x) }\np",
-        "`loop` is already set",
-        2,
-        1,
-    ),
-    (
-        "use Plasma as p\np",
-        "`use` puts a formula in by its name",
-        1,
-        1,
-    ),
+const FN_ERRORS: &[(&str, &str, usize, usize)] = &[
+    ("fn f(a) = a\ngray(f(x, y))", "`f` takes 1 values, but got 2", 2, 6),
+    ("fn f(a) = a\nf = 2\ngray(x)", "`f` is already the name of a function (line 1)", 2, 1),
+    ("fn f(a) {\n  gray(a)\n  v = 1\n}\nf(x)", "only a function's last line is its value", 2, 3),
+    ("fn p(v) = hsv(v, 1, 1)\ngray(p(x))", "`p(…)` is a whole colour", 2, 6),
+    ("fn p(v) = hsv(v, 1, 1)\np(x) * 0.5", "`p(…)` is a whole colour: it can't go into a sum", 2, 6),
+    ("fn f(a) = gray(tme)\nf(x)", "unknown name `tme` — did you mean `t`?", 1, 16),
+    ("part p { gray(x) }\np", "there are no parts: write a function", 1, 1),
+    ("use Plasma as p\np", "`use` puts a formula in by its name", 1, 1),
     ("part = 2\ngray(x)", "`part` is a word of the language", 1, 1),
-    (
-        "gray(x.y)",
-        "expected `,` or `)` in `gray(…)`, found `.`",
-        1,
-        7,
-    ),
+    ("fn = 2\ngray(x)", "`fn` is a word of the language", 1, 1),
 ];
 
 #[test]
-fn part_error_messages() {
+fn function_error_messages() {
     let mut bad = alloc::vec::Vec::new();
-    for &(src, want, line, col) in PART_ERRORS {
+    for &(src, want, line, col) in FN_ERRORS {
         match compile(src) {
             Ok(_) => bad.push(alloc::format!("{src:?}: compiled")),
             Err(e) => {
@@ -1185,8 +1011,8 @@ fn part_error_messages() {
 }
 
 #[test]
-fn compact_keeps_parts() {
-    let src = "loop 8\npart p {\n  -- Plasma\n  loop 4\n  v = sin(x*2 + t/4)\n  hsv(v, 1, 1)\n}\nlayer { p }\nlayer add { p(1 - x, y, 0.5) }";
+fn compact_keeps_functions() {
+    let src = "loop 8\nfn p(x, y) {\n  -- Plasma\n  v = sin(x*2 + t/4)\n  hsv(v, 1, 1)\n}\nlayer { p(x, y) }\nlayer add { hsv(sin((1 - x)*2 + t/4), 1, 1, 0.5) }";
     assert_eq!(compile(&compact(src)).unwrap(), compile(src).unwrap());
 }
 
@@ -1219,8 +1045,8 @@ fn centred_values_are_what_they_stand_for() {
     same("gray(angle)", "gray(atan2(y - 0.5, (x - 0.5)*4))");
     // Several: the same steps (maybe in another order), the same bytes.
     let (a, b) = (
-        "part p { hsv(angle, 1, r + py/31) }\np(1 - x, y*0.5)",
-        "part p { hsv(atan2(y - 0.5, (x - 0.5)*4), 1, len((x - 0.5)*4, y - 0.5) + py/31) }\np(1 - x, y*0.5)",
+        "fn p(x, y) = hsv(angle, 1, r + py/31)\np(1 - x, y*0.5)",
+        "fn p(x, y) = hsv(atan2(y - 0.5, (x - 0.5)*4), 1, len((x - 0.5)*4, y - 0.5) + py/31)\np(1 - x, y*0.5)",
     );
     assert_eq!(compile(a).unwrap().counts(), compile(b).unwrap().counts());
     assert!(over(a, None, 0) == over(b, None, 0));
@@ -1228,11 +1054,8 @@ fn centred_values_are_what_they_stand_for() {
         "r = x\ncx = y\npy = 0.5\nangle = 1\ncy = 0\npick = 0.25\nrgb(r, cx, py + angle + cy + pick)",
         "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
     );
-    // A part called `pick` is still the part.
-    same(
-        "part pick { gray(x) }\npick(1 - x, y)",
-        "part q { gray(x) }\nq(1 - x, y)",
-    );
+    // A function called `pick` is still the function.
+    same("fn pick(a, b) = a*b\ngray(pick(x, y))", "fn q(a, b) = a*b\ngray(q(x, y))");
 }
 
 /// `pick(k, …)` against the chain of `?:` it replaces, byte for byte; one
@@ -1338,10 +1161,10 @@ fn colours_are_their_channels() {
         over("layer { rgb(#ffbf4d, x) }", Some(&u), 0),
         over("layer { rgb(1, 0.75, 0.3, x) }", Some(&u), 0)
     );
-    // Anywhere a colour line goes: a layer, a part, a part drawn elsewhere.
+    // Anywhere a colour line goes: a layer, a function.
     for s in [
         "layer { #102040 }\nlayer multiply { mix(#fff, #000, x) }",
-        "part p { mix(#000, #fff, x) }\np(1 - x, y)",
+        "fn p(x, y) = mix(#000, #fff, x)\np(1 - x, y)",
         "-- #nope\nloop 4\nk = sin(t/4)\nrgb(mix(#f00, #00f, k*0.5 + 0.5), 0.5)",
     ] {
         p(s);
@@ -1463,7 +1286,7 @@ const DRAW_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("layer { draw { dot(1, 1) }\ngray(ink) }", "goes at the top of the formula", 1, 9, "E701"),
     ("layer { table T = 1\ngray(1) }", "a table goes at the top", 1, 9, "E701"),
     ("draw { dot(1, 1) }\ndraw { dot(2, 2) }\ngray(ink)", "there can be one `draw { }`", 2, 1, "E702"),
-    ("part p { draw { dot(1, 1) }\ngray(ink) }\ndraw { dot(2, 2) }\np", "there can be one `draw { }`", 3, 1, "E702"),
+    ("draw { dot(1, 1) }\ndraw { dot(2, 2) }\ngray(ink)", "there can be one `draw { }`", 2, 1, "E702"),
     ("draw { for k 12 { dot(k, 1) } }\ngray(ink)", "`for` takes a name and a count", 1, 8, "E703"),
     ("draw { for", "`for` takes a name and a count", 1, 8, "E703"),
     ("draw { for k", "`for` takes a name and a count", 1, 8, "E703"),
@@ -2027,16 +1850,6 @@ fn loop_forever_programs() {
         "{l}"
     );
     assert!(!l.contains("noise0.y"), "{l}");
-    // A part with its own loop inside one that never repeats: t % its loop.
-    let p = compile("loop forever\npart p {\n  loop 4\n  gray(t/4)\n}\np").unwrap();
-    assert!(p.listing().contains("w_mod(w0, 4)"), "{}", p.listing());
-    // One that never repeats inside a looped formula: the host's t.
-    let p = compile("loop 4\npart p {\n  loop forever\n  gray(frac(t))\n}\np").unwrap();
-    assert!(
-        !p.forever() && !p.listing().contains("w_"),
-        "{}",
-        p.listing()
-    );
 }
 
 /// The wide steps' errors (E901-E906; `Error.code` is not a field yet).
@@ -2434,9 +2247,9 @@ fn own_palettes_hit_their_colours() {
     let c = spr_frame("palette sea = #003366, #3399cc, #ffffff\nlayer { gray(0.25) }\nlayer add { pal(sea, 1, x) }");
     let d = spr_frame("layer { gray(0.25) }\nlayer add { rgb(1, 1, 1, x) }");
     assert_eq!(c, d);
-    // Three of a formula's own, one stored once, in parts too; a name a
-    // formula sets is still that name.
-    let p = compile("palette a1 = #f00, #0f0\npalette a2 = #00f, #fff\npart q {\n  palette a3 = #f00, #0f0\n  palette a4 = #123, #456\n  pal(a4, x)\n}\nlayer { pal(a1, x) }\nlayer add { pal(a2, y, 0.5) }\nlayer add { q(x, y, 0.5) }").unwrap();
+    // Three of a formula's own, one stored once; a name a formula sets is
+    // still that name.
+    let p = compile("palette a1 = #f00, #0f0\npalette a2 = #00f, #fff\npalette a3 = #f00, #0f0\npalette a4 = #123, #456\nlayer { pal(a1, x) }\nlayer add { pal(a2, y, 0.5) }\nlayer add { pal(a4, x, 0.5) }").unwrap();
     assert_eq!(p.layers(), 3);
     compile("palette = 3\ngray(palette*x)").unwrap();
     assert_eq!(
@@ -2799,11 +2612,9 @@ fn a_rate_formula_races_its_fast_part_over_the_held_picture() {
     assert!(n >= 72, "only {n} frames raced");
 }
 
-/// The errors (E941-E947), and `rate` inside a part left out.
+/// The errors (E941-E947).
 #[test]
 fn rate_error_messages() {
-    let p = compile("part p { layer rate 3 { gray(x) }\nlayer add { gray(y*t) } }\np").unwrap();
-    assert!(p.rate().is_none());
     let cases: &[(&str, &str, &str)] = &[
         ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "write the blend first", "—"),
         ("layer { gray(x) }\nlayer add rate 4 { gray(y) }", "bottom layers only", "E941"),
@@ -2814,7 +2625,6 @@ fn rate_error_messages() {
         ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
         ("layer rate 4 { gray(x) }\nlayer add { gray(ur) }", "can't read", "E944"),
         ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),
-        ("part p { layer { gray(x) }\nlayer add { gray(y) } }\nlayer rate 3 { p }\nlayer add { gray(t) }", "not on a part's", "E945"),
         ("layer rate 4 { gray(x) }", "add a layer above", "E947"),
     ];
     let mut bad = alloc::vec::Vec::new();
@@ -2894,8 +2704,7 @@ fn names_may_be_set_again() {
         "v = x\nlayer { v = v*y\ngray(v) }\nlayer add { gray(v) }",
         "v = x\nlayer { q = v*y\ngray(q) }\nlayer add { gray(v) }",
     );
-    same("part p { v = x\nv = v*0.5\ngray(v) }\ngray(p.v)", "gray(x*0.5)");
-    same("part p { v = 2\ngray(v) }\nv = y\nlayer { p(x, y) }\nlayer add { gray(v) }", "part p { q = 2\ngray(q) }\nv = y\nlayer { p(x, y) }\nlayer add { gray(v) }");
+    same("fn p(a) {\n  v = a\n  v = v*0.5\n  v\n}\ngray(p(x))", "gray(x*0.5)");
     same(
         "k = 3\ndraw { for k < 4 { dot(k, 1) } }\ngray(ink*k/4)",
         "k = 3\ndraw { for j < 4 { dot(j, 1) } }\ngray(ink*k/4)",
@@ -2911,11 +2720,10 @@ fn names_may_be_set_again() {
     for (src, want) in [
         ("table T = 1\nT = 2\ngray(T)", "`T` is already the name of a table (line 1)"),
         ("v = 1\ntable v = 2\ngray(v)", "`v` is already the name of a value (line 1)"),
-        ("part p { gray(x) }\nlayer { p = 2\ngray(p) }", "`p` is already the name of a part (line 1)"),
+        ("fn p(a) = a\nlayer { p = 2\ngray(p) }", "`p` is already the name of a function (line 1)"),
         ("control s 0..1\ncontrol s 0..2\ngray(s)", "`s` is already the name of a control (line 1)"),
         ("control s 0..1 = 0.5\ns = s*2\ngray(s)", "`s` is already the name of a control (line 1)"),
         ("control s 0..1\ndraw { for s < 4 { dot(s, 1) } }\ngray(ink*s)", "`s` is already the name of a control (line 1)"),
-        ("part p { control s 0..1\ns = 2\ngray(s) }\ngray(p.s)", "`s` is already the name of a control (line 1)"),
         ("draw { for k < 4 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set"),
         ("draw { for k < 4 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here"),
         ("v = v*2\ngray(v)", "unknown name `v`"),
@@ -2945,10 +2753,10 @@ fn palette_entries_have_names() {
         "palette p = a #000, b #fff\npal(p, p.b)",
         "palette p = #000, #fff\npal(p, 1)",
     );
-    // In a part, its own palette.
+    // In a function.
     same(
-        "part q {\n  palette sea = deep #003, foam #fff\n  pal(sea, sea.foam*x)\n}\nq(x, y)",
-        "part q {\n  palette sea = #003, #fff\n  pal(sea, 1*x)\n}\nq(x, y)",
+        "palette sea = deep #003, foam #fff\nfn q(x) = pal(sea, sea.foam*x)\nq(x)",
+        "palette sea = #003, #fff\npal(sea, 1*x)",
     );
 }
 

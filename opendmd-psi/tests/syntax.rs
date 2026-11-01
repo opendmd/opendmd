@@ -32,7 +32,7 @@ impl Sink for Seen {
     }
 }
 
-const SRC: &str = "name \"Spin\"\ncontrol speed 0..4 = 1\nloop 4\nk = sin(t/4*speed)\nv = x*k + y\npart p {\n  gray(x)\n}\nlayer { gray(v) }\nlayer add { p(x, y, 0.5) }";
+const SRC: &str = "name \"Spin\"\ncontrol speed 0..4 = 1\nloop 4\nk = sin(t/4*speed)\nv = x*k + y\nfn p(a) = a*0.5\nlayer { gray(v) }\nlayer add { gray(p(x)) }";
 
 #[test]
 fn the_sink_hears_what_the_compiler_saw() {
@@ -46,7 +46,7 @@ fn the_sink_hears_what_the_compiler_saw() {
     assert_eq!(at(def("speed").1), "speed");
     assert_eq!(def("k").4, Level::Frame);
     assert_eq!(def("v").4, Level::Pixel);
-    assert_eq!(def("p").2, Defined::Part);
+    assert_eq!(def("p").2, Defined::Function);
     assert_eq!(def("v").3, 0);
     // Every read of a defined name points at its definition.
     for (r, d) in &seen.reads {
