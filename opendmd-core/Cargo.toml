@@ -25,6 +25,9 @@ opendmd-psi = { path = "../opendmd-psi", default-features = false, optional = tr
 opendmd-psi = { path = "../opendmd-psi" }
 
 [features]
+# The ESP32 build with SRAM1 as IRAM (opendmd-psi's `sram1-iram`): more hot
+# functions in IRAM.
+sram1-iram = ["opendmd-psi?/sram1-iram"]
 # Smooth motion (src/tween.rs): the shift tweener for prepared copies. Only
 # opendmd-pack and the art wasm module enable it; the firmware never does.
 tween = []

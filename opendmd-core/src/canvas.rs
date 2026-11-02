@@ -103,6 +103,7 @@ impl DirtyMap {
     /// Mark the raster-order pixel indices `start..end` (`y * WIDTH + x`),
     /// which may wrap across rows — the shape of an ODM run. Clipped to the
     /// canvas.
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
     pub fn mark_run(&mut self, start: usize, end: usize) {
         let end = end.min(PIXELS);
         if start >= end {

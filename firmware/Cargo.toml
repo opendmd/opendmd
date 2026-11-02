@@ -24,6 +24,10 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [features]
+# SRAM1 as IRAM (sdkconfig ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM, set by the
+# Makefile with this: FW_SRAM1_IRAM=1): up to 40 KB more IRAM, taken from the
+# top of the D/IRAM heap byte for byte, for the next hottest functions.
+sram1-iram = ["opendmd-core/sram1-iram"]
 # Formulas on the panel (`psi`) are in every build, releases included.
 default = ["psi", "jit"]
 # Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed

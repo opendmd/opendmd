@@ -723,6 +723,7 @@ static ORDERS: [[u8; H]; 2] = {
 /// The frame loop's next row of `rows` in the scratch's order (`H`: none
 /// left). (Out of IRAM: once a row.)
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn next_row<const N: usize>(scratch: &mut Scratch<N>, rows: u32) -> usize {
     loop {
         let i = usize::from(scratch.next);
@@ -1165,6 +1166,7 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
 /// formula's palette slots in `own` for the row.
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn row_steps<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -1467,6 +1469,7 @@ impl<const N: usize> Scratch<N> {
 /// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,

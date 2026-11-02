@@ -173,6 +173,7 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 
 /// Fill the words that change from row to row (`per_row`), or those that
 /// do not (once a frame, before the rows).
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
@@ -650,9 +651,24 @@ mod device {
         unsafe { eval_helper(hid::PICK, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
+    /// `div`'s and `noise_o`'s helpers, the next most called (Endless road's
+    /// kernels): in SRAM1's IRAM with the `sram1-iram` build, else as the
+    /// generic shims are.
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    extern "C" fn shim_div(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::DIV, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    extern "C" fn shim_noise_o(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::NOISE_O, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
     const SHIMS: [Shim; hid::COUNT as usize] = [
-        shim::<0>, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
-        shim::<8>, shim::<9>, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
+        shim_div, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
+        shim::<8>, shim_noise_o, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
         shim::<15>, shim::<16>, shim::<17>, shim::<18>,
     ];
 

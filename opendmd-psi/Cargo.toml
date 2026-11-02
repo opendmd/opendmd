@@ -12,6 +12,9 @@ publish = false
 [dependencies]
 
 [features]
+# The ESP32 build with SRAM1 as IRAM (sdkconfig ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM,
+# the Makefile's FW_SRAM1_IRAM=1): the next hottest functions placed there too.
+sram1-iram = []
 default = ["tables", "compiler"]
 # The compiler (text -> program). The player never compiles: it loads
 # programs the browser or the build compiled (`psb`), so the firmware
