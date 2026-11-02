@@ -113,6 +113,19 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
     }
 }
 
+/// Why a write's path was refused ([`card_path_for_write`]).
+pub const BAD_WRITE_PATH: &str = "path not allowed: it must stay on the card, with no empty, '.' or '..' part, none ending in a dot or a space, and no 8.3 short name (NAME~1.GIF): use the file's long name";
+
+/// [`card_path`] for a write (PUT, DELETE, move, forget): an 8.3 alias
+/// component (`NES_MA~1.GIF`) is refused too. It names a file whose long
+/// name is something else, so the prepared copy worked out from it, and
+/// the player's open files compared with it (`fatidx::holds`), would be
+/// the wrong ones. Reads by path take it as FatFs does.
+pub fn card_path_for_write(root: &str, rel: &str) -> Option<String> {
+    let p = card_path(root, rel)?;
+    opendmd_core::fatread::is_canonical(rel.trim_end_matches('/')).then_some(p)
+}
+
 /// Content type by extension. Everything the web app ships (served from the
 /// www pack, `www.rs`, by its logical name), plus the card's own files;
 /// anything unknown is an octet stream rather than a guess.

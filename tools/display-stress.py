@@ -130,10 +130,23 @@ def snapshot(s):
         "late_starts": beam.get("late_starts", 0),
         "write_us": beam.get("write_us", 0),
         "frame_us": f.get("frame_us"),
+        "render_us_total": f.get("render_us_total"),
+        "renders": f.get("renders"),
         "frame_ms": f.get("frame_ms"),
         "misses": s.get("deadline_misses"),
         "heap": (s.get("heap") or {}).get("free"),
+        "fat_index": ((s.get("sd") or {}).get("fat_index")) or {},
     }
+
+
+def mean_render(a, b):
+    """The mean render µs between snapshots `a` and `b`, or None (a firmware
+    without the totals, or nothing rendered)."""
+    if a.get("renders") is None or b.get("renders") is None:
+        return None
+    n = (b["renders"] - a["renders"]) % (1 << 32)
+    us = (b["render_us_total"] - a["render_us_total"]) % (1 << 32)
+    return round(us / n) if n else None
 
 
 def phase(a, b, seconds, extra=None):
@@ -146,7 +159,10 @@ def phase(a, b, seconds, extra=None):
         "late_per_1000": round(late * 1000 / n, 2) if n > 0 else None,
         "late_pairs": b["late_pairs"] - a["late_pairs"],
         "late_starts": b["late_starts"] - a["late_starts"],
-        "frame_us": b["frame_us"],
+        # The phase's exact mean render (the totals' differences, wrapping
+        # at 2^32 µs), and the governor's running mean at its end.
+        "frame_us": mean_render(a, b) or b["frame_us"],
+        "frame_us_end": b["frame_us"],
         "frame_ms": b["frame_ms"],
         "misses": None if a["misses"] is None or b["misses"] is None else b["misses"] - a["misses"],
         "wakes": b["wakes"] - a["wakes"],
@@ -163,6 +179,11 @@ def phase(a, b, seconds, extra=None):
         "status_cached": b["status_cached"] - a["status_cached"],
         "status_build_us_last": b["status_build_us"],
         "status_lock_us_last": b["status_lock_us"],
+        # The player's card opens and reads under the writers' rule
+        # (fatidx): refused under a write intent, raw reads that fell back,
+        # opens that found every slot busy.
+        "fat_index": {k: b["fat_index"].get(k, 0) - a["fat_index"].get(k, 0)
+                      for k in ("intent_refused", "raw_fallbacks", "slots_full", "raw_reads") if k in b["fat_index"]},
         **(extra or {}),
     }
 
