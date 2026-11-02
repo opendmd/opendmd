@@ -527,7 +527,13 @@ pub enum Command {
     ///
     /// (Every reply here is a [`Reply`]: each distinct channel type costs
     /// several KB of code, and the image is close to its slot.)
-    SetSchedule { json: String, reply: Reply },
+    /// The schedule, parsed by the handler (CPU0): the main task takes it
+    /// as it is.
+    SetSchedule {
+        json: String,
+        parsed: Box<opendmd_core::schedule::Schedule>,
+        reply: Reply,
+    },
     /// Suspend the schedule for this many minutes (0 resumes it now). The
     /// local `"HH:MM"` it lasts until is in `Status::wake_until` by the time
     /// the reply is sent.
