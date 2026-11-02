@@ -140,6 +140,8 @@ def snapshot(s):
         "heap": (s.get("heap") or {}).get("free"),
         "fat_index": ((s.get("sd") or {}).get("fat_index")) or {},
         "uploads": disp.get("uploads") or {},
+        "miss_causes": ((s.get("misses") or {}).get("by_cause")) or {},
+        "miss_late": ((s.get("misses") or {}).get("late_ms")) or {},
     }
 
 
@@ -189,6 +191,10 @@ def phase(a, b, seconds, extra=None):
         # Uploads paced while a Formula ran near its budget (ms slept), and
         # whether pacing was on at the end.
         "upload_paced_ms": b["uploads"].get("paced_ms", 0) - a["uploads"].get("paced_ms", 0),
+        # The phase's deadline misses by cause (open, read, decode, blit, …)
+        # and by how late: what a GIF's late frames came from.
+        "miss_causes": {k: v - a["miss_causes"].get(k, 0) for k, v in b["miss_causes"].items() if v - a["miss_causes"].get(k, 0)},
+        "miss_late": {k: v - a["miss_late"].get(k, 0) for k, v in b["miss_late"].items() if v - a["miss_late"].get(k, 0)},
         "upload_paced_end": b["uploads"].get("paced"),
         "fat_index": {k: b["fat_index"].get(k, 0) - a["fat_index"].get(k, 0)
                       for k in ("intent_refused", "raw_fallbacks", "slots_full", "raw_reads") if k in b["fat_index"]},
