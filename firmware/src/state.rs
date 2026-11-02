@@ -84,6 +84,25 @@ pub fn largest_free_block() -> usize {
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
 
+/// The display loop's command handling (step 1: what the HTTP handlers
+/// asked), timed: (loops that handled one, µs in all (wrapping), the
+/// longest µs). It runs on CPU1 between frames, before the next frame's
+/// start: a long one is a late start.
+pub static CMD_LOOPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CMD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CMD_MAX_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `display.commands`: `{n, us, max_us}` ([`CMD_LOOPS`]).
+pub fn commands_json() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    format!(
+        r#"{{"n":{},"us":{},"max_us":{}}}"#,
+        CMD_LOOPS.load(Relaxed),
+        CMD_US.load(Relaxed),
+        CMD_MAX_US.load(Relaxed)
+    )
+}
+
 /// Frames whose status publish was skipped because `/api/status` held the
 /// lock (the display never waits on CPU0): `display.publish_skipped`.
 pub static PUBLISH_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

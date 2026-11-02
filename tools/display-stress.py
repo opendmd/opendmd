@@ -61,7 +61,18 @@ def snapshot(s):
     beam = ((s.get("scan") or {}).get("beam")) or {}
     f = (s.get("now_playing") or {}).get("formula") or {}
     disp = s.get("display") or {}
+    pre = disp.get("pre_start") or {}
+    cmd = disp.get("commands") or {}
     return {
+        "pre_n": pre.get("n", 0),
+        "pre_us": pre.get("us", 0),
+        "pre_spikes": pre.get("spikes", 0),
+        "cmd_n": cmd.get("n", 0),
+        "cmd_us": cmd.get("us", 0),
+        "cmd_max_us": cmd.get("max_us"),
+        "status_cached": disp.get("status_cached", 0),
+        "status_build_us": disp.get("status_build_us"),
+        "status_lock_us": disp.get("status_lock_us"),
         "wakes": disp.get("wakes", 0),
         "wake_late": disp.get("wake_late", 0),
         "wake_max_us": disp.get("wake_max_us"),
@@ -95,6 +106,16 @@ def phase(a, b, seconds, extra=None):
         "wake_late": b["wake_late"] - a["wake_late"],
         "wake_max_us_since_boot": b["wake_max_us"],
         "publish_skipped": b["publish_skipped"] - a["publish_skipped"],
+        # The wake to a raced start: the mean over the phase and the
+        # stretches (over the running mean by 300 µs).
+        "pre_start_mean_us": round((b["pre_us"] - a["pre_us"]) / (b["pre_n"] - a["pre_n"])) if b["pre_n"] > a["pre_n"] else None,
+        "pre_start_spikes": b["pre_spikes"] - a["pre_spikes"],
+        "command_loops": b["cmd_n"] - a["cmd_n"],
+        "command_us": b["cmd_us"] - a["cmd_us"],
+        "command_max_us_since_boot": b["cmd_max_us"],
+        "status_cached": b["status_cached"] - a["status_cached"],
+        "status_build_us_last": b["status_build_us"],
+        "status_lock_us_last": b["status_lock_us"],
         **(extra or {}),
     }
 

@@ -643,7 +643,10 @@ fn main() -> Result<()> {
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
         //    rebuilds the engine or swaps a file on the card happens here — on
         //    this task, between frames, never on the httpd thread.
+        let cmd_t0 = Instant::now();
+        let mut handled = false;
         while let Ok(command) = cmd_rx.try_recv() {
+            handled = true;
             match command {
                 Command::Skip => {
                     if let Some(e) = engine.as_mut() {
@@ -1289,6 +1292,13 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
             }
+        }
+        if handled {
+            use std::sync::atomic::Ordering::Relaxed;
+            let took = us(cmd_t0.elapsed());
+            state::CMD_LOOPS.fetch_add(1, Relaxed);
+            state::CMD_US.fetch_add(took, Relaxed);
+            state::CMD_MAX_US.fetch_max(took, Relaxed);
         }
 
         // Follow RePlayOS's sequence: the next step once the engine has
