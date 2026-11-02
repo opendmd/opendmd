@@ -415,6 +415,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 from pathlib import Path
 
@@ -2789,7 +2790,7 @@ def make_handler(ctx: Context, quiet: bool):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as e:  # noqa: BLE001 - mirror the firmware's catch-all 500
-                sys.stderr.write(f"mock-device: unhandled error on {method} {self.path}: {e!r}\n")
+                sys.stderr.write(f"mock-device: unhandled error on {method} {self.path}: {e!r}\n{traceback.format_exc()}")
                 if self._resp_status is None:
                     self.send_error_json(500, "internal error")
             if not quiet:
@@ -3622,8 +3623,11 @@ def make_handler(ctx: Context, quiet: bool):
                 # anything applies).
                 ctx.panel.test = None
                 # Settings are "saved" now, like the firmware saves to NVS
-                # before the rebuild.
-                ctx.settings.clear()
+                # before the rebuild. One update(), never clear() first:
+                # next_settings has every key, and some readers (the API key
+                # check every request makes, before any handler) look
+                # without the lock: an empty moment between the two was a
+                # KeyError, a 500, to a request that came in just then.
                 ctx.settings.update(next_settings)
                 card_speed_applied = None
                 if "card_speed" in patch:
