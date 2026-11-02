@@ -167,6 +167,18 @@ def lit(page: Page, sel: str) -> int:
 F_READY = "#f:not([hidden]):not([aria-busy])"
 
 
+def f_ready(page: Page, timeout: float = 20000) -> None:
+    """Wait for /f/ to be ready, or to have said why not (no Formula: #f-none,
+    #f hidden for good; a load failure: #f-cap), and fail with what it said
+    rather than a bare timeout. Arrive from another document (about:blank),
+    never /f/ -> /f/#…: f.js reloads on that hashchange, and the old page's
+    #f-none would answer."""
+    page.wait_for_selector(f"{F_READY}, #f-none:not([hidden])", timeout=timeout)
+    if not page.is_visible("#f") or page.is_visible("#f-cap"):
+        why = page.evaluate("[...document.querySelectorAll('#f-none, #f-cap')].filter(e => !e.hidden).map(e => e.textContent.trim()).join(' | ')")
+        raise AssertionError(f"/f/ ({page.url}) is not showing a Formula: {why}")
+
+
 def examples(bundled_only: bool = False) -> list[dict]:
     """OpenDMD's examples (opendmd-web/formulas/*.psi): each file's formula
     (without its header), its name (its `name "…"` line), whether it is
@@ -202,7 +214,7 @@ def open_text(page: Page, base: str, src: str, name: str = "", more: str = "") -
     page.evaluate("([s, n]) => localStorage.setItem('odmd.psi.open', JSON.stringify({src: s, name: n}))", [src, name])
     page.goto("about:blank")
     page.goto(f"{base}/f/#open{more}")
-    page.wait_for_selector(F_READY, timeout=20000)
+    f_ready(page, 20000)
 
 
 def params(u: str) -> dict:
@@ -325,8 +337,9 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     panel_route(page.context, seen)
     page.goto(f"{base}/f/")
     page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+    page.goto("about:blank")
     page.goto(gallery_link(base, e["slug"]))
-    page.wait_for_selector(F_READY, timeout=20000)
+    f_ready(page, 20000)
     check(page.input_value("#psi-src").rstrip("\n") == e["src"].rstrip("\n") and page.inner_text("#f-name") == e["name"],
           f"/f/: a gallery Formula by name, its text from the gallery ({e['name']})")
     page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = r.max; r.dispatchEvent(new Event('input')); }")
@@ -755,7 +768,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                 const d = x.getImageData(0, 0, 128, 32).data; for (let k = 0; k < d.length; k += 4) if (d[k] + d[k+1] + d[k+2] > 90) return false; return true; }).length""")
             check(dark == 0, f"gallery: every thumbnail lit ({dark} dark)")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a.alt", has_text="Open").click()
-            page.wait_for_selector(F_READY, timeout=20000)
+            f_ready(page, 20000)
             e = every[5]
             about = re.search(r'^about "([^"]*)"', e["src"], re.M).group(1)
             check(page.inner_text("#f-name") == e["name"] and page.inner_text("#f-about") == about
@@ -1261,7 +1274,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             first = page.locator(".psi-live a.psi-open").first
             first.scroll_into_view_if_needed()
             first.click()
-            page.wait_for_selector(F_READY, timeout=30000)
+            f_ready(page, 30000)
             stored = page.evaluate("localStorage.getItem('odmd.psi.open')")
             check(page.url == f"{base}/f/#open" and page.input_value("#psi-src").strip() != "" and stored is None,
                   f"psi reference: Open in editor opens the site's editor with it, read once ({page.input_value('#psi-src')[:40]!r})")

@@ -797,9 +797,13 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         # A cron run (simulated) syncs state A.
         sha_a = repo.set(state_a)
         write_state(state_a, tmp / "a")
-        t0 = time.time()
         st, _, _ = get(base, "/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*")
         d = wait_synced(base, sha_a)
+        # The sync's claim (sync_started, 10 s apart) came before its commit
+        # landed, so it is no later than now: the next POST waits from here.
+        # (Not from the cron request: the scheduled handler syncs in
+        # waitUntil, after its reply, as late as a loaded machine makes it.)
+        t0 = time.time()
         check(st == 200 and d.get("commit") == sha_a, f"a simulated cron run syncs the fixture's main ({st}, {str(d.get('commit'))[:12]})")
         examples_from_store(base, site)
         good, bad = native(tool, tmp / "a")

@@ -404,13 +404,34 @@ def www_snapshot() -> Path:
     return _www_snap
 
 
+mock_logs: list[Path] = []
+
+
+def mock_errors() -> None:
+    """Every mock's unhandled errors (each answered 500), with tracebacks."""
+    hits = []
+    for log in mock_logs:
+        text = log.read_text(errors="replace") if log.is_file() else ""
+        hits += [f"{log.name}: {blk.strip()}" for blk in text.split("mock-device: ")[1:] if blk.startswith("unhandled error")]
+    check(not hits, f"mock: no unhandled errors (500s) in {len(mock_logs)} mock runs")
+    for h in hits:
+        print("  !!   " + h.replace("\n", "\n  !!   "))
+
+
 def start_mock(args: list[str]) -> tuple[subprocess.Popen, str]:
     port = free_port()
     if "--www" not in args:
         args = [*args, "--www", str(www_snapshot())]
-    proc = subprocess.Popen(
-        ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
-        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    # Its output (with --quiet: the banner and any unhandled error's
+    # traceback, each a 500 to the page) goes to a file, read back by
+    # mock_errors() at the end: a 500 is a bug in the mock, never noise.
+    OUT.mkdir(parents=True, exist_ok=True)
+    log = OUT / f"mock-{len(mock_logs)}.log"
+    mock_logs.append(log)
+    with log.open("wb") as f:
+        proc = subprocess.Popen(
+            ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
+            stdout=f, stderr=subprocess.STDOUT)
     for _ in range(100):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
@@ -1724,10 +1745,12 @@ def now_fav_checks(page: Page, base: str) -> None:
     check(page.inner_text("#now-fav") == "☆" and tip == "Favourite in “All files”" and page.get_attribute("#now-fav", "aria-pressed") == "false",
           f"now fav: ☆ for {path.rsplit('/', 1)[-1]} ({tip!r})")
     page.click("#now-fav")
-    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    # ★ and aria-pressed in one look, as the click left them: the save
+    # reindexes the playlist, and the panel moving on to the next GIF then
+    # (right) puts ☆ back before the overrides are read below.
+    page.wait_for_function("(b => b.textContent === '★' && b.getAttribute('aria-pressed') === 'true')(document.querySelector('#now-fav'))")
     r = wait_overrides(base, "", 1)
-    check(r["overrides"] == [{"path": path, "w": 3}] and page.get_attribute("#now-fav", "aria-pressed") == "true",
-          f"now fav: ★ -> GET /api/overrides?set= {r['overrides']}")
+    check(r["overrides"] == [{"path": path, "w": 3}], f"now fav: ★ (pressed) -> GET /api/overrides?set= {r['overrides']}")
     # The save reindexes the playlist, which can move the mock on: back to the GIF.
     settle(base, 1)
     if get_json(base + "/api/status")["now_playing"]["path"] != path:
@@ -7064,9 +7087,14 @@ def main() -> int:
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()
+    mock_errors()
     print(f"\n{'FAILED: ' + str(len(failures)) if failures else 'all checks passed'}")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        mock_errors()  # a crash on a 500: the mock's side of it
+        raise
