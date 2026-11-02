@@ -1682,14 +1682,28 @@ impl Engine {
             }
         }
         let budget = self.scheduler.len().saturating_mul(2).max(32);
+        // The first failure of this pass is logged, the rest counted: a
+        // pass where every entry fails (a one-entry playlist while a write
+        // holds its file) would log a line per attempt, every retry, from
+        // the display core.
+        let mut failed = 0u32;
+        let mut note = |what: std::fmt::Arguments<'_>| {
+            if failed == 0 {
+                log::warn!("{what}");
+            }
+            failed += 1;
+        };
         for _ in 0..budget {
             let Some(index) = self.scheduler.next_index() else {
+                if failed > 1 {
+                    log::warn!("... and {} more not opened", failed - 1);
+                }
                 return false;
             };
             let entry = match self.catalog.entry(index) {
                 Ok(entry) => entry,
                 Err(e) => {
-                    log::warn!("catalog entry {index} unreadable: {e}");
+                    note(format_args!("catalog entry {index} unreadable: {e}"));
                     continue;
                 }
             };
@@ -1704,10 +1718,10 @@ impl Engine {
                     self.current = Some(playing);
                     return true;
                 }
-                Err(e) => log::warn!("skipping {path}: {e}"),
+                Err(e) => note(format_args!("skipping {path}: {e}")),
             }
         }
-        log::error!("no playable entries after {budget} attempts");
+        log::error!("no playable entries after {budget} attempts ({failed} not opened; the first is above)");
         false
     }
 }

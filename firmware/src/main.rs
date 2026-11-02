@@ -3194,13 +3194,14 @@ fn restart_for_card(why: Reason) -> ! {
 /// which survives that reset, and stops the DMA. Callable from any task.
 pub fn restart(why: Reason) -> ! {
     restarts::record(why);
-    // Settings a Formula held back: written now, or the reboot drops them.
+    panel::blank();
+    // Settings a Formula held back: written now (the panel already dark:
+    // the NVS write stalls the flash cache), or the reboot drops them.
     if SETTINGS_UNSAVED.swap(false, Ordering::Relaxed) {
         if let Some(flush) = FLUSH_AT_RESTART.get() {
             flush();
         }
     }
-    panel::blank();
     log::info!("restarting (panel off): {}", why.name());
     if !logring::flush(config::RESTART_LOG_FLUSH) {
         log::warn!("log ring not drained before the restart");
