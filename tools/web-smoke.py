@@ -4860,7 +4860,8 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     app = remix_open(page, base, errors, "loop 4\nrings = sin(x*4 - t/4)\nhsv(rings*0.5, 1, 1)", "Demo rings")
     app.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
     wait_lit(app, "#psi-ed-panel", "formulas (demo): a Formula from the site's page")
-    check(app.input_value("#psi-name") == "Demo rings" and app.input_value("#psi-src").startswith("loop 4\nrings")
+    # (Saved in this browser as it arrived: its name is its name line now.)
+    check(app.input_value("#psi-name") == "Demo rings" and "loop 4\nrings" in app.input_value("#psi-src")
           and app.locator("#psi-ed-show, #psi-show").count() == 0 and app.locator("#psi-ed-share").count() == 0,
           f"formulas (demo): it opened '{app.input_value('#psi-name')}', no Show on panel, no share link")
     page.context.close()
