@@ -70,6 +70,7 @@ mod psi_probe;
 #[cfg(feature = "psi")]
 #[cfg(feature = "psi-probe")]
 mod psi_stack;
+mod quiet;
 mod restarts;
 mod sched;
 mod sd;

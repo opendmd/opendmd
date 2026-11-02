@@ -116,6 +116,29 @@ curl -s -X POST "$DMD/api/skip?back=1"
 
 ## Status and health
 
+### GET /api/quiet
+
+The quiet window, a diagnostic: while it is on, the firmware's heavy
+network and card loops (file and web app downloads, uploads, the status
+JSON) wait, between chunks and never more than 12 ms at a time, while a
+raced Formula's frame is in its sensitive stretch (from the display loop's
+wake to its last row pair written). Off by default and after a restart.
+Reply: `{"on", "waits", "wait_us", "cut"}` — waits that happened, the µs
+they took in all (wrapping), and those cut short at 12 ms.
+
+```sh
+curl -s $DMD/api/quiet
+```
+
+### PUT /api/quiet
+
+`{"on": true|false}`; not saved. Reply as `GET /api/quiet`. `400` without
+a boolean `on`.
+
+```sh
+curl -s -X PUT -d '{"on":true}' $DMD/api/quiet
+```
+
 ### GET /api/status
 
 A cheap snapshot (the web app polls it twice a second); counts since boot.

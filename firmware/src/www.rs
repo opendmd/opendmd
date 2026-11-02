@@ -326,6 +326,9 @@ pub fn serve(req: &mut Req, rel: &str) -> Result<Served> {
         if pieces.peek().is_some() {
             std::thread::yield_now();
             files::wait_for_heap()?;
+            // Out of a raced frame's way (the quiet window): the pack is
+            // read through the flash cache.
+            crate::quiet::wait();
         }
     }
     Ok(Served::Sent)

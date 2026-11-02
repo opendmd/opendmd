@@ -110,6 +110,10 @@ impl Waker {
         if left.is_zero() {
             // (Already due: the frame ran over, not the wake.)
             WOKE_AT.store(now_us(), Relaxed);
+            #[cfg(feature = "psi")]
+            if opendmd_core::fx_psi::beam_us() != 0 {
+                crate::quiet::begin();
+            }
             return;
         }
         let us = left.as_micros().min(u128::from(u32::MAX)) as u64;
@@ -144,6 +148,11 @@ impl Waker {
 /// Count a wake against its time.
 fn note(at: Instant) {
     WOKE_AT.store(now_us(), Relaxed);
+    // A raced Formula's sensitive stretch begins (the quiet window).
+    #[cfg(feature = "psi")]
+    if opendmd_core::fx_psi::beam_us() != 0 {
+        crate::quiet::begin();
+    }
     let late = Instant::now().saturating_duration_since(at).as_micros().min(u128::from(u32::MAX)) as u32;
     WAKES.fetch_add(1, Relaxed);
     if late > LATE_US {
