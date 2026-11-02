@@ -1194,11 +1194,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         };
         match crate::cache::forget(&forget.path) {
-            Ok(removed) => req.json(&format!(
+            Ok(removed) => {
+                if let Some(copy) = &removed {
+                    crate::fatidx::note_gone(&format!("{}{copy}", config::SD_MOUNT));
+                }
+                req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{}}}"#,
                 json_string(&forget.path),
                 removed.is_some()
-            )),
+            ))
+            }
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
         }
     })?;
@@ -1568,11 +1573,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         crate::fatidx::touched(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
+                crate::fatidx::note_gone(&path);
                 // A GIF takes its prepared copy with it; a copy removed
                 // directly changes the count.
                 let card = format!("/{}", rel.trim_start_matches('/'));
-                if let Err(e) = crate::cache::forget(&card) {
-                    log::warn!("DELETE {card}: its prepared copy: {e}");
+                match crate::cache::forget(&card) {
+                    Ok(Some(copy)) => crate::fatidx::note_gone(&format!("{}{copy}", config::SD_MOUNT)),
+                    Ok(None) => {}
+                    Err(e) => log::warn!("DELETE {card}: its prepared copy: {e}"),
                 }
                 if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
@@ -1848,6 +1856,9 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
                 || files::same_card_path(path, config::CACHE_ROOT)
             {
                 crate::cache::invalidate();
+                // Copies (and perhaps the index file itself) gone: the
+                // index is dropped and rebuilt when quiet.
+                crate::fatidx::dir_changed();
             }
             req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{removed},"done":{done}}}"#,
@@ -1946,6 +1957,8 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
     };
     let written = files::receive_upload(up, &dest)?;
+    // Its entry, for the index's lookups (`fatidx` delta).
+    crate::fatidx::note_written(&dest);
     info!(
         "PUT /{rel}: {written} B in {:.1} s",
         up.elapsed().as_secs_f32()
@@ -2052,10 +2065,19 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
                 format!("{}{old}", config::SD_MOUNT),
                 format!("{}{new}", config::SD_MOUNT),
             );
-            files::move_copy(&old, &new)
+            let moved = files::move_copy(&old, &new);
+            crate::fatidx::note_gone(&old);
+            if moved == "moved" {
+                crate::fatidx::note_written(&new);
+            } else {
+                crate::fatidx::note_gone(&new);
+            }
+            moved
         }
         _ => "none",
     };
+    crate::fatidx::note_gone(&from);
+    crate::fatidx::note_written(&to);
     crate::cache::invalidate();
     let smooth = files::rename_line(config::SMOOTH_LIST, &m.from, Some(&m.to))
         .unwrap_or_else(|e| {
@@ -2308,7 +2330,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json() + &crate::cardspeed::yields_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),

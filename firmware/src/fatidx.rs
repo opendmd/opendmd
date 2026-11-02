@@ -149,7 +149,66 @@ static FAILED: AtomicBool = AtomicBool::new(false);
 struct Loaded {
     file: File,
     fanout: Box<[u32; fatdir::FANOUT]>,
+    /// The index file read raw (its extents, the drive): a lookup by the
+    /// player never waits on FatFs's volume lock. `None`: through `file`.
+    raw: Option<(fatread::RawFile, u8)>,
 }
+
+/// Files written, renamed or removed through the API or the cache builder
+/// since the index was built: (key, the 8.3 entry's location, or `None`
+/// for gone), newest last, and the uptime it was noted at. Looked at before
+/// the index file, so a new or renamed file stays an index hit until the
+/// next build folds it in (`note_written`, `note_gone`).
+static DELTA: Mutex<Vec<(u32, Option<u32>, u32)>> = Mutex::new(Vec::new());
+/// Past this many, the index is rebuilt (when quiet, as before).
+const DELTA_MAX: usize = 256;
+
+/// `full` (`/sdcard/...`) was just written (or renamed to): its entry's
+/// location found by an open of our own (a directory walk under FatFs's
+/// lock, here on CPU0: the player's index opens no longer wait on it) and
+/// noted for lookups.
+pub fn note_written(full: &str) {
+    let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/") || c.starts_with("/cache/")) else {
+        return;
+    };
+    let Ok((fs, geo)) = volume() else { return };
+    let Ok(path) = std::ffi::CString::new(format!("0:{card}")) else { return };
+    // SAFETY: a zeroed FIL f_open fills and f_close leaves; `dir_ptr` points
+    // into the volume's window (the entry's slot in its sector) and is read
+    // before the FIL is closed.
+    let loc = unsafe {
+        let mut f: sys::FIL = std::mem::zeroed();
+        if sys::f_open(&mut f, path.as_ptr(), sys::FA_READ as u8) != sys::FRESULT_FR_OK {
+            return;
+        }
+        let slot = ((f.dir_ptr as usize).wrapping_sub(std::ptr::addr_of!((*fs).win) as usize) / 32) & 15;
+        let rel = f.dir_sect.wrapping_sub(geo.database);
+        sys::f_close(&mut f);
+        fatdir::loc(rel, slot)
+    };
+    push_delta(fatdir::hash(card.as_bytes()), loc);
+}
+
+/// `full` was removed (or renamed from): lookups find no record for it.
+pub fn note_gone(full: &str) {
+    if let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/") || c.starts_with("/cache/")) {
+        push_delta(fatdir::hash(card.as_bytes()), None);
+    }
+}
+
+fn push_delta(h: u32, loc: Option<u32>) {
+    let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
+    d.retain(|(k, _, _)| *k != h);
+    d.push((h, loc, uptime_ms()));
+    if d.len() > DELTA_MAX {
+        d.remove(0);
+        // Too much since the build: rebuild when quiet.
+        TOUCHED_MS.store(uptime_ms(), Relaxed);
+        DIRTY.store(true, Relaxed);
+    }
+    DELTA_LEN.store(d.len() as u32, Relaxed);
+}
+static DELTA_LEN: AtomicU32 = AtomicU32::new(0);
 
 /// `Some(None)`: looked, no usable index.
 static LOADED: Mutex<Option<Option<Loaded>>> = Mutex::new(None);
@@ -232,6 +291,19 @@ impl Drop for VolLock {
         // SAFETY: taken in `take`.
         unsafe { sys::ff_mutex_give(self.0) };
     }
+}
+
+/// Sectors from `lba` into `buf` from the card itself, through its I/O lock
+/// only (no volume lock, not FatFs's window): the player's index opens.
+fn card_read(fs: *mut sys::FATFS, lba: u32, buf: &mut [u8]) -> io::Result<()> {
+    let n = buf.len() / SS;
+    // SAFETY: the mounted volume's drive; buf is n sectors.
+    unsafe {
+        if sys::ff_disk_read((*fs).pdrv, buf.as_mut_ptr(), lba, n as u32) != 0 {
+            return Err(errno(sys::EIO));
+        }
+    }
+    Ok(())
 }
 
 /// Sectors from `lba` into `buf`, the lock held: FatFs's window (perhaps
@@ -503,17 +575,24 @@ fn open_path_raw(full: &str) -> io::Result<Option<File>> {
             None
         }
     };
-    hand_out(f, Some(full), raw)
+    hand_out(f, Some(full), raw, None)
 }
 
 /// Put an open FIL in a free slot and open it there as a `File`; with
 /// `raw`, read raw and noted in [`holds`]. `Ok(None)`: every slot busy
 /// (the FIL is freed; the caller opens by path).
-fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>) -> io::Result<Option<File>> {
+fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Option<u32>) -> io::Result<Option<File>> {
     // A player's open is noted in the open set under its lock unless a
     // write intent covers the path, the check and the note one step; then
     // it is not opened at all (`fatread::OpenSet`).
-    let mut note = |k: usize| player.is_some_and(|full| open_set(|o| o.insert_unless_covered(k, full)));
+    let mut note = |k: usize| {
+        player.is_some_and(|full| {
+            open_set(|o| match since {
+                Some(seq) => o.insert_unless_covered_since(k, full, seq),
+                None => o.insert_unless_covered(k, full),
+            })
+        })
+    };
     let claimed = TABLE.claim(f, raw.map(Box::new), player.map(|_| &mut note as &mut dyn FnMut(usize) -> bool));
     let k = match claimed {
         Ok(k) => k,
@@ -569,7 +648,7 @@ fn indexed_as(full: &str, raw: bool) -> Option<io::Result<File>> {
 /// [`indexed_as`] without the handover check (psi-probe's self-check, on
 /// the main task with the card already its own).
 fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
-    let card = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/"))?;
+    let card = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/") || c.starts_with("/cache/"))?;
     let name = card.rsplit('/').next()?;
     if !VFS_UP.load(Relaxed) || !name.is_ascii() || name.len() > 255 {
         return None;
@@ -579,7 +658,13 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
     // reads below.
     let mut cands = [0u32; 8];
     let mut nc = 0;
-    {
+    // A file written, renamed or removed since the build: the delta knows.
+    let delta = DELTA.try_lock().ok().and_then(|d| d.iter().rev().find(|(k, _, _)| *k == h).map(|(_, l, _)| *l));
+    if let Some(loc) = delta {
+        let loc = loc?;
+        cands[0] = loc;
+        nc = 1;
+    } else {
         // Never wait for the index (a build swapping it in, or another
         // task's lookup): this may be the display task. Busy means a path open.
         let Ok(mut g) = LOADED.try_lock() else {
@@ -595,7 +680,39 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
         // by path.
         let (lo, hi) = (l.fanout[b], l.fanout[b + 1].min(l.fanout[b] + 256));
         let mut recs = vec![0u8; (hi - lo) as usize * 8];
-        if let Err(e) = l.file.seek(SeekFrom::Start(fatdir::RECORDS_AT + lo as u64 * 8)).and_then(|_| l.file.read_exact(&mut recs)) {
+        let at = fatdir::RECORDS_AT + lo as u64 * 8;
+        let got = match l.raw.as_mut() {
+            // Raw: the card's I/O lock only.
+            Some((rf, pdrv)) => {
+                let pdrv = *pdrv;
+                rf.seek(at);
+                let mut dev = |lba: u32, n: u32, b: &mut [u8]| -> io::Result<()> {
+                    // SAFETY: `b` is `n` sectors; the mounted card's drive.
+                    if unsafe { sys::ff_disk_read(pdrv, b.as_mut_ptr(), lba, n) } != 0 {
+                        return Err(errno(sys::EIO));
+                    }
+                    Ok(())
+                };
+                let mut done = 0;
+                let mut r = Ok(());
+                while done < recs.len() {
+                    match rf.read(&mut recs[done..], &mut dev) {
+                        Ok(0) => {
+                            r = Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                            break;
+                        }
+                        Ok(n) => done += n,
+                        Err(e) => {
+                            r = Err(e);
+                            break;
+                        }
+                    }
+                }
+                r
+            }
+            None => l.file.seek(SeekFrom::Start(at)).and_then(|_| l.file.read_exact(&mut recs)),
+        };
+        if let Err(e) = got {
             if crate::sdhealth::is_card_error(&e) {
                 return Some(Err(e));
             }
@@ -637,13 +754,25 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
     }
     let mut buf = vec![0u8; 2 * SS];
     let (pbuf, cur) = buf.split_at_mut(SS);
-    let lock = VolLock::take(fs)?;
-    read_locked(fs, geo.database + rel, cur)?;
+    // The player's opens read the card without FatFs's volume lock (the
+    // card's I/O lock only, `card_read`): a FatFs call walking a big
+    // directory meanwhile no longer holds them up. Coherent for any file no
+    // write is changing (tests/fatopen_mixed.rs: every mixture of a
+    // create's, delete's, rename's or directory growth's sectors from before
+    // and after opens the untouched files the same); a write that covers
+    // this file and began since `since` refuses the open at its note
+    // (`OpenSet::insert_unless_covered_since`). Other opens (the server's,
+    // the builder's) take the lock and read through FatFs's window.
+    let player = raw.is_some();
+    let since = player.then(|| open_set(|o| o.seq()));
+    let lock = if player { None } else { Some(VolLock::take(fs)?) };
+    let read = |lba: u32, b: &mut [u8]| if player { card_read(fs, lba, b) } else { read_locked(fs, lba, b) };
+    read(geo.database + rel, cur)?;
     let mut v = fatdir::verify(cur, None, slot, name);
     // Indexed names never start in the previous cluster: the sector before
     // is in this one.
     if v == Verify::NeedPrev && !rel.is_multiple_of(geo.csize) {
-        read_locked(fs, geo.database + rel - 1, pbuf)?;
+        read(geo.database + rel - 1, pbuf)?;
         v = fatdir::verify(cur, Some(pbuf), slot, name);
     }
     let Verify::Ok { cluster, size, attr } = v else {
@@ -667,9 +796,8 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
     };
     // The player's: its chain, still under the lock (the FAT sectors
     // through the window).
-    let player = raw;
-    let raw = match raw {
-        Some(full) => match fatread::chain(&geo, cluster, size, &mut |lba, b| read_locked(fs, lba, b)) {
+    let raw_state = match raw {
+        Some(full) => match fatread::chain(&geo, cluster, size, &mut |lba, b| read(lba, b)) {
             // SAFETY: the mounted volume's drive number.
             Ok(ext) if fatread::is_canonical(full) => Some(Raw { file: fatread::RawFile::new(ext), pdrv: unsafe { (*fs).pdrv }, broken: false }),
             Ok(_) => None,
@@ -683,7 +811,7 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
         None => None,
     };
     drop(lock);
-    hand_out(f, player, raw)
+    hand_out(f, raw, raw_state, since)
 }
 
 fn load() -> io::Result<Loaded> {
@@ -704,11 +832,11 @@ fn load() -> io::Result<Loaded> {
     // directory renamed or replaced on a PC leaves its entries where they
     // were, and a record would then name a file in another directory.
     let mut dirs = Vec::with_capacity(h.dirs as usize);
-    for _ in 0..h.dirs.min(1024) {
+    for _ in 0..h.dirs.min(8192) {
         file.read_exact(&mut e)?;
         dirs.push(pair(&e));
     }
-    let now: Vec<(u32, u32)> = gif_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
+    let now: Vec<(u32, u32)> = indexed_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
     if !fatdir::dirs_match(&dirs, &now) {
         DIRTY.store(true, Relaxed);
         return Err(errno(sys::ESTALE));
@@ -720,7 +848,29 @@ fn load() -> io::Result<Loaded> {
     if t == 0 || (b != 0 && since(b, t) as i32 > 0) {
         DIRTY.store(false, Relaxed);
     }
-    Ok(Loaded { file, fanout })
+    // Its extents, for the player's lookups without the volume lock.
+    let raw = index_extents();
+    Ok(Loaded { file, fanout, raw })
+}
+
+/// The index file's extents (its own FIL's first cluster and size, its
+/// chain under the volume lock): `None` if anything does not add up.
+fn index_extents() -> Option<(fatread::RawFile, u8)> {
+    let (fs, geo) = volume().ok()?;
+    let path = std::ffi::CString::new(format!("0:{}", INDEX.strip_prefix(config::SD_MOUNT)?)).ok()?;
+    // SAFETY: a zeroed FIL f_open fills; closed before return.
+    let (first, size) = unsafe {
+        let mut f: sys::FIL = std::mem::zeroed();
+        if sys::f_open(&mut f, path.as_ptr(), sys::FA_READ as u8) != sys::FRESULT_FR_OK {
+            return None;
+        }
+        let r = (f.obj.sclust, f.obj.objsize as u32);
+        sys::f_close(&mut f);
+        r
+    };
+    let ext = VolLock::take(fs).ok().and_then(|_l| fatread::chain(&geo, first, size, &mut |lba, b| read_locked(fs, lba, b)).ok())?;
+    // SAFETY: the mounted volume's drive number.
+    Some((fatread::RawFile::new(ext), unsafe { (*fs).pdrv }))
 }
 
 // ---- keeping it current ------------------------------------------------------
@@ -749,9 +899,10 @@ pub fn mounted() {
 /// The API changed `path` (an upload, move or delete): rebuild once things
 /// are quiet. Only `/gifs` is indexed.
 pub fn touched(path: &str) {
+    // The delta keeps lookups current (`note_written`, `note_gone`); this
+    // only says the API is busy (a build waits for a quiet spell).
     if path.strip_prefix(config::SD_MOUNT).unwrap_or(path).starts_with("/gifs/") {
         TOUCHED_MS.store(uptime_ms(), Relaxed);
-        DIRTY.store(true, Relaxed);
     }
 }
 
@@ -838,6 +989,31 @@ pub fn tick() {
 }
 
 /// Every `/gifs/<dir>`: its card path and first cluster.
+/// Every directory the index covers: `/gifs/<dir>` and the prepared copies'
+/// buckets, `/cache/<category>/<bucket>` (what plays is mostly copies).
+fn indexed_dirs() -> io::Result<Vec<(String, u32)>> {
+    let mut dirs = gif_dirs()?;
+    let root = format!("{}/cache", config::SD_MOUNT);
+    let Ok(cats) = fs::read_dir(&root) else { return Ok(dirs) };
+    for c in cats.flatten() {
+        let cat = c.file_name().to_string_lossy().into_owned();
+        if cat.starts_with('.') || !c.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let Ok(buckets) = fs::read_dir(format!("{root}/{cat}")) else { continue };
+        for b in buckets.flatten() {
+            if !b.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let dir = format!("/cache/{cat}/{}", b.file_name().to_string_lossy());
+            if let Ok((_, first)) = open_dir(&dir) {
+                dirs.push((dir, first));
+            }
+        }
+    }
+    Ok(dirs)
+}
+
 fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
     let mut dirs = Vec::new();
     for e in fs::read_dir(format!("{}/gifs", config::SD_MOUNT))? {
@@ -855,7 +1031,7 @@ fn build() -> io::Result<()> {
     let (fs, geo) = volume()?;
     // Cleared first: a change during the walks marks it again.
     DIRTY.store(false, Relaxed);
-    let dirs = gif_dirs()?;
+    let dirs = indexed_dirs()?;
     let listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
     let _ = fs::create_dir(config::CACHE_ROOT);
     let mut scratch = vec![0u8; 8 * SS];
@@ -898,13 +1074,19 @@ fn build() -> io::Result<()> {
     let _ = fs::remove_file(INDEX);
     fs::rename(NEW, INDEX)?;
     *g = Some(load().ok());
+    // What the walks saw is in the index now; changes noted since its
+    // start stay in the delta.
+    let started = BUILT_MS.load(Relaxed);
+    let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
+    d.retain(|(_, _, at)| since(*at, started) as i32 >= 0);
+    DELTA_LEN.store(d.len() as u32, Relaxed);
     Ok(())
 }
 
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -915,6 +1097,7 @@ pub fn status_json() -> String {
         RAW_FALLBACKS.load(Relaxed),
         SLOTS_FULL.load(Relaxed),
         INTENT_REFUSED.load(Relaxed),
+        DELTA_LEN.load(Relaxed),
     )
 }
 

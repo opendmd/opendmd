@@ -1359,6 +1359,8 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
             return fail(Fail::Card(format!("rename to {dest}: {e}")));
         }
     }
+    // Its entry, for the index's lookups (the player opens copies).
+    crate::fatidx::note_written(&dest);
     Ok((stats.gif_bytes, stats.out_bytes, written))
 }
 
