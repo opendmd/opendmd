@@ -40,6 +40,7 @@
 // network worker, the HTTP status, boot, config; console-c).
 #![feature(optimize_attribute)]
 mod ahead;
+mod arena;
 mod boot;
 mod cache;
 mod cache_builder;
@@ -61,6 +62,7 @@ mod http;
 mod httpd;
 mod improv;
 mod logring;
+mod membank;
 mod net_worker;
 mod nvs_config;
 mod ota;
@@ -506,6 +508,12 @@ fn main() -> Result<()> {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
+    // `formula_arena` (dev): a Formula's memory set aside now, before the
+    // network takes any (`arena.rs`).
+    #[cfg(feature = "psi")]
+    if settings.formula_arena {
+        arena::reserve();
+    }
     // The ceiling first, so nothing below (the show included) can exceed it;
     // until safe start is over it is no higher than `BRIGHTNESS_SAFE_MAX`.
     let mut safe = SafeStart::new(&settings);
@@ -553,6 +561,7 @@ fn main() -> Result<()> {
     );
 
     let mut canvas = Canvas::new();
+    membank::CANVAS.store(canvas.as_bytes().as_ptr() as usize, Ordering::Relaxed);
     // The engine's clock is a `Duration` since an epoch the caller picks, not
     // an `Instant` — `Instant` has no clock on wasm and the web app shares
     // this core. Boot is our epoch; only differences ever matter.
@@ -3340,7 +3349,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}; buffers{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
@@ -3352,6 +3361,7 @@ fn heartbeat(
         logring::summary(),
         probe::period_summary(),
         panel.glow_summary(),
-        diag::summary()
+        diag::summary(),
+        membank::buffers_line()
     );
 }

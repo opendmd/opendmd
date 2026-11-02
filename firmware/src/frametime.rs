@@ -56,7 +56,9 @@ pub fn open<T>(f: impl FnOnce() -> T) -> T {
     let reads = READ_US.load(Relaxed);
     let r = f();
     READ_US.store(reads, Relaxed);
-    OPEN_US.fetch_add(us_since(t), Relaxed);
+    let us = us_since(t);
+    OPEN_US.fetch_add(us, Relaxed);
+    crate::membank::OPEN_MAX_US.fetch_max(us, Relaxed);
     r
 }
 
@@ -97,7 +99,9 @@ impl<R: Read> Read for Counted<R> {
             Some(e) => Err(e),
             None => self.0.read(buf),
         };
-        READ_US.fetch_add(us_since(t), Relaxed);
+        let us = us_since(t);
+        READ_US.fetch_add(us, Relaxed);
+        crate::membank::READ_MAX_US.fetch_max(us, Relaxed);
         match &r {
             Ok(n) => self.1 |= *n > 0,
             Err(e) => crate::sdhealth::read_failed(
@@ -115,7 +119,9 @@ impl<R: Seek> Seek for Counted<R> {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let t = Instant::now();
         let r = self.0.seek(pos);
-        READ_US.fetch_add(us_since(t), Relaxed);
+        let us = us_since(t);
+        READ_US.fetch_add(us, Relaxed);
+        crate::membank::READ_MAX_US.fetch_max(us, Relaxed);
         if let Err(e) = &r {
             crate::sdhealth::read_failed(
                 crate::sdhealth::Kind::Read,

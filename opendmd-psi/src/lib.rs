@@ -74,7 +74,7 @@ pub use compile::{
     compile_unfused, compile_with, squeeze, Declared, DeclaredControl, Info, MAX_ABOUT_TEXT,
     MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
-pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
+pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};

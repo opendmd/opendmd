@@ -817,10 +817,10 @@ fn canvas_for(
     if !prog.draws() {
         return Ok(None);
     }
-    let fitted = match held.as_deref_mut() {
+    let fitted = hinted(ARENA_CANVAS, || match held.as_deref_mut() {
         Some(k) => k.try_fit(prog).then(|| held.take()).flatten(),
         None => psi::Ink::try_boxed_for(prog),
-    };
+    });
     match fitted {
         Some(k) => Ok(Some(k)),
         None => Err(psi::Error {
@@ -1058,10 +1058,64 @@ impl PsiFx {
     }
 }
 
+/// Where the playing formula's working memory is (`display.buffers` in
+/// the firmware's `/api/status`: which SRAM pool each landed in, against
+/// CPU0's DMA traffic, display-isolation 2026-11-02): the formula's one
+/// allocation (program and VM scratch), its ink plane, its paint plane and
+/// its JIT kernel; 0 for none. Noted at each of its frames, cleared when
+/// it goes.
+pub static BUFFERS: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// [`BUFFERS`]' entries.
+pub const BUF_FX: usize = 0;
+pub const BUF_INK: usize = 1;
+pub const BUF_PLANE: usize = 2;
+pub const BUF_KERNEL: usize = 3;
+/// Bytes of the formula's one allocation.
+pub const FX_BYTES: usize = std::mem::size_of::<PsiFx>();
+/// Bytes of an ink plane (with its paint plane's pointer), and of a paint
+/// plane.
+pub const INK_BYTES: usize = std::mem::size_of::<psi::Ink>();
+pub const PLANE_BYTES: usize = std::mem::size_of::<psi::Plane>();
+
+/// The firmware's `formula_arena` (a dev setting): while this names an
+/// allocation the formula is about to make ([`ARENA_FX`], [`ARENA_CANVAS`]),
+/// the firmware's allocator serves it from an arena it set aside at boot,
+/// so the formula's memory lands in the same place every time. 0: none
+/// (and nothing reads it off the device).
+pub static ARENA_HINT: AtomicUsize = AtomicUsize::new(0);
+pub const ARENA_FX: usize = 1;
+pub const ARENA_CANVAS: usize = 2;
+
+/// Run `f` with [`ARENA_HINT`] at `hint`.
+fn hinted<T>(hint: usize, f: impl FnOnce() -> T) -> T {
+    ARENA_HINT.store(hint, Ordering::Relaxed);
+    let r = f();
+    ARENA_HINT.store(0, Ordering::Relaxed);
+    r
+}
+
+impl PsiFx {
+    /// Note where this formula's memory is ([`BUFFERS`]).
+    fn note_buffers(&self) {
+        BUFFERS[BUF_FX].store(self as *const PsiFx as usize, Ordering::Relaxed);
+        let ink = self.ink.as_deref();
+        BUFFERS[BUF_INK].store(ink.map_or(0, |k| k as *const psi::Ink as usize), Ordering::Relaxed);
+        let plane = ink.and_then(|k| k.1.as_deref());
+        BUFFERS[BUF_PLANE].store(plane.map_or(0, |p| p as *const psi::Plane as usize), Ordering::Relaxed);
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        BUFFERS[BUF_KERNEL].store(self.jit.kernel_addr(), Ordering::Relaxed);
+    }
+}
+
 impl Drop for PsiFx {
     fn drop(&mut self) {
         if self.still.is_held() {
             set_still_held(0);
+        }
+        if BUFFERS[BUF_FX].load(Ordering::Relaxed) == self as *const PsiFx as usize {
+            for b in &BUFFERS {
+                b.store(0, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -1288,6 +1342,7 @@ impl PsiFx {
     /// `render`).
     #[inline(never)]
     fn draw(&mut self, bytes: &mut [u8], mut changed: Option<&mut [u32; psi::H]>, sink: Option<psi::PairSink<'_>>) -> bool {
+        self.note_buffers();
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let mut sink = sink;
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -2137,6 +2192,11 @@ mod jit {
     const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
 
     impl Jit {
+        /// The kernel's block address, 0 for none (`BUFFERS`).
+        pub(super) fn kernel_addr(&self) -> usize {
+            self.kernel.as_ref().map_or(0, |k| k.addr())
+        }
+
         /// The kernel, if it draws this frame (a trial's frames kernel and
         /// VM in turn). Not made yet: made now, and the VM draws this frame
         /// (the check reads its bytes).
@@ -2335,7 +2395,7 @@ mod alloc_box {
             // way down (`Program`, `Scratch`, `Inputs`, `u8`) but for its
             // canvas, an `Option<Box<_>>`, whose all-zero value is `None`:
             // all-zero is a valid value of it.
-            let mut b = PsiBox(unsafe { super::try_zeroed::<PsiFx>()? });
+            let mut b = PsiBox(super::hinted(super::ARENA_FX, || unsafe { super::try_zeroed::<PsiFx>() })?);
             b.0.prog.clear();
             b.0.scratch.reset();
             b.0.delay_ms = 20;
