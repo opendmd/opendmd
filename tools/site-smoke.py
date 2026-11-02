@@ -36,6 +36,11 @@ build URL serves. There the art index must also carry
   three ways;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
+- Open on my panel, both ends: an edited Formula sent from /f/ (this build
+  as https://opendmd.dev) to the panel's app (this build's web app on
+  mock-device.py over target/demo-card, as http://192.168.1.50) is saved
+  under Your formulas as it arrives, and is still there, and on the card,
+  after a reload;
 - the demo's Formulas: no share link, Copy code and Submit;
 - /art-index/v1/ (Create Art's game name index, not in the www pack): every
   platform's file published, the committed file byte for byte, served as
@@ -85,9 +90,12 @@ import functools
 import http.server
 import io
 import json
+import os
 import posixpath
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -435,6 +443,77 @@ def open_on_panel(browser, base: str, errors: list[str]) -> None:
     check(page.url.startswith(base) and "panel=1" not in page.url and len(seen) == n,
           f"gallery -> Open on my panel: back is the site, not handed on again ({page.url[len(base):][:40]})")
     page.context.close()
+
+
+def panel_end_to_end(browser, base: str, errors: list[str]) -> None:
+    """Open on my panel, both ends: the site (this build, as https://opendmd.dev)
+    sends an edited Formula to the panel's app (this build's web app on
+    tools/mock-device.py over the demo card, as http://192.168.1.50); the
+    app takes it from opendmd.dev and saves it under Your formulas, and it
+    is still there, and on the card, after a reload."""
+    card = ROOT / "target/demo-card"
+    www = ROOT / "opendmd-web/www"
+    if not (card / "filelist.txt").is_file() or not (www / "pkg").is_dir():
+        check(False, "panel end to end: needs make site (target/demo-card) and make web")
+        return
+    with tempfile.TemporaryDirectory(prefix="site-smoke-panel-") as tmp:
+        overlay = Path(tmp)
+        port = free_port()
+        mock = subprocess.Popen(["uv", "run", "--quiet", str(ROOT / "tools/mock-device.py"), "--port", str(port), "--quiet",
+                                 "--root", str(card), "--overlay", str(overlay), "--www", str(www)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            panel = f"http://127.0.0.1:{port}"
+            for _ in range(200):
+                try:
+                    urllib.request.urlopen(panel + "/api/status", timeout=1).read()
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            page = new_page(browser, "laptop", errors)
+
+            def via(to: str, cors: bool):
+                def handle(route):
+                    u = urllib.parse.urlsplit(route.request.url)
+                    # (The app's own requests, same-origin as on a panel: its origin is the mock's.)
+                    h = {**route.request.headers, **({"origin": to} if "origin" in route.request.headers and not cors else {})}
+                    r = route.fetch(url=to + u.path + (f"?{u.query}" if u.query else ""), headers=h)
+                    route.fulfill(response=r, headers={**r.headers, **({"access-control-allow-origin": "*"} if cors else {})})
+                return handle
+            page.context.route("https://opendmd.dev/**", via(base, True))
+            page.context.route("http://192.168.1.50/**", via(panel, False))
+            slug = next(e["slug"] for e in examples() if not e["bundle"])
+            page.goto("https://opendmd.dev/")
+            page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+            page.goto(f"https://opendmd.dev/f/#gallery={slug}")
+            f_ready(page)
+            src = 'name "Site rings"\nloop 4\ngray(saw(x - t/4))'
+            page.fill("#psi-src", src)
+            page.wait_for_function("document.querySelector('#f-name').textContent === 'Site rings'", timeout=5000)
+            with page.context.expect_page() as info:
+                page.click("#f-open")
+            app = info.value
+            with contextlib.suppress(PlaywrightTimeout):
+                app.wait_for_selector("#toasts .toast", timeout=30000)
+            t = " | ".join(app.eval_on_selector_all("#toasts .toast", "els => els.map(e => e.textContent)"))
+            f = overlay / "formulas" / "site-rings.psi"
+            check(f.is_file() and f.read_text() == src and "Your formulas" in t,
+                  f"panel end to end: sent from the site, saved on the panel as it arrives ('{t}')")
+            app.goto("http://192.168.1.50/#formulas")
+            app.reload()
+            app.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
+            mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+            check(mine == ["Site rings"] and f.is_file(), f"panel end to end: after a reload it is under Your formulas, and on the card ({mine})")
+            page.context.close()
+        finally:
+            os.killpg(mock.pid, signal.SIGTERM)
+
+
+def free_port() -> int:
+    """A free local port (closed again for the mock to take)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def demo_share(browser, base: str, errors: list[str]) -> None:
@@ -1369,6 +1448,8 @@ def main() -> int:
         gallery_sort(browser, base, errors)
         print("Open on my panel (the gallery's tiles)")
         open_on_panel(browser, base, errors)
+        print("Open on my panel, the site to the panel's app (saved, kept over a reload)")
+        panel_end_to_end(browser, base, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
         print("the Psi language reference (dev/psi/)")
