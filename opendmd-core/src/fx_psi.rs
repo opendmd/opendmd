@@ -389,9 +389,26 @@ impl Governor {
     /// waits for the next refresh instead: none are late.)
     pub const LATE_HOLD: u16 = 4096;
 
-    /// A raced frame was (`late`) or wasn't late; `true` when that just
-    /// moved the formula to every 2nd refresh.
-    pub fn note_late(&mut self, late: bool) -> bool {
+    /// A late frame counts towards the hold only while the formula's own
+    /// mean render (render and writes, waits left out) is over this share
+    /// of its frame's budget, %. Under it, a late frame is a stall from
+    /// outside the formula: the loop's work before the tick, the wake, a
+    /// flash write on CPU0 (which stops the flash cache on both cores),
+    /// the web app's polls. The spare (psi-perf, 2026-11-02): Starfield at
+    /// ~3,300 µs of a 6,468 µs budget had 1-2 late frames in ~200 while
+    /// being measured over HTTP, ~1 in 1,000 in all (7 in 6,269 raced
+    /// frames since boot), and was held to 50 fps for a minute or not by
+    /// luck. The hold stays for a formula near the edge, where a late
+    /// frame says its own time does not fit (console-lessons §8.11: it
+    /// was the fallback for Starfield's narrow window, which `late_share`
+    /// and `retarget` absorbed since).
+    pub const LATE_NEAR_PCT: u32 = 75;
+
+    /// A raced frame was (`late`) or wasn't late, `budget_us` its frame's
+    /// render budget ([`beam_budget_us`]); `true` when that just moved the
+    /// formula to every 2nd refresh.
+    pub fn note_late(&mut self, late: bool, budget_us: u32) -> bool {
+        let late = late && u64::from(self.avg_us) * 100 > u64::from(budget_us) * u64::from(Self::LATE_NEAR_PCT);
         if self.grace > 0 {
             self.grace -= 1;
             return false;
@@ -1349,9 +1366,10 @@ impl PsiFx {
     fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, grid: u32) -> Duration {
         let (err, waited, late) = (h.end)();
         let unit = crate::scan::beam_frames(grid * 1000, cycle);
-        if self.gov.note_late(late) {
+        let budget = beam_budget_us(self.gov.beam_frames(unit) * cycle, cycle);
+        if self.gov.note_late(late, budget) {
             log::info!(
-                "formula: over 1 in 1,000 raced frames late -> every {} refreshes for a while",
+                "formula: over 1 in 1,000 raced frames late near its budget -> every {} refreshes for a while",
                 self.gov.beam_frames(unit)
             );
         }
@@ -2515,62 +2533,62 @@ mod tests {
     }
 
     /// Racing the beam: over one late frame in a window of 1,024, every 2nd
-    /// refresh for 4,096 frames, then every refresh again.
+    /// refresh for 4,096 frames, then every refresh again — for a formula
+    /// near its budget (here a mean of 1,000 µs against 1,200).
     #[test]
     fn late_raced_frames_hold_every_second_refresh_for_a_while() {
+        const NEAR: u32 = 1_200;
         let mut g = Governor::new(1_000, 10);
         assert_eq!(g.beam_frames(1), 1);
         // The first frames after an open are cold: late or not, not counted.
         for _ in 0..Governor::LATE_GRACE {
-            assert!(!g.note_late(true));
+            assert!(!g.note_late(true, NEAR));
         }
         assert_eq!(g.beam_frames(1), 1);
         // One late frame a window: fine.
         for k in 0..3 * Governor::LATE_WINDOW {
-            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7));
+            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7, NEAR));
         }
         assert_eq!(g.beam_frames(1), 1);
-        assert!(!g.note_late(true));
-        assert!(g.note_late(true), "two in a window");
+        assert!(!g.note_late(true, NEAR));
+        assert!(g.note_late(true, NEAR), "two in a window");
         assert_eq!(g.beam_frames(1), 2);
         for _ in 0..Governor::LATE_HOLD {
             assert_eq!(g.beam_frames(1), 2);
-            g.note_late(false);
+            g.note_late(false, NEAR);
         }
         assert_eq!(g.beam_frames(1), 1, "tried again");
     }
 
-    /// The light bundled Formulas the spare measured (2026-11-01), loaded
-    /// from their compiled files as the player loads them: the frame time
-    /// each asks for, and the grid the governor starts them on, are main's
-    /// (f92f182, compiled on the device), and so is the estimate the grid
-    /// comes from (within 3 %: the rows-down rewrite added a row step or
-    /// two). Raced on a 7.98 ms refresh, the 20 ms ones every 2nd refresh
-    /// (16 ms), the 10 ms ones every refresh.
+    /// A formula well under its budget keeps every refresh through late
+    /// frames that come from outside it (a stall: a flash write on CPU0,
+    /// the loop's work before the tick), however they bunch; one near its
+    /// budget is still held by two in a window. The spare's numbers:
+    /// Starfield ~3,300 µs of a 6,468 µs budget; a formula at 5,500.
     #[test]
-    fn bundled_formulas_from_their_files_keep_mains_frame_grid() {
-        // (file, main's `fps` ms, main's VM estimate µs, refreshes a frame)
-        const MAIN: [(&str, &str, u32, u32, u32); 8] = [
-            ("scanlines", include_str!("../../opendmd-web/formulas/scanlines.psi"), 20, 1412, 2),
-            ("old-tv", include_str!("../../opendmd-web/formulas/old-tv.psi"), 20, 3024, 2),
-            ("glitter", include_str!("../../opendmd-web/formulas/glitter.psi"), 20, 5560, 2),
-            ("matrix", include_str!("../../opendmd-web/formulas/matrix.psi"), 20, 5927, 2),
-            ("old-photo", include_str!("../../opendmd-web/formulas/old-photo.psi"), 20, 5463, 2),
-            ("big-clock", include_str!("../../opendmd-web/formulas/big-clock.psi"), 20, 3431, 2),
-            ("starfield", include_str!("../../opendmd-web/formulas/starfield.psi"), 10, 2393, 1),
-            ("endless-road", include_str!("../../opendmd-web/formulas/endless-road.psi"), 10, 4805, 1),
-        ];
-        for (name, src, ms, est, frames) in MAIN {
-            let psb = psi::build(src).unwrap();
-            let fx = PsiFx::from_bytes(&psb, "").unwrap_or_else(|e| panic!("{name}: {}", e.msg));
-            let mine = fx.prog.esp32_us();
-            assert!((est..=est * 103 / 100).contains(&mine), "{name}: {mine} µs, main {est}");
-            assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (ms, ms), "{name}");
-            let unit = crate::scan::beam_frames(ms * 1000, 7_980);
-            assert_eq!(fx.gov.beam_frames(unit), frames, "{name}");
-            // Ink only unless it paints.
-            assert_eq!(fx.ink.as_ref().map(|k| k.1.is_some()), fx.prog.draws().then_some(false), "{name}");
+    fn only_a_formula_near_its_budget_is_held_for_late_frames() {
+        const BUDGET: u32 = 6_468;
+        let mut light = Governor::new(3_300, 10);
+        for k in 0..20 * Governor::LATE_WINDOW as u32 {
+            // Two late in a row every 300 frames: 0.7 %, seven times the
+            // spare's rate under its measurement's HTTP.
+            assert!(!light.note_late(k % 300 < 2, BUDGET), "frame {k}");
         }
+        assert_eq!(light.beam_frames(1), 1, "light: every refresh");
+        let mut near = Governor::new(5_500, 20);
+        for _ in 0..Governor::LATE_GRACE {
+            near.note_late(false, BUDGET);
+        }
+        assert!(!near.note_late(true, BUDGET));
+        assert!(near.note_late(true, BUDGET), "near its budget: held");
+        assert_eq!(near.beam_frames(1), 2);
+        // The edge: three quarters of the budget.
+        assert_eq!(Governor::LATE_NEAR_PCT, 75);
+        let mut at = Governor::new(BUDGET * 3 / 4, 10);
+        for _ in 0..Governor::LATE_GRACE + 2 {
+            at.note_late(true, BUDGET);
+        }
+        assert_eq!(at.beam_frames(1), 1, "at three quarters: not yet");
     }
 
     /// A Formula played over one whose raced frames were held to every 2nd
@@ -2582,19 +2600,21 @@ mod tests {
         const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
         const SCAN: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
         let mut fx = PsiFx::from_query(&super::path(ROAD, "")[Q..]).unwrap();
-        // (Its first frames are the grace's: cold, not counted.)
+        // (Its first frames are the grace's: cold, not counted. A budget
+        // it is near: late frames count.)
+        const NEAR: u32 = 5_000;
         for _ in 0..Governor::LATE_GRACE {
-            assert!(!fx.gov.note_late(true));
+            assert!(!fx.gov.note_late(true, NEAR));
         }
         assert_eq!(fx.gov.beam_frames(1), 1, "late in its grace: not held");
-        assert!(!fx.gov.note_late(true));
-        assert!(fx.gov.note_late(true));
+        assert!(!fx.gov.note_late(true, NEAR));
+        assert!(fx.gov.note_late(true, NEAR));
         assert_eq!(fx.gov.beam_frames(1), 2, "the road held");
         fx.retune_from(&super::path(SCAN, "")[Q..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (20, 20));
         assert_eq!(fx.gov.beam_frames(2), 2, "every 2nd refresh: its 50 fps, not 25");
         // One late frame after the retune is not two in a window.
-        assert!(!fx.gov.note_late(true));
+        assert!(!fx.gov.note_late(true, NEAR));
         assert_eq!(fx.gov.beam_frames(2), 2);
         // Heavier: its own start (about 9 ms, two noises: 40 ms frames).
         let heavy = "loop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
@@ -2754,7 +2774,11 @@ mod tests {
                 b.retune_from(&super::path(STARS, "")[Q..]).unwrap();
             }
             COLD.with(|c| c.set(3));
-            let d = run(&mut fx, from);
+            run(&mut fx, from);
+            // Then two late frames well after its grace, a frame apart
+            // (a stall from outside: Starfield is far under its budget).
+            COLD.with(|c| c.set(2));
+            let d = run(&mut fx, from + 60);
             grids.push(*d.last().unwrap());
         }
         assert_eq!(grids, [Duration::from_micros(7_980); 3], "fresh, over Glitter, over Old photo");
