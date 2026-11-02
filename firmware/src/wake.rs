@@ -56,6 +56,23 @@ pub fn stats() -> (u32, u32, u32, u32) {
     (WAKES.load(Relaxed), LATE.load(Relaxed), MAX_US.load(Relaxed), SPUN_US.load(Relaxed))
 }
 
+/// The loop's semaphore, for [`kick`] (null before the waker exists).
+static SEM: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+/// A command is waiting: the loop's sleep ends now, without its spin.
+static KICKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Wake the display loop from its frame's sleep (a command that must be
+/// answered now, `Command::Release`): it handles its commands, and its
+/// frame is not shown early (the tick finds it not yet due).
+pub fn kick() {
+    KICKED.store(true, Relaxed);
+    let sem = SEM.load(Relaxed);
+    if !sem.is_null() {
+        // SAFETY: the loop's semaphore, alive for the program.
+        unsafe { sys::xQueueGenericSend(sem.cast(), core::ptr::null(), 0, 0) };
+    }
+}
+
 pub struct Waker {
     timer: sys::esp_timer_handle_t,
     sem: sys::QueueHandle_t,
@@ -99,6 +116,7 @@ impl Waker {
                 sys::vQueueDelete(sem);
                 return None;
             }
+            SEM.store(sem.cast(), Relaxed);
             Some(Waker { timer, sem })
         }
     }
@@ -112,6 +130,10 @@ impl Waker {
         let now = crate::uclock::now_us();
         let left = Duration::from_micros(at.saturating_sub(now));
         let start = now as u32;
+        if KICKED.swap(false, Relaxed) {
+            WOKE_AT.store(start, Relaxed);
+            return;
+        }
         if left.is_zero() {
             // (Already due: the frame ran over, not the wake.)
             WOKE_AT.store(start, Relaxed);
@@ -135,7 +157,21 @@ impl Waker {
                     note(due);
                     return;
                 }
+                // A kick whose give the take above swallowed set its flag
+                // first: seen here.
+                if KICKED.swap(false, Relaxed) {
+                    sys::esp_timer_stop(self.timer);
+                    WOKE_AT.store(now_us(), Relaxed);
+                    return;
+                }
                 sys::xQueueSemaphoreTake(self.sem, ticks);
+            }
+            // Woken for a command (`kick`): no spin to the frame's time.
+            if KICKED.swap(false, Relaxed) {
+                // SAFETY: the waker's own timer.
+                unsafe { sys::esp_timer_stop(self.timer) };
+                WOKE_AT.store(now_us(), Relaxed);
+                return;
             }
         }
         let spin = now_us();

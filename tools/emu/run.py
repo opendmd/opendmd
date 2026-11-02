@@ -65,7 +65,7 @@ GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
-RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ")
+RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
 PROBE_KEYS = re.compile(r"psi-probe: (raw reads|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
@@ -171,7 +171,7 @@ def main():
                     swap_card = (line, m[1])
                 m = RAW.search(line)
                 if m:
-                    raw_reads = (line, int(m[1]), int(m[2]))
+                    raw_reads = (line, int(m[1]), int(m[2]), int(m[3]))
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -246,7 +246,7 @@ def main():
         # FatFs's bytes, and some were read raw.
         if not raw_reads:
             die("the raw-reads line is missing")
-        if raw_reads[1] == 0 or raw_reads[2] != 0:
+        if raw_reads[1] == 0 or raw_reads[2] != 0 or raw_reads[3] == 0:
             die(f"raw reads: {raw_reads[0]}")
         print("--- correctness lines:")
         for l in lines:

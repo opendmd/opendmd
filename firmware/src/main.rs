@@ -743,9 +743,10 @@ fn main() -> Result<()> {
                         e.skip();
                     }
                 }
-                Command::ReleaseAhead(reply) => {
+                Command::Release(reply) => {
                     if let Some(e) = engine.as_mut() {
                         ahead::release(e);
+                        e.drop_current(&mut canvas);
                     }
                     let _ = reply.send(());
                 }

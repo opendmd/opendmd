@@ -94,8 +94,15 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
     if rel.contains('\0') || rel.contains('\\') {
         return None;
     }
-    for component in rel.split('/') {
-        if component == ".." {
+    // One spelling per file (`fatread::OpenSet` compares paths): no `..`,
+    // no empty or `.` component (`gifs//x.gif`), none ending in a dot or a
+    // space (FatFs drops those). A trailing `/` (a directory) is allowed.
+    let body = rel.trim_end_matches('/');
+    for component in body.split('/') {
+        if body.is_empty() {
+            break;
+        }
+        if component == ".." || component == "." || component.is_empty() || component.ends_with('.') || component.ends_with(' ') {
             return None;
         }
     }

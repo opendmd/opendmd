@@ -130,7 +130,7 @@ pub static NET_UP: AtomicBool = AtomicBool::new(false);
 /// when the copy opens and cleared when that handle closes
 /// (`frametime::Counted`), so it covers the copy while it waits and while it
 /// plays. The handlers that replace or delete a file check it
-/// (`http::skip_if_playing`), as they check the path on screen: FAT must not
+/// (`http::release_for_write`), as they check the path on screen: FAT must not
 /// have an open file replaced or unlinked. A key, not the path, so setting
 /// it allocates nothing on the display loop.
 ///
@@ -472,12 +472,14 @@ pub enum PlayError {
 pub enum Command {
     /// End the current GIF at the next tick.
     Skip,
-    /// Let go of the copy opened ahead for the next file (a handler is
-    /// about to replace or delete it: `http::skip_if_playing`); the pick
-    /// stays and opens when it plays. Answered once the handle is closed
-    /// (the loop reads commands only between frames, so a long frame delay
-    /// is waited out, not guessed at).
-    ReleaseAhead(mpsc::Sender<()>),
+    /// Let go of the file on screen and the copy opened ahead (a handler
+    /// is about to replace, rename or delete one: `http::release_for_write`,
+    /// whose write intents keep them from being opened raw again): the
+    /// picture stays, and the next tick opens the next file (the pick
+    /// opened ahead stays the pick). Answered once both handles are closed;
+    /// the sender wakes the loop from its frame's sleep (`wake::kick`), so
+    /// a long frame delay is not waited out.
+    Release(mpsc::Sender<()>),
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
     /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is
