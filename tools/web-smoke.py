@@ -866,6 +866,15 @@ def last_toast(page: Page, kind: str) -> str:
     return page.eval_on_selector_all(f"#toasts .toast.{kind}", "els => els.at(-1).textContent")
 
 
+def toast_or_none(page: Page, kind: str, timeout: float = 10000) -> str:
+    """The last toast of `kind`, or "" when none comes (a check then fails, not the run)."""
+    try:
+        page.wait_for_selector(f"#toasts .toast.{kind}", timeout=timeout)
+    except PlaywrightTimeoutError:
+        return ""
+    return page.eval_on_selector_all(f"#toasts .toast.{kind}", "els => els.at(-1).textContent")
+
+
 def send_from_library(page: Page, base: str, what: str) -> None:
     page.wait_for_selector("#lib-play:not([disabled])", timeout=10000)
     path = page.get_attribute("#lib-play", "data-path")
@@ -3559,6 +3568,7 @@ def mock_pass(browser) -> None:
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
         formulas_remix_checks(browser, base, overlay, errors)
+        formulas_store_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -4188,9 +4198,11 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     (`#gallery=<slug>`: a bundled one is built in, another fetched from
     opendmd.dev/formulas/src/, here a stand-in) or, edited, by postMessage
     from the page that opened it (`#remix`, from opendmd.dev or the app's
-    own origin only), never in the link. It opens in the editor (the
-    remix), nothing saved until Save; a name it doesn't have, no opener, or
-    an opener elsewhere: said plainly."""
+    own origin only), never in the link. It is saved on the panel as it
+    arrives (under Your formulas, kept over a reload; the same text not
+    twice; a bundled one needs nothing; one that doesn't work isn't saved,
+    and comes back as not saved yet) and opens in the editor; a name it
+    doesn't have, no opener, or an opener elsewhere: said plainly."""
     raw = (REPO / "opendmd-web/formulas/searchlight.psi").read_text()
     src = raw.split("\n", 2)[2]
     f = overlay / "formulas" / "searchlight.psi"
@@ -4212,20 +4224,84 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
-    check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"] and not f.exists(),
-          f"remix: a gallery Formula is fetched by name and opens in the editor, nothing saved yet ({got[1:]}, {asked})")
+    check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"],
+          f"remix: a gallery Formula is fetched by name and opens in the editor ({got[1:]}, {asked})")
+    # Saved on the panel as it arrives (no Save pressed), and said.
+    t = toast_or_none(page, "ok")
+    page.wait_for_timeout(300)
+    check(f.exists() and f.read_text() == src and "Your formulas" in t,
+          f"remix: a gallery Formula is saved on the panel as it arrives (/formulas/searchlight.psi, '{t}')")
     shot(page, "formulas-remix", "laptop")
-    page.click("#psi-save")
-    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    check(f.exists() and f.read_text() == src, "remix: Save puts it on the panel (/formulas/searchlight.psi)")
-    # A bundled one: here already, nothing fetched.
+    # Still there after a reload, under Your formulas, with the slider as sent.
+    page.goto(base + "/#formulas")
+    page.reload()
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)").count("Searchlight") == 1,
+          "remix: after a reload the gallery Formula is under Your formulas")
+    # A change saved later goes into the same file, not a second one.
+    if page.locator("#psi-mine .psi-tile[data-name='Searchlight']").count():
+        page.click("#psi-mine .psi-tile[data-name='Searchlight']")
+        page.click("#psi-edit")
+        page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+        page.fill("#psi-src", src.replace("0.4", "0.5", 1))
+        page.wait_for_timeout(300)
+        page.click("#psi-save")
+        page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
+          "remix: Save afterwards changes the same file (/formulas/searchlight.psi, no second copy)")
+    # Edited on the site (Open on my panel, a changed one): sent by postMessage,
+    # saved as it arrives, kept over a reload and a trip to another view.
+    sent_src = 'name "Sent rings"\nloop 4\ngray(saw(x - t/4))'
+    sf = overlay / "formulas" / "sent-rings.psi"
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, sent_src, "Sent rings", a=0.25)
+    t = toast_or_none(app, "ok")
+    app.wait_for_timeout(300)
+    check(sf.exists() and sf.read_text() == sent_src and "Your formulas" in t,
+          f"remix: a Formula sent from the site is saved on the panel as it arrives (/formulas/sent-rings.psi, '{t}')")
+    app.goto(base + "/#library")
+    app.wait_for_timeout(500)
+    app.goto(base + "/#formulas")
+    app.reload()
+    app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+    check(mine.count("Searchlight") == 1 and mine.count("Sent rings") == 1, f"remix: after another view and a reload it is under Your formulas ({mine})")
+    opener.context.close()
+    # The same Formula sent again: opened, not saved twice.
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, sent_src, "Sent rings")
+    app.wait_for_timeout(500)
+    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
+          "remix: the same Formula sent again opens the saved one, no second copy")
+    opener.context.close()
+    # One that doesn't work: not saved, said, and offered back as not saved yet.
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, 'name "Broken rings"\ngray(', "Broken rings")
+    t = toast_or_none(app, "bad")
+    check(not (overlay / "formulas" / "broken-rings.psi").exists() and "isn’t saved" in t,
+          f"remix: a Formula that doesn't work isn't saved, and says so ('{t}')")
+    app.goto(base + "/#formulas")
+    app.reload()
+    app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    cont = app.inner_text("#psi-cont") if app.locator("#psi-cont").count() else ""
+    check("Broken rings" in cont, f"remix: after a reload it is offered back, not saved yet ('{cont[:60]}')")
+    if cont:
+        app.click("#psi-cont-drop")
+    opener.context.close()
+    # A bundled one: here already, nothing fetched, nothing saved.
     asked.clear()
+    before = sorted(p.name for p in (overlay / "formulas").glob("*"))
     page.goto("about:blank")
     page.goto(base + "/#gallery=starfield")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     star = next(e for e in bundled() if e["name"] == "Starfield")
-    check(page.input_value("#psi-src") == star["src"] and not asked, f"remix: a bundled one opens from the panel's own copy ({asked})")
+    after = sorted(p.name for p in (overlay / "formulas").glob("*"))
+    check(page.input_value("#psi-src") == star["src"] and not asked and after == before,
+          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, {after})")
     # A name the gallery doesn't have (its 404 expected).
     expected.append("/formulas/src/no-such-formula")
     page.goto("about:blank")
@@ -4253,7 +4329,46 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
           f"remix: a Formula sent from another site is ignored ('{t}')")
     other.context.close()
     page.context.close()
-    urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/searchlight.psi", method="DELETE"), timeout=30)
+    for p in [*(overlay / "formulas").glob("searchlight*.psi"), *(overlay / "formulas").glob("sent-rings*.psi")]:
+        urllib.request.urlopen(urllib.request.Request(base + f"/api/files/formulas/{p.name}", method="DELETE"), timeout=30)
+
+
+def formulas_store_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Your Formulas on the panel when the panel can't list them: said, not
+    shown as none, and nothing saved over one already there (a save waits
+    for a listing that works); once it lists again, the one there is whole."""
+    d = overlay / "formulas"
+    d.mkdir(parents=True, exist_ok=True)
+    keep = d / "kept-rings.psi"
+    kept = 'name "Kept rings"\nloop 4\ngray(saw(x + t/4))'
+    keep.write_text(kept)
+    expected.append("/api/files?dir=%2Fformulas")
+    try:
+        opener = new_page(browser, "laptop", errors)
+        fail = lambda r: r.fulfill(status=500, body="card error", headers={"content-type": "text/plain"})
+        opener.context.route("**/api/files?dir=%2Fformulas", fail)
+        opener.goto(base + "/#formulas")
+        t = toast_or_none(opener, "bad")
+        check("Couldn’t read your Formulas" in t and opener.locator("#psi-mine .psi-tile").count() == 0,
+              f"store: a listing that fails is said, not shown as no Formulas ('{t}')")
+        opener.goto(base + "/version.txt")
+        app = remix_open(opener, base, errors, 'name "Kept rings"\nloop 4\ngray(1)', "Kept rings")
+        t = toast_or_none(app, "bad")
+        check(keep.read_text() == kept and sorted(p.name for p in d.glob("kept-rings*")) == ["kept-rings.psi"] and "isn’t saved" in t,
+              f"store: with no listing nothing is saved over a Formula already there ('{t}')")
+        opener.context.unroute("**/api/files?dir=%2Fformulas", fail)
+        app.goto(base + "/#formulas")
+        app.reload()
+        app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+        mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+        check(mine.count("Kept rings") == 1 and keep.read_text() == kept, f"store: listed again, the one there is whole ({mine})")
+        if app.locator("#psi-cont-drop").count():
+            app.click("#psi-cont-drop")
+        opener.context.close()
+    finally:
+        expected.remove("/api/files?dir=%2Fformulas")
+        for p in d.glob("kept-rings*"):
+            p.unlink()
 
 
 def clear_toasts(page: Page) -> None:
@@ -4605,6 +4720,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
         {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
+    # (Copied onto the panel by the view, once: listed there before the hand-over.)
+    page.evaluate("Object.keys(localStorage).filter(k => k.startsWith('odmd.psi.copied.')).forEach(k => localStorage.removeItem(k))")
+    page.reload()
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Bee']", timeout=20000)
     app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
     src = app.input_value("#psi-src")
     check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
@@ -4680,7 +4799,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     evil = '<img src=x onerror="window.__pwned=1">'
     app = remix_open(page, base, errors, "-- " + evil + "\ngray(x)", evil, bad_first=True)
     safe = (app.evaluate("window.__pwned") is None and app.locator("#psi-ed img, #psi-gal img").count() == 0
-            and app.input_value("#psi-name") == evil[:60] and app.input_value("#psi-src").startswith("-- <img"))
+            and "img src=x" in app.input_value("#psi-name") and "-- <img" in app.input_value("#psi-src"))
     app.click("#psi-back")
     app.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
     safe = safe and app.locator("#psi-gal img").count() == 0 and app.evaluate("window.__pwned") is None
@@ -4690,6 +4809,10 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     src_len, name_len = len(app.input_value("#psi-src")), len(app.input_value("#psi-name"))
     check(src_len == 16384 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
     page.context.close()
+    # (Both were saved as they arrived: gone again, for the checks after.)
+    for e in get_json(base + "/api/files?dir=%2Fformulas")["entries"]:
+        if e["name"].startswith(("img-src", "nnnn")):
+            urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/" + e["name"], method="DELETE"), timeout=30)
 
 
 def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
@@ -4737,7 +4860,8 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     app = remix_open(page, base, errors, "loop 4\nrings = sin(x*4 - t/4)\nhsv(rings*0.5, 1, 1)", "Demo rings")
     app.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
     wait_lit(app, "#psi-ed-panel", "formulas (demo): a Formula from the site's page")
-    check(app.input_value("#psi-name") == "Demo rings" and app.input_value("#psi-src").startswith("loop 4\nrings")
+    # (Saved in this browser as it arrived: its name is its name line now.)
+    check(app.input_value("#psi-name") == "Demo rings" and "loop 4\nrings" in app.input_value("#psi-src")
           and app.locator("#psi-ed-show, #psi-show").count() == 0 and app.locator("#psi-ed-share").count() == 0,
           f"formulas (demo): it opened '{app.input_value('#psi-name')}', no Show on panel, no share link")
     page.context.close()

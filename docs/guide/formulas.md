@@ -658,10 +658,12 @@ kept but reads something that moves.
 
 **Open on my panel** is on every tile in the [formula
 gallery](#the-formula-gallery) and on every formula's page there. Press it
-and your panel's app opens the formula in its editor, the way **Remix**
-does on the panel: from there you can change it, **Save** it on the panel,
-**Show on panel**, add it to a playlist, or use it as the look. Nothing is
-saved until you say so.
+and the formula is saved on your panel, under **Your formulas**, and opens
+in your panel's editor: from there you can change it (**Save** keeps the
+change), **Show on panel**, add it to a playlist, or use it as the look.
+One of the bundled ten is already on the panel, so nothing new is saved;
+the same formula opened twice is saved once; and one that doesn't work
+isn't saved: the panel says why and keeps it in the editor, not saved yet.
 
 The first time, it asks for your panel's address (it suggests
 `opendmd.local`; the name or IP address your panel shows in Settings ›

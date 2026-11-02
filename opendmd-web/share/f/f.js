@@ -10,8 +10,8 @@
 // reference opened, `/f/#open` (left in this site's own storage by the
 // reference, read once).
 //
-// Open on my panel: the panel's own web app in its editor, with this
-// Formula. As it came from the gallery, a top-level navigation to
+// Open on my panel: the Formula saved on the panel (under Your formulas,
+// by its own web app as it arrives) and open in its editor. As it came from the gallery, a top-level navigation to
 // `http://<addr>/#gallery=<slug>` (the panel has it built in or fetches it
 // from here); changed, a window opened on `http://<addr>/#remix`, whose app
 // says it is ready (postMessage) and gets the Formula back the same way:
@@ -85,7 +85,7 @@ async function start() {
   const open = btn('f-open', 'Open on my panel', 'pri'), copyCode = btn('f-copy-code', 'Copy code'), submit = btn('f-submit', 'Submit to the gallery…');
   const ed = await editorPage($('f-ed'), { ...got, ...(ref?.f || {}) }, {
     acts: [open, copyCode, submit],
-    note: 'Open on my panel takes it to your own panel’s web app, where you can change it, save it, show it and add it to a playlist. To share it, submit it to the gallery.',
+    note: 'Open on my panel saves it on your own panel, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery.',
     changed: () => { clearTimeout(changed.t); changed.t = setTimeout(changed, 150); },
   });
   let subForm = null;
