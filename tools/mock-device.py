@@ -651,6 +651,7 @@ DEFAULT_SETTINGS = {
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
+    "formula_arena": False,     # dev: a Formula's memory set aside at boot
     "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
     "api_key": "",              # "" = no key asked; never echoed back
 }
@@ -700,6 +701,7 @@ FIELD_TYPES = {
     "panel_sync": "bool",
     "panel_split": "bool",
     "formula_jit": "bool",
+    "formula_arena": "bool",
     "formula_keep": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
@@ -3026,6 +3028,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
+                (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -3371,6 +3374,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
+                    "formula_arena": s["formula_arena"],
                     "formula_keep": s["formula_keep"],
                     "api_key_set": bool(s["api_key"]),
                 }
@@ -4354,6 +4358,10 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_error_json(400, "path escapes the card")
                 return
             data = self.read_body()
+            # `?new=1`: only if there is no such file (http.rs put_file).
+            if query_param(self.path.partition("?")[2] if "?" in self.path else None, "new") == "1" and ctx.fs.read_path(rel) is not None:
+                self.send_error_json(409, f"/{rel} exists")
+                return
             if is_manifest_path(rel):
                 with ctx.lock:
                     obj = self._install_manifest(rel, data)
@@ -4530,6 +4538,17 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, {"ok": True, "from": src, "to": dst, "copy": copy,
                                  "smooth": smooth, "failed": failed})
 
+        def h_mock_stale_names(self, path):
+            # GET /mock/stale-names?hide=<card path> (mock only): names
+            # listings (`?names=1`) leave that file out, as a stale names file.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            hide = query_param(q, "hide")
+            if hide:
+                if not hasattr(ctx, "stale_names"):
+                    ctx.stale_names = set()
+                ctx.stale_names.add(hide)
+            self.send_json(200, {"hidden": sorted(getattr(ctx, "stale_names", set()))})
+
         def h_files_list(self, path):
             _, _, query = self.path.partition("?")
             query = query if "?" in self.path else None
@@ -4543,6 +4562,15 @@ def make_handler(ctx: Context, quiet: bool):
             sizes_raw = query_param(query, "sizes")
             sizes = sizes_raw in ("1", "true")
             entries = ctx.fs.listdir(rel)
+            # `?names=1` (fatidx::names_json): the folder's file names, as a
+            # names file built a while ago would have them: without what
+            # GET /mock/stale-names?hide=<path> hid (a GIF added since).
+            if query_param(query, "names") == "1" and entries is not None and not sizes:
+                hidden = {h.lower() for h in getattr(ctx, "stale_names", set())}
+                out = [{"name": n, "size": None, "dir": False} for n, is_dir, _ in entries
+                       if not is_dir and f"/{rel}/{n}".lower() not in hidden]
+                self.send_json(200, {"dir": dir_param, "entries": out, "count": len(out), "sizes": False, "names": True})
+                return
             if entries is None:
                 self.send_error_json(404, enoent(dir_param))
                 return

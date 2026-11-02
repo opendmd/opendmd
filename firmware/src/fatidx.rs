@@ -49,6 +49,17 @@ use crate::config;
 
 const INDEX: &str = "/sdcard/cache/.fatidx";
 const NEW: &str = "/sdcard/cache/.fatidx.new";
+/// The GIFs' names (`<card path>` a line, `/gifs/<dir>/<name>`), written by
+/// each build: what naming a new GIF needs without a directory listing
+/// (`GET /api/files?dir=…&names=1`, [`names_json`]).
+const NAMES: &str = "/sdcard/cache/.names";
+const NAMES_NEW: &str = "/sdcard/cache/.names.new";
+/// The names file matches the card (built, nothing since but what
+/// [`NAMES_DELTA`] holds).
+static NAMES_OK: AtomicBool = AtomicBool::new(false);
+/// GIFs written (true) or removed (false) through the API since the names
+/// file was built, by card path, newest last, with the uptime noted.
+static NAMES_DELTA: Mutex<Vec<(String, bool, u32)>> = Mutex::new(Vec::new());
 /// Files opened through the index at once (the player's two, the server's,
 /// and room).
 const SLOTS: usize = 6;
@@ -187,13 +198,70 @@ pub fn note_written(full: &str) {
         fatdir::loc(rel, slot)
     };
     push_delta(fatdir::hash(card.as_bytes()), loc);
+    note_name(card, true);
 }
 
 /// `full` was removed (or renamed from): lookups find no record for it.
 pub fn note_gone(full: &str) {
     if let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/") || c.starts_with("/cache/")) {
         push_delta(fatdir::hash(card.as_bytes()), None);
+        note_name(card, false);
     }
+}
+
+/// A GIF's name came or went (`/gifs/...` only), for [`names_json`].
+fn note_name(card: &str, present: bool) {
+    if !card.starts_with("/gifs/") {
+        return;
+    }
+    let mut d = NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner());
+    d.retain(|(p, _, _)| !p.eq_ignore_ascii_case(card));
+    d.push((card.to_string(), present, uptime_ms()));
+    if d.len() > DELTA_MAX {
+        // Past this the names file is not trusted until the next build.
+        d.clear();
+        NAMES_OK.store(false, Relaxed);
+    }
+}
+
+/// `GET /api/files?dir=/gifs/<dir>&names=1`: the names in a `/gifs/`
+/// directory from the names file and what changed since, as the listing's
+/// JSON (`{"dir","entries":[{"name","size":null,"dir":false}],"count",
+/// "names":true}`): no directory walk. `None` when the file cannot be
+/// trusted (no build yet, a directory changed): list it instead.
+pub fn names_json(card_dir: &str) -> Option<String> {
+    let dir = card_dir.trim_end_matches('/');
+    if !NAMES_OK.load(Relaxed) || !dir.starts_with("/gifs/") || dir[6..].contains('/') {
+        return None;
+    }
+    let text = fs::read_to_string(NAMES).ok()?;
+    let mut names: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some((d, n)) = line.rsplit_once('/') {
+            if d.eq_ignore_ascii_case(dir) && !n.is_empty() {
+                names.push(n.to_string());
+            }
+        }
+    }
+    for (p, present, _) in NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+        let Some((d, n)) = p.rsplit_once('/') else { continue };
+        if !d.eq_ignore_ascii_case(dir) {
+            continue;
+        }
+        names.retain(|x| !x.eq_ignore_ascii_case(n));
+        if *present {
+            names.push(n.to_string());
+        }
+    }
+    let mut out = format!(r#"{{"dir":{},"entries":["#, crate::httpd::json_string(dir));
+    for (k, n) in names.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(r#"{{"name":{},"size":null,"dir":false}}"#, crate::httpd::json_string(n)));
+    }
+    out.push_str(&format!(r#"],"count":{},"sizes":false,"names":true}}"#, names.len()));
+    Some(out)
 }
 
 fn push_delta(h: u32, loc: Option<u32>) {
@@ -456,14 +524,37 @@ unsafe extern "C" fn v_fstat(fd: i32, st: *mut sys::stat) -> i32 {
     0
 }
 
+// FatFs keeps no record of an open file (no share lock): a FIL is FatFs's
+// only on its own side.
+const _: () = assert!(sys::CONFIG_FATFS_FS_LOCK == 0);
+
+/// Close a slot's FIL and free it. Ours are opened for reading only, and
+/// with no share lock (above) `f_close` of such a FIL does nothing but take
+/// the volume lock twice (its `f_sync` and its own check) to mark it closed;
+/// so it is freed without: the player's close of the outgoing GIF at a
+/// switch (in the tick) waited there behind a card write holding the lock,
+/// hundreds of ms during saves (the rig's "transition" misses). A FIL
+/// opened for writing (none today) still goes through `f_close`.
+///
+/// # Safety
+/// `f` is a FIL from `Box` that `f_open` filled, used by nothing else.
+unsafe fn free_fil(f: *mut sys::FIL) {
+    // SAFETY: as the caller's.
+    unsafe {
+        if (*f).flag & sys::FA_WRITE as u8 != 0 {
+            sys::f_close(f);
+        }
+        drop(Box::from_raw(f));
+    }
+}
+
 unsafe extern "C" fn v_close(fd: i32) -> i32 {
     // The raw state and the open-set entry go before the slot is free
     // (`fatread::Slots::release`): another task's open can then never find
     // this file's extents in it.
     match TABLE.release(fd as usize, |k| open_set(|o| o.remove(k))) {
         Some((f, _raw)) => {
-            sys::f_close(f);
-            drop(Box::from_raw(f));
+            free_fil(f);
             0
         }
         None => fail(sys::EBADF),
@@ -606,10 +697,7 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
         Ok(k) => k,
         Err(why) => {
             // SAFETY: never handed out.
-            unsafe {
-                sys::f_close(f);
-                drop(Box::from_raw(f));
-            }
+            unsafe { free_fil(f) };
             return match (why, player) {
                 // A write began during a lock-free open (now over, or the
                 // ring overflowed): the caller opens again under the lock.
@@ -638,10 +726,7 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
         Err(e) => {
             if let Some((f, _)) = TABLE.release(k, |k| open_set(|o| o.remove(k))) {
                 // SAFETY: never handed out.
-                unsafe {
-                    sys::f_close(f);
-                    drop(Box::from_raw(f));
-                }
+                unsafe { free_fil(f) };
             }
             Err(e)
         }
@@ -932,6 +1017,7 @@ pub fn touched(path: &str) {
 /// once (its records may now point into another directory) and rebuild
 /// when things are quiet.
 pub fn dir_changed() {
+    NAMES_OK.store(false, Relaxed);
     TOUCHED_MS.store(uptime_ms(), Relaxed);
     DIRTY.store(true, Relaxed);
     *LOADED.lock().unwrap() = Some(None);
@@ -1079,6 +1165,29 @@ fn build() -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(1));
         Ok(())
     };
+    // The names, one walk of the GIFs' directories (the copies' are not
+    // named by anyone).
+    {
+        let mut names = BufWriter::with_capacity(1024, File::create(NAMES_NEW)?);
+        for (dir, first) in &dirs {
+            let mut failed = None;
+            fatdir::walk(&geo, *first, &mut read, &mut scratch, &mut |f| {
+                let r = names
+                    .write_all(dir.as_bytes())
+                    .and_then(|()| names.write_all(b"/"))
+                    .and_then(|()| names.write_all(f.name))
+                    .and_then(|()| names.write_all(b"\n"));
+                if let Err(e) = r {
+                    failed = Some(e);
+                }
+                Ok(())
+            })?;
+            if let Some(e) = failed {
+                return Err(e);
+            }
+        }
+        names.flush()?;
+    }
     let mut walk_all = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
         for (dir, first) in &dirs {
             let first = *first;
@@ -1118,6 +1227,12 @@ fn build() -> io::Result<()> {
     let _ = fs::remove_file(INDEX);
     fs::rename(NEW, INDEX)?;
     *g = Some(load().ok());
+    let _ = fs::remove_file(NAMES);
+    if fs::rename(NAMES_NEW, NAMES).is_ok() {
+        let started = BUILT_MS.load(Relaxed);
+        NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, _, at)| since(*at, started) as i32 >= 0);
+        NAMES_OK.store(true, Relaxed);
+    }
     // What the walks saw is in the index now; changes noted since its
     // start stay in the delta.
     let started = BUILT_MS.load(Relaxed);

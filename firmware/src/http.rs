@@ -498,6 +498,9 @@ pub struct ConfigPatch {
     /// (`settings_card`); `PUT /api/config` ignores it (`PUT /api/schedule`
     /// sets the schedule).
     pub(crate) schedule: Option<String>,
+    /// Dev: where upload pacing starts, % of a Formula's frame time
+    /// (`pace`); live only, never saved.
+    pub(crate) pace_on_pct: Option<u32>,
     /// `true` keeps the trial (with `panel`: saved without one), `false`
     /// undoes it.
     pub(crate) panel_confirm: Option<bool>,
@@ -669,6 +672,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
+        if let Some(p) = patch.pace_on_pct {
+            crate::pace::set_on_pct(p);
+        }
         if let Err(e) = apply_patch(&mut next, &patch) {
             return match e.code {
                 413 => req.error(413, "413 Payload Too Large", &e.msg),
@@ -1221,6 +1227,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
+        // `?names=1`: a /gifs folder's names from the index's names file,
+        // no directory walk (naming a new GIF); listed as usual when that
+        // file cannot be trusted.
+        if query_param(req.query(), "names").as_deref() == Some("1") && !sizes {
+            if let Some(json) = crate::fatidx::names_json(&dir) {
+                req.header("Cache-Control", "no-cache")?;
+                return req.json(&json);
+            }
+        }
         listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
@@ -1503,7 +1518,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/files/*", Method::Put, move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let c = c.clone();
-        stream::receive(req, move |up| put_file(up, &c, &rel))
+        // `?new=1`: only if there is no such file (409 otherwise): a name
+        // picked from a names list that has gone stale never replaces a GIF.
+        let create_new = query_param(req.query(), "new").as_deref() == Some("1");
+        stream::receive(req, move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -1932,7 +1950,7 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
 
 /// `PUT /api/files/<rel>`, on the stream task: anywhere on the card, a
 /// manifest or a `.meta` by way of the main task.
-fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
+fn put_file(up: &mut Upload, c: &Ctx, rel: &str, create_new: bool) -> Result<()> {
     let Some(dest) = files::card_path_for_write(config::SD_MOUNT, rel) else {
         return up.bad_request(files::BAD_WRITE_PATH);
     };
@@ -1956,7 +1974,31 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     let Some(_held) = release_for_write(c, &dest) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
     };
-    let written = files::receive_upload(up, &dest)?;
+    if create_new {
+        // Taken now, empty (FatFs's create-new: the folder's one walk): a
+        // second writer of the same name gets the 409; the body then
+        // replaces it as any upload's does.
+        if let Some(parent) = std::path::Path::new(&dest).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return up.error(409, "409 Conflict", &format!("/{} exists", rel.trim_start_matches('/')));
+            }
+            Err(e) => return up.error(500, "500 Internal Server Error", &format!("{e}")),
+        }
+    }
+    let written = match files::receive_upload(up, &dest) {
+        Ok(w) => w,
+        Err(e) => {
+            // The name taken for this upload goes back with it.
+            if create_new {
+                let _ = std::fs::remove_file(&dest);
+            }
+            return Err(e);
+        }
+    };
     // Its entry, for the index's lookups (`fatidx` delta).
     crate::fatidx::note_written(&dest);
     info!(
@@ -2317,7 +2359,12 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.refresh_hz,
         s.deadline_misses,
         s.worst_lateness_ms,
-        s.misses.json(),
+        {
+            // `misses` with `recent` (the last late frames' phases) inside.
+            let mut j = s.misses.json();
+            j.pop();
+            j + &crate::misslog::json() + "}"
+        },
         s.gifs_started,
         crate::httpd::streams_aborted(),
         crate::logring::drops(),

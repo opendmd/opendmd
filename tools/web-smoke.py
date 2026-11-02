@@ -695,7 +695,9 @@ def shot(page: Page, name: str, size: str) -> None:
 # URL substrings of requests that fail on purpose (a 404/415 play). A
 # preview asks for the prepared copy first, and a 404 there is normal; so
 # is Smooth motion's list on a card that has none yet.
-expected: list[str] = ["/cache/", "/sets/.smooth"]
+# (`?new=1`: a create-only upload whose name was taken answers 409 and the
+# web app tries the next number: expected, the add test checks it.)
+expected: list[str] = ["/cache/", "/sets/.smooth", "new=1"]
 
 
 def unexpected(url: str) -> bool:
@@ -718,6 +720,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
             and not ("status of 503" in m.text and retried(m.location.get("url", "")))
+            and not ("status of 409" in m.text and "/api/files/" in m.location.get("url", "") and "new=1" in m.location.get("url", ""))
             and errors.append(f"[{size}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     # Chromium's console line for a failed load has no URL; this does.
@@ -1955,11 +1958,11 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-14:] == ["attract", "look", "glow", "look_formula", "boot_show",
-                              "panel_sync", "panel_split", "formula_jit", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
+    check(list(cfg0)[-15:] == ["attract", "look", "glow", "look_formula", "boot_show",
+                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"formula_jit/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
+          f"formula_jit/formula_arena/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
@@ -3560,6 +3563,25 @@ def mock_pass(browser) -> None:
         gone = not (overlay / cache_path(gif_paths[1]).lstrip("/")).exists()
         r = cache_ready(base)
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
+        # A names list gone stale (the device's names file from before a GIF
+        # came): the dialog picks a taken name, the create-only upload gets a
+        # 409, and the GIF goes in under the next number; the one there is
+        # left as it was.
+        taken = "/gifs/Consoles/SNES_Smoke_Stale_01.gif"
+        before = (CARD / selected[0].lstrip("/")).read_bytes()
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files" + taken, data=before, method="PUT"), timeout=30).read()
+        urllib.request.urlopen(base + "/mock/stale-names?hide=" + taken, timeout=10).read()
+        stale_src = src_dir / "SNES_Smoke_Stale_01.gif"
+        shutil.copy(CARD / selected[1].lstrip("/"), stale_src)
+        add_files(page, [stale_src])
+        page.wait_for_function("(e => e && e.dataset.name === 'SNES_Smoke_Stale_01.gif')(document.querySelector('#dl .dl-item[data-i=\"0\"]'))", timeout=20000)
+        page.click("#dl-ok")
+        page.wait_for_function("document.querySelector('#lib-add-progress').textContent.startsWith('1 of 1 added')", timeout=60000)
+        second = overlay / "gifs/Consoles/SNES_Smoke_Stale_02.gif"
+        check(second.exists() and second.read_bytes() == stale_src.read_bytes() and (overlay / taken.lstrip("/")).read_bytes() == before,
+              "add: a name taken since the names list was made (409) -> the GIF goes in as _02, the _01 there untouched")
+        for p in (taken, "/gifs/Consoles/SNES_Smoke_Stale_02.gif"):
+            urllib.request.urlopen(urllib.request.Request(base + "/api/files" + p, method="DELETE"), timeout=30).read()
         details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
@@ -4354,7 +4376,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
         page.wait_for_timeout(300)
         page.click("#psi-save")
         page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
+    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*.psi")) == ["searchlight.psi"],
           "remix: Save afterwards changes the same file (/formulas/searchlight.psi, no second copy)")
     # Edited on the site (Open on my panel, a changed one): sent by postMessage,
     # saved as it arrives, kept over a reload and a trip to another view.
@@ -4380,7 +4402,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     opener.goto(base + "/version.txt")
     app = remix_open(opener, base, errors, sent_src, "Sent rings")
     app.wait_for_timeout(500)
-    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
+    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*.psi")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
           "remix: the same Formula sent again opens the saved one, no second copy")
     opener.context.close()
     # One that doesn't work: not saved, said, and offered back as not saved yet.

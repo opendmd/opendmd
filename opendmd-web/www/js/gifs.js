@@ -8,9 +8,24 @@ import { emit, toast, lines, isFlag } from './util.js';
 
 export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
 
+// The next name to try when one is taken (a names list gone stale): the
+// GIF's number up by one, else a `_2` before `.gif`.
+export const nextName = (n) => {
+  const m = /^(.*_)(\d+)((?:_[^_]*)?\.gif)$/i.exec(n);
+  return m ? m[1] + String(+m[2] + 1).padStart(m[2].length, '0') + m[3] : n.replace(/(\.gif)$/i, '_2$1');
+};
+
+// Adds the GIF under `name`, or the next free name if a GIF has it (the
+// device refuses to replace one: 409): the path it was written to.
 export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
-  const path = `/gifs/${category}/${name}`;
-  await app.src.writeFile(path, bytes);
+  let path;
+  for (let k = 0; ; k++) {
+    path = `/gifs/${category}/${name}`;
+    try { await app.src.writeFile(path, bytes, { createNew: true }); break; } catch (e) {
+      if (e.status !== 409 || k >= 20) throw e;
+      name = nextName(name);
+    }
+  }
   import('./thumbs.js').then((m) => m.forget(path)); // its thumbnail, if one was kept
   try { await prep(path, bytes); } catch (e) {
     warn?.(`${name}: added, but it could not be prepared (${e.message || e}); it will play as it is`);
