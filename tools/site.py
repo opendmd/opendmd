@@ -35,6 +35,10 @@
                Formula by name (`/f/#gallery=<slug>`, the gallery's tiles) or
                one the Psi reference opened (`/f/#open`); never its text in
                the link
+- /create/     Create Art, the web app's own Studio on the demo's files
+               (opendmd-web/share/create/; js/studio.js `mount`): Game art,
+               GifCities and your own pictures, every editing step, Save
+               downloads the GIF; `?q=&platform=` searches at once
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
                *.psi, CC0, copied to formulas/src/; the ten marked
                `-- bundle` are also the web app's formulas.json) and the contributions merged into the public
@@ -76,12 +80,12 @@
                caching, CSP), MOVED as 301s, what not to upload
 
 Every page has the same chrome, from site/theme/: page.html around it,
-header.html (the wordmark and the top bar: Guide, Formulas, Demo, For
+header.html (the wordmark and the top bar: Guide, Formulas, Create Art, Demo, For
 developers and Install; a Menu button on a phone), footer.html, and
 site.css (light and dark follow the system). A page in a SECTION (the guide,
 the developers' pages) also gets that section's menu: down the side on a
-wide screen, a folded list above the page on a phone. /f/ gets the same
-header and footer (f_page), around its own f.css.
+wide screen, a folded list above the page on a phone. /f/ and /create/ get the same
+header and footer (app_page), around their own f.css and create.css.
 
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
 `site:features`, `site:steps` and `site:cards` ... `site:cards-end` style
@@ -159,6 +163,7 @@ ALIASES = {"README.md": "index.html"}
 TOP = [
     ("Guide", "guide/index.html", "guide"),
     ("Formulas", "formulas/index.html", "formulas"),
+    ("Create Art", "create/index.html", "create"),
     ("Demo", "demo/", "demo"),
     ("For developers", "dev/index.html", "dev"),
     ("Install", "install/index.html", "install"),
@@ -206,6 +211,8 @@ def section(page: str) -> tuple[str | None, str | None]:
         return None, "dev"
     if first in ("formulas", "f"):
         return "formulas", None
+    if first == "create":
+        return "create", None
     return None, None
 # The installer page: ESP Web Tools, pinned (the flashing itself is
 # esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
@@ -359,6 +366,13 @@ CSP = {
     # The home page and the gallery: their live Formulas run the demo's Psi,
     # as the reference's examples do (the same policy).
     "home": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
+    # Create Art's page: the demo's wasm (the Studio's, the panel preview's), Game art's and
+    # GifCities' pictures (js/find.js), your own picture (blob:) or one from any https address
+    # (the Studio fetches it: the address field), so connect-src takes https:.
+    "create": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
+                               "https://raw.githubusercontent.com")
+    .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    + "; connect-src 'self' https:",
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
     # update check (util.js SITE).
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
@@ -382,7 +396,7 @@ def headers_file() -> str:
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
-    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
     for name in ("release.json", "beta.json"):
         rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))
@@ -761,23 +775,30 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
         description="Formulas for the OpenDMD LED display: change one here, then open it on your panel."), encoding="utf-8")
 
 
-# A Formula's page (opendmd-web/share/f/index.html): the site's header and
-# footer around it, the site's styles under its own f.css.
+# The site's pages made of the web app's own parts, on the demo's files: a
+# Formula's page (opendmd-web/share/f/: the editor) and Create Art's
+# (opendmd-web/share/create/: the Studio). The site's header and footer
+# around each, the site's styles under its own stylesheet; its body class.
 F_PAGE = "f/index.html"
+CREATE_PAGE = "create/index.html"
+APP_PAGES = {F_PAGE: ("f.css", "fpage"), CREATE_PAGE: ("create.css", "cpage")}
 
 
-def f_page(dest: Path, wm: dict) -> None:
+def app_page(out: Path, page: str, wm: dict) -> None:
+    css, cls = APP_PAGES[page]
+    shutil.copytree(ROOT / "opendmd-web/share" / posixpath.dirname(page), out / posixpath.dirname(page))
+    dest = out / page
     text = dest.read_text(encoding="utf-8")
     subs = [
         (r'<meta name="color-scheme" content="dark">', '<meta name="color-scheme" content="light dark">'),
-        (r'(<link rel="stylesheet" href="f\.css">)', '<link rel="stylesheet" href="../site.css">\n\\1'),
-        (r'<body>\s*<header class="top">.*?</header>\s*', lambda m: '<body class="fpage">\n' + header(F_PAGE, wm) + '\n<div class="wrap">\n'),
-        (r'</main>\s*<footer>.*?</footer>', lambda m: '</main>\n</div>\n' + footer(F_PAGE)),
+        (rf'(<link rel="stylesheet" href="{re.escape(css)}">)', '<link rel="stylesheet" href="../site.css">\n\\1'),
+        (r'<body>\s*<header class="top">.*?</header>\s*', lambda m: f'<body class="{cls}">\n' + header(page, wm) + '\n<div class="wrap">\n'),
+        (r'</main>\s*<footer>.*?</footer>', lambda m: '</main>\n</div>\n' + footer(page)),
     ]
     for pat, to in subs:
         text, n = re.subn(pat, to, text, count=1, flags=re.S)
         if n != 1:
-            raise SystemExit(f"opendmd-web/share/f/index.html: no {pat!r} to replace (the page changed: change f_page too)")
+            raise SystemExit(f"opendmd-web/share/{page}: no {pat!r} to replace (the page changed: change app_page too)")
     dest.write_text(text, encoding="utf-8")
 
 
@@ -881,10 +902,10 @@ def main() -> None:
     # The demo: the app (the player sends the .gz copies; Cloudflare compresses by itself) and its card.
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
-    # A formula's own page; it runs on the demo's files.
-    shutil.copytree(ROOT / "opendmd-web/share/f", out / "f")
+    # A formula's own page and Create Art's; they run on the demo's files.
     art = json.loads((a.art / "art.json").read_text())
-    f_page(out / F_PAGE, art["wordmark"])
+    for page in APP_PAGES:
+        app_page(out, page, art["wordmark"])
     # The Psi reference's script (the page itself is a doc, written below).
     (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")

@@ -11,6 +11,11 @@ It works in six steps. Until you've picked something only step 1 shows;
 after that it folds away (**Change picture** opens it again) and the other
 steps appear.
 
+Create Art is also on the project site, at
+[opendmd.dev/create/](https://opendmd.dev/create/), with the same steps:
+there **Download GIF** saves the GIF to your computer, and Library →
+**Add GIFs** in your panel's web app puts it on the card.
+
 ## 1. Find
 
 Pick a source:

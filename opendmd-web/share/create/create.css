@@ -1,0 +1,56 @@
+/* Create Art's page: on the site's site.css (its colours, light and dark, its header and footer),
+   with the web app's Studio in it. The app's stylesheets come in a layer of their own, so the
+   site's rules (unlayered) win where both speak (as /f/'s f.css does). */
+@import url("../demo/app.css") layer(app);
+@import url("../demo/studio.css") layer(app);
+@import url("../demo/find.css") layer(app);
+/* The app's full-height page (its fixed nav) would squeeze the site's header and footer. */
+html,body.cpage{height:auto}
+/* The app's progress .bar is the site header's row; its .banner the site's notice. */
+.top .bar{height:auto;background:none;border-radius:0;overflow:visible}
+body>.banner{border:0;border-radius:0;margin:0}
+.cpage{--bad:#d33;--ok:#1b8a4b}
+@media (prefers-color-scheme:dark){.cpage{--bad:#e55;--ok:#6c6}}
+.cpage main{max-width:1100px;padding-top:28px}
+.cpage main>*{max-width:none}
+.cpage h1{font-size:24px;margin:0 0 8px}
+.cpage .lead{margin:0 0 4px;color:var(--mut);font-size:17px}
+/* The page has the heading and the line about it. */
+#c-ed .st-box>h2,#c-ed .st-box>p{display:none}
+#c-ed .st-grid{margin-top:16px}
+#c-ed h2{font-size:16px;margin:0 0 12px;padding:0;border:0}
+.cpage .card{padding:14px}
+.cap{color:var(--mut);font-size:13px;margin:8px 0 0}
+.bad{color:var(--bad)}
+/* The Studio's own text sizes, not the site's 17px body. */
+#c-ed{font-size:15px;line-height:1.45}
+#c-ed p.cap,#c-ed .card p.cap{font-size:13px;margin:8px 0 0;color:var(--mut)}
+#c-ed a{color:var(--ink)}
+.cpage main button,.cpage main .btn,.cpage main input[type=text],.cpage main input[type=search],.cpage main input[type=number],.cpage main select{font:inherit;font-size:15px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 14px}
+.cpage main input[type=number]{padding:8px}
+.cpage main button,.cpage main .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.cpage main button.sm{min-height:32px;padding:4px 10px;font-size:13px}
+.cpage main button:hover,.cpage main .btn:hover{border-color:var(--acc)}
+.cpage main button:disabled{opacity:.5;cursor:not-allowed}
+.cpage main .pri{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font-weight:700}
+.cpage main button.txt{background:none;border:0;padding:0 2px;min-height:0;color:var(--ink);font-size:inherit}
+/* The Studio's segmented controls, timeline cells, anchors and result tiles: its own shapes. */
+.cpage main .st-seg button{border:0;border-radius:0;min-height:32px;padding:4px 12px;color:var(--mut);background:none}
+.cpage main .st-seg button+button{border-left:1px solid var(--line)}
+.cpage main .st-seg button.on{background:var(--line);color:var(--fg)}
+.cpage main .st-anchor button{min-height:0;height:20px;padding:0;border-radius:3px}
+.cpage main .st-anchor button.on{background:var(--acc)}
+.cpage main .find-hit{flex-direction:column;align-items:stretch;padding:6px;gap:4px;min-width:0;text-align:center}
+.cpage main .find-hit.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.cpage main .chip{min-height:32px;padding:4px 12px;border-radius:999px;font-size:13px}
+.cpage main .chip.on{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}
+.cpage main .st-ctl select{min-height:28px;padding:4px 8px;font-size:13px}
+@media (max-width:760px){
+  .cpage main .st-seg button,.cpage main .st-ctl select{min-height:36px}
+  .cpage main .st-anchor button{height:36px}
+}
+@media (max-width:600px){
+  .cpage h1{font-size:20px}
+  .cpage main input,.cpage main select{font-size:16px}
+}
+#c-ed #st-seen{font-size:13px}

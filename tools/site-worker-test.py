@@ -333,6 +333,8 @@ def headers(base: str, site: Path) -> None:
         "/demo/": ("connect-src 'self' https://gifcities.archive.org", None, None, "public, max-age=600"),
         "/demo/app.js": (None, None, None, "public, max-age=600"),
         "/f/": ("'wasm-unsafe-eval'", "connect-src", None, "public, max-age=600"),
+        # Create Art: the Studio's wasm, its sources' pictures, a picture from any https address.
+        "/create/": ("connect-src 'self' https:", None, None, "public, max-age=600"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
         "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
     }
@@ -366,7 +368,7 @@ def csp_in_browser(base: str) -> None:
     from playwright.sync_api import sync_playwright
     paths = ["/", "/guide/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/", "/dev/api", "/dev/psi/",
              "/no/such/page", "/demo/",
-             "/f/#gallery=fire"]
+             "/f/#gallery=fire", "/create/"]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         for path in paths:
@@ -381,6 +383,8 @@ def csp_in_browser(base: str) -> None:
                 page.wait_for_selector("#f:not([hidden]):not([aria-busy])", timeout=20000)
             elif path == "/demo/":
                 page.wait_for_timeout(1500)
+            elif path == "/create/":
+                page.wait_for_selector("#create:not([aria-busy]) #studio", timeout=20000)
             elif path == "/install/":
                 # (polled with evaluate: wait_for_function evals, which the CSP refuses)
                 for _ in range(200):

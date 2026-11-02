@@ -6215,7 +6215,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         page.dispatch_event("#fo-code", "change")
         page.select_option("#fo-attract", "*")
         cfg = wait_config(base, lambda c: c.get("follow") is True and c.get("follow_host") == host_val)
-        raw_cfg = json.dumps(cfg)
+        raw_cfg = json.dumps({k: v for k, v in cfg.items() if k != "follow_host"})  # (the mock's port can hold "4321")
         check(cfg.get("follow") is True and cfg.get("follow_host") == host_val
               and cfg.get("follow_code_set") is True and cfg.get("attract_set") is None
               and "4321" not in raw_cfg,
