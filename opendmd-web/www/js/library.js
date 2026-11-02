@@ -8,7 +8,7 @@ import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
 import { authorOf, addOne, appendTo, offerPlaylist } from './gifs.js';
-import { h, clear, emit, on, store, toast, label, niceName, flagName, isFlag } from './util.js';
+import { h, clear, emit, on, store, toast, label, niceName, flagName, isFlag, SITE } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;
@@ -26,7 +26,13 @@ export async function mount(el) {
   // art on the one platform chip picked, else GifCities).
   const webQ = h('b');
   const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
-    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim(), platform: plats.size === 1 ? [...plats][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
+    h('button.txt', { id: 'lib-web-go', onclick: () => webSearch(search.value.trim(), plats.size === 1 ? [...plats][0] : '') }, 'Search the web in Create Art →'));
+  // (Create Art's web sources are the site's: opendmd.dev/create/, the demo's beside it.)
+  const webSearch = (q, platform) => {
+    const u = new URL('create/', app.demo ? new URL('../', location.href) : SITE);
+    u.search = new URLSearchParams({ q, ...(platform && { platform }) });
+    window.open(u.href, '_blank', 'noopener');
+  };
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -225,10 +231,10 @@ export async function mount(el) {
     const c = (open.length === 1 ? open[0] : cur) || open[0] || '';
     return { category: c, categories: tree.real(), platforms: [...new Set(tree.rows.filter((r) => r.path).map((r) => r.e.platform).filter(Boolean))] };
   };
-  async function addGifs(picked) {
+  async function addGifs(picked, inits) {
     const gifs = picked.filter((f) => /\.gif$/i.test(f.name));
     if (!gifs.length) { toast('choose .gif files', 'bad'); return; }
-    const plan = await (await import('./details.js')).addDialog(gifs, opts());
+    const plan = await (await import('./details.js')).addDialog(gifs, { ...opts(), inits });
     if (!plan) return;
     addCard.hidden = false;
     addErr.replaceChildren();
@@ -289,6 +295,11 @@ export async function mount(el) {
       sync();
       playlists();
       again();
+      // A GIF sent from the site's Create Art (app.js, js/importgif.js): Add GIFs, filled in.
+      const gif = app.gifIn;
+      app.gifIn = null;
+      gif?.then(({ file, init }) => (app.device ? addGifs([file], [init]) : toast('Send it to your panel’s own address: this isn’t one', 'bad')),
+        (e) => toast(`Couldn’t add that GIF: ${e.message || e}`, 'bad'));
       // A card swapped since the last look shows in the status: one request.
       if (app.device) app.refreshStatus().catch(() => {});
     },

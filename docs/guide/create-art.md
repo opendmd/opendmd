@@ -11,6 +11,14 @@ It works in six steps. Until you've picked something only step 1 shows;
 after that it folds away (**Change picture** opens it again) and the other
 steps appear.
 
+Create Art is also on the project site, at
+[opendmd.dev/create/](https://opendmd.dev/create/), with the same steps.
+There **Send to my panel** asks for your panel's address once (the name or
+IP address it shows), then opens your panel's web app with the GIF ready to
+add: pick its folder and press **Add GIF**. Your computer or phone must be
+on the same network as the panel. **Download GIF** saves it instead; Library
+→ **Add GIFs** in your panel's web app puts it on the card.
+
 ## 1. Find
 
 Pick a source:

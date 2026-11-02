@@ -3568,6 +3568,7 @@ def mock_pass(browser) -> None:
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
         formulas_remix_checks(browser, base, overlay, errors)
+        import_checks(browser, base, overlay, errors)
         formulas_store_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
@@ -4191,6 +4192,111 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     check(refused, "keep: formula_keep refuses a value it doesn't know")
     post_json(base + "/api/skip", {})
     page.context.close()
+
+
+IMPORT_SEND = """([u, b64, fields, size]) => {
+    const bytes = b64 ? Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) : new Uint8Array(size);
+    if (!b64) bytes.set([71, 73, 70, 56]);
+    addEventListener('message', function on(e) {
+        if (e.data?.type !== 'opendmd-import-ready') return;
+        removeEventListener('message', on);
+        const buf = bytes.buffer;
+        e.source.postMessage({ type: 'opendmd-import', gif: buf, ...fields }, '*', [buf]);
+        window.__sent = buf.byteLength;  // 0 once transferred
+    });
+    window.open(u, '_blank');
+}"""
+
+
+def import_open(opener: Page, base: str, errors: list[str], gif: bytes | None, fields: dict, size: int = 0) -> Page:
+    """The panel's app opened at `#import` by `opener` (as the site's Create
+    Art opens it with Send to my panel), its ready answered with a GIF
+    (`gif`, or `size` zero bytes after a GIF header) transferred by postMessage."""
+    import base64
+    with opener.context.expect_page() as info:
+        opener.evaluate(IMPORT_SEND, [base + "/#import", base64.b64encode(gif).decode() if gif else "", fields, size])
+    app = info.value
+    app.on("pageerror", lambda e: errors.append(f"[import] pageerror: {e}"))
+    app.on("dialog", lambda d: d.dismiss())  # (the playlist offer: not this time)
+    return app
+
+
+def import_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Send to my panel from the site's Create Art: the app opened at
+    `#import` says it is ready to its opener, takes the GIF it sends (a
+    transferred ArrayBuffer, from opendmd.dev or the app's own origin) and
+    opens the Library's Add GIFs with the file, its title, platform, author
+    and logo filled in; Add puts it and its prepared copy on the card, there
+    after a reload. Refused, and said: no opener, too big, not a GIF; an
+    opener on another origin is ignored."""
+    from PIL import Image, ImageDraw
+    frames = []
+    for i in range(3):
+        im = Image.new("RGB", (128, 32), (10, 20, 80))
+        ImageDraw.Draw(im).rectangle([10 + 30 * i, 8, 40 + 30 * i, 24], fill=(240, 200, 40))
+        frames.append(im)
+    import io
+    b = io.BytesIO()
+    frames[0].save(b, "GIF", save_all=True, append_images=frames[1:], duration=120, loop=0)
+    gif = b.getvalue()
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/#now")
+    opener.wait_for_selector("#view-now.on", timeout=20000)
+    fields = {"name": "SNES_Import_Test_LOGO_01_tester1.gif", "title": "Import Test", "platform": "SNES", "author": "tester1", "logo": True}
+    app = import_open(opener, base, errors, gif, fields)
+    app.wait_for_selector("#dl .dl-item", timeout=30000)
+    got = app.evaluate("""() => { const i = document.querySelector('#dl .dl-item'); return {title: i.querySelector('.dl-title').value,
+        platform: i.querySelector('.dl-plat').value, author: i.querySelector('.dl-author').value, img: !!i.querySelector('img'), file: i.textContent}; }""")
+    check(app.url.endswith("#library") and got["title"] == "Import Test" and got["platform"] == "SNES" and got["author"] == "tester1"
+          and got["img"] and opener.evaluate("window.__sent") == 0,
+          f"import: #import -> Add GIFs filled in from what the site sent, the GIF transferred ({got['title']}, {got['platform']}, {got['author']})")
+    app.select_option("#dl .dl-cat", "Other")
+    app.wait_for_function("document.querySelector('#dl .dl-item').dataset.name && !document.querySelector('#dl-ok').disabled", timeout=10000)
+    name = app.get_attribute("#dl .dl-item", "data-name")
+    path = f"/gifs/Other/{name}"
+    parsed = app.evaluate(f"import('./js/state.js').then(m => m.app.wasm.parsePath({json.dumps(path)}))")
+    check((parsed["platform"], parsed["title"], "LOGO" in parsed["flags"], "tester1" in parsed["flags"]) == ("SNES", "Import Test", True, True),
+          f"import: named as the site named it, the logo and author kept ({name})")
+    app.click("#dl-ok")
+    f, copy = overlay / path.lstrip("/"), overlay / cache_path(path).lstrip("/")
+    deadline = time.time() + 60
+    while time.time() < deadline and not (f.exists() and copy.exists()):
+        time.sleep(0.2)
+    check(f.exists() and f.read_bytes() == gif and copy.exists(), f"import: Add -> {path} on the card, byte for byte, and its prepared copy")
+    app.reload()
+    app.wait_for_selector("#view-library.on", timeout=20000)
+    check(app.locator("#dl").count() == 0, "import: a reload doesn't ask again")
+    lib_row(app, path)
+    check(True, "import: after a reload the Library lists it")
+    no_leaks(app, "import")
+    app.close()
+    # Too big, and not a GIF: said, nothing added.
+    app = import_open(opener, base, errors, None, {"name": "Big.gif", "title": "Big"}, size=4 * 1024 * 1024 + 1)
+    t = toast_or_none(app, "bad", 20000)
+    check("over 4 MB" in t and app.locator("#dl").count() == 0, f"import: over 4 MB refused, said ('{t}')")
+    app.close()
+    app = import_open(opener, base, errors, b"PNG not a gif at all", {"name": "x.gif"})
+    t = toast_or_none(app, "bad", 20000)
+    check("isn’t a GIF" in t and app.locator("#dl").count() == 0, f"import: not a GIF refused, said ('{t}')")
+    app.close()
+    opener.context.close()
+    # An opener on another site: ignored.
+    other = new_page(browser, "laptop", errors)
+    other.context.route("http://elsewhere.test/**", lambda r: r.fulfill(status=200, headers={"content-type": "text/html"}, body="<!doctype html><p>elsewhere"))
+    other.goto("http://elsewhere.test/")
+    app = import_open(other, base, errors, gif, fields)
+    app.wait_for_selector("#view-library.on", timeout=20000)
+    app.wait_for_timeout(3000)
+    check(app.locator("#dl").count() == 0 and other.evaluate("window.__sent") == 0, "import: a GIF sent from another site is ignored")
+    other.context.close()
+    # No opener: said.
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#import")
+    t = toast_or_none(page, "bad", 20000)
+    check("open it again from Create Art" in t and page.url.endswith("#library"), f"import: no opener -> '{t}'")
+    page.context.close()
+    # Leave the card as it was.
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files" + path, method="DELETE"), timeout=30).read()
 
 
 def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
@@ -5569,7 +5675,8 @@ def find_checks(page: Page) -> None:
     narrowing to the one wide hit, a click loading it (2 frames, the title
     hint in Save, "Seen on" the page it was on, Find folded); Change picture;
     a failed query's sentence. The Library: no web sources, and a search that
-    finds nothing there offers the web, its words carried over."""
+    finds nothing there offers the web: the site's Create Art in a new tab,
+    its words (and the one platform picked) in the address."""
     from PIL import Image, ImageDraw
     gif = OUT / "find-fixture.gif"
     frames = []
@@ -5607,12 +5714,17 @@ def find_checks(page: Page) -> None:
     page.wait_for_selector("#lib-web:not([hidden])")
     check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
     check(not page.is_visible("#view-library .vlist"), "find: no empty list under the hint")
-    page.click("#lib-web-go")
-    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
-    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
-    page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
-    check(page.url.endswith("#create") and page.is_visible("#find-grid") and page.inner_text("#st-change") == "Keep this picture"
-          and any("q=zzqx" in u for u in asked), "find: Search the web carries the words to Create Art and searches them, Find open")
+    # Search the web: the site's Create Art, in a new tab, with the words (its web sources are the site's).
+    page.context.route("https://opendmd.dev/create/**", lambda r: r.fulfill(status=200, body="<p>create</p>", content_type="text/html"))
+    with page.context.expect_page() as info:
+        page.click("#lib-web-go")
+    tab = info.value
+    tab.wait_for_load_state()
+    check(tab.url == "https://opendmd.dev/create/?q=zzqx+mario+banner" and "#library" in page.url,
+          f"find: Search the web opens the site's Create Art with the words ({tab.url})")
+    tab.close()
+    goto_view(page, "create")
+    page.click("#st-src [data-v=gifcities]")
     check(page.get_attribute("#st-q", "placeholder") == "Search GifCities", "find: the box searches GifCities")
     asked.clear()
     page.fill("#st-q", "mario")
@@ -5672,13 +5784,14 @@ def find_checks(page: Page) -> None:
     page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "zzqx harvest moon")
     page.wait_for_selector("#lib-web:not([hidden])")
-    page.click("#lib-web-go")
-    page.wait_for_selector("#view-create.on #find-platform", timeout=20000)
-    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx harvest moon'", timeout=10000)
-    check("on" in page.get_attribute("#st-src [data-v=gameart]", "class").split() and page.input_value("#find-platform") == "SNES",
-          f"find: with SNES picked, Search the web searches SNES game art ({page.input_value('#find-platform')})")
-    page.click("#st-src [data-v=gameart]")
-    goto_view(page, "library")
+    with page.context.expect_page() as info:
+        page.click("#lib-web-go")
+    tab = info.value
+    tab.wait_for_load_state()
+    check(tab.url == "https://opendmd.dev/create/?q=zzqx+harvest+moon&platform=SNES",
+          f"find: with SNES picked, Search the web names the platform ({tab.url})")
+    tab.close()
+    page.context.unroute("https://opendmd.dev/create/**")
     page.fill("#lib-search", "")
     page.click("#lib-chips [data-platform='SNES']")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
@@ -5836,6 +5949,10 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     # after the delete, by two 404s that are the app's right answer and not
     # a page error. (On a loaded machine the read was still queued.)
     wait_thumbs_idle(page)
+    # (A preview's read begun before the delete — the Library's own refresh
+    # on coming back to it — may still be answered after: a 404 for a file
+    # that is gone is the right answer from then on.)
+    expected.append(to)
     details_do(page, "#lib-d-del")
     page.wait_for_function("document.querySelector('#lib-d-body').hidden", timeout=60000)
     check(not (overlay / to.lstrip("/")).exists() and not (overlay / cache_path(to).lstrip("/")).exists(), "delete: the GIF and its copy are gone")
@@ -6215,7 +6332,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         page.dispatch_event("#fo-code", "change")
         page.select_option("#fo-attract", "*")
         cfg = wait_config(base, lambda c: c.get("follow") is True and c.get("follow_host") == host_val)
-        raw_cfg = json.dumps(cfg)
+        raw_cfg = json.dumps({k: v for k, v in cfg.items() if k != "follow_host"})  # (the mock's port can hold "4321")
         check(cfg.get("follow") is True and cfg.get("follow_host") == host_val
               and cfg.get("follow_code_set") is True and cfg.get("attract_set") is None
               and "4321" not in raw_cfg,

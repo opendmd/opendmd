@@ -247,7 +247,7 @@ export function addDialog(files, opts) {
     title: n > 1 ? `Add ${n} GIFs` : 'Add a GIF',
     intro: 'A GIF’s title, platform and author are its file name on the card: that is what the Library lists, search finds and playlists filter by.',
     files, opts, ok: n > 1 ? `Add ${n} GIFs` : 'Add GIF',
-    inits: files.map((f) => ({ ...guess(f.name), category: opts.category })),
+    inits: files.map((f, i) => ({ ...guess(f.name), ...opts.inits?.[i], category: opts.category })), // (inits: a GIF from the site's Create Art)
   });
 }
 
