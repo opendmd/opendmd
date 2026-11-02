@@ -865,6 +865,14 @@ impl PsiFx {
         fx.set_sliders(s);
         fx.inputs.seed = next_seed();
         fx.gov = Governor::new(start_estimate(&fx.prog, est), fx.ms());
+        // Where its working memory landed (the scratch's lanes and the
+        // canvas): a frame's cost can depend on which SRAM bank they share
+        // with the panel's DMA (the firmware logs its rows' range at boot).
+        log::info!(
+            "formula: scratch at {:p}, canvas at {:?}",
+            &fx.scratch as *const _,
+            fx.ink.as_deref().map(|k| k as *const psi::Ink)
+        );
         Ok(fx)
     }
 
