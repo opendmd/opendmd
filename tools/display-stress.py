@@ -37,10 +37,13 @@ The owner's rule: work on CPU0 must not reach the display. Pass when the
 stress phase's late frames per 1,000 raced frames, its frame ms and its
 frame µs (within a few %) match the idle phase's. Prints both phases and
 the verdict; `--json OUT` keeps the numbers. Puts `dwell_max` and
-`formula_keep` back and deletes the file at the end, whatever happens.
+`formula_keep` back at the end, whatever happens (retried, and checked by
+reading `/api/config` back; exits 2 with a loud message if they did not take),
+and deletes the file.
 """
 import argparse
 import json
+import sys
 import threading
 import time
 import urllib.request
@@ -64,6 +67,28 @@ class Device:
 
     def config(self):
         return json.loads(self.req("GET", "/api/config")[1])
+
+
+def restore(dev, want, tries=6):
+    """Put the settings the run changed back and read /api/config to check
+    they took; retried (the device may still be busy with the last upload).
+    Says so loudly, and the script exits non-zero, if they did not."""
+    last = None
+    for k in range(tries):
+        try:
+            dev.req("PUT", "/api/config", want)
+            got = dev.config()
+            off = {key: got.get(key) for key, v in want.items() if got.get(key) != v}
+            if not off:
+                return True
+            last = f"still {off}"
+        except Exception as e:
+            last = repr(e)
+        time.sleep(1 + k)
+    bar = "!" * 72
+    print(f"{bar}\nRESTORE FAILED: the device keeps the run's settings ({last});\n"
+          f"put these back by hand: PUT /api/config {json.dumps(want)}\n{bar}", file=sys.stderr)
+    return False
 
 
 def snapshot(s):
@@ -220,19 +245,14 @@ def main():
         stress = phase(s2, s3, a.seconds, extra)
     finally:
         stop.set()
-        for call in (
-            lambda: dev.req(
-                "PUT",
-                "/api/config",
-                {"dwell_max": dwell_max, "formula_keep": keep}
-                | ({"formula_jit": jit_before} if a.jit and jit_before is not None else {}),
-            ),
-            lambda: dev.req("DELETE", "/api/files" + STRESS_FILE),
-        ):
-            try:
-                call()
-            except Exception:
-                pass
+        want = {"dwell_max": dwell_max, "formula_keep": keep} | (
+            {"formula_jit": jit_before} if a.jit and jit_before is not None else {}
+        )
+        restored = restore(dev, want)
+        try:
+            dev.req("DELETE", "/api/files" + STRESS_FILE)
+        except Exception as e:
+            print(f"warning: {STRESS_FILE} not deleted ({e})", file=sys.stderr)
     print(f"{label}: idle   {idle}")
     print(f"{label}: stress {stress}")
     li, ls = idle["late_per_1000"] or 0, stress["late_per_1000"] or 0
@@ -246,6 +266,8 @@ def main():
     if a.json:
         with open(a.json, "w") as f:
             json.dump({"formula": a.formula, "path": a.path, "jit": a.jit, "loads": a.loads, "idle": idle, "stress": stress, "pass": ok}, f, indent=1)
+    if not restored:
+        sys.exit(2)
 
 
 if __name__ == "__main__":
