@@ -3568,6 +3568,7 @@ def mock_pass(browser) -> None:
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
         formulas_remix_checks(browser, base, overlay, errors)
+        formulas_store_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -4331,6 +4332,44 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     for n in ("searchlight", "sent-rings"):
         if (overlay / "formulas" / f"{n}.psi").exists():
             urllib.request.urlopen(urllib.request.Request(base + f"/api/files/formulas/{n}.psi", method="DELETE"), timeout=30)
+
+
+def formulas_store_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Your Formulas on the panel when the panel can't list them: said, not
+    shown as none, and nothing saved over one already there (a save waits
+    for a listing that works); once it lists again, the one there is whole."""
+    d = overlay / "formulas"
+    d.mkdir(parents=True, exist_ok=True)
+    keep = d / "kept-rings.psi"
+    kept = 'name "Kept rings"\nloop 4\ngray(saw(x + t/4))'
+    keep.write_text(kept)
+    expected.append("/api/files?dir=%2Fformulas")
+    try:
+        opener = new_page(browser, "laptop", errors)
+        fail = lambda r: r.fulfill(status=500, body="card error", headers={"content-type": "text/plain"})
+        opener.context.route("**/api/files?dir=%2Fformulas", fail)
+        opener.goto(base + "/#formulas")
+        t = toast_or_none(opener, "bad")
+        check("Couldn’t read your Formulas" in t and opener.locator("#psi-mine .psi-tile").count() == 0,
+              f"store: a listing that fails is said, not shown as no Formulas ('{t}')")
+        opener.goto(base + "/version.txt")
+        app = remix_open(opener, base, errors, 'name "Kept rings"\nloop 4\ngray(1)', "Kept rings")
+        t = toast_or_none(app, "bad")
+        check(keep.read_text() == kept and sorted(p.name for p in d.glob("kept-rings*")) == ["kept-rings.psi"] and "isn’t saved" in t,
+              f"store: with no listing nothing is saved over a Formula already there ('{t}')")
+        opener.context.unroute("**/api/files?dir=%2Fformulas", fail)
+        app.goto(base + "/#formulas")
+        app.reload()
+        app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+        mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+        check(mine == ["Kept rings"] and keep.read_text() == kept, f"store: listed again, the one there is whole ({mine})")
+        if app.locator("#psi-cont-drop").count():
+            app.click("#psi-cont-drop")
+        opener.context.close()
+    finally:
+        expected.remove("/api/files?dir=%2Fformulas")
+        for p in d.glob("kept-rings*"):
+            p.unlink()
 
 
 def clear_toasts(page: Page) -> None:
