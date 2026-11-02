@@ -515,7 +515,9 @@ FW_DEV_FEATURES = dev-credentials,bench$(if $(FW_FEATURES),$(comma)$(FW_FEATURES
 comma := ,
 FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 
-# Every build ends with tools/check-stack-realign.py: a function that moves
+# Every build ends with tools/check-iram.py (the hot loops and the raced
+# pair writer must be linked into IRAM: from flash their cost depends on the
+# image's layout) and tools/check-stack-realign.py: a function that moves
 # its stack pointer without MOVSP (an over-aligned local) corrupts its
 # caller's registers now and then (opendmd-core/src/chan.rs). The diag build's
 # std-channel torture test keeps one such function on purpose.
@@ -564,6 +566,7 @@ fw-build: fw-sdkconfig-flavour
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_BINARY)'
 
 # The console (the firmware's log) runs at 921600 baud (sdkconfig.defaults,
 # CONFIG_ESP_CONSOLE_UART_BAUDRATE): every monitor and capture must match.
@@ -744,6 +747,7 @@ fw-release-variant:
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	$(MAKE) --no-print-directory updater
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_RELEASE_BINARY)'
 	@# The third-party notices: the committed ones must be what this build links.
 	$(MAKE) --no-print-directory notices-check
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'

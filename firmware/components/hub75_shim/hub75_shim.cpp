@@ -341,6 +341,17 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
     s_fast = false;
 #endif
     ESP_LOGI(TAG, "span writer: %s", s_fast ? "direct" : "per-pixel fallback");
+#if !defined(NO_CIE1931) && LUT_NATIVE_BIT_DEPTH && !defined(SPIRAM_DMA_BUFFER)
+    {
+        /* Where the DMA rows are (internal SRAM banks: 0x3FFAE000.. SRAM2,
+         * 0x3FFE0000.. SRAM1): a CPU access to the bank the I2S DMA streams
+         * from waits on it, so this is one line of a layout investigation. */
+        frameStruct *fb = s_panel->*get(FbTag());
+        const uint16_t rows = s_height / MATRIX_ROWS_IN_PARALLEL;
+        ESP_LOGI(TAG, "dma rows: %p .. %p", (void *)fb->rowBits[0]->data,
+                 (void *)fb->rowBits[rows - 1]->data);
+    }
+#endif
     s_oe = cfg->oe;
     s_clk = cfg->clk;
     s_driver = cfg->driver;
