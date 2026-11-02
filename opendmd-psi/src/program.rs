@@ -309,6 +309,7 @@ pub(crate) mod code {
     /// Whether a step writes the scalar slot in its `d` (the per-frame,
     /// per-row and draw stage values; not a wide step that writes a wide
     /// slot or an offset, nor a step that writes pixels or nothing).
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
     pub fn writes_scalar(c: u8) -> bool {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
@@ -336,6 +337,7 @@ pub(crate) mod code {
 
     /// Value operands (`a`, `b`, `c` in order) a step reads, the coverage
     /// of a layer not counted.
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
     pub fn arity(c: u8) -> usize {
         match c {
             ARGS | PAINT => 3,
@@ -560,6 +562,7 @@ pub(crate) fn palette<'a>(
 /// The formula's own palettes from its tables (out of line: once a frame,
 /// and only for a formula with some, `OWNPAL`).
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
     for (j, p) in own.iter_mut().enumerate() {
         let at = user_palette_at(j);
@@ -1630,6 +1633,7 @@ impl Program {
     /// on the FOR as [`LANES`]); this reads that mark and lays the
     /// registers out (one pass over the body), each time a frame runs the
     /// loop. The estimate reads the same.
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
     pub(crate) fn vector_loop(&self, at: usize) -> Option<VecLoop> {
         let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
         if f.c != LANES {
@@ -2098,6 +2102,7 @@ pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
 /// a table, [`code::is_table`], hence the `Option`: `None` there). Out of
 /// line: one copy for both (inlined, the ESP32 build carried two, 2.4 KB).
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
     use code::*;
     match c {

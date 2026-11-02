@@ -535,9 +535,21 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # own idea of it (CONFIG_ESPTOOLPY_FLASHFREQ_*, which the flash driver's
 # SPI1 uses) both follow this. `/api/firmware` `flash` reads the clock back.
 FW_FLASH_FREQ ?= 40
+# SRAM1 as IRAM (FW_SRAM1_IRAM=1): IDF's ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM,
+# up to 40 KB more IRAM (0x400A0000..), each byte used taken from the top of
+# the D/IRAM heap (heap/port/esp32/memory_layout.c reserves _heap_end..
+# 0x40000000), and the firmware's `sram1-iram` feature, which places the next
+# hottest functions there. The v5.3 bootloader's own data ends at 0x3FFF6000
+# (bootloader.ld), below the region, and its load-address check takes SRAM1's
+# IRAM alias as IRAM (SOC_IRAM_HIGH 0x400AA000): the bootloader OpenDMD's
+# installs write (v5.3, the same code with or without the option) boots it,
+# so it can go by OTA; a pre-5.1 bootloader would refuse the image
+# (psi-rebuild-worklog.md, 2026-11-02, SRAM1 as IRAM).
+FW_SRAM1_IRAM ?= 0
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
+	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy; VARIANT=8mb for the
@@ -702,6 +714,8 @@ FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFI
 # DIST=/somewhere/else), signed like any other so it can go to the rig over
 # the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
+FW_COMMA := ,
+FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram)))
 DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
@@ -745,7 +759,7 @@ fw-release-variant:
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
 	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size: a fragment
 	@# that failed to apply would build a 4 MB image under an 8mb name.
 	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \

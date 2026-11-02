@@ -47,6 +47,26 @@ REQUIRED = [
     (r"^opendmd_psi::jit::device::shim_pick$", "the JIT's pick helper, a pixel"),
 ]
 
+# With SRAM1 as IRAM (FW_SRAM1_IRAM=1, the `sram1-iram` feature): .iram0.text
+# runs past 0x400A0000, and these are placed there too.
+SRAM1_START = 0x400A0000
+REQUIRED_S1 = [
+    (r"^opendmd_psi::draw::run_lanes::<128>$", "the lane loops' driver (Starfield)"),
+    (r"^opendmd_psi::vm::lane_draw::<128>$", "a lane loop's step"),
+    (r"^opendmd_psi::program::eval$", "the scalar steps (Endless road)"),
+    (r"^opendmd_psi::program::code::writes_scalar$", "run_lanes' step test"),
+    (r"^opendmd_psi::program::code::arity$", "run_lanes' operand count"),
+    (r"^<opendmd_psi::program::Program>::vector_loop$", "a lane loop's shape"),
+    (r"^opendmd_psi::program::unpack_palettes$", "the palettes, a frame"),
+    (r"^opendmd_psi::vm::row_steps::<128>$", "the row steps"),
+    (r"^opendmd_psi::vm::next_row::<128>$", "the next row"),
+    (r"^opendmd_psi::jit::fill::<", "the JIT's words"),
+    (r"^opendmd_psi::jit::device::shim_div$", "the JIT's div helper"),
+    (r"^opendmd_psi::jit::device::shim_noise_o$", "the JIT's noise helper"),
+    (r"^opendmd_core::fx_psi::mark_pair$", "a raced pair's dirty marks"),
+    (r"^<opendmd_core::canvas::DirtyMap>::mark_run$", "the dirty runs"),
+]
+
 
 def sections(elf):
     """(start, end) of .iram0.text, from readelf."""
@@ -76,7 +96,8 @@ def main():
     # A build without Psi (no `psi` feature) has no VM to place.
     psi = any(n.startswith("opendmd_psi::") for _, n in syms)
     bad = []
-    for pat, why in REQUIRED:
+    required = REQUIRED + (REQUIRED_S1 if hi > SRAM1_START else [])
+    for pat, why in required:
         if not psi and "opendmd_psi" in pat:
             continue
         r = re.compile(pat)
@@ -89,7 +110,8 @@ def main():
     if bad:
         print("IRAM placement: hot functions outside IRAM:\n" + "\n".join(bad))
         sys.exit(1)
-    print(f"IRAM placement: {len(REQUIRED)} hot functions in .iram0.text ({hi - lo:,} B)")
+    s1 = f", {hi - SRAM1_START:,} B of it in SRAM1" if hi > SRAM1_START else ""
+    print(f"IRAM placement: {len(required)} hot functions in .iram0.text ({hi - lo:,} B{s1})")
 
 
 if __name__ == "__main__":

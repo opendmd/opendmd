@@ -1460,6 +1460,7 @@ pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]
 /// [`mark_changed`] for row pair `p` alone (rows `p` and `p + 16`, their
 /// changed groups `a` and `b`): what racing the beam marks as each pair is
 /// drawn. Returns the pixels it marked.
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub fn mark_pair(dirty: &mut crate::canvas::DirtyMap, p: usize, a: u32, b: u32) -> u32 {
     const HALF: usize = psi::H / 2;
     let whole = spans_cost(u32::MAX);

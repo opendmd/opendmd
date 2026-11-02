@@ -272,6 +272,7 @@ const PRIMS: usize = 6;
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn run_lanes<const N: usize>(
     prog: &Program,
     s: &mut Scratch<N>,
