@@ -74,7 +74,7 @@ unsafe impl Sync for Under {}
 static UNDER: Under = Under(UnsafeCell::new([0; W * H * 3]));
 
 /// The draw stage's canvas (`draw { }`): a static of its own, all zero, as
-/// [`UNDER`].
+/// [`UNDER`]; its paint plane is taken for a formula that paints.
 struct InkCell(UnsafeCell<Ink>);
 // SAFETY: as `Cell`.
 unsafe impl Sync for InkCell {}
@@ -318,6 +318,7 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
         let under = over.then(|| unsafe { &*UNDER.0.get() }.as_slice());
         // SAFETY: as `state()`.
         let ink = unsafe { &mut *INK.0.get() };
+        ink.try_fit(&s.prog);
         render_rows_ink(
             &s.prog,
             &mut s.scratch,

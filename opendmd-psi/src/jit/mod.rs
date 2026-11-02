@@ -312,6 +312,7 @@ pub(crate) fn frame<T: Target>(
         }
         _ => None,
     };
+    let paint = crate::draw::paint_of(prog, ink);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
     }
@@ -477,10 +478,12 @@ pub(crate) fn frame<T: Target>(
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
         }
         t.run(ctx, d);
-        // SAFETY: `dest` gives the row's W × 3 bytes at `d`.
-        crate::draw::paint_row(prog, ink, row, unsafe {
-            core::slice::from_raw_parts_mut(d, W * 3)
-        });
+        if let Some(p) = paint {
+            // SAFETY: `dest` gives the row's W × 3 bytes at `d`.
+            crate::draw::paint_row(prog, p, row, unsafe {
+                core::slice::from_raw_parts_mut(d, W * 3)
+            });
+        }
         if let Some(ch) = changed.as_deref_mut() {
             ch[row] = if track {
                 // SAFETY: the row's W × 3 bytes at `d`, word-aligned.

@@ -18,10 +18,11 @@ draw {
     st = 1 / (back - near) -- perspective, now and a moment ago
     hx = sx*s
     hy = sy*s -- the head, from the middle
-    -- a head off the panel: the line moved far below it, where it is skipped
-    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16
+    -- the middle row; a head off the panel: the line moved far below it,
+    -- where it is skipped
+    row = abs(hx) > 64 or abs(hy) > 16 ? 1030 : 15
     lit = near*near -- squared: far stars stay dark longer
-    line(64 + sx*st, 31 - (row + sy*st), 64 + hx, 31 - (row + hy), lit*0.2, lit)
+    line(64 + sx*st, row - sy*st, 64 + hx, row - hy, lit*0.2, lit)
   }
 }
 pal(ice, ink)

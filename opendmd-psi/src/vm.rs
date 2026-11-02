@@ -890,6 +890,7 @@ pub(crate) fn frame<const N: usize>(
         }
         _ => None,
     };
+    let paint = crate::draw::paint_of(prog, ink);
     // A `rate` formula's parts (`crate::rate`): the slow part runs only
     // the steps after its marker (no still cache: the caller gives none),
     // the fast part the steps after those, each lane starting from `under`
@@ -1047,10 +1048,12 @@ pub(crate) fn frame<const N: usize>(
                 k += 1;
             }
         }
-        // The paint canvas over every layer (`draw { }` with colours): once
+        // The paint plane over every layer (`draw { }` with colours): once
         // a row, out of line (a test in the lane loop would have LLVM copy
-        // the loop: IRAM).
-        crate::draw::paint_row(prog, ink, row, &mut out[span]);
+        // the loop: IRAM); no call at all for a formula that doesn't paint.
+        if let Some(p) = paint {
+            crate::draw::paint_row(prog, p, row, &mut out[span]);
+        }
         columns_kept = N == W;
     }
     per_row.end(out, scratch);

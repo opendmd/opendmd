@@ -534,7 +534,12 @@ fn sizes() {
         core::mem::size_of::<Program>(),
         2876 + 4 * crate::program::MAX_PAINT
     );
-    assert_eq!(core::mem::size_of::<crate::Ink>(), 8192);
+    // The ink plane and the paint plane's pointer (the plane itself, 4 KB
+    // more, only for a formula that paints).
+    assert_eq!(
+        core::mem::size_of::<crate::Ink>(),
+        4096 + core::mem::size_of::<usize>()
+    );
     // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
     let beam = 3 * core::mem::size_of::<usize>();
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192 + beam);

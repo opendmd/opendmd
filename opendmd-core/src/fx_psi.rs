@@ -42,8 +42,9 @@ pub const LANES: usize = psi::LANES;
 pub struct PsiFx {
     prog: psi::Program,
     scratch: psi::Scratch<LANES>,
-    /// The draw stage's canvas (4 KB), held only while the formula draws
-    /// (`draw { }`); `None` is all-zero, so the zeroed box is valid.
+    /// The draw stage's canvas (4 KB, 8 KB when it paints), held only
+    /// while the formula draws (`draw { }`); `None` is all-zero, so the
+    /// zeroed box is valid.
     ink: Option<Box<psi::Ink>>,
     /// When the canvas was last asked for and refused (the installed
     /// clock's µs; 0: not refused): asked again a second later (a clone
@@ -222,6 +223,23 @@ impl Governor {
     /// A live edit: the next frames run cold, leave them out.
     pub fn edited(&mut self) {
         self.skip = Self::SKIP;
+    }
+
+    /// Another program in place (a live edit, or a Formula played over the
+    /// one on screen): `start`, its own governor, where it starts slower;
+    /// else the level and the mean go on (a heavier formula starts at least
+    /// as slow as its estimate says). The raced frames' record (late frames
+    /// and the every-2nd-refresh hold they bring) always starts again: it
+    /// was the old program's against the scan. Kept, a hold one heavy
+    /// Formula earned held every Formula played over it to half its frame
+    /// rate for ~4,096 frames (on the spare after Endless road: Scanlines
+    /// at 1.6 ms a frame on 32 ms frames).
+    pub fn retune(&mut self, start: Governor) {
+        if start.level > self.level {
+            *self = start;
+        }
+        (self.late, self.seen, self.floor, self.floor_left) = (0, 0, 0, 0);
+        self.edited();
     }
 
     /// The budget at the slowest step on a `grid` ms grid: the heaviest
@@ -745,20 +763,28 @@ fn grid(delay_ms: u8) -> u32 {
     u32::from(delay_ms.max(crate::fx::floor()))
 }
 
-/// What a formula that draws gets when the heap hasn't its canvas (4 KB):
-/// as the compiler's own thread does when it can't start.
+/// What a formula that draws gets when the heap hasn't its canvas (4 KB,
+/// 8 KB for one that paints): as the compiler's own thread does when it
+/// can't start.
 pub const NO_CANVAS: &str = "the player is short of memory just now: try again in a moment";
 
-/// A canvas for `prog` if it draws (taken from the heap only if it may
-/// fail: `None` for one that doesn't draw, `Err` when the heap hasn't 4 KB).
+/// A canvas for `prog` if it draws, with the planes it uses (taken from
+/// the heap only if it may fail: `None` for one that doesn't draw, `Err`
+/// when the heap hasn't them). `held`, the canvas on hand, is taken and
+/// fitted (the paint plane taken or let go); refused, it is left as it was
+/// for the program it serves.
 fn canvas_for(
     prog: &psi::Program,
-    held: Option<Box<psi::Ink>>,
+    held: &mut Option<Box<psi::Ink>>,
 ) -> Result<Option<Box<psi::Ink>>, psi::Error> {
     if !prog.draws() {
         return Ok(None);
     }
-    match held.or_else(psi::Ink::try_boxed) {
+    let fitted = match held.as_deref_mut() {
+        Some(k) => k.try_fit(prog).then(|| held.take()).flatten(),
+        None => psi::Ink::try_boxed_for(prog),
+    };
+    match fitted {
         Some(k) => Ok(Some(k)),
         None => Err(psi::Error {
             start: 0,
@@ -832,7 +858,7 @@ impl PsiFx {
     fn open(q: &Query) -> Result<PsiBox, psi::Error> {
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
         let (est, delay) = compile(q, &mut fx.prog)?;
-        fx.ink = canvas_for(&fx.prog, None)?;
+        fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
         fx.delay_ms = delay;
         let s = fx.prog.meta().values(q.sliders);
@@ -855,10 +881,11 @@ impl PsiFx {
     }
 
     /// Take another query's formula, sliders and frame rate in place (a
-    /// live edit on the panel): the clock, the working memory and the
-    /// governor stay — a heavier formula starts at least as slow as its
-    /// estimate says. Only a program's worth (2.8 KB) is allocated, and
-    /// only while compiling.
+    /// live edit on the panel, or `/api/play` of a Formula over this one):
+    /// the clock, the working memory and the governor stay — a heavier
+    /// formula starts at least as slow as its estimate says — but not the
+    /// raced frames' hold ([`Governor::retune`]). Only a program's worth
+    /// (3.4 KB) is allocated, and only while loading.
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = resolve(q)?;
         // SAFETY: `Program` is integers all the way down: zero is valid.
@@ -867,7 +894,7 @@ impl PsiFx {
         let (est, delay) = compile(&q, &mut prog)?;
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
-        self.ink = canvas_for(&prog, self.ink.take())?;
+        self.ink = canvas_for(&prog, &mut self.ink)?;
         // The still cache keeps its lanes for a formula with as many values
         // (the next full frame keeps the new formula's: it checks), else
         // lets them go and the next frame asks again.
@@ -895,11 +922,7 @@ impl PsiFx {
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
-        let g = Governor::new(start_estimate(&self.prog, est), self.ms());
-        if g.level > self.gov.level {
-            self.gov = g;
-        }
-        self.gov.edited();
+        self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()));
         Ok(())
     }
 
@@ -1080,7 +1103,7 @@ impl PsiFx {
                 || self.ink_tried == 0
                 || t0.wrapping_sub(self.ink_tried) >= CANVAS_RETRY_US;
             if due {
-                self.ink = psi::Ink::try_boxed();
+                self.ink = psi::Ink::try_boxed_for(&self.prog);
                 self.ink_tried = if self.ink.is_some() { 0 } else { t0 | 1 };
             }
         }
@@ -1661,7 +1684,7 @@ impl FormulaLook {
         // till then); one that stops gives it back.
         self.ink_tried = None;
         if let Some(b) = self.held.as_mut() {
-            b.ink = canvas_for(&self.prog, b.ink.take()).unwrap_or(None);
+            b.ink = canvas_for(&self.prog, &mut b.ink).unwrap_or(None);
             let ink = b
                 .ink
                 .as_ref()
@@ -1707,7 +1730,7 @@ impl FormulaLook {
             return false;
         }
         px.resize(PIXELS, Rgb::BLACK);
-        let Ok(ink) = canvas_for(&self.prog, None) else {
+        let Ok(ink) = canvas_for(&self.prog, &mut None) else {
             return false;
         };
         let layout = std::alloc::Layout::new::<psi::Scratch<LANES>>();
@@ -1825,7 +1848,7 @@ impl FormulaLook {
                 .ink_tried
                 .is_none_or(|t| now >= t + Duration::from_micros(u64::from(CANVAS_RETRY_US)))
         {
-            b.ink = psi::Ink::try_boxed();
+            b.ink = psi::Ink::try_boxed_for(&self.prog);
             if b.ink.is_some() {
                 self.ink_tried = None;
                 self.fresh = true;
@@ -2298,7 +2321,7 @@ mod alloc_box {
             let mut b = PsiBox::new();
             b.0.prog = self.0.prog;
             // (A clone that can't have its canvas draws nothing: `ink` 0.)
-            b.0.ink = super::canvas_for(&b.0.prog, None).unwrap_or(None);
+            b.0.ink = super::canvas_for(&b.0.prog, &mut None).unwrap_or(None);
             b.0.clock = self.0.clock;
             b.0.delay_ms = self.0.delay_ms;
             b.0.inputs = self.0.inputs;
@@ -2482,6 +2505,63 @@ mod tests {
             g.note_late(false);
         }
         assert_eq!(g.beam_frames(1), 1, "tried again");
+    }
+
+    /// The light bundled Formulas the spare measured (2026-11-01), loaded
+    /// from their compiled files as the player loads them: the frame time
+    /// each asks for, and the grid the governor starts them on, are main's
+    /// (f92f182, compiled on the device), and so is the estimate the grid
+    /// comes from (within 3 %: the rows-down rewrite added a row step or
+    /// two). Raced on a 7.98 ms refresh, the 20 ms ones every 2nd refresh
+    /// (16 ms), the 10 ms ones every refresh.
+    #[test]
+    fn bundled_formulas_from_their_files_keep_mains_frame_grid() {
+        // (file, main's `fps` ms, main's VM estimate µs, refreshes a frame)
+        const MAIN: [(&str, &str, u32, u32, u32); 8] = [
+            ("scanlines", include_str!("../../opendmd-web/formulas/scanlines.psi"), 20, 1412, 2),
+            ("old-tv", include_str!("../../opendmd-web/formulas/old-tv.psi"), 20, 3024, 2),
+            ("glitter", include_str!("../../opendmd-web/formulas/glitter.psi"), 20, 5560, 2),
+            ("matrix", include_str!("../../opendmd-web/formulas/matrix.psi"), 20, 5927, 2),
+            ("old-photo", include_str!("../../opendmd-web/formulas/old-photo.psi"), 20, 5463, 2),
+            ("big-clock", include_str!("../../opendmd-web/formulas/big-clock.psi"), 20, 3431, 2),
+            ("starfield", include_str!("../../opendmd-web/formulas/starfield.psi"), 10, 2393, 1),
+            ("endless-road", include_str!("../../opendmd-web/formulas/endless-road.psi"), 10, 4805, 1),
+        ];
+        for (name, src, ms, est, frames) in MAIN {
+            let psb = psi::build(src).unwrap();
+            let fx = PsiFx::from_bytes(&psb, "").unwrap_or_else(|e| panic!("{name}: {}", e.msg));
+            let mine = fx.prog.esp32_us();
+            assert!((est..=est * 103 / 100).contains(&mine), "{name}: {mine} µs, main {est}");
+            assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (ms, ms), "{name}");
+            let unit = crate::scan::beam_frames(ms * 1000, 7_980);
+            assert_eq!(fx.gov.beam_frames(unit), frames, "{name}");
+            // Ink only unless it paints.
+            assert_eq!(fx.ink.as_ref().map(|k| k.1.is_some()), fx.prog.draws().then_some(false), "{name}");
+        }
+    }
+
+    /// A Formula played over one whose raced frames were held to every 2nd
+    /// refresh (late frames) starts on its own grid: `/api/play` of a
+    /// Formula over a Formula is a retune, and the hold was the old one's.
+    /// A heavier one still starts at its own (slower) level.
+    #[test]
+    fn a_formula_played_over_a_held_one_starts_on_its_own_grid() {
+        const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
+        const SCAN: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
+        let mut fx = PsiFx::from_query(&super::path(ROAD, "")[Q..]).unwrap();
+        assert!(!fx.gov.note_late(true));
+        assert!(fx.gov.note_late(true));
+        assert_eq!(fx.gov.beam_frames(1), 2, "the road held");
+        fx.retune_from(&super::path(SCAN, "")[Q..]).unwrap();
+        assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (20, 20));
+        assert_eq!(fx.gov.beam_frames(2), 2, "every 2nd refresh: its 50 fps, not 25");
+        // One late frame after the retune is not two in a window.
+        assert!(!fx.gov.note_late(true));
+        assert_eq!(fx.gov.beam_frames(2), 2);
+        // Heavier: its own start (about 9 ms, two noises: 40 ms frames).
+        let heavy = "loop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
+        fx.retune_from(&super::path(heavy, "")[Q..]).unwrap();
+        assert_eq!(fx.gov.delay_ms(fx.ms()), 40);
     }
 
     thread_local! {
