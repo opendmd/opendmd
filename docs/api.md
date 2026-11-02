@@ -387,8 +387,16 @@ A playlist (`/filelist.*`, `/sets/*`) is installed as by
 rebuilds its playlist if in play. With a GIF, upload its prepared copy
 too, or forget the old one.
 
-Errors: `400` path escapes the card; `408` the body stalled; `503` busy
-(retry).
+Errors: `400` the path is not allowed (below); `408` the body stalled;
+`503` busy, or the player did not let go of the file (retry).
+
+**Write paths** (PUT, DELETE, move, `POST /api/cache/forget`) must stay on
+the card and be spelled the one way: no empty, `.` or `..` component
+(`gifs//x.gif`), none ending in a dot or a space (FAT drops them), and no
+8.3 short name (`NAME~1.GIF`, `CONSOL~2`: it names a file whose long name
+is something else, so its prepared copy and whether the player has it
+open could not be told). Use the long name. The `400` says so. Reads by
+path accept what FAT accepts.
 
 ```sh
 curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -404,8 +412,9 @@ An empty directory under `/gifs/` too. Reply: `{"ok":true}`.
 retired `/odm/`), else `400`; 4 s of work a request:
 `{"ok":true,"path","removed":N,"done":bool}`, ask again until `done`.
 
-Errors: `404` not there; `409` the playlist in play, or a directory not
-empty.
+Errors: `400` the path is not allowed (see PUT); `404` not there; `409`
+the playlist in play, or a directory not empty; `503` the player did not
+let go of the file (retry).
 
 ```sh
 curl -s -X DELETE $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -420,8 +429,9 @@ does that).
 
 Reply: `{"ok":true,"from","to","copy":"moved"|"removed"|"none","smooth":bool,"failed":bool}`.
 
-Errors: `400` not two different `/gifs/….gif` paths; `404` no `from`;
-`409` `to` exists (a change of case is fine).
+Errors: `400` not two different `/gifs/….gif` paths (spelled as PUT's
+write paths); `404` no `from`; `409` `to` exists (a change of case is
+fine); `503` the player did not let go of either file (retry).
 
 ```sh
 curl -s $DMD/api/files/move --json '{"from":"/gifs/Other/a.gif","to":"/gifs/Arcade/ARCADE_A_01.gif"}'
@@ -779,7 +789,10 @@ its frames are not raced, see `scan.beam`),
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
 its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 `it reads the picture under it`, `it draws (ink)`, `off (setting)`,
-`being checked`). The whole inline path is at most 6,144 B;
+`being checked`), and `render_us_total`/`renders`: the playing
+formula's render µs in all (wrapping) and renders since boot, whose
+differences give a stretch's exact mean (`frame_us` is a running mean of
+the last few frames). The whole inline path is at most 6,144 B;
 `name=<url-encoded>` (≤ 60 characters) is its name for display.
 
 **By reference** (what playlists and the look use, so a Formula's length

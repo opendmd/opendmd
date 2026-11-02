@@ -67,6 +67,21 @@ struct Raw {
 static TABLE: fatread::Slots<sys::FIL, Raw, SLOTS> = fatread::Slots::new();
 /// Opens that found every slot busy (read by path, through FatFs).
 static SLOTS_FULL: AtomicU32 = AtomicU32::new(0);
+/// The player's opens refused because a write intent covered the file
+/// (the engine skipped it, or played the original for its copy).
+static INTENT_REFUSED: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a write intent covers `full`.
+pub fn covered(full: &str) -> bool {
+    open_set(|o| o.covered(full))
+}
+
+/// The player's open of a file a write is about to change: refused, never
+/// by path either (`ENOENT`: the engine skips it).
+fn refused() -> io::Error {
+    INTENT_REFUSED.fetch_add(1, Relaxed);
+    errno(sys::ENOENT)
+}
 /// The raw-read files open, by path (`holds`).
 static OPEN: Mutex<Option<fatread::OpenSet<SLOTS>>> = Mutex::new(None);
 /// Raw reads done, and those that failed and fell back (`status_json`).
@@ -267,6 +282,10 @@ fn fr_code(r: sys::FRESULT) -> u32 {
     match r {
         sys::FRESULT_FR_TIMEOUT => sys::ETIMEDOUT,
         sys::FRESULT_FR_NOT_READY => sys::ENODEV,
+        // The file's FAT structure is not what it was (its chain freed by a
+        // delete under a reader): never evidence against the card
+        // (`sdhealth::is_card_error` counts EIO, ETIMEDOUT, ENODEV).
+        sys::FRESULT_FR_INT_ERR | sys::FRESULT_FR_NO_FILE | sys::FRESULT_FR_INVALID_OBJECT => sys::ESTALE,
         _ => sys::EIO,
     }
 }
@@ -419,6 +438,9 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
 
 /// [`indexed`] for the player: the file read raw ([`open_player`]).
 pub fn indexed_player(full: &str) -> Option<io::Result<File>> {
+    if covered(full) {
+        return Some(Err(refused()));
+    }
     indexed_as(full, true)
 }
 
@@ -426,6 +448,9 @@ pub fn indexed_player(full: &str) -> Option<io::Result<File>> {
 /// `/gifs/` file when it has it, else by path, read raw when a slot is
 /// free (the module docs), else as [`open`] does.
 pub fn open_player(full: &str) -> io::Result<File> {
+    if covered(full) {
+        return Err(refused());
+    }
     if let Some(r) = indexed_as(full, true) {
         return r;
     }
@@ -470,37 +495,53 @@ fn open_path_raw(full: &str) -> io::Result<Option<File>> {
     // SAFETY: the mounted volume's drive number.
     let pdrv = unsafe { (*fs).pdrv };
     let raw = match ext {
-        Ok(ext) => Some((Raw { file: fatread::RawFile::new(ext), pdrv, broken: false }, full)),
+        Ok(ext) if fatread::is_canonical(card) => Some(Raw { file: fatread::RawFile::new(ext), pdrv, broken: false }),
+        Ok(_) => None,
         // As in `open_at`: FatFs reads this one.
         Err(e) => {
             log::warn!("fat index: {full}: no raw reads ({e}); FatFs reads it");
             None
         }
     };
-    hand_out(f, raw)
+    hand_out(f, Some(full), raw)
 }
 
 /// Put an open FIL in a free slot and open it there as a `File`; with
 /// `raw`, read raw and noted in [`holds`]. `Ok(None)`: every slot busy
 /// (the FIL is freed; the caller opens by path).
-fn hand_out(f: *mut sys::FIL, raw: Option<(Raw, &str)>) -> io::Result<Option<File>> {
-    let (raw, full) = match raw {
-        Some((r, full)) => (Some(Box::new(r)), full),
-        None => (None, ""),
-    };
-    // Noted in the open set under its lock, unless a write intent covers
-    // the path (then FatFs reads it): the check and the note are one step.
-    let claimed = TABLE.claim(f, raw, |k| open_set(|o| o.insert_unless_covered(k, full)));
-    let Some(k) = claimed else {
-        if SLOTS_FULL.fetch_add(1, Relaxed) == 0 {
-            log::warn!("fat index: all {SLOTS} /fidx slots busy; opening by path (FatFs) meanwhile");
+fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>) -> io::Result<Option<File>> {
+    // A player's open is noted in the open set under its lock unless a
+    // write intent covers the path, the check and the note one step; then
+    // it is not opened at all (`fatread::OpenSet`).
+    let mut note = |k: usize| player.is_some_and(|full| open_set(|o| o.insert_unless_covered(k, full)));
+    let claimed = TABLE.claim(f, raw.map(Box::new), player.map(|_| &mut note as &mut dyn FnMut(usize) -> bool));
+    let k = match claimed {
+        Ok(k) => k,
+        Err(why) => {
+            // SAFETY: never handed out.
+            unsafe {
+                sys::f_close(f);
+                drop(Box::from_raw(f));
+            }
+            return match (why, player) {
+                (fatread::Claim::Refused, _) => {
+                    INTENT_REFUSED.fetch_add(1, Relaxed);
+                    Err(errno(sys::ENOENT))
+                }
+                (fatread::Claim::Full, p) => {
+                    if SLOTS_FULL.fetch_add(1, Relaxed) == 0 {
+                        log::warn!("fat index: all {SLOTS} /fidx slots busy");
+                    }
+                    // The player's opens are never by path behind the open
+                    // set's back: refused (the engine skips the file).
+                    if p.is_some() {
+                        Err(errno(sys::EBUSY))
+                    } else {
+                        Ok(None)
+                    }
+                }
+            };
         }
-        // SAFETY: never handed out; every slot busy.
-        unsafe {
-            sys::f_close(f);
-            drop(Box::from_raw(f));
-        }
-        return Ok(None);
     };
     match File::open(SLOT_PATHS[k]) {
         Ok(file) => Ok(Some(file)),
@@ -626,10 +667,12 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
     };
     // The player's: its chain, still under the lock (the FAT sectors
     // through the window).
+    let player = raw;
     let raw = match raw {
         Some(full) => match fatread::chain(&geo, cluster, size, &mut |lba, b| read_locked(fs, lba, b)) {
             // SAFETY: the mounted volume's drive number.
-            Ok(ext) => Some((Raw { file: fatread::RawFile::new(ext), pdrv: unsafe { (*fs).pdrv }, broken: false }, full)),
+            Ok(ext) if fatread::is_canonical(full) => Some(Raw { file: fatread::RawFile::new(ext), pdrv: unsafe { (*fs).pdrv }, broken: false }),
+            Ok(_) => None,
             // A chain that does not add up (or a card error reading it):
             // FatFs reads this one, as before.
             Err(e) => {
@@ -640,7 +683,7 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
         None => None,
     };
     drop(lock);
-    hand_out(f, raw)
+    hand_out(f, player, raw)
 }
 
 fn load() -> io::Result<Loaded> {
@@ -861,7 +904,7 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -871,6 +914,7 @@ pub fn status_json() -> String {
         RAW_READS.load(Relaxed),
         RAW_FALLBACKS.load(Relaxed),
         SLOTS_FULL.load(Relaxed),
+        INTENT_REFUSED.load(Relaxed),
     )
 }
 

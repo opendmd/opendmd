@@ -368,17 +368,30 @@ fn pick_up(settings: &mut Settings, next: &mut Settings, live: Live<'_>) -> Resu
 fn save_settings(cfg: &mut Config, next: &Settings, dirty: &mut bool, defer: bool) -> anyhow::Result<()> {
     if defer {
         *dirty = true;
+        // A restart before the flush writes them first (`restart`).
+        SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
         return Ok(());
     }
     *dirty = false;
+    SETTINGS_UNSAVED.store(false, Ordering::Relaxed);
     cfg.save(next)
 }
+
+/// Settings held back while a Formula played and not written yet: a
+/// restart writes them first ([`restart`], through [`FLUSH_AT_RESTART`]),
+/// or a change made during a Formula (`formula_arena`, a `formula_keep`
+/// put back) is lost to the reboot that was to apply it.
+static SETTINGS_UNSAVED: AtomicBool = AtomicBool::new(false);
+/// Writes the shared settings copy (the settings in force: every apply
+/// puts them there) to NVS; set once at boot.
+static FLUSH_AT_RESTART: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 /// Write the settings in force, marked by [`save_settings`], when nothing
 /// races.
 #[inline(never)]
 fn flush_settings(cfg: &mut Config, settings: &Settings, dirty: &mut bool) {
     if std::mem::take(dirty) {
+        SETTINGS_UNSAVED.store(false, Ordering::Relaxed);
         match cfg.save(settings) {
             Ok(()) => log::info!("settings: saved (held while a Formula played)"),
             Err(e) => log::error!("settings: saving what waited failed ({e:#}); they apply until a restart"),
@@ -635,6 +648,16 @@ fn main() -> Result<()> {
         s.panel = tuner;
     }
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
+    {
+        let (shared, part) = (shared_settings.clone(), nvs_partition.clone());
+        let _ = FLUSH_AT_RESTART.set(Box::new(move || {
+            let s = shared.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            match Config::new(part.clone()).and_then(|mut c| c.save(&s)) {
+                Ok(()) => log::info!("settings: saved before the restart (held while a Formula played)"),
+                Err(e) => log::error!("settings: saving before the restart failed ({e:#})"),
+            }
+        }));
+    }
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
     cache::init(net_tx.clone());
@@ -743,10 +766,12 @@ fn main() -> Result<()> {
                         e.skip();
                     }
                 }
-                Command::Release(reply) => {
+                Command::Release { screen, reply } => {
                     if let Some(e) = engine.as_mut() {
                         ahead::release(e);
-                        e.drop_current(&mut canvas);
+                        if screen {
+                            e.drop_current(&mut canvas);
+                        }
                     }
                     let _ = reply.send(());
                 }
@@ -3169,6 +3194,12 @@ fn restart_for_card(why: Reason) -> ! {
 /// which survives that reset, and stops the DMA. Callable from any task.
 pub fn restart(why: Reason) -> ! {
     restarts::record(why);
+    // Settings a Formula held back: written now, or the reboot drops them.
+    if SETTINGS_UNSAVED.swap(false, Ordering::Relaxed) {
+        if let Some(flush) = FLUSH_AT_RESTART.get() {
+            flush();
+        }
+    }
     panel::blank();
     log::info!("restarting (panel off): {}", why.name());
     if !logring::flush(config::RESTART_LOG_FLUSH) {

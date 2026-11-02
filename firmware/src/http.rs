@@ -1152,7 +1152,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        if files::card_path(config::SD_MOUNT, &forget.path).is_none()
+        if files::card_path_for_write(config::SD_MOUNT, &forget.path).is_none()
             || opendmd_core::layout::cache_path(&forget.path).is_none()
         {
             return req.bad_request("path must be a card-absolute /gifs/….gif");
@@ -1474,8 +1474,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let c = ctx.clone();
     server.route("/api/files/*", Method::Delete, move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
-        let Some(path) = files::card_path(config::SD_MOUNT, &rel) else {
-            return req.bad_request("path escapes the card");
+        let Some(path) = files::card_path_for_write(config::SD_MOUNT, &rel) else {
+            return req.bad_request(files::BAD_WRITE_PATH);
         };
         // The engine holds the active manifest and its `.idx` open, and FAT
         // (no FF_FS_LOCK in this build) would let us unlink them underneath it.
@@ -1718,19 +1718,23 @@ fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
         let pcopy = opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
         files::same_card_path(fs_path, &gif) || pcopy.is_some_and(|c| files::same_card_path(fs_path, &c))
     };
-    if (on_screen || crate::state::is_ahead(fs_path) || held()) && !release_player(ctx) {
+    // The file on screen is let go only if it is the one in the way;
+    // else just the copy opened ahead (a transition's outgoing file closes
+    // within the wait below).
+    if (on_screen || crate::state::is_ahead(fs_path) || held()) && !release_player(ctx, on_screen) {
         return None;
     }
     wait_until_not(held).then_some(Held(intents))
 }
 
-/// `Command::Release`: the main loop lets go of the file on screen and the
-/// one opened ahead (the picture stays; the next tick opens the next file,
-/// never raw while an intent covers it), woken from its frame's sleep for
-/// it. False if it did not answer in [`REPLY_TIMEOUT`].
-fn release_player(ctx: &Ctx) -> bool {
+/// `Command::Release`: the main loop lets go of the copy opened ahead and,
+/// with `screen`, of the file on screen (the picture stays; the next tick
+/// opens the next file, and nothing an intent covers opens at all), woken
+/// from its frame's sleep for it. False if it did not answer in
+/// [`REPLY_TIMEOUT`].
+fn release_player(ctx: &Ctx, screen: bool) -> bool {
     let (tx, rx) = mpsc::channel();
-    if ctx.cmd.send(Command::Release(tx)).is_err() {
+    if ctx.cmd.send(Command::Release { screen, reply: tx }).is_err() {
         // No main loop: nothing is open.
         return true;
     }
@@ -1787,7 +1791,7 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
             .map(|p| format!("{}{p}", config::SD_MOUNT))
             .is_some_and(|copy| files::same_card_path(path, &copy) || files::under(&copy, path));
         let ahead = crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0;
-        if (copy_under || ahead || crate::fatidx::holds_under(path)) && !release_player(c) {
+        if (copy_under || ahead || crate::fatidx::holds_under(path)) && !release_player(c, copy_under) {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
     }
@@ -1876,8 +1880,8 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
 /// `PUT /api/files/<rel>`, on the stream task: anywhere on the card, a
 /// manifest or a `.meta` by way of the main task.
 fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
-    let Some(dest) = files::card_path(config::SD_MOUNT, rel) else {
-        return up.bad_request("path escapes the card");
+    let Some(dest) = files::card_path_for_write(config::SD_MOUNT, rel) else {
+        return up.bad_request(files::BAD_WRITE_PATH);
     };
     // A manifest (`/filelist.*`, `/sets/*`) may be the one the engine has
     // open, and it has an `.idx` sidecar that must go first. Both are the
@@ -1949,7 +1953,7 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     let gif = |p: &str| {
         let under_gifs = p.get(..6).is_some_and(|g| g.eq_ignore_ascii_case("/gifs/"));
         (under_gifs && !p.contains(['\t', '\r', '\n']))
-            .then(|| files::card_path(config::SD_MOUNT, p))
+            .then(|| files::card_path_for_write(config::SD_MOUNT, p))
             .flatten()
             .filter(|_| opendmd_core::layout::cache_path(p).is_some())
     };
@@ -1971,7 +1975,11 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     // nor a stale copy at `to`'s place, which goes (a playlist line naming
     // `to` would have played it). The stream task holds
     // `cache_builder::busy()` throughout.
-    let (Some(_from_held), Some(_to_held)) = (release_for_write(c, &from), release_for_write(c, &to)) else {
+    // In turn: a refused `from` asks nothing more of the player.
+    let Some(_from_held) = release_for_write(c, &from) else {
+        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    };
+    let Some(_to_held) = release_for_write(c, &to) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
     };
     if let Some(dir) = std::path::Path::new(&to).parent() {
@@ -2315,8 +2323,9 @@ fn formula_json(path: &str) -> String {
     let still = opendmd_core::fx_psi::still_held();
     let beam = opendmd_core::fx_psi::beam_us();
     let jit = jit_json();
+    let (rt, rn) = opendmd_core::fx_psi::render_totals();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit},"render_us_total":{rt},"renders":{rn}}}"#
     )
 }
 

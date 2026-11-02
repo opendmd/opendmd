@@ -602,6 +602,23 @@ fn reads_clock(prog: &psi::Program) -> bool {
     prog.inputs() & 16 != 0
 }
 
+/// The playing formula's renders since boot: µs in all (wrapping) and how
+/// many — what a measurement over a stretch of time averages
+/// (`/api/status` `formula.render_us_total`, `renders`; the governor's
+/// `frame_us` is a running mean of the last few frames).
+static RENDER_US: AtomicU32 = AtomicU32::new(0);
+static RENDERS: AtomicU32 = AtomicU32::new(0);
+
+fn note_render(us: u32) {
+    RENDER_US.fetch_add(us, Ordering::Relaxed);
+    RENDERS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// ([`RENDER_US`], [`RENDERS`]).
+pub fn render_totals() -> (u32, u32) {
+    (RENDER_US.load(Ordering::Relaxed), RENDERS.load(Ordering::Relaxed))
+}
+
 /// The last formula drawn: (mean render µs, frame time ms, asked ms, the
 /// last compile's µs) — for `/api/status`. Zeros before any.
 pub fn stats() -> (u32, u32, u32, u32) {
@@ -1317,7 +1334,9 @@ impl PsiFx {
         let Some(c) = clock else {
             return self.delay();
         };
-        if self.gov.observe(c().wrapping_sub(t0).wrapping_sub(slow_us).wrapping_add(slow_fair), grid) {
+        let us = c().wrapping_sub(t0).wrapping_sub(slow_us).wrapping_add(slow_fair);
+        note_render(us);
+        if self.gov.observe(us, grid) {
             log::info!(
                 "formula: {} us a frame -> {} ms frames (asked {grid})",
                 self.gov.avg_us(),
@@ -1430,6 +1449,7 @@ impl PsiFx {
         }
         if let Some(c) = clock {
             let us = c().wrapping_sub(t0).saturating_sub(waited);
+            note_render(us);
             if self.gov.observe_beam(us, unit * cycle, cycle) {
                 log::info!(
                     "formula: {} us a frame raced -> every {} refreshes (asked {grid} ms)",

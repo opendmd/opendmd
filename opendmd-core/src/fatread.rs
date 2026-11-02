@@ -251,10 +251,11 @@ impl RawFile {
 /// **Write intents** close the gap between that check and the write: a
 /// writer registers an intent for the path (or a whole tree) *before* it
 /// waits, under the same lock as every open, and keeps it until its write
-/// is done. An open for raw reads of anything an intent covers is refused
-/// ([`OpenSet::insert_unless_covered`]): that file is read through FatFs
-/// (which fails cleanly on a freed chain), never raw. So once the writer
-/// has seen the path not held, nothing can open it raw until it is done.
+/// is done. A player's open of anything an intent covers is refused
+/// outright ([`OpenSet::insert_unless_covered`]): not raw, and not through
+/// FatFs either, whose read of a chain freed under it fails in a way that
+/// looks like the card's. So once the writer has seen the path not held,
+/// the player cannot open it until the write is done.
 pub struct OpenSet<const N: usize> {
     paths: [Option<String>; N],
     intents: Vec<(u32, String, bool)>,
@@ -321,11 +322,13 @@ impl<const N: usize> OpenSet<N> {
         }
     }
 
-    /// [`put`](Self::put) unless a write intent covers `path` (or it is
-    /// not [canonical](is_canonical)): true if noted, and it may be read
-    /// raw; false, and it must be read through FatFs.
+    /// [`put`](Self::put) unless a write intent covers `path`: true if
+    /// noted (the player may open it: raw if [`is_canonical`]); false, and
+    /// it must not be opened at all — a write is about to change or remove
+    /// it, and even FatFs would read a chain freed under it (an error that
+    /// is not the card's).
     pub fn insert_unless_covered(&mut self, k: usize, path: &str) -> bool {
-        if self.covered(path) || !is_canonical(path) {
+        if self.covered(path) {
             return false;
         }
         self.put(k, path);
@@ -377,6 +380,15 @@ impl<const N: usize> OpenSet<N> {
     }
 }
 
+/// Why [`Slots::claim`] did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// Every slot is taken.
+    Full,
+    /// A write intent covers the path: not opened.
+    Refused,
+}
+
 /// The device's open-file slots (`fatidx`'s `/fidx/<k>`): each a file
 /// handle and, read raw, its raw state. The order matters: a slot is
 /// claimed by publishing its file, then its raw state; it is released by
@@ -403,25 +415,30 @@ impl<F, R, const N: usize> Slots<F, R, N> {
         }
     }
 
-    /// Put `file` (non-null) in a free slot, `raw` with it: the slot, or
-    /// `None` when all are taken (`raw` is dropped, `file` is the caller's).
-    /// `noted(k)` runs once the slot is ours and before its raw state is
-    /// published (the caller notes the path in its open set there, unless a
-    /// write intent covers it): false, and `raw` is dropped — the file is
-    /// read without it.
-    pub fn claim(&self, file: *mut F, raw: Option<Box<R>>, noted: impl FnOnce(usize) -> bool) -> Option<usize> {
-        use std::sync::atomic::Ordering::AcqRel;
+    /// Put `file` (non-null) in a free slot, `raw` with it. With `note`
+    /// (the player's opens), `note(k)` runs once the slot is ours and before
+    /// its raw state is published: the caller notes the path in its open set
+    /// there, unless a write intent covers it — false, and the slot is given
+    /// back ([`Claim::Refused`]). `file` stays the caller's when it is not
+    /// claimed.
+    pub fn claim(&self, file: *mut F, raw: Option<Box<R>>, note: Option<&mut dyn FnMut(usize) -> bool>) -> Result<usize, Claim> {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
         for k in 0..N {
-            if self.files[k].compare_exchange(std::ptr::null_mut(), file, AcqRel, std::sync::atomic::Ordering::Acquire).is_ok() {
-                if let Some(r) = raw {
-                    if noted(k) {
-                        self.raws[k].store(Box::into_raw(r), std::sync::atomic::Ordering::Release);
+            if self.files[k].compare_exchange(std::ptr::null_mut(), file, AcqRel, Acquire).is_ok() {
+                if let Some(note) = note {
+                    if !note(k) {
+                        // Nothing else has seen slot k: free again.
+                        self.files[k].store(std::ptr::null_mut(), Release);
+                        return Err(Claim::Refused);
                     }
                 }
-                return Some(k);
+                if let Some(r) = raw {
+                    self.raws[k].store(Box::into_raw(r), Release);
+                }
+                return Ok(k);
             }
         }
-        None
+        Err(Claim::Full)
     }
 
     /// The file in slot `k` (null when free).
@@ -434,11 +451,10 @@ impl<F, R, const N: usize> Slots<F, R, N> {
         self.raws.get(k).map_or(std::ptr::null_mut(), |p| p.load(std::sync::atomic::Ordering::Acquire))
     }
 
-    /// Free slot `k`: its raw state taken first (`on_raw_cleared(k)` then
-    /// runs: the caller's open-set entry goes), the file last. The file
-    /// pointer, and the raw state, are the caller's to free. `None` if the
-    /// slot was free.
-    pub fn release(&self, k: usize, on_raw_cleared: impl FnOnce(usize)) -> Option<(*mut F, Option<Box<R>>)> {
+    /// Free slot `k`: its raw state taken first, then `on_release(k)` (the
+    /// caller's open-set entry goes), the file last. The file pointer, and
+    /// the raw state, are the caller's to free. `None` if the slot was free.
+    pub fn release(&self, k: usize, on_release: impl FnOnce(usize)) -> Option<(*mut F, Option<Box<R>>)> {
         use std::sync::atomic::Ordering::AcqRel;
         if self.file(k).is_null() {
             return None;
@@ -447,9 +463,7 @@ impl<F, R, const N: usize> Slots<F, R, N> {
         // SAFETY: only `claim` stores, from `Box::into_raw`; swapped out,
         // nothing else has it.
         let raw = (!r.is_null()).then(|| unsafe { Box::from_raw(r) });
-        if raw.is_some() {
-            on_raw_cleared(k);
-        }
+        on_release(k);
         let f = self.files[k].swap(std::ptr::null_mut(), AcqRel);
         (!f.is_null()).then_some((f, raw))
     }
@@ -542,11 +556,27 @@ mod tests {
     }
 
     #[test]
-    fn an_open_under_a_write_intent_falls_back_to_fatfs() {
+    fn a_claim_under_a_write_intent_is_refused_and_frees_its_slot() {
+        let slots: Slots<u32, u32, 1> = Slots::new();
+        let mut open = OpenSet::<1>::default();
+        let w = open.begin_write("/sdcard/cache/a.gif", false);
+        let mut f = 7u32;
+        let mut note = |k| open.insert_unless_covered(k, "/sdcard/cache/a.gif");
+        assert_eq!(slots.claim(&mut f, Some(Box::new(1)), Some(&mut note)), Err(Claim::Refused));
+        assert!(slots.file(0).is_null() && slots.raw(0).is_null(), "the refused slot is free again");
+        open.end_write(w);
+        let mut note = |k| open.insert_unless_covered(k, "/sdcard/cache/a.gif");
+        assert_eq!(slots.claim(&mut f, None, Some(&mut note)), Ok(0));
+        let mut g = 8u32;
+        assert_eq!(slots.claim(&mut g, None, None), Err(Claim::Full));
+    }
+
+    #[test]
+    fn an_open_under_a_write_intent_is_refused() {
         let mut o = OpenSet::<4>::default();
         let w = o.begin_write("/sdcard/gifs/Consoles/NES_Mario_01.gif", false);
         // The switch's open of that very file (any spelling of its case):
-        // not raw.
+        // refused (the engine skips it, a copy falls back to its original).
         assert!(!o.insert_unless_covered(0, "/sdcard/GIFS/Consoles/nes_mario_01.gif"));
         assert!(!o.holds("/sdcard/gifs/Consoles/NES_Mario_01.gif"), "a refused open is not held");
         // Another file opens raw meanwhile.
@@ -589,8 +619,11 @@ mod tests {
         ] {
             assert!(!is_canonical(bad), "{bad}");
         }
+        // An alias is noted (held, so a writer waits for it) but is never
+        // read raw: the caller asks `is_canonical`.
         let mut o = OpenSet::<2>::default();
-        assert!(!o.insert_unless_covered(0, "/sdcard/gifs/Consoles/NES_MA~1.GIF"));
+        assert!(o.insert_unless_covered(0, "/sdcard/gifs/Consoles/NES_MA~1.GIF"));
+        assert!(o.holds("/sdcard/gifs/Consoles/nes_ma~1.gif"));
     }
 
     #[test]
@@ -620,7 +653,8 @@ mod tests {
                         let id = t * 1_000_000 + i + 1;
                         let file = Box::into_raw(Box::new(id));
                         let path = format!("/f/{id}");
-                        let Some(k) = slots.claim(file, Some(Box::new(id)), |k| open.lock().unwrap().insert_unless_covered(k, &path)) else {
+                        let mut note = |k| open.lock().unwrap().insert_unless_covered(k, &path);
+                        let Ok(k) = slots.claim(file, Some(Box::new(id)), Some(&mut note)) else {
                             // SAFETY: never published.
                             drop(unsafe { Box::from_raw(file) });
                             continue;

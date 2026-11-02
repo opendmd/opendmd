@@ -472,14 +472,14 @@ pub enum PlayError {
 pub enum Command {
     /// End the current GIF at the next tick.
     Skip,
-    /// Let go of the file on screen and the copy opened ahead (a handler
-    /// is about to replace, rename or delete one: `http::release_for_write`,
-    /// whose write intents keep them from being opened raw again): the
-    /// picture stays, and the next tick opens the next file (the pick
-    /// opened ahead stays the pick). Answered once both handles are closed;
-    /// the sender wakes the loop from its frame's sleep (`wake::kick`), so
-    /// a long frame delay is not waited out.
-    Release(mpsc::Sender<()>),
+    /// Let go of the copy opened ahead and, with `screen`, of the file on
+    /// screen (a handler is about to replace, rename or delete one:
+    /// `http::release_for_write`, whose write intents keep them from being
+    /// opened again meanwhile): the picture stays, and the next tick opens
+    /// the next file (the pick opened ahead stays the pick). Answered once
+    /// the handles are closed; the sender wakes the loop from its frame's
+    /// sleep (`wake::kick`), so a long frame delay is not waited out.
+    Release { screen: bool, reply: mpsc::Sender<()> },
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
     /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is
