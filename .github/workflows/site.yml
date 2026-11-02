@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/site-gallery"
-          git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
+          git clone -q --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
           git -C "$dir" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
           git -C "$dir" checkout -q
           mkdir -p "$dir/gallery" "$dir/dev/api"

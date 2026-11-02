@@ -34,8 +34,22 @@ build URL serves. There the art index must also carry
   postMessage, to a stand-in there; remembered); a gallery Formula by name
   (`#gallery=<slug>`, to the panel by name too); a choice; nothing to show
   three ways;
+- /create/ (Create Art, the web app's Studio), under its _headers CSP with
+  no violation: `?q=&platform=` searching Game art at once (the index
+  same-origin, nothing asked of opendmd.dev, the pictures stubbed); a
+  picture loaded, edited (text, colours) and downloaded, the GIF 128x32;
+  GifCities (stubbed) to an animated GIF, trimmed, reversed and
+  downloaded with its frames; your own file; none of the words users never
+  see; a phone's width; Send to my panel (the address asked once, the
+  panel's page opened at #import, the GIF sent to it on its ready with its
+  fields, Download after, a blocked pop-up said);
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
+- Open on my panel, both ends: an edited Formula sent from /f/ (this build
+  as https://opendmd.dev) to the panel's app (this build's web app on
+  mock-device.py over target/demo-card, as http://192.168.1.50) is saved
+  under Your formulas as it arrives, and is still there, and on the card,
+  after a reload;
 - the demo's Formulas: no share link, Copy code and Submit;
 - /art-index/v1/ (Create Art's game name index, not in the www pack): every
   platform's file published, the committed file byte for byte, served as
@@ -43,8 +57,11 @@ build URL serves. There the art index must also carry
   which this test's own server cannot show; checked with --base); none left under demo/; the demo's
   Game art searches it same-origin (nothing asked of opendmd.dev; the
   pictures' requests answered locally);
-- /formulas/ (the gallery): every example listed with its thumbnail, Open
-  leading to the Formula in the editor;
+- /formulas/ (the gallery): every example listed with its thumbnail, newest
+  first, Open leading to the Formula in the editor; its sort and filter form
+  (each sort, Show, Has controls, search, the state in the query and back
+  from a link, by keyboard, nothing matching, hover-play after a sort, a
+  phone's width, hidden without a script);
 - the HTTP API: dev/api.html in the site, linking every frozen copy it
   carries (dev/api/v<version>.html); then a publish-like build of the API
   pages (`site.py --api-only` into a copy of the site's dev/ and styles)
@@ -76,14 +93,18 @@ Needs, once, `uv run --with playwright playwright install chromium`.
 """
 
 import argparse
+import contextlib
 import filecmp
 import functools
 import http.server
 import io
 import json
+import os
 import posixpath
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -163,10 +184,24 @@ def lit(page: Page, sel: str) -> int:
 F_READY = "#f:not([hidden]):not([aria-busy])"
 
 
+def f_ready(page: Page, timeout: float = 20000) -> None:
+    """Wait for /f/ to be ready, or to have said why not (no Formula: #f-none,
+    #f hidden for good; a load failure: #f-cap), and fail with what it said
+    rather than a bare timeout. Arrive from another document (about:blank),
+    never /f/ -> /f/#…: f.js reloads on that hashchange, and the old page's
+    #f-none would answer."""
+    page.wait_for_selector(f"{F_READY}, #f-none:not([hidden])", timeout=timeout)
+    if not page.is_visible("#f") or page.is_visible("#f-cap"):
+        why = page.evaluate("[...document.querySelectorAll('#f-none, #f-cap')].filter(e => !e.hidden).map(e => e.textContent.trim()).join(' | ')")
+        raise AssertionError(f"/f/ ({page.url}) is not showing a Formula: {why}")
+
+
 def examples(bundled_only: bool = False) -> list[dict]:
     """OpenDMD's examples (opendmd-web/formulas/*.psi): each file's formula
     (without its header), its name (its `name "…"` line), whether it is
-    bundled, in the gallery's order (by name)."""
+    bundled, when it was added (opendmd-web/formulas/added.json), in the
+    gallery's order (newest first, then by name)."""
+    added = json.loads((ROOT / "opendmd-web/formulas/added.json").read_text())
     out = []
     for p in sorted((ROOT / "opendmd-web/formulas").glob("*.psi")):
         lines = p.read_text(encoding="utf-8").split("\n")
@@ -174,11 +209,12 @@ def examples(bundled_only: bool = False) -> list[dict]:
         while lines and lines[0].startswith(("-- author:", "-- licence:", "-- license:", "-- bundle")):
             head.append(lines.pop(0))
         src = "\n".join(lines)
-        out.append({"slug": p.stem, "src": src, "bundle": "-- bundle" in head,
+        out.append({"slug": p.stem, "src": src, "bundle": "-- bundle" in head, "added": added[p.stem],
                     "name": re.search(r'^name "([^"]*)"', src, re.M).group(1)})
     if bundled_only:  # as formulas.json has them: in file-name order
         return [e for e in out if e["bundle"]]
-    return sorted(out, key=lambda e: (e["name"].casefold(), e["slug"]))
+    by_name = sorted(out, key=lambda e: (e["name"].casefold(), e["slug"]))
+    return sorted(by_name, key=lambda e: e["added"], reverse=True)
 
 
 def gallery_link(base: str, slug: str, **sliders) -> str:
@@ -195,7 +231,7 @@ def open_text(page: Page, base: str, src: str, name: str = "", more: str = "") -
     page.evaluate("([s, n]) => localStorage.setItem('odmd.psi.open', JSON.stringify({src: s, name: n}))", [src, name])
     page.goto("about:blank")
     page.goto(f"{base}/f/#open{more}")
-    page.wait_for_selector(F_READY, timeout=20000)
+    f_ready(page, 20000)
 
 
 def params(u: str) -> dict:
@@ -312,14 +348,15 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     # A gallery Formula as it is: to the panel by its name, a top-level
     # navigation (the slider that moved with it).
     every = examples()
-    e = next(x for x in every if not x["bundle"] and "control" in x["src"])
+    e = next(x for x in sorted(every, key=lambda x: (x["name"].casefold(), x["slug"])) if not x["bundle"] and "control" in x["src"])
     page = new_page(browser, "laptop", errors)
     seen: list[str] = []
     panel_route(page.context, seen)
     page.goto(f"{base}/f/")
     page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+    page.goto("about:blank")
     page.goto(gallery_link(base, e["slug"]))
-    page.wait_for_selector(F_READY, timeout=20000)
+    f_ready(page, 20000)
     check(page.input_value("#psi-src").rstrip("\n") == e["src"].rstrip("\n") and page.inner_text("#f-name") == e["name"],
           f"/f/: a gallery Formula by name, its text from the gallery ({e['name']})")
     page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = r.max; r.dispatchEvent(new Event('input')); }")
@@ -369,6 +406,213 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     page.context.close()
 
 
+# Create Art's page: canned answers for its web sources (no network).
+C_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"], "kinds": "123"}
+C_GC = [  # GifCities' JSON: a square one and a wide one
+    {"url_text": "spinning  mario 2", "weight": 90, "gif": "x/a.gif", "checksum": "SQUARE", "height": 64, "width": 64, "page": "https://web.archive.org/web/2009/a"},
+    {"url_text": "cool mario banner 1", "weight": 50, "gif": "x/b.gif", "checksum": "WIDE", "height": 31, "width": 88, "page": "https://web.archive.org/web/2009/b"},
+]
+
+
+def c_fixtures() -> tuple[bytes, bytes]:
+    """A 256x64 picture (bands and a box) as PNG, and a 4-frame 88x31 GIF (a box moving right)."""
+    from PIL import ImageDraw
+    im = Image.new("RGB", (256, 64), (10, 20, 60))
+    d = ImageDraw.Draw(im)
+    for k in range(8):
+        d.rectangle([k * 32, 40, k * 32 + 30, 63], fill=(40 * k % 256, 200 - 20 * k, 90))
+    d.rectangle([100, 8, 160, 34], fill=(250, 210, 30))
+    png = io.BytesIO()
+    im.save(png, "PNG")
+    frames = []
+    for i in range(4):
+        f = Image.new("RGB", (88, 31), (20, 30, 120))
+        ImageDraw.Draw(f).rectangle([4 + 18 * i, 6, 24 + 18 * i, 24], fill=(250, 210, 30))
+        frames.append(f)
+    gif = io.BytesIO()
+    frames[0].save(gif, "GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return png.getvalue(), gif.getvalue()
+
+
+def c_stub(page: Page, base: str, png: bytes, gif: bytes, asked: list[str]) -> None:
+    cors = {"access-control-allow-origin": "*"}
+    page.route(f"{base}/art-index/v1/SNES.json", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=json.dumps(C_INDEX), headers={"content-type": "application/json"})))
+    page.route("https://raw.githubusercontent.com/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=png, headers={**cors, "content-type": "image/png"})))
+    page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=json.dumps(C_GC), headers={**cors, "content-type": "application/json"})))
+    page.route("https://blob.gifcities.org/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=gif, headers={
+        "content-type": "image/gif", **(cors if r.request.headers.get("origin") else {})})))
+    page.route("https://opendmd.dev/**", lambda r: (asked.append(r.request.url), r.abort()))
+
+
+def c_data(page: Page) -> dict:
+    return page.evaluate("({...document.querySelector('#studio').dataset})")
+
+
+def c_download(page: Page) -> Image.Image:
+    """Save (Download GIF): the file, opened."""
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#st-save")
+    d = dl.value
+    im = Image.open(io.BytesIO(Path(d.path()).read_bytes()))
+    im.filename_suggested = d.suggested_filename
+    return im
+
+
+def create_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    png, gif = c_fixtures()
+    for size in SIZES:
+        page = new_page(browser, size, errors)
+        page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+            (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+        page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+                   lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+        asked: list[str] = []
+        c_stub(page, base, png, gif, asked)
+        page.goto(f"{base}/create/?q=studio+test&platform=snes")
+        page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+        page.wait_for_selector("#find-grid .find-hit", timeout=20000)
+        tiles = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.kind)")
+        src = page.eval_on_selector_all("#st-src button", "els => els.map(e => [e.dataset.v, e.classList.contains('on')])")
+        check(tiles == ["Named_Titles", "Named_Snaps", "Named_Snaps"] and page.input_value("#st-q") == "studio test"
+              and page.input_value("#find-platform") == "SNES" and src == [["gameart", True], ["gifcities", False], ["own", False]],
+              f"/create/ ({size}): ?q=&platform= searches Game art on that platform at once ({tiles}, {src})")
+        check(page.is_hidden("#c-cap") and page.inner_text("h1") == "Create Art" and page.locator("#st-save").inner_text() == "Download GIF"
+              and page.locator("#st-cat-l").is_hidden(), f"/create/ ({size}): the Studio, Save downloads (no category: there is no card)")
+        page.click("#find-grid .find-hit[data-kind=Named_Titles]")
+        wait_js(page, "document.querySelector('#studio').dataset.title === 'Studio Test'", timeout=20000)
+        d = c_data(page)
+        check(d.get("platform") == "SNES" and d.get("name") == "SNES_Studio_Test_01.gif" and page.is_visible("#st-frame") and page.is_hidden("#find-grid"),
+              f"/create/ ({size}): a picture loaded, its platform and title, Find folded ({d.get('platform')}, {d.get('name')})")
+        if size == "phone":
+            check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "/create/ (phone): no sideways scroll with a picture in")
+            if shots:
+                page.screenshot(path=str(shots / "create-phone.png"), full_page=True)
+            check(not page.evaluate("window.__csp || []"), f"/create/ ({size}): no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+            page.context.close()
+            continue
+        # Edits: text, colours.
+        page.fill("#st-text", "HI")
+        page.select_option("#st-colours", "16")
+        wait_js(page, "document.querySelector('#studio').dataset.text === '1'", timeout=5000)
+        page.wait_for_timeout(400)
+        if shots:
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=str(shots / "create-laptop-still.png"), full_page=True)
+        im = c_download(page)
+        n = getattr(im, "n_frames", 1)
+        im.seek(0)
+        colours = len(im.convert("RGB").getcolors(4096) or [])
+        check(im.format == "GIF" and im.size == (128, 32) and im.filename_suggested == "SNES_Studio_Test_01.gif" and 1 < colours <= 17,
+              f"/create/: Download GIF -> {im.filename_suggested}, {im.size}, {n} frame(s), {colours} colours")
+        # GifCities: an animated GIF, trimmed and reversed.
+        page.click("#st-change")
+        page.click("#st-src [data-v=gifcities]")
+        page.fill("#st-q", "mario")
+        page.click("#st-go")
+        wait_js(page, "document.querySelectorAll('#find-grid .find-hit').length === 2", timeout=20000)
+        page.click("#find-grid .find-hit[data-id=WIDE]")
+        wait_js(page, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+        d = c_data(page)
+        check(d.get("srcFrames") == "4" and page.is_visible("#st-tl") and "Seen on" in page.inner_text("#st-import"),
+              f"/create/: GifCities -> an animated GIF on the timeline ({d.get('srcFrames')} frames)")
+        page.click("#st-tl .st-cell >> nth=3")
+        page.click("#st-del")
+        page.check("#st-rev")
+        wait_js(page, "document.querySelector('#studio').dataset.frames === '3'", timeout=5000)
+        page.fill("#st-title", "Mario banner")
+        wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Mario_banner_01.gif'", timeout=5000)
+        if shots:
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=str(shots / "create-laptop-anim.png"), full_page=True)
+        im = c_download(page)
+        xs = []  # where the yellow box starts in each frame: it moved right, so reversed it moves left
+        for i in range(im.n_frames):
+            im.seek(i)
+            rgb = im.convert("RGB")
+            xs.append(min((x for x in range(128) for y in range(32) if (lambda p: p[0] > 180 and p[1] > 140 and p[2] < 90)(rgb.getpixel((x, y)))), default=-1))
+        check(im.size == (128, 32) and im.n_frames == 3 and im.filename_suggested == "SNES_Mario_banner_01.gif" and xs[0] > xs[1] > xs[2] >= 0,
+              f"/create/: the animation downloaded, the last frame deleted, reversed ({im.filename_suggested}, {im.n_frames} frames, box at {xs})")
+        # Your own picture.
+        page.click("#st-change")
+        page.click("#st-src [data-v=own]")
+        with tempfile.TemporaryDirectory() as t:  # (the browser reads the file from its path: kept until it has)
+            f = Path(t) / "mine.png"
+            f.write_bytes(png)
+            page.set_input_files("#st-file", str(f))
+            wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('Picture 256')", timeout=20000)
+        check(c_data(page).get("animated") == "", "/create/: your own picture loads")
+        text = page.inner_text("body")
+        hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
+        check(not hit, f"/create/: none of the words users never see {hit}")
+        off = [u for u in asked if u.startswith("https://opendmd.dev/")]
+        check(not off and any("/art-index/v1/SNES.json" in u for u in asked), f"/create/: Game art's index same-origin, nothing asked of opendmd.dev {off[:2]}")
+        check(not page.evaluate("window.__csp || []"), f"/create/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+        page.context.close()
+
+
+PANEL_IMPORT_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { const d = e.data, g = d && d.gif; "
+                     "document.title = JSON.stringify({origin: e.origin, data: {...d, gif: g instanceof ArrayBuffer ? "
+                     "{bytes: g.byteLength, head: String.fromCharCode(...new Uint8Array(g, 0, 4))} : String(g)}}); });"
+                     "if (opener) opener.postMessage({type: 'opendmd-import-ready'}, '*');</script>")
+
+
+def create_send(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/create/'s Send to my panel: the address asked once (as /f/ asks it),
+    the panel's page opened at `#import`, nothing in its link, and on its
+    ready the GIF (a transferred ArrayBuffer) with its name, title,
+    platform, author and logo, to that window's origin; Download still
+    works after; remembered; a blocked pop-up said; no button before a picture."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    c_stub(page, base, png, gif, [])
+    seen: list[str] = []
+    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=PANEL_IMPORT_STUB, content_type="text/html")))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(page.is_hidden("#c-send"), "/create/ send: no Send to my panel until there is a picture")
+    page.goto(f"{base}/create/?q=studio+test&platform=SNES")
+    page.wait_for_selector("#find-grid .find-hit", timeout=30000)
+    page.click("#find-grid .find-hit[data-kind=Named_Titles]")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01.gif'", timeout=20000)
+    page.check("#st-logo")
+    page.fill("#st-author", "tester1")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01_tester1_LOGO.gif'", timeout=10000)
+    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
+    check(pri == ["c-send"] and page.is_visible("#st-save"), f"/create/ send: Send to my panel the primary, Download beside it ({pri})")
+    page.click("#c-send")
+    check(page.is_visible("#c-ask") and page.input_value("#c-addr") == "opendmd.local" and not seen, "/create/ send: asks for the panel's address (opendmd.local)")
+    page.fill("#c-addr", "example.com")
+    page.click("#c-go")
+    check("Press Send again" in page.inner_text("#c-addr-err") and not seen, "/create/ send: an address on the internet is asked about first")
+    page.fill("#c-addr", "192.168.1.50")
+    with page.context.expect_page() as info:
+        page.click("#c-go")
+    popup = info.value
+    got = sent(popup)
+    d = got["data"]
+    want = {"type": "opendmd-import", "name": "SNES_Studio_Test_01_tester1_LOGO.gif", "title": "Studio Test", "platform": "SNES", "author": "tester1", "logo": True}
+    check(popup.url == "http://192.168.1.50/#import" and got["origin"] == base and {k: d.get(k) for k in want} == want
+          and d["gif"]["head"] == "GIF8" and d["gif"]["bytes"] > 100,
+          f"/create/ send: the panel's page at #import, the GIF sent to it on its ready ({popup.url}, {str(got)[:120]})")
+    popup.close()
+    check(page.inner_text("#c-where-addr") == "192.168.1.50", "/create/ send: the address is remembered")
+    im = c_download(page)
+    check(im.size == (128, 32) and im.filename_suggested == "SNES_Studio_Test_01_tester1_LOGO.gif", "/create/ send: Download still works after sending")
+    with page.context.expect_page() as info:
+        page.click("#c-send")
+    check(info.value.url == "http://192.168.1.50/#import" and sent(info.value)["data"]["gif"]["head"] == "GIF8", "/create/ send: straight to the panel the next time")
+    info.value.close()
+    page.evaluate("window.open = () => null")
+    page.click("#c-send")
+    check("allow pop-ups" in page.inner_text("#c-cap"), f"/create/ send: a blocked pop-up is said ({page.inner_text('#c-cap')[:60]})")
+    check(not page.evaluate("window.__csp || []"), "/create/ send: no CSP violation")
+    page.context.close()
+
+
 def open_on_panel(browser, base: str, errors: list[str]) -> None:
     """Open on my panel, one press: every gallery tile has it (by name,
     `../f/#gallery=<slug>&panel=1`), leading through the Formula's page,
@@ -415,6 +659,77 @@ def open_on_panel(browser, base: str, errors: list[str]) -> None:
     check(page.url.startswith(base) and "panel=1" not in page.url and len(seen) == n,
           f"gallery -> Open on my panel: back is the site, not handed on again ({page.url[len(base):][:40]})")
     page.context.close()
+
+
+def panel_end_to_end(browser, base: str, errors: list[str]) -> None:
+    """Open on my panel, both ends: the site (this build, as https://opendmd.dev)
+    sends an edited Formula to the panel's app (this build's web app on
+    tools/mock-device.py over the demo card, as http://192.168.1.50); the
+    app takes it from opendmd.dev and saves it under Your formulas, and it
+    is still there, and on the card, after a reload."""
+    card = ROOT / "target/demo-card"
+    www = ROOT / "opendmd-web/www"
+    if not (card / "filelist.txt").is_file() or not (www / "pkg").is_dir():
+        check(False, "panel end to end: needs make site (target/demo-card) and make web")
+        return
+    with tempfile.TemporaryDirectory(prefix="site-smoke-panel-") as tmp:
+        overlay = Path(tmp)
+        port = free_port()
+        mock = subprocess.Popen(["uv", "run", "--quiet", str(ROOT / "tools/mock-device.py"), "--port", str(port), "--quiet",
+                                 "--root", str(card), "--overlay", str(overlay), "--www", str(www)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            panel = f"http://127.0.0.1:{port}"
+            for _ in range(200):
+                try:
+                    urllib.request.urlopen(panel + "/api/status", timeout=1).read()
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            page = new_page(browser, "laptop", errors)
+
+            def via(to: str, cors: bool):
+                def handle(route):
+                    u = urllib.parse.urlsplit(route.request.url)
+                    # (The app's own requests, same-origin as on a panel: its origin is the mock's.)
+                    h = {**route.request.headers, **({"origin": to} if "origin" in route.request.headers and not cors else {})}
+                    r = route.fetch(url=to + u.path + (f"?{u.query}" if u.query else ""), headers=h)
+                    route.fulfill(response=r, headers={**r.headers, **({"access-control-allow-origin": "*"} if cors else {})})
+                return handle
+            page.context.route("https://opendmd.dev/**", via(base, True))
+            page.context.route("http://192.168.1.50/**", via(panel, False))
+            slug = next(e["slug"] for e in examples() if not e["bundle"])
+            page.goto("https://opendmd.dev/")
+            page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+            page.goto(f"https://opendmd.dev/f/#gallery={slug}")
+            f_ready(page)
+            src = 'name "Site rings"\nloop 4\ngray(saw(x - t/4))'
+            page.fill("#psi-src", src)
+            page.wait_for_function("document.querySelector('#f-name').textContent === 'Site rings'", timeout=5000)
+            with page.context.expect_page() as info:
+                page.click("#f-open")
+            app = info.value
+            with contextlib.suppress(PlaywrightTimeout):
+                app.wait_for_selector("#toasts .toast", timeout=30000)
+            t = " | ".join(app.eval_on_selector_all("#toasts .toast", "els => els.map(e => e.textContent)"))
+            f = overlay / "formulas" / "site-rings.psi"
+            check(f.is_file() and f.read_text() == src and "Your formulas" in t,
+                  f"panel end to end: sent from the site, saved on the panel as it arrives ('{t}')")
+            app.goto("http://192.168.1.50/#formulas")
+            app.reload()
+            app.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
+            mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+            check(mine == ["Site rings"] and f.is_file(), f"panel end to end: after a reload it is under Your formulas, and on the card ({mine})")
+            page.context.close()
+        finally:
+            os.killpg(mock.pid, signal.SIGTERM)
+
+
+def free_port() -> int:
+    """A free local port (closed again for the mock to take)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def demo_share(browser, base: str, errors: list[str]) -> None:
@@ -732,7 +1047,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                                timeout=20000)
         names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.firstChild.textContent)")
         if size == "laptop":
-            check(names == [e["name"] for e in every] and len(names) == 39, f"gallery: the {len(names)} examples, in order")
+            check(names == [e["name"] for e in every] and len(names) == 39, f"gallery: the {len(names)} examples, newest first")
             # What each says of itself: the bundled ten marked, the looks badged.
             marked = page.eval_on_selector_all("#examples ~ ul .ftile h3:has(.fbadge[title^='The web app'])", "els => els.map(e => e.firstChild.textContent)")
             looks = page.locator("#examples ~ ul .ftile h3 .fbadge", has_text="look").count()
@@ -748,7 +1063,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                 const d = x.getImageData(0, 0, 128, 32).data; for (let k = 0; k < d.length; k += 4) if (d[k] + d[k+1] + d[k+2] > 90) return false; return true; }).length""")
             check(dark == 0, f"gallery: every thumbnail lit ({dark} dark)")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a.alt", has_text="Open").click()
-            page.wait_for_selector(F_READY, timeout=20000)
+            f_ready(page, 20000)
             e = every[5]
             about = re.search(r'^about "([^"]*)"', e["src"], re.M).group(1)
             check(page.inner_text("#f-name") == e["name"] and page.inner_text("#f-about") == about
@@ -769,12 +1084,143 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
         page.context.close()
 
 
+# Sorting and filtering the gallery (ftsort.js): what each visible list shows.
+SHOWN = """() => [...document.querySelectorAll('main ul.ftiles')].map(ul => [ul.closest('.fsec').dataset.part,
+    [...ul.children].filter(li => !li.hidden && !li.closest('[hidden]')).map(li => li.querySelector('h3').firstChild.textContent)])"""
+
+
+def gallery_sort(browser, base: str, errors: list[str]) -> None:
+    """The gallery's sort and filter form: hidden without a script (the page
+    newest first as built), shown with one; each sort's order and each
+    filter's tiles as the entries say (formulas/gallery.json), the state in
+    the address's query and back from it; by keyboard; nothing matching;
+    hover-play after a sort and stopped when its tile is filtered out; no
+    sideways scroll on a phone, inside the 16 px gutter."""
+    every = examples()
+    page = new_page(browser, "laptop", errors)
+    page.goto(f"{base}/formulas/")
+    page.wait_for_selector("#fsort:not([hidden])", timeout=20000)
+    data = page.evaluate("fetch('gallery.json').then(r => r.json())")
+    entries = [{**e, "part": "examples"} for e in data["examples"]] + [{**e, "part": "community"} for e in data["contributions"]]
+    total = len(entries)
+
+    def fold(s: str) -> str:
+        return s.lower().replace("ß", "ss").replace("ς", "σ").replace("ſ", "s")
+
+    def want(sort="new", show="all", controls=False, q=""):
+        def ok(e):
+            text = fold(f"{e['name']} {e['about']} by {e['author']}")
+            return (all(w in text for w in fold(q).split())
+                    and (show == "all" or (show == "community" and e["part"] == "community") or (show == "panel" and e["bundle"])
+                         or (show == "looks" and e["look"]))
+                    and (not controls or e["controls"]))
+        out = []
+        for part in ("community", "examples"):
+            es = sorted((e for e in entries if e["part"] == part and ok(e)), key=lambda e: ([ord(c) for c in fold(e["name"])], e["slug"]))
+            if sort != "name":
+                dated = sorted((e for e in es if e.get("added")), key=lambda e: e["added"], reverse=sort == "new")
+                es = dated + [e for e in es if not e.get("added")]
+            if es:
+                out.append([part, [e["name"] for e in es]])
+        return out
+
+    def shown():
+        return [x for x in page.evaluate(SHOWN) if x[1]]
+
+    def query():
+        return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(page.url).query))
+
+    count = page.inner_text("#fsort .fs-count")
+    check(shown() == want() and query() == {} and count == f"{total} Formulas",
+          f"gallery: the sort and filter form shown, newest first, no query ({count!r})")
+    page.select_option("#fsort select[name=sort]", "old")
+    check(shown() == want("old") and query() == {"sort": "old"}, f"gallery: Oldest ({page.url[len(base):]})")
+    page.select_option("#fsort select[name=sort]", "name")
+    check(shown() == want("name") and query() == {"sort": "name"}, "gallery: Name A–Z")
+    for show in ("panel", "looks", "community"):
+        page.select_option("#fsort select[name=show]", show)
+        w = want("name", show)
+        n = sum(len(x[1]) for x in w)
+        check(shown() == w and query() == {"sort": "name", "show": show} and page.inner_text("#fsort .fs-count") == f"{n} of {total} Formulas"
+              and (n > 0 or show == "community"), f"gallery: Show {show} ({n})")
+    # An empty community list keeps its note when asked for.
+    if not data["contributions"]:
+        check(page.is_visible("main .fsec[data-part=community] .tiles-note") and not page.is_visible("main .fs-none"),
+              "gallery: Show from the community with none yet: its note, not 'No Formulas match'")
+    page.select_option("#fsort select[name=show]", "all")
+    page.check("#fsort input[name=controls]")
+    check(shown() == want("name", controls=True) and query() == {"sort": "name", "controls": "1"}, "gallery: Has controls")
+    page.uncheck("#fsort input[name=controls]")
+    page.fill("#fsort input[name=q]", "clock")
+    w = want("name", q="clock")
+    check(shown() == w and len(w[0][1]) >= 3 and query() == {"sort": "name", "q": "clock"}, f"gallery: search 'clock' ({w[0][1]})")
+    # Linked: the same view after a reload, from the address alone.
+    page.goto(f"{base}/formulas/?q=OpenDMD+ring&sort=old&show=all")
+    page.wait_for_selector("#fsort:not([hidden])", timeout=20000)
+    f = page.evaluate("[...new FormData(document.getElementById('fsort'))].map(([k, v]) => k + '=' + v).join('&')")
+    check(shown() == want("old", q="OpenDMD ring") and f == "q=OpenDMD ring&sort=old&show=all",
+          f"gallery: a linked view (?q=OpenDMD+ring&sort=old) opens as linked ({f})")
+    # Nothing matching: said so, and Show all brings everything back.
+    page.fill("#fsort input[name=q]", "no such formula zzz")
+    check(page.is_visible("main .fs-none") and shown() == [] and not page.is_visible("main .fsec"),
+          "gallery: nothing matching: 'No Formulas match', the lists hidden")
+    page.click("main .fs-none button")
+    check(shown() == want() and query() == {} and not page.is_visible("main .fs-none"), "gallery: Show all: everything, newest first again")
+    # By keyboard: search, Sort, Show and Has controls in turn.
+    page.focus("#fsort input[name=q]")
+    page.keyboard.type("plasma")
+    page.keyboard.press("Tab")
+    on_sort = page.evaluate("document.activeElement.name")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Tab")
+    page.keyboard.press("Tab")
+    page.keyboard.press(" ")
+    # (Space ticks a box on its keyup's click, which can land after press() returns.)
+    with contextlib.suppress(Exception):
+        page.wait_for_function("location.search.includes('controls=1')", timeout=3000)
+    st = query()
+    check(on_sort == "sort" and st.get("q") == "plasma" and st.get("sort") == "old" and st.get("controls") == "1"
+          and shown() == want("old", controls=True, q="plasma"), f"gallery: by keyboard (Tab, arrows, Space) {st}")
+    # Hover-play after a sort, stopped when its tile is filtered out.
+    page.goto(f"{base}/formulas/?sort=name")
+    page.wait_for_selector("#fsort:not([hidden])", timeout=20000)
+    tile = page.locator("li.ftile:has(a.fpic[href$='gallery=matrix'])")
+    tile.locator("h3").hover()
+    try:
+        page.wait_for_selector("li.ftile[data-live=on] canvas", timeout=20000)
+        live = tile.get_attribute("data-live") == "on"
+    except Exception:
+        live = False
+    check(live, "gallery: a tile plays on hover after a sort")
+    page.fill("#fsort input[name=q]", "starfield")
+    page.wait_for_timeout(300)
+    # (Another tile may come under the pointer and play: only this one's is asked about.)
+    check(tile.locator("canvas").count() == 0 and tile.get_attribute("data-live") is None and not tile.is_visible(),
+          "gallery: a playing tile filtered out stops playing")
+    page.context.close()
+    # A phone: no sideways scroll, the form inside the 16 px gutter.
+    page = new_page(browser, "phone", errors)
+    page.goto(f"{base}/formulas/?sort=name&show=looks&controls=1&q=a")
+    page.wait_for_selector("#fsort:not([hidden])", timeout=20000)
+    box = page.evaluate("(() => { const r = document.getElementById('fsort').getBoundingClientRect(); return [r.left, r.right]; })()")
+    check(page.evaluate("document.documentElement.scrollWidth <= innerWidth") and box[0] >= 15.5 and box[1] <= 390 - 15.5,
+          f"gallery (phone): the form inside the gutter, no sideways scroll ({box})")
+    page.context.close()
+    # No script: no form, the page as built (newest first).
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800}, java_script_enabled=False)
+    page = ctx.new_page()
+    page.goto(f"{base}/formulas/?sort=name")
+    names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.firstChild.textContent)")
+    check(not page.is_visible("#fsort") and names == [e["name"] for e in every], "gallery (no script): no form, newest first as built")
+    ctx.close()
+
+
 # The site's structure (the design pass): the pages every visitor sees.
 KEY_PAGES = {  # shot name: path
     "home": "/", "install": "/install/", "guide": "/guide/", "guide-web-app": "/guide/web-app.html",
-    "formulas": "/formulas/", "dev": "/dev/", "dev-psi": "/dev/psi/", "licences": "/licenses/",
+    "formulas": "/formulas/", "create": "/create/", "dev": "/dev/", "dev-psi": "/dev/psi/", "licences": "/licenses/",
 }
-TOP_LABELS = ["Guide", "Formulas", "Demo", "For developers", "Install"]
+TOP_LABELS = ["Guide", "Formulas", "Create Art", "Demo", "For developers", "Install"]
 # Words users never see (CLAUDE.md, "Product model"); "pack" only as the DMDoS GIF pack's name.
 HIDDEN_WORDS = re.compile(r"\b(cache[sd]?|caching|ODM|odm|buckets?|manifests?|bundles?|bundled)\b|(?<!GIF )\bpack\b", re.I)
 
@@ -822,7 +1268,7 @@ def reachable(site: Path) -> None:
 
 
 def csp_pattern(path: str) -> str:
-    for pat in ("/install/*", "/f/*", "/dev/psi/*", "/formulas/*"):
+    for pat in ("/install/*", "/f/*", "/create/*", "/dev/psi/*", "/formulas/*"):
         if path.startswith(pat[:-1]):
             return pat
     return "/*"
@@ -860,7 +1306,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
                 lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
                 check(lum > 600 if scheme == "light" else lum < 120, f"{what}: the {scheme} theme ({bg})")
-                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas"):
+                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create"):
                     text = page.inner_text("body")
                     hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
                     check(not hit, f"{name}: none of the words users never see {hit}")
@@ -1123,7 +1569,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             first = page.locator(".psi-live a.psi-open").first
             first.scroll_into_view_if_needed()
             first.click()
-            page.wait_for_selector(F_READY, timeout=30000)
+            f_ready(page, 30000)
             stored = page.evaluate("localStorage.getItem('odmd.psi.open')")
             check(page.url == f"{base}/f/#open" and page.input_value("#psi-src").strip() != "" and stored is None,
                   f"psi reference: Open in editor opens the site's editor with it, read once ({page.input_value('#psi-src')[:40]!r})")
@@ -1205,6 +1651,9 @@ def main() -> int:
         structure(browser, base, a.site, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
+        print("Create Art (/create/)")
+        create_page(browser, base, a.site, errors, a.shots)
+        create_send(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
@@ -1214,8 +1663,12 @@ def main() -> int:
         art_index(browser, base, a.site, errors, cors_expected=bool(a.base))
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
+        print("sorting and filtering the gallery")
+        gallery_sort(browser, base, errors)
         print("Open on my panel (the gallery's tiles)")
         open_on_panel(browser, base, errors)
+        print("Open on my panel, the site to the panel's app (saved, kept over a reload)")
+        panel_end_to_end(browser, base, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
         print("the Psi language reference (dev/psi/)")

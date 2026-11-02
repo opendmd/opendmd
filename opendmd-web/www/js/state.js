@@ -66,6 +66,9 @@ export const app = {
   selection: new Set(),
   draft: { name: '', paths: [], path: '' },
   texts: new Map(),
+  // A page of the site's own (its Create Art page, share/create/), not the
+  // web app: no source, no card; Game art's index is beside it.
+  site: false,
 
   get device() { return this.src?.kind === 'device'; },
 

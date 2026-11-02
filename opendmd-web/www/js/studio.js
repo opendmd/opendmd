@@ -67,20 +67,24 @@ const MAX_PX = 4e6; // bigger pictures are scaled down on the way in
 
 let art = null; // the wasm module
 
-// The view: built once, into `root`.
-export async function mount(root) {
-  [art] = await Promise.all([artModule(), css(), style()]);
-  return build(root);
+// The view: built once, into `root`. The site's Create Art page (share/create/)
+// mounts it too, with `o`: `css: false` (its own stylesheet imports the
+// Studio's), `acts` (buttons beside Save) — and reads what Save would write
+// through `ready()` and `out()`.
+export async function mount(root, o = {}) {
+  [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
+  return build(root, o);
 }
 
+// (Beside this module's folder: the web app's root, on a device or the site's demo/.)
 function css() {
   return new Promise((res, rej) => {
-    const l = h('link', { rel: 'stylesheet', href: './studio.css', onload: res, onerror: () => rej(new Error('could not load the Studio')) });
+    const l = h('link', { rel: 'stylesheet', href: new URL('../studio.css', import.meta.url).href, onload: res, onerror: () => rej(new Error('could not load the Studio')) });
     document.head.append(l);
   });
 }
 
-function build(root) {
+function build(root, o) {
   const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, tok: 0, from: null, listing: null, cats: [] };
   const id = (x) => 'st-' + x;
   const seg = (name, items, onpick) => {
@@ -93,8 +97,8 @@ function build(root) {
   // A numbered step; 2-6 are hidden until there is a picture.
   const step = (n, t, sid, ...kids) => h('section.card' + (n > 1 ? '.st-step' : ''), { id: id(sid) }, h('h2', h('span.muted', n), ' ', t), ...kids);
 
-  // --- 1 Find: the web (find.js' sources) or your own picture.
-  const SRC = [['gameart', 'Game art'], ['gifcities', 'GifCities'], ['own', 'Your own']];
+  // --- 1 Find: the web (find.js' sources, in their order) or your own picture.
+  const SRC = [...sources.map((x) => [x.id, x.label]), ['own', 'Your own']];
   const file = h('input', { type: 'file', accept: 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
   const url = h('input', { type: 'text', id: id('url'), inputMode: 'url', placeholder: 'Picture address (https://…)' });
   const msg = h('span.cap', { id: id('msg'), 'aria-live': 'polite' });
@@ -117,7 +121,7 @@ function build(root) {
     if (!(await load(await x.fetch(), { platform: x.platform, title: x.hint || '', logo: x.logo, label: x.title, link: x.link }))) throw new Error();
   } });
   function useSource(v, keep) {
-    if (!SRC.some(([x]) => x === v)) v = 'gameart';
+    if (!SRC.some(([x]) => x === v)) v = SRC[0][0];
     S.src = v;
     if (keep) store.set('art.src', v);
     src.set(v);
@@ -237,7 +241,7 @@ function build(root) {
       h('label.stack', 'Title', title), h('label.stack', 'Platform', splat),
       h('label.stack', { id: id('cat-l') }, 'Category', cat), h('label.stack', 'Author', author)),
     h('div.row.st-logo', h('label', logo, 'It is a logo')),
-    name, warn, h('div.row.st-go', saveBtn));
+    name, warn, h('div.row.st-go', saveBtn, ...(o.acts || [])));
 
   const box = h('div.st-box', h('h2', 'Create Art'),
     h('p.muted', 'Find a picture — a title screen, box art, a logo — or an animated GIF, and make it into a GIF for the panel'),
@@ -743,7 +747,7 @@ function build(root) {
     const flags = (S.from?.fields?.flags || []).filter((x) => x !== 'LOGO' && x !== S.from.fields.author);
     const f = { title: title.value.trim(), platform: splat.value || null, category: c, author: author.value.trim() || null, flags: logo.checked ? [...flags, 'LOGO'] : flags, ordinal: null };
     author.placeholder = f.platform ? 'optional' : 'optional · needs a platform';
-    S.listing ??= listings(S.cats);
+    S.listing ??= listings(app.src ? S.cats : []); // (the site's page has no card)
     const l = await S.listing(c);
     if (t !== naming.t) return;
     const keep = S.mode === 'replace' && S.from ? { ...S.from.fields, path: S.from.path } : null;
@@ -766,6 +770,20 @@ function build(root) {
   for (const c of [title, author]) c.addEventListener('input', renaming);
   for (const c of [splat, logo, cat]) c.addEventListener('change', naming);
 
+  // What Save writes: an animation's every frame is rendered now (a still's
+  // GIF is rendered as it is changed).
+  async function finish(st) {
+    if (st.animated) {
+      const t0 = performance.now();
+      st.saveBegin(+plays.value);
+      await run(() => st.saveStep(8), null, () => { const [d, of] = st.saveProgress(); clear(name, `Saving… ${Math.round((100 * d) / of)}%`); });
+      S.gif = st.saved();
+      el.dataset.tSave = Math.round(performance.now() - t0);
+      el.dataset.colours = st.colours;
+    }
+    return S.gif;
+  }
+
   async function save() {
     const st = S.studio;
     if (!st || !S.path) return;
@@ -777,15 +795,7 @@ function build(root) {
     SM.gen++;
     S.saving = true;
     try {
-      if (st.animated) {
-        const t0 = performance.now();
-        st.saveBegin(+plays.value);
-        await run(() => st.saveStep(8), null, () => { const [d, of] = st.saveProgress(); clear(name, `Saving… ${Math.round((100 * d) / of)}%`); });
-        S.gif = st.saved();
-        el.dataset.tSave = Math.round(performance.now() - t0);
-        el.dataset.colours = st.colours;
-      }
-      if (!S.gif) return;
+      if (!(await finish(st))) return;
       const path = S.path, f = base(path), c = path.split('/')[2];
       if (!app.device) {
         const a = h('a', { href: URL.createObjectURL(new Blob([S.gif], { type: 'image/gif' })), download: f });
@@ -851,6 +861,19 @@ function build(root) {
   return {
     el,
     load,
+    // The site's page: a picture in and named, nothing being saved.
+    ready: () => !!(S.studio && S.path && !S.saving),
+    // The site's page: what Save would write, {gif, name, title, platform,
+    // author, logo}, or null (no picture, or the fields name nothing).
+    async out() {
+      const st = S.studio;
+      if (!st || !S.path || S.saving) return null;
+      S.saving = true;
+      try {
+        const gif = await finish(st);
+        return gif && { gif, name: base(S.path), title: title.value.trim(), platform: splat.value, author: author.value.trim(), logo: logo.checked };
+      } finally { S.saving = false; await naming(); }
+    },
     async show() {
       addEventListener('paste', onPaste);
       let cats = [];

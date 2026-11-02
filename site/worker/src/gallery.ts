@@ -72,6 +72,7 @@ async function claim(db: D1Database, key: string, gap: number): Promise<boolean>
 
 interface Built extends Entry {
   file: string;
+  added: string; // ISO time (opendmd-web/formulas/added.json)
 }
 
 /** Git's id of a blob: sha1 of "blob <length>\0" and the bytes, hex. */
@@ -98,11 +99,11 @@ export async function seed(env: GalleryEnv, origin = "https://opendmd.dev"): Pro
     examples.map(async (e) =>
       db
         .prepare(
-          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated) " +
-            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 'ok', ?)",
+          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated, added) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 'ok', ?, ?)",
         )
         .bind(e.bundle ? "bundle" : "example", e.slug, e.file, e.src, e.name, e.about, e.author, e.licence, e.look ? JSON.stringify(e.look) : null,
-          JSON.stringify(e.controls), e.us, e.loop_ms, e.inputs, await blobSha(new TextEncoder().encode(e.file)), t),
+          JSON.stringify(e.controls), e.us, e.loop_ms, e.inputs, await blobSha(new TextEncoder().encode(e.file)), t, Math.floor(Date.parse(e.added) / 1000)),
     ),
   );
   await db.batch([db.prepare("delete from gallery where source in ('bundle', 'example')"), ...rows, metaSet(db, "examples", __GALLERY_EXAMPLES__)]);
@@ -276,10 +277,11 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
       (row ? r.updated : r.added).push(slug);
       writes.push(
         db.prepare(
-          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated) " +
-            "values ('gallery', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'ok', ?15) on conflict(source, slug) do update set " +
+          // `added`: when first accepted, kept through later versions (a file that went and came back: again).
+          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated, added) " +
+            "values ('gallery', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'ok', ?15, ?15) on conflict(source, slug) do update set " +
             "file = ?2, src = ?3, name = ?4, about = ?5, author = ?6, licence = ?7, look = ?8, controls = ?9, esp32_us = ?10, loop_ms = ?11, inputs = ?12, " +
-            "sha = ?13, thumb = ?14, status = 'ok', updated = ?15",
+            "sha = ?13, thumb = ?14, updated = ?15, added = case when gallery.status = 'gone' or gallery.added is null then ?15 else gallery.added end, status = 'ok'",
         ).bind(slug, file, e.src, e.name, e.about, e.author, e.licence, e.look ? JSON.stringify(e.look) : null, JSON.stringify(e.controls), e.us,
           e.loop_ms, e.inputs, sha, pic, t),
         db.prepare("delete from gallery_refused where slug = ?").bind(slug),
@@ -321,6 +323,7 @@ interface Row {
   loop_ms: number;
   status: string;
   updated: number;
+  added: number | null;
 }
 
 /** The store, when it is ready to serve this build: its examples, and a
@@ -328,7 +331,7 @@ interface Row {
 async function listed(env: GalleryEnv, ctx: ExecutionContext | null, origin: string): Promise<{ rows: Row[]; meta: Record<string, string> } | null> {
   const db = env.DB;
   const [rows, meta] = await db.batch([
-    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated from gallery where status = 'ok'"),
+    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated, added from gallery where status = 'ok'"),
     db.prepare("select key, value from meta where key in ('examples', 'synced', 'commit')"),
   ]);
   const m = Object.fromEntries((meta.results as { key: string; value: string }[]).map((r) => [r.key, r.value]));
@@ -368,7 +371,11 @@ interface Tile {
   look: unknown;
   controls: string[];
   src: string;
+  added: string | null; // ISO time (`iso`)
 }
+
+/** gallery_page.py `iso`: UTC to the second. */
+const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 /** gallery_page.py `share_hash`: by name, never the text. */
 function shareHash(e: Tile): string {
@@ -383,8 +390,10 @@ function tile(e: Tile, pic: string): string {
     ["on the panel", "The web app comes with it: in Formulas, under Bundled", e.bundle],
   ] as const).filter(([, , on]) => on).map(([b, why]) => `<span class="fbadge" title="${esc(why)}">${esc(b)}</span>`).join("");
   const h = esc(shareHash(e));
+  const data = (e.added ? ` data-added="${esc(e.added)}"` : "") +
+    ([["look", !!e.look], ["panel", e.bundle], ["controls", e.controls.length > 0]] as const).filter(([, on]) => on).map(([k]) => ` data-${k}="1"`).join("");
   return (
-    `<li class="ftile"><a class="fpic" href="../f/${h}" tabindex="-1" aria-hidden="true">` +
+    `<li class="ftile"${data}><a class="fpic" href="../f/${h}" tabindex="-1" aria-hidden="true">` +
     `<picture class="led"><img src="${esc(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>` +
     `<h3>${esc(e.name)}${badges}</h3><p class="fdesc">${esc(e.about)}</p>` +
     (e.controls.length ? `<p class="fctl">Controls: ${esc(e.controls.join(", "))}</p>` : "") +
@@ -411,17 +420,24 @@ function byName(a: Tile, b: Tile): number {
   return cmp(fold(a.name), fold(b.name)) || cmp(a.slug, b.slug);
 }
 
+/** gallery_page.py `order`: newest first, then by name; the undated last. */
+function order(tiles: Tile[]): Tile[] {
+  const named = [...tiles].sort(byName);
+  const dated = named.filter((e) => e.added).sort((a, b) => (a.added! < b.added! ? 1 : a.added! > b.added! ? -1 : 0));
+  return [...dated, ...named.filter((e) => !e.added)];
+}
+
 const asTile = (r: Row): Tile => ({
   slug: r.slug, name: r.name, about: r.about, author: r.author, licence: r.licence, bundle: r.source === "bundle",
-  look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), src: r.src,
+  look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), src: r.src, added: r.added == null ? null : iso(r.added),
 });
 
 /** The two lists between their markers, from the store's rows. */
 function lists(rows: Row[]): { community: string; examples: string } {
-  const ex = rows.filter((r) => r.source !== "gallery").map(asTile).sort(byName);
+  const ex = order(rows.filter((r) => r.source !== "gallery").map(asTile));
   const known = new Set(ex.map((e) => e.src.trim()));
   const sha = new Map(rows.filter((r) => r.source === "gallery").map((r) => [r.slug, r.sha]));
-  const co = rows.filter((r) => r.source === "gallery" && !known.has(r.src.trim())).map(asTile).sort(byName);
+  const co = order(rows.filter((r) => r.source === "gallery" && !known.has(r.src.trim())).map(asTile));
   // A contribution's thumbnail is the store's, named by its version (it can change in place).
   const community = co.map((e) => tile(e, `thumbs/${e.slug}.png?v=${sha.get(e.slug)!.slice(0, 12)}`)).join("");
   return {
@@ -505,7 +521,7 @@ export async function file(request: Request, env: GalleryEnv, ctx: ExecutionCont
 export async function api(env: GalleryEnv): Promise<unknown> {
   const db = env.DB;
   const [rows, meta, refused] = await db.batch([
-    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated from gallery where status = 'ok' order by source, slug"),
+    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated, added from gallery where status = 'ok' order by source, slug"),
     db.prepare("select key, value from meta where key in ('examples', 'synced', 'commit')"),
     db.prepare("select slug, sha, problems, seen from gallery_refused order by slug"),
   ]);
@@ -518,7 +534,7 @@ export async function api(env: GalleryEnv): Promise<unknown> {
     entries: (rows.results as Row[]).map((r) => ({
       source: r.source, slug: r.slug, name: r.name, about: r.about, author: r.author, licence: r.licence,
       look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), esp32_us: r.esp32_us, loop_ms: r.loop_ms,
-      sha: r.sha, updated: r.updated, src: r.src,
+      sha: r.sha, updated: r.updated, added: r.added, src: r.src,
     })),
     refused: (refused.results as { slug: string; sha: string; problems: string; seen: number }[]).map((x) => ({ ...x, problems: JSON.parse(x.problems) })),
   };

@@ -405,13 +405,34 @@ def www_snapshot() -> Path:
     return _www_snap
 
 
+mock_logs: list[Path] = []
+
+
+def mock_errors() -> None:
+    """Every mock's unhandled errors (each answered 500), with tracebacks."""
+    hits = []
+    for log in mock_logs:
+        text = log.read_text(errors="replace") if log.is_file() else ""
+        hits += [f"{log.name}: {blk.strip()}" for blk in text.split("mock-device: ")[1:] if blk.startswith("unhandled error")]
+    check(not hits, f"mock: no unhandled errors (500s) in {len(mock_logs)} mock runs")
+    for h in hits:
+        print("  !!   " + h.replace("\n", "\n  !!   "))
+
+
 def start_mock(args: list[str]) -> tuple[subprocess.Popen, str]:
     port = free_port()
     if "--www" not in args:
         args = [*args, "--www", str(www_snapshot())]
-    proc = subprocess.Popen(
-        ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
-        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    # Its output (with --quiet: the banner and any unhandled error's
+    # traceback, each a 500 to the page) goes to a file, read back by
+    # mock_errors() at the end: a 500 is a bug in the mock, never noise.
+    OUT.mkdir(parents=True, exist_ok=True)
+    log = OUT / f"mock-{len(mock_logs)}.log"
+    mock_logs.append(log)
+    with log.open("wb") as f:
+        proc = subprocess.Popen(
+            ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
+            stdout=f, stderr=subprocess.STDOUT)
     for _ in range(100):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
@@ -843,6 +864,15 @@ def wait_playing(base: str, path: str, timeout_s: float = 6) -> str:
 
 def last_toast(page: Page, kind: str) -> str:
     page.wait_for_selector(f"#toasts .toast.{kind}", timeout=10000)
+    return page.eval_on_selector_all(f"#toasts .toast.{kind}", "els => els.at(-1).textContent")
+
+
+def toast_or_none(page: Page, kind: str, timeout: float = 10000) -> str:
+    """The last toast of `kind`, or "" when none comes (a check then fails, not the run)."""
+    try:
+        page.wait_for_selector(f"#toasts .toast.{kind}", timeout=timeout)
+    except PlaywrightTimeoutError:
+        return ""
     return page.eval_on_selector_all(f"#toasts .toast.{kind}", "els => els.at(-1).textContent")
 
 
@@ -1725,10 +1755,12 @@ def now_fav_checks(page: Page, base: str) -> None:
     check(page.inner_text("#now-fav") == "☆" and tip == "Favourite in “All files”" and page.get_attribute("#now-fav", "aria-pressed") == "false",
           f"now fav: ☆ for {path.rsplit('/', 1)[-1]} ({tip!r})")
     page.click("#now-fav")
-    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    # ★ and aria-pressed in one look, as the click left them: the save
+    # reindexes the playlist, and the panel moving on to the next GIF then
+    # (right) puts ☆ back before the overrides are read below.
+    page.wait_for_function("(b => b.textContent === '★' && b.getAttribute('aria-pressed') === 'true')(document.querySelector('#now-fav'))")
     r = wait_overrides(base, "", 1)
-    check(r["overrides"] == [{"path": path, "w": 3}] and page.get_attribute("#now-fav", "aria-pressed") == "true",
-          f"now fav: ★ -> GET /api/overrides?set= {r['overrides']}")
+    check(r["overrides"] == [{"path": path, "w": 3}], f"now fav: ★ (pressed) -> GET /api/overrides?set= {r['overrides']}")
     # The save reindexes the playlist, which can move the mock on: back to the GIF.
     settle(base, 1)
     if get_json(base + "/api/status")["now_playing"]["path"] != path:
@@ -3537,6 +3569,8 @@ def mock_pass(browser) -> None:
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
         formulas_remix_checks(browser, base, overlay, errors)
+        import_checks(browser, base, overlay, errors)
+        formulas_store_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -4161,14 +4195,121 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+IMPORT_SEND = """([u, b64, fields, size]) => {
+    const bytes = b64 ? Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) : new Uint8Array(size);
+    if (!b64) bytes.set([71, 73, 70, 56]);
+    addEventListener('message', function on(e) {
+        if (e.data?.type !== 'opendmd-import-ready') return;
+        removeEventListener('message', on);
+        const buf = bytes.buffer;
+        e.source.postMessage({ type: 'opendmd-import', gif: buf, ...fields }, '*', [buf]);
+        window.__sent = buf.byteLength;  // 0 once transferred
+    });
+    window.open(u, '_blank');
+}"""
+
+
+def import_open(opener: Page, base: str, errors: list[str], gif: bytes | None, fields: dict, size: int = 0) -> Page:
+    """The panel's app opened at `#import` by `opener` (as the site's Create
+    Art opens it with Send to my panel), its ready answered with a GIF
+    (`gif`, or `size` zero bytes after a GIF header) transferred by postMessage."""
+    import base64
+    with opener.context.expect_page() as info:
+        opener.evaluate(IMPORT_SEND, [base + "/#import", base64.b64encode(gif).decode() if gif else "", fields, size])
+    app = info.value
+    app.on("pageerror", lambda e: errors.append(f"[import] pageerror: {e}"))
+    app.on("dialog", lambda d: d.dismiss())  # (the playlist offer: not this time)
+    return app
+
+
+def import_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Send to my panel from the site's Create Art: the app opened at
+    `#import` says it is ready to its opener, takes the GIF it sends (a
+    transferred ArrayBuffer, from opendmd.dev or the app's own origin) and
+    opens the Library's Add GIFs with the file, its title, platform, author
+    and logo filled in; Add puts it and its prepared copy on the card, there
+    after a reload. Refused, and said: no opener, too big, not a GIF; an
+    opener on another origin is ignored."""
+    from PIL import Image, ImageDraw
+    frames = []
+    for i in range(3):
+        im = Image.new("RGB", (128, 32), (10, 20, 80))
+        ImageDraw.Draw(im).rectangle([10 + 30 * i, 8, 40 + 30 * i, 24], fill=(240, 200, 40))
+        frames.append(im)
+    import io
+    b = io.BytesIO()
+    frames[0].save(b, "GIF", save_all=True, append_images=frames[1:], duration=120, loop=0)
+    gif = b.getvalue()
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/#now")
+    opener.wait_for_selector("#view-now.on", timeout=20000)
+    fields = {"name": "SNES_Import_Test_LOGO_01_tester1.gif", "title": "Import Test", "platform": "SNES", "author": "tester1", "logo": True}
+    app = import_open(opener, base, errors, gif, fields)
+    app.wait_for_selector("#dl .dl-item", timeout=30000)
+    got = app.evaluate("""() => { const i = document.querySelector('#dl .dl-item'); return {title: i.querySelector('.dl-title').value,
+        platform: i.querySelector('.dl-plat').value, author: i.querySelector('.dl-author').value, img: !!i.querySelector('img'), file: i.textContent}; }""")
+    check(app.url.endswith("#library") and got["title"] == "Import Test" and got["platform"] == "SNES" and got["author"] == "tester1"
+          and got["img"] and opener.evaluate("window.__sent") == 0,
+          f"import: #import -> Add GIFs filled in from what the site sent, the GIF transferred ({got['title']}, {got['platform']}, {got['author']})")
+    app.select_option("#dl .dl-cat", "Other")
+    app.wait_for_function("document.querySelector('#dl .dl-item').dataset.name && !document.querySelector('#dl-ok').disabled", timeout=10000)
+    name = app.get_attribute("#dl .dl-item", "data-name")
+    path = f"/gifs/Other/{name}"
+    parsed = app.evaluate(f"import('./js/state.js').then(m => m.app.wasm.parsePath({json.dumps(path)}))")
+    check((parsed["platform"], parsed["title"], "LOGO" in parsed["flags"], "tester1" in parsed["flags"]) == ("SNES", "Import Test", True, True),
+          f"import: named as the site named it, the logo and author kept ({name})")
+    app.click("#dl-ok")
+    f, copy = overlay / path.lstrip("/"), overlay / cache_path(path).lstrip("/")
+    deadline = time.time() + 60
+    while time.time() < deadline and not (f.exists() and copy.exists()):
+        time.sleep(0.2)
+    check(f.exists() and f.read_bytes() == gif and copy.exists(), f"import: Add -> {path} on the card, byte for byte, and its prepared copy")
+    app.reload()
+    app.wait_for_selector("#view-library.on", timeout=20000)
+    check(app.locator("#dl").count() == 0, "import: a reload doesn't ask again")
+    lib_row(app, path)
+    check(True, "import: after a reload the Library lists it")
+    no_leaks(app, "import")
+    app.close()
+    # Too big, and not a GIF: said, nothing added.
+    app = import_open(opener, base, errors, None, {"name": "Big.gif", "title": "Big"}, size=4 * 1024 * 1024 + 1)
+    t = toast_or_none(app, "bad", 20000)
+    check("over 4 MB" in t and app.locator("#dl").count() == 0, f"import: over 4 MB refused, said ('{t}')")
+    app.close()
+    app = import_open(opener, base, errors, b"PNG not a gif at all", {"name": "x.gif"})
+    t = toast_or_none(app, "bad", 20000)
+    check("isn’t a GIF" in t and app.locator("#dl").count() == 0, f"import: not a GIF refused, said ('{t}')")
+    app.close()
+    opener.context.close()
+    # An opener on another site: ignored.
+    other = new_page(browser, "laptop", errors)
+    other.context.route("http://elsewhere.test/**", lambda r: r.fulfill(status=200, headers={"content-type": "text/html"}, body="<!doctype html><p>elsewhere"))
+    other.goto("http://elsewhere.test/")
+    app = import_open(other, base, errors, gif, fields)
+    app.wait_for_selector("#view-library.on", timeout=20000)
+    app.wait_for_timeout(3000)
+    check(app.locator("#dl").count() == 0 and other.evaluate("window.__sent") == 0, "import: a GIF sent from another site is ignored")
+    other.context.close()
+    # No opener: said.
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#import")
+    t = toast_or_none(page, "bad", 20000)
+    check("open it again from Create Art" in t and page.url.endswith("#library"), f"import: no opener -> '{t}'")
+    page.context.close()
+    # Leave the card as it was.
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files" + path, method="DELETE"), timeout=30).read()
+
+
 def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Open on my panel: the site hands a Formula to the panel's app by name
     (`#gallery=<slug>`: a bundled one is built in, another fetched from
     opendmd.dev/formulas/src/, here a stand-in) or, edited, by postMessage
     from the page that opened it (`#remix`, from opendmd.dev or the app's
-    own origin only), never in the link. It opens in the editor (the
-    remix), nothing saved until Save; a name it doesn't have, no opener, or
-    an opener elsewhere: said plainly."""
+    own origin only), never in the link. It is saved on the panel as it
+    arrives (under Your formulas, kept over a reload; the same text not
+    twice; a bundled one needs nothing; one that doesn't work isn't saved,
+    and comes back as not saved yet) and opens in the editor; a name it
+    doesn't have, no opener, or an opener elsewhere: said plainly."""
     raw = (REPO / "opendmd-web/formulas/searchlight.psi").read_text()
     src = raw.split("\n", 2)[2]
     f = overlay / "formulas" / "searchlight.psi"
@@ -4190,20 +4331,84 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
-    check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"] and not f.exists(),
-          f"remix: a gallery Formula is fetched by name and opens in the editor, nothing saved yet ({got[1:]}, {asked})")
+    check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"],
+          f"remix: a gallery Formula is fetched by name and opens in the editor ({got[1:]}, {asked})")
+    # Saved on the panel as it arrives (no Save pressed), and said.
+    t = toast_or_none(page, "ok")
+    page.wait_for_timeout(300)
+    check(f.exists() and f.read_text() == src and "Your formulas" in t,
+          f"remix: a gallery Formula is saved on the panel as it arrives (/formulas/searchlight.psi, '{t}')")
     shot(page, "formulas-remix", "laptop")
-    page.click("#psi-save")
-    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    check(f.exists() and f.read_text() == src, "remix: Save puts it on the panel (/formulas/searchlight.psi)")
-    # A bundled one: here already, nothing fetched.
+    # Still there after a reload, under Your formulas, with the slider as sent.
+    page.goto(base + "/#formulas")
+    page.reload()
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)").count("Searchlight") == 1,
+          "remix: after a reload the gallery Formula is under Your formulas")
+    # A change saved later goes into the same file, not a second one.
+    if page.locator("#psi-mine .psi-tile[data-name='Searchlight']").count():
+        page.click("#psi-mine .psi-tile[data-name='Searchlight']")
+        page.click("#psi-edit")
+        page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+        page.fill("#psi-src", src.replace("0.4", "0.5", 1))
+        page.wait_for_timeout(300)
+        page.click("#psi-save")
+        page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
+          "remix: Save afterwards changes the same file (/formulas/searchlight.psi, no second copy)")
+    # Edited on the site (Open on my panel, a changed one): sent by postMessage,
+    # saved as it arrives, kept over a reload and a trip to another view.
+    sent_src = 'name "Sent rings"\nloop 4\ngray(saw(x - t/4))'
+    sf = overlay / "formulas" / "sent-rings.psi"
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, sent_src, "Sent rings", a=0.25)
+    t = toast_or_none(app, "ok")
+    app.wait_for_timeout(300)
+    check(sf.exists() and sf.read_text() == sent_src and "Your formulas" in t,
+          f"remix: a Formula sent from the site is saved on the panel as it arrives (/formulas/sent-rings.psi, '{t}')")
+    app.goto(base + "/#library")
+    app.wait_for_timeout(500)
+    app.goto(base + "/#formulas")
+    app.reload()
+    app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+    check(mine.count("Searchlight") == 1 and mine.count("Sent rings") == 1, f"remix: after another view and a reload it is under Your formulas ({mine})")
+    opener.context.close()
+    # The same Formula sent again: opened, not saved twice.
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, sent_src, "Sent rings")
+    app.wait_for_timeout(500)
+    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
+          "remix: the same Formula sent again opens the saved one, no second copy")
+    opener.context.close()
+    # One that doesn't work: not saved, said, and offered back as not saved yet.
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    app = remix_open(opener, base, errors, 'name "Broken rings"\ngray(', "Broken rings")
+    t = toast_or_none(app, "bad")
+    check(not (overlay / "formulas" / "broken-rings.psi").exists() and "isn’t saved" in t,
+          f"remix: a Formula that doesn't work isn't saved, and says so ('{t}')")
+    app.goto(base + "/#formulas")
+    app.reload()
+    app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+    cont = app.inner_text("#psi-cont") if app.locator("#psi-cont").count() else ""
+    check("Broken rings" in cont, f"remix: after a reload it is offered back, not saved yet ('{cont[:60]}')")
+    if cont:
+        app.click("#psi-cont-drop")
+    opener.context.close()
+    # A bundled one: here already, nothing fetched, nothing saved.
     asked.clear()
+    before = sorted(p.name for p in (overlay / "formulas").glob("*"))
     page.goto("about:blank")
     page.goto(base + "/#gallery=starfield")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     star = next(e for e in bundled() if e["name"] == "Starfield")
-    check(page.input_value("#psi-src") == star["src"] and not asked, f"remix: a bundled one opens from the panel's own copy ({asked})")
+    after = sorted(p.name for p in (overlay / "formulas").glob("*"))
+    check(page.input_value("#psi-src") == star["src"] and not asked and after == before,
+          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, {after})")
     # A name the gallery doesn't have (its 404 expected).
     expected.append("/formulas/src/no-such-formula")
     page.goto("about:blank")
@@ -4231,7 +4436,46 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
           f"remix: a Formula sent from another site is ignored ('{t}')")
     other.context.close()
     page.context.close()
-    urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/searchlight.psi", method="DELETE"), timeout=30)
+    for p in [*(overlay / "formulas").glob("searchlight*.psi"), *(overlay / "formulas").glob("sent-rings*.psi")]:
+        urllib.request.urlopen(urllib.request.Request(base + f"/api/files/formulas/{p.name}", method="DELETE"), timeout=30)
+
+
+def formulas_store_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Your Formulas on the panel when the panel can't list them: said, not
+    shown as none, and nothing saved over one already there (a save waits
+    for a listing that works); once it lists again, the one there is whole."""
+    d = overlay / "formulas"
+    d.mkdir(parents=True, exist_ok=True)
+    keep = d / "kept-rings.psi"
+    kept = 'name "Kept rings"\nloop 4\ngray(saw(x + t/4))'
+    keep.write_text(kept)
+    expected.append("/api/files?dir=%2Fformulas")
+    try:
+        opener = new_page(browser, "laptop", errors)
+        fail = lambda r: r.fulfill(status=500, body="card error", headers={"content-type": "text/plain"})
+        opener.context.route("**/api/files?dir=%2Fformulas", fail)
+        opener.goto(base + "/#formulas")
+        t = toast_or_none(opener, "bad")
+        check("Couldn’t read your Formulas" in t and opener.locator("#psi-mine .psi-tile").count() == 0,
+              f"store: a listing that fails is said, not shown as no Formulas ('{t}')")
+        opener.goto(base + "/version.txt")
+        app = remix_open(opener, base, errors, 'name "Kept rings"\nloop 4\ngray(1)', "Kept rings")
+        t = toast_or_none(app, "bad")
+        check(keep.read_text() == kept and sorted(p.name for p in d.glob("kept-rings*")) == ["kept-rings.psi"] and "isn’t saved" in t,
+              f"store: with no listing nothing is saved over a Formula already there ('{t}')")
+        opener.context.unroute("**/api/files?dir=%2Fformulas", fail)
+        app.goto(base + "/#formulas")
+        app.reload()
+        app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+        mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+        check(mine.count("Kept rings") == 1 and keep.read_text() == kept, f"store: listed again, the one there is whole ({mine})")
+        if app.locator("#psi-cont-drop").count():
+            app.click("#psi-cont-drop")
+        opener.context.close()
+    finally:
+        expected.remove("/api/files?dir=%2Fformulas")
+        for p in d.glob("kept-rings*"):
+            p.unlink()
 
 
 def clear_toasts(page: Page) -> None:
@@ -4575,6 +4819,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
         {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
+    # (Copied onto the panel by the view, once: listed there before the hand-over.)
+    page.evaluate("Object.keys(localStorage).filter(k => k.startsWith('odmd.psi.copied.')).forEach(k => localStorage.removeItem(k))")
+    page.reload()
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Bee']", timeout=20000)
     app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
     src, err = app.input_value("#psi-src"), app.inner_text("#psi-err")
     check("fn " not in src and "can’t be put in as a function" in err, f"formulas: a cycle through saved formulas is refused ({src!r}, {err!r})")
@@ -4650,7 +4898,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     evil = '<img src=x onerror="window.__pwned=1">'
     app = remix_open(page, base, errors, "-- " + evil + "\ngray(x)", evil, bad_first=True)
     safe = (app.evaluate("window.__pwned") is None and app.locator("#psi-ed img, #psi-gal img").count() == 0
-            and app.input_value("#psi-name") == evil[:60] and app.input_value("#psi-src").startswith("-- <img"))
+            and "img src=x" in app.input_value("#psi-name") and "-- <img" in app.input_value("#psi-src"))
     app.click("#psi-back")
     app.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
     safe = safe and app.locator("#psi-gal img").count() == 0 and app.evaluate("window.__pwned") is None
@@ -4660,6 +4908,10 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     src_len, name_len = len(app.input_value("#psi-src")), len(app.input_value("#psi-name"))
     check(src_len == 16384 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
     page.context.close()
+    # (Both were saved as they arrived: gone again, for the checks after.)
+    for e in get_json(base + "/api/files?dir=%2Fformulas")["entries"]:
+        if e["name"].startswith(("img-src", "nnnn")):
+            urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/" + e["name"], method="DELETE"), timeout=30)
 
 
 def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
@@ -4707,7 +4959,8 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     app = remix_open(page, base, errors, "loop 4\nrings = sin(x*4 - t/4)\nhsv(rings*0.5, 1, 1)", "Demo rings")
     app.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
     wait_lit(app, "#psi-ed-panel", "formulas (demo): a Formula from the site's page")
-    check(app.input_value("#psi-name") == "Demo rings" and app.input_value("#psi-src").startswith("loop 4\nrings")
+    # (Saved in this browser as it arrived: its name is its name line now.)
+    check(app.input_value("#psi-name") == "Demo rings" and "loop 4\nrings" in app.input_value("#psi-src")
           and app.locator("#psi-ed-show, #psi-show").count() == 0 and app.locator("#psi-ed-share").count() == 0,
           f"formulas (demo): it opened '{app.input_value('#psi-name')}', no Show on panel, no share link")
     page.context.close()
@@ -5415,7 +5668,8 @@ def find_checks(page: Page) -> None:
     narrowing to the one wide hit, a click loading it (2 frames, the title
     hint in Save, "Seen on" the page it was on, Find folded); Change picture;
     a failed query's sentence. The Library: no web sources, and a search that
-    finds nothing there offers the web, its words carried over."""
+    finds nothing there offers the web: the site's Create Art in a new tab,
+    its words (and the one platform picked) in the address."""
     from PIL import Image, ImageDraw
     gif = OUT / "find-fixture.gif"
     frames = []
@@ -5453,12 +5707,17 @@ def find_checks(page: Page) -> None:
     page.wait_for_selector("#lib-web:not([hidden])")
     check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
     check(not page.is_visible("#view-library .vlist"), "find: no empty list under the hint")
-    page.click("#lib-web-go")
-    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
-    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
-    page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
-    check(page.url.endswith("#create") and page.is_visible("#find-grid") and page.inner_text("#st-change") == "Keep this picture"
-          and any("q=zzqx" in u for u in asked), "find: Search the web carries the words to Create Art and searches them, Find open")
+    # Search the web: the site's Create Art, in a new tab, with the words (its web sources are the site's).
+    page.context.route("https://opendmd.dev/create/**", lambda r: r.fulfill(status=200, body="<p>create</p>", content_type="text/html"))
+    with page.context.expect_page() as info:
+        page.click("#lib-web-go")
+    tab = info.value
+    tab.wait_for_load_state()
+    check(tab.url == "https://opendmd.dev/create/?q=zzqx+mario+banner" and "#library" in page.url,
+          f"find: Search the web opens the site's Create Art with the words ({tab.url})")
+    tab.close()
+    goto_view(page, "create")
+    page.click("#st-src [data-v=gifcities]")
     check(page.get_attribute("#st-q", "placeholder") == "Search GifCities", "find: the box searches GifCities")
     asked.clear()
     page.fill("#st-q", "mario")
@@ -5518,13 +5777,14 @@ def find_checks(page: Page) -> None:
     page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "zzqx harvest moon")
     page.wait_for_selector("#lib-web:not([hidden])")
-    page.click("#lib-web-go")
-    page.wait_for_selector("#view-create.on #find-platform", timeout=20000)
-    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx harvest moon'", timeout=10000)
-    check("on" in page.get_attribute("#st-src [data-v=gameart]", "class").split() and page.input_value("#find-platform") == "SNES",
-          f"find: with SNES picked, Search the web searches SNES game art ({page.input_value('#find-platform')})")
-    page.click("#st-src [data-v=gameart]")
-    goto_view(page, "library")
+    with page.context.expect_page() as info:
+        page.click("#lib-web-go")
+    tab = info.value
+    tab.wait_for_load_state()
+    check(tab.url == "https://opendmd.dev/create/?q=zzqx+harvest+moon&platform=SNES",
+          f"find: with SNES picked, Search the web names the platform ({tab.url})")
+    tab.close()
+    page.context.unroute("https://opendmd.dev/create/**")
     page.fill("#lib-search", "")
     page.click("#lib-chips [data-platform='SNES']")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
@@ -5682,6 +5942,10 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     # after the delete, by two 404s that are the app's right answer and not
     # a page error. (On a loaded machine the read was still queued.)
     wait_thumbs_idle(page)
+    # (A preview's read begun before the delete — the Library's own refresh
+    # on coming back to it — may still be answered after: a 404 for a file
+    # that is gone is the right answer from then on.)
+    expected.append(to)
     details_do(page, "#lib-d-del")
     page.wait_for_function("document.querySelector('#lib-d-body').hidden", timeout=60000)
     check(not (overlay / to.lstrip("/")).exists() and not (overlay / cache_path(to).lstrip("/")).exists(), "delete: the GIF and its copy are gone")
@@ -6061,7 +6325,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         page.dispatch_event("#fo-code", "change")
         page.select_option("#fo-attract", "*")
         cfg = wait_config(base, lambda c: c.get("follow") is True and c.get("follow_host") == host_val)
-        raw_cfg = json.dumps(cfg)
+        raw_cfg = json.dumps({k: v for k, v in cfg.items() if k != "follow_host"})  # (the mock's port can hold "4321")
         check(cfg.get("follow") is True and cfg.get("follow_host") == host_val
               and cfg.get("follow_code_set") is True and cfg.get("attract_set") is None
               and "4321" not in raw_cfg,
@@ -7057,9 +7321,14 @@ def main() -> int:
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()
+    mock_errors()
     print(f"\n{'FAILED: ' + str(len(failures)) if failures else 'all checks passed'}")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        mock_errors()  # a crash on a 500: the mock's side of it
+        raise

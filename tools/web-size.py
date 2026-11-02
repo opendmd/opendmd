@@ -74,7 +74,8 @@ message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The Formula page on the site (`--share opendmd-web/share`: `f/`'s page,
 script and style, gzipped here since `make web` does not compress them;
-never packed) has a line of its own, <= 8 KB; it is the web app's editor on
+never packed) has a line of its own, <= 8 KB (Create Art's page, `create/`,
+another, <= 5 KB, on the Studio's lines); it is the web app's editor on
 the demo's files (the main wasm, js/formulas.js and its imports, pkg-psi,
 app.css and formulas.css), which are counted in their own lines and printed
 as the page's first-visit total for information. js/psikit.js (where a
@@ -96,7 +97,8 @@ first error) have a line of their own, <= 4 KB, and so does the site's Psi
 language reference script (`--share`'s `ref/psiref.js` with the drawing it
 shares, `ref/psiled.js`, outside the share line), <= 6 KB; the home page's
 live panels (`ref/home.js`) and the gallery's tiles on hover
-(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB.
+(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB; the gallery's
+sorting and filtering (`ref/ftsort.js`) a line of its own, <= 3 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
@@ -150,6 +152,11 @@ POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}
 DETAILS_GZ_BUDGET = 8 * 1024
 DETAILS = {"js/details.js"}
+# A GIF from the site's Create Art (js/importgif.js: `#import`, the
+# postMessage checks; loaded only then): a line of its own, <= 2 KB
+# (2026-11-02, branch create-art: ~1.4 KB gz).
+IMPORT_GZ_BUDGET = 2 * 1024
+IMPORT = {"js/importgif.js"}
 FIND_GZ_BUDGET = 10 * 1024
 FIND = {"js/find.js", "find.css"}
 SMOOTH_GZ_BUDGET = 6 * 1024
@@ -373,6 +380,14 @@ SHARE_GZ_BUDGET = 8 * 1024
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
               "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
+# Create Art's page on the site (`--share`'s create/: its page, script and
+# style; never packed): a line of its own, <= 5 KB (2026-11-02, branch
+# create-art: ~2.7 KB for C1, ~3.8 KB with Send to my panel). It is the web app's Studio on the demo's files (js/studio.js,
+# js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
+# printed as the page's first-visit total for information.
+CREATE_GZ_BUDGET = 5 * 1024
+CREATE_USES = ("pkg/", "pkg-art/", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
+               "js/gifs.js", "js/details.js", "js/prepare.js", "app.css", "studio.css", "find.css", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,
@@ -416,6 +431,10 @@ PSIREF_GZ_BUDGET = 6 * 1024
 LIVE_REF = {"home.js": "home", "ftiles.js": "gallery"}
 LIVE_REF_GZ_BUDGET = 4 * 1024
 SHARED_REF = "psiled.js"
+# The gallery's sorting and filtering (ref/ftsort.js, beside ftiles.js; no
+# Psi): a line of its own, <= 3 KB (2026-11-02, branch gallery-sort: ~2.3 KB gz).
+FTSORT = "ftsort.js"
+FTSORT_GZ_BUDGET = 3 * 1024
 
 
 def q_ref(p: Path, share: Path) -> bool:
@@ -501,6 +520,8 @@ def main() -> int:
             kind = "editor"
         elif rel in PSIERR:
             kind = "psierr"
+        elif rel in IMPORT:
+            kind = "import"
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -516,6 +537,8 @@ def main() -> int:
         rraw = rgz = 0
         live: dict[str, tuple[int, int]] = {}
         shared = (0, 0)
+        ftsort = (0, 0)
+        craw = cgz = 0
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
                 b = p.read_bytes()
@@ -524,6 +547,9 @@ def main() -> int:
                 if p.name in LIVE_REF:
                     live[LIVE_REF[p.name]] = (len(b), g)
                     continue
+                if p.name == FTSORT:
+                    ftsort = (len(b), g)
+                    continue
                 if p.name == SHARED_REF:
                     shared = (len(b), g)
                 rraw += len(b)
@@ -531,14 +557,25 @@ def main() -> int:
                 continue
             b = p.read_bytes()
             g = len(gzip.compress(b, 9, mtime=0))
+            print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
+            if p.relative_to(share).parts[0] == "create":
+                craw += len(b)
+                cgz += g
+                continue
             sraw += len(b)
             sgz += g
-            print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
-        uses = sum((q.with_name(q.name + ".gz").stat().st_size if q.with_name(q.name + ".gz").exists() else q.stat().st_size)
-                   for q in files if any(q.relative_to(root).as_posix().startswith(u) for u in SHARE_USES))
+
+        def demo_gz(prefixes: tuple[str, ...]) -> int:
+            return sum((q.with_name(q.name + ".gz").stat().st_size if q.with_name(q.name + ".gz").exists() else q.stat().st_size)
+                       for q in files if any(q.relative_to(root).as_posix().startswith(u) for u in prefixes))
+        uses = demo_gz(SHARE_USES)
         verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
         print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {sgz + uses:,} B gz)")
+        verdict = "ok" if cgz <= CREATE_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'create':<10} raw {craw:>9,}           gz {cgz:>9,} / {CREATE_GZ_BUDGET // 1024} KB {verdict:<10}"
+              f"(first visit with the demo's files: {cgz + demo_gz(CREATE_USES):,} B gz)")
+        ok &= cgz <= CREATE_GZ_BUDGET
         verdict = "ok" if rgz <= PSIREF_GZ_BUDGET else "OVER BUDGET"
         print(f"{'psiref':<10} raw {rraw:>9,}           gz {rgz:>9,} / {PSIREF_GZ_BUDGET // 1024} KB {verdict}")
         for name, (raw, gz) in sorted(live.items()):
@@ -546,12 +583,15 @@ def main() -> int:
             verdict = "ok" if gz <= LIVE_REF_GZ_BUDGET else "OVER BUDGET"
             print(f"{name:<10} raw {raw:>9,}           gz {gz:>9,} / {LIVE_REF_GZ_BUDGET // 1024} KB {verdict}")
             ok &= gz <= LIVE_REF_GZ_BUDGET
+        verdict = "ok" if ftsort[1] <= FTSORT_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'ftsort':<10} raw {ftsort[0]:>9,}           gz {ftsort[1]:>9,} / {FTSORT_GZ_BUDGET // 1024} KB {verdict}")
+        ok &= ftsort[1] <= FTSORT_GZ_BUDGET
         print()
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
-                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),

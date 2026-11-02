@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Make a GIF for the OpenDMD LED display from game art, a GIF from the web or your own picture.">
+<meta name="referrer" content="no-referrer">
+<title>Create Art · OpenDMD</title>
+<link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="create.css">
+<script type="module" src="create.js"></script>
+</head>
+<body>
+<header class="top"><a class="brand" href="../">OpenDMD</a><nav aria-label="Site"><a href="../formulas/">Gallery</a><a href="../guide/create-art.html">About Create Art</a><a href="../demo/">Demo</a></nav></header>
+<main id="main">
+<article id="create" aria-busy="true">
+<h1>Create Art</h1>
+<p class="lead">Find a title screen, box art, a logo or an animated GIF, or bring your own picture, and make it into a GIF for your panel.</p>
+<p class="cap bad" id="c-cap" hidden></p>
+<div id="c-ed"></div>
+<p class="cap" id="c-where" hidden>Your panel: <b id="c-where-addr"></b> · <button class="txt" id="c-change">Change</button></p>
+<form id="c-ask" class="card" hidden>
+<label for="c-addr">Your panel’s address</label>
+<div class="row"><input id="c-addr" name="addr" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="opendmd.local" value="opendmd.local"><button class="pri" id="c-go">Send</button></div>
+<p class="cap">The name or IP address your panel shows on its screen and in its web app (Settings › Device). Your device must be on the same network as the panel. The GIF opens in your panel’s web app, where you pick its folder and add it.</p>
+<p class="cap bad" id="c-addr-err" hidden></p>
+</form>
+</article>
+<div id="toasts" aria-live="polite"></div>
+</main>
+<footer><p>OpenDMD is an independent, open-source project for the DMDoS LED display. <a href="../">opendmd.dev</a> · <a href="../licenses/">licences</a></p></footer>
+</body>
+</html>
