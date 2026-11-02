@@ -836,7 +836,7 @@ fn load() -> io::Result<Loaded> {
         file.read_exact(&mut e)?;
         dirs.push(pair(&e));
     }
-    let now: Vec<(u32, u32)> = indexed_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
+    let now: Vec<(u32, u32)> = gif_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
     if !fatdir::dirs_match(&dirs, &now) {
         DIRTY.store(true, Relaxed);
         return Err(errno(sys::ESTALE));
@@ -989,12 +989,14 @@ pub fn tick() {
 }
 
 /// Every `/gifs/<dir>`: its card path and first cluster.
-/// Every directory the index covers: `/gifs/<dir>` and the prepared copies'
-/// buckets, `/cache/<category>/<bucket>` (what plays is mostly copies).
-fn indexed_dirs() -> io::Result<Vec<(String, u32)>> {
-    let mut dirs = gif_dirs()?;
+/// The prepared copies' buckets, `/cache/<category>/<bucket>`, as (the
+/// directory's key, its first cluster): what plays is mostly copies, so the
+/// index covers them too. Kept as numbers (a card has up to 256 buckets a
+/// category: their paths as strings would be tens of KB of heap).
+fn bucket_dirs() -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
     let root = format!("{}/cache", config::SD_MOUNT);
-    let Ok(cats) = fs::read_dir(&root) else { return Ok(dirs) };
+    let Ok(cats) = fs::read_dir(&root) else { return out };
     for c in cats.flatten() {
         let cat = c.file_name().to_string_lossy().into_owned();
         if cat.starts_with('.') || !c.file_type().is_ok_and(|t| t.is_dir()) {
@@ -1007,11 +1009,11 @@ fn indexed_dirs() -> io::Result<Vec<(String, u32)>> {
             }
             let dir = format!("/cache/{cat}/{}", b.file_name().to_string_lossy());
             if let Ok((_, first)) = open_dir(&dir) {
-                dirs.push((dir, first));
+                out.push((fatdir::hash(dir.as_bytes()), first));
             }
         }
     }
-    Ok(dirs)
+    out
 }
 
 fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
@@ -1031,7 +1033,10 @@ fn build() -> io::Result<()> {
     let (fs, geo) = volume()?;
     // Cleared first: a change during the walks marks it again.
     DIRTY.store(false, Relaxed);
-    let dirs = indexed_dirs()?;
+    let dirs = gif_dirs()?;
+    // The copies' buckets are walked too, but not part of the header's
+    // directory check (a record that no longer verifies opens by path).
+    let buckets = bucket_dirs();
     let listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
     let _ = fs::create_dir(config::CACHE_ROOT);
     let mut scratch = vec![0u8; 8 * SS];
@@ -1048,6 +1053,15 @@ fn build() -> io::Result<()> {
         for (dir, first) in &dirs {
             let first = *first;
             let seed = fatdir::hash_more(fatdir::hash(dir.as_bytes()), b"/");
+            fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
+                if f.prev_rel.is_none() {
+                    emit(fatdir::hash_more(seed, f.name), f.loc);
+                }
+                Ok(())
+            })?;
+        }
+        for &(key, first) in &buckets {
+            let seed = fatdir::hash_more(key, b"/");
             fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
                 if f.prev_rel.is_none() {
                     emit(fatdir::hash_more(seed, f.name), f.loc);
@@ -1126,7 +1140,7 @@ pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize, usize) {
     let mut tries = Vec::new();
     for full in paths {
         tries.push((full.clone(), false));
-        if indexed_ok && full.starts_with(&format!("{root}/gifs/")) {
+        if indexed_ok && (full.starts_with(&format!("{root}/gifs/")) || full.starts_with(&format!("{root}/cache/"))) {
             tries.push((full, true));
         }
     }
