@@ -167,6 +167,20 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 .ftile .fbadge{display:inline-block;vertical-align:middle;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:6px;font:12px/1.6 system-ui,sans-serif;color:var(--mut)}
 .ftile .facts .cta{padding:6px 14px;font-size:14px}
 .ftile .facts .add{display:block;text-align:center;margin:6px 0 2px}
+.ftile[hidden],.fsec[hidden],.fsort[hidden],.fs-none[hidden]{display:none}
+.gallery main .fsec>p{max-width:var(--text)}
+/* Sorting and filtering (ftsort.js shows it) */
+.fsort{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 14px;margin:22px 0 4px;padding:12px 14px;background:var(--bg2);border:1px solid var(--line);border-radius:12px}
+.fsort label{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--mut)}
+.fsort .fs-q{flex:1 1 220px;min-width:0}
+.fsort input[type=search],.fsort select{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-height:40px;max-width:100%;box-sizing:border-box}
+.fsort input[type=search]{width:100%}
+.fsort .fs-ctl{flex-direction:row;align-items:center;gap:6px;font-size:15px;color:var(--fg);min-height:40px}
+.fsort .fs-ctl input{width:18px;height:18px;margin:0;accent-color:var(--acc)}
+.fsort .fs-count{flex-basis:100%;font-size:13px;color:var(--mut)}
+.fs-none{margin:18px 0}
+.fs-none .cta{margin-left:8px;padding:6px 14px;font:inherit;font-size:14px;font-weight:700;border:0;cursor:pointer}
+@media (max-width:520px){.fsort label:not(.fs-q):not(.fs-ctl){flex:1 1 40%}.fsort select{width:100%}}
 
 /* Cards: feature lists, the hardware page */
 ul.features{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:18px 0}

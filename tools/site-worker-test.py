@@ -694,11 +694,15 @@ def compare_store(base: str, site: Path, tool: Path, shown: Path, refused_want: 
     out = tmp / "built"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir()
-    want_body = gallery_page.build(out, site / "formulas/src", shown, tool)
+    # The same dates: the examples' as built, the contributions' as the store has them (when it first took each).
+    ex_added = {e["slug"]: e["added"] for e in json.loads((site / "formulas/gallery.json").read_text())["examples"]}
+    co_added = {s: e["added"] for s, e in stored.items() if e.get("added") is not None}
+    want_body = gallery_page.build(out, site / "formulas/src", shown, tool, ex_added, co_added)
     got, want = lists_of(html), lists_of(gallery_page.marked(want_body))
     check(st == 200 and h.get("X-Gallery") == "store" and got == want and got[0] is not None,
-          f"{what}: /formulas/ from the store (X-Gallery {h.get('X-Gallery')}), its lists as gallery_page.py builds them "
-          f"({'same' if got == want else 'differ'})")
+          f"{what}: /formulas/ from the store (X-Gallery {h.get('X-Gallery')}), its lists as gallery_page.py builds them, "
+          f"newest first, their sort and filter marks too ({'same' if got == want else 'differ'})")
+    check(all(isinstance(e.get("added"), int) for e in stored.values()), f"{what}: every contribution in the store has its date")
     check(h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and "script-src 'self' 'wasm-unsafe-eval';" in csp_of(h)[0],
           f"{what}: /formulas/ cached 60 s, the gallery's CSP ({h.get('Cache-Control')})")
     pics = []
@@ -734,6 +738,9 @@ def examples_from_store(base: str, site: Path) -> None:
            or ex[e["slug"]]["src"] != e["src"] or ex[e["slug"]]["esp32_us"] != e["us"]]
     check(d.get("examples_build") == "this" and len(ex) == len(built) and not bad,
           f"the store holds this build's {len(built)} examples (bundled ones as 'bundle') {bad[:4]}")
+    undated = [e["slug"] for e in built if ex.get(e["slug"], {}).get("added") is None
+               or gallery_page.iso(ex[e["slug"]]["added"]) != e["added"]]
+    check(not undated, f"every example's date in the store is the build's (opendmd-web/formulas/added.json) {undated[:4]}")
     wrong = []
     for e in built:
         st, h, body = get(base, f"/formulas/src/{e['slug']}.psi")
@@ -804,6 +811,9 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         shown_a = tmp / "a-shown"
         write_state({k: v for k, v in state_a.items() if k[:-4] in good}, shown_a)
         before = compare_store(base, site, tool, shown_a, want_refused, "cron run", tmp)
+        took = {e["slug"]: e.get("added") for e in before.get("entries", []) if e["source"] == "gallery"}
+        check(took and all(isinstance(v, int) and t0 - 5 <= v <= time.time() + 5 for v in took.values()),
+              f"each contribution dated when the sync first took it ({took})")
         html = get(base, "/formulas/")[2].decode()
         check(some["name"] not in lists_of(html)[0] and "Site test glow &amp; &#x27;shine&#x27;" in html and "by Fixture &amp; Co" in html,
               "the page: a contribution identical to an example left out; names and authors escaped")
@@ -830,8 +840,25 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         d = compare_store(base, site, tool, shown_b, want_b, "after a broken update", tmp)
         rip = {e["slug"]: e for e in d.get("entries", [])}.get("site-test-ripple", {})
         old = {e["slug"]: e for e in before.get("entries", [])}.get("site-test-ripple", {})
-        check(rip and rip.get("sha") == old.get("sha") and rip.get("src") == old.get("src"),
-              "a contribution broken in place: its last good version still served")
+        check(rip and rip.get("sha") == old.get("sha") and rip.get("src") == old.get("src") and rip.get("added") == old.get("added"),
+              "a contribution broken in place: its last good version still served, its date kept")
+        dates = {e["slug"]: e.get("added") for e in d.get("entries", []) if e["source"] == "gallery"}
+        first = re.findall(r'href="\.\./f/#gallery=([a-z0-9-]+)"', lists_of(get(base, "/formulas/")[2].decode())[0] or "")
+        check(dates.get("site-test-stars", 0) > dates.get("site-test-ripple", 0) and first[:1] == ["site-test-stars"],
+              f"the newest contribution first on the page ({first[:3]})")
+
+        # State B2: ripple fixed with a new version: updated in place, its first date kept.
+        state_b2 = {**state_b, "site-test-ripple.psi": ripple.replace("t/4 + speed", "t/2 + speed")}
+        sha_b2 = repo.set(state_b2)
+        time.sleep(11)
+        st, h, raw = get(base, "/api/gallery/sync", "POST")
+        rep = json.loads(raw) if raw else {}
+        rip2 = {e["slug"]: e for e in gallery_api(base).get("entries", [])}.get("site-test-ripple", {})
+        check(st == 200 and rep.get("commit") == sha_b2 and rep.get("updated") == ["site-test-ripple"] and rip2.get("sha") != old.get("sha")
+              and rip2.get("added") == old.get("added") and rip2.get("updated", 0) > rip2.get("added", 0),
+              f"a contribution changed: the new version served, the date it was first taken kept ({st} {rep.get('updated')})")
+        write_state({**{k: state_b2[k] for k in ("site-test-ripple.psi", "copycat.psi", "site-test-stars.psi")}}, shown_b)
+        compare_store(base, site, tool, shown_b, {k: v for k, v in want_b.items() if k != "site-test-ripple"}, "after a good update", tmp)
         gone = [get(base, p)[0] for p in ("/formulas/src/site-test-glow.psi", "/formulas/thumbs/site-test-glow.png")]
         check(gone == [404, 404] and "Site test glow" not in get(base, "/formulas/")[2].decode(),
               f"a contribution removed: gone from the page, src/ and thumbs/ ({gone})")
