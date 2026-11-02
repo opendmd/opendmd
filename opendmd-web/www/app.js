@@ -30,6 +30,14 @@ async function route() {
   // A Formula from the site (its Open on my panel: `#gallery=<slug>` or a
   // short link's `#remix=<id>`, never the text itself): Formulas fetches it
   // and opens it in the editor (js/formulas.js keeps it in app.remix).
+  // A GIF from the site's Create Art (its Send to my panel, `#import`): sent
+  // by postMessage (js/importgif.js), then the Library's Add GIFs, filled in.
+  if (/^#import(&|$)/.test(location.hash)) {
+    app.gifIn = import('./js/importgif.js').then((m) => m.received());
+    app.gifIn.catch(() => {}); // (said by the Library, which may mount after a refusal)
+    location.replace('#library');
+    return;
+  }
   const ref = /^#(gallery=|remix(&|$))/.test(location.hash) && (await import('./js/psikit.js')).from(location.hash);
   if (ref) app.remix = ref;
   const [v, sub = ''] = ref ? ['formulas', ''] : location.hash.slice(1).split('/');
