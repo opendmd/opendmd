@@ -48,6 +48,7 @@ FAIL = [
     (re.compile(r"Guru Meditation"), "Guru Meditation"),
     (re.compile(r"panicked at|\bpanic\b.*\bat\b|abort\(\) was called|\bassert failed\b", re.I), "panic/abort"),
     (re.compile(r"stack overflow", re.I), "stack overflow"),
+    (re.compile(r"HTTP server failed to start"), "HTTP server failed to start"),
     (re.compile(r"^Backtrace:"), "backtrace"),
     (re.compile(r"CORRUPT HEAP|heap_caps_.*(alloc|free) failed.*abort", re.I), "heap corruption"),
 ]

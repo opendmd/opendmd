@@ -311,7 +311,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // URI handler slots: one per `route`/`route_json` below (49 now, the
     // captive-portal loop counting six; 50 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 50)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, config::HTTP_MAX_HANDLERS)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
