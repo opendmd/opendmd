@@ -104,17 +104,22 @@ impl Waker {
     }
 
     /// Block until [`SPIN_US`] before `at`, then spin to `at` (at once if
-    /// it has passed).
+    /// it has passed). One `Instant::now` to place `at` on the µs clock;
+    /// the spin and the count read `esp_timer_get_time` (IRAM), not
+    /// `Instant::now` (`clock_gettime` and its helpers, from flash: ~4 % of
+    /// a raced Formula's frame instructions spun on the flash bus).
     pub fn sleep_until(&self, at: Instant) {
         let left = at.saturating_duration_since(Instant::now());
+        let start = now_us();
         if left.is_zero() {
             // (Already due: the frame ran over, not the wake.)
-            WOKE_AT.store(now_us(), Relaxed);
+            WOKE_AT.store(start, Relaxed);
             return;
         }
-        let us = left.as_micros().min(u128::from(u32::MAX)) as u64;
-        if us > SPIN_US {
-            let fire = us - SPIN_US;
+        let us = left.as_micros().min(u128::from(u32::MAX / 2)) as u32;
+        let due = start.wrapping_add(us);
+        if u64::from(us) > SPIN_US {
+            let fire = u64::from(us) - SPIN_US;
             // A tick or two past the timer: the wait ends even if it never
             // fires.
             let ticks = (fire / 1000 + 2) as u32;
@@ -126,25 +131,26 @@ impl Waker {
                 sys::xQueueSemaphoreTake(self.sem, 0);
                 if sys::esp_timer_start_once(self.timer, fire) != sys::ESP_OK {
                     std::thread::sleep(left);
-                    note(at);
+                    note(due);
                     return;
                 }
                 sys::xQueueSemaphoreTake(self.sem, ticks);
             }
         }
-        let spin = Instant::now();
-        while Instant::now() < at {
+        let spin = now_us();
+        while (now_us().wrapping_sub(due) as i32) < 0 {
             core::hint::spin_loop();
         }
-        SPUN_US.fetch_add(spin.elapsed().as_micros() as u32, Relaxed);
-        note(at);
+        SPUN_US.fetch_add(now_us().wrapping_sub(spin), Relaxed);
+        note(due);
     }
 }
 
-/// Count a wake against its time.
-fn note(at: Instant) {
-    WOKE_AT.store(now_us(), Relaxed);
-    let late = Instant::now().saturating_duration_since(at).as_micros().min(u128::from(u32::MAX)) as u32;
+/// Count a wake against its time (`due`, on the µs clock).
+fn note(due: u32) {
+    let now = now_us();
+    WOKE_AT.store(now, Relaxed);
+    let late = (now.wrapping_sub(due) as i32).max(0) as u32;
     WAKES.fetch_add(1, Relaxed);
     if late > LATE_US {
         LATE.fetch_add(1, Relaxed);
