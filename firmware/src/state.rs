@@ -410,6 +410,33 @@ impl Applied {
 /// The reply channel every command that changes state carries.
 pub type Reply = mpsc::Sender<Result<Applied, String>>;
 
+/// The settings a [`Command::ApplyConfig`] left behind (the ones it
+/// replaced, or the request's own when refused), handed back for the
+/// handler to drop on CPU0 ([`drop_spent`]): a PUT frees nothing on the
+/// display core.
+static SPENT: std::sync::atomic::AtomicPtr<crate::nvs_config::Settings> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// The main task: leave `spent` for the handler (one left uncollected is
+/// dropped here).
+pub fn spend(spent: Box<crate::nvs_config::Settings>) {
+    let prev = SPENT.swap(Box::into_raw(spent), Ordering::AcqRel);
+    if !prev.is_null() {
+        // SAFETY: only `spend` stores, always from `Box::into_raw`; the
+        // swap took it out, so nothing else holds it.
+        drop(unsafe { Box::from_raw(prev) });
+    }
+}
+
+/// The handler, once replied to: drop what the main task left.
+pub fn drop_spent() {
+    let p = SPENT.swap(std::ptr::null_mut(), Ordering::AcqRel);
+    if !p.is_null() {
+        // SAFETY: as in `spend`.
+        drop(unsafe { Box::from_raw(p) });
+    }
+}
+
 /// The error [`Command::ApplyConfig`] replies with when the requested set's
 /// manifest does not open; the handler turns exactly this into a 404.
 pub const SET_NOT_FOUND: &str = "set not found";
