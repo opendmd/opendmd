@@ -723,6 +723,12 @@ impl Program {
         self.draw_end > self.frame_end
     }
 
+    /// Whether the draw stage paints (`draw { }` with colours): the canvas's
+    /// paint plane, 4 KB more, laid over every layer once a row.
+    pub fn paints(&self) -> bool {
+        self.uses & PAINTS != 0
+    }
+
     /// The lines and dots the draw stage draws a frame: every primitive
     /// counted as often as its loops run it.
     pub fn primitives(&self) -> u32 {
@@ -1022,6 +1028,7 @@ impl Program {
             + row * 10
             + turns
             + self.draw_cost(lanes, usize::MAX)
+            + if self.paints() { PAINT_ROWS_US } else { 0 }
             + extra)
             * 115
             / 100
@@ -1343,16 +1350,73 @@ impl Program {
                     1_100 + 270 * len
                 }
                 code::DOT => 450,
-                // A paint primitive (a guess until the device measures them:
-                // a call and the pixels it covers, ~15 ns each natively).
-                code::PAINT => [
-                    62_000, 600, 4_000, 6_000, 12_000, 6_000, 10_000, 14_000, 8_000, 8_000, 8_000,
-                ][(op.d as usize).min(paint::LAST as usize)],
+                code::PAINT => self.paint_ns(at),
                 _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
         });
         (ns / 1000).min(u32::MAX as u64) as u32
+    }
+
+    /// A paint primitive's cost (the `PAINT` at `at`), ns: a call, and the
+    /// pixels it examines at its kind's cost each — its box where its
+    /// values are constants, else a typical size. The kinds' shapes are
+    /// the code's (`draw::paint_prim`: each walks its bounding box on the
+    /// panel; a circle's test is two 64-bit products a pixel, a ring's five
+    /// tests where it is inside, a triangle's three edge functions of two
+    /// products each), the per-pixel base an ink line's measured 270 ns;
+    /// scaled by [`PAINT_PCT`], fitted to two device rows (palm.psi 3,550 µs,
+    /// paint-heavy.psi 7,700 µs on the spare, 2026-11-01). Rough: two
+    /// points for a dozen kinds.
+    fn paint_ns(&self, at: usize) -> u64 {
+        use crate::program::paint::*;
+        let kind = self.ops[at].d.min(LAST) as usize;
+        // Its first six values (the ARGS steps before it, then its own),
+        // whole pixels where constant.
+        let first = (at.saturating_sub(2)..at)
+            .rev()
+            .take_while(|&k| self.ops[k].code == code::ARGS)
+            .last()
+            .unwrap_or(at);
+        let mut v = [None; 6];
+        let mut n = 0;
+        for o in &self.ops[first..=at] {
+            for s in [o.a, o.b, o.c] {
+                if n < 6 {
+                    v[n] = self.const_value(s, at).map(|x| x >> 16);
+                    n += 1;
+                }
+            }
+        }
+        // The pixels on the panel from the least to the most of values
+        // `ix`, `m` more each way, held to `lim`.
+        let side = |ix: &[usize], m: i32, lim: i32| -> Option<u64> {
+            let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+            for &i in ix {
+                let x = v[i]?;
+                (lo, hi) = (lo.min(x), hi.max(x));
+            }
+            Some(((hi + m).min(lim - 1) - (lo - m).max(0) + 1).max(0) as u64)
+        };
+        let (w, h) = (W as i32, H as i32);
+        let area = |m: i32, xs: &[usize], ys: &[usize]| side(xs, m, w).zip(side(ys, m, h)).map(|(a, b)| a * b);
+        let px = match kind as u8 {
+            CLS => Some(W as u64 * H as u64),
+            PSET => Some(0),
+            LINE => side(&[0, 2], 0, i32::MAX).zip(side(&[1, 3], 0, i32::MAX)).map(|(a, b)| a.max(b)),
+            RECT | RECTFILL => area(0, &[0, 2], &[1, 3]),
+            TRIFILL => area(1, &[0, 2, 4], &[1, 3, 5]),
+            CIRC | CIRCFILL => v[2].map(|r| {
+                let rr = r.max(0) + 1;
+                area(rr, &[0], &[1]).unwrap_or(((2 * rr + 2).min(w) * (2 * rr + 2).min(h)) as u64)
+            }),
+            _ => None,
+        };
+        // A kind's typical pixels (its values not constants) and its cost a
+        // pixel, ns.
+        const TYPICAL: [u64; 11] = [4096, 0, 16, 80, 400, 400, 144, 600, 64, 175, 72];
+        const EACH: [u64; 11] = [4, 0, 270, 270, 270, 900, 420, 700, 350, 270, 270];
+        (PAINT_CALL_NS + px.unwrap_or(TYPICAL[kind]) * EACH[kind]) * PAINT_PCT / 100
     }
 
     /// The value of slot `v` as step `at` reads it if it holds a constant
@@ -1827,6 +1891,14 @@ pub(crate) const HELD_COPY_NS: u32 = 5;
 /// of a 32-entry copy (consoleb-a on the spare: `cycle(fire, x*3, t)` 838
 /// µs a frame against `pal(fire, frac(x*3))`'s 735).
 pub(crate) const TURN_US: u32 = 90;
+/// A paint primitive's call: its values gathered (`ARGS`), the call, its
+/// coordinates to pixels (ns, before [`PAINT_PCT`]).
+pub(crate) const PAINT_CALL_NS: u64 = 3_000;
+/// The paint primitives' model ([`Program::paint_ns`]) against the device, %.
+pub(crate) const PAINT_PCT: u64 = 115;
+/// The paint plane laid over the rows a frame (`draw::paint_row`: a byte a
+/// pixel read, a palette entry written where something was painted), µs.
+pub(crate) const PAINT_ROWS_US: u32 = 1_090;
 
 /// What a cached lane costs a pixel, ns: its register is pointed at it
 /// (read in place), once a lane of pixels — next to nothing. (It was a
@@ -1889,6 +1961,12 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // psi-probe measures it).
         INKN => 90,
         U_L => 140,
+        // `under(x', y')`'s channel: a lane's two coordinates rounded and
+        // held to the panel, a byte read (VM, out of line). Fitted to the
+        // spare (2026-11-01): pixelate.psi and under-shake.psi, three a
+        // pixel each, 4,540 µs both against 1.4 and 1.5 ms estimated
+        // without it (215 and 222 ns).
+        UAT => 220,
         _ => 0,
     }
 }

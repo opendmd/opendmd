@@ -37,34 +37,64 @@ const X_MAX: i32 = W as i32 + 511;
 const Y_MIN: i32 = -512;
 const Y_MAX: i32 = H as i32 + 511;
 
-/// The draw stage's canvases, 128 × 32 bytes each, row-major from the top
-/// as the frame is: **ink** (`.0`: 0 where nothing was drawn, 255 at full
-/// ink, the brighter wins) and **paint** (`.1`: a colour of the program's
-/// paint palette, 0 none, the last drawn wins), laid over every layer.
-/// Plain bytes, so a zeroed allocation is a valid one. Only a program that
+/// One plane of the draw stage's canvas: 128 × 32 bytes, row-major from
+/// the top as the frame is.
+pub type Plane = [u8; W * H];
+
+/// The draw stage's canvas: **ink** (`.0`: 0 where nothing was drawn, 255
+/// at full ink, the brighter wins) and, for a program that paints, the
+/// **paint** plane (`.1`: a colour of the program's paint palette, 0 none,
+/// the last drawn wins), laid over every layer. A formula pays for the
+/// planes it uses: 4 KB for one that only draws lines and dots, 8 KB for
+/// one that paints ([`try_fit`](Self::try_fit)). All zero is a valid value
+/// (`.1` `None`), so a zeroed allocation is one. Only a program that
 /// [`draws`](Program::draws) needs one.
 #[repr(C)]
-pub struct Ink(pub [u8; W * H], pub [u8; W * H]);
+pub struct Ink(pub Plane, pub Option<Box<Plane>>);
 
 impl Ink {
+    /// The ink plane alone.
     pub const fn new() -> Ink {
-        Ink([0; W * H], [0; W * H])
+        Ink([0; W * H], None)
     }
 
-    /// A canvas on the heap, made zeroed in place (4 KB never passes
-    /// through the stack).
+    /// A canvas on the heap with both planes (the hosts': tests, tools, the
+    /// simulator), each made zeroed in place (never through the stack).
     pub fn boxed() -> Box<Ink> {
-        Self::try_boxed().unwrap_or_else(|| alloc::alloc::handle_alloc_error(Self::LAYOUT))
+        let mut k =
+            Self::try_boxed().unwrap_or_else(|| alloc::alloc::handle_alloc_error(Self::LAYOUT));
+        k.1 = Some(plane().unwrap_or_else(|| alloc::alloc::handle_alloc_error(PLANE)));
+        k
     }
 
-    /// [`boxed`](Self::boxed), or `None` when the heap hasn't 4 KB.
+    /// The ink plane alone on the heap (4 KB), or `None` when the heap
+    /// hasn't it.
     pub fn try_boxed() -> Option<Box<Ink>> {
-        // SAFETY: a non-zero-sized layout; `Ink` is bytes, so the zeroed
-        // memory is a valid value; the box frees it with the same layout.
+        // SAFETY: a non-zero-sized layout; `Ink` is all-zero valid (bytes,
+        // and `None`), so the zeroed memory is a value; the box frees it
+        // with the same layout.
         unsafe {
             let p = alloc::alloc::alloc_zeroed(Self::LAYOUT).cast::<Ink>();
             (!p.is_null()).then(|| Box::from_raw(p))
         }
+    }
+
+    /// The planes `prog` uses, or `None` when the heap hasn't them.
+    pub fn try_boxed_for(prog: &Program) -> Option<Box<Ink>> {
+        let mut k = Self::try_boxed()?;
+        k.try_fit(prog).then_some(k)
+    }
+
+    /// Hold the planes `prog` uses: the paint plane taken (zeroed) when it
+    /// paints, let go when it doesn't. `false` when the heap hasn't the
+    /// paint plane (the canvas is then ink only).
+    pub fn try_fit(&mut self, prog: &Program) -> bool {
+        if !prog.paints() {
+            self.1 = None;
+        } else if self.1.is_none() {
+            self.1 = plane();
+        }
+        self.1.is_some() || !prog.paints()
     }
 
     const LAYOUT: core::alloc::Layout = core::alloc::Layout::new::<Ink>();
@@ -72,6 +102,17 @@ impl Ink {
     /// The byte at column `x`, row `y` from the top.
     pub fn at(&self, x: usize, y: usize) -> u8 {
         self.0[(y * W + x) & (W * H - 1)]
+    }
+}
+
+const PLANE: core::alloc::Layout = core::alloc::Layout::new::<Plane>();
+
+/// A zeroed plane on the heap, or `None` when the heap hasn't 4 KB.
+fn plane() -> Option<Box<Plane>> {
+    // SAFETY: as `Ink::try_boxed`: bytes, zeroed, freed with its layout.
+    unsafe {
+        let p = alloc::alloc::alloc_zeroed(PLANE).cast::<Plane>();
+        (!p.is_null()).then(|| Box::from_raw(p))
     }
 }
 
@@ -95,7 +136,9 @@ pub(crate) fn run<const N: usize>(
     lanes: bool,
 ) {
     ink.0.fill(0);
-    ink.1.fill(0);
+    if let Some(p) = ink.1.as_deref_mut() {
+        p.fill(0);
+    }
     let mut args = [0i32; 9];
     let mut na = 0usize;
     let start = prog.frame_end as usize;
@@ -154,7 +197,10 @@ pub(crate) fn run<const N: usize>(
                     }
                 }
                 if op.code == code::PAINT {
-                    paint_prim(prog, t, &mut ink.1, &mut pen, op.d, &args);
+                    // (No paint plane: the heap hadn't it. Nothing painted.)
+                    if let Some(p) = ink.1.as_deref_mut() {
+                        paint_prim(prog, t, p, &mut pen, op.d, &args);
+                    }
                     na = 0;
                 }
             }
@@ -614,17 +660,21 @@ fn put(p: &mut [u8; W * H], x: i32, y: i32, c: u8) {
     }
 }
 
-/// The paint canvas's colours over row `row` of the picture (`out`, its
-/// W × 3 bytes), when the program paints. Out of line, in flash.
+/// The paint plane of a frame's canvas when `prog` paints and the canvas
+/// has one: what [`paint_row`] lays over each row (`None`: nothing, and no
+/// call a row).
+#[inline]
+pub(crate) fn paint_of<'a>(prog: &Program, ink: Option<&'a Ink>) -> Option<&'a Plane> {
+    ink.filter(|_| prog.paints()).and_then(|k| k.1.as_deref())
+}
+
+/// The paint plane's colours over row `row` of the picture (`out`, its
+/// W × 3 bytes). Out of line, in flash; called only for a program that
+/// paints ([`paint_of`]).
 #[inline(never)]
-pub(crate) fn paint_row(prog: &Program, ink: Option<&Ink>, row: usize, out: &mut [u8]) {
-    if prog.uses & PAINTS == 0 {
-        return;
-    }
-    if let Some(k) = ink {
-        let px = out.as_chunks_mut::<3>().0;
-        overlay(prog, &k.1[row * W..(row + 1) * W], px);
-    }
+pub(crate) fn paint_row(prog: &Program, paint: &Plane, row: usize, out: &mut [u8]) {
+    let px = out.as_chunks_mut::<3>().0;
+    overlay(prog, &paint[row * W..(row + 1) * W], px);
 }
 
 /// The paint canvas's colours over a lane of the picture (`row` from

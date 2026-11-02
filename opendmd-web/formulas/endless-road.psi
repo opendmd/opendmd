@@ -61,6 +61,7 @@ light = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
 night = clamp(-light, 0, 1)
 day = clamp(light, 0, 1)
 sunY = 23.5 - clamp(light*-24, -2.5, 20)
+sunRow = 31 - sunY -- its row down from the top
 sunR = 8 - day*3
 
 -- The sky's ramp: its step a row and where it starts at the horizon
@@ -87,24 +88,24 @@ draw {
     for j < 7 {
       hillHalf = peakHalf[k] - j*1.9
       hillX = skyMid - peakMid[k]
-      line(hillX - hillHalf, 31 - (19 + j), hillX + hillHalf, 31 - (19 + j), (hillHalf >= 0)*6/16)
+      line(hillX - hillHalf, 12 - j, hillX + hillHalf, 12 - j, (hillHalf >= 0)*6/16)
     }
   }
 
   -- The sun, a line a row, in its glow (none below the horizon)
   for k < 12 {
     e = 5 - k
-    rowY = sunY - e
+    rowY = sunRow + e
     sunHalf = sqrt(max(sunR*sunR - e*e, 0))
-    shown = rowY >= 19.5
+    shown = rowY <= 11.5
     glow = sunHalf*-1.4 - 2
-    line(skyMid - sunHalf, 31 - (rowY), skyMid + sunHalf, 31 - (rowY), shown*5/16)
-    line(skyMid + glow, 31 - (rowY), skyMid - glow, 31 - (rowY), shown*3/16)
+    line(skyMid - sunHalf, rowY, skyMid + sunHalf, rowY, shown*5/16)
+    line(skyMid + glow, rowY, skyMid - glow, rowY, shown*3/16)
   }
 
   -- The stars, by night
   for k < 16 {
-    dot(frac(k*.7549)*128, 31 - (20.5 - frac(k*.5698)*-11), (frac(k*.382) < night*1.4 - .4)*4/16)
+    dot(frac(k*.7549)*128, 10.5 + frac(k*.5698)*-11, (frac(k*.382) < night*1.4 - .4)*4/16)
   }
 
   -- Palms: three places, one every 14 stripes, now and then a palm there:
@@ -115,13 +116,13 @@ draw {
     along = frac(place)
     ahead = 14.7 - along*14
     size = 1.2/ahead
-    baseY = 19.5 - 12.5*size
+    baseY = 11.5 + 12.5*size
     sideX = cos(k/2)*size
     palmX = 64 - (heading - noise(driven + ahead*.0075, 0, 0))*2000 - sideX*-47
     palm = not (noise(place - along, k*5, 0) > .45 or ahead > 11)
     for j < 4 {
       frond = j > 0
-      line(palmX - frond*-5*sideX, 31 - (baseY - frond*-22*size), palmX + palmOut[j]*sideX, 31 - (baseY + palmUp[j]*size), palm*7/16)
+      line(palmX - frond*-5*sideX, baseY + frond*-22*size, palmX + palmOut[j]*sideX, baseY - palmUp[j]*size, palm*7/16)
     }
   }
 

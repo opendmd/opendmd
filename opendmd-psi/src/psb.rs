@@ -632,6 +632,11 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
     if depth != 0 || line_open {
         return bad;
     }
+    // A program that paints says so: the player gives the paint plane
+    // only to one that does (`Ink::try_fit`).
+    if !p.paints() && p.ops[fe..de].iter().any(|o| o.code == PAINT) {
+        return bad;
+    }
     // The colour is the last step; every pixel section ends in one.
     if !is_colour(p.ops[pe - 1].code) {
         return bad;
@@ -888,6 +893,68 @@ mod tests {
             let back = from_base64(to_base64(&b).as_bytes()).unwrap();
             assert_eq!(back, b);
         }
+    }
+
+    /// The paint plane is a painter's only: a formula that draws lines and
+    /// dots gets the ink plane (4 KB), one that paints both (8 KB), and a
+    /// canvas changes with the formula. A painter without its plane (the
+    /// heap hadn't it) draws its lines and colours, no paint, no panic.
+    #[test]
+    fn only_a_program_that_paints_gets_the_paint_plane() {
+        let lines = compile("draw { line(0, 0, 127, 31, 1) }\ngray(ink)").unwrap();
+        let paint =
+            compile("draw { circfill(64, 16, 10, #f00); line(0, 0, 127, 31, 0.5) }\ngray(ink)")
+                .unwrap();
+        assert!(lines.draws() && !lines.paints());
+        assert!(paint.paints());
+        let mut k = Ink::try_boxed_for(&lines).unwrap();
+        assert!(k.1.is_none());
+        assert!(k.try_fit(&paint) && k.1.is_some());
+        assert!(k.try_fit(&lines) && k.1.is_none());
+        let frame = |p: &Program, k: &mut Ink| {
+            let mut out = alloc::vec![0u8; W * H * 3];
+            crate::render_rows_ink::<128>(
+                p,
+                &mut Scratch::new(),
+                Some(k),
+                &golden::inputs(0),
+                &crate::tables::OWN,
+                None,
+                u32::MAX,
+                &mut out,
+            );
+            out
+        };
+        // The same frame from a fitted canvas as from a host's (both planes).
+        for p in [&lines, &paint] {
+            let mut fitted = Ink::try_boxed_for(p).unwrap();
+            assert!(frame(p, &mut fitted) == frame(p, &mut Ink::boxed()));
+        }
+        // Without the plane: the ink is drawn, the red disc is not.
+        let mut bare = Ink::try_boxed().unwrap();
+        let out = frame(&paint, &mut bare);
+        let at = |x: usize, y: usize| &out[(y * W + x) * 3..][..3];
+        assert_eq!(at(64, 16), &[128, 128, 128][..], "ink only");
+        assert!(
+            frame(&paint, &mut Ink::boxed())[(16 * W + 64) * 3] > 200,
+            "painted red"
+        );
+    }
+
+    /// A program with paint steps must say it paints (the player gives the
+    /// plane by the flag).
+    #[test]
+    fn paint_steps_without_the_flag_are_refused() {
+        let mut b = Program::default();
+        load_portable(
+            &crate::build("draw { circfill(64, 16, 10, #f00) }").unwrap(),
+            Which::Play,
+            &mut b,
+        )
+        .unwrap();
+        assert!(verify(&b).is_ok());
+        b.uses &= !crate::program::PAINTS;
+        assert!(verify(&b).is_err());
     }
 
     #[test]
