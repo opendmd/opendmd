@@ -1693,7 +1693,7 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
     // its 24 KB: short of the compile, swap-mem2). It plays on until sent
     // again; a deleted one until its dwell ends.
     if playing.is_empty() || opendmd_core::synth::formula_file(&playing).is_some() {
-        return true;
+        return released(fs_path);
     }
     let gif = format!("{}{playing}", config::SD_MOUNT);
     let copy =
@@ -1703,6 +1703,34 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
     {
         let _ = ctx.cmd.send(Command::Skip);
         std::thread::sleep(Duration::from_millis(200));
+    }
+    released(fs_path)
+}
+
+/// The answer the skip is not: `fs_path` (and, for a GIF, its prepared
+/// copy) no longer open for the player's raw reads, waited for up to
+/// [`RELEASE_WAIT`] (a transition's outgoing file closes when it ends).
+/// A raw-read file whose clusters were freed would be read as whatever
+/// was written there next (`fatidx` "raw reads"), so a writer touches
+/// nothing the player still holds: false, and it refuses.
+fn released(fs_path: &str) -> bool {
+    let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
+    let copy = opendmd_core::layout::cache_path(card).map(|p| format!("{}{p}", config::SD_MOUNT));
+    let held = || crate::fatidx::holds(fs_path) || copy.as_deref().is_some_and(crate::fatidx::holds);
+    wait_until_not(held)
+}
+
+/// How long a writer waits for the player to let go of a file.
+const RELEASE_WAIT: Duration = Duration::from_secs(3);
+
+fn wait_until_not(held: impl Fn() -> bool) -> bool {
+    let until = std::time::Instant::now() + RELEASE_WAIT;
+    while held() {
+        if std::time::Instant::now() >= until {
+            log::warn!("a write waited {} s for the player to let go of a file: refused", RELEASE_WAIT.as_secs());
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
     true
 }
@@ -1757,6 +1785,10 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
                 return req.error(503, "503 Service Unavailable", NOT_RELEASED);
             }
         }
+    }
+    // Nothing under it may still be open for the player's raw reads.
+    if !wait_until_not(|| crate::fatidx::holds_under(path)) {
+        return req.error(503, "503 Service Unavailable", NOT_RELEASED);
     }
     let card = format!("/{}", rel.trim_start_matches('/').trim_end_matches('/'));
     match files::remove_tree(path, config::RECURSIVE_DELETE_BUDGET) {

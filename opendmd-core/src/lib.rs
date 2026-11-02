@@ -16,6 +16,7 @@ pub mod chan;
 pub mod compositor;
 pub mod engine;
 pub mod fatdir;
+pub mod fatread;
 pub mod filter;
 pub mod follow;
 mod fonts;

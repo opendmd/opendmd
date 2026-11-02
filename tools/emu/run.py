@@ -14,7 +14,8 @@ build must never leave an earlier image to be booted in its place).
 
 smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF start
        from the playlist are all seen; prints EMU_SMOKE_OK.
-probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a missing/
+probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw card reads that
+       do not match FatFs's (or none), or a missing/
        mismatching golden line, or a bundled Formula that does not open / a short heap
        that does not refuse Endless road, or a Formula by reference (a bundled one by
        name, the card's /formulas/ci-test.psi) that does not play, or a formula sent over
@@ -64,8 +65,9 @@ GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
+RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+PROBE_KEYS = re.compile(r"psi-probe: (raw reads|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -113,6 +115,7 @@ def main():
     refs = None
     swap = None
     swap_card = None
+    raw_reads = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -166,6 +169,9 @@ def main():
                 m = SWAP_CARD.search(line)
                 if m:
                     swap_card = (line, m[1])
+                m = RAW.search(line)
+                if m:
+                    raw_reads = (line, int(m[1]), int(m[2]))
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -236,6 +242,12 @@ def main():
             die("the card-formula-over-card-formula line is missing")
         if swap_card[1] != "all played":
             die(f"card formula over card formula: {swap_card[0]}")
+        # The player's raw card reads (fatidx): every file read raw matches
+        # FatFs's bytes, and some were read raw.
+        if not raw_reads:
+            die("the raw-reads line is missing")
+        if raw_reads[1] == 0 or raw_reads[2] != 0:
+            die(f"raw reads: {raw_reads[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):

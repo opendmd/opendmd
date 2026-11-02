@@ -13,6 +13,19 @@
 //! `f_close`), so the player and the server keep their one file type.
 //! Anything that does not match falls back to the path open.
 //!
+//! **Raw reads** (the player's files only, [`open_player`]): the file's
+//! cluster chain is read at open, under the volume lock, into
+//! `opendmd_core::fatread::Extents`, and its data sectors are then read
+//! through `ff_disk_read` alone (the card's I/O mutex, `cardspeed`), never
+//! FatFs's volume mutex: a FatFs call walking a big directory on CPU0
+//! (a create, delete or rename in `gifs/Consoles`, ~330 ms under that
+//! lock) interleaves with the player sector by sector instead of making a
+//! frame late. A raw-read file is in [`holds`] while open; every writer
+//! has the player let go of a file and checks it is no longer held before
+//! touching it (`http::skip_if_playing`), so its chain cannot change under
+//! the reads. A failed raw read falls back to FatFs's `f_read` from the
+//! same position for the rest of the file's life.
+//!
 //! The index is rebuilt on the network worker (CPU0) when it is missing,
 //! after the API changed something under `/gifs` (30 s quiet first), or when
 //! opens keep missing it (a card edited on a PC): never with a transfer in
@@ -20,6 +33,7 @@
 
 use esp_idf_sys as sys;
 use opendmd_core::fatdir::{self, Geometry, Header, Verify, SS};
+use opendmd_core::fatread;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering::Relaxed};
@@ -36,6 +50,36 @@ const SLOTS: usize = 6;
 const SLOT_PATHS: [&str; SLOTS] = ["/fidx/0", "/fidx/1", "/fidx/2", "/fidx/3", "/fidx/4", "/fidx/5"];
 
 static FILES: [AtomicPtr<sys::FIL>; SLOTS] = [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS];
+
+/// A slot's raw reads: its extents and position, the drive, and whether a
+/// raw read failed (FatFs's `f_read` from then on).
+struct Raw {
+    file: fatread::RawFile,
+    pdrv: u8,
+    broken: bool,
+}
+static RAW: [AtomicPtr<Raw>; SLOTS] = [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS];
+/// The raw-read files open, by path (`holds`).
+static OPEN: Mutex<Option<fatread::OpenSet<SLOTS>>> = Mutex::new(None);
+/// Raw reads done, and those that failed and fell back (`status_json`).
+static RAW_READS: AtomicU32 = AtomicU32::new(0);
+static RAW_FALLBACKS: AtomicU32 = AtomicU32::new(0);
+
+fn open_set<T>(f: impl FnOnce(&mut fatread::OpenSet<SLOTS>) -> T) -> T {
+    let mut g = OPEN.lock().unwrap_or_else(|p| p.into_inner());
+    f(g.get_or_insert_with(Default::default))
+}
+
+/// Whether the player has `full` (`/sdcard/...`) open for raw reads: a
+/// writer must not change, replace, rename or delete it until it is not.
+pub fn holds(full: &str) -> bool {
+    open_set(|o| o.holds(full))
+}
+
+/// Whether the player has any file under the directory `full` open.
+pub fn holds_under(full: &str) -> bool {
+    open_set(|o| o.holds_under(full))
+}
 static VFS_UP: AtomicBool = AtomicBool::new(false);
 /// A rebuild is wanted (no index, the API changed `/gifs`, too many misses).
 static DIRTY: AtomicBool = AtomicBool::new(true);
@@ -208,6 +252,39 @@ unsafe extern "C" fn v_read(fd: i32, dst: *mut core::ffi::c_void, size: usize) -
     if f.is_null() {
         return fail(sys::EBADF) as isize;
     }
+    let r = RAW[fd as usize].load(Relaxed);
+    if !r.is_null() && !(*r).broken {
+        let raw = &mut *r;
+        let pdrv = raw.pdrv;
+        let mut dev = |lba: u32, count: u32, b: &mut [u8]| -> io::Result<()> {
+            // SAFETY: `b` is `count` sectors; the drive is the mounted card's.
+            if sys::ff_disk_read(pdrv, b.as_mut_ptr(), lba, count) != 0 {
+                return Err(errno(sys::EIO));
+            }
+            Ok(())
+        };
+        let buf = std::slice::from_raw_parts_mut(dst.cast::<u8>(), size);
+        match raw.file.read(buf, &mut dev) {
+            Ok(n) => {
+                RAW_READS.fetch_add(1, Relaxed);
+                return n as isize;
+            }
+            Err(_) => {
+                // FatFs from here, from the same position: its chain walk
+                // starts again at the file's first cluster (`fptr` 0) and
+                // its buffer is reloaded (no data sector is 0).
+                raw.broken = true;
+                RAW_FALLBACKS.fetch_add(1, Relaxed);
+                (*f).fptr = 0;
+                (*f).clust = 0;
+                (*f).sect = 0;
+                let r = sys::f_lseek(f, raw.file.pos() as sys::FSIZE_t);
+                if r != sys::FRESULT_FR_OK {
+                    return fail(fr_code(r)) as isize;
+                }
+            }
+        }
+    }
     let mut br: sys::UINT = 0;
     match sys::f_read(f, dst, size as sys::UINT, &mut br) {
         sys::FRESULT_FR_OK => br as isize,
@@ -220,14 +297,21 @@ unsafe extern "C" fn v_lseek(fd: i32, off: sys::off_t, whence: i32) -> sys::off_
     if f.is_null() {
         return fail(sys::EBADF) as sys::off_t;
     }
+    let r = RAW[fd as usize].load(Relaxed);
+    let raw = (!r.is_null() && !(*r).broken).then(|| &mut *r);
     let base = match whence as u32 {
-        sys::SEEK_CUR => (*f).fptr as i64,
+        sys::SEEK_CUR => raw.as_ref().map_or((*f).fptr as i64, |r| r.file.pos() as i64),
         sys::SEEK_END => (*f).obj.objsize as i64,
         _ => 0,
     };
     let to = base + off as i64;
     if to < 0 {
         return fail(sys::EINVAL) as sys::off_t;
+    }
+    // Raw: a position only (FatFs's is set if a read ever falls back).
+    if let Some(raw) = raw {
+        raw.file.seek(to as u64);
+        return to as sys::off_t;
     }
     match sys::f_lseek(f, to as sys::FSIZE_t) {
         sys::FRESULT_FR_OK => (*f).fptr as sys::off_t,
@@ -249,6 +333,11 @@ unsafe extern "C" fn v_fstat(fd: i32, st: *mut sys::stat) -> i32 {
 unsafe extern "C" fn v_close(fd: i32) -> i32 {
     match FILES.get(fd as usize).map(|p| p.swap(std::ptr::null_mut(), Relaxed)) {
         Some(f) if !f.is_null() => {
+            let r = RAW[fd as usize].swap(std::ptr::null_mut(), Relaxed);
+            if !r.is_null() {
+                drop(Box::from_raw(r));
+                open_set(|o| o.remove(fd as usize));
+            }
             sys::f_close(f);
             drop(Box::from_raw(f));
             0
@@ -292,6 +381,111 @@ pub fn open(full: &str) -> io::Result<File> {
 /// Through the index only: `None` when it cannot (not indexed, stale, no
 /// index), never a directory scan. For opening an original ahead.
 pub fn indexed(full: &str) -> Option<io::Result<File>> {
+    indexed_as(full, false)
+}
+
+/// [`indexed`] for the player: the file read raw ([`open_player`]).
+pub fn indexed_player(full: &str) -> Option<io::Result<File>> {
+    indexed_as(full, true)
+}
+
+/// Open a file for the player (`/sdcard/...`): through the index for a
+/// `/gifs/` file when it has it, else by path, read raw when a slot is
+/// free (the module docs), else as [`open`] does.
+pub fn open_player(full: &str) -> io::Result<File> {
+    if let Some(r) = indexed_as(full, true) {
+        return r;
+    }
+    if crate::CARD_READY.load(Relaxed) && VFS_UP.load(Relaxed) {
+        if let Some(f) = open_path_raw(full)? {
+            return Ok(f);
+        }
+    }
+    File::open(full)
+}
+
+/// By path into a FIL of ours (FatFs's `f_open`: the directory walk the
+/// path open does), its chain read, read raw. `Ok(None)`: no free slot,
+/// or the volume is not FAT32.
+fn open_path_raw(full: &str) -> io::Result<Option<File>> {
+    let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with('/')) else {
+        return Ok(None);
+    };
+    let Ok((fs, geo)) = volume() else {
+        return Ok(None);
+    };
+    let path = std::ffi::CString::new(format!("0:{card}")).map_err(|_| errno(sys::EINVAL))?;
+    // SAFETY: a zeroed FIL f_open fills; freed below or by `v_close`.
+    let f = unsafe {
+        let p = std::alloc::alloc_zeroed(std::alloc::Layout::new::<sys::FIL>()) as *mut sys::FIL;
+        if p.is_null() {
+            return Err(errno(sys::ENOMEM));
+        }
+        let r = sys::f_open(p, path.as_ptr(), sys::FA_READ as u8);
+        if r != sys::FRESULT_FR_OK {
+            drop(Box::from_raw(p));
+            return Err(match r {
+                sys::FRESULT_FR_NO_FILE | sys::FRESULT_FR_NO_PATH | sys::FRESULT_FR_INVALID_NAME => errno(sys::ENOENT),
+                r => errno(fr_code(r)),
+            });
+        }
+        p
+    };
+    // SAFETY: the FIL f_open filled.
+    let (first, size) = unsafe { ((*f).obj.sclust, (*f).obj.objsize as u32) };
+    let ext = VolLock::take(fs).and_then(|_l| fatread::chain(&geo, first, size, &mut |lba, b| read_locked(fs, lba, b)));
+    // SAFETY: the mounted volume's drive number.
+    let pdrv = unsafe { (*fs).pdrv };
+    let raw = match ext {
+        Ok(ext) => Some((Raw { file: fatread::RawFile::new(ext), pdrv, broken: false }, full)),
+        // As in `open_at`: FatFs reads this one.
+        Err(e) => {
+            log::warn!("fat index: {full}: no raw reads ({e}); FatFs reads it");
+            None
+        }
+    };
+    hand_out(f, raw)
+}
+
+/// Put an open FIL in a free slot and open it there as a `File`; with
+/// `raw`, read raw and noted in [`holds`]. `Ok(None)`: every slot busy
+/// (the FIL is freed; the caller opens by path).
+fn hand_out(f: *mut sys::FIL, raw: Option<(Raw, &str)>) -> io::Result<Option<File>> {
+    for (k, (slot, path)) in FILES.iter().zip(SLOT_PATHS).enumerate() {
+        if slot.compare_exchange(std::ptr::null_mut(), f, Relaxed, Relaxed).is_ok() {
+            if let Some((r, full)) = raw {
+                open_set(|o| o.put(k, full));
+                RAW[k].store(Box::into_raw(Box::new(r)), Relaxed);
+            }
+            return match File::open(path) {
+                Ok(file) => Ok(Some(file)),
+                Err(e) => {
+                    let r = RAW[k].swap(std::ptr::null_mut(), Relaxed);
+                    if !r.is_null() {
+                        // SAFETY: never handed out.
+                        drop(unsafe { Box::from_raw(r) });
+                        open_set(|o| o.remove(k));
+                    }
+                    slot.store(std::ptr::null_mut(), Relaxed);
+                    // SAFETY: never handed out.
+                    unsafe {
+                        sys::f_close(f);
+                        drop(Box::from_raw(f));
+                    }
+                    Err(e)
+                }
+            };
+        }
+    }
+    // SAFETY: never handed out; every slot busy.
+    unsafe {
+        sys::f_close(f);
+        drop(Box::from_raw(f));
+    }
+    Ok(None)
+}
+
+fn indexed_as(full: &str, raw: bool) -> Option<io::Result<File>> {
     // Not before the handover: the card may still be remounted (`unmounted`).
     if !crate::CARD_READY.load(Relaxed) {
         return None;
@@ -337,7 +531,7 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
         }
     }
     for &loc in &cands[..nc] {
-        match open_at(loc, name.as_bytes()) {
+        match open_at(loc, name.as_bytes(), raw.then_some(full)) {
             Ok(Some(f)) => {
                 HITS.fetch_add(1, Relaxed);
                 return Some(Ok(f));
@@ -356,7 +550,7 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
 }
 
 /// Verify the entry at `loc` and open it (`Ok(None)`: not this file).
-fn open_at(loc: u32, name: &[u8]) -> io::Result<Option<File>> {
+fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>> {
     let (fs, geo) = volume()?;
     let (rel, slot) = (loc >> 4, (loc & 15) as usize);
     if rel as u64 >= (geo.n_fatent as u64 - 2) * geo.csize as u64 {
@@ -392,23 +586,23 @@ fn open_at(loc: u32, name: &[u8]) -> io::Result<Option<File>> {
         (*p).dir_sect = geo.database + rel;
         p
     };
+    // The player's: its chain, still under the lock (the FAT sectors
+    // through the window).
+    let raw = match raw {
+        Some(full) => match fatread::chain(&geo, cluster, size, &mut |lba, b| read_locked(fs, lba, b)) {
+            // SAFETY: the mounted volume's drive number.
+            Ok(ext) => Some((Raw { file: fatread::RawFile::new(ext), pdrv: unsafe { (*fs).pdrv }, broken: false }, full)),
+            // A chain that does not add up (or a card error reading it):
+            // FatFs reads this one, as before.
+            Err(e) => {
+                log::warn!("fat index: {full}: no raw reads ({e}); FatFs reads it");
+                None
+            }
+        },
+        None => None,
+    };
     drop(lock);
-    for (slot, path) in FILES.iter().zip(SLOT_PATHS) {
-        if slot.compare_exchange(std::ptr::null_mut(), f, Relaxed, Relaxed).is_ok() {
-            return match File::open(path) {
-                Ok(file) => Ok(Some(file)),
-                Err(e) => {
-                    slot.store(std::ptr::null_mut(), Relaxed);
-                    // SAFETY: never handed out.
-                    drop(unsafe { Box::from_raw(f) });
-                    Err(e)
-                }
-            };
-        }
-    }
-    // SAFETY: never handed out; every slot busy, open by path instead.
-    drop(unsafe { Box::from_raw(f) });
-    Ok(None)
+    hand_out(f, raw)
 }
 
 fn load() -> io::Result<Loaded> {
@@ -629,11 +823,67 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
         BUILDS.load(Relaxed),
         DIRTY.load(Relaxed),
+        open_set(|o| o.len()),
+        RAW_READS.load(Relaxed),
+        RAW_FALLBACKS.load(Relaxed),
     )
+}
+
+/// psi-probe (the emulator lane): read up to `max` of the playlist's GIFs
+/// and their prepared copies raw ([`open_player`]'s path open, chunks of
+/// odd sizes and a seek) and through FatFs, and compare. (files read raw,
+/// files that differ, files FatFs read but raw could not open.)
+#[cfg(feature = "psi-probe")]
+pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize) {
+    if !register_vfs() {
+        return (0, 0, 0);
+    }
+    let list = fs::read_to_string(format!("{root}/filelist.txt")).unwrap_or_default();
+    let mut paths = Vec::new();
+    for line in list.lines().map(str::trim).filter(|l| l.starts_with("/gifs/")).take(max) {
+        paths.push(format!("{root}{line}"));
+        if let Some(c) = opendmd_core::layout::cache_path(line) {
+            paths.push(format!("{root}{c}"));
+        }
+    }
+    let (mut ok, mut bad, mut no_raw) = (0, 0, 0);
+    for full in paths {
+        let Ok(want) = fs::read(&full) else { continue };
+        let mut f = match open_path_raw(&full) {
+            Ok(Some(f)) => f,
+            _ => {
+                no_raw += 1;
+                continue;
+            }
+        };
+        let mut got = Vec::with_capacity(want.len());
+        let sizes = [1usize, 700, 512, 3000, 513, 64];
+        let mut buf = vec![0u8; 3000];
+        let mut k = 0;
+        let read_ok = loop {
+            let n = sizes[k % sizes.len()];
+            k += 1;
+            match f.read(&mut buf[..n]) {
+                Ok(0) => break true,
+                Ok(m) => got.extend_from_slice(&buf[..m]),
+                Err(_) => break false,
+            }
+        };
+        let third = want.len() / 3;
+        let mut mid = vec![0u8; 1500.min(want.len() - third)];
+        let seek_ok = f.seek(SeekFrom::Start(third as u64)).is_ok() && f.read_exact(&mut mid).is_ok() && mid[..] == want[third..third + mid.len()];
+        if read_ok && got == want && seek_ok {
+            ok += 1;
+        } else {
+            log::warn!("fat index: raw read of {full} differs from FatFs's");
+            bad += 1;
+        }
+    }
+    (ok, bad, no_raw)
 }
