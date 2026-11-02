@@ -998,6 +998,18 @@ emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
+# The no-card lane: an image with the `nocard-test` feature (src/nocard_test.rs)
+# booted with no card (an empty card image): it must boot, run its panel, keep
+# its settings in NVS and keep a change across a restart. EMU_NOCARD_OK.
+EMU_NOCARD_IMAGE = $(EMU_DIR)/nocard/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-nocard:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/nocard/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/nocard/dist/opendmd-*-4mb-app.bin
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-nocard: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
+	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The 8mb layout by default: the emulator does not care about the DevKit's 4 MB,
 # and the full probe does not fit the 4mb factory partition with margin (same
