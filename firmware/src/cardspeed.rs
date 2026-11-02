@@ -196,12 +196,73 @@ unsafe extern "C" fn d_status(pdrv: u8) -> DSTATUS {
     ff_sdmmc_status(pdrv)
 }
 
+/// Reads waiting for (or doing) a transfer: a long write steps aside for
+/// them between its chunks ([`d_write`]).
+static READERS: AtomicU32 = AtomicU32::new(0);
+/// The most sectors one write transfer carries: a save's multi-sector write
+/// (a whole cluster, 64 sectors: ~60 ms with the card's busy time) held the
+/// I/O lock that long, and the player's raw read waited it out.
+const WRITE_CHUNK: u32 = 8;
+/// How long a write waits between chunks for the reads that want the card
+/// (each a few sectors): at most this much a chunk, so a stream of reads can
+/// slow a save but never stop it.
+const YIELD_MAX_US: i64 = 5_000;
+/// Writes that stepped aside, and the µs they waited (`/api/status`).
+static YIELDS: AtomicU32 = AtomicU32::new(0);
+static YIELD_US: AtomicU32 = AtomicU32::new(0);
+
 unsafe extern "C" fn d_read(pdrv: u8, buff: *mut u8, sector: u32, count: u32) -> DRESULT {
-    transfer(false, &mut || ff_sdmmc_read(pdrv, buff, sector, count) == DRESULT_RES_OK)
+    READERS.fetch_add(1, Relaxed);
+    let r = transfer(false, &mut || ff_sdmmc_read(pdrv, buff, sector, count) == DRESULT_RES_OK);
+    READERS.fetch_sub(1, Relaxed);
+    r
 }
 
 unsafe extern "C" fn d_write(pdrv: u8, buff: *const u8, sector: u32, count: u32) -> DRESULT {
-    transfer(true, &mut || ff_sdmmc_write(pdrv, buff, sector, count) == DRESULT_RES_OK)
+    let mut done = 0;
+    while done < count {
+        if done > 0 {
+            step_aside();
+        }
+        let n = (count - done).min(WRITE_CHUNK);
+        // SAFETY: within the caller's `count` sectors.
+        let (b, at) = (buff.add(done as usize * 512), sector + done);
+        let r = transfer(true, &mut || ff_sdmmc_write(pdrv, b, at, n) == DRESULT_RES_OK);
+        if r != DRESULT_RES_OK {
+            return r;
+        }
+        done += n;
+    }
+    DRESULT_RES_OK
+}
+
+/// Between a write's chunks, the I/O lock free: let the reads waiting for
+/// it go first, for at most [`YIELD_MAX_US`] (a FreeRTOS mutex is not
+/// fair: the writer, at a higher priority, would take it straight back).
+fn step_aside() {
+    if READERS.load(Relaxed) == 0 {
+        return;
+    }
+    // SAFETY: a plain clock read.
+    let t0 = unsafe { esp_idf_sys::esp_timer_get_time() };
+    YIELDS.fetch_add(1, Relaxed);
+    loop {
+        std::thread::yield_now();
+        // SAFETY: as above.
+        let waited = unsafe { esp_idf_sys::esp_timer_get_time() } - t0;
+        if READERS.load(Relaxed) == 0 || waited >= YIELD_MAX_US {
+            YIELD_US.fetch_add(waited as u32, Relaxed);
+            return;
+        }
+        if waited > 200 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+/// `"write_yields":N,"write_yield_us":N` for the status's card part.
+pub fn yields_json() -> String {
+    format!(r#","write_yields":{},"write_yield_us":{}"#, YIELDS.load(Relaxed), YIELD_US.load(Relaxed))
 }
 
 unsafe extern "C" fn d_ioctl(pdrv: u8, cmd: u8, buff: *mut c_void) -> DRESULT {

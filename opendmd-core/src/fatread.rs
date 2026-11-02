@@ -256,15 +256,35 @@ impl RawFile {
 /// FatFs either, whose read of a chain freed under it fails in a way that
 /// looks like the card's. So once the writer has seen the path not held,
 /// the player cannot open it until the write is done.
+///
+/// An open that reads the card without FatFs's volume lock (the index's
+/// open: `fatidx::open_at`) takes [`OpenSet::seq`] when it starts and is
+/// noted with [`OpenSet::insert_unless_covered_since`]: refused if a write
+/// covering the path began since, even one already over (its change may
+/// have reached the card only in part while the open read it).
 pub struct OpenSet<const N: usize> {
     paths: [Option<String>; N],
     intents: Vec<(u32, String, bool)>,
     next_intent: u32,
+    /// Every intent begun lately, by its sequence number: (seq, path, tree).
+    recent: std::collections::VecDeque<(u32, String, bool)>,
+    /// The number of intents ever begun.
+    seq: u32,
 }
+
+/// How many intents begun lately [`OpenSet`] remembers; an open that
+/// started longer ago than that many is refused (it cannot tell).
+pub const RECENT: usize = 16;
 
 impl<const N: usize> Default for OpenSet<N> {
     fn default() -> Self {
-        OpenSet { paths: std::array::from_fn(|_| None), intents: Vec::new(), next_intent: 1 }
+        OpenSet {
+            paths: std::array::from_fn(|_| None),
+            intents: Vec::new(),
+            next_intent: 1,
+            recent: std::collections::VecDeque::with_capacity(RECENT),
+            seq: 0,
+        }
     }
 }
 
@@ -341,7 +361,33 @@ impl<const N: usize> OpenSet<N> {
         let id = self.next_intent;
         self.next_intent = self.next_intent.wrapping_add(1).max(1);
         self.intents.push((id, path.to_string(), tree));
+        self.seq = self.seq.wrapping_add(1);
+        if self.recent.len() == RECENT {
+            self.recent.pop_front();
+        }
+        self.recent.push_back((self.seq, path.to_string(), tree));
         id
+    }
+
+    /// The intents begun so far: what an open without the volume lock
+    /// takes as it starts.
+    pub fn seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// [`insert_unless_covered`](Self::insert_unless_covered), and refused
+    /// too if an intent covering `path` began since `since` (an open's
+    /// [`seq`](Self::seq) at its start), or more began than it remembers.
+    pub fn insert_unless_covered_since(&mut self, k: usize, path: &str, since: u32) -> bool {
+        let begun = self.seq.wrapping_sub(since) as usize;
+        if begun > self.recent.len() {
+            return false;
+        }
+        let since_covered = self.recent.iter().rev().take(begun).any(|(_, p, tree)| same_path(p, path) || (*tree && under(path, p)));
+        if since_covered {
+            return false;
+        }
+        self.insert_unless_covered(k, path)
     }
 
     /// The write `id` is done.
@@ -583,6 +629,39 @@ mod tests {
         assert!(o.insert_unless_covered(1, "/sdcard/gifs/Consoles/NES_Mario_02.gif"));
         o.end_write(w);
         assert!(o.insert_unless_covered(0, "/sdcard/gifs/Consoles/NES_Mario_01.gif"));
+    }
+
+    #[test]
+    fn an_open_without_the_lock_is_refused_if_a_write_began_during_it() {
+        let mut o = OpenSet::<4>::default();
+        let path = "/sdcard/gifs/Consoles/NES_Mario_01.gif";
+        // A write of the same file begun and finished while the open read
+        // the card: refused, though no intent is left.
+        let since = o.seq();
+        let w = o.begin_write(path, false);
+        o.end_write(w);
+        assert!(!o.insert_unless_covered_since(0, path, since));
+        // One of another file: no matter.
+        let since = o.seq();
+        let w = o.begin_write("/sdcard/gifs/Consoles/NES_Other_01.gif", false);
+        o.end_write(w);
+        assert!(o.insert_unless_covered_since(0, path, since));
+        o.remove(0);
+        // A tree over it: refused.
+        let since = o.seq();
+        let w = o.begin_write("/sdcard/gifs", true);
+        o.end_write(w);
+        assert!(!o.insert_unless_covered_since(0, path, since));
+        // More writes begun than remembered: refused (it cannot tell).
+        let since = o.seq();
+        for _ in 0..=RECENT {
+            let w = o.begin_write("/sdcard/x.gif", false);
+            o.end_write(w);
+        }
+        assert!(!o.insert_unless_covered_since(0, path, since));
+        // Started after them all: fine.
+        let since = o.seq();
+        assert!(o.insert_unless_covered_since(0, path, since));
     }
 
     #[test]
