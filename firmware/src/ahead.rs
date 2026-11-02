@@ -95,7 +95,7 @@ pub fn release(eng: &mut Engine) {
 /// Between frames: take the steps that are due while the next frame
 /// (`deadline`, on `epoch`'s clock) leaves time for each. True if any ran
 /// (the loop sleeps until its planned time either way: `wake`).
-pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &Instant) -> bool {
+pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &crate::uclock::Epoch) -> bool {
     // The A/B switch for measurements: a probe build with `ahead-off`
     // never steps ahead (everything else identical).
     if cfg!(feature = "ahead-off") || crate::cache_builder::task_up() || crate::cache_builder::transfer_in_flight() {
