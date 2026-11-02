@@ -428,7 +428,11 @@ has the bundled ones, else fetches `opendmd.dev/formulas/src/<slug>.psi`,
 CORS `*`), or, once changed, a window on `http://<address>/#remix` that
 says it is ready to the page that opened it and gets `{name, src, a, b, c}`
 back by `postMessage` (accepted only from `https://opendmd.dev`, or the
-app's own origin for the demo). There are no anonymous short links:
+app's own origin for the demo). The app saves it under Your formulas as it
+arrives (`js/fstore.js`: on the panel's card, else in the browser; a
+bundled one needs nothing, the same text is not saved twice, one that
+doesn't compile is kept as an unsaved draft), then opens it in the
+editor. There are no anonymous short links:
 sharing is submitting to the gallery.
 
 **The formula gallery** (`/formulas/`) is the app's examples plus the
