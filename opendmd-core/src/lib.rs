@@ -33,12 +33,14 @@ pub mod index;
 pub mod layout;
 pub mod look;
 pub mod manifest;
+pub mod names_file;
 #[cfg(feature = "ota")]
 pub mod ota;
 pub mod overrides;
 pub mod panel_test;
 pub mod panel_timing;
 pub mod player;
+pub mod readahead;
 pub mod restarts;
 pub mod scan;
 pub mod schedule;

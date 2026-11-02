@@ -74,9 +74,11 @@ BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; 
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
 SETTINGS = re.compile(r"psi-probe: settings file: a save cut between its renames (loads the new settings|DID NOT load the new settings)")
+NAMES = re.compile(r"psi-probe: names file: (\d+) folders match their listings, (\d+) differ")
+READAHEAD = re.compile(r"psi-probe: read-ahead: (\d+) B read a block a frame, (the same as FatFs's|DIFFERS from FatFs's); (\d+) served from the ring|psi-probe: read-ahead: NOT CHECKED")
 RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ahead|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -130,6 +132,8 @@ def main():
     swap = None
     swap_card = None
     raw_reads = None
+    readahead = None
+    names_file = None
     settings_file = None
     differ_bad = []
     lines = []
@@ -197,6 +201,12 @@ def main():
                 m = RAW.search(line)
                 if m:
                     raw_reads = (line, int(m[1]), int(m[2]), int(m[3]))
+                m = NAMES.search(line)
+                if m:
+                    names_file = (line, int(m[1]), int(m[2]))
+                m = READAHEAD.search(line)
+                if m:
+                    readahead = (line, m[2], int(m[3]) if m[3] else 0)
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -287,6 +297,16 @@ def main():
             die("the raw-reads line is missing")
         if raw_reads[1] == 0 or raw_reads[2] != 0 or raw_reads[3] == 0:
             die(f"raw reads: {raw_reads[0]}")
+        # The names file: every folder's names as its listing has them.
+        if not names_file:
+            die("the names-file line is missing")
+        if names_file[1] == 0 or names_file[2] != 0:
+            die(f"names file: {names_file[0]}")
+        # The read-ahead: the same bytes as FatFs, and some served from it.
+        if not readahead:
+            die("the read-ahead line is missing")
+        if readahead[1] != "the same as FatFs's" or readahead[2] == 0:
+            die(f"read-ahead: {readahead[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):

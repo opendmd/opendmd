@@ -227,44 +227,65 @@ fn note_name(card: &str, present: bool) {
     }
 }
 
-/// `GET /api/files?dir=/gifs/<dir>&names=1`: the names in a `/gifs/`
-/// directory from the names file and what changed since, as the listing's
-/// JSON (`{"dir","entries":[{"name","size":null,"dir":false}],"count",
-/// "names":true}`): no directory walk. `None` when the file cannot be
-/// trusted (no build yet, a directory changed): list it instead.
-pub fn names_json(card_dir: &str) -> Option<String> {
+/// `GET /api/files?dir=/gifs/<dir>&names=1`: a `/gifs/` folder's names
+/// from the names file (that folder's bytes alone,
+/// `opendmd_core::names_file`) and what changed since, for streaming as
+/// the listing's JSON: no directory walk. `None` when the file cannot be
+/// trusted (no build yet, a folder added or removed since): list it
+/// instead.
+pub struct Names {
+    /// The folder's lines in the names file.
+    file: std::io::BufReader<io::Take<File>>,
+    /// Names written, renamed or removed in it since (present or not).
+    delta: Vec<(String, bool)>,
+}
+
+impl Names {
+    /// Each name, the file's (less what changed since) then the ones
+    /// written since; stops at `f`'s first error.
+    pub fn each(mut self, f: &mut dyn FnMut(&str) -> io::Result<()>) -> io::Result<()> {
+        use std::io::BufRead;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if self.file.read_line(&mut line)? == 0 {
+                break;
+            }
+            let n = line.trim_end_matches('\n');
+            if n.is_empty() || self.delta.iter().any(|(d, _)| d.eq_ignore_ascii_case(n)) {
+                continue;
+            }
+            f(n)?;
+        }
+        for (n, present) in &self.delta {
+            if *present {
+                f(n)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn names(card_dir: &str) -> Option<Names> {
     let dir = card_dir.trim_end_matches('/');
     if !NAMES_OK.load(Relaxed) || !dir.starts_with("/gifs/") || dir[6..].contains('/') {
         return None;
     }
-    let text = fs::read_to_string(NAMES).ok()?;
-    let mut names: Vec<String> = Vec::new();
-    for line in text.lines() {
-        if let Some((d, n)) = line.rsplit_once('/') {
-            if d.eq_ignore_ascii_case(dir) && !n.is_empty() {
-                names.push(n.to_string());
-            }
-        }
-    }
+    let mut f = File::open(NAMES).ok()?;
+    let (_, len) = opendmd_core::names_file::find(&mut f, dir).ok()??;
+    let mut delta = Vec::new();
     for (p, present, _) in NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner()).iter() {
         let Some((d, n)) = p.rsplit_once('/') else { continue };
-        if !d.eq_ignore_ascii_case(dir) {
-            continue;
-        }
-        names.retain(|x| !x.eq_ignore_ascii_case(n));
-        if *present {
-            names.push(n.to_string());
+        if d.eq_ignore_ascii_case(dir) {
+            delta.push((n.to_string(), *present));
         }
     }
-    let mut out = format!(r#"{{"dir":{},"entries":["#, crate::httpd::json_string(dir));
-    for (k, n) in names.iter().enumerate() {
-        if k > 0 {
-            out.push(',');
-        }
-        out.push_str(&format!(r#"{{"name":{},"size":null,"dir":false}}"#, crate::httpd::json_string(n)));
-    }
-    out.push_str(&format!(r#"],"count":{},"sizes":false,"names":true}}"#, names.len()));
-    Some(out)
+    Some(Names { file: std::io::BufReader::with_capacity(512, f.take(len as u64)), delta })
+}
+
+/// A names file of the current layout is at [`NAMES`].
+fn names_present() -> bool {
+    File::open(NAMES).is_ok_and(|mut f| opendmd_core::names_file::trailer(&mut f).is_ok_and(|t| t.is_some()))
 }
 
 fn push_delta(h: u32, loc: Option<u32>) {
@@ -458,9 +479,19 @@ unsafe extern "C" fn v_read(fd: i32, dst: *mut core::ffi::c_void, size: usize) -
             Ok(())
         };
         let buf = std::slice::from_raw_parts_mut(dst.cast::<u8>(), size);
+        // The display core's reads: from the read-ahead when it has them.
+        let player = crate::cardspeed::on_display_core();
+        if player {
+            if let Some(n) = crate::readahead::serve(fd as usize, &mut raw.file, pdrv, buf) {
+                return n as isize;
+            }
+        }
         match raw.file.read(buf, &mut dev) {
             Ok(n) => {
                 RAW_READS.fetch_add(1, Relaxed);
+                if player {
+                    crate::readahead::moved(fd as usize, raw.file.pos());
+                }
                 return n as isize;
             }
             Err(e) => {
@@ -554,7 +585,8 @@ unsafe fn free_fil(f: *mut sys::FIL) {
 unsafe extern "C" fn v_close(fd: i32) -> i32 {
     // The raw state and the open-set entry go before the slot is free
     // (`fatread::Slots::release`): another task's open can then never find
-    // this file's extents in it.
+    // this file's extents in it. The read-ahead forgets it first.
+    crate::readahead::closed(fd as usize);
     match TABLE.release(fd as usize, |k| open_set(|o| o.remove(k))) {
         Some((f, _raw)) => {
             free_fil(f);
@@ -617,15 +649,59 @@ pub fn open_player(full: &str) -> io::Result<File> {
     if covered(full) {
         return Err(refused());
     }
-    if let Some(r) = indexed_as(full, true) {
+    // The display core's opens, timed by route (`misses.recent`): the index
+    // (no volume lock), else by path (FatFs's directory walk, behind the
+    // volume lock: a save's walk of a big folder holds it).
+    let display = crate::cardspeed::on_display_core();
+    let t = now_us();
+    let indexed = indexed_as(full, true);
+    if display {
+        OPEN_INDEX_US.fetch_add(now_us().wrapping_sub(t), Relaxed);
+    }
+    if let Some(r) = indexed {
         return r;
     }
+    let t = now_us();
+    let r = open_by_path(full);
+    if display {
+        let us = now_us().wrapping_sub(t);
+        OPEN_PATH_US.fetch_add(us, Relaxed);
+        PATH_OPENS.fetch_add(1, Relaxed);
+        PATH_OPEN_MAX_US.fetch_max(us, Relaxed);
+    }
+    r
+}
+
+/// [`open_player`] by path: FatFs's directory walk, read raw after.
+#[inline(never)]
+fn open_by_path(full: &str) -> io::Result<File> {
     if crate::CARD_READY.load(Relaxed) && VFS_UP.load(Relaxed) {
         if let Some(f) = open_path_raw(full)? {
             return Ok(f);
         }
     }
     File::open(full)
+}
+
+/// The display core's open time since the last call: `(index route µs, by
+/// path µs)`, and reset (the main loop, per frame).
+pub fn take_open_split() -> (u32, u32) {
+    (OPEN_INDEX_US.swap(0, Relaxed), OPEN_PATH_US.swap(0, Relaxed))
+}
+
+static OPEN_INDEX_US: AtomicU32 = AtomicU32::new(0);
+static OPEN_PATH_US: AtomicU32 = AtomicU32::new(0);
+/// The display core's opens by path (the index could not open the file),
+/// the longest, and why the index did not: busy (a build swapping it in),
+/// not loaded.
+static PATH_OPENS: AtomicU32 = AtomicU32::new(0);
+static PATH_OPEN_MAX_US: AtomicU32 = AtomicU32::new(0);
+static INDEX_BUSY: AtomicU32 = AtomicU32::new(0);
+static INDEX_UNLOADED: AtomicU32 = AtomicU32::new(0);
+
+fn now_us() -> u32 {
+    // SAFETY: a plain clock read.
+    unsafe { sys::esp_timer_get_time() as u32 }
 }
 
 /// By path into a FIL of ours (FatFs's `f_open`: the directory walk the
@@ -771,12 +847,20 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
         // Never wait for the index (a build swapping it in, or another
         // task's lookup): this may be the display task. Busy means a path open.
         let Ok(mut g) = LOADED.try_lock() else {
+            if raw {
+                INDEX_BUSY.fetch_add(1, Relaxed);
+            }
             return None;
         };
         // Not loaded yet: the network worker loads it (`tick`); a load
         // here (its directory walks under the volume lock) could be on the
         // display task.
-        let l = g.as_mut()?.as_mut()?;
+        let Some(l) = g.as_mut().and_then(Option::as_mut) else {
+            if raw {
+                INDEX_UNLOADED.fetch_add(1, Relaxed);
+            }
+            return None;
+        };
         let b = (h >> 24) as usize;
         // A bucket holds ~1/256 of the records (~40 on a stock card); past
         // 256 (2 KB) the rest of it is not looked at, and those names open
@@ -920,8 +1004,10 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
     hand_out(f, raw, raw_state, since)
 }
 
-fn load() -> io::Result<Loaded> {
-    let mut file = File::open(INDEX)?;
+/// The index file at `path` (`/sdcard/...`: [`INDEX`], or a build's [`NEW`]
+/// before it is renamed: its handle and extents stay good across the rename).
+fn load(path: &str) -> io::Result<Loaded> {
+    let mut file = File::open(path)?;
     let mut raw = vec![0u8; fatdir::HEADER + fatdir::FANOUT * 4];
     file.read_exact(&mut raw)?;
     let (_, geo) = volume()?;
@@ -962,21 +1048,21 @@ fn load() -> io::Result<Loaded> {
     // directories are the ones it walked, and this boot's changes are
     // noted as they happen); an index without one, from a build before
     // names files, gets one by a walk of its own.
-    if fs::metadata(NAMES).is_ok() {
+    if names_present() {
         NAMES_OK.store(true, Relaxed);
     } else {
         NAMES_WANTED.store(true, Relaxed);
     }
     // Its extents, for the player's lookups without the volume lock.
-    let raw = index_extents();
+    let raw = index_extents(path);
     Ok(Loaded { file, fanout, raw })
 }
 
 /// The index file's extents (its own FIL's first cluster and size, its
 /// chain under the volume lock): `None` if anything does not add up.
-fn index_extents() -> Option<(fatread::RawFile, u8)> {
+fn index_extents(file: &str) -> Option<(fatread::RawFile, u8)> {
     let (fs, geo) = volume().ok()?;
-    let path = std::ffi::CString::new(format!("0:{}", INDEX.strip_prefix(config::SD_MOUNT)?)).ok()?;
+    let path = std::ffi::CString::new(format!("0:{}", file.strip_prefix(config::SD_MOUNT)?)).ok()?;
     // SAFETY: a zeroed FIL f_open fills; closed before return.
     let (first, size) = unsafe {
         let mut f: sys::FIL = std::mem::zeroed();
@@ -1042,15 +1128,26 @@ pub fn tick() {
     }
     // The first look at the card decides whether there is an index at all.
     let missing = {
-        let mut g = LOADED.lock().unwrap();
-        if RELOAD.swap(false, Relaxed) {
-            *g = None;
-            DIRTY.store(true, Relaxed);
+        let need = {
+            let mut g = LOADED.lock().unwrap();
+            if RELOAD.swap(false, Relaxed) {
+                *g = None;
+                DIRTY.store(true, Relaxed);
+            }
+            g.is_none()
+        };
+        if need {
+            // Loaded without the index's lock: its directory walks wait
+            // behind card writes for the volume lock, and the player's
+            // lookups meanwhile must not find the lock taken (they go by
+            // path while there is no index, as they would anyway).
+            let l = load(INDEX).ok();
+            let mut g = LOADED.lock().unwrap();
+            if g.is_none() {
+                *g = Some(l);
+            }
         }
-        if g.is_none() {
-            *g = Some(load().ok());
-        }
-        g.as_ref().is_some_and(Option::is_none)
+        LOADED.lock().unwrap().as_ref().is_some_and(Option::is_none)
     };
     // A current index with no names file: the names alone.
     let names_only = !DIRTY.load(Relaxed) && !missing && NAMES_WANTED.load(Relaxed);
@@ -1177,24 +1274,21 @@ fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
     Ok(dirs)
 }
 
-/// [`NAMES_NEW`]: every `/gifs/<dir>/<name>`, a line each, from one walk of
-/// the GIFs' directories.
+/// [`NAMES_NEW`]: every `/gifs/<dir>`'s names, folder by folder, with the
+/// table that finds one folder's (`opendmd_core::names_file`), from one walk
+/// of the GIFs' directories.
 fn write_names(
     dirs: &[(String, u32)],
     geo: &fatdir::Geometry,
     read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
     scratch: &mut [u8],
 ) -> io::Result<()> {
-    let mut names = BufWriter::with_capacity(1024, File::create(NAMES_NEW)?);
+    let mut names = opendmd_core::names_file::Writer::new(BufWriter::with_capacity(1024, File::create(NAMES_NEW)?));
     for (dir, first) in dirs {
+        names.begin(dir);
         let mut failed = None;
         fatdir::walk(geo, *first, read, scratch, &mut |f| {
-            let r = names
-                .write_all(dir.as_bytes())
-                .and_then(|()| names.write_all(b"/"))
-                .and_then(|()| names.write_all(f.name))
-                .and_then(|()| names.write_all(b"\n"));
-            if let Err(e) = r {
+            if let Err(e) = names.name(f.name) {
                 failed = Some(e);
             }
             Ok(())
@@ -1203,7 +1297,7 @@ fn write_names(
             return Err(e);
         }
     }
-    names.flush()
+    names.finish().map(drop)
 }
 
 /// [`NAMES_NEW`] in place of [`NAMES`], trusted from now on with the
@@ -1298,14 +1392,18 @@ fn build() -> io::Result<()> {
     fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &listed, &mut group)?;
     out.flush()?;
     drop(out);
-    // Nothing reopens the old index between its removal and the rename,
-    // and the new one is loaded here, on the build's task, not by the next
-    // open (which may be the display task's).
-    let mut g = LOADED.lock().unwrap();
-    *g = None;
+    // The new one is loaded from its own name on the build's task (its
+    // directory check walks the folders behind card writes) before the
+    // index's lock is taken, and swapped in under it; the old one is closed
+    // after (its close takes the volume lock), then the files renamed. The
+    // player's lookups never find the lock held for longer than the swap:
+    // a lookup that found it held went by path, behind the volume lock
+    // (iso14: opens of 1.4 s and 5.8 s while a build ended during saves).
+    let fresh = load(NEW).ok();
+    let old = LOADED.lock().unwrap().replace(fresh);
+    drop(old);
     let _ = fs::remove_file(INDEX);
     fs::rename(NEW, INDEX)?;
-    *g = Some(load().ok());
     install_names(BUILT_MS.load(Relaxed));
     // What the walks saw is in the index now; changes noted since its
     // start stay in the delta.
@@ -1319,7 +1417,7 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{},"path_opens":{},"path_open_max_us":{},"index_busy":{},"index_unloaded":{},"building":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -1331,7 +1429,127 @@ pub fn status_json() -> String {
         SLOTS_FULL.load(Relaxed),
         INTENT_REFUSED.load(Relaxed),
         DELTA_LEN.load(Relaxed),
+        PATH_OPENS.load(Relaxed),
+        PATH_OPEN_MAX_US.load(Relaxed),
+        INDEX_BUSY.load(Relaxed),
+        INDEX_UNLOADED.load(Relaxed),
+        BUILDING.load(Relaxed),
     )
+}
+
+/// psi-probe: every `/gifs/<folder>`'s names from the names file (after
+/// [`raw_self_check`]'s build) against the folder's listing: (folders that
+/// match, folders that differ, names in all).
+#[cfg(feature = "psi-probe")]
+#[inline(never)]
+pub fn names_self_check(root: &str) -> (usize, usize, usize) {
+    let (mut ok, mut bad, mut total) = (0, 0, 0);
+    let Ok(dirs) = fs::read_dir(format!("{root}/gifs")) else { return (0, 0, 0) };
+    for d in dirs.flatten() {
+        if !d.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let name = d.file_name().to_string_lossy().into_owned();
+        let card = format!("/gifs/{name}");
+        let mut want: Vec<String> = fs::read_dir(d.path())
+            .map(|r| r.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        let mut got = Vec::new();
+        let read = names(&card).map(|n| n.each(&mut |s| {
+            got.push(s.to_string());
+            Ok(())
+        }));
+        want.sort();
+        got.sort();
+        total += got.len();
+        if matches!(read, Some(Ok(()))) && got == want {
+            ok += 1;
+        } else {
+            bad += 1;
+            log::warn!("names {card}: {} from the names file, {} listed", got.len(), want.len());
+        }
+    }
+    (ok, bad, total)
+}
+
+/// psi-probe: the read-ahead (`readahead`) serving the main task's raw
+/// reads of the playlist's largest GIF, read as the player
+/// reads one (2 KB at a time, a frame apart, up to 96 KB), byte for byte
+/// against FatFs's reads of the same file.
+#[cfg(feature = "psi-probe")]
+pub struct ReadaheadCheck {
+    /// The filling task still up after the idle time.
+    pub running: bool,
+    pub bytes: usize,
+    pub same: bool,
+    pub hits: u32,
+    pub underruns: u32,
+    pub fetches: u32,
+    /// The heap the read-ahead took while it was held: the filling task's
+    /// stack, its 8 KB ring, the 2 KB block being read, the file's extents.
+    pub ring_heap: u32,
+    /// The heap after its 5 s idle, against before the files were opened
+    /// (the task's stack is freed by FreeRTOS's idle task a while later:
+    /// a second check starts within 200 B of the first).
+    pub left_heap: i64,
+    /// Free heap before the read.
+    pub heap: u32,
+}
+
+#[cfg(feature = "psi-probe")]
+#[inline(never)]
+pub fn readahead_self_check(root: &str) -> Option<ReadaheadCheck> {
+    let list = fs::read_to_string(format!("{root}/filelist.txt")).ok()?;
+    let path = list
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("/gifs/"))
+        .map(|l| format!("{root}{l}"))
+        .max_by_key(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))?;
+    let (_, h0, u0, f0) = crate::readahead::probe_counts();
+    let heap0 = crate::state::free_heap();
+    let mut raw = open_path_raw(&path).ok()??;
+    let mut fat = File::open(&path).ok()?;
+    let (mut a, mut b) = (vec![0u8; 2048], vec![0u8; 2048]);
+    // With both files open and the buffers taken: what the read-ahead takes
+    // is measured from here.
+    let heap1 = crate::state::free_heap();
+    let (mut same, mut bytes, mut low) = (true, 0usize, u32::MAX);
+    while bytes < 96 * 1024 {
+        let n = raw.read(&mut a).ok()?;
+        if n == 0 {
+            break;
+        }
+        if fat.read_exact(&mut b[..n]).is_err() || a[..n] != b[..n] {
+            same = false;
+            break;
+        }
+        bytes += n;
+        // (The network worker's turn, which starts the filling task.)
+        crate::readahead::tick();
+        if crate::readahead::probe_counts().0 {
+            low = low.min(crate::state::free_heap());
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    drop(raw);
+    drop(fat);
+    // Its idle time out: the task and the ring gone.
+    std::thread::sleep(Duration::from_millis(5_300));
+    let left_heap = heap0 as i64 - crate::state::free_heap() as i64;
+    let (_, h1, u1, f1) = crate::readahead::probe_counts();
+    Some(ReadaheadCheck {
+        running: crate::readahead::probe_running(),
+        bytes,
+        same,
+        hits: h1 - h0,
+        underruns: u1 - u0,
+        fetches: f1 - f0,
+        left_heap,
+        heap: heap0,
+        // (The file's open, its FIL and raw state, is in `heap0`.)
+        ring_heap: if low == u32::MAX { 0 } else { heap1.saturating_sub(low) },
+    })
 }
 
 /// psi-probe (the emulator lane): read up to `max` of the playlist's GIFs
@@ -1340,6 +1558,7 @@ pub fn status_json() -> String {
 /// files that differ, files FatFs read but raw could not open, of the
 /// first those opened through the index's `open_at`.)
 #[cfg(feature = "psi-probe")]
+#[inline(never)]
 pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize, usize) {
     if !register_vfs() {
         return (0, 0, 0, 0);

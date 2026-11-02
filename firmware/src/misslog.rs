@@ -22,6 +22,12 @@ pub struct Miss {
     pub card_xfer_us: u32,
     /// The decoder of the file on screen (`Engine::playing_kind`).
     pub kind: &'static str,
+    /// Its opens by step: through the FAT index, by path (FatFs, behind
+    /// the volume lock), and waiting for the cache builder to let go of
+    /// its heap (µs).
+    pub open_index_us: u32,
+    pub open_path_us: u32,
+    pub open_builder_us: u32,
 }
 
 static RECENT: Mutex<([Option<Miss>; 8], usize)> = Mutex::new(([None; 8], 0));
@@ -37,7 +43,7 @@ pub fn note(m: Miss) {
 
 /// `,"recent":[{late_ms, cause, open, read, decode, blit, log, other, wake,
 /// transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us,
-/// kind}]`, oldest first.
+/// kind, open_index_us, open_path_us, open_builder_us}]`, oldest first.
 pub fn json() -> String {
     let g = RECENT.lock().unwrap_or_else(|p| p.into_inner());
     let n = g.1;
@@ -51,11 +57,11 @@ pub fn json() -> String {
         first = false;
         let p = m.phases;
         out.push_str(&format!(
-            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{},"card_wait_us":{},"card_xfer_us":{},"kind":"{}"}}"#,
+            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{},"card_wait_us":{},"card_xfer_us":{},"kind":"{}","open_index_us":{},"open_path_us":{},"open_builder_us":{}}}"#,
             m.late_ms,
             opendmd_core::frametime::CAUSES[m.cause.min(7)],
             p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-            m.transitioning, m.advance_us, m.step_us, m.at_s, m.card_wait_us, m.card_xfer_us, m.kind
+            m.transitioning, m.advance_us, m.step_us, m.at_s, m.card_wait_us, m.card_xfer_us, m.kind, m.open_index_us, m.open_path_us, m.open_builder_us
         ));
     }
     out.push(']');

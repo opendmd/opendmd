@@ -1231,9 +1231,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // no directory walk (naming a new GIF); listed as usual when that
         // file cannot be trusted.
         if query_param(req.query(), "names").as_deref() == Some("1") && !sizes {
-            if let Some(json) = crate::fatidx::names_json(&dir) {
-                req.header("Cache-Control", "no-cache")?;
-                return req.json(&json);
+            if let Some(names) = crate::fatidx::names(&dir) {
+                return listing(req, move |req| stream_names(req, &dir, names));
             }
         }
         listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
@@ -2222,6 +2221,41 @@ fn apply_meta<R: Respond>(
     }
 }
 
+/// `GET /api/files?names=1`: the listing's JSON from the names file
+/// (`{"dir","entries":[{"name","size":null,"dir":false}],"count","sizes":
+/// false,"names":true}`), streamed.
+fn stream_names(req: &mut Req, dir: &str, names: crate::fatidx::Names) -> Result<()> {
+    req.header("Cache-Control", "no-cache")?;
+    req.begin_chunked("200 OK", "application/json")?;
+    let mut buf = format!(r#"{{"dir":{},"entries":["#, json_string(dir.trim_end_matches('/')));
+    let mut count = 0usize;
+    let mut sent: Result<()> = Ok(());
+    let r = names.each(&mut |n| {
+        if count > 0 {
+            buf.push(',');
+        }
+        count += 1;
+        buf.push_str(&format!(r#"{{"name":{},"size":null,"dir":false}}"#, json_string(n)));
+        if buf.len() >= config::IO_CHUNK {
+            sent = req.chunk(buf.as_bytes()).and_then(|()| files::wait_for_heap());
+            buf.clear();
+            if sent.is_err() {
+                return Err(std::io::Error::other("client gone"));
+            }
+        }
+        Ok(())
+    });
+    sent?;
+    if let Err(e) = r {
+        // The card failed mid-file: the JSON is cut, and the app lists.
+        log::warn!("names {dir}: {e}");
+        return req.finish();
+    }
+    buf.push_str(&format!(r#"],"count":{count},"sizes":false,"names":true}}"#));
+    req.chunk(buf.as_bytes())?;
+    req.finish()
+}
+
 /// `GET /api/overrides`: `{"set","playlist","overrides":[{path, never?, w?,
 /// dwell?, dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
 /// is an empty list).
@@ -2377,7 +2411,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json() + &crate::cardspeed::yields_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json() + &crate::cardspeed::yields_json() + &crate::readahead::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),

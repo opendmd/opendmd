@@ -2345,6 +2345,26 @@ pub fn run(root: &str) {
     // The player's raw card reads (fatidx), byte for byte against FatFs's.
     let (raw_ok, raw_bad, no_raw, via_index) = crate::fatidx::raw_self_check(root, 24);
     say!(info, "psi-probe: raw reads: {raw_ok} files match FatFs's reads, {raw_bad} differ, {via_index} of them through the index ({no_raw} not opened raw)");
+    // The names file the build above wrote, a folder at a time.
+    let (names_ok, names_bad, names_n) = crate::fatidx::names_self_check(root);
+    say!(info, "psi-probe: names file: {names_ok} folders match their listings, {names_bad} differ ({names_n} names)");
+    // The read-ahead serving those reads as the player makes them.
+    match crate::fatidx::readahead_self_check(root) {
+        Some(c) => say!(
+            info,
+            "psi-probe: read-ahead: {} B read a block a frame, {}; {} served from the ring, {} underruns, {} fetched; heap {} B: {} B held, {} B left{}",
+            c.bytes,
+            if c.same { "the same as FatFs's" } else { "DIFFERS from FatFs's" },
+            c.hits,
+            c.underruns,
+            c.fetches,
+            c.heap,
+            c.ring_heap,
+            c.left_heap,
+            if c.running { " (task STILL UP)" } else { "" }
+        ),
+        None => say!(error, "psi-probe: read-ahead: NOT CHECKED (no GIF opened raw)"),
+    }
     let mut out = vec![0u8; psi::W * psi::H * 3];
 
     // (The examples as effects, with and without the still cache, timed, are

@@ -68,6 +68,7 @@ mod net_worker;
 mod nvs_config;
 mod ota;
 mod pace;
+mod readahead;
 mod panel;
 mod probe;
 #[cfg(feature = "psi-probe")]
@@ -1757,6 +1758,8 @@ fn main() -> Result<()> {
         probe::tick_begin();
         let (pre_open, pre_read) = frametime::take();
         let pre_card = crate::cardspeed::take_player();
+        let pre_split = crate::fatidx::take_open_split();
+        let pre_builder = crate::cache_builder::take_opening_wait();
         let tick_start = uclock::now_us();
         if fresh {
             fresh = false;
@@ -1794,6 +1797,8 @@ fn main() -> Result<()> {
         let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
         let card_io = crate::cardspeed::take_player();
+        let open_split = crate::fatidx::take_open_split();
+        let builder_wait = crate::cache_builder::take_opening_wait();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
         // (content time, see `NowPlaying::elapsed`) and frame number, when the
@@ -1996,6 +2001,9 @@ fn main() -> Result<()> {
                             card_wait_us: pre_card.0 + card_io.0,
                             card_xfer_us: pre_card.1 + card_io.1,
                             kind: eng.playing_kind(),
+                            open_index_us: pre_split.0 + open_split.0,
+                            open_path_us: pre_split.1 + open_split.1,
+                            open_builder_us: pre_builder + builder_wait,
                         });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold

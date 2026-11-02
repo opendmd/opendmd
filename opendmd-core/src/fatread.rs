@@ -182,6 +182,11 @@ impl RawFile {
         self.ext.size as u64
     }
 
+    /// Its clusters (the read-ahead reads the same file by them).
+    pub fn extents(&self) -> &Extents {
+        &self.ext
+    }
+
     /// Move to `pos` (past the end is allowed: reads there give 0).
     /// No card access.
     pub fn seek(&mut self, pos: u64) {
