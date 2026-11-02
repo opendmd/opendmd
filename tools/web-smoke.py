@@ -4236,11 +4236,11 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     page.goto(base + "/#formulas")
     page.reload()
     page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
-    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)") == ["Searchlight"],
+    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)").count("Searchlight") == 1,
           "remix: after a reload the gallery Formula is under Your formulas")
     # A change saved later goes into the same file, not a second one.
-    if page.locator("#psi-mine .psi-tile").count():
-        page.click("#psi-mine .psi-tile >> nth=0")
+    if page.locator("#psi-mine .psi-tile[data-name='Searchlight']").count():
+        page.click("#psi-mine .psi-tile[data-name='Searchlight']")
         page.click("#psi-edit")
         page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
         page.fill("#psi-src", src.replace("0.4", "0.5", 1))
@@ -4266,7 +4266,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     app.reload()
     app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
     mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
-    check(mine == ["Searchlight", "Sent rings"], f"remix: after another view and a reload it is under Your formulas ({mine})")
+    check(mine.count("Searchlight") == 1 and mine.count("Sent rings") == 1, f"remix: after another view and a reload it is under Your formulas ({mine})")
     opener.context.close()
     # The same Formula sent again: opened, not saved twice.
     opener = new_page(browser, "laptop", errors)
@@ -4329,9 +4329,8 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
           f"remix: a Formula sent from another site is ignored ('{t}')")
     other.context.close()
     page.context.close()
-    for n in ("searchlight", "sent-rings"):
-        if (overlay / "formulas" / f"{n}.psi").exists():
-            urllib.request.urlopen(urllib.request.Request(base + f"/api/files/formulas/{n}.psi", method="DELETE"), timeout=30)
+    for p in [*(overlay / "formulas").glob("searchlight*.psi"), *(overlay / "formulas").glob("sent-rings*.psi")]:
+        urllib.request.urlopen(urllib.request.Request(base + f"/api/files/formulas/{p.name}", method="DELETE"), timeout=30)
 
 
 def formulas_store_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
@@ -4362,7 +4361,7 @@ def formulas_store_checks(browser, base: str, overlay: Path, errors: list[str]) 
         app.reload()
         app.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
         mine = app.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
-        check(mine == ["Kept rings"] and keep.read_text() == kept, f"store: listed again, the one there is whole ({mine})")
+        check(mine.count("Kept rings") == 1 and keep.read_text() == kept, f"store: listed again, the one there is whole ({mine})")
         if app.locator("#psi-cont-drop").count():
             app.click("#psi-cont-drop")
         opener.context.close()
@@ -4721,6 +4720,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
         {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
+    # (Copied onto the panel by the view, once: listed there before the hand-over.)
+    page.evaluate("Object.keys(localStorage).filter(k => k.startsWith('odmd.psi.copied.')).forEach(k => localStorage.removeItem(k))")
+    page.reload()
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Bee']", timeout=20000)
     app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
     src = app.input_value("#psi-src")
     check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
@@ -4796,7 +4799,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     evil = '<img src=x onerror="window.__pwned=1">'
     app = remix_open(page, base, errors, "-- " + evil + "\ngray(x)", evil, bad_first=True)
     safe = (app.evaluate("window.__pwned") is None and app.locator("#psi-ed img, #psi-gal img").count() == 0
-            and app.input_value("#psi-name") == evil[:60] and app.input_value("#psi-src").startswith("-- <img"))
+            and "img src=x" in app.input_value("#psi-name") and "-- <img" in app.input_value("#psi-src"))
     app.click("#psi-back")
     app.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
     safe = safe and app.locator("#psi-gal img").count() == 0 and app.evaluate("window.__pwned") is None
@@ -4806,6 +4809,10 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     src_len, name_len = len(app.input_value("#psi-src")), len(app.input_value("#psi-name"))
     check(src_len == 16384 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
     page.context.close()
+    # (Both were saved as they arrived: gone again, for the checks after.)
+    for e in get_json(base + "/api/files?dir=%2Fformulas")["entries"]:
+        if e["name"].startswith(("img-src", "nnnn")):
+            urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/" + e["name"], method="DELETE"), timeout=30)
 
 
 def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:

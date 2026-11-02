@@ -328,7 +328,7 @@ async function remixed() {
 async function arrived(f) {
   if (!info(f.src).length) throw new Error(`it doesn’t work yet: ${T(() => P.error(), '').replace(/`/g, '')}`);
   const c = ctlOf(f), name = c?.name || f.name.trim() || `My formula ${mine().length + 1}`;
-  const src = c?.name ? f.src : T(() => P.declare(f.src, 'name', 0, `name "${declText(name, MAX_NAME)}"`), '') || f.src;
+  const src = (c?.name ? f.src : T(() => P.declare(f.src, 'name', 0, `name "${declText(name, MAX_NAME)}"`), '') || f.src).slice(0, MAX_SRC);
   const vals = {};
   for (const k of 'abc') if (f[k] != null) vals[k] = f[k];
   const had = mine().find((x) => x.src === src || x.src === f.src);
