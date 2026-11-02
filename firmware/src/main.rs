@@ -275,40 +275,37 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
-/// Racing the beam: may this tick's Formula frame write
-/// its pairs as it draws them? Not with the panel dark, under the glow or
-/// Save the settings to NVS now, or keep them for later while a Formula
-/// plays (`later`): an NVS write stops the flash cache on both cores for
+/// Save the settings to NVS now, or mark them for later while a Formula
+/// plays (`dirty`): an NVS write stops the flash cache on both cores for
 /// milliseconds (tens when a page is erased), and a raced Formula's pairs
 /// then miss their windows. They take effect at once either way (the caller
-/// applies them); [`flush_settings`] writes what waited once no Formula
-/// plays (a GIF, the panel off). A change made while a Formula plays and
-/// lost to a power cut before anything else plays is the trade.
-fn save_settings(
-    cfg: &mut Config,
-    next: &Settings,
-    later: &mut Option<Settings>,
-    defer: bool,
-) -> anyhow::Result<()> {
+/// applies them); [`flush_settings`] writes the settings then in force once
+/// no Formula plays (a GIF, the panel off). A change made while a Formula
+/// plays and lost to a power cut before anything else plays is the trade.
+/// (No copy is kept: the display core clones nothing for it.)
+fn save_settings(cfg: &mut Config, next: &Settings, dirty: &mut bool, defer: bool) -> anyhow::Result<()> {
     if defer {
-        *later = Some(next.clone());
+        *dirty = true;
         return Ok(());
     }
-    *later = None;
+    *dirty = false;
     cfg.save(next)
 }
 
-/// Write the settings [`save_settings`] kept back, when nothing races.
+/// Write the settings in force, marked by [`save_settings`], when nothing
+/// races.
 #[inline(never)]
-fn flush_settings(cfg: &mut Config, later: &mut Option<Settings>) {
-    if let Some(s) = later.take() {
-        match cfg.save(&s) {
+fn flush_settings(cfg: &mut Config, settings: &Settings, dirty: &mut bool) {
+    if std::mem::take(dirty) {
+        match cfg.save(settings) {
             Ok(()) => log::info!("settings: saved (held while a Formula played)"),
             Err(e) => log::error!("settings: saving what waited failed ({e:#}); they apply until a restart"),
         }
     }
 }
 
+/// Racing the beam: may this tick's Formula frame write
+/// its pairs as it draws them? Not with the panel dark, under the glow or
 /// a formula look, nor while a transition runs. (Out of line: once a tick,
 /// and `main` is big enough.)
 #[cfg(feature = "psi")]
@@ -508,7 +505,7 @@ fn main() -> Result<()> {
     let mut fresh = true;
     // Settings changed while a Formula played, not yet in NVS
     // (`save_settings`), and whether a Formula is what plays.
-    let mut unsaved: Option<Settings> = None;
+    let mut unsaved = false;
     let mut formula_on = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
@@ -636,8 +633,8 @@ fn main() -> Result<()> {
         }
 
         // Settings kept back while a Formula played: written once none does.
-        if unsaved.is_some() && (!formula_on || sched.off()) {
-            flush_settings(&mut nvs_config, &mut unsaved);
+        if unsaved && (!formula_on || sched.off()) {
+            flush_settings(&mut nvs_config, &settings, &mut unsaved);
         }
 
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
@@ -855,13 +852,13 @@ fn main() -> Result<()> {
                     // settings: a rule's playlist wins over `set` while it
                     // is in force, so compare what would actually play.
                     // Follow RePlayOS's attract playlist is an overlay too.
-                    let (eff_now, eff_next) = (
-                        runner.overlay(sched.effective(&settings)),
-                        runner.overlay(sched.effective(&next)),
-                    );
-                    let needs_reindex = eff_next.platforms != eff_now.platforms
-                        || eff_next.set != eff_now.set
-                        || eff_next.shuffle != eff_now.shuffle
+                    // (Compared field by field, borrowed: two copies of
+                    // the whole settings here cost the display core.)
+                    let set_now = runner.overlay_set(&settings, sched.effective_set(&settings));
+                    let set_next = runner.overlay_set(&next, sched.effective_set(&next));
+                    let needs_reindex = next.platforms != settings.platforms
+                        || set_next != set_now
+                        || next.shuffle != settings.shuffle
                         // Attract shows the clock or a text instead now.
                         || (runner.mode() == follow::Mode::Attract
                             && next.attract != settings.attract);
@@ -880,8 +877,8 @@ fn main() -> Result<()> {
                     let mut prebuilt = None;
                     if needs_reindex
                         && CARD_READY.load(Ordering::Relaxed)
-                        && !eff_next.platform_list().is_empty()
-                        && (eff_next.platforms != eff_now.platforms || eff_next.set != eff_now.set)
+                        && !next.platform_list().is_empty()
+                        && (next.platforms != settings.platforms || set_next != set_now)
                     {
                         let tried =
                             replay(&mut engine, &next, &sched, &mut runner, false, &status, &mut canvas);
@@ -895,7 +892,7 @@ fn main() -> Result<()> {
                             log::warn!(
                                 "config: platforms '{}' in {} not verified ({e}); refused, nothing saved, previous playlist back: {back:?}",
                                 next.platforms,
-                                eff_next.manifest_path()
+                                nvs_config::manifest_path_for(set_next)
                             );
                             let msg = if e.ends_with(NO_ENTRIES) {
                                 format!("{} \"{}\"; nothing was saved", state::FILTER_EMPTY, next.platforms.trim())
@@ -929,7 +926,9 @@ fn main() -> Result<()> {
                         Ok(()) => {
                             let look_changed = next.look_formula != settings.look_formula;
                             settings = next;
-                            *shared_settings.lock().unwrap() = settings.clone();
+                            // (The handler puts its copy in the shared
+                            // settings once this replies: no clone and no
+                            // lock here, on the display core.)
                             if look_changed {
                                 let shown = match engine.as_mut() {
                                     Some(e) => e.display_mut(&mut canvas),
@@ -1006,21 +1005,9 @@ fn main() -> Result<()> {
                                     clock::hhmm_now().unwrap_or_else(|| "not set yet".into())
                                 );
                             }
-                            log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
-                                settings.brightness,
-                                settings.look.name(),
-                                settings.glow.name(),
-                                settings.dwell_min,
-                                settings.dwell_max,
-                                settings.shuffle,
-                                settings.platforms,
-                                settings.set,
-                                settings.transition,
-                                settings.attract,
-                                settings.panel_sync,
-                                settings.panel_split
-                            );
+                            // (The "config applied" line is the handler's,
+                            // on CPU0: formatting it here cost the display
+                            // core time before the next frame.)
                             let outcome = if let Some(built) = prebuilt {
                                 // Built above, before the save.
                                 built
@@ -1184,33 +1171,16 @@ fn main() -> Result<()> {
                     );
                     let _ = reply.send(outcome);
                 }
-                Command::SetSchedule { json, reply } => {
-                    let parsed = match sched::parse(json.as_bytes()) {
-                        Ok(p) => p,
+                Command::SetSchedule { json, parsed, reply } => {
+                    // Parsed by the handler; no copy of the settings here.
+                    let before = std::mem::replace(&mut settings.schedule, json);
+                    match save_settings(&mut nvs_config, &settings, &mut unsaved, formula_on && !sched.off()) {
                         Err(e) => {
-                            let _ = reply.send(Err(e));
-                            continue;
-                        }
-                    };
-                    let mut next = settings.clone();
-                    next.schedule = json;
-                    match save_settings(&mut nvs_config, &next, &mut unsaved, formula_on && !sched.off()) {
-                        Err(e) => {
+                            settings.schedule = before;
                             let _ = reply.send(Err(format!("saving the schedule: {e:#}")));
                         }
                         Ok(()) => {
-                            settings = next;
-                            *shared_settings.lock().unwrap() = settings.clone();
-                            log::info!(
-                                "schedule saved: {} rule(s){}",
-                                parsed.rules.len(),
-                                if parsed.night.is_some() {
-                                    " + night mode"
-                                } else {
-                                    ""
-                                }
-                            );
-                            sched.schedule = parsed;
+                            sched.schedule = *parsed;
                             sched.dirty = true;
                             let _ = reply.send(Ok(Applied::unchanged(
                                 engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -2284,6 +2254,15 @@ impl Scheduling {
 
     /// The settings that apply now: the saved ones, with the rule's playlist
     /// in place of `set` while a rule chooses one.
+    /// [`effective`](Self::effective)'s playlist alone, borrowed: no copy
+    /// of the settings (the display core compares a PUT with it).
+    fn effective_set<'a>(&'a self, settings: &'a Settings) -> &'a str {
+        match &self.decision.set {
+            Some(set) if self.broken_set.as_ref() != Some(set) => set,
+            _ => &settings.set,
+        }
+    }
+
     fn effective(&self, settings: &Settings) -> Settings {
         let mut eff = settings.clone();
         if let Some(set) = &self.decision.set {

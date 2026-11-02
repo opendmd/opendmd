@@ -4,9 +4,15 @@
 # ///
 """Does CPU0's work reach the display? A raced Formula idle, then under load.
 
-    uv run tools/display-stress.py HOST [--formula starfield] [--seconds 60]
-        [--loads poll,configs,uploads] [--status-hz 20] [--config-every 2]
-        [--upload-kb 256] [--json OUT]
+    uv run tools/display-stress.py HOST [--formula starfield | --path PATH]
+        [--jit on|off] [--seconds 60] [--loads poll,configs,uploads]
+        [--status-hz 20] [--config-every 2] [--upload-kb 256] [--json OUT]
+
+`--path` plays any path instead of a bundled Formula, e.g. the bus test
+(a frame of IRAM-resident VM code), with the JIT off for the run:
+
+    P="@formula?psb=$(psi build --base64 docs/research/display-iso/iram-light.psi)"
+    uv run tools/display-stress.py HOST --path "$P" --jit off --loads uploads
 
 Plays a bundled Formula with `/api/play` (`formula_keep` set to `hold` for
 the run, put back after), lets it settle, then samples
@@ -124,6 +130,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("host")
     ap.add_argument("--formula", default="starfield")
+    ap.add_argument("--path", help="a path to play instead of @formula:<--formula>")
+    ap.add_argument("--jit", choices=["on", "off"], help="formula_jit for the run (put back after)")
     ap.add_argument("--seconds", type=float, default=60)
     ap.add_argument("--settle", type=float, default=8)
     ap.add_argument("--status-hz", type=float, default=20)
@@ -135,11 +143,17 @@ def main():
     dev = Device(a.host)
     cfg = dev.config()
     keep, dwell_max = cfg.get("formula_keep", "turn"), int(cfg.get("dwell_max", 30))
+    jit_before = cfg.get("formula_jit")
+    path = a.path or f"@formula:{a.formula}"
+    label = a.formula if not a.path else "path"
     counts = {"status": 0, "config": 0, "uploads": 0, "errors": 0}
     stop = threading.Event()
     try:
-        dev.req("PUT", "/api/config", {"formula_keep": "hold"})
-        dev.req("POST", "/api/play", {"path": f"@formula:{a.formula}"})
+        first = {"formula_keep": "hold"}
+        if a.jit:
+            first["formula_jit"] = a.jit == "on"
+        dev.req("PUT", "/api/config", first)
+        dev.req("POST", "/api/play", {"path": path})
         time.sleep(a.settle)
         s0 = snapshot(dev.status())
         time.sleep(a.seconds)
@@ -201,15 +215,20 @@ def main():
     finally:
         stop.set()
         for call in (
-            lambda: dev.req("PUT", "/api/config", {"dwell_max": dwell_max, "formula_keep": keep}),
+            lambda: dev.req(
+                "PUT",
+                "/api/config",
+                {"dwell_max": dwell_max, "formula_keep": keep}
+                | ({"formula_jit": jit_before} if a.jit and jit_before is not None else {}),
+            ),
             lambda: dev.req("DELETE", "/api/files" + STRESS_FILE),
         ):
             try:
                 call()
             except Exception:
                 pass
-    print(f"{a.formula}: idle   {idle}")
-    print(f"{a.formula}: stress {stress}")
+    print(f"{label}: idle   {idle}")
+    print(f"{label}: stress {stress}")
     li, ls = idle["late_per_1000"] or 0, stress["late_per_1000"] or 0
     us_i, us_s = idle["frame_us"] or 0, stress["frame_us"] or 0
     ok = (
@@ -220,7 +239,7 @@ def main():
     print("verdict:", "PASS: the load did not reach the display" if ok else "FAIL: the load reached the display")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"formula": a.formula, "loads": a.loads, "idle": idle, "stress": stress, "pass": ok}, f, indent=1)
+            json.dump({"formula": a.formula, "path": a.path, "jit": a.jit, "loads": a.loads, "idle": idle, "stress": stress, "pass": ok}, f, indent=1)
 
 
 if __name__ == "__main__":

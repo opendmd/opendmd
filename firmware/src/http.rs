@@ -684,6 +684,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
         let card_speed = next.card_speed;
+        // The shared copy and the log line are this handler's (CPU0), once
+        // the main task has applied it: the display core neither clones
+        // the settings nor formats a line for a PUT.
+        let shared = next.clone();
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -698,6 +702,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         match rx.recv_timeout(REINDEX_TIMEOUT) {
             Ok(Ok(applied)) => {
+                info!(
+                    "config applied: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
+                    shared.brightness,
+                    shared.look.name(),
+                    shared.glow.name(),
+                    shared.dwell_min,
+                    shared.dwell_max,
+                    shared.shuffle,
+                    shared.platforms,
+                    shared.set,
+                    shared.transition,
+                    shared.attract,
+                    shared.panel_sync,
+                    shared.panel_split
+                );
+                *c.settings.lock().unwrap() = shared;
                 if let Some(name) = renamed {
                     // Queued, not waited for: the worker may be mid-connect.
                     if c.net.send(NetCommand::Rename(name)).is_err() {
@@ -816,20 +836,27 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         } else {
             json
         };
+        let (rules, night) = (parsed.rules.len(), parsed.night.is_some());
+        let shared = json.clone();
         let (tx, rx) = mpsc::channel();
         if c.cmd
-            .send(Command::SetSchedule { json, reply: tx })
+            .send(Command::SetSchedule {
+                json,
+                parsed: Box::new(parsed),
+                reply: tx,
+            })
             .is_err()
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
         // Applying may switch the playlist (a rule in force now).
         match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(Ok(_)) => req.json(&format!(
-                r#"{{"ok":true,"rules":{},"night":{}}}"#,
-                parsed.rules.len(),
-                parsed.night.is_some()
-            )),
+            Ok(Ok(_)) => {
+                // (The shared copy and the line are this handler's, on CPU0.)
+                c.settings.lock().unwrap().schedule = shared;
+                info!("schedule saved: {rules} rule(s){}", if night { " + night mode" } else { "" });
+                req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
+            }
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
