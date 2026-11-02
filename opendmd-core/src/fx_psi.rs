@@ -213,6 +213,9 @@ pub struct Governor {
     seen: u16,
     floor: u8,
     floor_left: u16,
+    /// Raced frames after an open or a retune whose lateness is not
+    /// counted ([`Governor::LATE_GRACE`]): they run from cold caches.
+    grace: u8,
 }
 
 impl Governor {
@@ -227,8 +230,9 @@ impl Governor {
 
     /// Another program in place (a live edit, or a Formula played over the
     /// one on screen): `start`, its own governor, where it starts slower;
-    /// else the level and the mean go on (a heavier formula starts at least
-    /// as slow as its estimate says). The raced frames' record (late frames
+    /// else the level goes on (a heavier formula starts at least as slow as
+    /// its estimate says) but the mean is the new program's estimate (the
+    /// old one's mean was another program's frames). The raced frames' record (late frames
     /// and the every-2nd-refresh hold they bring) always starts again: it
     /// was the old program's against the scan. Kept, a hold one heavy
     /// Formula earned held every Formula played over it to half its frame
@@ -238,7 +242,9 @@ impl Governor {
         if start.level > self.level {
             *self = start;
         }
+        self.avg_us = start.avg_us;
         (self.late, self.seen, self.floor, self.floor_left) = (0, 0, 0, 0);
+        self.grace = Self::LATE_GRACE;
         self.edited();
     }
 
@@ -264,6 +270,7 @@ impl Governor {
             calm: 0,
             avg_us: est_us,
             skip: Self::SKIP,
+            grace: Self::LATE_GRACE,
             ..Governor::default()
         };
         while g.level < Self::MAX_LEVEL && est_us > Self::budget_us(grid << g.level) {
@@ -359,6 +366,15 @@ impl Governor {
         false
     }
 
+    /// Raced frames after an open or a retune left out of the late count:
+    /// the first frames of a Formula run from cold caches (its code and
+    /// data just loaded, the flash cache holding the last one's), and two
+    /// late ones among them held a Formula that keeps every refresh after
+    /// that to every 2nd for [`Governor::LATE_HOLD`] frames: Starfield,
+    /// opened after a reboot or over Glitter, at 16 ms frames for a minute
+    /// and over Old photo at 8 (psi-perf, 2026-11-02).
+    pub const LATE_GRACE: u8 = 16;
+
     /// The frames (refreshes) a raced picture is held for.
     pub fn beam_frames(&self, unit: u32) -> u32 {
         unit << self.level.max(self.floor)
@@ -376,6 +392,10 @@ impl Governor {
     /// A raced frame was (`late`) or wasn't late; `true` when that just
     /// moved the formula to every 2nd refresh.
     pub fn note_late(&mut self, late: bool) -> bool {
+        if self.grace > 0 {
+            self.grace -= 1;
+            return false;
+        }
         if self.floor > 0 {
             self.floor_left = self.floor_left.saturating_sub(1);
             if self.floor_left == 0 {
@@ -2500,6 +2520,11 @@ mod tests {
     fn late_raced_frames_hold_every_second_refresh_for_a_while() {
         let mut g = Governor::new(1_000, 10);
         assert_eq!(g.beam_frames(1), 1);
+        // The first frames after an open are cold: late or not, not counted.
+        for _ in 0..Governor::LATE_GRACE {
+            assert!(!g.note_late(true));
+        }
+        assert_eq!(g.beam_frames(1), 1);
         // One late frame a window: fine.
         for k in 0..3 * Governor::LATE_WINDOW {
             assert!(!g.note_late(k % Governor::LATE_WINDOW == 7));
@@ -2557,6 +2582,11 @@ mod tests {
         const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
         const SCAN: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
         let mut fx = PsiFx::from_query(&super::path(ROAD, "")[Q..]).unwrap();
+        // (Its first frames are the grace's: cold, not counted.)
+        for _ in 0..Governor::LATE_GRACE {
+            assert!(!fx.gov.note_late(true));
+        }
+        assert_eq!(fx.gov.beam_frames(1), 1, "late in its grace: not held");
         assert!(!fx.gov.note_late(true));
         assert!(fx.gov.note_late(true));
         assert_eq!(fx.gov.beam_frames(1), 2, "the road held");
@@ -2664,6 +2694,7 @@ mod tests {
             }
         }
         a_rate_formula_is_not_raced_and_keeps_its_grid();
+        starfields_grid_does_not_depend_on_what_played_before();
         arm_beam(false);
         set_beam(None);
         set_clock(None);
@@ -2672,6 +2703,63 @@ mod tests {
     fn raced_level(fx: &Fx) -> u32 {
         let _ = fx;
         u32::from(stats().1 > 12)
+    }
+
+    thread_local! {
+        static COLD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The panel's end of a raced frame whose first frames after an open
+    /// come in late (cold caches): `COLD` of them.
+    fn beam_end_cold() -> (i32, u32, bool) {
+        let late = COLD.with(|c| {
+            let n = c.get();
+            c.set(n.saturating_sub(1));
+            n > 0
+        });
+        (0, 0, late)
+    }
+
+    /// Starfield (100 fps) plays every refresh whether it opens fresh or is
+    /// played over Glitter or Old photo (a retune), even when its first
+    /// raced frames run late from cold caches. (They counted: two of them
+    /// held it to every 2nd refresh for a minute — the spare after a reboot
+    /// and over Glitter, not over Old photo.)
+    /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`: the
+    /// hooks are the process's.)
+    fn starfields_grid_does_not_depend_on_what_played_before() {
+        const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+        const GLITTER: &str = include_str!("../../opendmd-web/formulas/glitter.psi");
+        const PHOTO: &str = include_str!("../../opendmd-web/formulas/old-photo.psi");
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end_cold }));
+        let run = |fx: &mut Fx, from: u32| -> Vec<Duration> {
+            let mut c = Canvas::new();
+            arm_beam(true);
+            (from..from + 60)
+                .map(|k| {
+                    TOLD.with(|t| t.borrow_mut().clear());
+                    STARTS.with(|n| n.set(0));
+                    fx.frame(Duration::from_millis(u64::from(k) * 8), &mut c)
+                })
+                .collect()
+        };
+        let mut grids = Vec::new();
+        for before in [None, Some(GLITTER), Some(PHOTO)] {
+            let mut fx = Fx::parse(&path(before.unwrap_or(STARS))).unwrap();
+            let mut from = 0;
+            if before.is_some() {
+                run(&mut fx, 0);
+                from = 60;
+                let Fx::Psi(b) = &mut fx;
+                b.retune_from(&super::path(STARS, "")[Q..]).unwrap();
+            }
+            COLD.with(|c| c.set(3));
+            let d = run(&mut fx, from);
+            grids.push(*d.last().unwrap());
+        }
+        assert_eq!(grids, [Duration::from_micros(7_980); 3], "fresh, over Glitter, over Old photo");
+        COLD.with(|c| c.set(0));
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end }));
     }
 
     /// A `rate` formula with the beam's hooks armed is not raced: its
