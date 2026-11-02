@@ -129,7 +129,7 @@ input.sw{appearance:none;width:32px;height:18px;border-radius:9px;background:var
 input.sw::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg)}
 input.sw:checked{background:var(--acc)}input.sw:checked::after{left:16px}
 #lib-detail{position:relative}
-.file{display:flex;gap:16px;font-size:13px;margin-top:16px}.file>span{min-width:0;overflow-wrap:anywhere}
+.file{display:flex;gap:16px;font-size:13px;margin-top:16px}.file>span{min-width:0;overflow-wrap:anywhere}.file>span:first-child{flex:none}
 .close{display:none}
 @media (max-width:1000px){
   .libgrid{grid-template-columns:minmax(0,1fr)}

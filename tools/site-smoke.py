@@ -34,6 +34,15 @@ build URL serves. There the art index must also carry
   postMessage, to a stand-in there; remembered); a gallery Formula by name
   (`#gallery=<slug>`, to the panel by name too); a choice; nothing to show
   three ways;
+- /create/ (Create Art, the web app's Studio), under its _headers CSP with
+  no violation: `?q=&platform=` searching Game art at once (the index
+  same-origin, nothing asked of opendmd.dev, the pictures stubbed); a
+  picture loaded, edited (text, colours) and downloaded, the GIF 128x32;
+  GifCities (stubbed) to an animated GIF, trimmed, reversed and
+  downloaded with its frames; your own file; none of the words users never
+  see; a phone's width; Send to my panel (the address asked once, the
+  panel's page opened at #import, the GIF sent to it on its ready with its
+  fields, Download after, a blocked pop-up said);
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -394,6 +403,213 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
         page.goto(u)
         page.wait_for_selector("#f-none:not([hidden])", timeout=20000)
         check(page.is_hidden("#f"), f"/f/: {what} says so ({page.inner_text('#f-none-why')[:60]})")
+    page.context.close()
+
+
+# Create Art's page: canned answers for its web sources (no network).
+C_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"], "kinds": "123"}
+C_GC = [  # GifCities' JSON: a square one and a wide one
+    {"url_text": "spinning  mario 2", "weight": 90, "gif": "x/a.gif", "checksum": "SQUARE", "height": 64, "width": 64, "page": "https://web.archive.org/web/2009/a"},
+    {"url_text": "cool mario banner 1", "weight": 50, "gif": "x/b.gif", "checksum": "WIDE", "height": 31, "width": 88, "page": "https://web.archive.org/web/2009/b"},
+]
+
+
+def c_fixtures() -> tuple[bytes, bytes]:
+    """A 256x64 picture (bands and a box) as PNG, and a 4-frame 88x31 GIF (a box moving right)."""
+    from PIL import ImageDraw
+    im = Image.new("RGB", (256, 64), (10, 20, 60))
+    d = ImageDraw.Draw(im)
+    for k in range(8):
+        d.rectangle([k * 32, 40, k * 32 + 30, 63], fill=(40 * k % 256, 200 - 20 * k, 90))
+    d.rectangle([100, 8, 160, 34], fill=(250, 210, 30))
+    png = io.BytesIO()
+    im.save(png, "PNG")
+    frames = []
+    for i in range(4):
+        f = Image.new("RGB", (88, 31), (20, 30, 120))
+        ImageDraw.Draw(f).rectangle([4 + 18 * i, 6, 24 + 18 * i, 24], fill=(250, 210, 30))
+        frames.append(f)
+    gif = io.BytesIO()
+    frames[0].save(gif, "GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return png.getvalue(), gif.getvalue()
+
+
+def c_stub(page: Page, base: str, png: bytes, gif: bytes, asked: list[str]) -> None:
+    cors = {"access-control-allow-origin": "*"}
+    page.route(f"{base}/art-index/v1/SNES.json", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=json.dumps(C_INDEX), headers={"content-type": "application/json"})))
+    page.route("https://raw.githubusercontent.com/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=png, headers={**cors, "content-type": "image/png"})))
+    page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=json.dumps(C_GC), headers={**cors, "content-type": "application/json"})))
+    page.route("https://blob.gifcities.org/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=gif, headers={
+        "content-type": "image/gif", **(cors if r.request.headers.get("origin") else {})})))
+    page.route("https://opendmd.dev/**", lambda r: (asked.append(r.request.url), r.abort()))
+
+
+def c_data(page: Page) -> dict:
+    return page.evaluate("({...document.querySelector('#studio').dataset})")
+
+
+def c_download(page: Page) -> Image.Image:
+    """Save (Download GIF): the file, opened."""
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#st-save")
+    d = dl.value
+    im = Image.open(io.BytesIO(Path(d.path()).read_bytes()))
+    im.filename_suggested = d.suggested_filename
+    return im
+
+
+def create_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    png, gif = c_fixtures()
+    for size in SIZES:
+        page = new_page(browser, size, errors)
+        page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+            (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+        page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+                   lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+        asked: list[str] = []
+        c_stub(page, base, png, gif, asked)
+        page.goto(f"{base}/create/?q=studio+test&platform=snes")
+        page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+        page.wait_for_selector("#find-grid .find-hit", timeout=20000)
+        tiles = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.kind)")
+        src = page.eval_on_selector_all("#st-src button", "els => els.map(e => [e.dataset.v, e.classList.contains('on')])")
+        check(tiles == ["Named_Titles", "Named_Snaps", "Named_Snaps"] and page.input_value("#st-q") == "studio test"
+              and page.input_value("#find-platform") == "SNES" and src == [["gameart", True], ["gifcities", False], ["own", False]],
+              f"/create/ ({size}): ?q=&platform= searches Game art on that platform at once ({tiles}, {src})")
+        check(page.is_hidden("#c-cap") and page.inner_text("h1") == "Create Art" and page.locator("#st-save").inner_text() == "Download GIF"
+              and page.locator("#st-cat-l").is_hidden(), f"/create/ ({size}): the Studio, Save downloads (no category: there is no card)")
+        page.click("#find-grid .find-hit[data-kind=Named_Titles]")
+        wait_js(page, "document.querySelector('#studio').dataset.title === 'Studio Test'", timeout=20000)
+        d = c_data(page)
+        check(d.get("platform") == "SNES" and d.get("name") == "SNES_Studio_Test_01.gif" and page.is_visible("#st-frame") and page.is_hidden("#find-grid"),
+              f"/create/ ({size}): a picture loaded, its platform and title, Find folded ({d.get('platform')}, {d.get('name')})")
+        if size == "phone":
+            check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "/create/ (phone): no sideways scroll with a picture in")
+            if shots:
+                page.screenshot(path=str(shots / "create-phone.png"), full_page=True)
+            check(not page.evaluate("window.__csp || []"), f"/create/ ({size}): no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+            page.context.close()
+            continue
+        # Edits: text, colours.
+        page.fill("#st-text", "HI")
+        page.select_option("#st-colours", "16")
+        wait_js(page, "document.querySelector('#studio').dataset.text === '1'", timeout=5000)
+        page.wait_for_timeout(400)
+        if shots:
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=str(shots / "create-laptop-still.png"), full_page=True)
+        im = c_download(page)
+        n = getattr(im, "n_frames", 1)
+        im.seek(0)
+        colours = len(im.convert("RGB").getcolors(4096) or [])
+        check(im.format == "GIF" and im.size == (128, 32) and im.filename_suggested == "SNES_Studio_Test_01.gif" and 1 < colours <= 17,
+              f"/create/: Download GIF -> {im.filename_suggested}, {im.size}, {n} frame(s), {colours} colours")
+        # GifCities: an animated GIF, trimmed and reversed.
+        page.click("#st-change")
+        page.click("#st-src [data-v=gifcities]")
+        page.fill("#st-q", "mario")
+        page.click("#st-go")
+        wait_js(page, "document.querySelectorAll('#find-grid .find-hit').length === 2", timeout=20000)
+        page.click("#find-grid .find-hit[data-id=WIDE]")
+        wait_js(page, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+        d = c_data(page)
+        check(d.get("srcFrames") == "4" and page.is_visible("#st-tl") and "Seen on" in page.inner_text("#st-import"),
+              f"/create/: GifCities -> an animated GIF on the timeline ({d.get('srcFrames')} frames)")
+        page.click("#st-tl .st-cell >> nth=3")
+        page.click("#st-del")
+        page.check("#st-rev")
+        wait_js(page, "document.querySelector('#studio').dataset.frames === '3'", timeout=5000)
+        page.fill("#st-title", "Mario banner")
+        wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Mario_banner_01.gif'", timeout=5000)
+        if shots:
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=str(shots / "create-laptop-anim.png"), full_page=True)
+        im = c_download(page)
+        xs = []  # where the yellow box starts in each frame: it moved right, so reversed it moves left
+        for i in range(im.n_frames):
+            im.seek(i)
+            rgb = im.convert("RGB")
+            xs.append(min((x for x in range(128) for y in range(32) if (lambda p: p[0] > 180 and p[1] > 140 and p[2] < 90)(rgb.getpixel((x, y)))), default=-1))
+        check(im.size == (128, 32) and im.n_frames == 3 and im.filename_suggested == "SNES_Mario_banner_01.gif" and xs[0] > xs[1] > xs[2] >= 0,
+              f"/create/: the animation downloaded, the last frame deleted, reversed ({im.filename_suggested}, {im.n_frames} frames, box at {xs})")
+        # Your own picture.
+        page.click("#st-change")
+        page.click("#st-src [data-v=own]")
+        with tempfile.TemporaryDirectory() as t:  # (the browser reads the file from its path: kept until it has)
+            f = Path(t) / "mine.png"
+            f.write_bytes(png)
+            page.set_input_files("#st-file", str(f))
+            wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('Picture 256')", timeout=20000)
+        check(c_data(page).get("animated") == "", "/create/: your own picture loads")
+        text = page.inner_text("body")
+        hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
+        check(not hit, f"/create/: none of the words users never see {hit}")
+        off = [u for u in asked if u.startswith("https://opendmd.dev/")]
+        check(not off and any("/art-index/v1/SNES.json" in u for u in asked), f"/create/: Game art's index same-origin, nothing asked of opendmd.dev {off[:2]}")
+        check(not page.evaluate("window.__csp || []"), f"/create/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+        page.context.close()
+
+
+PANEL_IMPORT_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { const d = e.data, g = d && d.gif; "
+                     "document.title = JSON.stringify({origin: e.origin, data: {...d, gif: g instanceof ArrayBuffer ? "
+                     "{bytes: g.byteLength, head: String.fromCharCode(...new Uint8Array(g, 0, 4))} : String(g)}}); });"
+                     "if (opener) opener.postMessage({type: 'opendmd-import-ready'}, '*');</script>")
+
+
+def create_send(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/create/'s Send to my panel: the address asked once (as /f/ asks it),
+    the panel's page opened at `#import`, nothing in its link, and on its
+    ready the GIF (a transferred ArrayBuffer) with its name, title,
+    platform, author and logo, to that window's origin; Download still
+    works after; remembered; a blocked pop-up said; no button before a picture."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    c_stub(page, base, png, gif, [])
+    seen: list[str] = []
+    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=PANEL_IMPORT_STUB, content_type="text/html")))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(page.is_hidden("#c-send"), "/create/ send: no Send to my panel until there is a picture")
+    page.goto(f"{base}/create/?q=studio+test&platform=SNES")
+    page.wait_for_selector("#find-grid .find-hit", timeout=30000)
+    page.click("#find-grid .find-hit[data-kind=Named_Titles]")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01.gif'", timeout=20000)
+    page.check("#st-logo")
+    page.fill("#st-author", "tester1")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01_tester1_LOGO.gif'", timeout=10000)
+    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
+    check(pri == ["c-send"] and page.is_visible("#st-save"), f"/create/ send: Send to my panel the primary, Download beside it ({pri})")
+    page.click("#c-send")
+    check(page.is_visible("#c-ask") and page.input_value("#c-addr") == "opendmd.local" and not seen, "/create/ send: asks for the panel's address (opendmd.local)")
+    page.fill("#c-addr", "example.com")
+    page.click("#c-go")
+    check("Press Send again" in page.inner_text("#c-addr-err") and not seen, "/create/ send: an address on the internet is asked about first")
+    page.fill("#c-addr", "192.168.1.50")
+    with page.context.expect_page() as info:
+        page.click("#c-go")
+    popup = info.value
+    got = sent(popup)
+    d = got["data"]
+    want = {"type": "opendmd-import", "name": "SNES_Studio_Test_01_tester1_LOGO.gif", "title": "Studio Test", "platform": "SNES", "author": "tester1", "logo": True}
+    check(popup.url == "http://192.168.1.50/#import" and got["origin"] == base and {k: d.get(k) for k in want} == want
+          and d["gif"]["head"] == "GIF8" and d["gif"]["bytes"] > 100,
+          f"/create/ send: the panel's page at #import, the GIF sent to it on its ready ({popup.url}, {str(got)[:120]})")
+    popup.close()
+    check(page.inner_text("#c-where-addr") == "192.168.1.50", "/create/ send: the address is remembered")
+    im = c_download(page)
+    check(im.size == (128, 32) and im.filename_suggested == "SNES_Studio_Test_01_tester1_LOGO.gif", "/create/ send: Download still works after sending")
+    with page.context.expect_page() as info:
+        page.click("#c-send")
+    check(info.value.url == "http://192.168.1.50/#import" and sent(info.value)["data"]["gif"]["head"] == "GIF8", "/create/ send: straight to the panel the next time")
+    info.value.close()
+    page.evaluate("window.open = () => null")
+    page.click("#c-send")
+    check("allow pop-ups" in page.inner_text("#c-cap"), f"/create/ send: a blocked pop-up is said ({page.inner_text('#c-cap')[:60]})")
+    check(not page.evaluate("window.__csp || []"), "/create/ send: no CSP violation")
     page.context.close()
 
 
@@ -1002,9 +1218,9 @@ def gallery_sort(browser, base: str, errors: list[str]) -> None:
 # The site's structure (the design pass): the pages every visitor sees.
 KEY_PAGES = {  # shot name: path
     "home": "/", "install": "/install/", "guide": "/guide/", "guide-web-app": "/guide/web-app.html",
-    "formulas": "/formulas/", "dev": "/dev/", "dev-psi": "/dev/psi/", "licences": "/licenses/",
+    "formulas": "/formulas/", "create": "/create/", "dev": "/dev/", "dev-psi": "/dev/psi/", "licences": "/licenses/",
 }
-TOP_LABELS = ["Guide", "Formulas", "Demo", "For developers", "Install"]
+TOP_LABELS = ["Guide", "Formulas", "Create Art", "Demo", "For developers", "Install"]
 # Words users never see (CLAUDE.md, "Product model"); "pack" only as the DMDoS GIF pack's name.
 HIDDEN_WORDS = re.compile(r"\b(cache[sd]?|caching|ODM|odm|buckets?|manifests?|bundles?|bundled)\b|(?<!GIF )\bpack\b", re.I)
 
@@ -1052,7 +1268,7 @@ def reachable(site: Path) -> None:
 
 
 def csp_pattern(path: str) -> str:
-    for pat in ("/install/*", "/f/*", "/dev/psi/*", "/formulas/*"):
+    for pat in ("/install/*", "/f/*", "/create/*", "/dev/psi/*", "/formulas/*"):
         if path.startswith(pat[:-1]):
             return pat
     return "/*"
@@ -1090,7 +1306,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
                 lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
                 check(lum > 600 if scheme == "light" else lum < 120, f"{what}: the {scheme} theme ({bg})")
-                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas"):
+                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create"):
                     text = page.inner_text("body")
                     hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
                     check(not hit, f"{name}: none of the words users never see {hit}")
@@ -1435,6 +1651,9 @@ def main() -> int:
         structure(browser, base, a.site, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
+        print("Create Art (/create/)")
+        create_page(browser, base, a.site, errors, a.shots)
+        create_send(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
