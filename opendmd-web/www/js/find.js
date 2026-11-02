@@ -49,9 +49,9 @@ export async function thumb(url, hops = 3) {
 }
 
 // Where the index is: the site, from a player (it answers with
-// `Access-Control-Allow-Origin: *`); beside the demo, same-origin, when this
-// page is the site's demo.
-export const artIndexBase = () => (app.demo || location.origin === new URL(SITE).origin
+// `Access-Control-Allow-Origin: *`); same-origin when this page is the
+// site's (its demo, its Create Art page: `app.site`).
+export const artIndexBase = () => (app.demo || app.site || location.origin === new URL(SITE).origin
   ? new URL('../' + ART_INDEX, location.href).href : SITE + ART_INDEX);
 
 // A platform's index, fetched once a session (a failure is forgotten, so
@@ -122,7 +122,23 @@ function gifcities(q) {
   return gcCache.get(k);
 }
 
+// In the order Find offers them (a new source, a new entry here).
 export const sources = [
+  {
+    id: 'gameart',
+    label: 'Game art',
+    placeholder: 'Game title',
+    async search(q, o) {
+      const { d, games } = await findGames(o.platform, q);
+      return games.slice(0, 12).flatMap((g) => gamePictures(o.platform, d, g));
+    },
+    filters: [
+      { id: 'platform', type: 'select', value: PLATFORMS[0], search: true, label: 'Platform',
+        items: async () => { const art = await artModule(); return PLATFORMS.map((p) => [p, art.consoleName(p) || p]); } },
+    ],
+    fail: 'Game art needs the internet: the list of games couldn’t be reached',
+    caption: () => ['Title screens, in-game shots, boxes and logos from the ', h('a', { href: 'https://github.com/libretro-thumbnails', target: '_blank', rel: 'noopener' }, 'libretro-thumbnails'), ' collections'],
+  },
   {
     id: 'gifcities',
     label: 'GifCities',
@@ -141,28 +157,14 @@ export const sources = [
     fail: 'GifCities didn’t answer',
     caption: () => ['From the Internet Archive’s GeoCities collection. Results are unfiltered. ', h('a', { href: 'https://gifcities.org/', target: '_blank', rel: 'noopener' }, 'gifcities.org')],
   },
-  {
-    id: 'gameart',
-    label: 'Game art',
-    placeholder: 'Game title',
-    async search(q, o) {
-      const { d, games } = await findGames(o.platform, q);
-      return games.slice(0, 12).flatMap((g) => gamePictures(o.platform, d, g));
-    },
-    filters: [
-      { id: 'platform', type: 'select', value: PLATFORMS[0], search: true, label: 'Platform',
-        items: async () => { const art = await artModule(); return PLATFORMS.map((p) => [p, art.consoleName(p) || p]); } },
-    ],
-    fail: 'Game art needs the internet: the list of games couldn’t be reached',
-    caption: () => ['Title screens, in-game shots, boxes and logos from the ', h('a', { href: 'https://github.com/libretro-thumbnails', target: '_blank', rel: 'noopener' }, 'libretro-thumbnails'), ' collections'],
-  },
 ];
 
 // --- The results ----------------------------------------------------------------
 
 // find.css, once (resolves when it has loaded).
 let styled = null;
-export const style = () => (styled ??= new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './find.css', onload: res, onerror: res }))));
+// (Beside this module's folder: the web app's root.)
+export const style = () => (styled ??= new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: new URL('../find.css', import.meta.url).href, onload: res, onerror: res }))));
 
 // A result tile: the picture (small GIFs at a whole-number zoom, as the panel
 // would show pixels), its title and size (a game picture: the game, and which picture); `onPick(hit, tile)` on a click.
@@ -190,8 +192,8 @@ export function tile(x, onPick, urls) {
 // Game art) into `narrow`; a click on a hit is `onPick(hit)` (awaited; it
 // loads the picture into the editor, and throws if it could not).
 // Returns { use(source), search(q), set(source id, filter id, value) }.
+// (Its stylesheet is the caller's: `style()`, or the site page's own.)
 export function mountResults(el, { onPick, narrow }) {
-  style();
   let src = null, all = [], tok = 0, q = '', urls = [];
   const opts = {}; // per source id: the filters' values
   const narrowRow = h('div.row.find-narrow', { id: 'find-narrow' });
