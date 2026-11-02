@@ -597,6 +597,14 @@ pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 /// a TCP pcb (~200 B) and nothing else until it is used.
 pub const HTTP_MAX_SOCKETS: u16 = 7;
 
+/// Route slots in the HTTP server (`httpd_config_t.max_uri_handlers`): one
+/// per `server.route` in `http::start`, the captive-portal probes and the
+/// catch-all included. A route past the limit fails to register and the
+/// whole server is dropped (the player carries on, unreachable): that
+/// happened when `/api/quiet` became the 51st under a limit of 50
+/// (2026-11-02). A slot costs ~16 B of heap; keep a dozen spare.
+pub const HTTP_MAX_HANDLERS: u16 = 64;
+
 /// Where the playlists live on the card. (The web app is not on the card: it
 /// is a www pack in flash, `www.rs`.)
 pub const SETS_DIR: &str = "/sdcard/sets";
