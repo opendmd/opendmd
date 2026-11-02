@@ -299,11 +299,14 @@ export async function mount(el) {
 }
 
 // `#gallery=<slug>` or `#remix` (the site's Open on my panel, app.js keeps
-// it in app.remix): the Formula into the editor, the remix: change it, save
-// it, show it, add it to a playlist. A gallery one by name (a bundled one
-// is here already, else fetched from the site); an edited one sent by the
-// site's page that opened this one (postMessage: its origin opendmd.dev, or
-// this page's own for the demo and the tests), never in the link.
+// it in app.remix): the Formula saved under Your formulas as it arrives
+// (js/fstore.js: on the panel, else this browser), then into the editor:
+// change it, show it, add it to a playlist. A gallery one by name (a
+// bundled one is here already: nothing to save; else fetched from the
+// site); an edited one sent by the site's page that opened this one
+// (postMessage: its origin opendmd.dev, or this page's own for the demo
+// and the tests), never in the link. One that doesn't work isn't saved:
+// said, and kept as a draft not saved yet.
 async function remixed() {
   const r = app.remix;
   if (!r) return;
@@ -312,8 +315,27 @@ async function remixed() {
   const ex = r.gallery && EX.find((x) => x.stem === r.gallery);
   let f;
   try { f = ex ? { name: ex.name, src: ex.src } : r.gallery ? await fetchFormula(ROOT(), r.gallery) : await sent(); } catch (e) { toast(`Couldn’t open that Formula: ${e.message || e}`, 'bad'); return; }
-  app.psiOpen = { ...f, ...r.f };
+  f = { ...f, ...r.f };
+  if (!ex) {
+    try { f = await arrived(f); } catch (e) { toast(`“${f.name || 'This formula'}” isn’t saved: ${e.message || e}`, 'bad'); f.unsaved = true; }
+  }
+  app.psiOpen = f;
   app.go('formulas/edit');
+}
+// A Formula from the site, saved under Your formulas (once: the same text
+// already there is opened instead), its name written in as its `name` line
+// as the editor's Save does. The record, as saved.
+async function arrived(f) {
+  if (!info(f.src).length) throw new Error(`it doesn’t work yet: ${T(() => P.error(), '').replace(/`/g, '')}`);
+  const c = ctlOf(f), name = c?.name || f.name.trim() || `My formula ${mine().length + 1}`;
+  const src = (c?.name ? f.src : T(() => P.declare(f.src, 'name', 0, `name "${declText(name, MAX_NAME)}"`), '') || f.src).slice(0, MAX_SRC);
+  const vals = {};
+  for (const k of 'abc') if (f[k] != null) vals[k] = f[k];
+  const had = mine().find((x) => x.src === src || x.src === f.src);
+  if (had) { toast(`“${name}” is already under Your formulas`, 'ok'); return { ...had, ...vals }; }
+  const rec = await S.put({ name, src, ...vals });
+  toast(`“${name}” is saved ${S.onCard() ? 'on your panel' : 'in this browser'}, under Your formulas`, 'ok');
+  return rec;
 }
 // The edited Formula from the page that opened this one: READY to it, then
 // its answer, `{type: REMIX, name, src, a, b, c}`, from opendmd.dev only.
@@ -431,7 +453,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, pick, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(S.copyUp).then((n) => { B.copied = n; }, () => {})])
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(S.copyUp).then((n) => { B.copied = n; }, (e) => toast('Couldn’t read your Formulas on the panel: ' + (e.message || e), 'bad'))])
     // (Each says its own name: `[{src}]`.)
     .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); copied(B.copied); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
@@ -884,10 +906,15 @@ function edit() {
   if (ext || pe) {
     const f = m ? { ...m } : opened(ext || pe.f), d = unsaved();
     f.base ??= sig(f);
+    // Yours as saved (the site's, saved as it arrived): Save keeps to its file.
+    if (ext?.id != null) { f.id = ext.id; if (ext.file) f.file = ext.file; }
+    // Not saved (it doesn't work yet): a draft not saved yet, kept over a reload.
+    if (ext?.unsaved) f.base = '';
     B.pushed = !!pe;
     if (d && sig(d) !== sig(f)) later = () => ask(`Open “${f.name}”? “${d.name || 'Untitled formula'}” isn’t saved yet and will be replaced.`, ['Open it', () => { B.ed.open(f); if (pe) B.ed.settings(); }], ['Keep mine', () => {}]);
     else B.draft = f;
     if (later) B.sheet = 0;
+    else if (ext?.unsaved) store.set('psi.draft', f);
   }
   B.editing = true;
   B.root.classList.add('psied');
