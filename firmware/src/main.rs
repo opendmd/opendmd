@@ -1756,6 +1756,7 @@ fn main() -> Result<()> {
         let entries = eng.catalog_len();
         probe::tick_begin();
         let (pre_open, pre_read) = frametime::take();
+        let pre_card = crate::cardspeed::take_player();
         let tick_start = uclock::now_us();
         if fresh {
             fresh = false;
@@ -1792,6 +1793,7 @@ fn main() -> Result<()> {
         };
         let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
+        let card_io = crate::cardspeed::take_player();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
         // (content time, see `NowPlaying::elapsed`) and frame number, when the
@@ -1991,6 +1993,9 @@ fn main() -> Result<()> {
                             advance_us,
                             step_us,
                             at_s: now.as_secs(),
+                            card_wait_us: pre_card.0 + card_io.0,
+                            card_xfer_us: pre_card.1 + card_io.1,
+                            kind: eng.playing_kind(),
                         });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold
