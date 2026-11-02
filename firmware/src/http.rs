@@ -370,8 +370,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return req.json(&json);
         }
-        // Out of a raced frame's way before the build (the quiet window).
-        crate::quiet::wait();
         let snap = {
             let s = c.status.lock().unwrap();
             let held = std::time::Instant::now();
@@ -384,23 +382,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
         keep_status(recent, &json);
         req.json(&json)
-    })?;
-
-    // The quiet window (`quiet.rs`): CPU0's heavy loops step aside while a
-    // raced frame is in its sensitive stretch. A diagnostic switch, not
-    // saved.
-    server.route("/api/quiet", Method::Get, move |req| req.json(&crate::quiet::json()))?;
-    server.route_json("/api/quiet", Method::Put, move |req| {
-        let Some(body) = json_body(req)? else {
-            return Ok(());
-        };
-        let on = match serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| v.get("on").and_then(|o| o.as_bool())) {
-            Some(on) => on,
-            None => return req.bad_request("expected {\"on\": true|false}"),
-        };
-        crate::quiet::set(on);
-        info!("quiet window {}", if on { "on" } else { "off" });
-        req.json(&crate::quiet::json())
     })?;
 
     let c = ctx.clone();

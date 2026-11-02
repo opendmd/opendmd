@@ -1350,8 +1350,6 @@ mod beam {
 
     /// `fx_psi::BeamHooks::end`.
     pub(super) fn end() -> (i32, u32, bool) {
-        // The frame's pairs are written: the quiet window ends.
-        crate::quiet::end();
         let st = state();
         let Some(f) = st.frame.take() else {
             return (0, 0, false);

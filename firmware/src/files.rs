@@ -253,8 +253,6 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
         // heap has fallen into the player's reserve, stop until it recovers.
         thread::yield_now();
         wait_for_heap()?;
-        // Between chunks, out of a raced frame's way (the quiet window).
-        crate::quiet::wait();
     }
     if probe::HTTP_LOG {
         probe::http_log(
@@ -338,7 +336,6 @@ pub fn stream_dir_json(req: &mut Req, card_dir: &str, fs_dir: &str, sizes: bool)
             out.clear();
             thread::yield_now();
             wait_for_heap()?;
-            crate::quiet::wait();
         }
         if count.is_multiple_of(64) {
             thread::yield_now();
@@ -556,8 +553,6 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
         if let Err(e) = wait_for_heap() {
             break Err((e, Some((503, "503 Service Unavailable"))));
         }
-        // Out of a raced frame's way before the card write (the quiet window).
-        crate::quiet::wait();
         if let Err(e) = file.write_all(&buf[..n]) {
             break Err((
                 anyhow::Error::from(e).context("writing to the card"),

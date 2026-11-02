@@ -8,9 +8,8 @@
         [--jit on|off] [--seconds 60] [--loads poll,configs,uploads]
         [--status-hz 20] [--config-every 2] [--upload-kb 256] [--json OUT]
 
-`--quiet on|off` sets the quiet window (`PUT /api/quiet`) for the run, for
-an A/B in one session; the stress phase reports the upload KB/s and the
-status rate achieved alongside the late frames.
+The stress phase reports the upload KB/s and the status rate achieved
+alongside the late frames.
 
 `--path` plays any path instead of a bundled Formula, e.g. the bus test
 (a frame of IRAM-resident VM code), with the JIT off for the run:
@@ -136,7 +135,6 @@ def main():
     ap.add_argument("--formula", default="starfield")
     ap.add_argument("--path", help="a path to play instead of @formula:<--formula>")
     ap.add_argument("--jit", choices=["on", "off"], help="formula_jit for the run (put back after)")
-    ap.add_argument("--quiet", choices=["on", "off"], help="the quiet window (PUT /api/quiet) for the run (put back after)")
     ap.add_argument("--seconds", type=float, default=60)
     ap.add_argument("--settle", type=float, default=8)
     ap.add_argument("--status-hz", type=float, default=20)
@@ -149,13 +147,6 @@ def main():
     cfg = dev.config()
     keep, dwell_max = cfg.get("formula_keep", "turn"), int(cfg.get("dwell_max", 30))
     jit_before = cfg.get("formula_jit")
-    quiet_before = None
-    if a.quiet:
-        try:
-            quiet_before = json.loads(dev.req("GET", "/api/quiet")[1]).get("on")
-            dev.req("PUT", "/api/quiet", {"on": a.quiet == "on"})
-        except Exception as e:
-            raise SystemExit(f"--quiet: this firmware has no /api/quiet ({e})")
     path = a.path or f"@formula:{a.formula}"
     label = a.formula if not a.path else "path"
     counts = {"status": 0, "config": 0, "uploads": 0, "errors": 0}
@@ -219,7 +210,7 @@ def main():
         for t in threads:
             t.join(timeout=70)
         s3 = snapshot(dev.status())
-        extra = dict(counts, loads=names, quiet=a.quiet)
+        extra = dict(counts, loads=names)
         if "uploads" in names:
             # Throughput: what the upload loop moved (each a write and a delete).
             extra["upload_kb_s"] = round(counts["uploads"] * a.upload_kb / a.seconds, 1)
@@ -237,7 +228,6 @@ def main():
                 | ({"formula_jit": jit_before} if a.jit and jit_before is not None else {}),
             ),
             lambda: dev.req("DELETE", "/api/files" + STRESS_FILE),
-            lambda: quiet_before is not None and dev.req("PUT", "/api/quiet", {"on": quiet_before}),
         ):
             try:
                 call()

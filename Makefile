@@ -527,7 +527,16 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # which also sets the bootloader's and the app's image headers), and the app
 # descriptor's version as the release sets it ("<version> <variant>",
 # `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
+# The flash clock (FW_FLASH_FREQ=40|80, MHz; DIO either way). The app sets
+# SPI0's clock itself at start-up from its own image header
+# (esp_system/port/cpu_start.c: bootloader_flash_clock_config(&app header),
+# ESP32 without PSRAM), so 80 reaches a board by OTA with its bootloader
+# left at 40: the app image's header (espflash --flash-freq) and the IDF's
+# own idea of it (CONFIG_ESPTOOLPY_FLASHFREQ_*, which the flash driver's
+# SPI1 uses) both follow this. `/api/firmware` `flash` reads the clock back.
+FW_FLASH_FREQ ?= 40
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
+	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
@@ -750,7 +759,7 @@ fw-release-variant:
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_RELEASE_BINARY)'
 	@# The third-party notices: the committed ones must be what this build links.
 	$(MAKE) --no-print-directory notices-check
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
@@ -777,10 +786,16 @@ fw-release-variant:
 	   got=$$(dd if=$$f bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
 	   test $$(( got >> 4 )) -eq $$want || { echo "$$f: flash size code $$(( got >> 4 )) in its header, want $$want ($(FW_VARIANT))"; exit 1; }; \
 	 done; echo "image headers: flash size $(FW_VARIANT) (bootloader, app)"
+	@# The app's flash clock (byte 3's low nibble: 0 = 40 MHz, 15 = 80 MHz),
+	@# which the app applies at start-up whatever the bootloader runs at.
+	@want=$$(case $(FW_FLASH_FREQ) in 40) echo 0;; 80) echo 15;; *) echo x;; esac); \
+	 got=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
+	 test $$(( got & 15 )) -eq $$want || { echo "$(FW_APP_IMAGE): flash clock code $$(( got & 15 )) in its header, want $$want ($(FW_FLASH_FREQ) MHz)"; exit 1; }; \
+	 echo "app header: flash clock $(FW_FLASH_FREQ) MHz"
 	@# The merged image: espflash lays out bootloader, table and app padded to
 	@# the flash size with 0xFF (so otadata is erased: the bootloader boots
 	@# factory); the updater and the pack go in at their offsets on top.
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
 	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
