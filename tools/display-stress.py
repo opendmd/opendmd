@@ -46,9 +46,12 @@ and `now_playing.formula` (frame µs, frame ms) over two phases of
    `--upload-kb` KB written to the card and deleted, over and over
    (`/opendmd-stress.bin`).
 
-The owner's rule: work on CPU0 must not reach the display. Pass when the
-stress phase's late frames per 1,000 raced frames, its frame ms and its
-frame µs (within a few %) match the idle phase's. Prints both phases and
+The owner's rule: work on CPU0 must not reach the display: no late frames
+or missed refreshes. Pass when the stress phase's late frames per 1,000
+raced frames are within the idle phase's + 0.5, its deadline misses no
+more than idle's, and its frame ms (the governor's step) the same. The
+frame µs change (each phase's exact mean render) is reported, not judged:
+a slowdown that only uses headroom passes. Prints both phases and
 the verdict; `--json OUT` keeps the numbers. Puts `dwell_max` and
 `formula_keep` back at the end, whatever happens (retried, and checked by
 reading `/api/config` back; exits 2 with a loud message if they did not take),
@@ -355,12 +358,15 @@ def one_run(dev, a, path, names, dwell_max, stop, saved):
     stress = phase(s2, s3, a.seconds, extra)
     li, ls = idle["late_per_1000"] or 0, stress["late_per_1000"] or 0
     us_i, us_s = idle["frame_us"] or 0, stress["frame_us"] or 0
+    # The owner's test (2026-11-02): no late frames or missed refreshes
+    # caused by non-display work. Late raced frames within idle + 0.5 per
+    # 1,000, deadline misses no more than idle's, and no governor step-down
+    # (the frame time it holds the Formula to unchanged). A slowdown that
+    # only uses headroom passes: frame_us_change_pct is information.
     ok = (
         ls <= li + 0.5
+        and (stress["misses"] or 0) <= (idle["misses"] or 0)
         and stress["frame_ms"] == idle["frame_ms"]
-        and (us_i == 0 or abs(us_s - us_i) <= us_i * 0.05)
-        # (A GIF has no raced frames: saves are judged by its deadline misses.)
-        and ("saves" not in names or (stress["misses"] or 0) <= (idle["misses"] or 0))
     )
     return {
         "buffers": buffers,

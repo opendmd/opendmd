@@ -26,19 +26,18 @@ use crate::nvs_config::Settings;
 use opendmd_core::settings_file::{self, DirStore, Step};
 use std::sync::{Arc, Mutex};
 
-/// The settings in the file, by their `/api/config` names. Groups apply
-/// together (`brightness` is checked against `max_brightness`, `dwell_max`
-/// against `dwell_min`).
+/// The settings in the file, by their `/api/config` names, in groups that
+/// apply together (`brightness` is checked against `max_brightness`,
+/// `dwell_max` against `dwell_min`).
 const GROUPS: &[&[&str]] = &[
     &["max_brightness", "brightness"],
     &["dwell_min", "dwell_max"],
+    &["transition", "transition_ms"],
     &["shuffle"],
     &["platforms"],
     &["set"],
     &["tz"],
     &["tz_name"],
-    &["transition"],
-    &["transition_ms"],
     &["auto_prepare"],
     &["follow"],
     &["follow_host"],
@@ -54,6 +53,53 @@ const GROUPS: &[&[&str]] = &[
     &["formula_arena"],
     &["formula_keep"],
 ];
+
+/// The part of `full` that group `g` names (everything else absent).
+fn group_patch(full: &ConfigPatch, g: &[&str]) -> ConfigPatch {
+    let mut p = ConfigPatch::default();
+    for k in g {
+        match *k {
+            "max_brightness" => p.max_brightness = full.max_brightness,
+            "brightness" => p.brightness = full.brightness,
+            "dwell_min" => p.dwell_min = full.dwell_min,
+            "dwell_max" => p.dwell_max = full.dwell_max,
+            "transition" => p.transition = full.transition.clone(),
+            "transition_ms" => p.transition_ms = full.transition_ms,
+            "shuffle" => p.shuffle = full.shuffle,
+            "platforms" => p.platforms = full.platforms.clone(),
+            "set" => p.set = full.set.clone(),
+            "tz" => p.tz = full.tz.clone(),
+            "tz_name" => p.tz_name = full.tz_name.clone(),
+            "auto_prepare" => p.auto_prepare = full.auto_prepare.clone(),
+            "follow" => p.follow = full.follow,
+            "follow_host" => p.follow_host = full.follow_host.clone(),
+            "attract_set" => p.attract_set = full.attract_set.clone(),
+            "attract" => p.attract = full.attract.clone(),
+            "look" => p.look = full.look.clone(),
+            "glow" => p.glow = full.glow.clone(),
+            "look_formula" => p.look_formula = full.look_formula.clone(),
+            "boot_show" => p.boot_show = full.boot_show.clone(),
+            "panel_sync" => p.panel_sync = full.panel_sync,
+            "panel_split" => p.panel_split = full.panel_split,
+            "formula_jit" => p.formula_jit = full.formula_jit,
+            "formula_arena" => p.formula_arena = full.formula_arena,
+            "formula_keep" => p.formula_keep = full.formula_keep.clone(),
+            _ => {}
+        }
+    }
+    p
+}
+
+/// Whether the group has any value in `p`.
+fn has_any(p: &ConfigPatch) -> bool {
+    p.max_brightness.is_some() || p.brightness.is_some() || p.dwell_min.is_some() || p.dwell_max.is_some()
+        || p.transition.is_some() || p.transition_ms.is_some() || p.shuffle.is_some() || p.platforms.is_some()
+        || p.set.is_some() || p.tz.is_some() || p.tz_name.is_some() || p.auto_prepare.is_some()
+        || p.follow.is_some() || p.follow_host.is_some() || p.attract_set.is_some() || p.attract.is_some()
+        || p.look.is_some() || p.glow.is_some() || p.look_formula.is_some() || p.boot_show.is_some()
+        || p.panel_sync.is_some() || p.panel_split.is_some() || p.formula_jit.is_some()
+        || p.formula_arena.is_some() || p.formula_keep.is_some()
+}
 
 /// One save or load at a time; taken only by CPU0 tasks.
 static STORE: Mutex<()> = Mutex::new(());
@@ -73,66 +119,65 @@ pub fn status_json() -> String {
     format!(r#","settings_store":{}"#, crate::httpd::json_string(&s))
 }
 
-/// The file's body for `s`: the card keys, as `/api/config` names them.
+/// The file's body for `s`: the card keys, as `/api/config` names them
+/// (by hand: no `serde_json::Value` in the image, which cost ~60 KB).
 pub fn to_json(s: &Settings) -> String {
-    use serde_json::{json, Value};
-    let v: Value = json!({
-        "max_brightness": s.max_brightness,
-        "brightness": s.brightness,
-        "dwell_min": s.dwell_min,
-        "dwell_max": s.dwell_max,
-        "shuffle": s.shuffle,
-        "platforms": s.platforms,
-        "set": s.set,
-        "tz": s.tz,
-        "tz_name": s.tz_name,
-        "schedule": s.schedule,
-        "transition": s.transition.kind.name(),
-        "transition_ms": s.transition.duration.as_millis() as u64,
-        "auto_prepare": s.auto_prepare.as_str(),
-        "follow": s.follow,
-        "follow_host": s.follow_host,
-        "attract_set": s.attract_set,
-        "attract": s.attract,
-        "look": s.look.name(),
-        "glow": s.glow.name(),
-        "look_formula": s.look_formula,
-        "boot_show": s.boot_show.name(),
-        "panel_sync": s.panel_sync,
-        "panel_split": s.panel_split,
-        "formula_jit": s.formula_jit,
-        "formula_arena": s.formula_arena,
-        "formula_keep": s.formula_keep.name(),
-    });
-    v.to_string()
+    let j = crate::httpd::json_string;
+    let attract_set = s.attract_set.as_deref().map_or_else(|| "null".to_string(), j);
+    format!(
+        concat!(
+            r#"{{"max_brightness":{},"brightness":{},"dwell_min":{},"dwell_max":{},"shuffle":{},"#,
+            r#""platforms":{},"set":{},"tz":{},"tz_name":{},"schedule":{},"transition":"{}","#,
+            r#""transition_ms":{},"auto_prepare":"{}","follow":{},"follow_host":{},"attract_set":{},"#,
+            r#""attract":{},"look":"{}","glow":"{}","look_formula":{},"boot_show":"{}","#,
+            r#""panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}"}}"#
+        ),
+        s.max_brightness,
+        s.brightness,
+        s.dwell_min,
+        s.dwell_max,
+        s.shuffle,
+        j(&s.platforms),
+        j(&s.set),
+        j(&s.tz),
+        j(&s.tz_name),
+        j(&s.schedule),
+        s.transition.kind.name(),
+        s.transition.duration.as_millis(),
+        s.auto_prepare.as_str(),
+        s.follow,
+        j(&s.follow_host),
+        attract_set,
+        j(&s.attract),
+        s.look.name(),
+        s.glow.name(),
+        j(&s.look_formula),
+        s.boot_show.name(),
+        s.panel_sync,
+        s.panel_split,
+        s.formula_jit,
+        s.formula_arena,
+        s.formula_keep.name(),
+    )
 }
 
-/// Whether `text` is a settings object the firmware reads.
+/// Whether `text` is a settings object the firmware reads (the same
+/// deserialiser as `PUT /api/config`'s, so no second copy of it).
 fn parses(text: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(text).is_ok_and(|v| v.is_object())
+    serde_json::from_slice::<ConfigPatch>(text.as_bytes()).is_ok()
 }
 
-/// `base` with the card's values from `text` (a parsed settings object):
-/// each group checked as `PUT /api/config` checks it, one refused (an edit
-/// on a PC) left as it was in `base`, and said so.
+/// `base` with the card's values from `text`: each group checked as `PUT
+/// /api/config` checks it, one refused (an edit on a PC) left as it was in
+/// `base`, and said so.
 fn apply_text(base: &Settings, text: &str) -> Option<Settings> {
-    let serde_json::Value::Object(map) = serde_json::from_str(text).ok()? else {
-        return None;
-    };
+    let full: ConfigPatch = serde_json::from_slice(text.as_bytes()).ok()?;
     let mut next = base.clone();
     for group in GROUPS {
-        let part: serde_json::Map<String, serde_json::Value> =
-            group.iter().filter_map(|k| map.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
-        if part.is_empty() {
+        let patch = group_patch(&full, group);
+        if !has_any(&patch) {
             continue;
         }
-        let patch: ConfigPatch = match serde_json::from_value(serde_json::Value::Object(part)) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("settings on the card: {group:?} not read ({e}); kept as it was");
-                continue;
-            }
-        };
         let mut tried = next.clone();
         match apply_patch(&mut tried, &patch) {
             Ok(()) => next = tried,
@@ -140,7 +185,7 @@ fn apply_text(base: &Settings, text: &str) -> Option<Settings> {
         }
     }
     // The schedule, checked as `PUT /api/schedule` checks it.
-    if let Some(serde_json::Value::String(sch)) = map.get("schedule") {
+    if let Some(sch) = &full.schedule {
         if sch.is_empty() || crate::sched::parse(sch.as_bytes()).is_ok() {
             next.schedule = sch.clone();
         } else {
