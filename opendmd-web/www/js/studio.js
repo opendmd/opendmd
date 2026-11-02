@@ -70,7 +70,7 @@ let art = null; // the wasm module
 // The view: built once, into `root`. The site's Create Art page (share/create/)
 // mounts it too, with `o`: `css: false` (its own stylesheet imports the
 // Studio's), `acts` (buttons beside Save) — and reads what Save would write
-// through `out()`.
+// through `ready()` and `out()`.
 export async function mount(root, o = {}) {
   [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
   return build(root, o);
@@ -861,6 +861,8 @@ function build(root, o) {
   return {
     el,
     load,
+    // The site's page: a picture in and named, nothing being saved.
+    ready: () => !!(S.studio && S.path && !S.saving),
     // The site's page: what Save would write, {gif, name, title, platform,
     // author, logo}, or null (no picture, or the fields name nothing).
     async out() {

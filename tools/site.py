@@ -38,7 +38,11 @@
 - /create/     Create Art, the web app's own Studio on the demo's files
                (opendmd-web/share/create/; js/studio.js `mount`): Game art,
                GifCities and your own pictures, every editing step, Save
-               downloads the GIF; `?q=&platform=` searches at once
+               downloads the GIF, Send to my panel hands it to the panel's
+               web app (`#import`, postMessage); `?q=&platform=` searches
+               at once
+- /panel.js    the panel's address and the window hand-off, shared by /f/
+               and /create/ (opendmd-web/share/panel.js)
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
                *.psi, CC0, copied to formulas/src/; the ten marked
                `-- bundle` are also the web app's formulas.json) and the contributions merged into the public
@@ -906,6 +910,8 @@ def main() -> None:
     art = json.loads((a.art / "art.json").read_text())
     for page in APP_PAGES:
         app_page(out, page, art["wordmark"])
+    # Their way to a panel (the address, the hand-off), shared.
+    shutil.copyfile(ROOT / "opendmd-web/share/panel.js", out / "panel.js")
     # The Psi reference's script (the page itself is a doc, written below).
     (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")

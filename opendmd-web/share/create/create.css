@@ -54,3 +54,7 @@ body>.banner{border:0;border-radius:0;margin:0}
   .cpage main input,.cpage main select{font-size:16px}
 }
 #c-ed #st-seen{font-size:13px}
+/* Send to my panel: the address, asked once (as /f/ asks it). */
+#c-ask{margin-top:14px}#c-ask label{font-weight:600}
+#c-ask .row{display:flex;gap:8px;margin-top:6px}#c-ask .row input{flex:1;min-width:0}
+#c-where{margin:12px 0 0}

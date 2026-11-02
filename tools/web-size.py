@@ -75,7 +75,7 @@ the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The Formula page on the site (`--share opendmd-web/share`: `f/`'s page,
 script and style, gzipped here since `make web` does not compress them;
 never packed) has a line of its own, <= 8 KB (Create Art's page, `create/`,
-another, <= 4 KB, on the Studio's lines); it is the web app's editor on
+another, <= 5 KB, on the Studio's lines); it is the web app's editor on
 the demo's files (the main wasm, js/formulas.js and its imports, pkg-psi,
 app.css and formulas.css), which are counted in their own lines and printed
 as the page's first-visit total for information. js/psikit.js (where a
@@ -152,6 +152,11 @@ POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}
 DETAILS_GZ_BUDGET = 8 * 1024
 DETAILS = {"js/details.js"}
+# A GIF from the site's Create Art (js/importgif.js: `#import`, the
+# postMessage checks; loaded only then): a line of its own, <= 2 KB
+# (2026-11-02, branch create-art: ~1.4 KB gz).
+IMPORT_GZ_BUDGET = 2 * 1024
+IMPORT = {"js/importgif.js"}
 FIND_GZ_BUDGET = 10 * 1024
 FIND = {"js/find.js", "find.css"}
 SMOOTH_GZ_BUDGET = 6 * 1024
@@ -376,12 +381,12 @@ SHARE_GZ_BUDGET = 8 * 1024
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
               "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
 # Create Art's page on the site (`--share`'s create/: its page, script and
-# style; never packed): a line of its own, <= 4 KB (2026-11-02, branch
-# create-art). It is the web app's Studio on the demo's files (js/studio.js,
+# style; never packed): a line of its own, <= 5 KB (2026-11-02, branch
+# create-art: ~2.7 KB for C1, ~3.8 KB with Send to my panel). It is the web app's Studio on the demo's files (js/studio.js,
 # js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
 # printed as the page's first-visit total for information.
-CREATE_GZ_BUDGET = 4 * 1024
-CREATE_USES = ("pkg/", "pkg-art/", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js",
+CREATE_GZ_BUDGET = 5 * 1024
+CREATE_USES = ("pkg/", "pkg-art/", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
                "js/gifs.js", "js/details.js", "js/prepare.js", "app.css", "studio.css", "find.css", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
@@ -515,6 +520,8 @@ def main() -> int:
             kind = "editor"
         elif rel in PSIERR:
             kind = "psierr"
+        elif rel in IMPORT:
+            kind = "import"
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -584,7 +591,7 @@ def main() -> int:
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
-                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),

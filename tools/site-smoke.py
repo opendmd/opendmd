@@ -40,7 +40,9 @@ build URL serves. There the art index must also carry
   picture loaded, edited (text, colours) and downloaded, the GIF 128x32;
   GifCities (stubbed) to an animated GIF, trimmed, reversed and
   downloaded with its frames; your own file; none of the words users never
-  see; a phone's width;
+  see; a phone's width; Send to my panel (the address asked once, the
+  panel's page opened at #import, the GIF sent to it on its ready with its
+  fields, Download after, a blocked pop-up said);
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -546,6 +548,69 @@ def create_page(browser, base: str, site: Path, errors: list[str], shots: Path |
         check(not off and any("/art-index/v1/SNES.json" in u for u in asked), f"/create/: Game art's index same-origin, nothing asked of opendmd.dev {off[:2]}")
         check(not page.evaluate("window.__csp || []"), f"/create/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
         page.context.close()
+
+
+PANEL_IMPORT_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { const d = e.data, g = d && d.gif; "
+                     "document.title = JSON.stringify({origin: e.origin, data: {...d, gif: g instanceof ArrayBuffer ? "
+                     "{bytes: g.byteLength, head: String.fromCharCode(...new Uint8Array(g, 0, 4))} : String(g)}}); });"
+                     "if (opener) opener.postMessage({type: 'opendmd-import-ready'}, '*');</script>")
+
+
+def create_send(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/create/'s Send to my panel: the address asked once (as /f/ asks it),
+    the panel's page opened at `#import`, nothing in its link, and on its
+    ready the GIF (a transferred ArrayBuffer) with its name, title,
+    platform, author and logo, to that window's origin; Download still
+    works after; remembered; a blocked pop-up said; no button before a picture."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    c_stub(page, base, png, gif, [])
+    seen: list[str] = []
+    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=PANEL_IMPORT_STUB, content_type="text/html")))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(page.is_hidden("#c-send"), "/create/ send: no Send to my panel until there is a picture")
+    page.goto(f"{base}/create/?q=studio+test&platform=SNES")
+    page.wait_for_selector("#find-grid .find-hit", timeout=30000)
+    page.click("#find-grid .find-hit[data-kind=Named_Titles]")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01.gif'", timeout=20000)
+    page.check("#st-logo")
+    page.fill("#st-author", "tester1")
+    wait_js(page, "document.querySelector('#studio').dataset.name === 'SNES_Studio_Test_01_tester1_LOGO.gif'", timeout=10000)
+    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
+    check(pri == ["c-send"] and page.is_visible("#st-save"), f"/create/ send: Send to my panel the primary, Download beside it ({pri})")
+    page.click("#c-send")
+    check(page.is_visible("#c-ask") and page.input_value("#c-addr") == "opendmd.local" and not seen, "/create/ send: asks for the panel's address (opendmd.local)")
+    page.fill("#c-addr", "example.com")
+    page.click("#c-go")
+    check("Press Send again" in page.inner_text("#c-addr-err") and not seen, "/create/ send: an address on the internet is asked about first")
+    page.fill("#c-addr", "192.168.1.50")
+    with page.context.expect_page() as info:
+        page.click("#c-go")
+    popup = info.value
+    got = sent(popup)
+    d = got["data"]
+    want = {"type": "opendmd-import", "name": "SNES_Studio_Test_01_tester1_LOGO.gif", "title": "Studio Test", "platform": "SNES", "author": "tester1", "logo": True}
+    check(popup.url == "http://192.168.1.50/#import" and got["origin"] == base and {k: d.get(k) for k in want} == want
+          and d["gif"]["head"] == "GIF8" and d["gif"]["bytes"] > 100,
+          f"/create/ send: the panel's page at #import, the GIF sent to it on its ready ({popup.url}, {str(got)[:120]})")
+    popup.close()
+    check(page.inner_text("#c-where-addr") == "192.168.1.50", "/create/ send: the address is remembered")
+    im = c_download(page)
+    check(im.size == (128, 32) and im.filename_suggested == "SNES_Studio_Test_01_tester1_LOGO.gif", "/create/ send: Download still works after sending")
+    with page.context.expect_page() as info:
+        page.click("#c-send")
+    check(info.value.url == "http://192.168.1.50/#import" and sent(info.value)["data"]["gif"]["head"] == "GIF8", "/create/ send: straight to the panel the next time")
+    info.value.close()
+    page.evaluate("window.open = () => null")
+    page.click("#c-send")
+    check("allow pop-ups" in page.inner_text("#c-cap"), f"/create/ send: a blocked pop-up is said ({page.inner_text('#c-cap')[:60]})")
+    check(not page.evaluate("window.__csp || []"), "/create/ send: no CSP violation")
+    page.context.close()
 
 
 def open_on_panel(browser, base: str, errors: list[str]) -> None:
@@ -1588,6 +1653,7 @@ def main() -> int:
         f_page(browser, base, errors, tool, a.shots)
         print("Create Art (/create/)")
         create_page(browser, base, a.site, errors, a.shots)
+        create_send(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
