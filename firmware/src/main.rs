@@ -1760,6 +1760,7 @@ fn main() -> Result<()> {
         let pre_card = crate::cardspeed::take_player();
         let pre_split = crate::fatidx::take_open_split();
         let pre_builder = crate::cache_builder::take_opening_wait();
+        let pre_catalog = frametime::take_catalog();
         let tick_start = uclock::now_us();
         if fresh {
             fresh = false;
@@ -1799,6 +1800,7 @@ fn main() -> Result<()> {
         let card_io = crate::cardspeed::take_player();
         let open_split = crate::fatidx::take_open_split();
         let builder_wait = crate::cache_builder::take_opening_wait();
+        let catalog_us = frametime::take_catalog();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
         // (content time, see `NowPlaying::elapsed`) and frame number, when the
@@ -2004,6 +2006,7 @@ fn main() -> Result<()> {
                             open_index_us: pre_split.0 + open_split.0,
                             open_path_us: pre_split.1 + open_split.1,
                             open_builder_us: pre_builder + builder_wait,
+                            open_catalog_us: pre_catalog + catalog_us,
                         });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold
@@ -2367,8 +2370,8 @@ fn rebuild_context(
     let started = Instant::now();
     let built = (|| -> Result<(Engine, Overrides)> {
         let manifest =
-            File::open(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
-        let index = File::open(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
+            fatidx::open_catalog_file(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
+        let index = fatidx::open_catalog_file(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
         let mut catalog = IndexedCatalog::open(manifest, index)?;
         let ov = catalog.overrides()?;
         // Its own no-repeat window, so a small set of matches can cycle.
@@ -2928,7 +2931,9 @@ fn open_catalog(
     filter: &Filter,
     force: bool,
 ) -> Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)> {
-    let manifest = File::open(path).with_context(|| format!("opening {path}"))?;
+    // Read raw (`fatidx::open_catalog_file`): the next file's lookup is on
+    // the display core, and FatFs's reads wait for the volume lock.
+    let manifest = fatidx::open_catalog_file(path).with_context(|| format!("opening {path}"))?;
     let len = manifest
         .metadata()
         .with_context(|| format!("stat {path}"))?
@@ -2961,7 +2966,7 @@ fn open_catalog(
     let mut manifest = manifest;
     match write_index_file(&mut manifest, len, filter, &set, meta_fp, &idx) {
         Ok((header, ov)) => {
-            let index = File::open(&idx).with_context(|| format!("reopening {idx}"))?;
+            let index = fatidx::open_catalog_file(&idx).with_context(|| format!("reopening {idx}"))?;
             let catalog =
                 IndexedCatalog::open(manifest, index).with_context(|| format!("opening {idx}"))?;
             debug_assert_eq!(catalog.len(), header.count as usize);
@@ -2992,7 +2997,7 @@ fn open_catalog(
 
 /// The index file, if it is current; otherwise why not, for the log.
 fn load_index(idx: &str, manifest_len: u32, filter: &Filter, meta_fp: u64) -> Result<File, String> {
-    let mut file = match File::open(idx) {
+    let mut file = match fatidx::open_catalog_file(idx) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
         Err(e) => return Err(format!("unreadable ({e})")),

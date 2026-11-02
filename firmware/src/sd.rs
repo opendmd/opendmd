@@ -517,6 +517,9 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 impl Source for SdSource {
     /// All of it is the display loop's `open` time ([`crate::frametime::open`]).
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+        // A switch: the read-ahead's ring goes before the new decoder and
+        // the transition ask the heap (`readahead::release`).
+        crate::readahead::release();
         crate::frametime::open(|| open_resolved(path))
     }
 
@@ -603,6 +606,8 @@ impl Source for SdSource {
     /// (if it started meanwhile), and the GIF-start line says how it was
     /// served.
     fn adopt(&self, _path: &str) {
+        // A switch to the copy opened ahead: as in `open`.
+        crate::readahead::release();
         crate::frametime::open(|| {
             if crate::cache_builder::task_up() {
                 crate::cache_builder::player_opening();

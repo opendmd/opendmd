@@ -134,6 +134,14 @@ impl<R: Seek> Seek for Counted<R> {
     }
 }
 
+/// [`CountedCatalog`]'s lookups since the last [`take_catalog`] (µs).
+static CATALOG_US: AtomicU32 = AtomicU32::new(0);
+
+/// The main loop, per frame: the playlist lookups' time (part of `open`).
+pub fn take_catalog() -> u32 {
+    CATALOG_US.swap(0, Relaxed)
+}
+
 /// The playlist lookup (an index seek and a manifest line) timed as `open`:
 /// it is the card work of choosing the next file. Its card errors count as
 /// reads, proven once a lookup has succeeded (`.1`).
@@ -145,7 +153,9 @@ impl Catalog for CountedCatalog {
     }
 
     fn entry(&mut self, i: usize) -> io::Result<Entry> {
+        let t = Instant::now();
         let r = open(|| self.0.entry(i));
+        CATALOG_US.fetch_add(us_since(t), Relaxed);
         match &r {
             Ok(_) => self.1 = true,
             Err(e) => {
