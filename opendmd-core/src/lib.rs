@@ -43,6 +43,7 @@ pub mod restarts;
 pub mod scan;
 pub mod schedule;
 pub mod scheduler;
+pub mod settings_file;
 pub mod synth;
 pub mod text;
 pub mod www_pack;
