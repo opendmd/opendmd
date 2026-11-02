@@ -364,8 +364,10 @@ FSHEET = {"js/fsheet.js"}
 # Your Formulas where they live (on the panel's card, or this browser) and
 # the line a playlist or the look names one by (js/fstore.js, branch
 # formula-refs, 2026-10-29): imported by the Formulas view and Settings ›
-# Look, a line of its own.
-FSTORE_GZ_BUDGET = 3 * 1024
+# Look, a line of its own. 3.5 KB since display-isolation met main (main's
+# known/read checks and this branch's compiled-file .psb handling together,
+# 3,132 B gz, 2026-11-02).
+FSTORE_GZ_BUDGET = 3584
 FSTORE = {"js/fstore.js"}
 # Submit to the gallery (js/fsubmit.js, branch f-editor, 2026-10-30): the
 # form, for the web app's editor and the site's Formula page; imported when

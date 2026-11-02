@@ -822,10 +822,11 @@ function build(root, o) {
         for (const m of problems) toast(m, 'bad');
         emit('gifs', c);
       } else {
-        await S.opts.save(c, f, S.gif, (m) => problems.push(m), smoothOnSave ? keep : undefined);
-        toast(`${f} saved to ${c}`, 'ok');
+        // (Under another number if the name was taken meanwhile.)
+        const put = (await S.opts.save(c, f, S.gif, (m) => problems.push(m), smoothOnSave ? keep : undefined)) || path;
+        toast(`${base(put)} saved to ${c}`, 'ok');
         for (const m of problems) toast(m, 'bad');
-        await S.opts.saved(c, [path]);
+        await S.opts.saved(c, [put]);
       }
       el.dataset.tUpload = Math.round(performance.now() - t1);
       el.dataset.saved = path;

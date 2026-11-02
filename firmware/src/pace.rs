@@ -12,10 +12,16 @@ use std::time::Duration;
 
 /// The paced rate, bytes a second.
 pub const RATE: u32 = 96 * 1024;
-#[cfg_attr(not(feature = "psi"), allow(dead_code))]
-const ON_PCT: u32 = 60;
-#[cfg_attr(not(feature = "psi"), allow(dead_code))]
-const OFF_PCT: u32 = 50;
+/// Where pacing starts (the mean render as a share of the frame time, %)
+/// and stops (10 points under). A dev setting changes the start for a
+/// test (`PUT /api/config` `pace_on_pct`, not saved: 60 again at boot).
+static ON_PCT: AtomicU32 = AtomicU32::new(60);
+
+/// The dev setting: pacing from `pct` % of the frame time (1..=100).
+pub fn set_on_pct(pct: u32) {
+    ON_PCT.store(pct.clamp(1, 100), Relaxed);
+    log::info!("uploads: paced from {} % of a Formula's frame time (dev setting, until a restart)", pct.clamp(1, 100));
+}
 
 /// A Formula is on the panel now (the main loop, at each frame).
 pub static FORMULA_ON: AtomicBool = AtomicBool::new(false);
@@ -31,7 +37,8 @@ fn active() -> bool {
         {
             let (avg_us, frame_ms, _, _) = opendmd_core::fx_psi::stats();
             let budget = frame_ms.max(1) * 1000;
-            let pct = if on { OFF_PCT } else { ON_PCT };
+            let start = ON_PCT.load(Relaxed);
+            let pct = if on { start.saturating_sub(10) } else { start };
             avg_us as u64 * 100 > budget as u64 * pct as u64
         }
         #[cfg(not(feature = "psi"))]
@@ -65,9 +72,10 @@ pub fn after_read(bytes: usize, debt_us: &mut u64) {
 /// `"uploads":{"paced","rate_kb_s","paced_ms"}` for the status.
 pub fn status_json() -> String {
     format!(
-        r#""uploads":{{"paced":{},"rate_kb_s":{},"paced_ms":{}}}"#,
+        r#""uploads":{{"paced":{},"rate_kb_s":{},"paced_ms":{},"on_pct":{}}}"#,
         PACED.load(Relaxed),
         RATE / 1024,
-        PACED_MS.load(Relaxed)
+        PACED_MS.load(Relaxed),
+        ON_PCT.load(Relaxed)
     )
 }

@@ -62,6 +62,7 @@ mod http;
 mod httpd;
 mod improv;
 mod logring;
+mod misslog;
 mod membank;
 mod net_worker;
 mod nvs_config;
@@ -593,6 +594,7 @@ fn main() -> Result<()> {
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
+    opendmd_core::engine::set_tick_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
     // And keep their still caches to what the heap can spare.
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_still_gate(Some(still_gate));
@@ -1980,6 +1982,16 @@ fn main() -> Result<()> {
                             first_shown.map(|t| now.saturating_sub(t)),
                         );
                         misses.record(phases.cause(), late, when);
+                        let (advance_us, step_us) = opendmd_core::engine::tick_split();
+                        misslog::note(misslog::Miss {
+                            late_ms: late,
+                            cause: phases.cause() as usize,
+                            phases: [phases.open, phases.read, phases.decode, phases.blit, phases.log, phases.other, phases.wake],
+                            transitioning,
+                            advance_us,
+                            step_us,
+                            at_s: now.as_secs(),
+                        });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold
                         // the drip off for a while.

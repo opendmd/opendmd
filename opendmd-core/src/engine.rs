@@ -762,6 +762,33 @@ pub struct Engine {
     started_ahead: bool,
 }
 
+/// A µs clock the engine times its ticks by (the firmware's esp_timer;
+/// none on the host): [`tick_split`].
+static TICK_CLOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TICK_SPLIT: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
+
+/// Install the clock ([`tick_split`]).
+pub fn set_tick_clock(clock: Option<fn() -> u32>) {
+    TICK_CLOCK.store(clock.map_or(0, |f| f as usize), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn tick_clock() -> Option<fn() -> u32> {
+    match TICK_CLOCK.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        // SAFETY: only `set_tick_clock` stores, from a `fn() -> u32`.
+        f => Some(unsafe { std::mem::transmute::<usize, fn() -> u32>(f) }),
+    }
+}
+
+/// The last tick's (advance µs: the file's frame, opening the next file at
+/// a switch; step µs: the transition's compositing), with a clock installed.
+pub fn tick_split() -> (u32, u32) {
+    (
+        TICK_SPLIT[0].load(std::sync::atomic::Ordering::Relaxed),
+        TICK_SPLIT[1].load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 impl Engine {
     /// `scheduler` should be built over `catalog.len()` — filtering happened
     /// when the catalog was built, and is never re-applied per tick.
@@ -1151,7 +1178,10 @@ impl Engine {
         if self.is_paused() {
             return Ok(TickOutcome::Idle);
         }
+        let clock = tick_clock();
+        let t0 = clock.map_or(0, |c| c());
         let decoded = self.advance(now, canvas)?;
+        let t1 = clock.map_or(0, |c| c());
         // A step on its own only when the file's next frame is not about to
         // carry it (the same rule as the wake time below). The loop also
         // wakes for other things — a glow step, a formula look's frame —
@@ -1165,6 +1195,13 @@ impl Engine {
                     .is_some_and(|p| now < p.next_frame_at && step + STEP / 2 >= p.next_frame_at)
             });
         let stepped = !carried && self.compositor.step(now, canvas) != Step::Idle;
+        if let Some(c) = clock {
+            // The tick's split, for a late frame's record (the firmware's
+            // misses log): the file's advance (opening the next one at a
+            // switch, decoding) and the transition's step.
+            TICK_SPLIT[0].store(t1.wrapping_sub(t0), std::sync::atomic::Ordering::Relaxed);
+            TICK_SPLIT[1].store(c().wrapping_sub(t1), std::sync::atomic::Ordering::Relaxed);
+        }
         let (playing, started) = match decoded {
             TickOutcome::Frame {
                 playing, started, ..

@@ -84,7 +84,7 @@ export function listings(known) {
   return (c) => {
     if (!got.has(c)) {
       // A new category has nothing in it (and listing it would be a 404).
-      got.set(c, (known.includes(c) ? app.src.list(`/gifs/${c}`).catch(() => []) : Promise.resolve([])).then((files) => {
+      got.set(c, (known.includes(c) ? (app.src.names || app.src.list).call(app.src, `/gifs/${c}`).catch(() => []) : Promise.resolve([])).then((files) => {
         const names = new Set(), max = new Map();
         for (const f of files) {
           if (f.dir) continue;
