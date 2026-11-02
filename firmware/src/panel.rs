@@ -1365,3 +1365,12 @@ mod beam {
         (f.err, f.waited, f.late)
     }
 }
+
+/// The panel's DMA rows (lo, hi, bytes, count) and descriptors (lo, hi):
+/// where they are, for `membank` (0s before the panel is up).
+pub fn dma_span() -> (u32, u32, u32, u32, u32, u32) {
+    let (mut lo, mut hi, mut bytes, mut n, mut dlo, mut dhi) = (0, 0, 0, 0, 0, 0);
+    // SAFETY: plain out-parameters; the shim answers 0s without a panel.
+    unsafe { hub75::hub75_dma_span(&mut lo, &mut hi, &mut bytes, &mut n, &mut dlo, &mut dhi) };
+    (lo, hi, bytes, n, dlo, dhi)
+}

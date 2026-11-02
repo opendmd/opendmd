@@ -259,6 +259,7 @@ struct ConfigPatch {
     panel_split: Option<bool>,
     /// The Formulas' JIT (the kill switch); applied at the next frame.
     formula_jit: Option<bool>,
+    formula_arena: Option<bool>,
     /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
     /// `hold` (until something else plays).
     formula_keep: Option<String>,
@@ -357,6 +358,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let set = c.settings.lock().unwrap();
             looks_json(&set)
         };
+        // Measurement (display-isolation): the heap's use per SRAM pool, or
+        // the player's longest card read and open since the last ask.
+        if query_param(req.query(), "pools").as_deref() == Some("1") {
+            return req.json(&crate::membank::pools_json());
+        }
+        if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
+            return req.json(&crate::membank::take_read_max());
+        }
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
         // A status read costs CPU0 ~7 ms of formatting (code and strings
         // from flash, whose bus CPU1 shares): answered from the last one
@@ -609,6 +618,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.formula_jit {
             next.formula_jit = v;
+        }
+        if let Some(v) = patch.formula_arena {
+            next.formula_arena = v;
         }
         if let Some(v) = &patch.formula_keep {
             match opendmd_core::FormulaKeep::from_name(v) {
@@ -2423,14 +2435,30 @@ static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomic
 fn display_json() -> String {
     let (wakes, late, max, spun) = crate::wake::stats();
     format!(
-        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{}}}"#,
+        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{},"buffers":{},"arena":{},"card_read_max_us":{}}}"#,
         crate::state::PUBLISH_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_LOCK_US.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_BUILD_US.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_CACHED.load(std::sync::atomic::Ordering::Relaxed),
         crate::panel::pre_start_json(),
         crate::state::commands_json(),
+        crate::membank::buffers_json(),
+        arena_json(),
+        crate::membank::READ_MAX_US.load(std::sync::atomic::Ordering::Relaxed),
     )
+}
+
+/// `display.arena`: `formula_arena`'s allocations served and wanted while
+/// its slot was busy, or `null` when it is off.
+fn arena_json() -> String {
+    #[cfg(feature = "psi")]
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        if crate::arena::span().0 != 0 {
+            return format!(r#"{{"hits":{},"busy":{}}}"#, crate::arena::HITS.load(Relaxed), crate::arena::BUSY.load(Relaxed));
+        }
+    }
+    "null".to_string()
 }
 
 /// A JSON string, or `null`.
@@ -2464,7 +2492,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2493,6 +2521,7 @@ fn settings_json(s: &Settings) -> String {
         s.panel_sync,
         s.panel_split,
         s.formula_jit,
+        s.formula_arena,
         s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
