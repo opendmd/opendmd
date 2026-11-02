@@ -982,6 +982,12 @@ impl Engine {
             .map(|k| self.timed[k].1)
     }
 
+    /// The decoder of the file on screen (`slim`, `gif`, `synth`: a Formula
+    /// or a virtual file), `none` between files.
+    pub fn playing_kind(&self) -> &'static str {
+        self.current.as_ref().map_or("none", |p| p.gif.kind())
+    }
+
     /// The dwell policy the file on screen plays under: the configured one,
     /// bent by its override.
     pub fn current_dwell(&self) -> DwellPolicy {

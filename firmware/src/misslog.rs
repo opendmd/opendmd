@@ -16,6 +16,12 @@ pub struct Miss {
     pub advance_us: u32,
     pub step_us: u32,
     pub at_s: u64,
+    /// The display core's card reads this frame: µs waiting for the card's
+    /// I/O lock (another task's transfer), µs transferring (`cardspeed`).
+    pub card_wait_us: u32,
+    pub card_xfer_us: u32,
+    /// The decoder of the file on screen (`Engine::playing_kind`).
+    pub kind: &'static str,
 }
 
 static RECENT: Mutex<([Option<Miss>; 8], usize)> = Mutex::new(([None; 8], 0));
@@ -30,7 +36,8 @@ pub fn note(m: Miss) {
 }
 
 /// `,"recent":[{late_ms, cause, open, read, decode, blit, log, other, wake,
-/// transitioning, advance_us, step_us, at_s}]`, oldest first.
+/// transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us,
+/// kind}]`, oldest first.
 pub fn json() -> String {
     let g = RECENT.lock().unwrap_or_else(|p| p.into_inner());
     let n = g.1;
@@ -44,11 +51,11 @@ pub fn json() -> String {
         first = false;
         let p = m.phases;
         out.push_str(&format!(
-            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{}}}"#,
+            r#"{{"late_ms":{},"cause":"{}","open":{},"read":{},"decode":{},"blit":{},"log":{},"other":{},"wake":{},"transitioning":{},"advance_us":{},"step_us":{},"at_s":{},"card_wait_us":{},"card_xfer_us":{},"kind":"{}"}}"#,
             m.late_ms,
             opendmd_core::frametime::CAUSES[m.cause.min(7)],
             p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-            m.transitioning, m.advance_us, m.step_us, m.at_s
+            m.transitioning, m.advance_us, m.step_us, m.at_s, m.card_wait_us, m.card_xfer_us, m.kind
         ));
     }
     out.push(']');

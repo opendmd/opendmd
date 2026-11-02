@@ -57,6 +57,9 @@ const NAMES_NEW: &str = "/sdcard/cache/.names.new";
 /// The names file matches the card (built, nothing since but what
 /// [`NAMES_DELTA`] holds).
 static NAMES_OK: AtomicBool = AtomicBool::new(false);
+/// A current index was loaded with no names file beside it: walk the
+/// GIFs' directories for one alone ([`build_names`]) once things are quiet.
+static NAMES_WANTED: AtomicBool = AtomicBool::new(false);
 /// GIFs written (true) or removed (false) through the API since the names
 /// file was built, by card path, newest last, with the uptime noted.
 static NAMES_DELTA: Mutex<Vec<(String, bool, u32)>> = Mutex::new(Vec::new());
@@ -955,6 +958,15 @@ fn load() -> io::Result<Loaded> {
     if t == 0 || (b != 0 && since(b, t) as i32 > 0) {
         DIRTY.store(false, Relaxed);
     }
+    // The names file of the same build is as current as the index (the
+    // directories are the ones it walked, and this boot's changes are
+    // noted as they happen); an index without one, from a build before
+    // names files, gets one by a walk of its own.
+    if fs::metadata(NAMES).is_ok() {
+        NAMES_OK.store(true, Relaxed);
+    } else {
+        NAMES_WANTED.store(true, Relaxed);
+    }
     // Its extents, for the player's lookups without the volume lock.
     let raw = index_extents();
     Ok(Loaded { file, fanout, raw })
@@ -1040,7 +1052,9 @@ pub fn tick() {
         }
         g.as_ref().is_some_and(Option::is_none)
     };
-    if !DIRTY.load(Relaxed) {
+    // A current index with no names file: the names alone.
+    let names_only = !DIRTY.load(Relaxed) && !missing && NAMES_WANTED.load(Relaxed);
+    if !DIRTY.load(Relaxed) && !names_only {
         return;
     }
     let now = uptime_ms();
@@ -1066,6 +1080,26 @@ pub fn tick() {
         return;
     }
     if BUILDING.swap(true, Relaxed) {
+        return;
+    }
+    if names_only {
+        let spawned = crate::task::spawn_core0(
+            b"fat-names\0",
+            config::FATIDX_STACK,
+            config::BUILDER_PRIORITY,
+            Box::new(|| {
+                if let Err(e) = build_names() {
+                    log::warn!("fat index: names: {e}");
+                    // Not again this boot: names=1 lists instead.
+                    NAMES_WANTED.store(false, Relaxed);
+                }
+                BUILDING.store(false, Relaxed);
+            }),
+        );
+        if spawned.is_err() {
+            NAMES_WANTED.store(false, Relaxed);
+            BUILDING.store(false, Relaxed);
+        }
         return;
     }
     BUILT_MS.store(now, Relaxed);
@@ -1143,6 +1177,71 @@ fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
     Ok(dirs)
 }
 
+/// [`NAMES_NEW`]: every `/gifs/<dir>/<name>`, a line each, from one walk of
+/// the GIFs' directories.
+fn write_names(
+    dirs: &[(String, u32)],
+    geo: &fatdir::Geometry,
+    read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
+    scratch: &mut [u8],
+) -> io::Result<()> {
+    let mut names = BufWriter::with_capacity(1024, File::create(NAMES_NEW)?);
+    for (dir, first) in dirs {
+        let mut failed = None;
+        fatdir::walk(geo, *first, read, scratch, &mut |f| {
+            let r = names
+                .write_all(dir.as_bytes())
+                .and_then(|()| names.write_all(b"/"))
+                .and_then(|()| names.write_all(f.name))
+                .and_then(|()| names.write_all(b"\n"));
+            if let Err(e) = r {
+                failed = Some(e);
+            }
+            Ok(())
+        })?;
+        if let Some(e) = failed {
+            return Err(e);
+        }
+    }
+    names.flush()
+}
+
+/// [`NAMES_NEW`] in place of [`NAMES`], trusted from now on with the
+/// changes noted since `started` (ms uptime, the walk's start).
+fn install_names(started: u32) -> bool {
+    let _ = fs::remove_file(NAMES);
+    if fs::rename(NAMES_NEW, NAMES).is_err() {
+        return false;
+    }
+    NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, _, at)| since(*at, started) as i32 >= 0);
+    NAMES_WANTED.store(false, Relaxed);
+    NAMES_OK.store(true, Relaxed);
+    true
+}
+
+/// The names file alone, for a current index without one (an index built
+/// before names files were): one walk of the GIFs' directories.
+fn build_names() -> io::Result<()> {
+    let (fs, geo) = volume()?;
+    let started = uptime_ms();
+    let dirs = gif_dirs()?;
+    let mut scratch = vec![0u8; 8 * SS];
+    let mut read = |lba: u32, buf: &mut [u8]| -> io::Result<()> {
+        {
+            let _l = VolLock::take(fs)?;
+            read_locked(fs, lba, buf)?;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        Ok(())
+    };
+    write_names(&dirs, &geo, &mut read, &mut scratch)?;
+    if install_names(started) {
+        Ok(())
+    } else {
+        Err(errno(sys::EIO))
+    }
+}
+
 fn build() -> io::Result<()> {
     let (fs, geo) = volume()?;
     // Cleared first: a change during the walks marks it again.
@@ -1167,27 +1266,7 @@ fn build() -> io::Result<()> {
     };
     // The names, one walk of the GIFs' directories (the copies' are not
     // named by anyone).
-    {
-        let mut names = BufWriter::with_capacity(1024, File::create(NAMES_NEW)?);
-        for (dir, first) in &dirs {
-            let mut failed = None;
-            fatdir::walk(&geo, *first, &mut read, &mut scratch, &mut |f| {
-                let r = names
-                    .write_all(dir.as_bytes())
-                    .and_then(|()| names.write_all(b"/"))
-                    .and_then(|()| names.write_all(f.name))
-                    .and_then(|()| names.write_all(b"\n"));
-                if let Err(e) = r {
-                    failed = Some(e);
-                }
-                Ok(())
-            })?;
-            if let Some(e) = failed {
-                return Err(e);
-            }
-        }
-        names.flush()?;
-    }
+    write_names(&dirs, &geo, &mut read, &mut scratch)?;
     let mut walk_all = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
         for (dir, first) in &dirs {
             let first = *first;
@@ -1227,12 +1306,7 @@ fn build() -> io::Result<()> {
     let _ = fs::remove_file(INDEX);
     fs::rename(NEW, INDEX)?;
     *g = Some(load().ok());
-    let _ = fs::remove_file(NAMES);
-    if fs::rename(NAMES_NEW, NAMES).is_ok() {
-        let started = BUILT_MS.load(Relaxed);
-        NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, _, at)| since(*at, started) as i32 >= 0);
-        NAMES_OK.store(true, Relaxed);
-    }
+    install_names(BUILT_MS.load(Relaxed));
     // What the walks saw is in the index now; changes noted since its
     // start stay in the delta.
     let started = BUILT_MS.load(Relaxed);
