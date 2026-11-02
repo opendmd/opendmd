@@ -481,7 +481,8 @@ fn open_file_keyed(full: &str, ahead_key: u32) -> io::Result<Box<dyn ReadSeek>> 
     let file = if crate::probe::ENABLED {
         crate::probe::open(full)
     } else {
-        crate::fatidx::open(full)
+        // Read raw: never behind FatFs's volume lock (`fatidx` "raw reads").
+        crate::fatidx::open_player(full)
     };
     let file = match file {
         Ok(f) => f,
@@ -564,7 +565,7 @@ impl Source for SdSource {
                 // with the heap for cap 12.
                 Err(_) => match (copy != path)
                     .then(|| format!("{}{path}", config::SD_MOUNT))
-                    .and_then(|orig| crate::fatidx::indexed(&orig).map(|r| (orig, r)))
+                    .and_then(|orig| crate::fatidx::indexed_player(&orig).map(|r| (orig, r)))
                 {
                     Some((orig, Ok(o))) => {
                         crate::sdhealth::opened(&orig);
