@@ -172,6 +172,13 @@ static BUSY_END: AtomicU32 = AtomicU32::new(0);
 /// and how many gave up.
 static RELEASE_WAITS: AtomicU32 = AtomicU32::new(0);
 static RELEASE_MAX_US: AtomicU32 = AtomicU32::new(0);
+/// [`player_opening`]'s waits since the last [`take_opening_wait`] (µs).
+static OPENING_WAIT_US: AtomicU32 = AtomicU32::new(0);
+
+/// The main loop, per frame: the player's waits for the builder (µs).
+pub fn take_opening_wait() -> u32 {
+    OPENING_WAIT_US.swap(0, SeqCst)
+}
 static RELEASE_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 /// `auto_prepare` as the main task last published it (0 idle, 1 always, 2 off).
 static MODE: AtomicU8 = AtomicU8::new(0);
@@ -216,6 +223,14 @@ pub fn player_opening() {
         return;
     }
     let t = Instant::now();
+    // Its time, for the late frame's record (`misses.recent`).
+    struct Waited(Instant);
+    impl Drop for Waited {
+        fn drop(&mut self) {
+            OPENING_WAIT_US.fetch_add(self.0.elapsed().as_micros() as u32, SeqCst);
+        }
+    }
+    let _waited = Waited(t);
     // The encoder's heap, which a GIF's decoder may need: wait for it. The
     // task runs at priority 1 on CPU0, under everything that answers the
     // network, so it is lifted to their level until it lets go — otherwise

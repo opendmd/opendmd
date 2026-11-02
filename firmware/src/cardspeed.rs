@@ -340,10 +340,14 @@ fn now_us() -> u32 {
     unsafe { esp_idf_sys::esp_timer_get_time() as u32 }
 }
 
-fn transfer(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
+/// The running task is the display core's (the main task: the player).
+pub fn on_display_core() -> bool {
     // SAFETY: plain FreeRTOS queries of the running task.
-    let player = !write
-        && unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() == esp_idf_sys::xTaskGetCurrentTaskHandleForCore(1) };
+    unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() == esp_idf_sys::xTaskGetCurrentTaskHandleForCore(1) }
+}
+
+fn transfer(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
+    let player = !write && on_display_core();
     if !player {
         give_way();
     }

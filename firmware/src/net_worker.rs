@@ -508,6 +508,7 @@ fn run(worker: NetWorker) {
         follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());
 
         // The FAT index (`fatidx`): built or rebuilt when due.
+        crate::readahead::tick();
         crate::fatidx::tick();
 
         // An open AP does not stay up indefinitely. Rebooting (rather than

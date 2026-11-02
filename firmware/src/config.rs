@@ -806,5 +806,10 @@ pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
 /// a failed read is recovered and the clock slowed on the caller's task)
 /// and the SD SPI driver, under two closures.
 pub const FATIDX_STACK: usize = 10 * 1024;
+/// The read-ahead's filling task (`readahead`): card reads only (the SD
+/// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
+/// network does not starve it.
+pub const READAHEAD_STACK: usize = 4 * 1024;
+pub const READAHEAD_PRIORITY: u8 = 5;
 /// The most records a build gathers per walk, in bytes (8 a record).
 pub const FATIDX_GROUP: usize = 16 * 1024;
