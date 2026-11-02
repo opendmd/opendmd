@@ -66,6 +66,7 @@ mod membank;
 mod net_worker;
 mod nvs_config;
 mod ota;
+mod pace;
 mod panel;
 mod probe;
 #[cfg(feature = "psi-probe")]
@@ -1772,6 +1773,9 @@ fn main() -> Result<()> {
         let due_before = eng.frame_due();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
+        if off {
+            pace::FORMULA_ON.store(false, Ordering::Relaxed);
+        }
         // Racing the beam: a Formula's frame this tick may
         // write its pairs as it draws them — not under the glow or a
         // formula look (each composites the whole picture) nor while a
@@ -1837,6 +1841,7 @@ fn main() -> Result<()> {
                 // canvas is clean and the blit returns at once.)
                 formula_on = opendmd_core::synth::is_formula(&playing.path)
                     || opendmd_core::synth::formula_file(&playing.path).is_some();
+                pace::FORMULA_ON.store(formula_on && !off, Ordering::Relaxed);
                 let decoded = (playing.ordinal, playing.frame) != published;
                 let blit_start = uclock::now_us();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
