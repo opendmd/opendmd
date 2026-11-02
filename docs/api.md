@@ -116,29 +116,6 @@ curl -s -X POST "$DMD/api/skip?back=1"
 
 ## Status and health
 
-### GET /api/quiet
-
-The quiet window, a diagnostic: while it is on, the firmware's heavy
-network and card loops (file and web app downloads, uploads, the status
-JSON) wait, between chunks and never more than 12 ms at a time, while a
-raced Formula's frame is in its sensitive stretch (from the display loop's
-wake to its last row pair written). Off by default and after a restart.
-Reply: `{"on", "waits", "wait_us", "cut"}` — waits that happened, the µs
-they took in all (wrapping), and those cut short at 12 ms.
-
-```sh
-curl -s $DMD/api/quiet
-```
-
-### PUT /api/quiet
-
-`{"on": true|false}`; not saved. Reply as `GET /api/quiet`. `400` without
-a boolean `on`.
-
-```sh
-curl -s -X PUT -d '{"on":true}' $DMD/api/quiet
-```
-
 ### GET /api/status
 
 A cheap snapshot (the web app polls it twice a second); counts since boot.
@@ -731,11 +708,13 @@ staged on the card (one is needed), checked and installed (`docs/ota.md`);
 
 ### GET /api/firmware
 
-`{"version","build","variant","flash_size","pending","last","log"}`: the
+`{"version","build","variant","flash_size","flash","pending","last","log"}`: the
 running version (a bundle's, and `/api/status`'s; `build` its image
 descriptor, `"<version> <variant>"`), the flash layout it is built for
 (`variant`: `4mb` or `8mb`) and the flash chip's real size in bytes
-(`flash_size`; a 4mb build on an 8 MB board reports 8388608), a staged
+(`flash_size`; a 4mb build on an 8 MB board reports 8388608), the clock and
+read mode the flash runs at (`flash`: `{"mhz": 40|80, "mode": "dio"|…}`,
+read back from the chip), a staged
 update not yet installed (or null), the last
 line of the card's `/update/log.txt` and its last ≤ 1 KB of whole lines
 (`log`, the firmware's and the updater's; both null without a card or log).

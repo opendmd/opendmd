@@ -70,7 +70,6 @@ mod psi_probe;
 #[cfg(feature = "psi")]
 #[cfg(feature = "psi-probe")]
 mod psi_stack;
-mod quiet;
 mod restarts;
 mod sched;
 mod sd;
@@ -323,6 +322,9 @@ fn main() -> Result<()> {
     // allocation and overwrite its record; installs the panic hook.
     let reset = restarts::reset_now();
     restarts::boot(reset);
+    // The flash clock the app set from its own header (FW_FLASH_FREQ).
+    let (mhz, mode) = ota::flash_clock();
+    log::info!("flash: {mhz} MHz, {mode}");
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
 
