@@ -1613,7 +1613,7 @@ mod tests {
             t += Duration::from_millis(10);
         }
         // The clock holds for its 3 s (three one-second loops), then the text.
-        assert_eq!(starts[0], (0, "@clock".to_string(), "Clock".to_string()));
+        assert_eq!(starts[0], (0, "@clock".into(), "Clock".into()));
         assert_eq!(starts[1].1, "@text?msg=Hi");
         assert_eq!(starts[1].2, "Hi");
         assert_eq!(starts[1].0, 3000);
@@ -1692,8 +1692,8 @@ mod tests {
             t += Duration::from_millis(5);
         }
         // The first loop is 2.4 s: two loops cover the 3 s minimum.
-        assert_eq!(starts[0], (0, a));
-        assert_eq!(starts[1], (4800, b));
+        assert_eq!(starts[0], (0, a.into()));
+        assert_eq!(starts[1], (4800, b.into()));
         // 4.8 s at 50 frames a second, then 3.2 s at the default 100.
         assert!((555..=565).contains(&frames), "{frames}");
     }

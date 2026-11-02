@@ -358,10 +358,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             looks_json(&set)
         };
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
+        // How long the lock is held and the JSON takes (the next answer
+        // says: `display.status_lock_us`, `status_build_us`).
+        let t0 = std::time::Instant::now();
         let json = {
             let s = c.status.lock().unwrap();
-            status_json(&s, &looks, recent)
+            let held = std::time::Instant::now();
+            let j = status_json(&s, &looks, recent);
+            STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+            j
         };
+        STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
         req.json(&json)
     })?;
 
@@ -2316,7 +2323,7 @@ fn looks_json(set: &Settings) -> String {
         .then(|| crate::nvs_config::attract_path(&set.attract))
         .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -2333,6 +2340,27 @@ fn looks_json(set: &Settings) -> String {
             n => n.to_string(),
         },
         crate::panel::scan_json(),
+        display_json(),
+    )
+}
+
+/// The last `/api/status`: how long it held `status` (µs) while it wrote
+/// the JSON, and the whole build with the settings' part.
+static STATUS_LOCK_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `"display":{wakes, wake_late, wake_max_us, spin_us, publish_skipped,
+/// status_lock_us, status_build_us}`:
+/// how the display loop's wake kept time (`wake.rs`: a wake over 100 µs
+/// after its time is late) and the frames whose status publish was skipped
+/// for a held lock, since boot.
+fn display_json() -> String {
+    let (wakes, late, max, spun) = crate::wake::stats();
+    format!(
+        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{}}}"#,
+        crate::state::PUBLISH_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_LOCK_US.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_BUILD_US.load(std::sync::atomic::Ordering::Relaxed),
     )
 }
 

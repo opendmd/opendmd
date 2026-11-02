@@ -99,6 +99,10 @@ pub struct Panel {
     max_brightness: u8,
     /// What the last `set_brightness` asked for, before the clamp.
     wanted_brightness: u8,
+    /// The brightness the DMA buffer's OE bits were last rendered at
+    /// (`None`: not yet): re-rendering them rewrites every word of the
+    /// buffer (~ms on CPU1), so an unchanged level is not applied again.
+    shown_brightness: Option<u8>,
     /// The DMD tint, applied to every pixel pushed (`opendmd_core::look`).
     look: Look,
     /// Phosphor glow: what the panel shows, while it is held (12 KB).
@@ -282,6 +286,7 @@ impl Panel {
             cfg: *cfg,
             max_brightness: config::BRIGHTNESS_SAFE_MAX,
             wanted_brightness: cfg.brightness,
+            shown_brightness: None,
             look: Look::Colour,
             glow: Glow::new(GlowLevel::Off),
             stepped: Instant::now(),
@@ -688,6 +693,14 @@ impl Panel {
         self.wanted_brightness = brightness;
         let applied = opendmd_core::brightness::effective(brightness, self.max_brightness);
         self.cfg.brightness = applied;
+        // Every settings PUT re-applied it (and the schedule's ticks): each
+        // a pass over the whole DMA buffer on the display core, a raced
+        // Formula's frame late (display-isolation, 2026-11-02). Unchanged:
+        // nothing to do.
+        if self.shown_brightness == Some(applied) {
+            return;
+        }
+        self.shown_brightness = Some(applied);
         // SAFETY: no arguments to get wrong; a no-op before init.
         unsafe { hub75::hub75_set_brightness(applied) };
     }

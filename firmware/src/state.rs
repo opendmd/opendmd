@@ -83,6 +83,10 @@ pub fn largest_free_block() -> usize {
 /// main loop sets rather than [`Status`] fields, so the looks pass costs
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Frames whose status publish was skipped because `/api/status` held the
+/// lock (the display never waits on CPU0): `display.publish_skipped`.
+pub static PUBLISH_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// The main task's stack high-water mark (bytes never used), for a probe
 /// build's `/api/status` `heap.main_stack`.
 /// Pixels pushed to the panel since boot (every push: frames, glow steps,
