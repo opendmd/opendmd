@@ -201,7 +201,7 @@ pub fn pre_start_json() -> String {
     let sum = beam::PRE_SUM.load(Relaxed);
     format!(
         r#"{{"n":{n},"us":{sum},"mean_us":{},"max_us":{},"spikes":{}}}"#,
-        if n > 0 { sum / n } else { 0 },
+        sum.checked_div(n).unwrap_or(0),
         beam::PRE_MAX.load(Relaxed),
         beam::PRE_SPIKES.load(Relaxed)
     )
