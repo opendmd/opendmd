@@ -1,6 +1,7 @@
 //! `fatread` (the player's reads without FatFs's volume lock) against real
 //! FAT32 images made by `mkfs.fat` and filled by mtools (both must be
-//! installed: the test says so and passes without them). Every file is read
+//! installed: without them the tests fail, unless OPENDMD_SKIP_FAT_IMAGES
+//! is set). Every file is read
 //! through its extents and compared, byte for byte, with what mtools reads
 //! back, at the cluster sizes a card may have (512 B to 32 KB) and with:
 //! a fragmented file (written into the holes deleted files left), files
@@ -151,8 +152,12 @@ fn body(seed: u32, n: usize) -> Vec<u8> {
 
 fn image(cluster_sectors: u32, kb: u32) -> Option<(Img, tempdir::Dir)> {
     if !tools() {
-        eprintln!("skipping: {MKFS} or mtools missing");
-        return None;
+        // Never a silent pass: these are the raw reads' correctness tests.
+        if std::env::var_os("OPENDMD_SKIP_FAT_IMAGES").is_some() {
+            eprintln!("skipping (OPENDMD_SKIP_FAT_IMAGES): {MKFS} or mtools missing");
+            return None;
+        }
+        panic!("{MKFS} or mtools missing: install dosfstools and mtools to run the raw-read image tests (OPENDMD_SKIP_FAT_IMAGES=1 skips them)");
     }
     let dir = tempdir::Dir::new();
     let path = dir.0.join("card.img");

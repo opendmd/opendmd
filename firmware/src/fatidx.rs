@@ -20,10 +20,15 @@
 //! FatFs's volume mutex: a FatFs call walking a big directory on CPU0
 //! (a create, delete or rename in `gifs/Consoles`, ~330 ms under that
 //! lock) interleaves with the player sector by sector instead of making a
-//! frame late. A raw-read file is in [`holds`] while open; every writer
-//! has the player let go of a file and checks it is no longer held before
-//! touching it (`http::skip_if_playing`), so its chain cannot change under
-//! the reads. A failed raw read falls back to FatFs's `f_read` from the
+//! frame late. A raw-read file is in [`holds`] while open. Every writer
+//! first registers a write intent for what it will touch ([`intend`],
+//! [`intend_tree`]), under the same lock as every open, so nothing it
+//! covers opens raw from then on (FatFs reads it); then has the player let
+//! go and waits until the file is not held; then writes, then drops the
+//! intent (`http::release_for_write`). A raw-read file's chain therefore
+//! cannot change under its reads. Files of more than
+//! `fatread::MAX_RUNS` runs, and paths not spelled canonically (an 8.3
+//! alias, a trailing dot), are read by FatFs. A failed raw read falls back to FatFs's `f_read` from the
 //! same position for the rest of the file's life.
 //!
 //! The index is rebuilt on the network worker (CPU0) when it is missing,
@@ -49,7 +54,6 @@ const NEW: &str = "/sdcard/cache/.fatidx.new";
 const SLOTS: usize = 6;
 const SLOT_PATHS: [&str; SLOTS] = ["/fidx/0", "/fidx/1", "/fidx/2", "/fidx/3", "/fidx/4", "/fidx/5"];
 
-static FILES: [AtomicPtr<sys::FIL>; SLOTS] = [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS];
 
 /// A slot's raw reads: its extents and position, the drive, and whether a
 /// raw read failed (FatFs's `f_read` from then on).
@@ -58,7 +62,11 @@ struct Raw {
     pdrv: u8,
     broken: bool,
 }
-static RAW: [AtomicPtr<Raw>; SLOTS] = [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS];
+/// The slots: each a FIL and, read raw, its [`Raw`] (`fatread::Slots`:
+/// claimed file first, released raw state first).
+static TABLE: fatread::Slots<sys::FIL, Raw, SLOTS> = fatread::Slots::new();
+/// Opens that found every slot busy (read by path, through FatFs).
+static SLOTS_FULL: AtomicU32 = AtomicU32::new(0);
 /// The raw-read files open, by path (`holds`).
 static OPEN: Mutex<Option<fatread::OpenSet<SLOTS>>> = Mutex::new(None);
 /// Raw reads done, and those that failed and fell back (`status_json`).
@@ -79,6 +87,30 @@ pub fn holds(full: &str) -> bool {
 /// Whether the player has any file under the directory `full` open.
 pub fn holds_under(full: &str) -> bool {
     open_set(|o| o.holds_under(full))
+}
+
+/// A writer's intent (`fatread::OpenSet`'s write intents): while it lives,
+/// nothing it covers is opened for raw reads (the player reads it through
+/// FatFs). Taken *before* the writer waits for the player to let go, and
+/// kept until the write is done.
+#[must_use]
+pub struct WriteIntent(u32);
+
+impl Drop for WriteIntent {
+    fn drop(&mut self) {
+        let id = self.0;
+        open_set(|o| o.end_write(id));
+    }
+}
+
+/// An intent for the file `full` (`/sdcard/...`).
+pub fn intend(full: &str) -> WriteIntent {
+    WriteIntent(open_set(|o| o.begin_write(full, false)))
+}
+
+/// An intent for every file under the directory `full`.
+pub fn intend_tree(full: &str) -> WriteIntent {
+    WriteIntent(open_set(|o| o.begin_write(full, true)))
 }
 static VFS_UP: AtomicBool = AtomicBool::new(false);
 /// A rebuild is wanted (no index, the API changed `/gifs`, too many misses).
@@ -223,7 +255,7 @@ pub fn volume_id() -> io::Result<Option<opendmd_core::card::Volume>> {
 // ---- the VFS: a FIL we filled, as a file descriptor -------------------------
 
 fn fil(fd: i32) -> *mut sys::FIL {
-    FILES.get(fd as usize).map_or(std::ptr::null_mut(), |p| p.load(Relaxed))
+    TABLE.file(fd as usize)
 }
 
 unsafe fn fail(code: u32) -> i32 {
@@ -252,7 +284,7 @@ unsafe extern "C" fn v_read(fd: i32, dst: *mut core::ffi::c_void, size: usize) -
     if f.is_null() {
         return fail(sys::EBADF) as isize;
     }
-    let r = RAW[fd as usize].load(Relaxed);
+    let r = TABLE.raw(fd as usize);
     if !r.is_null() && !(*r).broken {
         let raw = &mut *r;
         let pdrv = raw.pdrv;
@@ -269,7 +301,10 @@ unsafe extern "C" fn v_read(fd: i32, dst: *mut core::ffi::c_void, size: usize) -
                 RAW_READS.fetch_add(1, Relaxed);
                 return n as isize;
             }
-            Err(_) => {
+            Err(e) => {
+                // A card error, counted as any read's is (`frametime`
+                // sees the fallback's result, which may succeed).
+                crate::sdhealth::read_failed(crate::sdhealth::Kind::Read, raw.file.pos() > 0, "the playing file (raw)", &e);
                 // FatFs from here, from the same position: its chain walk
                 // starts again at the file's first cluster (`fptr` 0) and
                 // its buffer is reloaded (no data sector is 0).
@@ -297,7 +332,7 @@ unsafe extern "C" fn v_lseek(fd: i32, off: sys::off_t, whence: i32) -> sys::off_
     if f.is_null() {
         return fail(sys::EBADF) as sys::off_t;
     }
-    let r = RAW[fd as usize].load(Relaxed);
+    let r = TABLE.raw(fd as usize);
     let raw = (!r.is_null() && !(*r).broken).then(|| &mut *r);
     let base = match whence as u32 {
         sys::SEEK_CUR => raw.as_ref().map_or((*f).fptr as i64, |r| r.file.pos() as i64),
@@ -331,18 +366,16 @@ unsafe extern "C" fn v_fstat(fd: i32, st: *mut sys::stat) -> i32 {
 }
 
 unsafe extern "C" fn v_close(fd: i32) -> i32 {
-    match FILES.get(fd as usize).map(|p| p.swap(std::ptr::null_mut(), Relaxed)) {
-        Some(f) if !f.is_null() => {
-            let r = RAW[fd as usize].swap(std::ptr::null_mut(), Relaxed);
-            if !r.is_null() {
-                drop(Box::from_raw(r));
-                open_set(|o| o.remove(fd as usize));
-            }
+    // The raw state and the open-set entry go before the slot is free
+    // (`fatread::Slots::release`): another task's open can then never find
+    // this file's extents in it.
+    match TABLE.release(fd as usize, |k| open_set(|o| o.remove(k))) {
+        Some((f, _raw)) => {
             sys::f_close(f);
             drop(Box::from_raw(f));
             0
         }
-        _ => fail(sys::EBADF),
+        None => fail(sys::EBADF),
     }
 }
 
@@ -451,38 +484,37 @@ fn open_path_raw(full: &str) -> io::Result<Option<File>> {
 /// `raw`, read raw and noted in [`holds`]. `Ok(None)`: every slot busy
 /// (the FIL is freed; the caller opens by path).
 fn hand_out(f: *mut sys::FIL, raw: Option<(Raw, &str)>) -> io::Result<Option<File>> {
-    for (k, (slot, path)) in FILES.iter().zip(SLOT_PATHS).enumerate() {
-        if slot.compare_exchange(std::ptr::null_mut(), f, Relaxed, Relaxed).is_ok() {
-            if let Some((r, full)) = raw {
-                open_set(|o| o.put(k, full));
-                RAW[k].store(Box::into_raw(Box::new(r)), Relaxed);
-            }
-            return match File::open(path) {
-                Ok(file) => Ok(Some(file)),
-                Err(e) => {
-                    let r = RAW[k].swap(std::ptr::null_mut(), Relaxed);
-                    if !r.is_null() {
-                        // SAFETY: never handed out.
-                        drop(unsafe { Box::from_raw(r) });
-                        open_set(|o| o.remove(k));
-                    }
-                    slot.store(std::ptr::null_mut(), Relaxed);
-                    // SAFETY: never handed out.
-                    unsafe {
-                        sys::f_close(f);
-                        drop(Box::from_raw(f));
-                    }
-                    Err(e)
+    let (raw, full) = match raw {
+        Some((r, full)) => (Some(Box::new(r)), full),
+        None => (None, ""),
+    };
+    // Noted in the open set under its lock, unless a write intent covers
+    // the path (then FatFs reads it): the check and the note are one step.
+    let claimed = TABLE.claim(f, raw, |k| open_set(|o| o.insert_unless_covered(k, full)));
+    let Some(k) = claimed else {
+        if SLOTS_FULL.fetch_add(1, Relaxed) == 0 {
+            log::warn!("fat index: all {SLOTS} /fidx slots busy; opening by path (FatFs) meanwhile");
+        }
+        // SAFETY: never handed out; every slot busy.
+        unsafe {
+            sys::f_close(f);
+            drop(Box::from_raw(f));
+        }
+        return Ok(None);
+    };
+    match File::open(SLOT_PATHS[k]) {
+        Ok(file) => Ok(Some(file)),
+        Err(e) => {
+            if let Some((f, _)) = TABLE.release(k, |k| open_set(|o| o.remove(k))) {
+                // SAFETY: never handed out.
+                unsafe {
+                    sys::f_close(f);
+                    drop(Box::from_raw(f));
                 }
-            };
+            }
+            Err(e)
         }
     }
-    // SAFETY: never handed out; every slot busy.
-    unsafe {
-        sys::f_close(f);
-        drop(Box::from_raw(f));
-    }
-    Ok(None)
 }
 
 fn indexed_as(full: &str, raw: bool) -> Option<io::Result<File>> {
@@ -490,6 +522,12 @@ fn indexed_as(full: &str, raw: bool) -> Option<io::Result<File>> {
     if !crate::CARD_READY.load(Relaxed) {
         return None;
     }
+    indexed_now(full, raw)
+}
+
+/// [`indexed_as`] without the handover check (psi-probe's self-check, on
+/// the main task with the card already its own).
+fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
     let card = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/"))?;
     let name = card.rsplit('/').next()?;
     if !VFS_UP.load(Relaxed) || !name.is_ascii() || name.len() > 255 {
@@ -823,7 +861,7 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -832,17 +870,19 @@ pub fn status_json() -> String {
         open_set(|o| o.len()),
         RAW_READS.load(Relaxed),
         RAW_FALLBACKS.load(Relaxed),
+        SLOTS_FULL.load(Relaxed),
     )
 }
 
 /// psi-probe (the emulator lane): read up to `max` of the playlist's GIFs
 /// and their prepared copies raw ([`open_player`]'s path open, chunks of
 /// odd sizes and a seek) and through FatFs, and compare. (files read raw,
-/// files that differ, files FatFs read but raw could not open.)
+/// files that differ, files FatFs read but raw could not open, of the
+/// first those opened through the index's `open_at`.)
 #[cfg(feature = "psi-probe")]
-pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize) {
+pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize, usize) {
     if !register_vfs() {
-        return (0, 0, 0);
+        return (0, 0, 0, 0);
     }
     let list = fs::read_to_string(format!("{root}/filelist.txt")).unwrap_or_default();
     let mut paths = Vec::new();
@@ -852,10 +892,31 @@ pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize) {
             paths.push(format!("{root}{c}"));
         }
     }
+    // The index route too (`open_at`): built now if the card has none.
+    let indexed_ok = { let _ = build(); true };
     let (mut ok, mut bad, mut no_raw) = (0, 0, 0);
+    let mut via_index = 0;
+    let mut tries = Vec::new();
     for full in paths {
+        tries.push((full.clone(), false));
+        if indexed_ok && full.starts_with(&format!("{root}/gifs/")) {
+            tries.push((full, true));
+        }
+    }
+    for (full, index) in tries {
         let Ok(want) = fs::read(&full) else { continue };
-        let mut f = match open_path_raw(&full) {
+        let opened = if index {
+            match indexed_now(&full, true) {
+                Some(Ok(f)) => {
+                    via_index += 1;
+                    Ok(Some(f))
+                }
+                _ => Ok(None),
+            }
+        } else {
+            open_path_raw(&full)
+        };
+        let mut f = match opened {
             Ok(Some(f)) => f,
             _ => {
                 no_raw += 1;
@@ -885,5 +946,5 @@ pub fn raw_self_check(root: &str, max: usize) -> (usize, usize, usize) {
             bad += 1;
         }
     }
-    (ok, bad, no_raw)
+    (ok, bad, no_raw, via_index)
 }

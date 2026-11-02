@@ -1159,9 +1159,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         // The copy may be the one opened ahead (the GIF's path finds it).
         let _busy = crate::cache_builder::busy();
-        if !skip_if_playing(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) {
+        let Some(_held) = release_for_write(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) else {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-        }
+        };
         match crate::cache::forget(&forget.path) {
             Ok(removed) => req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{}}}"#,
@@ -1520,9 +1520,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Held to the end: the GIF's copy goes too, and nothing may open
         // it ahead in between.
         let _busy = crate::cache_builder::busy();
-        if !skip_if_playing(&c, &path) {
+        let Some(_held) = release_for_write(&c, &path) else {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-        }
+        };
         crate::fatidx::touched(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
@@ -1668,59 +1668,82 @@ fn portal_target(ctx: &Ctx) -> Option<String> {
     (s.wifi == "ap" && !s.ip.is_empty()).then(|| format!("http://{}/", s.ip))
 }
 
-/// If the player has `fs_path` open — the GIF on screen, or the prepared copy
-/// it is actually reading for it — skip to the next entry and give it a beat
-/// to close the file: FAT must not have an open file replaced or unlinked.
-/// The copy it opened ahead for the next file — `fs_path` itself, or the
-/// copy of the GIF at `fs_path` — is let go first, and waited for (its pick
-/// then opens whatever is there when it plays). The caller holds
-/// `cache_builder::busy()` from before this to the end of its card work, so
-/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). False if the
-/// player did not answer: the caller refuses rather than touch the file.
-///
-/// The skip is still a beat, not an answer: the file on screen closes at
-/// the loop's next tick, which an answer would have to wait across
-/// iterations for.
+/// The write intents a writer holds (`fatidx::WriteIntent`) from before it
+/// waits for the player until its card work is done: drop it last.
 #[must_use]
-fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
-    if crate::state::is_ahead(fs_path) && !release_ahead(ctx) {
-        return false;
-    }
-    let playing = ctx.status.lock().unwrap().path.clone();
-    // A Formula's file is read (compacted) and closed as it opens: nothing
-    // holds it, and a skip would only drop the Formula being edited (whose
-    // `POST /api/play` then met the next file's transition still holding
-    // its 24 KB: short of the compile, swap-mem2). It plays on until sent
-    // again; a deleted one until its dwell ends.
-    if playing.is_empty() || opendmd_core::synth::formula_file(&playing).is_some() {
-        return released(fs_path);
-    }
-    let gif = format!("{}{playing}", config::SD_MOUNT);
-    let copy =
-        opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
-    if files::same_card_path(fs_path, &gif)
-        || copy.is_some_and(|c| files::same_card_path(fs_path, &c))
-    {
-        let _ = ctx.cmd.send(Command::Skip);
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    released(fs_path)
-}
+struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
 
-/// The answer the skip is not: `fs_path` (and, for a GIF, its prepared
-/// copy) no longer open for the player's raw reads, waited for up to
-/// [`RELEASE_WAIT`] (a transition's outgoing file closes when it ends).
-/// A raw-read file whose clusters were freed would be read as whatever
-/// was written there next (`fatidx` "raw reads"), so a writer touches
-/// nothing the player still holds: false, and it refuses.
-fn released(fs_path: &str) -> bool {
+/// Before a writer changes, replaces, renames or deletes `fs_path` (and,
+/// for a GIF, its prepared copy): register write intents for them, so
+/// nothing opens them for raw reads from now on (`fatidx`: the player then
+/// reads them through FatFs, which fails cleanly on a freed chain); have
+/// the player let go of them if it has them open — the file on screen, the
+/// copy it reads for it, the copy opened ahead — answered by the main loop
+/// at once (`Command::Release`, the loop woken from its frame's sleep);
+/// and wait until neither is held. The caller keeps the returned intents
+/// to the end of its card work, and holds `cache_builder::busy()` too, so
+/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). `None` if the
+/// player did not let go: the caller refuses and touches nothing.
+///
+/// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
+/// folder: the intent and the wait are for the whole folder then.
+fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
     let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
+    let alias = !opendmd_core::fatread::is_canonical(card);
+    let parent = fs_path.rsplit_once('/').map_or(fs_path, |(d, _)| d).to_string();
     let copy = opendmd_core::layout::cache_path(card).map(|p| format!("{}{p}", config::SD_MOUNT));
-    let held = || crate::fatidx::holds(fs_path) || copy.as_deref().is_some_and(crate::fatidx::holds);
-    wait_until_not(held)
+    let mut intents = Vec::with_capacity(2);
+    if alias {
+        intents.push(crate::fatidx::intend_tree(&parent));
+    } else {
+        intents.push(crate::fatidx::intend(fs_path));
+        if let Some(c) = &copy {
+            intents.push(crate::fatidx::intend(c));
+        }
+    }
+    let held = || {
+        if alias {
+            crate::fatidx::holds_under(&parent)
+        } else {
+            crate::fatidx::holds(fs_path) || copy.as_deref().is_some_and(crate::fatidx::holds)
+        }
+    };
+    // The file on screen read through FatFs (not raw) is let go too: FAT
+    // must not have an open file replaced or unlinked. A Formula's file is
+    // read and closed as it opens: nothing holds it (and letting go would
+    // drop the Formula being edited).
+    let playing = ctx.status.lock().unwrap().path.clone();
+    let on_screen = !playing.is_empty() && opendmd_core::synth::formula_file(&playing).is_none() && {
+        let gif = format!("{}{playing}", config::SD_MOUNT);
+        let pcopy = opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
+        files::same_card_path(fs_path, &gif) || pcopy.is_some_and(|c| files::same_card_path(fs_path, &c))
+    };
+    if (on_screen || crate::state::is_ahead(fs_path) || held()) && !release_player(ctx) {
+        return None;
+    }
+    wait_until_not(held).then_some(Held(intents))
 }
 
-/// How long a writer waits for the player to let go of a file.
+/// `Command::Release`: the main loop lets go of the file on screen and the
+/// one opened ahead (the picture stays; the next tick opens the next file,
+/// never raw while an intent covers it), woken from its frame's sleep for
+/// it. False if it did not answer in [`REPLY_TIMEOUT`].
+fn release_player(ctx: &Ctx) -> bool {
+    let (tx, rx) = mpsc::channel();
+    if ctx.cmd.send(Command::Release(tx)).is_err() {
+        // No main loop: nothing is open.
+        return true;
+    }
+    crate::wake::kick();
+    let answered = rx.recv_timeout(REPLY_TIMEOUT).is_ok();
+    if !answered {
+        log::warn!("the player did not answer a release");
+    }
+    answered
+}
+
+/// How long a writer waits for a released file to be no longer held (a
+/// transition's outgoing file closes when its last step is drawn).
 const RELEASE_WAIT: Duration = Duration::from_secs(3);
 
 fn wait_until_not(held: impl Fn() -> bool) -> bool {
@@ -1735,23 +1758,8 @@ fn wait_until_not(held: impl Fn() -> bool) -> bool {
     true
 }
 
-/// `Command::ReleaseAhead`, and its answer: true once the copy opened ahead
-/// is closed (or there was none), false if the main loop did not answer in
-/// [`REPLY_TIMEOUT`] (a frame held longer than that, or a stuck loop).
-fn release_ahead(ctx: &Ctx) -> bool {
-    let (tx, rx) = mpsc::channel();
-    if ctx.cmd.send(Command::ReleaseAhead(tx)).is_err() {
-        // No main loop: nothing is open.
-        return true;
-    }
-    let answered = rx.recv_timeout(REPLY_TIMEOUT).is_ok();
-    if !answered {
-        log::warn!("the player did not let go of the next file's copy");
-    }
-    answered
-}
 
-/// The answer when [`skip_if_playing`] got none: the file is left alone.
+/// The answer when [`release_for_write`] got none: the file is left alone.
 const NOT_RELEASED: &str = "the player did not let go of the file; try again";
 
 /// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
@@ -1769,24 +1777,20 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
         return req.bad_request("recursive delete is only for cache/ and odm/");
     }
     let _busy = crate::cache_builder::busy();
+    // Nothing under it opens for raw reads from here to the end of this
+    // round (`fatidx::WriteIntent`, a tree); what the player holds there
+    // now (the copy on screen, the one opened ahead) is let go first.
+    let _tree = crate::fatidx::intend_tree(path);
     if files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT) {
-        // A copy opened ahead may be anywhere under it.
-        if crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0
-            && !release_ahead(c)
-        {
+        let playing = c.status.lock().unwrap().path.clone();
+        let copy_under = opendmd_core::layout::cache_path(&playing)
+            .map(|p| format!("{}{p}", config::SD_MOUNT))
+            .is_some_and(|copy| files::same_card_path(path, &copy) || files::under(&copy, path));
+        let ahead = crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0;
+        if (copy_under || ahead || crate::fatidx::holds_under(path)) && !release_player(c) {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
-        let playing = c.status.lock().unwrap().path.clone();
-        if let Some(copy) = opendmd_core::layout::cache_path(&playing) {
-            let copy = format!("{}{copy}", config::SD_MOUNT);
-            if (files::same_card_path(path, &copy) || files::under(&copy, path))
-                && !skip_if_playing(c, &copy)
-            {
-                return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-            }
-        }
     }
-    // Nothing under it may still be open for the player's raw reads.
     if !wait_until_not(|| crate::fatidx::holds_under(path)) {
         return req.error(503, "503 Service Unavailable", NOT_RELEASED);
     }
@@ -1891,9 +1895,10 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     // If the player has this very file open — the GIF, or its prepared
     // copy — ask it to move on first: FAT cannot replace a file that is
     // being read.
-    if !skip_if_playing(c, &dest) {
+    // Held to the end of the upload and its replace of `dest`.
+    let Some(_held) = release_for_write(c, &dest) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
-    }
+    };
     let written = files::receive_upload(up, &dest)?;
     info!(
         "PUT /{rel}: {written} B in {:.1} s",
@@ -1966,9 +1971,9 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     // nor a stale copy at `to`'s place, which goes (a playlist line naming
     // `to` would have played it). The stream task holds
     // `cache_builder::busy()` throughout.
-    if !skip_if_playing(c, &from) || !skip_if_playing(c, &to) {
+    let (Some(_from_held), Some(_to_held)) = (release_for_write(c, &from), release_for_write(c, &to)) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
-    }
+    };
     if let Some(dir) = std::path::Path::new(&to).parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             return up.error(

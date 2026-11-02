@@ -2339,8 +2339,8 @@ pub fn run(root: &str) {
     swap_card(root, &mut canvas);
     let mut out = vec![0u8; psi::W * psi::H * 3];
     // The player's raw card reads (fatidx), byte for byte against FatFs's.
-    let (raw_ok, raw_bad, no_raw) = crate::fatidx::raw_self_check(root, 24);
-    say!(info, "psi-probe: raw reads: {raw_ok} files match FatFs's reads, {raw_bad} differ ({no_raw} not opened raw)");
+    let (raw_ok, raw_bad, no_raw, via_index) = crate::fatidx::raw_self_check(root, 24);
+    say!(info, "psi-probe: raw reads: {raw_ok} files match FatFs's reads, {raw_bad} differ, {via_index} of them through the index ({no_raw} not opened raw)");
 
     // (The examples as effects, with and without the still cache, timed, are
     // not in the full probe: it is the emulator lane's correctness run, and
