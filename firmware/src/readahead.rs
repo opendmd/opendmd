@@ -54,6 +54,8 @@ struct State {
     /// A block has been fetched since the slot or position changed: a read
     /// it cannot serve now is an underrun.
     primed: bool,
+    /// When [`release`] last gave the ring back (ms uptime).
+    released_ms: u32,
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -67,7 +69,16 @@ static STATE: Mutex<State> = Mutex::new(State {
     ring: None,
     last_read_ms: 0,
     primed: false,
+    released_ms: 0,
 });
+/// The ring is held and a file followed (for the status without the lock).
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// [`release`] found the lock busy: the task gives the ring back.
+static RELEASE: AtomicBool = AtomicBool::new(false);
+/// After [`release`], the ring is not taken again for this long: the next
+/// file's decoder and its transition's buffers come first (a dissolve is
+/// 400 ms).
+const HOLD_OFF_MS: u32 = 1_000;
 
 /// The filling task is up (set by [`tick`], cleared by the task under the
 /// state's lock as it decides to go).
@@ -190,11 +201,35 @@ pub fn closed(k: usize) {
     if s.slot == Some(k) {
         s.slot = None;
         s.gen = s.gen.wrapping_add(1);
-        s.ext = None;
-        // Given back now (a free, at a file change): the next file's
-        // transition, in this same tick, asks the heap for 24 KB.
-        s.ring = None;
+        let ext = s.ext.take();
+        let ring = s.ring.take();
+        ACTIVE.store(false, Relaxed);
+        drop(s);
+        // Freed after the lock (a free, at a file change).
+        drop((ext, ring));
     }
+}
+
+/// The main loop is opening a file (a switch, or the next file ahead):
+/// give the ring back now, before the new decoder and the transition's
+/// 24 KB ask the heap (the file on screen stays open through a transition,
+/// so its close is too late), and take it again only after
+/// [`HOLD_OFF_MS`]. The display core: the lock is tried (busy: the task
+/// gives it back at its next look, `RELEASE`).
+#[inline(never)]
+pub fn release() {
+    let ring = match STATE.try_lock() {
+        Ok(mut s) => {
+            s.released_ms = now_ms();
+            ACTIVE.store(false, Relaxed);
+            s.ring.take()
+        }
+        Err(_) => {
+            RELEASE.store(true, Relaxed);
+            None
+        }
+    };
+    drop(ring);
 }
 
 /// One block to fetch: its offset and length, the card sectors (lba,
@@ -210,38 +245,68 @@ struct Fetch {
 
 enum Next {
     Fetch(Fetch),
-    /// Full, or waiting for the heap: look again soon.
+    /// Full: look again soon.
     Wait,
+    /// No room for the ring: look again in a while (`no_heap` counts
+    /// these looks).
+    NoHeap,
     /// Nothing followed (or idle): given back.
     Idle,
 }
 
 fn plan() -> Next {
-    let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
-    let idle = s.slot.is_none() || now_ms().wrapping_sub(s.last_read_ms) >= IDLE_MS;
-    if idle {
-        s.ring = None;
-        // Gone under the lock: `tick` starts another when wanted again.
-        RUNNING.store(false, Relaxed);
-        return Next::Idle;
-    }
-    if s.ring.is_none() {
+    // The lock is held only for bookkeeping: the heap's checks, the 8 KB
+    // allocation (and its zeroing) and frees are done outside it, so the
+    // display core's `closed` never waits behind them.
+    let need_ring = {
+        let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+        if RELEASE.swap(false, Relaxed) {
+            s.released_ms = now_ms();
+            let ring = s.ring.take();
+            ACTIVE.store(false, Relaxed);
+            drop(s);
+            drop(ring);
+            return Next::Wait;
+        }
+        let idle = s.slot.is_none() || now_ms().wrapping_sub(s.last_read_ms) >= IDLE_MS;
+        if idle {
+            let ring = s.ring.take();
+            ACTIVE.store(false, Relaxed);
+            // Gone under the lock: `tick` starts another when wanted again.
+            RUNNING.store(false, Relaxed);
+            drop(s);
+            drop(ring);
+            return Next::Idle;
+        }
+        if s.ring.is_none() && now_ms().wrapping_sub(s.released_ms) < HOLD_OFF_MS {
+            // Given back at a switch: not taken again while the next file's
+            // decoder and transition take theirs.
+            return Next::Wait;
+        }
+        s.ring.is_none().then_some(s.gen)
+    };
+    if let Some(gen) = need_ring {
         let heap = crate::state::free_heap();
         if heap < MIN_HEAP + (BLOCKS * BLOCK) as u32 || crate::state::largest_free_block() < BLOCKS * BLOCK {
             NO_HEAP.fetch_add(1, Relaxed);
+            return Next::NoHeap;
+        }
+        let Some(ring) = Ring::try_new() else {
+            NO_HEAP.fetch_add(1, Relaxed);
+            return Next::NoHeap;
+        };
+        let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+        if s.gen != gen || s.ring.is_some() || s.slot.is_none() {
+            // Changed meanwhile: freed outside the lock, asked again.
+            drop(s);
+            drop(ring);
             return Next::Wait;
         }
-        match Ring::try_new() {
-            Some(r) => {
-                s.ring = Some(r);
-                TAKEN.fetch_add(1, Relaxed);
-            }
-            None => {
-                NO_HEAP.fetch_add(1, Relaxed);
-                return Next::Wait;
-            }
-        }
+        s.ring = Some(ring);
+        ACTIVE.store(true, Relaxed);
+        TAKEN.fetch_add(1, Relaxed);
     }
+    let s = STATE.lock().unwrap_or_else(|p| p.into_inner());
     let (pos, size) = (s.pos, s.size);
     let Some(off) = s.ring.as_ref().and_then(|r| r.want(pos, size)) else {
         return Next::Wait;
@@ -272,6 +337,7 @@ fn run() {
         match plan() {
             Next::Idle => return,
             Next::Wait => std::thread::sleep(Duration::from_millis(5)),
+            Next::NoHeap => std::thread::sleep(Duration::from_millis(200)),
             Next::Fetch(f) => {
                 let buf = scratch.get_or_insert_with(|| vec![0u8; BLOCK]);
                 let mut at = 0usize;
@@ -311,9 +377,10 @@ fn run() {
 
 /// `/api/status`'s card part: `,"readahead":{...}`.
 pub fn status_json() -> String {
-    let (active, fill) = match STATE.try_lock() {
-        Ok(s) => (s.ring.is_some() && s.slot.is_some(), s.ring.as_ref().map_or(0, |r| r.ahead(s.pos))),
-        Err(_) => (true, FILL.load(Relaxed) as u64),
+    let active = ACTIVE.load(Relaxed);
+    let fill = match STATE.try_lock() {
+        Ok(s) => s.ring.as_ref().map_or(0, |r| r.ahead(s.pos)),
+        Err(_) => FILL.load(Relaxed) as u64,
     };
     let fill_min = FILL_MIN.swap(u32::MAX, Relaxed);
     format!(

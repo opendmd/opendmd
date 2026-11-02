@@ -14,6 +14,10 @@ use crate::fatdir;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
 pub const MAGIC: &[u8; 4] = b"ODN2";
+/// The longest name a reader takes (bytes): a FAT long name is at most 255
+/// UTF-16 units, at most 765 bytes of UTF-8. A longer line means a damaged
+/// file: the reader stops there rather than read on into its heap.
+pub const NAME_MAX: usize = 768;
 const TRAILER: u64 = 12;
 /// More folders than any card has: a damaged trailer is refused.
 const MAX_DIRS: u32 = 1 << 16;
@@ -103,10 +107,16 @@ pub fn find<R: Read + Seek>(r: &mut R, dir: &str) -> io::Result<Option<(u32, u32
         found = e[..k * 12].as_chunks::<12>().0.iter().find(|c| u32_at(&c[..], 0) == key).map(|c| (u32_at(&c[..], 4), u32_at(&c[..], 8)));
         left -= k;
     }
-    if let Some((off, _)) = found {
-        r.seek(SeekFrom::Start(off as u64))?;
+    match found {
+        // A folder's names lie before the table: anything else is a damaged
+        // file, refused (so a reader never reads past them).
+        Some((off, len)) if off as u64 + len as u64 <= at as u64 => {
+            r.seek(SeekFrom::Start(off as u64))?;
+            Ok(found)
+        }
+        Some(_) => Ok(None),
+        None => Ok(None),
     }
-    Ok(found)
 }
 
 #[cfg(test)]
@@ -152,5 +162,17 @@ mod tests {
         assert_eq!(trailer(&mut Cursor::new(b"/gifs/Consoles/a.gif\n".to_vec())).unwrap(), None);
         assert_eq!(trailer(&mut Cursor::new(file[..file.len() - 1].to_vec())).unwrap(), None);
         assert_eq!(names_of(&file[..file.len() - 3], "/gifs/D1"), None);
+    }
+
+    #[test]
+    fn a_folder_reaching_into_the_table_is_refused() {
+        let mut w = Writer::new(Vec::new());
+        w.begin("/gifs/A");
+        w.name(b"a.gif").unwrap();
+        let mut file = w.finish().unwrap();
+        // The folder's length (its table entry's third u32) made too long.
+        let at = u32_at(&file, file.len() - 12) as usize;
+        file[at + 8..at + 12].copy_from_slice(&1000u32.to_le_bytes());
+        assert_eq!(find(&mut Cursor::new(&file), "/gifs/A").unwrap(), None);
     }
 }
