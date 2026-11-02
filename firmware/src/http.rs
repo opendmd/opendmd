@@ -700,7 +700,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REINDEX_TIMEOUT) {
+        let answer = rx.recv_timeout(REINDEX_TIMEOUT);
+        // The settings the main task replaced (or refused), freed here on
+        // CPU0 rather than on the display core.
+        crate::state::drop_spent();
+        match answer {
             Ok(Ok(applied)) => {
                 info!(
                     "config applied: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",

@@ -275,6 +275,85 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
+/// Whether a settings change only has values for the loop to pick up:
+/// nothing to rebuild, open or check (the playlist and what chooses it, the
+/// formula look, the time zone, the schedule, the builder's policy). Field
+/// by field, borrowed.
+fn picks_up(now: &Settings, next: &Settings) -> bool {
+    next.set == now.set
+        && next.platforms == now.platforms
+        && next.shuffle == now.shuffle
+        && next.attract == now.attract
+        && next.attract_set == now.attract_set
+        && next.look_formula == now.look_formula
+        && next.tz == now.tz
+        && next.tz_name == now.tz_name
+        && next.schedule == now.schedule
+        && next.auto_prepare == now.auto_prepare
+}
+
+/// What [`pick_up`] applies the new values to.
+struct Live<'a> {
+    nvs: &'a mut Config,
+    unsaved: &'a mut bool,
+    defer: bool,
+    sched: &'a Scheduling,
+    safe: &'a SafeStart,
+    panel: &'a mut Panel,
+    looks: &'a mut formula_look::Looks,
+    engine: Option<&'a mut Engine>,
+    canvas: &'a mut Canvas,
+    epoch: Instant,
+}
+
+/// A `PUT /api/config` that [`picks_up`]: saved (or marked, while a Formula
+/// plays), swapped in (`next` is then the replaced settings, for the
+/// handler to drop on CPU0), and only what changed applied. Out of line and
+/// small: the display core runs this between two frames, from flash, and
+/// the whole `ApplyConfig` arm cost a raced frame its start (~415 µs a PUT
+/// at 80 MHz flash, display-isolation 2026-11-02).
+#[inline(never)]
+fn pick_up(settings: &mut Settings, next: &mut Settings, live: Live<'_>) -> Result<Applied, String> {
+    if let Err(e) = save_settings(live.nvs, next, live.unsaved, live.defer) {
+        return Err(format!("saving settings: {e:#}"));
+    }
+    std::mem::swap(settings, next);
+    let (s, old) = (&*settings, &*next);
+    let off = live.sched.off();
+    if s.brightness != old.brightness || s.max_brightness != old.max_brightness {
+        live.panel.set_max_brightness(live.safe.ceiling(s.max_brightness));
+        if !off {
+            live.panel.set_brightness(live.sched.brightness(s));
+        }
+    }
+    if s.panel_sync != old.panel_sync || s.panel_split != old.panel_split {
+        live.panel.set_sync(s.panel_sync, s.panel_split);
+    }
+    #[cfg(feature = "psi")]
+    if s.formula_jit != old.formula_jit {
+        opendmd_core::fx_psi::set_jit(s.formula_jit);
+    }
+    let mut engine = live.engine;
+    if s.look != old.look || s.glow != old.glow {
+        if live.panel.set_display(s.look, s.glow) && !off {
+            let now = live.epoch.elapsed();
+            repaint_look(live.looks, live.panel, engine.as_deref_mut(), live.canvas, now);
+        }
+        state::GLOW_HELD.store(live.panel.glow_bytes() > 0, Ordering::Relaxed);
+    }
+    let entries = engine.as_ref().map_or(0, |e| e.catalog_len());
+    // (Attract's clock or text plays for as long as attract lasts.)
+    if let Some(e) = engine.filter(|_| !state::ATTRACT_LIVE.load(Ordering::Relaxed)) {
+        if s.dwell_min != old.dwell_min || s.dwell_max != old.dwell_max {
+            e.set_dwell(dwell_policy(s));
+        }
+        if s.transition != old.transition {
+            e.set_transition(s.transition);
+        }
+    }
+    Ok(Applied::unchanged(entries))
+}
+
 /// Save the settings to NVS now, or mark them for later while a Formula
 /// plays (`dirty`): an NVS write stops the flash cache on both cores for
 /// milliseconds (tens when a page is erased), and a raced Formula's pairs
@@ -643,7 +722,9 @@ fn main() -> Result<()> {
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
         //    rebuilds the engine or swaps a file on the card happens here — on
         //    this task, between frames, never on the httpd thread.
-        let cmd_t0 = Instant::now();
+        // (The µs clock, IRAM: this runs every loop, each frame.)
+        // SAFETY: no arguments; esp_timer is up before `main`.
+        let cmd_t0 = unsafe { esp_idf_sys::esp_timer_get_time() };
         let mut handled = false;
         while let Ok(command) = cmd_rx.try_recv() {
             handled = true;
@@ -791,10 +872,34 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
                 Command::ApplyConfig {
-                    settings: next,
+                    settings: mut next,
                     panel: panel_op,
                     reply,
                 } => {
+                    // Values the loop only picks up (brightness, dwell,
+                    // tint, glow, sync, …): taken in one small step, the
+                    // replaced settings freed by the handler on CPU0.
+                    if panel_op.is_none() && ptest.is_none() && picks_up(&settings, &next) {
+                        let outcome = pick_up(
+                            &mut settings,
+                            &mut next,
+                            Live {
+                                nvs: &mut nvs_config,
+                                unsaved: &mut unsaved,
+                                defer: formula_on && !sched.off(),
+                                sched: &sched,
+                                safe: &safe,
+                                panel: &mut panel,
+                                looks: &mut looks,
+                                engine: engine.as_mut(),
+                                canvas: &mut canvas,
+                                epoch,
+                            },
+                        );
+                        state::spend(next);
+                        let _ = reply.send(outcome);
+                        continue;
+                    }
                     let next = *next;
                     // A settings change ends the panel test first: its live
                     // timing and the look go back before anything applies.
@@ -1268,7 +1373,8 @@ fn main() -> Result<()> {
         }
         if handled {
             use std::sync::atomic::Ordering::Relaxed;
-            let took = us(cmd_t0.elapsed());
+            // SAFETY: as above.
+            let took = (unsafe { esp_idf_sys::esp_timer_get_time() } - cmd_t0) as u32;
             state::CMD_LOOPS.fetch_add(1, Relaxed);
             state::CMD_US.fetch_add(took, Relaxed);
             state::CMD_MAX_US.fetch_max(took, Relaxed);
