@@ -61,7 +61,7 @@ SMOKE = [
 ]
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
-BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) by the check, (.*) by the compiler")
+BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
@@ -210,7 +210,8 @@ def main():
         if golden[1] == 0 or golden[2] != 0:
             die(f"golden frames: {golden[1]} match, {golden[2]} differ")
         # Every bundled Formula opens through the real path, and a short heap
-        # refuses one (the check, and the compiler itself) instead of aborting.
+        # refuses Endless road (far short, and just short of what its open
+        # takes) instead of aborting.
         if not bundled:
             die("the bundled-formulas line is missing")
         if bundled[1] == 0 or bundled[2] != 0 or bundled[3] != "refused" or bundled[4] != "refused":
@@ -224,7 +225,10 @@ def main():
         # once the one on screen is let go; refused when even that is short.
         if not swap:
             die("the formula-over-formula line is missing")
-        if swap[1] != "played" or swap[2] != "refused, the playlist on":
+        # (The second case cannot be made when the Formula on screen holds
+        # more than Endless road's open takes: the player loads compiled
+        # Formulas now, and Time gate holds more.)
+        if swap[1] != "played" or not (swap[2] == "refused, the playlist on" or swap[2].startswith("not constructible")):
             die(f"formula over formula: {swap[0]}")
         # A card Formula over a card Formula (the same file written anew, the
         # same within a skip's transition, another): each played.
