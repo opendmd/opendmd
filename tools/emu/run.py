@@ -65,9 +65,10 @@ GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
+SETTINGS = re.compile(r"psi-probe: settings file: a save cut between its renames (loads the new settings|DID NOT load the new settings)")
 RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (raw reads|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -116,6 +117,7 @@ def main():
     swap = None
     swap_card = None
     raw_reads = None
+    settings_file = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -169,6 +171,9 @@ def main():
                 m = SWAP_CARD.search(line)
                 if m:
                     swap_card = (line, m[1])
+                m = SETTINGS.search(line)
+                if m:
+                    settings_file = (line, m[1])
                 m = RAW.search(line)
                 if m:
                     raw_reads = (line, int(m[1]), int(m[2]), int(m[3]))
@@ -244,6 +249,12 @@ def main():
             die(f"card formula over card formula: {swap_card[0]}")
         # The player's raw card reads (fatidx): every file read raw matches
         # FatFs's bytes, and some were read raw.
+        # The settings file on the card: a save cut between its renames
+        # (a power cut there) loads the new settings.
+        if not settings_file:
+            die("the settings-file line is missing")
+        if settings_file[1] != "loads the new settings":
+            die(f"settings file: {settings_file[0]}")
         if not raw_reads:
             die("the raw-reads line is missing")
         if raw_reads[1] == 0 or raw_reads[2] != 0 or raw_reads[3] == 0:
