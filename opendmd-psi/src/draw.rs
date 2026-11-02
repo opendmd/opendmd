@@ -127,7 +127,13 @@ impl Default for Ink {
 /// [`Program::vector_loop`] allows runs as lanes ([`run_lanes`]; the lane
 /// registers are free before the rows); without, every loop a turn at a
 /// time (the same canvas and slots: the tests compare).
+///
+/// In IRAM (the dispatch: per step of the draw stage; Endless road's
+/// draw stage ~8.5 % of its frame's instructions from flash,
+/// display-isolation 2026-11-02), its rare steps out of line in flash:
+/// a lane loop's start ([`as_lanes`]), the paint steps ([`args_paint`]).
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_draw")]
 pub(crate) fn run<const N: usize>(
     prog: &Program,
     s: &mut Scratch<N>,
@@ -162,15 +168,10 @@ pub(crate) fn run<const N: usize>(
                 if turns >= TURNS {
                     pc = (op.b as usize + 1).max(pc);
                 } else if lanes {
-                    // Its turns (as many as a turn at a time would run:
-                    // each END counts one, and the last is the one that
-                    // reaches the count or the frame's turns).
                     #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(vl) = prog.vector_loop(pc - 1) {
-                        let n = vl.count.min(TURNS - turns);
-                        run_lanes(prog, s, t, ink, &mut pen, pc - 1, &vl, n);
+                    if let Some((n, next)) = as_lanes(prog, s, t, ink, &mut pen, pc - 1, turns) {
                         turns += n;
-                        pc = vl.end + 1;
+                        pc = next;
                     }
                 }
             }
@@ -189,21 +190,7 @@ pub(crate) fn run<const N: usize>(
                 pen.line(ink, to);
             }
             code::DOT => pen.dot(ink, sc[m(op.a)], sc[m(op.b)], sc[m(op.c)]),
-            code::ARGS | code::PAINT => {
-                for v in [op.a, op.b, op.c] {
-                    if na < args.len() {
-                        args[na] = sc[m(v)];
-                        na += 1;
-                    }
-                }
-                if op.code == code::PAINT {
-                    // (No paint plane: the heap hadn't it. Nothing painted.)
-                    if let Some(p) = ink.1.as_deref_mut() {
-                        paint_prim(prog, t, p, &mut pen, op.d, &args);
-                    }
-                    na = 0;
-                }
-            }
+            code::ARGS | code::PAINT => args_paint(prog, t, ink, &mut pen, &op, sc, &mut args, &mut na),
             // Forward only (the verifier holds it): no loop can come of it.
             code::IF => {
                 if sc[m(op.a)] == 0 {
@@ -213,6 +200,58 @@ pub(crate) fn run<const N: usize>(
             code::JUMP => pc = (op.b as usize).max(pc),
             _ => super::vm::scalar(sc, &op, t, &prog.tables),
         }
+    }
+}
+
+/// A `FOR` at `at` with turns left, as lanes if [`Program::vector_loop`]
+/// allows: its turns (as many as a turn at a time would run: each END
+/// counts one, and the last is the one that reaches the count or the
+/// frame's turns) and the step after its END. Once a loop a frame: out of
+/// [`run`]'s IRAM.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn as_lanes<const N: usize>(
+    prog: &Program,
+    s: &mut Scratch<N>,
+    t: &Tables,
+    ink: &mut Ink,
+    pen: &mut Pen,
+    at: usize,
+    turns: u32,
+) -> Option<(u32, usize)> {
+    let vl = prog.vector_loop(at)?;
+    let n = vl.count.min(TURNS - turns);
+    run_lanes(prog, s, t, ink, pen, at, &vl, n);
+    Some((n, vl.end + 1))
+}
+
+/// An `ARGS` or `PAINT` step: its values into `args`; a `PAINT` draws the
+/// primitive (into the paint plane, if the heap had it) and starts the
+/// next one's. Out of [`run`]'s IRAM: few formulas paint.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn args_paint(
+    prog: &Program,
+    t: &Tables,
+    ink: &mut Ink,
+    pen: &mut Pen,
+    op: &Op,
+    sc: &[i32; MAX_SCALARS],
+    args: &mut [i32; 9],
+    na: &mut usize,
+) {
+    for v in [op.a, op.b, op.c] {
+        if *na < args.len() {
+            args[*na] = sc[(v & 0x7f) as usize];
+            *na += 1;
+        }
+    }
+    if op.code == code::PAINT {
+        // (No paint plane: the heap hadn't it. Nothing painted.)
+        if let Some(p) = ink.1.as_deref_mut() {
+            paint_prim(prog, t, p, pen, op.d, args);
+        }
+        *na = 0;
     }
 }
 
@@ -292,13 +331,6 @@ fn run_lanes<const N: usize>(
         // slot), looked up once a lane of turns.
         let (sc, lanes) = (&s.sc, &s.lanes);
         let src = |v: u8| vl.reg(v).map_or(v & 0x7f, |r| 0x80 | r as u8);
-        let at = |o: u8, j: usize| {
-            if o & 0x80 != 0 {
-                lanes[(o & 0x7f) as usize % (REGS + 1)][j]
-            } else {
-                sc[o as usize]
-            }
-        };
         let prim = |op: &Op| matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT);
         let mut ps = [[0u8; 4]; PRIMS];
         let mut np = 0;
@@ -309,21 +341,13 @@ fn run_lanes<const N: usize>(
             np += 1;
         }
         for j in 0..m {
-            let mut one = |p: [u8; 4]| {
-                let (a, b, c) = (at(p[1], j), at(p[2], j), at(p[3], j));
-                match p[0] {
-                    code::LINE_FROM => pen.from = (a, b, c),
-                    code::LINE_TO => pen.line(ink, (a, b, c)),
-                    _ => pen.dot(ink, a, b, c),
-                }
-            };
             if np <= PRIMS {
                 for &p in &ps[..np] {
-                    one(p);
+                    lane_prim(pen, ink, p, sc, lanes, j);
                 }
             } else {
                 for op in prog.ops[body.clone()].iter().filter(|op| prim(op)) {
-                    one([op.code, src(op.a), src(op.b), src(op.c)]);
+                    lane_prim(pen, ink, [op.code, src(op.a), src(op.b), src(op.c)], sc, lanes, j);
                 }
             }
         }
@@ -335,6 +359,36 @@ fn run_lanes<const N: usize>(
         s.sc[vl.slot[r] as usize] = s.lanes[r][last];
     }
     s.sc[vl.slot[1] as usize] = (n as i32) << 16;
+}
+
+/// One line or dot of a lane loop's turn `j`: each operand a register's
+/// lane at the turn (`0x80 | r`) or a slot. In IRAM with [`Pen::line`]:
+/// the two were ~12 % of Starfield's frame instructions from flash
+/// (display-isolation 2026-11-02, esp32sim's block profile).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_draw")]
+fn lane_prim<const N: usize>(
+    pen: &mut Pen,
+    ink: &mut Ink,
+    p: [u8; 4],
+    sc: &[i32; MAX_SCALARS],
+    lanes: &[[i32; N]; REGS + 1],
+    j: usize,
+) {
+    let at = |o: u8| {
+        if o & 0x80 != 0 {
+            lanes[(o & 0x7f) as usize % (REGS + 1)][j % N]
+        } else {
+            sc[o as usize % MAX_SCALARS]
+        }
+    };
+    let (a, b, c) = (at(p[1]), at(p[2]), at(p[3]));
+    match p[0] {
+        code::LINE_FROM => pen.from = (a, b, c),
+        code::LINE_TO => pen.line(ink, (a, b, c)),
+        _ => pen.dot(ink, a, b, c),
+    }
 }
 
 /// What a frame has drawn so far, and a line's start.
@@ -372,6 +426,8 @@ impl Pen {
     /// The line from `self.from` to `to`: integer Bresenham as
     /// `opendmd-core`'s `reference_line` (its two tests in its order), the ink from
     /// the start's byte to the end's in equal integer steps.
+    #[inline(never)]
+    #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_draw")]
     fn line(&mut self, ink: &mut Ink, to: (i32, i32, i32)) {
         if !self.may() {
             return;

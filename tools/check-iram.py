@@ -38,6 +38,13 @@ REQUIRED = [
     (r"^hub75_draw_row_pair$", "the shim's row-pair writer"),
     (r"^hub75_scan_pos$", "the scan read, twice a raced pair"),
     (r"^opendmd_firmware::wake::give$", "the display's wake, run in the esp_timer ISR"),
+    (r"^opendmd_psi::draw::run::<128>$", "the draw stage's dispatch (display-isolation: Endless road)"),
+    (r"^<opendmd_psi::draw::Pen>::line$", "the line walker"),
+    (r"^opendmd_psi::draw::lane_prim::<128>$", "a lane loop's lines and dots"),
+    (r"^opendmd_psi::vm::run1_hot::", "recip's lane loop"),
+    (r"^opendmd_psi::vm::run2_hot::", "hash's lane loops"),
+    (r"^opendmd_psi::jit::changed_groups$", "the JIT's per-row compare"),
+    (r"^opendmd_psi::jit::device::shim_pick$", "the JIT's pick helper, a pixel"),
 ]
 
 

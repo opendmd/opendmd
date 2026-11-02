@@ -233,6 +233,34 @@ fn run2<const N: usize, A: Src, B: Src>(
     }
 }
 
+/// `run1` and `run2` in IRAM, for the two steps a raced Formula's draw
+/// loop spent its flash time on (`recip`, `hash`: Starfield's lanes,
+/// display-isolation 2026-11-02, esp32sim's block profile). Generic as
+/// they are: only the instances these two are used with are placed.
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run1_hot<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run2_hot<const N: usize, A: Src, B: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0), b.at(0));
+        a.step(1);
+        b.step(1);
+    }
+}
+
 #[inline(never)]
 fn run3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
@@ -311,6 +339,31 @@ fn fast2<const N: usize, A: Src, B: Src>(
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
+        *o = [
+            f(x[0], y[0], z[0]),
+            f(x[1], y[1], z[1]),
+            f(x[2], y[2], z[2]),
+            f(x[3], y[3], z[3]),
+        ];
+        a.step(4);
+        b.step(4);
+        c.step(4);
+    }
+}
+
+/// [`fast3`] in flash: the operand orders of `mix` no bundled Formula uses.
+#[inline(never)]
+fn fast3_flash<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
     mut a: A,
     mut b: B,
@@ -1434,14 +1487,14 @@ pub(crate) fn lane_draw<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         LT => bin!(fast2, d, a, b, fixed::lt),
         GT => bin!(fast2, d, a, b, fixed::gt),
         AND => bin!(fast2, d, a, b, fixed::and),
         OR => bin!(fast2, d, a, b, fixed::or),
         MIN => bin!(fast2, d, a, b, fixed::min),
         MAX => bin!(fast2, d, a, b, fixed::max),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         MOD => bin!(run2, d, a, b, fixed::modulo),
         LE => bin!(fast2, d, a, b, fixed::le),
         GE => bin!(fast2, d, a, b, fixed::ge),
@@ -1598,7 +1651,7 @@ pub(crate) fn lane_op<const N: usize>(
         MAX => bin!(fast2, d, a, b, fixed::max),
         STEP => bin!(fast2, d, a, b, fixed::step),
         ATAN2 => bin!(run2, d, a, b, fixed::atan2),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         LEN => bin!(run2, d, a, b, fixed::len),
         BIT => bin!(fast2, d, a, b, fixed::bit),
         NEG => un!(fast1, d, a, fixed::neg),
@@ -1612,7 +1665,7 @@ pub(crate) fn lane_op<const N: usize>(
         SAW => un!(fast1, d, a, fixed::saw),
         SQR => un!(fast1, d, a, fixed::sqr),
         SQRT => un!(run1, d, a, fixed::sqrt),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         // (k is always a lane: a pick with a scalar k is compares and
         // selects.)
         PICK => {
@@ -1627,7 +1680,21 @@ pub(crate) fn lane_op<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
-        MIX => tern!(fast3, d, a, b, c, fixed::mix),
+        // `mix` from IRAM with its operands as the bundled Formulas have
+        // them (scalar/lane: SLS, SSL, LLS; each also lowers to the JIT);
+        // the four orders none uses from flash, their 2.7 KB of IRAM the
+        // draw stage's (census of opendmd-web/formulas, display-isolation
+        // 2026-11-02).
+        MIX => match (a, b, c) {
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => fast3(d, S(u), L(q), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => fast3(d, S(u), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => fast3(d, L(p), L(q), S(w), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, L(p), L(q), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => fast3_flash(d, L(p), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => fast3_flash(d, L(p), S(v), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, S(u), L(q), L(r), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => d.fill(fixed::mix(u, v, w)),
+        },
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
         // the other four are weighed 0 there, so the bytes are the same.
