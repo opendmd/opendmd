@@ -441,62 +441,66 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
 /// is left as it was.
 #[derive(serde::Deserialize, Default)]
 pub struct ConfigPatch {
-    wifi_ssid: Option<String>,
-    wifi_pass: Option<String>,
-    brightness: Option<u8>,
+    pub(crate) wifi_ssid: Option<String>,
+    pub(crate) wifi_pass: Option<String>,
+    pub(crate) brightness: Option<u8>,
     /// Read wider than `u8` so an out-of-range value gets the range message.
-    max_brightness: Option<u32>,
-    dwell_min: Option<u64>,
-    dwell_max: Option<u64>,
-    shuffle: Option<bool>,
-    platforms: Option<String>,
-    set: Option<String>,
-    hostname: Option<String>,
-    tz: Option<String>,
-    tz_name: Option<String>,
-    transition: Option<String>,
-    transition_ms: Option<u32>,
-    auto_prepare: Option<String>,
-    follow: Option<bool>,
-    follow_host: Option<String>,
+    pub(crate) max_brightness: Option<u32>,
+    pub(crate) dwell_min: Option<u64>,
+    pub(crate) dwell_max: Option<u64>,
+    pub(crate) shuffle: Option<bool>,
+    pub(crate) platforms: Option<String>,
+    pub(crate) set: Option<String>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) tz: Option<String>,
+    pub(crate) tz_name: Option<String>,
+    pub(crate) transition: Option<String>,
+    pub(crate) transition_ms: Option<u32>,
+    pub(crate) auto_prepare: Option<String>,
+    pub(crate) follow: Option<bool>,
+    pub(crate) follow_host: Option<String>,
     /// Never echoed back; `""` clears it.
-    follow_code: Option<String>,
+    pub(crate) follow_code: Option<String>,
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
-    attract_set: Option<Option<String>>,
+    pub(crate) attract_set: Option<Option<String>>,
     /// `""`, `"clock"` or `"text:<message>"`.
-    attract: Option<String>,
-    look: Option<String>,
-    glow: Option<String>,
+    pub(crate) attract: Option<String>,
+    pub(crate) look: Option<String>,
+    pub(crate) glow: Option<String>,
     /// The Formula look: a formula's `@formula?psb=…` path, `""` = none
     /// (checked by the main task before anything is saved).
     /// Its name, blend and amount are the formula's own `name` and `look`
     /// lines (no fields of their own: unknown fields are ignored).
-    look_formula: Option<String>,
-    boot_show: Option<String>,
+    pub(crate) look_formula: Option<String>,
+    pub(crate) boot_show: Option<String>,
     /// Refresh-synchronised blits, applied at once.
-    panel_sync: Option<bool>,
+    pub(crate) panel_sync: Option<bool>,
     /// With it, the bottom half a refresh after the top; applied at once.
-    panel_split: Option<bool>,
+    pub(crate) panel_split: Option<bool>,
     /// The Formulas' JIT (the kill switch); applied at the next frame.
-    formula_jit: Option<bool>,
-    formula_arena: Option<bool>,
+    pub(crate) formula_jit: Option<bool>,
+    pub(crate) formula_arena: Option<bool>,
     /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
     /// `hold` (until something else plays).
-    formula_keep: Option<String>,
+    pub(crate) formula_keep: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
-    api_key: Option<String>,
+    pub(crate) api_key: Option<String>,
     /// `safe`, `fast` or `full` (`opendmd_core::card_speed`): in effect at
     /// once when a card is mounted (`cardspeed::set_mode`).
-    card_speed: Option<String>,
+    pub(crate) card_speed: Option<String>,
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
     panel: Option<Option<PanelWire>>,
+    /// The schedule's JSON: read from the settings file on the card only
+    /// (`settings_card`); `PUT /api/config` ignores it (`PUT /api/schedule`
+    /// sets the schedule).
+    pub(crate) schedule: Option<String>,
     /// `true` keeps the trial (with `panel`: saved without one), `false`
     /// undoes it.
-    panel_confirm: Option<bool>,
+    pub(crate) panel_confirm: Option<bool>,
 }
 
 /// Wire format for `POST /api/card/format`: `{"confirm": true}`, so an
