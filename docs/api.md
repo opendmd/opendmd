@@ -140,7 +140,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
 | `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
-| `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale}` diagnostics of the index that opens GIFs without a directory scan |
+| `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale, raw_open, raw_reads, raw_fallbacks, slots_full, intent_refused}` diagnostics of the index that opens GIFs without a directory scan and of the player's card reads (read past FatFs's volume lock; opens refused while a write holds the file); `settings_store` where the settings are kept: `card` (`/opendmd.json`, see Settings), `nvs (no card)`, or `nvs (card write failed: …)` (technical: an app showing it says "Settings are kept on the card") |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `interrupt watchdog`, `task watchdog`, `brownout`, `external`, …; why this boot's restart was made in plain words — `"card failure"`, `"different card"`, `"restarted on request"`, `"restarted to apply a card speed change"`, `"crashed (panic)"`, `"restarted without a recorded reason"`, … — or null after a power-on |
 | `restarts` | the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: `{reason, reset, uptime_s, heap_free, largest, where?}`. `reason`: `api_reboot`, `firmware_update`, `ap_timeout` (setup network timed out), `card_full_speed`, `card_speed`, `fresh_heap` (playlist index needed a fresh heap), `panel_trial`, `card_failure`, `new_card`, `card_lost` (SPI device lost), `card_retry`, `panic`, `stack_overflow`, `diag_abort` (a `diag-heap` build's heap check), or, when the restart wrote nothing, from the reset alone: `power_on` (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), `brownout`, `unrecorded` (a software restart), `unrecorded_crash`. `reset`: the chip's reset after it (`reset_reason`'s words; null if no boot has seen it yet). `uptime_s`, `heap_free`, `largest`: when it was written (for `unrecorded`/`unrecorded_crash`/`brownout`, the last heartbeat's, ≤ 30 s earlier; null when unknown; `largest` null for `panic`, `stack_overflow` and `diag_abort`, which do not walk the heap). `where`: a panic's `file:line message` (message ≤ 48 B), the overflowing task (`task <name>`), the heap check's site, or for `unrecorded_crash` the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe) |
 | `overrides`, `hidden` | as in "Fields that recur" |
@@ -222,6 +222,28 @@ curl -s -X POST $DMD/api/card/full-speed
 ```
 
 ## Settings
+
+**Where they are kept.** The settings that belong to what plays travel
+with the card, in `/opendmd.json` at its root: brightness and its
+ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
+the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
+host, attract, look, glow, `look_formula`, `boot_show`, `panel_sync`,
+`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`. A change is
+on the card the moment it is saved, whatever plays. The device keeps the
+rest itself, never on the card: the WiFi details and name, the API key
+and the RePlayOS code (secrets), the card's clock and its slow-clock
+record, and the panel timing. It also keeps a copy of everything, what it
+runs on until a card is read and with no card at all.
+
+The file is JSON, by the names below, sealed with a last member `"crc"`;
+it is saved as `opendmd.json.new`, then the old one becomes
+`opendmd.json.bak` and the new one takes its name, so a power cut leaves
+the old settings or the new. It may be edited on a PC (the seal is then
+ignored): a value the device would refuse over the API is kept as it was,
+with a log line. A card from another display brings its settings; this
+display's WiFi and secrets stay. A card without the file gets one, from
+the settings in force, when it is first read. Copying the pack onto a
+card, or formatting it, leaves no settings file: the next boot writes one.
 
 ### GET /api/config
 
