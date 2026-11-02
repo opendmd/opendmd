@@ -76,6 +76,8 @@ mod psi_stack;
 mod restarts;
 mod sched;
 mod sd;
+#[cfg(feature = "nocard-test")]
+mod nocard_test;
 mod settings_card;
 mod sdhealth;
 mod show;
@@ -737,16 +739,19 @@ fn main() -> Result<()> {
     // Dropped once the card is handed over: the channel's few hundred bytes
     // are not kept for the life of the run.
     let mut boot_rx = Some(boot_rx);
+    let boot_ctx = Arc::new(Ctx {
+        status: status.clone(),
+        settings: shared_settings.clone(),
+        cmd: cmd_tx.clone(),
+        net: net_tx,
+    });
+    #[cfg(feature = "nocard-test")]
+    nocard_test::spawn(boot_ctx.clone());
     boot::spawn(boot::BootTask {
         bus,
         health,
         nvs: nvs_partition.clone(),
-        ctx: Arc::new(Ctx {
-            status: status.clone(),
-            settings: shared_settings.clone(),
-            cmd: cmd_tx.clone(),
-            net: net_tx,
-        }),
+        ctx: boot_ctx,
         net: net_worker::NetWorker {
             modem,
             sysloop,

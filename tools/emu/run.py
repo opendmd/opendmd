@@ -60,6 +60,14 @@ SMOKE = [
     ("www pack verified", re.compile(r"www: pack '.*' verified")),
     ("GIFs from the playlist", re.compile(r"\] /gifs/\S+\.gif <- (prepared|original)")),
 ]
+# No card: the firmware boots, its panel runs, the settings are kept in NVS,
+# and a change made then survives a restart (src/nocard_test.rs).
+NOCARD = [
+    ("panel up", re.compile(r"opendmd_firmware: panel up: 128x32")),
+    ("settings in NVS", re.compile(r'nocard-test: store,"settings_store":"nvs \(no card\)"')),
+    ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
+    ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
+]
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
@@ -73,7 +81,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|bundled |short hea
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -89,12 +97,17 @@ def main():
     for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
+    if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
+        # No card: an empty image (a card the firmware cannot mount).
+        a.card = EMU_DIR / "card" / "empty.img"
+        a.card.parent.mkdir(parents=True, exist_ok=True)
+        a.card.write_bytes(b"")
     if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
     want_sha = image_elf_sha(a.image)
     if not want_sha:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
-    seconds = a.seconds or (60 if a.mode == "smoke" else 400)
+    seconds = a.seconds or {"smoke": 60, "nocard": 40}.get(a.mode, 400)
     wall = a.wall or (900 if a.mode == "smoke" else 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -139,14 +152,21 @@ def main():
                     failure = f"the booted app (ELF SHA256 {booted_sha}...) is not {a.image} ({want_sha[:16]}...)"
             if line.startswith("rst:0x"):
                 resets += 1
-                if resets > 1:
+                # (nocard: the test restarts once on purpose.)
+                if resets > (2 if a.mode == "nocard" else 1):
                     failure = f"unexpected reset: {line}"
             for rx, name in FAIL:
                 if rx.search(line):
                     failure = f"{name}: {line[:200]}"
             if failure:
                 break
-            if a.mode == "smoke":
+            if a.mode == "nocard":
+                for name, rx in NOCARD:
+                    if name not in seen and rx.search(line):
+                        seen[name] = line
+                if len(seen) == len(NOCARD):
+                    break
+            elif a.mode == "smoke":
                 for name, rx in SMOKE:
                     if name not in seen and rx.search(line) and name != "GIFs from the playlist":
                         seen[name] = line
@@ -203,6 +223,14 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "nocard":
+        missing = [n for n, _ in NOCARD if n not in seen]
+        if missing:
+            die(f"not seen within {seconds} emulated s / {wall} s wall: {missing}")
+        for n, _ in NOCARD:
+            print(f"pass  {n}: {seen[n][:170]}")
+        print(f"EMU_NOCARD_OK ({took:.0f} s wall)")
+        return
     if a.mode == "smoke":
         missing = [n for n, _ in SMOKE if n not in seen]
         if missing or gifs < a.min_gifs:
