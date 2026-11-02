@@ -16,7 +16,11 @@ import { store } from './util.js';
 import { vals, program, abi } from './psikit.js';
 
 export const DIR = '/formulas';
-let card = false, cache = [];
+// `known`: where they live is known (on a device, from a status that
+// came); `read`: the panel's were listed. Until then a device shows none
+// and a save asks again: never this browser's list, never a guessed name
+// over a file already on the card.
+let card = false, cache = [], known = false, read = false;
 // The compiled files the listing showed (lowercased paths).
 const built = new Set();
 
@@ -43,39 +47,48 @@ export const stemTitle = (s) => { const t = s.replace(/[-_]+/g, ' ').trim(); ret
 export const slug = (n) => n.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'formula';
 
 // Your Formulas, read where they live: [{id, name, src, a, b, c, file?}].
+// A failed status or listing throws (said by the caller), not an empty list.
 export async function load() {
   once = once || Promise.resolve();
-  card = false;
+  card = read = false;
+  known = !app.device;
+  cache = [];
   if (app.device) {
-    const sd = (app.status || await app.src.status().catch(() => null))?.sd;
+    const sd = (app.status || await app.src.status())?.sd;
     card = !!sd?.mounted && sd.readable !== false;
+    known = true;
   }
   if (!card) return (cache = local());
   // (Asked first: a listing of a folder that isn't there is a 404.)
-  const rows = (await app.src.stat(DIR).catch(() => null))?.exists ? await app.src.list(DIR).catch(() => []) : [];
+  const rows = (await app.src.stat(DIR))?.exists ? await app.src.list(DIR) : [];
   const out = [];
   for (const r of rows) {
     if (!r.dir && /\.psb$/i.test(r.name)) built.add(`${DIR}/${r.name}`.toLowerCase());
   }
   for (const r of rows) {
     if (r.dir || !/\.psi$/i.test(r.name)) continue;
-    const file = `${DIR}/${r.name}`, src = await app.src.readText(file).catch(() => null);
+    // (null: gone since the listing.)
+    const file = `${DIR}/${r.name}`, src = await app.src.readText(file);
     if (typeof src != 'string') continue;
     out.push({ ...valsOf(file), id: file, file, src, name: declared(src) || stemTitle(r.name.replace(/\.psi$/i, '')) });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
+  read = true;
   return (cache = out);
 }
 
 // The list as last loaded.
-export const list = () => (card ? cache : local());
+export const list = () => (card || !known ? cache : local());
 // Loaded once (Settings › Look; the Formulas view loads it when it opens).
 let once = null;
-export const loaded = () => (once ??= load().catch(() => (once = null, local())));
+export const loaded = () => (once ??= load().catch(() => (once = null, list())));
+// Before a change: loaded again if the last try failed (it throws again if so).
+const sure = () => (!known || (card && !read) ? load().catch(() => { throw new Error('your Formulas on the panel couldn’t be read just now: try again'); }) : 0);
 
 // Save `f` ({id?, name, src, a, b, c, file?}): on the panel a file (a new
 // one named from its name, unique), else this browser's list. The record kept.
 export async function put(f) {
+  await sure();
   if (!card) {
     const l = local(), rec = { id: f.id ?? Date.now(), name: f.name, src: f.src, a: f.a, b: f.b, c: f.c }, k = l.findIndex((x) => x.id === rec.id);
     if (k < 0) l.unshift(rec); else l[k] = rec;
@@ -99,6 +112,7 @@ export async function put(f) {
 
 // Delete one.
 export async function drop(f) {
+  await sure();
   if (!card) { store.set('psi.mine', local().filter((x) => x.id !== f.id)); cache = local(); return; }
   await app.src.deleteFile(f.file);
   await app.src.deleteFile(psb(f.file)).catch(() => {});

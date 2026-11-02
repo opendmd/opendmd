@@ -381,7 +381,7 @@ else
   # read-only over https (release.yml "Fetch the formula gallery ...").
   g=$REL/site-gallery
   rm -rf "$g"
-  git clone -q --depth 1 --filter=blob:none --no-checkout "$GALLERY_URL" "$g"
+  git clone -q --filter=blob:none --no-checkout "$GALLERY_URL" "$g"
   git -C "$g" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
   git -C "$g" checkout -q
   mkdir -p "$g/gallery" "$g/dev/api"
