@@ -480,7 +480,7 @@ fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
     let t0 = Instant::now();
     for _ in 0..1024 {
         match engine.tick(t0.elapsed(), canvas)? {
-            TickOutcome::Frame { playing, .. } => return Ok(playing.path),
+            TickOutcome::Frame { playing, .. } => return Ok(playing.path.into()),
             TickOutcome::Idle => continue,
             TickOutcome::Exhausted => bail!("nothing playable"),
         }
@@ -985,7 +985,7 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
             } => {
                 if started {
                     println!("[{}/{}] {}", playing.ordinal, total, playing.path);
-                    playing_path = playing.path;
+                    playing_path = playing.path.into();
                     window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
                 }
                 // The compositor's output while a transition runs.
