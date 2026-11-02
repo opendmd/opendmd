@@ -5,7 +5,8 @@
 """Does CPU0's work reach the display? A raced Formula idle, then under load.
 
     uv run tools/display-stress.py HOST [--formula starfield] [--seconds 60]
-        [--status-hz 20] [--config-every 2] [--upload-kb 256]
+        [--loads poll,configs,uploads] [--status-hz 20] [--config-every 2]
+        [--upload-kb 256] [--json OUT]
 
 Plays a bundled Formula with `/api/play` (`formula_keep` set to `hold` for
 the run, put back after), lets it settle, then samples
@@ -14,11 +15,13 @@ and `now_playing.formula` (frame µs, frame ms) over two phases of
 `--seconds` each:
 
 1. **idle**: one status read at the start and one at the end;
-2. **stress**, at once: `/api/status` polled `--status-hz` times a second;
-   a `PUT /api/config` every `--config-every` s that changes a setting
+2. **stress**, the loads `--loads` names at once (all three by default):
+   `poll`, `/api/status` polled `--status-hz` times a second (the rate
+   achieved is reported: a device that answers slowly gets fewer);
+   `configs`, a `PUT /api/config` every `--config-every` s that changes a setting
    (`dwell_max`, toggled between two values: a real NVS write when it is
-   written, nothing the held Formula reacts to); and a file of `--upload-kb`
-   KB written to the card and deleted, over and over
+   written, nothing the held Formula reacts to); `uploads`, a file of
+   `--upload-kb` KB written to the card and deleted, over and over
    (`/opendmd-stress.bin`).
 
 The owner's rule: work on CPU0 must not reach the display. Pass when the
@@ -57,7 +60,12 @@ class Device:
 def snapshot(s):
     beam = ((s.get("scan") or {}).get("beam")) or {}
     f = (s.get("now_playing") or {}).get("formula") or {}
+    disp = s.get("display") or {}
     return {
+        "wakes": disp.get("wakes", 0),
+        "wake_late": disp.get("wake_late", 0),
+        "wake_max_us": disp.get("wake_max_us"),
+        "publish_skipped": disp.get("publish_skipped", 0),
         "frames": beam.get("frames", 0),
         "late_frames": beam.get("late_frames", 0),
         "late_pairs": beam.get("late_pairs", 0),
@@ -83,6 +91,10 @@ def phase(a, b, seconds, extra=None):
         "frame_us": b["frame_us"],
         "frame_ms": b["frame_ms"],
         "misses": None if a["misses"] is None or b["misses"] is None else b["misses"] - a["misses"],
+        "wakes": b["wakes"] - a["wakes"],
+        "wake_late": b["wake_late"] - a["wake_late"],
+        "wake_max_us_since_boot": b["wake_max_us"],
+        "publish_skipped": b["publish_skipped"] - a["publish_skipped"],
         **(extra or {}),
     }
 
@@ -96,6 +108,7 @@ def main():
     ap.add_argument("--status-hz", type=float, default=20)
     ap.add_argument("--config-every", type=float, default=2)
     ap.add_argument("--upload-kb", type=int, default=256)
+    ap.add_argument("--loads", default="poll,configs,uploads", help="which loads the stress phase runs, comma-separated")
     ap.add_argument("--json")
     a = ap.parse_args()
     dev = Device(a.host)
@@ -145,7 +158,12 @@ def main():
                     counts["errors"] += 1
                     stop.wait(1)
 
-        threads = [threading.Thread(target=f, daemon=True) for f in (poll, configs, uploads)]
+        loads = {"poll": poll, "configs": configs, "uploads": uploads}
+        names = [n.strip() for n in a.loads.split(",") if n.strip()]
+        for n in names:
+            if n not in loads:
+                raise SystemExit(f"--loads: unknown load {n!r} (poll, configs, uploads)")
+        threads = [threading.Thread(target=loads[n], daemon=True) for n in names]
         s2 = snapshot(dev.status())
         for t in threads:
             t.start()
@@ -154,7 +172,11 @@ def main():
         for t in threads:
             t.join(timeout=70)
         s3 = snapshot(dev.status())
-        stress = phase(s2, s3, a.seconds, dict(counts))
+        extra = dict(counts, loads=names)
+        if "poll" in names:
+            extra["status_hz_asked"] = a.status_hz
+            extra["status_hz_achieved"] = round(counts["status"] / a.seconds, 2)
+        stress = phase(s2, s3, a.seconds, extra)
     finally:
         stop.set()
         for call in (
@@ -177,7 +199,7 @@ def main():
     print("verdict:", "PASS: the load did not reach the display" if ok else "FAIL: the load reached the display")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"formula": a.formula, "idle": idle, "stress": stress, "pass": ok}, f, indent=1)
+            json.dump({"formula": a.formula, "loads": a.loads, "idle": idle, "stress": stress, "pass": ok}, f, indent=1)
 
 
 if __name__ == "__main__":

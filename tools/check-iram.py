@@ -37,6 +37,7 @@ REQUIRED = [
     (r"^hub75_draw_span$", "the shim's span writer"),
     (r"^hub75_draw_row_pair$", "the shim's row-pair writer"),
     (r"^hub75_scan_pos$", "the scan read, twice a raced pair"),
+    (r"^opendmd_firmware::wake::give$", "the display's wake, run in the esp_timer ISR"),
 ]
 
 

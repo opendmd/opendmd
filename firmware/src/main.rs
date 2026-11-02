@@ -743,8 +743,8 @@ fn main() -> Result<()> {
                                 if r.is_ok() {
                                     let np = engine.as_ref().and_then(|e| e.now_playing());
                                     if let (Ok(mut s), Some(np)) = (status.lock(), np) {
-                                        s.path = np.path;
-                                        s.title = np.title;
+                                        s.path = np.path.into();
+                                        s.title = np.title.into();
                                     }
                                 }
                                 r
@@ -1907,7 +1907,11 @@ fn main() -> Result<()> {
         //    strings move when a GIF starts. Never waited for: an
         //    `/api/status` on CPU0 holds the lock while it writes its JSON,
         //    and the display must not wait on CPU0 (the next frame publishes).
-        if let Ok(mut s) = status.try_lock() {
+        let publish = status.try_lock();
+        if publish.is_err() {
+            state::PUBLISH_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Ok(mut s) = publish {
             s.uptime_secs = epoch.elapsed().as_secs();
             s.entries = entries;
             s.heap_free = free_heap();
@@ -1923,8 +1927,8 @@ fn main() -> Result<()> {
                     s.kept = None;
                 }
                 s.ordinal = playing.ordinal;
-                s.path = playing.path;
-                s.title = playing.title;
+                s.path = playing.path.into();
+                s.title = playing.title.into();
                 s.gifs_started = playing.ordinal;
             }
             if let Some((elapsed, frame, at, due)) = shown {

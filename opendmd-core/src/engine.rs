@@ -342,14 +342,96 @@ impl Default for DwellPolicy {
     }
 }
 
+/// A string shared by count (`Arc<str>`): what [`NowPlaying`] carries, so
+/// the outcome of every frame clones no string on the heap (the display
+/// loop takes no heap lock a frame: CPU0 allocating would hold it). Reads
+/// as a `str`, compares with `str`, `&str` and `String`.
+#[derive(Clone, PartialEq, Eq, Hash, Default)]
+pub struct SharedStr(std::sync::Arc<str>);
+
+impl SharedStr {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SharedStr {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SharedStr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for SharedStr {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SharedStr {
+    fn from(s: String) -> Self {
+        SharedStr(s.into())
+    }
+}
+
+impl From<&str> for SharedStr {
+    fn from(s: &str) -> Self {
+        SharedStr(s.into())
+    }
+}
+
+impl From<SharedStr> for String {
+    fn from(s: SharedStr) -> String {
+        s.0.to_string()
+    }
+}
+
+impl PartialEq<str> for SharedStr {
+    fn eq(&self, o: &str) -> bool {
+        &*self.0 == o
+    }
+}
+
+impl PartialEq<&str> for SharedStr {
+    fn eq(&self, o: &&str) -> bool {
+        &*self.0 == *o
+    }
+}
+
+impl PartialEq<String> for SharedStr {
+    fn eq(&self, o: &String) -> bool {
+        &*self.0 == o.as_str()
+    }
+}
+
+impl std::fmt::Debug for SharedStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl std::fmt::Display for SharedStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
 /// What is on screen right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NowPlaying {
     /// Index into the engine's catalog, or [`OFF_PLAYLIST`] for a file
     /// started with [`Engine::play_now`].
     pub index: usize,
-    pub path: String,
-    pub title: String,
+    /// (Shared with the engine: a frame's outcome carries these, and a
+    /// clone is a count, not an allocation on the display path.)
+    pub path: SharedStr,
+    pub title: SharedStr,
     /// 1-based count of GIFs started since the engine was created.
     pub ordinal: u64,
     /// Where the frame on screen starts in the file's own timeline: the sum
@@ -578,8 +660,8 @@ struct Playing {
     index: usize,
     /// This entry's override, if it bends the dwell (`dwell`/`loops`).
     timed: Option<Override>,
-    path: String,
-    title: String,
+    path: SharedStr,
+    title: SharedStr,
     ordinal: u64,
     gif: Stream,
     started_at: Duration,
@@ -632,8 +714,8 @@ impl Playing {
         Playing {
             index,
             timed: None,
-            path,
-            title,
+            path: path.into(),
+            title: title.into(),
             ordinal,
             gif,
             started_at: at,
@@ -1007,8 +1089,8 @@ impl Engine {
         if r.is_ok() {
             // The new formula's own name (`&name=`), as `play_now` would
             // report it: `now_playing.title` follows what is on the panel.
-            p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title);
-            p.path = path.to_string();
+            p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title).into();
+            p.path = path.into();
             p.started_at = at;
             p.loops = 0;
             p.timed = ov.filter(Override::affects_dwell);
@@ -2442,7 +2524,7 @@ mod tests {
 
     fn title_at(e: &mut Engine, t: Duration, canvas: &mut Canvas) -> String {
         match e.tick(t, canvas).unwrap() {
-            TickOutcome::Frame { playing, .. } => playing.title,
+            TickOutcome::Frame { playing, .. } => playing.title.into(),
             other => panic!("expected a frame at {t:?}, got {other:?}"),
         }
     }
