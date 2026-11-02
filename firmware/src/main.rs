@@ -51,6 +51,7 @@ mod diag;
 mod dns_server;
 mod fatidx;
 mod task;
+mod uclock;
 mod files;
 mod follow;
 mod formula_look;
@@ -303,7 +304,7 @@ struct Live<'a> {
     looks: &'a mut formula_look::Looks,
     engine: Option<&'a mut Engine>,
     canvas: &'a mut Canvas,
-    epoch: Instant,
+    epoch: uclock::Epoch,
 }
 
 /// A `PUT /api/config` that [`picks_up`]: saved (or marked, while a Formula
@@ -555,8 +556,8 @@ fn main() -> Result<()> {
     // The engine's clock is a `Duration` since an epoch the caller picks, not
     // an `Instant` — `Instant` has no clock on wasm and the web app shares
     // this core. Boot is our epoch; only differences ever matter.
-    let epoch = Instant::now();
-    let mut last_heartbeat = Instant::now();
+    let epoch = uclock::Epoch::now();
+    let mut last_heartbeat = uclock::now_us();
     // Our own heap floor, sampled at every phase boundary of the loop. Do not
     // use esp_get_minimum_free_heap_size() for this: it is the SUM of each
     // heap region's own minimum, which drifts ~30 KB below the true floor as
@@ -581,7 +582,7 @@ fn main() -> Result<()> {
     if waker.is_none() {
         log::warn!("display loop: no wake timer; sleeping in whole ticks");
     }
-    let mut woke = Instant::now();
+    let mut woke = uclock::now_us();
     let mut wake_us: u32 = 0;
     let mut log_us: u32 = 0;
     let mut fresh = true;
@@ -723,8 +724,7 @@ fn main() -> Result<()> {
         //    rebuilds the engine or swaps a file on the card happens here — on
         //    this task, between frames, never on the httpd thread.
         // (The µs clock, IRAM: this runs every loop, each frame.)
-        // SAFETY: no arguments; esp_timer is up before `main`.
-        let cmd_t0 = unsafe { esp_idf_sys::esp_timer_get_time() };
+        let cmd_t0 = uclock::now_us();
         let mut handled = false;
         while let Ok(command) = cmd_rx.try_recv() {
             handled = true;
@@ -1373,8 +1373,7 @@ fn main() -> Result<()> {
         }
         if handled {
             use std::sync::atomic::Ordering::Relaxed;
-            // SAFETY: as above.
-            let took = (unsafe { esp_idf_sys::esp_timer_get_time() } - cmd_t0) as u32;
+            let took = uclock::since(cmd_t0);
             state::CMD_LOOPS.fetch_add(1, Relaxed);
             state::CMD_US.fetch_add(took, Relaxed);
             state::CMD_MAX_US.fetch_max(took, Relaxed);
@@ -1653,13 +1652,13 @@ fn main() -> Result<()> {
         let entries = eng.catalog_len();
         probe::tick_begin();
         let (pre_open, pre_read) = frametime::take();
-        let tick_start = Instant::now();
+        let tick_start = uclock::now_us();
         if fresh {
             fresh = false;
             (woke, wake_us, log_us) = (tick_start, 0, 0);
         }
-        let pre_us = us(tick_start.duration_since(woke));
-        let tick_now = epoch.elapsed();
+        let pre_us = uclock::span(woke, tick_start);
+        let tick_now = epoch.at(tick_start);
         let due_in_us = if probe::ENABLED {
             eng.frame_due()
                 .map(|d| d.as_micros() as i64 - tick_now.as_micros() as i64)
@@ -1684,7 +1683,7 @@ fn main() -> Result<()> {
         } else {
             eng.tick(tick_now, &mut canvas)?
         };
-        let mut tick_us = us(tick_start.elapsed());
+        let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
@@ -1721,7 +1720,7 @@ fn main() -> Result<()> {
                 // seconds after most dissolves (the rig: 20% of the time
                 // at 40 ms frames, against 7% when they were drawn between
                 // the steps, timed alone).
-                let look_start = Instant::now();
+                let look_start = uclock::now_us();
                 let decode_us = if transitioning {
                     0
                 } else {
@@ -1729,8 +1728,8 @@ fn main() -> Result<()> {
                 };
                 #[cfg(feature = "psi-probe")]
                 let look_on = looks.avg_us() > 0;
-                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
-                tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
+                let pic = looks.apply(epoch.at(look_start), eng.display_mut(&mut canvas), decode_us);
+                tick_us += uclock::since(look_start) + std::mem::take(&mut look_us);
                 // With `panel_sync` the blit may wait for the scan, as
                 // long as that leaves the next frame on time (`scan::Budget`).
                 // (A raced Formula frame wrote its pairs in the tick: the
@@ -1738,22 +1737,22 @@ fn main() -> Result<()> {
                 formula_on = opendmd_core::synth::is_formula(&playing.path)
                     || opendmd_core::synth::formula_file(&playing.path).is_some();
                 let decoded = (playing.ordinal, playing.frame) != published;
-                let blit_start = Instant::now();
+                let blit_start = uclock::now_us();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
-                    .saturating_sub(us(tick_start.elapsed()));
+                    .saturating_sub(uclock::span(tick_start, blit_start));
                 let blit_px = panel.blit_within(pic, Budget::frame(left_us));
                 #[cfg(feature = "psi-probe")]
                 let fx = opendmd_core::synth::is_formula(&playing.path);
                 // The blit's own time: a wait for the scan (`panel_sync`,
                 // inside the frame's slack) is not part of it.
-                let blit_us = us(blit_start.elapsed()).saturating_sub(panel.last_wait_us());
+                let blit_us = uclock::since(blit_start).saturating_sub(panel.last_wait_us());
                 let free = free_heap();
                 floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);
                 // The loop's own lines (a GIF started, a heap low-water
                 // mark) are logged here: formatted into the log ring, not
                 // written to the UART (`logring`).
-                let log_start = Instant::now();
+                let log_start = uclock::now_us();
                 if is_new {
                     started = playing.ordinal;
                     // (A virtual file — Follow RePlayOS's cards — opened
@@ -1786,11 +1785,12 @@ fn main() -> Result<()> {
                     );
                     low_water = floor.min;
                 }
-                let post_log_us = us(log_start.elapsed());
+                let judged_at = uclock::now_us();
+                let post_log_us = uclock::span(log_start, judged_at);
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
-                let now = epoch.elapsed();
-                judged = Some(Instant::now());
+                let now = epoch.at(judged_at);
+                judged = Some(judged_at);
                 if is_new {
                     first_shown = Some(now);
                 }
@@ -1832,7 +1832,7 @@ fn main() -> Result<()> {
                 if (fx || look_on) && decoded && !transitioning && !is_new {
                     let wait = panel.last_wait_us();
                     let start = due_before.map_or(0, |d| us(tick_now.saturating_sub(d)));
-                    let post = us(blit_start.elapsed()).saturating_sub(blit_us + wait);
+                    let post = uclock::since(blit_start).saturating_sub(blit_us + wait);
                     psi_probe::play::note([wake_us, pre_us, start, tick_us, blit_us, wait, post, blit_px], now > deadline);
                 }
                 let glow_between = std::mem::take(&mut glow_us);
@@ -1910,10 +1910,10 @@ fn main() -> Result<()> {
                     && !file_soon
                     && looks.due(transitioning).is_some_and(|d| d <= at)
                 {
-                    let t = Instant::now();
+                    let t = uclock::now_us();
                     let pic = looks.apply(at, eng.display_mut(&mut canvas), 0);
                     panel.blit(pic);
-                    look_us += us(t.elapsed());
+                    look_us += uclock::since(t);
                 }
                 // (Synchronised, it may wait for the scan as long as that
                 // leaves the next frame on time.)
@@ -1945,7 +1945,7 @@ fn main() -> Result<()> {
             }
         };
 
-        let judged = judged.unwrap_or_else(Instant::now);
+        let judged = judged.unwrap_or_else(uclock::now_us);
 
         // The next file, ahead: a held copy let go on a card error or low
         // heap; then the steps that fit before the next frame (`ahead.rs`).
@@ -2030,13 +2030,13 @@ fn main() -> Result<()> {
 
         // The sleep should end at `judged + sleep_for`; anything after that
         // (publishing above, preemption on CPU1) is the next frame's `wake`.
-        let planned = judged + sleep_for;
+        let planned = uclock::after(judged, sleep_for);
         // (On time: `wake`. Before road-cost a whole-tick `thread::sleep`,
         // ~0.9 ms late on average; and of `sleep_for` from here unless the
         // next file had been stepped ahead, so publishing came on top.)
         wake::sleep_until(waker.as_ref(), planned);
-        woke = Instant::now();
-        wake_us = us(woke.saturating_duration_since(planned));
+        woke = uclock::now_us();
+        wake_us = uclock::span(planned, woke);
         log_us = 0;
         if exhausted {
             // The index is still good: reseed and rewind, don't re-read.
@@ -2045,8 +2045,8 @@ fn main() -> Result<()> {
             floor.sample();
         }
 
-        if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
-            last_heartbeat = Instant::now();
+        if uclock::elapsed(last_heartbeat) >= config::HEARTBEAT_INTERVAL {
+            last_heartbeat = uclock::now_us();
             heartbeat(
                 &mut panel,
                 &status,
@@ -2057,7 +2057,7 @@ fn main() -> Result<()> {
                 &misses,
                 &(sched.summary() + &follow::summary() + &ahead::summary(Some(eng))),
             );
-            log_us = us(last_heartbeat.elapsed());
+            log_us = uclock::since(last_heartbeat);
         }
     }
 }
@@ -2334,7 +2334,9 @@ struct Scheduling {
     decision: Decision,
     wake_until: Option<Instant>,
     wake_label: Option<String>,
-    last_check: Instant,
+    /// When the schedule was last looked at (µs clock, `uclock`: read
+    /// every loop, so not `Instant`).
+    last_check: u64,
     last_seen: Option<schedule::LocalTime>,
     /// Evaluate at the next poll, whatever the minute.
     dirty: bool,
@@ -2354,7 +2356,7 @@ impl Scheduling {
             decision: Decision::default(),
             wake_until: None,
             wake_label: None,
-            last_check: Instant::now(),
+            last_check: uclock::now_us(),
             last_seen: None,
             dirty: true,
             broken_set: None,
@@ -2397,10 +2399,10 @@ impl Scheduling {
     /// A fresh decision, if the minute (or anything else) changed and it
     /// differs from what is applied. Cheap when it is not time to look.
     fn poll(&mut self) -> Option<Decision> {
-        if !self.dirty && self.last_check.elapsed() < config::SCHEDULE_CHECK {
+        if !self.dirty && uclock::elapsed(self.last_check) < config::SCHEDULE_CHECK {
             return None;
         }
-        self.last_check = Instant::now();
+        self.last_check = uclock::now_us();
         if self.wake_until.is_some_and(|t| Instant::now() >= t) {
             log::info!("schedule: wake over, schedule back in force");
             self.wake_until = None;

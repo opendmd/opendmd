@@ -17,7 +17,7 @@
 
 use crate::chan as mpsc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Which flash layout this build is for, compiled in by `build.rs`
 /// (`/api/status` `variant`, the boot banner).
@@ -179,7 +179,7 @@ pub struct Status {
     pub paused: bool,
     /// The main loop's clock (`Duration`s below are since this); a handler
     /// reads it to stamp `t_ms` and to extrapolate the position.
-    pub epoch: Instant,
+    pub epoch: crate::uclock::Epoch,
     /// The frame on the glass: where it starts in the file's timeline
     /// (`NowPlaying::elapsed`, loops included), its 1-based number in the
     /// file, when it went up (after the blit) and when the next one is due.
@@ -276,7 +276,7 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn new(version: &'static str, hostname: String, epoch: Instant) -> Self {
+    pub fn new(version: &'static str, hostname: String, epoch: crate::uclock::Epoch) -> Self {
         Status {
             version,
             uptime_secs: 0,

@@ -20,7 +20,7 @@
 
 use esp_idf_sys as sys;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
-use std::time::Instant;
+use std::time::Duration;
 
 /// How long before the frame is due the timer fires; the rest is spun.
 /// An ISR on CPU0 can be held off by a flash operation or a higher
@@ -103,14 +103,15 @@ impl Waker {
         }
     }
 
-    /// Block until [`SPIN_US`] before `at`, then spin to `at` (at once if
-    /// it has passed). One `Instant::now` to place `at` on the µs clock;
-    /// the spin and the count read `esp_timer_get_time` (IRAM), not
+    /// Block until [`SPIN_US`] before `at` (µs since boot, `uclock`), then
+    /// spin to `at` (at once if it has passed). Every read is
+    /// `esp_timer_get_time` (IRAM), not
     /// `Instant::now` (`clock_gettime` and its helpers, from flash: ~4 % of
     /// a raced Formula's frame instructions spun on the flash bus).
-    pub fn sleep_until(&self, at: Instant) {
-        let left = at.saturating_duration_since(Instant::now());
-        let start = now_us();
+    pub fn sleep_until(&self, at: u64) {
+        let now = crate::uclock::now_us();
+        let left = Duration::from_micros(at.saturating_sub(now));
+        let start = now as u32;
         if left.is_zero() {
             // (Already due: the frame ran over, not the wake.)
             WOKE_AT.store(start, Relaxed);
@@ -159,9 +160,9 @@ fn note(due: u32) {
 }
 
 /// Sleep until `at` with `w`, else as the loop did before.
-pub fn sleep_until(w: Option<&Waker>, at: Instant) {
+pub fn sleep_until(w: Option<&Waker>, at: u64) {
     match w {
         Some(w) => w.sleep_until(at),
-        None => std::thread::sleep(at.saturating_duration_since(Instant::now())),
+        None => std::thread::sleep(Duration::from_micros(at.saturating_sub(crate::uclock::now_us()))),
     }
 }
