@@ -557,6 +557,7 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
         }
         .into());
     }
+    let mut pace_debt = 0u64;
     let outcome = loop {
         let n = match up.read(&mut buf) {
             Ok(0) => {
@@ -573,6 +574,8 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
         if let Err(e) = wait_for_heap() {
             break Err((e, Some((503, "503 Service Unavailable"))));
         }
+        // A Formula near its frame budget: the upload slows (`pace`).
+        crate::pace::after_read(n, &mut pace_debt);
         if let Err(e) = file.write_all(&buf[..n]) {
             break Err((
                 anyhow::Error::from(e).context("writing to the card"),

@@ -139,6 +139,7 @@ def snapshot(s):
         "misses": s.get("deadline_misses"),
         "heap": (s.get("heap") or {}).get("free"),
         "fat_index": ((s.get("sd") or {}).get("fat_index")) or {},
+        "uploads": disp.get("uploads") or {},
     }
 
 
@@ -185,6 +186,10 @@ def phase(a, b, seconds, extra=None):
         # The player's card opens and reads under the writers' rule
         # (fatidx): refused under a write intent, raw reads that fell back,
         # opens that found every slot busy.
+        # Uploads paced while a Formula ran near its budget (ms slept), and
+        # whether pacing was on at the end.
+        "upload_paced_ms": b["uploads"].get("paced_ms", 0) - a["uploads"].get("paced_ms", 0),
+        "upload_paced_end": b["uploads"].get("paced"),
         "fat_index": {k: b["fat_index"].get(k, 0) - a["fat_index"].get(k, 0)
                       for k in ("intent_refused", "raw_fallbacks", "slots_full", "raw_reads") if k in b["fat_index"]},
         **(extra or {}),

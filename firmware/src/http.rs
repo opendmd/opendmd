@@ -2545,7 +2545,7 @@ static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomic
 fn display_json() -> String {
     let (wakes, late, max, spun) = crate::wake::stats();
     format!(
-        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{},"buffers":{},"arena":{},"card_read_max_us":{}}}"#,
+        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{},"buffers":{},"arena":{},"card_read_max_us":{},{}}}"#,
         crate::state::PUBLISH_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_LOCK_US.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_BUILD_US.load(std::sync::atomic::Ordering::Relaxed),
@@ -2555,6 +2555,7 @@ fn display_json() -> String {
         crate::membank::buffers_json(),
         arena_json(),
         crate::membank::READ_MAX_US.load(std::sync::atomic::Ordering::Relaxed),
+        crate::pace::status_json(),
     )
 }
 
