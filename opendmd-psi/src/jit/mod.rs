@@ -535,6 +535,7 @@ fn tell_pair(
 /// # Safety
 /// `now` points at W × 3 / 4 readable words.
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
 unsafe fn changed_groups(now: *const u32, before: &[u32; W * 3 / 4]) -> u32 {
     let mut m = 0;
     let mut now = now;
@@ -639,9 +640,19 @@ mod device {
         unsafe { eval_helper(ID, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
+    /// `pick`'s helper, in IRAM: a kernel calls it a pixel (Endless
+    /// road's, ~7.7 % of its frame's instructions from flash in esp32sim's
+    /// block profile, display-isolation 2026-11-02). `shim::<PICK>` as one
+    /// function of its own: the generic shims stay in flash.
+    #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+    extern "C" fn shim_pick(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::PICK, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
     const SHIMS: [Shim; hid::COUNT as usize] = [
         shim::<0>, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
-        shim::<8>, shim::<9>, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim::<14>,
+        shim::<8>, shim::<9>, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
         shim::<15>, shim::<16>, shim::<17>, shim::<18>,
     ];
 
