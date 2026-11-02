@@ -186,7 +186,9 @@ static inline uint32_t scan_desc_index(void) {
     return idx < s_scan_count ? idx : UINT32_MAX;
 }
 
-extern "C" uint32_t hub75_scan_pos(void) {
+/* In IRAM, as the span writers: read twice a row pair while a Formula
+ * races the beam, between renders whose flash code would evict it. */
+extern "C" IRAM_ATTR uint32_t hub75_scan_pos(void) {
     if (s_scan_desc == 0 || s_stopped) {
         return UINT32_MAX;
     }
@@ -422,7 +424,11 @@ extern "C" void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, ui
  * extraction replaced by s_spread. hub75_fb_checksum() is how the two are
  * shown to agree (Panel::bench, probe builds).
  */
-extern "C" void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1) {
+/* In IRAM (with hub75_draw_row_pair and hub75_scan_pos): a raced
+ * Formula writes a pair between rendering rows, whose flash code evicted
+ * these from the flash cache in some builds (psi-perf, 2026-11-02: the
+ * same pixels written cost 0.4 ms a frame on main, 1.2 ms on the branch). */
+extern "C" IRAM_ATTR void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1) {
     if (s_panel == nullptr || rgb_row == nullptr || y >= s_height) {
         return;
     }
@@ -478,7 +484,7 @@ extern "C" void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0,
  * instead of two. For frames that repaint whole rows -- the first of every
  * file, scrollers. Falls back to two spans when the fast path is off.
  */
-extern "C" void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y) {
+extern "C" IRAM_ATTR void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y) {
     if (s_panel == nullptr || top_row == nullptr || bottom_row == nullptr) {
         return;
     }

@@ -878,24 +878,41 @@ fn push(
 }
 
 /// The dirty pixels of row `y` alone (its half of the pair's DMA words),
-/// as spans, tinted. Returns the pixels pushed.
+/// as spans, tinted. Returns the pixels pushed. In IRAM with the rest of a
+/// raced pair's write ([`write_pair`], `beam::pair`, the shim's writers):
+/// written between rendering rows, whose flash code evicted it from the
+/// flash cache in some builds (psi-perf 2026-11-02: the same pixels cost
+/// 0.4 ms a frame on main, 1.2 ms on the branch). A tinted look's rows
+/// stay in flash ([`write_row_tinted`]).
+#[link_section = ".iram1.opendmd_pair"]
 fn write_row(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
     if map.row_mask() & (1 << y) == 0 {
         return 0;
     }
+    if look != Look::Colour {
+        return write_row_tinted(bytes, map, y, look);
+    }
+    let row = &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let mut pushed = 0;
+    for (x0, x1) in map.row_spans(y) {
+        // SAFETY: `row` is one full row (WIDTH * 3 bytes) and x0 < x1 <=
+        // WIDTH, so the shim reads only inside it; it only reads. y < HEIGHT.
+        unsafe { hub75::hub75_draw_span(row.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+        pushed += (x1 - x0) as u32;
+    }
+    pushed
+}
+
+/// [`write_row`] for a tinted look: each span tinted first.
+#[inline(never)]
+fn write_row_tinted(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
     let row = &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
     let mut a: Row = [0; WIDTH * 3];
     let mut pushed = 0;
     for (x0, x1) in map.row_spans(y) {
-        let src = if look != Look::Colour {
-            tint_into(&mut a, row, x0, x1, look);
-            a.as_slice()
-        } else {
-            row
-        };
-        // SAFETY: `src` is one full row (WIDTH * 3 bytes) and x0 < x1 <=
-        // WIDTH, so the shim reads only inside it; it only reads. y < HEIGHT.
-        unsafe { hub75::hub75_draw_span(src.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+        tint_into(&mut a, row, x0, x1, look);
+        // SAFETY: as `write_row`'s.
+        unsafe { hub75::hub75_draw_span(a.as_ptr(), y as u16, x0 as u16, x1 as u16) };
         pushed += (x1 - x0) as u32;
     }
     pushed
@@ -903,26 +920,33 @@ fn write_row(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
 
 /// Row pair `p` (rows p and p + 16): through `hub75_draw_row_pair` when
 /// both are dirty end to end (one pass over the shared words), else each
-/// row's spans. Returns the pixels pushed.
+/// row's spans. Returns the pixels pushed. In IRAM ([`write_row`]).
+#[link_section = ".iram1.opendmd_pair"]
 fn write_pair(bytes: &[u8], map: &DirtyMap, p: usize, look: Look) -> u32 {
     const HALF: usize = HEIGHT / 2;
-    let rows = map.row_mask();
-    let full = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
-    if !(full(p) && full(p + HALF)) {
+    if !(map.row_full(p) && map.row_full(p + HALF)) {
         return write_row(bytes, map, p, look) + write_row(bytes, map, p + HALF, look);
     }
+    if look != Look::Colour {
+        return write_pair_tinted(bytes, p, look);
+    }
     let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
-    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
-    let (t, b) = if look != Look::Colour {
-        tint_into(&mut a, row_of(p), 0, WIDTH, look);
-        tint_into(&mut b, row_of(p + HALF), 0, WIDTH, look);
-        (a.as_slice(), b.as_slice())
-    } else {
-        (row_of(p), row_of(p + HALF))
-    };
     // SAFETY: two full rows (WIDTH * 3 bytes each), p < HEIGHT / 2; read
     // only.
-    unsafe { hub75::hub75_draw_row_pair(t.as_ptr(), b.as_ptr(), p as u16) };
+    unsafe { hub75::hub75_draw_row_pair(row_of(p).as_ptr(), row_of(p + HALF).as_ptr(), p as u16) };
+    2 * WIDTH as u32
+}
+
+/// [`write_pair`]'s whole pair for a tinted look.
+#[inline(never)]
+fn write_pair_tinted(bytes: &[u8], p: usize, look: Look) -> u32 {
+    const HALF: usize = HEIGHT / 2;
+    let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
+    tint_into(&mut a, row_of(p), 0, WIDTH, look);
+    tint_into(&mut b, row_of(p + HALF), 0, WIDTH, look);
+    // SAFETY: as `write_pair`'s.
+    unsafe { hub75::hub75_draw_row_pair(a.as_ptr(), b.as_ptr(), p as u16) };
     2 * WIDTH as u32
 }
 
@@ -1231,7 +1255,9 @@ mod beam {
     }
 
     /// `fx_psi::BeamHooks::pair`: one scan reading before (is its window
-    /// open?) and one after (did the write end inside it?).
+    /// open?) and one after (did the write end inside it?). In IRAM with
+    /// the writers it calls (`write_pair`).
+    #[link_section = ".iram1.opendmd_pair"]
     pub(super) fn pair(p: usize, bytes: &[u8], dirty: &DirtyMap) {
         let t = now_us();
         let st = state();
