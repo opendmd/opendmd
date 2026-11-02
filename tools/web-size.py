@@ -96,7 +96,8 @@ first error) have a line of their own, <= 4 KB, and so does the site's Psi
 language reference script (`--share`'s `ref/psiref.js` with the drawing it
 shares, `ref/psiled.js`, outside the share line), <= 6 KB; the home page's
 live panels (`ref/home.js`) and the gallery's tiles on hover
-(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB.
+(`ref/ftiles.js`) a line each, with psiled.js, <= 4 KB; the gallery's
+sorting and filtering (`ref/ftsort.js`) a line of its own, <= 3 KB.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
@@ -416,6 +417,10 @@ PSIREF_GZ_BUDGET = 6 * 1024
 LIVE_REF = {"home.js": "home", "ftiles.js": "gallery"}
 LIVE_REF_GZ_BUDGET = 4 * 1024
 SHARED_REF = "psiled.js"
+# The gallery's sorting and filtering (ref/ftsort.js, beside ftiles.js; no
+# Psi): a line of its own, <= 3 KB (2026-11-02, branch gallery-sort: ~2.3 KB gz).
+FTSORT = "ftsort.js"
+FTSORT_GZ_BUDGET = 3 * 1024
 
 
 def q_ref(p: Path, share: Path) -> bool:
@@ -516,6 +521,7 @@ def main() -> int:
         rraw = rgz = 0
         live: dict[str, tuple[int, int]] = {}
         shared = (0, 0)
+        ftsort = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
                 b = p.read_bytes()
@@ -523,6 +529,9 @@ def main() -> int:
                 print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
                 if p.name in LIVE_REF:
                     live[LIVE_REF[p.name]] = (len(b), g)
+                    continue
+                if p.name == FTSORT:
+                    ftsort = (len(b), g)
                     continue
                 if p.name == SHARED_REF:
                     shared = (len(b), g)
@@ -546,6 +555,9 @@ def main() -> int:
             verdict = "ok" if gz <= LIVE_REF_GZ_BUDGET else "OVER BUDGET"
             print(f"{name:<10} raw {raw:>9,}           gz {gz:>9,} / {LIVE_REF_GZ_BUDGET // 1024} KB {verdict}")
             ok &= gz <= LIVE_REF_GZ_BUDGET
+        verdict = "ok" if ftsort[1] <= FTSORT_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'ftsort':<10} raw {ftsort[0]:>9,}           gz {ftsort[1]:>9,} / {FTSORT_GZ_BUDGET // 1024} KB {verdict}")
+        ok &= ftsort[1] <= FTSORT_GZ_BUDGET
         print()
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
