@@ -76,6 +76,7 @@ mod psi_stack;
 mod restarts;
 mod sched;
 mod sd;
+mod settings_card;
 mod sdhealth;
 mod show;
 mod state;
@@ -276,6 +277,53 @@ pub fn still_gate(take: usize) -> bool {
         }
     }
     ok
+}
+
+/// The card's settings at the handover (`settings_card`): `new` in force,
+/// and what differs from the settings it replaces applied the way a
+/// settings change is (the brightness under safe start's ceiling, the
+/// tint and glow, the sync, the JIT, the time zone, the schedule). Values
+/// that match are not touched (no flash, no brightness step). The playlist
+/// follows `settings` where the handover builds it; dwell and transition
+/// go into the engine built from them.
+#[inline(never)]
+fn adopt_card_settings(
+    settings: &mut Settings,
+    new: Box<Settings>,
+    panel: &mut Panel,
+    safe: &SafeStart,
+    sched: &mut Scheduling,
+    status: &Mutex<Status>,
+) {
+    let old = std::mem::replace(settings, *new);
+    let s = &*settings;
+    if s.brightness != old.brightness || s.max_brightness != old.max_brightness {
+        panel.set_max_brightness(safe.ceiling(s.max_brightness));
+        if !sched.off() {
+            panel.set_brightness(sched.brightness(s));
+        }
+    }
+    if s.panel_sync != old.panel_sync || s.panel_split != old.panel_split {
+        panel.set_sync(s.panel_sync, s.panel_split);
+    }
+    #[cfg(feature = "psi")]
+    if s.formula_jit != old.formula_jit {
+        opendmd_core::fx_psi::set_jit(s.formula_jit);
+    }
+    if s.look != old.look || s.glow != old.glow {
+        panel.set_display(s.look, s.glow);
+        state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
+    }
+    if s.tz != old.tz || s.tz_name != old.tz_name {
+        clock::set_timezone(&s.tz, &s.tz_name);
+        status.lock().unwrap().tz_name = tz_label(s);
+        sched.dirty = true;
+    }
+    if s.schedule != old.schedule {
+        sched.schedule = sched::parse(s.schedule.as_bytes()).unwrap_or_default();
+        sched.dirty = true;
+    }
+    log::info!("settings: the card's applied (brightness {}, look {}, playlist '{}')", s.brightness, s.look.name(), s.set);
 }
 
 /// Whether a settings change only has values for the loop to pick up:
@@ -1534,8 +1582,19 @@ fn main() -> Result<()> {
                 platforms,
                 index_ms,
                 healed_set,
+                settings: card_settings,
             } = *h;
             card = Some(mounted);
+            // The card's settings (`settings_card`): those that differ from
+            // what was in force applied now, live (no flash: nothing that
+            // matches is touched). The playlist below follows `settings`.
+            if let Some(new) = card_settings {
+                adopt_card_settings(&mut settings, new, &mut panel, &safe, &mut sched, &status);
+                // NVS gets them too (its copy is what boots until the card
+                // is read): when nothing races, as any change.
+                unsaved = true;
+                SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+            }
             // The Psi probe, now that the card is ours (its report goes
             // there) and the httpd and the network are up (see psi_probe).
             #[cfg(feature = "psi-probe")]
@@ -1557,6 +1616,7 @@ fn main() -> Result<()> {
                     log::error!("clearing the set in NVS failed ({e:#}); the default plays for this boot only");
                 }
                 *shared_settings.lock().unwrap() = settings.clone();
+                settings_card::save_soon(shared_settings.clone());
             }
             // Still what should play? A schedule rule, Follow RePlayOS or
             // a filter change since the boot task read the settings means
@@ -1646,6 +1706,7 @@ fn main() -> Result<()> {
                         // there.
                         if heal_missing_set(&mut settings, &mut nvs_config) {
                             *shared_settings.lock().unwrap() = settings.clone();
+                            settings_card::save_soon(shared_settings.clone());
                             last_build_try = None;
                             continue;
                         }

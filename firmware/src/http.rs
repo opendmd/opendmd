@@ -216,10 +216,231 @@ pub struct Ctx {
     pub net: mpsc::Sender<NetCommand>,
 }
 
+/// Why [`apply_patch`] refused a patch: the status and the message.
+pub struct PatchErr {
+    pub code: u16,
+    pub msg: String,
+}
+
+impl PatchErr {
+    fn bad(msg: &str) -> PatchErr {
+        PatchErr { code: 400, msg: msg.to_string() }
+    }
+    fn too_large(msg: &str) -> PatchErr {
+        PatchErr { code: 413, msg: msg.to_string() }
+    }
+}
+
+/// Apply `patch` to `next`, checked as `PUT /api/config` checks it (and the
+/// settings file on the card, `settings_card`, read through the same
+/// checks): the first value refused is the error, and `next` is then
+/// partly changed (the caller drops it).
+pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), PatchErr> {
+    if let Some(v) = patch.wifi_ssid.clone() {
+        next.wifi_ssid = v;
+    }
+    if let Some(v) = patch.wifi_pass.clone() {
+        next.wifi_pass = v;
+    }
+    match opendmd_core::brightness::resolve(
+        next.brightness,
+        next.max_brightness,
+        patch.brightness,
+        patch.max_brightness,
+    ) {
+        Ok((b, m)) => {
+            next.brightness = b;
+            next.max_brightness = m;
+        }
+        Err(e) => return Err(PatchErr::bad(&e)),
+    }
+    if let Some(v) = patch.dwell_min {
+        next.dwell_min = v.max(1);
+    }
+    if let Some(v) = patch.dwell_max {
+        next.dwell_max = v.max(1);
+    }
+    if let Some(v) = patch.shuffle {
+        next.shuffle = v;
+    }
+    if let Some(v) = patch.platforms.clone() {
+        next.platforms = v;
+    }
+    if let Some(v) = patch.set.clone() {
+        if !crate::nvs_config::valid_set_name(&v) {
+            return Err(PatchErr::bad("set must be a single path segment"));
+        }
+        next.set = v;
+    }
+    if let Some(v) = patch.hostname.clone() {
+        match opendmd_core::hostname::parse(&v) {
+            Ok(Some(v)) => next.hostname = v,
+            Ok(None) => {}
+            Err(e) => return Err(PatchErr::bad(&e)),
+        }
+    }
+    if let Some(v) = patch.tz.clone() {
+        let v = v.trim().to_string();
+        if v.is_empty() || v.len() > 64 || v.contains('\0') {
+            return Err(PatchErr::bad("tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0"));
+        }
+        next.tz = v;
+    }
+    if let Some(v) = patch.tz_name.clone() {
+        if v.len() > 64 {
+            return Err(PatchErr::bad("tz_name is at most 64 characters"));
+        }
+        next.tz_name = v;
+    }
+    if let Some(v) = patch.transition.clone() {
+        let Some(kind) = TransitionKind::from_name(&v) else {
+            return Err(PatchErr::bad(
+                "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none",
+            ));
+        };
+        next.transition.kind = kind;
+    }
+    if let Some(ms) = patch.transition_ms {
+        let range = compositor::MIN_DURATION.as_millis()..=compositor::MAX_DURATION.as_millis();
+        if !range.contains(&u128::from(ms)) {
+            return Err(PatchErr::bad(&format!(
+                "transition_ms must be {}..={}",
+                range.start(),
+                range.end()
+            )));
+        }
+        next.transition.duration = Duration::from_millis(u64::from(ms));
+    }
+    if let Some(v) = patch.auto_prepare.clone() {
+        let Some(mode) = crate::nvs_config::AutoPrepare::parse(&v) else {
+            return Err(PatchErr::bad("auto_prepare must be idle, always or off"));
+        };
+        next.auto_prepare = mode;
+    }
+    if let Some(v) = patch.follow {
+        next.follow = v;
+    }
+    if let Some(v) = patch.follow_host.clone() {
+        let v = v.trim().to_string();
+        // Empty (no host), or `name[:port]` with a port in digits: a
+        // bad port is refused here, never quietly replaced at poll time.
+        if v.len() > 64
+            || v.contains(['/', ' ', '\0', '?', '#', '@'])
+            || (!v.is_empty() && opendmd_core::http_client::split_host_port(&v).is_none())
+        {
+            return Err(PatchErr::bad("follow_host must be a host name or address, optionally :port"));
+        }
+        next.follow_host = v;
+    }
+    if let Some(v) = patch.follow_code.clone() {
+        if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
+            return Err(PatchErr::bad("follow_code is at most 64 characters on one line"));
+        }
+        next.follow_code = v;
+    }
+    if let Some(v) = patch.attract_set.clone() {
+        if let Some(set) = &v {
+            if !crate::nvs_config::valid_set_name(set) {
+                return Err(PatchErr::bad("attract_set must be a single path segment"));
+            }
+        }
+        next.attract_set = v;
+    }
+    if let Some(v) = patch.attract.clone() {
+        if !crate::nvs_config::valid_attract(&v) {
+            return Err(PatchErr::bad(&format!(
+                "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
+                crate::nvs_config::ATTRACT_MAX - 5
+            )));
+        }
+        next.attract = v;
+    }
+    if let Some(v) = patch.look.clone() {
+        let Some(look) = opendmd_core::look::Look::from_name(&v) else {
+            return Err(PatchErr::bad("look must be colour, amber, red, green, blue or white"));
+        };
+        next.look = look;
+    }
+    if let Some(v) = patch.glow.clone() {
+        let Some(glow) = opendmd_core::look::GlowLevel::from_name(&v) else {
+            return Err(PatchErr::bad("glow must be off, short or long"));
+        };
+        next.glow = glow;
+    }
+    if let Some(v) = patch.look_formula.clone() {
+        use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
+        match formula_ref(&v) {
+            _ if v.is_empty() => {}
+            Some(FormulaRef::File { file, .. })
+                if files::card_path(config::SD_MOUNT, file).is_none() =>
+            {
+                return Err(PatchErr::bad("look_formula: the Formula's path must stay on the card"));
+            }
+            Some(_) => {}
+            None => {
+                return Err(PatchErr::bad(
+                    "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)",
+                ))
+            }
+        }
+        if v.len() > MAX_LOOK_PATH {
+            return Err(PatchErr::too_large(&format!(
+                "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
+                v.len(),
+            )));
+        }
+        next.look_formula = v;
+    }
+    if let Some(v) = patch.boot_show.clone() {
+        let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
+            return Err(PatchErr::bad("boot_show must be off, short or full"));
+        };
+        next.boot_show = len;
+    }
+    if let Some(v) = patch.panel_sync {
+        next.panel_sync = v;
+    }
+    if let Some(v) = patch.panel_split {
+        next.panel_split = v;
+    }
+    if let Some(v) = patch.formula_jit {
+        next.formula_jit = v;
+    }
+    if let Some(v) = patch.formula_arena {
+        next.formula_arena = v;
+    }
+    if let Some(v) = &patch.formula_keep {
+        match opendmd_core::FormulaKeep::from_name(v) {
+            Some(k) => next.formula_keep = k,
+            None => return Err(PatchErr::bad("formula_keep must be turn, 1m, 5m or hold")),
+        }
+    }
+    if let Some(v) = &patch.api_key {
+        if !v.is_empty() && !opendmd_core::access::valid_key(v) {
+            return Err(PatchErr::bad(&format!(
+                "api_key must be {}..{} of A-Z a-z 0-9 . _ ~ - (or \"\" for none)",
+                opendmd_core::access::KEY_MIN,
+                opendmd_core::access::KEY_MAX
+            )));
+        }
+        next.api_key = v.clone();
+    }
+    if let Some(v) = &patch.card_speed {
+        let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
+            return Err(PatchErr::bad(opendmd_core::card_speed::INVALID));
+        };
+        next.card_speed = mode;
+    }
+    if next.dwell_max < next.dwell_min {
+        return Err(PatchErr::bad("dwell_max must be >= dwell_min"));
+    }
+    Ok(())
+}
+
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
 /// is left as it was.
-#[derive(serde::Deserialize)]
-struct ConfigPatch {
+#[derive(serde::Deserialize, Default)]
+pub struct ConfigPatch {
     wifi_ssid: Option<String>,
     wifi_pass: Option<String>,
     brightness: Option<u8>,
@@ -444,208 +665,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
-        if let Some(v) = patch.wifi_ssid {
-            next.wifi_ssid = v;
-        }
-        if let Some(v) = patch.wifi_pass {
-            next.wifi_pass = v;
-        }
-        match opendmd_core::brightness::resolve(
-            next.brightness,
-            next.max_brightness,
-            patch.brightness,
-            patch.max_brightness,
-        ) {
-            Ok((b, m)) => {
-                next.brightness = b;
-                next.max_brightness = m;
-            }
-            Err(e) => return req.bad_request(&e),
-        }
-        if let Some(v) = patch.dwell_min {
-            next.dwell_min = v.max(1);
-        }
-        if let Some(v) = patch.dwell_max {
-            next.dwell_max = v.max(1);
-        }
-        if let Some(v) = patch.shuffle {
-            next.shuffle = v;
-        }
-        if let Some(v) = patch.platforms {
-            next.platforms = v;
-        }
-        if let Some(v) = patch.set {
-            if !crate::nvs_config::valid_set_name(&v) {
-                return req.bad_request("set must be a single path segment");
-            }
-            next.set = v;
-        }
-        if let Some(v) = patch.hostname {
-            match opendmd_core::hostname::parse(&v) {
-                Ok(Some(v)) => next.hostname = v,
-                Ok(None) => {}
-                Err(e) => return req.bad_request(&e),
-            }
-        }
-        if let Some(v) = patch.tz {
-            let v = v.trim().to_string();
-            if v.is_empty() || v.len() > 64 || v.contains('\0') {
-                return req
-                    .bad_request("tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0");
-            }
-            next.tz = v;
-        }
-        if let Some(v) = patch.tz_name {
-            if v.len() > 64 {
-                return req.bad_request("tz_name is at most 64 characters");
-            }
-            next.tz_name = v;
-        }
-        if let Some(v) = patch.transition {
-            let Some(kind) = TransitionKind::from_name(&v) else {
-                return req.bad_request(
-                    "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none",
-                );
+        if let Err(e) = apply_patch(&mut next, &patch) {
+            return match e.code {
+                413 => req.error(413, "413 Payload Too Large", &e.msg),
+                _ => req.bad_request(&e.msg),
             };
-            next.transition.kind = kind;
-        }
-        if let Some(ms) = patch.transition_ms {
-            let range = compositor::MIN_DURATION.as_millis()..=compositor::MAX_DURATION.as_millis();
-            if !range.contains(&u128::from(ms)) {
-                return req.bad_request(&format!(
-                    "transition_ms must be {}..={}",
-                    range.start(),
-                    range.end()
-                ));
-            }
-            next.transition.duration = Duration::from_millis(u64::from(ms));
-        }
-        if let Some(v) = patch.auto_prepare {
-            let Some(mode) = crate::nvs_config::AutoPrepare::parse(&v) else {
-                return req.bad_request("auto_prepare must be idle, always or off");
-            };
-            next.auto_prepare = mode;
-        }
-        if let Some(v) = patch.follow {
-            next.follow = v;
-        }
-        if let Some(v) = patch.follow_host {
-            let v = v.trim().to_string();
-            // Empty (no host), or `name[:port]` with a port in digits: a
-            // bad port is refused here, never quietly replaced at poll time.
-            if v.len() > 64
-                || v.contains(['/', ' ', '\0', '?', '#', '@'])
-                || (!v.is_empty() && opendmd_core::http_client::split_host_port(&v).is_none())
-            {
-                return req.bad_request("follow_host must be a host name or address, optionally :port");
-            }
-            next.follow_host = v;
-        }
-        if let Some(v) = patch.follow_code {
-            if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
-                return req.bad_request("follow_code is at most 64 characters on one line");
-            }
-            next.follow_code = v;
-        }
-        if let Some(v) = patch.attract_set {
-            if let Some(set) = &v {
-                if !crate::nvs_config::valid_set_name(set) {
-                    return req.bad_request("attract_set must be a single path segment");
-                }
-            }
-            next.attract_set = v;
-        }
-        if let Some(v) = patch.attract {
-            if !crate::nvs_config::valid_attract(&v) {
-                return req.bad_request(&format!(
-                    "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
-                    crate::nvs_config::ATTRACT_MAX - 5
-                ));
-            }
-            next.attract = v;
-        }
-        if let Some(v) = patch.look {
-            let Some(look) = opendmd_core::look::Look::from_name(&v) else {
-                return req.bad_request("look must be colour, amber, red, green, blue or white");
-            };
-            next.look = look;
-        }
-        if let Some(v) = patch.glow {
-            let Some(glow) = opendmd_core::look::GlowLevel::from_name(&v) else {
-                return req.bad_request("glow must be off, short or long");
-            };
-            next.glow = glow;
-        }
-        if let Some(v) = patch.look_formula {
-            use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
-            match formula_ref(&v) {
-                _ if v.is_empty() => {}
-                Some(FormulaRef::File { file, .. })
-                    if files::card_path(config::SD_MOUNT, file).is_none() =>
-                {
-                    return req.bad_request("look_formula: the Formula's path must stay on the card");
-                }
-                Some(_) => {}
-                None => {
-                    return req.bad_request(
-                        "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)",
-                    )
-                }
-            }
-            if v.len() > MAX_LOOK_PATH {
-                return req.error(
-                    413,
-                    "413 Payload Too Large",
-                    &format!(
-                        "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
-                        v.len(),
-                    ),
-                );
-            }
-            next.look_formula = v;
-        }
-        if let Some(v) = patch.boot_show {
-            let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
-                return req.bad_request("boot_show must be off, short or full");
-            };
-            next.boot_show = len;
-        }
-        if let Some(v) = patch.panel_sync {
-            next.panel_sync = v;
-        }
-        if let Some(v) = patch.panel_split {
-            next.panel_split = v;
-        }
-        if let Some(v) = patch.formula_jit {
-            next.formula_jit = v;
-        }
-        if let Some(v) = patch.formula_arena {
-            next.formula_arena = v;
-        }
-        if let Some(v) = &patch.formula_keep {
-            match opendmd_core::FormulaKeep::from_name(v) {
-                Some(k) => next.formula_keep = k,
-                None => return req.bad_request("formula_keep must be turn, 1m, 5m or hold"),
-            }
-        }
-        if let Some(v) = &patch.api_key {
-            if !v.is_empty() && !opendmd_core::access::valid_key(v) {
-                return req.bad_request(&format!(
-                    "api_key must be {}..{} of A-Z a-z 0-9 . _ ~ - (or \"\" for none)",
-                    opendmd_core::access::KEY_MIN,
-                    opendmd_core::access::KEY_MAX
-                ));
-            }
-            next.api_key = v.clone();
-        }
-        if let Some(v) = &patch.card_speed {
-            let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
-                return req.bad_request(opendmd_core::card_speed::INVALID);
-            };
-            next.card_speed = mode;
-        }
-        if next.dwell_max < next.dwell_min {
-            return req.bad_request("dwell_max must be >= dwell_min");
         }
         let panel_op = match (patch.panel, patch.panel_confirm) {
             (None, None) => None,
@@ -734,6 +758,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     shared.panel_split
                 );
                 *c.settings.lock().unwrap() = shared;
+                // Durable at once on the card (CPU0; `settings_card`).
+                crate::settings_card::save_shared(&c.settings);
                 if let Some(name) = renamed {
                     // Queued, not waited for: the worker may be mid-connect.
                     if c.net.send(NetCommand::Rename(name)).is_err() {
@@ -870,6 +896,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(Ok(_)) => {
                 // (The shared copy and the line are this handler's, on CPU0.)
                 c.settings.lock().unwrap().schedule = shared;
+                crate::settings_card::save_shared(&c.settings);
                 info!("schedule saved: {rules} rule(s){}", if night { " + night mode" } else { "" });
                 req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
             }
@@ -1349,7 +1376,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
-    server.route("/api/reboot", Method::Post, |req| {
+    #[cfg(feature = "bench")]
+    let c_cut = ctx.clone();
+    server.route("/api/reboot", Method::Post, move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check
         // what a crash leaves: the panic message and IDF's backtrace on the
@@ -1371,6 +1400,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             req.json(r#"{"ok":true,"overflowing":true}"#)?;
             std::thread::sleep(Duration::from_millis(500));
             crate::restarts::overflow_on_purpose();
+        }
+        // `?settings_cut=1` (`bench` only): the power-cut test of the
+        // settings file: a save stopped between its renames (the old file
+        // moved aside, the new one not yet in its place), then this reboot.
+        // The next boot must come up with the settings in force now.
+        #[cfg(feature = "bench")]
+        if query_param(req.query(), "settings_cut").is_some() {
+            crate::settings_card::save_cut(&c_cut.settings);
+            log::warn!("settings: a save stopped between its renames on purpose (bench); restarting");
         }
         info!("reboot requested over HTTP");
         // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
@@ -2266,7 +2304,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json() + &crate::fatidx::status_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),

@@ -2338,6 +2338,10 @@ pub fn run(root: &str) {
     drop(out);
     swap_card(root, &mut canvas);
     let mut out = vec![0u8; psi::W * psi::H * 3];
+    // The settings file on the card: a save cut between its renames loads
+    // the new settings (settings_card).
+    let (settings_ok, settings_what) = crate::settings_card::self_check();
+    say!(info, "psi-probe: settings file: a save cut between its renames {} ({settings_what})", if settings_ok { "loads the new settings" } else { "DID NOT load the new settings" });
     // The player's raw card reads (fatidx), byte for byte against FatFs's.
     let (raw_ok, raw_bad, no_raw, via_index) = crate::fatidx::raw_self_check(root, 24);
     say!(info, "psi-probe: raw reads: {raw_ok} files match FatFs's reads, {raw_bad} differ, {via_index} of them through the index ({no_raw} not opened raw)");

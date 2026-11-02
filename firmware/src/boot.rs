@@ -85,6 +85,10 @@ pub struct Handover {
     /// task clears it from NVS (it owns NVS's settings); the default was
     /// built instead.
     pub healed_set: Option<String>,
+    /// The card's settings (`settings_card`), when they differ from what
+    /// the main task has: it applies them (the playlist above was built
+    /// from them already).
+    pub settings: Option<Box<Settings>>,
 }
 
 /// What the task needs, moved to it.
@@ -350,8 +354,10 @@ fn run(task: BootTask) {
     );
 
     if let Some(c) = card {
-        let snapshot = settings.lock().unwrap().clone();
-        let handover = prepare(c, &snapshot, &status);
+        // The card's settings over the device's (or written from them).
+        let (snapshot, card_settings) = crate::settings_card::adopt_at_mount(&settings);
+        let mut handover = prepare(c, &snapshot, &status);
+        handover.settings = card_settings;
         start_http(ctx);
         let _ = tx.send(Event::Ready(Box::new(handover)));
         let ready = t0.elapsed().as_millis();
@@ -465,8 +471,10 @@ fn run(task: BootTask) {
             format_over(&status, gone.then(|| "the card was taken out".to_string()));
         }
         if let Some(c) = ready {
-            let now = settings.lock().unwrap().clone();
-            let _ = tx.send(Event::Ready(Box::new(prepare(c, &now, &status))));
+            let (now, card_settings) = crate::settings_card::adopt_at_mount(&settings);
+            let mut handover = prepare(c, &now, &status);
+            handover.settings = card_settings;
+            let _ = tx.send(Event::Ready(Box::new(handover)));
             log::info!(
                 "boot: card handed over after {remounts} retries; boot task done (stack {} B unused)",
                 stack_unused()
@@ -547,6 +555,7 @@ fn prepare(card: SdCard, settings: &Settings, status: &Mutex<Status>) -> Handove
         platforms: s.platforms.clone(),
         index_ms: started.elapsed().as_millis() as u64,
         healed_set,
+        settings: None,
     }
 }
 
