@@ -259,11 +259,14 @@ jobs:
       # the site links from dev/api.html and carries as they are
       # (gallery-repo-publish.sh never removes or replaces them); this
       # release's own is frozen by make site only when the tree is its tag.
+      # Not shallow: the gallery dates each contribution by its first commit
+      # (gallery_page.py `git_added`); blob-less, so only commits and trees
+      # come, and the sparse checkout's few files.
       - name: Fetch the formula gallery and the earlier API pages
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/site-gallery"
-          git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
+          git clone -q --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
           git -C "$dir" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
           git -C "$dir" checkout -q
           mkdir -p "$dir/gallery" "$dir/dev/api"

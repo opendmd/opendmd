@@ -15,6 +15,11 @@ for the public gallery repo's gallery/:
    checked the same way first.
 2. Hostile files in gallery/ (a markup name, a link out of gallery/, a
    folder) are left out, the log says so, and the rest is still published.
+3. The order: the examples newest first by opendmd-web/formulas/added.json
+   (every tile marked for ftsort.js), contributions by their first commit
+   when gallery/ is a whole git checkout, undated (by name, last) in a
+   shallow one; an example with no date, or a date with no example, stops
+   the build.
 
 Nothing leaves the machine. Run by `make test`.
 """
@@ -24,6 +29,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -154,6 +160,59 @@ def main() -> int:
         check("left out 'evil.psi'" in log and "left out 'passwd.psi': not a plain file" in log
               and "left out 'folder.psi': not a plain file" in log, "the log names what was left out", log)
         check("<h3>Rainbow rings</h3>" in page and "<h3>Spiral sweep</h3>" in page, "the good contributions are still there")
+
+        # 3. The order and the dates.
+        gp = site_py.gallery_page
+        added = json.loads((site_py.EXAMPLES / gp.ADDED).read_text())
+        ex = [e for e in data["examples"]]
+        want = sorted(sorted(ex, key=lambda e: (e["name"].casefold(), e["slug"])), key=lambda e: added[e["slug"]], reverse=True)
+        tiles = re.findall(r'<li class="ftile"([^>]*)><a class="fpic" href="\.\./f/#gallery=([a-z0-9-]+)"', page.split("<!-- gallery:examples -->")[1])
+        check([t[1] for t in tiles] == [e["slug"] for e in want] and all(f'data-added="{gp.iso(added[t[1]])}"' in t[0] for t in tiles)
+              and all(e["added"] == gp.iso(added[e["slug"]]) for e in ex),
+              "the examples newest first by added.json, each tile and gallery.json entry dated")
+        marks = {t[1]: t[0] for t in tiles}
+        e_look = next(e for e in ex if e["look"])
+        e_ctl = next(e for e in ex if e["controls"] and not e["bundle"])
+        e_panel = next(e for e in ex if e["bundle"])
+        check('data-look="1"' in marks[e_look["slug"]] and 'data-controls="1"' in marks[e_ctl["slug"]] and 'data-panel="1"' not in marks[e_ctl["slug"]]
+              and 'data-panel="1"' in marks[e_panel["slug"]], "each tile marked as a look, with controls, on the panel, as it is")
+        check('<form class="fsort" id="fsort"' in page and " hidden>" in page.split('id="fsort"')[1][:80]
+              and page.index('id="fsort"') < page.index("<!-- gallery:community -->"),
+              "the sort and filter form: above the lists, hidden until its script shows it")
+        repo = tmp / "repo"
+        (repo / "gallery").mkdir(parents=True)
+        sh("git", "init", "-q", "-b", "main", repo)
+        for name, text, when in (("rainbow-rings.psi", RINGS, "2026-10-01T10:00:00Z"), ("spiral-sweep.psi", SPIRAL, "2026-10-05T12:30:00+02:00")):
+            (repo / "gallery" / name).write_text(text)
+            sh("git", "-C", repo, "add", "gallery")
+            sh("git", "-C", repo, "commit", "-q", "-m", name, env={"GIT_COMMITTER_DATE": when, "GIT_AUTHOR_DATE": when})
+        (repo / "gallery/rainbow-rings.psi").write_text(RINGS.replace("t/2", "t/3"))  # a later change: the first commit still counts
+        sh("git", "-C", repo, "commit", "-q", "-am", "change", env={"GIT_COMMITTER_DATE": "2026-10-09T00:00:00Z"})
+        out, log = build("site-3", repo / "gallery")
+        co = re.findall(r'<li class="ftile"([^>]*)><a class="fpic" href="\.\./f/#gallery=([a-z0-9-]+)"',
+                        (out / "formulas/index.html").read_text().split("<!-- gallery:community -->")[1].split("<!-- gallery:community-end -->")[0])
+        check([c[1] for c in co] == ["spiral-sweep", "rainbow-rings"] and 'data-added="2026-10-05T10:30:00Z"' in co[0][0]
+              and 'data-added="2026-10-01T10:00:00Z"' in co[1][0], f"contributions dated by their first commit, newest first {co}", log)
+        shallow = tmp / "shallow"
+        sh("git", "clone", "-q", "--depth", "1", f"file://{repo}", shallow)
+        out, log = build("site-4", shallow / "gallery")
+        co = re.findall(r'<li class="ftile"([^>]*)><a class="fpic" href="\.\./f/#gallery=([a-z0-9-]+)"',
+                        (out / "formulas/index.html").read_text().split("<!-- gallery:community -->")[1].split("<!-- gallery:community-end -->")[0])
+        check([c[1] for c in co] == ["rainbow-rings", "spiral-sweep"] and not any("data-added" in c[0] for c in co),
+              f"a shallow clone: contributions undated, by name {co}", log)
+        for what, change in (("an example with no date", lambda d: d.pop(next(iter(d)))), ("a date with no example", lambda d: d.update({"no-such-formula": "2026-11-01T00:00:00Z"}))):
+            exdir = tmp / "examples-bad"
+            shutil.rmtree(exdir, ignore_errors=True)
+            shutil.copytree(site_py.EXAMPLES, exdir)
+            d = dict(added)
+            change(d)
+            (exdir / gp.ADDED).write_text(json.dumps(d))
+            try:
+                site_py.write_gallery(tmp / "site-bad", exdir, None, tool, wm)
+                stopped = ""
+            except SystemExit as e:
+                stopped = str(e)
+            check("every example needs its date" in stopped, f"{what}: the build stops ({stopped[:120]})")
     finally:
         if not a.keep:
             shutil.rmtree(tmp, ignore_errors=True)

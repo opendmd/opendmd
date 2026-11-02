@@ -22,6 +22,7 @@ SITE/formulas/src/).
 from __future__ import annotations
 
 import argparse
+import datetime
 import html
 import json
 import re
@@ -33,6 +34,10 @@ import zlib
 from pathlib import Path
 
 PAGE = "formulas/index.html"
+# Beside OpenDMD's examples: when each was added to OpenDMD ({"<stem>":
+# "<ISO time, UTC>"}), checked in (a date git can't be trusted to keep: a
+# move or a rewrite of the files would reset it). Every example has one.
+ADDED = "added.json"
 # Beside it: the entries as data (`write_json`).
 JSON = "gallery.json"
 REPO = "https://github.com/opendmd/opendmd.github.io"
@@ -93,6 +98,65 @@ def say(msg: str) -> None:
     print(msg.replace("\r", " ").replace("\n", " "), file=sys.stderr)
 
 
+def iso(t: str | int) -> str:
+    """A time (ISO 8601, or unix seconds) as the page writes it: UTC to the
+    second, `YYYY-MM-DDTHH:MM:SSZ` (the Worker's `iso` writes the same)."""
+    d = (datetime.datetime.fromtimestamp(t, datetime.timezone.utc) if isinstance(t, int)
+         else datetime.datetime.fromisoformat(t.replace("Z", "+00:00")))
+    if d.tzinfo is None:
+        raise ValueError(f"{t!r}: no time zone")
+    return d.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_added(folder: Path) -> dict[str, str]:
+    """`folder`/added.json, checked against the examples in `folder`: one
+    date for every .psi file and none for a file that isn't there (a new
+    example has to be dated when it is added)."""
+    path = folder / ADDED
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        dates = {k: iso(v) for k, v in raw.items()}
+    except (OSError, ValueError, AttributeError, TypeError) as e:
+        raise SystemExit(f"{path}: {e}")
+    stems = {p.stem for p in folder.glob("*.psi")}
+    if set(dates) != stems:
+        raise SystemExit(f"{path}: every example needs its date, and only they"
+                         f" (no date: {sorted(stems - set(dates))}; no such file: {sorted(set(dates) - stems)})")
+    return dates
+
+
+def git_added(contrib: Path) -> dict[str, str]:
+    """When each file in `contrib` was first committed, by git's commit
+    time, if `contrib` is in a git checkout with its whole history; nothing
+    for a shallow clone (its oldest commit would look like every file's
+    first) or no checkout. Trees only (no rename detection), so a
+    blob-less clone fetches nothing."""
+    def git(*a: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(contrib), *a], capture_output=True, text=True)
+    r = git("rev-parse", "--is-shallow-repository")
+    if r.returncode or r.stdout.strip() != "false":
+        return {}
+    r = git("log", "--no-renames", "--diff-filter=A", "--relative", "--name-only", "--format=@%ct", "--", ".")
+    if r.returncode:
+        return {}
+    out: dict[str, str] = {}
+    t = 0
+    for line in r.stdout.splitlines():
+        if line.startswith("@"):
+            t = int(line[1:])
+        elif line.endswith(".psi") and "/" not in line:
+            out[line[:-4]] = iso(t)  # newest first: the last seen is the first commit
+    return out
+
+
+def order(entries: list[dict]) -> list[dict]:
+    """Newest first (by `added`), then by name; the undated last, by name.
+    The page's default order (and ftsort.js's `new`)."""
+    by_name = sorted(entries, key=lambda e: (e["name"].casefold(), e["slug"]))
+    dated = sorted((e for e in by_name if e.get("added")), key=lambda e: e["added"], reverse=True)
+    return dated + [e for e in by_name if not e.get("added")]
+
+
 def check_gallery(tool: Path, files: list[Path], thumbs: Path, trusted: bool = False) -> tuple[list[dict], list[dict]]:
     """opendmd-gallery check over `files`: (entries, failures). If the
     checker itself fails on a batch (not a verdict: a crash), the files are
@@ -122,19 +186,26 @@ def check_gallery(tool: Path, files: list[Path], thumbs: Path, trusted: bool = F
     return good, bad
 
 
-def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> str:
+def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path, added: dict[str, str],
+          contrib_added: dict[str, str] | None = None) -> str:
     """Writes the thumbnails under `formulas` (formulas/examples/ and
     formulas/thumbs/, emptied first) and returns the page's body: the
     contributions in `contrib` (checked again here, so a file that should
     not have been merged is left out, not published) and OpenDMD's examples
-    (the `.psi` files in `examples`), with thumbnails drawn by the checker."""
+    (the `.psi` files in `examples`, dated by `added`: `load_added`), with
+    thumbnails drawn by the checker. The contributions are dated by
+    `contrib_added` (slug: ISO time) or else by git (`git_added`); an
+    undated one comes last. Both lists newest first."""
     for d in ("examples", "thumbs"):
         shutil.rmtree(formulas / d, ignore_errors=True)
     files = sorted(p for p in examples.glob("*.psi") if not p.is_symlink() and p.is_file())
     seeds, bad = check_gallery(tool, files, formulas / "examples", trusted=True)
     if bad or not files or len(seeds) != len(files):
         raise SystemExit(f"an example fails the gallery's checks: {bad}")
-    seeds = sorted(seeds, key=lambda e: (e["name"].casefold(), e["slug"]))
+    missing = sorted({e["slug"] for e in seeds} - set(added))
+    if missing:
+        raise SystemExit(f"{ADDED}: no date for {missing}")
+    seeds = order([{**e, "added": added[e["slug"]]} for e in seeds])
     entries: list[dict] = []
     if contrib is not None:
         if not contrib.is_dir():
@@ -152,7 +223,8 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
         dup = [e for e in entries if e["src"].strip() in known]
         for e in dup:
             say(f"gallery: left out {e['slug']!r}: the same formula as an example")
-        entries = sorted((e for e in entries if e not in dup), key=lambda e: (e["name"].casefold(), e["slug"]))
+        dates = git_added(contrib) if contrib_added is None else {k: iso(v) for k, v in contrib_added.items()}
+        entries = order([{**e, "added": dates.get(e["slug"])} for e in entries if e not in dup])
     write_json(formulas, seeds, examples, entries, contrib)
 
     def tile(e: dict, pic: str) -> str:
@@ -165,7 +237,10 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
             ("look", "It can be the panel's look: drawn over every GIF (Settings › Look)", e.get("look")),
             ("on the panel", "The web app comes with it: in Formulas, under Bundled", e.get("bundle"))) if on)
         ctl = e.get("controls") or []
-        return (f'<li class="ftile"><a class="fpic" href="../f/{t(share_hash(e))}" tabindex="-1" aria-hidden="true">'
+        # What ftsort.js sorts and filters by (its own copy of the order and the badges).
+        data = (f' data-added="{t(e["added"])}"' if e.get("added") else "") + "".join(
+            f' data-{k}="1"' for k, on in (("look", e.get("look")), ("panel", e.get("bundle")), ("controls", ctl)) if on)
+        return (f'<li class="ftile"{data}><a class="fpic" href="../f/{t(share_hash(e))}" tabindex="-1" aria-hidden="true">'
                 f'<picture class="led"><img src="{t(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>'
                 f'<h3>{t(name)}{badges}</h3><p class="fdesc">{t(e["about"])}</p>'
                 + (f'<p class="fctl">Controls: {t(", ".join(ctl))}</p>' if ctl else "")
@@ -182,12 +257,31 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
             f'panel\'s editor, where you can change it, save it, play it, put it in a playlist or lay it over your GIFs as the look.</p>\n'
             f'<p><strong>Open</strong> plays it here in the editor, with its sliders and its code, ready to change. Made one you '
             f'like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
-            f'<h2 id="community">From the community</h2>\n'
+            + CONTROLS
+            + f'<section class="fsec" data-part="community">\n<h2 id="community">From the community</h2>\n'
             + listed("community", f'<ul class="ftiles">{community}</ul>\n' if community else EMPTY)
-            + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
-            f'the panel.</p>\n'
-            + listed("examples", f'<ul class="ftiles">{ex}</ul>\n'))
+            + f'</section>\n<section class="fsec" data-part="examples">\n<h2 id="examples">Examples</h2>\n'
+            f'<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with the panel.</p>\n'
+            + listed("examples", f'<ul class="ftiles">{ex}</ul>\n') + '</section>\n'
+            + NONE)
 
+
+# Sorting and filtering the tiles (ftsort.js, which shows it: without a
+# script the page is newest first, as built). Its state is the address's
+# query (?q=…&sort=old|name&show=community|panel|looks&controls=1).
+CONTROLS = ('<form class="fsort" id="fsort" role="search" aria-label="Sort and filter the Formulas" hidden>\n'
+            '<label class="fs-q"><span>Search</span><input type="search" name="q" autocomplete="off" '
+            'placeholder="Name, what it does, who made it"></label>\n'
+            '<label><span>Sort</span><select name="sort"><option value="new">Newest</option>'
+            '<option value="old">Oldest</option><option value="name">Name A–Z</option></select></label>\n'
+            '<label><span>Show</span><select name="show"><option value="all">All</option>'
+            '<option value="community">From the community</option><option value="panel">On the panel</option>'
+            '<option value="looks">Looks</option></select></label>\n'
+            '<label class="fs-ctl"><input type="checkbox" name="controls" value="1"> Has controls</label>\n'
+            '<output class="fs-count" name="count" aria-live="polite"></output>\n'
+            '</form>\n')
+# Shown when nothing matches.
+NONE = '<p class="fs-none" hidden>No Formulas match. <button type="button" class="cta alt">Show all</button></p>\n'
 
 # The community list when it is empty.
 EMPTY = ('<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
@@ -209,6 +303,7 @@ def write_json(formulas: Path, seeds: list[dict], examples: Path, entries: list[
     contributions it syncs from the public repo itself (site/worker/src/
     gallery.ts); site-worker-test compares the two."""
     def one(e: dict, d: Path) -> dict:
+        # (`added`: an example's from added.json, a contribution's from git or null.)
         return {**e, "file": (d / f"{e['slug']}.psi").read_text(encoding="utf-8")}
     data = {"examples": [one(e, examples) for e in seeds],
             "contributions": [one(e, contrib) for e in entries] if contrib is not None else []}
@@ -234,13 +329,15 @@ def main() -> int:
     ap.add_argument("site", type=Path, help="the built site (its formulas/src/*.psi and formulas/index.html)")
     ap.add_argument("--tool", type=Path, required=True, help="opendmd-gallery, built")
     ap.add_argument("--gallery", type=Path, help="the contributions (the public gallery repo's gallery/)")
+    ap.add_argument("--added", type=Path, default=Path(__file__).resolve().parents[1] / "opendmd-web/formulas",
+                    help=f"the folder whose {ADDED} dates the examples (default: this checkout's opendmd-web/formulas)")
     a = ap.parse_args()
     page = a.site / PAGE
     if page.is_symlink() or not page.is_file():
         raise SystemExit(f"no {page}")
     text = page.read_text(encoding="utf-8")
     splice(text, "")  # the markers are there, before anything is rewritten
-    body = build(page.parent, page.parent / "src", a.gallery, a.tool)
+    body = build(page.parent, page.parent / "src", a.gallery, a.tool, load_added(a.added))
     page.write_text(splice(text, body), encoding="utf-8")
     n, ex = body.count('src="thumbs/'), body.count('src="examples/')
     print(f"{PAGE}: {n} contribution{'s' * (n != 1)}, {ex} examples")

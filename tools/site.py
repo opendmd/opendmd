@@ -221,8 +221,8 @@ PSI_HEAD = '<script type="module" src="psiref.js"></script>'
 HOME_HEAD = '<script type="module" src="home.js"></script>'
 ROOT_SCRIPTS = ("psiled.js", "home.js")  # from opendmd-web/share/ref/
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
-# on psiled.js): CSP["home"] there too.
-GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>'
+# on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
+GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="module" src="ftsort.js"></script>'
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
 # Every flash layout (the firmware's `variant`): the board, the words on its
@@ -753,8 +753,9 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
         (page_dir / "src").mkdir()
         for p in sorted(examples.glob("*.psi")):
             shutil.copyfile(p, page_dir / "src" / p.name)
-    body = gallery_page.build(page_dir, page_dir / "src", contrib, tool)
-    shutil.copyfile(ROOT / "opendmd-web/share/ref/ftiles.js", page_dir / "ftiles.js")
+    body = gallery_page.build(page_dir, page_dir / "src", contrib, tool, gallery_page.load_added(examples))
+    for js in ("ftiles.js", "ftsort.js"):
+        shutil.copyfile(ROOT / "opendmd-web/share/ref" / js, page_dir / js)
     (out / GALLERY_PAGE).write_text(render(
         GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery", head="\n" + GALLERY_HEAD,
         description="Formulas for the OpenDMD LED display: change one here, then open it on your panel."), encoding="utf-8")
