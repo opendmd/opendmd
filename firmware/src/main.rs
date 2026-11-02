@@ -277,6 +277,38 @@ pub fn still_gate(take: usize) -> bool {
 
 /// Racing the beam: may this tick's Formula frame write
 /// its pairs as it draws them? Not with the panel dark, under the glow or
+/// Save the settings to NVS now, or keep them for later while a Formula
+/// plays (`later`): an NVS write stops the flash cache on both cores for
+/// milliseconds (tens when a page is erased), and a raced Formula's pairs
+/// then miss their windows. They take effect at once either way (the caller
+/// applies them); [`flush_settings`] writes what waited once no Formula
+/// plays (a GIF, the panel off). A change made while a Formula plays and
+/// lost to a power cut before anything else plays is the trade.
+fn save_settings(
+    cfg: &mut Config,
+    next: &Settings,
+    later: &mut Option<Settings>,
+    defer: bool,
+) -> anyhow::Result<()> {
+    if defer {
+        *later = Some(next.clone());
+        return Ok(());
+    }
+    *later = None;
+    cfg.save(next)
+}
+
+/// Write the settings [`save_settings`] kept back, when nothing races.
+#[inline(never)]
+fn flush_settings(cfg: &mut Config, later: &mut Option<Settings>) {
+    if let Some(s) = later.take() {
+        match cfg.save(&s) {
+            Ok(()) => log::info!("settings: saved (held while a Formula played)"),
+            Err(e) => log::error!("settings: saving what waited failed ({e:#}); they apply until a restart"),
+        }
+    }
+}
+
 /// a formula look, nor while a transition runs. (Out of line: once a tick,
 /// and `main` is big enough.)
 #[cfg(feature = "psi")]
@@ -474,6 +506,10 @@ fn main() -> Result<()> {
     let mut wake_us: u32 = 0;
     let mut log_us: u32 = 0;
     let mut fresh = true;
+    // Settings changed while a Formula played, not yet in NVS
+    // (`save_settings`), and whether a Formula is what plays.
+    let mut unsaved: Option<Settings> = None;
+    let mut formula_on = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
     // file's position.
@@ -597,6 +633,11 @@ fn main() -> Result<()> {
         if let Some(fx) = tuner.poll(epoch.elapsed(), state::NET_UP.load(Ordering::Relaxed)) {
             log::warn!("panel timing: trial not kept within {} s, undoing it", panel_timing::TRIAL.as_secs());
             panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
+        }
+
+        // Settings kept back while a Formula played: written once none does.
+        if unsaved.is_some() && (!formula_on || sched.off()) {
+            flush_settings(&mut nvs_config, &mut unsaved);
         }
 
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
@@ -866,7 +907,7 @@ fn main() -> Result<()> {
                         prebuilt = Some(tried);
                     }
 
-                    match nvs_config.save(&next) {
+                    match save_settings(&mut nvs_config, &next, &mut unsaved, formula_on && !sched.off()) {
                         Err(e) => {
                             if prebuilt.is_some() {
                                 // Playing what was not saved: back to what was.
@@ -1150,7 +1191,7 @@ fn main() -> Result<()> {
                     };
                     let mut next = settings.clone();
                     next.schedule = json;
-                    match nvs_config.save(&next) {
+                    match save_settings(&mut nvs_config, &next, &mut unsaved, formula_on && !sched.off()) {
                         Err(e) => {
                             let _ = reply.send(Err(format!("saving the schedule: {e:#}")));
                         }
@@ -1507,7 +1548,7 @@ fn main() -> Result<()> {
                 }
                 wait
             };
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.try_lock() {
                 s.uptime_secs = epoch.elapsed().as_secs();
                 s.heap_free = free_heap();
             }
@@ -1605,6 +1646,8 @@ fn main() -> Result<()> {
                 // long as that leaves the next frame on time (`scan::Budget`).
                 // (A raced Formula frame wrote its pairs in the tick: the
                 // canvas is clean and the blit returns at once.)
+                formula_on = opendmd_core::synth::is_formula(&playing.path)
+                    || opendmd_core::synth::formula_file(&playing.path).is_some();
                 let decoded = (playing.ordinal, playing.frame) != published;
                 let blit_start = Instant::now();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
@@ -1861,8 +1904,10 @@ fn main() -> Result<()> {
 
         // 4. Publish, before the sleep, so a status read during the frame's
         //    hold sees the frame that is on the glass. Cheap fields only: the
-        //    strings move when a GIF starts.
-        if let Ok(mut s) = status.lock() {
+        //    strings move when a GIF starts. Never waited for: an
+        //    `/api/status` on CPU0 holds the lock while it writes its JSON,
+        //    and the display must not wait on CPU0 (the next frame publishes).
+        if let Ok(mut s) = status.try_lock() {
             s.uptime_secs = epoch.elapsed().as_secs();
             s.entries = entries;
             s.heap_free = free_heap();
