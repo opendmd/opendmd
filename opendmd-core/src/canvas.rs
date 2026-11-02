@@ -158,6 +158,12 @@ impl DirtyMap {
         self.rows
     }
 
+    /// Row `y` is dirty end to end (a whole row to write).
+    #[inline]
+    pub fn row_full(&self, y: usize) -> bool {
+        y < HEIGHT && self.bits[y * WORDS_PER_ROW..(y + 1) * WORDS_PER_ROW].iter().all(|&w| w == u64::MAX)
+    }
+
     /// Nothing is dirty.
     pub fn is_clean(&self) -> bool {
         self.rows == 0
@@ -169,6 +175,7 @@ impl DirtyMap {
     }
 
     /// The dirty runs of row `y` as half-open `(x0, x1)` spans, left to right.
+    #[inline]
     pub fn row_spans(&self, y: usize) -> RowSpans {
         let mut words = [0u64; WORDS_PER_ROW];
         if y < HEIGHT {
@@ -357,6 +364,21 @@ mod tests {
         let c = Canvas::new();
         assert_eq!(c.as_slice().len(), 128 * 32);
         assert!(c.as_slice().iter().all(|p| *p == Rgb::BLACK));
+    }
+
+    /// A whole row is dirty end to end only when every pixel of it is:
+    /// what the raced pair writer tests instead of walking its spans.
+    #[test]
+    fn row_full_is_a_whole_dirty_row() {
+        let mut d = DirtyMap::default();
+        assert!(!d.row_full(3));
+        d.mark_span(3, 0, WIDTH - 1);
+        assert!(!d.row_full(3));
+        d.mark(WIDTH - 1, 3);
+        assert!(d.row_full(3) && !d.row_full(4) && !d.row_full(HEIGHT));
+        assert_eq!(d.row_full(3), d.row_spans(3).eq([(0, WIDTH)]));
+        d.mark_all();
+        assert!((0..HEIGHT).all(|y| d.row_full(y)));
     }
 
     #[test]
