@@ -351,6 +351,25 @@ pub fn build_index(
 /// the ones on the card now? A directory renamed, replaced or added on a PC
 /// keeps its entries where they were, so [`verify`] alone would accept a
 /// record that now names a file in another directory.
+/// The directories an index was built over, as (key, first cluster)
+/// pairs, summed so two sets compare without keeping either (a card has up
+/// to 256 copy buckets a category): order does not matter.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DirSet {
+    n: u32,
+    sum: u32,
+    xor: u32,
+}
+
+impl DirSet {
+    pub fn add(&mut self, (key, cluster): (u32, u32)) {
+        let m = hash_more(key, &cluster.to_le_bytes());
+        self.n += 1;
+        self.sum = self.sum.wrapping_add(m);
+        self.xor ^= m.rotate_left(7) ^ key;
+    }
+}
+
 pub fn dirs_match(indexed: &[(u32, u32)], now: &[(u32, u32)]) -> bool {
     indexed.len() == now.len() && now.iter().all(|d| indexed.contains(d))
 }
@@ -358,6 +377,26 @@ pub fn dirs_match(indexed: &[(u32, u32)], now: &[(u32, u32)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dir_sets_compare_whatever_the_order() {
+        let (mut a, mut b, mut c) = (DirSet::default(), DirSet::default(), DirSet::default());
+        for p in [(1, 10), (2, 20), (3, 30)] {
+            a.add(p);
+        }
+        for p in [(3, 30), (1, 10), (2, 20)] {
+            b.add(p);
+        }
+        for p in [(1, 10), (2, 20), (3, 31)] {
+            c.add(p);
+        }
+        assert_eq!(a, b);
+        assert_ne!(a, c, "a bucket's cluster reused elsewhere");
+        let mut d = DirSet::default();
+        d.add((1, 10));
+        d.add((2, 20));
+        assert_ne!(a, d, "one missing");
+    }
 
     fn lfn_entry(ord: u8, chk: u8, chars: &[u16]) -> [u8; 32] {
         let mut e = [0u8; 32];

@@ -585,10 +585,18 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
     // A player's open is noted in the open set under its lock unless a
     // write intent covers the path, the check and the note one step; then
     // it is not opened at all (`fatread::OpenSet`).
+    let mut again = false;
     let mut note = |k: usize| {
         player.is_some_and(|full| {
             open_set(|o| match since {
-                Some(seq) => o.insert_unless_covered_since(k, full, seq),
+                Some(seq) => match o.note_since(k, full, seq) {
+                    fatread::Note::Noted => true,
+                    fatread::Note::Covered => false,
+                    fatread::Note::Since => {
+                        again = true;
+                        false
+                    }
+                },
                 None => o.insert_unless_covered(k, full),
             })
         })
@@ -603,6 +611,9 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
                 drop(Box::from_raw(f));
             }
             return match (why, player) {
+                // A write began during a lock-free open (now over, or the
+                // ring overflowed): the caller opens again under the lock.
+                (fatread::Claim::Refused, _) if again => Err(errno(sys::EAGAIN)),
                 (fatread::Claim::Refused, _) => {
                     INTENT_REFUSED.fetch_add(1, Relaxed);
                     Err(errno(sys::ENOENT))
@@ -661,7 +672,11 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
     // A file written, renamed or removed since the build: the delta knows.
     let delta = DELTA.try_lock().ok().and_then(|d| d.iter().rev().find(|(k, _, _)| *k == h).map(|(_, l, _)| *l));
     if let Some(loc) = delta {
-        let loc = loc?;
+        // Removed (or renamed from) since the build: not there, without a
+        // directory walk to find that out.
+        let Some(loc) = loc else {
+            return Some(Err(errno(sys::ENOENT)));
+        };
         cands[0] = loc;
         nc = 1;
     } else {
@@ -670,10 +685,10 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
         let Ok(mut g) = LOADED.try_lock() else {
             return None;
         };
-        if g.is_none() {
-            *g = Some(load().ok());
-        }
-        let l = g.as_mut().unwrap().as_mut()?;
+        // Not loaded yet: the network worker loads it (`tick`); a load
+        // here (its directory walks under the volume lock) could be on the
+        // display task.
+        let l = g.as_mut()?.as_mut()?;
         let b = (h >> 24) as usize;
         // A bucket holds ~1/256 of the records (~40 on a stock card); past
         // 256 (2 KB) the rest of it is not looked at, and those names open
@@ -733,6 +748,9 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
                 return Some(Ok(f));
             }
             Ok(None) => {}
+            // A write of this file began during the open: open it again,
+            // by path under the lock (no miss: the record was right).
+            Err(e) if e.raw_os_error() == Some(sys::EAGAIN as i32) => return None,
             Err(e) => return Some(Err(e)),
         }
     }
@@ -831,13 +849,17 @@ fn load() -> io::Result<Loaded> {
     // The directories it was built over must be the ones there now: a
     // directory renamed or replaced on a PC leaves its entries where they
     // were, and a record would then name a file in another directory.
-    let mut dirs = Vec::with_capacity(h.dirs as usize);
+    let mut built = fatdir::DirSet::default();
     for _ in 0..h.dirs.min(8192) {
         file.read_exact(&mut e)?;
-        dirs.push(pair(&e));
+        built.add(pair(&e));
     }
-    let now: Vec<(u32, u32)> = gif_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
-    if !fatdir::dirs_match(&dirs, &now) {
+    let mut now = fatdir::DirSet::default();
+    for (d, c) in gif_dirs()? {
+        now.add((fatdir::hash(d.as_bytes()), c));
+    }
+    bucket_dirs_each(&mut |k, c| now.add((k, c)));
+    if built != now {
         DIRTY.store(true, Relaxed);
         return Err(errno(sys::ESTALE));
     }
@@ -995,8 +1017,15 @@ pub fn tick() {
 /// category: their paths as strings would be tens of KB of heap).
 fn bucket_dirs() -> Vec<(u32, u32)> {
     let mut out = Vec::new();
+    bucket_dirs_each(&mut |k, c| out.push((k, c)));
+    out
+}
+
+/// [`bucket_dirs`], one at a time (the index's load compares them without
+/// keeping them).
+fn bucket_dirs_each(each: &mut dyn FnMut(u32, u32)) {
     let root = format!("{}/cache", config::SD_MOUNT);
-    let Ok(cats) = fs::read_dir(&root) else { return out };
+    let Ok(cats) = fs::read_dir(&root) else { return };
     for c in cats.flatten() {
         let cat = c.file_name().to_string_lossy().into_owned();
         if cat.starts_with('.') || !c.file_type().is_ok_and(|t| t.is_dir()) {
@@ -1009,11 +1038,10 @@ fn bucket_dirs() -> Vec<(u32, u32)> {
             }
             let dir = format!("/cache/{cat}/{}", b.file_name().to_string_lossy());
             if let Ok((_, first)) = open_dir(&dir) {
-                out.push((fatdir::hash(dir.as_bytes()), first));
+                each(fatdir::hash(dir.as_bytes()), first);
             }
         }
     }
-    out
 }
 
 fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
@@ -1034,10 +1062,12 @@ fn build() -> io::Result<()> {
     // Cleared first: a change during the walks marks it again.
     DIRTY.store(false, Relaxed);
     let dirs = gif_dirs()?;
-    // The copies' buckets are walked too, but not part of the header's
-    // directory check (a record that no longer verifies opens by path).
+    // The copies' buckets are walked too, and in the header's directory
+    // check: a bucket's cluster reused after a cache clear must not let a
+    // record name a copy of another category.
     let buckets = bucket_dirs();
-    let listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
+    let mut listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
+    listed.extend_from_slice(&buckets);
     let _ = fs::create_dir(config::CACHE_ROOT);
     let mut scratch = vec![0u8; 8 * SS];
     let mut read = |lba: u32, buf: &mut [u8]| -> io::Result<()> {

@@ -375,19 +375,29 @@ impl<const N: usize> OpenSet<N> {
         self.seq
     }
 
-    /// [`insert_unless_covered`](Self::insert_unless_covered), and refused
-    /// too if an intent covering `path` began since `since` (an open's
-    /// [`seq`](Self::seq) at its start), or more began than it remembers.
-    pub fn insert_unless_covered_since(&mut self, k: usize, path: &str, since: u32) -> bool {
+    /// [`insert_unless_covered`](Self::insert_unless_covered) for an open
+    /// that read the card without the volume lock since `since` (its
+    /// [`seq`](Self::seq) at the start): [`Note::Since`] if an intent
+    /// covering `path` began meanwhile (or more began than it remembers):
+    /// what it read may be part-way through that write, so it opens again
+    /// under the lock; [`Note::Covered`] while one is live.
+    pub fn note_since(&mut self, k: usize, path: &str, since: u32) -> Note {
+        if self.covered(path) {
+            return Note::Covered;
+        }
         let begun = self.seq.wrapping_sub(since) as usize;
-        if begun > self.recent.len() {
-            return false;
+        if begun > self.recent.len()
+            || self.recent.iter().rev().take(begun).any(|(_, p, tree)| same_path(p, path) || (*tree && under(path, p)))
+        {
+            return Note::Since;
         }
-        let since_covered = self.recent.iter().rev().take(begun).any(|(_, p, tree)| same_path(p, path) || (*tree && under(path, p)));
-        if since_covered {
-            return false;
-        }
-        self.insert_unless_covered(k, path)
+        self.put(k, path);
+        Note::Noted
+    }
+
+    /// [`note_since`](Self::note_since) as a yes or no.
+    pub fn insert_unless_covered_since(&mut self, k: usize, path: &str, since: u32) -> bool {
+        self.note_since(k, path, since) == Note::Noted
     }
 
     /// The write `id` is done.
@@ -424,6 +434,16 @@ impl<const N: usize> OpenSet<N> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// What [`OpenSet::note_since`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Note {
+    Noted,
+    /// A write covering the path is under way: not opened at all.
+    Covered,
+    /// One began during the open: open again, under the lock.
+    Since,
 }
 
 /// Why [`Slots::claim`] did not.
@@ -662,6 +682,14 @@ mod tests {
         // Started after them all: fine.
         let since = o.seq();
         assert!(o.insert_unless_covered_since(0, path, since));
+        o.remove(0);
+        // Why: a live intent is Covered (skip), one begun and over is Since
+        // (open again under the lock).
+        let since = o.seq();
+        let w = o.begin_write(path, false);
+        assert_eq!(o.note_since(0, path, since), Note::Covered);
+        o.end_write(w);
+        assert_eq!(o.note_since(0, path, since), Note::Since);
     }
 
     #[test]
