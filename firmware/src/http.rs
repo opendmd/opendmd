@@ -358,17 +358,29 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             looks_json(&set)
         };
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
-        // How long the lock is held and the JSON takes (the next answer
-        // says: `display.status_lock_us`, `status_build_us`).
+        // A status read costs CPU0 ~7 ms of formatting (code and strings
+        // from flash, whose bus CPU1 shares): answered from the last one
+        // for `STATUS_CACHE` (the web app polls once a second; a client
+        // polling faster gets the same JSON within it). The lock is held
+        // only to copy the status (µs), never while formatting. The next
+        // answer says what it took (`display.status_lock_us`,
+        // `status_build_us`, `status_cached`).
         let t0 = std::time::Instant::now();
-        let json = {
+        if let Some(json) = cached_status(recent) {
+            STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return req.json(&json);
+        }
+        let snap = {
             let s = c.status.lock().unwrap();
             let held = std::time::Instant::now();
-            let j = status_json(&s, &looks, recent);
+            let copy = s.clone();
             STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
-            j
+            copy
         };
+        let json = status_json(&snap, &looks, recent);
+        drop(snap);
         STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+        keep_status(recent, &json);
         req.json(&json)
     })?;
 
@@ -2344,8 +2356,31 @@ fn looks_json(set: &Settings) -> String {
     )
 }
 
-/// The last `/api/status`: how long it held `status` (µs) while it wrote
-/// the JSON, and the whole build with the settings' part.
+/// How long a status answer is reused for another read.
+const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The last status answer (with or without `recent`), and when it was made.
+static STATUS_LAST: std::sync::Mutex<Option<(std::time::Instant, bool, String)>> = std::sync::Mutex::new(None);
+
+/// Reads answered from the last answer (`display.status_cached`).
+static STATUS_CACHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The last answer, if it is fresh and of the same kind (httpd's only).
+fn cached_status(recent: bool) -> Option<String> {
+    let last = STATUS_LAST.lock().ok()?;
+    last.as_ref()
+        .filter(|(at, r, _)| *r == recent && at.elapsed() < STATUS_CACHE)
+        .map(|(_, _, j)| j.clone())
+}
+
+fn keep_status(recent: bool, json: &str) {
+    if let Ok(mut last) = STATUS_LAST.lock() {
+        *last = Some((std::time::Instant::now(), recent, json.to_string()));
+    }
+}
+
+/// The last `/api/status`: how long it held `status` (µs) to copy it, and
+/// the whole build with the settings' part.
 static STATUS_LOCK_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -2357,10 +2392,13 @@ static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomic
 fn display_json() -> String {
     let (wakes, late, max, spun) = crate::wake::stats();
     format!(
-        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{}}}"#,
+        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{}}}"#,
         crate::state::PUBLISH_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_LOCK_US.load(std::sync::atomic::Ordering::Relaxed),
         STATUS_BUILD_US.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_CACHED.load(std::sync::atomic::Ordering::Relaxed),
+        crate::panel::pre_start_json(),
+        crate::state::commands_json(),
     )
 }
 

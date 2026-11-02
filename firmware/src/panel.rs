@@ -192,6 +192,21 @@ pub fn scan_json() -> String {
     )
 }
 
+/// `display.pre_start`: `{n, us, mean_us, max_us, spikes}` — a raced frame's
+/// time from the loop's wake to its start (the loop's work, the tick, the
+/// frame's steps and draw stage), since boot; `spikes` those over their
+/// running mean by more than 300 µs.
+pub fn pre_start_json() -> String {
+    let n = beam::PRE_N.load(Relaxed);
+    let sum = beam::PRE_SUM.load(Relaxed);
+    format!(
+        r#"{{"n":{n},"us":{sum},"mean_us":{},"max_us":{},"spikes":{}}}"#,
+        if n > 0 { sum / n } else { 0 },
+        beam::PRE_MAX.load(Relaxed),
+        beam::PRE_SPIKES.load(Relaxed)
+    )
+}
+
 /// `scan.beam` alone (psi-probe's play lines).
 #[cfg(feature = "psi-probe")]
 pub fn beam_json() -> String {
@@ -1198,6 +1213,29 @@ mod beam {
         }
     }
 
+    /// The time from the loop's wake to a raced frame's start (µs): raced
+    /// starts timed, µs in all (wrapping), the longest, and those over
+    /// their running mean by more than [`PRE_SPIKE_US`] (a stretch: what
+    /// makes a start late when the wake was on time).
+    pub(super) static PRE_N: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_SUM: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_MAX: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_SPIKES: AtomicU32 = AtomicU32::new(0);
+    static PRE_MEAN: AtomicU32 = AtomicU32::new(0);
+    /// A stretch: this much over the running mean.
+    pub(super) const PRE_SPIKE_US: u32 = 300;
+
+    fn note_pre(pre: u32) {
+        let mean = PRE_MEAN.load(Relaxed);
+        if mean > 0 && pre > mean + PRE_SPIKE_US {
+            PRE_SPIKES.fetch_add(1, Relaxed);
+        }
+        PRE_MEAN.store(if mean == 0 { pre } else { mean - mean / 16 + pre / 16 }, Relaxed);
+        PRE_N.fetch_add(1, Relaxed);
+        PRE_SUM.fetch_add(pre, Relaxed);
+        PRE_MAX.fetch_max(pre, Relaxed);
+    }
+
     /// `fx_psi::BeamHooks::begin`: can this frame be raced (the scan read)?
     pub(super) fn begin() -> Option<u32> {
         let st = state();
@@ -1221,6 +1259,12 @@ mod beam {
             UNREAD.fetch_add(1, Relaxed);
             return;
         };
+        // From the loop's wake to here: its work before the tick, the
+        // tick, the frame's steps and draw stage (what moves the start).
+        let pre = now_us().wrapping_sub(crate::wake::woke_at_us());
+        if pre < 1_000_000 {
+            note_pre(pre);
+        }
         let write = if st.look == Look::Colour { WRITE_US } else { WRITE_US_TINTED };
         // Measured, else from the governor's mean (a frame's render is at
         // least its pairs' writes).

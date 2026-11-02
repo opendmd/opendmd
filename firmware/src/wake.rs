@@ -35,6 +35,20 @@ static WAKES: AtomicU32 = AtomicU32::new(0);
 static LATE: AtomicU32 = AtomicU32::new(0);
 static MAX_US: AtomicU32 = AtomicU32::new(0);
 static SPUN_US: AtomicU32 = AtomicU32::new(0);
+/// When the loop last went on after its sleep (or found its frame already
+/// due), on the µs clock (`esp_timer_get_time`, wrapping): what the beam's
+/// start measures the time before it from ([`woke_at_us`]).
+static WOKE_AT: AtomicU32 = AtomicU32::new(0);
+
+/// [`WOKE_AT`].
+pub fn woke_at_us() -> u32 {
+    WOKE_AT.load(Relaxed)
+}
+
+fn now_us() -> u32 {
+    // SAFETY: argument-free read of the µs clock.
+    unsafe { sys::esp_timer_get_time() as u32 }
+}
 
 /// `/api/status` `wake`: (wakes, late ones, the latest µs, µs spun), since
 /// boot (the last two wrapping or saturating).
@@ -95,6 +109,7 @@ impl Waker {
         let left = at.saturating_duration_since(Instant::now());
         if left.is_zero() {
             // (Already due: the frame ran over, not the wake.)
+            WOKE_AT.store(now_us(), Relaxed);
             return;
         }
         let us = left.as_micros().min(u128::from(u32::MAX)) as u64;
@@ -128,6 +143,7 @@ impl Waker {
 
 /// Count a wake against its time.
 fn note(at: Instant) {
+    WOKE_AT.store(now_us(), Relaxed);
     let late = Instant::now().saturating_duration_since(at).as_micros().min(u128::from(u32::MAX)) as u32;
     WAKES.fetch_add(1, Relaxed);
     if late > LATE_US {
