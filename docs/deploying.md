@@ -55,7 +55,10 @@ restart.
 /api/card/format`; it refuses a card that can be read): 32 KB clusters, the
 data area aligned to 4 MiB, two FATs. Then the card plays like any other:
 add GIFs from the Library, or copy the pack onto it from a laptop (FAT32
-reads everywhere). A card of any size works; 32 GB is only the Windows
+reads everywhere). The display keeps its settings on the card in
+`/opendmd.json` (written at the first boot with the card, from the
+display's own settings): copying the pack never overwrites it, and a
+card moved to another display brings them (docs/api.md, Settings). A card of any size works; 32 GB is only the Windows
 formatter's limit for FAT32.
 
 The rig's card is a 32 GB card that was full-surface scanned with zero errors
