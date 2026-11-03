@@ -32,7 +32,8 @@ folder or GIF dropped onto the program counts as the argument.
 `--title`, `--category`), `--shuffle`, `--scale` (pixels per LED, default
 10), `--transition`, `--look` (the panel's tints), `--glow`, and
 `--play '@clock?date=1'` for a single live item, `--formula FILE.psi` (with
-`--formula-opts a=0.5&fps=100`) or `--play '@formula?src=…'` for a Formula
+`--formula-opts a=0.5&fps=100`) or `--play '@formula?psb=…'` (a compiled
+Formula, `psi build FILE.psi --base64`) for a Formula
 (the `psi` feature is on by default; `opendmd-psi/formulas/` has `plasma.psi`,
 `fire.psi` and others).
 

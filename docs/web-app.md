@@ -161,7 +161,7 @@ button lands on them.
   **Add N ticked**, or search (title words, platform chips) and **Add all N
   shown**; a GIF already in the playlist has a ✓ and is not added twice.
   A Formula added from Formulas (**Add to playlist…**: the line is its
-  player path, `@formula?src=…[&a=&b=&c=]&name=…`, ≤ 2,048 B) shows by its
+  player path, `@formula?psb=…[&a=&b=&c=]&name=…`, the compiled Formula, ≤ 2,048 B) shows by its
   name with a *Formula* tag, no thumbnail. **Add by filter…** is a sheet over the editor that runs the core's
   `Filter` (platforms, categories, title words, **Leave out** flags,
   shuffle with a seed, at most N) over any playlist; its last row is **Add
@@ -362,7 +362,7 @@ the firmware and the core: they are Formulas now, in the site's gallery
 them, the ones marked `-- bundle`, as `www/formulas.json`, written by
 `make web`), where they can be read and changed. A Formula plays, sends to the panel and goes in a playlist like any
 GIF (**Show on panel**, **Add to playlist…**), as a line
-`@formula?src=…` (see [the HTTP API](api.md)). A retired `@fx:` line in a
+`@formula?psb=…` (the compiled Formula; see [the HTTP API](api.md)). A retired `@fx:` line in a
 playlist is skipped with a log line. Follow RePlayOS can show the clock or a
 text in the menus instead of its attract playlist, and a playlist of one
 Formula, chosen as the attract playlist, does the same for a Formula

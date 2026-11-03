@@ -171,7 +171,7 @@ firmware image; `docs/ota.md` "Two flash layouts".
 |---|---|---|---|
 | (bootloader) | 0x1000 | | the project's second-stage bootloader |
 | (partition table) | 0x8000 | | `firmware/partitions.csv` |
-| `nvs` | 0x9000 | 24 KB | settings, WiFi, the schedule, Follow RePlayOS |
+| `nvs` | 0x9000 | 24 KB | WiFi and the secrets; a copy of the settings (their store is the card's `/opendmd.json`) |
 | `otadata` | 0xF000 | 8 KB | which app boots next; erased = `factory` |
 | `phy_init` | 0x11000 | 4 KB | |
 | `factory` | 0x20000 | 2,304 KB | the firmware |
@@ -309,8 +309,10 @@ which starts unticked (`new_install_prompt_erase`):
 - **Erase ticked — a first install, or a board coming from DMDoS or any
   other firmware.** The whole chip is erased, then the bootloader, the
   partition table, the app and the web app are written. *Everything* on the
-  board goes, NVS included: WiFi credentials, brightness and its maximum, playlist, the
-  schedule and night window, Follow RePlayOS. The installer then waits up
+  board goes, NVS included: WiFi credentials, the API key and the Follow
+  RePlayOS code (the settings — brightness and its maximum, playlist, the
+  schedule and night window, Follow RePlayOS — come back from the card's
+  `/opendmd.json` at the next boot with the card). The installer then waits up
   to `new_install_improv_wait_time` (15 s) for the new firmware to answer
   and asks for WiFi: the board scans, joins the network it is given (live,
   within 35 s), saves it and reports its URL. Skipped or unanswered, the
