@@ -453,7 +453,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, pick, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(async () => { await psi(); B.copied = await S.copyUp(); await S.prepare(); }, (e) => toast('Couldn’t read your Formulas on the panel: ' + (e.message || e), 'bad'))])
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(async () => { await psi(); B.copied = await S.copyUp(); const bad = await S.prepare(() => toast('Getting your Formulas ready for the panel…')); if (bad) toast(`Couldn’t get ${bad} of your Formulas ready for the panel`, 'bad'); }, (e) => toast('Couldn’t read your Formulas on the panel: ' + (e.message || e), 'bad'))])
     // (Each says its own name: `[{src}]`.)
     .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); copied(B.copied); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });

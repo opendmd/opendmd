@@ -160,14 +160,16 @@ async function compile(file, src) {
 // no compiled file (copied onto the card by a computer), or all of them
 // when the player plays another version of compiled Formulas than this
 // app writes (`/api/status` `psi_abi`, after an update). How many.
-export async function prepare() {
+// `say()` before the first one is compiled; the ones that failed, counted.
+export async function prepare(say) {
   if (!card) return 0;
   const stale = app.status?.psi_abi != null && app.status.psi_abi !== abi();
   if (stale && app.status.psi_abi > abi()) return 0;
-  let n = 0;
+  let n = 0, bad = 0;
   for (const f of cache) {
     if (!f.file || (!stale && built.has(psb(f.file).toLowerCase()))) continue;
-    await compile(f.file, f.src).then(() => n++, () => {});
+    if (!n && !bad) say?.();
+    await compile(f.file, f.src).then(() => n++, () => bad++);
   }
-  return n;
+  return bad;
 }
