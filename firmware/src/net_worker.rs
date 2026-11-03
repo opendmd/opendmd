@@ -197,8 +197,18 @@ fn save_wifi(
         reply: tx,
     })
     .map_err(|_| "player not running")?;
-    match rx.recv_timeout(config::IMPROV_SAVE_TIMEOUT) {
-        Ok(Ok(_)) => Ok(()),
+    let answer = rx.recv_timeout(config::IMPROV_SAVE_TIMEOUT);
+    crate::state::drop_spent();
+    match answer {
+        Ok(Ok(_)) => {
+            // The shared copy as the main task now has it (a later PUT
+            // starts from it and would otherwise put the old WiFi back).
+            if let Ok(mut s) = settings.lock() {
+                s.wifi_ssid = ssid.to_string();
+                s.wifi_pass = password.to_string();
+            }
+            Ok(())
+        }
         Ok(Err(e)) => Err(e),
         Err(_) => Err("player did not answer".into()),
     }
@@ -498,6 +508,7 @@ fn run(worker: NetWorker) {
         follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());
 
         // The FAT index (`fatidx`): built or rebuilt when due.
+        crate::readahead::tick();
         crate::fatidx::tick();
 
         // An open AP does not stay up indefinitely. Rebooting (rather than

@@ -126,10 +126,6 @@ test:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --features docs,syntax
-	cd $(PSI) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_OPT_LEVEL=2 cargo test --release --test stack
-	@# The compiler's heap as the device compiles (no `syntax`): every bundled
-	@# Formula under its budget, a short heap refused, never an abort.
-	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --release --test compile_heap
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
@@ -519,7 +515,9 @@ FW_DEV_FEATURES = dev-credentials,bench$(if $(FW_FEATURES),$(comma)$(FW_FEATURES
 comma := ,
 FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 
-# Every build ends with tools/check-stack-realign.py: a function that moves
+# Every build ends with tools/check-iram.py (the hot loops and the raced
+# pair writer must be linked into IRAM: from flash their cost depends on the
+# image's layout) and tools/check-stack-realign.py: a function that moves
 # its stack pointer without MOVSP (an over-aligned local) corrupts its
 # caller's registers now and then (opendmd-core/src/chan.rs). The diag build's
 # std-channel torture test keeps one such function on purpose.
@@ -529,8 +527,35 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # which also sets the bootloader's and the app's image headers), and the app
 # descriptor's version as the release sets it ("<version> <variant>",
 # `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
+# The flash clock (FW_FLASH_FREQ=40|80, MHz; DIO either way). The app sets
+# SPI0's clock itself at start-up from its own image header
+# (esp_system/port/cpu_start.c: bootloader_flash_clock_config(&app header),
+# ESP32 without PSRAM), so 80 reaches a board by OTA with its bootloader
+# left at 40: the app image's header (espflash --flash-freq) and the IDF's
+# own idea of it (CONFIG_ESPTOOLPY_FLASHFREQ_*, which the flash driver's
+# SPI1 uses) both follow this. `/api/firmware` `flash` reads the clock back.
+FW_FLASH_FREQ ?= 40
+# SRAM1 as IRAM (FW_SRAM1_IRAM=1): IDF's ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM,
+# up to 40 KB more IRAM (0x400A0000..), each byte used taken from the top of
+# the D/IRAM heap (heap/port/esp32/memory_layout.c reserves _heap_end..
+# 0x40000000), and the firmware's `sram1-iram` feature, which places the next
+# hottest functions there. The v5.3 bootloader's own data ends at 0x3FFF6000
+# (bootloader.ld), below the region, and its load-address check takes SRAM1's
+# IRAM alias as IRAM (SOC_IRAM_HIGH 0x400AA000): the bootloader OpenDMD's
+# installs write (v5.3, the same code with or without the option) boots it,
+# so it can go by OTA; a pre-5.1 bootloader would refuse the image
+# (psi-rebuild-worklog.md, 2026-11-02, SRAM1 as IRAM).
+FW_SRAM1_IRAM ?= 0
+# psi-probe builds only: the main task's stack 2 KB over the release's 16 KB
+# (sdkconfig.defaults). The probe's checks run on the main task on top of
+# the frame loop's own depth, and left 268 B of the 16 KB (c4b8e10); a
+# release build never runs them. (From the heap: the probe's heap figures
+# are 2 KB under a release build's.)
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
+	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
+	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
+	$(if $(filter psi-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy; VARIANT=8mb for the
@@ -568,6 +593,7 @@ fw-build: fw-sdkconfig-flavour
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_BINARY)'
 
 # The console (the firmware's log) runs at 921600 baud (sdkconfig.defaults,
 # CONFIG_ESP_CONSOLE_UART_BAUDRATE): every monitor and capture must match.
@@ -694,6 +720,8 @@ FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFI
 # DIST=/somewhere/else), signed like any other so it can go to the rig over
 # the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
+FW_COMMA := ,
+FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram)))
 DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
@@ -737,7 +765,7 @@ fw-release-variant:
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
 	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size: a fragment
 	@# that failed to apply would build a 4 MB image under an 8mb name.
 	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \
@@ -748,9 +776,10 @@ fw-release-variant:
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	$(MAKE) --no-print-directory updater
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_RELEASE_BINARY)'
 	@# The third-party notices: the committed ones must be what this build links.
 	$(MAKE) --no-print-directory notices-check
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
@@ -777,10 +806,16 @@ fw-release-variant:
 	   got=$$(dd if=$$f bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
 	   test $$(( got >> 4 )) -eq $$want || { echo "$$f: flash size code $$(( got >> 4 )) in its header, want $$want ($(FW_VARIANT))"; exit 1; }; \
 	 done; echo "image headers: flash size $(FW_VARIANT) (bootloader, app)"
+	@# The app's flash clock (byte 3's low nibble: 0 = 40 MHz, 15 = 80 MHz),
+	@# which the app applies at start-up whatever the bootloader runs at.
+	@want=$$(case $(FW_FLASH_FREQ) in 40) echo 0;; 80) echo 15;; *) echo x;; esac); \
+	 got=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
+	 test $$(( got & 15 )) -eq $$want || { echo "$(FW_APP_IMAGE): flash clock code $$(( got & 15 )) in its header, want $$want ($(FW_FLASH_FREQ) MHz)"; exit 1; }; \
+	 echo "app header: flash clock $(FW_FLASH_FREQ) MHz"
 	@# The merged image: espflash lays out bootloader, table and app padded to
 	@# the flash size with 0xFF (so otadata is erased: the bootloader boots
 	@# factory); the updater and the pack go in at their offsets on top.
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
 	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
@@ -968,6 +1003,18 @@ emu-image-smoke:
 emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
+# The no-card lane: an image with the `nocard-test` feature (src/nocard_test.rs)
+# booted with no card (an empty card image): it must boot, run its panel, keep
+# its settings in NVS and keep a change across a restart. EMU_NOCARD_OK.
+EMU_NOCARD_IMAGE = $(EMU_DIR)/nocard/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-nocard:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/nocard/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/nocard/dist/opendmd-*-4mb-app.bin
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-nocard: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
+	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The 8mb layout by default: the emulator does not care about the DevKit's 4 MB,

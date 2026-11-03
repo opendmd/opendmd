@@ -112,6 +112,12 @@ export class DeviceSource {
     const r = await queued(() => this.json('GET', '/api/files?dir=' + encodeURIComponent(dir)));
     return r.entries;
   }
+  // A /gifs folder's names for naming a new GIF: from the device's names
+  // file, no folder walk (a listing when it has none).
+  async names(dir) {
+    const r = await queued(() => this.json('GET', '/api/files?names=1&dir=' + encodeURIComponent(dir)));
+    return r.entries;
+  }
   // Card files: a GIF or copy meets a full stream queue as a 503 at once
   // (a playlist after 2 s), asked again by `queued`.
   async readText(path) {
@@ -123,7 +129,8 @@ export class DeviceSource {
   async readBytes(path) { return queued(async () => new Uint8Array(await (await this.req('GET', enc(path))).arrayBuffer())); }
   // A manifest path (`/filelist.*`, `/sets/*`) is installed by the device's
   // main task (the `.idx` goes first, then a reindex if it is active).
-  writeFile(path, data) { return this.json('PUT', '/api/files' + enc(path), data); }
+  // `createNew`: only if the file is not there (409 if it is).
+  writeFile(path, data, o) { return this.json('PUT', '/api/files' + enc(path) + (o?.createNew ? '?new=1' : ''), data); }
   deleteFile(path) { return this.json('DELETE', '/api/files' + enc(path)); }
   saveSet(name, text) { return this.json('PUT', '/api/sets/' + encodeURIComponent(name), text); }
 }

@@ -57,7 +57,7 @@ one), then the playlist carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
-`/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?src=…`) or
+`/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?psb=…`) or
 a live item (see "Live items"). `"live":true`: only replace a formula on screen (`409` if
 none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
@@ -81,7 +81,7 @@ Errors: `400` neither card-absolute nor a live item, or a bad formula;
 (`there is no bundled Formula by that name`; what was playing carries on); `415` not a
 GIF, a live item this firmware does not know (`@nonsense`), or a retired
 `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
-Formulas replace them (play one as @formula?src=…)`); `503` no
+Formulas replace them (play one as @formula?psb=…)`); `503` no
 playlist running; `413` body over 8 KB, or an inline formula over 6,144 B.
 
 ```sh
@@ -123,6 +123,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | field | meaning |
 |---|---|
 | `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit; `"8mb"`, an 8 MB board in development) |
+| `psi_abi` | the compiled Formulas this player plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the player's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
@@ -137,9 +138,9 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
 | `refresh_hz` | panel refresh rate |
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
-| `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
+| `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`); `recent` the last 8 late frames (newest last), each `{late_ms, cause, open, read, decode, blit, log, other, wake, transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us, kind}`: its cause (as above), each step's µs, whether a transition was running, the engine tick split into the file's advance (`advance_us`: opens, decoding, the outgoing file's drop at a switch) and the dissolve's step (`step_us`), seconds since boot, the frame's card reads split into µs waiting for the card (another task's transfer ahead) and µs transferring (`card_wait_us`, `card_xfer_us`), the decoder of the file on screen (`kind`: `slim`, `gif`, `synth`, a Formula), and its opens by step (`open_index_us` through the FAT index, `open_path_us` by path behind FatFs's volume lock, `open_builder_us` waiting for the cache builder to let go of its heap, `open_catalog_us` the playlist's lookup of the next file; a diagnostic) |
 | `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
-| `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale}` diagnostics of the index that opens GIFs without a directory scan |
+| `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale, raw_open, raw_reads, raw_fallbacks, slots_full, intent_refused, delta, path_opens, path_open_max_us, index_busy, index_unloaded, building}` diagnostics of the index that opens GIFs and their prepared copies without a directory scan (`delta`: files written, renamed or removed since it was built, which it already knows) and of the player's card opens and reads (both past FatFs's volume lock; opens refused while a write holds the file); `path_opens`, `path_open_max_us` the display's opens the index could not serve (by path, behind the volume lock) and the longest, `index_busy`, `index_unloaded` why (its lock held for a swap; no index loaded), `absent` prepared copies the index showed are not there (no path open), `catalog_fatfs` playlist files read through FatFs instead of raw (their lookups wait for the volume lock), `building` a build or names walk running; `write_yields`, `write_yield_us` the card writes that stepped aside between their chunks for reads, and how long (at most 5 ms a chunk); `gave_way`, `gave_way_us` other tasks' card transfers that waited for the display's read first (at most 5 ms each); `write_max_us` the longest single write transfer (a chunk with the card's busy time); `player_wait_max_us`, `player_xfer_max_us` the display's longest single card read's wait for the card and transfer, since boot; `readahead` `{active, bytes, fill, fill_min, hits, underruns, fetches, taken, no_heap, busy, errors, task_starts, stack_unused}`: the playing GIF's read-ahead (`bytes`, 8 KB, of the file kept ahead of the display by a CPU0 task while a GIF plays): `fill` the bytes ahead now, `fill_min` the least after a served read since the last status (null: none), `hits` reads served from it, `underruns` reads it could not serve once filling (from the card), `fetches` blocks read ahead, `taken` times its memory was taken (given back 5 s after the last read), `no_heap` looks that found no room (one each 200 ms while short), `busy` reads that found it locked (from the card), `errors` card errors filling it; `settings_store` where the settings are kept: `card` (`/opendmd.json`, see Settings), `nvs (no card)`, or `nvs (card write failed: …)` (technical: an app showing it says "Settings are kept on the card") |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `interrupt watchdog`, `task watchdog`, `brownout`, `external`, …; why this boot's restart was made in plain words — `"card failure"`, `"different card"`, `"restarted on request"`, `"restarted to apply a card speed change"`, `"crashed (panic)"`, `"restarted without a recorded reason"`, … — or null after a power-on |
 | `restarts` | the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: `{reason, reset, uptime_s, heap_free, largest, where?}`. `reason`: `api_reboot`, `firmware_update`, `ap_timeout` (setup network timed out), `card_full_speed`, `card_speed`, `fresh_heap` (playlist index needed a fresh heap), `panel_trial`, `card_failure`, `new_card`, `card_lost` (SPI device lost), `card_retry`, `panic`, `stack_overflow`, `diag_abort` (a `diag-heap` build's heap check), or, when the restart wrote nothing, from the reset alone: `power_on` (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), `brownout`, `unrecorded` (a software restart), `unrecorded_crash`. `reset`: the chip's reset after it (`reset_reason`'s words; null if no boot has seen it yet). `uptime_s`, `heap_free`, `largest`: when it was written (for `unrecorded`/`unrecorded_crash`/`brownout`, the last heartbeat's, ≤ 30 s earlier; null when unknown; `largest` null for `panic`, `stack_overflow` and `diag_abort`, which do not walk the heap). `where`: a panic's `file:line message` (message ≤ 48 B), the overflowing task (`task <name>`), the heap check's site, or for `unrecorded_crash` the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe) |
 | `overrides`, `hidden` | as in "Fields that recur" |
@@ -153,7 +154,10 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
 | `attract_live` | the live item Follow RePlayOS shows in the menus, else null |
 | `max_brightness`, `brightness_safe_max`, `safe_start_until` | the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after) |
-| `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one for 2 for ~4,096 frames), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
+| `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one whose own frame time is over three quarters of its budget for 2 for ~4,096 frames; a lighter one keeps its rate), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
+| `display` | how the display loop kept its time, since boot: `{wakes, wake_late, wake_max_us, spin_us, publish_skipped, status_lock_us, status_build_us, status_cached, pre_start, commands}` — the loop's wakes, those over 100 µs after their time and the latest (µs), the µs it spun waiting for its frame (it blocks until 0.4 ms before, then spins), frames whose status publish was skipped because a status read held it (the display never waits for one), the last status read's time holding that lock (a copy) and building in all (µs), status reads answered from the last answer (it is reused for 100 ms); `pre_start {n, us, mean_us, max_us, spikes}` a raced frame's time from the wake to its start (the loop's work, the tick, the frame's steps and draw stage; `spikes` over its running mean by 300 µs); `commands {n, us, max_us}` the loop's handling of what the HTTP handlers asked (loops that had any, µs in all, the longest); `buffers` where the display's hot memory is (a measurement: each `{at, bytes, pool}` or `null`, `pool` IDF's SRAM pool such as `SRAM2/15` or `SRAM1/7`): `formula` (the playing Formula's program and VM scratch), `ink`, `plane`, `kernel` (its JIT code), `arena` (`formula_arena`), `canvas`, `dma_rows` (the panel's DMA rows, `{at, end, bytes, pool, pool_end}`), `dma_desc`; `arena` `{hits, busy}` while `formula_arena` is in force, else `null`; `card_read_max_us` the player's longest single card read since the last `?take_read_max=1`; `uploads` `{paced, rate_kb_s, paced_ms, on_pct}`: uploads are read at `rate_kb_s` at most while a Formula plays near its frame budget (its mean render over `on_pct` % of the frame time, 60 by default, until 10 points under), full speed otherwise; `paced_ms` the time slept for it since boot. A dev field of `PUT /api/config`, `pace_on_pct` (1..100, live only, never saved), moves the start for a test |
+| `?pools=1` | answers `{"pools":{"SRAM2/15":{used, blocks, free}, …}}` instead of the status: one walk of the heap, bytes in use and free per SRAM pool (a measurement) |
+| `?take_read_max=1` | answers `{read_max_us, open_max_us}` instead of the status: the player's longest card read and open since the last ask, then both start again from 0 |
 
 ```sh
 curl -s $DMD/api/status | jq .now_playing
@@ -219,6 +223,28 @@ curl -s -X POST $DMD/api/card/full-speed
 
 ## Settings
 
+**Where they are kept.** The settings that belong to what plays travel
+with the card, in `/opendmd.json` at its root: brightness and its
+ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
+the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
+host, attract, look, glow, `look_formula`, `boot_show`, `panel_sync`,
+`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`. A change is
+on the card the moment it is saved, whatever plays. The device keeps the
+rest itself, never on the card: the WiFi details and name, the API key
+and the RePlayOS code (secrets), the card's clock and its slow-clock
+record, and the panel timing. It also keeps a copy of everything, what it
+runs on until a card is read and with no card at all.
+
+The file is JSON, by the names below, sealed with a last member `"crc"`;
+it is saved as `opendmd.json.new`, then the old one becomes
+`opendmd.json.bak` and the new one takes its name, so a power cut leaves
+the old settings or the new. It may be edited on a PC (the seal is then
+ignored): a value the device would refuse over the API is kept as it was,
+with a log line. A card from another display brings its settings; this
+display's WiFi and secrets stay. A card without the file gets one, from
+the settings in force, when it is first read. Copying the pack onto a
+card, or formatting it, leaves no settings file: the next boot writes one.
+
 ### GET /api/config
 
 The saved settings (never the WiFi password or the RePlayOS code).
@@ -245,11 +271,12 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?src=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
 | `formula_jit` | `true` | the narrow JIT for Formulas on the ESP32 (`docs/research/psi-jit-esp32.md`): a Formula's pixel stage compiled to machine code at its first frame, checked against the VM there, then drawing the same bytes faster. `false` is the kill switch: every Formula plays on the VM (a kernel held is let go at its next frame). `/api/status` `now_playing.formula.jit` says which draws |
+| `formula_arena` | `false` | a dev setting, in force from the next boot: a Formula's memory (its program and VM scratch, ink and paint planes, ~19 KB) from one block set aside at boot before the network starts, so it lands in the same SRAM pool every time (`display.buffers`; the A/B for the upload residual). Costs that block for the whole boot |
 | `formula_keep` | `turn` | how long a Formula sent with `/api/play` stays on the panel: `turn` (one turn of the dwell, as any file), `1m`, `5m` or `hold` (until something else plays: another `/api/play`, `/api/skip` or Previous, a playlist change). Formulas in a playlist are not affected. From the next one sent |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
@@ -366,6 +393,15 @@ listing, streamed:
 `size` is null without `sizes=1`: each costs a directory scan, minutes for
 a folder of thousands. `404` no such directory.
 
+`&names=1` (a `/gifs/<folder>`, no `sizes`): the folder's file names from
+the card's names file (`/cache/.names`, written with the FAT index, and
+alone when an index has none; that folder's part read alone) and the
+changes since, with no folder walk, streamed: the same shape, sizes null,
+`"names":true`. When the names file can't be
+trusted (none yet, a folder added or removed since) it is a listing
+(no `"names"`). For naming a new file: a name taken since can still be
+met, which `PUT …?new=1` refuses.
+
 ```sh
 curl -s "$DMD/api/files?dir=/sets&sizes=1"
 ```
@@ -377,13 +413,25 @@ created, a file replaced (the player moves off it first).
 
 Reply: `{"ok":true,"path":"/…","bytes":N}`.
 
+`?new=1`: create only. `409` if the file is there (nothing written); a
+failed upload leaves no file.
+
 A playlist (`/filelist.*`, `/sets/*`) is installed as by
 `PUT /api/sets/<name>`, with its reply; an overrides file (`.meta`)
 rebuilds its playlist if in play. With a GIF, upload its prepared copy
 too, or forget the old one.
 
-Errors: `400` path escapes the card; `408` the body stalled; `503` busy
-(retry).
+Errors: `400` the path is not allowed (below); `408` the body stalled;
+`409` with `?new=1`, the file exists; `503` busy, or the player did not let
+go of the file (retry).
+
+**Write paths** (PUT, DELETE, move, `POST /api/cache/forget`) must stay on
+the card and be spelled the one way: no empty, `.` or `..` component
+(`gifs//x.gif`), none ending in a dot or a space (FAT drops them), and no
+8.3 short name (`NAME~1.GIF`, `CONSOL~2`: it names a file whose long name
+is something else, so its prepared copy and whether the player has it
+open could not be told). Use the long name. The `400` says so. Reads by
+path accept what FAT accepts.
 
 ```sh
 curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -399,8 +447,9 @@ An empty directory under `/gifs/` too. Reply: `{"ok":true}`.
 retired `/odm/`), else `400`; 4 s of work a request:
 `{"ok":true,"path","removed":N,"done":bool}`, ask again until `done`.
 
-Errors: `404` not there; `409` the playlist in play, or a directory not
-empty.
+Errors: `400` the path is not allowed (see PUT); `404` not there; `409`
+the playlist in play, or a directory not empty; `503` the player did not
+let go of the file (retry).
 
 ```sh
 curl -s -X DELETE $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -415,8 +464,9 @@ does that).
 
 Reply: `{"ok":true,"from","to","copy":"moved"|"removed"|"none","smooth":bool,"failed":bool}`.
 
-Errors: `400` not two different `/gifs/….gif` paths; `404` no `from`;
-`409` `to` exists (a change of case is fine).
+Errors: `400` not two different `/gifs/….gif` paths (spelled as PUT's
+write paths); `404` no `from`; `409` `to` exists (a change of case is
+fine); `503` the player did not let go of either file (retry).
 
 ```sh
 curl -s $DMD/api/files/move --json '{"from":"/gifs/Other/a.gif","to":"/gifs/Arcade/ARCADE_A_01.gif"}'
@@ -706,11 +756,13 @@ staged on the card (one is needed), checked and installed (`docs/ota.md`);
 
 ### GET /api/firmware
 
-`{"version","build","variant","flash_size","pending","last","log"}`: the
+`{"version","build","variant","flash_size","flash","pending","last","log"}`: the
 running version (a bundle's, and `/api/status`'s; `build` its image
 descriptor, `"<version> <variant>"`), the flash layout it is built for
 (`variant`: `4mb` or `8mb`) and the flash chip's real size in bytes
-(`flash_size`; a 4mb build on an 8 MB board reports 8388608), a staged
+(`flash_size`; a 4mb build on an 8 MB board reports 8388608), the clock and
+read mode the flash runs at (`flash`: `{"mhz": 40|80, "mode": "dio"|…}`,
+read back from the chip), a staged
 update not yet installed (or null), the last
 line of the card's `/update/log.txt` and its last ≤ 1 KB of whole lines
 (`log`, the firmware's and the updater's; both null without a card or log).
@@ -759,31 +811,39 @@ centred, if it fits). A loop is one pass across the panel.
 curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
 ```
 
-**`@formula`** — a formula (the app's Formulas): `src=<url-encoded
-formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default:
+**`@formula`** — a formula (the app's Formulas), **compiled**: the player
+never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
+the web app's pkg-psi `program(src)` makes, or `psi build`), `a=`, `b=`,
+`c=` (sliders), `fps=50|100|25` (default:
 the formula's `fps` line, else 50; as a look over the GIF the line is not
 used). A heavy one is shown at fewer frames a second; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms`,
 `beam_us` (the raced frame time on the panel's refresh, µs; 0 while
 its frames are not raced, see `scan.beam`),
-`compile_us`, `still` (the still cache's bytes) and `jit`:
+`compile_us` (the load's time, µs), `still` (the still cache's bytes) and `jit`:
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
 its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 `it reads the picture under it`, `it draws (ink)`, `off (setting)`,
-`being checked`). The whole inline path is at most 6,144 B;
+`being checked`), and `render_us_total`/`renders`: the playing
+formula's render µs in all (wrapping) and renders since boot, whose
+differences give a stretch's exact mean (`frame_us` is a running mean of
+the last few frames). The whole inline path is at most 6,144 B;
 `name=<url-encoded>` (≤ 60 characters) is its name for display.
 
 **By reference** (what playlists and the look use, so a Formula's length
 never matters there): `@formula:<stem>[?a=&b=&c=&fps=]` plays a bundled
-Formula (its file's stem in `opendmd-web/formulas/`, built into the
+Formula (its file's stem in `opendmd-web/formulas/`, compiled into the
 firmware: `endless-road`, `big-clock`, …); a card path ending `.psi`,
-`/formulas/<stem>.psi[?a=…]`, plays one of the user's, read from the card
-as it opens (comments and indentation left out as it is read; 8 KB of
-Formula after that, 64 KB of file). A name that is not bundled, or a file
-that is not there, is a `404`. Its title is its `name "…"` line.
+`/formulas/<stem>.psi[?a=…]`, plays one of the user's from the compiled
+file beside it, `/formulas/<stem>.psb` (16 KB at most), which the web app
+writes whenever it saves the `.psi`. A name that is not bundled, or a
+Formula with no compiled file, is a `404`; one compiled for another
+version of the player is a `400` (`/api/status` `psi_abi` is the version
+this player takes; the web app prepares its Formulas again for it). Its
+title is the compiled Formula's name (its `name "…"` line).
 
 ```sh
-curl -s $DMD/api/play --json '{"path":"@formula?src=gray(x)"}'
+curl -s $DMD/api/play --json "{\"path\":\"@formula?psb=$(psi build my.psi --base64)\"}"
 curl -s $DMD/api/play --json '{"path":"@formula:endless-road"}'
 curl -s $DMD/api/play --json '{"path":"/formulas/my-road.psi?a=0.4"}'
 ```

@@ -309,6 +309,7 @@ Any console error or page error fails the run.
 """
 import argparse
 import atexit
+import base64
 import filecmp
 import gzip
 import http.server
@@ -694,7 +695,9 @@ def shot(page: Page, name: str, size: str) -> None:
 # URL substrings of requests that fail on purpose (a 404/415 play). A
 # preview asks for the prepared copy first, and a 404 there is normal; so
 # is Smooth motion's list on a card that has none yet.
-expected: list[str] = ["/cache/", "/sets/.smooth"]
+# (`?new=1`: a create-only upload whose name was taken answers 409 and the
+# web app tries the next number: expected, the add test checks it.)
+expected: list[str] = ["/cache/", "/sets/.smooth", "new=1"]
 
 
 def unexpected(url: str) -> bool:
@@ -717,6 +720,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
             and not ("status of 503" in m.text and retried(m.location.get("url", "")))
+            and not ("status of 409" in m.text and "/api/files/" in m.location.get("url", "") and "new=1" in m.location.get("url", ""))
             and errors.append(f"[{size}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     # Chromium's console line for a failed load has no URL; this does.
@@ -1954,11 +1958,11 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-14:] == ["attract", "look", "glow", "look_formula", "boot_show",
-                              "panel_sync", "panel_split", "formula_jit", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
+    check(list(cfg0)[-15:] == ["attract", "look", "glow", "look_formula", "boot_show",
+                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"formula_jit/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
+          f"formula_jit/formula_arena/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
@@ -3559,6 +3563,25 @@ def mock_pass(browser) -> None:
         gone = not (overlay / cache_path(gif_paths[1]).lstrip("/")).exists()
         r = cache_ready(base)
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
+        # A names list gone stale (the device's names file from before a GIF
+        # came): the dialog picks a taken name, the create-only upload gets a
+        # 409, and the GIF goes in under the next number; the one there is
+        # left as it was.
+        taken = "/gifs/Consoles/SNES_Smoke_Stale_01.gif"
+        before = (CARD / selected[0].lstrip("/")).read_bytes()
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files" + taken, data=before, method="PUT"), timeout=30).read()
+        urllib.request.urlopen(base + "/mock/stale-names?hide=" + taken, timeout=10).read()
+        stale_src = src_dir / "SNES_Smoke_Stale_01.gif"
+        shutil.copy(CARD / selected[1].lstrip("/"), stale_src)
+        add_files(page, [stale_src])
+        page.wait_for_function("(e => e && e.dataset.name === 'SNES_Smoke_Stale_01.gif')(document.querySelector('#dl .dl-item[data-i=\"0\"]'))", timeout=20000)
+        page.click("#dl-ok")
+        page.wait_for_function("document.querySelector('#lib-add-progress').textContent.startsWith('1 of 1 added')", timeout=60000)
+        second = overlay / "gifs/Consoles/SNES_Smoke_Stale_02.gif"
+        check(second.exists() and second.read_bytes() == stale_src.read_bytes() and (overlay / taken.lstrip("/")).read_bytes() == before,
+              "add: a name taken since the names list was made (409) -> the GIF goes in as _02, the _01 there untouched")
+        for p in (taken, "/gifs/Consoles/SNES_Smoke_Stale_02.gif"):
+            urllib.request.urlopen(urllib.request.Request(base + "/api/files" + p, method="DELETE"), timeout=30).read()
         details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
@@ -4041,7 +4064,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.wait_for_selector("#psi-mine .psi-tile[data-name='Kept here']", timeout=10000)
     page.wait_for_timeout(500)
     again = page.locator("#toasts .toast:has-text('on the panel now')").count()
-    check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psi"],
+    check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psb", "kept-here.psi"],
           f"formulas on the panel: not copied again ({again} toasts)")
     # A bundled one's details: Add to playlist names it.
     page.click("#psi-ex .psi-tile[data-name='Starfield']")
@@ -4083,7 +4106,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.wait_for_timeout(300)
     page.click("#psi-save")
     page.wait_for_function("document.querySelector('#psi-ed .tick')?.dataset.n >= 2", timeout=10000)
-    check(f.read_text().endswith("-- changed") and sorted(p.name for p in (overlay / "formulas").glob("smoke-ramp*")) == ["smoke-ramp.psi"],
+    check(f.read_text().endswith("-- changed") and sorted(p.name for p in (overlay / "formulas").glob("smoke-ramp*")) == ["smoke-ramp.psb", "smoke-ramp.psi"],
           "formulas playlist: saved again, the same file")
     # The playlist editor: by name, as Formulas.
     goto_view(page, "sets")
@@ -4353,7 +4376,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
         page.wait_for_timeout(300)
         page.click("#psi-save")
         page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
+    check(f.exists() and f.read_text() == src.replace("0.4", "0.5", 1) and sorted(p.name for p in (overlay / "formulas").glob("searchlight*.psi")) == ["searchlight.psi"],
           "remix: Save afterwards changes the same file (/formulas/searchlight.psi, no second copy)")
     # Edited on the site (Open on my panel, a changed one): sent by postMessage,
     # saved as it arrives, kept over a reload and a trip to another view.
@@ -4379,7 +4402,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     opener.goto(base + "/version.txt")
     app = remix_open(opener, base, errors, sent_src, "Sent rings")
     app.wait_for_timeout(500)
-    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
+    check(sorted(p.name for p in (overlay / "formulas").glob("sent-rings*.psi")) == ["sent-rings.psi"] and app.input_value("#psi-name") == "Sent rings",
           "remix: the same Formula sent again opens the saved one, no second copy")
     opener.context.close()
     # One that doesn't work: not saved, said, and offered back as not saved yet.
@@ -4482,7 +4505,7 @@ def clear_toasts(page: Page) -> None:
 
 
 def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
-    """Show on panel: a formula plays on the (mock) panel as `@formula?src=…`;
+    """Show on panel: a formula plays on the (mock) panel as `@formula?psb=…`;
     slider changes follow it there, ~200 ms apart and one at a time, as live
     edits (the same ordinal); once the playlist moves on a change stops
     following (409, no toast); an older firmware (415), a formula it refuses
@@ -4496,14 +4519,17 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-ex .psi-tile >> nth=0")
     name = page.inner_text("#psi-d-title")
     check(page.inner_text("#psi-show") == "Show on panel", "formulas panel: Show on panel in Details")
-    # The path is the device's own (`fx_psi::path`, its test has the same string).
-    enc = page.evaluate("import('./js/psishow.js').then(m => m.fpath({src: '-- a: x\\nv = x % 2 + 1 & 3 # é  // c', a: 0.5}))")
-    check(enc == "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9&a=0.5", f"formulas panel: the formula's path as the device writes it ({enc})")
+    # The path is the device's own (`fx_psi::path_of`): the compiled Formula.
+    src = 'name "Ü"\nv = x % 2 + 1 // c\ngray(v)'
+    enc = page.evaluate("(s) => import('./js/psishow.js').then(m => m.fpath({src: s, a: 0.5}))", src)
+    psb = enc[len("@formula?psb="):-len("&a=0.5")] if enc.startswith("@formula?psb=") and enc.endswith("&a=0.5") else ""
+    raw = base64.urlsafe_b64decode(psb + "=" * (-len(psb) % 4)) if psb else b""
+    check(raw[:4] == b"PSB\x01" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
     clear_toasts(page)
     page.click("#psi-show")
     t = last_toast(page, "ok")
     st = get_json(base + "/api/status")["now_playing"]
-    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?src=name+") and st["title"] == name
+    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?psb=") and st["title"] == name
           and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
           f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
     shot(page, "formulas-panel-on", "laptop")
@@ -4588,7 +4614,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     fl = get_json(base + "/api/status")["formula_look"]
-    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?src=")
+    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?psb=")
           and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
           f"formulas over: shown over the panel's GIF ('{t}', {fl})")
     clear_toasts(page)
@@ -4683,28 +4709,15 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.reload()
     page.wait_for_function("document.querySelector('#st-look-formula')?.selectedOptions[0]?.textContent == 'Gone'", timeout=20000)
     why = page.inner_text("#st-look-why")
-    check(c["look_formula"] == gone and "look_blend" not in c and why.startswith("Add at 25%"),
-          f"looks: a look saved elsewhere is listed by its name line ('{why}'; old fields ignored: {sorted(set(c) & {'look_blend', 'look_formula_name'})})")
-    # Change…: its settings, in the Formulas editor.
-    page.click("#st-look-change")
-    page.wait_for_selector("#psi-set #psi-set-look", timeout=20000)
-    got = (page.input_value("#psi-src"), page.input_value("#psi-set-name"), page.is_checked("#psi-set-look"),
-           page.input_value("#psi-set-lk-blend"), page.input_value("#psi-set-lk-amt"))
-    # (The path's text: its statements `; `-joined; the sheet edits them there.)
-    page.fill("#psi-set-about", "Kept")
-    page.wait_for_timeout(300)
-    edited = page.input_value("#psi-src")
-    check(got == ('name "Gone"; look add 25; loop 4; hsv(x + t/4, 1, 1)', "Gone", True, "add", "25")
-          and edited == 'name "Gone"; about "Kept"; look add 25; loop 4; hsv(x + t/4, 1, 1)' and page.get_attribute("#psi-ed", "data-err") is None,
-          f"looks: Change… opens its settings ({got}), edited in place ({edited!r})")
-    page.keyboard.press("Escape")
+    check(c["look_formula"] == gone and "look_blend" not in c and why == "Set elsewhere: open it where it was made to change it"
+          and page.is_hidden("#st-look-change"),
+          f"looks: a look saved elsewhere is listed by its name ('{why}'; old fields ignored: {sorted(set(c) & {'look_blend', 'look_formula_name'})})")
     # The sheet over Matrix (a remix): every change a line of the text.
     open_formulas(page)
     page.click("#psi-ex .psi-tile[data-name='Matrix']")
     page.click("#psi-settings")
-    # (Gone, edited above and not saved: replaced on the question.)
-    page.wait_for_selector("#psi-ask", timeout=5000)
-    page.click("#psi-ask button:has-text('Replace it')")
+    if page.locator("#psi-ask").count():
+        page.click("#psi-ask button:has-text('Replace it')")
     page.wait_for_selector("#psi-set #psi-set-name", timeout=10000)
     src0 = page.input_value("#psi-src")
     page.fill("#psi-set-name", "Matrix glow")
@@ -4753,6 +4766,8 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     check(c5["look_formula"] == "/formulas/matrix-glow.psi" and saved.startswith('name "Matrix glow"\nabout "Matrix, screened over the GIF"\n') and "\nlook screen 40\n" in saved
           and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
           f"looks: Set as the panel’s look saves it on the panel and names its file ('{t}'; {c5['look_formula']!r})")
+    compiled = urllib.request.urlopen(base + "/formulas/matrix-glow.psb", timeout=30).read() if saved else b""
+    check(compiled[:4] == b"PSB\x01", "looks: the saved Formula's compiled file is beside it")
     # Off: the line goes.
     page.click("#psi-set-btn")
     page.wait_for_selector("#psi-set #psi-set-look", timeout=10000)
@@ -4766,7 +4781,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(400)
     f0 = page.evaluate("""() => import('./js/psikit.js').then((k) => { const c = { controls: [{ slot: 'a', default: 0.5 }] };
         return [k.path({ src: 'gray(a)', a: 0.5 }, c), k.path({ src: 'gray(a)', a: 0.25 }, c), k.vals({ src: 'gray(a)', a: 0.5 }, c), k.vals({ src: 'gray(a)', a: 0.75 }, c)]; })""")
-    check(f0 == ["@formula?src=gray(a)", "@formula?src=gray(a)&a=0.25", "", "&a=0.75"],
+    check(f0[0].startswith("@formula?psb=") and "&" not in f0[0] and f0[1] == f0[0] + "&a=0.25" and f0[2:] == ["", "&a=0.75"],
           f"looks: a value at its default stays out of paths and the site's hand-over ({f0})")
     put_json(base + "/api/config", {"look_formula": ""})
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/matrix-glow.psi", method="DELETE"), timeout=30)
@@ -4778,15 +4793,15 @@ def psi_frames(page: Page, sel: str) -> int:
 
 
 def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
-    """`use <name> as p` pastes an example in as `part p { … }` once the
+    """`use <name> as p` puts an example in as `fn p(x, y) { … }` once the
     caret is off its line (the text stands alone), says plainly when there is
     no formula by that name, and the combined formula plays."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     formula_editor(page, "loop 8\nuse matrix as p\nlayer { p(1 - x, y) }")
     src = page.input_value("#psi-src")
-    check("part p {\n  -- Matrix\n  name \"Matrix\"\n  about \"" in src and "\n  loop 30\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
-          and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p pastes the example in as a part ({src[:60]!r})")
+    check("-- Matrix\nfn p(x, y) {\n" in src and "name \"Matrix\"" not in src and "loop 30" not in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
+          and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p puts the example in as a function ({src[:60]!r})")
     page.fill("#psi-src", "\nr")
     page.focus("#psi-src")
     page.keyboard.press("Control+Home")
@@ -4796,7 +4811,7 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     typing = typed == "use Big clock as r\nr" and "puts a formula in" in said
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(500)
-    moved = "part r {" in page.input_value("#psi-src")
+    moved = "fn r(x, y) {" in page.input_value("#psi-src")
     check(typing and moved, f"formulas: a use line waits while the caret is on it ({typed!r}, {said!r}) and pastes when it moves off ({moved})")
     page.fill("#psi-src", "use No such thing as q\nq")
     page.wait_for_timeout(400)
@@ -4820,8 +4835,8 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     check("can’t be put inside itself" in err and "Loopy" not in mine() and page.input_value("#psi-src") == "use Loopy as p\np",
           f"formulas: a formula naming itself isn't pasted or saved ({err!r}, {mine()})")
     page.context.close()
-    # A cycle in saved text (two formulas naming each other): one paste each,
-    # the inner use left as a comment, no runaway.
+    # A cycle in saved text (two formulas naming each other): a formula with
+    # a use line of its own is no function, said so, no runaway.
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
@@ -4831,8 +4846,8 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.reload()
     page.wait_for_selector("#psi-mine .psi-tile[data-name='Bee']", timeout=20000)
     app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
-    src = app.input_value("#psi-src")
-    check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
+    src, err = app.input_value("#psi-src"), app.inner_text("#psi-err")
+    check("fn " not in src and "can’t be put in as a function" in err, f"formulas: a cycle through saved formulas is refused ({src!r}, {err!r})")
     page.context.close()
 
 
@@ -5099,10 +5114,11 @@ def now_edit_checks(page: Page, base: str) -> None:
     check(b in asked and cache_path(b) not in asked and s["now_playing"]["path"] == a,
           f"now edit: a recent entry's ✎ opens {b.rsplit('/', 1)[-1]} in Create Art, without playing it")
     # A Formula: the example it is, in the editor.
-    # (Old photo: a path within the history's 200 B an entry, so it is listed.)
     e = next(x for x in bundled() if x["name"] == "Old photo")
-    path = page.evaluate("src => import('./js/psishow.js').then(m => m.fpath({ src }))", e["src"])
-    on_screen(path)
+    path = page.evaluate("src => import('./js/looks.js').then(l => l.psi()).then(() => import('./js/psishow.js')).then(m => m.fpath({ src }))", e["src"])
+    post_json(base + "/api/play", {"path": path})
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-edit')?.textContent === '✎ Edit in Formulas'", timeout=10000)
     check(page.inner_text("#now-edit") == "✎ Edit in Formulas", f"now edit: a Formula offers '{page.inner_text('#now-edit')}'")
     page.click("#now-edit")
     page.wait_for_selector("#view-formulas.on #psi-ed #psi-src", timeout=20000)
@@ -5111,9 +5127,8 @@ def now_edit_checks(page: Page, base: str) -> None:
     page.wait_for_function(f"document.querySelector('#psi-src').value === {json.dumps(e['src'])}", timeout=10000)
     check(page.input_value("#psi-name") == "Old photo" and location_hash(page) == "#formulas/edit",
           "now edit: the Formula opens in the editor as the example it is, comments and all")
-    goto_view(page, "now")
-    page.wait_for_selector("#now-recent > div button[aria-label='Edit in Formulas']", timeout=10000)
-    check(True, "now edit: a recent Formula has ✎ Edit in Formulas")
+    # (A Formula sent from the editor is longer than an entry of Recently
+    # played may be: the panel doesn't list it there.)
     # The clock: said, not offered.
     on_screen("@clock")
     page.wait_for_function("document.querySelector('#now-live').textContent !== ''", timeout=10000)

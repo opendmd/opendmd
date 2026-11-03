@@ -24,6 +24,13 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [features]
+# SRAM1 as IRAM (sdkconfig ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM, set by the
+# Makefile with this: FW_SRAM1_IRAM=1): up to 40 KB more IRAM, taken from the
+# top of the D/IRAM heap byte for byte, for the next hottest functions.
+sram1-iram = ["opendmd-core/sram1-iram"]
+# The emulator's no-card lane (`make emu-nocard`, src/nocard_test.rs): a
+# settings change with no card, kept across a restart. Never in a release.
+nocard-test = []
 # Formulas on the panel (`psi`) are in every build, releases included.
 default = ["psi", "jit"]
 # Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed
@@ -64,13 +71,13 @@ bench = []
 # lines). `make fw-release FW_RELEASE_FEATURES=psi-probe` for the rig: alone,
 # not with `probe`, whose frame-timing histograms are ~12.5 KB of .bss (the
 # start heap lang-probe-a lacked, 2026-10-28).
-psi-probe = ["psi", "opendmd-core/psi-stats"]
+psi-probe = ["psi", "opendmd-core/psi-stats", "opendmd-core/psi-compiler"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
-# The built-in bundled Formulas are kept as `opendmd_psi::squeeze` writes
-# them (the same programs, about half the bytes: build.rs).
-opendmd-psi = { path = "../opendmd-psi", default-features = false }
+# The built-in bundled Formulas are compiled at build time (build.rs): the
+# player never compiles.
+opendmd-psi = { path = "../opendmd-psi", default-features = false, features = ["compiler"] }
 # The embedded setup page is rendered and gzipped at build time, the same way
 # ~/projects/stripe-dashboard does it.
 flate2 = "1"

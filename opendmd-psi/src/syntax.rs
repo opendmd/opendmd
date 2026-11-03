@@ -12,9 +12,9 @@
 use crate::compile::{lex_tokens, Error, Info};
 
 mod fmt;
-pub use fmt::format;
 use crate::Program;
 use alloc::vec::Vec;
+pub use fmt::format;
 
 /// What a token is ([`tokens`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +51,8 @@ pub enum Defined {
     Value,
     /// A draw stage's `for k < n`.
     Counter,
-    Part,
+    /// `fn name(…)`.
+    Function,
     Table,
     Sprite,
     Palette,
@@ -76,7 +77,8 @@ pub trait Sink {
     /// A name the formula defines, the name's place, what it is, its scope
     /// (0 the formula's own lines; parts and layers have scopes of their
     /// own), how often it is worked out.
-    fn defined(&mut self, name: &str, at: (usize, usize), what: Defined, scope: u16, level: Level) {}
+    fn defined(&mut self, name: &str, at: (usize, usize), what: Defined, scope: u16, level: Level) {
+    }
     /// A name read at `at`, and the place of its definition when the
     /// formula defined it (`None`: a built-in, or unknown).
     fn read(&mut self, at: (usize, usize), defined: Option<(usize, usize)>) {}

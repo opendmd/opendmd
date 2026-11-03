@@ -40,6 +40,7 @@
 // network worker, the HTTP status, boot, config; console-c).
 #![feature(optimize_attribute)]
 mod ahead;
+mod arena;
 mod boot;
 mod cache;
 mod cache_builder;
@@ -51,6 +52,7 @@ mod diag;
 mod dns_server;
 mod fatidx;
 mod task;
+mod uclock;
 mod files;
 mod follow;
 mod formula_look;
@@ -60,18 +62,26 @@ mod http;
 mod httpd;
 mod improv;
 mod logring;
+mod misslog;
+mod membank;
 mod net_worker;
 mod nvs_config;
 mod ota;
+mod pace;
+mod readahead;
 mod panel;
 mod probe;
 #[cfg(feature = "psi-probe")]
 mod psi_probe;
 #[cfg(feature = "psi")]
+#[cfg(feature = "psi-probe")]
 mod psi_stack;
 mod restarts;
 mod sched;
 mod sd;
+#[cfg(feature = "nocard-test")]
+mod nocard_test;
+mod settings_card;
 mod sdhealth;
 mod show;
 mod state;
@@ -274,6 +284,174 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
+/// The card's settings at the handover (`settings_card`): `new` in force,
+/// and what differs from the settings it replaces applied the way a
+/// settings change is (the brightness under safe start's ceiling, the
+/// tint and glow, the sync, the JIT, the time zone, the schedule). Values
+/// that match are not touched (no flash, no brightness step). The playlist
+/// follows `settings` where the handover builds it; dwell and transition
+/// go into the engine built from them.
+#[inline(never)]
+fn adopt_card_settings(
+    settings: &mut Settings,
+    new: Box<Settings>,
+    panel: &mut Panel,
+    safe: &SafeStart,
+    sched: &mut Scheduling,
+    status: &Mutex<Status>,
+) {
+    let old = std::mem::replace(settings, *new);
+    let s = &*settings;
+    if s.brightness != old.brightness || s.max_brightness != old.max_brightness {
+        panel.set_max_brightness(safe.ceiling(s.max_brightness));
+        if !sched.off() {
+            panel.set_brightness(sched.brightness(s));
+        }
+    }
+    if s.panel_sync != old.panel_sync || s.panel_split != old.panel_split {
+        panel.set_sync(s.panel_sync, s.panel_split);
+    }
+    #[cfg(feature = "psi")]
+    if s.formula_jit != old.formula_jit {
+        opendmd_core::fx_psi::set_jit(s.formula_jit);
+    }
+    if s.look != old.look || s.glow != old.glow {
+        panel.set_display(s.look, s.glow);
+        state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
+    }
+    if s.tz != old.tz || s.tz_name != old.tz_name {
+        clock::set_timezone(&s.tz, &s.tz_name);
+        status.lock().unwrap().tz_name = tz_label(s);
+        sched.dirty = true;
+    }
+    if s.schedule != old.schedule {
+        sched.schedule = sched::parse(s.schedule.as_bytes()).unwrap_or_default();
+        sched.dirty = true;
+    }
+    log::info!("settings: the card's applied (brightness {}, look {}, playlist '{}')", s.brightness, s.look.name(), s.set);
+}
+
+/// Whether a settings change only has values for the loop to pick up:
+/// nothing to rebuild, open or check (the playlist and what chooses it, the
+/// formula look, the time zone, the schedule, the builder's policy). Field
+/// by field, borrowed.
+fn picks_up(now: &Settings, next: &Settings) -> bool {
+    next.set == now.set
+        && next.platforms == now.platforms
+        && next.shuffle == now.shuffle
+        && next.attract == now.attract
+        && next.attract_set == now.attract_set
+        && next.look_formula == now.look_formula
+        && next.tz == now.tz
+        && next.tz_name == now.tz_name
+        && next.schedule == now.schedule
+        && next.auto_prepare == now.auto_prepare
+}
+
+/// What [`pick_up`] applies the new values to.
+struct Live<'a> {
+    nvs: &'a mut Config,
+    unsaved: &'a mut bool,
+    defer: bool,
+    sched: &'a Scheduling,
+    safe: &'a SafeStart,
+    panel: &'a mut Panel,
+    looks: &'a mut formula_look::Looks,
+    engine: Option<&'a mut Engine>,
+    canvas: &'a mut Canvas,
+    epoch: uclock::Epoch,
+}
+
+/// A `PUT /api/config` that [`picks_up`]: saved (or marked, while a Formula
+/// plays), swapped in (`next` is then the replaced settings, for the
+/// handler to drop on CPU0), and only what changed applied. Out of line and
+/// small: the display core runs this between two frames, from flash, and
+/// the whole `ApplyConfig` arm cost a raced frame its start (~415 µs a PUT
+/// at 80 MHz flash, display-isolation 2026-11-02).
+#[inline(never)]
+fn pick_up(settings: &mut Settings, next: &mut Settings, live: Live<'_>) -> Result<Applied, String> {
+    if let Err(e) = save_settings(live.nvs, next, live.unsaved, live.defer) {
+        return Err(format!("saving settings: {e:#}"));
+    }
+    std::mem::swap(settings, next);
+    let (s, old) = (&*settings, &*next);
+    let off = live.sched.off();
+    if s.brightness != old.brightness || s.max_brightness != old.max_brightness {
+        live.panel.set_max_brightness(live.safe.ceiling(s.max_brightness));
+        if !off {
+            live.panel.set_brightness(live.sched.brightness(s));
+        }
+    }
+    if s.panel_sync != old.panel_sync || s.panel_split != old.panel_split {
+        live.panel.set_sync(s.panel_sync, s.panel_split);
+    }
+    #[cfg(feature = "psi")]
+    if s.formula_jit != old.formula_jit {
+        opendmd_core::fx_psi::set_jit(s.formula_jit);
+    }
+    let mut engine = live.engine;
+    if s.look != old.look || s.glow != old.glow {
+        if live.panel.set_display(s.look, s.glow) && !off {
+            let now = live.epoch.elapsed();
+            repaint_look(live.looks, live.panel, engine.as_deref_mut(), live.canvas, now);
+        }
+        state::GLOW_HELD.store(live.panel.glow_bytes() > 0, Ordering::Relaxed);
+    }
+    let entries = engine.as_ref().map_or(0, |e| e.catalog_len());
+    // (Attract's clock or text plays for as long as attract lasts.)
+    if let Some(e) = engine.filter(|_| !state::ATTRACT_LIVE.load(Ordering::Relaxed)) {
+        if s.dwell_min != old.dwell_min || s.dwell_max != old.dwell_max {
+            e.set_dwell(dwell_policy(s));
+        }
+        if s.transition != old.transition {
+            e.set_transition(s.transition);
+        }
+    }
+    Ok(Applied::unchanged(entries))
+}
+
+/// Save the settings to NVS now, or mark them for later while a Formula
+/// plays (`dirty`): an NVS write stops the flash cache on both cores for
+/// milliseconds (tens when a page is erased), and a raced Formula's pairs
+/// then miss their windows. They take effect at once either way (the caller
+/// applies them); [`flush_settings`] writes the settings then in force once
+/// no Formula plays (a GIF, the panel off). A change made while a Formula
+/// plays and lost to a power cut before anything else plays is the trade.
+/// (No copy is kept: the display core clones nothing for it.)
+fn save_settings(cfg: &mut Config, next: &Settings, dirty: &mut bool, defer: bool) -> anyhow::Result<()> {
+    if defer {
+        *dirty = true;
+        // A restart before the flush writes them first (`restart`).
+        SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+        return Ok(());
+    }
+    *dirty = false;
+    SETTINGS_UNSAVED.store(false, Ordering::Relaxed);
+    cfg.save(next)
+}
+
+/// Settings held back while a Formula played and not written yet: a
+/// restart writes them first ([`restart`], through [`FLUSH_AT_RESTART`]),
+/// or a change made during a Formula (`formula_arena`, a `formula_keep`
+/// put back) is lost to the reboot that was to apply it.
+static SETTINGS_UNSAVED: AtomicBool = AtomicBool::new(false);
+/// Writes the shared settings copy (the settings in force: every apply
+/// puts them there) to NVS; set once at boot.
+static FLUSH_AT_RESTART: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Write the settings in force, marked by [`save_settings`], when nothing
+/// races.
+#[inline(never)]
+fn flush_settings(cfg: &mut Config, settings: &Settings, dirty: &mut bool) {
+    if std::mem::take(dirty) {
+        SETTINGS_UNSAVED.store(false, Ordering::Relaxed);
+        match cfg.save(settings) {
+            Ok(()) => log::info!("settings: saved (held while a Formula played)"),
+            Err(e) => log::error!("settings: saving what waited failed ({e:#}); they apply until a restart"),
+        }
+    }
+}
+
 /// Racing the beam: may this tick's Formula frame write
 /// its pairs as it draws them? Not with the panel dark, under the glow or
 /// a formula look, nor while a transition runs. (Out of line: once a tick,
@@ -292,10 +470,9 @@ fn main() -> Result<()> {
     // allocation and overwrite its record; installs the panic hook.
     let reset = restarts::reset_now();
     restarts::boot(reset);
-    // Formulas compile on a stack of their own (`psi_stack::compile`): the
-    // compiler's worst case is more than the main task or httpd can spare.
-    #[cfg(feature = "psi")]
-    opendmd_core::fx_psi::set_compiler(psi_stack::compile);
+    // The flash clock the app set from its own header (FW_FLASH_FREQ).
+    let (mhz, mode) = ota::flash_clock();
+    log::info!("flash: {mhz} MHz, {mode}");
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
 
@@ -397,6 +574,12 @@ fn main() -> Result<()> {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
+    // `formula_arena` (dev): a Formula's memory set aside now, before the
+    // network takes any (`arena.rs`).
+    #[cfg(feature = "psi")]
+    if settings.formula_arena {
+        arena::reserve();
+    }
     // The ceiling first, so nothing below (the show included) can exceed it;
     // until safe start is over it is no higher than `BRIGHTNESS_SAFE_MAX`.
     let mut safe = SafeStart::new(&settings);
@@ -412,6 +595,7 @@ fn main() -> Result<()> {
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
+    opendmd_core::engine::set_tick_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
     // And keep their still caches to what the heap can spare.
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_still_gate(Some(still_gate));
@@ -444,11 +628,12 @@ fn main() -> Result<()> {
     );
 
     let mut canvas = Canvas::new();
+    membank::CANVAS.store(canvas.as_bytes().as_ptr() as usize, Ordering::Relaxed);
     // The engine's clock is a `Duration` since an epoch the caller picks, not
     // an `Instant` — `Instant` has no clock on wasm and the web app shares
     // this core. Boot is our epoch; only differences ever matter.
-    let epoch = Instant::now();
-    let mut last_heartbeat = Instant::now();
+    let epoch = uclock::Epoch::now();
+    let mut last_heartbeat = uclock::now_us();
     // Our own heap floor, sampled at every phase boundary of the loop. Do not
     // use esp_get_minimum_free_heap_size() for this: it is the SUM of each
     // heap region's own minimum, which drifts ~30 KB below the true floor as
@@ -473,10 +658,14 @@ fn main() -> Result<()> {
     if waker.is_none() {
         log::warn!("display loop: no wake timer; sleeping in whole ticks");
     }
-    let mut woke = Instant::now();
+    let mut woke = uclock::now_us();
     let mut wake_us: u32 = 0;
     let mut log_us: u32 = 0;
     let mut fresh = true;
+    // Settings changed while a Formula played, not yet in NVS
+    // (`save_settings`), and whether a Formula is what plays.
+    let mut unsaved = false;
+    let mut formula_on = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
     // file's position.
@@ -513,6 +702,16 @@ fn main() -> Result<()> {
         s.panel = tuner;
     }
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
+    {
+        let (shared, part) = (shared_settings.clone(), nvs_partition.clone());
+        let _ = FLUSH_AT_RESTART.set(Box::new(move || {
+            let s = shared.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            match Config::new(part.clone()).and_then(|mut c| c.save(&s)) {
+                Ok(()) => log::info!("settings: saved before the restart (held while a Formula played)"),
+                Err(e) => log::error!("settings: saving before the restart failed ({e:#})"),
+            }
+        }));
+    }
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
     cache::init(net_tx.clone());
@@ -544,16 +743,19 @@ fn main() -> Result<()> {
     // Dropped once the card is handed over: the channel's few hundred bytes
     // are not kept for the life of the run.
     let mut boot_rx = Some(boot_rx);
+    let boot_ctx = Arc::new(Ctx {
+        status: status.clone(),
+        settings: shared_settings.clone(),
+        cmd: cmd_tx.clone(),
+        net: net_tx,
+    });
+    #[cfg(feature = "nocard-test")]
+    nocard_test::spawn(boot_ctx.clone());
     boot::spawn(boot::BootTask {
         bus,
         health,
         nvs: nvs_partition.clone(),
-        ctx: Arc::new(Ctx {
-            status: status.clone(),
-            settings: shared_settings.clone(),
-            cmd: cmd_tx.clone(),
-            net: net_tx,
-        }),
+        ctx: boot_ctx,
         net: net_worker::NetWorker {
             modem,
             sysloop,
@@ -602,19 +804,31 @@ fn main() -> Result<()> {
             panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
         }
 
+        // Settings kept back while a Formula played: written once none does.
+        if unsaved && (!formula_on || sched.off()) {
+            flush_settings(&mut nvs_config, &settings, &mut unsaved);
+        }
+
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
         //    rebuilds the engine or swaps a file on the card happens here — on
         //    this task, between frames, never on the httpd thread.
+        // (The µs clock, IRAM: this runs every loop, each frame.)
+        let cmd_t0 = uclock::now_us();
+        let mut handled = false;
         while let Ok(command) = cmd_rx.try_recv() {
+            handled = true;
             match command {
                 Command::Skip => {
                     if let Some(e) = engine.as_mut() {
                         e.skip();
                     }
                 }
-                Command::ReleaseAhead(reply) => {
+                Command::Release { screen, reply } => {
                     if let Some(e) = engine.as_mut() {
                         ahead::release(e);
+                        if screen {
+                            e.drop_current(&mut canvas);
+                        }
                     }
                     let _ = reply.send(());
                 }
@@ -705,8 +919,8 @@ fn main() -> Result<()> {
                                 if r.is_ok() {
                                     let np = engine.as_ref().and_then(|e| e.now_playing());
                                     if let (Ok(mut s), Some(np)) = (status.lock(), np) {
-                                        s.path = np.path;
-                                        s.title = np.title;
+                                        s.path = np.path.into();
+                                        s.title = np.title.into();
                                     }
                                 }
                                 r
@@ -750,10 +964,34 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
                 Command::ApplyConfig {
-                    settings: next,
+                    settings: mut next,
                     panel: panel_op,
                     reply,
                 } => {
+                    // Values the loop only picks up (brightness, dwell,
+                    // tint, glow, sync, …): taken in one small step, the
+                    // replaced settings freed by the handler on CPU0.
+                    if panel_op.is_none() && ptest.is_none() && picks_up(&settings, &next) {
+                        let outcome = pick_up(
+                            &mut settings,
+                            &mut next,
+                            Live {
+                                nvs: &mut nvs_config,
+                                unsaved: &mut unsaved,
+                                defer: formula_on && !sched.off(),
+                                sched: &sched,
+                                safe: &safe,
+                                panel: &mut panel,
+                                looks: &mut looks,
+                                engine: engine.as_mut(),
+                                canvas: &mut canvas,
+                                epoch,
+                            },
+                        );
+                        state::spend(next);
+                        let _ = reply.send(outcome);
+                        continue;
+                    }
                     let next = *next;
                     // A settings change ends the panel test first: its live
                     // timing and the look go back before anything applies.
@@ -814,13 +1052,13 @@ fn main() -> Result<()> {
                     // settings: a rule's playlist wins over `set` while it
                     // is in force, so compare what would actually play.
                     // Follow RePlayOS's attract playlist is an overlay too.
-                    let (eff_now, eff_next) = (
-                        runner.overlay(sched.effective(&settings)),
-                        runner.overlay(sched.effective(&next)),
-                    );
-                    let needs_reindex = eff_next.platforms != eff_now.platforms
-                        || eff_next.set != eff_now.set
-                        || eff_next.shuffle != eff_now.shuffle
+                    // (Compared field by field, borrowed: two copies of
+                    // the whole settings here cost the display core.)
+                    let set_now = runner.overlay_set(&settings, sched.effective_set(&settings));
+                    let set_next = runner.overlay_set(&next, sched.effective_set(&next));
+                    let needs_reindex = next.platforms != settings.platforms
+                        || set_next != set_now
+                        || next.shuffle != settings.shuffle
                         // Attract shows the clock or a text instead now.
                         || (runner.mode() == follow::Mode::Attract
                             && next.attract != settings.attract);
@@ -839,8 +1077,8 @@ fn main() -> Result<()> {
                     let mut prebuilt = None;
                     if needs_reindex
                         && CARD_READY.load(Ordering::Relaxed)
-                        && !eff_next.platform_list().is_empty()
-                        && (eff_next.platforms != eff_now.platforms || eff_next.set != eff_now.set)
+                        && !next.platform_list().is_empty()
+                        && (next.platforms != settings.platforms || set_next != set_now)
                     {
                         let tried =
                             replay(&mut engine, &next, &sched, &mut runner, false, &status, &mut canvas);
@@ -854,7 +1092,7 @@ fn main() -> Result<()> {
                             log::warn!(
                                 "config: platforms '{}' in {} not verified ({e}); refused, nothing saved, previous playlist back: {back:?}",
                                 next.platforms,
-                                eff_next.manifest_path()
+                                nvs_config::manifest_path_for(set_next)
                             );
                             let msg = if e.ends_with(NO_ENTRIES) {
                                 format!("{} \"{}\"; nothing was saved", state::FILTER_EMPTY, next.platforms.trim())
@@ -869,7 +1107,7 @@ fn main() -> Result<()> {
                         prebuilt = Some(tried);
                     }
 
-                    match nvs_config.save(&next) {
+                    match save_settings(&mut nvs_config, &next, &mut unsaved, formula_on && !sched.off()) {
                         Err(e) => {
                             if prebuilt.is_some() {
                                 // Playing what was not saved: back to what was.
@@ -888,7 +1126,9 @@ fn main() -> Result<()> {
                         Ok(()) => {
                             let look_changed = next.look_formula != settings.look_formula;
                             settings = next;
-                            *shared_settings.lock().unwrap() = settings.clone();
+                            // (The handler puts its copy in the shared
+                            // settings once this replies: no clone and no
+                            // lock here, on the display core.)
                             if look_changed {
                                 let shown = match engine.as_mut() {
                                     Some(e) => e.display_mut(&mut canvas),
@@ -965,21 +1205,9 @@ fn main() -> Result<()> {
                                     clock::hhmm_now().unwrap_or_else(|| "not set yet".into())
                                 );
                             }
-                            log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
-                                settings.brightness,
-                                settings.look.name(),
-                                settings.glow.name(),
-                                settings.dwell_min,
-                                settings.dwell_max,
-                                settings.shuffle,
-                                settings.platforms,
-                                settings.set,
-                                settings.transition,
-                                settings.attract,
-                                settings.panel_sync,
-                                settings.panel_split
-                            );
+                            // (The "config applied" line is the handler's,
+                            // on CPU0: formatting it here cost the display
+                            // core time before the next frame.)
                             let outcome = if let Some(built) = prebuilt {
                                 // Built above, before the save.
                                 built
@@ -1143,33 +1371,16 @@ fn main() -> Result<()> {
                     );
                     let _ = reply.send(outcome);
                 }
-                Command::SetSchedule { json, reply } => {
-                    let parsed = match sched::parse(json.as_bytes()) {
-                        Ok(p) => p,
+                Command::SetSchedule { json, parsed, reply } => {
+                    // Parsed by the handler; no copy of the settings here.
+                    let before = std::mem::replace(&mut settings.schedule, json);
+                    match save_settings(&mut nvs_config, &settings, &mut unsaved, formula_on && !sched.off()) {
                         Err(e) => {
-                            let _ = reply.send(Err(e));
-                            continue;
-                        }
-                    };
-                    let mut next = settings.clone();
-                    next.schedule = json;
-                    match nvs_config.save(&next) {
-                        Err(e) => {
+                            settings.schedule = before;
                             let _ = reply.send(Err(format!("saving the schedule: {e:#}")));
                         }
                         Ok(()) => {
-                            settings = next;
-                            *shared_settings.lock().unwrap() = settings.clone();
-                            log::info!(
-                                "schedule saved: {} rule(s){}",
-                                parsed.rules.len(),
-                                if parsed.night.is_some() {
-                                    " + night mode"
-                                } else {
-                                    ""
-                                }
-                            );
-                            sched.schedule = parsed;
+                            sched.schedule = *parsed;
                             sched.dirty = true;
                             let _ = reply.send(Ok(Applied::unchanged(
                                 engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -1251,6 +1462,13 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
             }
+        }
+        if handled {
+            use std::sync::atomic::Ordering::Relaxed;
+            let took = uclock::since(cmd_t0);
+            state::CMD_LOOPS.fetch_add(1, Relaxed);
+            state::CMD_US.fetch_add(took, Relaxed);
+            state::CMD_MAX_US.fetch_max(took, Relaxed);
         }
 
         // Follow RePlayOS's sequence: the next step once the engine has
@@ -1373,8 +1591,19 @@ fn main() -> Result<()> {
                 platforms,
                 index_ms,
                 healed_set,
+                settings: card_settings,
             } = *h;
             card = Some(mounted);
+            // The card's settings (`settings_card`): those that differ from
+            // what was in force applied now, live (no flash: nothing that
+            // matches is touched). The playlist below follows `settings`.
+            if let Some(new) = card_settings {
+                adopt_card_settings(&mut settings, new, &mut panel, &safe, &mut sched, &status);
+                // NVS gets them too (its copy is what boots until the card
+                // is read): when nothing races, as any change.
+                unsaved = true;
+                SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+            }
             // The Psi probe, now that the card is ours (its report goes
             // there) and the httpd and the network are up (see psi_probe).
             #[cfg(feature = "psi-probe")]
@@ -1396,6 +1625,7 @@ fn main() -> Result<()> {
                     log::error!("clearing the set in NVS failed ({e:#}); the default plays for this boot only");
                 }
                 *shared_settings.lock().unwrap() = settings.clone();
+                settings_card::save_soon(shared_settings.clone());
             }
             // Still what should play? A schedule rule, Follow RePlayOS or
             // a filter change since the boot task read the settings means
@@ -1485,6 +1715,7 @@ fn main() -> Result<()> {
                         // there.
                         if heal_missing_set(&mut settings, &mut nvs_config) {
                             *shared_settings.lock().unwrap() = settings.clone();
+                            settings_card::save_soon(shared_settings.clone());
                             last_build_try = None;
                             continue;
                         }
@@ -1510,7 +1741,7 @@ fn main() -> Result<()> {
                 }
                 wait
             };
-            if let Ok(mut s) = status.lock() {
+            if let Ok(mut s) = status.try_lock() {
                 s.uptime_secs = epoch.elapsed().as_secs();
                 s.heap_free = free_heap();
             }
@@ -1526,13 +1757,17 @@ fn main() -> Result<()> {
         let entries = eng.catalog_len();
         probe::tick_begin();
         let (pre_open, pre_read) = frametime::take();
-        let tick_start = Instant::now();
+        let pre_card = crate::cardspeed::take_player();
+        let pre_split = crate::fatidx::take_open_split();
+        let pre_builder = crate::cache_builder::take_opening_wait();
+        let pre_catalog = frametime::take_catalog();
+        let tick_start = uclock::now_us();
         if fresh {
             fresh = false;
             (woke, wake_us, log_us) = (tick_start, 0, 0);
         }
-        let pre_us = us(tick_start.duration_since(woke));
-        let tick_now = epoch.elapsed();
+        let pre_us = uclock::span(woke, tick_start);
+        let tick_now = epoch.at(tick_start);
         let due_in_us = if probe::ENABLED {
             eng.frame_due()
                 .map(|d| d.as_micros() as i64 - tick_now.as_micros() as i64)
@@ -1545,6 +1780,9 @@ fn main() -> Result<()> {
         let due_before = eng.frame_due();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
+        if off {
+            pace::FORMULA_ON.store(false, Ordering::Relaxed);
+        }
         // Racing the beam: a Formula's frame this tick may
         // write its pairs as it draws them — not under the glow or a
         // formula look (each composites the whole picture) nor while a
@@ -1557,8 +1795,12 @@ fn main() -> Result<()> {
         } else {
             eng.tick(tick_now, &mut canvas)?
         };
-        let mut tick_us = us(tick_start.elapsed());
+        let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
+        let card_io = crate::cardspeed::take_player();
+        let open_split = crate::fatidx::take_open_split();
+        let builder_wait = crate::cache_builder::take_opening_wait();
+        let catalog_us = frametime::take_catalog();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
         // (content time, see `NowPlaying::elapsed`) and frame number, when the
@@ -1594,7 +1836,7 @@ fn main() -> Result<()> {
                 // seconds after most dissolves (the rig: 20% of the time
                 // at 40 ms frames, against 7% when they were drawn between
                 // the steps, timed alone).
-                let look_start = Instant::now();
+                let look_start = uclock::now_us();
                 let decode_us = if transitioning {
                     0
                 } else {
@@ -1602,29 +1844,32 @@ fn main() -> Result<()> {
                 };
                 #[cfg(feature = "psi-probe")]
                 let look_on = looks.avg_us() > 0;
-                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
-                tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
+                let pic = looks.apply(epoch.at(look_start), eng.display_mut(&mut canvas), decode_us);
+                tick_us += uclock::since(look_start) + std::mem::take(&mut look_us);
                 // With `panel_sync` the blit may wait for the scan, as
                 // long as that leaves the next frame on time (`scan::Budget`).
                 // (A raced Formula frame wrote its pairs in the tick: the
                 // canvas is clean and the blit returns at once.)
+                formula_on = opendmd_core::synth::is_formula(&playing.path)
+                    || opendmd_core::synth::formula_file(&playing.path).is_some();
+                pace::FORMULA_ON.store(formula_on && !off, Ordering::Relaxed);
                 let decoded = (playing.ordinal, playing.frame) != published;
-                let blit_start = Instant::now();
+                let blit_start = uclock::now_us();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
-                    .saturating_sub(us(tick_start.elapsed()));
+                    .saturating_sub(uclock::span(tick_start, blit_start));
                 let blit_px = panel.blit_within(pic, Budget::frame(left_us));
                 #[cfg(feature = "psi-probe")]
                 let fx = opendmd_core::synth::is_formula(&playing.path);
                 // The blit's own time: a wait for the scan (`panel_sync`,
                 // inside the frame's slack) is not part of it.
-                let blit_us = us(blit_start.elapsed()).saturating_sub(panel.last_wait_us());
+                let blit_us = uclock::since(blit_start).saturating_sub(panel.last_wait_us());
                 let free = free_heap();
                 floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);
                 // The loop's own lines (a GIF started, a heap low-water
                 // mark) are logged here: formatted into the log ring, not
                 // written to the UART (`logring`).
-                let log_start = Instant::now();
+                let log_start = uclock::now_us();
                 if is_new {
                     started = playing.ordinal;
                     // (A virtual file — Follow RePlayOS's cards — opened
@@ -1657,11 +1902,12 @@ fn main() -> Result<()> {
                     );
                     low_water = floor.min;
                 }
-                let post_log_us = us(log_start.elapsed());
+                let judged_at = uclock::now_us();
+                let post_log_us = uclock::span(log_start, judged_at);
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
-                let now = epoch.elapsed();
-                judged = Some(Instant::now());
+                let now = epoch.at(judged_at);
+                judged = Some(judged_at);
                 if is_new {
                     first_shown = Some(now);
                 }
@@ -1703,7 +1949,7 @@ fn main() -> Result<()> {
                 if (fx || look_on) && decoded && !transitioning && !is_new {
                     let wait = panel.last_wait_us();
                     let start = due_before.map_or(0, |d| us(tick_now.saturating_sub(d)));
-                    let post = us(blit_start.elapsed()).saturating_sub(blit_us + wait);
+                    let post = uclock::since(blit_start).saturating_sub(blit_us + wait);
                     psi_probe::play::note([wake_us, pre_us, start, tick_us, blit_us, wait, post, blit_px], now > deadline);
                 }
                 let glow_between = std::mem::take(&mut glow_us);
@@ -1745,6 +1991,23 @@ fn main() -> Result<()> {
                             first_shown.map(|t| now.saturating_sub(t)),
                         );
                         misses.record(phases.cause(), late, when);
+                        let (advance_us, step_us) = opendmd_core::engine::tick_split();
+                        misslog::note(misslog::Miss {
+                            late_ms: late,
+                            cause: phases.cause() as usize,
+                            phases: [phases.open, phases.read, phases.decode, phases.blit, phases.log, phases.other, phases.wake],
+                            transitioning,
+                            advance_us,
+                            step_us,
+                            at_s: now.as_secs(),
+                            card_wait_us: pre_card.0 + card_io.0,
+                            card_xfer_us: pre_card.1 + card_io.1,
+                            kind: eng.playing_kind(),
+                            open_index_us: pre_split.0 + open_split.0,
+                            open_path_us: pre_split.1 + open_split.1,
+                            open_builder_us: pre_builder + builder_wait,
+                            open_catalog_us: pre_catalog + catalog_us,
+                        });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold
                         // the drip off for a while.
@@ -1781,10 +2044,10 @@ fn main() -> Result<()> {
                     && !file_soon
                     && looks.due(transitioning).is_some_and(|d| d <= at)
                 {
-                    let t = Instant::now();
+                    let t = uclock::now_us();
                     let pic = looks.apply(at, eng.display_mut(&mut canvas), 0);
                     panel.blit(pic);
-                    look_us += us(t.elapsed());
+                    look_us += uclock::since(t);
                 }
                 // (Synchronised, it may wait for the scan as long as that
                 // leaves the next frame on time.)
@@ -1816,7 +2079,7 @@ fn main() -> Result<()> {
             }
         };
 
-        let judged = judged.unwrap_or_else(Instant::now);
+        let judged = judged.unwrap_or_else(uclock::now_us);
 
         // The next file, ahead: a held copy let go on a card error or low
         // heap; then the steps that fit before the next frame (`ahead.rs`).
@@ -1864,8 +2127,14 @@ fn main() -> Result<()> {
 
         // 4. Publish, before the sleep, so a status read during the frame's
         //    hold sees the frame that is on the glass. Cheap fields only: the
-        //    strings move when a GIF starts.
-        if let Ok(mut s) = status.lock() {
+        //    strings move when a GIF starts. Never waited for: an
+        //    `/api/status` on CPU0 holds the lock while it writes its JSON,
+        //    and the display must not wait on CPU0 (the next frame publishes).
+        let publish = status.try_lock();
+        if publish.is_err() {
+            state::PUBLISH_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Ok(mut s) = publish {
             s.uptime_secs = epoch.elapsed().as_secs();
             s.entries = entries;
             s.heap_free = free_heap();
@@ -1881,8 +2150,8 @@ fn main() -> Result<()> {
                     s.kept = None;
                 }
                 s.ordinal = playing.ordinal;
-                s.path = playing.path;
-                s.title = playing.title;
+                s.path = playing.path.into();
+                s.title = playing.title.into();
                 s.gifs_started = playing.ordinal;
             }
             if let Some((elapsed, frame, at, due)) = shown {
@@ -1895,13 +2164,13 @@ fn main() -> Result<()> {
 
         // The sleep should end at `judged + sleep_for`; anything after that
         // (publishing above, preemption on CPU1) is the next frame's `wake`.
-        let planned = judged + sleep_for;
+        let planned = uclock::after(judged, sleep_for);
         // (On time: `wake`. Before road-cost a whole-tick `thread::sleep`,
         // ~0.9 ms late on average; and of `sleep_for` from here unless the
         // next file had been stepped ahead, so publishing came on top.)
         wake::sleep_until(waker.as_ref(), planned);
-        woke = Instant::now();
-        wake_us = us(woke.saturating_duration_since(planned));
+        woke = uclock::now_us();
+        wake_us = uclock::span(planned, woke);
         log_us = 0;
         if exhausted {
             // The index is still good: reseed and rewind, don't re-read.
@@ -1910,8 +2179,8 @@ fn main() -> Result<()> {
             floor.sample();
         }
 
-        if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
-            last_heartbeat = Instant::now();
+        if uclock::elapsed(last_heartbeat) >= config::HEARTBEAT_INTERVAL {
+            last_heartbeat = uclock::now_us();
             heartbeat(
                 &mut panel,
                 &status,
@@ -1922,7 +2191,7 @@ fn main() -> Result<()> {
                 &misses,
                 &(sched.summary() + &follow::summary() + &ahead::summary(Some(eng))),
             );
-            log_us = us(last_heartbeat.elapsed());
+            log_us = uclock::since(last_heartbeat);
         }
     }
 }
@@ -2101,8 +2370,8 @@ fn rebuild_context(
     let started = Instant::now();
     let built = (|| -> Result<(Engine, Overrides)> {
         let manifest =
-            File::open(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
-        let index = File::open(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
+            fatidx::open_catalog_file(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
+        let index = fatidx::open_catalog_file(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
         let mut catalog = IndexedCatalog::open(manifest, index)?;
         let ov = catalog.overrides()?;
         // Its own no-repeat window, so a small set of matches can cycle.
@@ -2199,7 +2468,9 @@ struct Scheduling {
     decision: Decision,
     wake_until: Option<Instant>,
     wake_label: Option<String>,
-    last_check: Instant,
+    /// When the schedule was last looked at (µs clock, `uclock`: read
+    /// every loop, so not `Instant`).
+    last_check: u64,
     last_seen: Option<schedule::LocalTime>,
     /// Evaluate at the next poll, whatever the minute.
     dirty: bool,
@@ -2219,7 +2490,7 @@ impl Scheduling {
             decision: Decision::default(),
             wake_until: None,
             wake_label: None,
-            last_check: Instant::now(),
+            last_check: uclock::now_us(),
             last_seen: None,
             dirty: true,
             broken_set: None,
@@ -2228,6 +2499,15 @@ impl Scheduling {
 
     /// The settings that apply now: the saved ones, with the rule's playlist
     /// in place of `set` while a rule chooses one.
+    /// [`effective`](Self::effective)'s playlist alone, borrowed: no copy
+    /// of the settings (the display core compares a PUT with it).
+    fn effective_set<'a>(&'a self, settings: &'a Settings) -> &'a str {
+        match &self.decision.set {
+            Some(set) if self.broken_set.as_ref() != Some(set) => set,
+            _ => &settings.set,
+        }
+    }
+
     fn effective(&self, settings: &Settings) -> Settings {
         let mut eff = settings.clone();
         if let Some(set) = &self.decision.set {
@@ -2253,10 +2533,10 @@ impl Scheduling {
     /// A fresh decision, if the minute (or anything else) changed and it
     /// differs from what is applied. Cheap when it is not time to look.
     fn poll(&mut self) -> Option<Decision> {
-        if !self.dirty && self.last_check.elapsed() < config::SCHEDULE_CHECK {
+        if !self.dirty && uclock::elapsed(self.last_check) < config::SCHEDULE_CHECK {
             return None;
         }
-        self.last_check = Instant::now();
+        self.last_check = uclock::now_us();
         if self.wake_until.is_some_and(|t| Instant::now() >= t) {
             log::info!("schedule: wake over, schedule back in force");
             self.wake_until = None;
@@ -2651,7 +2931,9 @@ fn open_catalog(
     filter: &Filter,
     force: bool,
 ) -> Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)> {
-    let manifest = File::open(path).with_context(|| format!("opening {path}"))?;
+    // Read raw (`fatidx::open_catalog_file`): the next file's lookup is on
+    // the display core, and FatFs's reads wait for the volume lock.
+    let manifest = fatidx::open_catalog_file(path).with_context(|| format!("opening {path}"))?;
     let len = manifest
         .metadata()
         .with_context(|| format!("stat {path}"))?
@@ -2684,7 +2966,7 @@ fn open_catalog(
     let mut manifest = manifest;
     match write_index_file(&mut manifest, len, filter, &set, meta_fp, &idx) {
         Ok((header, ov)) => {
-            let index = File::open(&idx).with_context(|| format!("reopening {idx}"))?;
+            let index = fatidx::open_catalog_file(&idx).with_context(|| format!("reopening {idx}"))?;
             let catalog =
                 IndexedCatalog::open(manifest, index).with_context(|| format!("opening {idx}"))?;
             debug_assert_eq!(catalog.len(), header.count as usize);
@@ -2715,7 +2997,7 @@ fn open_catalog(
 
 /// The index file, if it is current; otherwise why not, for the log.
 fn load_index(idx: &str, manifest_len: u32, filter: &Filter, meta_fp: u64) -> Result<File, String> {
-    let mut file = match File::open(idx) {
+    let mut file = match fatidx::open_catalog_file(idx) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
         Err(e) => return Err(format!("unreadable ({e})")),
@@ -3014,6 +3296,13 @@ fn restart_for_card(why: Reason) -> ! {
 pub fn restart(why: Reason) -> ! {
     restarts::record(why);
     panel::blank();
+    // Settings a Formula held back: written now (the panel already dark:
+    // the NVS write stalls the flash cache), or the reboot drops them.
+    if SETTINGS_UNSAVED.swap(false, Ordering::Relaxed) {
+        if let Some(flush) = FLUSH_AT_RESTART.get() {
+            flush();
+        }
+    }
     log::info!("restarting (panel off): {}", why.name());
     if !logring::flush(config::RESTART_LOG_FLUSH) {
         log::warn!("log ring not drained before the restart");
@@ -3194,7 +3483,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}; buffers{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
@@ -3206,6 +3495,7 @@ fn heartbeat(
         logring::summary(),
         probe::period_summary(),
         panel.glow_summary(),
-        diag::summary()
+        diag::summary(),
+        membank::buffers_line()
     );
 }

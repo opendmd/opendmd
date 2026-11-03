@@ -399,8 +399,9 @@ pub fn info_json(card_mounted: bool) -> String {
     };
     let last = log.as_deref().and_then(last_line);
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
+    let (mhz, mode) = flash_clock();
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"flash_size":{},"pending":{},"last":{},"log":{}}}"#,
+        r#"{{"version":{},"build":{},"variant":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
         json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
@@ -409,6 +410,46 @@ pub fn info_json(card_mounted: bool) -> String {
         opt(last),
         opt(log),
     )
+}
+
+/// The clock and read mode the flash runs at now, read back from SPI0
+/// (the cache's port): MHz (80 when its clock equals the 80 MHz APB, else
+/// 80 / ((pre + 1) × (n + 1))) and `qio`, `qout`, `dio`, `dout`, `fast` or
+/// `slow`. The app sets the clock at start-up from its own image header
+/// (`esp_system/port/cpu_start.c`), the read mode is the bootloader's.
+pub fn flash_clock() -> (u32, &'static str) {
+    const SPI0: usize = 0x3ff4_3000; // DR_REG_SPI0_BASE
+    const CTRL: usize = SPI0 + 0x08; // SPI_CTRL_REG(0)
+    const CLOCK: usize = SPI0 + 0x18; // SPI_CLOCK_REG(0)
+    // SAFETY: two aligned reads of SPI0's registers (memory-mapped, always
+    // readable; nothing is written).
+    let (ctrl, clock) = unsafe {
+        (
+            core::ptr::read_volatile(CTRL as *const u32),
+            core::ptr::read_volatile(CLOCK as *const u32),
+        )
+    };
+    let mhz = if clock & (1 << 31) != 0 {
+        80
+    } else {
+        let pre = (clock >> 18) & 0x1fff;
+        let n = (clock >> 12) & 0x3f;
+        80 / ((pre + 1) * (n + 1))
+    };
+    let mode = if ctrl & (1 << 13) == 0 {
+        "slow"
+    } else if ctrl & (1 << 24) != 0 {
+        "qio"
+    } else if ctrl & (1 << 23) != 0 {
+        "dio"
+    } else if ctrl & (1 << 20) != 0 {
+        "qout"
+    } else if ctrl & (1 << 14) != 0 {
+        "dout"
+    } else {
+        "fast"
+    };
+    (mhz, mode)
 }
 
 /// At boot, once the card is mounted: account for an update that ran (or

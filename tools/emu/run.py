@@ -14,7 +14,8 @@ build must never leave an earlier image to be booted in its place).
 
 smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF start
        from the playlist are all seen; prints EMU_SMOKE_OK.
-probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a missing/
+probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw card reads that
+       do not match FatFs's (or none), or a missing/
        mismatching golden line, or a bundled Formula that does not open / a short heap
        that does not refuse Endless road, or a Formula by reference (a bundled one by
        name, the card's /formulas/ci-test.psi) that does not play, or a formula sent over
@@ -48,6 +49,7 @@ FAIL = [
     (re.compile(r"Guru Meditation"), "Guru Meditation"),
     (re.compile(r"panicked at|\bpanic\b.*\bat\b|abort\(\) was called|\bassert failed\b", re.I), "panic/abort"),
     (re.compile(r"stack overflow", re.I), "stack overflow"),
+    (re.compile(r"HTTP server failed to start"), "HTTP server failed to start"),
     (re.compile(r"^Backtrace:"), "backtrace"),
     (re.compile(r"CORRUPT HEAP|heap_caps_.*(alloc|free) failed.*abort", re.I), "heap corruption"),
 ]
@@ -58,18 +60,30 @@ SMOKE = [
     ("www pack verified", re.compile(r"www: pack '.*' verified")),
     ("GIFs from the playlist", re.compile(r"\] /gifs/\S+\.gif <- (prepared|original)")),
 ]
+# No card: the firmware boots, its panel runs, the settings are kept in NVS,
+# and a change made then survives a restart (src/nocard_test.rs).
+NOCARD = [
+    ("panel up", re.compile(r"opendmd_firmware: panel up: 128x32")),
+    ("settings in NVS", re.compile(r'nocard-test: store,"settings_store":"nvs \(no card\)"')),
+    ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
+    ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
+]
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
-BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) by the check, (.*) by the compiler")
+BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
+SETTINGS = re.compile(r"psi-probe: settings file: a save cut between its renames (loads the new settings|DID NOT load the new settings)")
+NAMES = re.compile(r"psi-probe: names file: (\d+) folders match their listings, (\d+) differ")
+READAHEAD = re.compile(r"psi-probe: read-ahead: (\d+) B read a block a frame, (the same as FatFs's|DIFFERS from FatFs's); (\d+) served from the ring|psi-probe: read-ahead: NOT CHECKED")
+RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ahead|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -85,12 +99,17 @@ def main():
     for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
+    if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
+        # No card: an empty image (a card the firmware cannot mount).
+        a.card = EMU_DIR / "card" / "empty.img"
+        a.card.parent.mkdir(parents=True, exist_ok=True)
+        a.card.write_bytes(b"")
     if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
     want_sha = image_elf_sha(a.image)
     if not want_sha:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
-    seconds = a.seconds or (60 if a.mode == "smoke" else 400)
+    seconds = a.seconds or {"smoke": 60, "nocard": 40}.get(a.mode, 400)
     wall = a.wall or (900 if a.mode == "smoke" else 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +131,10 @@ def main():
     refs = None
     swap = None
     swap_card = None
+    raw_reads = None
+    readahead = None
+    names_file = None
+    settings_file = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -133,14 +156,21 @@ def main():
                     failure = f"the booted app (ELF SHA256 {booted_sha}...) is not {a.image} ({want_sha[:16]}...)"
             if line.startswith("rst:0x"):
                 resets += 1
-                if resets > 1:
+                # (nocard: the test restarts once on purpose.)
+                if resets > (2 if a.mode == "nocard" else 1):
                     failure = f"unexpected reset: {line}"
             for rx, name in FAIL:
                 if rx.search(line):
                     failure = f"{name}: {line[:200]}"
             if failure:
                 break
-            if a.mode == "smoke":
+            if a.mode == "nocard":
+                for name, rx in NOCARD:
+                    if name not in seen and rx.search(line):
+                        seen[name] = line
+                if len(seen) == len(NOCARD):
+                    break
+            elif a.mode == "smoke":
                 for name, rx in SMOKE:
                     if name not in seen and rx.search(line) and name != "GIFs from the playlist":
                         seen[name] = line
@@ -165,6 +195,18 @@ def main():
                 m = SWAP_CARD.search(line)
                 if m:
                     swap_card = (line, m[1])
+                m = SETTINGS.search(line)
+                if m:
+                    settings_file = (line, m[1])
+                m = RAW.search(line)
+                if m:
+                    raw_reads = (line, int(m[1]), int(m[2]), int(m[3]))
+                m = NAMES.search(line)
+                if m:
+                    names_file = (line, int(m[1]), int(m[2]))
+                m = READAHEAD.search(line)
+                if m:
+                    readahead = (line, m[2], int(m[3]) if m[3] else 0)
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -191,6 +233,14 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "nocard":
+        missing = [n for n, _ in NOCARD if n not in seen]
+        if missing:
+            die(f"not seen within {seconds} emulated s / {wall} s wall: {missing}")
+        for n, _ in NOCARD:
+            print(f"pass  {n}: {seen[n][:170]}")
+        print(f"EMU_NOCARD_OK ({took:.0f} s wall)")
+        return
     if a.mode == "smoke":
         missing = [n for n, _ in SMOKE if n not in seen]
         if missing or gifs < a.min_gifs:
@@ -209,7 +259,8 @@ def main():
         if golden[1] == 0 or golden[2] != 0:
             die(f"golden frames: {golden[1]} match, {golden[2]} differ")
         # Every bundled Formula opens through the real path, and a short heap
-        # refuses one (the check, and the compiler itself) instead of aborting.
+        # refuses Endless road (far short, and just short of what its open
+        # takes) instead of aborting.
         if not bundled:
             die("the bundled-formulas line is missing")
         if bundled[1] == 0 or bundled[2] != 0 or bundled[3] != "refused" or bundled[4] != "refused":
@@ -223,7 +274,10 @@ def main():
         # once the one on screen is let go; refused when even that is short.
         if not swap:
             die("the formula-over-formula line is missing")
-        if swap[1] != "played" or swap[2] != "refused, the playlist on":
+        # (The second case cannot be made when the Formula on screen holds
+        # more than Endless road's open takes: the player loads compiled
+        # Formulas now, and Time gate holds more.)
+        if swap[1] != "played" or not (swap[2] == "refused, the playlist on" or swap[2].startswith("not constructible")):
             die(f"formula over formula: {swap[0]}")
         # A card Formula over a card Formula (the same file written anew, the
         # same within a skip's transition, another): each played.
@@ -231,6 +285,28 @@ def main():
             die("the card-formula-over-card-formula line is missing")
         if swap_card[1] != "all played":
             die(f"card formula over card formula: {swap_card[0]}")
+        # The player's raw card reads (fatidx): every file read raw matches
+        # FatFs's bytes, and some were read raw.
+        # The settings file on the card: a save cut between its renames
+        # (a power cut there) loads the new settings.
+        if not settings_file:
+            die("the settings-file line is missing")
+        if settings_file[1] != "loads the new settings":
+            die(f"settings file: {settings_file[0]}")
+        if not raw_reads:
+            die("the raw-reads line is missing")
+        if raw_reads[1] == 0 or raw_reads[2] != 0 or raw_reads[3] == 0:
+            die(f"raw reads: {raw_reads[0]}")
+        # The names file: every folder's names as its listing has them.
+        if not names_file:
+            die("the names-file line is missing")
+        if names_file[1] == 0 or names_file[2] != 0:
+            die(f"names file: {names_file[0]}")
+        # The read-ahead: the same bytes as FatFs, and some served from it.
+        if not readahead:
+            die("the read-ahead line is missing")
+        if readahead[1] != "the same as FatFs's" or readahead[2] == 0:
+            die(f"read-ahead: {readahead[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):

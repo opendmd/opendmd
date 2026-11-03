@@ -22,8 +22,8 @@
 //! shift, 16 for `mul_w`) is set again after a call.
 
 use super::enc::*;
-use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
 use crate::fixed;
+use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
 use crate::program::*;
 use alloc::vec::Vec;
 
@@ -323,9 +323,12 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
             Word::Init(_) => true,
             // (Its choice's slot, from the pick's table of slots: a row's
             // only if a row step writes it; outside the choices, 0.)
-            Word::Pick { pal, b, n, i, k, .. } => {
+            Word::Pick {
+                pal, b, n, i, k, ..
+            } => {
                 let m = (n as usize).min(PICK_MAX);
-                let choice = (i as usize) < m && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                let choice = (i as usize) < m
+                    && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
                 choice || rs(k) || turned(pal)
             }
             _ => false,
@@ -643,7 +646,12 @@ impl<'a> Emitter<'a> {
     /// hoists and temporaries share a5..a15; with calls: values in a5..a12,
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn new(prog: &'a Program, items: &'a [Item], t: usize, hsv_call: bool) -> Result<Emitter<'a>, Refusal> {
+    fn new(
+        prog: &'a Program,
+        items: &'a [Item],
+        t: usize,
+        hsv_call: bool,
+    ) -> Result<Emitter<'a>, Refusal> {
         let calls = items.iter().any(|it| needs_call(hsv_call, it));
         let hot = items.iter().any(|it| hot_call(hsv_call, it));
         let uses_src = items
@@ -701,7 +709,11 @@ impl<'a> Emitter<'a> {
             // temporaries too (a call item takes none: it writes a10..
             // itself), but never a hoist's.
             let hoisted: Vec<Reg> = e.hoist.iter().map(|&(_, r)| r).collect();
-            e.pool = POOL.iter().copied().filter(|r| !hoisted.contains(r)).collect();
+            e.pool = POOL
+                .iter()
+                .copied()
+                .filter(|r| !hoisted.contains(r))
+                .collect();
         }
         Ok(e)
     }
@@ -792,7 +804,10 @@ impl<'a> Emitter<'a> {
                     Arg::Val(op.c),
                     Arg::Word(Word::Glyphs(code)),
                 ],
-                _ => [op.a, op.b, op.c][..n].iter().map(|&v| Arg::Val(v)).collect(),
+                _ => [op.a, op.b, op.c][..n]
+                    .iter()
+                    .map(|&v| Arg::Val(v))
+                    .collect(),
             };
             for (j, a) in args.into_iter().enumerate() {
                 let t = 10 + j as Reg;
@@ -935,7 +950,12 @@ impl<'a> Emitter<'a> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn keep_call_regs(&mut self) -> Vec<Reg> {
         // (This item's only: `reset_temps` starts the next from the pool.)
-        let out = self.free.iter().copied().filter(|&r| r == 8 || (10..=12).contains(&r)).collect();
+        let out = self
+            .free
+            .iter()
+            .copied()
+            .filter(|&r| r == 8 || (10..=12).contains(&r))
+            .collect();
         self.free.retain(|&r| r != 8 && !(10..=12).contains(&r));
         out
     }
@@ -1698,7 +1718,8 @@ impl<'a> Emitter<'a> {
     fn keep_save(&mut self, k: usize, extra: &[Reg]) -> Vec<Reg> {
         let mut keep: Vec<Reg> = extra.to_vec();
         for (id, v) in self.vals.iter().enumerate() {
-            if v.start <= k && k <= v.end && v.gpr >= 8 && self.valid[id] && !keep.contains(&v.gpr) {
+            if v.start <= k && k <= v.end && v.gpr >= 8 && self.valid[id] && !keep.contains(&v.gpr)
+            {
                 keep.push(v.gpr);
             }
         }
@@ -1914,7 +1935,14 @@ impl<'a> Emitter<'a> {
         // (r, g, b) by sector: 0 (v t p), 1 (q v p), 2 (p v t), 3 (p q v),
         // 4 (t p v), 5 (v p q).
         let (r, g, b) = (s, w, self.tmp()?);
-        let ways = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]];
+        let ways = [
+            [v, t, p],
+            [q, v, p],
+            [p, v, t],
+            [p, q, v],
+            [t, p, v],
+            [v, p, q],
+        ];
         let mut done = Vec::new();
         for (k, way) in ways.iter().enumerate() {
             let next = match k {
@@ -2031,7 +2059,11 @@ impl<'a> Emitter<'a> {
         let (kind, Some(mode)) = colour_parts(op.code) else {
             return Err("a colour the kernel has no template for");
         };
-        let cv = if kind == OUT_RGB || kind == OUT_HSV { op.d } else { op.b };
+        let cv = if kind == OUT_RGB || kind == OUT_HSV {
+            op.d
+        } else {
+            op.b
+        };
         match kind {
             OUT_GRAY => {
                 let v = self.val(op.a)?;
@@ -2066,7 +2098,12 @@ impl<'a> Emitter<'a> {
                 self.call(
                     k,
                     hid::HSV,
-                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c), Arg::Stack(SLOT_HSV)],
+                    &[
+                        Arg::Val(op.a),
+                        Arg::Val(op.b),
+                        Arg::Val(op.c),
+                        Arg::Stack(SLOT_HSV),
+                    ],
                     None,
                 )?;
                 let cov = match cov {

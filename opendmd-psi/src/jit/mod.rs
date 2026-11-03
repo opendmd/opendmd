@@ -20,7 +20,11 @@
 //! On the host with `docs` (`psi check`'s "JIT: yes/no") only
 //! [`refusal`] is used: the driver is there, unused.
 #![cfg_attr(
-    all(feature = "docs", not(test), not(all(feature = "jit", target_arch = "xtensa", target_os = "espidf"))),
+    all(
+        feature = "docs",
+        not(test),
+        not(all(feature = "jit", target_arch = "xtensa", target_os = "espidf"))
+    ),
     allow(dead_code)
 )]
 
@@ -36,10 +40,10 @@ mod tests;
 pub use lower::Refusal;
 use lower::{hid, Lowered, Word, NONE};
 
+use crate::draw::Ink;
 use crate::fixed;
 use crate::fuse::PICK_MAX;
 use crate::program::*;
-use crate::draw::Ink;
 use crate::still::Still;
 use crate::tables::{Glyphs, Tables};
 use crate::vm::{self, Alias, Inputs, Scratch};
@@ -169,6 +173,7 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 
 /// Fill the words that change from row to row (`per_row`), or those that
 /// do not (once a frame, before the rows).
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
@@ -308,6 +313,7 @@ pub(crate) fn frame<T: Target>(
         }
         _ => None,
     };
+    let paint = crate::draw::paint_of(prog, ink);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
     }
@@ -375,7 +381,7 @@ pub(crate) fn frame<T: Target>(
         if rows & (1 << row) == 0 {
             continue;
         }
-        let py = ((H - 1 - row) as i32) << 16;
+        let py = (row as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         match low.rows_at {
@@ -461,7 +467,9 @@ pub(crate) fn frame<T: Target>(
         let track = changed.is_some() && (d as usize).is_multiple_of(4);
         if track {
             // SAFETY: `dest` gives W × 3 bytes, word-aligned (`track`).
-            unsafe { core::ptr::copy_nonoverlapping(d.cast::<u32>(), before.as_mut_ptr(), W * 3 / 4) };
+            unsafe {
+                core::ptr::copy_nonoverlapping(d.cast::<u32>(), before.as_mut_ptr(), W * 3 / 4)
+            };
         }
         // (A `rate` formula's fast part: over the held slow layers, or over
         // the row as it is without them.)
@@ -471,6 +479,12 @@ pub(crate) fn frame<T: Target>(
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
         }
         t.run(ctx, d);
+        if let Some(p) = paint {
+            // SAFETY: `dest` gives the row's W × 3 bytes at `d`.
+            crate::draw::paint_row(prog, p, row, unsafe {
+                core::slice::from_raw_parts_mut(d, W * 3)
+            });
+        }
         if let Some(ch) = changed.as_deref_mut() {
             ch[row] = if track {
                 // SAFETY: the row's W × 3 bytes at `d`, word-aligned.
@@ -494,8 +508,15 @@ pub(crate) fn frame<T: Target>(
 /// Racing the beam: rows `row - 16` and `row` are drawn, the pair told
 /// (`row` [`crate::BEAM_START`]: the rows start). (Out of the row loop.)
 #[inline(never)]
-fn tell_pair(beam: &mut Option<crate::PairSink<'_>>, changed: Option<&[u32; H]>, dest: &dyn Fn(usize) -> *mut u8, row: usize) {
-    let Some(sink) = beam.as_deref_mut() else { return };
+fn tell_pair(
+    beam: &mut Option<crate::PairSink<'_>>,
+    changed: Option<&[u32; H]>,
+    dest: &dyn Fn(usize) -> *mut u8,
+    row: usize,
+) {
+    let Some(sink) = beam.as_deref_mut() else {
+        return;
+    };
     // SAFETY: `dest` maps rows into one W × H × 3 picture (`Kernel::render`'s
     // `out`), whose start is row 0's.
     let all = unsafe { core::slice::from_raw_parts(dest(0).cast_const(), W * H * 3) };
@@ -515,6 +536,7 @@ fn tell_pair(beam: &mut Option<crate::PairSink<'_>>, changed: Option<&[u32; H]>,
 /// # Safety
 /// `now` points at W × 3 / 4 readable words.
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
 unsafe fn changed_groups(now: *const u32, before: &[u32; W * 3 / 4]) -> u32 {
     let mut m = 0;
     let mut now = now;
@@ -619,9 +641,34 @@ mod device {
         unsafe { eval_helper(ID, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
+    /// `pick`'s helper, in IRAM: a kernel calls it a pixel (Endless
+    /// road's, ~7.7 % of its frame's instructions from flash in esp32sim's
+    /// block profile, display-isolation 2026-11-02). `shim::<PICK>` as one
+    /// function of its own: the generic shims stay in flash.
+    #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+    extern "C" fn shim_pick(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::PICK, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
+    /// `div`'s and `noise_o`'s helpers, the next most called (Endless road's
+    /// kernels): in SRAM1's IRAM with the `sram1-iram` build, else as the
+    /// generic shims are.
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    extern "C" fn shim_div(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::DIV, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
+    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    extern "C" fn shim_noise_o(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
+        // SAFETY: as `shim`.
+        unsafe { eval_helper(hid::NOISE_O, [a, b, c, d, e], &|p| p as usize as *mut u8) }
+    }
+
     const SHIMS: [Shim; hid::COUNT as usize] = [
-        shim::<0>, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
-        shim::<8>, shim::<9>, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim::<14>,
+        shim_div, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
+        shim::<8>, shim_noise_o, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
         shim::<15>, shim::<16>, shim::<17>, shim::<18>,
     ];
 
@@ -643,9 +690,8 @@ mod device {
         fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
             // SAFETY: `at` is the row stage's function in the block
             // (`lower`'s, 4-byte aligned): the windowed ABI, (ctx, sc).
-            let f = unsafe {
-                core::mem::transmute::<*const u8, RowsFn>((self.0 as *const u8).add(at))
-            };
+            let f =
+                unsafe { core::mem::transmute::<*const u8, RowsFn>((self.0 as *const u8).add(at)) };
             f(ctx.as_mut_ptr(), sc)
         }
     }
@@ -720,9 +766,15 @@ mod device {
         beam: Option<crate::PairSink<'_>>,
     ) -> bool {
         match (beam, changed) {
-            (Some(sink), ch) => crate::render_rows_beam::<128>(prog, scratch, ink, still, inputs, tables, under, out, ch, sink),
-            (None, Some(ch)) => crate::render_rows_changed::<128>(prog, scratch, ink, still, inputs, tables, under, rows, out, ch),
-            (None, None) => crate::render_rows_still::<128>(prog, scratch, ink, still, inputs, tables, under, rows, out),
+            (Some(sink), ch) => crate::render_rows_beam::<128>(
+                prog, scratch, ink, still, inputs, tables, under, out, ch, sink,
+            ),
+            (None, Some(ch)) => crate::render_rows_changed::<128>(
+                prog, scratch, ink, still, inputs, tables, under, rows, out, ch,
+            ),
+            (None, None) => crate::render_rows_still::<128>(
+                prog, scratch, ink, still, inputs, tables, under, rows, out,
+            ),
         }
         false
     }
@@ -763,7 +815,9 @@ mod device {
             out: &mut [u8],
             changed: Option<&mut [u32; H]>,
         ) -> bool {
-            self.render_inner(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, None)
+            self.render_inner(
+                prog, scratch, ink, still, inputs, tables, under, rows, out, changed, None,
+            )
         }
 
         /// A whole frame as [`Kernel::render`] draws it, racing the beam:
@@ -785,7 +839,19 @@ mod device {
             changed: Option<&mut [u32; H]>,
             sink: crate::PairSink<'_>,
         ) -> bool {
-            self.render_inner(prog, scratch, ink, still, inputs, tables, under, u32::MAX, out, changed, Some(sink))
+            self.render_inner(
+                prog,
+                scratch,
+                ink,
+                still,
+                inputs,
+                tables,
+                under,
+                u32::MAX,
+                out,
+                changed,
+                Some(sink),
+            )
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -805,10 +871,14 @@ mod device {
         ) -> bool {
             assert_eq!(out.len(), W * H * 3);
             if !crate::range::inputs_in_range(prog, inputs) {
-                return vm_instead(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam);
+                return vm_instead(
+                    prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam,
+                );
             }
             if self.low.rate && beam.is_some() && under.is_none() {
-                return self.rate_raced(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam);
+                return self.rate_raced(
+                    prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam,
+                );
             }
             // A `rate` formula without its held picture: the slow layers'
             // rows first (the VM's), the kernel's fast part over them.
@@ -859,7 +929,19 @@ mod device {
         ) -> bool {
             let mut ch = [u32::MAX; H];
             let tell = changed.is_some();
-            let drawn = self.render_inner(prog, scratch, ink, still, inputs, tables, under, rows, out, tell.then_some(&mut ch), None);
+            let drawn = self.render_inner(
+                prog,
+                scratch,
+                ink,
+                still,
+                inputs,
+                tables,
+                under,
+                rows,
+                out,
+                tell.then_some(&mut ch),
+                None,
+            );
             if let Some(sink) = beam {
                 sink(crate::BEAM_START, out, 0, 0);
                 for p in 0..H / 2 {

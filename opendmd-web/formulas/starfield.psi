@@ -8,9 +8,7 @@ loop 2.4
 fps 100
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
 -- each a streak from where it was a moment ago
-frame {
-  back = 1 + 1/64 + (144 + streak*240)/4096
-}
+back = 1 + 1/64 + (144 + streak*240)/4096
 draw {
   for k < 192 {
     sx = hash(k, 7)*32 - 16
@@ -20,10 +18,11 @@ draw {
     st = 1 / (back - near) -- perspective, now and a moment ago
     hx = sx*s
     hy = sy*s -- the head, from the middle
-    -- a head off the panel: the line moved far below it, where it is skipped
-    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16
+    -- the middle row; a head off the panel: the line moved far below it,
+    -- where it is skipped
+    row = abs(hx) > 64 or abs(hy) > 16 ? 1030 : 15
     lit = near*near -- squared: far stars stay dark longer
-    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)
+    line(64 + sx*st, row - sy*st, 64 + hx, row - hy, lit*0.2, lit)
   }
 }
 pal(ice, ink)

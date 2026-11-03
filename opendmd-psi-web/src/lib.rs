@@ -74,7 +74,7 @@ unsafe impl Sync for Under {}
 static UNDER: Under = Under(UnsafeCell::new([0; W * H * 3]));
 
 /// The draw stage's canvas (`draw { }`): a static of its own, all zero, as
-/// [`UNDER`].
+/// [`UNDER`]; its paint plane is taken for a formula that paints.
 struct InkCell(UnsafeCell<Ink>);
 // SAFETY: as `Cell`.
 unsafe impl Sync for InkCell {}
@@ -111,6 +111,21 @@ fn utf16_at(s: &str, byte: usize) -> u32 {
 #[wasm_bindgen]
 pub fn compile(src: &str) -> bool {
     build(src)
+}
+
+/// `src` compiled for the player (`opendmd_psi::psb`: what a card's `.psb`
+/// file holds and `@formula?psb=` carries), or empty when it does not
+/// compile ([`compile`] says why). The player never compiles.
+#[wasm_bindgen(js_name = program)]
+pub fn program(src: &str) -> Vec<u8> {
+    opendmd_psi::build(src).unwrap_or_default()
+}
+
+/// The compiled Formulas' format ([`program`]): the player says its own in
+/// `/api/status` (`psi_abi`); bytes for another are refused there.
+#[wasm_bindgen]
+pub fn abi() -> u8 {
+    opendmd_psi::psb::ABI
 }
 
 /// [`compile`], once in the module ([`as_look`] calls it twice).
@@ -162,21 +177,30 @@ pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
     opendmd_psi::look::declare(src, word, nth, line)
 }
 
+/// `src` as a function, `fn name(x, y) { … }`, for the editor's `use
+/// Plasma as p` (`opendmd_psi::look::function`); empty for one that can't
+/// be one (layers, a draw stage, tables, sprites, palettes, functions).
+#[wasm_bindgen(js_name = asFunction)]
+pub fn as_function(src: &str, name: &str) -> String {
+    opendmd_psi::look::function(src, name).unwrap_or_default()
+}
+
 /// What the panel draws over every GIF for a formula kept as its look
-/// (`fx_psi::FormulaLook`): the composition its `look` line asks for, or
-/// the formula itself (no line, or `look` alone), compiled — [`info`] and
-/// [`error`] then describe the look. Empty when it does not compile.
+/// (`fx_psi::FormulaLook`): the formula as its `look` line asks
+/// (`opendmd_psi::look::program`), compiled — [`info`] and [`error`] then
+/// describe the look. `src` when it compiles, else empty.
 #[wasm_bindgen(js_name = asLook)]
 pub fn as_look(src: &str) -> String {
-    if !build(src) {
-        return String::new();
-    }
-    match opendmd_psi::look::declared(src, &state().prog) {
-        None => String::from(src),
-        Some(Ok(s)) if build(&s) => s,
-        Some(Ok(_)) => String::new(),
-        Some(Err(e)) => {
-            state().at = [0; 2];
+    let s = state();
+    match opendmd_psi::look::program(src, &mut s.next) {
+        Ok(()) => {
+            core::mem::swap(&mut s.prog, &mut s.next);
+            s.ok = true;
+            s.err_len = 0;
+            String::from(src)
+        }
+        Err(e) => {
+            s.at = [utf16_at(src, e.start), utf16_at(src, e.end)];
             fail(&e.msg);
             String::new()
         }
@@ -294,6 +318,7 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
         let under = over.then(|| unsafe { &*UNDER.0.get() }.as_slice());
         // SAFETY: as `state()`.
         let ink = unsafe { &mut *INK.0.get() };
+        ink.try_fit(&s.prog);
         render_rows_ink(
             &s.prog,
             &mut s.scratch,

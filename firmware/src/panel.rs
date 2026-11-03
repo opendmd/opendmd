@@ -99,6 +99,10 @@ pub struct Panel {
     max_brightness: u8,
     /// What the last `set_brightness` asked for, before the clamp.
     wanted_brightness: u8,
+    /// The brightness the DMA buffer's OE bits were last rendered at
+    /// (`None`: not yet): re-rendering them rewrites every word of the
+    /// buffer (~ms on CPU1), so an unchanged level is not applied again.
+    shown_brightness: Option<u8>,
     /// The DMD tint, applied to every pixel pushed (`opendmd_core::look`).
     look: Look,
     /// Phosphor glow: what the panel shows, while it is held (12 KB).
@@ -185,6 +189,21 @@ pub fn scan_json() -> String {
         SPIN_US.load(Relaxed),
         opendmd_core::engine::FX_RETIMED.load(Relaxed),
         beam::json(),
+    )
+}
+
+/// `display.pre_start`: `{n, us, mean_us, max_us, spikes}` — a raced frame's
+/// time from the loop's wake to its start (the loop's work, the tick, the
+/// frame's steps and draw stage), since boot; `spikes` those over their
+/// running mean by more than 300 µs.
+pub fn pre_start_json() -> String {
+    let n = beam::PRE_N.load(Relaxed);
+    let sum = beam::PRE_SUM.load(Relaxed);
+    format!(
+        r#"{{"n":{n},"us":{sum},"mean_us":{},"max_us":{},"spikes":{}}}"#,
+        sum.checked_div(n).unwrap_or(0),
+        beam::PRE_MAX.load(Relaxed),
+        beam::PRE_SPIKES.load(Relaxed)
     )
 }
 
@@ -282,6 +301,7 @@ impl Panel {
             cfg: *cfg,
             max_brightness: config::BRIGHTNESS_SAFE_MAX,
             wanted_brightness: cfg.brightness,
+            shown_brightness: None,
             look: Look::Colour,
             glow: Glow::new(GlowLevel::Off),
             stepped: Instant::now(),
@@ -688,6 +708,14 @@ impl Panel {
         self.wanted_brightness = brightness;
         let applied = opendmd_core::brightness::effective(brightness, self.max_brightness);
         self.cfg.brightness = applied;
+        // Every settings PUT re-applied it (and the schedule's ticks): each
+        // a pass over the whole DMA buffer on the display core, a raced
+        // Formula's frame late (display-isolation, 2026-11-02). Unchanged:
+        // nothing to do.
+        if self.shown_brightness == Some(applied) {
+            return;
+        }
+        self.shown_brightness = Some(applied);
         // SAFETY: no arguments to get wrong; a no-op before init.
         unsafe { hub75::hub75_set_brightness(applied) };
     }
@@ -878,24 +906,41 @@ fn push(
 }
 
 /// The dirty pixels of row `y` alone (its half of the pair's DMA words),
-/// as spans, tinted. Returns the pixels pushed.
+/// as spans, tinted. Returns the pixels pushed. In IRAM with the rest of a
+/// raced pair's write ([`write_pair`], `beam::pair`, the shim's writers):
+/// written between rendering rows, whose flash code evicted it from the
+/// flash cache in some builds (psi-perf 2026-11-02: the same pixels cost
+/// 0.4 ms a frame on main, 1.2 ms on the branch). A tinted look's rows
+/// stay in flash ([`write_row_tinted`]).
+#[link_section = ".iram1.opendmd_pair"]
 fn write_row(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
     if map.row_mask() & (1 << y) == 0 {
         return 0;
     }
+    if look != Look::Colour {
+        return write_row_tinted(bytes, map, y, look);
+    }
+    let row = &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let mut pushed = 0;
+    for (x0, x1) in map.row_spans(y) {
+        // SAFETY: `row` is one full row (WIDTH * 3 bytes) and x0 < x1 <=
+        // WIDTH, so the shim reads only inside it; it only reads. y < HEIGHT.
+        unsafe { hub75::hub75_draw_span(row.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+        pushed += (x1 - x0) as u32;
+    }
+    pushed
+}
+
+/// [`write_row`] for a tinted look: each span tinted first.
+#[inline(never)]
+fn write_row_tinted(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
     let row = &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
     let mut a: Row = [0; WIDTH * 3];
     let mut pushed = 0;
     for (x0, x1) in map.row_spans(y) {
-        let src = if look != Look::Colour {
-            tint_into(&mut a, row, x0, x1, look);
-            a.as_slice()
-        } else {
-            row
-        };
-        // SAFETY: `src` is one full row (WIDTH * 3 bytes) and x0 < x1 <=
-        // WIDTH, so the shim reads only inside it; it only reads. y < HEIGHT.
-        unsafe { hub75::hub75_draw_span(src.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+        tint_into(&mut a, row, x0, x1, look);
+        // SAFETY: as `write_row`'s.
+        unsafe { hub75::hub75_draw_span(a.as_ptr(), y as u16, x0 as u16, x1 as u16) };
         pushed += (x1 - x0) as u32;
     }
     pushed
@@ -903,26 +948,33 @@ fn write_row(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
 
 /// Row pair `p` (rows p and p + 16): through `hub75_draw_row_pair` when
 /// both are dirty end to end (one pass over the shared words), else each
-/// row's spans. Returns the pixels pushed.
+/// row's spans. Returns the pixels pushed. In IRAM ([`write_row`]).
+#[link_section = ".iram1.opendmd_pair"]
 fn write_pair(bytes: &[u8], map: &DirtyMap, p: usize, look: Look) -> u32 {
     const HALF: usize = HEIGHT / 2;
-    let rows = map.row_mask();
-    let full = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
-    if !(full(p) && full(p + HALF)) {
+    if !(map.row_full(p) && map.row_full(p + HALF)) {
         return write_row(bytes, map, p, look) + write_row(bytes, map, p + HALF, look);
     }
+    if look != Look::Colour {
+        return write_pair_tinted(bytes, p, look);
+    }
     let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
-    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
-    let (t, b) = if look != Look::Colour {
-        tint_into(&mut a, row_of(p), 0, WIDTH, look);
-        tint_into(&mut b, row_of(p + HALF), 0, WIDTH, look);
-        (a.as_slice(), b.as_slice())
-    } else {
-        (row_of(p), row_of(p + HALF))
-    };
     // SAFETY: two full rows (WIDTH * 3 bytes each), p < HEIGHT / 2; read
     // only.
-    unsafe { hub75::hub75_draw_row_pair(t.as_ptr(), b.as_ptr(), p as u16) };
+    unsafe { hub75::hub75_draw_row_pair(row_of(p).as_ptr(), row_of(p + HALF).as_ptr(), p as u16) };
+    2 * WIDTH as u32
+}
+
+/// [`write_pair`]'s whole pair for a tinted look.
+#[inline(never)]
+fn write_pair_tinted(bytes: &[u8], p: usize, look: Look) -> u32 {
+    const HALF: usize = HEIGHT / 2;
+    let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
+    tint_into(&mut a, row_of(p), 0, WIDTH, look);
+    tint_into(&mut b, row_of(p + HALF), 0, WIDTH, look);
+    // SAFETY: as `write_pair`'s.
+    unsafe { hub75::hub75_draw_row_pair(a.as_ptr(), b.as_ptr(), p as u16) };
     2 * WIDTH as u32
 }
 
@@ -1161,6 +1213,29 @@ mod beam {
         }
     }
 
+    /// The time from the loop's wake to a raced frame's start (µs): raced
+    /// starts timed, µs in all (wrapping), the longest, and those over
+    /// their running mean by more than [`PRE_SPIKE_US`] (a stretch: what
+    /// makes a start late when the wake was on time).
+    pub(super) static PRE_N: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_SUM: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_MAX: AtomicU32 = AtomicU32::new(0);
+    pub(super) static PRE_SPIKES: AtomicU32 = AtomicU32::new(0);
+    static PRE_MEAN: AtomicU32 = AtomicU32::new(0);
+    /// A stretch: this much over the running mean.
+    pub(super) const PRE_SPIKE_US: u32 = 300;
+
+    fn note_pre(pre: u32) {
+        let mean = PRE_MEAN.load(Relaxed);
+        if mean > 0 && pre > mean + PRE_SPIKE_US {
+            PRE_SPIKES.fetch_add(1, Relaxed);
+        }
+        PRE_MEAN.store(if mean == 0 { pre } else { mean - mean / 16 + pre / 16 }, Relaxed);
+        PRE_N.fetch_add(1, Relaxed);
+        PRE_SUM.fetch_add(pre, Relaxed);
+        PRE_MAX.fetch_max(pre, Relaxed);
+    }
+
     /// `fx_psi::BeamHooks::begin`: can this frame be raced (the scan read)?
     pub(super) fn begin() -> Option<u32> {
         let st = state();
@@ -1184,6 +1259,12 @@ mod beam {
             UNREAD.fetch_add(1, Relaxed);
             return;
         };
+        // From the loop's wake to here: its work before the tick, the
+        // tick, the frame's steps and draw stage (what moves the start).
+        let pre = now_us().wrapping_sub(crate::wake::woke_at_us());
+        if pre < 1_000_000 {
+            note_pre(pre);
+        }
         let write = if st.look == Look::Colour { WRITE_US } else { WRITE_US_TINTED };
         // Measured, else from the governor's mean (a frame's render is at
         // least its pairs' writes).
@@ -1231,7 +1312,9 @@ mod beam {
     }
 
     /// `fx_psi::BeamHooks::pair`: one scan reading before (is its window
-    /// open?) and one after (did the write end inside it?).
+    /// open?) and one after (did the write end inside it?). In IRAM with
+    /// the writers it calls (`write_pair`).
+    #[link_section = ".iram1.opendmd_pair"]
     pub(super) fn pair(p: usize, bytes: &[u8], dirty: &DirtyMap) {
         let t = now_us();
         let st = state();
@@ -1281,4 +1364,13 @@ mod beam {
         LATE_FRAMES.fetch_add(u32::from(f.late), Relaxed);
         (f.err, f.waited, f.late)
     }
+}
+
+/// The panel's DMA rows (lo, hi, bytes, count) and descriptors (lo, hi):
+/// where they are, for `membank` (0s before the panel is up).
+pub fn dma_span() -> (u32, u32, u32, u32, u32, u32) {
+    let (mut lo, mut hi, mut bytes, mut n, mut dlo, mut dhi) = (0, 0, 0, 0, 0, 0);
+    // SAFETY: plain out-parameters; the shim answers 0s without a panel.
+    unsafe { hub75::hub75_dma_span(&mut lo, &mut hi, &mut bytes, &mut n, &mut dlo, &mut dhi) };
+    (lo, hi, bytes, n, dlo, dhi)
 }

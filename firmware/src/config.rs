@@ -444,6 +444,7 @@ pub const BOOT_STACK: usize = 10 * 1024;
 /// the stream task's extra 1.5 KB back.
 pub const HTTP_STACK: usize = 6 * 1024 + 512;
 
+/// (psi-probe builds only: the player never compiles, the probe does.)
 /// The stack a formula is compiled on (`psi_stack.rs`): Psi's compiler
 /// recurses to `psi::MAX_DEPTH` levels, ~430 B each on the ESP32. At the
 /// old cap of 24 its worst used 11,808 B inside a thread (`psi-probe` on
@@ -453,7 +454,7 @@ pub const HTTP_STACK: usize = 6 * 1024 + 512;
 /// cap at 18, ~9.2 KB (opendmd-psi's `tests/stack.rs` holds the host's
 /// figure to a budget calibrated on that probe). Taken from the heap for
 /// the compile only.
-#[cfg(feature = "psi")]
+#[cfg(feature = "psi-probe")]
 pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// The heap a compile leaves for everyone else (the network on CPU0, the
 /// compile's error text, allocator overhead): `psi_stack::compile` starts
@@ -463,11 +464,11 @@ pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// the player goes on. The compiler's big lists grow fallibly besides, so
 /// a misjudged estimate is a refusal too, not an abort (Endless road
 /// aborted the spare at 39 s on 2026-10-29: 9,648 B free, no 4 KB block).
-#[cfg(feature = "psi")]
+#[cfg(feature = "psi-probe")]
 pub const PSI_COMPILE_RESERVE: usize = 6 * 1024;
 /// The largest free block a compile needs: its stack (12 KB) and the
 /// tokens of a 2 KB formula (~12 KB) are each one block.
-#[cfg(feature = "psi")]
+#[cfg(feature = "psi-probe")]
 pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
 /// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
@@ -595,6 +596,14 @@ pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 /// connection the browser has abandoned. An idle keep-alive socket costs
 /// a TCP pcb (~200 B) and nothing else until it is used.
 pub const HTTP_MAX_SOCKETS: u16 = 7;
+
+/// Route slots in the HTTP server (`httpd_config_t.max_uri_handlers`): one
+/// per `server.route` in `http::start`, the captive-portal probes and the
+/// catch-all included. A route past the limit fails to register and the
+/// whole server is dropped (the player carries on, unreachable): that
+/// happened when `/api/quiet` became the 51st under a limit of 50
+/// (2026-11-02). A slot costs ~16 B of heap; keep a dozen spare.
+pub const HTTP_MAX_HANDLERS: u16 = 64;
 
 /// Where the playlists live on the card. (The web app is not on the card: it
 /// is a www pack in flash, `www.rs`.)
@@ -797,5 +806,10 @@ pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
 /// a failed read is recovered and the clock slowed on the caller's task)
 /// and the SD SPI driver, under two closures.
 pub const FATIDX_STACK: usize = 10 * 1024;
+/// The read-ahead's filling task (`readahead`): card reads only (the SD
+/// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
+/// network does not starve it.
+pub const READAHEAD_STACK: usize = 4 * 1024;
+pub const READAHEAD_PRIORITY: u8 = 5;
 /// The most records a build gathers per walk, in bytes (8 a record).
 pub const FATIDX_GROUP: usize = 16 * 1024;

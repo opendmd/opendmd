@@ -1,7 +1,7 @@
 //! `psi check`: does a candidate Formula compile — and if not, its error's
 //! code, the line, the column and carets —, how heavy it is for the panel
 //! (on the VM and compiled by the panel's JIT), what it takes to compile
-//! on the panel, how long it is as a path, what it reads, and a PNG
+//! on the panel, how long it is compiled, what it reads, and a PNG
 //! contact sheet of its frames. The feedback loop `docs/psi-for-models.md`
 //! describes (it was opendmd-psi's `psi-check` example).
 //!
@@ -225,28 +225,15 @@ pub fn run(args: Vec<String>) -> i32 {
         ),
         None => println!("JIT: yes, but no faster by the estimate (the panel keeps whichever draws faster)"),
     }
-    // What compiling it takes on the panel: the compiler's heap at its peak
-    // (by tokens), and what the panel asks to have free first.
-    let heap = opendmd_psi::compile_heap_estimate(&src);
-    let asks = PANEL_COMPILE_STACK + 512 + heap + PANEL_COMPILE_RESERVE;
-    let tokens = opendmd_psi::syntax::tokens(&src).map_or(0, |t| t.len());
+    // How long it is, as written and compiled (the player never compiles:
+    // it plays the compiled Formula, a card's `.psb`, or `@formula?psb=…`).
+    let psb = opendmd_psi::build(&src).map_or(0, |b| b.len());
+    let p = "@formula?psb=".len() + psb.div_ceil(3) * 4;
     println!(
-        "compile: {} tokens, ~{:.1} KB of heap; the panel asks for ~{:.1} KB free first ({}about {} KB is free between items)",
-        n(tokens),
-        heap as f64 / 1024.0,
-        asks as f64 / 1024.0,
-        if asks > PANEL_FREE { "more than it has: " } else { "" },
-        PANEL_FREE / 1024
-    );
-    // How long it is, each way it travels.
-    let kept = kept_on_panel(&src);
-    let p = path_len(&opendmd_psi::compact(&src));
-    println!(
-        "length: {} B as written ({} at most), {} B as the panel keeps it saved ({} at most), {} B as a path (@formula?src=…: {} to show it, {} for an inline look){}",
+        "length: {} B as written ({} at most), {} B compiled ({} B as a path, @formula?psb=…: {} to show it, {} for an inline look){}",
         n(src.len()),
         n(opendmd_psi::MAX_SOURCE),
-        n(kept),
-        n(MAX_FORMULA_SOURCE),
+        n(psb),
         n(p),
         n(MAX_PATH),
         n(MAX_LOOK_PATH),
@@ -273,6 +260,10 @@ pub fn run(args: Vec<String>) -> i32 {
     let line = |at: usize| src[..at.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1;
     for (at, text) in &seen.notes {
         println!("note: line {}: {text}", line(at.0));
+    }
+    // Past light: where the time goes (the steps a frame, by line).
+    if us > 5000 {
+        print!("heaviest lines (their share of the work a frame; make these lighter first):\n{}", seen.heaviest(&src));
     }
     if levels {
         print!("{}", seen.levels(&src));
@@ -416,6 +407,9 @@ pub fn run(args: Vec<String>) -> i32 {
 struct Seen {
     defs: Vec<Def>,
     notes: Vec<((usize, usize), String)>,
+    /// Each step the compiler made: where, and its cost a frame (ns: a
+    /// pixel's ×4,096, a row's ×32), for the heaviest lines.
+    ops: Vec<(usize, u64)>,
 }
 
 struct Def {
@@ -440,6 +434,41 @@ impl Sink for Seen {
     }
     fn note(&mut self, at: (usize, usize), text: &str) {
         self.notes.push((at, text.into()));
+    }
+    fn op(&mut self, at: (usize, usize), level: Level, _: u8, cost_ns: u32) {
+        let n = match level {
+            Level::Pixel => 4096,
+            Level::Row => 32,
+            _ => 1,
+        };
+        self.ops.push((at.0, u64::from(cost_ns) * n));
+    }
+}
+
+impl Seen {
+    /// The lines whose steps cost the most a frame (pixel steps 4,096
+    /// times, row steps 32), with their share: what to make lighter first.
+    fn heaviest(&self, src: &str) -> String {
+        let line = |at: usize| src[..at.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1;
+        let mut per: std::collections::BTreeMap<usize, u64> = Default::default();
+        for &(at, ns) in &self.ops {
+            *per.entry(line(at)).or_default() += ns;
+        }
+        let total: u64 = per.values().sum::<u64>().max(1);
+        let mut v: Vec<(usize, u64)> = per.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let lines: Vec<&str> = src.lines().collect();
+        let mut out = String::new();
+        for (l, ns) in v.into_iter().take(3) {
+            let text = lines.get(l - 1).map_or("", |t| t.trim());
+            let text: String = if text.chars().count() > 60 {
+                text.chars().take(57).chain("…".chars()).collect()
+            } else {
+                text.into()
+            };
+            out += &format!("  line {l} ({}%): {text}\n", ns * 100 / total);
+        }
+        out
     }
 }
 
@@ -609,37 +638,11 @@ pub fn read(path: &str) -> String {
     }
 }
 
-// The panel's numbers (firmware/src/config.rs, opendmd-core/src/synth.rs,
-// js/psikit.js, opendmd-gallery): what `psi check` measures a Formula
-// against. `PANEL_FREE` is the heap measured free between items on the
-// DevKit (CLAUDE.md, "The compiler's heap").
-const PANEL_COMPILE_STACK: usize = 12 * 1024;
-const PANEL_COMPILE_RESERVE: usize = 6 * 1024;
-const PANEL_FREE: usize = 63 * 1024;
-const MAX_FORMULA_SOURCE: usize = 8192;
+// The panel's numbers (opendmd-core/src/synth.rs, js/psikit.js,
+// opendmd-gallery): what `psi check` measures a Formula against.
 const MAX_LOOK_PATH: usize = 2048;
 const MAX_PATH: usize = 6144;
 const GALLERY_MAX: usize = 4096;
-
-/// What the panel keeps of a saved Formula (opendmd-core `fx_psi::read_text`):
-/// its lines trimmed, blank and comment-only ones left out.
-fn kept_on_panel(src: &str) -> usize {
-    src.lines()
-        .map(str::trim)
-        .filter(|l| !(l.is_empty() || l.starts_with("--") || l.starts_with("//")))
-        .map(|l| l.len() + 1)
-        .sum()
-}
-
-/// `@formula?src=` and the compacted text as js/psikit.js `enc` writes it:
-/// a space `+`; `% & + # ?`, controls and non-ASCII as %XX.
-fn path_len(compact: &str) -> usize {
-    "@formula?src=".len()
-        + compact
-            .bytes()
-            .map(|b| if b == b' ' || (b > 32 && b < 127 && !b"%&+#?".contains(&b)) { 1 } else { 3 })
-            .sum::<usize>()
-}
 
 fn q(v: f64) -> i32 {
     q16((v.clamp(-32767.0, 32767.0) * 10000.0).round() as i32, 10000)

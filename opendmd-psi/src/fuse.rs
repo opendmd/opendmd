@@ -260,7 +260,10 @@ pub(crate) fn fuse(prog: &mut Program) {
     let mut k = start;
     while k < pe && runs.len() < room {
         let ops = &prog.ops[k..pe];
-        if matches!(ops[0].code, code::STILL | code::COLUMN | code::FUSE | code::SLOW) {
+        if matches!(
+            ops[0].code,
+            code::STILL | code::COLUMN | code::FUSE | code::SLOW
+        ) {
             k += 1;
             continue;
         }

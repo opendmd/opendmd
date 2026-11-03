@@ -23,36 +23,34 @@ table MW = 9, 13, 8
 -- the road's half width (out, up)
 table PX = 5, 16, -5, 8
 table PY = 22, 17, 17, 27
-frame {
-  -- distance in bends; heading here and just ahead; height and slope
-  u = t*.15 + seed*1000
-  h0 = noise(u, 0, 0)
-  h1 = noise(u + .03, 0, 0)
-  v0 = noise(u, 5, 0)
-  dv = (noise(u + .01, 5, 0) - v0) * 100
-  -- the car slides out in bends, the sky turns with the road; a place
-  -- for a palm every 14 stripes
-  cx = 50.99999 + (h1 - h0)*80
-  mx = (.5 - h0) * 60
-  g = t/1.4
-  -- the light el (-1 night, 0 sunset, 1 day), night nt, day dy; the
-  -- sun's middle and radius; the sky's ramp at the horizon and its rise
-  -- a row; by night (nf) neon palms and night's colours
-  sn = sin(t/240 + seed)
-  el = clamp(sn*sn*sn*-3, -1, 1)
-  nt = clamp(-el, 0, 1)
-  dy = clamp(el, 0, 1)
-  sc = 23.5 + clamp(el*24, -20, 2.5)
-  sr = 8 - dy*3
-  sb = .5 - (nt + dy)/3
-  sk = 23.3 - 7*nt - 4*dy + 19*sb
-  nf = nt > .5
-  ob = nf*8/24
-  r0 = (1 + nf*14) / 24
-  r1 = (3 + nf*4) / 24
-  r2 = (5 + nf*9) / 24
-  hc = nf*-7/12
-}
+-- distance in bends; heading here and just ahead; height and slope
+u = t*.15 + seed*1000
+h0 = noise(u, 0, 0)
+h1 = noise(u + .03, 0, 0)
+v0 = noise(u, 5, 0)
+dv = (noise(u + .01, 5, 0) - v0) * 100
+-- the car slides out in bends, the sky turns with the road; a place
+-- for a palm every 14 stripes
+cx = 50.99999 + (h1 - h0)*80
+mx = (.5 - h0) * 60
+g = t/1.4
+-- the light el (-1 night, 0 sunset, 1 day), night nt, day dy; the
+-- sun's middle and radius; the sky's ramp at the horizon and its rise
+-- a row; by night (nf) neon palms and night's colours
+sn = sin(t/240 + seed)
+el = clamp(sn*sn*sn*-3, -1, 1)
+nt = clamp(-el, 0, 1)
+dy = clamp(el, 0, 1)
+sc = 23.5 + clamp(el*24, -20, 2.5)
+sr = 8 - dy*3
+sb = .5 - (nt + dy)/3
+sk = 23.3 - 7*nt - 4*dy + 19*sb
+nf = nt > .5
+ob = nf*8/24
+r0 = (1 + nf*14) / 24
+r1 = (3 + nf*4) / 24
+r2 = (5 + nf*9) / 24
+hc = nf*-7/12
 draw {
   for k < 3 {
     for j < 7 {

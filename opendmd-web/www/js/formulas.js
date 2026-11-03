@@ -17,7 +17,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSelect } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
+import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC, compiler } from './psikit.js';
 import * as S from './fstore.js';
 
 let P = null, mod = null, gen = 0;
@@ -26,7 +26,7 @@ let PAGE = null;
 // The site whose gallery and reference these are: the demo's and /f/'s
 // own, else opendmd.dev.
 const ROOT = () => (app.demo || PAGE ? new URL('../', location.href).href : SITE);
-const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
+const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; compiler(P); })
   .catch((e) => { mod = null; throw e; }));
 // A trap (a bug) leaves the module unusable: a fresh instance takes over.
 function restart() {
@@ -453,7 +453,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, pick, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(S.copyUp).then((n) => { B.copied = n; }, (e) => toast('Couldn’t read your Formulas on the panel: ' + (e.message || e), 'bad'))])
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(async () => { await psi(); B.copied = await S.copyUp(); await S.prepare(); }, (e) => toast('Couldn’t read your Formulas on the panel: ' + (e.message || e), 'bad'))])
     // (Each says its own name: `[{src}]`.)
     .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); copied(B.copied); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
@@ -462,18 +462,18 @@ function build(root) {
 // --- The editor (`#formulas/edit`)
 // psi-builtins: cheat sheet (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
 const VARS = [
-  ['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'],
-  ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
+  ['x, y', 'where the pixel is: 0 to 1 across from the left, and down from the top'],
+  ['px, py', 'the pixel’s column 0–127 from the left and row 0–31 from the top'],
   ['t', 'seconds into the loop'],
   ['hour, minute, second', 'the time of day'],
-  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared)'],
+  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own'],
   ['w, h', '128 and 32'],
   ['i', 'the pixel’s number, 0–4095'],
-  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
-  ['r, angle', 'distance and angle (turns) from the middle'],
-  ['ty', 'row 0–31 from the top'],
+  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 down'],
+  ['r, angle', 'distance and angle (turns, clockwise from the right) from the middle'],
   ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
-  ['ul', 'how bright that is']
+  ['ul', 'how bright that is'],
+  ['under(x, y)', 'the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel\'s']
 ];
 const FUNCS = [
   ['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'],
@@ -498,18 +498,26 @@ const FUNCS = [
   ['loop 8', 'the loop’s length in seconds (first line)'],
   ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'],
   ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
-  ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['layer rate 4 { … }', 'a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame', 'layer rate 4 {\n  \n}\n'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
-  ['p.v', 'a value part p sets'],
-  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']
+  ['fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1', 'a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw', 'fn f(a) = '],
+  ['fn p(x, y) { … }', 'a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored', 'fn p(x, y) {\n  \n}\n'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as a function fn p(x, y) { … }', 'use Plasma as p\n']
 ];
 const DRAW = [
   ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
   ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
-  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
+  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
   ['dot(x, y, v)', 'one pixel of ink v'],
+  ['cls(#102)', 'paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins)'],
+  ['pset(x, y, #f80)', 'paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour'],
+  ['rect(x0, y0, x1, y1, c) rectfill(…)', 'paint a box (its corners included), or a filled one'],
+  ['circ(x, y, r, c) circfill(…)', 'paint a circle, or a filled one'],
+  ['trifill(x0, y0, x1, y1, x2, y2, c)', 'paint a filled triangle'],
+  ['print("TEXT", x, y, c)', 'paint text in the panel\'s font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits'],
+  ['spr(s, x, y, flip)', 'paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both'],
+  ['pal(fire, v), gray(v)', 'colours to paint with besides #…: a palette\'s or a gray, v 0 to 1'],
+  ['if c { … } else { … }', 'inside draw: only when c is not 0', 'if  {\n  \n}'],
   ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],
   ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '],
@@ -587,11 +595,11 @@ function editor() {
     ta.style.height = `calc(${Math.max(8, n + 1) * 1.5}em + 18px)`;
   }
   const build = debounce(() => compile(), 150);
-  // `use Plasma as p`: one of yours or an example pasted in as `part p { … }`
-  // (the shared text stands alone), once the caret is off the line — every
-  // one (`all`) before saving or sharing. Never the formula itself; `use`
-  // lines inside what is pasted are left as comments; at most 16 a time.
-  // One it can't paste: {s, e, why}.
+  // `use Plasma as p`: one of yours or an example put in as a function,
+  // `fn p(x, y) { … }` (pkg-psi asFunction; the shared text stands alone),
+  // once the caret is off the line — every one (`all`) before saving or
+  // sharing. Never the formula itself; at most 16 a time. One it can't put
+  // in: {s, e, why}.
   function paste(all) {
     for (let k = 0; ; k++) {
       const s = ta.value, cl = s.slice(0, ta.selectionStart).split('\n').length, me = name.value.trim().toLowerCase();
@@ -601,7 +609,9 @@ function editor() {
       const n = m[2].trim(), at = { s: m.index, e: m.index + m[0].length }, i = m[1];
       const f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase() && (x.id == null || x.id !== B.draft.id) && x.name.toLowerCase() !== me);
       if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the bundled ones` };
-      const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^(\s*)(use\s)/gm, '$1-- $2').replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
+      const fn = T(() => P.asFunction(f.src, m[3]), '');
+      if (!fn) return { ...at, why: `“${f.name}” can’t be put in as a function: only a formula with one colour line can (no layers, drawing, tables, sprites or palettes)` };
+      const t = `${i}-- ${f.name}\n${fn.replace(/^/gm, i)}`, c = ta.selectionStart;
       // Before saving or sharing: focused, so one undo takes it back. Not on
       // opening a draft or a link (no phone keyboard, the name keeps focus).
       if (all) ta.focus({ preventScroll: true });
@@ -609,9 +619,8 @@ function editor() {
       // The caret stays where it was (one undo takes the paste back).
       const q = c > m.index ? c + t.length - m[0].length : c;
       ta.setSelectionRange(q, q);
-      for (const k of 'abc') B.draft[k] ??= f[k];
       const lp = (x) => +(x.match(/^loop\s+([\d.]+)/m) || [0, 8])[1];
-      toast(`“${f.name}” is in as part ${m[3]}` + (lp(f.src) > lp(s) ? `: its loop (${lp(f.src)} s) is longer than this formula’s — try loop ${lp(f.src)}` : ''));
+      toast(`“${f.name}” is in as ${m[3]}(x, y): draw it with ${m[3]}(x, y) as a last line` + (lp(f.src) > lp(s) ? `; its loop (${lp(f.src)} s) is longer than this formula’s — try loop ${lp(f.src)}` : ''));
     }
   }
   // A use line it couldn't paste: said, and returned (nothing is saved or shared).

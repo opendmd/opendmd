@@ -82,7 +82,7 @@ pub fn check(path: &str) -> Result<(), String> {
     Err("this build cannot draw formulas".to_string())
 }
 
-/// The look a `look_formula` value names: inline (`@formula?src=…`), a
+/// The look a `look_formula` value names: inline (`@formula?psb=…`), a
 /// bundled Formula by name (`@formula:<name>`) or the user's on the card
 /// (`/formulas/<stem>.psi`, read here, on the main task, like any file the
 /// player opens).
@@ -90,7 +90,7 @@ pub fn check(path: &str) -> Result<(), String> {
 pub fn build(path: &str) -> Result<opendmd_core::fx_psi::FormulaLook, opendmd_core::psi::Error> {
     use opendmd_core::fx_psi::FormulaLook;
     match opendmd_core::synth::formula_file(path) {
-        Some((file, opts)) => FormulaLook::from_text(&crate::formulas::read_card(file)?, opts),
+        Some((file, opts)) => FormulaLook::from_bytes(&crate::formulas::read_card(file)?, opts),
         None => FormulaLook::from_path(path),
     }
 }

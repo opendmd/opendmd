@@ -32,16 +32,7 @@ impl Sink for Seen {
     }
 }
 
-const SRC: &str = "name \"Spin\"
-control speed 0..4 = 1
-loop 4
-frame { k = sin(t/4*speed) }
-v = x*k + y
-part p {
-  gray(x)
-}
-layer { gray(v) }
-layer add { p(x, y, 0.5) }";
+const SRC: &str = "name \"Spin\"\ncontrol speed 0..4 = 1\nloop 4\nk = sin(t/4*speed)\nv = x*k + y\nfn p(a) = a*0.5\nlayer { gray(v) }\nlayer add { gray(p(x)) }";
 
 #[test]
 fn the_sink_hears_what_the_compiler_saw() {
@@ -55,7 +46,7 @@ fn the_sink_hears_what_the_compiler_saw() {
     assert_eq!(at(def("speed").1), "speed");
     assert_eq!(def("k").4, Level::Frame);
     assert_eq!(def("v").4, Level::Pixel);
-    assert_eq!(def("p").2, Defined::Part);
+    assert_eq!(def("p").2, Defined::Function);
     assert_eq!(def("v").3, 0);
     // Every read of a defined name points at its definition.
     for (r, d) in &seen.reads {
@@ -68,7 +59,10 @@ fn the_sink_hears_what_the_compiler_saw() {
     assert!(seen.reads.iter().any(|(r, d)| at(*r) == "x" && d.is_none()));
     // Ops: per pixel ones, each with a cost.
     assert!(seen.ops.iter().any(|o| o.1 == Level::Pixel && o.2 > 0));
-    assert!(seen.ops.iter().any(|o| o.1 == Level::Frame && at(o.0).contains("sin")));
+    assert!(seen
+        .ops
+        .iter()
+        .any(|o| o.1 == Level::Frame && at(o.0).contains("sin")));
     assert_eq!(seen.decls, ["name", "control"]);
 }
 
@@ -91,7 +85,9 @@ fn tokens_say_what_each_is() {
     assert!(kinds.contains(&(Kind::Punctuation, "..")));
     assert!(kinds.contains(&(Kind::Colour, "#f80")));
     assert!(kinds.contains(&(Kind::Operator, "*")));
-    assert!(!kinds.iter().any(|k| k.1.contains('c') && k.0 == Kind::Name && k.1 == "c"));
+    assert!(!kinds
+        .iter()
+        .any(|k| k.1.contains('c') && k.0 == Kind::Name && k.1 == "c"));
 }
 
 /// A value's place, the place of the value that makes it vary, the input.
@@ -121,7 +117,11 @@ fn notes(src: &str) -> Notes {
     let mut n = Notes::default();
     let mut p = Program::default();
     compile_observed(src, &mut p, &mut n).unwrap_or_else(|e| panic!("{}", e.render(src)));
-    assert_eq!(p, compile(src).unwrap(), "a sink changed the program of {src:?}");
+    assert_eq!(
+        p,
+        compile(src).unwrap(),
+        "a sink changed the program of {src:?}"
+    );
     n
 }
 
@@ -147,27 +147,63 @@ fn why_names_the_chain_to_the_input() {
 fn notes_say_where_a_formula_costs_more() {
     // A per-pixel arm makes the whole pick per pixel.
     let n = notes("k = px/8 + py\nv = pick(k, t, sin(t), y*x)\ngray(v)");
-    assert!(n.notes.iter().any(|x| x.1.starts_with("arm 3 of this `pick` (`y*x`) is per pixel")), "{:?}", n.notes);
+    assert!(
+        n.notes
+            .iter()
+            .any(|x| x.1.starts_with("arm 3 of this `pick` (`y*x`) is per pixel")),
+        "{:?}",
+        n.notes
+    );
     // ... but not when the pick is in the column run (k and x by column).
     let n = notes("k = px/8\nv = pick(k, t, sin(t), x)\ngray(v)");
-    assert!(!n.notes.iter().any(|x| x.1.contains("of this `pick`")), "{:?}", n.notes);
-    assert!(n.notes.iter().any(|x| x.1.starts_with("column run: `k`, `v`")), "{:?}", n.notes);
+    assert!(
+        !n.notes.iter().any(|x| x.1.contains("of this `pick`")),
+        "{:?}",
+        n.notes
+    );
+    assert!(
+        n.notes
+            .iter()
+            .any(|x| x.1.starts_with("column run: `k`, `v`")),
+        "{:?}",
+        n.notes
+    );
     // A sum worked out per pixel that brackets better.
     let n = notes("X = sin(t)*20\nd = px*py - 64 - X\ngray(d/64)");
     assert!(
-        n.notes.iter().any(|x| x.1.starts_with("`px*py - 64 - X` works out `- X` for every pixel; bracketed, `px*py - (64 + X)`")),
+        n.notes.iter().any(|x| x.1.starts_with(
+            "`px*py - 64 - X` works out `- X` for every pixel; bracketed, `px*py - (64 + X)`"
+        )),
         "{:?}",
         n.notes
     );
     // What the still cache kept, and what a moving value kept out.
     let n = notes("d = sqrt(cx*cx + cy*cy)\nq = d*a + y\ngray(frac(q + t))");
-    assert!(n.notes.iter().any(|x| x.1.contains("it reads `a`, which changes")), "{:?}", n.notes);
+    assert!(
+        n.notes
+            .iter()
+            .any(|x| x.1.contains("it reads `a`, which changes")),
+        "{:?}",
+        n.notes
+    );
     let src = "near = 8/max(sqrt(cx*cx + cy*cy), 0.1)\ngray(frac(near + t))";
     let n = notes(src);
-    assert!(n.notes.iter().any(|x| x.1.starts_with("still cache: `near`") && &src[x.0 .0..x.0 .1] == "near"), "{:?}", n.notes);
+    assert!(
+        n.notes
+            .iter()
+            .any(|x| x.1.starts_with("still cache: `near`") && &src[x.0 .0..x.0 .1] == "near"),
+        "{:?}",
+        n.notes
+    );
     // A draw loop of 32 turns or more runs as lanes.
     let n = notes("draw { for k < 48 { dot(hash(k, 1)*128, hash(k, 2)*32) } }\ngray(ink)");
-    assert!(n.notes.iter().any(|x| x.1.starts_with("this loop of 48 turns runs as lanes")), "{:?}", n.notes);
+    assert!(
+        n.notes
+            .iter()
+            .any(|x| x.1.starts_with("this loop of 48 turns runs as lanes")),
+        "{:?}",
+        n.notes
+    );
 }
 
 /// A sink changes no program: every bundled Formula and experiment.

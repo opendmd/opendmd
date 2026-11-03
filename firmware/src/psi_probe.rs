@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 /// rows below look up rather than `include_str!` again. (Time-gate and
 /// Endless road are the roadprobe's pair; Endless road is also the
 /// psi-lang case for `loop forever`, a sprite and slot reuse.)
-use crate::formulas::BUNDLED;
+use crate::formulas::BUNDLED_SOURCES as BUNDLED;
 
 /// The examples that are not bundled (the drawing and plain ones the speed2
 /// and leak rows compile), likewise comment-free, from build.rs.
@@ -1023,13 +1023,7 @@ fn ergo_probe(root: &str, start: Instant, stack0: u32) {
 /// The line a finished probe ends its report with.
 const DONE: &str = "psi-probe: done";
 
-/// The compile threads' stack for the worst cases: the host's high-water
-/// for the deepest is ~16 KB (bigger frames than the ESP32's ~10 KB).
-const WORST_STACK: usize = 24 * 1024;
 
-/// What a worst case must leave of the player's compile stack before the
-/// probe compiles it there (an overflow there is a crash).
-const PSI_MARGIN: u32 = 1024;
 
 /// Open the report at `root` for this boot's probe: `false` (and nothing
 /// to run) when last boot's report is there without its [`DONE`] line.
@@ -1519,12 +1513,11 @@ const BUNDLED_ONLY: bool = false;
 
 /// The bundled Formulas (`-- bundle` in opendmd-web/formulas/; the list
 /// is firmware/build.rs's), each opened through the real path
-/// (`Fx::parse`: the Formula's box, `psi_stack::compile` with its heap
-/// check, the canvas) and drawn for a few frames; then a heap made short
-/// on purpose: Endless road refused by the check before the compile, and
-/// by the compiler itself (`psi::compile_into` on the formula stack, the
-/// check skipped) with [`psi::NO_MEMORY`] — not the abort Endless road
-/// was on 2026-10-29. `make emu-probe` requires the summary line.
+/// (`Fx::parse`: the Formula's box, its compiled program loaded, the
+/// canvas) and drawn for a few frames; then a heap made short on purpose:
+/// Endless road refused ([`psi::NO_MEMORY`] or [`fx_psi::NO_CANVAS`]) with
+/// the heap far short and just short of what its open took — never the
+/// abort it was on 2026-10-29. `make emu-probe` requires the summary line.
 #[inline(never)]
 fn bundled(canvas: &mut Canvas) {
     let (mut opened, mut failed) = (0, 0);
@@ -1549,10 +1542,11 @@ fn bundled(canvas: &mut Canvas) {
         say!(info, "psi-probe: bundled {name}: opened and drawn, {} B of source, heap {h0} -> {h1} B at open, {} B after",
             psi::compact(src).len(), heap());
         if name == "endless-road" {
-            road = Some(psi::compact(src));
+            // (What its open took: the Formula's box and its canvas.)
+            road = Some(h0.saturating_sub(h1) as usize);
         }
     }
-    let Some(road) = road else {
+    let Some(open_use) = road else {
         say!(error, "psi-probe: bundled formulas: {opened} opened, {failed} failed; short heap: no Endless road to try");
         return;
     };
@@ -1572,40 +1566,28 @@ fn bundled(canvas: &mut Canvas) {
         }
         b
     };
-    // 1. Under the check's figure: refused before any compile.
-    let need = crate::config::PSI_COMPILE_STACK + 512 + psi::compile_heap_estimate(&road) + crate::config::PSI_COMPILE_RESERVE;
-    let b = ballast(need - 4096);
+    // The player loads a compiled Formula (no compile, no compile check):
+    // what a short heap must do is refuse the open, never abort.
+    // 1. Far too short: the Formula's box (~12 KB) does not fit; 8 KB left
+    // for everything else on the heap meanwhile.
+    let road_path = format!("{}endless-road", opendmd_core::synth::FORMULA_REF);
+    let b = ballast(8 * 1024);
     let h = heap();
-    let check = fx_psi::open_error(&fx_psi::path(&road, "")).map(|e| e.to_string()).unwrap_or_else(|| "opened".into());
+    let boxed = fx_psi::open_error(&road_path).map(|e| e.to_string()).unwrap_or_else(|| "opened".into());
     drop(b);
-    say!(info, "psi-probe: short heap, {h} B free (the check needs {need}): Endless road: {check}");
-    // 2. The check skipped: the compile's stack and ~6 KB more, so the
-    // compiler itself runs short (its tokens alone are ~12 KB).
-    // The task's stack must be one block: hold one of its size while the
-    // ballast fills the heap in small pieces, and let it go just before the
-    // task is made (else the ~19 KB left can be too scattered for a stack, and
-    // the run reports "no task" instead of the compiler's refusal).
-    let mut prog = zeroed::<psi::Program>();
-    // (black_box: an allocation nothing reads may be optimised away.)
-    let mut hold: Vec<u8> = Vec::with_capacity(crate::config::PSI_COMPILE_STACK + 512);
-    hold.push(1);
-    let hold = core::hint::black_box(hold);
-    let b = ballast(6 * 1024);
-    let h = heap() + hold.capacity() as u32;
-    drop(hold);
-    let r = crate::psi_stack::run(|| psi::compile_into(&road, &mut prog).map(|_| ()).map_err(|e| e.msg));
+    say!(info, "psi-probe: short heap, {h} B free: Endless road: {boxed}");
+    // 2. Just short of what its open took ({open_use} B: the box and the
+    // canvas): the box may fit, the canvas not, or neither.
+    let b = ballast(open_use.saturating_sub(5 * 1024).max(8 * 1024));
+    let h = heap();
+    let canvas_r = fx_psi::open_error(&road_path).map(|e| e.to_string()).unwrap_or_else(|| "opened".into());
     drop(b);
-    let compiler = match r {
-        None => "no task".to_string(),
-        Some(Ok(())) => "compiled".to_string(),
-        Some(Err(m)) => m,
-    };
-    say!(info, "psi-probe: short heap, {h} B free, the check skipped: Endless road: {compiler}");
-    let ok = |m: &str| m == psi::NO_MEMORY;
+    say!(info, "psi-probe: short heap, {h} B free (its open took {open_use}): Endless road: {canvas_r}");
+    let ok = |m: &str| m == psi::NO_MEMORY || m == fx_psi::NO_CANVAS;
     say!(info,
-        "psi-probe: bundled formulas: {opened} opened, {failed} failed; short heap: {} by the check, {} by the compiler; heap {} B free after",
-        if ok(&check) { "refused" } else { "NOT refused" },
-        if ok(&compiler) { "refused" } else { "NOT refused" },
+        "psi-probe: bundled formulas: {opened} opened, {failed} failed; short heap: {} far short, {} just short; heap {} B free after",
+        if ok(&boxed) { "refused" } else { "NOT refused" },
+        if ok(&canvas_r) { "refused" } else { "NOT refused" },
         heap()
     );
 }
@@ -1643,9 +1625,18 @@ fn refs(root: &str, canvas: &mut Canvas) {
     );
     say!(info, "psi-probe: @formula:endless-road: {named} (heap {h0} B free at open)");
     let h0 = heap();
-    let card = std::fs::File::open(format!("{root}{CARD_FORMULA}")).and_then(|f| {
-        let text = opendmd_core::fx_psi::read_text(std::io::BufReader::with_capacity(512, f))?;
-        Ok(opendmd_core::synth::open_formula_text("a=1", &text))
+    // (The player plays a card Formula from its `.psb`; the probe card
+    // carries the source alone, so it is built here, as the web app would.)
+    let card = std::fs::read_to_string(format!("{root}{CARD_FORMULA}")).and_then(|text| {
+        // (On a thread of its own, as below: the compiler's recursion.)
+        let psb = std::thread::Builder::new()
+            .stack_size(32 * 1024)
+            .spawn(move || psi::build(&text).map_err(|e| e.msg))
+            .map_err(std::io::Error::other)?
+            .join()
+            .map_err(|_| std::io::Error::other("the build panicked"))?
+            .map_err(std::io::Error::other)?;
+        Ok(opendmd_core::synth::open_formula_bytes("a=1", &psb))
     });
     let card = draw(card, canvas);
     say!(info, "psi-probe: {CARD_FORMULA}: {card} (heap {h0} B free at open)");
@@ -1657,12 +1648,16 @@ fn refs(root: &str, canvas: &mut Canvas) {
     );
 }
 
+/// What opening Endless road takes, with 2 KB to spare: its box and canvas
+/// (15,828 B in the emulator's bundled step).
+const ROAD_OPEN_NEED: usize = 18 * 1024;
+
 /// A formula sent over a formula, as `/api/play` sends it (`Engine::retune`
-/// through the real engine, `SdSource` and `psi_stack::compile` with its
-/// heap check): Time gate on screen, the heap made short so that Endless
-/// road's compile fits only once Time gate is let go (the owner's panel,
-/// 558416c: refused until a GIF or a lighter formula had played). Then a
-/// heap short even without Time gate: refused, nothing on screen, the
+/// through the real engine and `SdSource`, the compiled Formula loaded):
+/// Time gate on screen, the heap made short so that Endless road fits only
+/// once Time gate is let go (the owner's panel, 558416c: refused until a
+/// GIF or a lighter formula had played). Then a heap short even without
+/// Time gate, when that can be made: refused, nothing on screen, the
 /// playlist's GIF next. First, Time gate and a GIF in turn, the heap after
 /// each GIF (a leak would fall). `make emu-probe` requires the summary line.
 #[inline(never)]
@@ -1720,10 +1715,10 @@ fn swap(root: &str, canvas: &mut Canvas) {
     let _ = e.play_now_with(GATE, now, keep);
     run(&mut e, canvas, 1_000);
     let held = h1.saturating_sub(heap()) as usize;
-    let need = crate::config::PSI_COMPILE_STACK
-        + 512
-        + psi::compile_heap_estimate(opendmd_core::synth::bundled("endless-road").unwrap_or(""))
-        + crate::config::PSI_COMPILE_RESERVE;
+    // What opening Endless road takes (its box and canvas: 15,828 B in the
+    // emulator's bundled step) and 2 KB more: the player loads a compiled
+    // Formula, it no longer compiles one.
+    let need = ROAD_OPEN_NEED;
     // The heap down to `left` B free, most of it one block (the compile
     // needs a 16 KB one): that block held while the rest is filled with
     // 4 KB, then 256 B pieces (4 KB left over for the system), then let go.
@@ -1771,17 +1766,22 @@ fn swap(root: &str, canvas: &mut Canvas) {
                 run(&mut e, canvas, 200);
                 drop(b);
                 first = r;
-                say!(info, "psi-probe: formula over formula: Time gate holding {held} B, {h} B free (the check needs {need}): Endless road: {first}");
+                say!(info, "psi-probe: formula over formula: Time gate holding {held} B, {h} B free (its open needs {need}): Endless road: {first}");
             }
         }
     }
-    // 2. Short even without Time gate: refused, the playlist goes on.
+    // 2. Short even without Time gate: refused, the playlist goes on —
+    // when that can be made: Time gate holds more than Endless road's open
+    // takes, so with a compiled Formula letting it go always makes room.
     let now = run(&mut e, canvas, 0);
     let _ = e.play_now_with(GATE, now, keep);
     run(&mut e, canvas, 1_000);
     let mut second = "NOT tried".to_string();
-    if gate_on(&e) {
-        let held = h1.saturating_sub(heap()) as usize;
+    let held_now = h1.saturating_sub(heap()) as usize;
+    if gate_on(&e) && held_now + 4096 >= need {
+        second = format!("not constructible (Time gate holds {held_now} B, Endless road needs {need})");
+    } else if gate_on(&e) {
+        let held = held_now;
         let left = need.saturating_sub(held + 4096).max(8192);
         match short(left) {
             None => second = format!("NOT tried (no {left} B to keep)"),
@@ -1798,7 +1798,7 @@ fn swap(root: &str, canvas: &mut Canvas) {
                     Some(Err(err)) => format!("NOT as asked ({err}; nothing on screen {gone}, the GIF next {next})"),
                     _ => "NOT refused".to_string(),
                 };
-                say!(info, "psi-probe: formula over formula: {h} B free, Time gate holding {held} B (the check needs {need}): Endless road: {second}");
+                say!(info, "psi-probe: formula over formula: {h} B free, Time gate holding {held} B (its open needs {need}): Endless road: {second}");
             }
         }
     }
@@ -1827,7 +1827,22 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     const WORM_SRC: &str = include_str!("../../opendmd-web/formulas/wormhole-run.psi");
     // The owner's panel with a GIF on screen (build 664d0ed).
     const RIG_FREE_WITH_GIF: u32 = 95_060;
-    let write = |file: &str, src: &str| std::fs::write(format!("{root}{file}"), src);
+    // A card Formula is its `.psi` and the compiled `.psb` beside it (the
+    // player plays the `.psb`; the web app writes both, as here).
+    let write = |file: &str, src: &str| {
+        std::fs::write(format!("{root}{file}"), src)?;
+        // (Built on a thread of its own: the compiler's recursion is more
+        // than the main task's stack.)
+        let owned = src.to_string();
+        let psb = std::thread::Builder::new()
+            .stack_size(32 * 1024)
+            .spawn(move || psi::build(&owned).map_err(|e| e.msg))
+            .map_err(std::io::Error::other)?
+            .join()
+            .map_err(|_| std::io::Error::other("the build panicked"))?
+            .map_err(std::io::Error::other)?;
+        std::fs::write(format!("{root}{}", opendmd_core::synth::compiled_path(file)), psb)
+    };
     if write(NEON, NEON_SRC).and_then(|_| write(WORM, WORM_SRC)).is_err() {
         say!(error, "psi-probe: card formula over card formula: could not write the files");
         return;
@@ -1920,108 +1935,6 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     );
 }
 
-/// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
-/// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
-/// reporting the bytes it used; then on the player's compile stack and
-/// through `Fx::parse` only those that fit it with [`PSI_MARGIN`] to spare;
-/// then, only if the deepest plus what the main task already uses leaves a
-/// 2 KB margin, the deepest again on the main task itself.
-#[inline(never)]
-fn worst_stack() {
-    let mut deepest = 0u32;
-    // The sources first, on a thread of their own: making some of them
-    // compiles deeper and deeper candidates.
-    let srcs: Vec<(&str, String)> = std::thread::Builder::new()
-        .stack_size(WORST_STACK)
-        .spawn(|| psi::worst::ALL.iter().map(|(n, f)| (*n, f())).collect())
-        .ok()
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
-    let mut used_by: Vec<u32> = Vec::new();
-    for (name, src) in &srcs {
-        let src = src.clone();
-        let r = std::thread::Builder::new()
-            .stack_size(WORST_STACK)
-            .spawn(move || {
-                let mut prog = zeroed::<psi::Program>();
-                let base = stack_unused();
-                let r = psi::compile_into(&src, &mut prog);
-                (
-                    src.len(),
-                    base.saturating_sub(stack_unused()),
-                    r.err().map(|e| e.msg),
-                )
-            })
-            .map(|h| h.join());
-        match r {
-            Ok(Ok((len, used, err))) => {
-                deepest = deepest.max(used);
-                used_by.push(used);
-                say!(info,
-                    "psi-probe: worst {name}: {len} B source, compile used {used} B of a thread's stack ({})",
-                    err.as_deref().unwrap_or("ok")
-                );
-            }
-            _ => {
-                used_by.push(u32::MAX);
-                say!(
-                    error,
-                    "psi-probe: worst {name}: no thread (heap {} B free)",
-                    heap()
-                )
-            }
-        }
-    }
-    let fits = |k: usize| used_by[k] as usize + PSI_MARGIN as usize <= crate::config::PSI_COMPILE_STACK;
-    // Each that fits, through `psi_stack` itself, on its own thread (the size
-    // the player uses, pinned and prioritised as it does): the compile time
-    // (what a frame deadline sees when a formula opens) and the bytes of that
-    // stack never touched, the thread's entry frames and any interrupt frames
-    // pushed on it included; then through the real path (`Fx::parse`, as the
-    // engine and the checks before saving open a formula), the main task's
-    // mark not to move.
-    for (k, (name, src)) in srcs.iter().enumerate() {
-        if !fits(k) {
-            say!(warn,
-                "psi-probe: worst {name} on psi_stack ({} B): NOT RUN, it needs {} B (+{PSI_MARGIN} B margin)",
-                crate::config::PSI_COMPILE_STACK,
-                used_by[k]
-            );
-            continue;
-        }
-        let mut prog = zeroed::<psi::Program>();
-        let r = crate::psi_stack::run(|| {
-            let t0 = Instant::now();
-            let ok = psi::compile_into(src, &mut prog).is_ok();
-            (t0.elapsed().as_micros(), ok, stack_unused())
-        });
-        let (us, ok, free) = r.unwrap_or((0, false, 0));
-        let before = stack_unused();
-        let bad = Fx::parse(&fx_psi::path(src, "")).is_some();
-        let good = Fx::parse(&fx_psi::path(&src.replace("tme", "t"), "")).is_some();
-        say!(info,
-            "psi-probe: worst {name} on psi_stack ({} B): compile {us} us ({}), {free} B of its stack never touched; as an effect on the main task: misspelt opened {bad}, fixed opened {good}, main stack {before} -> {} B unused",
-            crate::config::PSI_COMPILE_STACK,
-            if r.is_none() { "no thread" } else if ok { "ok" } else { "an error" },
-            stack_unused()
-        );
-    }
-    let unused = stack_unused();
-    if deepest > 0 && deepest != u32::MAX && deepest + 2048 < unused {
-        let mut prog = zeroed::<psi::Program>();
-        for (_, src) in &srcs {
-            let _ = psi::compile_into(src, &mut prog);
-        }
-        say!(info,
-            "psi-probe: worst on the main task: {unused} B unused before, {} B after (deepest thread figure {deepest} B)",
-            stack_unused()
-        );
-    } else {
-        say!(warn,
-            "psi-probe: worst on the main task: skipped, {unused} B unused and the deepest compile takes {deepest} B"
-        );
-    }
-}
 
 /// The probe, when the card at `root` is the main task's (see the module
 /// docs).
@@ -2406,7 +2319,8 @@ pub fn run(root: &str) {
         std::mem::size_of::<psi::Ink>()
     );
     // What the probe is for first: the compiler's stack.
-    worst_stack();
+    // (The compile-stack worst cases are gone: the player never compiles;
+    // the browser and `psi build` do, with the stacks they have.)
     // (Held through the sections below as before: `black_box`, or the
     // allocation would be elided until its first use.)
     let out = core::hint::black_box(vec![0u8; psi::W * psi::H * 3]);
@@ -2423,6 +2337,34 @@ pub fn run(root: &str) {
     // that buffer held). Taken again after, in the same place as a rule.
     drop(out);
     swap_card(root, &mut canvas);
+    // (Before the frame buffer is taken back: the index build wants
+    // the heap.) The settings file on the card: a save cut between its renames loads
+    // the new settings (settings_card).
+    let (settings_ok, settings_what) = crate::settings_card::self_check();
+    say!(info, "psi-probe: settings file: a save cut between its renames {} ({settings_what})", if settings_ok { "loads the new settings" } else { "DID NOT load the new settings" });
+    // The player's raw card reads (fatidx), byte for byte against FatFs's.
+    let (raw_ok, raw_bad, no_raw, via_index) = crate::fatidx::raw_self_check(root, 24);
+    say!(info, "psi-probe: raw reads: {raw_ok} files match FatFs's reads, {raw_bad} differ, {via_index} of them through the index ({no_raw} not opened raw)");
+    // The names file the build above wrote, a folder at a time.
+    let (names_ok, names_bad, names_n) = crate::fatidx::names_self_check(root);
+    say!(info, "psi-probe: names file: {names_ok} folders match their listings, {names_bad} differ ({names_n} names)");
+    // The read-ahead serving those reads as the player makes them.
+    match crate::fatidx::readahead_self_check(root) {
+        Some(c) => say!(
+            info,
+            "psi-probe: read-ahead: {} B read a block a frame, {}; {} served from the ring, {} underruns, {} fetched; heap {} B: {} B held, {} B left{}",
+            c.bytes,
+            if c.same { "the same as FatFs's" } else { "DIFFERS from FatFs's" },
+            c.hits,
+            c.underruns,
+            c.fetches,
+            c.heap,
+            c.ring_heap,
+            c.left_heap,
+            if c.running { " (task STILL UP)" } else { "" }
+        ),
+        None => say!(error, "psi-probe: read-ahead: NOT CHECKED (no GIF opened raw)"),
+    }
     let mut out = vec![0u8; psi::W * psi::H * 3];
 
     // (The examples as effects, with and without the still cache, timed, are
@@ -2792,7 +2734,7 @@ pub(crate) mod jit2 {
         let looks = [
             ("Old TV", fx_psi::path(OLD_TV, "")),
             ("Plasma letters", fx_psi::path(PLASMA_LETTERS, "")),
-            ("Plasma (screen 40)", fx_psi::path(&psi::look::compose(PLASMA, "screen", 40).unwrap_or_default(), "")),
+            ("Plasma (screen 40)", fx_psi::path(&psi::look::set(PLASMA, "screen", 40).unwrap_or_default(), "")),
         ];
         for (name, path) in &looks {
             look(name, path, &mut canvas);

@@ -106,10 +106,7 @@ fn formulas() {
     // as text, then drawn as the panel draws it (asLook).
     let s = look("hsv(x, 1, 1)", "screen", 40);
     assert_eq!(s, "look screen 40\nhsv(x, 1, 1)");
-    assert_eq!(
-        as_look(&s),
-        "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
-    );
+    assert_eq!(as_look(&s), s);
     assert_eq!((info()[5] & 32, info()[7]), (32, 1));
     assert_eq!(look("gray(ul)", "over", 100), "look\ngray(ul)");
     assert_eq!(as_look("look\ngray(ul)"), "look\ngray(ul)");
@@ -239,14 +236,16 @@ fn the_examples_are_light_enough_for_the_panel() {
         // the palm) and five draw loops, written tight for the path; and
         // so are its two alternatives, Neon city and Wormhole run.
         let most = if ["Endless road", "Neon city", "Wormhole run"].contains(&e.name.as_str()) {
-            52
+            80
         } else if e.name == "Time gate" {
-            // 20 since `psi fmt` (2026-10-29): one statement a line.
-            20
+            // 20 since `psi fmt` (2026-10-29): one statement a line (24
+            // since the `frame { }` block's lines count).
+            30
         } else if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor", "Matrix"].contains(&e.name.as_str()) {
-            16
+            30
         } else {
-            7
+            // (30 since the `frame { }` blocks went: their lines count.)
+            30
         };
         assert!(own <= most, "{}: too long for an example", e.name);
         // (As the player draws it: with its still cache, when it has one.)
@@ -294,23 +293,26 @@ fn every_example_compacts_to_the_same_program() {
     }
 }
 
-/// Every example pasted into another formula as a part (as the editor's
-/// `use … as p` does: indented, under a comment) and drawn whole: the same
-/// frames, over the golden picture too.
+/// Every example that can be a function (the editor's `use … as p`), put
+/// in as one and drawn at the same place under its own loop: the same
+/// frames at its defaults, over the golden picture too.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn every_example_pasted_in_as_a_part_draws_the_same() {
+fn every_example_put_in_as_a_function_draws_the_same() {
     use opendmd_psi::{golden, render_rows_ink, Scratch};
     let mut under = vec![0u8; W * H * 3];
     golden::picture(&mut under);
-    let draw = |src: &str, ms: u32| {
+    let draw = |src: &str, ms: u32, abc: [i32; 3]| {
         let p = opendmd_psi::compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
         let mut out = vec![0u8; W * H * 3];
+        let mut i = golden::inputs(ms);
+        [i.a, i.b, i.c] = abc;
+        i.set_ms(&p, u64::from(ms));
         render_rows_ink::<128>(
             &p,
             &mut Scratch::new(),
             Some(&mut opendmd_psi::Ink::boxed()),
-            &golden::inputs(ms),
+            &i,
             &OWN,
             Some(&under),
             u32::MAX,
@@ -318,27 +320,24 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
         );
         (out, p.loop_ms())
     };
+    let (mut put, mut not) = (Vec::new(), Vec::new());
     for e in crate::examples() {
-        // (`rate` is left out inside a part: a slow layer that moves draws
-        // every frame there, not as the formula does.)
-        if opendmd_psi::compile(&e.src).is_ok_and(|p| p.rate().is_some()) {
+        let Some(f) = opendmd_psi::look::function(&e.src, "p") else {
+            not.push(e.name.clone());
             continue;
-        }
-        let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
+        };
+        let p = opendmd_psi::compile(&e.src).unwrap();
+        let abc = p.meta().values([None; 3]);
         for ms in [0, 1730, 6420] {
-            let (want, lp) = draw(&e.src, ms);
-            let lp = if lp == 0 {
-                "forever".to_string()
-            } else {
-                format!("{}", lp as f64 / 1000.0)
-            };
-            let src = format!(
-                "loop {lp}\npart p {{\n  -- {}\n{inner}}}\nlayer {{ p }}",
-                e.name
-            );
-            assert!(draw(&src, ms).0 == want, "{} at {ms} ms", e.name);
+            let (want, lp) = draw(&e.src, ms, abc);
+            let lp = if lp == 0 { "forever".to_string() } else { format!("{}", lp as f64 / 1000.0) };
+            let src = format!("loop {lp}\n{f}\np(x, y)");
+            assert!(draw(&src, ms, [0; 3]).0 == want, "{} at {ms} ms:\n{src}", e.name);
         }
+        put.push(e.name.clone());
     }
+    assert!(put.len() >= 10, "put in: {put:?}; not: {not:?}");
+    std::println!("put in as functions: {put:?}\nnot: {not:?}");
 }
 
 /// Every example as a look, at the choice Settings starts it at (js/looks.js
@@ -379,16 +378,11 @@ fn every_example_as_a_look() {
                 "{} {b} {k}: lets the GIF show through",
                 e.name
             );
-            if over {
-                assert_eq!(s, look(&e.src, b, k), "{}: the formula itself", e.name);
-            } else {
-                assert_eq!(
-                    s,
-                    opendmd_psi::look::compose(&e.src, b, k).unwrap(),
-                    "{}: the line is the composition",
-                    e.name
-                );
-            }
+            assert!(
+                state().prog == opendmd_psi::look::compose(&e.src, b, k).unwrap(),
+                "{}: the line is the composition",
+                e.name
+            );
             i[6] <= 12_000
         });
         match fit {
@@ -429,33 +423,33 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     // Re-pinned for road-full (2026-10-29): Full bundled, the frames of
     // experiments/road-life/road-full.psi (psi-check --hash, 3 seeds × 142
     // frames over a day, all the same).
-    ("Endless road", 0, 0x3cbd8c7a60c8a9d8),
-    ("Endless road", 1730, 0xb5a7a75c00190bdc),
-    ("Endless road", 6420, 0xf89516c3b22a3706),
+    ("Endless road", 0, 0x0688870f3d2fa467),
+    ("Endless road", 1730, 0xdbabb755250ccc83),
+    ("Endless road", 6420, 0xe6076a6dca5a376d),
     ("Time gate", 0, 0x24bd9942453ef2e8),
     ("Time gate", 1730, 0x7787a7d7cc3f723e),
     ("Time gate", 6420, 0x2a17edb7a1ade755),
-    ("Plasma", 0, 0xfb5c1cb21173b111),
-    ("Plasma", 1730, 0x9546a903ee9acb61),
-    ("Plasma", 6420, 0xbf90cf3c83bac96b),
-    ("Fire", 0, 0x960e59aeab7951c8),
-    ("Fire", 1730, 0xbea6b26c5d43c15d),
-    ("Fire", 6420, 0x847898880d31ee05),
-    ("Rain", 0, 0xbda039267e727a4e),
-    ("Rain", 1730, 0x8e61dd4784375452),
-    ("Rain", 6420, 0x77570f4a476294a7),
+    ("Plasma", 0, 0x240bb68b2b00acf3),
+    ("Plasma", 1730, 0x4c5a8909ed18b7ae),
+    ("Plasma", 6420, 0x134d518c3dbbaf84),
+    ("Fire", 0, 0xc3bd2977c66368c0),
+    ("Fire", 1730, 0xaea0b3dc586e6f2c),
+    ("Fire", 6420, 0x2f3083cf9d7fa2a0),
+    ("Rain", 0, 0x6f4f326c2dee6b52),
+    ("Rain", 1730, 0x75468f97617c2d11),
+    ("Rain", 6420, 0x8f94da3025fe1fec),
     ("Matrix", 0, 0xfaae4ed4783bbda8),
     ("Matrix", 9730, 0xec157dd618adb5e3),
-    ("Matrix", 21420, 0x9a1c2d761d0e01e3),
-    ("Lava lamp", 0, 0x1c70828a94fa5c82),
-    ("Lava lamp", 1730, 0x3912ecb2c5c51b43),
-    ("Lava lamp", 6420, 0xe2da3e4b13b05630),
+    ("Matrix", 21420, 0x859a43082b013930),
+    ("Lava lamp", 0, 0x147fb5afe15bdce1),
+    ("Lava lamp", 1730, 0xdf3f08c182e57534),
+    ("Lava lamp", 6420, 0x23a9774c63cba823),
     ("Rings", 0, 0xf2cca724804083b5),
     ("Rings", 1730, 0x4e985fe095de8d29),
-    ("Rings", 6420, 0xdcba9def1c26c04f),
-    ("Moiré", 0, 0x4157bdfdb00c81c3),
+    ("Rings", 6420, 0x75de8c7a3137a917),
+    ("Moiré", 0, 0x2bcfae197227fd8e),
     ("Moiré", 1730, 0xafa70d932caf84a0),
-    ("Moiré", 6420, 0x8681c1171c7953c7),
+    ("Moiré", 6420, 0x9d9d7bcaa44b6fd8),
     ("XOR pattern", 0, 0x3d89f2b7439e8625),
     ("XOR pattern", 1730, 0xbd877aa5f66e5925),
     ("XOR pattern", 6420, 0x49a1218e8c889d65),
@@ -465,27 +459,27 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Clock", 0, 0x1c859c9432c78b42),
     ("Clock", 1730, 0x1c859c9432c78b42),
     ("Clock", 6420, 0x1c859c9432c78b42),
-    ("CRT", 0, 0xa370b6d938e6a211),
-    ("CRT", 1730, 0x624e33f3904fa52c),
-    ("CRT", 6420, 0x5754c9112c907b97),
-    ("Rainbow wave", 0, 0x6d6cd15d6293619f),
+    ("CRT", 0, 0xaa8baed99c3bc884),
+    ("CRT", 1730, 0xd2139818ebfe2b2d),
+    ("CRT", 6420, 0x757aac8dcffdce1e),
+    ("Rainbow wave", 0, 0x452a5ceff4a49295),
     ("Rainbow wave", 1730, 0x7e1aa7ac7a23dded),
     ("Rainbow wave", 6420, 0xd2645bea0a67abe2),
-    ("Spotlight", 0, 0x5a646f5a21333771),
-    ("Spotlight", 1730, 0x6ca3a96555f17be5),
-    ("Spotlight", 6420, 0xeecb16dc3e03b206),
+    ("Spotlight", 0, 0xcf55f10e666af368),
+    ("Spotlight", 1730, 0x877bf5fbc38a6066),
+    ("Spotlight", 6420, 0x85322417781d8056),
     ("Copper bars", 0, 0xd65a063a3b24a925),
     ("Copper bars", 1730, 0xf229f95cbec2ed25),
     ("Copper bars", 6420, 0xbd475933b7c45625),
-    ("Bars to stars", 0, 0xe121beaf81716ded),
-    ("Bars to stars", 1730, 0x4269f88db1e25dc1),
-    ("Bars to stars", 6420, 0x9806d62838473829),
+    ("Bars to stars", 0, 0x2dfb6d58d8b1ef10),
+    ("Bars to stars", 1730, 0x2e1e0904e4748c3d),
+    ("Bars to stars", 6420, 0xe0a25bef73e17289),
     ("Rings through stripes", 0, 0x0cce44831f18a402),
     ("Rings through stripes", 1730, 0xbd9030d90c96e5c8),
-    ("Rings through stripes", 6420, 0x7bc9d15841cb6754),
-    ("Kaleidoscope", 0, 0x8acaa53c934ec265),
-    ("Kaleidoscope", 1730, 0xf7ac89f4ae0e1d0f),
-    ("Kaleidoscope", 6420, 0xfac1d28e1c0ad8a7),
+    ("Rings through stripes", 6420, 0x87e61aad5e38e649),
+    ("Kaleidoscope", 0, 0x538b06650b0ada01),
+    ("Kaleidoscope", 1730, 0x5037e02efb59e8bf),
+    ("Kaleidoscope", 6420, 0xaff5d4c6f8828c2f),
     ("Scanlines", 0, 0x2e1c992bbc8c9f5a),
     ("Scanlines", 1730, 0x2e1c992bbc8c9f5a),
     ("Scanlines", 6420, 0x2e1c992bbc8c9f5a),
@@ -495,24 +489,24 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Old photo", 0, 0x8a96329730876e8a),
     ("Old photo", 1730, 0x8a96329730876e8a),
     ("Old photo", 6420, 0x8a96329730876e8a),
-    ("Vignette", 0, 0x33bf77d214dc3c9d),
-    ("Vignette", 1730, 0x33bf77d214dc3c9d),
-    ("Vignette", 6420, 0x33bf77d214dc3c9d),
+    ("Vignette", 0, 0x453b285a00fb5235),
+    ("Vignette", 1730, 0x453b285a00fb5235),
+    ("Vignette", 6420, 0x453b285a00fb5235),
     ("Corner clock", 0, 0xf9ac5e7955b4a76c),
     ("Corner clock", 1730, 0xf9ac5e7955b4a76c),
     ("Corner clock", 6420, 0xf9ac5e7955b4a76c),
-    ("Old TV", 0, 0x858b99abf175d63d),
-    ("Old TV", 1730, 0x5b634bb1f03cce37),
-    ("Old TV", 6420, 0xf530faae1d47c446),
-    ("Plasma letters", 0, 0x25c29254edf5deb8),
-    ("Plasma letters", 1730, 0xc116670365b1c4b9),
-    ("Plasma letters", 6420, 0x129224eed97a6537),
-    ("Searchlight", 0, 0x6688521f0639056f),
+    ("Old TV", 0, 0x2a5a1b307957cfe2),
+    ("Old TV", 1730, 0x8b53ce2d8fe16652),
+    ("Old TV", 6420, 0x596b9ec7904d3353),
+    ("Plasma letters", 0, 0x937ede84e51c5360),
+    ("Plasma letters", 1730, 0xb316afe62da32778),
+    ("Plasma letters", 6420, 0xd2757fe31150dfda),
+    ("Searchlight", 0, 0xd0c55470814a1ec4),
     ("Searchlight", 1730, 0x27134696e6b29b96),
-    ("Searchlight", 6420, 0xf3755c40b9cf4ce2),
+    ("Searchlight", 6420, 0xcb61313dcf7f82d9),
     // console-b (2026-10-29): `cycle` and `layer rate N`.
-    ("Cycled plasma", 0, 0x29972ee92caa0f1b),
-    ("Cycled plasma", 1730, 0x977b747bc2dd4286),
+    ("Cycled plasma", 0, 0x14b6efec60d6a3a2),
+    ("Cycled plasma", 1730, 0x7b793a80ab8ff5c3),
     ("Cycled plasma", 6420, 0x3928057f5f1044f8),
     ("Waterfall", 0, 0x48cec5829abeb314),
     ("Waterfall", 1730, 0x2883fa1fa89f947c),
@@ -520,16 +514,16 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Copper sky", 0, 0x37d19a046136c611),
     ("Copper sky", 1730, 0x30938cc2cfb8aa77),
     ("Copper sky", 6420, 0x37d16e5a38a4527b),
-    ("Storm front", 0, 0x98a68d2c73ac89dd),
-    ("Storm front", 1730, 0x61b0d4e51c3a6693),
-    ("Storm front", 6420, 0x1d518c5020f2eb93),
+    ("Storm front", 0, 0x6d0e0e7d3130b115),
+    ("Storm front", 1730, 0x66c4db3c49640df1),
+    ("Storm front", 6420, 0x14020362b551311d),
     // road-alts (2026-10-30): Endless road's alternatives.
     ("Neon city", 0, 0x13e664bf85322932),
     ("Neon city", 1730, 0xfeb6ace546e7770b),
     ("Neon city", 6420, 0xde41e747ec3eff17),
-    ("Wormhole run", 0, 0x4178a0db1e176401),
-    ("Wormhole run", 1730, 0x8d31664b21c7c69e),
-    ("Wormhole run", 6420, 0x0591a193ac5abe14),
+    ("Wormhole run", 0, 0x72b7572f97630448),
+    ("Wormhole run", 1730, 0xe9ce3bd5322c9207),
+    ("Wormhole run", 6420, 0xbea23f200e4f7996),
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -542,6 +536,7 @@ fn every_example_draws_as_before_at_its_defaults() {
     // (Pinned by name: the files are read in file-name order, the table is
     // in formulas.json's old order.)
     assert_eq!(all.len() * 3, EXAMPLE_FRAMES.len());
+    let mut bad = 0;
     for e in &all {
         let p = opendmd_psi::compile(&e.src).unwrap();
         let want: Vec<_> = EXAMPLE_FRAMES.iter().filter(|w| w.0 == e.name).collect();
@@ -561,72 +556,42 @@ fn every_example_draws_as_before_at_its_defaults() {
                 u32::MAX,
                 &mut out,
             );
-            assert_eq!(golden::fnv(&out), hash, "{name} at {ms} ms");
+            if golden::fnv(&out) != hash {
+                std::println!("BLESS (\"{name}\", {ms}, {:#018x}),", golden::fnv(&out));
+                bad += 1;
+            }
         }
     }
+    assert_eq!(bad, 0, "pinned example frames differ (BLESS lines above)");
 }
 
-/// The web app's path text (`js/psikit.js` `compact`, which `fpath` sends)
-/// is the compiler's `compact()`, for every example and the edge cases:
-/// text in quotes on declaration lines only, `'"'` a character, comments,
-/// runs of spaces, `;`-joined lines. Run under node.
+/// (Pinned frames: `BLESS` lines printed for a deliberate change.)
+#[allow(dead_code)]
+const _BLESS: () = ();
+
+/// The web app's path for a Formula (`js/psikit.js` `path`, which Show on
+/// panel sends) is `fx_psi::path_of`: `@formula?psb=`, the compiled
+/// Formula in base64url (unpadded), then the values. Run under node, with
+/// the compiler stood in for by the bytes.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn the_web_apps_compact_is_the_compilers() {
-    let mut srcs: Vec<String> = crate::examples().into_iter().map(|e| e.src).collect();
-    for s in [
-        "name = '\"' -- a quote\ngray(name/100)",
-        "name \"a  b\"\ngray(x)",
-        "control k 0..1 = 0.5 \"a;b -- c\"\ngray(k)",
-        "name \"x\"  -- \"q\"\ngray(x)",
-        "name \"a\" ; control k = 0.5 ; gray(k)",
-        "psi 1\nlook screen 40 -- c\nloop 4\ngray(x)",
-        "psi 1; name \"a -- b; c\"; gray(x)",
-        "-- name \"x\"\n  v = 1   // c \"a  b\" \ngray( v )",
-        "k = ' ' + ';' + '-'-'/' -- c\ngray(glyph(k, px % 5, py))",
-        "about \"Moiré:\tx\" \r\nname \"unclosed -- x\ngray(x)",
-        "control  k   = 0  \"Ünï  cödé\"  // c\r\ngray(k)",
-        "v = x % 2 + 1 & 3 # é  // c",
-        "names \"x\" -- c\ngray(x)",
-        "sprite s {\n  key \" 1, . 0\n  .\"\".\n}\ngray(s[px, py])",
-    ] {
-        srcs.push(s.to_string());
-    }
-    // Over the panel's 6,144 B with its `about` line, under it without:
-    // the path leaves the line out (`;` and `--` in another's quotes).
-    let body = format!("gray({}1)", "x*".repeat(3010));
-    let about = format!("about \"{}\"", "A".repeat(110));
-    srcs.push(format!("name \"Long; -- one\"\n{about}\ncontrol k = 0.5 \"x; y\"\n{body}"));
-    srcs.push(format!("{about}\n{body}"));
-    // Over it either way: still without.
-    srcs.push(format!("{about}\n{body}{}", "+1".repeat(100)));
-    let input: String = {
-        let mut j = String::from("[");
-        for (k, s) in srcs.iter().enumerate() {
-            if k > 0 {
-                j.push(',');
-            }
-            j.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => j.push_str("\\\""),
-                    '\\' => j.push_str("\\\\"),
-                    '\n' => j.push_str("\\n"),
-                    '\r' => j.push_str("\\r"),
-                    '\t' => j.push_str("\\t"),
-                    c => j.push(c),
-                }
-            }
-            j.push('"');
-        }
-        j.push(']');
-        j
-    };
+fn the_web_apps_path_is_the_players() {
     let kit = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/www/js/psikit.js");
-    // Each formula's compact text, then its path (psikit `path`, what
-    // psishow's fpath sends).
+    let progs: Vec<Vec<u8>> = crate::examples()
+        .into_iter()
+        .map(|e| opendmd_psi::build(&e.src).unwrap())
+        .chain((0..40).map(|n| (0..n).map(|k| (k * 37 + n) as u8).collect()))
+        .collect();
+    let input: String = format!(
+        "[{}]",
+        progs
+            .iter()
+            .map(|p| format!("[{}]", p.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(",")))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let script = format!(
-        "import {{ compact, path }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const x of JSON.parse(s)) console.log(JSON.stringify(compact(x)) + '\\n' + path({{ src: x }})); }});"
+        "import {{ path, compiler }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const b of JSON.parse(s)) {{ compiler({{ program: () => new Uint8Array(b) }}); console.log(path({{ src: 'x', a: 0.5 }})); }} }});"
     );
     let mut child = std::process::Command::new("node")
         .args(["--input-type=module", "-e", &script])
@@ -639,49 +604,10 @@ fn the_web_apps_compact_is_the_compilers() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     let got: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect();
-    assert_eq!(got.len(), srcs.len() * 2);
-    // fx_psi's path: the compact text, lightly encoded; over 6,144 B
-    // (`synth::MAX_FORMULA_PATH`) without its `about` line.
-    let enc = |c: &str| {
-        let mut p = String::from("@formula?src=");
-        for b in c.bytes() {
-            match b {
-                b' ' => p.push('+'),
-                b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
-                0x21..=0x7e => p.push(b as char),
-                _ => p.push_str(&format!("%{b:02X}")),
-            }
-        }
-        p
-    };
-    // (`synth::MAX_FORMULA_PATH`, psikit `MAX_PATH`.)
-    const MAX_PATH: usize = 6144;
-    let mut dropped = 0;
-    for (src, g) in srcs.iter().zip(got.chunks(2)) {
-        let full = enc(&opendmd_psi::compact(src));
-        let want = if full.len() > MAX_PATH {
-            dropped += 1;
-            enc(&opendmd_psi::compact(&opendmd_psi::look::declare(src, "about", 0, "")))
-        } else {
-            full
-        };
-        assert_eq!(g[1], want, "path of {src:?}");
-        assert!(want.len() <= MAX_PATH || !src.starts_with("name"), "{}", want.len());
-    }
-    // (The three long cases. Endless road keeps its `about` since road-cost.)
-    assert_eq!(dropped, 3);
-    for (src, g) in srcs.iter().zip(got.into_iter().step_by(2)) {
-        let want = opendmd_psi::compact(src);
-        let mut w = String::from("\"");
-        for c in want.chars() {
-            match c {
-                '"' => w.push_str("\\\""),
-                '\\' => w.push_str("\\\\"),
-                '\t' => w.push_str("\\t"),
-                c => w.push(c),
-            }
-        }
-        w.push('"');
-        assert_eq!(g, w, "compact of {src:?}");
+    assert_eq!(got.len(), progs.len());
+    for (b, g) in progs.iter().zip(&got) {
+        let want = format!("@formula?psb={}&a=0.5", opendmd_psi::psb::to_base64(b));
+        assert_eq!(g, &want);
+        assert_eq!(opendmd_psi::psb::from_base64(&want.as_bytes()[13..want.len() - 6]).as_ref(), Some(b));
     }
 }

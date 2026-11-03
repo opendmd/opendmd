@@ -165,7 +165,7 @@ Press **+ New formula**, clear the text, and build it up line by line.
    gray(sin(x*2 + t/8)*0.5 + 0.5)
    ```
 
-4. Add a second wave going up and down the panel (`y` is 0 at the bottom, 1
+4. Add a second wave going up and down the panel (`y` is 0 at the top, 1
    at the top), moving the other way and twice as fast. Give the sum a name:
 
    ```
@@ -208,16 +208,15 @@ The [language reference](../psi-spec.md) has all of it in one place.
 | name | what |
 | --- | --- |
 | `x`, `y` | where the pixel is: 0 to 1 across (left to right) and up (bottom to top) |
-| `px`, `py` | the pixel's column, 0–127, and row from the bottom, 0–31 |
+| `px`, `py` | the pixel's column from the left, 0–127, and row from the top, 0–31 |
 | `i` | the pixel's number, 0–4095, from the top left |
 | `t` | seconds into the loop (with `loop forever`, since the formula started) |
 | `seed` | with `loop forever`: 0 to 1, a new one each time it plays |
 | `hour`, `minute`, `second` | the time of day |
 | `a`, `b`, `c` | the controls, in the order the `control` lines declare them (0 to 1 when there is no `control` line) |
 | `w`, `h` | 128 and 32 |
-| `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the bottom to 0.5 at the top |
+| `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the top to 0.5 at the bottom |
 | `r`, `angle` | how far the pixel is from the middle (round, though the panel is 4 times wider than tall: `r < 0.4` is a disc), and its angle round the middle, in turns |
-| `ty` | the pixel's row counted from the top, 0–31 |
 
 **Functions.** Waves and angles are in *turns*, not degrees or radians:
 `sin(0.25)` is 1, and `sin` repeats every 1.
@@ -247,10 +246,9 @@ one the clock and the title cards use: a character is 5 columns by 7 rows
 columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
 Anything outside that, or a character the font hasn't, is 0, so a
 character drawn big is just its column and row worked out from the pixel:
-`digit(7, floor(px/4), floor(ty/4))` draws a 7 four times the size in the
-top-left corner (rows count down from the top here, as `ty` does; `py`
-counts up). `pick` chooses which character goes where:
-`glyph(pick(floor(px/5), 'H', 'I'), px % 5, ty)` writes HI in the top
+`digit(7, floor(px/4), floor(py/4))` draws a 7 four times the size in the
+top-left corner (rows count down from the top, as `py` does). `pick` chooses which character goes where:
+`glyph(pick(floor(px/5), 'H', 'I'), px % 5, py)` writes HI in the top
 left, and nothing after it. Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
 `digit(n, col, row, small)`, or `bold` for chunky 3 by 5 digits (digits
 only): `digit(n, col, row, bold)`; `normal`, the panel's own font, is
@@ -303,7 +301,7 @@ wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
 cycle(glow, wave/6, t/8)
 ```
 
-`s` must be the same along a row: the time, a value from `frame { }`, or
+`s` must be the same along a row: the time, a per-frame value, or
 one that changes with the row (`py`). Turning by the row is how the
 copper-bar skies of the 16-bit machines were made: `cycle(sunset, 0, t/6
 + py/40)` gives each row its own place in the palette. It takes `* k` and
@@ -400,8 +398,7 @@ only when what it does use changes: the clock, a control. A few rules:
 `rate` goes on the bottom layer (or the first few, with the same number),
 under at least one layer that isn't slow; the bottom one covers everything
 (no blend, no coverage); and a slow layer can't read `ink` or the GIF
-under it (`ur`, `ug`, `ub`, `ul`); in a formula pasted in as a part
-(`use … as p`) `rate` is left out, as `fps` is. Something that moves fast in a slow
+under it (`ur`, `ug`, `ub`, `ul`). Something that moves fast in a slow
 layer shows its bands moving at different times: `rate` is for what
 changes slowly. The browser's preview draws the same frames as the panel.
 The gallery's **Storm front** is made this way.
@@ -411,47 +408,49 @@ how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
 `hsv(h, s, v, k)`, `gray(v, k)`, `pal(fire, v, k)`. Where it covers less
 than all, what is below shows through.
 
-**Two formulas in one.** A formula can hold another one as a *part*:
+**Functions.** A piece you use more than once, or a picture you want to
+draw somewhere else, can be a *function*:
 
 ```
 loop 16
-part bars {
-  loop 4
+fn bars() {
   bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
   bar * #ff9933
 }
-part rings {
-  loop 4
-  d = r
-  pal(rainbow, frac(d*1.5 - t/2))
-}
+fn rings(k) = pal(rainbow, frac(r*1.5 - t/2), k)
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
-layer { bars }
-layer { rings(x, y, k) }
+layer { bars() }
+layer { rings(k) }
 ```
 
-You don't have to type a part out: in the editor, write
-`use Clock as ring` on a line of its own, with the name of one of your
-formulas or a bundled one (open a gallery one and save it to use it), and when you move to another line the editor puts
-that formula in as `part ring { … }`, ready to change. Everything you save or
-share then has the whole of it, so it works anywhere: if a `use` line names
-a formula there isn't (or the formula you're editing), the editor says so
-and won't save or share until it's fixed.
+- `fn name(a, b) = …` is one line; with `{ … }` it can set names on its
+  first lines, and its last line is what it gives: a value, or a colour.
+  Call it with values, `rings(0.5)`, and it works as if you had written its
+  lines out there.
+- A function whose values are called `x` and `y` draws at another place:
+  inside it, `px`, `py`, `r` and the others follow them. With
+  `fn p(x, y) { … }`, `p(1 - x, y)` mirrors it, `p(frac(x*4), y)` repeats it
+  four times, `p(abs(x - 0.5)*2, abs(y - 0.5)*2)` folds it like a
+  kaleidoscope.
+- A colour made with `#…` or `rgb(…)` can be mixed with another:
+  `mix(bars(), stars(), k)` fades one into the other as `k` moves.
+  `hsv`, `pal` and `gray` give a whole colour: use the function alone as
+  the last line (or a layer's), and give it how much it covers, as above.
+- Names a function sets are its own: it can use `d` or `wave` whatever the
+  rest of the formula uses.
+- Functions that draw (see Drawing, below) are called on a line of their
+  own inside `draw { }`: `palm(30, 31)` draws a palm there.
 
-- A part draws nothing until you use it. Its name on its own, as the last
-  line (of the formula or of a layer), draws it: `layer { rings }`.
-- `rings(x2, y2)` draws it as if each pixel were somewhere else:
-  `rings(1 - x, y)` mirrors it, `rings(frac(x*4), y)` repeats it four times,
-  `rings(abs(x - 0.5)*2, abs(y - 0.5)*2)` folds it like a kaleidoscope.
-- Like every colour, it takes one more value, how much of the pixel it
-  covers: `rings(x, y, k)`. Moving `k` with `t` fades one formula into
-  another (above).
-- `rings.d` is a value the part sets, here its `d`: use one formula's
-  values in another, for example as how much it covers, so one formula
-  decides where the other shows.
-- Names inside a part are its own: it can use `d` or `wave` whatever the
-  rest of the formula uses. Inside a part, `t` follows the part's own
-  `loop`; make the whole formula's loop a multiple of it.
+You don't have to type a function out: in the editor, write
+`use Clock as ring` on a line of its own, with the name of one of your
+formulas or a bundled one (open a gallery one and save it to use it), and
+when you move to another line the editor puts that formula in as
+`fn ring(x, y) { … }`, ready to change (its sliders become fixed values).
+Only a formula with one colour line can be put in this way (no layers or
+drawing). Everything you save or share then has the whole of it, so it
+works anywhere: if a `use` line names a formula there isn't (or the
+formula you're editing), the editor says so and won't save or share until
+it's fixed.
 
 The gallery's **Bars to stars**, **Rings through stripes** and
 **Kaleidoscope** are made this way.
@@ -473,7 +472,7 @@ hsv(x, 0.6, ink)
 ```
 
 - `line(x0, y0, x1, y1)` and `dot(x, y)` work in pixels: across from the
-  left, **up from the bottom** (as `px` and `py`). One more value or two is
+  left, **down from the top** (as `px` and `py`). One more value or two is
   the ink: `dot(x, y, 0.5)`, or `line(…, 1, 0.2)` fading from one end to
   the other. Where lines cross, the brighter one wins.
 - `for k < 12 { … }` runs its lines with `k` = 0, 1, … 11 (up to 1,024;
@@ -496,6 +495,51 @@ hsv(x, 0.6, ink)
 
 **Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.
 
+**Painting a scene.** For a scene of things in their own colours (a sun,
+hills, a car, a score) draw with colours instead of ink. Paint goes on
+top of the colour line, and **the last thing painted wins**, as in a game
+console: paint the back first, the front last.
+
+```
+loop 4
+sprite car {
+  key . 0, R #d22, W #fff, K #222
+  ..RRRR..
+  .RWWWWR.
+  RRRRRRRR
+  .K....K.
+}
+draw {
+  circfill(100, 8, 6, #fc4)                -- the sun
+  trifill(0, 31, 30, 14, 60, 31, #264)     -- a hill
+  rectfill(0, 26, 127, 31, #333)           -- the road
+  for k < 8 {
+    rectfill(k*16 - frac(t/4)*16, 28, k*16 + 6 - frac(t/4)*16, 28, #fff)
+  }
+  spr(car, 50, 21)
+  print("GO!", 4, 2, #fff)
+}
+mix(#124, #f84, y)                          -- the sky, under the paint
+```
+
+- The painting calls, in pixels from the top left: `pset(x, y, c)`,
+  `line(x0, y0, x1, y1, c)`, `rect(x0, y0, x1, y1, c)` and `rectfill(…)`
+  (corners included), `circ(x, y, r, c)` and `circfill(…)`,
+  `trifill(x0, y0, x1, y1, x2, y2, c)`, `cls(c)` (everything one colour),
+  `spr(sprite, x, y)` (add `1` to flip it across, `2` down, `3` both) and
+  `print("TEXT", x, y, c)`, or a number, `print(minute, x, y, c, small, 2)`
+  (at least 2 digits; `small` or `normal` for the font, `bold` for chunky
+  digits).
+- A colour is `#f80`, a palette's `pal(fire, v)` or `gray(v)`. A sprite's
+  key may give colours: `key . 0, R #d22` (`0`: nothing, the paint under
+  shows).
+- `if k % 2 == 0 { … } else { … }` draws only some things.
+- With paint and no colour line, what is under shows: the picture under
+  the formula over a GIF (snow, a badge, a score), black when it plays
+  alone.
+- Ink and paint mix freely: ink is read by the colour line (`ink`), paint
+  is laid over everything.
+
 **Sprites.** A little picture can be written into the formula as it looks,
 one character a pixel, with a key saying what number each character
 stands for:
@@ -508,13 +552,13 @@ sprite ship {
   .WWWWWW.
   W.W..W.W
 }
-s = ship[px - 60, ty - 12]
+s = ship[px - 60, py - 12]
 mix(#000010, #80c0ff, s)
 ```
 
 `ship[u, v]` is the number of the character at column `u` and row `v`,
 counted from the sprite's top left (and 0 outside it), so moving it is
-adding to `px` and `ty`, and making it bigger is dividing them. The key
+adding to `px` and `py`, and making it bigger is dividing them. The key
 comes first; up to 16 characters (not spaces, or `; { } , - /`), rows up
 to 64 characters wide and 32 tall. Use the numbers for colours —
 `pick(k, #000, #f00, #ff0)` — or for brightness. A sprite's pixel costs a
@@ -600,6 +644,14 @@ formula is edited or deleted here. When the player is short of memory
 (several downloads at once, say) it shows the GIFs without the formula for
 a while.
 
+
+**Moving the GIF.** `under(x, y)` is the picture under the formula at
+pixel x, y, as a colour: `under(px + 2, py)` shifts it two pixels,
+`under(127 - px, py)` mirrors it, `under(floor(px/4)*4 + 2, floor(py/4)*4 +
+2)` pixelates it into 4 × 4 blocks, and `under(px + floor(sin(t*2)*2), py)`
+shakes it. Use it like a colour: alone, scaled (`under(px, py + 1) * 0.5`)
+or mixed (`mix(under, under(px, py - 2), 0.5)`).
+
 ## Keeping them fast
 
 Formulas are made to run on the panel's own small processor too, which
@@ -623,8 +675,8 @@ milliseconds); all the examples are light or medium.
   worked out once a frame, whatever line it's on.
 - Each layer costs about as much as a `smoothstep`; `screen` and colours
   that cover only part of a pixel a little more.
-- A part costs what its formula costs, once for each place it is drawn
-  at: two formulas in one cost about as much as both.
+- A function costs what its lines cost, once for each call: called at
+  two places, about twice.
 - Drawing costs by the line, not by the pixel: a few hundred lines a frame
   is light. A loop's lines count as often as it turns.
 - Anything worked out from the pixel's column and the time only

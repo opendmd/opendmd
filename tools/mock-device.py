@@ -220,9 +220,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   **Retired effects**: any `@fx:..` path (the old native `@fx:tunnel`,
   `@fx:starfield`, ... and the old `@fx:psi`) is a 415 from `POST /api/play`
   ("the built-in effects are gone: Formulas replace them (play one as
-  @formula?src=...)"); a playlist line starting `@fx:` is skipped, with a stderr
+  @formula?psb=...)"); a playlist line starting `@fx:` is skipped, with a stderr
   line each time the playlist is read.
-  **Formulas** (`@formula?src=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
+  **Formulas** (`@formula?psb=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
   `name`, a playlist entry's, is its title): 20 ms
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
   (default 8); not compiled here (any `src` plays). A formula over the
@@ -646,11 +646,12 @@ DEFAULT_SETTINGS = {
     "attract": "",              # "" (the playlist), "clock" or "text:<message>"
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
-    "look_formula": "",         # the Formula look: "" or a formula's @formula?src=.. path
+    "look_formula": "",         # the Formula look: "" or a formula's @formula?psb=.. path
     "boot_show": "short",       # the start-up show: off / short / full
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
+    "formula_arena": False,     # dev: a Formula's memory set aside at boot
     "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
     "api_key": "",              # "" = no key asked; never echoed back
 }
@@ -700,6 +701,7 @@ FIELD_TYPES = {
     "panel_sync": "bool",
     "panel_split": "bool",
     "formula_jit": "bool",
+    "formula_arena": "bool",
     "formula_keep": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
@@ -1002,7 +1004,7 @@ VIRTUAL_POWER_ON = "@power-on"
 
 
 ATTRACT_MESSAGE = 'attract must be "" (the playlist), "clock" or "text:<message>" (at most 200 characters, one line)'
-RETIRED_FX_MESSAGE = "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)"
+RETIRED_FX_MESSAGE = "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)"
 
 
 def _bundled() -> dict[str, str]:
@@ -1041,7 +1043,7 @@ def is_formula_ref(path: str) -> bool:
 
 
 def live_parse(path: str):
-    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@formula?src=..`)
+    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@formula?psb=..`)
     -> ("clock"|"text"|"formula", {param: value}) with the values
     percent-decoded, or None for anything else (a text needs a non-empty
     `msg`, a formula a non-empty `src`)."""
@@ -1053,7 +1055,7 @@ def live_parse(path: str):
         params = {k: urllib.parse.unquote(v) for k, _, v in (kv.partition("=") for kv in query.split("&") if kv)}
         params["src"] = src
         return "formula", params
-    if head == "@formula" and "src=" in query:
+    if head == "@formula" and "psb=" in query:
         pass
     elif head not in ("@clock", "@text", "@boot"):
         return None
@@ -1063,9 +1065,34 @@ def live_parse(path: str):
         params[k] = (urllib.parse.unquote_plus if k == "name" else urllib.parse.unquote)(v)
     if head == "@text" and not params.get("msg"):
         return None
-    if head == "@formula" and not params.get("src", "").strip():
-        return None
+    if head == "@formula":
+        info = psb_info(params.get("psb", ""))
+        if info is None:
+            return None
+        params["name_"], params["loop_ms"] = info
     return head[1:], params
+
+
+PSI_ABI = 1
+
+
+def psb_info(b64: str) -> tuple[str, int] | None:
+    """A compiled Formula's (opendmd_psi::psb) name and loop (ms; 0: it
+    never repeats) from its base64url header, or None when it is not one
+    this player takes (another ABI included)."""
+    import base64
+    try:
+        b = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+    except (ValueError, TypeError):
+        return None
+    if len(b) < 6 or b[:3] != b"PSB" or b[3] != PSI_ABI:
+        return None
+    n = b[5]
+    name = b[6:6 + n].decode("utf-8", "replace")
+    at = 6 + n + 2 + 8 + 4
+    if len(b) < at + 4:
+        return None
+    return name, int.from_bytes(b[at:at + 4], "little")
 
 
 def is_live(path: str) -> bool:
@@ -1086,8 +1113,11 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
     if kind == "formula":
         # A formula: its `loop N` seconds of 20 ms frames (fps=100: 10, 25: 40).
         delay = {"100": 10, "25": 40}.get(params.get("fps", ""), 20)
-        m = re.search(r"(?:^|;|\n)\s*loop\s+([0-9.]+)", params.get("src", ""))
-        secs = min(3600.0, max(0.1, float(m.group(1)))) if m else 8.0
+        if "loop_ms" in params:
+            secs = (params["loop_ms"] or 8000) / 1000
+        else:
+            m = re.search(r"(?:^|;|\n)\s*loop\s+([0-9.]+)", params.get("src", ""))
+            secs = min(3600.0, max(0.1, float(m.group(1)))) if m else 8.0
         return [delay] * max(1, int(secs * 1000) // delay)
     msg = params.get("msg", "")
     font = params.get("font", "big")
@@ -1166,8 +1196,7 @@ def virtual_title(path: str) -> str | None:
         if live[0] == "formula":
             # synth::title: its `name "…"` line, else `&name=` (an older
             # playlist entry's), 60 characters.
-            raw = next((v for k, _, v in (kv.partition("=") for kv in path.partition("?")[2].split("&")) if k == "src"), "")
-            for n in (declared_name(urllib.parse.unquote_plus(raw)), live[1].get("name", "")):
+            for n in (live[1].get("name_", ""), live[1].get("name", "")):
                 n = "".join(c for c in n or "" if c.isprintable())[:60]
                 if n.strip():
                     return n
@@ -2999,6 +3028,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
+                (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -3208,6 +3238,7 @@ def make_handler(ctx: Context, quiet: bool):
                 obj = {
                     "version": ctx.version,
                     "variant": ctx.variant,
+                    "psi_abi": PSI_ABI,
                     "uptime_secs": int(time.monotonic() - player.boot_time),
                     "t_ms": int((time.monotonic() - player.boot_time) * 1000),
                     "ip": "127.0.0.1",
@@ -3343,6 +3374,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
+                    "formula_arena": s["formula_arena"],
                     "formula_keep": s["formula_keep"],
                     "api_key_set": bool(s["api_key"]),
                 }
@@ -3463,7 +3495,7 @@ def make_handler(ctx: Context, quiet: bool):
                         self.send_error_json(400, "glow must be off, short or long")
                         return
                     if field == "look_formula" and v and not is_formula_ref(v):
-                        self.send_error_json(400, "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?src=…)")
+                        self.send_error_json(400, "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)")
                         return
                     if field == "look_formula" and len(v.encode()) > LOOK_INLINE_MAX:
                         self.send_error_json(413, f"this formula is too long for the panel as a look ({len(v.encode())} B as sent; the limit is {LOOK_INLINE_MAX} B): save it and set it by name")
@@ -3881,13 +3913,13 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
             if req.get("live") is True and not (p.startswith("@formula?") or p.startswith("@formula:")):
-                self.send_error_json(400, "\"live\" is only for a formula (@formula?src=…)")
+                self.send_error_json(400, "\"live\" is only for a formula (@formula?psb=…)")
                 return
             if req.get("over") is True:
                 # The editor's formula over the file on screen, until the
                 # playlist moves on ("" takes it off).
                 if p and not is_formula_ref(p):
-                    self.send_error_json(400, "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off")
+                    self.send_error_json(400, "\"over\" is only for a formula (@formula?psb=…), or \"\" to take it off")
                     return
                 if len(p.encode()) > INLINE_MAX:
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")
@@ -4326,6 +4358,10 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_error_json(400, "path escapes the card")
                 return
             data = self.read_body()
+            # `?new=1`: only if there is no such file (http.rs put_file).
+            if query_param(self.path.partition("?")[2] if "?" in self.path else None, "new") == "1" and ctx.fs.read_path(rel) is not None:
+                self.send_error_json(409, f"/{rel} exists")
+                return
             if is_manifest_path(rel):
                 with ctx.lock:
                     obj = self._install_manifest(rel, data)
@@ -4502,6 +4538,17 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, {"ok": True, "from": src, "to": dst, "copy": copy,
                                  "smooth": smooth, "failed": failed})
 
+        def h_mock_stale_names(self, path):
+            # GET /mock/stale-names?hide=<card path> (mock only): names
+            # listings (`?names=1`) leave that file out, as a stale names file.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            hide = query_param(q, "hide")
+            if hide:
+                if not hasattr(ctx, "stale_names"):
+                    ctx.stale_names = set()
+                ctx.stale_names.add(hide)
+            self.send_json(200, {"hidden": sorted(getattr(ctx, "stale_names", set()))})
+
         def h_files_list(self, path):
             _, _, query = self.path.partition("?")
             query = query if "?" in self.path else None
@@ -4515,6 +4562,15 @@ def make_handler(ctx: Context, quiet: bool):
             sizes_raw = query_param(query, "sizes")
             sizes = sizes_raw in ("1", "true")
             entries = ctx.fs.listdir(rel)
+            # `?names=1` (fatidx::names_json): the folder's file names, as a
+            # names file built a while ago would have them: without what
+            # GET /mock/stale-names?hide=<path> hid (a GIF added since).
+            if query_param(query, "names") == "1" and entries is not None and not sizes:
+                hidden = {h.lower() for h in getattr(ctx, "stale_names", set())}
+                out = [{"name": n, "size": None, "dir": False} for n, is_dir, _ in entries
+                       if not is_dir and f"/{rel}/{n}".lower() not in hidden]
+                self.send_json(200, {"dir": dir_param, "entries": out, "count": len(out), "sizes": False, "names": True})
+                return
             if entries is None:
                 self.send_error_json(404, enoent(dir_param))
                 return

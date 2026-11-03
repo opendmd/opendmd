@@ -42,8 +42,9 @@ pub const LANES: usize = psi::LANES;
 pub struct PsiFx {
     prog: psi::Program,
     scratch: psi::Scratch<LANES>,
-    /// The draw stage's canvas (4 KB), held only while the formula draws
-    /// (`draw { }`); `None` is all-zero, so the zeroed box is valid.
+    /// The draw stage's canvas (4 KB, 8 KB when it paints), held only
+    /// while the formula draws (`draw { }`); `None` is all-zero, so the
+    /// zeroed box is valid.
     ink: Option<Box<psi::Ink>>,
     /// When the canvas was last asked for and refused (the installed
     /// clock's µs; 0: not refused): asked again a second later (a clone
@@ -212,6 +213,9 @@ pub struct Governor {
     seen: u16,
     floor: u8,
     floor_left: u16,
+    /// Raced frames after an open or a retune whose lateness is not
+    /// counted ([`Governor::LATE_GRACE`]): they run from cold caches.
+    grace: u8,
 }
 
 impl Governor {
@@ -222,6 +226,26 @@ impl Governor {
     /// A live edit: the next frames run cold, leave them out.
     pub fn edited(&mut self) {
         self.skip = Self::SKIP;
+    }
+
+    /// Another program in place (a live edit, or a Formula played over the
+    /// one on screen): `start`, its own governor, where it starts slower;
+    /// else the level goes on (a heavier formula starts at least as slow as
+    /// its estimate says) but the mean is the new program's estimate (the
+    /// old one's mean was another program's frames). The raced frames' record (late frames
+    /// and the every-2nd-refresh hold they bring) always starts again: it
+    /// was the old program's against the scan. Kept, a hold one heavy
+    /// Formula earned held every Formula played over it to half its frame
+    /// rate for ~4,096 frames (on the spare after Endless road: Scanlines
+    /// at 1.6 ms a frame on 32 ms frames).
+    pub fn retune(&mut self, start: Governor) {
+        if start.level > self.level {
+            *self = start;
+        }
+        self.avg_us = start.avg_us;
+        (self.late, self.seen, self.floor, self.floor_left) = (0, 0, 0, 0);
+        self.grace = Self::LATE_GRACE;
+        self.edited();
     }
 
     /// The budget at the slowest step on a `grid` ms grid: the heaviest
@@ -246,6 +270,7 @@ impl Governor {
             calm: 0,
             avg_us: est_us,
             skip: Self::SKIP,
+            grace: Self::LATE_GRACE,
             ..Governor::default()
         };
         while g.level < Self::MAX_LEVEL && est_us > Self::budget_us(grid << g.level) {
@@ -341,6 +366,15 @@ impl Governor {
         false
     }
 
+    /// Raced frames after an open or a retune left out of the late count:
+    /// the first frames of a Formula run from cold caches (its code and
+    /// data just loaded, the flash cache holding the last one's), and two
+    /// late ones among them held a Formula that keeps every refresh after
+    /// that to every 2nd for [`Governor::LATE_HOLD`] frames: Starfield,
+    /// opened after a reboot or over Glitter, at 16 ms frames for a minute
+    /// and over Old photo at 8 (psi-perf, 2026-11-02).
+    pub const LATE_GRACE: u8 = 16;
+
     /// The frames (refreshes) a raced picture is held for.
     pub fn beam_frames(&self, unit: u32) -> u32 {
         unit << self.level.max(self.floor)
@@ -355,9 +389,30 @@ impl Governor {
     /// waits for the next refresh instead: none are late.)
     pub const LATE_HOLD: u16 = 4096;
 
-    /// A raced frame was (`late`) or wasn't late; `true` when that just
-    /// moved the formula to every 2nd refresh.
-    pub fn note_late(&mut self, late: bool) -> bool {
+    /// A late frame counts towards the hold only while the formula's own
+    /// mean render (render and writes, waits left out) is over this share
+    /// of its frame's budget, %. Under it, a late frame is a stall from
+    /// outside the formula: the loop's work before the tick, the wake, a
+    /// flash write on CPU0 (which stops the flash cache on both cores),
+    /// the web app's polls. The spare (psi-perf, 2026-11-02): Starfield at
+    /// ~3,300 µs of a 6,468 µs budget had 1-2 late frames in ~200 while
+    /// being measured over HTTP, ~1 in 1,000 in all (7 in 6,269 raced
+    /// frames since boot), and was held to 50 fps for a minute or not by
+    /// luck. The hold stays for a formula near the edge, where a late
+    /// frame says its own time does not fit (console-lessons §8.11: it
+    /// was the fallback for Starfield's narrow window, which `late_share`
+    /// and `retarget` absorbed since).
+    pub const LATE_NEAR_PCT: u32 = 75;
+
+    /// A raced frame was (`late`) or wasn't late, `budget_us` its frame's
+    /// render budget ([`beam_budget_us`]); `true` when that just moved the
+    /// formula to every 2nd refresh.
+    pub fn note_late(&mut self, late: bool, budget_us: u32) -> bool {
+        let late = late && u64::from(self.avg_us) * 100 > u64::from(budget_us) * u64::from(Self::LATE_NEAR_PCT);
+        if self.grace > 0 {
+            self.grace -= 1;
+            return false;
+        }
         if self.floor > 0 {
             self.floor_left = self.floor_left.saturating_sub(1);
             if self.floor_left == 0 {
@@ -417,45 +472,36 @@ fn set_stat(i: usize, v: u32) {
     STATS_T.with(|s| s[i].store(v, Ordering::Relaxed));
 }
 
-/// How a formula is compiled: [`psi::compile_into`] in place, unless the
-/// firmware installs another with [`set_compiler`].
-pub type Compiler = fn(&str, &mut psi::Program) -> Result<psi::Info, psi::Error>;
-
-static COMPILER: std::sync::OnceLock<Compiler> = std::sync::OnceLock::new();
-
-/// Install how formulas are compiled (once). The firmware runs the compiler
-/// on a stack of its own: it recurses up to [`psi::MAX_DEPTH`] levels
-/// (~9 KB at the worst on the ESP32), more than the main task (16 KB, much
-/// of it used where a path opens) or the HTTP server (6.5 KB, which checks
-/// an attract effect) can spare.
-pub fn set_compiler(f: Compiler) {
-    let _ = COMPILER.set(f);
-}
-
-// Tests: refuse the next N compiles on this thread with [`psi::NO_MEMORY`]
-// (the firmware's heap check, without a heap to make short).
+// Tests: refuse the next N loads on this thread with [`psi::NO_MEMORY`]
+// (the player's heap, without a heap to make short).
 #[cfg(test)]
 thread_local! {
     static REFUSE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Tests: the next `n` compiles on this thread are refused for the heap.
+/// Tests: the next `n` loads on this thread are refused for the heap.
 #[cfg(test)]
-pub(crate) fn refuse_compiles(n: u32) {
+pub(crate) fn refuse_loads(n: u32) {
     REFUSE.with(|r| r.set(n));
 }
 
-/// Compile `src` into `prog` the installed way.
-pub fn compile_into(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
+/// What a Formula on the card says when its compiled file is not there.
+pub const NOT_PREPARED: &str =
+    "this Formula is not on the card, or not prepared for the panel yet: open the OpenDMD app";
+
+/// Load the compiled Formula `psb` (program `which`) into `prog`: checked
+/// and finished for the player ([`psi::psb::load_into`]).
+fn load_into(psb: &[u8], which: psi::psb::Which, prog: &mut psi::Program) -> Result<(), psi::Error> {
     #[cfg(test)]
     if REFUSE.with(|r| r.replace(r.get().saturating_sub(1)) > 0) {
         prog.clear();
         return Err(no_memory());
     }
-    match COMPILER.get() {
-        Some(f) => f(src, prog),
-        None => psi::compile_into(src, prog),
-    }
+    psi::psb::load_into(psb, which, prog).map_err(|m| psi::Error {
+        start: 0,
+        end: 0,
+        msg: m.to_string(),
+    })
 }
 
 /// Install the clock that turns the governor on (the firmware's
@@ -556,6 +602,23 @@ fn reads_clock(prog: &psi::Program) -> bool {
     prog.inputs() & 16 != 0
 }
 
+/// The playing formula's renders since boot: µs in all (wrapping) and how
+/// many — what a measurement over a stretch of time averages
+/// (`/api/status` `formula.render_us_total`, `renders`; the governor's
+/// `frame_us` is a running mean of the last few frames).
+static RENDER_US: AtomicU32 = AtomicU32::new(0);
+static RENDERS: AtomicU32 = AtomicU32::new(0);
+
+fn note_render(us: u32) {
+    RENDER_US.fetch_add(us, Ordering::Relaxed);
+    RENDERS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// ([`RENDER_US`], [`RENDERS`]).
+pub fn render_totals() -> (u32, u32) {
+    (RENDER_US.load(Ordering::Relaxed), RENDERS.load(Ordering::Relaxed))
+}
+
 /// The last formula drawn: (mean render µs, frame time ms, asked ms, the
 /// last compile's µs) — for `/api/status`. Zeros before any.
 pub fn stats() -> (u32, u32, u32, u32) {
@@ -587,20 +650,11 @@ pub fn tables() -> psi::Tables<'static> {
     }
 }
 
-/// The `@formula?src=…` path for a formula: [`psi::compact`]ed, then
-/// URL-encoded lightly (a space is `+`; `% & + # ?` and anything outside
-/// printable ASCII are `%XX`), with `opts` (`a=0.5&fps=100`) after it.
-/// May be longer than a virtual path may be (512 B): check.
-pub fn path(src: &str, opts: &str) -> String {
-    let mut p = format!("{}?src=", crate::synth::FORMULA);
-    for b in psi::compact(src).bytes() {
-        match b {
-            b' ' => p.push('+'),
-            b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
-            0x21..=0x7e => p.push(b as char),
-            _ => p.push_str(&format!("%{b:02X}")),
-        }
-    }
+/// The `@formula?psb=…` path for a compiled Formula, with `opts`
+/// (`a=0.5&fps=100`) after it. May be longer than a virtual path may be
+/// (512 B): check.
+pub fn path_of(psb: &[u8], opts: &str) -> String {
+    let mut p = format!("{}?psb={}", crate::synth::FORMULA, crate::synth::to_base64(psb));
     if !opts.is_empty() {
         p.push('&');
         p.push_str(opts);
@@ -608,11 +662,19 @@ pub fn path(src: &str, opts: &str) -> String {
     p
 }
 
-/// An `@formula` query: the source, the frame time asked (`fps=`; `None`:
+/// The path for a formula's source, compiled here (the host's tools and
+/// tests; the player never compiles): a source that does not compile gives
+/// a path that does not open.
+#[cfg(any(test, feature = "psi-compiler"))]
+pub fn path(src: &str, opts: &str) -> String {
+    path_of(&psi::build(src).unwrap_or_else(|_| b"not compiled".to_vec()), opts)
+}
+
+/// An `@formula` query: the compiled Formula, the frame time asked (`fps=`; `None`:
 /// the formula's `fps N`, else 20 ms), the sliders (`None`: not on the
 /// path, so the formula's declared default: `psi::Meta::values`).
 struct Query<'a> {
-    src: std::borrow::Cow<'a, str>,
+    psb: std::borrow::Cow<'a, [u8]>,
     delay_ms: Option<u8>,
     sliders: [Option<i32>; 3],
 }
@@ -621,15 +683,15 @@ struct Query<'a> {
 /// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
 pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
 
-/// What follows `@formula` on a path: `?src=…&…` (or the query alone,
-/// `src=…`), or `:<name>?<opts>` for a bundled Formula (any `src=` there is
+/// What follows `@formula` on a path: `?psb=…&…` (or the query alone,
+/// `psb=…`), or `:<name>?<opts>` for a bundled Formula (any `psb=` there is
 /// ignored: the name says what plays).
 fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
     let Some(named) = rest.strip_prefix(':') else {
         return Ok(query(rest.trim_start_matches('?')));
     };
     let (name, opts) = named.split_once('?').unwrap_or((named, ""));
-    let src = crate::synth::valid_formula_name(name)
+    let psb = crate::synth::valid_formula_name(name)
         .then(|| crate::synth::bundled(name))
         .flatten()
         .ok_or_else(|| psi::Error {
@@ -638,66 +700,43 @@ fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
             msg: NO_SUCH_FORMULA.to_string(),
         })?;
     let mut q = query(opts);
-    q.src = std::borrow::Cow::Borrowed(src);
+    q.psb = std::borrow::Cow::Borrowed(psb);
     Ok(q)
 }
 
-/// A Formula's `text` (read from its file) with `opts` (`a=0.5&fps=100`).
-fn with_text<'a>(text: &'a str, opts: &str) -> Query<'a> {
+/// A compiled Formula (read from its file) with `opts`.
+fn with_bytes<'a>(psb: &'a [u8], opts: &str) -> Query<'a> {
     let mut q = query(opts);
-    q.src = std::borrow::Cow::Borrowed(text);
+    q.psb = std::borrow::Cow::Borrowed(psb);
     q
 }
 
-/// A `.psi` file's Formula as it is read, a line at a time: lines that are
-/// only a comment (`--`, `//`) or blank are left out and the rest trimmed,
-/// so comments and indentation mostly never reach the heap (a comment after
-/// code stays: the compiler skips it). Not `psi::compact`, whose code would
-/// cost the firmware 1.7 KB.
-/// `InvalidInput` ("too long for the panel") past
-/// [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE) compacted or
-/// [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE) read.
-pub fn read_text<R: std::io::BufRead>(mut r: R) -> std::io::Result<String> {
-    use crate::synth::{MAX_FORMULA_FILE, MAX_FORMULA_SOURCE};
-    let too_long = || {
-        std::io::Error::new(
+/// A compiled Formula's file (`.psb`), read whole; `InvalidInput` ("too
+/// long for the panel") past [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE).
+pub fn read_psb<R: std::io::Read>(r: R) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let max = crate::synth::MAX_FORMULA_FILE;
+    let mut b = Vec::new();
+    r.take(max as u64 + 1).read_to_end(&mut b)?;
+    if b.len() > max {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "this Formula is too long for the panel",
-        )
-    };
-    let (mut out, mut line, mut read) = (String::new(), String::new(), 0usize);
-    loop {
-        line.clear();
-        let n = r.read_line(&mut line)?;
-        if n == 0 {
-            return Ok(out);
-        }
-        read += n;
-        if read > MAX_FORMULA_FILE {
-            return Err(too_long());
-        }
-        let code = line.trim();
-        if code.is_empty() || code.starts_with("--") || code.starts_with("//") {
-            continue;
-        }
-        out.push_str(code);
-        out.push('\n');
-        if out.len() > MAX_FORMULA_SOURCE {
-            return Err(too_long());
-        }
+        ));
     }
+    Ok(b)
 }
 
 fn query(query: &str) -> Query<'static> {
     let mut q = Query {
-        src: std::borrow::Cow::Borrowed(""),
+        psb: std::borrow::Cow::Borrowed(&[]),
         delay_ms: None,
         sliders: [None; 3],
     };
     for kv in query.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
         match k {
-            "src" => q.src = std::borrow::Cow::Owned(crate::synth::url_decode(v.as_bytes())),
+            "psb" => q.psb = std::borrow::Cow::Owned(crate::synth::from_base64(v.as_bytes()).unwrap_or_default()),
             "fps" => {
                 q.delay_ms = match v {
                     "100" => Some(10),
@@ -722,13 +761,13 @@ fn query(query: &str) -> Query<'static> {
     q
 }
 
-/// Compile `q` into `prog` and hold it to what the [`Governor`] can keep in
+/// Load `q` into `prog` and hold it to what the [`Governor`] can keep in
 /// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
 /// slowest step 80 ms) 32 ms. The estimate and the frame time asked (ms:
 /// the path's `fps=`, else the formula's `fps N`, else 20).
 fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
-    compile_into(&q.src, prog)?;
+    load_into(&q.psb, psi::psb::Which::Play, prog)?;
     if let Some((c, t0)) = t0 {
         set_stat(2, c().wrapping_sub(t0));
     }
@@ -778,20 +817,28 @@ fn grid(delay_ms: u8) -> u32 {
     u32::from(delay_ms.max(crate::fx::floor()))
 }
 
-/// What a formula that draws gets when the heap hasn't its canvas (4 KB):
-/// as the compiler's own thread does when it can't start.
+/// What a formula that draws gets when the heap hasn't its canvas (4 KB,
+/// 8 KB for one that paints): as the compiler's own thread does when it
+/// can't start.
 pub const NO_CANVAS: &str = "the player is short of memory just now: try again in a moment";
 
-/// A canvas for `prog` if it draws (taken from the heap only if it may
-/// fail: `None` for one that doesn't draw, `Err` when the heap hasn't 4 KB).
+/// A canvas for `prog` if it draws, with the planes it uses (taken from
+/// the heap only if it may fail: `None` for one that doesn't draw, `Err`
+/// when the heap hasn't them). `held`, the canvas on hand, is taken and
+/// fitted (the paint plane taken or let go); refused, it is left as it was
+/// for the program it serves.
 fn canvas_for(
     prog: &psi::Program,
-    held: Option<Box<psi::Ink>>,
+    held: &mut Option<Box<psi::Ink>>,
 ) -> Result<Option<Box<psi::Ink>>, psi::Error> {
     if !prog.draws() {
         return Ok(None);
     }
-    match held.or_else(psi::Ink::try_boxed) {
+    let fitted = hinted(ARENA_CANVAS, || match held.as_deref_mut() {
+        Some(k) => k.try_fit(prog).then(|| held.take()).flatten(),
+        None => psi::Ink::try_boxed_for(prog),
+    });
+    match fitted {
         Some(k) => Ok(Some(k)),
         None => Err(psi::Error {
             start: 0,
@@ -857,21 +904,29 @@ impl PsiFx {
         Self::open(&resolve(q)?)
     }
 
-    /// The effect for a Formula's text (read from its file) with `opts`.
-    pub fn from_text(text: &str, opts: &str) -> Result<PsiBox, psi::Error> {
-        Self::open(&with_text(text, opts))
+    /// The effect for a compiled Formula (read from its file) with `opts`.
+    pub fn from_bytes(psb: &[u8], opts: &str) -> Result<PsiBox, psi::Error> {
+        Self::open(&with_bytes(psb, opts))
     }
 
     fn open(q: &Query) -> Result<PsiBox, psi::Error> {
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
         let (est, delay) = compile(q, &mut fx.prog)?;
-        fx.ink = canvas_for(&fx.prog, None)?;
+        fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
         fx.delay_ms = delay;
         let s = fx.prog.meta().values(q.sliders);
         fx.set_sliders(s);
         fx.inputs.seed = next_seed();
         fx.gov = Governor::new(start_estimate(&fx.prog, est), fx.ms());
+        // Where its working memory landed (the scratch's lanes and the
+        // canvas): a frame's cost can depend on which SRAM bank they share
+        // with the panel's DMA (the firmware logs its rows' range at boot).
+        log::info!(
+            "formula: scratch at {:p}, canvas at {:?}",
+            &fx.scratch as *const _,
+            fx.ink.as_deref().map(|k| k as *const psi::Ink)
+        );
         Ok(fx)
     }
 
@@ -888,10 +943,11 @@ impl PsiFx {
     }
 
     /// Take another query's formula, sliders and frame rate in place (a
-    /// live edit on the panel): the clock, the working memory and the
-    /// governor stay — a heavier formula starts at least as slow as its
-    /// estimate says. Only a program's worth (2.8 KB) is allocated, and
-    /// only while compiling.
+    /// live edit on the panel, or `/api/play` of a Formula over this one):
+    /// the clock, the working memory and the governor stay — a heavier
+    /// formula starts at least as slow as its estimate says — but not the
+    /// raced frames' hold ([`Governor::retune`]). Only a program's worth
+    /// (3.4 KB) is allocated, and only while loading.
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = resolve(q)?;
         // SAFETY: `Program` is integers all the way down: zero is valid.
@@ -900,7 +956,7 @@ impl PsiFx {
         let (est, delay) = compile(&q, &mut prog)?;
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
-        self.ink = canvas_for(&prog, self.ink.take())?;
+        self.ink = canvas_for(&prog, &mut self.ink)?;
         // The still cache keeps its lanes for a formula with as many values
         // (the next full frame keeps the new formula's: it checks), else
         // lets them go and the next frame asks again.
@@ -928,11 +984,7 @@ impl PsiFx {
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
-        let g = Governor::new(start_estimate(&self.prog, est), self.ms());
-        if g.level > self.gov.level {
-            self.gov = g;
-        }
-        self.gov.edited();
+        self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()));
         Ok(())
     }
 
@@ -1023,10 +1075,64 @@ impl PsiFx {
     }
 }
 
+/// Where the playing formula's working memory is (`display.buffers` in
+/// the firmware's `/api/status`: which SRAM pool each landed in, against
+/// CPU0's DMA traffic, display-isolation 2026-11-02): the formula's one
+/// allocation (program and VM scratch), its ink plane, its paint plane and
+/// its JIT kernel; 0 for none. Noted at each of its frames, cleared when
+/// it goes.
+pub static BUFFERS: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// [`BUFFERS`]' entries.
+pub const BUF_FX: usize = 0;
+pub const BUF_INK: usize = 1;
+pub const BUF_PLANE: usize = 2;
+pub const BUF_KERNEL: usize = 3;
+/// Bytes of the formula's one allocation.
+pub const FX_BYTES: usize = std::mem::size_of::<PsiFx>();
+/// Bytes of an ink plane (with its paint plane's pointer), and of a paint
+/// plane.
+pub const INK_BYTES: usize = std::mem::size_of::<psi::Ink>();
+pub const PLANE_BYTES: usize = std::mem::size_of::<psi::Plane>();
+
+/// The firmware's `formula_arena` (a dev setting): while this names an
+/// allocation the formula is about to make ([`ARENA_FX`], [`ARENA_CANVAS`]),
+/// the firmware's allocator serves it from an arena it set aside at boot,
+/// so the formula's memory lands in the same place every time. 0: none
+/// (and nothing reads it off the device).
+pub static ARENA_HINT: AtomicUsize = AtomicUsize::new(0);
+pub const ARENA_FX: usize = 1;
+pub const ARENA_CANVAS: usize = 2;
+
+/// Run `f` with [`ARENA_HINT`] at `hint`.
+fn hinted<T>(hint: usize, f: impl FnOnce() -> T) -> T {
+    ARENA_HINT.store(hint, Ordering::Relaxed);
+    let r = f();
+    ARENA_HINT.store(0, Ordering::Relaxed);
+    r
+}
+
+impl PsiFx {
+    /// Note where this formula's memory is ([`BUFFERS`]).
+    fn note_buffers(&self) {
+        BUFFERS[BUF_FX].store(self as *const PsiFx as usize, Ordering::Relaxed);
+        let ink = self.ink.as_deref();
+        BUFFERS[BUF_INK].store(ink.map_or(0, |k| k as *const psi::Ink as usize), Ordering::Relaxed);
+        let plane = ink.and_then(|k| k.1.as_deref());
+        BUFFERS[BUF_PLANE].store(plane.map_or(0, |p| p as *const psi::Plane as usize), Ordering::Relaxed);
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        BUFFERS[BUF_KERNEL].store(self.jit.kernel_addr(), Ordering::Relaxed);
+    }
+}
+
 impl Drop for PsiFx {
     fn drop(&mut self) {
         if self.still.is_held() {
             set_still_held(0);
+        }
+        if BUFFERS[BUF_FX].load(Ordering::Relaxed) == self as *const PsiFx as usize {
+            for b in &BUFFERS {
+                b.store(0, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -1113,7 +1219,7 @@ impl PsiFx {
                 || self.ink_tried == 0
                 || t0.wrapping_sub(self.ink_tried) >= CANVAS_RETRY_US;
             if due {
-                self.ink = psi::Ink::try_boxed();
+                self.ink = psi::Ink::try_boxed_for(&self.prog);
                 self.ink_tried = if self.ink.is_some() { 0 } else { t0 | 1 };
             }
         }
@@ -1228,7 +1334,9 @@ impl PsiFx {
         let Some(c) = clock else {
             return self.delay();
         };
-        if self.gov.observe(c().wrapping_sub(t0).wrapping_sub(slow_us).wrapping_add(slow_fair), grid) {
+        let us = c().wrapping_sub(t0).wrapping_sub(slow_us).wrapping_add(slow_fair);
+        note_render(us);
+        if self.gov.observe(us, grid) {
             log::info!(
                 "formula: {} us a frame -> {} ms frames (asked {grid})",
                 self.gov.avg_us(),
@@ -1253,6 +1361,7 @@ impl PsiFx {
     /// `render`).
     #[inline(never)]
     fn draw(&mut self, bytes: &mut [u8], mut changed: Option<&mut [u32; psi::H]>, sink: Option<psi::PairSink<'_>>) -> bool {
+        self.note_buffers();
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let mut sink = sink;
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -1331,14 +1440,16 @@ impl PsiFx {
     fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, grid: u32) -> Duration {
         let (err, waited, late) = (h.end)();
         let unit = crate::scan::beam_frames(grid * 1000, cycle);
-        if self.gov.note_late(late) {
+        let budget = beam_budget_us(self.gov.beam_frames(unit) * cycle, cycle);
+        if self.gov.note_late(late, budget) {
             log::info!(
-                "formula: over 1 in 1,000 raced frames late -> every {} refreshes for a while",
+                "formula: over 1 in 1,000 raced frames late near its budget -> every {} refreshes for a while",
                 self.gov.beam_frames(unit)
             );
         }
         if let Some(c) = clock {
             let us = c().wrapping_sub(t0).saturating_sub(waited);
+            note_render(us);
             if self.gov.observe_beam(us, unit * cycle, cycle) {
                 log::info!(
                     "formula: {} us a frame raced -> every {} refreshes (asked {grid} ms)",
@@ -1424,6 +1535,7 @@ pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]
 /// [`mark_changed`] for row pair `p` alone (rows `p` and `p + 16`, their
 /// changed groups `a` and `b`): what racing the beam marks as each pair is
 /// drawn. Returns the pixels it marked.
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub fn mark_pair(dirty: &mut crate::canvas::DirtyMap, p: usize, a: u32, b: u32) -> u32 {
     const HALF: usize = psi::H / 2;
     let whole = spans_cost(u32::MAX);
@@ -1566,10 +1678,10 @@ impl FormulaLook {
         Self::open(&resolve(Self::query_of(path))?)
     }
 
-    /// The look for a Formula's text (read from its `.psi` file, as
-    /// [`read_text`] gives it) with `opts`.
-    pub fn from_text(text: &str, opts: &str) -> Result<FormulaLook, psi::Error> {
-        Self::open(&with_text(text, opts))
+    /// The look for a compiled Formula (read from its `.psb` file) with
+    /// `opts`.
+    pub fn from_bytes(psb: &[u8], opts: &str) -> Result<FormulaLook, psi::Error> {
+        Self::open(&with_bytes(psb, opts))
     }
 
     fn open(q: &Query) -> Result<FormulaLook, psi::Error> {
@@ -1600,13 +1712,9 @@ impl FormulaLook {
     }
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
-        crate::fx_psi::compile_into(&q.src, prog)?;
-        // Its own `look screen 40` line: the look is that composition (the
-        // controls' defaults stay the formula's: the compiler takes the
-        // part's when the composed text declares none).
-        if let Some(text) = psi::look::declared(&q.src, prog) {
-            crate::fx_psi::compile_into(&text?, prog)?;
-        }
+        // Its look program: its own `look screen 40` line composed in by
+        // the compiler (else the program as it plays).
+        load_into(&q.psb, psi::psb::Which::Look, prog)?;
         if !prog.over() {
             prog.clear();
             return Err(psi::Error {
@@ -1698,7 +1806,7 @@ impl FormulaLook {
         // till then); one that stops gives it back.
         self.ink_tried = None;
         if let Some(b) = self.held.as_mut() {
-            b.ink = canvas_for(&self.prog, b.ink.take()).unwrap_or(None);
+            b.ink = canvas_for(&self.prog, &mut b.ink).unwrap_or(None);
             let ink = b
                 .ink
                 .as_ref()
@@ -1744,7 +1852,7 @@ impl FormulaLook {
             return false;
         }
         px.resize(PIXELS, Rgb::BLACK);
-        let Ok(ink) = canvas_for(&self.prog, None) else {
+        let Ok(ink) = canvas_for(&self.prog, &mut None) else {
             return false;
         };
         let layout = std::alloc::Layout::new::<psi::Scratch<LANES>>();
@@ -1862,7 +1970,7 @@ impl FormulaLook {
                 .ink_tried
                 .is_none_or(|t| now >= t + Duration::from_micros(u64::from(CANVAS_RETRY_US)))
         {
-            b.ink = psi::Ink::try_boxed();
+            b.ink = psi::Ink::try_boxed_for(&self.prog);
             if b.ink.is_some() {
                 self.ink_tried = None;
                 self.fresh = true;
@@ -2104,6 +2212,11 @@ mod jit {
     const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
 
     impl Jit {
+        /// The kernel's block address, 0 for none (`BUFFERS`).
+        pub(super) fn kernel_addr(&self) -> usize {
+            self.kernel.as_ref().map_or(0, |k| k.addr())
+        }
+
         /// The kernel, if it draws this frame (a trial's frames kernel and
         /// VM in turn). Not made yet: made now, and the VM draws this frame
         /// (the check reads its bytes).
@@ -2302,7 +2415,7 @@ mod alloc_box {
             // way down (`Program`, `Scratch`, `Inputs`, `u8`) but for its
             // canvas, an `Option<Box<_>>`, whose all-zero value is `None`:
             // all-zero is a valid value of it.
-            let mut b = PsiBox(unsafe { super::try_zeroed::<PsiFx>()? });
+            let mut b = PsiBox(super::hinted(super::ARENA_FX, || unsafe { super::try_zeroed::<PsiFx>() })?);
             b.0.prog.clear();
             b.0.scratch.reset();
             b.0.delay_ms = 20;
@@ -2335,7 +2448,7 @@ mod alloc_box {
             let mut b = PsiBox::new();
             b.0.prog = self.0.prog;
             // (A clone that can't have its canvas draws nothing: `ink` 0.)
-            b.0.ink = super::canvas_for(&b.0.prog, None).unwrap_or(None);
+            b.0.ink = super::canvas_for(&b.0.prog, &mut None).unwrap_or(None);
             b.0.clock = self.0.clock;
             b.0.delay_ms = self.0.delay_ms;
             b.0.inputs = self.0.inputs;
@@ -2397,7 +2510,7 @@ mod tests {
     /// and the open's `seed`; a live edit keeps the time.
     #[test]
     fn a_formula_that_never_repeats_goes_on_across_passes() {
-        let src = "loop forever\nframe { u = t*0.15 + seed*100 }\ngray(noise(u + x*4, y*2, 0) * frac(t*3))";
+        let src = "loop forever\nu = t*0.15 + seed*100\ngray(noise(u + x*4, y*2, 0) * frac(t*3))";
         let mut fx = Fx::parse(&path(src)).unwrap();
         let Fx::Psi(b) = &mut fx;
         b.set_seed(12_345);
@@ -2501,24 +2614,93 @@ mod tests {
     }
 
     /// Racing the beam: over one late frame in a window of 1,024, every 2nd
-    /// refresh for 4,096 frames, then every refresh again.
+    /// refresh for 4,096 frames, then every refresh again — for a formula
+    /// near its budget (here a mean of 1,000 µs against 1,200).
     #[test]
     fn late_raced_frames_hold_every_second_refresh_for_a_while() {
+        const NEAR: u32 = 1_200;
         let mut g = Governor::new(1_000, 10);
+        assert_eq!(g.beam_frames(1), 1);
+        // The first frames after an open are cold: late or not, not counted.
+        for _ in 0..Governor::LATE_GRACE {
+            assert!(!g.note_late(true, NEAR));
+        }
         assert_eq!(g.beam_frames(1), 1);
         // One late frame a window: fine.
         for k in 0..3 * Governor::LATE_WINDOW {
-            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7));
+            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7, NEAR));
         }
         assert_eq!(g.beam_frames(1), 1);
-        assert!(!g.note_late(true));
-        assert!(g.note_late(true), "two in a window");
+        assert!(!g.note_late(true, NEAR));
+        assert!(g.note_late(true, NEAR), "two in a window");
         assert_eq!(g.beam_frames(1), 2);
         for _ in 0..Governor::LATE_HOLD {
             assert_eq!(g.beam_frames(1), 2);
-            g.note_late(false);
+            g.note_late(false, NEAR);
         }
         assert_eq!(g.beam_frames(1), 1, "tried again");
+    }
+
+    /// A formula well under its budget keeps every refresh through late
+    /// frames that come from outside it (a stall: a flash write on CPU0,
+    /// the loop's work before the tick), however they bunch; one near its
+    /// budget is still held by two in a window. The spare's numbers:
+    /// Starfield ~3,300 µs of a 6,468 µs budget; a formula at 5,500.
+    #[test]
+    fn only_a_formula_near_its_budget_is_held_for_late_frames() {
+        const BUDGET: u32 = 6_468;
+        let mut light = Governor::new(3_300, 10);
+        for k in 0..20 * Governor::LATE_WINDOW as u32 {
+            // Two late in a row every 300 frames: 0.7 %, seven times the
+            // spare's rate under its measurement's HTTP.
+            assert!(!light.note_late(k % 300 < 2, BUDGET), "frame {k}");
+        }
+        assert_eq!(light.beam_frames(1), 1, "light: every refresh");
+        let mut near = Governor::new(5_500, 20);
+        for _ in 0..Governor::LATE_GRACE {
+            near.note_late(false, BUDGET);
+        }
+        assert!(!near.note_late(true, BUDGET));
+        assert!(near.note_late(true, BUDGET), "near its budget: held");
+        assert_eq!(near.beam_frames(1), 2);
+        // The edge: three quarters of the budget.
+        assert_eq!(Governor::LATE_NEAR_PCT, 75);
+        let mut at = Governor::new(BUDGET * 3 / 4, 10);
+        for _ in 0..Governor::LATE_GRACE + 2 {
+            at.note_late(true, BUDGET);
+        }
+        assert_eq!(at.beam_frames(1), 1, "at three quarters: not yet");
+    }
+
+    /// A Formula played over one whose raced frames were held to every 2nd
+    /// refresh (late frames) starts on its own grid: `/api/play` of a
+    /// Formula over a Formula is a retune, and the hold was the old one's.
+    /// A heavier one still starts at its own (slower) level.
+    #[test]
+    fn a_formula_played_over_a_held_one_starts_on_its_own_grid() {
+        const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
+        const SCAN: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
+        let mut fx = PsiFx::from_query(&super::path(ROAD, "")[Q..]).unwrap();
+        // (Its first frames are the grace's: cold, not counted. A budget
+        // it is near: late frames count.)
+        const NEAR: u32 = 5_000;
+        for _ in 0..Governor::LATE_GRACE {
+            assert!(!fx.gov.note_late(true, NEAR));
+        }
+        assert_eq!(fx.gov.beam_frames(1), 1, "late in its grace: not held");
+        assert!(!fx.gov.note_late(true, NEAR));
+        assert!(fx.gov.note_late(true, NEAR));
+        assert_eq!(fx.gov.beam_frames(1), 2, "the road held");
+        fx.retune_from(&super::path(SCAN, "")[Q..]).unwrap();
+        assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (20, 20));
+        assert_eq!(fx.gov.beam_frames(2), 2, "every 2nd refresh: its 50 fps, not 25");
+        // One late frame after the retune is not two in a window.
+        assert!(!fx.gov.note_late(true, NEAR));
+        assert_eq!(fx.gov.beam_frames(2), 2);
+        // Heavier: its own start (about 9 ms, two noises: 40 ms frames).
+        let heavy = "loop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
+        fx.retune_from(&super::path(heavy, "")[Q..]).unwrap();
+        assert_eq!(fx.gov.delay_ms(fx.ms()), 40);
     }
 
     thread_local! {
@@ -2613,6 +2795,7 @@ mod tests {
             }
         }
         a_rate_formula_is_not_raced_and_keeps_its_grid();
+        starfields_grid_does_not_depend_on_what_played_before();
         arm_beam(false);
         set_beam(None);
         set_clock(None);
@@ -2621,6 +2804,67 @@ mod tests {
     fn raced_level(fx: &Fx) -> u32 {
         let _ = fx;
         u32::from(stats().1 > 12)
+    }
+
+    thread_local! {
+        static COLD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The panel's end of a raced frame whose first frames after an open
+    /// come in late (cold caches): `COLD` of them.
+    fn beam_end_cold() -> (i32, u32, bool) {
+        let late = COLD.with(|c| {
+            let n = c.get();
+            c.set(n.saturating_sub(1));
+            n > 0
+        });
+        (0, 0, late)
+    }
+
+    /// Starfield (100 fps) plays every refresh whether it opens fresh or is
+    /// played over Glitter or Old photo (a retune), even when its first
+    /// raced frames run late from cold caches. (They counted: two of them
+    /// held it to every 2nd refresh for a minute — the spare after a reboot
+    /// and over Glitter, not over Old photo.)
+    /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`: the
+    /// hooks are the process's.)
+    fn starfields_grid_does_not_depend_on_what_played_before() {
+        const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+        const GLITTER: &str = include_str!("../../opendmd-web/formulas/glitter.psi");
+        const PHOTO: &str = include_str!("../../opendmd-web/formulas/old-photo.psi");
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end_cold }));
+        let run = |fx: &mut Fx, from: u32| -> Vec<Duration> {
+            let mut c = Canvas::new();
+            arm_beam(true);
+            (from..from + 60)
+                .map(|k| {
+                    TOLD.with(|t| t.borrow_mut().clear());
+                    STARTS.with(|n| n.set(0));
+                    fx.frame(Duration::from_millis(u64::from(k) * 8), &mut c)
+                })
+                .collect()
+        };
+        let mut grids = Vec::new();
+        for before in [None, Some(GLITTER), Some(PHOTO)] {
+            let mut fx = Fx::parse(&path(before.unwrap_or(STARS))).unwrap();
+            let mut from = 0;
+            if before.is_some() {
+                run(&mut fx, 0);
+                from = 60;
+                let Fx::Psi(b) = &mut fx;
+                b.retune_from(&super::path(STARS, "")[Q..]).unwrap();
+            }
+            COLD.with(|c| c.set(3));
+            run(&mut fx, from);
+            // Then two late frames well after its grace, a frame apart
+            // (a stall from outside: Starfield is far under its budget).
+            COLD.with(|c| c.set(2));
+            let d = run(&mut fx, from + 60);
+            grids.push(*d.last().unwrap());
+        }
+        assert_eq!(grids, [Duration::from_micros(7_980); 3], "fresh, over Glitter, over Old photo");
+        COLD.with(|c| c.set(0));
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end }));
     }
 
     /// A `rate` formula with the beam's hooks armed is not raced: its
@@ -2794,7 +3038,7 @@ mod tests {
         assert!(Fx::parse(&path("loop 2\ngray(x)")).is_some());
         assert_eq!(
             PsiFx::from_query("src=gray(tme)").unwrap_err().msg,
-            "unknown name `tme` — did you mean `t`?"
+            psi::psb::NOT_PSB
         );
         // A clone is equal and renders the same.
         let a = Fx::parse(&path(psi::sketches::PLASMA)).unwrap();
@@ -2887,16 +3131,10 @@ mod tests {
             let p = path(src);
             assert!(p.len() <= crate::synth::MAX_PATH, "{name}: {} B", p.len());
         }
-        assert_eq!(
-            path("v = x % 2 + 1 & 3 # é"),
-            "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9"
-        );
-        // Characters in quotes, the URL's own among them, come back as they
-        // went.
+        // The compiled Formula comes back as it went.
         let src = "k = ' ' + '+' + '%' + '#' + '&' + '?' + ';' + '=' -- c\ngray(glyph(k, px % 5, 31 - py))";
         let q = query(path(src).strip_prefix("@formula?").unwrap());
-        assert_eq!(q.src, psi::compact(src));
-        assert_eq!(psi::compile(&q.src).unwrap(), psi::compile(src).unwrap());
+        assert_eq!(&*q.psb, &psi::build(src).unwrap()[..]);
     }
 
     #[test]
@@ -3064,7 +3302,7 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
-        assert_eq!(e.to_string(), "unknown name `tme` — did you mean `t`?");
+        assert_eq!(e.to_string(), psi::psb::NOT_PSB);
         assert!(src.retune("@clock").is_none());
         assert!(src.retune("@formulas").is_none());
         let mut clock =
@@ -3085,7 +3323,7 @@ mod tests {
             (e.kind(), e.to_string().as_str()),
             (
                 ErrorKind::InvalidInput,
-                "unknown name `tme` — did you mean `t`?"
+                psi::psb::NOT_PSB
             )
         );
         // Too heavy: ~48 ms a frame estimated.
@@ -3121,11 +3359,8 @@ mod tests {
             assert_eq!(open(p).unwrap_err().kind(), ErrorKind::InvalidData);
         }
         // A formula may be longer than other virtual paths, up to its limit.
-        let mut src = String::from("loop 8\n");
-        for k in 0..60 {
-            src.push_str(&format!("v{k} = x * {k}.125 + y\n"));
-        }
-        src.push_str("gray(frac(v59))");
+        let terms: Vec<String> = (0..40).map(|k| format!("sin(x*{k}.125 + y)")).collect();
+        let src = format!("loop 8\ngray(frac({}))", terms.join(" + "));
         let p = super::path(&src, "");
         assert!(
             p.len() > crate::synth::MAX_PATH && p.len() <= crate::synth::MAX_FORMULA_PATH,
@@ -3186,14 +3421,22 @@ mod tests {
 
     /// The VM's frame of `src` at `ms` over `under`.
     fn over(src: &str, ms: u32, under: &Canvas) -> Vec<u8> {
-        let prog = psi::compile(src).unwrap();
+        over_prog(&psi::compile(src).unwrap(), ms, under)
+    }
+
+    /// `src` with its look line set to `blend` at `k` %.
+    fn as_look(src: &str, blend: &str, k: u8) -> String {
+        psi::look::set(src, blend, k).unwrap()
+    }
+
+    fn over_prog(prog: &psi::Program, ms: u32, under: &Canvas) -> Vec<u8> {
         let mut want = vec![0u8; psi::W * psi::H * 3];
         let inputs = psi::Inputs {
             t: psi::Inputs::at_ms(ms),
             ..Default::default()
         };
         psi::render_rows_ink(
-            &prog,
+            prog,
             &mut psi::Scratch::<128>::new(),
             Some(&mut psi::Ink::boxed()),
             &inputs,
@@ -3336,9 +3579,8 @@ mod tests {
         let body = "control k 0..1 = 0.5\nhsv(x, 1, k)";
         let mine =
             FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
-        let composed = psi::look::compose(body, "screen", 40).unwrap();
-        let theirs = FormulaLook::from_path(&super::path(&composed, "")).unwrap();
-        assert!(*mine.prog == *theirs.prog);
+        let theirs = psi::look::compose(body, "screen", 40).unwrap();
+        assert!(*mine.prog == theirs);
         assert_eq!(mine.inputs.a, 1 << 15);
         // `look` alone is the formula itself: one that covers the GIF is
         // still no look.
@@ -3368,13 +3610,13 @@ mod tests {
         // Composed with a blend or a lower amount (Settings' choices), it is.
         let under = picture();
         for (b, k) in [("screen", 40), ("over", 30), ("multiply", 100), ("max", 50)] {
-            let src = psi::look::compose("hsv(x, 1, 1)", b, k).unwrap();
+            let src = as_look("hsv(x, 1, 1)", b, k);
             let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
             assert!(look.take());
             let mut c = picture();
             let out = look.apply(Duration::ZERO, &mut c, 0);
             assert!(
-                out.as_bytes() == over(&src, 0, &under).as_slice(),
+                out.as_bytes() == over_prog(&psi::look::compose("hsv(x, 1, 1)", b, k).unwrap(), 0, &under).as_slice(),
                 "{b} {k}"
             );
             assert!(out.as_bytes() != under.as_bytes(), "{b} {k}: drawn");
@@ -3395,7 +3637,7 @@ mod tests {
             FormulaLook::from_path("@formula?src=gray(tme)")
                 .unwrap_err()
                 .msg,
-            "unknown name `tme` — did you mean `t`?"
+            psi::psb::NOT_PSB
         );
         assert_eq!(
             FormulaLook::BUFFER_BYTES,
@@ -3432,7 +3674,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut under = picture();
         let mut look = FormulaLook::from_path(&super::path(
-            "frame { m = minute / 60 }\nlayer { gray(1, step(px, m*128) * 0.3) }",
+            "m = minute / 60\nlayer { gray(1, step(px, m*128) * 0.3) }",
             "",
         ))
         .unwrap();
@@ -3657,15 +3899,15 @@ mod tests {
     #[test]
     fn a_look_that_draws_takes_its_canvas() {
         let under = picture();
-        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let src = as_look(STARS, "screen", 60);
         let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
-        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + 4096);
+        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + core::mem::size_of::<psi::Ink>());
         assert!(look.take());
         let mut c = picture();
         let out = look.apply(Duration::ZERO, &mut c, 0);
-        assert_eq!(out.as_bytes(), over(&src, 0, &under).as_slice());
+        assert_eq!(out.as_bytes(), over_prog(&psi::look::compose(STARS, "screen", 60).unwrap(), 0, &under).as_slice());
         // Retuned to a look that doesn't draw: the canvas goes.
-        let plain = psi::look::compose("gray(x)", "screen", 40).unwrap();
+        let plain = as_look("gray(x)", "screen", 40);
         look.retune(&super::path(&plain, "")).unwrap();
         assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES);
         assert!(look.held.as_ref().unwrap().ink.is_none());
@@ -3714,8 +3956,8 @@ mod tests {
     }
 
     /// Psi's `line` is the built-in effects' rasteriser: the same pixels
-    /// for any two ends (Psi counts y up from the bottom, the reference
-    /// rows down from the top), off the panel too.
+    /// for any two ends (both count rows down from the top), off the
+    /// panel too.
     #[test]
     fn psi_lines_are_the_effects_lines() {
         let mut r = 0x9e37_79b9u32;
@@ -3734,11 +3976,7 @@ mod tests {
                 (x1, y1, 255),
                 Rgb::new(255, 255, 255),
             );
-            let src = format!(
-                "draw {{ line({x0}, {}, {x1}, {}) }}\ngray(ink)",
-                31 - y0,
-                31 - y1
-            );
+            let src = format!("draw {{ line({x0}, {y0}, {x1}, {y1}) }}\ngray(ink)");
             let want = drawn(&src, 0);
             for (k, (a, b)) in c.as_bytes().chunks(3).zip(want.chunks(3)).enumerate() {
                 assert_eq!(a[0] > 0, b[0] > 0, "{x0},{y0} -> {x1},{y1}: pixel {k}");
@@ -3875,7 +4113,7 @@ mod tests {
     /// draw stage: its time is the rows', not the lines'.
     #[test]
     fn a_looks_partial_redraw_does_not_draw_again() {
-        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let src = as_look(STARS, "screen", 60);
         let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
         assert!(look.take());
         let mut c = picture();
@@ -3904,26 +4142,4 @@ mod tests {
         assert_eq!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0, before);
     }
 
-    /// A `.psi` file read a line at a time compiles to the same program as
-    /// the file (every example, header and comments too), with no comment
-    /// line or indentation kept.
-    #[test]
-    fn a_file_read_is_the_formula_without_its_comment_lines() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
-        let mut n = 0;
-        for e in std::fs::read_dir(dir).unwrap() {
-            let p = e.unwrap().path();
-            if p.extension().is_none_or(|x| x != "psi") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&p).unwrap();
-            let read = read_text(std::io::Cursor::new(text.replace('\n', "\r\n"))).unwrap();
-            let listing = |s: &str| psi::compile(s).map(|p| p.listing()).map_err(|e| e.msg);
-            assert_eq!(listing(&read), listing(&text), "{}", p.display());
-            assert!(read.lines().all(|l| !l.starts_with("--") && !l.starts_with(' ') && !l.is_empty()), "{}", p.display());
-            assert!(read.len() < text.len(), "{}", p.display());
-            n += 1;
-        }
-        assert!(n > 20);
-    }
 }
