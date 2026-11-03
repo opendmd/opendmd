@@ -1631,6 +1631,28 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         };
         crate::fatidx::touched(&path);
+        // A directory is told apart before anything is removed: FatFs's
+        // `f_unlink`, behind `remove_file`, removes an empty directory as
+        // readily as a file, so an emptied category deleted through
+        // `remove_file` never reached `dir_changed` and the index went on
+        // pointing into it (EMPTY_FOLDER, the emulator's API lane).
+        if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+            // An empty category (a directory under gifs/) goes: what is left
+            // when its last GIF was deleted or moved away. The index stops
+            // using its records first (`dir_changed`).
+            if files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) {
+                crate::fatidx::dir_changed();
+            }
+            return match std::fs::remove_dir(&path) {
+                Ok(()) => {
+                    if files::under(&path, config::CACHE_ROOT) {
+                        crate::cache::invalidate();
+                    }
+                    req.json(r#"{"ok":true}"#)
+                }
+                Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
+            };
+        }
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 crate::fatidx::note_gone(&path);
@@ -1646,18 +1668,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     crate::cache::invalidate();
                 }
                 req.json(r#"{"ok":true}"#)
-            }
-            // An empty category (a directory under gifs/) goes too: what is
-            // left when its last GIF was deleted or moved away.
-            Err(_)
-                if std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
-                    && files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) =>
-            {
-                crate::fatidx::dir_changed();
-                match std::fs::remove_dir(&path) {
-                    Ok(()) => req.json(r#"{"ok":true}"#),
-                    Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
-                }
             }
             Err(e) => req.not_found(&format!("{rel}: {e}")),
         }

@@ -772,14 +772,29 @@ fn sync_sd_slow(nvs: &EspNvsPartition<NvsDefault>) {
     }
 }
 
+#[cfg(feature = "emu-census")]
+extern "C" {
+    /// `components/hub75_shim/netdiag.c`: logs `netdiag: sum: … N rx pbufs
+    /// held` (and the pcbs and sockets holding them, when any are): the
+    /// frames lwIP keeps in the WiFi driver's receive buffers.
+    fn opendmd_netdiag();
+}
+
 /// The emulator's leak lane (feature `emu-census`): the heap's blocks in
 /// use and bytes, every 20 s (`run.py leak` counts the GIFs between). A walk of the
-/// heap (here on CPU0, never the display core).
+/// heap (here on CPU0, never the display core). And every 5 s, lwIP's
+/// received frames held (`opendmd_netdiag`, for the API lane's bursts).
 #[cfg(feature = "emu-census")]
 fn census() {
-    static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    // SAFETY: plain IDF calls; `info` is filled by the call.
+    static NET_LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    // SAFETY: a plain IDF call.
     let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1000) as u32;
+    if now.wrapping_sub(NET_LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 5_000 {
+        NET_LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: posts a walk to lwIP's own thread; no arguments.
+        unsafe { opendmd_netdiag() };
+    }
+    static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
     if now.wrapping_sub(last) < 20_000 {
         return;

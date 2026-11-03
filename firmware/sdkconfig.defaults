@@ -73,18 +73,54 @@ CONFIG_ESP_WIFI_NVS_ENABLED=n
 # lwip. One httpd task serves four sockets (config::HTTP_MAX_SOCKETS) and
 # needs three more of its own, plus one for the captive-portal DNS server (or
 # the RePlayOS client), plus three for uploads the stream task has taken out
-# of httpd (one receiving, two queued: stream.rs asserts the sum); and
+# of httpd (room for the stream queue's three: stream.rs asserts the sum); and
 # nothing here speaks IPv6, so the default windows and mailbox depths are
 # oversized. A socket is a few dozen bytes of table until it is used.
 # 14 = HTTP_MAX_SOCKETS (7, six for a browser's keep-alive connections plus
 # one evictable) + 3 (listening, control, spare) + 1 (DNS) + 3 (uploads).
 CONFIG_LWIP_MAX_SOCKETS=14
 CONFIG_LWIP_IPV6=n
-# One MSS each. Two MSS was measurably faster and measurably closer to the
-# out-of-memory line; with a ~20 KB floor the margin is worth more than the
-# throughput, which is still ~200 KB/s off the card.
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=1440
-CONFIG_LWIP_TCP_WND_DEFAULT=1440
+# The receive side is bounded by the WiFi driver, not the heap. Without
+# LWIP_L2_TO_L3_COPY every received frame stays in one of the driver's
+# DYNAMIC_RX_BUFFER_NUM (6) buffers for as long as lwIP holds its pbuf, and
+# with all six held the driver drops every frame: TCP, ARP and ping alike
+# (net-wedge, 2026-11-03; measured with the emulator's netdiag walk of
+# lwIP's pcbs and sockets, `emu-census` builds).
+#
+# Out-of-order segments expire one RTO after the last frame received. lwIP
+# keeps up to 4 segments per connection that arrive after a lost one
+# (TCP_QUEUE_OOSEQ), also on connections already closed, and dropped them
+# only after TCP_OOSEQ_TIMEOUT (6) RTOs without a frame received. Two 408'd
+# uploads left in FIN_WAIT_1 (no socket) held 4 + 2 such segments, all six
+# buffers, so the ACK of their FIN could never come in; each FIN
+# retransmission doubled the RTO, and with it the expiry, which the time
+# since the last frame never caught up with: nothing received again (the
+# spare's wedge: no HTTP, ping or ARP, for good). With a factor of 1 it
+# always does: between two retransmissions the silence grows past the RTO
+# (tcp_slowtmr backs the RTO off first, then compares), so any held
+# segments go within about one RTO, socket or not (1.5 s at the first), and
+# a connection starved of buffers by them gets its retransmission in. Off
+# altogether (TCP_QUEUE_OOSEQ=n) was tried: every loss then cost the rest of
+# the window, and a single 570 KB upload ran into the 120 s cap in the
+# emulator; so was two per connection (TCP_OOSEQ_MAX_PBUFS=2): the firmware
+# bundle's upload slowed by a quarter there and ran into it too. What a
+# socket not read yet holds is kept down by the stream task: one upload at
+# a time, taken only when nothing else is, a second one refused at once
+# (stream.rs).
+#
+# The windows: 5760 (four MSS) both ways, what every build so far really
+# had. The 1440 asked for here before is under Kconfig's minimum (2440), so
+# the build silently took the default (the spare's boot log: `tcp rx win:
+# 5760`), and all the throughput and heap figures in these notes were
+# measured at 5760. A 2880 receive window was tried with the fix: uploads
+# went ~3.5x slower in the emulator (300 KB in 52 s against 15 s) and the
+# 2.2 MB firmware bundle ran into the 120 s body cap, while what it bought
+# (two buffers held by a waiting upload, not four) the one-upload rule gives
+# already. A window caps bytes, not frames: small segments held five
+# buffers for 2.6 KB.
+CONFIG_LWIP_TCP_OOSEQ_TIMEOUT=1
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=6
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16

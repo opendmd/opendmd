@@ -1019,7 +1019,8 @@ emu-leak: emu-build emu-card
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real
 # network); the HTTP API driven from the host over two boots: uploads,
-# listings, moves, deletes, settings, play, skip/pause, a www pack, load
+# listings, moves, deletes, settings, play, skip/pause, a www pack, bursts of
+# simultaneous uploads (the spare's wedge recipe), five-connection load
 # rounds with the heap census flat, a recursive /cache delete during the FAT
 # index build, OTA refusals, the card checked after (fatcheck, the settings
 # file, the bytes), then the signed bundle through the updater. EMU_API_OK.
