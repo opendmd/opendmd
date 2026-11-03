@@ -797,19 +797,49 @@ pub const FATIDX_QUIET_S: u32 = 30;
 pub const FATIDX_MIN_GAP_S: u32 = 600;
 /// No build in the first seconds after boot: the start-up show, the first GIF.
 pub const FATIDX_BOOT_DELAY_S: u32 = 20;
-/// Free heap a build needs to start: its task's stack (8 KB), a 4 KB
-/// sector batch, a 1 KB writer and the group (`FATIDX_GROUP`), over the
-/// network side's transients.
-pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
+/// The free heap a FAT index build leaves the player: the transition
+/// gate's 24 KB and its [`TRANSITION_HEAP_RESERVE`], and 4 KB of a new
+/// file's decoder. The build sizes its group so the heap stays above this
+/// (on the rig a 16 KB group with ~70 KB free cut transitions throughout).
+pub const FATIDX_HEAP_RESERVE: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE + 4 * 1024;
+/// Free heap below which a build stops at its next card read (the heap it
+/// holds goes back; retried after [`FATIDX_MIN_GAP_S`]): the emergency
+/// valve under the reserve (a transition's 24 KB comes and goes out of the
+/// reserve without stopping a build; past it something else needs the heap
+/// more than the index does).
+pub const FATIDX_HEAP_STOP: usize = 12 * 1024;
+/// The largest block a build's group must leave beside it: a GIF's LZW
+/// state (the transition gate's 16 KB block).
+pub const FATIDX_KEEP_BLOCK: usize = 16 * 1024;
 /// The build's task stack (it exists only while it builds): the walk goes
 /// through FatFs, card-speed's transfer and error path (`cardspeed`:
 /// a failed read is recovered and the clock slowed on the caller's task)
-/// and the SD SPI driver, under two closures.
-pub const FATIDX_STACK: usize = 10 * 1024;
+/// and the SD SPI driver, under two closures and three directory levels
+/// (`fatdir::each_indexed_dir`). Emulator, rig-scale card: 2,072 B of
+/// 10 KB left after a build (its paths already on the heap); 11 KB for
+/// card-speed's recovery path on top.
+pub const FATIDX_STACK: usize = 11 * 1024;
+/// The build's batch of directory sectors (the files' walk). Beside it,
+/// ~2 KB for the directory levels above and their paths
+/// (`fatdir::INDEXED_DIR_BUFS`).
+pub const FATIDX_SCRATCH: usize = 4 * 512;
+/// The most records a build gathers per walk, in bytes (8 a record), and
+/// the least (smaller means more walks, never a build that takes the
+/// player's heap): sized at the start from the heap above the reserve.
+pub const FATIDX_GROUP: usize = 16 * 1024;
+pub const FATIDX_GROUP_MIN: usize = 4 * 1024;
+/// Free heap a build needs to start: the reserve, its task's stack, its
+/// buffers, a 1 KB writer and the least group.
+pub const FATIDX_BUILD_HEAP: usize =
+    FATIDX_HEAP_RESERVE + FATIDX_STACK + FATIDX_SCRATCH + 2 * 1024 + 1024 + FATIDX_GROUP_MIN;
+/// After a build that crashed the board (`fatidx::boot`): the next waits
+/// this long after boot (doubled for a second crash in a row), and past
+/// [`FATIDX_CRASHES_OFF`] crashes in a row there is none until a power-on.
+/// GIFs open by path meanwhile.
+pub const FATIDX_AFTER_CRASH_S: u32 = 30 * 60;
+pub const FATIDX_CRASHES_OFF: u32 = 3;
 /// The read-ahead's filling task (`readahead`): card reads only (the SD
 /// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
 /// network does not starve it.
 pub const READAHEAD_STACK: usize = 4 * 1024;
 pub const READAHEAD_PRIORITY: u8 = 5;
-/// The most records a build gathers per walk, in bytes (8 a record).
-pub const FATIDX_GROUP: usize = 16 * 1024;

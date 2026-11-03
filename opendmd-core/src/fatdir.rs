@@ -162,29 +162,75 @@ pub struct Found<'a> {
     pub prev_rel: Option<u32>,
 }
 
-/// Walk a directory from its first cluster: every file with an ASCII long
-/// name, in directory order. `read(lba, buf)` fills `buf` (a whole
-/// number of sectors); `scratch` is a multiple of [`SS`] (the batch size).
-/// Returns the sectors read.
-pub fn walk(
+/// One subdirectory found by [`walk_dirs`]: its name as FatFs lists it (the
+/// long name, else the 8.3 name with its NT case bits) and first cluster.
+pub struct DirFound<'a> {
+    pub name: &'a [u8],
+    pub cluster: u32,
+}
+
+/// An entry [`scan`] found: a live file or directory with an ASCII name.
+struct Entry<'a> {
+    name: &'a [u8],
+    /// The name is a long one (else the 8.3 name).
+    long: bool,
+    dir: bool,
+    cluster: u32,
+    loc: Option<u32>,
+    prev_rel: Option<u32>,
+}
+
+/// The 8.3 name of entry `e` as FatFs shows it (`NAME.EXT`, the NT case
+/// bits applied) into `out`: its length, `None` if not ASCII.
+fn short_name(e: &[u8], out: &mut [u8; 12]) -> Option<usize> {
+    let mut n = 0;
+    let base = e[..8].iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
+    let ext = e[8..11].iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
+    for (i, &b) in e[..base].iter().enumerate() {
+        // 0x05 stands for a leading 0xE5 (not ASCII either way).
+        let b = if i == 0 && b == 0x05 { 0xE5 } else { b };
+        out[n] = if e[12] & 0x08 != 0 { b.to_ascii_lowercase() } else { b };
+        n += 1;
+    }
+    if ext > 0 {
+        out[n] = b'.';
+        n += 1;
+        for &b in &e[8..8 + ext] {
+            out[n] = if e[12] & 0x10 != 0 { b.to_ascii_lowercase() } else { b };
+            n += 1;
+        }
+    }
+    out[..n].is_ascii().then_some(n)
+}
+
+/// Every live entry of a directory, from its first cluster, in directory
+/// order. The first read is one sector (a copy's bucket rarely fills more),
+/// then batches of `scratch`'s size; the FAT sector between clusters is
+/// read into `scratch` too. Allocates nothing.
+fn scan(
     geo: &Geometry,
     first: u32,
     read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
     scratch: &mut [u8],
-    emit: &mut dyn FnMut(Found) -> io::Result<()>,
+    emit: &mut dyn FnMut(Entry) -> io::Result<()>,
 ) -> io::Result<u32> {
     let batch = (scratch.len() / SS).max(1) as u32;
     let mut lfn = [0u8; 260];
+    let mut sfn = [0u8; 12];
     let (mut want, mut chk, mut nent, mut ascii) = (0u8, 0u8, 0usize, true);
     let mut sectors = 0;
     let mut prev_rel = u32::MAX;
-    let mut fat = [0u8; SS];
     let mut cluster = Some(first);
+    let mut step = 1;
     while let Some(c) = cluster {
+        if c < 2 || c >= geo.n_fatent {
+            return Err(io::Error::other("directory cluster out of range"));
+        }
         let first_rel = geo.rel(c);
         let mut s = 0;
         while s < geo.csize {
-            let n = batch.min(geo.csize - s);
+            let n = step.min(geo.csize - s);
+            step = batch;
             read(geo.database + first_rel + s, &mut scratch[..n as usize * SS])?;
             sectors += n;
             for k in 0..n {
@@ -225,33 +271,212 @@ pub fn walk(
                     let long = want == 0 && nent > 0 && chk == sum(e);
                     let lfn_n = std::mem::take(&mut nent);
                     want = 0;
-                    if !is_file(e) {
+                    // Live, not a long-name entry, not the volume label.
+                    if e[11] & 0x08 != 0 {
                         continue;
                     }
-                    if !long || !ascii {
-                        continue;
-                    }
-                    let end = lfn[..lfn_n * 13].iter().position(|&b| b == 0).unwrap_or(lfn_n * 13);
-                    let name = &lfn[..end];
-                    let Some(l) = loc(rel, slot) else { continue };
+                    let cluster = (u16::from_le_bytes([e[20], e[21]]) as u32) << 16 | u16::from_le_bytes([e[26], e[27]]) as u32;
+                    let dir = e[11] & 0x10 != 0;
+                    // FatFs shows the long name when there is one: one that is
+                    // not ASCII is left out, not shown by its 8.3 alias.
+                    let name: &[u8] = if long {
+                        if !ascii {
+                            continue;
+                        }
+                        let end = lfn[..lfn_n * 13].iter().position(|&b| b == 0).unwrap_or(lfn_n * 13);
+                        &lfn[..end]
+                    } else {
+                        match short_name(e, &mut sfn) {
+                            Some(n) => &sfn[..n],
+                            None => continue,
+                        }
+                    };
                     // The long name reaches back past this sector: fine
                     // inside a cluster (the sector before is rel - 1), an
                     // extra record across a cluster boundary, and not
                     // indexed past one sector back.
-                    let back = lfn_n.saturating_sub(slot);
-                    if back > 16 {
-                        continue;
-                    }
+                    let back = if long { lfn_n.saturating_sub(slot) } else { 0 };
+                    let loc = if back > 16 { None } else { loc(rel, slot) };
                     let prev = (back > 0 && rel.is_multiple_of(geo.csize)).then_some(prev_rel);
-                    emit(Found { name, loc: l, prev_rel: prev })?;
+                    emit(Entry { name, long, dir, cluster, loc, prev_rel: prev })?;
                 }
                 prev_rel = rel;
             }
             s += n;
         }
-        cluster = next_cluster(geo, c, read, &mut fat)?;
+        cluster = next_cluster(geo, c, read, &mut scratch[..SS])?;
     }
     Ok(sectors)
+}
+
+/// Walk a directory from its first cluster: every file with an ASCII long
+/// name, in directory order. `read(lba, buf)` fills `buf` (a whole
+/// number of sectors); `scratch` is a multiple of [`SS`] (the batch size).
+/// Returns the sectors read. Allocates nothing.
+pub fn walk(
+    geo: &Geometry,
+    first: u32,
+    read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
+    scratch: &mut [u8],
+    emit: &mut dyn FnMut(Found) -> io::Result<()>,
+) -> io::Result<u32> {
+    scan(geo, first, read, scratch, &mut |e| match e {
+        // Only long names are indexed (a name that fits 8.3 opens by path).
+        Entry { dir: false, long: true, loc: Some(loc), name, prev_rel, .. } => emit(Found { name, loc, prev_rel }),
+        _ => Ok(()),
+    })
+}
+
+/// Every subdirectory of a directory (not `.` or `..`) with an ASCII name,
+/// in directory order, as [`walk`] reads them. Allocates nothing: a caller
+/// walks what it finds with a scratch of its own.
+pub fn walk_dirs(
+    geo: &Geometry,
+    first: u32,
+    read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
+    scratch: &mut [u8],
+    emit: &mut dyn FnMut(DirFound) -> io::Result<()>,
+) -> io::Result<u32> {
+    scan(geo, first, read, scratch, &mut |e| match e {
+        Entry { dir: true, name, cluster, .. } if name != b"." && name != b".." && (2..geo.n_fatent).contains(&cluster) => {
+            emit(DirFound { name, cluster })
+        }
+        _ => Ok(()),
+    })
+}
+
+/// A directory the index covers ([`each_indexed_dir`]): its card path
+/// (`/gifs/<folder>` or `/cache/<category>/<bucket>`), key ([`hash`] of
+/// the path) and first cluster.
+pub struct IndexedDir<'a> {
+    pub path: &'a str,
+    pub key: u32,
+    pub first: u32,
+    /// A `/gifs/` folder (else a copies' bucket).
+    pub gif: bool,
+}
+
+/// `read(lba, buf)`: fill `buf` (whole sectors) from `lba`.
+pub type ReadSectors<'a> = dyn FnMut(u32, &mut [u8]) -> io::Result<()> + 'a;
+
+/// The longest path [`each_indexed_dir`] builds: `/cache/` and two names
+/// of 255.
+const PATH_MAX: usize = 7 + 255 + 1 + 255;
+
+/// Every directory the index covers, read raw from the card: each
+/// `/gifs/<folder>` (from `/gifs`'s first cluster, `gifs`), then each copy
+/// bucket `/cache/<category>/<bucket>` (`cache`; categories starting with
+/// `.` are not the cache's). `f(dir, read)` gets the directory and `read`
+/// to walk it with (a scratch of its own). `bufs` (two sectors) holds the
+/// two directory levels being read. Streams: nothing is kept or allocated,
+/// whatever the number of folders and buckets (a card's cache has up to 256
+/// buckets a category: kept as a list they were the rig's 64 KB allocation
+/// that failed). Directories with a name that is not ASCII are left out
+/// (their files open by path).
+pub fn each_indexed_dir(
+    geo: &Geometry,
+    gifs: Option<u32>,
+    cache: Option<u32>,
+    read: &mut ReadSectors,
+    bufs: &mut [u8],
+    f: &mut dyn FnMut(&IndexedDir, &mut ReadSectors) -> io::Result<()>,
+) -> io::Result<()> {
+    // Two sectors, then the two paths: off the stack (the device's build
+    // task runs FatFs and the SD driver under three levels of this).
+    if bufs.len() < INDEXED_DIR_BUFS {
+        return Err(io::Error::other("each_indexed_dir: bufs too short"));
+    }
+    let (b0, rest) = bufs.split_at_mut(SS);
+    let (b1, rest) = rest.split_at_mut(SS);
+    let (path, rest) = rest.split_at_mut(PATH_MAX);
+    let sub = &mut rest[..PATH_MAX];
+    // One reader shared by the nested walks (each read is a call of its own).
+    let read = std::cell::RefCell::new(read);
+    let mut r0 = |l: u32, b: &mut [u8]| (read.borrow_mut())(l, b);
+    if let Some(first) = gifs {
+        walk_dirs(geo, first, &mut r0, b0, &mut |d| {
+            let n = put(path, 0, b"/gifs/");
+            let n = put(path, n, d.name);
+            // ASCII (`scan`), so a str.
+            let p = std::str::from_utf8(&path[..n]).map_err(io::Error::other)?;
+            let dir = IndexedDir { path: p, key: hash(p.as_bytes()), first: d.cluster, gif: true };
+            f(&dir, &mut |l, b| (read.borrow_mut())(l, b))
+        })?;
+    }
+    if let Some(first) = cache {
+        walk_dirs(geo, first, &mut r0, b0, &mut |cat| {
+            if cat.name.starts_with(b".") {
+                return Ok(());
+            }
+            let n = put(sub, 0, b"/cache/");
+            let n = put(sub, n, cat.name);
+            let n = put(sub, n, b"/");
+            let mut r1 = |l: u32, b: &mut [u8]| (read.borrow_mut())(l, b);
+            walk_dirs(geo, cat.cluster, &mut r1, b1, &mut |bucket| {
+                let m = put(sub, n, bucket.name);
+                let p = std::str::from_utf8(&sub[..m]).map_err(io::Error::other)?;
+                let dir = IndexedDir { path: p, key: hash(p.as_bytes()), first: bucket.cluster, gif: false };
+                f(&dir, &mut |l, b| (read.borrow_mut())(l, b))
+            })
+            .map(drop)
+        })?;
+    }
+    Ok(())
+}
+
+/// The bytes [`each_indexed_dir`]'s `bufs` must have: two directory
+/// sectors and two paths.
+pub const INDEXED_DIR_BUFS: usize = 2 * SS + 2 * PATH_MAX;
+
+fn put(buf: &mut [u8], at: usize, s: &[u8]) -> usize {
+    let n = s.len().min(buf.len() - at);
+    buf[at..at + n].copy_from_slice(&s[..n]);
+    at + n
+}
+
+/// The card's [`Walker`]: every directory [`each_indexed_dir`] finds, its
+/// files walked with `scratch`. Holds nothing but what it is lent.
+pub struct CardWalker<'a> {
+    pub geo: Geometry,
+    /// `/gifs`'s and `/cache`'s first clusters.
+    pub gifs: Option<u32>,
+    pub cache: Option<u32>,
+    pub read: &'a mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
+    /// [`INDEXED_DIR_BUFS`]: the directory levels and paths.
+    pub bufs: &'a mut [u8],
+    /// The files' batch.
+    pub scratch: &'a mut [u8],
+    /// [`Walker::between`].
+    pub between: &'a mut dyn FnMut() -> io::Result<()>,
+}
+
+impl Walker for CardWalker<'_> {
+    fn walk(&mut self, dir: &mut dyn FnMut(u32, u32), rec: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+        let CardWalker { geo, gifs, cache, read, bufs, scratch, .. } = self;
+        each_indexed_dir(geo, *gifs, *cache, *read, bufs, &mut |d, read| {
+            dir(d.key, d.first);
+            let seed = hash_more(d.key, b"/");
+            walk(geo, d.first, read, scratch, &mut |f| {
+                if f.prev_rel.is_none() {
+                    rec(hash_more(seed, f.name), f.loc);
+                }
+                Ok(())
+            })
+            .map(drop)
+        })
+    }
+
+    fn dirs(&mut self, dir: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+        let CardWalker { geo, gifs, cache, read, bufs, .. } = self;
+        each_indexed_dir(geo, *gifs, *cache, *read, bufs, &mut |d, _| {
+            dir(d.key, d.first);
+            Ok(())
+        })
+    }
+
+    fn between(&mut self) -> io::Result<()> {
+        (self.between)()
+    }
 }
 
 /// The index header.
@@ -285,30 +510,48 @@ impl Header {
     }
 }
 
-/// Walks every indexed directory, calling `emit(hash, loc)` per file.
-pub type WalkAll<'a> = dyn FnMut(&mut dyn FnMut(u32, u32)) -> io::Result<()> + 'a;
+/// What [`build_index`] walks: the indexed directories, again and again.
+pub trait Walker {
+    /// Walk every indexed directory: `dir(key, first cluster)` for each,
+    /// then `rec(hash, loc)` for each of its files.
+    fn walk(&mut self, dir: &mut dyn FnMut(u32, u32), rec: &mut dyn FnMut(u32, u32)) -> io::Result<()>;
+    /// Every indexed directory alone (`dir(key, first cluster)`), as
+    /// [`Walker::walk`] finds them.
+    fn dirs(&mut self, dir: &mut dyn FnMut(u32, u32)) -> io::Result<()>;
+    /// Between walks: `Err` stops the build (the device: the heap the player
+    /// needs is short). The default goes on.
+    fn between(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
-/// Write the index: `walk_all(emit)` walks every indexed directory, calling
-/// `emit(hash, loc)` per file. The first walk counts; then each
-/// walk gathers the buckets that fit `group` (8 bytes a record) and writes
-/// them, so no temporary file and no sort. Returns (records, walks).
+/// The error of a build whose directories changed between its walks.
+pub const DIRS_CHANGED: &str = "the indexed directories changed during the build";
+
+/// Write the index: the first walk counts; then each walk gathers the
+/// buckets that fit `group` (8 bytes a record) and writes them, so no
+/// temporary file and no sort; then the directories, streamed. Every walk
+/// must find the same directories (a [`DirSet`] each), or the build stops
+/// with [`DIRS_CHANGED`]. Allocates nothing: what it holds is `group` and a
+/// few KB of stack, whatever the card holds. Returns (records, walks).
 pub fn build_index(
     out: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     geo: &Geometry,
-    walk_all: &mut WalkAll,
-    dirs: &[(u32, u32)],
+    walker: &mut dyn Walker,
     group: &mut [u8],
 ) -> io::Result<(u32, u32)> {
     let mut fanout = [0u32; FANOUT];
-    walk_all(&mut |h, _| fanout[(h >> 24) as usize + 1] += 1)?;
+    let mut set = DirSet::default();
+    walker.walk(&mut |k, c| set.add((k, c)), &mut |h, _| fanout[(h >> 24) as usize + 1] += 1)?;
     for b in 0..256 {
         fanout[b + 1] += fanout[b];
     }
+    let changed = || io::Error::other(DIRS_CHANGED);
     let h = Header {
         count: fanout[256],
         n_fatent: geo.n_fatent,
         database: geo.database,
-        dirs: dirs.len() as u32,
+        dirs: set.n,
     };
     out(&h.encode())?;
     for v in fanout {
@@ -325,9 +568,15 @@ pub fn build_index(
             return Err(io::Error::other("index bucket larger than a pass"));
         }
         if fanout[b1] > fanout[b0] {
+            walker.between()?;
             let mut fill = [0u32; 256];
+            // A file gone since the count leaves its slot zero (a record no
+            // lookup's key matches but bucket 0's key 0, which then fails
+            // its entry check): no stale record from the last pass.
+            group[..(fanout[b1] - fanout[b0]) as usize * 8].fill(0);
+            let mut again = DirSet::default();
             walks += 1;
-            walk_all(&mut |h, l| {
+            walker.walk(&mut |k, c| again.add((k, c)), &mut |h, l| {
                 let b = (h >> 24) as usize;
                 if (b0..b1).contains(&b) && fill[b] < fanout[b + 1] - fanout[b] {
                     let at = (fanout[b] - fanout[b0] + fill[b]) as usize * 8;
@@ -336,13 +585,28 @@ pub fn build_index(
                     fill[b] += 1;
                 }
             })?;
+            // A directory added, gone or moved since the count: its
+            // records may be in no walk, or in the wrong directory's check.
+            if again != set {
+                return Err(changed());
+            }
             out(&group[..(fanout[b1] - fanout[b0]) as usize * 8])?;
         }
         b0 = b1;
     }
-    for &(a, b) in dirs {
-        out(&a.to_le_bytes())?;
-        out(&b.to_le_bytes())?;
+    let mut last = DirSet::default();
+    let mut failed = None;
+    walker.dirs(&mut |k, c| {
+        last.add((k, c));
+        if failed.is_none() {
+            failed = out(&k.to_le_bytes()).and_then(|()| out(&c.to_le_bytes())).err();
+        }
+    })?;
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    if last != set {
+        return Err(changed());
     }
     Ok((h.count, walks))
 }
@@ -471,25 +735,44 @@ mod tests {
         assert_eq!(verify(&c, Some(&p), 3, name.as_bytes()), Verify::Mismatch);
     }
 
+    /// A walker over made-up records: `n` files in one directory (9, 10);
+    /// `moved` moves that directory after the first walk.
+    struct Fake {
+        n: u32,
+        walks: u32,
+        moved: bool,
+    }
+
+    impl Walker for Fake {
+        fn walk(&mut self, dir: &mut dyn FnMut(u32, u32), rec: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+            dir(9, if self.moved && self.walks > 0 { 11 } else { 10 });
+            self.walks += 1;
+            for i in 0..self.n {
+                rec(hash(format!("/gifs/A/{i}.gif").as_bytes()), i);
+            }
+            Ok(())
+        }
+        fn dirs(&mut self, dir: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+            dir(9, 10);
+            Ok(())
+        }
+    }
+
     #[test]
     fn builds_an_index_in_bucket_order_over_several_walks() {
         let key = |i: u32| hash(format!("/gifs/A/{i}.gif").as_bytes());
         let geo = Geometry { csize: 64, fatbase: 32, database: 1000, n_fatent: 9999 };
         let mut out = Vec::new();
         let mut group = vec![0u8; 512 * 8];
-        let mut walk = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
-            for i in 0..3000u32 {
-                emit(key(i), i);
-            }
-            Ok(())
-        };
         let mut put = |b: &[u8]| -> io::Result<()> {
             out.extend_from_slice(b);
             Ok(())
         };
-        let (count, walks) = build_index(&mut put, &geo, &mut walk, &[(9, 10)], &mut group).unwrap();
+        let mut w = Fake { n: 3000, walks: 0, moved: false };
+        let (count, walks) = build_index(&mut put, &geo, &mut w, &mut group).unwrap();
         assert_eq!(count, 3000);
         assert!(walks >= 7, "{walks}");
+        assert_eq!(walks, w.walks);
         let h = Header::decode(&out).unwrap();
         assert_eq!((h.count, h.database, h.dirs), (3000, 1000, 1));
         let fan = |b: usize| u32::from_le_bytes(out[HEADER + b * 4..][..4].try_into().unwrap());
@@ -504,6 +787,53 @@ mod tests {
         }
         assert_eq!(out.len(), RECORDS_AT as usize + 3000 * 8 + 8);
         assert_eq!(out[out.len() - 8..], [9, 0, 0, 0, 10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_directory_moved_between_walks_stops_the_build() {
+        let geo = Geometry { csize: 64, fatbase: 32, database: 1000, n_fatent: 9999 };
+        let mut put = |_: &[u8]| -> io::Result<()> { Ok(()) };
+        let mut group = vec![0u8; 512 * 8];
+        let e = build_index(&mut put, &geo, &mut Fake { n: 3000, walks: 0, moved: true }, &mut group).unwrap_err();
+        assert_eq!(e.to_string(), DIRS_CHANGED);
+    }
+
+    #[test]
+    fn a_stop_between_walks_ends_the_build_with_its_error() {
+        struct Short(Fake);
+        impl Walker for Short {
+            fn walk(&mut self, d: &mut dyn FnMut(u32, u32), r: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+                self.0.walk(d, r)
+            }
+            fn dirs(&mut self, d: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+                self.0.dirs(d)
+            }
+            fn between(&mut self) -> io::Result<()> {
+                if self.0.walks >= 3 { Err(io::Error::other("heap short")) } else { Ok(()) }
+            }
+        }
+        let geo = Geometry { csize: 64, fatbase: 32, database: 1000, n_fatent: 9999 };
+        let mut put = |_: &[u8]| -> io::Result<()> { Ok(()) };
+        let mut group = vec![0u8; 512 * 8];
+        let mut w = Short(Fake { n: 3000, walks: 0, moved: false });
+        assert_eq!(build_index(&mut put, &geo, &mut w, &mut group).unwrap_err().to_string(), "heap short");
+        assert_eq!(w.0.walks, 3);
+    }
+
+    #[test]
+    fn short_names_read_as_fatfs_shows_them() {
+        let mut out = [0u8; 12];
+        let mut e = [0u8; 32];
+        e[..11].copy_from_slice(b"1B         ");
+        e[12] = 0x08; // NT: lower-case name
+        let n = short_name(&e, &mut out).unwrap();
+        assert_eq!(&out[..n], b"1b");
+        e[..11].copy_from_slice(b"ARCADE  GIF");
+        e[12] = 0x10; // NT: lower-case extension
+        let n = short_name(&e, &mut out).unwrap();
+        assert_eq!(&out[..n], b"ARCADE.gif");
+        e[0] = 0x05;
+        assert_eq!(short_name(&e, &mut out), None, "0xE5 first: not ASCII");
     }
 
     #[test]
@@ -531,16 +861,22 @@ mod tests {
 
     #[test]
     fn a_bucket_larger_than_the_group_is_an_error() {
-        let geo = Geometry { csize: 1, fatbase: 1, database: 2, n_fatent: 100 };
-        let mut walk = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
-            for i in 0..10u32 {
-                emit(0x0700_0000 | i, i); // one bucket, 10 records
+        struct One;
+        impl Walker for One {
+            fn walk(&mut self, _: &mut dyn FnMut(u32, u32), rec: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+                for i in 0..10u32 {
+                    rec(0x0700_0000 | i, i); // one bucket, 10 records
+                }
+                Ok(())
             }
-            Ok(())
-        };
+            fn dirs(&mut self, _: &mut dyn FnMut(u32, u32)) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let geo = Geometry { csize: 1, fatbase: 1, database: 2, n_fatent: 100 };
         let mut put = |_: &[u8]| -> io::Result<()> { Ok(()) };
         let mut group = vec![0u8; 8 * 4];
-        assert!(build_index(&mut put, &geo, &mut walk, &[], &mut group).is_err());
+        assert!(build_index(&mut put, &geo, &mut One, &mut group).is_err());
     }
 
     #[test]

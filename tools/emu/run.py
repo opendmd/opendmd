@@ -4,7 +4,7 @@
 # ///
 """Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
 
-    uv run tools/emu/run.py smoke|probe --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+    uv run tools/emu/run.py smoke|probe|nocard|rig --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
         [--built-after EPOCH]
 
 The image must be the one that boots: its app descriptor's ELF SHA-256 is checked against
@@ -23,7 +23,10 @@ probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw c
        still, not refused with the playlist going on), or a card Formula sent over a card
        Formula (Neon city, Wormhole run) that is not played; prints EMU_PROBE_OK
        and the correctness lines.
-Either fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
+rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's build to finish
+       (`fat index: built N records ...`, its heap floor and stack), with the panel playing; prints
+       EMU_RIG_OK, the build line and the lowest heartbeat heap floor.
+Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
 import argparse, os, re, signal, subprocess, sys, time
@@ -68,6 +71,9 @@ NOCARD = [
     ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
 ]
+HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
+RIG_BUILT = re.compile(r"fat index: built \d+ records")
+RIG_FAILED = re.compile(r"fat index: (?!built).*(heap|failed|short)")
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
@@ -83,7 +89,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ah
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -109,8 +115,10 @@ def main():
     want_sha = image_elf_sha(a.image)
     if not want_sha:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
-    seconds = a.seconds or {"smoke": 60, "nocard": 40}.get(a.mode, 400)
-    wall = a.wall or (900 if a.mode == "smoke" else 3600)
+    if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
+        a.card = EMU_DIR / "card" / "rig.img"
+    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800}.get(a.mode, 400)
+    wall = a.wall or {"smoke": 900, "rig": 5400}.get(a.mode, 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +145,8 @@ def main():
     settings_file = None
     differ_bad = []
     lines = []
+    built = None
+    floors = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
     with open(log, "w") as lf:
         import threading
@@ -164,7 +174,20 @@ def main():
                     failure = f"{name}: {line[:200]}"
             if failure:
                 break
-            if a.mode == "nocard":
+            if a.mode == "rig":
+                m = HEARTBEAT_FLOOR.search(line)
+                if m:
+                    floors.append(int(m[1]))
+                if SMOKE[4][1].search(line):
+                    gifs += 1
+                if RIG_BUILT.search(line):
+                    built = line
+                if RIG_FAILED.search(line) and not built:
+                    failure = f"the build failed: {line[:200]}"
+                    break
+                if built and gifs >= a.min_gifs:
+                    break
+            elif a.mode == "nocard":
                 for name, rx in NOCARD:
                     if name not in seen and rx.search(line):
                         seen[name] = line
@@ -233,6 +256,15 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "rig":
+        if floors:
+            print(f"heartbeat heap floors: lowest {min(floors)} B over {len(floors)} heartbeats")
+        if not built:
+            die(f"no `fat index: built` within {seconds} emulated s / {wall} s wall (GIF starts {gifs})")
+        print(f"pass  build: {built[:230]}")
+        print(f"pass  GIF starts: {gifs}")
+        print(f"EMU_RIG_OK ({took:.0f} s wall)")
+        return
     if a.mode == "nocard":
         missing = [n for n, _ in NOCARD if n not in seen]
         if missing:

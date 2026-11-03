@@ -105,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -992,6 +992,15 @@ emu-build:
 
 emu-card:
 	uv run --quiet tools/emu/mkcard.py
+
+# The rig's scale (~11,000 GIFs in 41 folders, ~11,000 copies in ~4,900 buckets):
+# the FAT index's build must finish with its heap floor reported, the panel
+# playing. Boots the smoke image (or FW_IMAGE). EMU_RIG_OK.
+emu-rig-card:
+	uv run --quiet tools/emu/mkcard.py --rig
+emu-rig: emu-build emu-rig-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
+	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # FW_IMAGE=<full.bin> boots that image; otherwise a normal 4mb release build
 # (incremental) goes to $(EMU_DIR)/smoke/.

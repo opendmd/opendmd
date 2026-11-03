@@ -212,7 +212,7 @@ impl Reset {
         }
     }
 
-    fn is_crash(self) -> bool {
+    pub fn is_crash(self) -> bool {
         matches!(
             self,
             Reset::Panic | Reset::IntWdt | Reset::TaskWdt | Reset::Wdt
