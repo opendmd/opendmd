@@ -322,9 +322,9 @@ colour is underlined in its own colour.
 **The loop and the frame.** `loop N` on a line of its own sets how long
 the loop is, in seconds (8 if you leave it out). For a seamless loop,
 everything that moves should come back to where it started: use `t/N`,
-`t*2/N` and so on with the loop's own `N`. Values inside `frame { … }`
-are worked out once a frame rather than for every pixel; they can't use
-the pixel's position.
+`t*2/N` and so on with the loop's own `N`. A value that reads only the
+time, the clock and the controls (not the pixel's position) is worked out
+once a frame by itself rather than for every pixel.
 
 **Going on without repeating.** `loop forever` instead of `loop N` is a
 formula with no loop at all: `t` counts the seconds since it started, for
@@ -341,7 +341,7 @@ starts when the preview does; **Save as GIF…** keeps its first 10 seconds.
 
 ```
 loop forever
-frame { u = t*0.05 + seed*1000 }
+u = t*0.05 + seed*1000
 k = smoothstep(0.45, 0.75, noise(x*6 + u, y*3, u*0.3))
 mix(#204080, #f0f0ff, k)
 ```
@@ -389,7 +389,7 @@ layer rate 4 {
 }
 layer add {
   fall = frac(t/8)*96
-  gray(hash(px, floor(ty/4 + hash(px, 1)*8 - fall)) > 0.93 ? 0.45 : 0)
+  gray(hash(px, floor(py/4 + hash(px, 1)*8 - fall)) > 0.93 ? 0.45 : 0)
 }
 ```
 
@@ -662,8 +662,8 @@ milliseconds); all the examples are light or medium.
 
 - Cheap: `+ - *`, the waves (`sin`, `cos`, `tri`, `saw`, `sqr`), `abs`,
   `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`, `digit`,
-  `glyph`, `bit`, and `pick` of numbers, letters or values from
-  `frame { }` (one step, however many it picks from).
+  `glyph`, `bit`, and `pick` of numbers, letters or values worked out
+  once a frame (one step, however many it picks from).
 - Dividing by a fixed number (`x/8`) is free: it becomes a multiply.
 - Dear: `noise`, `len`, `sqrt`, `atan2`, `smoothstep`, `hash`, and dividing
   by something that changes from pixel to pixel (`r` is a `len`, `angle`

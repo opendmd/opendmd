@@ -306,9 +306,11 @@ GIF as a look, and for the gallery).
   `postMessage` from the page that opened it. Sharing is submitting to the
   gallery.
 - **On the panel** a playlist line or the look names a built-in Formula
-  (`@formula:<name>`) or one saved on the panel; a formula sent to show it
-  at once goes as its text on one line, comments left out
-  (`@formula?src=…`, 6,144 bytes at most; 2,048 for a look set that way).
+  (`@formula:<name>`) or one saved on the panel (its `.psi` file, played
+  from the compiled `.psb` the app writes beside it); a formula sent to
+  show it at once goes compiled, on one line (`@formula?psb=…`, base64url,
+  6,144 bytes at most; 2,048 for a look set that way). The panel never
+  compiles.
 - **In the gallery** a formula is a file of two comment lines (`--
   author: …` and `-- licence: CC0-1.0`) and then the formula, 4,096 bytes
   at most.
@@ -320,14 +322,17 @@ The `psi` command checks and formats formulas on a computer
 
 ```text
 $ psi check storm-front.psi --out -
-ok: 41 of 256 steps (per frame 11, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 40 of 128 values
+ok: 41 of 256 steps (per frame 11, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 128 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
 JIT: yes, ~5.6 ms a frame compiled (the VM's ~6.8 ms is what the limits count)
-compile: 130 tokens, ~16.0 KB of heap; the panel asks for ~34.5 KB free first (about 63 KB is free between items)
-length: 541 B as written (16,384 at most), 364 B as the panel keeps it saved (8,192 at most), 397 B as a path (@formula?src=…: 6,144 to show it, 2,048 for an inline look)
+length: 559 B as written (16,384 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look)
 note: line 14: `d` is worked out for every pixel each frame (~666 ns a pixel): it would be kept in the still cache but it reads `fall`, which changes from frame to frame
+heaviest lines (their share of the work a frame; make these lighter first):
+  line 8 (68%): cl = noise(x*3 - t*0.15, (1 - y)*2, 0)*0.7 + noise(x*7 - …
+  line 14 (20%): d = hash(px, floor(py/4 + hash(px, 1)*8 - fall))
+  line 9 (8%): pal(ice, cl*0.8 + (1 - y)*0.3) * (0.35 + cl*0.5)
 
 $ psi check broken.psi
 error[E202]: line 3, column 6: unknown function `sine` — did you mean `sin`?
