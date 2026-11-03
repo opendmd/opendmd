@@ -1288,6 +1288,9 @@ static DIR_GEN: AtomicU32 = AtomicU32::new(0);
 
 /// The network worker's turn: rebuild when wanted, quiet and affordable;
 /// a build under way goes on by one slice ([`slice`]).
+// Not inlined into the network worker's loop: its frame would be under
+// the firmware signature check (`ota::verify_signature`, ~6.5 KB deep).
+#[inline(never)]
 pub fn tick() {
     if !crate::CARD_READY.load(Relaxed) || !register_vfs() {
         return;
