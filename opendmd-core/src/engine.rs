@@ -1235,6 +1235,29 @@ impl Engine {
         })
     }
 
+    /// How long from `now` the engine needs nothing of the card or the heap
+    /// beyond what it holds: until [`AHEAD_LEAD`] before the file on screen
+    /// could end its turn (the next file is opened ahead from then, then the
+    /// switch and its transition). Zero while a transition runs, before the
+    /// file's first frame is up, once it is done, while a skip is asked for
+    /// or a caller's sequence holds it. Paused: a minute (nothing switches).
+    /// The FAT index's build works only inside this window
+    /// (`fatidx::set_quiet`).
+    pub fn quiet_for(&self, now: Duration) -> Duration {
+        if self.compositor.is_active() || self.skip_requested || self.hold {
+            return Duration::ZERO;
+        }
+        if self.is_paused() {
+            return Duration::from_secs(60);
+        }
+        let Some(p) = self.current.as_ref() else { return Duration::ZERO };
+        if p.done || p.first_frame {
+            return Duration::ZERO;
+        }
+        let dwell = self.current_dwell();
+        (p.started_at + dwell.min.min(dwell.max)).saturating_sub(AHEAD_LEAD).saturating_sub(now)
+    }
+
     /// When the file on screen's next frame is due (its own timing, which a
     /// transition's steps do not change).
     pub fn frame_due(&self) -> Option<Duration> {
@@ -3748,6 +3771,24 @@ mod tests {
             } => playing,
             other => panic!("expected a new file at {t:?}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_quiet_window_ends_where_the_next_file_is_opened_ahead() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        // Nothing playing yet: not quiet.
+        assert_eq!(r.e.quiet_for(ms(0)), Duration::ZERO);
+        assert_eq!(started(&mut r.e, ms(0), &mut canvas).path, A);
+        r.e.tick(ms(100), &mut canvas).unwrap();
+        // A's minimum is 3 s, the lead 2 s: quiet until 1 s, as ahead_due.
+        assert_eq!(r.e.quiet_for(ms(200)), ms(800));
+        assert_eq!(r.e.ahead_due(ms(999)), None);
+        assert_eq!(r.e.quiet_for(ms(1000)), Duration::ZERO);
+        assert!(r.e.ahead_due(ms(1000)).is_some());
+        r.e.skip();
+        assert_eq!(r.e.quiet_for(ms(200)), Duration::ZERO);
     }
 
     #[test]

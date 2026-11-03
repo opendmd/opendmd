@@ -217,6 +217,11 @@ pub fn note_gone(full: &str) {
     }
 }
 
+/// The most [`NAMES_DELTA`] holds, in bytes of names: past it the names
+/// file is not trusted until the next build (names=1 lists instead). Names
+/// are up to 255 bytes: a count alone would let it reach tens of KB.
+const NAMES_DELTA_BYTES: usize = 4 * 1024;
+
 /// A GIF's name came or went (`/gifs/...` only), for [`names_json`].
 fn note_name(card: &str, present: bool) {
     if !card.starts_with("/gifs/") {
@@ -224,12 +229,14 @@ fn note_name(card: &str, present: bool) {
     }
     let mut d = NAMES_DELTA.lock().unwrap_or_else(|p| p.into_inner());
     d.retain(|(p, _, _)| !p.eq_ignore_ascii_case(card));
-    d.push((card.to_string(), present, uptime_ms()));
-    if d.len() > DELTA_MAX {
+    let bytes: usize = d.iter().map(|(p, _, _)| p.len()).sum::<usize>() + card.len();
+    if d.len() >= DELTA_MAX || bytes > NAMES_DELTA_BYTES {
         // Past this the names file is not trusted until the next build.
-        d.clear();
+        *d = Vec::new();
         NAMES_OK.store(false, Relaxed);
+        return;
     }
+    d.push((card.to_string(), present, uptime_ms()));
 }
 
 /// `GET /api/files?dir=/gifs/<dir>&names=1`: a `/gifs/` folder's names
@@ -301,15 +308,19 @@ fn names_present() -> bool {
 
 fn push_delta(h: u32, loc: Option<u32>) {
     let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
-    d.retain(|(k, _, _)| *k != h);
-    d.push((h, loc, uptime_ms()));
-    if d.len() > DELTA_MAX {
-        d.remove(0);
-        // Changes lost from it: no "absent" answers until the next build.
-        DELTA_OVERFLOWED.store(true, Relaxed);
-        // Too much since the build: rebuild when quiet.
-        TOUCHED_MS.store(uptime_ms(), Relaxed);
-        DIRTY.store(true, Relaxed);
+    // Grown as it fills (a few changes are a few bytes, not its whole 3 KB
+    // held from the first: the read-ahead's ring needs that heap), never
+    // past DELTA_MAX entries (`fatdir::push_bounded`, host-tested).
+    match fatdir::push_bounded(&mut d, (h, loc, uptime_ms()), DELTA_MAX, |(k, _, _)| *k == h) {
+        fatdir::Pushed::Noted => {}
+        fatdir::Pushed::Dropped | fatdir::Pushed::NoRoom => {
+            // Changes lost from it (the oldest, or this one: a stale record
+            // the entry check catches): no "absent" answers until the next
+            // build, which comes when quiet.
+            DELTA_OVERFLOWED.store(true, Relaxed);
+            TOUCHED_MS.store(uptime_ms(), Relaxed);
+            DIRTY.store(true, Relaxed);
+        }
     }
     DELTA_LEN.store(d.len() as u32, Relaxed);
 }
@@ -759,8 +770,27 @@ pub fn open_catalog_file(full: &str) -> io::Result<File> {
     File::open(full)
 }
 
-/// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`).
+/// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`),
+/// since the playlist was last opened.
 static CATALOG_FATFS: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a playlist file opened since [`catalog_reopening`] is read
+/// through FatFs (the boot task's, before the handover: `main` opens the
+/// playlist again once the card is its own).
+pub fn catalog_fatfs() -> bool {
+    CATALOG_FATFS.load(Relaxed) > 0
+}
+
+/// The playlist is about to be opened again: its old files' count goes
+/// (returned, for [`catalog_restore`] if the old files are kept).
+pub fn catalog_reopening() -> u32 {
+    CATALOG_FATFS.swap(0, Relaxed)
+}
+
+/// The old playlist is kept after all: its count back.
+pub fn catalog_restore(n: u32) {
+    CATALOG_FATFS.store(n, Relaxed);
+}
 
 
 /// [`open_path_raw`]; `player`: noted in the open set as the player's (a
@@ -1125,6 +1155,12 @@ fn open_at(loc: u32, name: &[u8], raw: Option<&str>) -> io::Result<Option<File>>
 /// The index file at `path` (`/sdcard/...`: [`INDEX`], or a build's [`NEW`]
 /// before it is renamed: its handle and extents stay good across the rename).
 fn load(path: &str) -> io::Result<Loaded> {
+    load_as(path, None)
+}
+
+/// [`load`]; `known`: the directories as a build just walked them (no walk
+/// again: a directory changed since aborts the build, `dir_changed`).
+fn load_as(path: &str, known: Option<fatdir::DirSet>) -> io::Result<Loaded> {
     let mut file = File::open(path)?;
     let mut raw = vec![0u8; fatdir::HEADER + fatdir::FANOUT * 4];
     file.read_exact(&mut raw)?;
@@ -1142,15 +1178,14 @@ fn load(path: &str) -> io::Result<Loaded> {
     // directory renamed or replaced on a PC leaves its entries where they
     // were, and a record would then name a file in another directory.
     let mut built = fatdir::DirSet::default();
-    for _ in 0..h.dirs.min(8192) {
+    for _ in 0..h.dirs.min(1 << 16) {
         file.read_exact(&mut e)?;
         built.add(pair(&e));
     }
-    let mut now = fatdir::DirSet::default();
-    for (d, c) in gif_dirs()? {
-        now.add((fatdir::hash(d.as_bytes()), c));
-    }
-    bucket_dirs_each(&mut |k, c| now.add((k, c)));
+    let now = match known {
+        Some(k) => k,
+        None => dir_set()?,
+    };
     if built != now {
         DIRTY.store(true, Relaxed);
         return Err(errno(sys::ESTALE));
@@ -1205,6 +1240,8 @@ fn index_extents(file: &str) -> Option<(fatread::RawFile, u8)> {
 /// `CARD_READY`); after it the card is only ever dropped by a restart. Open
 /// `/fidx` FILs and a build in flight are not closed here.
 pub fn unmounted() {
+    abort_job();
+    DIR_GEN.fetch_add(1, Relaxed);
     FS.store(std::ptr::null_mut(), Relaxed);
     BUILT_THIS_BOOT.store(false, Relaxed);
     *LOADED.lock().unwrap() = None;
@@ -1234,15 +1271,31 @@ pub fn touched(path: &str) {
 /// once (its records may now point into another directory) and rebuild
 /// when things are quiet.
 pub fn dir_changed() {
+    abort_job();
     NAMES_OK.store(false, Relaxed);
     TOUCHED_MS.store(uptime_ms(), Relaxed);
     DIRTY.store(true, Relaxed);
-    *LOADED.lock().unwrap() = Some(None);
+    // Under the index's lock: a build finishing now compares the generation
+    // under the same lock and drops its index (`finish`).
+    let mut g = LOADED.lock().unwrap();
+    DIR_GEN.fetch_add(1, Relaxed);
+    *g = Some(None);
 }
 
-/// The network worker's turn: rebuild when wanted, quiet and affordable.
+/// Bumped (under [`LOADED`]'s lock) whenever the indexed directories may
+/// have changed or the card went: a build begun before is not swapped in.
+static DIR_GEN: AtomicU32 = AtomicU32::new(0);
+
+/// The network worker's turn: rebuild when wanted, quiet and affordable;
+/// a build under way goes on by one slice ([`slice`]).
 pub fn tick() {
     if !crate::CARD_READY.load(Relaxed) || !register_vfs() {
+        return;
+    }
+    #[cfg(feature = "emu-ballast")]
+    ballast();
+    if job_running() {
+        run_slice();
         return;
     }
     // The first look at the card decides whether there is an index at all.
@@ -1252,6 +1305,13 @@ pub fn tick() {
             if RELOAD.swap(false, Relaxed) {
                 *g = None;
                 DIRTY.store(true, Relaxed);
+                // A build cut short by a restart or a crash left its files
+                // (~255 KB on the rig): no job is under way after a mount.
+                drop(g);
+                for f in [TMP, NEW, NAMES_NEW] {
+                    let _ = fs::remove_file(f);
+                }
+                g = LOADED.lock().unwrap();
             }
             g.is_none()
         };
@@ -1296,136 +1356,128 @@ pub fn tick() {
         || now < config::FATIDX_BOOT_DELAY_S * 1000
         || crate::cache_builder::task_up()
         || crate::cache_builder::transfer_in_flight()
-        || (crate::state::free_heap() as usize) < config::FATIDX_BUILD_HEAP
-        || crate::state::largest_free_block() < 24 * 1024
+        || (crate::state::free_heap() as usize) < config::FATIDX_START_HEAP
+        || !crash_allows(now)
     {
         return;
     }
-    if BUILDING.swap(true, Relaxed) {
-        return;
-    }
-    if names_only {
-        let spawned = crate::task::spawn_core0(
-            b"fat-names\0",
-            config::FATIDX_STACK,
-            config::BUILDER_PRIORITY,
-            Box::new(|| {
-                if let Err(e) = build_names() {
-                    log::warn!("fat index: names: {e}");
-                    // Not again this boot: names=1 lists instead.
-                    NAMES_WANTED.store(false, Relaxed);
-                }
-                BUILDING.store(false, Relaxed);
-            }),
-        );
-        if spawned.is_err() {
-            NAMES_WANTED.store(false, Relaxed);
-            BUILDING.store(false, Relaxed);
-        }
-        return;
-    }
-    BUILT_MS.store(now, Relaxed);
-    // The walks start now: the delta keeps what changes from here on.
-    DELTA_OVERFLOWED.store(false, Relaxed);
-    // Its own short-lived task (CPU0, the cache builder's priority): the
-    // walk's FatFs/SD calls are deep, and the network worker's stack is
-    // sized for its own work; and the worker keeps polling meanwhile.
-    let spawned = crate::task::spawn_core0(
-        b"fat-index\0",
-        config::FATIDX_STACK,
-        config::BUILDER_PRIORITY,
-        Box::new(|| {
-            let r = build();
-            FAILED.store(r.is_err(), Relaxed);
-            if let Err(e) = r {
-                log::warn!("fat index: {e}");
-                // Walked again only after the gap.
-                DIRTY.store(true, Relaxed);
+    match Job::new(names_only) {
+        Ok(job) => {
+            if !names_only {
+                BUILT_MS.store(now, Relaxed);
+                // The walk starts now: the delta keeps what changes from here on.
+                DELTA_OVERFLOWED.store(false, Relaxed);
             }
-            BUILDS.fetch_add(1, Relaxed);
-            BUILDING.store(false, Relaxed);
-        }),
+            log::info!(
+                "fat index: {} started (heap {} B free, largest {} B)",
+                if names_only { "names file" } else { "build" },
+                crate::state::free_heap(),
+                crate::state::largest_free_block()
+            );
+            *JOB.lock().unwrap_or_else(|p| p.into_inner()) = Some(job);
+            BUILDING.store(true, Relaxed);
+            run_slice();
+        }
+        Err(e) => {
+            log::warn!("fat index: no build started ({e})");
+            if names_only {
+                NAMES_WANTED.store(false, Relaxed);
+            } else {
+                FAILED.store(true, Relaxed);
+                BUILT_MS.store(now, Relaxed);
+            }
+        }
+    }
+}
+
+/// The emulator's spare-sized heap (feature `emu-ballast`): once, 12 s
+/// after boot (playing), heap taken in 2 KB blocks and kept until ~45 KB is
+/// free, as on the spare while it plays.
+#[cfg(feature = "emu-ballast")]
+fn ballast() {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if uptime_ms() < 12_000 || DONE.swap(true, Relaxed) {
+        return;
+    }
+    let mut taken = 0usize;
+    while crate::state::free_heap() as usize > 47 * 1024 {
+        std::mem::forget(vec![1u8; 2048]);
+        taken += 2048;
+    }
+    log::info!(
+        "ballast: {taken} B taken; heap {} B free, largest {} B",
+        crate::state::free_heap(),
+        crate::state::largest_free_block()
     );
-    if spawned.is_err() {
-        // No task (no heap for its stack): wait out the gap, not a retry
-        // every turn.
-        FAILED.store(true, Relaxed);
-        BUILDING.store(false, Relaxed);
+}
+
+/// `/gifs`'s and `/cache`'s first clusters (no `/cache`: no buckets).
+fn roots() -> io::Result<(Option<u32>, Option<u32>)> {
+    Ok((Some(open_dir("/gifs")?.1), open_dir("/cache").ok().map(|d| d.1)))
+}
+
+/// A buffer of `n` bytes, or `OutOfMemory` (never an abort).
+fn try_buf(n: usize) -> io::Result<Vec<u8>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| heap_short())?;
+    v.resize(n, 0);
+    Ok(v)
+}
+
+fn heap_short() -> io::Error {
+    io::Error::new(io::ErrorKind::OutOfMemory, "heap short: the build waits")
+}
+
+/// A box of a `T` made in place by `make`, or `OutOfMemory`.
+fn try_box<T>(make: impl FnOnce() -> T) -> io::Result<Box<T>> {
+    let layout = std::alloc::Layout::new::<T>();
+    // SAFETY: a fresh allocation of T's layout, written once before the Box
+    // takes it.
+    unsafe {
+        let p = std::alloc::alloc(layout) as *mut T;
+        if p.is_null() {
+            return Err(heap_short());
+        }
+        p.write(make());
+        Ok(Box::from_raw(p))
     }
 }
 
-/// Every `/gifs/<dir>`: its card path and first cluster.
-/// The prepared copies' buckets, `/cache/<category>/<bucket>`, as (the
-/// directory's key, its first cluster): what plays is mostly copies, so the
-/// index covers them too. Kept as numbers (a card has up to 256 buckets a
-/// category: their paths as strings would be tens of KB of heap).
-fn bucket_dirs() -> Vec<(u32, u32)> {
-    let mut out = Vec::new();
-    bucket_dirs_each(&mut |k, c| out.push((k, c)));
-    out
-}
-
-/// [`bucket_dirs`], one at a time (the index's load compares them without
-/// keeping them).
-fn bucket_dirs_each(each: &mut dyn FnMut(u32, u32)) {
-    let root = format!("{}/cache", config::SD_MOUNT);
-    let Ok(cats) = fs::read_dir(&root) else { return };
-    for c in cats.flatten() {
-        let cat = c.file_name().to_string_lossy().into_owned();
-        if cat.starts_with('.') || !c.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
+/// The volume read the build and the load use: the volume lock for the
+/// read alone. `pace`: a 1 ms pause after each (the player's reads first).
+fn volume_read(fs: *mut sys::FATFS, pace: bool) -> impl FnMut(u32, &mut [u8]) -> io::Result<()> {
+    move |lba: u32, buf: &mut [u8]| -> io::Result<()> {
+        BUILD_FLOOR.fetch_min(crate::state::free_heap(), Relaxed);
+        {
+            let _l = VolLock::take(fs)?;
+            read_locked(fs, lba, buf)?;
         }
-        let Ok(buckets) = fs::read_dir(format!("{root}/{cat}")) else { continue };
-        for b in buckets.flatten() {
-            if !b.file_type().is_ok_and(|t| t.is_dir()) {
-                continue;
-            }
-            let dir = format!("/cache/{cat}/{}", b.file_name().to_string_lossy());
-            if let Ok((_, first)) = open_dir(&dir) {
-                each(fatdir::hash(dir.as_bytes()), first);
-            }
+        if pace {
+            std::thread::sleep(Duration::from_millis(1));
         }
+        Ok(())
     }
 }
 
-fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
-    let mut dirs = Vec::new();
-    for e in fs::read_dir(format!("{}/gifs", config::SD_MOUNT))? {
-        let e = e?;
-        if e.file_type()?.is_dir() {
-            let dir = format!("/gifs/{}", e.file_name().to_string_lossy());
-            let first = open_dir(&dir)?.1;
-            dirs.push((dir, first));
-        }
+/// The directories the index covers, as [`load`] compares them with an
+/// index's (`fatdir::Cursor`, read raw as the build reads them: the
+/// directories' own entries, not their contents).
+fn dir_set() -> io::Result<fatdir::DirSet> {
+    let (fs, geo) = volume()?;
+    let (gifs, cache) = roots()?;
+    let mut cursor = try_box(|| fatdir::Cursor::new(gifs, cache))?;
+    let mut read = volume_read(fs, false);
+    let mut set = fatdir::DirSet::default();
+    while let Some(d) = cursor.next(&geo, &mut read)? {
+        set.add((d.key, d.first));
     }
-    Ok(dirs)
+    Ok(set)
 }
 
-/// [`NAMES_NEW`]: every `/gifs/<dir>`'s names, folder by folder, with the
-/// table that finds one folder's (`opendmd_core::names_file`), from one walk
-/// of the GIFs' directories.
-fn write_names(
-    dirs: &[(String, u32)],
-    geo: &fatdir::Geometry,
-    read: &mut dyn FnMut(u32, &mut [u8]) -> io::Result<()>,
-    scratch: &mut [u8],
-) -> io::Result<()> {
-    let mut names = opendmd_core::names_file::Writer::new(BufWriter::with_capacity(1024, File::create(NAMES_NEW)?));
-    for (dir, first) in dirs {
-        names.begin(dir);
-        let mut failed = None;
-        fatdir::walk(geo, *first, read, scratch, &mut |f| {
-            if let Err(e) = names.name(f.name) {
-                failed = Some(e);
-            }
-            Ok(())
-        })?;
-        if let Some(e) = failed {
-            return Err(e);
-        }
-    }
-    names.finish().map(drop)
-}
+/// The most `/gifs` folders a names file is written for: its table is
+/// 12 B a folder in RAM until it is written. More: no names file (names=1
+/// lists instead).
+const NAMES_MAX_FOLDERS: usize = 512;
 
 /// [`NAMES_NEW`] in place of [`NAMES`], trusted from now on with the
 /// changes noted since `started` (ms uptime, the walk's start).
@@ -1440,113 +1492,533 @@ fn install_names(started: u32) -> bool {
     true
 }
 
-/// The names file alone, for a current index without one (an index built
-/// before names files were): one walk of the GIFs' directories.
-fn build_names() -> io::Result<()> {
-    let (fs, geo) = volume()?;
-    let started = uptime_ms();
-    let dirs = gif_dirs()?;
-    let mut scratch = vec![0u8; 8 * SS];
-    let mut read = |lba: u32, buf: &mut [u8]| -> io::Result<()> {
-        {
-            let _l = VolLock::take(fs)?;
-            read_locked(fs, lba, buf)?;
+// ---- the build: a job in slices ------------------------------------------------
+
+/// The build's temporary records (`fatdir::TMP_DIR`, `fatdir::gather`).
+const TMP: &str = "/sdcard/cache/.fatidx.tmp";
+
+/// The lowest free heap a build's card reads saw (`fat_index.build_floor`),
+/// and its largest group (bytes).
+static BUILD_FLOOR: AtomicU32 = AtomicU32::new(0);
+static BUILD_GROUP: AtomicU32 = AtomicU32::new(0);
+
+/// Uptime (ms) until which the player needs nothing of the card or the heap
+/// beyond what it holds (`Engine::quiet_for`, from the main loop): the
+/// build works only before it.
+static QUIET_UNTIL: AtomicU32 = AtomicU32::new(0);
+
+/// The main loop's word on the player (each tick): quiet for `d` from now.
+pub fn set_quiet(d: Duration) {
+    QUIET_UNTIL.store(uptime_ms().wrapping_add(d.as_millis().min(60_000) as u32), Relaxed);
+}
+
+enum Stage {
+    /// One walk of every indexed directory: the names, the temporary
+    /// records, the count.
+    Walk,
+    /// Passes over the temporary records, from this bucket.
+    Passes(usize),
+    /// The directories after the records.
+    Trailer,
+    Done,
+}
+
+/// A build under way, between the network worker's slices: what it holds
+/// is this (the cursor's two sectors, the fanout: ~3 KB) and the names'
+/// table, whatever the card holds. A slice takes its buffers and gives them
+/// back.
+struct Job {
+    names_only: bool,
+    cursor: Box<fatdir::Cursor>,
+    fanout: Box<[u32; fatdir::FANOUT]>,
+    set: fatdir::DirSet,
+    stage: Stage,
+    tmp: Option<File>,
+    names: Option<opendmd_core::names_file::Writer<File>>,
+    names_folders: usize,
+    out: Option<File>,
+    started: u32,
+    slices: u32,
+    passes: u32,
+    cut0: u32,
+    /// [`DIR_GEN`] when the job began.
+    gen: u32,
+    /// The whole build at once (psi-probe): the player's quiet not asked.
+    ignore_quiet: bool,
+}
+
+static JOB: Mutex<Option<Box<Job>>> = Mutex::new(None);
+
+fn job_running() -> bool {
+    JOB.lock().unwrap_or_else(|p| p.into_inner()).is_some()
+}
+
+impl Job {
+    fn new(names_only: bool) -> io::Result<Box<Job>> {
+        volume()?;
+        let _ = fs::create_dir(config::CACHE_ROOT);
+        let (gifs, cache) = roots()?;
+        let cursor = try_box(|| fatdir::Cursor::new(gifs, if names_only { None } else { cache }))?;
+        let fanout = try_box(|| [0u32; fatdir::FANOUT])?;
+        let tmp = if names_only { None } else { Some(File::create(TMP)?) };
+        let names = Some(opendmd_core::names_file::Writer::new(File::create(NAMES_NEW)?));
+        BUILD_FLOOR.store(crate::state::free_heap(), Relaxed);
+        BUILD_GROUP.store(0, Relaxed);
+        try_box(|| Job {
+            names_only,
+            cursor,
+            fanout,
+            set: fatdir::DirSet::default(),
+            stage: Stage::Walk,
+            tmp,
+            names,
+            names_folders: 0,
+            out: None,
+            started: uptime_ms(),
+            slices: 0,
+            passes: 0,
+            cut0: crate::TRANSITIONS_CUT.load(Relaxed),
+            gen: DIR_GEN.load(Relaxed),
+            ignore_quiet: false,
+        })
+    }
+
+    /// Work until `until` (uptime ms) or the heap is short: `Ok(true)` when
+    /// the job is done. Stops only between directories and between passes.
+    fn slice(&mut self, until: u32) -> io::Result<bool> {
+        let (fs, geo) = volume()?;
+        self.slices += 1;
+        // The slice's end, and the player's quiet (read again each time: a
+        // skip, a play or a resume ends it at the next directory or read).
+        let ignore_quiet = self.ignore_quiet;
+        let time_left = || {
+            let now = uptime_ms();
+            (until.wrapping_sub(now) as i32) > 0 && (ignore_quiet || (QUIET_UNTIL.load(Relaxed).wrapping_sub(now) as i32) > 0)
+        };
+        let heap_ok = || crate::state::free_heap() as usize >= config::FATIDX_SLICE_KEEP;
+        loop {
+            match self.stage {
+                Stage::Walk => {
+                    let mut scratch = try_buf(config::FATIDX_SCRATCH)?;
+                    let mut read = volume_read(fs, true);
+                    self.cursor.refresh();
+                    let mut w = self.tmp.as_ref().map(|f| BufWriter::with_capacity(512, f));
+                    loop {
+                        if !time_left() || !heap_ok() {
+                            if let Some(w) = w.as_mut() {
+                                w.flush()?;
+                            }
+                            return Ok(false);
+                        }
+                        let Some(d) = self.cursor.next(&geo, &mut read)? else { break };
+                        self.set.add((d.key, d.first));
+                        if let Some(w) = w.as_mut() {
+                            w.write_all(&fatdir::TMP_DIR)?;
+                            w.write_all(&fatdir::tmp_record(d.key, d.first))?;
+                        }
+                        let mut names = None;
+                        if d.gif && self.names.is_some() {
+                            self.names_folders += 1;
+                            if self.names_folders > NAMES_MAX_FOLDERS {
+                                log::warn!("fat index: more than {NAMES_MAX_FOLDERS} folders: no names file");
+                                self.names = None;
+                            } else if let (Some(n), Ok(name)) = (self.names.as_mut(), std::str::from_utf8(&self.cursor.name[..d.name_len])) {
+                                n.begin(&format!("/gifs/{name}"));
+                                names = Some(n);
+                            }
+                        }
+                        let seed = fatdir::hash_more(d.key, b"/");
+                        let fanout = &mut self.fanout;
+                        let mut failed = None;
+                        let index = !self.names_only;
+                        fatdir::walk(&geo, d.first, &mut read, &mut scratch, &mut |f| {
+                            if let Some(n) = names.as_mut() {
+                                if let Err(e) = n.name(f.name) {
+                                    failed.get_or_insert(e);
+                                }
+                            }
+                            if index && f.prev_rel.is_none() {
+                                let h = fatdir::hash_more(seed, f.name);
+                                if let Some(w) = w.as_mut() {
+                                    if let Err(e) = w.write_all(&fatdir::tmp_record(h, f.loc)) {
+                                        failed.get_or_insert(e);
+                                    }
+                                }
+                                fanout[(h >> 24) as usize + 1] += 1;
+                            }
+                            Ok(())
+                        })?;
+                        if let Some(e) = failed {
+                            return Err(e);
+                        }
+                    }
+                    // The walk is done.
+                    if let Some(mut w) = w.take() {
+                        w.flush()?;
+                    }
+                    drop(w);
+                    self.tmp = None;
+                    if let Some(n) = self.names.take() {
+                        if let Err(e) = n.finish() {
+                            log::warn!("fat index: no names file ({e})");
+                            self.names_folders = usize::MAX;
+                        }
+                    } else {
+                        self.names_folders = usize::MAX;
+                    }
+                    if self.names_only {
+                        self.stage = Stage::Done;
+                        continue;
+                    }
+                    for b in 0..256 {
+                        self.fanout[b + 1] += self.fanout[b];
+                    }
+                    let h = Header { count: self.fanout[256], n_fatent: geo.n_fatent, database: geo.database, dirs: self.set.len() };
+                    let mut out = File::create(NEW)?;
+                    out.write_all(&h.encode())?;
+                    for v in self.fanout.iter() {
+                        out.write_all(&v.to_le_bytes())?;
+                    }
+                    self.out = Some(out);
+                    self.stage = Stage::Passes(0);
+                }
+                Stage::Passes(b0) => {
+                    if b0 >= 256 {
+                        self.stage = Stage::Trailer;
+                        continue;
+                    }
+                    if !time_left() || !heap_ok() {
+                        return Ok(false);
+                    }
+                    let mut group = take_group()?;
+                    let mut chunk = try_buf(config::FATIDX_SCRATCH)?;
+                    let mut f = File::open(TMP)?;
+                    // Each read asks the time and the player's quiet first:
+                    // out of either, the pass stops, its group goes, and it
+                    // is made again from its start (it writes nothing until
+                    // it is whole). FatFs takes the volume lock per read.
+                    let gathered = fatdir::gather(
+                        &mut |b| {
+                            if !time_left() {
+                                return Err(io::Error::from(io::ErrorKind::TimedOut));
+                            }
+                            let n = f.read(b)?;
+                            std::thread::sleep(Duration::from_millis(1));
+                            Ok(n)
+                        },
+                        &self.fanout,
+                        b0,
+                        &mut group,
+                        &mut chunk,
+                    );
+                    let (b1, n) = match gathered {
+                        Err(e) if e.kind() == io::ErrorKind::TimedOut => return Ok(false),
+                        r => r?,
+                    };
+                    self.out.as_mut().ok_or_else(|| errno(sys::EIO))?.write_all(&group[..n])?;
+                    BUILD_GROUP.fetch_max(group.len() as u32, Relaxed);
+                    self.passes += 1;
+                    self.stage = Stage::Passes(b1);
+                }
+                Stage::Trailer => {
+                    let mut chunk = try_buf(config::FATIDX_SCRATCH)?;
+                    let mut f = File::open(TMP)?;
+                    let out = self.out.as_mut().ok_or_else(|| errno(sys::EIO))?;
+                    let mut set = fatdir::DirSet::default();
+                    let mut pair = [0u8; 8];
+                    fatdir::tmp_dirs(&mut |b| f.read(b), &mut chunk, &mut |k, c| {
+                        set.add((k, c));
+                        pair[..4].copy_from_slice(&k.to_le_bytes());
+                        pair[4..].copy_from_slice(&c.to_le_bytes());
+                        out.write_all(&pair)
+                    })?;
+                    if set != self.set {
+                        return Err(io::Error::other("the temporary records' directories are not the walk's"));
+                    }
+                    out.flush()?;
+                    self.out = None;
+                    self.stage = Stage::Done;
+                }
+                Stage::Done => return Ok(true),
+            }
         }
-        std::thread::sleep(Duration::from_millis(1));
-        Ok(())
-    };
-    write_names(&dirs, &geo, &mut read, &mut scratch)?;
-    if install_names(started) {
-        Ok(())
-    } else {
-        Err(errno(sys::EIO))
     }
 }
 
-fn build() -> io::Result<()> {
-    let (fs, geo) = volume()?;
-    // Cleared first: a change during the walks marks it again.
-    DIRTY.store(false, Relaxed);
-    let dirs = gif_dirs()?;
-    // The copies' buckets are walked too, and in the header's directory
-    // check: a bucket's cluster reused after a cache clear must not let a
-    // record name a copy of another category.
-    let buckets = bucket_dirs();
-    let mut listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
-    listed.extend_from_slice(&buckets);
-    let _ = fs::create_dir(config::CACHE_ROOT);
-    let mut scratch = vec![0u8; 8 * SS];
-    let mut read = |lba: u32, buf: &mut [u8]| -> io::Result<()> {
-        {
-            let _l = VolLock::take(fs)?;
-            read_locked(fs, lba, buf)?;
+/// A pass's group: as much of [`config::FATIDX_GROUP`] as leaves
+/// [`config::FATIDX_PASS_KEEP`] free (a transition's need, should one come
+/// before the pass notices the player's quiet is over), halved down to
+/// [`config::FATIDX_GROUP_MIN`]; short of that the build waits.
+fn take_group() -> io::Result<Vec<u8>> {
+    let free = crate::state::free_heap() as usize;
+    let mut n = free
+        .saturating_sub(config::FATIDX_PASS_KEEP + config::FATIDX_SCRATCH)
+        .min(crate::state::largest_free_block().saturating_sub(1024))
+        .min(config::FATIDX_GROUP)
+        & !7;
+    while n >= config::FATIDX_GROUP_MIN {
+        if let Ok(v) = try_buf(n) {
+            BUILD_FLOOR.fetch_min(crate::state::free_heap().saturating_sub(config::FATIDX_SCRATCH as u32), Relaxed);
+            return Ok(v);
         }
-        // Between batches: the player's reads go first.
-        std::thread::sleep(Duration::from_millis(1));
-        Ok(())
+        n = (n / 2) & !7;
+    }
+    Err(heap_short())
+}
+
+/// One slice of the build under way, if the player is quiet for long enough
+/// and nothing the build must not run beside is up; the job finished or
+/// dropped as it ends.
+fn run_slice() {
+    let now = uptime_ms();
+    let quiet = QUIET_UNTIL.load(Relaxed);
+    let left = quiet.wrapping_sub(now) as i32;
+    let until = now.wrapping_add(if left > 0 { (left as u32).min(config::FATIDX_SLICE_MS) } else { 0 });
+    if until.wrapping_sub(now) < config::FATIDX_SLICE_MIN_MS
+        || crate::cache_builder::task_up()
+        || crate::cache_builder::transfer_in_flight()
+        || (crate::state::free_heap() as usize) < config::FATIDX_SLICE_KEEP
+    {
+        return;
+    }
+    let mut g = JOB.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(job) = g.as_mut() else { return };
+    guard(0).store(GUARD_MAGIC, Relaxed);
+    let r = job.slice(until);
+    guard(0).store(0, Relaxed);
+    match r {
+        Ok(false) => {}
+        Err(e) if e.kind() == io::ErrorKind::OutOfMemory => {}
+        Ok(true) => {
+            let job = g.take().unwrap();
+            drop(g);
+            finish(job);
+        }
+        Err(e) => {
+            let job = g.take().unwrap();
+            drop(g);
+            log::warn!("fat index: {e}");
+            abort(job, true);
+        }
+    }
+}
+
+/// Drop a build: its files closed, then deleted (never a write handle
+/// closed after its file went: its sync would write the entry back);
+/// `failed`: the next waits the gap.
+fn abort(job: Box<Job>, failed: bool) {
+    let names_only = job.names_only;
+    drop(job);
+    let _ = fs::remove_file(TMP);
+    let _ = fs::remove_file(NEW);
+    let _ = fs::remove_file(NAMES_NEW);
+    BUILDING.store(false, Relaxed);
+    if names_only {
+        // Not again this boot: names=1 lists instead.
+        NAMES_WANTED.store(false, Relaxed);
+        return;
+    }
+    DIRTY.store(true, Relaxed);
+    FAILED.store(failed, Relaxed);
+    BUILDS.fetch_add(1, Relaxed);
+}
+
+/// Drop the build under way (the card is going, a `/gifs` directory came or
+/// went): rebuilt when due, not counted as failed.
+fn abort_job() {
+    let job = JOB.lock().unwrap_or_else(|p| p.into_inner()).take();
+    if let Some(job) = job {
+        abort(job, false);
+    }
+}
+
+/// A build's last step: the new index in place and swapped in.
+fn finish(job: Box<Job>) {
+    let names_ok = job.names_folders != usize::MAX;
+    let names_only = job.names_only;
+    let (passes, slices, started, cut0, set, gen) = (job.passes, job.slices, job.started, job.cut0, job.set, job.gen);
+    drop(job);
+    if names_only {
+        if names_ok && install_names(started) {
+            log::info!("fat index: names file written");
+        } else {
+            NAMES_WANTED.store(false, Relaxed);
+        }
+        BUILDING.store(false, Relaxed);
+        return;
+    }
+    let _ = fs::remove_file(TMP);
+    // The new one is loaded from its own name (with the walk's directories:
+    // one changed since would have dropped the build) before the index's
+    // lock is taken, and swapped in under it; the old one is closed after
+    // (its close takes the volume lock), then the files renamed. The
+    // player's lookups never find the lock held for longer than the swap.
+    let fresh = load_as(NEW, Some(set));
+    if let Err(e) = &fresh {
+        log::warn!("fat index: the new index did not load ({e})");
+    }
+    let old = {
+        let mut g = LOADED.lock().unwrap();
+        // A directory came or went (or the card) since the walk began: its
+        // index is not put in (`dir_changed` left none), and rebuilt.
+        if DIR_GEN.load(Relaxed) != gen {
+            drop(g);
+            drop(fresh);
+            log::info!("fat index: the directories changed during the build: dropped, built again when quiet");
+            let _ = fs::remove_file(NEW);
+            let _ = fs::remove_file(NAMES_NEW);
+            DIRTY.store(true, Relaxed);
+            BUILDS.fetch_add(1, Relaxed);
+            BUILDING.store(false, Relaxed);
+            return;
+        }
+        let ok = fresh.is_ok();
+        BUILT_THIS_BOOT.store(ok, Relaxed);
+        let old = g.replace(fresh.ok());
+        LOADED_GEN.fetch_add(1, Relaxed);
+        old
     };
-    // The names, one walk of the GIFs' directories (the copies' are not
-    // named by anyone).
-    write_names(&dirs, &geo, &mut read, &mut scratch)?;
-    let mut walk_all = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
-        for (dir, first) in &dirs {
-            let first = *first;
-            let seed = fatdir::hash_more(fatdir::hash(dir.as_bytes()), b"/");
-            fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
-                if f.prev_rel.is_none() {
-                    emit(fatdir::hash_more(seed, f.name), f.loc);
-                }
-                Ok(())
-            })?;
-        }
-        for &(key, first) in &buckets {
-            let seed = fatdir::hash_more(key, b"/");
-            fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
-                if f.prev_rel.is_none() {
-                    emit(fatdir::hash_more(seed, f.name), f.loc);
-                }
-                Ok(())
-            })?;
-        }
-        Ok(())
-    };
-    // The records gathered per walk: up to 16 KB (2,048 records), less if
-    // the largest block is short. On the rig a 32 KB group took the sampled
-    // floor to 19 KB during a build; 16 KB costs two or three more walks.
-    let n = crate::state::largest_free_block().saturating_sub(16 * 1024).clamp(4 * 1024, config::FATIDX_GROUP);
-    let mut group = vec![0u8; n];
-    let mut out = BufWriter::with_capacity(1024, File::create(NEW)?);
-    fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &listed, &mut group)?;
-    out.flush()?;
-    drop(out);
-    // The new one is loaded from its own name on the build's task (its
-    // directory check walks the folders behind card writes) before the
-    // index's lock is taken, and swapped in under it; the old one is closed
-    // after (its close takes the volume lock), then the files renamed. The
-    // player's lookups never find the lock held for longer than the swap:
-    // a lookup that found it held went by path, behind the volume lock
-    // (iso14: opens of 1.4 s and 5.8 s while a build ended during saves).
-    let fresh = load(NEW).ok();
-    BUILT_THIS_BOOT.store(fresh.is_some(), Relaxed);
-    let old = LOADED.lock().unwrap().replace(fresh);
-    LOADED_GEN.fetch_add(1, Relaxed);
+    let ok = BUILT_THIS_BOOT.load(Relaxed);
     drop(old);
     let _ = fs::remove_file(INDEX);
-    fs::rename(NEW, INDEX)?;
-    install_names(BUILT_MS.load(Relaxed));
+    let renamed = fs::rename(NEW, INDEX).is_ok();
+    if names_ok {
+        install_names(BUILT_MS.load(Relaxed));
+    } else {
+        let _ = fs::remove_file(NAMES_NEW);
+    }
     // What the walks saw is in the index now; changes noted since its
     // start stay in the delta.
-    let started = BUILT_MS.load(Relaxed);
-    let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
-    d.retain(|(_, _, at)| since(*at, started) as i32 >= 0);
-    DELTA_LEN.store(d.len() as u32, Relaxed);
+    let built = BUILT_MS.load(Relaxed);
+    {
+        let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
+        d.retain(|(_, _, at)| since(*at, built) as i32 >= 0);
+        DELTA_LEN.store(d.len() as u32, Relaxed);
+    }
+    FAILED.store(!(ok && renamed), Relaxed);
+    if ok && renamed {
+        // A good build: the crashes before it no longer count.
+        guard(1).store(crashes_word(0), Relaxed);
+        AFTER_CRASH.store(0, Relaxed);
+    } else {
+        DIRTY.store(true, Relaxed);
+    }
+    BUILDS.fetch_add(1, Relaxed);
+    BUILDING.store(false, Relaxed);
+    // SAFETY: this task's own stack high-water mark (the network worker's).
+    let unused = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+    log::info!(
+        "fat index: built {} records ({} directories) in one walk and {passes} passes, largest group {} B, {slices} slices, {} s; heap floor {} B during the build; transitions cut during it {}; {} B of the worker's stack unused; stale {}",
+        RECORDS.load(Relaxed),
+        set.len(),
+        BUILD_GROUP.load(Relaxed),
+        since(uptime_ms(), started) / 1000,
+        BUILD_FLOOR.load(Relaxed),
+        crate::TRANSITIONS_CUT.load(Relaxed).wrapping_sub(cut0),
+        unused,
+        DIRTY.load(Relaxed)
+    );
+}
+
+/// The whole build now, on the caller's task, quiet or not (psi-probe).
+#[cfg(feature = "psi-probe")]
+fn build() -> io::Result<()> {
+    abort_job();
+    BUILT_MS.store(uptime_ms(), Relaxed);
+    let mut job = Job::new(false)?;
+    job.ignore_quiet = true;
+    loop {
+        match job.slice(uptime_ms().wrapping_add(1 << 30)) {
+            Ok(true) => break,
+            Ok(false) => continue,
+            Err(e) => {
+                abort(job, true);
+                return Err(e);
+            }
+        }
+    }
+    finish(job);
     Ok(())
+}
+
+// ---- no crash loop -----------------------------------------------------------
+
+/// A build slice in flight, and the builds in a row that ended in a crash,
+/// kept across a restart in RTC slow memory (`.rtc_noinit`, beside
+/// `restarts`' ring; plain word loads and stores only). [`GUARD_MAGIC`] in
+/// the first word while a slice runs; the count in the second with its
+/// complement.
+#[link_section = ".rtc_noinit"]
+static mut GUARD: [u32; 2] = [0; 2];
+const GUARD_MAGIC: u32 = 0x4644_5842;
+/// The builds in a row that crashed the board, as this boot found them.
+static AFTER_CRASH: AtomicU32 = AtomicU32::new(0);
+
+fn guard(i: usize) -> &'static AtomicU32 {
+    // SAFETY: a word of `GUARD`, only ever accessed through this view
+    // (loads and stores).
+    unsafe { AtomicU32::from_ptr((&raw mut GUARD).cast::<u32>().add(i)) }
+}
+
+fn crashes_word(n: u32) -> u32 {
+    (n & 0xFFFF) | (!n & 0xFFFF) << 16
+}
+
+fn crashes_stored() -> u32 {
+    let w = guard(1).load(Relaxed);
+    if w >> 16 == !w & 0xFFFF { w & 0xFFFF } else { 0 }
+}
+
+/// First thing at boot (`main`, after `restarts::boot`): a build slice that
+/// was in flight when the board crashed counts against the next build; a
+/// power-on (RTC memory lost) starts again from none. A planned restart
+/// mid-build (an update, a reboot) counts nothing.
+pub fn boot(crashed: bool, power_on: bool) {
+    let in_flight = guard(0).load(Relaxed) == GUARD_MAGIC;
+    let mut n = if power_on { 0 } else { crashes_stored() };
+    // Only a crash the build can be blamed for: a panic in its code, its
+    // task's stack (the network worker's), an out-of-memory abort; not a
+    // watchdog or another module's panic that happened during a slice.
+    if in_flight
+        && crashed
+        && crate::restarts::this_boot_crash_in(&["fatidx.rs", "fatdir.rs", "names_file.rs"], "net-worker")
+    {
+        n += 1;
+    }
+    guard(0).store(0, Relaxed);
+    guard(1).store(crashes_word(n), Relaxed);
+    AFTER_CRASH.store(n, Relaxed);
+    if n >= config::FATIDX_CRASHES_OFF {
+        log::warn!("fat index: {n} builds in a row ended in a crash: none this boot (until a power-on); GIFs open by path");
+    } else if n > 0 {
+        log::warn!(
+            "fat index: the last build ended in a crash ({n} in a row): the next waits {} min after boot; GIFs open by path meanwhile",
+            after_crash_wait_s(n) / 60
+        );
+    }
+}
+
+/// A new firmware booted (`restarts::booted_after_update`): the crashes
+/// counted were the old one's.
+pub fn forget_crashes() {
+    guard(1).store(crashes_word(0), Relaxed);
+    AFTER_CRASH.store(0, Relaxed);
+}
+
+fn after_crash_wait_s(n: u32) -> u32 {
+    config::FATIDX_AFTER_CRASH_S << (n.max(1) - 1).min(4)
+}
+
+/// May a build start now, after the crashes [`boot`] found?
+fn crash_allows(now_ms: u32) -> bool {
+    let n = AFTER_CRASH.load(Relaxed);
+    n == 0 || (n < config::FATIDX_CRASHES_OFF && now_ms / 1000 >= after_crash_wait_s(n))
 }
 
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{},"path_opens":{},"path_open_max_us":{},"index_busy":{},"index_unloaded":{},"absent":{},"catalog_fatfs":{},"building":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{},"path_opens":{},"path_open_max_us":{},"index_busy":{},"index_unloaded":{},"absent":{},"catalog_fatfs":{},"building":{},"build_floor":{},"build_group":{},"after_crash":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -1564,7 +2036,11 @@ pub fn status_json() -> String {
         INDEX_UNLOADED.load(Relaxed),
         ABSENT.load(Relaxed),
         CATALOG_FATFS.load(Relaxed),
-        BUILDING.load(Relaxed),
+        // (Busy: a slice under way, so a build.)
+        JOB.try_lock().map_or(true, |g| g.is_some()),
+        BUILD_FLOOR.load(Relaxed),
+        BUILD_GROUP.load(Relaxed),
+        AFTER_CRASH.load(Relaxed),
     )
 }
 
