@@ -29,7 +29,7 @@ rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's bui
        build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
        emu-rig-tight) the heap is the spare's (~45 KB free while playing).
 leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
-       up and 40 more (8 samples at least), the least blocks in use and bytes allocated of the
+       up and 60 more (8 samples at least), the least blocks in use and bytes allocated of the
        second half of the samples against the first half's must not have grown past 24 blocks /
        2 KB; prints EMU_LEAK_OK.
 heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
@@ -84,7 +84,12 @@ NOCARD = [
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
 ]
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
-LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 40, 24, 2048
+# 60 after the warm-up (was 40): a sample's level depends on where in a GIF it
+# falls (~194, 199, 209 or 219 KB allocated in the census image), and with 40
+# GIFs a half could miss the lowest phase by chance alone (heap-trim 84b2527:
+# 193,880 B in the first half, the second's least 199,312 B, both levels seen
+# in either half of the passing run before it): ~12 samples, 6 a half.
+LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 60, 24, 2048
 HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
 RIG_BUILT = re.compile(r"fat index: built (\d+) records .*transitions cut during it (\d+);.* stale (true|false)")
 RIG_FAILED = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)")
@@ -208,7 +213,7 @@ def main():
                 m = CENSUS.search(line)
                 if m:
                     census.append((gifs, int(m[1]), int(m[2])))
-                # 10 GIFs to warm up, then 40 more, with census lines after.
+                # 10 GIFs to warm up, then 60 more, with census lines after.
                 if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
                     break
             elif a.mode == "rig":
