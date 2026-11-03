@@ -31,6 +31,10 @@ sram1-iram = ["opendmd-core/sram1-iram"]
 # The emulator's no-card lane (`make emu-nocard`, src/nocard_test.rs): a
 # settings change with no card, kept across a restart. Never in a release.
 nocard-test = []
+# The emulator's rig lane with the spare's heap (`make emu-rig-tight`):
+# heap taken and kept at boot until ~45 KB is free while playing (the
+# spare, 2026-11-03: 42-48 KB). Never in a release.
+emu-ballast = []
 # Formulas on the panel (`psi`) are in every build, releases included.
 default = ["psi", "jit"]
 # Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed

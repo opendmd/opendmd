@@ -1,7 +1,7 @@
 //! The FAT index's build over a real FAT32 image (`mkfs.fat`, mtools: the
 //! test says so and passes without them) shaped like a card: `/gifs/<folder>`
 //! and the copies' buckets `/cache/<category>/<xx>/`. The build
-//! (`fatdir::build_index` over `fatdir::CardWalker`) must allocate nothing,
+//! (`fatdir::Cursor`, `walk`, `gather`, `tmp_dirs`, as the device runs it) must allocate nothing,
 //! however many folders and buckets the card has: on the rig (~10,000 GIFs,
 //! ~5,000 buckets) a list of the buckets was a 64 KB allocation that failed
 //! and aborted the board. Every file with a long name gets its record; the
@@ -111,46 +111,117 @@ fn a_card_shaped_build_allocates_nothing_and_indexes_every_long_name() {
         Ok(())
     })
     .unwrap();
-    let mut bufs = vec![0u8; fatdir::INDEXED_DIR_BUFS];
+    // The directories, as the device's cursor gives them (stopped and
+    // started again every 7, as the device's slices are).
+    let mut cursor = Box::new(fatdir::Cursor::new(roots.0, roots.1));
     let mut got_dirs = BTreeSet::new();
-    fatdir::each_indexed_dir(&geo, roots.0, roots.1, &mut read, &mut bufs, &mut |d, _| {
-        assert_eq!(d.gif, d.path.starts_with("/gifs/"));
-        got_dirs.insert(d.path.to_string());
-        Ok(())
-    })
-    .unwrap();
+    while let Some(d) = cursor.next(&geo, &mut read).unwrap() {
+        let path = if d.gif {
+            format!("/gifs/{}", std::str::from_utf8(&cursor.name[..d.name_len]).unwrap())
+        } else {
+            want_dirs.iter().find(|p| fatdir::hash(p.as_bytes()) == d.key).cloned().unwrap_or_else(|| format!("?{:08x}", d.key))
+        };
+        assert_eq!(fatdir::hash(path.as_bytes()), d.key, "{path}");
+        got_dirs.insert(path);
+    }
     // mtools stores `1b` as an 8.3 name with NT case: compare as FatFs would.
     let low = |s: &BTreeSet<String>| s.iter().map(|p| p.to_ascii_lowercase()).collect::<BTreeSet<_>>();
     assert_eq!(low(&got_dirs), low(&want_dirs));
     assert!(got_dirs.contains("/gifs/Consoles") && got_dirs.contains("/gifs/ARCADE"), "{got_dirs:?}");
 
-    // The build, its output hashed rather than kept: no allocation in it.
-    let mut scratch = vec![0u8; 8 * SS];
-    let mut group = vec![0u8; 4096];
-    let mut between = || Ok(());
-    let mut out = Vec::with_capacity(RECS_MAX);
-    let mut w = fatdir::CardWalker {
-        geo,
-        gifs: roots.0,
-        cache: roots.1,
-        read: &mut read,
-        bufs: &mut bufs,
-        scratch: &mut scratch,
-        between: &mut between,
-    };
-    let mut put = |b: &[u8]| -> std::io::Result<()> {
-        assert!(out.len() + b.len() <= out.capacity(), "the test's buffer");
-        out.extend_from_slice(b);
-        Ok(())
-    };
+    // The build as the device runs it: one walk into temporary records,
+    // then passes over them with a 2 KB group, then the directories. Its
+    // output kept in buffers taken before: no allocation in it.
+    let mut cursor = Box::new(fatdir::Cursor::new(roots.0, roots.1));
+    let mut scratch = vec![0u8; 4 * SS];
+    let mut group = vec![0u8; 2048];
+    let mut chunk = vec![0u8; 2048];
+    let mut tmp: Vec<u8> = Vec::with_capacity(RECS_MAX);
+    let mut out: Vec<u8> = Vec::with_capacity(RECS_MAX);
+    let mut fanout = [0u32; fatdir::FANOUT];
+    let mut set = fatdir::DirSet::default();
     COUNTING.with(|c| c.set(true));
-    let (count, walks) = fatdir::build_index(&mut put, &geo, &mut w, &mut group).unwrap();
+    let mut k = 0;
+    loop {
+        k += 1;
+        if k % 7 == 0 {
+            cursor.refresh();
+        }
+        let Some(d) = cursor.next(&geo, &mut read).unwrap() else { break };
+        set.add((d.key, d.first));
+        assert!(tmp.len() + 16 <= tmp.capacity());
+        tmp.extend_from_slice(&fatdir::TMP_DIR);
+        tmp.extend_from_slice(&fatdir::tmp_record(d.key, d.first));
+        let seed = fatdir::hash_more(d.key, b"/");
+        fatdir::walk(&geo, d.first, &mut read, &mut scratch, &mut |f| {
+            if f.prev_rel.is_none() {
+                let h = fatdir::hash_more(seed, f.name);
+                assert!(tmp.len() + 8 <= tmp.capacity());
+                tmp.extend_from_slice(&fatdir::tmp_record(h, f.loc));
+                fanout[(h >> 24) as usize + 1] += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+    for b in 0..256 {
+        fanout[b + 1] += fanout[b];
+    }
+    let count = fanout[256];
+    let h = fatdir::Header { count, n_fatent: geo.n_fatent, database: geo.database, dirs: set_n(&set) };
+    out.extend_from_slice(&h.encode());
+    for v in fanout {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    let (mut b0, mut passes) = (0, 0);
+    while b0 < 256 {
+        let mut at = 0;
+        let t = &tmp;
+        let (b1, n) = fatdir::gather(
+            &mut |buf: &mut [u8]| {
+                let n = buf.len().min(t.len() - at);
+                buf[..n].copy_from_slice(&t[at..at + n]);
+                at += n;
+                Ok(n)
+            },
+            &fanout,
+            b0,
+            &mut group,
+            &mut chunk,
+        )
+        .unwrap();
+        assert!(out.len() + n <= out.capacity());
+        out.extend_from_slice(&group[..n]);
+        b0 = b1;
+        passes += 1;
+    }
+    let mut at = 0;
+    let t = &tmp;
+    let mut again = fatdir::DirSet::default();
+    fatdir::tmp_dirs(
+        &mut |buf: &mut [u8]| {
+            let n = buf.len().min(t.len() - at);
+            buf[..n].copy_from_slice(&t[at..at + n]);
+            at += n;
+            Ok(n)
+        },
+        &mut chunk,
+        &mut |k, c| {
+            again.add((k, c));
+            out.extend_from_slice(&k.to_le_bytes());
+            out.extend_from_slice(&c.to_le_bytes());
+            Ok(())
+        },
+    )
+    .unwrap();
     COUNTING.with(|c| c.set(false));
     assert_eq!(ALLOCS.with(Cell::get), 0, "the build allocated");
+    assert_eq!(again, set);
+    let walks = passes;
     // (Long names that start in the previous cluster have no record: they
     // open by path, ~1% here with 4 KB clusters.)
     assert!(count as usize <= want_files.len() && count as usize * 100 >= want_files.len() * 97, "{count} of {}", want_files.len());
-    assert!(walks > 3, "{walks} walks: the group was meant to take several");
+    assert!(walks > 3, "{walks} passes: the group was meant to take several");
     let h = fatdir::Header::decode(&out).unwrap();
     assert_eq!(h.dirs as usize, want_dirs.len());
     let fan = |b: usize| u32::from_le_bytes(out[fatdir::HEADER + b * 4..][..4].try_into().unwrap());
@@ -163,8 +234,14 @@ fn a_card_shaped_build_allocates_nothing_and_indexes_every_long_name() {
         })
         .count();
     assert_eq!(missing, want_files.len() - count as usize, "every record is one of the card's files");
-    eprintln!("{count} records, {} directories, {walks} walks, no allocation", h.dirs);
+    assert_eq!(out.len(), fatdir::RECORDS_AT as usize + count as usize * 8 + want_dirs.len() * 8);
+    eprintln!("{count} records, {} directories, one walk and {walks} passes of a 2 KB group, no allocation", h.dirs);
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A [`fatdir::DirSet`]'s count (by adding nothing: compare with sets).
+fn set_n(s: &fatdir::DirSet) -> u32 {
+    s.len()
 }
 
 const RECS_MAX: usize = 1 << 20;

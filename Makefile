@@ -105,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1001,6 +1001,16 @@ emu-rig-card:
 emu-rig: emu-build emu-rig-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
+# while playing (the spare, 2026-11-03). EMU_RIG_OK.
+EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-rigtight:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/rigtight/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/rigtight/dist/opendmd-*-4mb-app.bin
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-ballast FW_RELEASE_TARGET_DIR=$(EMU_DIR)/rigtight/target DIST=$(EMU_DIR)/rigtight/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-rig-tight: emu-build emu-rig-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-rigtight &&) \
+	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_RIGTIGHT_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # FW_IMAGE=<full.bin> boots that image; otherwise a normal 4mb release build
 # (incremental) goes to $(EMU_DIR)/smoke/.
