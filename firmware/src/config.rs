@@ -797,19 +797,39 @@ pub const FATIDX_QUIET_S: u32 = 30;
 pub const FATIDX_MIN_GAP_S: u32 = 600;
 /// No build in the first seconds after boot: the start-up show, the first GIF.
 pub const FATIDX_BOOT_DELAY_S: u32 = 20;
-/// Free heap a build needs to start: its task's stack (8 KB), a 4 KB
-/// sector batch, a 1 KB writer and the group (`FATIDX_GROUP`), over the
-/// network side's transients.
-pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
-/// The build's task stack (it exists only while it builds): the walk goes
-/// through FatFs, card-speed's transfer and error path (`cardspeed`:
-/// a failed read is recovered and the clock slowed on the caller's task)
-/// and the SD SPI driver, under two closures.
-pub const FATIDX_STACK: usize = 10 * 1024;
+/// The FAT index build runs in slices on the network worker (its stack,
+/// no task of its own), each inside the player's quiet window
+/// (`Engine::quiet_for`: no transition, no file opened ahead or switched to
+/// while it runs), at most this long (ms), and only with at least
+/// [`FATIDX_SLICE_MIN_MS`] of the window left.
+pub const FATIDX_SLICE_MS: u32 = 250;
+pub const FATIDX_SLICE_MIN_MS: u32 = 120;
+/// The free heap a slice leaves after its buffers (the network side's
+/// transients): a slice does not start below it, and stops between
+/// directories when the heap falls under it.
+pub const FATIDX_SLICE_KEEP: usize = 20 * 1024;
+/// Free heap a build needs to start: its slice's reserve and ~4 KB it
+/// holds between slices (the cursor's two sectors, the fanout).
+pub const FATIDX_START_HEAP: usize = FATIDX_SLICE_KEEP + 8 * 1024;
+/// The free heap a pass's group leaves: a transition's 24 KB and its
+/// [`TRANSITION_HEAP_RESERVE`] (a skip or a play that comes during a pass
+/// finds the heap a transition needs; the pass stops at its next read).
+pub const FATIDX_PASS_KEEP: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE;
+/// A slice's batch of directory sectors, and its read chunk of the
+/// temporary records.
+pub const FATIDX_SCRATCH: usize = 4 * 512;
+/// The most records a pass gathers, in bytes (8 a record), and the least:
+/// taken for one slice from the heap above [`FATIDX_SLICE_KEEP`].
+pub const FATIDX_GROUP: usize = 16 * 1024;
+pub const FATIDX_GROUP_MIN: usize = 2 * 1024;
+/// After a build that crashed the board (`fatidx::boot`): the next waits
+/// this long after boot (doubled for a second crash in a row), and past
+/// [`FATIDX_CRASHES_OFF`] crashes in a row there is none until a power-on.
+/// GIFs open by path meanwhile.
+pub const FATIDX_AFTER_CRASH_S: u32 = 30 * 60;
+pub const FATIDX_CRASHES_OFF: u32 = 3;
 /// The read-ahead's filling task (`readahead`): card reads only (the SD
 /// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
 /// network does not starve it.
 pub const READAHEAD_STACK: usize = 4 * 1024;
 pub const READAHEAD_PRIORITY: u8 = 5;
-/// The most records a build gathers per walk, in bytes (8 a record).
-pub const FATIDX_GROUP: usize = 16 * 1024;

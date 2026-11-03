@@ -1759,6 +1759,13 @@ fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
     let alias = !opendmd_core::fatread::is_canonical(card);
     let parent = fs_path.rsplit_once('/').map_or(fs_path, |(d, _)| d).to_string();
     let copy = opendmd_core::layout::cache_path(card).map(|p| format!("{}{p}", config::SD_MOUNT));
+    // A file at `/cache`'s root (the FAT index, its build's files, the
+    // names file, by any name or alias): the build under way and the loaded
+    // index go first; the build keeps its files open for writing between
+    // slices, and a write after this one's would land in freed clusters.
+    if files::same_card_path(&parent, config::CACHE_ROOT) {
+        crate::fatidx::dir_changed();
+    }
     let mut intents = Vec::with_capacity(2);
     if alias {
         intents.push(crate::fatidx::intend_tree(&parent));
@@ -1866,12 +1873,18 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
         return req.error(503, "503 Service Unavailable", NOT_RELEASED);
     }
     let card = format!("/{}", rel.trim_start_matches('/').trim_end_matches('/'));
+    // The FAT index's build keeps its files under `/cache` open for writing
+    // between slices, and the index file is open: both go before anything
+    // is removed (a write after the remove would land in freed clusters),
+    // at every round, and no build starts again until 30 s after.
+    let cache_tree = files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT);
+    if cache_tree {
+        crate::fatidx::dir_changed();
+    }
     match files::remove_tree(path, config::RECURSIVE_DELETE_BUDGET) {
         Ok((removed, done)) => {
             info!("DELETE {card} (recursive): {removed} entries removed, done {done}");
-            if files::under(path, config::CACHE_ROOT)
-                || files::same_card_path(path, config::CACHE_ROOT)
-            {
+            if cache_tree {
                 crate::cache::invalidate();
                 // Copies (and perhaps the index file itself) gone: the
                 // index is dropped and rebuilt when quiet.
