@@ -510,6 +510,8 @@ fn run(worker: NetWorker) {
         // The FAT index (`fatidx`): built or rebuilt when due.
         crate::readahead::tick();
         crate::fatidx::tick();
+        #[cfg(feature = "emu-census")]
+        census();
 
         // An open AP does not stay up indefinitely. Rebooting (rather than
         // dropping back to STA in place) re-runs the whole boot decision with
@@ -666,4 +668,28 @@ fn sync_sd_slow(nvs: &EspNvsPartition<NvsDefault>) {
     if let Err(e) = crate::nvs_config::Config::new(nvs.clone()).and_then(|mut c| c.set_sd_slow(record)) {
         error!("[net] sd_slow: {e:#}");
     }
+}
+
+/// The emulator's leak lane (feature `emu-census`): the heap's blocks in
+/// use and bytes, every 20 s (`run.py leak` counts the GIFs between). A walk of the
+/// heap (here on CPU0, never the display core).
+#[cfg(feature = "emu-census")]
+fn census() {
+    static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    // SAFETY: plain IDF calls; `info` is filled by the call.
+    let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1000) as u32;
+    let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
+    if now.wrapping_sub(last) < 20_000 {
+        return;
+    }
+    LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+    let mut info: esp_idf_sys::multi_heap_info_t = unsafe { std::mem::zeroed() };
+    unsafe { esp_idf_sys::heap_caps_get_info(&mut info, esp_idf_sys::MALLOC_CAP_8BIT) };
+    log::info!(
+        "census: {} blocks in use, {} B allocated, {} B free, largest {} B",
+        info.allocated_blocks,
+        info.total_allocated_bytes,
+        info.total_free_bytes,
+        info.largest_free_block
+    );
 }

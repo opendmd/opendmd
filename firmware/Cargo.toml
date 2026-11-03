@@ -35,6 +35,10 @@ nocard-test = []
 # heap taken and kept at boot until ~45 KB is free while playing (the
 # spare, 2026-11-03: 42-48 KB). Never in a release.
 emu-ballast = []
+# The emulator's leak lane (`make emu-leak`): the heap's block count and
+# bytes in use logged every 20 s (`census:`), checked flat across 40+ GIFs.
+# Never in a release.
+emu-census = []
 # Formulas on the panel (`psi`) are in every build, releases included.
 default = ["psi", "jit"]
 # Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed

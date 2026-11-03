@@ -17,10 +17,18 @@
 //! - A slot's close forgets it before the slot is free (`fatidx::v_close`),
 //!   and a block read for a slot that was closed meanwhile is dropped (the
 //!   generation changed), so no freed cluster's bytes are ever served.
-//! - The filling task and its ring (4 KB of stack, 8 KB, and a 2 KB block)
-//!   exist only while a file is followed: the network worker starts the
-//!   task ([`tick`]), which takes the ring when the heap has room, and both
-//!   go after 5 s without a read (a Formula plays from memory).
+//! - The filling task is resident: started once (4 KB of stack, kept), it
+//!   waits on its FreeRTOS task notification while no file is followed, and
+//!   the network worker wakes it ([`tick`]). Until 2026-11-03 it was a task
+//!   started for each file, which ended after it: every start and end cost
+//!   a std thread's ~190 B that never came back (`task::spawn_core0`), the
+//!   spare's heap filling with small blocks GIF by GIF. Its ring (8 KB) and
+//!   block (2 KB) are taken when a file is followed and the heap has room,
+//!   and given back at a switch (before the next decoder and the
+//!   transition) and after 5 s without a read (a Formula plays from
+//!   memory). A ring kept for good would cost the heap 10 KB at all times:
+//!   on the spare (38-45 KB free while playing) that is the transition
+//!   gate's margin.
 
 use opendmd_core::fatread::{Extents, RawFile};
 use opendmd_core::readahead::{Ring, BLOCK};
@@ -82,10 +90,14 @@ static CLOSE_PENDING: AtomicU32 = AtomicU32::new(0);
 /// 400 ms).
 const HOLD_OFF_MS: u32 = 1_000;
 
-/// The filling task is up (set by [`tick`], cleared by the task under the
-/// state's lock as it decides to go).
+/// The filling task is working (set by [`tick`], cleared by the task under
+/// the state's lock as it decides to wait).
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// The resident filling task, once started (its FreeRTOS handle).
+static TASK: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 static SPAWNS: AtomicU32 = AtomicU32::new(0);
+/// Wake-ups of the resident task (a file followed again).
+static WAKES: AtomicU32 = AtomicU32::new(0);
 static HITS: AtomicU32 = AtomicU32::new(0);
 static UNDERRUNS: AtomicU32 = AtomicU32::new(0);
 static FETCHES: AtomicU32 = AtomicU32::new(0);
@@ -113,6 +125,14 @@ pub fn tick() {
             return;
         }
         RUNNING.store(true, Relaxed);
+    }
+    let task = TASK.load(SeqCst);
+    if !task.is_null() {
+        // SAFETY: the resident task's handle (it never ends): its
+        // notification count raised, which its wait takes.
+        unsafe { esp_idf_sys::xTaskGenericNotify(task as esp_idf_sys::TaskHandle_t, 0, 0, esp_idf_sys::eNotifyAction_eIncrement, std::ptr::null_mut()) };
+        WAKES.fetch_add(1, Relaxed);
+        return;
     }
     let spawned = crate::task::spawn_core0(
         b"readahead\0",
@@ -318,7 +338,7 @@ fn plan() -> Next {
         if idle {
             let ring = s.ring.take();
             ACTIVE.store(false, Relaxed);
-            // Gone under the lock: `tick` starts another when wanted again.
+            // Waiting from here (under the lock): `tick` wakes it when wanted.
             RUNNING.store(false, Relaxed);
             drop(s);
             drop(ring);
@@ -376,12 +396,20 @@ fn plan() -> Next {
 }
 
 fn run() {
+    // SAFETY: this task's own handle, kept for `tick`'s wake-ups.
+    TASK.store(unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() } as *mut core::ffi::c_void, SeqCst);
     let mut scratch: Option<Vec<u8>> = None;
     // SAFETY: the running task's own stack mark.
     let stack_low = || unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) } as u32;
     loop {
         match plan() {
-            Next::Idle => return,
+            Next::Idle => {
+                // Nothing followed: the block back, and wait for `tick`
+                // (a wake given before this wait is kept by the count).
+                scratch = None;
+                // SAFETY: a wait on this task's own notification.
+                unsafe { esp_idf_sys::ulTaskGenericNotifyTake(0, 1, u32::MAX) };
+            }
             Next::Wait => std::thread::sleep(Duration::from_millis(5)),
             Next::NoHeap => std::thread::sleep(Duration::from_millis(200)),
             Next::Fetch(f) => {
@@ -430,7 +458,7 @@ pub fn status_json() -> String {
     };
     let fill_min = FILL_MIN.swap(u32::MAX, Relaxed);
     format!(
-        r#","readahead":{{"active":{active},"bytes":{},"fill":{fill},"fill_min":{},"hits":{},"underruns":{},"fetches":{},"taken":{},"no_heap":{},"busy":{},"errors":{},"task_starts":{},"stack_unused":{}}}"#,
+        r#","readahead":{{"active":{active},"bytes":{},"fill":{fill},"fill_min":{},"hits":{},"underruns":{},"fetches":{},"taken":{},"no_heap":{},"busy":{},"errors":{},"task_starts":{},"wakes":{},"stack_unused":{}}}"#,
         BLOCKS * BLOCK,
         if fill_min == u32::MAX { "null".to_string() } else { fill_min.to_string() },
         HITS.load(Relaxed),
@@ -441,6 +469,7 @@ pub fn status_json() -> String {
         BUSY.load(Relaxed),
         ERRORS.load(Relaxed),
         SPAWNS.load(Relaxed),
+        WAKES.load(Relaxed),
         match STACK_LOW.load(Relaxed) {
             u32::MAX => "null".to_string(),
             n => n.to_string(),
