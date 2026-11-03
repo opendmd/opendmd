@@ -10,7 +10,7 @@ make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, 
 make emu-probe     # psi-probe image (8mb layout: the full probe outgrew the 4mb partition; EMU_PROBE_VARIANT=4mb for the DevKit one; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
 make emu-rig       # smoke image + the rig-scale card (mkcard.py --rig): the FAT index build finishes, heap floor reported -> EMU_RIG_OK
 make emu-rig-tight # the same with the spare's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK
-make emu-leak      # an emu-census image plays 70 GIFs: the heap's blocks and bytes stay flat after 10 -> EMU_LEAK_OK
+make emu-leak      # an emu-census image plays 70 GIFs (on to 150 while the halves differ): the heap's blocks and bytes stay flat after 10 -> EMU_LEAK_OK
 make emu-api       # the emu-census image on WiFi, its HTTP API driven from the host over two boots -> EMU_API_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"

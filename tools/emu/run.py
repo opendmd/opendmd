@@ -32,7 +32,7 @@ rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's bui
 leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
        up and 60 more (8 samples at least), the least blocks in use and bytes allocated of the
        second half of the samples against the first half's must not have grown past 24 blocks /
-       2 KB; prints EMU_LEAK_OK.
+       2 KB (while they have, it plays on, to 140 after the warm-up at most); prints EMU_LEAK_OK.
 heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
        pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
        `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
@@ -95,6 +95,25 @@ CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
 # 193,880 B in the first half, the second's least 199,312 B, both levels seen
 # in either half of the passing run before it): ~12 samples, 6 a half.
 LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 60, 24, 2048
+# The emulator is deterministic, so a half that misses the lowest phase misses
+# it on every run of that image (net-wedge e973481: 194,224 B once in the first
+# half, the second's least 199,428 B, a level the first half had three times).
+# So after the 60, while the halves do not compare flat, it plays on, to 140 at
+# most: a leak lifts every level for good and fails there; a flat heap meets
+# its lowest phase again.
+LEAK_GIFS_MAX = 140
+
+
+def leak_halves(census):
+    """The leak verdict's figures: the least blocks and bytes of the first and second half of
+    the census samples after the warm-up, the GIFs they span, and whether that is flat."""
+    after = [c for c in census if c[0] >= LEAK_WARM]
+    half = len(after) // 2
+    warm, late = after[:half], after[half:]
+    b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
+    y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
+    flat = b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES
+    return b0, b1, y0, y1, after[-1][0] - after[0][0], flat
 HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
 RIG_BUILT = re.compile(r"fat index: built (\d+) records .*transitions cut during it (\d+);.* stale (true|false)")
 RIG_FAILED = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)")
@@ -226,9 +245,11 @@ def main():
                 m = CENSUS.search(line)
                 if m:
                     census.append((gifs, int(m[1]), int(m[2])))
-                # 10 GIFs to warm up, then 60 more, with census lines after.
-                if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
-                    break
+                # 10 GIFs to warm up, then 60 more, with census lines after;
+                # on to LEAK_GIFS_MAX while the halves do not compare flat.
+                if m and len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
+                    if leak_halves(census)[5] or gifs >= LEAK_WARM + LEAK_GIFS_MAX:
+                        break
             elif a.mode == "rig":
                 m = HEARTBEAT_FLOOR.search(line)
                 if m:
@@ -326,16 +347,12 @@ def main():
         after = [c for c in census if c[0] >= LEAK_WARM]
         if len(after) < 6 or after[-1][0] < LEAK_WARM + LEAK_GIFS:
             die(f"not enough census lines ({len(after)} after the warm-up) within {seconds} emulated s (GIF starts {gifs})")
-        half = len(after) // 2
-        warm, late = after[:half], after[half:]
-        b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
-        y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
-        span = after[-1][0] - after[0][0]
+        b0, b1, y0, y1, span, flat = leak_halves(census)
         print(f"census: {len(census)} lines; least blocks {b0} -> {b1}, least allocated {y0} -> {y1} B, first half against second, over {span} GIFs")
         # A std thread's leftovers were ~4 blocks and ~190 B a GIF: 40 GIFs
         # were ~160 blocks and ~7.6 KB. Flat means within one GIF's own
         # churn (a decoder's pieces, the ring held or not).
-        if b1 - b0 > LEAK_BLOCKS or y1 - y0 > LEAK_BYTES:
+        if not flat:
             die(f"the heap grew across {span} GIFs: blocks {b0} -> {b1}, allocated {y0} -> {y1} B")
         print(f"EMU_LEAK_OK ({took:.0f} s wall)")
         return
