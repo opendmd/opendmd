@@ -38,11 +38,14 @@ mod on {
 
     pub struct Alloc;
 
-    #[global_allocator]
+    // The heap map's allocator (`heapmap`, a diagnostic build) is the
+    // global one there, and serves the arena's slots through `claim`.
+    #[cfg_attr(not(feature = "heapmap"), global_allocator)]
+    #[allow(dead_code)]
     static A: Alloc = Alloc;
 
     #[inline(never)]
-    fn claim(l: Layout) -> Option<*mut u8> {
+    pub fn claim(l: Layout) -> Option<*mut u8> {
         let base = BASE.load(Relaxed);
         if base == 0 || l.align() > 8 {
             return None;
@@ -63,7 +66,7 @@ mod on {
     }
 
     /// Give a slot back if `p` is one: true.
-    fn release(p: *mut u8) -> bool {
+    pub fn release(p: *mut u8) -> bool {
         let base = BASE.load(Relaxed);
         let a = p as usize;
         if base == 0 || a < base || a >= base + BYTES {
@@ -125,7 +128,7 @@ mod on {
         }
     }
 
-    fn release_check(p: *mut u8) -> bool {
+    pub fn release_check(p: *mut u8) -> bool {
         let base = BASE.load(Relaxed);
         let a = p as usize;
         base != 0 && a >= base && a < base + BYTES
@@ -154,3 +157,5 @@ mod on {
 
 #[cfg(feature = "psi")]
 pub use on::{reserve, span, BUSY, HITS};
+#[cfg(all(feature = "psi", feature = "heapmap"))]
+pub use on::{claim, release, release_check as holds};
