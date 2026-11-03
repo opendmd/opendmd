@@ -365,6 +365,9 @@ fn run(worker: NetWorker) {
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
 
+        // A cache count put off for a transfer, once it is over.
+        crate::cache::tick();
+
         // The FAT index (`fatidx`): built or rebuilt when due.
         let before = crate::state::free_heap();
         crate::readahead::tick();

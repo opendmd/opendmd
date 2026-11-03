@@ -647,13 +647,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             req.header("Retry-After", "1")?;
             return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
         }
-        let snap = {
-            let s = c.status.lock().unwrap();
-            let held = std::time::Instant::now();
-            let copy = s.clone();
-            STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
-            copy
-        };
+        let snap = status_snapshot(&c.status);
         status_json(&snap, &looks, recent, &mut json);
         drop(snap);
         drop(looks);
@@ -2656,6 +2650,18 @@ fn looks_json(set: &Settings) -> String {
 
 /// How long a status answer is reused for another read.
 const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The status, copied under its lock (µs), on the heap: as a local of the
+/// handler the copy (~1.5 KB) sat on the httpd task's stack under the whole
+/// of `status_json` (728 B of 6.5 KB left in the emulator).
+#[inline(never)]
+fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
+    let s = status.lock().unwrap();
+    let held = std::time::Instant::now();
+    let copy = Box::new(s.clone());
+    STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+    copy
+}
 
 /// A status answer kept for a fast poller: when it was made, with or
 /// without `recent`, the JSON.

@@ -48,7 +48,7 @@ use opendmd_core::filter::Filter;
 use opendmd_core::layout::{self, CacheCount};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -192,6 +192,20 @@ pub fn snapshot() -> State {
     STATE.lock().unwrap().clone()
 }
 
+/// A count waits for a transfer to end ([`run_count`]).
+static DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// The network worker's turn (each loop, at least once a second): a count
+/// put off for a transfer is asked for again once the transfer is over.
+pub fn tick() {
+    if DEFERRED.load(Relaxed)
+        && !crate::cache_builder::transfer_in_flight()
+        && DEFERRED.swap(false, Relaxed)
+    {
+        wake();
+    }
+}
+
 /// The network worker's side of [`NetCommand::CountCache`]: wait for the
 /// requests to go quiet, count, publish. Returns early if the count is
 /// already current (a queued duplicate).
@@ -234,6 +248,16 @@ pub fn run_count() {
             // No playlist yet (boot, or a card with none). Nothing to count.
             let mut s = STATE.lock().unwrap();
             s.counting = false;
+            return;
+        }
+        // Not beside a transfer (an upload, a firmware or www pack being
+        // staged, a listing): its buffers and the count's key slice (up to
+        // 12 KB) beside a GIF's start took the emulator's heap to a 9 KB
+        // floor once the count went back to work behind a signature check
+        // while the firmware staged. Left to [`tick`], which asks again
+        // once the card is free; the worker is not held meanwhile.
+        if crate::cache_builder::transfer_in_flight() {
+            DEFERRED.store(true, Relaxed);
             return;
         }
         let started = Instant::now();
