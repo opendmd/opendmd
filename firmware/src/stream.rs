@@ -265,6 +265,11 @@ pub fn hand_off_within<F>(req: &mut Req, wait: Duration, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
 {
+    hand_off_boxed(req, wait, Box::new(work))
+}
+
+/// [`hand_off_within`]'s body, once: not monomorphised for every route.
+fn hand_off_boxed(req: &mut Req, wait: Duration, work: Work) -> Result<()> {
     if !files::affordable(req)? {
         return Ok(());
     }
@@ -294,7 +299,7 @@ where
             if jobs.len() < QUEUE_DEPTH {
                 jobs.push_back(Job::Download {
                     req: req.detach()?,
-                    work: Box::new(work),
+                    work,
                 });
                 queue.ready.notify_one();
                 return Ok(());
@@ -323,13 +328,18 @@ pub fn receive<F>(req: &mut Req, work: F) -> Result<()>
 where
     F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
 {
+    receive_boxed(req, Box::new(work))
+}
+
+/// [`receive`]'s body, once: not monomorphised for every upload route.
+fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
     let up = req.take_over()?;
     let queue = match QUEUE.get() {
         Some(q) if STARTED.load(Ordering::Acquire) => q,
         // No task: on the httpd task, as before (the connection is still
         // ours, and still has its timeouts).
         _ => {
-            run_upload(up, Box::new(work), false);
+            run_upload(up, work, false);
             return Ok(());
         }
     };
@@ -356,10 +366,7 @@ where
         let idle = jobs.is_empty() && !BUSY.load(Ordering::Acquire);
         if !ahead && idle && UPLOADS.load(Ordering::Acquire) < MAX_UPLOADS {
             UPLOADS.fetch_add(1, Ordering::AcqRel);
-            jobs.push_back(Job::Upload {
-                up,
-                work: Box::new(work),
-            });
+            jobs.push_back(Job::Upload { up, work });
             queue.ready.notify_one();
             drop(jobs);
             line.retain(|(k, _)| *k != key);
