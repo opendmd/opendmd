@@ -105,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1015,6 +1015,26 @@ emu-image-leak:
 emu-leak: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# The API lane: the leak lane's `emu-census` image with WiFi credentials
+# seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
+# 127.0.0.1, inside a private network namespace (nothing reaches a real
+# network); the HTTP API driven from the host over two boots: uploads,
+# listings, moves, deletes, settings, play, skip/pause, a www pack, load
+# rounds with the heap census flat, a recursive /cache delete during the FAT
+# index build, OTA refusals, the card checked after (fatcheck, the settings
+# file, the bytes), then the signed bundle through the updater. EMU_API_OK.
+# FW_IMAGE=<full.bin> EMU_API_BUNDLE=<.odfw> boot a given image.
+EMU_API_BUNDLE ?= $(EMU_DIR)/leak/dist/opendmd-$(FW_VERSION)-4mb.odfw
+EMU_API_FORMULA ?= $(PSI)/formulas/plasma.psi
+EMU_API_PSB = $(EMU_DIR)/api/formula.psb.b64
+emu-api-psb:
+	@mkdir -p $(EMU_DIR)/api
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
+	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
+emu-api: emu-build emu-card emu-api-psb
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
+	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
+	  --www-pack $(WWW_PACK) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
 # The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (the spare, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin

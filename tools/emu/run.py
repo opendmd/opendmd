@@ -4,8 +4,9 @@
 # ///
 """Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
 
-    uv run tools/emu/run.py smoke|probe|nocard|rig|heapmap --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+    uv run tools/emu/run.py smoke|probe|nocard|rig|leak|heapmap --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
         [--built-after EPOCH]
+    uv run tools/emu/run.py api --image FULL.bin --www-pack www.pack --bundle B.odfw --psb F.b64 [--formula F.psi] [--card SD.img]
 
 The image must be the one that boots: its app descriptor's ELF SHA-256 is checked against
 the boot log's `ELF file SHA256:` line, and with --built-after (the Makefile passes the time it
@@ -35,10 +36,14 @@ leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: afte
 heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
        pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
        `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
+api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy of the image's NVS,
+       the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
+       (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
+       (tools/emu/api_lane.py says what each covers); prints EMU_API_OK.
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
-import argparse, os, re, signal, subprocess, sys, time
+import argparse, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
@@ -108,7 +113,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ah
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -117,6 +122,12 @@ def main():
     ap.add_argument("--rom", type=Path)
     ap.add_argument("--min-gifs", type=int, default=3)
     ap.add_argument("--built-after", type=float, help="refuse an image file older than this (epoch s)")
+    ap.add_argument("--www-pack", type=Path, help="api: the pack PUT to /api/www")
+    ap.add_argument("--bundle", type=Path, help="api: the signed bundle PUT to /api/firmware")
+    ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
+    ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=1,
+                    help="api: the load's connections at once: 1 (the default), 2 (status polls beside the rest) or 5 (RX_BUFFERS in api_lane.py)")
+    ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
     a = ap.parse_args()
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
@@ -134,6 +145,8 @@ def main():
     want_sha = image_elf_sha(a.image)
     if not want_sha:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
+    if a.mode == "api":
+        return api(a, sim, rom, want_sha)
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
     seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)
@@ -419,6 +432,29 @@ def main():
                 print(l[:230])
         print(f"golden: {golden[1]} match, {golden[2]} differ")
         print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+
+
+def api(a, sim, rom, want_sha):
+    """The API lane (api_lane.py), inside its own network namespace: run.py runs itself again
+    under `unshare -rn` (an unprivileged user and network namespace with only a loopback)."""
+    import api_lane
+    for what, p in (("--www-pack", a.www_pack), ("--bundle", a.bundle), ("--psb", a.psb)):
+        if not p or not p.exists():
+            sys.exit(f"EMU_API_FAIL: {what} missing: {p}")
+    try:
+        a.seeded = api_lane.seeded_image(a.image, EMU_DIR / "api")
+    except api_lane.LaneFail as e:
+        sys.exit(f"EMU_API_FAIL: {e}")
+    if os.environ.get("EMU_API_NETNS") != "1":
+        if not shutil.which("unshare"):
+            sys.exit("EMU_API_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+        env = {**os.environ, "EMU_API_NETNS": "1"}
+        os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
+    ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
+    if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
+        sys.exit("EMU_API_FAIL: cannot bring up the loopback in the lane's network namespace")
+    a.emu_dir, a.want_sha = EMU_DIR, want_sha
+    sys.exit(api_lane.run(a, sim, rom, FAIL))
 
 
 main()
