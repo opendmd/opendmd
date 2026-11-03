@@ -470,6 +470,8 @@ fn main() -> Result<()> {
     // allocation and overwrite its record; installs the panic hook.
     let reset = restarts::reset_now();
     restarts::boot(reset);
+    // A crash during a FAT index build defers the next (no crash loop).
+    fatidx::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();
     log::info!("flash: {mhz} MHz, {mode}");
