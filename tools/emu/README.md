@@ -15,10 +15,10 @@ make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
 Files:
 
 - `build-emulator.sh`: clone/fetch https://github.com/opendmd/esp32sim, check out `ESP32SIM_COMMIT`
-  (pinned in the script, 551417f on the fork's `opendmd` branch), build. Stamp = repo + commit.
+  (pinned in the script, a7ccd1b on the fork's `opendmd` branch), build. Stamp = repo + commit.
   Refuses a dir outside `~/scratch`.
-- The fork: our emulator changes live on its `opendmd` branch (upstream 2e36224 plus one commit, the SD-SPI
-  board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
+- The fork: our emulator changes live on its `opendmd` branch (upstream 9fdeb32, merged 2026-11-03, plus the
+  SD-SPI board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
   The board: a byte-stream SD-over-SPI card on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) as
   board `esp32dev-sdspi`. Env: `ESP32SIM_SD_IMG` (raw FAT image, copy-on-write in RAM),
   `ESP32SIM_SD_OUT` (write back if modified; the runner leaves it unset), `ESP32SIM_SD_LOG`.
@@ -33,4 +33,7 @@ Files:
 (`smoke/`, `probe/`). The emulator runs about 0.55 emulated seconds per wall second; the probe is ~5 min wall.
 
 Not covered: timing (emulated cycles are not trustworthy), panel output (I2S TX is not modelled),
-inbound HTTP (no port forwarding), WiFi (`--net none`).
+inbound HTTP and WiFi in the lanes (they run `--net none`). The emulator can do both since the
+2026-11-03 merge: `--wifi ssid=demo,chan=6,psk=demo-password --net nat --hostfwd tcp:127.0.0.1:8080-:80`
+with WiFi credentials seeded into the image's NVS (namespace `opendmd`, `wifi_ssid`/`wifi_pass`, written
+with IDF's `nvs_partition_gen.py` at 0x9000) answers `GET /api/status` on the host; no lane uses it yet.
