@@ -108,6 +108,15 @@ fn formulas() {
     assert_eq!(s, "look screen 40\nhsv(x, 1, 1)");
     assert_eq!(as_look(&s), s);
     assert_eq!((info()[5] & 32, info()[7]), (32, 1));
+    // Compiled (`@formula?psb=…`, the demo's look from the path the app
+    // sends): the same look, the same picture.
+    let p = program(&s);
+    assert!(!p.is_empty());
+    assert!(as_look_psb(&p));
+    assert_eq!((info()[5] & 32, info()[7]), (32, 1));
+    assert!(!as_look_psb(b"not a program"));
+    assert_eq!(error(), opendmd_psi::psb::NOT_PSB);
+    assert_eq!(as_look(&s), s);
     assert_eq!(look("gray(ul)", "over", 100), "look\ngray(ul)");
     assert_eq!(as_look("look\ngray(ul)"), "look\ngray(ul)");
     assert_eq!(as_look("gray(ul)"), "gray(ul)");

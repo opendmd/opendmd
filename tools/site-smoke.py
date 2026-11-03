@@ -836,7 +836,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     cfg = page.evaluate("""async (src) => { const { app } = await import('./js/state.js'), L = await import('./js/looks.js'), m = await L.psi();
         const f = L.set(m, { src }, 'screen', 40);
         await app.src.putConfig({ look_formula: L.path(m, f) }); const c = await app.refreshConfig();
-        return [c.look_formula.includes('look+screen+40;'), 'look_blend' in c || 'look_formula_name' in c]; }""", plasma)
+        return [c.look_formula.startsWith('@formula?psb=') && !!m.asLookPsb(Uint8Array.from(atob(c.look_formula.slice(13).split('&')[0].replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0))) && !!(m.info()[5] & 32), 'look_blend' in c || 'look_formula_name' in c]; }""", plasma)
     now()
     page.wait_for_timeout(800)
     l1, ratio = lum(), rows_ratio(page)

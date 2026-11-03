@@ -235,14 +235,23 @@ function apply() {
 }
 
 // A look's Formula and its values: a bundled one by name (`@formula:<stem>`,
-// formulas.json, as the player has them built in) or inline (`src=`).
+// formulas.json, as the player has them built in: its source) or inline
+// (`psb=`, the compiled Formula the app sends, base64url): `[src, q, psb]`.
 let exs = null;
 async function lookOf(path) {
-  if (!path.startsWith('@formula:')) { const q = new URLSearchParams(path.slice(9)); return [q.get('src') || '', q]; }
+  if (!path.startsWith('@formula:')) {
+    const q = new URLSearchParams(path.slice(9)), b = q.get('psb') || '';
+    let psb = null;
+    try { psb = b ? Uint8Array.from(atob(b.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)) : null; } catch { psb = new Uint8Array(); }
+    return ['', q, psb];
+  }
   const [n, q = ''] = path.slice(9).split('?');
   const ex = await (exs ??= fetch('formulas.json').then((r) => r.json()).catch(() => (exs = null, [])));
-  return [ex.find((x) => x.stem == n)?.src || '', new URLSearchParams(q)];
+  return [ex.find((x) => x.stem == n)?.src || '', new URLSearchParams(q), null];
 }
+// The look loaded into pkg-psi (asLook / asLookPsb: the player's FormulaLook
+// composition), or why not.
+const asLook = (P, src, psb) => (psb ? P.asLookPsb(psb) : src ? !!P.asLook(src) : false) ? '' : (psb || src ? P.error() : 'there is no bundled Formula by that name');
 
 // The Formula look on the demo's panel: Psi (an instance of its own) over
 // every frame, at the panel's clock and the formula's sliders, as its `look`
@@ -253,10 +262,11 @@ async function look(path) {
   lookErr = '';
   if (!path) { sim.preview.p.setOver(undefined); return; }
   try {
-    const P = await pkg(), [src, q] = await lookOf(path);
+    const P = await pkg(), [src, q, psb] = await lookOf(path);
     if (lookOn != path || !sim) return;
     const Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
-    if (!P.asLook(src)) throw new Error(src ? P.error() : 'there is no bundled Formula by that name');
+    const why = asLook(P, src, psb);
+    if (why) throw new Error(why);
     const loop = P.info()[4] || 0;
     sim.preview.p.setOver((px) => {
       const t = Math.floor(performance.now()), d = new Date();
@@ -275,12 +285,12 @@ async function look(path) {
 // The player's checks of a Formula look before it is saved (fx_psi's
 // FormulaLook::compile): it compiles, lets the GIF show through, ≤ 12 ms.
 async function lookCheck(path) {
-  const P = await pkg(), [s] = await lookOf(path), back = lookOn && (await lookOf(lookOn))[0];
-  const i = P.asLook(s) && P.info();
-  const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
-    : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '';
+  const P = await pkg(), [s, , b] = await lookOf(path), back = lookOn && (await lookOf(lookOn));
+  const no = asLook(P, s, b), i = !no && P.info();
+  const why = no || (!(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
+    : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '');
   // (One instance: the look on the panel goes back to its own formula.)
-  if (back) P.asLook(back);
+  if (back) asLook(P, back[0], back[2]);
   if (why) bad('look_formula: ' + why);
 }
 

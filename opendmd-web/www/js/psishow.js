@@ -1,5 +1,5 @@
 // Formulas' "Show on panel" (imported by js/formulas.js on a device): the
-// formula becomes the panel's live item, `@formula?src=…` (POST /api/play),
+// formula becomes the panel's live item, `@formula?psb=…` (POST /api/play),
 // until the playlist moves on; changes made meanwhile follow it there as
 // live edits (`"live":true`: the device swaps the formula in place, or says
 // 409 once it has moved on), ~200 ms apart, one request at a time, the
