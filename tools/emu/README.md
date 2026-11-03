@@ -60,8 +60,8 @@ Boot A (`--no-reboot`, so the reboot at its end stops the emulator and the card 
   --base64`, `EMU_API_FORMULA`, default plasma), the same saved to the card (`.psi` + `.psb`) by its path;
   a missing file 404, a relative path 400; skip; pause and resume;
 - `PUT /api/www` with `$(WWW_PACK)`; `GET /` serves it;
-- three load rounds of 30 s: status polls, settings saves, and one connection for every card transfer in
-  turn (a 64 KB upload read back and deleted, a save into `/gifs/Consoles` and its delete, a listing), each
+- three load rounds of 30 s: status polls throughout, and on a second connection in turn a 64 KB upload
+  read back and deleted, a settings save, a save into `/gifs/Consoles` and its delete, a listing; each
   followed by 30 s quiet (~100 emulated s, five census lines): the heap census of the third quiet spell against the first's (as emu-leak:
   24 blocks, 2 KB);
 - a recursive `DELETE /api/files/cache/Consoles?recursive=1` (rounds until `done`) while the FAT index
@@ -76,15 +76,22 @@ bytes uploaded, the deleted and moved paths gone, no `.part`/`.tmp` left. Boot B
 allowed): the setting and the files survived; `PUT /api/firmware` with the signed bundle (the build's
 `.odfw`, `EMU_API_BUNDLE`): signature ok, staged, the updater installs it and the firmware is back with
 its version (three resets: power-on, the updater, the firmware). Heap and stack high-water (heartbeat
-floor, main, log drain, httpd, stream task, network worker) are printed. About 7 minutes of wall time.
+floor, main, log drain, httpd, stream task, network worker) are printed. About 6 minutes of wall time (the image builds aside).
 
-What it found (2026-11-03): **RX_BUFFERS** in `api_lane.py`. More connections at once than the WiFi
-driver's 6 dynamic RX buffers can carry stall the one being served (an upload `aborted ... no data for
-5 s`, a download `response cut short`), and two upload bodies at once can wedge the network for good:
-`sdkconfig.defaults`' `CONFIG_LWIP_TCP_WND_DEFAULT=1440` (and `SND_BUF`) is below Kconfig's range
-(2440..), so the build keeps 5760 and one queued upload holds four buffers. With 16 RX buffers the full
-load passes. The lane keeps to three connections until that changes; `EMU_ARGS=--parallel` runs the five
-loads on five connections and shows it.
+What it found (2026-11-03), see the comments in `api_lane.py`:
+
+- **RX_BUFFERS**: concurrent connections stall the one being served (an upload `aborted ... no data
+  for 5 s`, a download `response cut short`) and can wedge the network for good (no SYN answered,
+  the player playing on); two upload bodies at once do it in seconds. Most likely the WiFi driver's
+  6 dynamic RX buffers held by frames lwIP keeps for connections not read yet: `sdkconfig.defaults`'
+  `CONFIG_LWIP_TCP_WND_DEFAULT=1440` (and `SND_BUF`) is below Kconfig's range (2440..) and silently
+  becomes 5760, so one queued upload holds four. 16 RX buffers pass two uploads at once but the five
+  loads still wedged in their third round. The lane's load keeps to two connections until that
+  changes; `EMU_ARGS=--parallel` runs the five loads on five connections and shows it.
+- **EMPTY_FOLDER**: deleting an emptied `/gifs` folder never reaches `fatidx::dir_changed()`
+  (FatFs's unlink removes an empty directory, so the `is_dir` branch is dead): the index is not
+  marked stale for a folder that went.
+- The httpd task's stack: 736-1024 B of 6656 B unused under the lane.
 
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air
 time), panel output (I2S TX is not modelled), radio conditions (a lossy or slow link, roaming, the AP

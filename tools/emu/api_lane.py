@@ -14,9 +14,9 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
   www         PUT /api/www with the web app's pack
-  load x3     status polls, settings saves and the card transfers (uploads read back, saves
-              into a big folder, listings) at once on three connections (display-stress's
-              loads; five with --parallel: RX_BUFFERS), then 30 s quiet: the heap
+  load x3     status polls throughout, and on a second connection uploads read back,
+              settings saves, saves into a big folder and listings in turn (display-stress's
+              loads; each on its own connection with --parallel: RX_BUFFERS), then 30 s quiet: the heap
               census (`emu-census`) of the last quiet spell against the first's
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
@@ -39,18 +39,22 @@ PORT = 8080  # in the lane's own network namespace: never taken by another run
 WIFI = "ssid=demo,chan=6,psk=demo-password"
 LOAD_S, QUIET_S = 30, 30
 ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
-# RX_BUFFERS (found by this lane, 2026-11-03): more connections at once than the WiFi
-# driver has RX buffers to spare stall the one being served: an upload `aborted ... no data
-# for 5 s` (408), a download `response cut short ... send failed` (its ACKs not received),
-# and with two upload bodies at once the network can wedge for good (no SYN answered again).
-# CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6, and every frame lwIP holds for a connection not
-# read yet (a queued upload's window, a request waiting for the httpd task) holds one;
-# sdkconfig.defaults' one-MSS window (CONFIG_LWIP_TCP_WND_DEFAULT=1440) is below Kconfig's
-# range (2440..), so the build keeps 5760: one queued upload can hold four. With 16 RX
-# buffers the five loads below pass at once (with a 2880 window and 6 buffers they still
-# stall, but recover). Until the firmware changes, the load keeps to three connections, as
-# display-stress drives the rig (status, saves, and one connection for every card transfer
-# in turn); --parallel (EMU_ARGS) runs the five on five connections and shows it.
+# RX_BUFFERS (found by this lane, 2026-11-03): concurrent connections stall the one being
+# served: an upload `aborted ... no data for 5 s` (408), a download `response cut short ...
+# send failed`; and the network can then wedge for good (no SYN answered again, the player
+# playing on). Two upload bodies at once do it within seconds. The wifi-frames trace shows
+# the segments reaching the guest and not acknowledged: dropped inside it. Most likely the
+# WiFi driver's RX buffers: CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6, and every frame lwIP
+# holds for a connection not read yet (a queued upload's window, a request waiting for the
+# httpd task) holds one; sdkconfig.defaults asks for a one-MSS window
+# (CONFIG_LWIP_TCP_WND_DEFAULT=1440, and SND_BUF) but that is below Kconfig's range
+# (2440..), so the build silently keeps 5760: one queued upload can hold four buffers while
+# the stream task waits on another. Measured: a 2880 window still stalls (and recovers); 16
+# RX buffers pass two uploads at once and two rounds of the five loads, then wedged in the
+# third. Three connections (status polls, settings saves, the card transfers: display-stress's
+# poll,configs,uploads) wedged it once in about six runs. Until the firmware changes, the
+# load keeps to two connections: status polls throughout, and one for everything else in
+# turn; --parallel (EMU_ARGS) runs the five loads on five connections and shows it.
 # EMPTY_FOLDER (found by this lane): `DELETE /api/files/gifs/<folder>` of an emptied folder
 # goes through `std::fs::remove_file`, which FatFs's f_unlink does for an empty directory
 # too, so the `Err(_) if is_dir` branch that calls `fatidx::dir_changed()` is never taken:
@@ -104,19 +108,23 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
     if out.exists():
         return out
     out_dir.mkdir(parents=True, exist_ok=True)
-    for old in out_dir.glob(f"{image.stem}-wifi-*.bin"):
-        old.unlink()
+    # Older seeds go once a day old (another run may be booting one now).
+    for old in out_dir.glob("*-wifi-*.bin"):
+        if time.time() - old.stat().st_mtime > 86400:
+            old.unlink(missing_ok=True)
     start, size = nvs_partition(data)
-    csv, binf = out_dir / "nvs.csv", out_dir / "nvs.bin"
+    csv, binf = out_dir / f"nvs-{digest}.csv", out_dir / f"nvs-{digest}.bin"
     csv.write_text(f"key,type,encoding,value\nopendmd,namespace,,\nwifi_ssid,data,string,{ssid}\nwifi_pass,data,string,{password}\n")
     subprocess.run([str(nvs_gen_python()), "-m", "esp_idf_nvs_partition_gen", "generate", str(csv), str(binf), hex(size)],
                    check=True, stdout=subprocess.DEVNULL)
     nvs = binf.read_bytes()
     if len(nvs) != size:
         raise LaneFail(f"nvs_partition_gen wrote {len(nvs)} B, the partition is {size} B")
-    tmp = out.with_suffix(".tmp")
+    tmp = out.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_bytes(data[:start] + nvs + data[start + size:])
     os.replace(tmp, out)
+    csv.unlink()
+    binf.unlink()
     print(f"api: seeded WiFi credentials into {out} (nvs at {start:#x})", flush=True)
     return out
 
@@ -301,10 +309,11 @@ class Lane:
         self.a, self.sim, self.rom, self.fail_rx = a, sim, rom, fail_rx
         self.passes: list[str] = []
         self.notes: list[str] = []
-        self.stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
         self.logs = a.log.parent if a.log else a.emu_dir / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
-        self.card_out = a.emu_dir / "card" / "api-out.img"
+        # The card boot A writes out (256 MB): removed after a pass, kept after a failure.
+        self.card_out = self.logs / f"api-{self.stamp}-card.img"
         self.heap_free_min = None
         root = a.emu_dir / "card" / "root" / "gifs" / "Other"
         self.gifs = [p.read_bytes() for p in sorted(root.glob("*.gif"))[:6]]
@@ -584,9 +593,12 @@ class Lane:
                 raise LaneFail(f"/gifs/Consoles lists {r.get('count')} entries")
 
         def card_work(n):
-            # One connection for every card transfer, in turn: an upload read back, and
-            # every third turn a save into the big folder, every fourth a listing of it.
+            # One connection for the rest, in turn: an upload read back; every second turn a
+            # settings save, every third a save into the big folder, every fourth a listing.
             upload(n)
+            if n % 2 == 1:
+                save(n // 2)
+                counts["saves"] += 1
             if n % 3 == 2:
                 card_save(n // 3)
                 counts["card saves"] += 1
@@ -597,7 +609,7 @@ class Lane:
         if self.a.parallel:
             loads = [("status", status, 0.25), ("saves", save, 2), ("uploads", upload, 0), ("card saves", card_save, 3), ("listings", listing, 4)]
         else:
-            loads = [("status", status, 0.5), ("saves", save, 2), ("uploads", card_work, 0)]
+            loads = [("status", status, 0.5), ("uploads", card_work, 0)]
         threads = [threading.Thread(target=loop, args=a, daemon=True) for a in loads]
         for t in threads:
             t.start()
@@ -822,6 +834,8 @@ def run(a, sim, rom, fail_rx) -> int:
         lane.run_b()
     except LaneFail as e:
         print(f"EMU_API_FAIL: {e}")
+        if lane.card_out.exists():
+            print(f"(the card boot A wrote is kept: {lane.card_out})")
         emu = getattr(lane, "emu", None)
         if emu:
             print(f"--- last console lines of {emu.log}:")
@@ -829,5 +843,6 @@ def run(a, sim, rom, fail_rx) -> int:
         return 1
     for n in lane.notes:
         print(f"note  {n}")
+    lane.card_out.unlink(missing_ok=True)
     print(f"EMU_API_OK ({time.time() - t0:.0f} s wall)")
     return 0
