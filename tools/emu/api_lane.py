@@ -14,10 +14,13 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
   www         PUT /api/www with the web app's pack
+  bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
+              5, 5 uploads of 300 KB at once beside status reads; each 200, or 503 + Retry-After
+              and 200 when asked again; never a 408; the network answering; nothing held after
   load x3     uploads read back, settings saves, saves into a big folder, listings and status
-              reads (display-stress's loads), one connection at a time by default (RX_BUFFERS:
-              --connections 2 puts the status polls beside them, 5 each on its own), then 30 s quiet: the heap
-              census (`emu-census`) of the last quiet spell against the first's
+              reads (display-stress's loads), each on its own connection at once by default
+              (--connections 2: status polls beside the rest; 1: one at a time), then 60 s quiet:
+              the heap census (`emu-census`) of the last quiet spell against the first's
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
   ota         GET /api/firmware; bundles with a bad signature and a bad image: 422
@@ -37,32 +40,32 @@ from pathlib import Path
 
 PORT = 8080  # in the lane's own network namespace: never taken by another run
 WIFI = "ssid=demo,chan=6,psk=demo-password"
-LOAD_S, QUIET_S = 30, 30
+# A quiet spell's census meets the playing GIF's phases (its levels step by 5-10 KB: ~196, 201,
+# 209, 211, 221 KB in the census image), and its least is compared: 30 s (~4 samples) missed the
+# lowest phase in one spell of three and failed a flat heap by 5 KB; 60 s takes ~8.
+LOAD_S, QUIET_S = 30, 60
+BURST_ROUNDS = [2, 2, 2, 5, 5, 5]
 ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
-# RX_BUFFERS (found by this lane, 2026-11-03): concurrent connections stall the one being
-# served: an upload `aborted ... no data for 5 s` (408), a download `response cut short ...
-# send failed`; and the network can then wedge for good (no SYN answered again, the player
-# playing on). Two upload bodies at once do it within seconds. The wifi-frames trace shows
-# the segments reaching the guest and not acknowledged: dropped inside it. Most likely the
-# WiFi driver's RX buffers: CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6, and every frame lwIP
-# holds for a connection not read yet (a queued upload's window, a request waiting for the
-# httpd task) holds one; sdkconfig.defaults asks for a one-MSS window
-# (CONFIG_LWIP_TCP_WND_DEFAULT=1440, and SND_BUF) but that is below Kconfig's range
-# (2440..), so the build silently keeps 5760: one queued upload can hold four buffers while
-# the stream task waits on another. Measured: a 2880 window still stalls (and recovers); 16
-# RX buffers pass two uploads at once and two rounds of the five loads, then wedged in the
-# third. Three connections (status polls, settings saves, the card transfers: display-stress's
-# poll,configs,uploads) wedged it once in about six runs; two (status polls beside one
-# connection for the rest) about one in five; the five loads on five connections within
-# seconds. The wedge is not settled: after it the guest still sends UDP and receives beacons,
-# so lwIP's thread lives; incoming TCP (SYNs included) goes unanswered, as if every RX buffer
-# stayed held; it is seen only in the emulator so far (its WiFi model could share the blame
-# until the spare shows it). Until then the gate's load is one connection at a time (a status
-# read between the card transfers); --connections 2 or 5 (EMU_ARGS) runs it at once.
-# EMPTY_FOLDER (found by this lane): `DELETE /api/files/gifs/<folder>` of an emptied folder
-# goes through `std::fs::remove_file`, which FatFs's f_unlink does for an empty directory
-# too, so the `Err(_) if is_dir` branch that calls `fatidx::dir_changed()` is never taken:
-# the index is not marked stale for a folder that went (seen: `stale` false for 300 s after).
+# RX_BUFFERS (found by this lane, 2026-11-03; fixed in net-wedge): two uploads at once got the
+# one being received a 408 (`no data for 5 s`), and a few rounds wedged the network for good (no
+# TCP, ping or ARP answered; the spare showed it too). The netdiag walk (`netdiag:` lines,
+# emu-census builds) showed why: every frame lwIP holds stays in one of the WiFi driver's six
+# dynamic receive buffers. The upload being received held four out-of-order segments after a lost
+# one and the waiting upload's unread data the other two, so its retransmission had no buffer;
+# then the 408'd uploads, closed into FIN_WAIT_1 with no socket, kept their out-of-order segments
+# (4 + 2): the ACK of their FIN could never come in, the queue's expiry (6 RTOs) receded as the
+# RTO backed off, and no frame was received again. Fixed: the expiry is one RTO
+# (CONFIG_LWIP_TCP_OOSEQ_TIMEOUT=1: between two retransmissions the silence always passes it),
+# and one upload at a time, taken only with the stream task idle, a second one 503 + Retry-After
+# at once, keeping its place in line (stream.rs: a waiting upload held five buffers for 2.6 KB of
+# small segments, and starved a listing ahead of it). The windows stay 5760 (the 1440 asked for was below Kconfig's range and
+# silently 5760 all along; 2880 made uploads ~3.5x slower here and the firmware bundle hit the
+# 120 s cap; no out-of-order queue at all, the same for the www pack). See "The receive side"
+# in sdkconfig.defaults. The bursts and the five-connection load are the gate.
+# EMPTY_FOLDER (found by this lane; fixed in net-wedge): `DELETE /api/files/gifs/<folder>` of an
+# emptied folder went through `std::fs::remove_file`, which FatFs's f_unlink does for an empty
+# directory too, so the branch that calls `fatidx::dir_changed()` was never taken. The firmware
+# now tells a directory apart first; `final_a` checks the index is stale at once after.
 # The heap census: the least of the last quiet spell against the first's (as emu-leak).
 LEAK_BLOCKS, LEAK_BYTES = 24, 2048
 
@@ -75,6 +78,7 @@ FATIDX_WARN = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)|raw rea
 DELETE_LINE = re.compile(r"DELETE (/cache/\S+) \(recursive\): (\d+) entries removed, done (true|false)")
 HEARTBEAT = re.compile(r"heartbeat: heap (\d+) B free \(floor (\d+) B.*main stack (\d+) B unused.*drain stack (\d+) B unused")
 HTTPD_STACK = re.compile(r"httpd task: stack high-water (\d+) B unused")
+NETDIAG_SUM = re.compile(r"netdiag: sum: (\d+) sockets open, \d+ TIME_WAIT pcbs, (\d+) rx pbufs held")
 WORKER_STACK = re.compile(r"fat index: built .* (\d+) B of the worker's stack unused")
 
 
@@ -254,14 +258,25 @@ class Api:
                 return f.status, dict(f.headers), f.read()
         except urllib.error.HTTPError as e:
             return e.code, dict(e.headers or {}), e.read()
-        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+        except (urllib.error.URLError, ConnectionResetError, BrokenPipeError) as e:
+            # An upload refused while another is received: 503 + Retry-After, then a reset under
+            # the rest of the body, which urllib (it sends the whole body before it reads) sees
+            # alone. curl and browsers read the 503 (the bursts check curl does). The firmware
+            # never resets an upload it took, so the web app asks again (`sent` in source.js);
+            # so does `call`.
+            reason = getattr(e, "reason", e)
+            if data is not None and isinstance(reason, (ConnectionResetError, BrokenPipeError)):
+                return 0, {"Retry-After": "2"}, b"reset under the body"
+            self.emu.check()
+            raise LaneFail(f"{method} {path[:120]}: no answer ({e!r})")
+        except (http.client.HTTPException, OSError) as e:
             self.emu.check()
             raise LaneFail(f"{method} {path[:120]}: no answer ({e!r})")
 
     def call(self, method, path, body=None, want=(200,), timeout=60.0, tries=12):
         for _ in range(tries):
             code, headers, data = self.raw(method, path, body, timeout)
-            if code == 503 and 503 not in want and "Retry-After" in headers:
+            if code in (0, 503) and 503 not in want and "Retry-After" in headers:
                 with self.lock:
                     self.stats["busy_retries"] += 1
                 time.sleep(min(float(headers.get("Retry-After") or 1), 3))
@@ -341,7 +356,7 @@ class Lane:
             env["ESP32SIM_SD_OUT"] = str(card_out)
         cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(self.rom),
                "--flash-image", str(self.a.seeded), "--flash-mb", str(max(4, self.a.seeded.stat().st_size >> 20)),
-               "--max-seconds", str(self.a.seconds or 3000), "--console", "uart0",
+               "--max-seconds", str(self.a.seconds or 7200), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
         if no_reboot:
             cmd.append("--no-reboot")
@@ -360,6 +375,8 @@ class Lane:
             self.files(api)
             self.play(emu, api)
             self.www(api)
+            if self.a.connections > 1:
+                self.bursts(emu, api)
             self.load_rounds(emu, api)
             self.cache_delete(emu, api)
             self.ota_refusals(api)
@@ -443,6 +460,10 @@ class Lane:
         self.expect(get(f"{d}/emu-d.gif")[0] == 404, "delete", "the deleted file still answers")
         api.call("DELETE", "/api/files" + q(f"{d}/emu-d.gif"), want=(404,))
         self.absent.add(f"{d}/emu-d.gif")
+        # An emptied folder, for EMPTY_FOLDER at the end of boot A.
+        put("/gifs/EmuApiEmpty/e.gif", g[0])
+        api.call("DELETE", "/api/files" + q("/gifs/EmuApiEmpty/e.gif"))
+        self.absent.add("/gifs/EmuApiEmpty/e.gif")
         self.ok("move, delete", "moved to a new folder (read back the same, the old name 404); onto an existing name 409, from nowhere 404; deleted (404 after, a second delete 404)")
         self.listing(api, d, {"emu-a.gif", "emu-b.gif", "emu-big.bin"})
         self.listing(api, "/gifs/EmuApi2", {"emu-c2.gif"})
@@ -514,6 +535,80 @@ class Lane:
         ctype = {k.lower(): v for k, v in headers.items()}.get("content-type", "")
         self.expect(code == 200 and ctype.startswith("text/html") and len(page) > 200, "www", f"GET /: HTTP {code}, {ctype}, {len(page)} B")
         self.ok("www pack", f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it")
+
+    # -- simultaneous uploads (the spare's wedge recipe) -------------------------
+
+    def bursts(self, emu, api):
+        """The spare's wedge recipe (wedge.sh) in the emulator: rounds of 2, 2, 2, 5, 5, 5 uploads of
+        300 KB at once (`curl -T`, as there: curl stops sending at an early reply) to
+        /gifs/_wedge/bN.bin, with a status read every second beside them. Each upload is answered
+        200, or 503 with Retry-After and then 200 when asked again (as the web app does): never a
+        408, never no answer; every status read answers; the network answers after every round (the
+        wedge: no TCP, ping or ARP answered again until a reset); and, 20 s after the last round,
+        lwIP holds no received frame (`netdiag: sum`, emu-census builds)."""
+        work = self.logs / f"burst-{self.stamp}"
+        work.mkdir(parents=True, exist_ok=True)
+        src = work / "blob.bin"
+        src.write_bytes(blob(77, 300 * 1024))
+        log, codes = [], {}
+        for rnd, n in enumerate(BURST_ROUNDS, 1):
+            errors: list[str] = []
+            lock = threading.Lock()
+
+            def one(i):
+                url = f"http://127.0.0.1:{PORT}/api/files/gifs/_wedge/b{i}.bin"
+                hdr = work / f"h{i}.txt"
+                t0, tries = time.time(), 0
+                while True:
+                    tries += 1
+                    r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-D", str(hdr), "-w", "%{http_code}", "-m", "90",
+                                        "-T", str(src), url], capture_output=True, text=True)
+                    code = int(r.stdout.strip() or 0)
+                    with lock:
+                        codes[code] = codes.get(code, 0) + 1
+                    head = hdr.read_text(errors="replace") if hdr.exists() else ""
+                    after = re.search(r"(?im)^retry-after:\s*(\d+)", head)
+                    if code == 503 and after and time.time() - t0 < 120:
+                        time.sleep(min(int(after[1]), 5))
+                        continue
+                    with lock:
+                        log.append(f"r{rnd} up{i} {code} {time.time() - t0:.1f}s x{tries}")
+                        if code != 200:
+                            errors.append(f"up{i}: HTTP {code} (curl exit {r.returncode}) after {time.time() - t0:.1f} s")
+                    return
+
+            threads = [threading.Thread(target=one, args=(i,), daemon=True) for i in range(1, n + 1)]
+            for t in threads:
+                t.start()
+            while any(t.is_alive() for t in threads):
+                emu.check()
+                try:
+                    code, _, _ = api.raw("GET", "/api/status", timeout=15)
+                    if code != 200:
+                        errors.append(f"status beside round {rnd}: HTTP {code}")
+                except LaneFail as e:
+                    errors.append(f"status beside round {rnd}: {e}")
+                    break
+                time.sleep(1)
+            for t in threads:
+                t.join(200)
+            try:
+                api.raw("GET", "/api/status", timeout=15)
+            except LaneFail as e:
+                errors.append(f"after round {rnd}: {e}")
+            if errors:
+                raise LaneFail(f"burst round {rnd} ({n} uploads at once): " + "; ".join(errors[:4]) + f" (so far: {', '.join(log[-12:])})")
+        for i in range(1, max(BURST_ROUNDS) + 1):
+            api.call("DELETE", "/api/files" + q(f"/gifs/_wedge/b{i}.bin"), want=(200, 404))
+        api.call("DELETE", "/api/files" + q("/gifs/_wedge"))
+        shutil.rmtree(work, ignore_errors=True)
+        # Nothing left holding the WiFi driver's receive buffers once it is quiet.
+        mark = emu.mark()
+        emu.wait_for(NETDIAG_SUM, 60, mark, "a `netdiag: sum` line after the bursts")
+        time.sleep(25)
+        sums = [(int(m[1]), int(m[2])) for _, m in emu.find(NETDIAG_SUM, mark)]
+        self.expect(sums and sums[-1][1] == 0, "bursts", f"lwIP still holds received frames after the bursts (sockets, frames per walk): {sums}")
+        self.ok("bursts", f"rounds of {'/'.join(map(str, BURST_ROUNDS))} 300 KB uploads at once beside status reads: every one 200 in the end (answers {dict(sorted(codes.items()))}), the network answering after each; quiet after: {sums[-1][0]} sockets, {sums[-1][1]} frames held")
 
     # -- the load -------------------------------------------------------------
 
@@ -644,9 +739,7 @@ class Lane:
         for attempt, cat in enumerate(["Consoles", "Other", "Arcade"], 1):
             # A write at /cache's root drops the index (`release_for_write`: `dir_changed`):
             # rebuilt after 30 s quiet. (A GIF written or deleted is only noted in the
-            # index's delta; and deleting an emptied /gifs folder never reaches
-            # `dir_changed`: FatFs's unlink removes an empty directory, so the branch for
-            # one is not taken. See EMPTY_FOLDER.)
+            # index's delta.)
             mark = emu.mark()
             t = f"/cache/emu-api-touch-{attempt}.tmp"
             api.call("PUT", "/api/files" + q(t), b"x" * 512)
@@ -718,6 +811,16 @@ class Lane:
         # The index ends current: rebuilt (30 s after the last write) if anything made it stale.
         st = self.wait_status(api, lambda s: s["sd"]["fat_index"]["stale"] is False and not s["sd"]["fat_index"]["building"], 120,
                               "the FAT index current (stale false, not building)")
+        # EMPTY_FOLDER: deleting an emptied /gifs folder marks the index stale at once (FatFs's
+        # unlink removes an empty directory too, so the firmware tells a directory apart first),
+        # and the index is rebuilt current without it.
+        api.call("DELETE", "/api/files" + q("/gifs/EmuApiEmpty"))
+        fi = api.status()["sd"]["fat_index"]
+        self.expect(fi["stale"] is True, "empty folder", f"DELETE /gifs/EmuApiEmpty (emptied): the index not stale after: {fi}")
+        self.expect(api.call("GET", "/api/files?dir=" + q("/gifs/EmuApiEmpty"), want=(200, 404))[0] == 404, "empty folder", "the folder still lists")
+        st = self.wait_status(api, lambda s: s["sd"]["fat_index"]["stale"] is False and not s["sd"]["fat_index"]["building"], 180,
+                              "the FAT index current again after the emptied folder went")
+        self.ok("empty folder", f"DELETE of an emptied /gifs folder: gone, the index stale at once, rebuilt current ({st['sd']['fat_index']['files']} records)")
         fi = st["sd"]["fat_index"]
         self.final_status = st
         _, r = api.json("POST", "/api/reboot")
@@ -847,7 +950,7 @@ def network_wedged(lane) -> bool:
 def run(a, sim, rom, fail_rx) -> int:
     t0 = time.time()
     lane = Lane(a, sim, rom, fail_rx)
-    wall = a.wall or 3600
+    wall = a.wall or 5400
 
     def watchdog():
         emu = getattr(lane, "emu", None)

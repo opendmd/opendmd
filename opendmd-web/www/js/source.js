@@ -30,6 +30,24 @@ async function check(res) {
 // asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
 // than Retry-After), for about 45 s in all, then the error stands.
 const RETRY_FOR = 45000;
+// Uploads (PUT, and a move): the device receives one at a time and
+// refuses another at once with 503 + Retry-After, then resets the
+// connection under the rest of the body; a browser that was still sending
+// may see only the reset (a TypeError). Neither wrote anything (the device
+// never resets an upload it took: it waits for the browser to close), so
+// both are asked again after Retry-After (jittered, 2-4 s at least), for
+// about 45 s. Not a timeout: that write may have landed.
+export async function sent(fn) {
+  const t0 = Date.now();
+  for (;;) {
+    try { return await fn(); } catch (e) {
+      const wait = Math.max((e?.after || 0) * 1000, 2000 + Math.random() * 2000);
+      const refused = e?.status === 503 || e instanceof TypeError;
+      if (!refused || Date.now() - t0 + wait > RETRY_FOR) throw e;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
 export async function queued(fn) {
   const t0 = Date.now();
   for (;;) {
@@ -96,7 +114,8 @@ export class DeviceSource {
   forget(path) { return this.json('POST', '/api/cache/forget', { path }); }
   // Rename a GIF: its prepared copy, Smooth motion line and failure line
   // follow on the device; playlists and overrides are the caller's.
-  move(from, to) { return this.json('POST', '/api/files/move', { from, to }); }
+  // (Received like an upload: refused with a 503 while one is, asked again.)
+  move(from, to) { return sent(() => this.json('POST', '/api/files/move', { from, to })); }
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
   cacheFailed() { return queued(() => this.json('GET', '/api/cache/failed')); }
@@ -130,9 +149,9 @@ export class DeviceSource {
   // A manifest path (`/filelist.*`, `/sets/*`) is installed by the device's
   // main task (the `.idx` goes first, then a reindex if it is active).
   // `createNew`: only if the file is not there (409 if it is).
-  writeFile(path, data, o) { return this.json('PUT', '/api/files' + enc(path) + (o?.createNew ? '?new=1' : ''), data); }
+  writeFile(path, data, o) { return sent(() => this.json('PUT', '/api/files' + enc(path) + (o?.createNew ? '?new=1' : ''), data)); }
   deleteFile(path) { return this.json('DELETE', '/api/files' + enc(path)); }
-  saveSet(name, text) { return this.json('PUT', '/api/sets/' + encodeURIComponent(name), text); }
+  saveSet(name, text) { return sent(() => this.json('PUT', '/api/sets/' + encodeURIComponent(name), text)); }
 }
 
 // Card-absolute path for a picked file. A folder pick gives

@@ -60,41 +60,53 @@ Boot A (`--no-reboot`, so the reboot at its end stops the emulator and the card 
   --base64`, `EMU_API_FORMULA`, default plasma), the same saved to the card (`.psi` + `.psb`) by its path;
   a missing file 404, a relative path 400; skip; pause and resume;
 - `PUT /api/www` with `$(WWW_PACK)`; `GET /` serves it;
-- three load rounds of 30 s, one connection at a time by default (RX_BUFFERS below): a 64 KB upload read
-  back and deleted, a status read, and in turn a settings save, a save into `/gifs/Consoles` and its delete,
-  a listing; each followed by 30 s quiet (~100 emulated s, five census lines): the heap census of the third
-  quiet spell against the first's (as emu-leak: 24 blocks, 2 KB). `EMU_ARGS="--connections 2"` polls the
-  status beside the rest; `--connections 5` runs display-stress's five loads each on its own connection;
+- bursts (the spare's wedge recipe, `wedge.sh`): rounds of 2, 2, 2, 5, 5, 5 uploads of 300 KB at once
+  (`curl -T`) beside a status read every second: each answered 200, or 503 + `Retry-After` and 200 when
+  asked again (as the web app does), never a 408 or no answer; the network answering after every round;
+  and 25 s after, `netdiag: sum` (below) shows no received frame held;
+- three load rounds of 30 s, display-stress's five loads each on its own connection at once by default
+  (`--connections 5`): a 64 KB upload read back and deleted, status reads, settings saves, a save into
+  `/gifs/Consoles` and its delete, a listing; each followed by 60 s quiet (about eight census lines): the
+  heap census of the third quiet spell against the first's (as emu-leak: 24 blocks, 2 KB).
+  `EMU_ARGS="--connections 2"` runs the status polls beside the rest in turn (no bursts),
+  `--connections 1` everything in turn;
 - a recursive `DELETE /api/files/cache/Consoles?recursive=1` (rounds until `done`) while the FAT index
   builds: the build is dropped (no `built` line before the delete), rebuilt, not stale, fewer records, no
   `fat index:` warning, `/cache/Consoles` 404, one of its GIFs plays from the original;
 - `GET /api/firmware`; the signed bundle with a flipped signature bit, then with a flipped image bit: 422,
   nothing pending;
-- every file read back again, the index current, `POST /api/reboot`.
+- every file read back again, the index current; an emptied `/gifs` folder deleted: the index stale at
+  once and rebuilt current (EMPTY_FOLDER); `POST /api/reboot`.
 
 Then the card boot A wrote: `fatcheck.py`, `/opendmd.json` holds the last `dwell_max` saved, the files the
 bytes uploaded, the deleted and moved paths gone, no `.part`/`.tmp` left. Boot B (from that card, reboots
 allowed): the setting and the files survived; `PUT /api/firmware` with the signed bundle (the build's
 `.odfw`, `EMU_API_BUNDLE`): signature ok, staged, the updater installs it and the firmware is back with
 its version (three resets: power-on, the updater, the firmware). Heap and stack high-water (heartbeat
-floor, main, log drain, httpd, stream task, network worker) are printed. About 6 minutes of wall time (the image builds aside).
+floor, main, log drain, httpd, stream task, network worker) are printed. About 9 minutes of wall time (the image builds aside).
 
 What it found (2026-11-03), see the comments in `api_lane.py`:
 
-- **RX_BUFFERS**: concurrent connections stall the one being served (an upload `aborted ... no data
-  for 5 s`, a download `response cut short`) and can wedge the network for good: incoming TCP (SYNs
-  too) unanswered while the guest still sends UDP and the player plays on. Five connections do it in
-  seconds (two upload bodies at once are enough), two about one run in five, three once in six. The
-  wifi-frames trace shows the segments reaching the guest unacknowledged. Most likely the WiFi
-  driver's 6 dynamic RX buffers held by frames lwIP keeps for connections not read yet:
-  `sdkconfig.defaults`' `CONFIG_LWIP_TCP_WND_DEFAULT=1440` (and `SND_BUF`) is below Kconfig's range
-  (2440..) and silently becomes 5760, so one queued upload holds four. A 2880 window still stalls
-  (and recovers); 16 RX buffers pass two uploads at once but the five loads still wedged in their
-  third round. Not settled, and seen only in the emulator so far (its WiFi model could share the
-  blame until the spare shows it). The gate's load is one connection at a time until then.
-- **EMPTY_FOLDER**: deleting an emptied `/gifs` folder never reaches `fatidx::dir_changed()`
-  (FatFs's unlink removes an empty directory, so the `is_dir` branch is dead): the index is not
-  marked stale for a folder that went.
+- **RX_BUFFERS** (fixed in net-wedge, the same day): two uploads at once got the one being received a 408
+  after 5 s of nothing, and a few rounds wedged the network for good (no TCP, ping or ARP answered; the
+  spare too). The `emu-census` image's `netdiag:` lines (`components/hub75_shim/netdiag.c`, every 5 s on
+  the network worker: lwIP's pcbs and sockets walked on its own thread, the frames each holds; every one
+  is a WiFi driver receive buffer, six in all) showed it: the upload being received held four
+  out-of-order segments after a lost one and the waiting upload the other two, so its retransmission
+  had no buffer; then the 408'd uploads, closed into FIN_WAIT_1 with no socket, kept their out-of-order
+  segments (4 + 2), the ACK of their FIN could never come in, and the queue's expiry (6 RTOs) receded as
+  the RTO backed off: nothing received again. Fixed: the expiry is one RTO (the silence always passes it
+  between two retransmissions), and one upload at a time, taken only with the stream task idle, a
+  second one refused at once (503 + `Retry-After: 2`, keeping its place in line; a waiting upload held
+  five buffers for 2.6 KB of small segments, and starved a download ahead of it as well as an upload;
+  the slot is free once the reply is out). The windows stay 5760,
+  now asked for (the 1440 asked for was under Kconfig's minimum and silently 5760; 2880 made uploads
+  ~3.5x slower here and the 2.2 MB firmware bundle hit the 120 s body cap; no out-of-order queue at all
+  did the same to the www pack). See "The receive side" in `firmware/sdkconfig.defaults` and
+  `stream.rs`. Concurrency is in the gate now: the bursts and the five-connection load.
+- **EMPTY_FOLDER** (fixed in net-wedge): deleting an emptied `/gifs` folder never reached
+  `fatidx::dir_changed()` (FatFs's unlink removes an empty directory, so the `is_dir` branch was
+  dead). The DELETE route tells a directory apart before removing anything now.
 - The httpd task's stack: 736-1024 B of 6656 B unused under the lane.
 
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air

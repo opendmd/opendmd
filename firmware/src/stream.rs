@@ -34,7 +34,24 @@
 //! that trickled its body held every other request — `/api/status` went
 //! unanswered for ~90 s. The handler takes the connection out of httpd's
 //! hands ([`Req::take_over`], see [`crate::httpd`]) and queues it like a
-//! download, in the same queue: one transfer at a time, either way. Reading
+//! download, in the same queue: one transfer at a time, either way.
+//!
+//! **One upload at a time, none waiting** ([`MAX_UPLOADS`]). A waiting
+//! upload's client has sent its window already, and each of those frames
+//! stays in one of the WiFi driver's six receive buffers until its turn
+//! comes (see "The receive side" in `sdkconfig.defaults`). The window caps
+//! the bytes, not the frames: in the emulator a waiting upload held five
+//! buffers for 2.6 KB of small segments, and the one being received starved
+//! on the one left (a 408 after 5 s of nothing, as on the spare under two
+//! uploads at once). So a second upload is refused at once with a `503` and
+//! `Retry-After` (never waited for on the httpd task either, where its frames
+//! would be held as well), and the web app asks again; a refused upload
+//! keeps its place in line for the next free slot ([`LINE`]). Nor does an
+//! upload wait behind a download: behind six of a waiting upload's frames a
+//! listing's ACKs could not come in and it was cut short. So an upload is
+//! taken only with the task idle, and while one waits its turn the downloads
+//! that are asked again anyway (GIFs, copies, listings) are refused too, so
+//! the task runs dry ([`upload_waiting`]). Reading
 //! gives up after [`config::UPLOAD_IDLE_TIMEOUT`] without data or
 //! [`config::UPLOAD_MAX_TIME`] in all; the temp file goes and one warn line
 //! says how much of the `Content-Length` came ([`files::stream_body_to`]).
@@ -88,6 +105,47 @@ pub const QUEUE_DEPTH: usize = 2;
 /// How long a request that finds the queue full waits (on the httpd task)
 /// for a place before it is answered 503.
 pub const QUEUE_WAIT: Duration = Duration::from_secs(2);
+/// Uploads in this task's hands at once, queued or being received (see the
+/// module docs): one, and only when the task is idle ([`BUSY`]).
+pub const MAX_UPLOADS: u32 = 1;
+/// The `Retry-After` of an upload refused because [`MAX_UPLOADS`] are here:
+/// about the time a 300 KB upload takes at the card's pace.
+const UPLOAD_RETRY_AFTER: &str = "2";
+/// Uploads queued or being received.
+static UPLOADS: AtomicU32 = AtomicU32::new(0);
+/// A transfer is under way on the task: set when a job is taken (under the
+/// queue's lock), cleared when it is done, for an upload as soon as its
+/// reply is out (its connection's close is still awaited, but nothing more
+/// comes in on it). An upload is taken only when this is clear and nothing
+/// waits ([`receive`]).
+static BUSY: AtomicBool = AtomicBool::new(false);
+/// Uploads refused for want of the slot, oldest first: `"<method> <path>"`
+/// and when it was last refused. A refused upload keeps its place: while
+/// the first of these is still asking (refused within [`LINE_HOLD`]), a free
+/// slot goes to it, and any other upload is refused too. Without it a
+/// client uploading back to back took the slot each time it came free,
+/// before the refused one asked again (the API lane's five loads: a save
+/// into `/gifs/Consoles` refused twelve times in a row). Touched on the
+/// httpd task only.
+static LINE: Mutex<VecDeque<(String, Instant)>> = Mutex::new(VecDeque::new());
+/// Is a refused upload waiting for its turn (the first of [`LINE`], still
+/// asking)? Then the downloads a client asks for again anyway are refused
+/// too, so the task runs dry and the upload gets it: a page of thumbnails
+/// would otherwise keep it busy for as long as it lasts.
+fn upload_waiting() -> bool {
+    let mut line = LINE.lock().unwrap_or_else(|p| p.into_inner());
+    line.retain(|(_, at)| at.elapsed() < LINE_HOLD);
+    !line.is_empty()
+}
+
+/// Refused uploads remembered at most (a few hundred bytes of paths).
+const LINE_LEN: usize = 4;
+/// How long a refused upload keeps its place without asking again (it is
+/// dropped when another upload comes and finds it this old): the web app
+/// asks after 2-4 s (`Retry-After` and its jitter), curl's scripts after
+/// `Retry-After`; a client that gave up holds the slot back this long.
+const LINE_HOLD: Duration = Duration::from_secs(12);
+
 /// Below the httpd task (5) and the network worker (5), above idle: the
 /// stream only runs when nothing on CPU0 that answers a client is ready to.
 const PRIORITY: u8 = 2;
@@ -215,6 +273,18 @@ where
         // No task: the old way, on the httpd task.
         _ => return work(req),
     };
+    // The ones that are asked again (no wait: GIFs, copies, listings) step
+    // aside for an upload waiting its turn; a page's own files do not (a
+    // browser does not ask again for a module).
+    if wait.is_zero() && upload_waiting() {
+        log::warn!("{}: an upload is waiting its turn, 503", req.path());
+        req.header("Retry-After", "1")?;
+        return req.error(
+            503,
+            "503 Service Unavailable",
+            "busy with an upload; retry shortly",
+        );
+    }
     let deadline = Instant::now() + wait;
     // Wait for a place *before* detaching, so no more than 1 + QUEUE_DEPTH
     // sockets are ever marked in use.
@@ -246,8 +316,9 @@ where
 /// Receive an upload's body on the streaming task with `work`, and return
 /// at once: the connection is taken out of httpd's hands first
 /// ([`Req::take_over`]), so nothing of the body is read on the httpd task.
-/// A queue that stays full for [`QUEUE_WAIT`] is a `503` with
-/// `Retry-After: 1`, as for a download.
+/// With the task busy, an upload here already or another refused one ahead
+/// of it, it is a `503` with `Retry-After` at once: nothing waits, on the
+/// httpd task or in the queue, with its body arriving (see the module docs).
 pub fn receive<F>(req: &mut Req, work: F) -> Result<()>
 where
     F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
@@ -258,57 +329,89 @@ where
         // No task: on the httpd task, as before (the connection is still
         // ours, and still has its timeouts).
         _ => {
-            run_upload(up, Box::new(work));
+            run_upload(up, Box::new(work), false);
             return Ok(());
         }
     };
-    let deadline = Instant::now() + QUEUE_WAIT;
-    let mut job = Some(Job::Upload {
-        up,
-        work: Box::new(work),
-    });
-    loop {
-        {
-            let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
-            if jobs.len() < QUEUE_DEPTH {
-                jobs.extend(job.take());
-                queue.ready.notify_one();
-                return Ok(());
-            }
-        }
-        if Instant::now() >= deadline {
-            let Some(Job::Upload {
-                up: mut refused, ..
-            }) = job.take()
-            else {
-                return Ok(());
-            };
-            log::warn!("PUT {}: stream queue full, 503", refused.path());
-            // On the httpd task: no lingering over the rest of the body.
-            refused.no_linger();
-            refused.header("Retry-After", "1");
-            let _ = refused.error(
-                503,
-                "503 Service Unavailable",
-                "busy with other transfers; retry shortly",
-            );
+    let key = format!("{} {}", up.method(), up.path());
+    let mut line = LINE.lock().unwrap_or_else(|p| p.into_inner());
+    // Its own place first, however long it took to ask again: dropping it
+    // as stale here let two uploads that each came back late swap places
+    // for ever, the slot free (the emulator, whose clock runs ahead of the
+    // client's).
+    if let Some(place) = line.iter_mut().find(|(k, _)| *k == key) {
+        place.1 = Instant::now();
+    }
+    line.retain(|(_, at)| at.elapsed() < LINE_HOLD);
+    let ahead = line.front().is_some_and(|(k, _)| *k != key);
+    let mut refused = {
+        let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
+        // Under the queue's lock: the count only goes up here, and the
+        // stream task takes it down (after the upload) without this lock,
+        // so a stale read can only refuse, never let a second one in.
+        // Idle only: nothing being sent or received, nothing waiting. A
+        // waiting upload's unread frames starve whatever is ahead of it, a
+        // download as much as an upload (the emulator: a listing's ACKs
+        // could not come in behind six of them, and it was cut short).
+        let idle = jobs.is_empty() && !BUSY.load(Ordering::Acquire);
+        if !ahead && idle && UPLOADS.load(Ordering::Acquire) < MAX_UPLOADS {
+            UPLOADS.fetch_add(1, Ordering::AcqRel);
+            jobs.push_back(Job::Upload {
+                up,
+                work: Box::new(work),
+            });
+            queue.ready.notify_one();
+            drop(jobs);
+            line.retain(|(k, _)| *k != key);
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(20));
+        up
+    };
+    if line.len() < LINE_LEN && !line.iter().any(|(k, _)| *k == key) {
+        line.push_back((key, Instant::now()));
     }
+    let waiting = line.len();
+    drop(line);
+    log::warn!(
+        "{} {}: {} upload here already, {waiting} refused in line; 503",
+        refused.method(),
+        refused.path(),
+        UPLOADS.load(Ordering::Relaxed)
+    );
+    // On the httpd task: no lingering over the rest of the body. Closing
+    // with the body unread resets the connection after the reply; curl and
+    // Chromium read a reply that came before the reset.
+    refused.no_linger();
+    refused.header("Retry-After", UPLOAD_RETRY_AFTER);
+    let _ = refused.error(
+        503,
+        "503 Service Unavailable",
+        "busy with another upload; retry shortly",
+    );
+    Ok(())
 }
 
 /// One upload, start to finish: `work` reads the body and answers; an abort
 /// (already logged) is answered with its status if one can still be sent,
 /// any other failure with a 500 if nothing was sent yet. Dropping `up` ends
 /// the connection.
-fn run_upload(up: Upload, work: UploadWork) {
+fn run_upload(mut up: Upload, work: UploadWork, counted: bool) {
     crate::diag::check("stream: upload start");
-    run_upload_inner(up, work);
+    run_upload_inner(&mut up, work);
+    // The reply is out and nothing more is read but the client's close:
+    // the slot is the next upload's while this one's drop waits for that
+    // (up to a second). Held until the drop, a client sending its uploads
+    // one after another met a 503 for every one (the API lane: ~10 s
+    // between two small PUTs).
+    if counted {
+        UPLOADS.fetch_sub(1, Ordering::AcqRel);
+        BUSY.store(false, Ordering::Release);
+    }
+    drop(up);
     crate::diag::check("stream: upload end");
 }
 
-fn run_upload_inner(mut up: Upload, work: UploadWork) {
+fn run_upload_inner(up: &mut Upload, work: UploadWork) {
     up.start_clock();
     // As for a download: a transfer starts only with room to finish. The
     // chunk buffer is taken fallibly as well (`files::stream_body_to`).
@@ -328,7 +431,7 @@ fn run_upload_inner(mut up: Upload, work: UploadWork) {
         );
         return;
     }
-    if let Err(e) = work(&mut up) {
+    if let Err(e) = work(up) {
         if let Some(aborted) = e.downcast_ref::<UploadAborted>() {
             if let Some((code, status)) = aborted.status {
                 let why = if code == 503 {
@@ -359,6 +462,7 @@ fn run(queue: &'static Queue) {
             let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
             loop {
                 if let Some(job) = jobs.pop_front() {
+                    BUSY.store(true, Ordering::Release);
                     break job;
                 }
                 jobs = queue.ready.wait(jobs).unwrap_or_else(|p| p.into_inner());
@@ -368,8 +472,11 @@ fn run(queue: &'static Queue) {
             // The cache builder stops while a file goes out or comes in.
             let _busy = crate::cache_builder::busy();
             match job {
-                Job::Download { req, work } => httpd::run_detached(req, work),
-                Job::Upload { up, work } => run_upload(up, work),
+                Job::Download { req, work } => {
+                    httpd::run_detached(req, work);
+                    BUSY.store(false, Ordering::Release);
+                }
+                Job::Upload { up, work } => run_upload(up, work, true),
             }
         }
         // The FAT lock and the SPI bus are shared with the player: a turn for
