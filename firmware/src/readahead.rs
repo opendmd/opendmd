@@ -119,6 +119,9 @@ fn now_ms() -> u32 {
 
 /// The network worker's turn: the filling task started when the display
 /// core follows a file and the task is not up.
+// Not inlined into the network worker's loop: its frame would be under
+// the firmware signature check (`ota::verify_signature`, ~6.5 KB deep).
+#[inline(never)]
 pub fn tick() {
     {
         let Some(s) = try_locked() else { return };

@@ -91,15 +91,37 @@ fn log_line(line: &str) {
 }
 
 /// How long the upload waits for the network worker to check a signature
-/// (it may be counting the cache or testing Follow RePlayOS).
+/// (it may be testing Follow RePlayOS, or in a FAT index slice: seconds at
+/// most; a cache count, which was tens of seconds on the rig, stops for it,
+/// see [`verify_waiting`]).
 const VERIFY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A signature check is queued for the network worker. Its long jobs (the
+/// cache count: a bucket walk and manifest passes, ~29 s on the rig's card)
+/// look at this and give way: they stop, queue themselves again behind the
+/// check and start over once it is done. The check itself is ~50 ms. Before
+/// this, a firmware update sent while the web app's Settings had just asked
+/// for a count waited behind it and got a 503 ("the signature could not be
+/// checked just now") until a retry (the rig, 2026-11-03).
+static VERIFY_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// See [`VERIFY_WAITING`].
+pub fn verify_waiting() -> bool {
+    VERIFY_WAITING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The network worker's side of `NetCommand::VerifyBundle`.
+pub fn serve_verify(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
+    VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
+    verify_signature(head)
+}
 
 /// Parse a bundle header and check its signature against [`PUBLIC_KEY`].
 /// **On the network worker** (`NetCommand::VerifyBundle`): Ed25519's
 /// variable-base multiplication keeps ~7-8.5 KB of frames on the stack
 /// (curve25519-dalek's NAF lookup table, 2.1 KB, and its caller, 2.6 KB,
 /// among them; measured from the ELF's `entry` sizes), more than the stream
-/// task's 6 KB, and the worker's 12 KB has it. ~50 ms of CPU0.
+/// task's 7 KB, and the worker's 11 KB has it (`config::NET_WORKER_STACK`). ~50 ms of CPU0.
 #[inline(never)]
 pub fn verify_signature(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
     let header = Header::parse(head)?;
@@ -124,9 +146,11 @@ fn check_header(
     // bundle at all, or one for the other flash layout.
     Header::parse(&header[..])?.check_variant(crate::state::FLASH_VARIANT)?;
     let (tx, rx) = mpsc::channel();
-    net.send(NetCommand::VerifyBundle { header, reply: tx })
-        .map_err(|_| None)?;
-    let meta = rx.recv_timeout(VERIFY_WAIT).map_err(|_| None)??;
+    VERIFY_WAITING.store(true, std::sync::atomic::Ordering::Relaxed);
+    let sent = net.send(NetCommand::VerifyBundle { header, reply: tx });
+    let got = sent.ok().and_then(|()| rx.recv_timeout(VERIFY_WAIT).ok());
+    VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
+    let meta = got.ok_or(None)??;
     meta.check_fits(factory_size)?;
     let image = body_len.saturating_sub(HEADER_LEN as u64);
     if u64::from(meta.length) != image {

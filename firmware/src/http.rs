@@ -105,9 +105,9 @@ pub enum NetCommand {
         reply: mpsc::Sender<String>,
     },
     /// `PUT /api/firmware`: check a bundle header's Ed25519 signature
-    /// (`ota::verify_signature`). Here because the network worker's 12 KB
-    /// stack has room for it (~8.5 KB at most, measured from the ELF's
-    /// frames) and the stream task's 6 KB does not.
+    /// (`ota::verify_signature`). Here because the network worker's stack
+    /// has room for it (9.4 KB used at most with it, `config::NET_WORKER_STACK`)
+    /// and the stream task's 7 KB does not.
     VerifyBundle {
         header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
         reply: mpsc::Sender<Result<opendmd_core::ota::Meta, opendmd_core::ota::OtaError>>,
@@ -594,6 +594,26 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
             return req.json(&crate::membank::take_read_max());
         }
+        // The heap map (a `heapmap` build only): the whole of it, fresh,
+        // in parts of a few KB each (`heapmap::part`).
+        if query_param(req.query(), "heapmap").as_deref() == Some("1") {
+            if let Some(first) = crate::heapmap::part(0) {
+                req.begin_chunked("200 OK", "application/json")?;
+                req.chunk(first.as_bytes())?;
+                drop(first);
+                let mut k = 1;
+                while let Some(p) = crate::heapmap::part(k) {
+                    req.chunk(p.as_bytes())?;
+                    k += 1;
+                }
+                return req.finish();
+            }
+        }
+        // Its short form, as `"heapmap"` in every status.
+        let looks = match crate::heapmap::status_brief() {
+            Some(h) => format!(r#""heapmap":{h},{looks}"#),
+            None => looks,
+        };
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
         // A status read costs CPU0 ~7 ms of formatting (code and strings
         // from flash, whose bus CPU1 shares): answered from the last one
@@ -603,9 +623,29 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // answer says what it took (`display.status_lock_us`,
         // `status_build_us`, `status_cached`).
         let t0 = std::time::Instant::now();
-        if let Some(json) = cached_status(recent) {
-            STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return req.json(&json);
+        // The last answer, if it is fresh: sent from where it is kept (no
+        // copy). A stale one is freed here, before a new one is built.
+        let fast = {
+            let mut last = STATUS_LAST.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(kept) = last.as_ref().filter(|k| k.recent == recent && k.at.elapsed() < STATUS_CACHE) {
+                STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return req.json(&kept.json);
+            }
+            *last = None;
+            // A client reading faster than `STATUS_CACHE` (the read before
+            // this one came within it): this answer is kept for its next.
+            let prev = STATUS_READ.lock().unwrap_or_else(|p| p.into_inner()).replace(t0);
+            prev.is_some_and(|p| t0.duration_since(p) < STATUS_CACHE)
+        };
+        // One block for the answer, the size of the last one and some: no
+        // regrowth while it is written, and no abort when the heap has no
+        // such block (a www push beside a playing GIF, the emulator's
+        // `memory allocation of 3542 bytes failed` in the old copy).
+        let mut json = String::new();
+        let want = STATUS_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize + STATUS_SLACK;
+        if json.try_reserve_exact(want).is_err() {
+            req.header("Retry-After", "1")?;
+            return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
         }
         let snap = {
             let s = c.status.lock().unwrap();
@@ -614,11 +654,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
             copy
         };
-        let json = status_json(&snap, &looks, recent);
+        status_json(&snap, &looks, recent, &mut json);
         drop(snap);
+        drop(looks);
+        STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
         STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
-        keep_status(recent, &json);
-        req.json(&json)
+        let sent = req.json(&json);
+        // Kept for the next read only for a client polling faster than
+        // `STATUS_CACHE` (the web app's 1 s poll is not): otherwise a
+        // ~3.5 KB block would sit wherever it landed until the next poll,
+        // in the middle of the heap the next GIF's decoder wants whole.
+        if fast {
+            *STATUS_LAST.lock().unwrap_or_else(|p| p.into_inner()) = Some(KeptStatus { at: std::time::Instant::now(), recent, json });
+        }
+        sent
     })?;
 
     let c = ctx.clone();
@@ -2350,7 +2399,8 @@ fn applied_json(a: &Applied) -> String {
 /// with the panel, correcting for its own request latency the NTP way.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
-fn status_json(s: &Status, looks: &str, recent: bool) -> String {
+fn status_json(s: &Status, looks: &str, recent: bool, out: &mut String) {
+    use std::fmt::Write as _;
     let t = s.epoch.elapsed();
     // `?recent=1`: Recently played, newest first, and which is on screen.
     let recent = if recent {
@@ -2360,7 +2410,8 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         String::new()
     };
     let www = crate::www::info();
-    format!(
+    let _ = write!(
+        out,
         concat!(
             r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},{}"#,
@@ -2443,7 +2494,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         crate::cache_builder::status_json(s.entries, crate::cache::peek()),
         crate::follow::status_json(),
         looks,
-    )
+    );
 }
 
 /// `now_playing`'s `,"kept_s":N` while a Formula sent to the panel is kept
@@ -2606,25 +2657,28 @@ fn looks_json(set: &Settings) -> String {
 /// How long a status answer is reused for another read.
 const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// The last status answer (with or without `recent`), and when it was made.
-static STATUS_LAST: std::sync::Mutex<Option<(std::time::Instant, bool, String)>> = std::sync::Mutex::new(None);
+/// A status answer kept for a fast poller: when it was made, with or
+/// without `recent`, the JSON.
+struct KeptStatus {
+    at: std::time::Instant,
+    recent: bool,
+    json: String,
+}
+
+/// The last status answer, kept only while reads come faster than
+/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale).
+static STATUS_LAST: std::sync::Mutex<Option<KeptStatus>> = std::sync::Mutex::new(None);
+
+/// When the last status read came (no heap: an `Instant`).
+static STATUS_READ: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// The last answer's length: the next one's buffer is reserved at this
+/// plus [`STATUS_SLACK`] (the first at 4 KB less the slack).
+static STATUS_LEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(3584);
+const STATUS_SLACK: usize = 512;
 
 /// Reads answered from the last answer (`display.status_cached`).
 static STATUS_CACHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// The last answer, if it is fresh and of the same kind (httpd's only).
-fn cached_status(recent: bool) -> Option<String> {
-    let last = STATUS_LAST.lock().ok()?;
-    last.as_ref()
-        .filter(|(at, r, _)| *r == recent && at.elapsed() < STATUS_CACHE)
-        .map(|(_, _, j)| j.clone())
-}
-
-fn keep_status(recent: bool, json: &str) {
-    if let Ok(mut last) = STATUS_LAST.lock() {
-        *last = Some((std::time::Instant::now(), recent, json.to_string()));
-    }
-}
 
 /// The last `/api/status`: how long it held `status` (µs) to copy it, and
 /// the whole build with the settings' part.
