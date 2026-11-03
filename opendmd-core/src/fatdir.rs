@@ -685,6 +685,37 @@ pub fn tmp_dirs(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, chunk: &mu
     }
 }
 
+/// What [`push_bounded`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pushed {
+    Noted,
+    /// Noted, the oldest entry dropped to make room (the log lost a change).
+    Dropped,
+    /// Not noted: no heap for the log to grow (it is left as it was).
+    NoRoom,
+}
+
+/// Push `item` to a log of at most `max` entries (the FAT index's delta):
+/// an entry `same` matches goes first; at `max` the oldest goes; the log
+/// grows by doubling from 8 up to `max` (fallibly: never an abort), and
+/// never past it, so its capacity is at most `max` whatever is pushed.
+pub fn push_bounded<T>(v: &mut Vec<T>, item: T, max: usize, same: impl Fn(&T) -> bool) -> Pushed {
+    v.retain(|x| !same(x));
+    let mut dropped = false;
+    if v.len() >= max {
+        v.drain(..v.len() + 1 - max);
+        dropped = true;
+    }
+    if v.len() == v.capacity() {
+        let want = (v.capacity() * 2).clamp(8, max.max(1));
+        if v.try_reserve_exact(want - v.len()).is_err() {
+            return Pushed::NoRoom;
+        }
+    }
+    v.push(item);
+    if dropped { Pushed::Dropped } else { Pushed::Noted }
+}
+
 /// The index header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
@@ -924,6 +955,31 @@ mod tests {
     fn no_location_word_is_the_temporary_directory_mark() {
         assert_eq!(loc((1 << 28) - 1, 15), None);
         assert_eq!(loc((1 << 28) - 2, 15), Some(((1 << 28) - 2) << 4 | 15));
+    }
+
+    #[test]
+    fn the_bounded_log_never_grows_past_its_cap() {
+        let mut v: Vec<(u32, u32)> = Vec::new();
+        let mut dropped = 0;
+        for i in 0..1000u32 {
+            match push_bounded(&mut v, (i % 700, i), 257, |x| x.0 == i % 700) {
+                Pushed::Noted => {}
+                Pushed::Dropped => dropped += 1,
+                Pushed::NoRoom => panic!("no room"),
+            }
+            assert!(v.len() <= 257 && v.capacity() <= 257, "{} {}", v.len(), v.capacity());
+        }
+        assert!(dropped > 0);
+        // The newest is last, and a key pushed again replaces its entry.
+        assert_eq!(v.last(), Some(&(999 % 700, 999)));
+        push_bounded(&mut v, (5, 1), 257, |x| x.0 == 5);
+        assert_eq!(v.iter().filter(|x| x.0 == 5).count(), 1);
+        // Small logs stay small.
+        let mut w: Vec<u8> = Vec::new();
+        for b in 0..6 {
+            push_bounded(&mut w, b, 257, |_| false);
+        }
+        assert_eq!(w.capacity(), 8);
     }
 
     #[test]

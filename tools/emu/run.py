@@ -29,8 +29,9 @@ rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's bui
        build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
        emu-rig-tight) the heap is the spare's (~45 KB free while playing).
 leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
-       up and 40 more, the blocks in use and bytes allocated (the least of a few samples each) must not
-       have grown past 24 blocks / 2 KB; prints EMU_LEAK_OK.
+       up and 40 more (8 samples at least), the least blocks in use and bytes allocated of the
+       second half of the samples against the first half's must not have grown past 24 blocks /
+       2 KB; prints EMU_LEAK_OK.
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -192,7 +193,7 @@ def main():
                 if m:
                     census.append((gifs, int(m[1]), int(m[2])))
                 # 10 GIFs to warm up, then 40 more, with census lines after.
-                if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3:
+                if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
                     break
             elif a.mode == "rig":
                 m = HEARTBEAT_FLOOR.search(line)
@@ -278,14 +279,18 @@ def main():
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
     if a.mode == "leak":
-        warm = [c for c in census if LEAK_WARM <= c[0] < LEAK_WARM + 10][:3]
-        late = [c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS][-3:]
-        if len(warm) < 1 or len(late) < 3:
-            die(f"not enough census lines ({len(census)}) within {seconds} emulated s (GIF starts {gifs})")
+        # The census swings with what is held at the sample (a decoder's
+        # pieces, the ring or not): the least of the first half of the
+        # samples after the warm-up against the least of the second half.
+        after = [c for c in census if c[0] >= LEAK_WARM]
+        if len(after) < 6 or after[-1][0] < LEAK_WARM + LEAK_GIFS:
+            die(f"not enough census lines ({len(after)} after the warm-up) within {seconds} emulated s (GIF starts {gifs})")
+        half = len(after) // 2
+        warm, late = after[:half], after[half:]
         b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
         y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
-        span = late[-1][0] - warm[0][0]
-        print(f"census: {len(census)} lines; blocks {b0} -> {b1}, allocated {y0} -> {y1} B over {span} GIFs")
+        span = after[-1][0] - after[0][0]
+        print(f"census: {len(census)} lines; least blocks {b0} -> {b1}, least allocated {y0} -> {y1} B, first half against second, over {span} GIFs")
         # A std thread's leftovers were ~4 blocks and ~190 B a GIF: 40 GIFs
         # were ~160 blocks and ~7.6 KB. Flat means within one GIF's own
         # churn (a decoder's pieces, the ring held or not).

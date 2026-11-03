@@ -811,6 +811,10 @@ pub const FATIDX_SLICE_KEEP: usize = 20 * 1024;
 /// Free heap a build needs to start: its slice's reserve and ~4 KB it
 /// holds between slices (the cursor's two sectors, the fanout).
 pub const FATIDX_START_HEAP: usize = FATIDX_SLICE_KEEP + 8 * 1024;
+/// The free heap a pass's group leaves: a transition's 24 KB and its
+/// [`TRANSITION_HEAP_RESERVE`] (a skip or a play that comes during a pass
+/// finds the heap a transition needs; the pass stops at its next read).
+pub const FATIDX_PASS_KEEP: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE;
 /// A slice's batch of directory sectors, and its read chunk of the
 /// temporary records.
 pub const FATIDX_SCRATCH: usize = 4 * 512;

@@ -679,9 +679,49 @@ pub fn mark_update(store: &mut dyn Store) -> bool {
     }
 }
 
+/// Whether crash entry `e` is one the code in `files` (file names, as a
+/// panic's location gives them) can be blamed for: a panic located in one
+/// of them, a stack overflow of `task`, or an out-of-memory abort (a crash
+/// that recorded nothing but a failed allocation just before it). Never a
+/// watchdog: an interrupt or task watchdog reset says nothing about which
+/// code was running (the FAT index's build counts only these against
+/// itself, `fatidx::boot`).
+pub fn crash_in(e: &Entry, files: &[&str], task: &str) -> bool {
+    match e.reason {
+        Reason::Panic => {
+            let at = e.text().split(':').next().unwrap_or("");
+            files.contains(&at)
+        }
+        Reason::StackOverflow => e.text().strip_prefix("task ") == Some(task),
+        Reason::Crash => e.reset == Reset::Panic && e.text().starts_with("last failed alloc"),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crash_is_blamed_on_the_build_only_when_it_shows() {
+        let files = ["fatidx.rs", "fatdir.rs", "names_file.rs"];
+        let mut e = Entry::new(Reason::Panic, None);
+        e.set_panic("src/fatidx.rs", 1466, "boom");
+        assert!(crash_in(&e, &files, "net-worker"));
+        e.set_panic("src/fx_psi.rs", 10, "a Formula");
+        assert!(!crash_in(&e, &files, "net-worker"));
+        let mut o = Entry::new(Reason::StackOverflow, None);
+        o.set_text(format_args!("task net-worker"));
+        assert!(crash_in(&o, &files, "net-worker"));
+        o.set_text(format_args!("task main"));
+        assert!(!crash_in(&o, &files, "net-worker"));
+        let mut w = Entry::new(Reason::Crash, None);
+        w.reset = Reset::IntWdt;
+        assert!(!crash_in(&w, &files, "net-worker"), "a watchdog");
+        w.reset = Reset::Panic;
+        w.set_text(format_args!("last failed alloc: 4096 B at 100 s, 9000 B free (maybe a probe)"));
+        assert!(crash_in(&w, &files, "net-worker"), "an out-of-memory abort");
+    }
 
     fn fig(uptime_ms: u32) -> Option<Figures> {
         Some(Figures {
