@@ -709,6 +709,9 @@ static PATH_OPENS: AtomicU32 = AtomicU32::new(0);
 static PATH_OPEN_MAX_US: AtomicU32 = AtomicU32::new(0);
 static INDEX_BUSY: AtomicU32 = AtomicU32::new(0);
 static INDEX_UNLOADED: AtomicU32 = AtomicU32::new(0);
+/// Bumped at every index swap: a lookup that read the old one's records
+/// after letting go of the lock drops them.
+static LOADED_GEN: AtomicU32 = AtomicU32::new(0);
 /// Copies found absent by the index (no path open).
 static ABSENT: AtomicU32 = AtomicU32::new(0);
 
@@ -736,11 +739,24 @@ fn open_path_raw(full: &str) -> io::Result<Option<File>> {
 pub fn open_catalog_file(full: &str) -> io::Result<File> {
     if crate::CARD_READY.load(Relaxed) && register_vfs() {
         if let Some(f) = open_path_raw_as(full, false)? {
+            if TABLE_RAW_LAST.load(Relaxed) {
+                return Ok(f);
+            }
+            // Opened, but FatFs reads it (its chain past 64 runs, or not
+            // canonical): its reads wait for the volume lock.
+            CATALOG_FATFS.fetch_add(1, Relaxed);
+            log::warn!("{full}: the playlist file is read through FatFs (its lookups wait for the volume lock)");
             return Ok(f);
         }
     }
+    CATALOG_FATFS.fetch_add(1, Relaxed);
     File::open(full)
 }
+
+/// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`).
+static CATALOG_FATFS: AtomicU32 = AtomicU32::new(0);
+/// The last [`hand_out`] gave its slot raw state.
+static TABLE_RAW_LAST: AtomicBool = AtomicBool::new(false);
 
 /// [`open_path_raw`]; `player`: noted in the open set as the player's (a
 /// GIF), else not (a playlist file).
@@ -808,6 +824,7 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
             })
         })
     };
+    TABLE_RAW_LAST.store(raw.is_some(), Relaxed);
     let claimed = TABLE.claim(f, raw.map(Box::new), player.map(|_| &mut note as &mut dyn FnMut(usize) -> bool));
     let k = match claimed {
         Ok(k) => k,
@@ -910,48 +927,74 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
         // by path.
         let (lo, hi) = (l.fanout[b], l.fanout[b + 1].min(l.fanout[b] + 256));
         whole = l.fanout[b + 1] - l.fanout[b] <= 256;
-        let mut recs = vec![0u8; (hi - lo) as usize * 8];
+        let len = (hi - lo) as usize * 8;
         let at = fatdir::RECORDS_AT + lo as u64 * 8;
-        let got = match l.raw.as_mut() {
-            // Raw: the card's I/O lock only.
+        // The records' sectors are mapped under the index's lock and read
+        // after it (a lookup that found the lock held went by path, behind
+        // the volume lock); an index swapped in meanwhile drops what was
+        // read (its old file may be freed).
+        let got: io::Result<Vec<u8>> = match l.raw.as_ref() {
             Some((rf, pdrv)) => {
-                let pdrv = *pdrv;
-                rf.seek(at);
-                let mut dev = |lba: u32, n: u32, b: &mut [u8]| -> io::Result<()> {
-                    // SAFETY: `b` is `n` sectors; the mounted card's drive.
-                    if unsafe { sys::ff_disk_read(pdrv, b.as_mut_ptr(), lba, n) } != 0 {
-                        return Err(errno(sys::EIO));
-                    }
-                    Ok(())
-                };
-                let mut done = 0;
-                let mut r = Ok(());
-                while done < recs.len() {
-                    match rf.read(&mut recs[done..], &mut dev) {
-                        Ok(0) => {
-                            r = Err(io::Error::from(io::ErrorKind::UnexpectedEof));
-                            break;
-                        }
-                        Ok(n) => done += n,
-                        Err(e) => {
-                            r = Err(e);
-                            break;
-                        }
-                    }
+                let (pdrv, gen) = (*pdrv, LOADED_GEN.load(Relaxed));
+                let first = at - at % SS as u64;
+                let sectors = (at + len as u64).div_ceil(SS as u64) - first / SS as u64;
+                let mut runs = [(0u32, 0u32); 8];
+                let mut nr = 0;
+                let mut mapped = 0u64;
+                while mapped < sectors && nr < runs.len() {
+                    let Some((lba, run)) = rf.extents().map(first + mapped * SS as u64) else { break };
+                    let n = (run as u64).min(sectors - mapped);
+                    runs[nr] = (lba, n as u32);
+                    nr += 1;
+                    mapped += n;
                 }
-                r
+                drop(g);
+                if mapped < sectors {
+                    Err(io::Error::from(io::ErrorKind::UnexpectedEof))
+                } else {
+                    let mut buf = vec![0u8; sectors as usize * SS];
+                    let mut done = 0usize;
+                    let mut r = Ok(());
+                    for &(lba, n) in &runs[..nr] {
+                        let bytes = n as usize * SS;
+                        // SAFETY: `bytes` of `buf` from `done`; the mounted card's drive.
+                        if unsafe { sys::ff_disk_read(pdrv, buf[done..done + bytes].as_mut_ptr(), lba, n) } != 0 {
+                            r = Err(errno(sys::EIO));
+                            break;
+                        }
+                        done += bytes;
+                    }
+                    if LOADED_GEN.load(Relaxed) != gen {
+                        return None;
+                    }
+                    r.map(|()| {
+                        let from = (at - first) as usize;
+                        buf[from..from + len].to_vec()
+                    })
+                }
             }
-            None => l.file.seek(SeekFrom::Start(at)).and_then(|_| l.file.read_exact(&mut recs)),
+            None => {
+                let mut recs = vec![0u8; len];
+                let r = l.file.seek(SeekFrom::Start(at)).and_then(|_| l.file.read_exact(&mut recs));
+                drop(g);
+                r.map(|()| recs)
+            }
         };
-        if let Err(e) = got {
-            if crate::sdhealth::is_card_error(&e) {
-                return Some(Err(e));
+        let recs = match got {
+            Ok(r) => r,
+            Err(e) => {
+                if crate::sdhealth::is_card_error(&e) {
+                    return Some(Err(e));
+                }
+                // Anything else (a short or damaged index): drop it, open by
+                // path (if it is still the one read).
+                if let Ok(mut g) = LOADED.try_lock() {
+                    *g = Some(None);
+                }
+                DIRTY.store(true, Relaxed);
+                return None;
             }
-            // Anything else (a short or damaged index): drop it, open by path.
-            *g = Some(None);
-            DIRTY.store(true, Relaxed);
-            return None;
-        }
+        };
         for r in recs.chunks_exact(8).filter(|r| r[..4] == h.to_le_bytes()).take(cands.len()) {
             cands[nc] = u32::from_le_bytes(r[4..].try_into().unwrap());
             nc += 1;
@@ -1455,6 +1498,7 @@ fn build() -> io::Result<()> {
     // (iso14: opens of 1.4 s and 5.8 s while a build ended during saves).
     let fresh = load(NEW).ok();
     let old = LOADED.lock().unwrap().replace(fresh);
+    LOADED_GEN.fetch_add(1, Relaxed);
     drop(old);
     let _ = fs::remove_file(INDEX);
     fs::rename(NEW, INDEX)?;
@@ -1471,7 +1515,7 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{},"path_opens":{},"path_open_max_us":{},"index_busy":{},"index_unloaded":{},"absent":{},"building":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{},"raw_open":{},"raw_reads":{},"raw_fallbacks":{},"slots_full":{},"intent_refused":{},"delta":{},"path_opens":{},"path_open_max_us":{},"index_busy":{},"index_unloaded":{},"absent":{},"catalog_fatfs":{},"building":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
@@ -1488,6 +1532,7 @@ pub fn status_json() -> String {
         INDEX_BUSY.load(Relaxed),
         INDEX_UNLOADED.load(Relaxed),
         ABSENT.load(Relaxed),
+        CATALOG_FATFS.load(Relaxed),
         BUILDING.load(Relaxed),
     )
 }
