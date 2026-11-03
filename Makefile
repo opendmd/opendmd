@@ -1005,7 +1005,8 @@ emu-rig: emu-build emu-rig-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 # The leak lane: an `emu-census` image (the heap's census every 20 s) plays
-# 70 GIFs; blocks in use and bytes allocated stay flat after the first 10.
+# 70 GIFs (on to 150 while the halves differ); blocks in use and bytes
+# allocated stay flat after the first 10.
 # EMU_LEAK_OK.
 EMU_LEAK_IMAGE = $(EMU_DIR)/leak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-leak:
