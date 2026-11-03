@@ -1797,6 +1797,9 @@ fn main() -> Result<()> {
         } else {
             eng.tick(tick_now, &mut canvas)?
         };
+        // The FAT index's build works only while the player needs nothing
+        // of the card or the heap (night mode "off": nothing decoded).
+        fatidx::set_quiet(if off { Duration::from_secs(60) } else { eng.quiet_for(tick_now) });
         let mut tick_us = uclock::since(tick_start);
         let (open_us, read_us) = frametime::take();
         let card_io = crate::cardspeed::take_player();

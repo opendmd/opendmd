@@ -24,8 +24,10 @@ probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw c
        Formula (Neon city, Wormhole run) that is not played; prints EMU_PROBE_OK
        and the correctness lines.
 rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's build to finish
-       (`fat index: built N records ...`, its heap floor and stack), with the panel playing; prints
-       EMU_RIG_OK, the build line and the lowest heartbeat heap floor.
+       (`fat index: built N records ...`, its heap floor and stack), with the panel playing: N > 0,
+       stale false, no transition cut during it, no `fat index:` warning; prints EMU_RIG_OK, the
+       build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
+       emu-rig-tight) the heap is the spare's (~45 KB free while playing).
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -72,8 +74,8 @@ NOCARD = [
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
 ]
 HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
-RIG_BUILT = re.compile(r"fat index: built \d+ records")
-RIG_FAILED = re.compile(r"fat index: (?!built).*(heap|failed|short)")
+RIG_BUILT = re.compile(r"fat index: built (\d+) records .*transitions cut during it (\d+);.* stale (true|false)")
+RIG_FAILED = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)")
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) far short, (.*) just short")
@@ -180,8 +182,9 @@ def main():
                     floors.append(int(m[1]))
                 if SMOKE[4][1].search(line):
                     gifs += 1
-                if RIG_BUILT.search(line):
-                    built = line
+                m = RIG_BUILT.search(line)
+                if m:
+                    built = (line, int(m[1]), int(m[2]), m[3])
                 if RIG_FAILED.search(line) and not built:
                     failure = f"the build failed: {line[:200]}"
                     break
@@ -261,7 +264,11 @@ def main():
             print(f"heartbeat heap floors: lowest {min(floors)} B over {len(floors)} heartbeats")
         if not built:
             die(f"no `fat index: built` within {seconds} emulated s / {wall} s wall (GIF starts {gifs})")
-        print(f"pass  build: {built[:230]}")
+        if built[1] == 0 or built[3] != "false":
+            die(f"the build did not leave a current index: {built[0][:230]}")
+        if built[2] != 0:
+            die(f"transitions were cut during the build: {built[0][:230]}")
+        print(f"pass  build: {built[0][:300]}")
         print(f"pass  GIF starts: {gifs}")
         print(f"EMU_RIG_OK ({took:.0f} s wall)")
         return
