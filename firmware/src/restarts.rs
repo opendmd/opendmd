@@ -289,9 +289,17 @@ pub fn alive() {
 /// came out of the updater (after an update from firmware with no ring).
 #[inline(never)]
 pub fn booted_after_update() {
+    // A new firmware: the FAT index's crash count was the old one's.
+    crate::fatidx::forget_crashes();
     if ring::mark_update(&mut Rtc) {
         log::info!("reset reason: the restart out of the updater (firmware_update)");
     }
+}
+
+/// Whether the crash this boot came out of is one the code in `files` can
+/// be blamed for (`opendmd_core::restarts::crash_in`).
+pub fn this_boot_crash_in(files: &[&str], task: &str) -> bool {
+    this_boot().is_some_and(|e| ring::crash_in(&e, files, task))
 }
 
 /// This boot's entry.

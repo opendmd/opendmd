@@ -1646,19 +1646,34 @@ fn main() -> Result<()> {
                 // (the spare, 2026-11-03: a 949 ms catalog lookup at a
                 // switch). Opened again now, read raw (the `.idx` it built
                 // or checked is reused: a few ms).
-                let (built, index_ms) = if built.is_ok() && fatidx::catalog_fatfs() {
-                    drop(built);
-                    fatidx::catalog_reopening();
+                // Only a playlist with its `.idx` on the card (loaded or
+                // built at boot) is opened again, and only by loading that
+                // `.idx` (`reopen_catalog`: never a write, never the in-RAM
+                // build, which needs a fresh heap); the boot's catalog is
+                // kept until the new one is open, and kept if it is not.
+                let reopen = fatidx::catalog_fatfs()
+                    && matches!(&built, Ok((_, _, IndexSource::Loaded | IndexSource::Built)));
+                let built = if reopen {
+                    let before = fatidx::catalog_reopening();
                     let t = Instant::now();
-                    let again = open_catalog(&manifest, &build_filter(&eff), false);
-                    let ms = t.elapsed().as_millis() as u64;
-                    log::info!(
-                        "playlist: opened again after the handover in {ms} ms, read {}",
-                        if fatidx::catalog_fatfs() { "through FatFs still" } else { "raw" }
-                    );
-                    (again, index_ms + ms)
+                    match reopen_catalog(&manifest, &build_filter(&eff)) {
+                        Ok(again) => {
+                            log::info!(
+                                "playlist: opened again after the handover in {} ms, read {}",
+                                t.elapsed().as_millis(),
+                                if fatidx::catalog_fatfs() { "through FatFs still" } else { "raw" }
+                            );
+                            drop(built);
+                            Ok(again)
+                        }
+                        Err(e) => {
+                            log::warn!("playlist: not opened again after the handover ({e:#}); read through FatFs");
+                            fatidx::catalog_restore(before);
+                            built
+                        }
+                    }
                 } else {
-                    (built, index_ms)
+                    built
                 };
                 finish_build(&mut engine, &eff, &manifest, built, index_ms, &status)
             } else {
@@ -2952,6 +2967,21 @@ fn read_meta(meta: &str) -> OverrideSet {
 ///
 /// Either way the manifest's `File` stays open inside the catalog; with an
 /// index file that is two FATFS handles for the life of the playlist.
+/// The playlist at `path` opened again over its current `.idx` (raw reads,
+/// now the card is the player's): never a write, never an in-RAM build; an
+/// error when the `.idx` is not current (the caller keeps what it has).
+fn reopen_catalog(path: &str, filter: &Filter) -> Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)> {
+    let manifest = fatidx::open_catalog_file(path).with_context(|| format!("opening {path}"))?;
+    let len = manifest.metadata().with_context(|| format!("stat {path}"))?.len();
+    let len = u32::try_from(len).with_context(|| format!("{path} is over 4 GB"))?;
+    let idx = files::index_path(path);
+    let meta_fp = meta_fingerprint(&overrides::meta_path(path));
+    let index = load_index(&idx, len, filter, meta_fp).map_err(|why| anyhow::anyhow!("{idx}: {why}"))?;
+    let mut catalog = IndexedCatalog::open(manifest, index).with_context(|| format!("opening {idx}"))?;
+    let ov = catalog.overrides().with_context(|| format!("reading the overrides in {idx}"))?;
+    Ok((Box::new(catalog), ov, IndexSource::Loaded))
+}
+
 fn open_catalog(
     path: &str,
     filter: &Filter,

@@ -309,27 +309,18 @@ fn names_present() -> bool {
 fn push_delta(h: u32, loc: Option<u32>) {
     let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
     // Grown as it fills (a few changes are a few bytes, not its whole 3 KB
-    // held from the first: the read-ahead's ring needs that heap), doubled
-    // up to its cap, never past it; no room: the change is not noted (a
-    // stale record, which the entry check catches).
-    if d.len() == d.capacity() {
-        let want = (d.capacity() * 2).clamp(8, DELTA_MAX + 1);
-        let more = want - d.len();
-        if want > d.capacity() && d.try_reserve_exact(more).is_err() {
+    // held from the first: the read-ahead's ring needs that heap), never
+    // past DELTA_MAX entries (`fatdir::push_bounded`, host-tested).
+    match fatdir::push_bounded(&mut d, (h, loc, uptime_ms()), DELTA_MAX, |(k, _, _)| *k == h) {
+        fatdir::Pushed::Noted => {}
+        fatdir::Pushed::Dropped | fatdir::Pushed::NoRoom => {
+            // Changes lost from it (the oldest, or this one: a stale record
+            // the entry check catches): no "absent" answers until the next
+            // build, which comes when quiet.
             DELTA_OVERFLOWED.store(true, Relaxed);
+            TOUCHED_MS.store(uptime_ms(), Relaxed);
             DIRTY.store(true, Relaxed);
-            return;
         }
-    }
-    d.retain(|(k, _, _)| *k != h);
-    d.push((h, loc, uptime_ms()));
-    if d.len() > DELTA_MAX {
-        d.remove(0);
-        // Changes lost from it: no "absent" answers until the next build.
-        DELTA_OVERFLOWED.store(true, Relaxed);
-        // Too much since the build: rebuild when quiet.
-        TOUCHED_MS.store(uptime_ms(), Relaxed);
-        DIRTY.store(true, Relaxed);
     }
     DELTA_LEN.store(d.len() as u32, Relaxed);
 }
@@ -790,9 +781,15 @@ pub fn catalog_fatfs() -> bool {
     CATALOG_FATFS.load(Relaxed) > 0
 }
 
-/// The playlist is about to be opened again: its old files' count goes.
-pub fn catalog_reopening() {
-    CATALOG_FATFS.store(0, Relaxed);
+/// The playlist is about to be opened again: its old files' count goes
+/// (returned, for [`catalog_restore`] if the old files are kept).
+pub fn catalog_reopening() -> u32 {
+    CATALOG_FATFS.swap(0, Relaxed)
+}
+
+/// The old playlist is kept after all: its count back.
+pub fn catalog_restore(n: u32) {
+    CATALOG_FATFS.store(n, Relaxed);
 }
 
 
@@ -1244,6 +1241,7 @@ fn index_extents(file: &str) -> Option<(fatread::RawFile, u8)> {
 /// `/fidx` FILs and a build in flight are not closed here.
 pub fn unmounted() {
     abort_job();
+    DIR_GEN.fetch_add(1, Relaxed);
     FS.store(std::ptr::null_mut(), Relaxed);
     BUILT_THIS_BOOT.store(false, Relaxed);
     *LOADED.lock().unwrap() = None;
@@ -1277,8 +1275,16 @@ pub fn dir_changed() {
     NAMES_OK.store(false, Relaxed);
     TOUCHED_MS.store(uptime_ms(), Relaxed);
     DIRTY.store(true, Relaxed);
-    *LOADED.lock().unwrap() = Some(None);
+    // Under the index's lock: a build finishing now compares the generation
+    // under the same lock and drops its index (`finish`).
+    let mut g = LOADED.lock().unwrap();
+    DIR_GEN.fetch_add(1, Relaxed);
+    *g = Some(None);
 }
+
+/// Bumped (under [`LOADED`]'s lock) whenever the indexed directories may
+/// have changed or the card went: a build begun before is not swapped in.
+static DIR_GEN: AtomicU32 = AtomicU32::new(0);
 
 /// The network worker's turn: rebuild when wanted, quiet and affordable;
 /// a build under way goes on by one slice ([`slice`]).
@@ -1299,6 +1305,13 @@ pub fn tick() {
             if RELOAD.swap(false, Relaxed) {
                 *g = None;
                 DIRTY.store(true, Relaxed);
+                // A build cut short by a restart or a crash left its files
+                // (~255 KB on the rig): no job is under way after a mount.
+                drop(g);
+                for f in [TMP, NEW, NAMES_NEW] {
+                    let _ = fs::remove_file(f);
+                }
+                g = LOADED.lock().unwrap();
             }
             g.is_none()
         };
@@ -1528,6 +1541,10 @@ struct Job {
     slices: u32,
     passes: u32,
     cut0: u32,
+    /// [`DIR_GEN`] when the job began.
+    gen: u32,
+    /// The whole build at once (psi-probe): the player's quiet not asked.
+    ignore_quiet: bool,
 }
 
 static JOB: Mutex<Option<Box<Job>>> = Mutex::new(None);
@@ -1561,6 +1578,8 @@ impl Job {
             slices: 0,
             passes: 0,
             cut0: crate::TRANSITIONS_CUT.load(Relaxed),
+            gen: DIR_GEN.load(Relaxed),
+            ignore_quiet: false,
         })
     }
 
@@ -1569,7 +1588,13 @@ impl Job {
     fn slice(&mut self, until: u32) -> io::Result<bool> {
         let (fs, geo) = volume()?;
         self.slices += 1;
-        let time_left = || (until.wrapping_sub(uptime_ms()) as i32) > 0;
+        // The slice's end, and the player's quiet (read again each time: a
+        // skip, a play or a resume ends it at the next directory or read).
+        let ignore_quiet = self.ignore_quiet;
+        let time_left = || {
+            let now = uptime_ms();
+            (until.wrapping_sub(now) as i32) > 0 && (ignore_quiet || (QUIET_UNTIL.load(Relaxed).wrapping_sub(now) as i32) > 0)
+        };
         let heap_ok = || crate::state::free_heap() as usize >= config::FATIDX_SLICE_KEEP;
         loop {
             match self.stage {
@@ -1668,7 +1693,28 @@ impl Job {
                     let mut group = take_group()?;
                     let mut chunk = try_buf(config::FATIDX_SCRATCH)?;
                     let mut f = File::open(TMP)?;
-                    let (b1, n) = fatdir::gather(&mut |b| f.read(b), &self.fanout, b0, &mut group, &mut chunk)?;
+                    // Each read asks the time and the player's quiet first:
+                    // out of either, the pass stops, its group goes, and it
+                    // is made again from its start (it writes nothing until
+                    // it is whole). FatFs takes the volume lock per read.
+                    let gathered = fatdir::gather(
+                        &mut |b| {
+                            if !time_left() {
+                                return Err(io::Error::from(io::ErrorKind::TimedOut));
+                            }
+                            let n = f.read(b)?;
+                            std::thread::sleep(Duration::from_millis(1));
+                            Ok(n)
+                        },
+                        &self.fanout,
+                        b0,
+                        &mut group,
+                        &mut chunk,
+                    );
+                    let (b1, n) = match gathered {
+                        Err(e) if e.kind() == io::ErrorKind::TimedOut => return Ok(false),
+                        r => r?,
+                    };
                     self.out.as_mut().ok_or_else(|| errno(sys::EIO))?.write_all(&group[..n])?;
                     BUILD_GROUP.fetch_max(group.len() as u32, Relaxed);
                     self.passes += 1;
@@ -1700,13 +1746,13 @@ impl Job {
 }
 
 /// A pass's group: as much of [`config::FATIDX_GROUP`] as leaves
-/// [`config::FATIDX_SLICE_KEEP`] free (held for one slice, inside the
-/// player's quiet window), halved down to [`config::FATIDX_GROUP_MIN`];
-/// short of that the build waits.
+/// [`config::FATIDX_PASS_KEEP`] free (a transition's need, should one come
+/// before the pass notices the player's quiet is over), halved down to
+/// [`config::FATIDX_GROUP_MIN`]; short of that the build waits.
 fn take_group() -> io::Result<Vec<u8>> {
     let free = crate::state::free_heap() as usize;
     let mut n = free
-        .saturating_sub(config::FATIDX_SLICE_KEEP + config::FATIDX_SCRATCH)
+        .saturating_sub(config::FATIDX_PASS_KEEP + config::FATIDX_SCRATCH)
         .min(crate::state::largest_free_block().saturating_sub(1024))
         .min(config::FATIDX_GROUP)
         & !7;
@@ -1726,7 +1772,8 @@ fn take_group() -> io::Result<Vec<u8>> {
 fn run_slice() {
     let now = uptime_ms();
     let quiet = QUIET_UNTIL.load(Relaxed);
-    let until = if (quiet.wrapping_sub(now) as i32) > 0 { quiet.min(now + config::FATIDX_SLICE_MS) } else { now };
+    let left = quiet.wrapping_sub(now) as i32;
+    let until = now.wrapping_add(if left > 0 { (left as u32).min(config::FATIDX_SLICE_MS) } else { 0 });
     if until.wrapping_sub(now) < config::FATIDX_SLICE_MIN_MS
         || crate::cache_builder::task_up()
         || crate::cache_builder::transfer_in_flight()
@@ -1789,7 +1836,7 @@ fn abort_job() {
 fn finish(job: Box<Job>) {
     let names_ok = job.names_folders != usize::MAX;
     let names_only = job.names_only;
-    let (passes, slices, started, cut0, set) = (job.passes, job.slices, job.started, job.cut0, job.set);
+    let (passes, slices, started, cut0, set, gen) = (job.passes, job.slices, job.started, job.cut0, job.set, job.gen);
     drop(job);
     if names_only {
         if names_ok && install_names(started) {
@@ -1807,13 +1854,31 @@ fn finish(job: Box<Job>) {
     // (its close takes the volume lock), then the files renamed. The
     // player's lookups never find the lock held for longer than the swap.
     let fresh = load_as(NEW, Some(set));
-    let ok = fresh.is_ok();
     if let Err(e) = &fresh {
         log::warn!("fat index: the new index did not load ({e})");
     }
-    BUILT_THIS_BOOT.store(ok, Relaxed);
-    let old = LOADED.lock().unwrap().replace(fresh.ok());
-    LOADED_GEN.fetch_add(1, Relaxed);
+    let old = {
+        let mut g = LOADED.lock().unwrap();
+        // A directory came or went (or the card) since the walk began: its
+        // index is not put in (`dir_changed` left none), and rebuilt.
+        if DIR_GEN.load(Relaxed) != gen {
+            drop(g);
+            drop(fresh);
+            log::info!("fat index: the directories changed during the build: dropped, built again when quiet");
+            let _ = fs::remove_file(NEW);
+            let _ = fs::remove_file(NAMES_NEW);
+            DIRTY.store(true, Relaxed);
+            BUILDS.fetch_add(1, Relaxed);
+            BUILDING.store(false, Relaxed);
+            return;
+        }
+        let ok = fresh.is_ok();
+        BUILT_THIS_BOOT.store(ok, Relaxed);
+        let old = g.replace(fresh.ok());
+        LOADED_GEN.fetch_add(1, Relaxed);
+        old
+    };
+    let ok = BUILT_THIS_BOOT.load(Relaxed);
     drop(old);
     let _ = fs::remove_file(INDEX);
     let renamed = fs::rename(NEW, INDEX).is_ok();
@@ -1861,6 +1926,7 @@ fn build() -> io::Result<()> {
     abort_job();
     BUILT_MS.store(uptime_ms(), Relaxed);
     let mut job = Job::new(false)?;
+    job.ignore_quiet = true;
     loop {
         match job.slice(uptime_ms().wrapping_add(1 << 30)) {
             Ok(true) => break,
@@ -1910,7 +1976,13 @@ fn crashes_stored() -> u32 {
 pub fn boot(crashed: bool, power_on: bool) {
     let in_flight = guard(0).load(Relaxed) == GUARD_MAGIC;
     let mut n = if power_on { 0 } else { crashes_stored() };
-    if in_flight && crashed {
+    // Only a crash the build can be blamed for: a panic in its code, its
+    // task's stack (the network worker's), an out-of-memory abort; not a
+    // watchdog or another module's panic that happened during a slice.
+    if in_flight
+        && crashed
+        && crate::restarts::this_boot_crash_in(&["fatidx.rs", "fatdir.rs", "names_file.rs"], "net-worker")
+    {
         n += 1;
     }
     guard(0).store(0, Relaxed);
@@ -1924,6 +1996,13 @@ pub fn boot(crashed: bool, power_on: bool) {
             after_crash_wait_s(n) / 60
         );
     }
+}
+
+/// A new firmware booted (`restarts::booted_after_update`): the crashes
+/// counted were the old one's.
+pub fn forget_crashes() {
+    guard(1).store(crashes_word(0), Relaxed);
+    AFTER_CRASH.store(0, Relaxed);
 }
 
 fn after_crash_wait_s(n: u32) -> u32 {
@@ -1957,7 +2036,8 @@ pub fn status_json() -> String {
         INDEX_UNLOADED.load(Relaxed),
         ABSENT.load(Relaxed),
         CATALOG_FATFS.load(Relaxed),
-        job_running(),
+        // (Busy: a slice under way, so a build.)
+        JOB.try_lock().map_or(true, |g| g.is_some()),
         BUILD_FLOOR.load(Relaxed),
         BUILD_GROUP.load(Relaxed),
         AFTER_CRASH.load(Relaxed),

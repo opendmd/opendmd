@@ -18,7 +18,7 @@
 //!   and a block read for a slot that was closed meanwhile is dropped (the
 //!   generation changed), so no freed cluster's bytes are ever served.
 //! - The filling task is resident: started once (4 KB of stack, kept), it
-//!   waits on its FreeRTOS task notification while no file is followed, and
+//!   waits on a semaphore of its own while no file is followed, and
 //!   the network worker wakes it ([`tick`]). Until 2026-11-03 it was a task
 //!   started for each file, which ended after it: every start and end cost
 //!   a std thread's ~190 B that never came back (`task::spawn_core0`), the
@@ -93,8 +93,10 @@ const HOLD_OFF_MS: u32 = 1_000;
 /// The filling task is working (set by [`tick`], cleared by the task under
 /// the state's lock as it decides to wait).
 static RUNNING: AtomicBool = AtomicBool::new(false);
-/// The resident filling task, once started (its FreeRTOS handle).
-static TASK: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+/// The resident filling task's wake-up: a binary semaphore of its own (not
+/// a task notification: IDF's own code waits on index 0 of those, the SPI
+/// bus lock among it), made before the task starts. Null: not started.
+static WAKE: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 static SPAWNS: AtomicU32 = AtomicU32::new(0);
 /// Wake-ups of the resident task (a file followed again).
 static WAKES: AtomicU32 = AtomicU32::new(0);
@@ -126,14 +128,25 @@ pub fn tick() {
         }
         RUNNING.store(true, Relaxed);
     }
-    let task = TASK.load(SeqCst);
-    if !task.is_null() {
-        // SAFETY: the resident task's handle (it never ends): its
-        // notification count raised, which its wait takes.
-        unsafe { esp_idf_sys::xTaskGenericNotify(task as esp_idf_sys::TaskHandle_t, 0, 0, esp_idf_sys::eNotifyAction_eIncrement, std::ptr::null_mut()) };
+    let wake = WAKE.load(SeqCst);
+    if !wake.is_null() {
+        // SAFETY: the semaphore made below, never deleted: given (a give
+        // while it is given already changes nothing), which the task's wait
+        // takes.
+        unsafe { esp_idf_sys::xQueueGenericSend(wake as esp_idf_sys::QueueHandle_t, std::ptr::null(), 0, 0) };
         WAKES.fetch_add(1, Relaxed);
         return;
     }
+    // (xSemaphoreCreateBinary: a queue of one empty item, type 3; made
+    // once, empty.)
+    // SAFETY: a plain IDF call.
+    let sem = unsafe { esp_idf_sys::xQueueGenericCreate(1, 0, 3) };
+    if sem.is_null() {
+        NO_HEAP.fetch_add(1, Relaxed);
+        RUNNING.store(false, Relaxed);
+        return;
+    }
+    WAKE.store(sem as *mut core::ffi::c_void, SeqCst);
     let spawned = crate::task::spawn_core0(
         b"readahead\0",
         crate::config::READAHEAD_STACK,
@@ -148,6 +161,10 @@ pub fn tick() {
             log::warn!("read-ahead: no task ({e})");
             NO_HEAP.fetch_add(1, Relaxed);
             RUNNING.store(false, Relaxed);
+            // The next try makes both again.
+            WAKE.store(std::ptr::null_mut(), SeqCst);
+            // SAFETY: made above, never given to any task.
+            unsafe { esp_idf_sys::vQueueDelete(sem) };
         }
     }
 }
@@ -396,8 +413,7 @@ fn plan() -> Next {
 }
 
 fn run() {
-    // SAFETY: this task's own handle, kept for `tick`'s wake-ups.
-    TASK.store(unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() } as *mut core::ffi::c_void, SeqCst);
+    let wake = WAKE.load(SeqCst) as esp_idf_sys::QueueHandle_t;
     let mut scratch: Option<Vec<u8>> = None;
     // SAFETY: the running task's own stack mark.
     let stack_low = || unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) } as u32;
@@ -407,8 +423,9 @@ fn run() {
                 // Nothing followed: the block back, and wait for `tick`
                 // (a wake given before this wait is kept by the count).
                 scratch = None;
-                // SAFETY: a wait on this task's own notification.
-                unsafe { esp_idf_sys::ulTaskGenericNotifyTake(0, 1, u32::MAX) };
+                // SAFETY: the semaphore `tick` made before starting this
+                // task, never deleted while it runs.
+                unsafe { esp_idf_sys::xQueueSemaphoreTake(wake, u32::MAX) };
             }
             Next::Wait => std::thread::sleep(Duration::from_millis(5)),
             Next::NoHeap => std::thread::sleep(Duration::from_millis(200)),
