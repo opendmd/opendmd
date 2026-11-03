@@ -60,10 +60,11 @@ Boot A (`--no-reboot`, so the reboot at its end stops the emulator and the card 
   --base64`, `EMU_API_FORMULA`, default plasma), the same saved to the card (`.psi` + `.psb`) by its path;
   a missing file 404, a relative path 400; skip; pause and resume;
 - `PUT /api/www` with `$(WWW_PACK)`; `GET /` serves it;
-- three load rounds of 30 s: status polls throughout, and on a second connection in turn a 64 KB upload
-  read back and deleted, a settings save, a save into `/gifs/Consoles` and its delete, a listing; each
-  followed by 30 s quiet (~100 emulated s, five census lines): the heap census of the third quiet spell against the first's (as emu-leak:
-  24 blocks, 2 KB);
+- three load rounds of 30 s, one connection at a time by default (RX_BUFFERS below): a 64 KB upload read
+  back and deleted, a status read, and in turn a settings save, a save into `/gifs/Consoles` and its delete,
+  a listing; each followed by 30 s quiet (~100 emulated s, five census lines): the heap census of the third
+  quiet spell against the first's (as emu-leak: 24 blocks, 2 KB). `EMU_ARGS="--connections 2"` polls the
+  status beside the rest; `--connections 5` runs display-stress's five loads each on its own connection;
 - a recursive `DELETE /api/files/cache/Consoles?recursive=1` (rounds until `done`) while the FAT index
   builds: the build is dropped (no `built` line before the delete), rebuilt, not stale, fewer records, no
   `fat index:` warning, `/cache/Consoles` 404, one of its GIFs plays from the original;
@@ -81,13 +82,16 @@ floor, main, log drain, httpd, stream task, network worker) are printed. About 6
 What it found (2026-11-03), see the comments in `api_lane.py`:
 
 - **RX_BUFFERS**: concurrent connections stall the one being served (an upload `aborted ... no data
-  for 5 s`, a download `response cut short`) and can wedge the network for good (no SYN answered,
-  the player playing on); two upload bodies at once do it in seconds. Most likely the WiFi driver's
-  6 dynamic RX buffers held by frames lwIP keeps for connections not read yet: `sdkconfig.defaults`'
-  `CONFIG_LWIP_TCP_WND_DEFAULT=1440` (and `SND_BUF`) is below Kconfig's range (2440..) and silently
-  becomes 5760, so one queued upload holds four. 16 RX buffers pass two uploads at once but the five
-  loads still wedged in their third round. The lane's load keeps to two connections until that
-  changes; `EMU_ARGS=--parallel` runs the five loads on five connections and shows it.
+  for 5 s`, a download `response cut short`) and can wedge the network for good: incoming TCP (SYNs
+  too) unanswered while the guest still sends UDP and the player plays on. Five connections do it in
+  seconds (two upload bodies at once are enough), two about one run in five, three once in six. The
+  wifi-frames trace shows the segments reaching the guest unacknowledged. Most likely the WiFi
+  driver's 6 dynamic RX buffers held by frames lwIP keeps for connections not read yet:
+  `sdkconfig.defaults`' `CONFIG_LWIP_TCP_WND_DEFAULT=1440` (and `SND_BUF`) is below Kconfig's range
+  (2440..) and silently becomes 5760, so one queued upload holds four. A 2880 window still stalls
+  (and recovers); 16 RX buffers pass two uploads at once but the five loads still wedged in their
+  third round. Not settled, and seen only in the emulator so far (its WiFi model could share the
+  blame until the spare shows it). The gate's load is one connection at a time until then.
 - **EMPTY_FOLDER**: deleting an emptied `/gifs` folder never reaches `fatidx::dir_changed()`
   (FatFs's unlink removes an empty directory, so the `is_dir` branch is dead): the index is not
   marked stale for a folder that went.

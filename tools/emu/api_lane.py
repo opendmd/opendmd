@@ -14,9 +14,9 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
   www         PUT /api/www with the web app's pack
-  load x3     status polls throughout, and on a second connection uploads read back,
-              settings saves, saves into a big folder and listings in turn (display-stress's
-              loads; each on its own connection with --parallel: RX_BUFFERS), then 30 s quiet: the heap
+  load x3     uploads read back, settings saves, saves into a big folder, listings and status
+              reads (display-stress's loads), one connection at a time by default (RX_BUFFERS:
+              --connections 2 puts the status polls beside them, 5 each on its own), then 30 s quiet: the heap
               census (`emu-census`) of the last quiet spell against the first's
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
@@ -52,9 +52,13 @@ ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # the stream task waits on another. Measured: a 2880 window still stalls (and recovers); 16
 # RX buffers pass two uploads at once and two rounds of the five loads, then wedged in the
 # third. Three connections (status polls, settings saves, the card transfers: display-stress's
-# poll,configs,uploads) wedged it once in about six runs. Until the firmware changes, the
-# load keeps to two connections: status polls throughout, and one for everything else in
-# turn; --parallel (EMU_ARGS) runs the five loads on five connections and shows it.
+# poll,configs,uploads) wedged it once in about six runs; two (status polls beside one
+# connection for the rest) about one in five; the five loads on five connections within
+# seconds. The wedge is not settled: after it the guest still sends UDP and receives beacons,
+# so lwIP's thread lives; incoming TCP (SYNs included) goes unanswered, as if every RX buffer
+# stayed held; it is seen only in the emulator so far (its WiFi model could share the blame
+# until the spare shows it). Until then the gate's load is one connection at a time (a status
+# read between the card transfers); --connections 2 or 5 (EMU_ARGS) runs it at once.
 # EMPTY_FOLDER (found by this lane): `DELETE /api/files/gifs/<folder>` of an emptied folder
 # goes through `std::fs::remove_file`, which FatFs's f_unlink does for an empty directory
 # too, so the `Err(_) if is_dir` branch that calls `fatidx::dir_changed()` is never taken:
@@ -606,10 +610,18 @@ class Lane:
                 listing(n)
                 counts["listings"] += 1
 
-        if self.a.parallel:
+        def serial_work(n):
+            # One connection at a time: a status read between the card transfers.
+            status(n)
+            counts["status"] += 1
+            card_work(n)
+
+        if self.a.connections == 5:
             loads = [("status", status, 0.25), ("saves", save, 2), ("uploads", upload, 0), ("card saves", card_save, 3), ("listings", listing, 4)]
-        else:
+        elif self.a.connections == 2:
             loads = [("status", status, 0.5), ("uploads", card_work, 0)]
+        else:
+            loads = [("uploads", serial_work, 0)]
         threads = [threading.Thread(target=loop, args=a, daemon=True) for a in loads]
         for t in threads:
             t.start()
@@ -815,6 +827,23 @@ class Lane:
             emu.kill()
 
 
+def network_wedged(lane) -> bool:
+    """After a failure: the emulator runs, the API does not answer, GIFs still start."""
+    emu = getattr(lane, "emu", None)
+    if not emu or emu.done or emu.failure:
+        return False
+    try:
+        Api(emu).raw("GET", "/api/status", timeout=10)
+        return False
+    except LaneFail:
+        pass
+    try:
+        emu.wait_for(GIF_START, 30, emu.mark())
+        return True
+    except LaneFail:
+        return False
+
+
 def run(a, sim, rom, fail_rx) -> int:
     t0 = time.time()
     lane = Lane(a, sim, rom, fail_rx)
@@ -833,6 +862,8 @@ def run(a, sim, rom, fail_rx) -> int:
         lane.card_checks()
         lane.run_b()
     except LaneFail as e:
+        if network_wedged(lane):
+            e = LaneFail(f"{e} -- the network wedged: no TCP answer while the player plays on (RX_BUFFERS in api_lane.py)")
         print(f"EMU_API_FAIL: {e}")
         if lane.card_out.exists():
             print(f"(the card boot A wrote is kept: {lane.card_out})")

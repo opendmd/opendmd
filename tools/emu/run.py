@@ -117,7 +117,8 @@ def main():
     ap.add_argument("--www-pack", type=Path, help="api: the pack PUT to /api/www")
     ap.add_argument("--bundle", type=Path, help="api: the signed bundle PUT to /api/firmware")
     ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
-    ap.add_argument("--parallel", action="store_true", help="api: the five loads on five connections at once (RX_BUFFERS in api_lane.py)")
+    ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=1,
+                    help="api: the load's connections at once: 1 (the default), 2 (status polls beside the rest) or 5 (RX_BUFFERS in api_lane.py)")
     ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
     a = ap.parse_args()
 

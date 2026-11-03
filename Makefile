@@ -1016,8 +1016,8 @@ emu-leak: emu-build emu-card
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real
 # network); the HTTP API driven from the host over two boots: uploads,
-# listings, moves, deletes, settings, play, skip/pause, a www pack, loads at
-# once with the heap census flat, a recursive /cache delete during the FAT
+# listings, moves, deletes, settings, play, skip/pause, a www pack, load
+# rounds with the heap census flat, a recursive /cache delete during the FAT
 # index build, OTA refusals, the card checked after (fatcheck, the settings
 # file, the bytes), then the signed bundle through the updater. EMU_API_OK.
 # FW_IMAGE=<full.bin> EMU_API_BUNDLE=<.odfw> boot a given image.
@@ -1026,8 +1026,8 @@ EMU_API_FORMULA ?= $(PSI)/formulas/plasma.psi
 EMU_API_PSB = $(EMU_DIR)/api/formula.psb.b64
 emu-api-psb:
 	@mkdir -p $(EMU_DIR)/api
-	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).tmp
-	mv $(EMU_API_PSB).tmp $(EMU_API_PSB)
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
+	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
 emu-api: emu-build emu-card emu-api-psb
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
