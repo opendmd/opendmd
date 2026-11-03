@@ -1639,6 +1639,27 @@ fn main() -> Result<()> {
                 && eff.platforms == platforms;
             let outcome = if same {
                 status.lock().unwrap().manifest = manifest.clone();
+                // The boot task opened the playlist before the card was
+                // ours, so through FatFs (`fatidx::open_catalog_file`):
+                // every next-file lookup would wait for the volume lock,
+                // which a save holds for up to a second on a slow card
+                // (the spare, 2026-11-03: a 949 ms catalog lookup at a
+                // switch). Opened again now, read raw (the `.idx` it built
+                // or checked is reused: a few ms).
+                let (built, index_ms) = if built.is_ok() && fatidx::catalog_fatfs() {
+                    drop(built);
+                    fatidx::catalog_reopening();
+                    let t = Instant::now();
+                    let again = open_catalog(&manifest, &build_filter(&eff), false);
+                    let ms = t.elapsed().as_millis() as u64;
+                    log::info!(
+                        "playlist: opened again after the handover in {ms} ms, read {}",
+                        if fatidx::catalog_fatfs() { "through FatFs still" } else { "raw" }
+                    );
+                    (again, index_ms + ms)
+                } else {
+                    (built, index_ms)
+                };
                 finish_build(&mut engine, &eff, &manifest, built, index_ms, &status)
             } else {
                 drop(built);
@@ -3108,6 +3129,7 @@ fn rebuild(
         s.index_state = "building";
     }
     let started = Instant::now();
+    fatidx::catalog_reopening();
     let built = open_catalog(&path, &build_filter(settings), force);
     finish_build(
         engine,

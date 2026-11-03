@@ -28,6 +28,9 @@ rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's bui
        stale false, no transition cut during it, no `fat index:` warning; prints EMU_RIG_OK, the
        build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
        emu-rig-tight) the heap is the spare's (~45 KB free while playing).
+leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
+       up and 40 more, the blocks in use and bytes allocated (the least of a few samples each) must not
+       have grown past 24 blocks / 2 KB; prints EMU_LEAK_OK.
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -64,6 +67,9 @@ SMOKE = [
     ("httpd started", re.compile(r"httpd started on port")),
     ("www pack verified", re.compile(r"www: pack '.*' verified")),
     ("GIFs from the playlist", re.compile(r"\] /gifs/\S+\.gif <- (prepared|original)")),
+    # The boot task's playlist (opened before the card was the player's,
+    # through FatFs) opened again raw once it is.
+    ("playlist read raw", re.compile(r"playlist: opened again after the handover in \d+ ms, read raw")),
 ]
 # No card: the firmware boots, its panel runs, the settings are kept in NVS,
 # and a change made then survives a restart (src/nocard_test.rs).
@@ -73,6 +79,8 @@ NOCARD = [
     ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
 ]
+CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
+LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 40, 24, 2048
 HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
 RIG_BUILT = re.compile(r"fat index: built (\d+) records .*transitions cut during it (\d+);.* stale (true|false)")
 RIG_FAILED = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)")
@@ -91,7 +99,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ah
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -119,8 +127,8 @@ def main():
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
-    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800}.get(a.mode, 400)
-    wall = a.wall or {"smoke": 900, "rig": 5400}.get(a.mode, 3600)
+    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500}.get(a.mode, 400)
+    wall = a.wall or {"smoke": 900, "rig": 5400, "leak": 5400}.get(a.mode, 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
@@ -149,6 +157,7 @@ def main():
     lines = []
     built = None
     floors = []
+    census = []  # (GIF starts so far, blocks, bytes)
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
     with open(log, "w") as lf:
         import threading
@@ -176,7 +185,16 @@ def main():
                     failure = f"{name}: {line[:200]}"
             if failure:
                 break
-            if a.mode == "rig":
+            if a.mode == "leak":
+                if SMOKE[4][1].search(line):
+                    gifs += 1
+                m = CENSUS.search(line)
+                if m:
+                    census.append((gifs, int(m[1]), int(m[2])))
+                # 10 GIFs to warm up, then 40 more, with census lines after.
+                if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3:
+                    break
+            elif a.mode == "rig":
                 m = HEARTBEAT_FLOOR.search(line)
                 if m:
                     floors.append(int(m[1]))
@@ -259,6 +277,22 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "leak":
+        warm = [c for c in census if LEAK_WARM <= c[0] < LEAK_WARM + 10][:3]
+        late = [c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS][-3:]
+        if len(warm) < 1 or len(late) < 3:
+            die(f"not enough census lines ({len(census)}) within {seconds} emulated s (GIF starts {gifs})")
+        b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
+        y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
+        span = late[-1][0] - warm[0][0]
+        print(f"census: {len(census)} lines; blocks {b0} -> {b1}, allocated {y0} -> {y1} B over {span} GIFs")
+        # A std thread's leftovers were ~4 blocks and ~190 B a GIF: 40 GIFs
+        # were ~160 blocks and ~7.6 KB. Flat means within one GIF's own
+        # churn (a decoder's pieces, the ring held or not).
+        if b1 - b0 > LEAK_BLOCKS or y1 - y0 > LEAK_BYTES:
+            die(f"the heap grew across {span} GIFs: blocks {b0} -> {b1}, allocated {y0} -> {y1} B")
+        print(f"EMU_LEAK_OK ({took:.0f} s wall)")
+        return
     if a.mode == "rig":
         if floors:
             print(f"heartbeat heap floors: lowest {min(floors)} B over {len(floors)} heartbeats")

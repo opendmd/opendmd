@@ -105,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1001,6 +1001,17 @@ emu-rig-card:
 emu-rig: emu-build emu-rig-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py rig --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# The leak lane: an `emu-census` image (the heap's census every 20 s) plays
+# 50 GIFs; blocks in use and bytes allocated stay flat after the first 10.
+# EMU_LEAK_OK.
+EMU_LEAK_IMAGE = $(EMU_DIR)/leak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-leak:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/leak/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/leak/dist/opendmd-*-4mb-app.bin
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census FW_RELEASE_TARGET_DIR=$(EMU_DIR)/leak/target DIST=$(EMU_DIR)/leak/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-leak: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
+	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 # The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (the spare, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin

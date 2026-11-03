@@ -308,12 +308,18 @@ fn names_present() -> bool {
 
 fn push_delta(h: u32, loc: Option<u32>) {
     let mut d = DELTA.lock().unwrap_or_else(|p| p.into_inner());
-    // Its whole 3 KB once (not doubled to 6 KB on the way), or none: a
-    // change not noted is a stale record, which the entry check catches.
-    if d.capacity() == 0 && d.try_reserve_exact(DELTA_MAX + 1).is_err() {
-        DELTA_OVERFLOWED.store(true, Relaxed);
-        DIRTY.store(true, Relaxed);
-        return;
+    // Grown as it fills (a few changes are a few bytes, not its whole 3 KB
+    // held from the first: the read-ahead's ring needs that heap), doubled
+    // up to its cap, never past it; no room: the change is not noted (a
+    // stale record, which the entry check catches).
+    if d.len() == d.capacity() {
+        let want = (d.capacity() * 2).clamp(8, DELTA_MAX + 1);
+        let more = want - d.len();
+        if want > d.capacity() && d.try_reserve_exact(more).is_err() {
+            DELTA_OVERFLOWED.store(true, Relaxed);
+            DIRTY.store(true, Relaxed);
+            return;
+        }
     }
     d.retain(|(k, _, _)| *k != h);
     d.push((h, loc, uptime_ms()));
@@ -773,8 +779,21 @@ pub fn open_catalog_file(full: &str) -> io::Result<File> {
     File::open(full)
 }
 
-/// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`).
+/// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`),
+/// since the playlist was last opened.
 static CATALOG_FATFS: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a playlist file opened since [`catalog_reopening`] is read
+/// through FatFs (the boot task's, before the handover: `main` opens the
+/// playlist again once the card is its own).
+pub fn catalog_fatfs() -> bool {
+    CATALOG_FATFS.load(Relaxed) > 0
+}
+
+/// The playlist is about to be opened again: its old files' count goes.
+pub fn catalog_reopening() {
+    CATALOG_FATFS.store(0, Relaxed);
+}
 
 
 /// [`open_path_raw`]; `player`: noted in the open set as the player's (a
