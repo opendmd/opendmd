@@ -138,7 +138,7 @@ export async function copyUp() {
 
 // The line a playlist or the look names `f` by: a bundled one by name, one
 // on the panel by its file, with the values that differ from its defaults
-// (`ctl`, pkg-psi controls()); else `inline`, its `@formula?src=…` path.
+// (`ctl`, pkg-psi controls()); else `inline`, its `@formula?psb=…` path.
 export function line(f, ctl, inline) {
   const v = vals(f, ctl), q = v ? '?' + v.slice(1) : '';
   if (f.stem) return `@formula:${f.stem}${q}`;

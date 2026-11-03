@@ -207,6 +207,30 @@ pub fn as_look(src: &str) -> String {
     }
 }
 
+/// [`as_look`] for a compiled Formula (what `@formula?psb=…` carries, a
+/// card's `.psb`): its look program loaded as the player loads it
+/// (`fx_psi::FormulaLook`: `psb::load_into` with `Which::Look`) — [`info`]
+/// then describes the look. False when the bytes are not a compiled
+/// Formula or are for another ABI ([`error`] says); the last formula that
+/// compiled is still the one drawn.
+#[wasm_bindgen(js_name = asLookPsb)]
+pub fn as_look_psb(psb: &[u8]) -> bool {
+    let s = state();
+    match opendmd_psi::psb::load_into(psb, opendmd_psi::psb::Which::Look, &mut s.next) {
+        Ok(()) => {
+            core::mem::swap(&mut s.prog, &mut s.next);
+            s.ok = true;
+            s.err_len = 0;
+            true
+        }
+        Err(m) => {
+            s.at = [0, 0];
+            fail(m);
+            false
+        }
+    }
+}
+
 /// The last compile's error, a sentence ("unknown name `tme` — did you
 /// mean `t`?"); empty after a compile that worked.
 #[wasm_bindgen]
