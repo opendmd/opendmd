@@ -546,6 +546,8 @@ FW_FLASH_FREQ ?= 40
 # so it can go by OTA; a pre-5.1 bootloader would refuse the image
 # (psi-rebuild-worklog.md, 2026-11-02, SRAM1 as IRAM).
 FW_SRAM1_IRAM ?= 0
+# heapmap builds only (src/heapmap.rs): FreeRTOS's trace facility, for the
+# task table (uxTaskGetSystemState).
 # psi-probe builds only: the main task's stack 2 KB over the release's 16 KB
 # (sdkconfig.defaults). The probe's checks run on the main task on top of
 # the frame loop's own depth, and left 268 B of the 16 KB (c4b8e10); a
@@ -556,6 +558,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
 	$(if $(filter psi-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
+	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy; VARIANT=8mb for the

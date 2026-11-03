@@ -58,6 +58,7 @@ mod follow;
 mod formula_look;
 mod formulas;
 mod frametime;
+mod heapmap;
 mod http;
 mod httpd;
 mod improv;
@@ -466,17 +467,20 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
     logring::init();
+    heapmap::cp("app_main");
     // Why the last run ended (`restarts`), before anything can fail an
     // allocation and overwrite its record; installs the panic hook.
     let reset = restarts::reset_now();
     restarts::boot(reset);
     // A crash during a FAT index build defers the next (no crash loop).
     fatidx::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
+    heapmap::cp("restarts + fatidx boot");
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();
     log::info!("flash: {mhz} MHz, {mode}");
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
+    heapmap::cp("formulas installed");
 
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
@@ -494,6 +498,7 @@ fn main() -> Result<()> {
     let modem = peripherals.modem;
     let sysloop = EspSystemEventLoop::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
+    heapmap::cp("peripherals, event loop, nvs");
 
     // The panel goes up first, before the card is mounted and long before the
     // index is built: its DMA buffers need a large contiguous run of internal
@@ -506,6 +511,7 @@ fn main() -> Result<()> {
     // the trial leaves the panel dark or the chip crashes, the next boot is
     // on the saved settings whatever happens (`opendmd_core::panel_timing`).
     let mut nvs_config = Config::new(nvs_partition.clone())?;
+    heapmap::cp("nvs config open");
     let mut tuner = {
         let (saved, staged) = nvs_config.panel();
         if staged.is_some() {
@@ -517,6 +523,7 @@ fn main() -> Result<()> {
     };
     let panel_cfg = PanelConfig::new(&tuner.running.effective());
     let mut panel = Panel::new(&panel_cfg)?;
+    heapmap::cp("hub75 panel up (dma)");
     log::info!(
         "panel up: {}x{} ({} x {}x{}), timing {} ({}), double_buff={}, hub75_refresh_rate={} Hz",
         panel_cfg.surface_width(),
@@ -548,6 +555,7 @@ fn main() -> Result<()> {
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
     let bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
+    heapmap::cp("sd spi bus");
     let reset_reason = reset.name();
 
     // The card's records first (`sdhealth`, before any other task exists):
@@ -576,6 +584,7 @@ fn main() -> Result<()> {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
+    heapmap::cp("settings loaded (nvs)");
     // `formula_arena` (dev): a Formula's memory set aside now, before the
     // network takes any (`arena.rs`).
     #[cfg(feature = "psi")]
@@ -602,6 +611,7 @@ fn main() -> Result<()> {
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_still_gate(Some(still_gate));
     let mut sched = Scheduling::new(&settings.schedule);
+    heapmap::cp("settings applied, schedule");
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
     log::info!(
@@ -630,6 +640,7 @@ fn main() -> Result<()> {
     );
 
     let mut canvas = Canvas::new();
+    heapmap::cp("canvas");
     membank::CANVAS.store(canvas.as_bytes().as_ptr() as usize, Ordering::Relaxed);
     // The engine's clock is a `Duration` since an epoch the caller picks, not
     // an `Instant` — `Instant` has no clock on wasm and the web app shares
@@ -689,6 +700,7 @@ fn main() -> Result<()> {
     let mut looks = Box::new(formula_look::Looks::new());
     looks.set_saved(&settings.look_formula, &mut canvas);
     let mut look_us: u32 = 0;
+    heapmap::cp("display state, formula looks");
 
     // --- Shared state, and the boot task ----------------------------------
     let status = Arc::new(Mutex::new(Status::new(
@@ -720,11 +732,15 @@ fn main() -> Result<()> {
     // Improv Serial (a browser installer over USB), answered from the log
     // ring's drain from here on.
     improv::init(&settings.hostname, net_tx.clone());
+    heapmap::cp("status, channels, improv");
 
     // Logging goes asynchronous first (a ring drained by a CPU0 task,
     // `logring`): from here on no task waits for the UART — the show's
     // frames included.
     logring::start();
+    heapmap::cp("logring started");
+    heapmap::start();
+    heapmap::cp("heapmap task (diagnostic)");
     // Again, outside logring's hook: the panic's entry before its flush.
     restarts::install_panic_hook();
     // lwip has to exist before anything can bind a socket. Normally the WiFi
@@ -735,6 +751,7 @@ fn main() -> Result<()> {
     // call is a no-op.
     // SAFETY: an argument-free IDF initialiser, safe to call more than once.
     esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_netif_init() })?;
+    heapmap::cp("lwip: esp_netif_init");
 
     // The boot task (`boot.rs`, CPU0): the card and its playlist index, the
     // HTTP server, the web app in flash, then WiFi — everything slow
@@ -772,6 +789,7 @@ fn main() -> Result<()> {
         },
         tx: boot_tx,
     })?;
+    heapmap::cp("boot task spawned");
 
     // `card` unmounts on drop, so it lives to the end once handed over.
     let mut card: Option<SdCard> = None;
@@ -1596,6 +1614,7 @@ fn main() -> Result<()> {
                 settings: card_settings,
             } = *h;
             card = Some(mounted);
+            heapmap::cp("handover to the player");
             // The card's settings (`settings_card`): those that differ from
             // what was in force applied now, live (no flash: nothing that
             // matches is touched). The playlist below follows `settings`.
@@ -1693,6 +1712,7 @@ fn main() -> Result<()> {
             }
             last_build_try = Some(Instant::now());
             screen.handed_over(engine.is_some());
+            heapmap::cp("engine built (playlist open)");
         }
 
         // 2. No engine: the start-up show or the status card (booting, no
@@ -2817,6 +2837,16 @@ fn short(path: &str) -> &str {
 }
 
 fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
+    match ordinal {
+        1 => heapmap::cp("gif 1 first frame"),
+        2 => heapmap::cp("gif 2 first frame"),
+        3 => heapmap::cp("gif 3 first frame"),
+        5 => heapmap::cp("gif 5 first frame"),
+        10 => heapmap::cp("gif 10 first frame"),
+        20 => heapmap::cp("gif 20 first frame"),
+        40 => heapmap::cp("gif 40 first frame"),
+        _ => {}
+    }
     let path = short(path);
     log::info!(
         "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",

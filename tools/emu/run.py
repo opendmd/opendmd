@@ -4,7 +4,7 @@
 # ///
 """Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
 
-    uv run tools/emu/run.py smoke|probe|nocard|rig --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+    uv run tools/emu/run.py smoke|probe|nocard|rig|heapmap --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
         [--built-after EPOCH]
 
 The image must be the one that boots: its app descriptor's ELF SHA-256 is checked against
@@ -32,6 +32,9 @@ leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: afte
        up and 40 more (8 samples at least), the least blocks in use and bytes allocated of the
        second half of the samples against the first half's must not have grown past 24 blocks /
        2 KB; prints EMU_LEAK_OK.
+heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
+       pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
+       `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -100,7 +103,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ah
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -128,7 +131,7 @@ def main():
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
-    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500}.get(a.mode, 400)
+    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)
     wall = a.wall or {"smoke": 900, "rig": 5400, "leak": 5400}.get(a.mode, 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +188,20 @@ def main():
                 if rx.search(line):
                     failure = f"{name}: {line[:200]}"
             if failure:
+                # The register dump and backtrace that follow, for the log.
+                for _ in range(40):
+                    more = p.stdout.readline()
+                    if not more:
+                        break
+                    lf.write(more)
+                    lines.append(ANSI.sub("", more.rstrip("\n")))
                 break
+            if a.mode == "heapmap":
+                if SMOKE[4][1].search(line):
+                    gifs += 1
+                if re.search(r"heapmap: report \d+ end", line):
+                    seen["report"] = line
+                continue
             if a.mode == "leak":
                 if SMOKE[4][1].search(line):
                     gifs += 1
@@ -278,6 +294,13 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "heapmap":
+        if "report" not in seen or gifs == 0:
+            die(f"no heap map report or no GIF within {seconds} emulated s / {wall} s wall (GIF starts {gifs})")
+        n = sum(1 for l in lines if "heapmap:" in l)
+        print(f"pass  {n} heapmap lines, GIF starts {gifs}")
+        print(f"EMU_HEAPMAP_OK ({took:.0f} s wall)")
+        return
     if a.mode == "leak":
         # The census swings with what is held at the sample (a decoder's
         # pieces, the ring or not): the least of the first half of the
