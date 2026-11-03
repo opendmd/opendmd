@@ -24,7 +24,7 @@
 
 use opendmd_core::fatread::{Extents, RawFile};
 use opendmd_core::readahead::{Ring, BLOCK};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{Relaxed, SeqCst}};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -75,6 +75,8 @@ static STATE: Mutex<State> = Mutex::new(State {
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// [`release`] found the lock busy: the task gives the ring back.
 static RELEASE: AtomicBool = AtomicBool::new(false);
+/// Slots closed while the lock was busy (bit `k`): see [`closed`].
+static CLOSE_PENDING: AtomicU32 = AtomicU32::new(0);
 /// After [`release`], the ring is not taken again for this long: the next
 /// file's decoder and its transition's buffers come first (a dissolve is
 /// 400 ms).
@@ -105,7 +107,7 @@ fn now_ms() -> u32 {
 /// core follows a file and the task is not up.
 pub fn tick() {
     {
-        let Ok(s) = STATE.try_lock() else { return };
+        let Some(s) = try_locked() else { return };
         let wanted = s.slot.is_some() && now_ms().wrapping_sub(s.last_read_ms) < IDLE_MS;
         if !wanted || RUNNING.load(Relaxed) {
             return;
@@ -135,7 +137,7 @@ pub fn tick() {
 /// card, then [`moved`]).
 #[inline(never)]
 pub fn serve(k: usize, file: &mut RawFile, pdrv: u8, buf: &mut [u8]) -> Option<usize> {
-    let Ok(mut s) = STATE.try_lock() else {
+    let Some(mut s) = try_locked() else {
         BUSY.fetch_add(1, Relaxed);
         return None;
     };
@@ -184,30 +186,74 @@ pub fn serve(k: usize, file: &mut RawFile, pdrv: u8, buf: &mut [u8]) -> Option<u
 /// After a read of slot `k` from the card: the display core is at `pos`.
 #[inline(never)]
 pub fn moved(k: usize, pos: u64) {
-    if let Ok(mut s) = STATE.try_lock() {
+    if let Some(mut s) = try_locked() {
         if s.slot == Some(k) {
             s.pos = pos;
         }
     }
 }
 
-/// Slot `k` is closing (before it is free): forget it.
+/// Slot `k` is closing (before it is free): forget it. The display core
+/// never waits here: with the lock busy (the filling task, at a higher
+/// priority than the main task, so no inheritance helps), the slot is
+/// marked in [`CLOSE_PENDING`], and whoever takes the lock next forgets it
+/// before anything else, so a block of the old file is never served for a
+/// new one in the same slot.
 #[inline(never)]
 pub fn closed(k: usize) {
-    let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+    match STATE.try_lock() {
+        Ok(mut s) => {
+            let freed = apply_pending(&mut s);
+            let more = forget(&mut s, k);
+            drop(s);
+            drop((freed, more));
+        }
+        Err(_) => {
+            CLOSE_PENDING.fetch_or(1 << k, SeqCst);
+        }
+    }
+}
+
+/// What a forgotten slot leaves to free (after the lock).
+type Freed = (Option<Extents>, Option<Ring<BLOCKS>>);
+
+fn forget(s: &mut State, k: usize) -> Freed {
     if s.candidate == Some(k) {
         s.candidate = None;
     }
-    if s.slot == Some(k) {
-        s.slot = None;
-        s.gen = s.gen.wrapping_add(1);
-        let ext = s.ext.take();
-        let ring = s.ring.take();
-        ACTIVE.store(false, Relaxed);
-        drop(s);
-        // Freed after the lock (a free, at a file change).
-        drop((ext, ring));
+    if s.slot != Some(k) {
+        return (None, None);
     }
+    s.slot = None;
+    s.gen = s.gen.wrapping_add(1);
+    ACTIVE.store(false, Relaxed);
+    (s.ext.take(), s.ring.take())
+}
+
+/// The closes [`closed`] could not make: made now, by whoever holds the
+/// lock, before it reads or changes anything else.
+fn apply_pending(s: &mut State) -> Vec<Freed> {
+    let bits = CLOSE_PENDING.swap(0, SeqCst);
+    if bits == 0 {
+        return Vec::new();
+    }
+    (0..32).filter(|k| bits & (1 << k) != 0).map(|k| forget(s, k)).collect()
+}
+
+/// The state, the closes pending made (the filling task, which may wait).
+fn locked() -> std::sync::MutexGuard<'static, State> {
+    let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+    // (Freed under the lock: rare, and not the display core.)
+    drop(apply_pending(&mut s));
+    s
+}
+
+/// The state if free, the closes pending made (the display core: never
+/// waits; a pending close frees at most the ring, once).
+fn try_locked() -> Option<std::sync::MutexGuard<'static, State>> {
+    let mut s = STATE.try_lock().ok()?;
+    drop(apply_pending(&mut s));
+    Some(s)
 }
 
 /// The main loop is opening a file (a switch, or the next file ahead):
@@ -218,13 +264,13 @@ pub fn closed(k: usize) {
 /// gives it back at its next look, `RELEASE`).
 #[inline(never)]
 pub fn release() {
-    let ring = match STATE.try_lock() {
-        Ok(mut s) => {
+    let ring = match try_locked() {
+        Some(mut s) => {
             s.released_ms = now_ms();
             ACTIVE.store(false, Relaxed);
             s.ring.take()
         }
-        Err(_) => {
+        None => {
             RELEASE.store(true, Relaxed);
             None
         }
@@ -259,7 +305,7 @@ fn plan() -> Next {
     // allocation (and its zeroing) and frees are done outside it, so the
     // display core's `closed` never waits behind them.
     let need_ring = {
-        let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+        let mut s = locked();
         if RELEASE.swap(false, Relaxed) {
             s.released_ms = now_ms();
             let ring = s.ring.take();
@@ -295,7 +341,7 @@ fn plan() -> Next {
             NO_HEAP.fetch_add(1, Relaxed);
             return Next::NoHeap;
         };
-        let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+        let mut s = locked();
         if s.gen != gen || s.ring.is_some() || s.slot.is_none() {
             // Changed meanwhile: freed outside the lock, asked again.
             drop(s);
@@ -306,7 +352,7 @@ fn plan() -> Next {
         ACTIVE.store(true, Relaxed);
         TAKEN.fetch_add(1, Relaxed);
     }
-    let s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+    let s = locked();
     let (pos, size) = (s.pos, s.size);
     let Some(off) = s.ring.as_ref().and_then(|r| r.want(pos, size)) else {
         return Next::Wait;
@@ -359,7 +405,7 @@ fn run() {
                     std::thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                let mut s = STATE.lock().unwrap_or_else(|p| p.into_inner());
+                let mut s = locked();
                 if s.gen == f.gen && s.slot.is_some() {
                     let pos = s.pos;
                     if let Some(r) = s.ring.as_mut() {
@@ -379,8 +425,8 @@ fn run() {
 pub fn status_json() -> String {
     let active = ACTIVE.load(Relaxed);
     let fill = match STATE.try_lock() {
-        Ok(s) => s.ring.as_ref().map_or(0, |r| r.ahead(s.pos)),
-        Err(_) => FILL.load(Relaxed) as u64,
+        Ok(s) if CLOSE_PENDING.load(SeqCst) == 0 => s.ring.as_ref().map_or(0, |r| r.ahead(s.pos)),
+        _ => FILL.load(Relaxed) as u64,
     };
     let fill_min = FILL_MIN.swap(u32::MAX, Relaxed);
     format!(
