@@ -74,7 +74,9 @@ fn spaced_separator(t: Tok) -> bool {
 /// What a gap between two tokens holds, in order.
 enum Item<'a> {
     /// A line end (`nl`) or a `;`.
-    Break { nl: bool },
+    Break {
+        nl: bool,
+    },
     Comment(&'a str),
 }
 
@@ -226,8 +228,10 @@ impl<'s> Fmt<'s> {
     /// No space between `p` and `i` on a line.
     fn glued(&self, p: usize, i: usize) -> bool {
         let (pt, t) = (self.toks[p].tok, self.toks[i].tok);
-        if matches!(t, Tok::Comma | Tok::RParen | Tok::RBracket | Tok::Dot | Tok::DotDot)
-            || matches!(pt, Tok::LParen | Tok::LBracket | Tok::Dot | Tok::DotDot)
+        if matches!(
+            t,
+            Tok::Comma | Tok::RParen | Tok::RBracket | Tok::Dot | Tok::DotDot
+        ) || matches!(pt, Tok::LParen | Tok::LBracket | Tok::Dot | Tok::DotDot)
         {
             return true;
         }
@@ -422,14 +426,22 @@ impl<'s> Out<'s> {
                 e += 1;
             }
             let run = if e > k { k..e } else { k..k + 1 };
-            let width = self.lines[run.clone()].iter().map(|l| l.code.chars().count()).max().unwrap_or(0);
+            let width = self.lines[run.clone()]
+                .iter()
+                .map(|l| l.code.chars().count())
+                .max()
+                .unwrap_or(0);
             for l in &self.lines[run.clone()] {
                 if l.blank_before {
                     s.push('\n');
                 }
                 s.push_str(&l.code);
                 if let Some(c) = l.comment {
-                    let pad = if l.code.is_empty() { 0 } else { width + 1 - l.code.chars().count() };
+                    let pad = if l.code.is_empty() {
+                        0
+                    } else {
+                        width + 1 - l.code.chars().count()
+                    };
                     s.extend(core::iter::repeat_n(' ', pad));
                     s.push_str(c);
                 }

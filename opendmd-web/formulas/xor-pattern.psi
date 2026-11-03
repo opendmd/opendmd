@@ -5,6 +5,6 @@ about "The old-school bit-twiddling texture, sliding along"
 loop 8
 -- sqr flips between 1 and -1: multiplying two of them works like the computer's XOR
 u = px + t*8 + 0.5
-v = py + t*4 + 0.5
+v = (31 - py) + t*4 + 0.5
 same = sqr(u/4)*(sqr(v/4)*0.07) + sqr(u/8)*(sqr(v/8)*0.13) + sqr(u/16)*(sqr(v/16)*0.27) + sqr(u/32)*(sqr(v/32)*0.53)
 pal(rainbow, 0.55 - same*0.45)

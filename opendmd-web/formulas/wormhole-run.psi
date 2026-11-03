@@ -43,42 +43,40 @@ table xA = -.25, -.1
 table inkA = .5161, .871
 table inkC = .6452, .8387
 
-frame {
-  -- Where we are: legs of 24 s, which planet
-  tour = t/24 + seed*100
-  f = frac(tour)
-  planet = floor(tour)%2
+-- Where we are: legs of 24 s, which planet
+tour = t/24 + seed*100
+f = frac(tour)
+planet = floor(tour)%2
 
-  -- The planet swells from a dot (the big one shows sooner), slowing at
-  -- the closest, further out as it grows; gone into the wormhole. The
-  -- Moon by the Earth
-  away = 1 - min(f*1.25, 1)
-  R = (f < .84) / (away*away*1.5 + closest[planet])
-  pX = passX[planet]*R + 64
-  pY = R*.25 + 16
-  moonR = (planet < 1) * .07 * R * R
-  mX = pX - R*2.6
+-- The planet swells from a dot (the big one shows sooner), slowing at
+-- the closest, further out as it grows; gone into the wormhole. The
+-- Moon by the Earth
+away = 1 - min(f*1.25, 1)
+R = (f < .84) / (away*away*1.5 + closest[planet])
+pX = passX[planet]*R + 64
+pY = 15 - R*.25
+moonR = (planet < 1) * .07 * R * R
+mX = pX - R*2.6
 
-  -- The wormhole, from .75 of a leg (g from 0): the black sphere opening
-  -- ahead (wR), all round us from .87 to .02 of the next leg (the
-  -- streaks), then the next sky opening out from the middle (hR)
-  g = frac(f + .25)
-  wR = (g < .4) * g * g * g * 1000 * 40
-  hR = (g < .4) * max(g - .25, 0) * 1200
-  rimY = abs(wR - 45) < 44.5 ? 16 : -999
-  tunnel = abs(g - .2) < .1
-  -- the streak loop draws the rim when not inside: its lean, width,
-  -- tail and row
-  lean = tunnel ? .35 : -.08
-  wide = tunnel ? 2.4 : 1
-  shrink = tunnel ? .93 : 1
-  rowY = tunnel ? 16 : rimY
+-- The wormhole, from .75 of a leg (g from 0): the black sphere opening
+-- ahead (wR), all round us from .87 to .02 of the next leg (the
+-- streaks), then the next sky opening out from the middle (hR)
+g = frac(f + .25)
+wR = (g < .4) * g * g * g * 1000 * 40
+hR = (g < .4) * max(g - .25, 0) * 1200
+rimY = abs(wR - 45) < 44.5 ? 15 : -999
+tunnel = abs(g - .2) < .1
+-- the streak loop draws the rim when not inside: its lean, width,
+-- tail and row
+lean = tunnel ? .35 : -.08
+wide = tunnel ? 2.4 : 1
+shrink = tunnel ? .93 : 1
+rowY = tunnel ? 15 : rimY
 
-  -- The ship sways; flying in, it climbs to the middle
-  into = clamp(g*10, 0, 1) * (g < .2)
-  shipX = sin(f)*12*(1 - into) + 64
-  shipY = into*3 + 8
-}
+-- The ship sways; flying in, it climbs to the middle
+into = clamp(g*10, 0, 1) * (g < .2)
+shipX = sin(f)*12*(1 - into) + 64
+shipY = 23 - into*3
 
 draw {
   -- The planet, a line a panel row, lit from the left (its bands, the
@@ -86,7 +84,7 @@ draw {
   -- at its middle; wisps of cloud (Jupiter's in its zones' colour); the
   -- Moon
   for k < 32 {
-    dy = k - pY
+    dy = pY - k
     half = sqrt(R*R - dy*dy)
     y0 = half > 0 ? k : -999
     ny = dy/R
@@ -100,7 +98,7 @@ draw {
     mid = (noise(ny*13, 17, 0)*1.8 - .9)*half + pX
     across = max(noise(ny*13, 13, 0)*1.2 - .76, 0) * half
     line(mid - across, y0, mid + across, y0, inkC[planet])
-    dy = k - (pY + R*.6)
+    dy = pY - R*.6 - k
     half = sqrt(moonR - dy*dy)
     y3 = half > 0 ? k : -999
     line(mX - half, y3, mX + half, y3, .9677, .9032)
@@ -118,7 +116,7 @@ draw {
     row = r1 < 70 ? rowY : -999
     co = cos(turn)
     si = sin(turn)
-    line((co + si*lean)*r0*wide + 64, (si - co*lean)*r0 + row, co*r1*wide + 64, si*r1 + row, tunnel ? near*.11 + .258 : 1)
+    line((co + si*lean)*r0*wide + 64, row - (si - co*lean)*r0, co*r1*wide + 64, row - si*r1, tunnel ? near*.11 + .258 : 1)
   }
 
   -- The ship from behind: twelve boxy modules turning on a ring (the far
@@ -128,13 +126,13 @@ draw {
     co = cos(k/12 + f/6)
     si = sin(k/12 + f/6)
     mx = co*11 + shipX
-    my = si*5.5 + shipY
-    line(mx, my, mx - si*5.8, my + co*2.9, .9355)
+    my = shipY - si*5.5
+    line(mx, my, mx - si*5.8, my - co*2.9, .9355)
     line(shipX, shipY, mx, my, (k%3 == 0) * .9032)
     line(mx, my, mx + 1, my, .952 - si*.026)
-    line(mx, my + 1, mx + 1, my + 1, .952 - si*.026)
+    line(mx, my - 1, mx + 1, my - 1, .952 - si*.026)
   }
-  line(shipX - 2, shipY + 1, shipX + 2, shipY + 1, .9677)
+  line(shipX - 2, shipY - 1, shipX + 2, shipY - 1, .9677)
   line(shipX - 2, shipY, shipX + 2, shipY, .9677)
   dot(shipX, shipY, 1)
 }

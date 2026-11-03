@@ -41,15 +41,18 @@ impl DnsServer {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = stop_flag.clone();
 
-        let handle = std::thread::Builder::new()
-            .name("dns-server".into())
-            .stack_size(4096)
-            .spawn(move || {
+        // On CPU0, as every task but the display's (it had no affinity).
+        let handle = crate::task::spawn_core0_joinable(
+            b"dns-server\0",
+            4096,
+            5,
+            Box::new(move || {
                 if let Err(e) = dns_server_loop(ip, &stop_clone) {
                     warn!("DNS server error: {}", e);
                 }
                 info!("DNS server stopped");
-            })?;
+            }),
+        )?;
 
         info!(
             "Captive portal DNS started for {}.{}.{}.{}",

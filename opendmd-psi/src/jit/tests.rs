@@ -147,7 +147,16 @@ fn first_diff(a: &[u8], b: &[u8]) -> Option<(usize, usize, [u8; 3], [u8; 3])> {
 fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f64, &'static str> {
     let u = picture();
     // Over the picture (what a look draws over), with a canvas if it draws.
-    same_as_vm_with(name, src, prog, times, With { under: Some(&u), ink: prog.draws() })?;
+    same_as_vm_with(
+        name,
+        src,
+        prog,
+        times,
+        With {
+            under: Some(&u),
+            ink: prog.draws(),
+        },
+    )?;
     // ...and alone (nothing under: black; ink 0 without a canvas).
     same_as_vm_with(name, src, prog, times, PLAIN)
 }
@@ -177,7 +186,10 @@ fn same_as_vm_with(
         let with = if prog.rate().is_some() {
             held.update::<128>(prog, &mut Scratch::new(), &inputs, &OWN);
             pic = held.picture().to_vec();
-            With { under: Some(&pic), ink: with.ink }
+            With {
+                under: Some(&pic),
+                ink: with.ink,
+            }
         } else {
             with
         };
@@ -276,7 +288,10 @@ fn kernels_draw_the_goldens_over_and_drawn() {
             refused.push(format!("{name}: a checked frame"));
             continue;
         }
-        let with = With { under: over.then_some(&u[..]), ink: true };
+        let with = With {
+            under: over.then_some(&u[..]),
+            ink: true,
+        };
         let (got, _) = kernel_frame(&prog, &low, &inputs, None, with);
         let h = golden::fnv(&got);
         if h != want {
@@ -307,7 +322,10 @@ fn random_layers_under_and_ink_draw_the_same_through_kernels() {
         if k % 3 != 0 {
             src.push_str("draw {\n  for j < 24 {\n    line(hash(j, 3)*128, hash(j, 5)*32, hash(j, 7)*128 + t*9, hash(j, 9)*32, hash(j, 1), 0.5)\n  }\n  dot(px0, 7, 0.75)\n}\npx0 = 0\n".replace("px0 = 0\n", "").replace("px0", "64").as_str());
         }
-        src.push_str(&format!("v = {}\n", expr(&mut r, 2).replace("hour", &leaf(&mut r))));
+        src.push_str(&format!(
+            "v = {}\n",
+            expr(&mut r, 2).replace("hour", &leaf(&mut r))
+        ));
         src.push_str(&format!("u = {} * {}\n", leaf(&mut r), expr(&mut r, 2)));
         let n = 1 + r.below(3);
         for j in 0..n {
@@ -317,10 +335,19 @@ fn random_layers_under_and_ink_draw_the_same_through_kernels() {
                 1 => format!("rgb({}, v, {}{cov})", leaf(&mut r), leaf(&mut r)),
                 2 => format!("hsv(v + {}, 1, u{cov})", leaf(&mut r)),
                 3 => format!("pal({}, {}{cov})", pals[r.below(5)], leaf(&mut r)),
-                4 => format!("pal({}, {}{cov}) * {}", pals[r.below(5)], leaf(&mut r), ["0.5", "y", "u", "1.5", "v"][r.below(5)]),
+                4 => format!(
+                    "pal({}, {}{cov}) * {}",
+                    pals[r.below(5)],
+                    leaf(&mut r),
+                    ["0.5", "y", "u", "1.5", "v"][r.below(5)]
+                ),
                 _ => format!("rgb(ur*1.2 - 0.05, ug, ub*0.7 + ul*0.2{cov})"),
             };
-            let b = if j == 0 && k % 2 == 0 { "" } else { blends[r.below(blends.len())] };
+            let b = if j == 0 && k % 2 == 0 {
+                ""
+            } else {
+                blends[r.below(blends.len())]
+            };
             src.push_str(&format!("layer {b} {{ {colour} }}\n"));
         }
         let Ok(prog) = compile(&src) else { continue };
@@ -369,7 +396,11 @@ fn bundled_formulas_draw_the_same_through_kernels() {
                     "{name}: {} B, {} words, {ipp:.1} instructions a pixel{}",
                     low.code.len(),
                     low.words.len(),
-                    if low.rows_at.is_some() { ", the row stage too" } else { "" }
+                    if low.rows_at.is_some() {
+                        ", the row stage too"
+                    } else {
+                        ""
+                    }
                 ));
             }
             Err(why) => report.push(format!("{name}: VM ({why})")),
@@ -510,19 +541,43 @@ fn random_row_stages_draw_the_same_through_kernels() {
                 format!("({} {op} {})", e(r), e(r))
             }
             3 => format!("({} ? {} : {})", e(r), e(r), e(r)),
-            4 => format!("{}({})", ["sin", "cos", "tri", "saw", "sqr", "abs", "floor", "frac", "sqrt", "-"][r.below(10)], e(r)),
-            5 => format!("{}({}, {})", ["min", "max", "step", "hash", "len", "atan2", "bit"][r.below(7)], e(r), e(r)),
-            6 => format!("{}({}, {}, {})", ["clamp", "mix", "smoothstep", "noise"][r.below(4)], e(r), e(r), e(r)),
+            4 => format!(
+                "{}({})",
+                ["sin", "cos", "tri", "saw", "sqr", "abs", "floor", "frac", "sqrt", "-"]
+                    [r.below(10)],
+                e(r)
+            ),
+            5 => format!(
+                "{}({}, {})",
+                ["min", "max", "step", "hash", "len", "atan2", "bit"][r.below(7)],
+                e(r),
+                e(r)
+            ),
+            6 => format!(
+                "{}({}, {}, {})",
+                ["clamp", "mix", "smoothstep", "noise"][r.below(4)],
+                e(r),
+                e(r),
+                e(r)
+            ),
             7 => format!("T[{}]", e(r)),
             _ => format!("digit(floor({}) % 10, {}, {})", e(r), e(r), e(r)),
         }
     }
     for k in 0..300 {
         let forever = k % 4 == 0;
-        let lf: Vec<&str> = leaf.iter().copied().filter(|&l| forever || l != "seed").collect();
+        let lf: Vec<&str> = leaf
+            .iter()
+            .copied()
+            .filter(|&l| forever || l != "seed")
+            .collect();
         let src = format!(
             "{}table T = 0.1, -3, 0.9, 7, 0.3\nq = {}\nr = {}\npal(fire, frac(x * q + r))",
-            if forever { "loop forever\n" } else { "loop 3\n" },
+            if forever {
+                "loop forever\n"
+            } else {
+                "loop 3\n"
+            },
             row(&mut r, 4, &lf),
             row(&mut r, 3, &lf)
         );
@@ -543,7 +598,9 @@ fn random_row_stages_draw_the_same_through_kernels() {
             Err(w) => *why.entry(w).or_default() += 1,
         }
     }
-    println!("random row stages through kernels: {ok} ({rows} with a row kernel); on the VM: {why:?}");
+    println!(
+        "random row stages through kernels: {ok} ({rows} with a row kernel); on the VM: {why:?}"
+    );
     assert!(rows >= 200, "only {rows} row kernels");
 }
 
@@ -568,7 +625,17 @@ fn the_check_rows_alone_are_the_frames_rows() {
         let mut s = Scratch::<128>::new();
         let mut want = vec![0u8; W * H * 3];
         let mut ink = Ink::boxed();
-        render_rows_still::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, Some(&u), u32::MAX, &mut want);
+        render_rows_still::<128>(
+            &prog,
+            &mut s,
+            Some(&mut ink),
+            None,
+            &inputs,
+            &OWN,
+            Some(&u),
+            u32::MAX,
+            &mut want,
+        );
         let mut t = EmuTarget {
             emu: Emu::new(&low.code),
         };
@@ -628,7 +695,10 @@ fn kernels_say_what_changed_as_the_vm_does() {
             if !crate::range::inputs_in_range(&prog, &inputs) {
                 continue;
             }
-            let with = With { under: Some(&u), ink: prog.draws() };
+            let with = With {
+                under: Some(&u),
+                ink: prog.draws(),
+            };
             let before = vm_frame(&prog, &before_in, None, with);
             let mut s = Scratch::<128>::new();
             let mut ink = Ink::boxed();
@@ -636,8 +706,20 @@ fn kernels_say_what_changed_as_the_vm_does() {
             let want = bytemuck_bytes(&mut words);
             want.copy_from_slice(&before);
             let mut want_ch = [0u32; H];
-            render_rows_changed::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, Some(&u), u32::MAX, want, &mut want_ch);
-            let (got, _, got_ch) = kernel_frame_changed(&prog, &low, &inputs, None, with, Some(&before));
+            render_rows_changed::<128>(
+                &prog,
+                &mut s,
+                Some(&mut ink),
+                None,
+                &inputs,
+                &OWN,
+                Some(&u),
+                u32::MAX,
+                want,
+                &mut want_ch,
+            );
+            let (got, _, got_ch) =
+                kernel_frame_changed(&prog, &low, &inputs, None, with, Some(&before));
             assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
             assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
             n += 1;
@@ -770,7 +852,7 @@ fn cycled_palettes_draw_the_same_through_kernels() {
 #[test]
 fn rate_formulas_draw_the_same_through_kernels() {
     let cases = [
-        "loop 60\nframe { h1 = floor(hour/10); m2 = minute % 10 }\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(ty/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
+        "loop 60\nh1 = floor(hour/10); m2 = minute % 10\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(py/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
         "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
         "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, len(cx, cy), t + py/32, 0.5) }",
         "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y) }\nlayer screen { hsv(t, 1, x) }",
@@ -806,7 +888,16 @@ fn kernels_race_the_beam_as_the_vm_draws_at_once() {
             if !crate::range::inputs_in_range(&prog, &inputs) {
                 continue;
             }
-            for with in [With { under: Some(&u), ink: prog.draws() }, With { under: None, ink: prog.draws() }] {
+            for with in [
+                With {
+                    under: Some(&u),
+                    ink: prog.draws(),
+                },
+                With {
+                    under: None,
+                    ink: prog.draws(),
+                },
+            ] {
                 let before = vm_frame(&prog, &before_in, None, with);
                 let mut s = Scratch::<128>::new();
                 let mut ink = Ink::boxed();
@@ -814,22 +905,50 @@ fn kernels_race_the_beam_as_the_vm_draws_at_once() {
                 let want = bytemuck_bytes(&mut words);
                 want.copy_from_slice(&before);
                 let mut want_ch = [0u32; H];
-                render_rows_changed::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, with.under, u32::MAX, want, &mut want_ch);
+                render_rows_changed::<128>(
+                    &prog,
+                    &mut s,
+                    Some(&mut ink),
+                    None,
+                    &inputs,
+                    &OWN,
+                    with.under,
+                    u32::MAX,
+                    want,
+                    &mut want_ch,
+                );
                 let mut told = Vec::new();
                 let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
                     let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
                     for q in 0..H / 2 {
-                        let pic = if p != crate::BEAM_START && q <= p { &want[..] } else { &before[..] };
-                        assert!(row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
-                            "{name} at {ms} ms: pair {q} when pair {p} was told");
+                        let pic = if p != crate::BEAM_START && q <= p {
+                            &want[..]
+                        } else {
+                            &before[..]
+                        };
+                        assert!(
+                            row(q, out) == row(q, pic)
+                                && row(q + H / 2, out) == row(q + H / 2, pic),
+                            "{name} at {ms} ms: pair {q} when pair {p} was told"
+                        );
                     }
                     told.push((p, a, b));
                 };
-                let (got, _, got_ch) = kernel_frame_beam(&prog, &low, &inputs, None, with, Some(&before), Some(&mut sink));
+                let (got, _, got_ch) = kernel_frame_beam(
+                    &prog,
+                    &low,
+                    &inputs,
+                    None,
+                    with,
+                    Some(&before),
+                    Some(&mut sink),
+                );
                 assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
                 assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-                let want_told: Vec<_> =
-                    [(crate::BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
+                let want_told: Vec<_> = [(crate::BEAM_START, 0, 0)]
+                    .into_iter()
+                    .chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])))
+                    .collect();
                 assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
                 n += 1;
             }
@@ -847,7 +966,10 @@ fn rate_kernels_race_their_fast_part_over_the_held_picture() {
         .into_iter()
         .filter(|(_, src)| compile(src).is_ok_and(|p| p.rate().is_some()))
         .collect();
-    srcs.push(("sketch".into(), "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*t) }".into()));
+    srcs.push((
+        "sketch".into(),
+        "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*t) }".into(),
+    ));
     let mut n = 0;
     for (name, src) in srcs {
         let prog = compile(&src).unwrap();
@@ -864,32 +986,105 @@ fn rate_kernels_race_their_fast_part_over_the_held_picture() {
                 continue;
             }
             held.update::<128>(&prog, &mut hs, &inputs, &OWN);
-            let with = With { under: Some(held.picture()), ink: prog.draws() };
+            let with = With {
+                under: Some(held.picture()),
+                ink: prog.draws(),
+            };
             let mut words = vec![0u32; W * H * 3 / 4];
             let want = bytemuck_bytes(&mut words);
             want.copy_from_slice(&before);
             let mut want_ch = [0u32; H];
             let mut ink = Ink::boxed();
-            crate::render_fast::<128>(&prog, &mut Scratch::new(), Some(&mut ink), None, &inputs, &OWN, with.under, u32::MAX, want, Some(&mut want_ch));
+            crate::render_fast::<128>(
+                &prog,
+                &mut Scratch::new(),
+                Some(&mut ink),
+                None,
+                &inputs,
+                &OWN,
+                with.under,
+                u32::MAX,
+                want,
+                Some(&mut want_ch),
+            );
             let mut told = Vec::new();
             let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
                 let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
                 for q in 0..H / 2 {
-                    let pic = if p != crate::BEAM_START && q <= p { &want[..] } else { &before[..] };
-                    assert!(row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
-                        "{name} at {ms} ms: pair {q} when pair {p} was told");
+                    let pic = if p != crate::BEAM_START && q <= p {
+                        &want[..]
+                    } else {
+                        &before[..]
+                    };
+                    assert!(
+                        row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
+                        "{name} at {ms} ms: pair {q} when pair {p} was told"
+                    );
                 }
                 told.push((p, a, b));
             };
-            let (got, _, got_ch) = kernel_frame_beam(&prog, &low, &inputs, None, with, Some(&before), Some(&mut sink));
+            let (got, _, got_ch) = kernel_frame_beam(
+                &prog,
+                &low,
+                &inputs,
+                None,
+                with,
+                Some(&before),
+                Some(&mut sink),
+            );
             assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
             assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-            let want_told: Vec<_> =
-                [(crate::BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
+            let want_told: Vec<_> = [(crate::BEAM_START, 0, 0)]
+                .into_iter()
+                .chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])))
+                .collect();
             assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
             before = got;
             n += 1;
         }
     }
     assert!(n >= 6, "only {n} frames raced");
+}
+
+/// Damaged programs the player's check takes ([`crate::psb::verify`]) are
+/// lowered and run in the emulator without a stray access (it panics on
+/// one). A kernel that draws differently from the VM is counted, not
+/// failed: the player checks rows of every kernel against the VM and
+/// keeps the VM then.
+#[test]
+fn damaged_programs_lower_safely() {
+    use crate::psb::fuzz::{mutate, sources, Rng};
+    use crate::psb::{load_into, Which};
+    let mut r = Rng(0x2545_f491_4f6c_dd1d);
+    let u = picture();
+    let (mut lowered, mut differ) = (0, 0);
+    for (_, src) in sources() {
+        let b = crate::build(&src).unwrap();
+        for _ in 0..150 {
+            let m = mutate(&mut r, &b);
+            let mut p = Program::default();
+            if load_into(&m, Which::Play, &mut p).is_err() {
+                continue;
+            }
+            let low = match std::panic::catch_unwind(|| lower(&p)) {
+                Ok(Ok(l)) => l,
+                Ok(Err(_)) => continue,
+                Err(_) => panic!("lowering panicked on a verified program:\n{}", p.listing()),
+            };
+            lowered += 1;
+            let mut inputs = golden::inputs((r.next() % 8000) as u32);
+            inputs.set_ms(&p, 1000);
+            let with = With {
+                under: Some(&u),
+                ink: p.draws(),
+            };
+            let (got, _) = kernel_frame(&p, &low, &inputs, None, with);
+            if crate::range::inputs_in_range(&p, &inputs)
+                && got != vm_frame(&p, &inputs, None, with)
+            {
+                differ += 1;
+            }
+        }
+    }
+    println!("{lowered} damaged programs lowered, {differ} drew otherwise than the VM");
 }

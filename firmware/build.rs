@@ -87,22 +87,27 @@ fn main() {
         .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
         .collect();
     bundled.sort();
-    // The sources go into the image as `opendmd_psi::squeeze` writes them:
-    // comments, blank lines and the spaces nothing depends on left out (the
-    // same programs, opendmd-psi's tests/squeeze.rs; about half the bytes),
-    // and the `about` line, which the panel never shows.
+    // The bundled Formulas go into the image compiled (`opendmd_psi::psb`:
+    // the player never compiles), each a byte string; the probe's builds
+    // also get their sources (squeezed: comments and the `about` line out).
     let strip = |text: &str| -> String {
         let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with("about \"")).collect();
         opendmd_psi::squeeze(&kept.join("\n"))
     };
     let mut list = String::from("&[\n");
+    let mut sources = String::from("&[\n");
     for (name, path) in &bundled {
         println!("cargo:rerun-if-changed={}", path.display());
         let text = std::fs::read_to_string(path).expect("reading a bundled Formula");
-        list += &format!("    ({name:?}, {:?}),\n", strip(&text));
+        let psb = opendmd_psi::build(&text)
+            .unwrap_or_else(|e| panic!("{}: {}", path.display(), e.render(&text)));
+        list += &format!("    ({name:?}, &{psb:?}),\n");
+        sources += &format!("    ({name:?}, {:?}),\n", strip(&text));
     }
     list += "]\n";
+    sources += "]\n";
     std::fs::write(out_dir.join("bundled_formulas.rs"), list).expect("writing bundled_formulas.rs");
+    std::fs::write(out_dir.join("bundled_sources.rs"), sources).expect("writing bundled_sources.rs");
     let mut list = String::from("&[\n");
     for name in ["plasma", "fire", "tunnel", "rotozoom", "rotozoom-floor", "wireframe-cube", "corner-clock"] {
         let path = dir.join(format!("{name}.psi"));

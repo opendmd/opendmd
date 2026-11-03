@@ -342,14 +342,96 @@ impl Default for DwellPolicy {
     }
 }
 
+/// A string shared by count (`Arc<str>`): what [`NowPlaying`] carries, so
+/// the outcome of every frame clones no string on the heap (the display
+/// loop takes no heap lock a frame: CPU0 allocating would hold it). Reads
+/// as a `str`, compares with `str`, `&str` and `String`.
+#[derive(Clone, PartialEq, Eq, Hash, Default)]
+pub struct SharedStr(std::sync::Arc<str>);
+
+impl SharedStr {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SharedStr {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for SharedStr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for SharedStr {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SharedStr {
+    fn from(s: String) -> Self {
+        SharedStr(s.into())
+    }
+}
+
+impl From<&str> for SharedStr {
+    fn from(s: &str) -> Self {
+        SharedStr(s.into())
+    }
+}
+
+impl From<SharedStr> for String {
+    fn from(s: SharedStr) -> String {
+        s.0.to_string()
+    }
+}
+
+impl PartialEq<str> for SharedStr {
+    fn eq(&self, o: &str) -> bool {
+        &*self.0 == o
+    }
+}
+
+impl PartialEq<&str> for SharedStr {
+    fn eq(&self, o: &&str) -> bool {
+        &*self.0 == *o
+    }
+}
+
+impl PartialEq<String> for SharedStr {
+    fn eq(&self, o: &String) -> bool {
+        &*self.0 == o.as_str()
+    }
+}
+
+impl std::fmt::Debug for SharedStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl std::fmt::Display for SharedStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
 /// What is on screen right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NowPlaying {
     /// Index into the engine's catalog, or [`OFF_PLAYLIST`] for a file
     /// started with [`Engine::play_now`].
     pub index: usize,
-    pub path: String,
-    pub title: String,
+    /// (Shared with the engine: a frame's outcome carries these, and a
+    /// clone is a count, not an allocation on the display path.)
+    pub path: SharedStr,
+    pub title: SharedStr,
     /// 1-based count of GIFs started since the engine was created.
     pub ordinal: u64,
     /// Where the frame on screen starts in the file's own timeline: the sum
@@ -578,8 +660,8 @@ struct Playing {
     index: usize,
     /// This entry's override, if it bends the dwell (`dwell`/`loops`).
     timed: Option<Override>,
-    path: String,
-    title: String,
+    path: SharedStr,
+    title: SharedStr,
     ordinal: u64,
     gif: Stream,
     started_at: Duration,
@@ -632,8 +714,8 @@ impl Playing {
         Playing {
             index,
             timed: None,
-            path,
-            title,
+            path: path.into(),
+            title: title.into(),
             ordinal,
             gif,
             started_at: at,
@@ -678,6 +760,33 @@ pub struct Engine {
     ahead: Ahead,
     /// The file that started last came ready ahead.
     started_ahead: bool,
+}
+
+/// A µs clock the engine times its ticks by (the firmware's esp_timer;
+/// none on the host): [`tick_split`].
+static TICK_CLOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TICK_SPLIT: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
+
+/// Install the clock ([`tick_split`]).
+pub fn set_tick_clock(clock: Option<fn() -> u32>) {
+    TICK_CLOCK.store(clock.map_or(0, |f| f as usize), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn tick_clock() -> Option<fn() -> u32> {
+    match TICK_CLOCK.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        // SAFETY: only `set_tick_clock` stores, from a `fn() -> u32`.
+        f => Some(unsafe { std::mem::transmute::<usize, fn() -> u32>(f) }),
+    }
+}
+
+/// The last tick's (advance µs: the file's frame, opening the next file at
+/// a switch; step µs: the transition's compositing), with a clock installed.
+pub fn tick_split() -> (u32, u32) {
+    (
+        TICK_SPLIT[0].load(std::sync::atomic::Ordering::Relaxed),
+        TICK_SPLIT[1].load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 impl Engine {
@@ -729,9 +838,9 @@ impl Engine {
     }
 
     /// What `path` reads as: a virtual file in memory, a Formula's `.psi`
-    /// file read through the source (compacted as it is read, then closed:
-    /// [`crate::fx_psi::read_text`]) into a virtual file, else the source's
-    /// file.
+    /// path played from the compiled `.psb` beside it (read through the
+    /// source, then closed: [`crate::fx_psi::read_psb`]) as a virtual file,
+    /// else the source's file.
     fn open_reader(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         if let Some(bytes) = synth::open(path) {
             return Ok(Box::new(bytes));
@@ -739,9 +848,15 @@ impl Engine {
         if let Some((file, opts)) = synth::formula_file(path) {
             #[cfg(feature = "psi")]
             {
-                let f = self.source.open(file)?;
-                let text = crate::fx_psi::read_text(io::BufReader::with_capacity(512, f))?;
-                return Ok(Box::new(synth::open_formula_text(opts, &text)));
+                let f = self.source.open(&synth::compiled_path(file)).map_err(|e| {
+                    if e.kind() == io::ErrorKind::NotFound {
+                        io::Error::new(io::ErrorKind::NotFound, crate::fx_psi::NOT_PREPARED)
+                    } else {
+                        e
+                    }
+                })?;
+                let psb = crate::fx_psi::read_psb(f)?;
+                return Ok(Box::new(synth::open_formula_bytes(opts, &psb)));
             }
             #[cfg(not(feature = "psi"))]
             {
@@ -865,6 +980,12 @@ impl Engine {
             .binary_search_by_key(&index, |(i, _)| *i)
             .ok()
             .map(|k| self.timed[k].1)
+    }
+
+    /// The decoder of the file on screen (`slim`, `gif`, `synth`: a Formula
+    /// or a virtual file), `none` between files.
+    pub fn playing_kind(&self) -> &'static str {
+        self.current.as_ref().map_or("none", |p| p.gif.kind())
     }
 
     /// The dwell policy the file on screen plays under: the configured one,
@@ -1001,8 +1122,8 @@ impl Engine {
         if r.is_ok() {
             // The new formula's own name (`&name=`), as `play_now` would
             // report it: `now_playing.title` follows what is on the panel.
-            p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title);
-            p.path = path.to_string();
+            p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title).into();
+            p.path = path.into();
             p.started_at = at;
             p.loops = 0;
             p.timed = ov.filter(Override::affects_dwell);
@@ -1063,7 +1184,10 @@ impl Engine {
         if self.is_paused() {
             return Ok(TickOutcome::Idle);
         }
+        let clock = tick_clock();
+        let t0 = clock.map_or(0, |c| c());
         let decoded = self.advance(now, canvas)?;
+        let t1 = clock.map_or(0, |c| c());
         // A step on its own only when the file's next frame is not about to
         // carry it (the same rule as the wake time below). The loop also
         // wakes for other things — a glow step, a formula look's frame —
@@ -1077,6 +1201,13 @@ impl Engine {
                     .is_some_and(|p| now < p.next_frame_at && step + STEP / 2 >= p.next_frame_at)
             });
         let stepped = !carried && self.compositor.step(now, canvas) != Step::Idle;
+        if let Some(c) = clock {
+            // The tick's split, for a late frame's record (the firmware's
+            // misses log): the file's advance (opening the next one at a
+            // switch, decoding) and the transition's step.
+            TICK_SPLIT[0].store(t1.wrapping_sub(t0), std::sync::atomic::Ordering::Relaxed);
+            TICK_SPLIT[1].store(c().wrapping_sub(t1), std::sync::atomic::Ordering::Relaxed);
+        }
         let (playing, started) = match decoded {
             TickOutcome::Frame {
                 playing, started, ..
@@ -1594,14 +1725,28 @@ impl Engine {
             }
         }
         let budget = self.scheduler.len().saturating_mul(2).max(32);
+        // The first failure of this pass is logged, the rest counted: a
+        // pass where every entry fails (a one-entry playlist while a write
+        // holds its file) would log a line per attempt, every retry, from
+        // the display core.
+        let mut failed = 0u32;
+        let mut note = |what: std::fmt::Arguments<'_>| {
+            if failed == 0 {
+                log::warn!("{what}");
+            }
+            failed += 1;
+        };
         for _ in 0..budget {
             let Some(index) = self.scheduler.next_index() else {
+                if failed > 1 {
+                    log::warn!("... and {} more not opened", failed - 1);
+                }
                 return false;
             };
             let entry = match self.catalog.entry(index) {
                 Ok(entry) => entry,
                 Err(e) => {
-                    log::warn!("catalog entry {index} unreadable: {e}");
+                    note(format_args!("catalog entry {index} unreadable: {e}"));
                     continue;
                 }
             };
@@ -1616,10 +1761,10 @@ impl Engine {
                     self.current = Some(playing);
                     return true;
                 }
-                Err(e) => log::warn!("skipping {path}: {e}"),
+                Err(e) => note(format_args!("skipping {path}: {e}")),
             }
         }
-        log::error!("no playable entries after {budget} attempts");
+        log::error!("no playable entries after {budget} attempts ({failed} not opened; the first is above)");
         false
     }
 }
@@ -1839,7 +1984,10 @@ mod tests {
         crate::synth::install_test_bundled();
         let mine = "-- author: me\n-- a comment\nname \"Mine\"\ncontrol k = 0\n\n  rgb(0, k, 0)   -- green\n";
         let mut e = engine_with(
-            &[("/formulas/mine.psi", mine.as_bytes().to_vec())],
+            &[
+                ("/formulas/mine.psi", mine.as_bytes().to_vec()),
+                ("/formulas/mine.psb", crate::synth::psi_build(mine)),
+            ],
             "@formula:nope\n/formulas/gone.psi\n@formula:red\n/formulas/mine.psi?a=1\n",
             DwellPolicy {
                 min: Duration::from_secs(1),
@@ -1877,18 +2025,14 @@ mod tests {
         }
     }
 
-    /// A Formula's file over [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE)
-    /// compacted is refused with a sentence, never cut.
+    /// A compiled Formula's file over [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE)
+    /// is refused with a sentence, never cut.
     #[cfg(feature = "psi")]
     #[test]
     fn a_formula_file_too_long_is_refused() {
-        let mut long = String::from("v = 0\n");
-        while long.len() < crate::synth::MAX_FORMULA_SOURCE + 100 {
-            long += "v = v + x * 0.5\n";
-        }
-        long += "gray(v)\n";
+        let long = vec![b'P'; crate::synth::MAX_FORMULA_FILE + 1];
         let mut e = engine_with(
-            &[("/formulas/long.psi", long.into_bytes())],
+            &[("/formulas/long.psi", b"gray(x)".to_vec()), ("/formulas/long.psb", long)],
             "/formulas/long.psi",
             DwellPolicy::default(),
         );
@@ -1970,7 +2114,7 @@ mod tests {
         let first = e.now_playing().unwrap().ordinal;
 
         // In place it is refused; after the one on screen goes, it compiles.
-        crate::fx_psi::refuse_compiles(1);
+        crate::fx_psi::refuse_loads(1);
         e.retune(&road, Duration::from_millis(t), keep)
             .unwrap()
             .unwrap();
@@ -1990,19 +2134,19 @@ mod tests {
                 "kept past the 10 s dwell ({t})"
             );
         }
-        let px = c.get(3, 7);
+        let px = c.get(3, 24);
         assert!(
             px.r > 100 && px.g < 20,
             "the road's picture (red from y), not the gate's: {px:?}"
         );
 
         // Refused before and after: the error, nothing on screen, then the playlist.
-        crate::fx_psi::refuse_compiles(u32::MAX);
+        crate::fx_psi::refuse_loads(u32::MAX);
         let err = e
             .retune(&gate, Duration::from_millis(t), keep)
             .unwrap()
             .unwrap_err();
-        crate::fx_psi::refuse_compiles(0);
+        crate::fx_psi::refuse_loads(0);
         assert!(crate::fx_psi::is_no_memory(&err), "{err}");
         assert!(e.now_playing().is_none(), "the one on screen was let go");
         t += 20;
@@ -2437,7 +2581,7 @@ mod tests {
 
     fn title_at(e: &mut Engine, t: Duration, canvas: &mut Canvas) -> String {
         match e.tick(t, canvas).unwrap() {
-            TickOutcome::Frame { playing, .. } => playing.title,
+            TickOutcome::Frame { playing, .. } => playing.title.into(),
             other => panic!("expected a frame at {t:?}, got {other:?}"),
         }
     }

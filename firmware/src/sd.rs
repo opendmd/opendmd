@@ -481,7 +481,8 @@ fn open_file_keyed(full: &str, ahead_key: u32) -> io::Result<Box<dyn ReadSeek>> 
     let file = if crate::probe::ENABLED {
         crate::probe::open(full)
     } else {
-        crate::fatidx::open(full)
+        // Read raw: never behind FatFs's volume lock (`fatidx` "raw reads").
+        crate::fatidx::open_player(full)
     };
     let file = match file {
         Ok(f) => f,
@@ -516,6 +517,9 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 impl Source for SdSource {
     /// All of it is the display loop's `open` time ([`crate::frametime::open`]).
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+        // A switch: the read-ahead's ring goes before the new decoder and
+        // the transition ask the heap (`readahead::release`).
+        crate::readahead::release();
         crate::frametime::open(|| open_resolved(path))
     }
 
@@ -564,7 +568,7 @@ impl Source for SdSource {
                 // with the heap for cap 12.
                 Err(_) => match (copy != path)
                     .then(|| format!("{}{path}", config::SD_MOUNT))
-                    .and_then(|orig| crate::fatidx::indexed(&orig).map(|r| (orig, r)))
+                    .and_then(|orig| crate::fatidx::indexed_player(&orig).map(|r| (orig, r)))
                 {
                     Some((orig, Ok(o))) => {
                         crate::sdhealth::opened(&orig);
@@ -602,6 +606,8 @@ impl Source for SdSource {
     /// (if it started meanwhile), and the GIF-start line says how it was
     /// served.
     fn adopt(&self, _path: &str) {
+        // A switch to the copy opened ahead: as in `open`.
+        crate::readahead::release();
         crate::frametime::open(|| {
             if crate::cache_builder::task_up() {
                 crate::cache_builder::player_opening();

@@ -81,7 +81,11 @@ impl<'s> Parser<'s> {
         if d.level(a) != LV_PIXEL || d.level(b) == LV_PIXEL || d.level(c) == LV_PIXEL {
             return None;
         }
-        let once = if d.level(b).max(d.level(c)) == LV_ROW { "row" } else { "frame" };
+        let once = if d.level(b).max(d.level(c)) == LV_ROW {
+            "row"
+        } else {
+            "frame"
+        };
         let txt = |x: usize, y: usize| sub(self.src, x, y).trim();
         let (ta, tb, tc) = (txt(start, pop.start), txt(bs.0, bs.1), txt(cs.0, cs.1));
         let (o1, o2) = (self.text(pop), self.text(op));
@@ -112,10 +116,18 @@ impl<'s> Parser<'s> {
     /// The notes only the laid-out program can give (what the still cache
     /// and the column run took, and the heaviest value they could not; the
     /// draw loops run as lanes), then every note to the sink, in order.
-    pub(super) fn layout_notes(&mut self, prog: &mut Program, (cached, col): &(Vec<usize>, Vec<usize>)) {
+    pub(super) fn layout_notes(
+        &mut self,
+        prog: &mut Program,
+        (cached, col): &(Vec<usize>, Vec<usize>),
+    ) {
         let dag = &self.dag;
         let n = dag.nodes.len();
-        let local = |i: usize| self.locals.iter().rposition(|l| l.id as usize == i && !l.counter);
+        let local = |i: usize| {
+            self.locals
+                .iter()
+                .rposition(|l| l.id as usize == i && !l.counter)
+        };
         let place = |i: usize| -> Option<(usize, usize, String)> {
             if let Some(j) = local(i) {
                 let l = &self.locals[j];
@@ -143,7 +155,14 @@ impl<'s> Parser<'s> {
         let first = cached
             .iter()
             .chain(col.iter())
-            .find_map(|&i| local(i).map(|j| (self.locals[j].at, self.locals[j].at + self.locals[j].name.len())))
+            .find_map(|&i| {
+                local(i).map(|j| {
+                    (
+                        self.locals[j].at,
+                        self.locals[j].at + self.locals[j].name.len(),
+                    )
+                })
+            })
             .or_else(|| cached.first().and_then(|&i| place(i)).map(|p| (p.0, p.1)));
         let (kept, cols) = (list(cached, false), list(col, true));
         if !kept.is_empty() || !cols.is_empty() {
@@ -191,7 +210,9 @@ impl<'s> Parser<'s> {
                 });
         }
         let best = (0..n)
-            .filter(|&i| almost[i] && !colnode[i] && sub_ns[i] >= STILL_GAIN_NS && local(i).is_some())
+            .filter(|&i| {
+                almost[i] && !colnode[i] && sub_ns[i] >= STILL_GAIN_NS && local(i).is_some()
+            })
             .max_by_key(|&i| sub_ns[i]);
         if let Some(i) = best {
             // The first value once a frame (not a constant) on the way down.
@@ -275,6 +296,52 @@ impl<'s> Parser<'s> {
                     lines.push(line);
                 }
                 sink.note((*a, *b), t);
+            }
+        }
+    }
+
+    /// Radians in a wave (`sin(x*6.28)`, a habit from other languages):
+    /// a note at the number.
+    pub(super) fn radians_notes(&self, sink: &mut dyn crate::syntax::Sink) {
+        for k in 0..self.toks.len().saturating_sub(2) {
+            let t = self.toks[k].get();
+            if t.tok != Tok::Name
+                || !matches!(self.text(t), "sin" | "cos")
+                || self.toks[k + 1].get().tok != Tok::LParen
+            {
+                continue;
+            }
+            let (mut depth, mut j) = (0, k + 1);
+            while j < self.toks.len() {
+                let u = self.toks[j].get();
+                match u.tok {
+                    Tok::LParen => depth += 1,
+                    Tok::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Num(v)
+                        if [(3, 1416), (6, 2832), (1, 5708)].iter().any(|&(w, f)| {
+                            let pi = (w << 16) + (f << 16) / 10000;
+                            (v - pi).abs() < ONE / 50
+                        }) =>
+                    {
+                        sink.note(
+                                (u.start, u.end),
+                                &format!(
+                                    "`{}` inside {}: Psi's waves take turns, not radians — {}(v) goes round once as v goes from 0 to 1, so there is no pi to multiply by (`sin(x*6.28)` goes round six times; write `sin(x)` for once)",
+                                    self.text(u),
+                                    self.text(t),
+                                    self.text(t)
+                                ),
+                            );
+                    }
+                    Tok::Eof => break,
+                    _ => {}
+                }
+                j += 1;
             }
         }
     }

@@ -216,65 +216,294 @@ pub struct Ctx {
     pub net: mpsc::Sender<NetCommand>,
 }
 
+/// Why [`apply_patch`] refused a patch: the status and the message.
+pub struct PatchErr {
+    pub code: u16,
+    pub msg: String,
+}
+
+impl PatchErr {
+    fn bad(msg: &str) -> PatchErr {
+        PatchErr { code: 400, msg: msg.to_string() }
+    }
+    fn too_large(msg: &str) -> PatchErr {
+        PatchErr { code: 413, msg: msg.to_string() }
+    }
+}
+
+/// Apply `patch` to `next`, checked as `PUT /api/config` checks it (and the
+/// settings file on the card, `settings_card`, read through the same
+/// checks): the first value refused is the error, and `next` is then
+/// partly changed (the caller drops it).
+pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), PatchErr> {
+    if let Some(v) = patch.wifi_ssid.clone() {
+        next.wifi_ssid = v;
+    }
+    if let Some(v) = patch.wifi_pass.clone() {
+        next.wifi_pass = v;
+    }
+    match opendmd_core::brightness::resolve(
+        next.brightness,
+        next.max_brightness,
+        patch.brightness,
+        patch.max_brightness,
+    ) {
+        Ok((b, m)) => {
+            next.brightness = b;
+            next.max_brightness = m;
+        }
+        Err(e) => return Err(PatchErr::bad(&e)),
+    }
+    if let Some(v) = patch.dwell_min {
+        next.dwell_min = v.max(1);
+    }
+    if let Some(v) = patch.dwell_max {
+        next.dwell_max = v.max(1);
+    }
+    if let Some(v) = patch.shuffle {
+        next.shuffle = v;
+    }
+    if let Some(v) = patch.platforms.clone() {
+        next.platforms = v;
+    }
+    if let Some(v) = patch.set.clone() {
+        if !crate::nvs_config::valid_set_name(&v) {
+            return Err(PatchErr::bad("set must be a single path segment"));
+        }
+        next.set = v;
+    }
+    if let Some(v) = patch.hostname.clone() {
+        match opendmd_core::hostname::parse(&v) {
+            Ok(Some(v)) => next.hostname = v,
+            Ok(None) => {}
+            Err(e) => return Err(PatchErr::bad(&e)),
+        }
+    }
+    if let Some(v) = patch.tz.clone() {
+        let v = v.trim().to_string();
+        if v.is_empty() || v.len() > 64 || v.contains('\0') {
+            return Err(PatchErr::bad("tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0"));
+        }
+        next.tz = v;
+    }
+    if let Some(v) = patch.tz_name.clone() {
+        if v.len() > 64 {
+            return Err(PatchErr::bad("tz_name is at most 64 characters"));
+        }
+        next.tz_name = v;
+    }
+    if let Some(v) = patch.transition.clone() {
+        let Some(kind) = TransitionKind::from_name(&v) else {
+            return Err(PatchErr::bad(
+                "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none",
+            ));
+        };
+        next.transition.kind = kind;
+    }
+    if let Some(ms) = patch.transition_ms {
+        let range = compositor::MIN_DURATION.as_millis()..=compositor::MAX_DURATION.as_millis();
+        if !range.contains(&u128::from(ms)) {
+            return Err(PatchErr::bad(&format!(
+                "transition_ms must be {}..={}",
+                range.start(),
+                range.end()
+            )));
+        }
+        next.transition.duration = Duration::from_millis(u64::from(ms));
+    }
+    if let Some(v) = patch.auto_prepare.clone() {
+        let Some(mode) = crate::nvs_config::AutoPrepare::parse(&v) else {
+            return Err(PatchErr::bad("auto_prepare must be idle, always or off"));
+        };
+        next.auto_prepare = mode;
+    }
+    if let Some(v) = patch.follow {
+        next.follow = v;
+    }
+    if let Some(v) = patch.follow_host.clone() {
+        let v = v.trim().to_string();
+        // Empty (no host), or `name[:port]` with a port in digits: a
+        // bad port is refused here, never quietly replaced at poll time.
+        if v.len() > 64
+            || v.contains(['/', ' ', '\0', '?', '#', '@'])
+            || (!v.is_empty() && opendmd_core::http_client::split_host_port(&v).is_none())
+        {
+            return Err(PatchErr::bad("follow_host must be a host name or address, optionally :port"));
+        }
+        next.follow_host = v;
+    }
+    if let Some(v) = patch.follow_code.clone() {
+        if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
+            return Err(PatchErr::bad("follow_code is at most 64 characters on one line"));
+        }
+        next.follow_code = v;
+    }
+    if let Some(v) = patch.attract_set.clone() {
+        if let Some(set) = &v {
+            if !crate::nvs_config::valid_set_name(set) {
+                return Err(PatchErr::bad("attract_set must be a single path segment"));
+            }
+        }
+        next.attract_set = v;
+    }
+    if let Some(v) = patch.attract.clone() {
+        if !crate::nvs_config::valid_attract(&v) {
+            return Err(PatchErr::bad(&format!(
+                "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
+                crate::nvs_config::ATTRACT_MAX - 5
+            )));
+        }
+        next.attract = v;
+    }
+    if let Some(v) = patch.look.clone() {
+        let Some(look) = opendmd_core::look::Look::from_name(&v) else {
+            return Err(PatchErr::bad("look must be colour, amber, red, green, blue or white"));
+        };
+        next.look = look;
+    }
+    if let Some(v) = patch.glow.clone() {
+        let Some(glow) = opendmd_core::look::GlowLevel::from_name(&v) else {
+            return Err(PatchErr::bad("glow must be off, short or long"));
+        };
+        next.glow = glow;
+    }
+    if let Some(v) = patch.look_formula.clone() {
+        use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
+        match formula_ref(&v) {
+            _ if v.is_empty() => {}
+            Some(FormulaRef::File { file, .. })
+                if files::card_path(config::SD_MOUNT, file).is_none() =>
+            {
+                return Err(PatchErr::bad("look_formula: the Formula's path must stay on the card"));
+            }
+            Some(_) => {}
+            None => {
+                return Err(PatchErr::bad(
+                    "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)",
+                ))
+            }
+        }
+        if v.len() > MAX_LOOK_PATH {
+            return Err(PatchErr::too_large(&format!(
+                "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
+                v.len(),
+            )));
+        }
+        next.look_formula = v;
+    }
+    if let Some(v) = patch.boot_show.clone() {
+        let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
+            return Err(PatchErr::bad("boot_show must be off, short or full"));
+        };
+        next.boot_show = len;
+    }
+    if let Some(v) = patch.panel_sync {
+        next.panel_sync = v;
+    }
+    if let Some(v) = patch.panel_split {
+        next.panel_split = v;
+    }
+    if let Some(v) = patch.formula_jit {
+        next.formula_jit = v;
+    }
+    if let Some(v) = patch.formula_arena {
+        next.formula_arena = v;
+    }
+    if let Some(v) = &patch.formula_keep {
+        match opendmd_core::FormulaKeep::from_name(v) {
+            Some(k) => next.formula_keep = k,
+            None => return Err(PatchErr::bad("formula_keep must be turn, 1m, 5m or hold")),
+        }
+    }
+    if let Some(v) = &patch.api_key {
+        if !v.is_empty() && !opendmd_core::access::valid_key(v) {
+            return Err(PatchErr::bad(&format!(
+                "api_key must be {}..{} of A-Z a-z 0-9 . _ ~ - (or \"\" for none)",
+                opendmd_core::access::KEY_MIN,
+                opendmd_core::access::KEY_MAX
+            )));
+        }
+        next.api_key = v.clone();
+    }
+    if let Some(v) = &patch.card_speed {
+        let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
+            return Err(PatchErr::bad(opendmd_core::card_speed::INVALID));
+        };
+        next.card_speed = mode;
+    }
+    if next.dwell_max < next.dwell_min {
+        return Err(PatchErr::bad("dwell_max must be >= dwell_min"));
+    }
+    Ok(())
+}
+
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
 /// is left as it was.
-#[derive(serde::Deserialize)]
-struct ConfigPatch {
-    wifi_ssid: Option<String>,
-    wifi_pass: Option<String>,
-    brightness: Option<u8>,
+#[derive(serde::Deserialize, Default)]
+pub struct ConfigPatch {
+    pub(crate) wifi_ssid: Option<String>,
+    pub(crate) wifi_pass: Option<String>,
+    pub(crate) brightness: Option<u8>,
     /// Read wider than `u8` so an out-of-range value gets the range message.
-    max_brightness: Option<u32>,
-    dwell_min: Option<u64>,
-    dwell_max: Option<u64>,
-    shuffle: Option<bool>,
-    platforms: Option<String>,
-    set: Option<String>,
-    hostname: Option<String>,
-    tz: Option<String>,
-    tz_name: Option<String>,
-    transition: Option<String>,
-    transition_ms: Option<u32>,
-    auto_prepare: Option<String>,
-    follow: Option<bool>,
-    follow_host: Option<String>,
+    pub(crate) max_brightness: Option<u32>,
+    pub(crate) dwell_min: Option<u64>,
+    pub(crate) dwell_max: Option<u64>,
+    pub(crate) shuffle: Option<bool>,
+    pub(crate) platforms: Option<String>,
+    pub(crate) set: Option<String>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) tz: Option<String>,
+    pub(crate) tz_name: Option<String>,
+    pub(crate) transition: Option<String>,
+    pub(crate) transition_ms: Option<u32>,
+    pub(crate) auto_prepare: Option<String>,
+    pub(crate) follow: Option<bool>,
+    pub(crate) follow_host: Option<String>,
     /// Never echoed back; `""` clears it.
-    follow_code: Option<String>,
+    pub(crate) follow_code: Option<String>,
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
-    attract_set: Option<Option<String>>,
+    pub(crate) attract_set: Option<Option<String>>,
     /// `""`, `"clock"` or `"text:<message>"`.
-    attract: Option<String>,
-    look: Option<String>,
-    glow: Option<String>,
-    /// The Formula look: a formula's `@formula?src=…` path, `""` = none
+    pub(crate) attract: Option<String>,
+    pub(crate) look: Option<String>,
+    pub(crate) glow: Option<String>,
+    /// The Formula look: a formula's `@formula?psb=…` path, `""` = none
     /// (checked by the main task before anything is saved).
     /// Its name, blend and amount are the formula's own `name` and `look`
     /// lines (no fields of their own: unknown fields are ignored).
-    look_formula: Option<String>,
-    boot_show: Option<String>,
+    pub(crate) look_formula: Option<String>,
+    pub(crate) boot_show: Option<String>,
     /// Refresh-synchronised blits, applied at once.
-    panel_sync: Option<bool>,
+    pub(crate) panel_sync: Option<bool>,
     /// With it, the bottom half a refresh after the top; applied at once.
-    panel_split: Option<bool>,
+    pub(crate) panel_split: Option<bool>,
     /// The Formulas' JIT (the kill switch); applied at the next frame.
-    formula_jit: Option<bool>,
+    pub(crate) formula_jit: Option<bool>,
+    pub(crate) formula_arena: Option<bool>,
     /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
     /// `hold` (until something else plays).
-    formula_keep: Option<String>,
+    pub(crate) formula_keep: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
-    api_key: Option<String>,
+    pub(crate) api_key: Option<String>,
     /// `safe`, `fast` or `full` (`opendmd_core::card_speed`): in effect at
     /// once when a card is mounted (`cardspeed::set_mode`).
-    card_speed: Option<String>,
+    pub(crate) card_speed: Option<String>,
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
     panel: Option<Option<PanelWire>>,
+    /// The schedule's JSON: read from the settings file on the card only
+    /// (`settings_card`); `PUT /api/config` ignores it (`PUT /api/schedule`
+    /// sets the schedule).
+    pub(crate) schedule: Option<String>,
+    /// Dev: where upload pacing starts, % of a Formula's frame time
+    /// (`pace`); live only, never saved.
+    pub(crate) pace_on_pct: Option<u32>,
     /// `true` keeps the trial (with `panel`: saved without one), `false`
     /// undoes it.
-    panel_confirm: Option<bool>,
+    pub(crate) panel_confirm: Option<bool>,
 }
 
 /// Wire format for `POST /api/card/format`: `{"confirm": true}`, so an
@@ -311,7 +540,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // URI handler slots: one per `route`/`route_json` below (49 now, the
     // captive-portal loop counting six; 50 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 50)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, config::HTTP_MAX_HANDLERS)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
@@ -357,11 +586,38 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let set = c.settings.lock().unwrap();
             looks_json(&set)
         };
+        // Measurement (display-isolation): the heap's use per SRAM pool, or
+        // the player's longest card read and open since the last ask.
+        if query_param(req.query(), "pools").as_deref() == Some("1") {
+            return req.json(&crate::membank::pools_json());
+        }
+        if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
+            return req.json(&crate::membank::take_read_max());
+        }
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
-        let json = {
+        // A status read costs CPU0 ~7 ms of formatting (code and strings
+        // from flash, whose bus CPU1 shares): answered from the last one
+        // for `STATUS_CACHE` (the web app polls once a second; a client
+        // polling faster gets the same JSON within it). The lock is held
+        // only to copy the status (µs), never while formatting. The next
+        // answer says what it took (`display.status_lock_us`,
+        // `status_build_us`, `status_cached`).
+        let t0 = std::time::Instant::now();
+        if let Some(json) = cached_status(recent) {
+            STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return req.json(&json);
+        }
+        let snap = {
             let s = c.status.lock().unwrap();
-            status_json(&s, &looks, recent)
+            let held = std::time::Instant::now();
+            let copy = s.clone();
+            STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+            copy
         };
+        let json = status_json(&snap, &looks, recent);
+        drop(snap);
+        STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+        keep_status(recent, &json);
         req.json(&json)
     })?;
 
@@ -416,205 +672,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
-        if let Some(v) = patch.wifi_ssid {
-            next.wifi_ssid = v;
+        if let Some(p) = patch.pace_on_pct {
+            crate::pace::set_on_pct(p);
         }
-        if let Some(v) = patch.wifi_pass {
-            next.wifi_pass = v;
-        }
-        match opendmd_core::brightness::resolve(
-            next.brightness,
-            next.max_brightness,
-            patch.brightness,
-            patch.max_brightness,
-        ) {
-            Ok((b, m)) => {
-                next.brightness = b;
-                next.max_brightness = m;
-            }
-            Err(e) => return req.bad_request(&e),
-        }
-        if let Some(v) = patch.dwell_min {
-            next.dwell_min = v.max(1);
-        }
-        if let Some(v) = patch.dwell_max {
-            next.dwell_max = v.max(1);
-        }
-        if let Some(v) = patch.shuffle {
-            next.shuffle = v;
-        }
-        if let Some(v) = patch.platforms {
-            next.platforms = v;
-        }
-        if let Some(v) = patch.set {
-            if !crate::nvs_config::valid_set_name(&v) {
-                return req.bad_request("set must be a single path segment");
-            }
-            next.set = v;
-        }
-        if let Some(v) = patch.hostname {
-            match opendmd_core::hostname::parse(&v) {
-                Ok(Some(v)) => next.hostname = v,
-                Ok(None) => {}
-                Err(e) => return req.bad_request(&e),
-            }
-        }
-        if let Some(v) = patch.tz {
-            let v = v.trim().to_string();
-            if v.is_empty() || v.len() > 64 || v.contains('\0') {
-                return req
-                    .bad_request("tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0");
-            }
-            next.tz = v;
-        }
-        if let Some(v) = patch.tz_name {
-            if v.len() > 64 {
-                return req.bad_request("tz_name is at most 64 characters");
-            }
-            next.tz_name = v;
-        }
-        if let Some(v) = patch.transition {
-            let Some(kind) = TransitionKind::from_name(&v) else {
-                return req.bad_request(
-                    "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none",
-                );
+        if let Err(e) = apply_patch(&mut next, &patch) {
+            return match e.code {
+                413 => req.error(413, "413 Payload Too Large", &e.msg),
+                _ => req.bad_request(&e.msg),
             };
-            next.transition.kind = kind;
-        }
-        if let Some(ms) = patch.transition_ms {
-            let range = compositor::MIN_DURATION.as_millis()..=compositor::MAX_DURATION.as_millis();
-            if !range.contains(&u128::from(ms)) {
-                return req.bad_request(&format!(
-                    "transition_ms must be {}..={}",
-                    range.start(),
-                    range.end()
-                ));
-            }
-            next.transition.duration = Duration::from_millis(u64::from(ms));
-        }
-        if let Some(v) = patch.auto_prepare {
-            let Some(mode) = crate::nvs_config::AutoPrepare::parse(&v) else {
-                return req.bad_request("auto_prepare must be idle, always or off");
-            };
-            next.auto_prepare = mode;
-        }
-        if let Some(v) = patch.follow {
-            next.follow = v;
-        }
-        if let Some(v) = patch.follow_host {
-            let v = v.trim().to_string();
-            // Empty (no host), or `name[:port]` with a port in digits: a
-            // bad port is refused here, never quietly replaced at poll time.
-            if v.len() > 64
-                || v.contains(['/', ' ', '\0', '?', '#', '@'])
-                || (!v.is_empty() && opendmd_core::http_client::split_host_port(&v).is_none())
-            {
-                return req.bad_request("follow_host must be a host name or address, optionally :port");
-            }
-            next.follow_host = v;
-        }
-        if let Some(v) = patch.follow_code {
-            if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
-                return req.bad_request("follow_code is at most 64 characters on one line");
-            }
-            next.follow_code = v;
-        }
-        if let Some(v) = patch.attract_set {
-            if let Some(set) = &v {
-                if !crate::nvs_config::valid_set_name(set) {
-                    return req.bad_request("attract_set must be a single path segment");
-                }
-            }
-            next.attract_set = v;
-        }
-        if let Some(v) = patch.attract {
-            if !crate::nvs_config::valid_attract(&v) {
-                return req.bad_request(&format!(
-                    "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
-                    crate::nvs_config::ATTRACT_MAX - 5
-                ));
-            }
-            next.attract = v;
-        }
-        if let Some(v) = patch.look {
-            let Some(look) = opendmd_core::look::Look::from_name(&v) else {
-                return req.bad_request("look must be colour, amber, red, green, blue or white");
-            };
-            next.look = look;
-        }
-        if let Some(v) = patch.glow {
-            let Some(glow) = opendmd_core::look::GlowLevel::from_name(&v) else {
-                return req.bad_request("glow must be off, short or long");
-            };
-            next.glow = glow;
-        }
-        if let Some(v) = patch.look_formula {
-            use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
-            match formula_ref(&v) {
-                _ if v.is_empty() => {}
-                Some(FormulaRef::File { file, .. })
-                    if files::card_path(config::SD_MOUNT, file).is_none() =>
-                {
-                    return req.bad_request("look_formula: the Formula's path must stay on the card");
-                }
-                Some(_) => {}
-                None => {
-                    return req.bad_request(
-                        "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?src=…)",
-                    )
-                }
-            }
-            if v.len() > MAX_LOOK_PATH {
-                return req.error(
-                    413,
-                    "413 Payload Too Large",
-                    &format!(
-                        "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
-                        v.len(),
-                    ),
-                );
-            }
-            next.look_formula = v;
-        }
-        if let Some(v) = patch.boot_show {
-            let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
-                return req.bad_request("boot_show must be off, short or full");
-            };
-            next.boot_show = len;
-        }
-        if let Some(v) = patch.panel_sync {
-            next.panel_sync = v;
-        }
-        if let Some(v) = patch.panel_split {
-            next.panel_split = v;
-        }
-        if let Some(v) = patch.formula_jit {
-            next.formula_jit = v;
-        }
-        if let Some(v) = &patch.formula_keep {
-            match opendmd_core::FormulaKeep::from_name(v) {
-                Some(k) => next.formula_keep = k,
-                None => return req.bad_request("formula_keep must be turn, 1m, 5m or hold"),
-            }
-        }
-        if let Some(v) = &patch.api_key {
-            if !v.is_empty() && !opendmd_core::access::valid_key(v) {
-                return req.bad_request(&format!(
-                    "api_key must be {}..{} of A-Z a-z 0-9 . _ ~ - (or \"\" for none)",
-                    opendmd_core::access::KEY_MIN,
-                    opendmd_core::access::KEY_MAX
-                ));
-            }
-            next.api_key = v.clone();
-        }
-        if let Some(v) = &patch.card_speed {
-            let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
-                return req.bad_request(opendmd_core::card_speed::INVALID);
-            };
-            next.card_speed = mode;
-        }
-        if next.dwell_max < next.dwell_min {
-            return req.bad_request("dwell_max must be >= dwell_min");
         }
         let panel_op = match (patch.panel, patch.panel_confirm) {
             (None, None) => None,
@@ -665,6 +730,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
         let card_speed = next.card_speed;
+        // The shared copy and the log line are this handler's (CPU0), once
+        // the main task has applied it: the display core neither clones
+        // the settings nor formats a line for a PUT.
+        let shared = next.clone();
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -677,8 +746,30 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REINDEX_TIMEOUT) {
+        let answer = rx.recv_timeout(REINDEX_TIMEOUT);
+        // The settings the main task replaced (or refused), freed here on
+        // CPU0 rather than on the display core.
+        crate::state::drop_spent();
+        match answer {
             Ok(Ok(applied)) => {
+                info!(
+                    "config applied: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
+                    shared.brightness,
+                    shared.look.name(),
+                    shared.glow.name(),
+                    shared.dwell_min,
+                    shared.dwell_max,
+                    shared.shuffle,
+                    shared.platforms,
+                    shared.set,
+                    shared.transition,
+                    shared.attract,
+                    shared.panel_sync,
+                    shared.panel_split
+                );
+                *c.settings.lock().unwrap() = shared;
+                // Durable at once on the card (CPU0; `settings_card`).
+                crate::settings_card::save_shared(&c.settings);
                 if let Some(name) = renamed {
                     // Queued, not waited for: the worker may be mid-connect.
                     if c.net.send(NetCommand::Rename(name)).is_err() {
@@ -797,20 +888,28 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         } else {
             json
         };
+        let (rules, night) = (parsed.rules.len(), parsed.night.is_some());
+        let shared = json.clone();
         let (tx, rx) = mpsc::channel();
         if c.cmd
-            .send(Command::SetSchedule { json, reply: tx })
+            .send(Command::SetSchedule {
+                json,
+                parsed: Box::new(parsed),
+                reply: tx,
+            })
             .is_err()
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
         // Applying may switch the playlist (a rule in force now).
         match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(Ok(_)) => req.json(&format!(
-                r#"{{"ok":true,"rules":{},"night":{}}}"#,
-                parsed.rules.len(),
-                parsed.night.is_some()
-            )),
+            Ok(Ok(_)) => {
+                // (The shared copy and the line are this handler's, on CPU0.)
+                c.settings.lock().unwrap().schedule = shared;
+                crate::settings_card::save_shared(&c.settings);
+                info!("schedule saved: {rules} rule(s){}", if night { " + night mode" } else { "" });
+                req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
+            }
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
@@ -863,7 +962,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        // An inline formula (`@formula?src=…`) may be up to 6 KB; it is
+        // An inline formula (`@formula?psb=…`) may be up to 6 KB; it is
         // compiled on the main task as it opens (a compile error or one too
         // heavy for the panel is a 400 with the compiler's sentence; a
         // bundled name or a card file that isn't there, a 404).
@@ -886,13 +985,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(
                 415,
                 "415 Unsupported Media Type",
-                "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)",
+                "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)",
             );
         }
         // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
         // this build does not know is a 415 from the engine.
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
-            return req.bad_request("\"live\" is only for a formula (@formula?src=…)");
+            return req.bad_request("\"live\" is only for a formula (@formula?psb=…)");
         }
         let formula_file = opendmd_core::synth::formula_file(&play.path);
         if play.over
@@ -901,7 +1000,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             && formula_file.is_none()
         {
             return req.bad_request(
-                "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off",
+                "\"over\" is only for a formula (@formula?psb=…), or \"\" to take it off",
             );
         }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
@@ -1090,22 +1189,27 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        if files::card_path(config::SD_MOUNT, &forget.path).is_none()
+        if files::card_path_for_write(config::SD_MOUNT, &forget.path).is_none()
             || opendmd_core::layout::cache_path(&forget.path).is_none()
         {
             return req.bad_request("path must be a card-absolute /gifs/….gif");
         }
         // The copy may be the one opened ahead (the GIF's path finds it).
         let _busy = crate::cache_builder::busy();
-        if !skip_if_playing(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) {
+        let Some(_held) = release_for_write(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) else {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-        }
+        };
         match crate::cache::forget(&forget.path) {
-            Ok(removed) => req.json(&format!(
+            Ok(removed) => {
+                if let Some(copy) = &removed {
+                    crate::fatidx::note_gone(&format!("{}{copy}", config::SD_MOUNT));
+                }
+                req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{}}}"#,
                 json_string(&forget.path),
                 removed.is_some()
-            )),
+            ))
+            }
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
         }
     })?;
@@ -1123,6 +1227,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
+        // `?names=1`: a /gifs folder's names from the index's names file,
+        // no directory walk (naming a new GIF); listed as usual when that
+        // file cannot be trusted.
+        if query_param(req.query(), "names").as_deref() == Some("1") && !sizes {
+            if let Some(names) = crate::fatidx::names(&dir) {
+                return listing(req, move |req| stream_names(req, &dir, names));
+            }
+        }
         listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
@@ -1287,7 +1399,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
-    server.route("/api/reboot", Method::Post, |req| {
+    #[cfg(feature = "bench")]
+    let c_cut = ctx.clone();
+    server.route("/api/reboot", Method::Post, move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check
         // what a crash leaves: the panic message and IDF's backtrace on the
@@ -1309,6 +1423,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             req.json(r#"{"ok":true,"overflowing":true}"#)?;
             std::thread::sleep(Duration::from_millis(500));
             crate::restarts::overflow_on_purpose();
+        }
+        // `?settings_cut=1` (`bench` only): the power-cut test of the
+        // settings file: a save stopped between its renames (the old file
+        // moved aside, the new one not yet in its place), then this reboot.
+        // The next boot must come up with the settings in force now.
+        #[cfg(feature = "bench")]
+        if query_param(req.query(), "settings_cut").is_some() {
+            crate::settings_card::save_cut(&c_cut.settings);
+            log::warn!("settings: a save stopped between its renames on purpose (bench); restarting");
         }
         info!("reboot requested over HTTP");
         // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
@@ -1394,7 +1517,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/files/*", Method::Put, move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let c = c.clone();
-        stream::receive(req, move |up| put_file(up, &c, &rel))
+        // `?new=1`: only if there is no such file (409 otherwise): a name
+        // picked from a names list that has gone stale never replaces a GIF.
+        let create_new = query_param(req.query(), "new").as_deref() == Some("1");
+        stream::receive(req, move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -1412,8 +1538,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let c = ctx.clone();
     server.route("/api/files/*", Method::Delete, move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
-        let Some(path) = files::card_path(config::SD_MOUNT, &rel) else {
-            return req.bad_request("path escapes the card");
+        let Some(path) = files::card_path_for_write(config::SD_MOUNT, &rel) else {
+            return req.bad_request(files::BAD_WRITE_PATH);
         };
         // The engine holds the active manifest and its `.idx` open, and FAT
         // (no FF_FS_LOCK in this build) would let us unlink them underneath it.
@@ -1458,17 +1584,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Held to the end: the GIF's copy goes too, and nothing may open
         // it ahead in between.
         let _busy = crate::cache_builder::busy();
-        if !skip_if_playing(&c, &path) {
+        let Some(_held) = release_for_write(&c, &path) else {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-        }
+        };
         crate::fatidx::touched(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
+                crate::fatidx::note_gone(&path);
                 // A GIF takes its prepared copy with it; a copy removed
                 // directly changes the count.
                 let card = format!("/{}", rel.trim_start_matches('/'));
-                if let Err(e) = crate::cache::forget(&card) {
-                    log::warn!("DELETE {card}: its prepared copy: {e}");
+                match crate::cache::forget(&card) {
+                    Ok(Some(copy)) => crate::fatidx::note_gone(&format!("{}{copy}", config::SD_MOUNT)),
+                    Ok(None) => {}
+                    Err(e) => log::warn!("DELETE {card}: its prepared copy: {e}"),
                 }
                 if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
@@ -1606,62 +1735,102 @@ fn portal_target(ctx: &Ctx) -> Option<String> {
     (s.wifi == "ap" && !s.ip.is_empty()).then(|| format!("http://{}/", s.ip))
 }
 
-/// If the player has `fs_path` open — the GIF on screen, or the prepared copy
-/// it is actually reading for it — skip to the next entry and give it a beat
-/// to close the file: FAT must not have an open file replaced or unlinked.
-/// The copy it opened ahead for the next file — `fs_path` itself, or the
-/// copy of the GIF at `fs_path` — is let go first, and waited for (its pick
-/// then opens whatever is there when it plays). The caller holds
-/// `cache_builder::busy()` from before this to the end of its card work, so
-/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). False if the
-/// player did not answer: the caller refuses rather than touch the file.
-///
-/// The skip is still a beat, not an answer: the file on screen closes at
-/// the loop's next tick, which an answer would have to wait across
-/// iterations for.
+/// The write intents a writer holds (`fatidx::WriteIntent`) from before it
+/// waits for the player until its card work is done: drop it last.
 #[must_use]
-fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
-    if crate::state::is_ahead(fs_path) && !release_ahead(ctx) {
-        return false;
+struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
+
+/// Before a writer changes, replaces, renames or deletes `fs_path` (and,
+/// for a GIF, its prepared copy): register write intents for them, so
+/// nothing opens them for raw reads from now on (`fatidx`: the player then
+/// reads them through FatFs, which fails cleanly on a freed chain); have
+/// the player let go of them if it has them open — the file on screen, the
+/// copy it reads for it, the copy opened ahead — answered by the main loop
+/// at once (`Command::Release`, the loop woken from its frame's sleep);
+/// and wait until neither is held. The caller keeps the returned intents
+/// to the end of its card work, and holds `cache_builder::busy()` too, so
+/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). `None` if the
+/// player did not let go: the caller refuses and touches nothing.
+///
+/// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
+/// folder: the intent and the wait are for the whole folder then.
+fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
+    let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
+    let alias = !opendmd_core::fatread::is_canonical(card);
+    let parent = fs_path.rsplit_once('/').map_or(fs_path, |(d, _)| d).to_string();
+    let copy = opendmd_core::layout::cache_path(card).map(|p| format!("{}{p}", config::SD_MOUNT));
+    let mut intents = Vec::with_capacity(2);
+    if alias {
+        intents.push(crate::fatidx::intend_tree(&parent));
+    } else {
+        intents.push(crate::fatidx::intend(fs_path));
+        if let Some(c) = &copy {
+            intents.push(crate::fatidx::intend(c));
+        }
     }
+    let held = || {
+        if alias {
+            crate::fatidx::holds_under(&parent)
+        } else {
+            crate::fatidx::holds(fs_path) || copy.as_deref().is_some_and(crate::fatidx::holds)
+        }
+    };
+    // The file on screen read through FatFs (not raw) is let go too: FAT
+    // must not have an open file replaced or unlinked. A Formula's file is
+    // read and closed as it opens: nothing holds it (and letting go would
+    // drop the Formula being edited).
     let playing = ctx.status.lock().unwrap().path.clone();
-    // A Formula's file is read (compacted) and closed as it opens: nothing
-    // holds it, and a skip would only drop the Formula being edited (whose
-    // `POST /api/play` then met the next file's transition still holding
-    // its 24 KB: short of the compile, swap-mem2). It plays on until sent
-    // again; a deleted one until its dwell ends.
-    if playing.is_empty() || opendmd_core::synth::formula_file(&playing).is_some() {
-        return true;
+    let on_screen = !playing.is_empty() && opendmd_core::synth::formula_file(&playing).is_none() && {
+        let gif = format!("{}{playing}", config::SD_MOUNT);
+        let pcopy = opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
+        files::same_card_path(fs_path, &gif) || pcopy.is_some_and(|c| files::same_card_path(fs_path, &c))
+    };
+    // The file on screen is let go only if it is the one in the way;
+    // else just the copy opened ahead (a transition's outgoing file closes
+    // within the wait below).
+    if (on_screen || crate::state::is_ahead(fs_path) || held()) && !release_player(ctx, on_screen) {
+        return None;
     }
-    let gif = format!("{}{playing}", config::SD_MOUNT);
-    let copy =
-        opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
-    if files::same_card_path(fs_path, &gif)
-        || copy.is_some_and(|c| files::same_card_path(fs_path, &c))
-    {
-        let _ = ctx.cmd.send(Command::Skip);
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    true
+    wait_until_not(held).then_some(Held(intents))
 }
 
-/// `Command::ReleaseAhead`, and its answer: true once the copy opened ahead
-/// is closed (or there was none), false if the main loop did not answer in
-/// [`REPLY_TIMEOUT`] (a frame held longer than that, or a stuck loop).
-fn release_ahead(ctx: &Ctx) -> bool {
+/// `Command::Release`: the main loop lets go of the copy opened ahead and,
+/// with `screen`, of the file on screen (the picture stays; the next tick
+/// opens the next file, and nothing an intent covers opens at all), woken
+/// from its frame's sleep for it. False if it did not answer in
+/// [`REPLY_TIMEOUT`].
+fn release_player(ctx: &Ctx, screen: bool) -> bool {
     let (tx, rx) = mpsc::channel();
-    if ctx.cmd.send(Command::ReleaseAhead(tx)).is_err() {
+    if ctx.cmd.send(Command::Release { screen, reply: tx }).is_err() {
         // No main loop: nothing is open.
         return true;
     }
+    crate::wake::kick();
     let answered = rx.recv_timeout(REPLY_TIMEOUT).is_ok();
     if !answered {
-        log::warn!("the player did not let go of the next file's copy");
+        log::warn!("the player did not answer a release");
     }
     answered
 }
 
-/// The answer when [`skip_if_playing`] got none: the file is left alone.
+/// How long a writer waits for a released file to be no longer held (a
+/// transition's outgoing file closes when its last step is drawn).
+const RELEASE_WAIT: Duration = Duration::from_secs(3);
+
+fn wait_until_not(held: impl Fn() -> bool) -> bool {
+    let until = std::time::Instant::now() + RELEASE_WAIT;
+    while held() {
+        if std::time::Instant::now() >= until {
+            log::warn!("a write waited {} s for the player to let go of a file: refused", RELEASE_WAIT.as_secs());
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
+
+/// The answer when [`release_for_write`] got none: the file is left alone.
 const NOT_RELEASED: &str = "the player did not let go of the file; try again";
 
 /// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
@@ -1679,22 +1848,22 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
         return req.bad_request("recursive delete is only for cache/ and odm/");
     }
     let _busy = crate::cache_builder::busy();
+    // Nothing under it opens for raw reads from here to the end of this
+    // round (`fatidx::WriteIntent`, a tree); what the player holds there
+    // now (the copy on screen, the one opened ahead) is let go first.
+    let _tree = crate::fatidx::intend_tree(path);
     if files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT) {
-        // A copy opened ahead may be anywhere under it.
-        if crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0
-            && !release_ahead(c)
-        {
+        let playing = c.status.lock().unwrap().path.clone();
+        let copy_under = opendmd_core::layout::cache_path(&playing)
+            .map(|p| format!("{}{p}", config::SD_MOUNT))
+            .is_some_and(|copy| files::same_card_path(path, &copy) || files::under(&copy, path));
+        let ahead = crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0;
+        if (copy_under || ahead || crate::fatidx::holds_under(path)) && !release_player(c, copy_under) {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
-        let playing = c.status.lock().unwrap().path.clone();
-        if let Some(copy) = opendmd_core::layout::cache_path(&playing) {
-            let copy = format!("{}{copy}", config::SD_MOUNT);
-            if (files::same_card_path(path, &copy) || files::under(&copy, path))
-                && !skip_if_playing(c, &copy)
-            {
-                return req.error(503, "503 Service Unavailable", NOT_RELEASED);
-            }
-        }
+    }
+    if !wait_until_not(|| crate::fatidx::holds_under(path)) {
+        return req.error(503, "503 Service Unavailable", NOT_RELEASED);
     }
     let card = format!("/{}", rel.trim_start_matches('/').trim_end_matches('/'));
     match files::remove_tree(path, config::RECURSIVE_DELETE_BUDGET) {
@@ -1704,6 +1873,9 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
                 || files::same_card_path(path, config::CACHE_ROOT)
             {
                 crate::cache::invalidate();
+                // Copies (and perhaps the index file itself) gone: the
+                // index is dropped and rebuilt when quiet.
+                crate::fatidx::dir_changed();
             }
             req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{removed},"done":{done}}}"#,
@@ -1777,9 +1949,9 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
 
 /// `PUT /api/files/<rel>`, on the stream task: anywhere on the card, a
 /// manifest or a `.meta` by way of the main task.
-fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
-    let Some(dest) = files::card_path(config::SD_MOUNT, rel) else {
-        return up.bad_request("path escapes the card");
+fn put_file(up: &mut Upload, c: &Ctx, rel: &str, create_new: bool) -> Result<()> {
+    let Some(dest) = files::card_path_for_write(config::SD_MOUNT, rel) else {
+        return up.bad_request(files::BAD_WRITE_PATH);
     };
     // A manifest (`/filelist.*`, `/sets/*`) may be the one the engine has
     // open, and it has an `.idx` sidecar that must go first. Both are the
@@ -1797,10 +1969,37 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     // If the player has this very file open — the GIF, or its prepared
     // copy — ask it to move on first: FAT cannot replace a file that is
     // being read.
-    if !skip_if_playing(c, &dest) {
+    // Held to the end of the upload and its replace of `dest`.
+    let Some(_held) = release_for_write(c, &dest) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    };
+    if create_new {
+        // Taken now, empty (FatFs's create-new: the folder's one walk): a
+        // second writer of the same name gets the 409; the body then
+        // replaces it as any upload's does.
+        if let Some(parent) = std::path::Path::new(&dest).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return up.error(409, "409 Conflict", &format!("/{} exists", rel.trim_start_matches('/')));
+            }
+            Err(e) => return up.error(500, "500 Internal Server Error", &format!("{e}")),
+        }
     }
-    let written = files::receive_upload(up, &dest)?;
+    let written = match files::receive_upload(up, &dest) {
+        Ok(w) => w,
+        Err(e) => {
+            // The name taken for this upload goes back with it.
+            if create_new {
+                let _ = std::fs::remove_file(&dest);
+            }
+            return Err(e);
+        }
+    };
+    // Its entry, for the index's lookups (`fatidx` delta).
+    crate::fatidx::note_written(&dest);
     info!(
         "PUT /{rel}: {written} B in {:.1} s",
         up.elapsed().as_secs_f32()
@@ -1850,7 +2049,7 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     let gif = |p: &str| {
         let under_gifs = p.get(..6).is_some_and(|g| g.eq_ignore_ascii_case("/gifs/"));
         (under_gifs && !p.contains(['\t', '\r', '\n']))
-            .then(|| files::card_path(config::SD_MOUNT, p))
+            .then(|| files::card_path_for_write(config::SD_MOUNT, p))
             .flatten()
             .filter(|_| opendmd_core::layout::cache_path(p).is_some())
     };
@@ -1872,9 +2071,13 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     // nor a stale copy at `to`'s place, which goes (a playlist line naming
     // `to` would have played it). The stream task holds
     // `cache_builder::busy()` throughout.
-    if !skip_if_playing(c, &from) || !skip_if_playing(c, &to) {
+    // In turn: a refused `from` asks nothing more of the player.
+    let Some(_from_held) = release_for_write(c, &from) else {
         return up.error(503, "503 Service Unavailable", NOT_RELEASED);
-    }
+    };
+    let Some(_to_held) = release_for_write(c, &to) else {
+        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    };
     if let Some(dir) = std::path::Path::new(&to).parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             return up.error(
@@ -1903,10 +2106,19 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
                 format!("{}{old}", config::SD_MOUNT),
                 format!("{}{new}", config::SD_MOUNT),
             );
-            files::move_copy(&old, &new)
+            let moved = files::move_copy(&old, &new);
+            crate::fatidx::note_gone(&old);
+            if moved == "moved" {
+                crate::fatidx::note_written(&new);
+            } else {
+                crate::fatidx::note_gone(&new);
+            }
+            moved
         }
         _ => "none",
     };
+    crate::fatidx::note_gone(&from);
+    crate::fatidx::note_written(&to);
     crate::cache::invalidate();
     let smooth = files::rename_line(config::SMOOTH_LIST, &m.from, Some(&m.to))
         .unwrap_or_else(|e| {
@@ -2009,6 +2221,41 @@ fn apply_meta<R: Respond>(
     }
 }
 
+/// `GET /api/files?names=1`: the listing's JSON from the names file
+/// (`{"dir","entries":[{"name","size":null,"dir":false}],"count","sizes":
+/// false,"names":true}`), streamed.
+fn stream_names(req: &mut Req, dir: &str, names: crate::fatidx::Names) -> Result<()> {
+    req.header("Cache-Control", "no-cache")?;
+    req.begin_chunked("200 OK", "application/json")?;
+    let mut buf = format!(r#"{{"dir":{},"entries":["#, json_string(dir.trim_end_matches('/')));
+    let mut count = 0usize;
+    let mut sent: Result<()> = Ok(());
+    let r = names.each(&mut |n| {
+        if count > 0 {
+            buf.push(',');
+        }
+        count += 1;
+        buf.push_str(&format!(r#"{{"name":{},"size":null,"dir":false}}"#, json_string(n)));
+        if buf.len() >= config::IO_CHUNK {
+            sent = req.chunk(buf.as_bytes()).and_then(|()| files::wait_for_heap());
+            buf.clear();
+            if sent.is_err() {
+                return Err(std::io::Error::other("client gone"));
+            }
+        }
+        Ok(())
+    });
+    sent?;
+    if let Err(e) = r {
+        // The card failed mid-file: the JSON is cut, and the app lists.
+        log::warn!("names {dir}: {e}");
+        return req.finish();
+    }
+    buf.push_str(&format!(r#"],"count":{count},"sizes":false,"names":true}}"#));
+    req.chunk(buf.as_bytes())?;
+    req.finish()
+}
+
 /// `GET /api/overrides`: `{"set","playlist","overrides":[{path, never?, w?,
 /// dwell?, dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
 /// is an empty list).
@@ -2102,7 +2349,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let www = crate::www::info();
     format!(
         concat!(
-            r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
+            r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
@@ -2115,6 +2362,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         ),
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
+        psi_abi(),
         s.uptime_secs,
         t.as_millis(),
         json_string(&s.ip),
@@ -2145,7 +2393,12 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.refresh_hz,
         s.deadline_misses,
         s.worst_lateness_ms,
-        s.misses.json(),
+        {
+            // `misses` with `recent` (the last late frames' phases) inside.
+            let mut j = s.misses.json();
+            j.pop();
+            j + &crate::misslog::json() + "}"
+        },
         s.gifs_started,
         crate::httpd::streams_aborted(),
         crate::logring::drops(),
@@ -2158,7 +2411,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json() + &crate::fatidx::status_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json() + &crate::cardspeed::yields_json() + &crate::readahead::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),
@@ -2190,6 +2443,15 @@ fn kept_json(s: &Status) -> String {
     }
 }
 
+/// The compiled Formulas this player plays (`opendmd_psi::psb::ABI`; null
+/// in a build without Formulas): the web app compiles for it.
+fn psi_abi() -> String {
+    #[cfg(feature = "psi")]
+    return opendmd_core::psi::psb::ABI.to_string();
+    #[cfg(not(feature = "psi"))]
+    return "null".to_string();
+}
+
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
 /// "beam_us","compile_us","still","jit"}` while a formula plays: its mean render time, the
 /// frame time its governor holds it to (`fx_psi::Governor`), the one it
@@ -2206,8 +2468,9 @@ fn formula_json(path: &str) -> String {
     let still = opendmd_core::fx_psi::still_held();
     let beam = opendmd_core::fx_psi::beam_us();
     let jit = jit_json();
+    let (rt, rn) = opendmd_core::fx_psi::render_totals();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit},"render_us_total":{rt},"renders":{rn}}}"#
     )
 }
 
@@ -2306,7 +2569,7 @@ fn looks_json(set: &Settings) -> String {
         .then(|| crate::nvs_config::attract_path(&set.attract))
         .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -2323,7 +2586,71 @@ fn looks_json(set: &Settings) -> String {
             n => n.to_string(),
         },
         crate::panel::scan_json(),
+        display_json(),
     )
+}
+
+/// How long a status answer is reused for another read.
+const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The last status answer (with or without `recent`), and when it was made.
+static STATUS_LAST: std::sync::Mutex<Option<(std::time::Instant, bool, String)>> = std::sync::Mutex::new(None);
+
+/// Reads answered from the last answer (`display.status_cached`).
+static STATUS_CACHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The last answer, if it is fresh and of the same kind (httpd's only).
+fn cached_status(recent: bool) -> Option<String> {
+    let last = STATUS_LAST.lock().ok()?;
+    last.as_ref()
+        .filter(|(at, r, _)| *r == recent && at.elapsed() < STATUS_CACHE)
+        .map(|(_, _, j)| j.clone())
+}
+
+fn keep_status(recent: bool, json: &str) {
+    if let Ok(mut last) = STATUS_LAST.lock() {
+        *last = Some((std::time::Instant::now(), recent, json.to_string()));
+    }
+}
+
+/// The last `/api/status`: how long it held `status` (µs) to copy it, and
+/// the whole build with the settings' part.
+static STATUS_LOCK_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static STATUS_BUILD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `"display":{wakes, wake_late, wake_max_us, spin_us, publish_skipped,
+/// status_lock_us, status_build_us}`:
+/// how the display loop's wake kept time (`wake.rs`: a wake over 100 µs
+/// after its time is late) and the frames whose status publish was skipped
+/// for a held lock, since boot.
+fn display_json() -> String {
+    let (wakes, late, max, spun) = crate::wake::stats();
+    format!(
+        r#"{{"wakes":{wakes},"wake_late":{late},"wake_max_us":{max},"spin_us":{spun},"publish_skipped":{},"status_lock_us":{},"status_build_us":{},"status_cached":{},"pre_start":{},"commands":{},"buffers":{},"arena":{},"card_read_max_us":{},{}}}"#,
+        crate::state::PUBLISH_SKIPPED.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_LOCK_US.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_BUILD_US.load(std::sync::atomic::Ordering::Relaxed),
+        STATUS_CACHED.load(std::sync::atomic::Ordering::Relaxed),
+        crate::panel::pre_start_json(),
+        crate::state::commands_json(),
+        crate::membank::buffers_json(),
+        arena_json(),
+        crate::membank::READ_MAX_US.load(std::sync::atomic::Ordering::Relaxed),
+        crate::pace::status_json(),
+    )
+}
+
+/// `display.arena`: `formula_arena`'s allocations served and wanted while
+/// its slot was busy, or `null` when it is off.
+fn arena_json() -> String {
+    #[cfg(feature = "psi")]
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        if crate::arena::span().0 != 0 {
+            return format!(r#"{{"hits":{},"busy":{}}}"#, crate::arena::HITS.load(Relaxed), crate::arena::BUSY.load(Relaxed));
+        }
+    }
+    "null".to_string()
 }
 
 /// A JSON string, or `null`.
@@ -2357,7 +2684,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2386,6 +2713,7 @@ fn settings_json(s: &Settings) -> String {
         s.panel_sync,
         s.panel_split,
         s.formula_jit,
+        s.formula_arena,
         s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),

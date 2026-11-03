@@ -1,26 +1,19 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Rings through stripes"
-about "Two formulas in one: the stripes decide where the rings show"
-control width = 0.3 "Stripe width" -- the stripes part reads it as a
+about "Two patterns in one: the stripes decide where the rings show"
+control width = 0.3 "Stripe width"
 loop 4
-part rings {
-  -- Rings
-  loop 4
-  pal(rainbow, frac(r*1.5 - t/2))
+-- how white the diagonal stripes are here: 0 to 1
+fn stripes(w) {
+  size = 8 + w*24
+  band = sin((px + 31 - py)/size - t/2)
+  clamp(band*1.5 + 0.5, 0, 1)
 }
-part stripes {
-  -- Stripes
-  loop 4
-  size = 8 + a*24
-  band = sin((px + py)/size - t/2)
-  s = clamp(band*1.5 + 0.5, 0, 1)
-  rgb(1, s, s)
-}
--- the rings show only where the stripes are white
 layer {
   gray(0.08)
 }
+-- the rings show only where the stripes are white
 layer {
-  rings(x, y, stripes.s)
+  pal(rainbow, frac(r*1.5 - t/2), stripes(width))
 }

@@ -290,7 +290,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # value (P1), `ink(n)` (P3), rebinding (P2), named palette entries (P6)
 # and the reworded sentences (P8): the wasm 92,107 B gz on main, the line
 # ~90 -> 91 KB at P1 (93,199 B). Raised under the budget authority.
-PSI_WASM_GZ_BUDGET = 96 * 1024  # 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+PSI_WASM_GZ_BUDGET = 106 * 1024  # 104 until psi-perf (2026-11-02: the paint primitives costed by the pixels they examine, their boxes from constant values, so the editor's estimate stays the panel's: +0.7 KB gz, 107,018 B; raised under the standing OK for budget lines); 96 until psi-rebuild (2026-10-31: the scene stage — paint, if, print — and `under(x, y)`, +6.5 KB gz; the player lost ~100 KB of compiler for it; the owner's OK 2026-10-31); 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -364,8 +364,10 @@ FSHEET = {"js/fsheet.js"}
 # Your Formulas where they live (on the panel's card, or this browser) and
 # the line a playlist or the look names one by (js/fstore.js, branch
 # formula-refs, 2026-10-29): imported by the Formulas view and Settings ›
-# Look, a line of its own.
-FSTORE_GZ_BUDGET = 3 * 1024
+# Look, a line of its own. 3.5 KB since display-isolation met main (main's
+# known/read checks and this branch's compiled-file .psb handling together,
+# 3,132 B gz, 2026-11-02).
+FSTORE_GZ_BUDGET = 3584
 FSTORE = {"js/fstore.js"}
 # Submit to the gallery (js/fsubmit.js, branch f-editor, 2026-10-30): the
 # form, for the web app's editor and the site's Formula page; imported when

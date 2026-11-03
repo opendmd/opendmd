@@ -4,15 +4,13 @@ name "Corner clock"
 about "The hour and minute as bars in a corner, over the GIF"
 look
 -- top bar: the hour (of 12); bottom bar: the minute
-frame {
-  hr = 104 + (hour%12 + minute/60)/12*22
-  mn = 104 + minute/60*22
-}
-top = py > 3 and py < 6
-bot = py > 0 and py < 3
+hr = 104 + (hour%12 + minute/60)/12*22
+mn = 104 + minute/60*22
+top = (31 - py) > 3 and (31 - py) < 6
+bot = (31 - py) > 0 and (31 - py) < 3
 bar = (top or bot) * (px >= 104) * (px < (top ? hr : mn))
 layer multiply {
-  gray(1 - (px >= 101)*(py < 8)*0.8)
+  gray(1 - (px >= 101)*((31 - py) < 8)*0.8)
 }
 layer {
   rgb(#ffbf4d, bar)

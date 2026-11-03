@@ -259,13 +259,8 @@ fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
         prog.len(),
         prog.regs()
     );
-    let mut path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
+    let path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
     let most = opendmd_core::synth::MAX_FORMULA_PATH;
-    // Over the limit: without its `about` line, as the web app's path does
-    // (js/psikit.js `path`).
-    if path.len() > most {
-        path = opendmd_core::fx_psi::path(&psi::look::declare(&src, "about", 0, ""), opts.unwrap_or(""));
-    }
     if path.len() > most {
         bail!(
             "{}: too long to play as a path ({} bytes encoded, {most} at most): shorten it",
@@ -342,7 +337,18 @@ struct DirSource {
 impl Source for DirSource {
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         let rel = Path::new(path.trim_start_matches('/'));
-        Ok(Box::new(std::fs::File::open(self.root.join(rel))?))
+        let full = self.root.join(rel);
+        // A Formula's compiled file the web app has not written: compiled
+        // here from the `.psi` beside it (the player never compiles).
+        #[cfg(feature = "psi")]
+        if full.extension().is_some_and(|e| e == "psb") && !full.exists() {
+            let src = std::fs::read_to_string(full.with_extension("psi"))?;
+            let psb = opendmd_core::psi::build(&src).map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidInput, e.render(&src))
+            })?;
+            return Ok(Box::new(io::Cursor::new(psb)));
+        }
+        Ok(Box::new(std::fs::File::open(full)?))
     }
 }
 
@@ -474,7 +480,7 @@ fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
     let t0 = Instant::now();
     for _ in 0..1024 {
         match engine.tick(t0.elapsed(), canvas)? {
-            TickOutcome::Frame { playing, .. } => return Ok(playing.path),
+            TickOutcome::Frame { playing, .. } => return Ok(playing.path.into()),
             TickOutcome::Idle => continue,
             TickOutcome::Exhausted => bail!("nothing playable"),
         }
@@ -755,14 +761,15 @@ fn launched_from_desktop(args: &Args) -> bool {
 fn install_bundled() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
     let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let mut list: Vec<(&'static str, &'static str)> = rd
+    let mut list: Vec<(&'static str, &'static [u8])> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "psi"))
         .filter_map(|p| {
             let text = std::fs::read_to_string(&p).ok()?;
             text.lines().any(|l| l.starts_with("-- bundle")).then(|| {
                 let stem = p.file_stem()?.to_string_lossy().into_owned();
-                Some((&*Box::leak(stem.into_boxed_str()), &*Box::leak(text.into_boxed_str())))
+                let psb = opendmd_core::psi::build(&text).ok()?;
+                Some((&*Box::leak(stem.into_boxed_str()), &*Box::leak(psb.into_boxed_slice())))
             })?
         })
         .collect();
@@ -978,7 +985,7 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
             } => {
                 if started {
                     println!("[{}/{}] {}", playing.ordinal, total, playing.path);
-                    playing_path = playing.path;
+                    playing_path = playing.path.into();
                     window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
                 }
                 // The compositor's output while a transition runs.

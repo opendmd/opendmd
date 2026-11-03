@@ -196,12 +196,83 @@ unsafe extern "C" fn d_status(pdrv: u8) -> DSTATUS {
     ff_sdmmc_status(pdrv)
 }
 
+/// Reads waiting for (or doing) a transfer: a long write steps aside for
+/// them between its chunks ([`d_write`]).
+static READERS: AtomicU32 = AtomicU32::new(0);
+/// The most sectors one write transfer carries: a save's multi-sector write
+/// (a whole cluster, 64 sectors: ~60 ms with the card's busy time) held the
+/// I/O lock that long, and the player's raw read waited it out.
+const WRITE_CHUNK: u32 = 8;
+/// How long a write waits between chunks for the reads that want the card
+/// (each a few sectors): at most this much a chunk, so a stream of reads can
+/// slow a save but never stop it.
+const YIELD_MAX_US: i64 = 5_000;
+/// Writes that stepped aside, and the µs they waited (`/api/status`).
+static YIELDS: AtomicU32 = AtomicU32::new(0);
+static YIELD_US: AtomicU32 = AtomicU32::new(0);
+
 unsafe extern "C" fn d_read(pdrv: u8, buff: *mut u8, sector: u32, count: u32) -> DRESULT {
-    transfer(false, &mut || ff_sdmmc_read(pdrv, buff, sector, count) == DRESULT_RES_OK)
+    READERS.fetch_add(1, Relaxed);
+    let r = transfer(false, &mut || ff_sdmmc_read(pdrv, buff, sector, count) == DRESULT_RES_OK);
+    READERS.fetch_sub(1, Relaxed);
+    r
 }
 
 unsafe extern "C" fn d_write(pdrv: u8, buff: *const u8, sector: u32, count: u32) -> DRESULT {
-    transfer(true, &mut || ff_sdmmc_write(pdrv, buff, sector, count) == DRESULT_RES_OK)
+    let mut done = 0;
+    while done < count {
+        if done > 0 {
+            step_aside();
+        }
+        let n = (count - done).min(WRITE_CHUNK);
+        // SAFETY: within the caller's `count` sectors.
+        let (b, at) = (buff.add(done as usize * 512), sector + done);
+        let r = transfer(true, &mut || ff_sdmmc_write(pdrv, b, at, n) == DRESULT_RES_OK);
+        if r != DRESULT_RES_OK {
+            return r;
+        }
+        done += n;
+    }
+    DRESULT_RES_OK
+}
+
+/// Between a write's chunks, the I/O lock free: let the reads waiting for
+/// it go first, for at most [`YIELD_MAX_US`] (a FreeRTOS mutex is not
+/// fair: the writer, at a higher priority, would take it straight back).
+fn step_aside() {
+    if READERS.load(Relaxed) == 0 {
+        return;
+    }
+    // SAFETY: a plain clock read.
+    let t0 = unsafe { esp_idf_sys::esp_timer_get_time() };
+    YIELDS.fetch_add(1, Relaxed);
+    loop {
+        std::thread::yield_now();
+        // SAFETY: as above.
+        let waited = unsafe { esp_idf_sys::esp_timer_get_time() } - t0;
+        if READERS.load(Relaxed) == 0 || waited >= YIELD_MAX_US {
+            YIELD_US.fetch_add(waited as u32, Relaxed);
+            return;
+        }
+        if waited > 200 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+/// `"write_yields":N,"write_yield_us":N,"gave_way":N,"gave_way_us":N,"write_max_us":N,
+/// "player_wait_max_us":N,"player_xfer_max_us":N` for the status's card part.
+pub fn yields_json() -> String {
+    format!(
+        r#","write_yields":{},"write_yield_us":{},"gave_way":{},"gave_way_us":{},"write_max_us":{},"player_wait_max_us":{},"player_xfer_max_us":{}"#,
+        YIELDS.load(Relaxed),
+        YIELD_US.load(Relaxed),
+        GAVE_WAY.load(Relaxed),
+        GAVE_WAY_US.load(Relaxed),
+        WRITE_MAX_US.load(Relaxed),
+        PLAYER_WAIT_MAX_US.load(Relaxed),
+        PLAYER_XFER_MAX_US.load(Relaxed)
+    )
 }
 
 unsafe extern "C" fn d_ioctl(pdrv: u8, cmd: u8, buff: *mut c_void) -> DRESULT {
@@ -215,8 +286,96 @@ unsafe extern "C" fn d_ioctl(pdrv: u8, cmd: u8, buff: *mut c_void) -> DRESULT {
 /// One transfer under [`IO`], and at an error at full speed in `fast`
 /// mode the in-place slow-down and one more try (see the module docs).
 /// One copy for every caller (`dyn`).
+/// The display core's card reads (the player's): µs waiting for [`IO`]
+/// and µs transferring, this frame ([`take_player`]) and their longest
+/// single read since boot; the longest write transfer (a chunk, with the
+/// card's busy time), any task. Which one a slow read was: another task's
+/// transfer ahead of it, or the card itself.
+static PLAYER_WAIT_US: AtomicU32 = AtomicU32::new(0);
+static PLAYER_XFER_US: AtomicU32 = AtomicU32::new(0);
+static PLAYER_WAIT_MAX_US: AtomicU32 = AtomicU32::new(0);
+static PLAYER_XFER_MAX_US: AtomicU32 = AtomicU32::new(0);
+static WRITE_MAX_US: AtomicU32 = AtomicU32::new(0);
+
+/// The display core's reads waiting for [`IO`] now.
+static PLAYER_WAITING: AtomicU32 = AtomicU32::new(0);
+/// Other tasks' transfers that gave way to them, and the µs they waited.
+static GAVE_WAY: AtomicU32 = AtomicU32::new(0);
+static GAVE_WAY_US: AtomicU32 = AtomicU32::new(0);
+
+/// Before another task's transfer: while a display-core read waits for
+/// [`IO`], let it go first, for at most [`YIELD_MAX_US`]. A FreeRTOS mutex
+/// is not fair: a CPU0 task with transfers back to back (a FatFs walk of a
+/// big directory, a sector at a time; an upload's writes) gives it and
+/// takes it straight back, and the display core's read waited out the
+/// whole run (iso13: opens of ~470 ms and reads of ~18 ms a frame during
+/// saves).
+fn give_way() {
+    if PLAYER_WAITING.load(Relaxed) == 0 {
+        return;
+    }
+    let t0 = now_us();
+    GAVE_WAY.fetch_add(1, Relaxed);
+    loop {
+        std::thread::yield_now();
+        let waited = now_us().wrapping_sub(t0);
+        if PLAYER_WAITING.load(Relaxed) == 0 || waited >= YIELD_MAX_US as u32 {
+            GAVE_WAY_US.fetch_add(waited, Relaxed);
+            return;
+        }
+        if waited > 200 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+/// The display core's card time since the last call: `(wait µs, transfer
+/// µs)`, and reset (the main loop, per frame).
+pub fn take_player() -> (u32, u32) {
+    (PLAYER_WAIT_US.swap(0, Relaxed), PLAYER_XFER_US.swap(0, Relaxed))
+}
+
+fn now_us() -> u32 {
+    // SAFETY: a plain clock read.
+    unsafe { esp_idf_sys::esp_timer_get_time() as u32 }
+}
+
+/// The running task is the display core's (the main task: the player).
+pub fn on_display_core() -> bool {
+    // SAFETY: plain FreeRTOS queries of the running task.
+    unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() == esp_idf_sys::xTaskGetCurrentTaskHandleForCore(1) }
+}
+
 fn transfer(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
-    let _io = io();
+    let player = !write && on_display_core();
+    if !player {
+        give_way();
+    }
+    let t0 = now_us();
+    if player {
+        PLAYER_WAITING.fetch_add(1, Relaxed);
+    }
+    let io = io();
+    if player {
+        PLAYER_WAITING.fetch_sub(1, Relaxed);
+    }
+    let t1 = now_us();
+    let r = transfer_locked(write, op);
+    drop(io);
+    let t2 = now_us();
+    let (wait, xfer) = (t1.wrapping_sub(t0), t2.wrapping_sub(t1));
+    if player {
+        PLAYER_WAIT_US.fetch_add(wait, Relaxed);
+        PLAYER_XFER_US.fetch_add(xfer, Relaxed);
+        PLAYER_WAIT_MAX_US.fetch_max(wait, Relaxed);
+        PLAYER_XFER_MAX_US.fetch_max(xfer, Relaxed);
+    } else if write {
+        WRITE_MAX_US.fetch_max(xfer, Relaxed);
+    }
+    r
+}
+
+fn transfer_locked(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
     if dead() {
         return DRESULT_RES_ERROR;
     }

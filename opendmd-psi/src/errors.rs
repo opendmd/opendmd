@@ -94,7 +94,7 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: 104,
         title: "the colour is not last",
         sentence: "the colour has to be the last line (move this to the end)",
-        fix: "Move the colour line to the end of the formula (or the layer or part).",
+        fix: "Move the colour line to the end of the formula (or the layer or function).",
         matches: &["the colour has to be the"],
     },
     ErrorDoc {
@@ -142,8 +142,8 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 111,
         title: "`use` left in a formula",
-        sentence: "`use` puts a formula in by its name, as `part p { … }`, when you leave the line",
-        fix: "Finish the line or write the part out as `part p { … }`.",
+        sentence: "`use` puts a formula in by its name, as a function `fn p(x, y) { … }`, when you leave the line",
+        fix: "Finish the line (the editor puts the formula in), or write the function out.",
         matches: &["`use` puts a formula in by its name"],
     },
     ErrorDoc {
@@ -225,17 +225,17 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 203,
-        title: "a name that is already a part, table, sprite, palette or control",
+        title: "a name that is already a function, table, sprite, palette or control",
         sentence: "`…` is already the name of a … (line …) — pick another name",
-        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or part may set a name from outside: only parts, tables, sprites, palettes and controls keep theirs.)",
+        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs.)",
         matches: &["is already the name of a "],
     },
     ErrorDoc {
         code: 204,
-        title: "a name that is built in",
-        sentence: "`…` is built in; pick another name",
-        fix: "Pick another name.",
-        matches: &["is built in", "pick another name"],
+        title: "a word of the language as a name",
+        sentence: "`…` is a word of the language; pick another name",
+        fix: "Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value or function's name may be yours).",
+        matches: &["is a word of the language; pick another name"],
     },
     ErrorDoc {
         code: 205,
@@ -309,10 +309,10 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 301,
-        title: "a per-pixel value in `frame { }`",
-        sentence: "`frame { }` is worked out once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
-        fix: "Use only values that are the same everywhere (such as `t`) inside `frame { }`.",
-        matches: &["`frame { }` is worked out once a frame"],
+        title: "a `frame { }` block",
+        sentence: "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block",
+        fix: "Take the lines out of the block, as they are.",
+        matches: &["there are no `frame { }` blocks"],
     },
     ErrorDoc {
         code: 302,
@@ -355,20 +355,6 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "`rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`",
         fix: "Give `rgb(r, g, b)` three numbers, or write the colour on its own.",
         matches: &["takes three numbers, not colours"],
-    },
-    ErrorDoc {
-        code: 308,
-        title: "a second `frame { }` block",
-        sentence: "there can be one `frame { }` block",
-        fix: "Merge the `frame { }` blocks into one.",
-        matches: &["one `frame { }` block"],
-    },
-    ErrorDoc {
-        code: 309,
-        title: "a line that does not belong in `frame { }`",
-        sentence: "only `name = value` lines can go inside frame { }",
-        fix: "Put only `name = value` lines inside `frame { }`.",
-        matches: &["can go inside frame { }"],
     },
     ErrorDoc {
         code: 401,
@@ -427,62 +413,6 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["not enough memory for this Formula right now"],
     },
     ErrorDoc {
-        code: 501,
-        title: "a part without a colour",
-        sentence: "part `…` has no colour, only values: `….v`",
-        fix: "Use one of its values, as `p.v`.",
-        matches: &["part `", "` has no colour, only values"],
-    },
-    ErrorDoc {
-        code: 502,
-        title: "a part without that value",
-        sentence: "part `…` sets no value `…` (did you mean `…`?)",
-        fix: "Use a name the part sets.",
-        matches: &["` sets no value `"],
-    },
-    ErrorDoc {
-        code: 503,
-        title: "parts too deep",
-        sentence: "parts go too deep here — take one out of another",
-        fix: "Take one part out of another.",
-        matches: &["parts go too deep"],
-    },
-    ErrorDoc {
-        code: 504,
-        title: "a part with layers",
-        sentence: "this part has layers of its own: it can only go over, as in `layer { p }`",
-        fix: "Draw it as `layer { p }`.",
-        matches: &["this part has layers of its own"],
-    },
-    ErrorDoc {
-        code: 505,
-        title: "too many places",
-        sentence: "this formula draws its parts in too many places — simplify it",
-        fix: "Draw fewer parts, or each part in fewer places.",
-        matches: &["draws its parts in too many places"],
-    },
-    ErrorDoc {
-        code: 506,
-        title: "a part without a name",
-        sentence: "a part needs a name, as in `part p { … }`",
-        fix: "Name the part.",
-        matches: &["a part needs a name"],
-    },
-    ErrorDoc {
-        code: 507,
-        title: "a part used as a value",
-        sentence: "`…` is a part: draw it as a whole last line, or read one of its values, as `….v`",
-        fix: "Draw it as the last line, or use `p.v`.",
-        matches: &["is a part: draw it as a whole last line"],
-    },
-    ErrorDoc {
-        code: 508,
-        title: "a part inside a layer",
-        sentence: "a part goes outside the layers (draw it in one with `layer { p }`)",
-        fix: "Move the part out of the layer.",
-        matches: &["a part goes outside the layers"],
-    },
-    ErrorDoc {
         code: 509,
         title: "a layer inside a layer",
         sentence: "a layer can't go inside another — close this one with `}` first",
@@ -520,14 +450,14 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 701,
         title: "`draw { }` or a table inside a layer",
-        sentence: "`draw { }` goes at the top of the formula (or a part), not inside a layer",
-        fix: "Move it out of the layer, to the top of the formula or the part.",
-        matches: &["goes at the top of the formula (or a part), not inside a layer"],
+        sentence: "`draw { }` goes at the top of the formula, not inside a layer",
+        fix: "Move it out of the layer, to the top of the formula.",
+        matches: &["goes at the top of the formula, not inside a layer"],
     },
     ErrorDoc {
         code: 702,
         title: "a second `draw { }` block",
-        sentence: "there can be one `draw { }` block (the formula's or one part's: they share one canvas)",
+        sentence: "there can be one `draw { }` block (functions that draw are called inside it)",
         fix: "Merge the `draw { }` blocks into one.",
         matches: &["there can be one `draw { }` block"],
     },
@@ -597,15 +527,15 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 712,
         title: "the wrong values for `line` or `dot`",
-        sentence: "`line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
+        sentence: "`line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
         fix: "Give `line` four values and `dot` two.",
-        matches: &["(pixels up from the bottom left)"],
+        matches: &["(pixels from the top left)"],
     },
     ErrorDoc {
         code: 713,
         title: "a line that does not belong in `draw { }`",
-        sentence: "inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only",
-        fix: "Use only those lines inside `draw { }`.",
+        sentence: "inside draw { } go `name = value`, `for k < N { … }`, `if c { … }` and drawing: `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print`",
+        fix: "Use only those lines inside `draw { }`; the colour line goes after it.",
         matches: &["inside draw { } go `name = value`"],
     },
     ErrorDoc {
@@ -628,6 +558,146 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "`…` is a table: read one of its numbers, `…[k]` (k from 0)",
         fix: "Read a number of the table with `NAME[k]`.",
         matches: &["is a table: read one of its numbers"],
+    },
+    ErrorDoc {
+        code: 720,
+        title: "too many colours to paint with",
+        sentence: "a formula paints with … colours at most (each of a palette's 32 counts)",
+        fix: "Paint with fewer colours: a palette used in `pal(P, v)` takes 32 of the 127.",
+        matches: &["a formula paints with", "colours at most"],
+    },
+    ErrorDoc {
+        code: 721,
+        title: "not a colour to paint with",
+        sentence: "a colour to paint with is `#…` (as #f80), `pal(palette, v)` or `gray(v)`",
+        fix: "End the call with a colour: `#f80`, `pal(fire, v)` or `gray(v)` (for brightness into ink, `line` and `dot` take a number).",
+        matches: &["a colour to paint with is"],
+    },
+    ErrorDoc {
+        code: 722,
+        title: "`spr` of something that is not a sprite",
+        sentence: "`spr` draws a sprite: `spr(name, x, y)`, its name a `sprite name { … }`'s",
+        fix: "Name a sprite block, as `spr(ship, x, y)`.",
+        matches: &["`spr` draws a sprite"],
+    },
+    ErrorDoc {
+        code: 723,
+        title: "`spr` without its place",
+        sentence: "… takes a sprite and its place",
+        fix: "Give the sprite's place: `spr(ship, x, y)`, and maybe a flip (1 across, 2 down, 3 both).",
+        matches: &["takes a sprite and its place"],
+    },
+    ErrorDoc {
+        code: 724,
+        title: "a text too long to print",
+        sentence: "`print` writes 32 characters at most",
+        fix: "Split the text into two `print`s.",
+        matches: &["`print` writes 32 characters at most"],
+    },
+    ErrorDoc {
+        code: 725,
+        title: "no room for a text",
+        sentence: "this text doesn't fit: tables, sprites and texts hold 256 numbers in all",
+        fix: "Use shorter texts, or fewer tables and sprites.",
+        matches: &["this text doesn't fit"],
+    },
+    ErrorDoc {
+        code: 726,
+        title: "a font `print` doesn't have",
+        sentence: "`print`'s font is `normal`, `small` or (for a value) `bold`",
+        fix: "Write `normal`, `small` or, for a number, `bold`.",
+        matches: &["`print`'s font is"],
+    },
+    ErrorDoc {
+        code: 727,
+        title: "something after a paint call's values",
+        sentence: "…: expected `)` here",
+        fix: "Close the call after its colour (and, for `print`, its font and digits).",
+        matches: &["expected `)` here"],
+    },
+    ErrorDoc {
+        code: 740,
+        title: "a function written wrongly",
+        sentence: "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw",
+        fix: "Write `fn name(a, b) = value`, or `fn name(a, b) { … }` around lines that draw.",
+        matches: &["a function is `fn name(a, b) = value`"],
+    },
+    ErrorDoc {
+        code: 742,
+        title: "a function's value that is not a name",
+        sentence: "a function's values are names: `fn name(a, b) = …`",
+        fix: "Name each value the function takes: `fn ring(cx, r) = …`.",
+        matches: &["a function's values are names"],
+    },
+    ErrorDoc {
+        code: 743,
+        title: "a function with no body",
+        sentence: "after a function's values: `= value`, or `{ … }` for lines that draw",
+        fix: "Put `= value` after the brackets, or `{ … }` around lines that draw.",
+        matches: &["after a function's values:"],
+    },
+    ErrorDoc {
+        code: 744,
+        title: "an empty function",
+        sentence: "function `…` has nothing in it",
+        fix: "Write what the function works out, or the lines it draws.",
+        matches: &["has nothing in it"],
+    },
+    ErrorDoc {
+        code: 745,
+        title: "a function calling itself",
+        sentence: "`…` calls itself: a function can't (there are no loops of calls)",
+        fix: "Use a `for` loop in draw, or write the steps out.",
+        matches: &["calls itself: a function can't"],
+    },
+    ErrorDoc {
+        code: 746,
+        title: "a drawing function used as a value",
+        sentence: "`…` draws: call it on a line of its own inside `draw { }`",
+        fix: "Call it on its own line in `draw { }`: `palm(30, 31, 1)`.",
+        matches: &["draws: call it on a line of its own"],
+    },
+    ErrorDoc {
+        code: 747,
+        title: "more than one value on a function's last line",
+        sentence: "function `…`'s last line is one value: `fn …(…) = value`",
+        fix: "Write one value after `=`, or use `{ … }` for lines that draw.",
+        matches: &["'s last line is one value: `fn "],
+    },
+    ErrorDoc {
+        code: 748,
+        title: "a value function called as lines",
+        sentence: "`…` is a value, not lines that draw: use it in one, `v = …(…)`",
+        fix: "Use it in a value, `v = name(…)`, or in a call's values.",
+        matches: &["is a value, not lines that draw"],
+    },
+    ErrorDoc {
+        code: 749,
+        title: "too many calls",
+        sentence: "this formula calls its functions too many times over — simplify it",
+        fix: "Call a function fewer times, or set its value once as a name and use the name.",
+        matches: &["calls its functions too many times"],
+    },
+    ErrorDoc {
+        code: 750,
+        title: "a part",
+        sentence: "there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`",
+        fix: "Write `fn p(x, y) { … }` with the part's lines; draw it with `p(x, y)` as the last line.",
+        matches: &["there are no parts: write a function"],
+    },
+    ErrorDoc {
+        code: 751,
+        title: "a value before a function's last line",
+        sentence: "only a function's last line is its value: set a name here (`v = …`), or move it last",
+        fix: "Set a name on each line but the last: `v = …`.",
+        matches: &["only a function's last line is its value"],
+    },
+    ErrorDoc {
+        code: 752,
+        title: "a whole-colour function inside a value",
+        sentence: "`…(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)",
+        fix: "Use it alone as the last line, or make its last line `#…` or `rgb(…)` so it can be mixed.",
+        matches: &["is a whole colour: use it alone on the colour line"],
     },
     ErrorDoc {
         code: 801,
@@ -709,9 +779,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 911,
         title: "a sprite inside a layer",
-        sentence: "a sprite goes at the top of the formula (or a part), not inside a layer",
+        sentence: "a sprite goes at the top of the formula, not inside a layer",
         fix: "Move the sprite out of the layer.",
-        matches: &["a sprite goes at the top of the formula (or a part), not inside a layer"],
+        matches: &["a sprite goes at the top of the formula, not inside a layer"],
     },
     ErrorDoc {
         code: 912,
@@ -779,9 +849,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 921,
         title: "a palette inside a layer",
-        sentence: "a palette goes at the top of the formula (or a part), not inside a layer",
+        sentence: "a palette goes at the top of the formula, not inside a layer",
         fix: "Move the palette out of the layer.",
-        matches: &["a palette goes at the top of the formula (or a part), not inside a layer"],
+        matches: &["a palette goes at the top of the formula, not inside a layer"],
     },
     ErrorDoc {
         code: 922,
@@ -829,7 +899,7 @@ pub const ERRORS: &[ErrorDoc] = &[
         code: 931,
         title: "`cycle` turned by a value that changes along a row",
         sentence: "`cycle` turns a whole row at once (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`",
-        fix: "Turn it by t, a `frame { }` value or py.",
+        fix: "Turn it by t, a value of t, or py.",
         matches: &["`cycle` turns a whole row at once"],
     },
     ErrorDoc {
@@ -887,13 +957,6 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`",
         fix: "Do not read `ink`, `ur`, `ug`, `ub` or `ul` in a `rate` formula.",
         matches: &["it can't read `"],
-    },
-    ErrorDoc {
-        code: 945,
-        title: "`rate` on a part",
-        sentence: "`rate` goes on the formula's own layers, not on a part's",
-        fix: "Put `rate` on the formula's own layers.",
-        matches: &["`rate` goes on the formula's own layers"],
     },
     ErrorDoc {
         code: 946,
@@ -1070,7 +1133,10 @@ pub fn code_of(msg: &str) -> Option<u16> {
 
 /// The entry for `code`.
 pub fn doc(code: u16) -> Option<&'static ErrorDoc> {
-    ERRORS.binary_search_by_key(&code, |d| d.code).ok().map(|i| &ERRORS[i])
+    ERRORS
+        .binary_search_by_key(&code, |d| d.code)
+        .ok()
+        .map(|i| &ERRORS[i])
 }
 
 /// "E203".

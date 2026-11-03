@@ -94,8 +94,15 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
     if rel.contains('\0') || rel.contains('\\') {
         return None;
     }
-    for component in rel.split('/') {
-        if component == ".." {
+    // One spelling per file (`fatread::OpenSet` compares paths): no `..`,
+    // no empty or `.` component (`gifs//x.gif`), none ending in a dot or a
+    // space (FatFs drops those). A trailing `/` (a directory) is allowed.
+    let body = rel.trim_end_matches('/');
+    for component in body.split('/') {
+        if body.is_empty() {
+            break;
+        }
+        if component == ".." || component == "." || component.is_empty() || component.ends_with('.') || component.ends_with(' ') {
             return None;
         }
     }
@@ -104,6 +111,19 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
     } else {
         Some(format!("{root}/{rel}"))
     }
+}
+
+/// Why a write's path was refused ([`card_path_for_write`]).
+pub const BAD_WRITE_PATH: &str = "path not allowed: it must stay on the card, with no empty, '.' or '..' part, none ending in a dot or a space, and no 8.3 short name (NAME~1.GIF): use the file's long name";
+
+/// [`card_path`] for a write (PUT, DELETE, move, forget): an 8.3 alias
+/// component (`NES_MA~1.GIF`) is refused too. It names a file whose long
+/// name is something else, so the prepared copy worked out from it, and
+/// the player's open files compared with it (`fatidx::holds`), would be
+/// the wrong ones. Reads by path take it as FatFs does.
+pub fn card_path_for_write(root: &str, rel: &str) -> Option<String> {
+    let p = card_path(root, rel)?;
+    opendmd_core::fatread::is_canonical(rel.trim_end_matches('/')).then_some(p)
 }
 
 /// Content type by extension. Everything the web app ships (served from the
@@ -537,6 +557,7 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
         }
         .into());
     }
+    let mut pace_debt = 0u64;
     let outcome = loop {
         let n = match up.read(&mut buf) {
             Ok(0) => {
@@ -553,6 +574,8 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
         if let Err(e) = wait_for_heap() {
             break Err((e, Some((503, "503 Service Unavailable"))));
         }
+        // A Formula near its frame budget: the upload slows (`pace`).
+        crate::pace::after_read(n, &mut pace_debt);
         if let Err(e) = file.write_all(&buf[..n]) {
             break Err((
                 anyhow::Error::from(e).context("writing to the card"),

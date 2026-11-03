@@ -1088,6 +1088,15 @@ impl Runner {
     /// The settings to build the playlist from: the attract playlist in
     /// place of `set` in attract mode (and in game mode until the context is
     /// on, which is what plays if it never comes).
+    /// [`overlay`](Self::overlay)'s playlist alone, borrowed: `set` (the
+    /// schedule's) or the attract playlist of `settings`.
+    pub fn overlay_set<'a>(&self, settings: &'a Settings, set: &'a str) -> &'a str {
+        match &settings.attract_set {
+            Some(a) if self.mode != Mode::Normal && !self.attract_broken => a,
+            _ => set,
+        }
+    }
+
     pub fn overlay(&self, mut eff: Settings) -> Settings {
         if self.mode != Mode::Normal && !self.attract_broken {
             if let Some(set) = &eff.attract_set {

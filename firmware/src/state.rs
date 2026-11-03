@@ -17,7 +17,7 @@
 
 use crate::chan as mpsc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Which flash layout this build is for, compiled in by `build.rs`
 /// (`/api/status` `variant`, the boot banner).
@@ -83,6 +83,29 @@ pub fn largest_free_block() -> usize {
 /// main loop sets rather than [`Status`] fields, so the looks pass costs
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
+
+/// The display loop's command handling (step 1: what the HTTP handlers
+/// asked), timed: (loops that handled one, µs in all (wrapping), the
+/// longest µs). It runs on CPU1 between frames, before the next frame's
+/// start: a long one is a late start.
+pub static CMD_LOOPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CMD_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static CMD_MAX_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `display.commands`: `{n, us, max_us}` ([`CMD_LOOPS`]).
+pub fn commands_json() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    format!(
+        r#"{{"n":{},"us":{},"max_us":{}}}"#,
+        CMD_LOOPS.load(Relaxed),
+        CMD_US.load(Relaxed),
+        CMD_MAX_US.load(Relaxed)
+    )
+}
+
+/// Frames whose status publish was skipped because `/api/status` held the
+/// lock (the display never waits on CPU0): `display.publish_skipped`.
+pub static PUBLISH_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// The main task's stack high-water mark (bytes never used), for a probe
 /// build's `/api/status` `heap.main_stack`.
 /// Pixels pushed to the panel since boot (every push: frames, glow steps,
@@ -107,7 +130,7 @@ pub static NET_UP: AtomicBool = AtomicBool::new(false);
 /// when the copy opens and cleared when that handle closes
 /// (`frametime::Counted`), so it covers the copy while it waits and while it
 /// plays. The handlers that replace or delete a file check it
-/// (`http::skip_if_playing`), as they check the path on screen: FAT must not
+/// (`http::release_for_write`), as they check the path on screen: FAT must not
 /// have an open file replaced or unlinked. A key, not the path, so setting
 /// it allocates nothing on the display loop.
 ///
@@ -156,7 +179,7 @@ pub struct Status {
     pub paused: bool,
     /// The main loop's clock (`Duration`s below are since this); a handler
     /// reads it to stamp `t_ms` and to extrapolate the position.
-    pub epoch: Instant,
+    pub epoch: crate::uclock::Epoch,
     /// The frame on the glass: where it starts in the file's timeline
     /// (`NowPlaying::elapsed`, loops included), its 1-based number in the
     /// file, when it went up (after the blit) and when the next one is due.
@@ -253,7 +276,7 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn new(version: &'static str, hostname: String, epoch: Instant) -> Self {
+    pub fn new(version: &'static str, hostname: String, epoch: crate::uclock::Epoch) -> Self {
         Status {
             version,
             uptime_secs: 0,
@@ -387,6 +410,33 @@ impl Applied {
 /// The reply channel every command that changes state carries.
 pub type Reply = mpsc::Sender<Result<Applied, String>>;
 
+/// The settings a [`Command::ApplyConfig`] left behind (the ones it
+/// replaced, or the request's own when refused), handed back for the
+/// handler to drop on CPU0 ([`drop_spent`]): a PUT frees nothing on the
+/// display core.
+static SPENT: std::sync::atomic::AtomicPtr<crate::nvs_config::Settings> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// The main task: leave `spent` for the handler (one left uncollected is
+/// dropped here).
+pub fn spend(spent: Box<crate::nvs_config::Settings>) {
+    let prev = SPENT.swap(Box::into_raw(spent), Ordering::AcqRel);
+    if !prev.is_null() {
+        // SAFETY: only `spend` stores, always from `Box::into_raw`; the
+        // swap took it out, so nothing else holds it.
+        drop(unsafe { Box::from_raw(prev) });
+    }
+}
+
+/// The handler, once replied to: drop what the main task left.
+pub fn drop_spent() {
+    let p = SPENT.swap(std::ptr::null_mut(), Ordering::AcqRel);
+    if !p.is_null() {
+        // SAFETY: as in `spend`.
+        drop(unsafe { Box::from_raw(p) });
+    }
+}
+
 /// The error [`Command::ApplyConfig`] replies with when the requested set's
 /// manifest does not open; the handler turns exactly this into a 404.
 pub const SET_NOT_FOUND: &str = "set not found";
@@ -422,12 +472,14 @@ pub enum PlayError {
 pub enum Command {
     /// End the current GIF at the next tick.
     Skip,
-    /// Let go of the copy opened ahead for the next file (a handler is
-    /// about to replace or delete it: `http::skip_if_playing`); the pick
-    /// stays and opens when it plays. Answered once the handle is closed
-    /// (the loop reads commands only between frames, so a long frame delay
-    /// is waited out, not guessed at).
-    ReleaseAhead(mpsc::Sender<()>),
+    /// Let go of the copy opened ahead and, with `screen`, of the file on
+    /// screen (a handler is about to replace, rename or delete one:
+    /// `http::release_for_write`, whose write intents keep them from being
+    /// opened again meanwhile): the picture stays, and the next tick opens
+    /// the next file (the pick opened ahead stays the pick). Answered once
+    /// the handles are closed; the sender wakes the loop from its frame's
+    /// sleep (`wake::kick`), so a long frame delay is not waited out.
+    Release { screen: bool, reply: mpsc::Sender<()> },
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
     /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is
@@ -504,7 +556,13 @@ pub enum Command {
     ///
     /// (Every reply here is a [`Reply`]: each distinct channel type costs
     /// several KB of code, and the image is close to its slot.)
-    SetSchedule { json: String, reply: Reply },
+    /// The schedule, parsed by the handler (CPU0): the main task takes it
+    /// as it is.
+    SetSchedule {
+        json: String,
+        parsed: Box<opendmd_core::schedule::Schedule>,
+        reply: Reply,
+    },
     /// Suspend the schedule for this many minutes (0 resumes it now). The
     /// local `"HH:MM"` it lasts until is in `Status::wake_until` by the time
     /// the reply is sent.

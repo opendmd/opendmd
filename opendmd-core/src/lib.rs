@@ -16,6 +16,7 @@ pub mod chan;
 pub mod compositor;
 pub mod engine;
 pub mod fatdir;
+pub mod fatread;
 pub mod filter;
 pub mod follow;
 mod fonts;
@@ -32,16 +33,19 @@ pub mod index;
 pub mod layout;
 pub mod look;
 pub mod manifest;
+pub mod names_file;
 #[cfg(feature = "ota")]
 pub mod ota;
 pub mod overrides;
 pub mod panel_test;
 pub mod panel_timing;
 pub mod player;
+pub mod readahead;
 pub mod restarts;
 pub mod scan;
 pub mod schedule;
 pub mod scheduler;
+pub mod settings_file;
 pub mod synth;
 pub mod text;
 pub mod www_pack;
@@ -49,7 +53,7 @@ pub mod www_pack;
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 pub use compositor::{Kind as TransitionKind, Transition};
 pub use engine::{
-    Catalog, DwellPolicy, Engine, FileCatalog, FormulaKeep, NowPlaying, ReadSeek, Source, TickOutcome,
+    Catalog, DwellPolicy, Engine, FileCatalog, FormulaKeep, NowPlaying, ReadSeek, SharedStr, Source, TickOutcome,
     OFF_PLAYLIST,
 };
 pub use filter::Filter;

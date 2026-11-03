@@ -1,13 +1,11 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Kaleidoscope"
-about "Plasma folded into a mirror pattern: a formula drawn at other places"
+about "Plasma folded into a mirror pattern: a function drawn at other places"
 loop 8
-part plasma {
-  -- Plasma
-  loop 8
+fn plasma(x, y) {
   wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
   hsv(wave/6 + t/8, 0.9, 1)
 }
 -- folded twice: the same quarter in every corner, mirrored
-plasma(abs(x - 0.5) * 2, abs(y - 0.5) * 2)
+plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)

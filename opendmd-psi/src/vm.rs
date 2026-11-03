@@ -233,6 +233,34 @@ fn run2<const N: usize, A: Src, B: Src>(
     }
 }
 
+/// `run1` and `run2` in IRAM, for the two steps a raced Formula's draw
+/// loop spent its flash time on (`recip`, `hash`: Starfield's lanes,
+/// display-isolation 2026-11-02, esp32sim's block profile). Generic as
+/// they are: only the instances these two are used with are placed.
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run1_hot<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi_hot")]
+fn run2_hot<const N: usize, A: Src, B: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0), b.at(0));
+        a.step(1);
+        b.step(1);
+    }
+}
+
 #[inline(never)]
 fn run3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
@@ -311,6 +339,31 @@ fn fast2<const N: usize, A: Src, B: Src>(
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
+        *o = [
+            f(x[0], y[0], z[0]),
+            f(x[1], y[1], z[1]),
+            f(x[2], y[2], z[2]),
+            f(x[3], y[3], z[3]),
+        ];
+        a.step(4);
+        b.step(4);
+        c.step(4);
+    }
+}
+
+/// [`fast3`] in flash: the operand orders of `mix` no bundled Formula uses.
+#[inline(never)]
+fn fast3_flash<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
     mut a: A,
     mut b: B,
@@ -605,7 +658,16 @@ pub fn render_rows_changed<const N: usize>(
 ) {
     if prog.slow_marker().is_some() {
         return crate::rate::render_scratch::<N>(
-            prog, scratch, ink, still, inputs, tables, rows, out, true, Some(changed),
+            prog,
+            scratch,
+            ink,
+            still,
+            inputs,
+            tables,
+            rows,
+            out,
+            true,
+            Some(changed),
         );
     }
     frame::<N>(
@@ -661,6 +723,7 @@ static ORDERS: [[u8; H]; 2] = {
 /// The frame loop's next row of `rows` in the scratch's order (`H`: none
 /// left). (Out of IRAM: once a row.)
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 fn next_row<const N: usize>(scratch: &mut Scratch<N>, rows: u32) -> usize {
     loop {
         let i = usize::from(scratch.next);
@@ -772,7 +835,11 @@ pub fn render_rows_beam<const N: usize>(
         out,
         true,
         core::hint::black_box(changed),
-        core::hint::black_box(if rate { crate::rate::FAST } else { crate::rate::WHOLE }),
+        core::hint::black_box(if rate {
+            crate::rate::FAST
+        } else {
+            crate::rate::WHOLE
+        }),
     )
 }
 
@@ -877,6 +944,7 @@ pub(crate) fn frame<const N: usize>(
         }
         _ => None,
     };
+    let paint = crate::draw::paint_of(prog, ink);
     // A `rate` formula's parts (`crate::rate`): the slow part runs only
     // the steps after its marker (no still cache: the caller gives none),
     // the fast part the steps after those, each lane starting from `under`
@@ -1011,6 +1079,11 @@ pub(crate) fn frame<const N: usize>(
                     k += 1;
                     continue;
                 }
+                if op.code == code::UAT {
+                    under_at(scratch, &mut alias, op, base, under);
+                    k += 1;
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, &alias, op, base, tables, &own, px);
                 } else {
@@ -1028,6 +1101,12 @@ pub(crate) fn frame<const N: usize>(
                 }
                 k += 1;
             }
+        }
+        // The paint plane over every layer (`draw { }` with colours): once
+        // a row, out of line (a test in the lane loop would have LLVM copy
+        // the loop: IRAM); no call at all for a formula that doesn't paint.
+        if let Some(p) = paint {
+            crate::draw::paint_row(prog, p, row, &mut out[span]);
         }
         columns_kept = N == W;
     }
@@ -1054,7 +1133,13 @@ pub(crate) fn reg_index(v: u8) -> usize {
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
 /// pixel `at`.
 #[inline(never)]
-pub(crate) fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+pub(crate) fn keep<const N: usize>(
+    s: &Scratch<N>,
+    st: &mut Still,
+    regs: [u8; 2],
+    n: u8,
+    at: usize,
+) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref_mut() {
             l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
@@ -1081,6 +1166,7 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
 /// formula's palette slots in `own` for the row.
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn row_steps<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -1129,14 +1215,19 @@ impl<'a> Rows<'a> {
     fn tell<const N: usize>(&mut self, out: &[u8], scratch: &mut Scratch<N>) {
         self.finish(out);
         let last = core::mem::replace(&mut scratch.last, 0) as usize;
-        let Some(mut sink) = scratch.beam.0 else { return };
+        let Some(mut sink) = scratch.beam.0 else {
+            return;
+        };
         if last == 0 {
             // SAFETY: as below.
             unsafe { (sink.as_mut())(BEAM_START, out, 0, 0) };
         } else if last > H / 2 {
             let row = last - 1;
             let p = row - H / 2;
-            let (a, b) = self.changed.as_deref().map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
+            let (a, b) = self
+                .changed
+                .as_deref()
+                .map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
             // SAFETY: set by `render_rows_beam` around this frame's call
             // only (`BeamGuard` clears it), so the closure is alive.
             unsafe { (sink.as_mut())(p, out, a, b) };
@@ -1180,7 +1271,7 @@ impl<'a> Rows<'a> {
         }
         scratch.last = row as u8 + 1;
         // y and py count from the bottom (y = 0 is the bottom row).
-        let py = ((H - 1 - row) as i32) << 16;
+        let py = (row as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         row_steps(prog, scratch, tables, own);
@@ -1221,7 +1312,8 @@ impl<'a> Rows<'a> {
                 let mut now = out.as_ptr().add(row * W * 3).cast::<u32>();
                 let mut was = self.before.as_ptr();
                 for g in 0..W / 4 {
-                    let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+                    let d =
+                        (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
                     m |= u32::from(d != 0) << g;
                     now = now.add(3);
                     was = was.add(3);
@@ -1251,6 +1343,7 @@ pub(crate) fn scalar_value(
     match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
+        code::PALIDX => (op.b as i32 + fixed::pal_index(g(op.a)) as i32) << 16,
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
     }
@@ -1376,6 +1469,7 @@ impl<const N: usize> Scratch<N> {
 /// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
+#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,
@@ -1396,14 +1490,14 @@ pub(crate) fn lane_draw<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         LT => bin!(fast2, d, a, b, fixed::lt),
         GT => bin!(fast2, d, a, b, fixed::gt),
         AND => bin!(fast2, d, a, b, fixed::and),
         OR => bin!(fast2, d, a, b, fixed::or),
         MIN => bin!(fast2, d, a, b, fixed::min),
         MAX => bin!(fast2, d, a, b, fixed::max),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         MOD => bin!(run2, d, a, b, fixed::modulo),
         LE => bin!(fast2, d, a, b, fixed::le),
         GE => bin!(fast2, d, a, b, fixed::ge),
@@ -1560,7 +1654,7 @@ pub(crate) fn lane_op<const N: usize>(
         MAX => bin!(fast2, d, a, b, fixed::max),
         STEP => bin!(fast2, d, a, b, fixed::step),
         ATAN2 => bin!(run2, d, a, b, fixed::atan2),
-        HASH => bin!(run2, d, a, b, fixed::hash),
+        HASH => bin!(run2_hot, d, a, b, fixed::hash),
         LEN => bin!(run2, d, a, b, fixed::len),
         BIT => bin!(fast2, d, a, b, fixed::bit),
         NEG => un!(fast1, d, a, fixed::neg),
@@ -1574,7 +1668,7 @@ pub(crate) fn lane_op<const N: usize>(
         SAW => un!(fast1, d, a, fixed::saw),
         SQR => un!(fast1, d, a, fixed::sqr),
         SQRT => un!(run1, d, a, fixed::sqrt),
-        RECIP => un!(run1, d, a, fixed::recip),
+        RECIP => un!(run1_hot, d, a, fixed::recip),
         // (k is always a lane: a pick with a scalar k is compares and
         // selects.)
         PICK => {
@@ -1589,7 +1683,21 @@ pub(crate) fn lane_op<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
-        MIX => tern!(fast3, d, a, b, c, fixed::mix),
+        // `mix` from IRAM with its operands as the bundled Formulas have
+        // them (scalar/lane: SLS, SSL, LLS; each also lowers to the JIT);
+        // the four orders none uses from flash, their 2.7 KB of IRAM the
+        // draw stage's (census of opendmd-web/formulas, display-isolation
+        // 2026-11-02).
+        MIX => match (a, b, c) {
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => fast3(d, S(u), L(q), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => fast3(d, S(u), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => fast3(d, L(p), L(q), S(w), fixed::mix),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, L(p), L(q), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => fast3_flash(d, L(p), S(v), L(r), fixed::mix),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => fast3_flash(d, L(p), S(v), S(w), fixed::mix),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => fast3_flash(d, S(u), L(q), L(r), fixed::mix),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => d.fill(fixed::mix(u, v, w)),
+        },
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
         // the other four are weighed 0 there, so the bytes are the same.
@@ -2201,4 +2309,33 @@ pub mod stats {
         };
         STILL1.store(still1, Relaxed);
     }
+}
+
+/// `under(x', y')`'s channel `op.c` for a lane: the picture under the
+/// formula at the pixel nearest (x', y'), held to the panel (0 without a
+/// picture). Out of line, in flash.
+#[inline(never)]
+fn under_at<const N: usize>(
+    s: &mut Scratch<N>,
+    al: &mut Alias,
+    op: &Op,
+    base: usize,
+    under: Option<&[u8]>,
+) {
+    let (a, b) = (s.arg(al, op.a, base), s.arg(al, op.b, base));
+    let at = |v: Arg, j: usize| match v {
+        // SAFETY: a lane operand points at N values (`Scratch::arg`).
+        Arg::Lane(p) => unsafe { *p.add(j) },
+        Arg::Sc(v) => v,
+    };
+    let ch = (op.c as usize).min(2);
+    let mut out = [0i32; N];
+    for (j, o) in out.iter_mut().enumerate() {
+        let x = (fixed::add(at(a, j), fixed::ONE / 2) >> 16).clamp(0, W as i32 - 1) as usize;
+        let y = (fixed::add(at(b, j), fixed::ONE / 2) >> 16).clamp(0, H as i32 - 1) as usize;
+        *o = fixed::byte(under.map_or(0, |u| u.get((y * W + x) * 3 + ch).copied().unwrap_or(0)));
+    }
+    let di = reg_index(op.d);
+    al[di] = core::ptr::null();
+    s.lanes[di] = out;
 }

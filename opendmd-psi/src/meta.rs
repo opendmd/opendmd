@@ -18,9 +18,13 @@ pub enum Control {
     Choice { n: u8 },
 }
 
-const NONE: u8 = 0;
-const SLIDER: u8 = 1;
-const CHOICE: u8 = 2;
+/// The blends a look may use, as `layer` names them (`max` and `min` are
+/// the web app's Lighten and Darken).
+pub const BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
+
+pub(crate) const NONE: u8 = 0;
+pub(crate) const SLIDER: u8 = 1;
+pub(crate) const CHOICE: u8 = 2;
 
 /// A compiled formula's declarations (44 bytes in [`Program`]).
 ///
@@ -28,15 +32,15 @@ const CHOICE: u8 = 2;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Meta {
     /// Each slot's (`a b c`) kind: none, a slider, a choice.
-    kind: [u8; 3],
-    /// `look`: 0 none, else 1 + the blend's place in [`crate::look::BLENDS`].
-    look: u8,
+    pub(crate) kind: [u8; 3],
+    /// `look`: 0 none, else 1 + the blend's place in [`BLENDS`].
+    pub(crate) look: u8,
     /// `look`'s amount, 0 to 100.
-    amount: u8,
+    pub(crate) amount: u8,
     /// Each slot's range and default (Q16.16; a choice's: 0, n − 1, 0).
-    lo: [i32; 3],
-    hi: [i32; 3],
-    def: [i32; 3],
+    pub(crate) lo: [i32; 3],
+    pub(crate) hi: [i32; 3],
+    pub(crate) def: [i32; 3],
 }
 
 impl Meta {
@@ -62,7 +66,9 @@ impl Meta {
     /// `range::inputs_in_range`: not optimised for size.)
     #[inline]
     pub fn declared(&self) -> u8 {
-        (0..3).filter(|&k| self.kind[k] != NONE).fold(0, |m, k| m | 1 << k)
+        (0..3)
+            .filter(|&k| self.kind[k] != NONE)
+            .fold(0, |m, k| m | 1 << k)
     }
 
     /// Slot `k`'s default (Q16.16): the declared one, else 0.
@@ -89,11 +95,11 @@ impl Meta {
         ]
     }
 
-    /// `look [blend] [amount]`: the blend (one of [`crate::look::BLENDS`])
+    /// `look [blend] [amount]`: the blend (one of [`BLENDS`])
     /// and the amount (0 to 100), when the formula says it may be a look.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn look(&self) -> Option<(&'static str, u8)> {
-        let b = crate::look::BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
+        let b = BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
         Some((b, self.amount))
     }
 
