@@ -305,6 +305,8 @@ fn push_delta(h: u32, loc: Option<u32>) {
     d.push((h, loc, uptime_ms()));
     if d.len() > DELTA_MAX {
         d.remove(0);
+        // Changes lost from it: no "absent" answers until the next build.
+        DELTA_OVERFLOWED.store(true, Relaxed);
         // Too much since the build: rebuild when quiet.
         TOUCHED_MS.store(uptime_ms(), Relaxed);
         DIRTY.store(true, Relaxed);
@@ -312,6 +314,10 @@ fn push_delta(h: u32, loc: Option<u32>) {
     DELTA_LEN.store(d.len() as u32, Relaxed);
 }
 static DELTA_LEN: AtomicU32 = AtomicU32::new(0);
+/// The index loaded was built this boot (`indexed_now`'s absent answer).
+static BUILT_THIS_BOOT: AtomicBool = AtomicBool::new(false);
+/// The delta dropped changes since the build in progress or loaded began.
+static DELTA_OVERFLOWED: AtomicBool = AtomicBool::new(false);
 
 /// `Some(None)`: looked, no usable index.
 static LOADED: Mutex<Option<Option<Loaded>>> = Mutex::new(None);
@@ -724,7 +730,7 @@ fn now_us() -> u32 {
 /// path open does), its chain read, read raw. `Ok(None)`: no free slot,
 /// or the volume is not FAT32.
 fn open_path_raw(full: &str) -> io::Result<Option<File>> {
-    open_path_raw_as(full, true)
+    Ok(open_path_raw_as(full, true)?.map(|(f, _)| f))
 }
 
 /// A playlist's manifest or index (`main::open_catalog`), read raw: the
@@ -738,8 +744,8 @@ fn open_path_raw(full: &str) -> io::Result<Option<File>> {
 /// it cannot be read raw.
 pub fn open_catalog_file(full: &str) -> io::Result<File> {
     if crate::CARD_READY.load(Relaxed) && register_vfs() {
-        if let Some(f) = open_path_raw_as(full, false)? {
-            if TABLE_RAW_LAST.load(Relaxed) {
+        if let Some((f, raw)) = open_path_raw_as(full, false)? {
+            if raw {
                 return Ok(f);
             }
             // Opened, but FatFs reads it (its chain past 64 runs, or not
@@ -755,12 +761,12 @@ pub fn open_catalog_file(full: &str) -> io::Result<File> {
 
 /// Playlist files read through FatFs, not raw (`fat_index.catalog_fatfs`).
 static CATALOG_FATFS: AtomicU32 = AtomicU32::new(0);
-/// The last [`hand_out`] gave its slot raw state.
-static TABLE_RAW_LAST: AtomicBool = AtomicBool::new(false);
+
 
 /// [`open_path_raw`]; `player`: noted in the open set as the player's (a
 /// GIF), else not (a playlist file).
-fn open_path_raw_as(full: &str, player: bool) -> io::Result<Option<File>> {
+/// The file and whether it reads raw (else FatFs reads it).
+fn open_path_raw_as(full: &str, player: bool) -> io::Result<Option<(File, bool)>> {
     let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with('/')) else {
         return Ok(None);
     };
@@ -798,7 +804,8 @@ fn open_path_raw_as(full: &str, player: bool) -> io::Result<Option<File>> {
             None
         }
     };
-    hand_out(f, player.then_some(full), raw, None)
+    let is_raw = raw.is_some();
+    Ok(hand_out(f, player.then_some(full), raw, None)?.map(|f| (f, is_raw)))
 }
 
 /// Put an open FIL in a free slot and open it there as a `File`; with
@@ -824,7 +831,6 @@ fn hand_out(f: *mut sys::FIL, player: Option<&str>, raw: Option<Raw>, since: Opt
             })
         })
     };
-    TABLE_RAW_LAST.store(raw.is_some(), Relaxed);
     let claimed = TABLE.claim(f, raw.map(Box::new), player.map(|_| &mut note as &mut dyn FnMut(usize) -> bool));
     let k = match claimed {
         Ok(k) => k,
@@ -1019,7 +1025,22 @@ fn indexed_now(full: &str, raw: bool) -> Option<io::Result<File>> {
     // walk of its bucket behind the volume lock (iso15: most of its 52 path
     // opens, up to 305 ms on the slow card). `/gifs` keeps the path open:
     // a PC may have added a GIF since the build.
-    if nc == 0 && whole && delta_known && card.starts_with("/cache/") && fatread::is_canonical(card) {
+    //
+    // Only while that holds: the index was built this boot (one from an
+    // earlier boot lacks the copies written after it, whose delta was in
+    // RAM, and any a PC added: `tick` rebuilds once a boot), and the delta
+    // has kept every change since (past 256 its oldest go). Only a copy's
+    // path, `/cache/<category>/<bucket>/<name>`: the files at `/cache`'s
+    // root (`.failed`, `.names`, ...) are not indexed.
+    if nc == 0
+        && whole
+        && delta_known
+        && BUILT_THIS_BOOT.load(Relaxed)
+        && !DELTA_OVERFLOWED.load(Relaxed)
+        && card.starts_with("/cache/")
+        && card.matches('/').count() == 4
+        && fatread::is_canonical(card)
+    {
         ABSENT.fetch_add(1, Relaxed);
         return Some(Err(errno(sys::ENOENT)));
     }
@@ -1185,6 +1206,7 @@ fn index_extents(file: &str) -> Option<(fatread::RawFile, u8)> {
 /// `/fidx` FILs and a build in flight are not closed here.
 pub fn unmounted() {
     FS.store(std::ptr::null_mut(), Relaxed);
+    BUILT_THIS_BOOT.store(false, Relaxed);
     *LOADED.lock().unwrap() = None;
     FAILED.store(false, Relaxed);
     BUILT_MS.store(0, Relaxed);
@@ -1239,6 +1261,12 @@ pub fn tick() {
             // lookups meanwhile must not find the lock taken (they go by
             // path while there is no index, as they would anyway).
             let l = load(INDEX).ok();
+            // An index from an earlier boot: rebuilt once this boot, when
+            // quiet (the copies written since its build were noted in RAM
+            // only; a PC may have added some).
+            if l.is_some() && !BUILT_THIS_BOOT.load(Relaxed) {
+                DIRTY.store(true, Relaxed);
+            }
             let mut g = LOADED.lock().unwrap();
             if g.is_none() {
                 *g = Some(l);
@@ -1297,6 +1325,8 @@ pub fn tick() {
         return;
     }
     BUILT_MS.store(now, Relaxed);
+    // The walks start now: the delta keeps what changes from here on.
+    DELTA_OVERFLOWED.store(false, Relaxed);
     // Its own short-lived task (CPU0, the cache builder's priority): the
     // walk's FatFs/SD calls are deep, and the network worker's stack is
     // sized for its own work; and the worker keeps polling meanwhile.
@@ -1497,6 +1527,7 @@ fn build() -> io::Result<()> {
     // a lookup that found it held went by path, behind the volume lock
     // (iso14: opens of 1.4 s and 5.8 s while a build ended during saves).
     let fresh = load(NEW).ok();
+    BUILT_THIS_BOOT.store(fresh.is_some(), Relaxed);
     let old = LOADED.lock().unwrap().replace(fresh);
     LOADED_GEN.fetch_add(1, Relaxed);
     drop(old);
