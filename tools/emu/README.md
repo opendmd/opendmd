@@ -64,6 +64,10 @@ Boot A (`--no-reboot`, so the reboot at its end stops the emulator and the card 
   (`curl -T`) beside a status read every second: each answered 200, or 503 + `Retry-After` and 200 when
   asked again (as the web app does), never a 408 or no answer; the network answering after every round;
   and 25 s after, `netdiag: sum` (below) shows no received frame held;
+  and the least free heap of each round (the `emu-census` image's low watch: a task reading the free
+  heap every ms, `lowwatch:` every 5 s with the Rust bytes, what the httpd and stream tasks were
+  doing and lwIP's received frames and unacknowledged bytes at the low) never under
+  `BURST_HEAP_MIN` (32 KB here, ~26 KB above the spare; see BURST_HEAP in `api_lane.py`);
 - three load rounds of 30 s, display-stress's five loads each on its own connection at once by default
   (`--connections 5`): a 64 KB upload read back and deleted, status reads, settings saves, a save into
   `/gifs/Consoles` and its delete, a listing; each followed by 60 s quiet (about eight census lines): the
@@ -84,6 +88,8 @@ allowed): the setting and the files survived; `PUT /api/firmware` with the signe
 `.odfw`, `EMU_API_BUNDLE`): signature ok, staged, the updater installs it and the firmware is back with
 its version (three resets: power-on, the updater, the firmware). Heap and stack high-water (heartbeat
 floor, main, log drain, httpd, stream task, network worker) are printed. About 9 minutes of wall time (the image builds aside).
+
+`EMU_API_ONLY=bursts` (a diagnostic shortcut) boots, runs the bursts alone and stops (~2 min wall).
 
 What it found (2026-11-03), see the comments in `api_lane.py`:
 
@@ -107,6 +113,12 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
 - **EMPTY_FOLDER** (fixed in net-wedge): deleting an emptied `/gifs` folder never reached
   `fatidx::dir_changed()` (FatFs's unlink removes an empty directory, so the `is_dir` branch was
   dead). The DELETE route tells a directory apart before removing anything now.
+- **BURST_HEAP** (net-wedge2): the spare's heap reached 8 KB under five uploads at once and the
+  WiFi driver, which takes its frame buffers from it, stopped delivering (refusals 10.5 s late,
+  status reads timing out). The low watch put every low of the bursts in a status read during an
+  upload: the whole answer and all its parts at once (~5 KB of strings), its ~3.7 KB of segments
+  and the upload's received frames (up to six buffers, ~10 KB). The answer is written in pieces
+  now, refused under 10 KB free, and a client that gave up has its reply aborted at close.
 - The httpd task's stack: 736-1024 B of 6656 B unused under the lane.
 
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air

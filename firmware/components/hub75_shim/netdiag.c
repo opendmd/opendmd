@@ -70,3 +70,50 @@ static void walk(void *arg) {
 void opendmd_netdiag(void) {
     tcpip_callback(walk, NULL);
 }
+
+// Sockets with a connection, read from the socket table without lwIP's lock
+// (the low watch's snapshot, `emu-census` builds only: a count, no walk).
+int opendmd_netdiag_socks(void) {
+    int open = 0;
+    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
+        struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
+        if (s && s->conn) open++;
+    }
+    return open;
+}
+
+// The low watch's snapshot (`emu-census` builds): what lwIP holds at a new
+// heap low, counted on the tcpip thread right after the low (posted from the
+// low watch, which runs below it on the same core).
+volatile int netdiag_snap[6]; // rx pbufs, rx bytes, tx bytes, active pcbs, TIME_WAIT pcbs, sockets
+static int seg_bytes(struct tcp_seg *s) {
+    int n = 0;
+    for (; s; s = s->next) n += s->p ? s->p->tot_len : 0;
+    return n;
+}
+static void snap(void *arg) {
+    (void)arg;
+    int rx = 0, rxb = 0, txb = 0, act = 0, tw = 0, socks = 0;
+    for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
+        act++;
+        rx += pcb_held(p);
+        if (p->refused_data) rxb += p->refused_data->tot_len;
+#if TCP_QUEUE_OOSEQ
+        rxb += seg_bytes(p->ooseq);
+#endif
+        txb += seg_bytes(p->unacked) + seg_bytes(p->unsent);
+    }
+    for (struct tcp_pcb *p = tcp_tw_pcbs; p; p = p->next) tw++;
+    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
+        struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
+        if (!s || !s->conn) continue;
+        socks++;
+        rx += sock_held(s);
+        if (s->lastdata.pbuf) rxb += s->lastdata.pbuf->tot_len;
+    }
+    netdiag_snap[0] = rx; netdiag_snap[1] = rxb; netdiag_snap[2] = txb;
+    netdiag_snap[3] = act; netdiag_snap[4] = tw; netdiag_snap[5] = socks;
+}
+void opendmd_netdiag_snap(void) {
+    tcpip_callback(snap, NULL);
+}
