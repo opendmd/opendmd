@@ -40,7 +40,21 @@ use opendmd_psi::{
 };
 use std::io::Read;
 
-const USAGE: &str = "psi check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V] [--levels] [--same-as OTHER.psi [--seeds N]]";
+const USAGE: &str = "psi check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V] [--set KEY=V] [--since KEY=S] [--was KEY=V] [--levels] [--same-as OTHER.psi [--seeds N]]";
+
+/// A built-in input's value from `KEY=V` (`--set`, `--since`, `--was`).
+fn key_value(v: Option<String>, what: &str) -> (u8, i32) {
+    let v = v.unwrap_or_default();
+    let (k, n) = v
+        .split_once('=')
+        .unwrap_or_else(|| die(&format!("{what} takes KEY=V, as in {what} daylight=0.3")));
+    let key = opendmd_psi::world::key(k.trim()).unwrap_or_else(|| {
+        let names: Vec<&str> = opendmd_psi::world::KEYS.iter().map(|k| k.name).collect();
+        die(&format!("{what}: `{k}` is not a built-in input ({})", names.join(", ")))
+    });
+    let n: f64 = n.trim().parse().unwrap_or_else(|_| die(&format!("{what} {k}= needs a number")));
+    (key.id, (n * 65536.0).round() as i32)
+}
 
 pub fn run(args: Vec<String>) -> i32 {
     let mut args = args.into_iter();
@@ -51,6 +65,8 @@ pub fn run(args: Vec<String>) -> i32 {
     let mut sl: [Option<f64>; 3] = [None; 3];
     let mut seed = 0f64;
     let mut clock = (10u8, 9u8, 30u8);
+    // The built-in inputs: their defaults, as previews draw them, unless set.
+    let mut world = opendmd_psi::World::default();
     let num = |v: Option<String>, what: &str| -> f64 {
         v.and_then(|s| s.parse().ok())
             .unwrap_or_else(|| die(&format!("{what} needs a number")))
@@ -88,6 +104,18 @@ pub fn run(args: Vec<String>) -> i32 {
                     die("--clock takes HH:MM:SS");
                 }
                 clock = (p[0], p[1], p[2]);
+            }
+            "--set" => {
+                let (k, v) = key_value(args.next(), "--set");
+                world.value[k as usize] = v;
+            }
+            "--since" => {
+                let (k, v) = key_value(args.next(), "--since");
+                world.since[k as usize] = v;
+            }
+            "--was" => {
+                let (k, v) = key_value(args.next(), "--was");
+                world.was[k as usize] = v;
             }
             "--over" => over = true,
             "--hash" => hash = true,
@@ -139,6 +167,19 @@ pub fn run(args: Vec<String>) -> i32 {
     .filter(|e| inputs & e.0 != 0)
     .map(|e| e.1)
     .collect();
+    // The built-in inputs, as written (`since(sun.alt)`).
+    let builtins: Vec<String> = prog
+        .builtins()
+        .map(|(k, what)| match what {
+            opendmd_psi::world::SINCE => format!("since({})", k.name),
+            opendmd_psi::world::WAS => format!("was({})", k.name),
+            _ => k.name.to_string(),
+        })
+        .collect();
+    let mut reads: Vec<&str> = reads;
+    for b in &builtins {
+        reads.push(b);
+    }
     println!(
         "ok: {} of {MAX_STEPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.steps(),
@@ -185,6 +226,15 @@ pub fn run(args: Vec<String>) -> i32 {
         if !parts.is_empty() {
             println!("{}", parts.join(" · "));
         }
+    }
+    if prog.used() > 0 {
+        let words = opendmd_psi::store_words(prog.used());
+        println!(
+            "store: {} of {} numbers in tables and sprites (the panel holds {words}: {} B with the program)",
+            prog.used(),
+            opendmd_psi::MAX_TABLE,
+            opendmd_psi::Prog::layout(words).size()
+        );
     }
     if prog.draws() {
         println!(
@@ -340,6 +390,7 @@ pub fn run(args: Vec<String>) -> i32 {
             b: slider(1),
             c: slider(2),
             seed: q(seed),
+            world,
             ..Inputs::default()
         };
         inp.set_ms(&prog, u64::from(ms));

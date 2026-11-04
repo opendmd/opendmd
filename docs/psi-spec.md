@@ -370,7 +370,7 @@ error[E202]: line 3, column 6: unknown function `sine` — did you mean `sin`?
 ```
 
 `psi check` also writes a PNG contact sheet of frames across one loop
-(`--out`, `--frames`, `--a`/`--b`/`--c`, `--clock`, `--hash`, `--listing`).
+(`--out`, `--frames`, `--a`/`--b`/`--c`, `--clock`, `--set KEY=V`, `--since KEY=S` and `--was KEY=V` for the built-in inputs, `--hash`, `--listing`).
 It says whether the panel's JIT takes the formula (and why not), and it
 prints the compiler's **notes**, each with its line: a `pick` worked out
 per pixel because one arm is, a sum or product that brackets better

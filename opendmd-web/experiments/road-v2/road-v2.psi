@@ -133,9 +133,13 @@ skyMid = 94 - heading*60
 roadMid = 64 - heading*bendAmp
 run = t*6
 
--- ---- Day and night (V1's): a 4-minute day lingering at dusk ----
+-- ---- Day and night: the real sun's height with the panel's location
+-- set (full day from 22.5° up, full night from 22.5° down); without one
+-- (`since(sun.alt)` reads 32767: it never moved), V1's 4-minute day
+-- lingering at dusk ----
 sunPhase = sin(t/240 + hash(seed, 7))
-light = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
+ownLight = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
+light = since(sun.alt) < 32767 ? clamp(sun.alt*16, -1, 1) : ownLight
 night = clamp(-light, 0, 1)
 day = clamp(light, 0, 1)
 neon = night > .5
@@ -290,7 +294,7 @@ draw {
       }
     } else {
       -- Gantries across the road (a sign light) and lamp posts beside it:
-      -- 4 places, a gantry at the first and the last
+      -- 4 places, a gantry at the first and the last, a post between
       for k < 4 {
         along = frac(placeRun + k*.25)
         ahead = 14.7 - along*14
@@ -307,6 +311,16 @@ draw {
         line(left, topY, left, baseY, gantry*19)
         line(right, topY, right, baseY, gantry*19)
         dot(roadX, topY, gantry*20)
+        -- between them, a lamp post on each side in turn: its pole, its
+        -- arm out over the road and its lamp
+        post = near - gantry
+        side = k%2*2 - 1
+        postX = roadX + side*hw
+        armX = postX - side*7*size
+        lampY = topY + 4*size
+        line(postX, lampY, postX, baseY, post*19)
+        line(postX, lampY, armX, lampY, post*19)
+        dot(armX, lampY + 1, post*21)
       }
     }
   }
