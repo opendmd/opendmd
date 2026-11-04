@@ -1033,16 +1033,15 @@ impl Prog {
     /// the heap has no block for it.
     pub fn try_boxed_copy(&self) -> Option<alloc::boxed::Box<Prog>> {
         let mut b = Self::try_boxed(self.tables.len())?;
-        b.copy_from(self).ok()?;
-        Some(b)
+        b.copy_from(self).then_some(b)
     }
 
-    /// Become `src` (the store's numbers included); `Err` when this
+    /// Become `src` (the store's numbers included); false when this
     /// store is too small for them (nothing changes then).
-    pub fn copy_from(&mut self, src: &Prog) -> Result<(), ()> {
+    pub fn copy_from(&mut self, src: &Prog) -> bool {
         let n = src.used();
         if n > self.tables.len() {
-            return Err(());
+            return false;
         }
         self.ops = src.ops;
         self.init = src.init;
@@ -1061,7 +1060,7 @@ impl Prog {
         self.ins = src.ins;
         self.tables.fill(0);
         self.tables[..n].copy_from_slice(&src.tables[..n]);
-        Ok(())
+        true
     }
 
     /// The store's numbers in use: up to the last that isn't 0.

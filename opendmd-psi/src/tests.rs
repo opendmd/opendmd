@@ -3529,7 +3529,7 @@ fn input_slots_survive_the_psb_and_the_verifier() {
     let mut p = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
     assert_eq!(p.ins, full.ins);
     assert!(p.ins.base as usize > crate::program::S_FIRST_FREE as usize);
-    let mut bad = |f: &dyn Fn(&mut Prog)| {
+    let bad = |f: &dyn Fn(&mut Prog)| {
         let mut q = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
         // (Its portable form: the verifier's.)
         crate::psb::load_portable(&b, crate::psb::Which::Play, &mut q).unwrap();
