@@ -371,6 +371,8 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
         match formula_ref(&v) {
             _ if v.is_empty() => {}
+            // A build without Formulas draws none.
+            _ if !crate::state::FORMULAS => return Err(PatchErr::bad(crate::state::NO_FORMULAS)),
             Some(FormulaRef::File { file, .. })
                 if files::card_path(config::SD_MOUNT, file).is_none() =>
             {
@@ -1047,6 +1049,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     opendmd_core::synth::MAX_FORMULA_PATH
                 ),
             );
+        }
+        // A build without Formulas (`formulas` off): a Formula, inline,
+        // bundled or the card's, or one drawn over the GIF, is a 501 that
+        // says so (the web app hides Formulas there; a script hears why).
+        if !crate::state::FORMULAS
+            && (opendmd_core::synth::is_formula(&play.path)
+                || opendmd_core::synth::formula_file(&play.path).is_some()
+                || play.over
+                || play.live)
+        {
+            return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
         }
         // A built-in effect's path from before they were Formulas: a 415
         // that says so.
@@ -2436,9 +2449,10 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let t = s.epoch.elapsed();
     let _ = write!(
         out,
-        r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
+        r#"{{"version":{},"variant":{},"features":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
+        crate::state::features_json(),
         psi_abi(),
         s.uptime_secs,
         t.as_millis(),

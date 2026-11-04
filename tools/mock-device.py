@@ -314,6 +314,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `/api/status` and `/api/firmware`, with `last` an updater-style line,
   `log` the lines the firmware and the updater would have appended, and
   `pending` null. Nothing is written to disk.
+- **Features** (`features` in `/api/status` and `/api/firmware`: the
+  optional parts compiled in, `["formulas", "jit"]`). `--no-formulas` is a
+  build without them: `features` `[]`, status `psi_abi` null, `POST
+  /api/play` of a Formula (or with `over`/`live`) a 501 `{"error":"Formulas
+  aren’t in this firmware build"}`, a non-empty `look_formula` a 400 with
+  it, and the playlist skips its Formula lines.
 - **Panel timing** (`opendmd_core::panel_timing`, docs/firmware.md): the
   config's `panel` (`clk_phase`, `latch_blanking` 1..4, `driver`,
   `i2s_speed` 8/16/20, `min_refresh` 30..240), `panel_now`, `panel_next`
@@ -1074,6 +1080,15 @@ def live_parse(path: str):
 
 
 PSI_ABI = 2
+# A build without Formulas (`--no-formulas`; the firmware without `psi`):
+# its own words for a Formula asked of it.
+NO_FORMULAS = "Formulas aren’t in this firmware build"
+
+
+def features(ctx) -> list[str]:
+    """`/api/status` and `/api/firmware` `features`: the optional parts the
+    firmware compiles in (a default build: formulas and the JIT)."""
+    return ["formulas", "jit"] if getattr(ctx, "formulas", True) else []
 
 
 def psb_info(b64: str) -> tuple[str, int] | None:
@@ -2048,6 +2063,9 @@ class Player:
                     print(f'playlist: skipping "{line[:48]}…": the built-in effects are gone (Formulas replace them)',
                           file=sys.stderr, flush=True)
                     continue
+                # A build without Formulas skips a playlist's Formula lines.
+                if not getattr(self.ctx, "formulas", True) and is_formula_ref(line):
+                    continue
                 if platforms and not matches_platforms(line, platforms):
                     continue
                 base.append(line)
@@ -2665,6 +2683,7 @@ class Context:
         self.auto = AutoPrepare(self)
         self.cache = Cache(self)
         self.schedule = Schedule(self)
+        self.formulas = True  # --no-formulas: a firmware build without them
         self.player = Player(self)
         self.follow = Follow(self)
         # The card's health (firmware `sdhealth.rs`): the clock it runs at,
@@ -3238,7 +3257,8 @@ def make_handler(ctx: Context, quiet: bool):
                 obj = {
                     "version": ctx.version,
                     "variant": ctx.variant,
-                    "psi_abi": PSI_ABI,
+                    "features": features(ctx),
+                    "psi_abi": PSI_ABI if ctx.formulas else None,
                     "uptime_secs": int(time.monotonic() - player.boot_time),
                     "t_ms": int((time.monotonic() - player.boot_time) * 1000),
                     "ip": "127.0.0.1",
@@ -3493,6 +3513,9 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
+                        return
+                    if field == "look_formula" and v and not ctx.formulas:
+                        self.send_error_json(400, f"look_formula: {NO_FORMULAS}")
                         return
                     if field == "look_formula" and v and not is_formula_ref(v):
                         self.send_error_json(400, "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)")
@@ -3912,6 +3935,10 @@ def make_handler(ctx: Context, quiet: bool):
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
+            # A build without Formulas (http.rs: a 501 that says so).
+            if not ctx.formulas and (is_formula_ref(p) or req.get("over") is True or req.get("live") is True):
+                self.send_error_json(501, NO_FORMULAS)
+                return
             if req.get("live") is True and not (p.startswith("@formula?") or p.startswith("@formula:")):
                 self.send_error_json(400, "\"live\" is only for a formula (@formula?psb=…)")
                 return
@@ -4184,7 +4211,7 @@ def make_handler(ctx: Context, quiet: bool):
             with ctx.lock:
                 card = ctx.sd_state == "ok"  # the firmware reads both off the card
                 self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} {ctx.variant}", "variant": ctx.variant,
-                                     "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
+                                     "features": features(ctx), "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
                                      "log": ctx.fw_log if card else None})
 
         def h_firmware_put(self, path):
@@ -4777,6 +4804,9 @@ def parse_args():
                     help="seconds a name check listens when no one answers (the firmware's 1.2)")
     ap.add_argument("--variant", choices=sorted(OTA_MAGICS), default="4mb",
                     help="the flash layout the mock's firmware is built for (GET /api/firmware, /api/status)")
+    ap.add_argument("--no-formulas", action="store_true",
+                    help="a firmware build without Formulas (features [], psi_abi null: /api/play of one a 501, "
+                         "look_formula a 400, a playlist's Formula lines skipped)")
     ap.add_argument("--flash-size", type=int, default=0,
                     help="GET /api/firmware's flash_size, bytes (default: the layout's)")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
@@ -4824,6 +4854,9 @@ def main():
         )
         ctx.name_query = args.name_query
         ctx.variant = args.variant
+        ctx.formulas = not args.no_formulas
+        if args.no_formulas:
+            ctx.player.rebuild_playlist()
         ctx.flash_size = args.flash_size or (8 << 20 if args.variant == "8mb" else 4 << 20)
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:

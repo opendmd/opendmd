@@ -6,7 +6,7 @@
 // `mount(el) -> {show, hide}`, mounted on first visit.
 
 import init from './pkg/opendmd_web.js';
-import { app } from './js/state.js';
+import { app, NO_FORMULAS } from './js/state.js';
 import { detect, demoCard, LocalSource } from './js/source.js';
 import { $, h, clear, emit, toast } from './js/util.js';
 import { closeMenu } from './js/overrides.js';
@@ -53,10 +53,19 @@ async function route() {
     for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);
   }
   if (!app.src) return;
-  const m = await (mounted[name] ??= import(`./js/${MODULE[name] || name}.js`).then((mod) => mod.mount($('#view-' + name))).then((r) => (ready[name] = r || {})));
+  // A player built without Formulas: their view is one plain note (no editor, no wasm).
+  const load = name === 'formulas' && app.noFormulas ? Promise.resolve({ mount: noFormulas })
+    : import(`./js/${MODULE[name] || name}.js`);
+  const m = await (mounted[name] ??= load.then((mod) => mod.mount($('#view-' + name))).then((r) => (ready[name] = r || {})));
   if (current !== name || app.src == null) return;
   if (shown !== name) { shown = name; m.show?.(sub); }
   m.sub?.(sub);
+}
+
+// The Formulas view on a player built without them.
+function noFormulas(el) {
+  el.append(h('div.card', { id: 'f-none' }, h('h2', 'Formulas'), h('p', NO_FORMULAS + '.'),
+    h('p.cap', 'This player plays your GIFs and playlists; a playlist’s Formulas are skipped.')));
 }
 
 function setSource(src) {

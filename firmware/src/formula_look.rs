@@ -79,7 +79,7 @@ pub fn check(path: &str) -> Result<(), String> {
         build(path).map(drop).map_err(|e| e.msg)
     }
     #[cfg(not(feature = "psi"))]
-    Err("this build cannot draw formulas".to_string())
+    Err(crate::state::NO_FORMULAS.to_string())
 }
 
 /// The look a `look_formula` value names: inline (`@formula?psb=…`), a
@@ -453,9 +453,7 @@ mod without {
             _: Option<u64>,
             _: &mut Canvas,
         ) -> Result<(), PlayError> {
-            Err(PlayError::Unplayable(
-                "this build cannot draw formulas".into(),
-            ))
+            Err(PlayError::Unplayable(crate::state::NO_FORMULAS.into()))
         }
         pub fn started(&mut self, _: u64, _: &mut Canvas) {}
         pub fn apply<'a>(

@@ -18,6 +18,10 @@ const LABELS = { 'filelist.txt': 'All files', 'filelist.hall': 'Halloween', 'fil
 // so does the UI.
 const OBSOLETE = /^filelist\.odm\./i;
 
+// What the Formulas view says on a player built without them (the
+// firmware's own words for a Formula sent there, its 501).
+export const NO_FORMULAS = 'Formulas aren’t in this firmware build';
+
 export function playlistLabel(name) {
   const n = base(name);
   if (LABELS[n]) return LABELS[n];
@@ -71,6 +75,11 @@ export const app = {
   site: false,
 
   get device() { return this.src?.kind === 'device'; },
+  // A player built without Formulas (`/api/status` `features`, the optional
+  // parts compiled in, has no "formulas"; firmware from before the field
+  // has them): the Formulas view is a note, no Formula look, and a
+  // playlist's Formula lines are marked skipped (the player skips them).
+  get noFormulas() { const f = this.status?.features; return !!this.device && Array.isArray(f) && !f.includes('formulas'); },
 
   // Which card the things kept in this browser belong to (thumbnails, the
   // folder counts, files the prepare job could not do): the status's
@@ -180,7 +189,7 @@ export const app = {
       toast(`on the panel: ${path.startsWith('@formula?') ? 'Formula' : base(path)}`, 'ok');
       return true;
     } catch (e) {
-      toast(e.status === 404 ? `${path}: not on the card` : e.status === 415 ? `${path}: not a GIF` : 'play: ' + e.message, 'bad');
+      toast(e.status === 501 ? e.message.replace(/^501: /, '') : e.status === 404 ? `${path}: not on the card` : e.status === 415 ? `${path}: not a GIF` : 'play: ' + e.message, 'bad');
       return false;
     }
   },
