@@ -133,9 +133,10 @@ mix(#102040, #ff8040, y + sin(t/8)*0.1)
 The panel has ~8 ms a frame (12 for a look over a GIF). `psi check` says
 the cost and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
 and `/` cost most; a value of only `t`, the clock and sliders is worked out
-once a frame, of `y` once a row — free. Drawing costs by the shapes, not the
-pixels: prefer `draw` for scenes (objects, sprites, text) and per-pixel
-maths for fields (plasma, fire, sky). Two habits keep a shader light:
+once a frame, of `y` once a row — free. Lines and dots cost by the line, not
+the pixel; painted filled shapes by the pixels they cover. Prefer `draw`
+for scenes (objects, sprites, text) and per-pixel maths for fields
+(plasma, fire, sky). Two habits keep a shader light:
 
 - Lift what doesn't need the pixel out of it: `s = sin(t/8)` (once a
   frame) and `row = noise(y*4, t, 0)` (once a row), then use `s` and
