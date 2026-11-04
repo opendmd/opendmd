@@ -243,7 +243,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   its name, blend and amount are the formula's own `name` and `look`
   lines, as on the firmware); status `formula_look`
   (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
-- **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
+- **`GET /api/exists?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
   manifest does not open; `building` is never observable, as on the device,
@@ -367,7 +367,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 
 Behave like the current firmware where this mock otherwise differs on
 purpose: a `..` escape through the `/*` catch-all is a plain 404 (not 400),
-and `/api/stat` and `/api/play` cost a FAT directory scan of the parent
+and `/api/exists` and `/api/play` cost a FAT directory scan of the parent
 (15 ms + 0.15 ms per entry: ~20 ms in a bucket, ~590 ms in `gifs/Consoles`),
 so a UI that stats or plays in a big directory feels it.
 
@@ -3064,7 +3064,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
-                (m_exact("/api/stat"), {"GET": self.h_stat}),
+                (m_exact("/api/exists"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
                 (m_exact("/api/cache/list"), {"GET": lambda p: self.streamed(lambda: self.h_cache_list(p), 0)}),
                 (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),

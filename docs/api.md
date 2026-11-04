@@ -18,6 +18,10 @@ curl -s $DMD/api/status
   with `Content-Type: application/json` (`415` otherwise; `curl --json`
   sets it). Every error is a non-2xx status with `{"error":"<why>"}`, except
   `405` (a route that exists for another method), the server's `text/html`.
+- **Names ad blockers leave alone.** A path named like analytics (`stat`, `track`, `log`) is on EasyPrivacy,
+  and uBlock Origin and Brave then fail the web app's request as a network
+  error. `make blocklist-check` (`tools/blocklist-check.py`) tests every route
+  against EasyPrivacy and EasyList; a new route must pass it.
 - **Size limits.** JSON bodies ≤ 8 KB (`413` over), the schedule ≤ 2 KB,
   a web app pack ≤ 1,310,720 B. Uploads are streamed, any size, but no data
   for 5 s, or 120 s in all, is a `408`. A body needs a `Content-Length`.
@@ -166,7 +170,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 curl -s $DMD/api/status | jq .now_playing
 ```
 
-### GET /api/stat
+### GET /api/exists
 
 `?path=<card path>`: whether a file or directory exists, its size.
 
@@ -176,7 +180,7 @@ directory or a miss.
 Errors: `400` no `path=`, or not card-absolute.
 
 ```sh
-curl -s "$DMD/api/stat?path=/filelist.txt"
+curl -s "$DMD/api/exists?path=/filelist.txt"
 ```
 
 ### POST /api/reboot
