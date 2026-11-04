@@ -32,7 +32,7 @@ formula without the line is version 1, and always will be.
 
 ## Text
 
-- A formula is text, at most 16,384 characters, comments included.
+- A formula is text, at most 32,768 characters, comments included.
 - **Lines.** Each statement is a line; `;` ends a statement too (`a = 1;
   b = 2`). Inside `( )` and `[ ]` a line end is a space, and after an
   operator or a `,` the statement goes on onto the next line.
@@ -287,7 +287,7 @@ example is compiled by the tests.
 <!-- psi-builtins: limits (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins) -->
 | limit | at most |
 | --- | --- |
-| a formula's text, comments included | 16,384 characters |
+| a formula's text, comments included | 32,768 characters |
 | steps (per frame, draw, per row, per pixel, and one per layer) | 768 |
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 241 |
@@ -336,7 +336,7 @@ name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
 JIT: yes, ~5.6 ms a frame compiled (the VM's ~6.8 ms is what the limits count)
-length: 559 B as written (16,384 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look)
+length: 559 B as written (32,768 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look)
 note: line 14: `d` is worked out for every pixel each frame (~666 ns a pixel): it would be kept in the still cache but it reads `fall`, which changes from frame to frame
 heaviest lines (their share of the work a frame; make these lighter first):
   line 8 (68%): cl = noise(x*3 - t*0.15, (1 - y)*2, 0)*0.7 + noise(x*7 - …

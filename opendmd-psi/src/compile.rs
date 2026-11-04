@@ -33,7 +33,7 @@ mod notes;
 /// the readable Endless road is ~6 KB). What the panel compiles is bounded
 /// by its heap check, by tokens (`compile_heap_estimate`); a Formula read
 /// from the card is compacted first (8 KB at most), an inline path is 6 KB.
-pub const MAX_SOURCE: usize = 16 * 1024;
+pub const MAX_SOURCE: usize = 32 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 2048;
 /// Brackets, operators and function calls nested this deep: bounds the

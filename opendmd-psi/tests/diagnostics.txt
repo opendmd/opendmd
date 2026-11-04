@@ -241,8 +241,8 @@ rgb(0.5, #f00, 1)
 --- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 === E401
-<<8200*x >>
---- 1:16385 too long: a formula can be 16384 characters at most
+<<16400*x >>
+--- 1:32769 too long: a formula can be 32768 characters at most
 
 === E402
 gray(<<260; + ;sin(x * {k})>>)
