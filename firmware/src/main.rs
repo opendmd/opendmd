@@ -289,6 +289,22 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
+/// May a Formula's JIT kernel be built now (`fx_psi::JitGate`): its build
+/// takes `take` B of small blocks for a moment, and an infallible one the
+/// heap can't give aborts. Room for it and 4 KB besides, and a 4 KB block
+/// (its largest, the lowering's step table, measured 4.3 KB on the host
+/// for Endless road V2): else the Formula stays on the VM and asks again
+/// a second later.
+#[cfg(feature = "psi")]
+pub fn jit_gate(take: usize) -> bool {
+    let free = free_heap() as usize;
+    let ok = free >= take + 4 * 1024 && largest_free_block() >= 4 * 1024;
+    if !ok {
+        log::info!("formula: JIT kernel not built yet ({take} B): heap {free} B free, largest block {} B", largest_free_block());
+    }
+    ok
+}
+
 /// The card's settings at the handover (`settings_card`): `new` in force,
 /// and what differs from the settings it replaces applied the way a
 /// settings change is (the brightness under safe start's ceiling, the
@@ -620,6 +636,8 @@ fn main() -> Result<()> {
     // And keep their still caches to what the heap can spare.
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_still_gate(Some(still_gate));
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_jit_gate(Some(jit_gate));
     let mut sched = Scheduling::new(&settings.schedule);
     heapmap::cp("settings applied, schedule");
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
