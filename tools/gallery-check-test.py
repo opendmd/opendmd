@@ -31,6 +31,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = ROOT / "tools/fixtures"
 HDR = "-- author: @contributor\n-- licence: CC0-1.0\nname \"Spiral sweep\"\nabout \"A rainbow spiral turning around the middle\"\n"
 FORMULA = "loop 8\na2 = atan2(y - 0.5, (x - 0.5)*4)\nd = len((x - 0.5)*4, y - 0.5)\nhsv(frac(a2 + d*0.6 - t/8), 1, 1)\n"
 GOOD = HDR + FORMULA
@@ -46,7 +47,7 @@ def sh(*args: str, cwd: Path | None = None, check: bool = True, env: dict | None
 def write(root: Path, rel: str, text: str | bytes) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(text if isinstance(text, bytes) else text.encode())
+    p.write_bytes(text.read_bytes() if isinstance(text, Path) else text if isinstance(text, bytes) else text.encode())
 
 
 # (title, edit(fork), expect pass?, a phrase the output must have)
@@ -74,7 +75,10 @@ def cases():
         ("a good formula", lambda f: write(f, "gallery/spiral-sweep.psi", GOOD), True, "ok   \"gallery/spiral-sweep.psi\""),
         ("outside gallery/: path traversal, a folder, a dotted name", lambda f: (write(f, "x/evil.psi", GOOD), write(f, "gallery/sub/nested.psi", GOOD),
                                                                                write(f, "gallery/..psi", GOOD)), False, "only files in gallery/"),
-        ("a huge file", lambda f: write(f, "gallery/huge.psi", GOOD + "-" * 6000), False, "4096 at most"),
+        ("a huge file", lambda f: write(f, "gallery/huge.psi", GOOD + "-" * 22000), False, "20480 at most"),
+        ("over 4,500 bytes once compiled (7.7 KB of source: tables, palettes, paint colours)", lambda f: write(f, "gallery/long-compiled.psi", FIXTURES / "gallery-over-4500.psi"), False, "4863 bytes once prepared, 4500 at most"),
+        ("heavy on the VM but light with the JIT (the gate counts the tier)", lambda f: write(f, "gallery/jit-only.psi", FIXTURES / "gallery-jit-only.psi"), True, "ok   \"gallery/jit-only.psi\""),
+        ("a 12 KB file that compiles small", lambda f: write(f, "gallery/long.psi", GOOD + "-- padding padding\n" * 600), True, "ok   \"gallery/long.psi\""),
         ("HTML in the author", lambda f: write(f, "gallery/html.psi", GOOD.replace("@contributor", "<img src=x onerror=alert(1)>")), False, "may not contain < or >"),
         ("HTML in the name", lambda f: write(f, "gallery/html2.psi", GOOD.replace("Spiral sweep", "<img src=x onerror=alert(1)>")), False, "doesn't compile"),
         ("the old header", lambda f: write(f, "gallery/old.psi", "-- name: Spiral sweep\n-- description: A spiral\n-- author: @contributor\n-- licence: CC0-1.0\n" + FORMULA), False, "the header is two lines now"),

@@ -64,6 +64,36 @@ def urlencoded(pairs: list[tuple[str, str]]) -> str:
     return "&".join(f"{enc(k)}={enc(v)}" for k, v in pairs)
 
 
+# The compiled format's version the newest release the site serves plays, and
+# the first release of each version (site/worker/src/gallery.ts has a copy).
+# Change both when a release ships a new ABI: ABI 2 is in 1.0.0-beta.14.
+ABI_SERVED = 1
+ABI_FIRMWARE = {1: "1.0.0-beta.13", 2: "1.0.0-beta.14"}
+
+
+def cost(e: dict) -> str:
+    """What a Formula costs on the panel, as the web app says it (light:
+    under 5 ms, medium: under 8, else heavy; `us` is the tier figure,
+    the JIT's where it takes the Formula, and `vm_us` the VM's beside it)."""
+    us, vm = e.get("us"), e.get("vm_us")
+    if us is None or vm is None:
+        return ""
+    tier = "Light" if us <= 5000 else "Medium" if us <= 8000 else "Heavy"
+    without = f", {vm / 1000:.1f} ms without the JIT" if vm > us else ""
+    tip = f"About {us / 1000:.1f} ms a frame on the panel{without} (light: under 5 ms; medium: under 8; the gallery takes up to 10)"
+    return f'<p class="fcost" title="{html.escape(tip)}">{tier} · about {us / 1000:.1f} ms a frame</p>'
+
+
+def needs(e: dict) -> str:
+    """The firmware a Formula needs, when its compiled format is newer than
+    the one the latest release plays (ABI_SERVED)."""
+    abi = e.get("abi")
+    if abi is None or abi <= ABI_SERVED:
+        return ""
+    v = ABI_FIRMWARE.get(abi)
+    return f'<p class="fneeds">{"Needs firmware " + html.escape(v) + " or later" if v else "Needs newer firmware"}</p>'
+
+
 def share_hash(e: dict) -> str:
     """`#gallery=<slug>`: a Formula goes by name, never by its text in a
     link (the web app reads the same: psikit `from`). /f/ reads it from
@@ -244,6 +274,7 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path, adde
                 f'<picture class="led"><img src="{t(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>'
                 f'<h3>{t(name)}{badges}</h3><p class="fdesc">{t(e["about"])}</p>'
                 + (f'<p class="fctl">Controls: {t(", ".join(ctl))}</p>' if ctl else "")
+                + cost(e) + needs(e)
                 + f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
                 # Open on my panel: the Formula's page with the mark, which hands it to
                 # the panel's editor at once once its address is known (else asks for it).

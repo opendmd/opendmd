@@ -8,7 +8,8 @@
 
 import { compiled, type Compiled } from "./psi";
 
-export const MAX_FILE = 4096;
+export const MAX_FILE = 20 * 1024;
+export const MAX_PSB = 4500;
 export const MAX_NAME = 40;
 export const MAX_DESCRIPTION = 120;
 export const MAX_AUTHOR = 40;
@@ -32,7 +33,13 @@ export interface Entry {
   src: string;
   loop_ms: number;
   inputs: number;
+  /** What the panel takes a frame: opendmd-gallery's `Program::tier_us(false)`, the JIT's where it takes the Formula (info[11] when info[15] is 1), else the VM's with the still cache (info[14]). */
   us: number;
+  /** The VM's (info[14]): "without the JIT" (the same as `us` when the JIT does not take it). */
+  vm_us: number;
+  /** The Formula compiled for the panel: bytes, and the format's version. */
+  psb_len: number;
+  abi: number;
 }
 
 export type Verdict = { ok: true; entry: Entry; program: Compiled } | { ok: false; problems: string[] };
@@ -203,9 +210,15 @@ export function checkFile(slug: string, bytes: Uint8Array): Verdict {
   for (const [what, v] of [["name", name ?? ""], ["author", author]] as const) {
     if (RESERVED.includes(skeleton(v))) problems.push(`the ${what} can't be OpenDMD's or a maintainer's`);
   }
-  const us = c.info[14];
+  // opendmd-gallery: Program::tier_us(false), as the panel plays it (the JIT's estimate where its kernel takes the Formula: info[15]).
+  const us = c.info[15] ? c.info[11] : c.info[14];
   if (us > MAX_US) {
     problems.push(`the formula is too heavy for the panel: about ${(us / 1000).toFixed(1)} ms a frame, ${(MAX_US / 1000).toFixed(0)} ms at most`);
+  }
+  // The Formula as compiled for the panel (a `@formula?psb=…` link carries it).
+  if (c.psb === 0) problems.push("the formula could not be prepared for the panel");
+  else if (c.psb > MAX_PSB) {
+    problems.push(`the formula is too long for the panel to take in a link: ${c.psb} bytes once prepared, ${MAX_PSB} at most; cut tables or repeated steps (comments and spaces cost nothing)`);
   }
   if (problems.length) return { ok: false, problems };
   // (controls() writes the amount as a number: 100 for `look` alone)
@@ -217,6 +230,7 @@ export function checkFile(slug: string, bytes: Uint8Array): Verdict {
       slug, name: name!, about: about!, author, licence, bundle, look,
       controls: c.meta.controls.map((k) => k.label),
       src, loop_ms: c.info[4], inputs: c.info[5], us,
+      vm_us: c.info[14], psb_len: c.psb, abi: c.abi,
     },
   };
 }
