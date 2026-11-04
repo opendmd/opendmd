@@ -64,3 +64,4 @@
 .psi-sls:empty{display:none}
 .psi-badge{align-self:flex-start;font-size:11px;color:var(--acc);border:1px solid;border-radius:4px;padding:0 4px}
 .psi-set-c{border-top:1px solid var(--line);padding:4px 0}.psi-set-c .row{flex-wrap:wrap;gap:4px}
+.psi-conds{border-top:1px solid var(--line);margin-top:12px;padding-top:8px}.psi-conds h3{margin:0}.psi-conds .acts{margin-top:8px}

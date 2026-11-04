@@ -4,7 +4,7 @@
 // only the open tab is in the page. Playback (brightness and its maximum
 // js/power.js, playlist, platforms, shuffle, how long each GIF stays),
 // Look (colour, glow, a formula over every GIF, mirroring on Now, the
-// transition, Start-up js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
+// transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode, Follow RePlayOS) and
 // Device (status, the playback cache, network — its own Save; a new name
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
@@ -235,7 +235,8 @@ export async function mount(el) {
           pvBox),
         boot);
     },
-    time: () => tab('time', time.el, sched.el, follow.el),
+    // Location (js/location.js): on a player that keeps one (`lat` in its config).
+    time: () => { const loc = 'lat' in c && h('div.grp', { id: 'loc' }); if (loc) import('./location.js').then((m) => m.locationCard(loc)); return tab('time', time.el, loc, sched.el, follow.el); },
     device: () => {
       const t = tab('device');
       import('./device.js').then((m) => { dev = m.deviceTab(t, { f, save, banner, sched, thumbs, live: () => visible && open === 'device' }); });

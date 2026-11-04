@@ -28,6 +28,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
+use opendmd_psi::world::{self, World};
 use opendmd_psi::{
     compile_declared, compile_into, render_rows_ink, Control, Ink, Inputs, Program, Scratch, H, OWN,
     W,
@@ -36,6 +37,13 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "bump"))]
 mod bump;
+
+// The sky's integer maths, the firmware's own file (no dependencies), so
+// the editor's time travel and the panel agree bit for bit; this crate
+// does not depend on opendmd-core.
+#[allow(dead_code)]
+#[path = "../../opendmd-core/src/sky.rs"]
+mod sky;
 
 #[cfg(all(target_arch = "wasm32", feature = "bare"))]
 #[panic_handler]
@@ -57,6 +65,9 @@ struct State {
     at: [u32; 2],
     /// A `loop forever` formula's `seed` ([`set_seed`]).
     seed: i32,
+    /// The built-in inputs the preview draws with ([`world_set`]):
+    /// [`World::default`] until the editor's controls say otherwise.
+    world: World,
 }
 
 struct Cell(UnsafeCell<Option<State>>);
@@ -93,6 +104,7 @@ fn state() -> &'static mut State {
         err_len: 0,
         at: [0; 2],
         seed: 0,
+        world: World::default(),
     })
 }
 
@@ -337,6 +349,7 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
             b,
             c,
             seed: s.seed,
+            world: s.world,
             ..Inputs::default()
         };
         // A formula that never repeats: `ms` since its preview began.
@@ -493,6 +506,108 @@ fn number(j: &mut String, v: i32) {
             d /= 10;
         }
     }
+}
+
+/// Every built-in input back at its default ([`World::default`]): what
+/// previews, thumbnails and the gallery draw with.
+#[wasm_bindgen(js_name = worldReset)]
+pub fn world_reset() {
+    state().world = World::default();
+}
+
+/// Built-in input `id` (`world::KEYS`' number) set for the frames drawn
+/// from now on: its value, its value before its last change, and the
+/// seconds since that change (Q16.16; the page keeps when each change was,
+/// so `since` grows with real time). Each read is held to its range.
+#[wasm_bindgen(js_name = worldSet)]
+pub fn world_set(id: u8, value: i32, was: i32, since: i32) {
+    let w = &mut state().world;
+    let i = id as usize % world::MAX_KEYS;
+    w.value[i] = value;
+    w.was[i] = was;
+    w.since[i] = since;
+}
+
+/// Built-in input `id` changed to `v` now (`World::change`: `was` the value
+/// it had, `since` 0; the same value is no change).
+#[wasm_bindgen(js_name = worldChange)]
+pub fn world_change(id: u8, v: i32) {
+    state().world.change(id, v);
+}
+
+/// Built-in input `id` as the frames read it: `[value, was, since]`
+/// (Q16.16, before the range).
+#[wasm_bindgen]
+pub fn world(id: u8) -> Vec<i32> {
+    let w = &state().world;
+    let i = id as usize % world::MAX_KEYS;
+    alloc::vec![w.value[i], w.was[i], w.since[i]]
+}
+
+/// The sky at a moment, as the panel works it out (`opendmd_core::sky`,
+/// the same integers): `unix` UTC seconds, the local time's `utc_offset`
+/// (seconds) and a place in degrees (NaN for none) → `[daylight, sun.alt,
+/// moon.phase, season, yearday]` (Q16.16; [`UNSET`] where it can't be
+/// known: the sun and the season without a place) and `[hour, minute,
+/// second]` of the local time, whole.
+#[wasm_bindgen]
+pub fn sky(unix: f64, utc_offset: i32, lat: f64, lon: f64) -> Vec<i32> {
+    let (t, off) = (unix as i64, i64::from(utc_offset));
+    let k = sky::inputs(t, off, sky::Place::from_degrees(lat, lon));
+    let day = (t + off).rem_euclid(86_400) as i32;
+    let or = |v: Option<i32>| v.unwrap_or(UNSET);
+    alloc::vec![
+        or(k.daylight),
+        or(k.sun_alt),
+        k.moon_phase,
+        or(k.season),
+        k.yearday,
+        day / 3600,
+        day / 60 % 60,
+        day % 60,
+    ]
+}
+
+/// The built-in inputs the formula drawn reads ([`Program::builtins`]), as
+/// JSON in `world::KEYS`' order: `[{"id": 1, "name": "daylight", "lo": 0,
+/// "hi": 1, "default": 1, "whole": false, "reads": 3}]`, `reads` bits 0
+/// its value, 1 `since(…)`, 2 `was(…)`; numbers to 4 decimals. `[]` for
+/// one that reads none (or before anything compiled).
+#[wasm_bindgen]
+pub fn builtins() -> String {
+    let s = state();
+    let mut j = String::from("[");
+    if s.ok {
+        for k in &world::KEYS {
+            let reads = s
+                .prog
+                .builtins()
+                .filter(|(b, _)| b.id == k.id)
+                .fold(0u8, |m, (_, w)| m | 1 << w);
+            if reads == 0 {
+                continue;
+            }
+            if j.len() > 1 {
+                j.push(',');
+            }
+            j.push_str("{\"id\":");
+            number(&mut j, i32::from(k.id) << 16);
+            j.push_str(",\"name\":\"");
+            j.push_str(k.name);
+            j.push_str("\",\"lo\":");
+            number(&mut j, k.lo);
+            j.push_str(",\"hi\":");
+            number(&mut j, k.hi);
+            j.push_str(",\"default\":");
+            number(&mut j, k.default);
+            j.push_str(if k.whole { ",\"whole\":true" } else { ",\"whole\":false" });
+            j.push_str(",\"reads\":");
+            number(&mut j, i32::from(reads) << 16);
+            j.push('}');
+        }
+    }
+    j.push(']');
+    j
 }
 
 /// Where the page puts the picture [`frame_over`] draws over: 128 × 32

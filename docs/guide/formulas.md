@@ -133,6 +133,16 @@ last version that worked, dimmed.
 - **Name and look:** `name "My sunrise"` and `about "…"` at the top say
   what it is called and what it is; `look screen 40` says it can be the
   panel's look, drawn over every GIF with that blend and amount.
+- **Try it out:** a formula that reads the world around the panel
+  (`daylight`, `night`, `replay.game`, `since(…)` …) gets a block of its
+  own under the preview. **Time travel** moves the sun, the moon and the
+  clock to another moment: a time of day and a date, and **Play** runs a
+  whole day in about 30 seconds, at your panel's location (Settings ›
+  Schedule › Location), else London. **Start a game** and **Back to the
+  menu**, **Night on**, and a slider for each value it reads make a change
+  as the panel would, so `since` and `was` play out as they will there.
+  **Back to the defaults** undoes it all. It is only the preview: the
+  gallery, thumbnails and Save as GIF show the defaults.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps the formula in this browser, under its name.
@@ -234,8 +244,7 @@ the same for every pixel of a frame, read by name like `hour`:
 | `replay.platform` | the game's platform as a number, 0 when none | 0 |
 | `replay.game` | a number for the game, 0 to 1: different for each game, the same each time it plays | 0 |
 
-The sun, `season` and `daylight` need the panel's location (Settings ›
-Location: two numbers, kept on the panel only); the moon and the date need
+The sun, `season` and `daylight` need the panel's location (Settings › Schedule › Location: two numbers, kept on the panel only); the moon and the date need
 the clock. Until then, and in the editor's preview and the gallery, each
 reads the value in the last column, so a formula always looks right.
 
