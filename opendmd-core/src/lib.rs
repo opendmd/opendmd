@@ -5,6 +5,11 @@
 //! outside crates are `gif` (the fallback decoder, and the metadata the
 //! tests read back) and `log`.
 
+// Code that runs once a minute or once a change (the sky, the input
+// table), optimised for size on the ESP32 (`#[optimize(size)]`: the app's
+// flash is the scarce thing there).
+#![cfg_attr(target_arch = "xtensa", feature(optimize_attribute))]
+
 pub mod access;
 pub mod auto_prepare;
 pub mod boot;

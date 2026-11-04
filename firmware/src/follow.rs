@@ -513,6 +513,8 @@ impl Poller {
             State::Unreachable => self.last_error.clone(),
             _ => None,
         };
+        // The `replay.*` inputs for Formulas (`inputs.rs`).
+        crate::inputs::replay(state, self.follow.game());
         match self.follow.game() {
             Some(g) => {
                 s.system = Some(g.system.clone());

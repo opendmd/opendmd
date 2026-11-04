@@ -241,9 +241,10 @@ the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
 host, attract, look, glow, `look_formula`, `boot_show`, `panel_sync`,
 `panel_split`, `formula_jit`, `formula_arena`, `formula_keep`. A change is
 on the card the moment it is saved, whatever plays. The device keeps the
-rest itself, never on the card: the WiFi details and name, the API key
-and the RePlayOS code (secrets), the card's clock and its slow-clock
-record, and the panel timing. It also keeps a copy of everything, what it
+rest itself, never on the card: the WiFi details and name, the
+location (`lat`, `lon`), the API key and the RePlayOS code (secrets), the
+card's clock and its slow-clock record, and the panel timing. The
+location is never in `/api/status` or a link either. It also keeps a copy of everything, what it
 runs on until a card is read and with no card at all.
 
 The file is JSON, by the names below, sealed with a last member `"crc"`;
@@ -290,6 +291,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `formula_arena` | `false` | a dev setting, in force from the next boot: a Formula's memory (its program and VM scratch, ink and paint planes, ~19 KB) from one block set aside at boot before the network starts, so it lands in the same SRAM pool every time (`display.buffers`; the A/B for the upload residual). Costs that block for the whole boot |
 | `formula_keep` | `turn` | how long a Formula sent with `/api/play` stays on the panel: `turn` (one turn of the dwell, as any file), `1m`, `5m` or `hold` (until something else plays: another `/api/play`, `/api/skip` or Previous, a playlist change). Formulas in a playlist are not affected. From the next one sent |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
+| `lat`, `lon` | numbers or null, null | where the panel is, in degrees (north and east positive, two decimals: 0.01° is about 1 km), for the built-in inputs Formulas read: `daylight`, `sun.alt` and `season` need it (`moon.phase` and `yearday` need only the clock); both null when none is set |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |
 
@@ -304,8 +306,14 @@ A partial update: only the fields to change, named as above (plus
 brightness, look and glow repaint the panel; a transition applies from the
 next file; a new `set`, `platforms` or `shuffle` rebuilds the playlist in
 place; a new `hostname` at once (mDNS re-announces, status `mdns` says the
-name it took; DHCP sends it from the next lease renewal). WiFi changes take
-effect after a reboot.
+name it took; DHCP sends it from the next lease renewal); a location at
+once (the sky's inputs are worked out again). WiFi changes take effect
+after a reboot.
+
+The location goes as a pair: `{"lat":51.51,"lon":-0.13}` sets it (rounded
+to 0.01°; `lat` −90..90, `lon` −180..180, else `400`),
+`{"lat":null,"lon":null}` clears it, and one without the other is a `400`
+(`lat and lon go together`).
 
 Panel timing is tried: a `panel` object (any of its fields) runs for 60 s,
 then reverts unless `"panel_confirm":true` keeps it (`false` undoes it; with
@@ -336,6 +344,7 @@ Clear filter.
 curl -s -X PUT $DMD/api/config --json '{"brightness":64,"transition":"wipe_left","transition_ms":300}'
 curl -s -X PUT $DMD/api/config --json '{"set":"consoles","shuffle":true}'
 curl -s -X PUT $DMD/api/config --json '{"panel":{"clk_phase":false}}'
+curl -s -X PUT $DMD/api/config --json '{"lat":53.35,"lon":-6.26}'
 ```
 
 ### GET /api/name-check

@@ -164,6 +164,14 @@ where
     <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
+/// A number, `null` or absent (`lat`, `lon`).
+fn double_option_f64<'de, D>(d: D) -> Result<Option<Option<f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<f64> as serde::Deserialize>::deserialize(d).map(Some)
+}
+
 /// `panel`: absent, `null` (the defaults) or an object.
 fn double_option_panel<'de, D>(d: D) -> Result<Option<Option<PanelWire>>, D::Error>
 where
@@ -433,6 +441,19 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         };
         next.card_speed = mode;
     }
+    match (patch.lat, patch.lon) {
+        (None, None) => {}
+        (Some(None), Some(None)) => next.location = None,
+        (Some(Some(lat)), Some(Some(lon))) => match opendmd_core::sky::Place::from_degrees(lat, lon) {
+            Some(p) => next.location = Some(p),
+            None => {
+                return Err(PatchErr::bad(
+                    "lat must be a number from -90 to 90 and lon one from -180 to 180 (degrees)",
+                ))
+            }
+        },
+        _ => return Err(PatchErr::bad("lat and lon go together: give both numbers, or both null")),
+    }
     if next.dwell_max < next.dwell_min {
         return Err(PatchErr::bad("dwell_max must be >= dwell_min"));
     }
@@ -492,6 +513,13 @@ pub struct ConfigPatch {
     /// `safe`, `fast` or `full` (`opendmd_core::card_speed`): in effect at
     /// once when a card is mounted (`cardspeed::set_mode`).
     pub(crate) card_speed: Option<String>,
+    /// The location in degrees (rounded to 0.01°), both or neither; both
+    /// `null` clears it. Kept in NVS only (never the card's file:
+    /// `settings_card` has no group for them).
+    #[serde(default, deserialize_with = "double_option_f64")]
+    pub(crate) lat: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "double_option_f64")]
+    pub(crate) lon: Option<Option<f64>>,
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
@@ -747,6 +775,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
+        let sky_before = (next.location, next.tz.clone());
         if let Some(p) = patch.pace_on_pct {
             crate::pace::set_on_pct(p);
         }
@@ -805,6 +834,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
         let card_speed = next.card_speed;
+        // The sky's inputs depend on the location and the zone.
+        let sky_changed = (next.location, next.tz.clone()) != sky_before;
+        let location = next.location;
         // The shared copy and the log line are this handler's (CPU0), once
         // the main task has applied it: the display core neither clones
         // the settings nor formats a line for a PUT.
@@ -843,6 +875,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     shared.panel_split
                 );
                 *c.settings.lock().unwrap() = shared;
+                // In effect at once: the sky's inputs for the new location
+                // (or zone), here on CPU0 (the zone is already set).
+                if sky_changed {
+                    crate::inputs::set_place(location);
+                }
                 // Durable at once on the card (CPU0; `settings_card`).
                 crate::settings_card::save_shared(&c.settings);
                 if let Some(name) = renamed {
@@ -2936,7 +2973,8 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
+            r#""lat":{},"lon":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2969,7 +3007,16 @@ fn settings_json(s: &Settings) -> String {
         s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
+        s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lat_c)),
+        s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lon_c)),
     )
+}
+
+/// Hundredths of a degree as a JSON number with two decimals (`-0.13`).
+fn centi_degrees(c: i32) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.unsigned_abs();
+    format!("{sign}{}.{:02}", a / 100, a % 100)
 }
 
 fn scan_json(aps: &[ScannedAp]) -> String {

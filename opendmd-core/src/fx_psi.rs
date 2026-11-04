@@ -493,8 +493,9 @@ pub const NOT_PREPARED: &str =
 
 /// A formula's program on the heap, with the store its formula needs
 /// ([`psi::Prog`]: its tables and sprites, a power of two of numbers, 4 for
-/// a formula with none), or none: an all-zero one (a zeroed [`PsiFx`]'s)
-/// is none, and reads as the empty program.
+/// a formula with none), or none: an all-zero one (a zeroed [`PsiFx`]'s,
+/// before its open gives it one; nothing reads it then). (No static empty
+/// program to read instead: it would be 6.4 KB of the app's flash.)
 pub struct ProgBox(Option<Box<psi::Prog>>);
 
 impl ProgBox {
@@ -515,7 +516,7 @@ impl ProgBox {
 impl std::ops::Deref for ProgBox {
     type Target = psi::Prog;
     fn deref(&self) -> &psi::Prog {
-        self.0.as_deref().unwrap_or(psi::empty())
+        self.0.as_deref().expect("a formula's program, given at its open")
     }
 }
 
@@ -2512,8 +2513,10 @@ mod alloc_box {
     impl Clone for PsiBox {
         fn clone(&self) -> PsiBox {
             let mut b = PsiBox::new();
-            // (A clone the heap has no program for plays nothing.)
-            b.0.prog = self.0.prog.try_clone().unwrap_or(super::ProgBox(None));
+            // (As `new`: the heap's refusal is an abort.)
+            b.0.prog = self.0.prog.try_clone().unwrap_or_else(|| {
+                std::alloc::handle_alloc_error(opendmd_psi::Prog::layout(self.0.prog.store_len()))
+            });
             // (A clone that can't have its canvas draws nothing: `ink` 0.)
             b.0.ink = super::canvas_for(&b.0.prog, &mut None).unwrap_or(None);
             b.0.clock = self.0.clock;

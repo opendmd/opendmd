@@ -28,6 +28,7 @@ use opendmd_core::card_speed::CardSpeed;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
 use opendmd_core::panel_timing::PanelTiming;
+use opendmd_core::sky::Place;
 
 use crate::config;
 
@@ -74,6 +75,10 @@ const KEY_FORMULA_ARENA: &str = "formula_arena";
 const KEY_FORMULA_KEEP: &str = "formula_keep";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
 const KEY_CARD_SPEED: &str = "card_speed";
+/// The location for the sky's inputs (`Settings::location`): latitude and
+/// longitude in hundredths of a degree, both or neither.
+const KEY_LAT: &str = "lat_c";
+const KEY_LON: &str = "lon_c";
 /// The longest `attract` value (`text:` and the message).
 pub const ATTRACT_MAX: usize = 205;
 /// The panel timing (`opendmd_core::panel_timing`): the saved settings and
@@ -193,6 +198,11 @@ pub struct Settings {
     /// (40 MHz, slowed down in place after an error) or `full` (always
     /// 40 MHz, never slowed: API and bench only). See `cardspeed.rs`.
     pub card_speed: CardSpeed,
+    /// Where the panel is (0.01°), for the sky's inputs to Formulas
+    /// (`daylight`, `sun.alt`, `season`: `inputs.rs`); `None`: not set.
+    /// Kept by the device itself like the WiFi details: never in the card's
+    /// settings file, `/api/status` or a link.
+    pub location: Option<Place>,
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
@@ -252,6 +262,7 @@ impl Default for Settings {
             formula_keep: FormulaKeep::Turn,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
+            location: None,
         }
     }
 }
@@ -457,6 +468,7 @@ impl Config {
                 .filter(|k| opendmd_core::access::valid_key(k))
                 .unwrap_or(d.api_key),
             card_speed: self.card_speed(),
+            location: self.location(),
         }
     }
 
@@ -505,6 +517,16 @@ impl Config {
         self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
+        match s.location {
+            Some(p) => {
+                self.nvs.set_i32(KEY_LAT, p.lat_c)?;
+                self.nvs.set_i32(KEY_LON, p.lon_c)?;
+            }
+            None => {
+                self.nvs.remove(KEY_LAT)?;
+                self.nvs.remove(KEY_LON)?;
+            }
+        }
         Ok(())
     }
 
@@ -548,6 +570,14 @@ impl Config {
                 false
             }
         }
+    }
+
+    /// The location, if both halves are stored and on the globe.
+    fn location(&self) -> Option<Place> {
+        let lat = self.nvs.get_i32(KEY_LAT).ok().flatten()?;
+        let lon = self.nvs.get_i32(KEY_LON).ok().flatten()?;
+        ((-9000..=9000).contains(&lat) && (-18000..=18000).contains(&lon))
+            .then_some(Place { lat_c: lat, lon_c: lon })
     }
 
     /// `card_speed` alone, for the boot's card records (`sdhealth::boot`),

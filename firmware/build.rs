@@ -257,10 +257,28 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
         ("guards rows".into(), 0, three("py < 16"), true),
         ("guards base".into(), 0, format!("{base}gray(frac(u*0.1))\n"), true),
     ];
+    // (V2 as P0b-4 measured it, fused and not: V2 itself has grown past
+    // what its unfused steps fit in, with its lamp posts.)
+    let p0b4 = std::fs::read_to_string("../opendmd-psi/tests/road-v2-p0b4.psi").expect("road-v2-p0b4.psi");
+    println!("cargo:rerun-if-changed=../opendmd-psi/tests/road-v2-p0b4.psi");
     for (place, ms) in [("exit", 2_056_049u32), ("mouth", 733_049), ("forest-desert", 544_049), ("desert", 2_177_549)] {
         cmp.push((format!("road-v2 {place} fused"), ms, road.clone(), true));
-        cmp.push((format!("road-v2 {place} unfused"), ms, road.clone(), false));
+        cmp.push((format!("road-v2-p0b4 {place} fused"), ms, p0b4.clone(), true));
+        cmp.push((format!("road-v2-p0b4 {place} unfused"), ms, p0b4.clone(), false));
     }
+    // V2 in the city (its lamp posts), and psb ABI 3: the same table and
+    // sprite reads in the store's first numbers and past 900 (the store
+    // sized 1,024; the helpers mask by its length), and built-in inputs
+    // against the same constants.
+    cmp.push(("road-v2 city fused".into(), 128_049, road.clone(), true));
+    let reads = "table T = 0.1, 0.5, 0.9, 0.3, 0.7\nsprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(frac(T[x*5 + t] + s[x*18 + t, y*2] + T[y*5]*0.3 + s[x*9, y*2 + t]))\n";
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    let fill = format!("table F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\n", f = filler.join(", "));
+    cmp.push(("store low".into(), 0, format!("loop 8\n{reads}"), true));
+    cmp.push(("store high".into(), 0, format!("loop 8\n{fill}{reads}").replace("gray(frac(", "gray(frac(F2[250]*0.01 + "), true));
+    cmp.push(("store low+f".into(), 0, format!("loop 8\n{reads}").replace("gray(frac(", "gray(frac(0.03 + "), true));
+    cmp.push(("inputs".into(), 0, format!("{base}gray(frac(u*daylight + sun.alt + y*moon.phase + since(night)*0.001 + was(bright)))\n"), true));
+    cmp.push(("inputs const".into(), 0, format!("{base}gray(frac(u*1 + 0.1 + y*0.5 + 32767*0.001 + 1))\n"), true));
     for (name, ms, src, fused) in cmp {
         let psb = opendmd_psi::build_with(&src, fused).unwrap_or_else(|e| panic!("cmp case {name}: {}", e.render(&src)));
         list += &format!("    (\"cmp\", {name:?}, {ms}, &{psb:?}),\n");

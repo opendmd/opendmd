@@ -1517,7 +1517,7 @@ fn input_word(n: &Node) -> (&'static str, &'static str) {
         return ("seed", "a new number each play");
     }
     if let Some(b) = key_byte(n) {
-        return crate::world::key_by_id(b & 63).map_or(("", ""), |k| (k.name, k.about));
+        return crate::world::key_by_id(b & 63).map_or(("", ""), |k| (k.name, crate::world::about(k.id)));
     }
     let e = INPUTS[n.why as usize];
     (e.0, e.2)
