@@ -78,7 +78,7 @@ fn t_max(loop_ms: u32) -> i32 {
 /// Whether a frame's inputs are within the ranges [`narrow`] assumed for
 /// `prog` (else the VM runs the checked steps).
 #[inline]
-pub(crate) fn inputs_in_range(prog: &Program, i: &Inputs) -> bool {
+pub(crate) fn inputs_in_range(prog: &Prog, i: &Inputs) -> bool {
     let unit = |v: i32| (0..=ONE).contains(&v);
     // (A `loop forever` formula reads `tw`, never `t`; its wide values
     // come back to Q16.16 only through steps whose ranges hold for any
@@ -135,7 +135,7 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
+fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32]) -> Iv {
     use code::*;
     match op.code {
         ADD | ADD_W => add_iv(a, b).sat(),
@@ -197,18 +197,20 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         SIN | COS | TRI | SAW | SQR => SIGNED,
         SPR => {
             // 0 outside, else one of its keys' numbers.
-            let at = op.c as usize;
+            let at = crate::program::store_at(op.c);
             let keys = (tabs[at] as u32 >> 20) & 31;
             let mut r = Iv::point(0);
             for k in 0..keys as usize {
-                r = r.union(Iv::point(tabs[(at + 1 + k) & (MAX_TABLE - 1)]));
+                r = r.union(Iv::point(tabs[(at + 1 + k) & (tabs.len() - 1)]));
             }
             r
         }
         TAB => {
             let mut r = Iv::point(0);
             for k in 0..=op.c as usize {
-                r = r.union(Iv::point(tabs[(op.b as usize + k) & (MAX_TABLE - 1)]));
+                r = r.union(Iv::point(
+                    tabs[(crate::program::store_at(op.b) + k) & (tabs.len() - 1)],
+                ));
             }
             r
         }
@@ -268,7 +270,7 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 /// ESP32.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn narrow(prog: &mut Program) {
+pub(crate) fn narrow(prog: &mut Prog) {
     use code::*;
     let mut sc = alloc::vec![FULL; SC];
     for (k, v) in sc
@@ -295,6 +297,12 @@ pub(crate) fn narrow(prog: &mut Program) {
     sc[S_PY as usize] = Iv(0, ((H - 1) * ONE as usize) as i64);
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = UNIT;
+    }
+    // The built-in inputs: their keys' ranges (the player holds each read
+    // to it: `World::read`).
+    for (slot, b) in prog.ins.iter() {
+        let (lo, hi) = crate::world::range(b & 63, b >> 6);
+        sc[slot as usize] = Iv(lo as i64, hi as i64);
     }
     let (fe, de, re, pe) = (
         (prog.frame_end as usize).min(MAX_OPS),

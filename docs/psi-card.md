@@ -19,6 +19,13 @@ what you need for most formulas. Check with `psi check FILE`.
   `sin cos tri saw sqr` are −1..1 waves.
 - The clock: `hour`, `minute`, `second`. Sliders: `a`, `b`, `c` (or names
   from `control` lines).
+- The panel's own values (once a frame, free): `daylight` 0..1 (1 without
+  a location), `sun.alt` in turns (0 horizon, 0.25 overhead; 0.1 without),
+  `moon.phase` (0 new, 0.5 full), `season` (0 midwinter, 0.5 midsummer),
+  `yearday`, `night` (1 while dimmed), `bright`, `replay.playing`,
+  `replay.platform`, `replay.game` (0..1 per game). `since(k)`: seconds
+  since `k` changed (32767 never); `was(k)`: its value before. Previews use
+  the defaults.
 - Colour line, one of: `rgb(r, g, b)` (0..1 each), `hsv(h, s, v)` (h in
   turns), `gray(v)`, `pal(P, v)` (palettes `fire ice ocean chrono amber
   rainbow gray`), `cycle(P, v, speed)`, a colour expression with `#rrggbb`
