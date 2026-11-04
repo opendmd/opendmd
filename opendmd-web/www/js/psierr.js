@@ -165,7 +165,11 @@ const C = [
   [966, 40, "a choice is words (names) between commas"],
   [967, 39, "expected the end of the `", "` line, found "],
   [968, 24, "a look's blend is one of"],
-  [969, 62, "text in quotes can't have characters that hide or reorder text"]
+  [969, 62, "text in quotes can't have characters that hide or reorder text"],
+  [970, 57, "a scene's `when` is worked out once a frame or once a row"],
+  [971, 40, "a scene holds values: `name = …` lines"],
+  [972, 14, "scenes at most"],
+  [973, 52, "a `rate` layer can't read a scene's per-pixel values"]
 ];
 // psi-errors end
 

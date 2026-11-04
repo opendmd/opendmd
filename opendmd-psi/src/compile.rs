@@ -1030,6 +1030,10 @@ const WIDE_T: i32 = 0x100;
 /// (`Parser::varies_err`).
 const DRAW_ONLY: &str = "`draw { }` runs once a frame, before any pixel, but ";
 const CYCLE_ROW: &str = "`cycle` turns a whole row at once (by t, a frame value or py), but ";
+/// E970.
+const SCENE_WHEN: &str = "a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but ";
+/// Scenes a formula may have (`code::GUARD`'s `c` keeps its number).
+const MAX_SCENES: usize = 15;
 /// E936.
 const TWEEN_FRAME: &str = "`tween` mixes a palette once a frame (by t or a frame value), but ";
 
@@ -1076,6 +1080,14 @@ struct Dag {
     /// language service's per-op costs).
     #[cfg(feature = "syntax")]
     made: Vec<(Id, usize, usize)>,
+    /// `scene NAME when c { … }`: the nodes each made, `(first, end, its
+    /// number from 1)` (`end` `NO` while it is read), and the one being
+    /// read (0: none). Its row and pixel values are its own
+    /// ([`Dag::scene_of`]): never shared with a value outside it.
+    scenes: Vec<(Id, Id, u8)>,
+    scene: u8,
+    /// Each scene's `when` (scene k's at k − 1).
+    conds: Vec<Id>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -1101,6 +1113,21 @@ impl Node {
 }
 
 impl Dag {
+    /// The scene whose steps work node `i` out (0: none): a row or pixel
+    /// value made while the scene was read.
+    fn scene_of(&self, i: usize) -> u8 {
+        let m = &self.nodes[i];
+        if m.level < LV_ROW || m.code >= K_CONST {
+            return 0;
+        }
+        self.scenes
+            .iter()
+            .find(|&&(a, e, _)| i >= a as usize && (e == NO || i < e as usize))
+            .map_or(0, |s| s.2)
+    }
+}
+
+impl Dag {
     fn level(&self, id: Id) -> u8 {
         self.nodes[id as usize].level
     }
@@ -1114,10 +1141,17 @@ impl Dag {
     #[inline(never)]
     fn push(&mut self, n: Node, at: (usize, usize)) -> Result<Id, Error> {
         let mut slot = n.hash() & (SLOTS - 1);
+        let tag = if self.scene != 0 && n.level >= LV_ROW && n.code < K_CONST {
+            self.scene
+        } else {
+            0
+        };
         loop {
             match self.index[slot] {
                 NO => break,
-                i if self.nodes[i as usize] == n => return Ok(i),
+                i if self.nodes[i as usize] == n && self.scene_of(i as usize) == tag => {
+                    return Ok(i)
+                }
                 _ => slot = (slot + 1) & (SLOTS - 1),
             }
         }
@@ -3440,6 +3474,86 @@ impl<'s> Parser<'s> {
         self.end_of_statement()
     }
 
+    /// `scene NAME when …` at the cursor (not a keyword: `scene = 3` still
+    /// sets a name).
+    fn is_scene(&self) -> bool {
+        let t = self.peek();
+        let w = self.tok(self.pos + 2);
+        t.tok == Tok::Name
+            && self.text(t) == "scene"
+            && self.tok(self.pos + 1).tok == Tok::Name
+            && w.tok == Tok::Name
+            && self.text(w) == "when"
+    }
+
+    /// `scene NAME when c { name = … }`: values whose row and pixel steps
+    /// run only while `c` (once a frame or once a row) is not 0; a name it
+    /// sets reads 0 after it while it is off (its row and pixel values
+    /// are zeroed by its guard, `code::GUARD`; any other, a constant, a
+    /// frame value or one from outside, is `c ? v : 0`).
+    #[inline(never)]
+    fn scene_block(&mut self) -> Result<(), Error> {
+        let kw = self.next();
+        self.next(); // its name
+        self.next(); // `when`
+        let st = self.peek();
+        let mut c = self.expr(0)?;
+        let at = (
+            st.start,
+            self.toks[self.pos.saturating_sub(1)].get().end.max(st.end),
+        );
+        if self.dag.level(c) > LV_ROW {
+            // E970.
+            return Err(self.varies_err(at, SCENE_WHEN, c));
+        }
+        if self.dag.grows(c) {
+            // (Not 0 where it is not: `min(c, 1)`.)
+            let one = self.dag.constant(ONE, at)?;
+            c = self.dag.op(code::MIN, [c, one, 0], at)?;
+        }
+        if self.dag.scenes.len() >= MAX_SCENES {
+            // E972.
+            return self.err(kw, format!("a formula can have {MAX_SCENES} scenes at most"));
+        }
+        self.expect(Tok::LBrace, "`{` (as in `scene city when c { … }`)")?;
+        self.skip_newlines();
+        let k = self.dag.scenes.len() as u8 + 1;
+        try_push(&mut self.dag.scenes, (self.dag.nodes.len() as Id, NO, k))?;
+        try_push(&mut self.dag.conds, c)?;
+        self.dag.scene = k;
+        let first_local = self.locals.len();
+        loop {
+            let t = self.peek();
+            if t.tok == Tok::RBrace {
+                self.next();
+                break;
+            }
+            if !self.is_assignment() {
+                self.dag.scene = 0;
+                // E971.
+                return self.err(
+                    t,
+                    "a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)",
+                );
+            }
+            self.assignment(false)?;
+            self.skip_newlines();
+        }
+        self.dag.scene = 0;
+        if let Some(s) = self.dag.scenes.last_mut() {
+            s.1 = self.dag.nodes.len() as Id;
+        }
+        // Its names: 0 while it is off.
+        let zero = self.dag.constant(0, at)?;
+        for j in first_local..self.locals.len() {
+            let id = self.locals[j].id;
+            if self.dag.scene_of(id as usize) != k {
+                self.locals[j].id = self.dag.op(code::SELECT, [c, id, zero], at)?;
+            }
+        }
+        self.end_of_statement()
+    }
+
     #[inline(never)]
     fn is_assignment(&self) -> bool {
         self.peek().tok == Tok::Name && self.toks[self.pos + 1].get().tok == Tok::Assign
@@ -5724,6 +5838,7 @@ impl<'s> Parser<'s> {
                 "table" => self.table(t)?,
                 _ if self.is_sprite() => self.sprite(t)?,
                 _ if self.is_palette() => self.palette(t)?,
+                _ if end == Tok::Eof && self.is_scene() => self.scene_block()?,
                 "for" => return Err(self.misplaced(t)),
                 "use" => {
                     return self.err(
@@ -6380,6 +6495,9 @@ fn compile_inner<'s>(
             deps: Vec::new(),
             #[cfg(feature = "syntax")]
             made: Vec::new(),
+            scenes: Vec::new(),
+            scene: 0,
+            conds: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -7477,6 +7595,22 @@ fn emit(
         need[tw.w as usize] = 0;
     }
     close(&mut need);
+    // Each node's scene (row and pixel values only), and each scene's
+    // `when` where the scene has a step.
+    let sc: Vec<u8> = (0..n).map(|i| dag.scene_of(i)).collect();
+    let mut guarded = [[false; 2]; MAX_SCENES + 1];
+    for i in 0..n {
+        if sc[i] != 0 && need[i] != NONE && nodes[i].code < K_CONST {
+            guarded[sc[i] as usize][usize::from(nodes[i].level == LV_PIXEL)] = true;
+        }
+    }
+    for (k, &c) in dag.conds.iter().enumerate() {
+        if guarded[k + 1] != [false; 2] {
+            need[c as usize] = 0;
+        }
+    }
+    close(&mut need);
+    let n_guards: usize = guarded.iter().flatten().filter(|&&g| g).count();
     if inked {
         prog.uses |= INKED;
     }
@@ -7501,7 +7635,8 @@ fn emit(
         + steps.len()
         + control
         + usize::from(slow.is_some())
-        + tweens.len();
+        + tweens.len()
+        + n_guards;
     // The steps of each section (per frame, the draw stage, per row, per
     // pixel with the colours), as `Program::counts` gives them.
     let sections = |markers: usize| {
@@ -7515,6 +7650,8 @@ fn emit(
             }] += 1;
         }
         sec[0] += tweens.len();
+        sec[2] += guarded.iter().filter(|g| g[0]).count();
+        sec[3] += guarded.iter().filter(|g| g[1]).count();
         sec[1] += control;
         sec[3] += steps.len() + usize::from(slow.is_some()) + markers;
         sec
@@ -7669,10 +7806,40 @@ fn emit(
             }
         }
     }
+    // A scene's row steps (together in node order: it made them in a run)
+    // after its guard; how many it skips, once they are laid out.
+    let mut open: Option<(usize, u8)> = None;
+    let close_guard = |ops: &mut [WOp], open: &mut Option<(usize, u8)>| -> Result<(), Error> {
+        if let Some((g, _)) = open.take() {
+            let n = ops.len() - g - 1;
+            if n > 255 {
+                return Err(Error::new(0, 0, format!("this formula is too long for the panel: a scene takes {n} steps a row, the limit is 255")));
+            }
+            ops[g].b = n as u16;
+        }
+        Ok(())
+    };
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
             if is_op(i) && m.level == level && m.code != code::TURN {
+                if level == LV_ROW && open.map_or(0, |o| o.1) != sc[i] {
+                    close_guard(&mut ops, &mut open)?;
+                    if sc[i] != 0 {
+                        let c = dag.conds[sc[i] as usize - 1];
+                        if !set[c as usize] {
+                            return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                        }
+                        open = Some((ops.len(), sc[i]));
+                        ops.push(WOp {
+                            code: code::GUARD,
+                            d: 0,
+                            a: loc[c as usize],
+                            b: 0,
+                            c: u16::from(sc[i]) << 4,
+                        });
+                    }
+                }
                 // A wide value has a wide slot; a noise's offset its place.
                 let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
                     if next_wide >= WIDE {
@@ -7830,6 +7997,7 @@ fn emit(
             }
             prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
+            close_guard(&mut ops, &mut open)?;
             // `cycle`'s turns, the row section's last steps (the JIT's
             // driver runs them after its row function): palette slot `b`
             // (`finish`'s) as palette `val` turned by `a`.
@@ -7887,6 +8055,14 @@ fn emit(
         }
     }
     let slow_px = |i: usize| in_slow.get(i).copied().unwrap_or(false);
+    if (0..n).any(|i| sc[i] != 0 && px_op(i) && slow_px(i)) {
+        // E973.
+        return Err(Error::new(
+            0,
+            0,
+            "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
+        ));
+    }
     let col = column_nodes(dag);
     let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !slow_px(i)).collect();
     let mut no_still = Vec::new();
@@ -7963,6 +8139,14 @@ fn emit(
         if lay.run_len > 255 || lay.col_len > 255 {
             continue;
         }
+        let mut lay = lay;
+        if n_guards > 0 {
+            let runs = [lay.run_len, lay.col_len, lay.slow_len];
+            match scene_blocks(dag, steps, &sc, &lay.seq, runs) {
+                Some(seq) => lay.seq = seq,
+                None => continue,
+            }
+        }
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
@@ -7992,8 +8176,24 @@ fn emit(
         };
     }
     let mut marker = None;
+    // Each guard: its step, its item, its scene.
+    let mut guards: Vec<(usize, usize, u8)> = Vec::new();
     for (at, item) in seq.iter().enumerate() {
         match *item {
+            Item::Guard(s) => {
+                let c = dag.conds[s as usize - 1];
+                if !set[c as usize] {
+                    return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                }
+                guards.push((ops.len(), at, s));
+                ops.push(WOp {
+                    code: code::GUARD,
+                    d: 0,
+                    a: loc[c as usize],
+                    b: 0,
+                    c: u16::from(s) << 4,
+                });
+            }
             Item::Column => ops.push(WOp {
                 code: code::COLUMN,
                 d: 0,
@@ -8065,6 +8265,37 @@ fn emit(
                 sections(ops.len().saturating_sub(total)),
             ));
         }
+    }
+    // Each guard's run (its scene's values after it, a step each) and the
+    // registers of those read after the run (zeroed while it is off).
+    for &(g, at, s) in &guards {
+        let end = seq[at + 1..]
+            .iter()
+            .position(|it| !matches!(*it, Item::Value(i) if sc[i] == s))
+            .map_or(seq.len(), |k| at + 1 + k);
+        let m = end - at - 1;
+        if m > 255 {
+            return Err(Error::new(0, 0, format!("this formula is too long for the panel: a scene takes {m} steps a pixel, the limit is 255")));
+        }
+        let mut later = alloc::vec![false; n];
+        for it in &seq[end..] {
+            match *it {
+                Item::Value(j) => reads(dag, j).for_each(|x| later[x as usize] = true),
+                Item::Colour(k) => steps[k].reads().for_each(|x| later[x as usize] = true),
+                _ => {}
+            }
+        }
+        let mut mask = 0u16;
+        for p in at + 1..end {
+            if let Item::Value(i) = seq[p] {
+                if later[i] {
+                    mask |= 1 << regs[p];
+                }
+            }
+        }
+        ops[g].b = m as u16;
+        ops[g].d = mask & 0xff;
+        ops[g].c |= mask >> 8;
     }
     // The marker's skip: the run is every value after it up to the first
     // that isn't in it (`still_seq` puts them together); its registers.
@@ -8325,6 +8556,8 @@ enum Item {
     Column,
     /// The slow layers' marker (`code::SLOW`).
     Slow,
+    /// A scene's guard (`code::GUARD`): the values after it of that scene.
+    Guard(u8),
 }
 
 /// A wide noise's code.
@@ -8379,7 +8612,7 @@ fn registers(
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still | Item::Column | Item::Slow => {}
+            Item::Still | Item::Column | Item::Slow | Item::Guard(_) => {}
         }
     }
     // A kept column value is never given up: the rows after the first
@@ -8442,6 +8675,8 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
             K_COUNTER | K_SPLIT => false,
             // (A wide noise's offsets move every frame.)
             c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT || is_noise_o(c) => false,
+            // (A scene's values are 0 while it is off.)
+            _ if dag.scene_of(i) != 0 => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }
@@ -8593,6 +8828,79 @@ fn still_run(
     ok.then_some((run, first))
 }
 
+/// The pixel order with each scene's values together after its guard
+/// (`Item::Guard`), or `None` when that can't be had in this layout (a
+/// scene's values among the runs' or the slow layers'). For each scene, the
+/// items from its first value to its last are put in three groups, each in
+/// its order: those that need none of its values (before), its values, and
+/// those that need them (after) — the same dependencies, since a value of
+/// the scene needs nothing that needs one.
+fn scene_blocks(
+    dag: &Dag,
+    steps: &[Step],
+    sc: &[u8],
+    seq: &[Item],
+    [run_len, col_len, slow_len]: [usize; 3],
+) -> Option<Vec<Item>> {
+    let n = dag.nodes.len();
+    let mut seq = seq.to_vec();
+    // Where the runs and the slow layers end (the JIT's kernel starts
+    // after the runs): a scene's values after.
+    let mut from = 0;
+    for (at, it) in seq.iter().enumerate() {
+        let len = match it {
+            Item::Still => run_len,
+            Item::Column => col_len,
+            Item::Slow => slow_len,
+            _ => continue,
+        };
+        from = from.max(at + 1 + len);
+    }
+    let scenes = dag.conds.len() as u8;
+    for k in 1..=scenes {
+        let of = |it: &Item| matches!(*it, Item::Value(i) if sc[i] == k);
+        let Some(first) = seq.iter().position(of) else {
+            continue;
+        };
+        let last = seq.iter().rposition(of).unwrap_or(first);
+        if first < from {
+            return None;
+        }
+        let mut dep = alloc::vec![false; n];
+        for i in 0..n {
+            dep[i] = sc[i] == k || reads(dag, i).any(|x| dep[x as usize]);
+        }
+        let needs = |it: &Item| match *it {
+            Item::Value(i) => dep[i],
+            Item::Colour(c) => steps[c].reads().any(|x| dep[x as usize]),
+            _ => false,
+        };
+        let w: Vec<Item> = seq[first..=last].to_vec();
+        if w.iter().any(|it| matches!(it, Item::Still | Item::Column | Item::Slow)) {
+            return None;
+        }
+        let mut out: Vec<Item> = w.iter().copied().filter(|it| !needs(it)).collect();
+        out.extend(w.iter().copied().filter(|it| of(it)));
+        out.extend(w.iter().copied().filter(|it| needs(it) && !of(it)));
+        seq.splice(first..=last, out);
+    }
+    // A guard before each scene's values (one run each, as above).
+    let mut out = Vec::with_capacity(seq.len() + scenes as usize);
+    let mut cur = 0u8;
+    for it in seq {
+        let s = match it {
+            Item::Value(i) => sc[i],
+            _ => 0,
+        };
+        if s != 0 && s != cur {
+            out.push(Item::Guard(s));
+        }
+        cur = s;
+        out.push(it);
+    }
+    Some(out)
+}
+
 /// A laid-out pixel section: the order, the cached run's and the column
 /// run's lengths, and the values kept in their registers for the frame.
 struct PixelSeq {
@@ -8715,6 +9023,7 @@ fn column_nodes(dag: &Dag) -> Vec<bool> {
                 K_CONST => true,
                 K_COUNTER => false,
                 c if (code::U_R..=code::INKN).contains(&c) || c == code::UAT => false,
+                _ if dag.scene_of(i) != 0 => false,
                 _ => reads(dag, i).all(|x| col[x as usize]),
             },
             _ => false,

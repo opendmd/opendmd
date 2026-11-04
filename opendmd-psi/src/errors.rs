@@ -1140,6 +1140,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         fix: "Take them out.",
         matches: &["text in quotes can't have characters that hide or reorder text"],
     },
+    ErrorDoc {
+        code: 970,
+        title: "a scene's `when` that changes along a row",
+        sentence: "a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`",
+        fix: "Make `when` a value of t, the clock, the sliders or the row (py, y); choose per pixel inside the scene instead.",
+        matches: &["a scene's `when` is worked out once a frame or once a row"],
+    },
+    ErrorDoc {
+        code: 971,
+        title: "something other than values in a scene",
+        sentence: "a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)",
+        fix: "Keep `name = …` lines in the scene; put colours, `draw`, `layer`, `palette` and another scene outside it.",
+        matches: &["a scene holds values: `name = …` lines"],
+    },
+    ErrorDoc {
+        code: 972,
+        title: "too many scenes",
+        sentence: "a formula can have … scenes at most",
+        fix: "Join scenes that share a condition, or pick inside one.",
+        matches: &["scenes at most"],
+    },
+    ErrorDoc {
+        code: 973,
+        title: "a `rate` layer reading a scene",
+        sentence: "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
+        fix: "Work the value out outside the scene, or leave `rate` out.",
+        matches: &["a `rate` layer can't read a scene's per-pixel values"],
+    },
 ];
 
 /// The code of an error message: of the entries whose fragments all occur

@@ -322,11 +322,30 @@ pub(crate) fn narrow(prog: &mut Program) {
             _ => sc[op.d as usize] = FULL,
         }
     }
-    for &op in &ops[de.min(re)..re] {
+    // (A scene's guarded run: its slots 0 too, while it is off.)
+    let mut off_end = 0usize;
+    let mut off: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    for (k, &op) in ops.iter().enumerate().take(re).skip(de.min(re)) {
+        if k == off_end {
+            for &d in &off {
+                sc[d as usize] = sc[d as usize].union(Iv::point(0));
+            }
+            off.clear();
+        }
+        if op.code == GUARD {
+            off_end = k + 1 + op.b as usize;
+            continue;
+        }
         // (`cycle`'s turn writes a palette, no slot: its `d` is the palette's.)
         if op.code != TURN {
             sc[op.d as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+            if k < off_end {
+                off.push(op.d);
+            }
         }
+    }
+    for &d in &off {
+        sc[d as usize] = sc[d as usize].union(Iv::point(0));
     }
     let mut regs = [FULL; REGS + 1];
     let lane = |regs: &[Iv; REGS + 1], sc: &[Iv], v: u8| -> Iv {
@@ -340,8 +359,22 @@ pub(crate) fn narrow(prog: &mut Program) {
             l => regs[((l - L_I) as usize).min(REGS)],
         }
     };
-    for slot in &mut ops[re.min(pe)..pe] {
+    // (A scene's guarded run: the registers of its mask 0 too after it.)
+    let (mut off_end, mut mask) = (usize::MAX, 0u16);
+    for (k, slot) in ops.iter_mut().enumerate().take(pe).skip(re.min(pe)) {
         let mut op = *slot;
+        if k == off_end {
+            for (r, v) in regs[1..].iter_mut().enumerate() {
+                if mask & (1 << r) != 0 {
+                    *v = v.union(Iv::point(0));
+                }
+            }
+            off_end = usize::MAX;
+        }
+        if op.code == GUARD {
+            (off_end, mask) = (k + 1 + op.b as usize, guard_mask(&op));
+            continue;
+        }
         if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE | SLOW) {
             continue;
         }

@@ -530,6 +530,7 @@ const COLS = [
   ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
   ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'],
+  ['scene s when c { v = … }', 'values worked out only while c (once a frame or a row) is not 0; after it its names are 0 while it is off; the estimate counts two scenes at once', 'scene s when  {\n  \n}\n'],
   ['palette sky = tween(day, night, w)', 'a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours', 'palette p = tween(, , )\n'],
   ['palette sea = deep #024, foam #fff', 'a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many)'],
   ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'],
