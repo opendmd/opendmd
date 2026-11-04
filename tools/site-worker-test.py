@@ -685,7 +685,7 @@ def compare_store(base: str, site: Path, tool: Path, shown: Path, refused_want: 
     d = gallery_api(base)
     good, bad = native(tool, shown)
     stored = {e["slug"]: e for e in d.get("entries", []) if e["source"] == "gallery"}
-    fields = ("name", "about", "author", "licence", "look", "controls", "src", "loop_ms", "jit_us", "psb_len", "abi")
+    fields = ("name", "about", "author", "licence", "look", "controls", "src", "loop_ms", "vm_us", "psb_len", "abi")
     diff = [f"{s}.{k}: {stored.get(s, {}).get(k)!r} != {e[k]!r}" for s, e in good.items() for k in fields if stored.get(s, {}).get(k) != e[k]]
     diff += [f"{s}.us: {stored[s]['esp32_us']} != {e['us']}" for s, e in good.items() if s in stored and stored[s]["esp32_us"] != e["us"]]
     check(set(stored) == set(good) and not diff and not bad,
@@ -787,6 +787,9 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         "Bad_Name.psi": ripple,
         # A file over 20 KB is refused (the 12 KB ripple is taken).
         "site-test-huge.psi": ripple + "-- padding padding\n" * 1200,
+        # Over 4,500 B compiled (a file of 7.7 KB) is refused; one the VM draws in 40 ms and the JIT in 7.4, compiled 4.1 KB, is taken (the tier is the gate).
+        "site-test-long.psi": (ROOT / "tools/fixtures/gallery-over-4500.psi").read_text(),
+        "site-test-jit.psi": (ROOT / "tools/fixtures/gallery-jit-only.psi").read_text(),
         "site-test-link.psi": ("link", "site-test-ripple.psi"),
         "site-test-dir.psi": ("dir",),
         "site-test-exec.psi": ("exec", stars),
@@ -818,8 +821,8 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         want_refused = {**bad, "site-test-link": ["not a regular file (a link or a folder)"],
                         "site-test-dir": ["not a regular file (a link or a folder)"],
                         "site-test-exec": ["the file is executable: a gallery file is a plain text file (mode 100644)"]}
-        check({"site-test-broken", "site-test-reserved", "site-test-crlf", "site-test-heavy", "site-test-huge", "Bad_Name"} <= set(bad) and set(good) == {
-            "site-test-ripple", "site-test-glow", "copycat"}, f"the fixture: opendmd-gallery passes 3 (the 12 KB one among them) and refuses the bad ones ({sorted(good)}, {sorted(bad)})")
+        check({"site-test-broken", "site-test-reserved", "site-test-crlf", "site-test-heavy", "site-test-huge", "site-test-long", "Bad_Name"} <= set(bad) and set(good) == {
+            "site-test-ripple", "site-test-glow", "site-test-jit", "copycat"}, f"the fixture: opendmd-gallery passes 4 (the 12 KB one and the JIT-only one among them) and refuses the bad ones ({sorted(good)}, {sorted(bad)})")
         shown_a = tmp / "a-shown"
         write_state({k: v for k, v in state_a.items() if k[:-4] in good}, shown_a)
         before = compare_store(base, site, tool, shown_a, want_refused, "cron run", tmp)
@@ -846,7 +849,7 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         check(st == 429 and h.get("Retry-After") == "10", f"POST /api/gallery/sync again at once: 429, Retry-After ({st})")
         good_b, bad_b = native(tool, tmp / "b")
         shown_b = tmp / "b-shown"
-        write_state({"site-test-ripple.psi": ripple, "copycat.psi": state_a["copycat.psi"], "site-test-stars.psi": stars}, shown_b)
+        write_state({"site-test-ripple.psi": ripple, "copycat.psi": state_a["copycat.psi"], "site-test-jit.psi": state_a["site-test-jit.psi"], "site-test-stars.psi": stars}, shown_b)
         want_b = {k: v for k, v in want_refused.items()}
         want_b["site-test-ripple"] = bad_b["site-test-ripple"]
         d = compare_store(base, site, tool, shown_b, want_b, "after a broken update", tmp)
@@ -869,7 +872,7 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         check(st == 200 and rep.get("commit") == sha_b2 and rep.get("updated") == ["site-test-ripple"] and rip2.get("sha") != old.get("sha")
               and rip2.get("added") == old.get("added") and rip2.get("updated", 0) > rip2.get("added", 0),
               f"a contribution changed: the new version served, the date it was first taken kept ({st} {rep.get('updated')})")
-        write_state({**{k: state_b2[k] for k in ("site-test-ripple.psi", "copycat.psi", "site-test-stars.psi")}}, shown_b)
+        write_state({**{k: state_b2[k] for k in ("site-test-ripple.psi", "copycat.psi", "site-test-jit.psi", "site-test-stars.psi")}}, shown_b)
         compare_store(base, site, tool, shown_b, {k: v for k, v in want_b.items() if k != "site-test-ripple"}, "after a good update", tmp)
         gone = [get(base, p)[0] for p in ("/formulas/src/site-test-glow.psi", "/formulas/thumbs/site-test-glow.png")]
         check(gone == [404, 404] and "Site test glow" not in get(base, "/formulas/")[2].decode(),
@@ -880,7 +883,7 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         time.sleep(11)
         st, h, raw = get(base, "/api/gallery/sync", "POST")
         rep = json.loads(raw) if raw else {}
-        check(st == 200 and rep.get("commit") == sha_c and sorted(rep.get("gone", [])) == ["copycat", "site-test-ripple", "site-test-stars"]
+        check(st == 200 and rep.get("commit") == sha_c and sorted(rep.get("gone", [])) == ["copycat", "site-test-jit", "site-test-ripple", "site-test-stars"]
               and not gallery_api(base).get("refused"), f"the fixture emptied: every contribution gone, no refusals left ({st} {rep.get('gone')})")
         empty = tmp / "empty"
         write_state({}, empty)

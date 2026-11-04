@@ -196,11 +196,12 @@ impl<'s> Parser<'s> {
             if m.level != LV_PIXEL || m.code >= K_CONST {
                 continue;
             }
-            sub_ns[i] = value_ns(m.code)
-                + reads(dag, i)
+            sub_ns[i] = value_ns(m.code).saturating_add(
+                reads(dag, i)
                     .filter(|&x| dag.level(x) == LV_PIXEL)
                     .map(|x| sub_ns[x as usize])
-                    .fold(0u32, u32::saturating_add);
+                    .fold(0u32, u32::saturating_add),
+            );
             almost[i] = !still[i]
                 && !(code::U_R..=code::INKN).contains(&m.code)
                 && !is_noise_o(m.code)

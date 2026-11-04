@@ -49,7 +49,7 @@ pal(rainbow, frac(d*(1 + width*2) - t/2))
   panel's look, drawn over every GIF (see
   [how formulas work](https://opendmd.dev/guide/formulas.html)).
 - The formula must work, and be light enough for the display: at most 10 ms
-  a frame as the editor estimates it.
+  a frame as the editor estimates it (with the display's speed-up where it applies).
 - Once compiled for the display, the formula is at most 4,500 bytes (the
   check tells you the number; tables and repeated steps are what add up,
   comments and spaces cost nothing). The file itself is at most 20 KB, and

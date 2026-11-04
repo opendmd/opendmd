@@ -213,13 +213,14 @@ def main() -> int:
             except SystemExit as e:
                 stopped = str(e)
             check("every example needs its date" in stopped, f"{what}: the build stops ({stopped[:120]})")
-        # A tile says what a Formula costs and, when its compiled form is newer than the oldest release served, which firmware it needs.
-        e = {"us": 6500, "jit_us": 4200, "abi": gp.ABI_SERVED}
-        check("Light · about 4.2 ms a frame" in gp.cost(e) and gp.needs(e) == "", "a tile: its tier and the speed-up's estimate; nothing about firmware for a format the oldest release plays")
-        e = {"us": 9000, "jit_us": 8100, "abi": gp.ABI_SERVED + 1}
-        check("Heavy · about 8.1 ms a frame" in gp.cost(e) and gp.needs(e) == '<p class="fneeds">Needs newer firmware</p>', "a tile: Heavy over 8 ms; a newer format with no release named says so")
-        gp.ABI_FIRMWARE[gp.ABI_SERVED + 1] = "1.0.0-beta.99"
-        check(gp.needs(e) == '<p class="fneeds">Needs firmware 1.0.0-beta.99 or later</p>', "a tile: \"Needs firmware 1.0.0-beta.99 or later\"")
+        # A tile says what a Formula costs and, when its compiled format is newer than the latest release plays, which firmware it needs.
+        e = {"us": 4200, "vm_us": 6500, "abi": 1}
+        c = gp.cost(e)
+        check("Light · about 4.2 ms a frame" in c and "6.5 ms without the JIT" in c and gp.needs(e) == "", "a tile: the tier's figure, the VM's in the hover text; nothing about firmware for a format the latest release plays")
+        e = {"us": 8100, "vm_us": 8100, "abi": 2}
+        check("Heavy · about 8.1 ms a frame" in gp.cost(e) and "without the JIT" not in gp.cost(e), "a tile: Heavy over 8 ms; no 'without the JIT' where the JIT does not take it")
+        check(gp.ABI_SERVED == 1 and gp.needs(e) == '<p class="fneeds">Needs firmware 1.0.0-beta.14 or later</p>', "a tile: an ABI-2 Formula says \"Needs firmware 1.0.0-beta.14 or later\"")
+        check(gp.needs({"abi": 3}) == '<p class="fneeds">Needs newer firmware</p>', "a tile: a format no release is named for says so")
         check(gp.cost({"us": 1}) == "" and gp.needs({}) == "", "a tile: a row stored before the migration says nothing")
     finally:
         if not a.keep:

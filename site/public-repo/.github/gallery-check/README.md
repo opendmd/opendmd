@@ -32,7 +32,7 @@ fails unless every change:
   name and author that don't pass for OpenDMD or a maintainer (lookalike
   letters included); `-- bundle` (OpenDMD's examples only) is refused;
 - compiles with OpenDMD's Psi compiler (the same crate the display runs) and
-  costs at most 10 ms a frame on the display (`Program::esp32_us`), and is at
+  costs at most 10 ms a frame on the display (`Program::tier_us`: with the JIT where it takes the formula), and is at
   most 4,500 bytes once compiled for it (so a link to it stays within the
   display's 6,144-byte path).
 

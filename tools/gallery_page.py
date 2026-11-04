@@ -64,27 +64,29 @@ def urlencoded(pairs: list[tuple[str, str]]) -> str:
     return "&".join(f"{enc(k)}={enc(v)}" for k, v in pairs)
 
 
-# The compiled format's version the oldest release the site serves plays, and
-# the first release of each newer one (site/worker/src/gallery.ts has a copy).
+# The compiled format's version the newest release the site serves plays, and
+# the first release of each version (site/worker/src/gallery.ts has a copy).
+# Change both when a release ships a new ABI: ABI 2 is in 1.0.0-beta.14.
 ABI_SERVED = 1
-ABI_FIRMWARE = {1: "1.0.0-beta.13"}
+ABI_FIRMWARE = {1: "1.0.0-beta.13", 2: "1.0.0-beta.14"}
 
 
 def cost(e: dict) -> str:
     """What a Formula costs on the panel, as the web app says it (light:
-    under 5 ms, medium: under 8, else heavy; its JIT estimate)."""
-    jit = e.get("jit_us")
-    if jit is None:
+    under 5 ms, medium: under 8, else heavy; `us` is the tier figure,
+    the JIT's where it takes the Formula, and `vm_us` the VM's beside it)."""
+    us, vm = e.get("us"), e.get("vm_us")
+    if us is None or vm is None:
         return ""
-    tier = "Light" if jit <= 5000 else "Medium" if jit <= 8000 else "Heavy"
-    tip = (f"About {jit / 1000:.1f} ms a frame on the panel, {e['us'] / 1000:.1f} ms without its speed-up "
-           f"(light: under 5 ms; medium: under 8; the gallery takes up to 10)")
-    return f'<p class="fcost" title="{html.escape(tip)}">{tier} · about {jit / 1000:.1f} ms a frame</p>'
+    tier = "Light" if us <= 5000 else "Medium" if us <= 8000 else "Heavy"
+    without = f", {vm / 1000:.1f} ms without the JIT" if vm > us else ""
+    tip = f"About {us / 1000:.1f} ms a frame on the panel{without} (light: under 5 ms; medium: under 8; the gallery takes up to 10)"
+    return f'<p class="fcost" title="{html.escape(tip)}">{tier} · about {us / 1000:.1f} ms a frame</p>'
 
 
 def needs(e: dict) -> str:
-    """The firmware a Formula needs, when it is newer than the oldest the
-    site serves."""
+    """The firmware a Formula needs, when its compiled format is newer than
+    the one the latest release plays (ABI_SERVED)."""
     abi = e.get("abi")
     if abi is None or abi <= ABI_SERVED:
         return ""
