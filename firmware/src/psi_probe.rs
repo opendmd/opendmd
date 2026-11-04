@@ -1600,24 +1600,9 @@ fn bundled(canvas: &mut Canvas) {
 /// first). The line: `psi-probe: store, short heap: …`.
 fn store_short_heap(canvas: &mut Canvas) {
     use opendmd_core::fx::Effect as _;
-    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
-    let f = filler.join(", ");
-    let src = format!(
-        "loop 8\ntable F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\ntable F3 = {f}, 4\n\
-gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]*0.1 + t/8 + daylight*0.1))\n"
-    );
-    // (On the formula stack, as the probe's rows compile: no thread.)
-    let psb = match crate::psi_stack::run(|| psi::build(&src)) {
-        Some(Ok(b)) => b,
-        r => {
-            let why = match r {
-                Some(Err(e)) => e.msg,
-                _ => String::from("no formula stack"),
-            };
-            say!(error, "psi-probe: store, short heap: NOT CHECKED (the build failed: {why}; heap {} B free)", heap());
-            return;
-        }
-    };
+    // (Compiled by build.rs: its compile here needs more heap than this.)
+    const PSB: &[u8] = include!(concat!(env!("OUT_DIR"), "/probe_store.rs"));
+    let psb = PSB;
     let ballast = |left: usize| -> Vec<Vec<u8>> {
         let mut b: Vec<Vec<u8>> = Vec::new();
         let _ = b.try_reserve(512);
@@ -1637,7 +1622,7 @@ gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]
     for left in [8 * 1024, 18 * 1024, 30 * 1024] {
         let b = ballast(left);
         let h = heap();
-        let r = match fx_psi::PsiFx::from_bytes(&psb, "") {
+        let r = match fx_psi::PsiFx::from_bytes(psb, "") {
             Ok(mut fx) => {
                 let delay = fx.delay();
                 for k in 0..4 {
