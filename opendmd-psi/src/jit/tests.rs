@@ -3,7 +3,7 @@
 //! without the still cache, and random formulas. A kernel that draws one
 //! byte differently from the VM fails here.
 
-use super::emu::{Emu, EmuTarget};
+use super::emu::EmuTarget;
 use super::lower::{lower, Lowered};
 use super::{check_rows, frame, CHECK_ROWS};
 use crate::program::{Program, H, W};
@@ -68,9 +68,7 @@ fn kernel_frame_beam(
     before: Option<&[u8]>,
     sink: Option<crate::PairSink<'_>>,
 ) -> (Vec<u8>, u64, [u32; H]) {
-    let mut t = EmuTarget {
-        emu: Emu::new(&low.code),
-    };
+    let mut t = EmuTarget::new(&low.code);
     let mut ctx = vec![0u32; low.words.len()];
     let mut s = Scratch::<128>::new();
     // (Word-aligned, as the player's canvas.)
@@ -636,9 +634,7 @@ fn the_check_rows_alone_are_the_frames_rows() {
             u32::MAX,
             &mut want,
         );
-        let mut t = EmuTarget {
-            emu: Emu::new(&low.code),
-        };
+        let mut t = EmuTarget::new(&low.code);
         let mut ctx = vec![0u32; low.words.len()];
         let mut buf = [[0u8; W * 3]; CHECK_ROWS.len()];
         let base = buf.as_mut_ptr() as *mut u8;
@@ -909,6 +905,16 @@ fn scenes_draw_the_same_through_kernels() {
         let prog = compile(src).unwrap();
         let low = lower(&prog).unwrap_or_else(|w| panic!("{src}: the JIT refuses: {w}"));
         assert!(low.rows_at.is_some(), "{src}: the row function");
+        // Each pixel guard a site the driver patches (no test a pixel).
+        let n = prog.ops[prog.row_end as usize..prog.len()]
+            .iter()
+            .filter(|o| o.code == crate::program::code::GUARD)
+            .count();
+        assert_eq!(low.guards.len(), n, "{src}: a site for each guard");
+        for g in &low.guards {
+            assert_eq!(g.on.len(), g.off.len());
+            assert_eq!(&low.code[g.at..g.at + g.on.len()], &g.on[..]);
+        }
         let times = [0, 130, 1000, 1500, 2470, 3300, 5555, 7990];
         if let Err(why) = same_as_vm("scene", src, &prog, &times) {
             panic!("{src}: on the VM ({why})");
@@ -1219,4 +1225,60 @@ fn jit_takes_is_lower() {
     println!("jit_takes: {yes} taken, {no} refused, {} disagree", bad.len());
     assert!(bad.is_empty(), "{}", bad.join("\n---\n"));
     assert!(yes > 200 && no > 20, "{yes} {no}");
+}
+
+/// The fused compares (P0b-4) through the kernel: every case of
+/// `crate::tests::fused_compare_cases`, the bytes of the VM's frame (the
+/// pixel templates and the row function's).
+#[test]
+fn fused_compares_draw_the_same_through_kernels() {
+    let mut lowered = 0;
+    for (src, _) in crate::tests::fused_compare_cases() {
+        let prog = compile(&src).unwrap();
+        let times = [0, 1999, 2000, 4000, 7321];
+        if same_as_vm("fused", &src, &prog, &times).is_ok() {
+            lowered += 1;
+        }
+    }
+    assert!(lowered >= 250, "only {lowered} lowered");
+}
+
+/// Endless road V2 (its scenes, the fused compares, the guards) through
+/// the kernel at points of its cycle: each place and transition, by day
+/// and by night, three seeds.
+#[test]
+fn road_v2_draws_the_same_through_kernels() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(root.join("../opendmd-web/experiments/road-v2/road-v2.psi"))
+        .unwrap();
+    let prog = compile(&src).unwrap();
+    let low = lower(&prog).unwrap_or_else(|w| panic!("the JIT refuses road-v2: {w}"));
+    let u = picture();
+    for seed in [0.0, 1.0 / 3.0, 2.0 / 3.0] {
+        for k in 0..24 {
+            // Through the cycle (324 s), and a day later (the sun moved).
+            for day in [0u64, 1] {
+                let p = (k as f64 + 0.5) / 24.0;
+                let t = (p - seed - 0.125 + 2.0 + day as f64 * 3.0) * 324.0;
+                let mut inputs = golden::inputs(0);
+                inputs.seed = (seed * 65536.0) as i32;
+                inputs.set_ms(&prog, (t * 1000.0) as u64);
+                let want = vm_frame(&prog, &inputs, None, PLAIN);
+                let (got, _) = kernel_frame(&prog, &low, &inputs, None, PLAIN);
+                if let Some(d) = first_diff(&got, &want) {
+                    panic!("road-v2 seed {seed} at {t} s: the kernel's pixel {d:?}");
+                }
+                let with = With {
+                    under: Some(&u),
+                    ink: prog.draws(),
+                };
+                let want = vm_frame(&prog, &inputs, None, with);
+                let (got, _) = kernel_frame(&prog, &low, &inputs, None, with);
+                assert!(
+                    first_diff(&got, &want).is_none(),
+                    "road-v2 over a picture, {t} s"
+                );
+            }
+        }
+    }
 }

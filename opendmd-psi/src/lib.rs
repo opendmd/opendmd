@@ -71,9 +71,10 @@ mod vm;
 #[cfg(feature = "compiler")]
 pub use compile::{
     compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into,
-    compile_layout, compile_look, compile_look_with, compile_opts, compile_portable,
-    compile_unfused, compile_with, squeeze, Declared, DeclaredControl, Info, MAX_ABOUT_TEXT,
-    MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
+    compile_layout, compile_look, compile_look_with, compile_measured, compile_opts,
+    compile_portable, compile_portable_with, compile_unfused, compile_with, squeeze, Declared,
+    DeclaredControl, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES,
+    MAX_SOURCE,
 };
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
@@ -164,6 +165,15 @@ fn zeroed_program() -> Result<alloc::boxed::Box<Program>, Error> {
 /// A Formula compiled for the player ([`psb`]): its program, and when its
 /// `look` line composes a blend or an amount, its program as a look.
 pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
+    build_with(src, true)
+}
+
+#[cfg(feature = "compiler")]
+/// [`build`] with (`cmp`) or without the fused compares (P0b-4; the same
+/// frames): the paint probe's before and after. A look program, when the
+/// Formula has one, is [`build`]'s.
+#[doc(hidden)]
+pub fn build_with(src: &str, cmp: bool) -> Result<alloc::vec::Vec<u8>, Error> {
     let mut d = Declared::default();
     // (One program on the heap, zeroed in place, for the declarations and
     // then the player's (each compile clears it): a Program is 7.4 KB, and
@@ -175,7 +185,7 @@ pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
         .name
         .and_then(|(a, b)| src.get(a as usize..b as usize))
         .unwrap_or("");
-    compile_portable(src, &mut play)?;
+    compile_portable_with(src, &mut play, cmp)?;
     let look = match play.meta().look() {
         Some((blend, amount)) if blend != "over" || amount < 100 => {
             let mut l = zeroed_program()?;
