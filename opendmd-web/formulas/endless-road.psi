@@ -10,7 +10,8 @@ fps 100
 -- its glow, headlights by night. Bends and hills come from noise along
 -- the distance driven; each play starts somewhere else on the road and at
 -- another time of day. A day is 4 minutes and lingers at sunset and dawn;
--- by night the stars come out and the kerbs turn neon.
+-- with the panel's location set, the day is the real one outside. By
+-- night the stars come out and the kerbs turn neon.
 --
 -- A note on the arithmetic: some sums are written as differences with a
 -- negative factor (`a - b * -19`), and some offsets are folded into one
@@ -56,9 +57,13 @@ carLeft = (heading - noise(driven + .03, 0, 0))*80 - 50.99999
 skyMid = 94 - heading*60
 
 -- The light (-1 night, 0 sunset, 1 day), how much night and how much
--- day; the sun's height and radius
+-- day; the sun's height and radius. With the panel's location set, the
+-- real sun's height (full day from 22.5° up, full night from 22.5° down);
+-- without one (the sun never moved: `since` reads 32767), the road's own
+-- day
 sunPhase = sin(t/240 + seed)
-light = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
+ownLight = clamp(sunPhase*sunPhase*sunPhase*-3, -1, 1)
+light = since(sun.alt) < 32767 ? clamp(sun.alt*16, -1, 1) : ownLight
 night = clamp(-light, 0, 1)
 day = clamp(light, 0, 1)
 sunY = 23.5 - clamp(light*-24, -2.5, 20)
@@ -69,6 +74,12 @@ sunR = 8 - day*3
 -- (one shade on: the sun's glow)
 skyStep = .5 - (night + day)/3
 skyBase = 24.3 - 7*night - 4*day - skyStep*-19
+
+-- When RePlayOS changes game, the road rushes by for two seconds: six
+-- stripes more, eased in and out (a whole number of them, so the road is
+-- where it would have been; with no RePlayOS, `since` reads 32767 and the
+-- six are always there)
+rush = smoothstep(0, 2, since(replay.game))*6
 
 -- By night (neon): neon palms, night's colours for road, kerbs and
 -- verge, and the headlights' shift of the road's colour
@@ -145,7 +156,7 @@ below = (31 - py) < 19
 depth = below * .1125 / (19.5 - (31 - py))
 rowDriven = driven + depth
 halfWidth = below*(50.7 - 2.6*((31 - py) - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2)))
-stripe = (frac(39/max(halfWidth, 1.3) - t*-10) < .5) * -road.step
+stripe = (frac(39/max(halfWidth, 1.3) - t*-10 + rush) < .5) * -road.step
 offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*2000))
 
 -- What each pixel shows: 0 road, 1 kerb, 2 verge or sky, then the tags
