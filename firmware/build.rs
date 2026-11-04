@@ -257,14 +257,10 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
         ("guards rows".into(), 0, three("py < 16"), true),
         ("guards base".into(), 0, format!("{base}gray(frac(u*0.1))\n"), true),
     ];
-    // (V2 as P0b-4 measured it, fused and not: V2 itself has grown past
-    // what its unfused steps fit in, with its lamp posts.)
-    let p0b4 = std::fs::read_to_string("../opendmd-psi/tests/road-v2-p0b4.psi").expect("road-v2-p0b4.psi");
-    println!("cargo:rerun-if-changed=../opendmd-psi/tests/road-v2-p0b4.psi");
+    // (V2 fused only: it has grown past what its unfused steps fit in, with
+    // its lamp posts; P0b-4 measured the pairs.)
     for (place, ms) in [("exit", 2_056_049u32), ("mouth", 733_049), ("forest-desert", 544_049), ("desert", 2_177_549)] {
         cmp.push((format!("road-v2 {place} fused"), ms, road.clone(), true));
-        cmp.push((format!("road-v2-p0b4 {place} fused"), ms, p0b4.clone(), true));
-        cmp.push((format!("road-v2-p0b4 {place} unfused"), ms, p0b4.clone(), false));
     }
     // V2 in the city (its lamp posts), and psb ABI 3: the same table and
     // sprite reads in the store's first numbers and past 900 (the store
