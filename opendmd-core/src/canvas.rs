@@ -104,6 +104,7 @@ impl DirtyMap {
     /// which may wrap across rows — the shape of an ODM run. Clipped to the
     /// canvas.
     #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    #[cfg_attr(all(target_os = "espidf", not(feature = "psi"), not(feature = "sram1-iram")), link_section = ".iram1.gif")]
     pub fn mark_run(&mut self, start: usize, end: usize) {
         let end = end.min(PIXELS);
         if start >= end {

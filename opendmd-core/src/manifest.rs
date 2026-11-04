@@ -180,6 +180,14 @@ pub fn parse_manifest(text: &str) -> Vec<Entry> {
 /// [`parse_manifest`] skip it with one log line each time they read it, so a
 /// stale playlist plays the rest (`@formula?src=…` is a Formula's line).
 fn retired(line: &str) -> bool {
+    if skips_formula(line) {
+        let cut = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
+        log::info!(
+            "playlist: skipping {cut:?}{}: Formulas are not in this build",
+            if cut.len() < line.len() { "…" } else { "" }
+        );
+        return true;
+    }
     if !crate::synth::is_retired_effect(line) {
         return false;
     }
@@ -189,6 +197,16 @@ fn retired(line: &str) -> bool {
         if cut.len() < line.len() { "…" } else { "" }
     );
     true
+}
+
+/// Is `line` a Formula's (`@formula…`, `/formulas/<stem>.psi[?…]`) in a
+/// device player without Formulas (`player` without `psi`)? [`scan`] and
+/// [`parse_manifest`] skip it (with a log line), and so does
+/// `layout::count_prepared`: a playlist with Formulas in it plays its GIFs.
+/// Always `false` in any other build.
+pub fn skips_formula(line: &str) -> bool {
+    cfg!(all(feature = "player", not(feature = "psi")))
+        && (crate::synth::is_formula(line) || crate::synth::formula_file(line).is_some())
 }
 
 /// Render entries back to card format: one path per line, each terminated
@@ -773,6 +791,27 @@ fn author_handle(a: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device player without Formulas skips a playlist's Formula lines as they are read
+    /// (and `count_prepared` with them); any other build keeps them.
+    #[test]
+    fn a_player_without_formulas_skips_their_lines() {
+        let text = "/gifs/A/One.gif\n@formula:plasma\n@formula?psb=AAAA\n/formulas/my-road.psi?a=0.5\n@clock\n/gifs/A/Two.gif\n";
+        let got: Vec<String> = parse_manifest(text).into_iter().map(|e| e.path).collect();
+        let mut scanned = Vec::new();
+        scan(text.as_bytes(), |_, e| scanned.push(e.path.clone())).unwrap();
+        if cfg!(all(feature = "player", not(feature = "psi"))) {
+            assert_eq!(got, ["/gifs/A/One.gif", "@clock", "/gifs/A/Two.gif"]);
+            assert!(skips_formula("@formula:plasma") && skips_formula("/formulas/x.psi"));
+        } else {
+            assert_eq!(got.len(), 6);
+            assert!(!skips_formula("@formula:plasma"));
+        }
+        assert_eq!(scanned, got);
+        assert!(!skips_formula("/gifs/A/One.gif") && !skips_formula("@clock"));
+        let n = crate::layout::count_prepared(text.as_bytes(), &crate::filter::Filter::default(), (0, 255), &[], true).unwrap();
+        assert_eq!(n.total, if cfg!(all(feature = "player", not(feature = "psi"))) { 3 } else { 6 });
+    }
     use std::io::Cursor;
 
     fn p(path: &str) -> Entry {

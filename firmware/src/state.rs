@@ -23,6 +23,29 @@ use std::time::Duration;
 /// (`/api/status` `variant`, the boot banner).
 pub const FLASH_VARIANT: &str = env!("OPENDMD_FLASH_VARIANT");
 
+/// The optional components this build has (`/api/status` and
+/// `GET /api/firmware` `features`, the boot banner): the Cargo features
+/// a build may leave out (`FW_DISABLE`, docs/notes/firmware-build.md
+/// "Feature flags"). The web app hides what is missing.
+pub const FEATURES: &[&str] = &[
+    #[cfg(feature = "psi")] // (`formulas`, or a probe's `psi`)
+    "formulas",
+    #[cfg(feature = "jit")]
+    "jit",
+];
+
+/// [`FEATURES`] as a JSON array.
+pub fn features_json() -> String {
+    format!("[{}]", FEATURES.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(","))
+}
+
+/// Whether this build plays Formulas (the `formulas` feature).
+pub const FORMULAS: bool = cfg!(feature = "psi");
+
+/// What a request for a Formula hears from a build without them
+/// (`/api/play`'s 501, a `look_formula`'s 400, a Formula look's refusal).
+pub const NO_FORMULAS: &str = "Formulas aren’t in this firmware build";
+
 /// The firmware's version: **the one source of truth** for `/api/status`,
 /// `GET /api/firmware`, the boot banner and the post-update check. It is
 /// the app descriptor's (`"<version> <variant>"`, which the Makefile writes

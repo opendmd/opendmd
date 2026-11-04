@@ -39,6 +39,14 @@ names = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
+# The device's player (the firmware enables it, always): built without
+# `psi` (the firmware's `formulas` off), a playlist's Formula lines
+# (`@formula…`, `/formulas/<stem>.psi`) are skipped as they are read, like
+# a retired effect's, so the rest plays. (The host crates, which edit
+# playlists, never enable it.) On the ESP32 without `psi`, the GIF path's
+# hottest code also goes in the IRAM the Formulas' code would take
+# (tools/check-iram.py REQUIRED_NO_FORMULAS).
+player = []
 # Psi formulas, the panel's only effects, `@formula?psb=…` (src/fx_psi.rs):
 # off by default here; the firmware and the simulator turn it on. The
 # player loads compiled Formulas only (opendmd-psi's `psb`).

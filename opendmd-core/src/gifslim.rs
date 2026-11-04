@@ -531,8 +531,12 @@ struct Painter<'a> {
 }
 
 impl Painter<'_> {
-    /// Indices for columns `x0..` of frame row `y`.
+    /// Indices for columns `x0..` of frame row `y`. (In IRAM in a
+    /// firmware without Formulas, with [`Lzw::run`], in the room their code
+    /// leaves: the two are ~70 % of the instructions a GIF frame fetches
+    /// from flash.)
     #[inline]
+    #[cfg_attr(all(target_os = "espidf", not(feature = "psi")), link_section = ".iram1.gif")]
     fn segment(&mut self, y: usize, x0: usize, idx: &[u8]) {
         if y >= self.vis_h || x0 >= self.vis_w {
             return;
@@ -588,6 +592,7 @@ struct Lzw<'a> {
 }
 
 impl Lzw<'_> {
+    #[cfg_attr(all(target_os = "espidf", not(feature = "psi")), link_section = ".iram1.gif")]
     fn run<R: Read>(&mut self, codes: &mut Codes<'_, R>, p: &mut Painter<'_>) -> io::Result<()> {
         let (fw, fh) = (self.frame_w, self.frame_h);
         if fw == 0 || fh == 0 {

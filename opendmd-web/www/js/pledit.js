@@ -62,14 +62,16 @@ export function editor(se, ctx) {
     render(row, i) {
       const p = app.draft.paths[i];
       const e = app.wasm.parsePath(p);
+      const skipped = app.noFormulas && isFormula(p);
       const o = ov.get(p), cv = thumbsOn() && !drawn(p) && h('canvas.th', { width: 128, height: 32 });
       clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
-        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p) && 'Formula') && h('span.tag', e.platform || 'Formula'),
+        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p)) && h('span.tag', e.platform || (skipped ? 'Formula: skipped on this player' : 'Formula')),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
         moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       if (cv) attach(cv, p);
       row.classList.toggle('cur', picked.has(i));
       row.classList.toggle('hid', !!o?.never);
+      row.classList.toggle('skip', skipped);
       row.dataset.path = p;
     },
     onClick: (i, _k, e) => { if (e.target.closest('.grip')) return; if (!picked.delete(i)) picked.add(i); list.refresh(); },
