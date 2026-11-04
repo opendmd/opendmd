@@ -1606,14 +1606,15 @@ fn store_short_heap(canvas: &mut Canvas) {
         "loop 8\ntable F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\ntable F3 = {f}, 4\n\
 gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]*0.1 + t/8 + daylight*0.1))\n"
     );
-    let psb = match std::thread::Builder::new()
-        .stack_size(32 * 1024)
-        .spawn(move || psi::build(&src).map_err(|e| e.msg))
-        .map(|h| h.join())
-    {
-        Ok(Ok(Ok(b))) => b,
-        _ => {
-            say!(error, "psi-probe: store, short heap: NOT CHECKED (the build failed)");
+    // (On the formula stack, as the probe's rows compile: no thread.)
+    let psb = match crate::psi_stack::run(|| psi::build(&src)) {
+        Some(Ok(b)) => b,
+        r => {
+            let why = match r {
+                Some(Err(e)) => e.msg,
+                _ => String::from("no formula stack"),
+            };
+            say!(error, "psi-probe: store, short heap: NOT CHECKED (the build failed: {why}; heap {} B free)", heap());
             return;
         }
     };
@@ -2555,6 +2556,14 @@ pub(crate) mod jit2 {
                 }
                 say!(error, "psi-probe: jit2: golden {name}: does not compile: {}", e.msg);
                 bad += 1;
+                continue;
+            }
+            // (The kernel's build takes small blocks infallibly: skipped
+            // on a heap that hasn't room for it, as the player's JIT gate
+            // does, never an abort.)
+            if !crate::jit_gate(opendmd_core::fx_psi::jit_build_bytes(&prog)) {
+                say!(info, "psi-probe: jit2: golden {name}: skipped, no heap to build its kernel here (heap {} B free)", heap());
+                skipped += 1;
                 continue;
             }
             let mut k = match psi::jit::emit(&prog) {

@@ -190,6 +190,10 @@ fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: O
 #[cfg(feature = "jit")]
 fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: Option<u32>) -> Result<Direct, &'static str> {
     use psi::jit::stats as js;
+    // (No room for the kernel's build: said, never an abort.)
+    if !crate::jit_gate(fx_psi::jit_build_bytes(prog)) {
+        return Err("no heap to build the kernel here");
+    }
     let mut k = psi::jit::emit(prog)?;
     let t = fx_psi::tables();
     let mut s = zeroed::<psi::Scratch<128>>();
