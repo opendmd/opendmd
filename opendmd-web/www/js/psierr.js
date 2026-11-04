@@ -127,15 +127,19 @@ const C = [
   [921, 60, "a palette goes at the top of the formula, not inside a layer"],
   [922, 28, "a palette is 1 to 32 colours"],
   [923, 27, "palettes of its own at most"],
-  [924, 33, "tables, sprites and palettes hold"],
+  [924, 23, "tables and sprites hold"],
   [925, 27, "already names a colour of `"],
   [926, 23, "are every palette's own"],
   [927, 21, "has no colour named `"],
   [931, 33, "`cycle` turns a whole row at once"],
   [932, 15, "gray is not one"],
-  [933, 33, "a formula holds ", "palettes: its own"],
+  [933, 52, "a formula holds ", "palettes that `pal` and `cycle` read"],
   [934, 27, "and the turn (as in `cycle("],
   [935, 21, "takes a palette", "found "],
+  [936, 36, "`tween` mixes a palette once a frame"],
+  [937, 51, "a palette's half is a tween of palettes of your own"],
+  [938, 34, "is a tween, worked out every frame"],
+  [939, 27, "palettes worked out at once"],
   [941, 37, "`rate` goes on the bottom layers only"],
   [942, 37, "`rate` takes a whole number of frames"],
   [943, 32, "the slow layers share one `rate`"],
@@ -161,7 +165,11 @@ const C = [
   [966, 40, "a choice is words (names) between commas"],
   [967, 39, "expected the end of the `", "` line, found "],
   [968, 24, "a look's blend is one of"],
-  [969, 62, "text in quotes can't have characters that hide or reorder text"]
+  [969, 62, "text in quotes can't have characters that hide or reorder text"],
+  [970, 57, "a scene's `when` is worked out once a frame or once a row"],
+  [971, 40, "a scene holds values: `name = …` lines"],
+  [972, 14, "scenes at most"],
+  [973, 52, "a `rate` layer can't read a scene's per-pixel values"]
 ];
 // psi-errors end
 

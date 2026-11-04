@@ -259,3 +259,30 @@ fn the_paint_and_under_estimates_fit_the_spare() {
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
 }
+
+/// Scenes (psi-p0, P0b-1): the estimate is the steps outside scenes and the
+/// two costliest scenes — a third as dear changes nothing, a cheaper one
+/// nothing either, and two scenes cost about two of their steps' worth.
+#[test]
+fn the_estimate_counts_two_scenes() {
+    let scene = |k: u32| format!("scene s{k} when frac(t/8) > {k}/8 {{\n  v{k} = sin(x*{k}.3 + y)*noise(x*7, y*{k}, t)\n}}\n");
+    let est = |n: u32, extra: &str| {
+        let mut src = String::from("loop 8\n");
+        for k in 1..=n {
+            src += &scene(k);
+        }
+        src += extra;
+        let sum: Vec<String> = (1..=n).map(|k| format!("v{k}")).collect();
+        src += &format!("gray({})", sum.join(" + "));
+        let p = opendmd_psi::compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        (p.esp32_us(), p.esp32_us_jit())
+    };
+    let (two, two_jit) = est(2, "");
+    let (three, three_jit) = est(3, "");
+    let (four, _) = est(4, "");
+    // (The extra scenes' sums are steps outside them: a step a scene.)
+    assert!(three <= two + two / 20 && four <= two + two / 10, "{two} {three} {four}");
+    assert!(three_jit <= two_jit + two_jit / 10, "{two_jit} {three_jit}");
+    let (one, _) = est(1, "");
+    assert!(two > one + one / 2, "{one} {two}");
+}

@@ -72,6 +72,11 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
+          | "palette" NAME "=" [ NAME ] COLOUR { "," [ NAME ] COLOUR }   -- 1..32 colours (section 6)
+          | "palette" NAME "=" tween [ "," tween ]   -- mixed once a frame; two: the halves (section 6)
+          | "scene" NAME "when" e "{" { NAME "=" expr sep } "}"   -- e once a frame or a row; its names 0 while e is 0 (section 13)
+tween     = "tween" "(" psrc "," psrc "," e ")"   -- e once a frame, held to 0..1
+psrc      = PALETTE | tween                    -- yours, a built-in (not gray), or another tween
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
           | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
           | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
@@ -287,7 +292,8 @@ The last line is the colour:
 
 **Palettes of your own.** `palette sea = #001020, #0060a0, #40c0e0, #fff`
 (a line at the top of the formula; 1 to 32 colours, a `,` may
-end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
+end a line; up to 8 palettes, 3 of them read by `pal` and `cycle`) is used
+as the built-ins are: `pal(sea, k)`,
 `pal(sea, k) * v`, `pal(sea, k, cover)`. With n colours, `pal(sea,
 i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
 second of four), and k in between gives the nearest — bands, not a blend,
@@ -310,8 +316,8 @@ floor(s·32)) mod 32`, so both wrap (where `pal` clamps). `s` may not vary
 along a row (E931: a value of `t`, another per-frame value, or a row value
 like `py/40`, which turns the palette per row: copper bars). P is a
 built-in palette or the formula's own, never `gray` (E932); each distinct
-(P, s) takes one of the formula's three palette slots, with its own
-`palette` lines (E933). The cost: the turn is a row step (a 32-entry copy,
+(P, s) takes one of the three palettes `pal` and `cycle` read, with the
+formula's own they name (E933). The cost: the turn is a row step (a 32-entry copy,
 ~20 µs a frame), the pixel pays `frac(v)` and a palette look-up; with `v`
 the pixel's position alone (no `t`, no slider) the still cache keeps
 `frac(v)` and a frame is ~0.6-0.9 ms — the idiom for plasma, rings,
@@ -324,6 +330,40 @@ fps 100
 palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
 wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
 cycle(glow, wave/6, t/8)
+```
+
+**Tweens.** `palette sky = tween(day, night, w)` is a palette worked out
+once a frame: entry e of `day` mixed towards entry e of `night` by `w`,
+each channel `a + ((b − a)·w + ½)/65536` rounded down (`w` held to 0..1:
+exactly `day` at 0, `night` at 1). `w` is a value once a frame (`t`, the
+clock, sliders, `seed` and what is made of them; E936 otherwise). The two
+palettes are the formula's own (of colours, or other tweens declared
+before), built-ins (not `gray`, E932), or `tween(…)` written inside: the
+first palette of a tween inside is worked out in place, the second needs a
+working palette (four at once, E939). Two tweens with a comma between are
+the palette's halves: entries 0-15 from the first, 16-31 from the second,
+each of palettes of the formula's own with 16 colours or fewer (E937),
+spread over 16 entries as a palette is over 32 (16 colours: entry e is
+colour e). Then `pal(sky, e/32)` is entry e: a per-pixel choice between
+two scenes is `+ 16·mask` inside the index, not a second palette. A tween
+palette has 32 colours (`sky.n` is 32, `sky.step` one entry) and no named
+colours; paint can't take it (E938: its colours change every frame). It
+counts as one of the three palettes `pal` and `cycle` read when they read
+it; a palette only tweens read takes none of those (a store of 8 holds
+the formula's palettes of colours: E923; one in a half takes half a
+place). Each tween is a step once a frame (~6 µs, the estimate counts it):
+dusk, dawn and an environment's colours sliding are free per pixel.
+
+```psi
+loop 8
+palette dD = #f80, #fc0, #08f, #fff
+palette dN = #400, #320, #002, #224
+palette cD = #f0f, #0ff, #888, #ccc
+palette cN = #202, #022, #111, #333
+night = 0.5 + 0.5*sin(t*0.8)
+p = frac(t/8)
+palette scene = tween(tween(dD, dN, night), tween(cD, cN, night), p), tween(cN, dN, p)
+pal(scene, (floor(x*4) + 16*(y > 0.5))/32)
 ```
 
 **Colours.** `#rrggbb` names a colour by its bytes: the channel `cc` is
@@ -641,9 +681,9 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 | limit | value | error says |
 |---|---|---|
 | source | 16,384 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes files of 4 KB) | too long |
-| steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
+| steps | 512 in all: per frame + draw + per row + per pixel + one per layer | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
 | live per-pixel values at once | 12 | holds more than 12 values at once |
-| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs more than 128 numbers and once-a-frame values |
+| constants + per-frame/per-row values held at once | 241 with the inputs, ~232 of your own (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs N numbers and once-a-frame values, more than the 241 it can hold (with the steps by section) |
 | nesting | 48 levels of brackets, operators and function calls | nested too deeply |
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
@@ -654,8 +694,9 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
 | `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
-| `palette` (your own) | 1 to 32 colours, 3 palettes; each takes 32 of the 256 table numbers | a palette is 1 to 32 colours / 3 palettes of its own at most / tables, sprites and palettes hold 256 numbers |
-| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables, sprites and palettes hold 256 numbers in all |
+| `palette` (your own) | 1 to 32 colours; 8 palettes of colours (a store of their own; one in a tween's half takes half a place); `pal` and `cycle` read 3 (with `cycle`'s turns) | a palette is 1 to 32 colours / 8 palettes of its own at most / holds 3 palettes that `pal` and `cycle` read |
+| `tween` | its weight once a frame; 4 working palettes at once; a half's palettes 16 colours at most | mixes a palette once a frame / palettes worked out at once / a palette's half is a tween of palettes of your own |
+| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables and sprites hold 256 numbers in all |
 | `draw { }` blocks | one | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 
@@ -670,6 +711,15 @@ then × 1.15 for what playing it adds (the copy to the panel, the picture
 under a look), where every colour costs 120 to write when it varies per
 pixel (about 5 when it is one value along a row), so `gray(x)` is 165.
 It is calibrated on the device (within ~12 % for layers and looks).
+**The JIT's estimate is the tier where it draws**: the panel compiles the
+pixel and row stages of most formulas (the JIT: its steps cost ~a third
+of the VM's), and where its kernel takes the formula `psi check`, the
+editor's light / medium / heavy and the limits count the JIT's estimate,
+the VM's shown beside it as "without the JIT" (`psi check` says when the
+JIT refuses one, and why: then the VM's counts). The JIT's estimate is
+fitted to the panel's effect path (−13 % to +11 % on the measured
+Formulas); the frame the panel reports while it plays adds racing the
+beam and the writes (~15 % more, the VM's the same).
 **Hoisting is automatic**: a value is computed as rarely as its inputs
 change — constants once, `t`/clock/slider-only values once a frame,
 `y`/`py`-only values once per row (32 times), the rest per pixel. So
@@ -775,6 +825,36 @@ Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
+
+
+**Scenes.** `scene city when c { … }` holds `name = …` lines whose row and
+pixel steps run only while `c` is not 0 — `c` once a frame (`t`, the
+clock, sliders) or once a row (`py`, `y`, a row value: the scene is skipped
+on the rows it can't touch), never per pixel (E970). After the block a
+name it set reads its value while `c` is on and **0 while it is off**
+(inside, the names read their values as usual). Only `name = …` lines go
+in a scene (E971); 15 scenes at most (E972); a `rate` layer can't read a
+scene's per-pixel values (E973). The panel tests a scene's `when` once a
+row (and the JIT once a pixel: a branch), skips its steps and zeroes what
+is read after; its values never share a step with the same value outside
+it, and none goes in the still cache or the column run. **The estimate
+counts every step outside scenes plus the two costliest scenes** (the
+panel budgets for two scenes at once: a transition shows two). An
+environment cycle is the idiom — each place a scene, the colour reading
+all of them, the weights making at most two non-zero at a time:
+
+```psi
+loop 8
+city = frac(t/8) > 0.5
+scene towers when city * (py < 20) {
+  h = hash(floor(px/6), 3)
+  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)
+}
+scene sea when 1 - city {
+  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5
+}
+rgb(lit, wave*0.3 + lit*0.5, wave)
+```
 
 ## 14. Idioms
 

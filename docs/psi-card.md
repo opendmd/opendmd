@@ -120,7 +120,16 @@ under(px + floor(sin(t*2)*2), py) * v
   slow bottom layer redrawn every 4th frame.
 - `table T = 0.2, 0.9, 0.5` numbers, read as `T[k]`.
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
-- `palette P = #000, #f80, #fff` your own palette for `pal(P, v)`.
+- `palette P = #000, #f80, #fff` your own palette for `pal(P, v)` (8 in
+  all; `pal` and `cycle` read 3 of them).
+- `scene NAME when c { v = … }`: values whose steps run only while `c`
+  (once a frame or a row, e.g. `city * (py < 20)`) is not 0; after it each
+  name reads 0 while it is off. The estimate counts two scenes at once:
+  an environment per scene, a transition two.
+- `palette S = tween(day, night, w)` mixes two palettes once a frame (`w`
+  0..1, of `t` or sliders, not the pixel); tweens nest; `tween(a, b, w),
+  tween(c, d, v)` fills the low and high 16 entries from palettes of ≤ 16
+  colours (entry e of a half: `pal(S, e/32)`, upper `pal(S, (16 + e)/32)`).
 
 ```psi
 name "Dusk"
@@ -131,7 +140,8 @@ mix(#102040, #ff8040, y + sin(t/8)*0.1)
 ## Cost: keep it light
 
 The panel has ~8 ms a frame (12 for a look over a GIF). `psi check` says
-the cost and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
+the cost (with the JIT where it takes the formula, the VM's beside it)
+and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
 and `/` cost most; a value of only `t`, the clock and sliders is worked out
 once a frame, of `y` once a row — free. Lines and dots cost by the line, not
 the pixel; painted filled shapes by the pixels they cover. Prefer `draw`

@@ -3641,8 +3641,9 @@ mod tests {
         );
         assert_eq!(
             FormulaLook::BUFFER_BYTES,
-            // (The scratch: 8 KB and racing the beam's three words.)
-            8192 + 3 * std::mem::size_of::<usize>() + 12288 + std::mem::size_of::<LookBuffers>()
+            // (The scratch: 8.5 KB, its scalar slots 256 since psi-p0, and
+            // racing the beam's three words.)
+            8704 + 3 * std::mem::size_of::<usize>() + 12288 + std::mem::size_of::<LookBuffers>()
         );
     }
 

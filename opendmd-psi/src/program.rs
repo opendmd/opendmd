@@ -23,10 +23,11 @@ pub const H: usize = 32;
 
 /// Steps a formula may take in all (per-frame, per-row, per-pixel and the
 /// colour): the cap the compiler holds every program to.
-pub const MAX_OPS: usize = 256;
+pub const MAX_OPS: usize = 512;
 /// Scalar slots: the inputs, the constants, and every per-frame and per-row
-/// value.
-pub const MAX_SCALARS: usize = 128;
+/// value. An operand byte below [`LANE`] is one of them; the 15 lane
+/// operands (`x`, `px`, `i` and the [`REGS`] registers) take the top.
+pub const MAX_SCALARS: usize = 256 - 3 - REGS;
 /// Lane registers (working values a pixel step reads and writes). Each is
 /// `N` × 4 B of [`crate::Scratch`].
 pub const REGS: usize = 12;
@@ -62,9 +63,34 @@ pub(crate) const fn noise_slot(k: usize, axis: usize) -> usize {
     S_SEED as usize + 1 + 3 * k + axis
 }
 
-/// An operand is a scalar slot (0..127) or, with this bit, a lane: 0 = `x`,
-/// 1 = `px`, 2 = `i`, 3.. = the registers.
-pub(crate) const LANE: u8 = 0x80;
+/// An operand is a scalar slot (0..LANE) or a lane, `LANE + k`: k = 0 `x`,
+/// 1 `px`, 2 `i`, 3.. the registers ([`lane`], [`lane_no`]).
+pub(crate) const LANE: u8 = MAX_SCALARS as u8;
+const _: () = assert!(LANE as usize + 3 + REGS == 256);
+
+/// Whether operand `v` is a lane (else a scalar slot).
+#[inline(always)]
+pub(crate) const fn is_lane(v: u8) -> bool {
+    v >= LANE
+}
+
+/// Lane operand `v`'s lane: 0 `x`, 1 `px`, 2 `i`, 3.. the registers.
+#[inline(always)]
+pub(crate) const fn lane_no(v: u8) -> u8 {
+    v.wrapping_sub(LANE)
+}
+
+/// The operand of lane `k` (`L_X`, `L_PX`, `L_I`, `L_REG0 + r`).
+#[inline(always)]
+pub(crate) const fn lane(k: u8) -> u8 {
+    LANE + k
+}
+
+/// The scalar slots as the VM holds them: one for every operand byte, so
+/// any byte indexes them without a check (slots from [`MAX_SCALARS`] up
+/// are never written).
+pub(crate) const SC: usize = 256;
+pub(crate) type Sc = [i32; SC];
 pub(crate) const L_X: u8 = 0;
 pub(crate) const L_PX: u8 = 1;
 pub(crate) const L_I: u8 = 2;
@@ -127,6 +153,11 @@ pub(crate) mod code {
     // of the picture under the formula at pixel (round(a), round(b)),
     // held to the panel; 0..1. Per pixel only.
     pub const UAT: u8 = 30;
+    // `palette P = tween(Q, R, w)`: `TWEEN d, a, b, c`, palette `a` mixed
+    // towards `b` by slot `c` into `d` (`super::TW_*`: live slots, the
+    // store, working palettes; all 32 entries or a half). Once a frame,
+    // the frame section's last steps (`super::own_palettes`).
+    pub const TWEEN: u8 = 31;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -213,6 +244,12 @@ pub(crate) mod code {
     // value the same all frame, the wide part's remainder carried in.
     pub const MULR: u8 = 78;
     pub const LAST_TERN: u8 = 78;
+    // A scene's guard (`scene NAME when c { … }`), before its row steps or
+    // its pixel steps: `GUARD d, a, b, c`: while slot `a` is 0 the `b` steps
+    // after it are skipped, their values 0 — in the row section each one's
+    // slot, in the pixel section the registers of the mask `d | (c & 15) <<
+    // 8` (the run's values read after it); `c >> 4` the scene's number.
+    pub const GUARD: u8 = 79;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -314,7 +351,7 @@ pub(crate) mod code {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
             LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END | TURN | SLOW => false,
-            ARGS | PAINT | IF | JUMP => false,
+            ARGS | PAINT | IF | JUMP | TWEEN | GUARD => false,
             c => !is_colour(c),
         }
     }
@@ -342,6 +379,7 @@ pub(crate) mod code {
         match c {
             ARGS | PAINT => 3,
             UAT => 2,
+            TWEEN | GUARD => 1,
             IF => 1,
             JUMP => 0,
             0..=LAST_BIN => 2,
@@ -395,6 +433,10 @@ pub(crate) mod code {
                 2 if w & 2 == 0 => ([op.b, 0, 0, 0], 1),
                 _ => ([0; 4], 0),
             };
+        }
+        if op.code == TWEEN {
+            // Its weight (its palettes are not slots).
+            return ([op.c, 0, 0, 0], 1);
         }
         let n = values(op);
         let mut v = [op.a, op.b, op.c, 0];
@@ -453,6 +495,8 @@ pub(crate) mod code {
             IF => "if",
             JUMP => "jump",
             UAT => "under_at",
+            TWEEN => "tween",
+            GUARD => "guard",
             PALIDX => "palidx",
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
@@ -476,6 +520,12 @@ pub(crate) mod code {
     }
 }
 
+/// A pixel section guard's registers (`code::GUARD`: bit r, register r).
+#[inline(always)]
+pub(crate) fn guard_mask(op: &Op) -> u16 {
+    op.d as u16 | ((op.c & 15) as u16) << 8
+}
+
 /// One step: `d = code(a, b, c)`. For `OUT_PAL`, `d` is the palette.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
@@ -485,6 +535,34 @@ pub struct Op {
     pub(crate) a: u8,
     pub(crate) b: u8,
     pub(crate) c: u8,
+}
+
+impl Op {
+    /// The step index a draw stage step goes on at (16 bits in two
+    /// operand bytes: a program has up to [`MAX_OPS`] steps): `IF`'s and
+    /// `JUMP`'s target (`b`, `c` high), a `FOR`'s END (`b`, `c`'s low seven
+    /// bits high; its top bit is [`LANES`]), an `END`'s step back (`c`, `d`
+    /// high). 0 for any other step.
+    #[inline(always)]
+    pub(crate) fn target(&self) -> usize {
+        match self.code {
+            code::IF | code::JUMP => self.b as usize | (self.c as usize) << 8,
+            code::FOR => self.b as usize | ((self.c & !LANES) as usize) << 8,
+            code::END => self.c as usize | (self.d as usize) << 8,
+            _ => 0,
+        }
+    }
+
+    /// Set [`target`](Self::target) (a FOR's lane mark kept).
+    pub(crate) fn set_target(&mut self, at: usize) {
+        let (lo, hi) = (at as u8, (at >> 8) as u8);
+        match self.code {
+            code::IF | code::JUMP => (self.b, self.c) = (lo, hi),
+            code::FOR => (self.b, self.c) = (lo, (self.c & LANES) | (hi & !LANES)),
+            code::END => (self.c, self.d) = (lo, hi),
+            _ => {}
+        }
+    }
 }
 
 /// Inputs bit: the program reads `i` (built per row).
@@ -530,17 +608,31 @@ pub mod paint {
     pub const ARGS: [usize; 11] = [1, 3, 5, 5, 5, 4, 4, 7, 4, 6, 6];
 }
 
-/// A formula's own palettes (`palette NAME = #…, …`): up to three, `pal`'s
-/// palettes 5, 6 and 7 after the five built-ins, each 32 entries
-/// (0x00RRGGBB) at the top of the tables ([`user_palette_at`]).
+/// The palettes `pal` reads of a formula's own: three live slots, `pal`'s
+/// palettes 5, 6 and 7 after the five built-ins, each 32 entries, worked
+/// out once a frame ([`own_palettes`]): a palette of the store as it is
+/// (live slot `j` from store slot `j`), a tween of palettes
+/// (`code::TWEEN`), or one `cycle` turns each row (`code::TURN`).
 pub const USER_PALETTES: usize = 3;
 
-/// Where user palette `j` (0..3) starts in the tables: the top 32 entries
-/// for the first, the 32 below for the second, …
-#[inline(always)]
-pub const fn user_palette_at(j: usize) -> usize {
-    MAX_TABLE - 32 * (j + 1)
-}
+/// The palette store (`Program::pals`): a formula's own palettes of
+/// colours, 32 entries (0x00RRGGBB) each. A palette in a tween's half
+/// takes the half of a slot (its colours over 16 entries).
+pub const MAX_PALETTES: usize = 8;
+
+/// A tween's working palettes besides the live slots (for one inside
+/// another, or a palette that only tweens read): `own_palettes`' own.
+pub(crate) const TWEEN_TEMPS: usize = 4;
+
+/// A tween's source (`TWEEN`'s `a` and `b`): store slot 0..8, live slot
+/// `TW_LIVE + j`, or working palette `TW_TEMP + k`.
+pub(crate) const TW_LIVE: u8 = MAX_PALETTES as u8;
+pub(crate) const TW_TEMP: u8 = TW_LIVE + USER_PALETTES as u8;
+/// A tween's destination (`TWEEN`'s `d`): live slot 0..3 or working
+/// palette `3 + k` in the low bits, and which entries: all 32, or with
+/// these bits the low or the high 16 (its sources read in the same half).
+pub(crate) const TW_LOW: u8 = 0x10;
+pub(crate) const TW_HIGH: u8 = 0x20;
 
 /// A formula's own palettes as `pal` reads them, unpacked once a frame.
 pub(crate) type Pals = [[[u8; 3]; 32]; USER_PALETTES];
@@ -559,16 +651,70 @@ pub(crate) fn palette<'a>(
     &own[(i as usize).saturating_sub(5) % USER_PALETTES]
 }
 
-/// The formula's own palettes from its tables (out of line: once a frame,
-/// and only for a formula with some, `OWNPAL`).
+#[inline(always)]
+fn rgb_of(v: u32) -> [u8; 3] {
+    [(v >> 16) as u8, (v >> 8) as u8, v as u8]
+}
+
+/// The formula's own palettes for a frame: the live slots from the store,
+/// then its tweens in order (the frame section's last steps, run after the
+/// frame's values: their weights are). Out of line, in flash: once a
+/// frame, and only for a formula with some (`OWNPAL`).
 #[inline(never)]
-#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
-pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
+pub(crate) fn own_palettes(prog: &Program, sc: &Sc, own: &mut Pals) {
     for (j, p) in own.iter_mut().enumerate() {
-        let at = user_palette_at(j);
         for (k, c) in p.iter_mut().enumerate() {
-            let v = tabs[at + k] as u32;
-            *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+            *c = rgb_of(prog.pals[32 * j + k]);
+        }
+    }
+    let tw = prog.tweens();
+    if tw.is_empty() {
+        return;
+    }
+    let mut tmp = [[[0u8; 3]; 32]; TWEEN_TEMPS];
+    for op in &prog.ops[tw] {
+        tween(&prog.pals, own, &mut tmp, sc, op);
+    }
+}
+
+/// One `TWEEN d, a, b, c`: palette `a` mixed towards `b` by slot `c`'s
+/// value (held to 0..1), entry by entry, channel by channel, rounded:
+/// `a + ((b − a)·w + ½) >> 16`, exactly `a` at 0 and `b` at 1. Indices
+/// are masked, whatever the program.
+fn tween(
+    store: &[u32; MAX_PALETTES * 32],
+    own: &mut Pals,
+    tmp: &mut [[[u8; 3]; 32]; TWEEN_TEMPS],
+    sc: &Sc,
+    op: &Op,
+) {
+    let w = sc[op.c as usize].clamp(0, ONE);
+    let (lo, hi) = match op.d & (TW_LOW | TW_HIGH) {
+        TW_LOW => (0, 16),
+        TW_HIGH => (16, 32),
+        _ => (0, 32),
+    };
+    for e in lo..hi {
+        let src = |s: u8| -> [u8; 3] {
+            if s < TW_LIVE {
+                rgb_of(store[(32 * s as usize + e) % (MAX_PALETTES * 32)])
+            } else if s < TW_TEMP {
+                own[(s - TW_LIVE) as usize % USER_PALETTES][e]
+            } else {
+                tmp[(s - TW_TEMP) as usize % TWEEN_TEMPS][e]
+            }
+        };
+        let (p, q) = (src(op.a), src(op.b));
+        let mut c = [0u8; 3];
+        for k in 0..3 {
+            let (x, y) = (i32::from(p[k]), i32::from(q[k]));
+            c[k] = (x + (((y - x) * w + 0x8000) >> 16)) as u8;
+        }
+        let d = (op.d & 7) as usize;
+        if d < USER_PALETTES {
+            own[d][e] = c;
+        } else {
+            tmp[(d - USER_PALETTES) % TWEEN_TEMPS][e] = c;
         }
     }
 }
@@ -578,8 +724,8 @@ pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
 /// entry (e + floor(a·32)) mod 32. Out of line, in flash: a row step's
 /// (once a row, ~1 µs). Indices are masked, whatever the program.
 #[inline(never)]
-pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS], op: &Op) {
-    let n = ((sc[(op.a & 0x7f) as usize] >> 11) & 31) as usize;
+pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &Sc, op: &Op) {
+    let n = ((sc[op.a as usize] >> 11) & 31) as usize;
     let src = *palette(t, own, op.b);
     let dst = &mut own[(op.d as usize) % USER_PALETTES];
     for (e, c) in dst.iter_mut().enumerate() {
@@ -594,12 +740,7 @@ pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCA
     feature = "docs",
     all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
 ))]
-pub(crate) fn turn_rows(
-    prog: &Program,
-    t: &crate::tables::Tables,
-    own: &mut Pals,
-    sc: &[i32; MAX_SCALARS],
-) {
+pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &Sc) {
     for op in &prog.ops[prog.turns()] {
         turn(t, own, sc, op);
     }
@@ -637,9 +778,14 @@ pub struct Program {
     pub(crate) meta: crate::meta::Meta,
     /// The paint palette: colour `k` (0x00RRGGBB) of index `k` (0 none).
     pub(crate) paint: [u32; MAX_PAINT],
+    /// The palette store: the formula's own palettes of colours, 32
+    /// entries (0x00RRGGBB) a slot ([`MAX_PALETTES`]); live slot `j` is
+    /// slot `j` unless a tween or a turn writes it.
+    pub(crate) pals: [u32; MAX_PALETTES * 32],
 }
 
-const _: () = assert!(core::mem::size_of::<Program>() <= 2876 + 4 * MAX_PAINT);
+// (The budget: 6.3 KB at the limits, `docs/research/endless-road-v2.md` §5.)
+const _: () = assert!(core::mem::size_of::<Program>() <= 6_300);
 
 impl core::fmt::Debug for Program {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -673,6 +819,7 @@ impl Default for Program {
             tables: [0; MAX_TABLE],
             meta: crate::meta::Meta::default(),
             paint: [0; MAX_PAINT],
+            pals: [0; MAX_PALETTES * 32],
         }
     }
 }
@@ -761,7 +908,7 @@ impl Program {
                         stack[depth] = mult;
                         depth += 1;
                     }
-                    let n = (self.init[(op.a & 0x7f) as usize] >> 16).max(1) as u32;
+                    let n = (self.init_at(op.a) >> 16).max(1) as u32;
                     mult = mult.saturating_mul(n);
                 }
                 code::END => {
@@ -841,7 +988,9 @@ impl Program {
             let (v, n) = code::operands(op);
             // A pick's choices are read through its table of slots.
             let table = if op.code == code::PICK {
-                &self.init[op.b as usize..][..op.c as usize]
+                self.init
+                    .get(op.b as usize..op.b as usize + op.c as usize)
+                    .unwrap_or(&[])
             } else {
                 &[]
             };
@@ -915,6 +1064,29 @@ impl Program {
             .min(self.esp32_us_still())
     }
 
+    /// Whether the panel's JIT draws this program's pixel stage (its
+    /// kernel takes it): the editor's and the limits' tier
+    /// ([`tier_us`](Self::tier_us)).
+    pub fn jit_takes(&self) -> bool {
+        crate::jitplan::jit_takes(self)
+    }
+
+    /// What the panel takes a frame, µs, for the tier and the limits
+    /// (P0b-2): [`esp32_us_jit_still`](Self::esp32_us_jit_still) where the
+    /// JIT takes it ([`jit_takes`](Self::jit_takes)), else
+    /// [`esp32_us_still`](Self::esp32_us_still); as a look (`look`: no still
+    /// cache) [`esp32_us_jit`](Self::esp32_us_jit) or
+    /// [`esp32_us`](Self::esp32_us). The VM's figure is the "without the
+    /// JIT" one shown beside it.
+    pub fn tier_us(&self, look: bool) -> u32 {
+        match (self.jit_takes(), look) {
+            (true, false) => self.esp32_us_jit_still(),
+            (true, true) => self.esp32_us_jit(),
+            (false, false) => self.esp32_us_still(),
+            (false, true) => self.esp32_us(),
+        }
+    }
+
     /// The first step a kernel draws: after the column run, and after the
     /// still cache's run with what is laid out before its marker (the VM
     /// runs those as lanes).
@@ -967,9 +1139,18 @@ impl Program {
             None => (0..0, 1),
         };
         let mut slow_ns = 0;
+        // Scenes (`code::GUARD`): each one's steps apart, then the two
+        // costliest counted ("the panel budgets for two scenes at once").
+        let guards = self.guard_runs();
+        let mut scene = [(0u32, 0u32, 0u32, 0u32); 16];
         let mut k = self.row_end as usize;
         while k < self.len() {
             let op = &self.ops[k];
+            let s = guards
+                .iter()
+                .find(|g| g.0.contains(&k) && g.0.start > self.row_end as usize)
+                .map_or(0, |g| g.1 as usize);
+            let before = (px, kp, saved);
             if skip.contains(&k) {
             } else if slow.contains(&k) {
                 slow_ns += self.step_ns(k, op);
@@ -995,9 +1176,35 @@ impl Program {
                     ns
                 };
             }
+            if s != 0 {
+                let sc = &mut scene[s % 16];
+                sc.0 += px - before.0;
+                sc.1 += kp - before.1;
+                sc.2 += saved - before.2;
+                (px, kp, saved) = before;
+            }
             k += 1;
         }
-        let row = self.counts().1 as u32;
+        // A scene's row steps (its guard's run in the row section).
+        let mut row = self.counts().1 as u32;
+        for (r, sn) in &guards {
+            if r.start <= self.row_end as usize {
+                scene[*sn as usize % 16].3 += r.len() as u32;
+                row -= r.len() as u32;
+            }
+        }
+        // (The two largest by a scan: a sort's code is ~3 KB of wasm.)
+        let (mut top, mut next) = (0u32, 0u32);
+        for &(sp, sk, ss, sr) in &scene {
+            let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
+            let c = p * (W * H) as u32 / 1000 + sr * 10;
+            if c > top {
+                (top, next) = (c, top);
+            } else if c > next {
+                next = c;
+            }
+        }
+        let scenes = top + next;
         // `cycle`'s turns: a palette copied each row, on top of a row
         // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
@@ -1005,6 +1212,8 @@ impl Program {
             .filter(|o| o.code == code::TURN)
             .count() as u32
             * TURN_US;
+        // The tweens: 32 entries' (or 16's) mixes once a frame.
+        let tweens = self.tweens().len() as u32 * TWEEN_US;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
         // 45 + 120, as measured); then what the real paths add to the VM's
         // own frame — the effect's copy into the canvas, the look's rows
@@ -1030,6 +1239,8 @@ impl Program {
         ((px * (W * H) as u32) / 1000
             + row * 10
             + turns
+            + tweens
+            + scenes
             + self.draw_cost(lanes, usize::MAX)
             + self.overlay_us()
             + extra)
@@ -1040,6 +1251,9 @@ impl Program {
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
     fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
+        if op.code == GUARD {
+            return GUARD_JIT_NS;
+        }
         if !is_colour(op.code) {
             return jit_value_ns(op.code);
         }
@@ -1062,8 +1276,8 @@ impl Program {
             _ => 39,
         };
         let k = v[n.saturating_sub(1)];
-        let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k, at);
-        let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+        let konst = !is_lane(k) && k >= S_FIRST_FREE && self.is_const_slot(k, at);
+        let covered = n > vals && !(konst && self.init_at(k) >= ONE);
         let mix = match blend {
             None => 0,
             Some(crate::fixed::BLEND_ADD) => 52,
@@ -1073,7 +1287,7 @@ impl Program {
             Some(_) => 13,
         };
         let cover = match (blend, covered) {
-            (Some(_), true) => 77 + if k & LANE != 0 { 15 } else { 0 },
+            (Some(_), true) => 77 + if is_lane(k) { 15 } else { 0 },
             _ => 0,
         };
         base + mix + cover
@@ -1083,6 +1297,7 @@ impl Program {
     fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         match op.code {
+            GUARD => GUARD_NS,
             c if is_colour(c) => {
                 // Measured on the device (psi-probe, 2026-10-26): a
                 // colour's write — a lane's `chan` per pixel, ~5 for one
@@ -1093,7 +1308,7 @@ impl Program {
                 let (kind, blend) = colour_parts(c);
                 let (v, n) = operands(op);
                 let vals = values(op);
-                let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
+                let lane = v[..vals.min(n)].iter().any(|&o| is_lane(o));
                 let write = if lane { 120 } else { 5 };
                 // (Of one value: worked out once, filled along the row.)
                 let base = match kind {
@@ -1124,8 +1339,8 @@ impl Program {
                 // Covered unless the coverage is a constant slot of 1 or
                 // more (a lane or an input never is one).
                 let k = v[n.saturating_sub(1)];
-                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k, at);
-                let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+                let konst = !is_lane(k) && k >= S_FIRST_FREE && self.is_const_slot(k, at);
+                let covered = n > vals && !(konst && self.init_at(k) >= ONE);
                 let mix = match (blend, covered) {
                     (None, _) => 0,
                     (Some(crate::fixed::BLEND_ADD), false) => 190,
@@ -1152,7 +1367,7 @@ impl Program {
     /// scalar, or a lane last written by a floor, a choice or a comparison.
     fn stepped(&self, at: usize, v: u8) -> bool {
         use code::*;
-        if v & LANE == 0 {
+        if !is_lane(v) {
             return true;
         }
         let re = self.row_end as usize;
@@ -1189,6 +1404,30 @@ impl Program {
             k -= 1;
         }
         k..re
+    }
+
+    /// Each scene's guarded runs (`code::GUARD`, in the row and the pixel
+    /// sections): the steps it skips, and the scene's number.
+    pub(crate) fn guard_runs(&self) -> alloc::vec::Vec<(core::ops::Range<usize>, u8)> {
+        let (de, pe) = (self.draw_end as usize, self.len().min(MAX_OPS));
+        (de.min(pe)..pe)
+            .filter(|&g| self.ops[g].code == code::GUARD)
+            .map(|g| {
+                let op = &self.ops[g];
+                (g + 1..(g + 1 + op.b as usize).min(pe), op.c >> 4)
+            })
+            .collect()
+    }
+
+    /// The tweens (`code::TWEEN`): the frame section's last steps, run
+    /// after its values ([`own_palettes`]).
+    pub(crate) fn tweens(&self) -> core::ops::Range<usize> {
+        let fe = (self.frame_end as usize).min(MAX_OPS);
+        let mut k = fe;
+        while k > 0 && self.ops[k - 1].code == code::TWEEN {
+            k -= 1;
+        }
+        k..fe
     }
 
     /// Where the slow layers' marker is (`code::SLOW`), if the formula has
@@ -1279,7 +1518,7 @@ impl Program {
         (fe.min(de)..de)
             .filter(|&k| self.ops[k].code == code::FOR)
             .map(|k| {
-                let count = (self.init[(self.ops[k].a & 0x7f) as usize] >> 16) as u32;
+                let count = (self.init_at(self.ops[k].a) >> 16) as u32;
                 (
                     count,
                     self.vector_loop(k).map(|_| (all, self.draw_cost(true, k))),
@@ -1369,13 +1608,13 @@ impl Program {
             close(&arms, &mut open, at, &mut ns);
             match op.code {
                 code::IF if open < arms.len() => {
-                    arms[open] = (op.b as usize, 0, ns, 0);
+                    arms[open] = (op.target(), 0, ns, 0);
                     open += 1;
                     return;
                 }
                 code::JUMP if open > 0 && arms[open - 1].0 == at + 1 && arms[open - 1].1 == 0 => {
                     let a = &mut arms[open - 1];
-                    (a.1, a.3) = (op.b as usize, ns - a.2);
+                    (a.1, a.3) = (op.target(), ns - a.2);
                     ns = a.2;
                     return;
                 }
@@ -1542,11 +1781,13 @@ impl Program {
     /// there, `None` for anything else (a slot holds a constant until a step
     /// writes another value into it: slots are used again).
     pub(crate) fn const_value(&self, v: u8, at: usize) -> Option<i32> {
-        (v & LANE == 0
-            && v >= S_FIRST_FREE
-            && (v as usize) < MAX_SCALARS
-            && self.is_const_slot(v, at))
-        .then(|| self.init[v as usize])
+        (!is_lane(v) && v >= S_FIRST_FREE && self.is_const_slot(v, at)).then(|| self.init_at(v))
+    }
+
+    /// Scalar slot `v`'s value at the start of a frame (0 past the slots).
+    #[inline(always)]
+    pub(crate) fn init_at(&self, v: u8) -> i32 {
+        self.init.get(v as usize).copied().unwrap_or(0)
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -1566,6 +1807,7 @@ impl Program {
         self.tables.fill(0);
         self.meta = crate::meta::Meta::default();
         self.paint.fill(0);
+        self.pals.fill(0);
     }
 
     /// What the formula declares: its controls (defaults for the slots a
@@ -1579,8 +1821,8 @@ impl Program {
         use core::fmt::Write;
         let mut s = alloc::string::String::new();
         let opnd = |v: u8, n: usize| -> alloc::string::String {
-            if v & LANE != 0 {
-                match v & !LANE {
+            if is_lane(v) {
+                match lane_no(v) {
                     L_X => "x".into(),
                     L_PX => "px".into(),
                     L_I => "i".into(),
@@ -1640,13 +1882,34 @@ impl Program {
                 let h = SprHead::new(&self.tables, op.c);
                 alloc::format!("{args}; sprite {} x {} at {}", h.w, h.h, op.c)
             } else if op.code == code::FOR {
-                alloc::format!("{args}; end {}", op.b)
+                alloc::format!("{args}; end {}", op.target())
             } else if op.code == code::END {
-                alloc::format!("{args}; back to {}", op.c)
+                alloc::format!("{args}; back to {}", op.target())
+            } else if matches!(op.code, code::IF | code::JUMP) {
+                alloc::format!("{args}; to {}", op.target())
             } else if op.code == code::FUSE {
                 alloc::format!("{}; {} steps", crate::fuse::name(op.d), op.a)
             } else if op.code == code::TURN {
                 alloc::format!("{args}; palette {}", op.b)
+            } else if op.code == code::GUARD {
+                alloc::format!(
+                    "{args}; skip {}, scene {}, mask {:#05x}",
+                    op.b,
+                    op.c >> 4,
+                    guard_mask(op)
+                )
+            } else if op.code == code::TWEEN {
+                let src = |v: u8| match v {
+                    v if v < TW_LIVE => alloc::format!("store{v}"),
+                    v if v < TW_TEMP => alloc::format!("pal{}", 5 + v - TW_LIVE),
+                    v => alloc::format!("work{}", v - TW_TEMP),
+                };
+                let half = match op.d & (TW_LOW | TW_HIGH) {
+                    TW_LOW => " low",
+                    TW_HIGH => " high",
+                    _ => "",
+                };
+                alloc::format!("{}, {}, {args}{half}", src(op.a), src(op.b))
             } else if op.code == code::SLOW {
                 alloc::format!(
                     "skip {} in the fast part; {} layers, rate {}, reads {:#x}",
@@ -1667,7 +1930,7 @@ impl Program {
                 )
             } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
-                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8, n))
+                    .map(|j| opnd(self.init_at((op.b as usize + j) as u8) as u8, n))
                     .collect();
                 alloc::format!("{args}; {}", t.join(", "))
             } else {
@@ -1677,6 +1940,9 @@ impl Program {
                 || matches!(
                     op.code,
                     code::END
+                        | code::IF
+                        | code::JUMP
+                        | code::GUARD
                         | code::LINE_FROM
                         | code::LINE_TO
                         | code::DOT
@@ -1687,6 +1953,11 @@ impl Program {
                 "out".into()
             } else if op.code == code::TURN {
                 alloc::format!("pal{}", 5 + op.d as usize)
+            } else if op.code == code::TWEEN {
+                match (op.d & 7) as usize {
+                    d if d < USER_PALETTES => alloc::format!("pal{}", 5 + d),
+                    d => alloc::format!("work{}", d - USER_PALETTES),
+                }
             } else if op.code == code::SLOW {
                 "out".into()
             } else if code::is_wide(op.code) && code::wide_ops(op.code).0 {
@@ -1752,21 +2023,21 @@ impl Program {
     #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
     pub(crate) fn vector_loop(&self, at: usize) -> Option<VecLoop> {
         let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
-        if f.c != LANES {
+        if f.c & LANES == 0 {
             return None;
         }
-        let end = f.b as usize;
+        let end = f.target();
         let mut vl = VecLoop {
             end,
-            count: (self.init[(f.a & 0x7f) as usize] >> 16) as u32,
+            count: (self.init_at(f.a) >> 16) as u32,
             regs: 1,
             slot: [0; REGS + 1],
         };
-        vl.slot[1] = f.d & 0x7f;
+        vl.slot[1] = f.d;
         for op in &self.ops[at + 1..end] {
             if code::writes_scalar(op.code) && vl.reg(op.d).is_none() {
                 vl.regs += 1;
-                vl.slot[(vl.regs as usize).min(REGS)] = op.d & 0x7f;
+                vl.slot[(vl.regs as usize).min(REGS)] = op.d;
             }
         }
         debug_assert_eq!(
@@ -1804,7 +2075,8 @@ impl Program {
         for at in fe.min(de)..de {
             if self.ops[at].code == code::FOR {
                 let lanes = self.check_vector_loop(at).is_some();
-                self.ops[at].c = if lanes { LANES } else { 0 };
+                let c = self.ops[at].c & !LANES;
+                self.ops[at].c = if lanes { c | LANES } else { c };
             }
         }
     }
@@ -1813,19 +2085,19 @@ impl Program {
     fn check_vector_loop(&self, at: usize) -> Option<VecLoop> {
         let de = (self.draw_end as usize).min(MAX_OPS);
         let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
-        let end = f.b as usize;
+        let end = f.target();
         if end <= at || end >= de {
             return None;
         }
         let e = &self.ops[end];
-        let k = f.d & 0x7f;
-        if e.code != code::END || e.a & 0x7f != k || e.b != f.a || e.c as usize != at + 1 {
+        let k = f.d;
+        if e.code != code::END || e.a != k || e.b != f.a || e.target() != at + 1 {
             return None;
         }
-        if !self.is_const_slot(f.a & 0x7f, at) {
+        if is_lane(f.a) || !self.is_const_slot(f.a, at) {
             return None;
         }
-        let count = self.init[(f.a & 0x7f) as usize] >> 16;
+        let count = self.init_at(f.a) >> 16;
         if count < VEC_MIN as i32 {
             return None;
         }
@@ -1846,7 +2118,7 @@ impl Program {
         vl.slot[1] = k;
         for op in body {
             if value(op.code) {
-                if op.d & 0x7f == k {
+                if op.d == k {
                     return None;
                 }
                 if vl.reg(op.d).is_none() {
@@ -1854,7 +2126,7 @@ impl Program {
                         return None;
                     }
                     vl.regs += 1;
-                    vl.slot[vl.regs as usize] = op.d & 0x7f;
+                    vl.slot[vl.regs as usize] = op.d;
                 }
             } else if !prim(op.code) {
                 return None;
@@ -1878,12 +2150,12 @@ impl Program {
             // PICK step's choices are all once-a-frame values.)
             if op.code == code::PICK
                 && (0..op.c as usize)
-                    .any(|j| bit(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8) != 0)
+                    .any(|j| bit(self.init_at((op.b as usize + j) as u8) as u8) != 0)
             {
                 return None;
             }
             if value(op.code) {
-                spare |= v[..n].iter().any(|&v| v & 0x7f == op.d & 0x7f);
+                spare |= v[..n].contains(&op.d);
                 done |= bit(op.d);
             }
         }
@@ -1915,9 +2187,10 @@ impl Program {
     }
 }
 
-/// A draw loop's FOR's `c` when it runs as lanes
-/// ([`Program::vector_loop`]; 0 when a turn at a time).
-pub(crate) const LANES: u8 = 1;
+/// A draw loop's FOR's mark when it runs as lanes, the top bit of its `c`
+/// ([`Program::vector_loop`]; clear when a turn at a time; the bits below
+/// are its END's index's high byte, [`Op::target`]).
+pub(crate) const LANES: u8 = 0x80;
 
 /// Turns a draw loop needs to run as lanes ([`Program::vector_loop`]):
 /// below it a turn at a time is as quick (each lane step works out a whole
@@ -1996,7 +2269,7 @@ impl VecLoop {
     #[inline(always)]
     pub(crate) fn reg(&self, v: u8) -> Option<usize> {
         let mut r = self.regs as usize;
-        while r > 0 && self.slot[r] != v & 0x7f {
+        while r > 0 && self.slot[r] != v {
             r -= 1;
         }
         (r > 0).then_some(r)
@@ -2011,6 +2284,15 @@ pub(crate) const HELD_COPY_NS: u32 = 5;
 /// of a 32-entry copy (consoleb-a on the spare: `cycle(fire, x*3, t)` 838
 /// µs a frame against `pal(fire, frac(x*3))`'s 735).
 pub(crate) const TURN_US: u32 = 90;
+/// A tween of a palette once a frame (`code::TWEEN`: 32 entries, 96
+/// mixes on bytes), µs: paint80-713cd on the spare, p0-tween's frame
+/// steps (six) and its four tweens with the store's unpacking 44 µs a frame.
+pub(crate) const TWEEN_US: u32 = 9;
+/// A scene's guard in the pixel section, ns a pixel: one test a lane of
+/// 128, and while it is off its values' lanes zeroed (a guess until
+/// paint-probe measures it); in the kernel a test and a branch a pixel.
+pub(crate) const GUARD_NS: u32 = 4;
+pub(crate) const GUARD_JIT_NS: u32 = 8;
 /// A paint primitive's call: its values gathered, the call, its
 /// coordinates to pixels, ns (paint-probe on the spare: `pset` off the
 /// panel 16 times a frame).
@@ -2215,13 +2497,12 @@ impl SprHead {
 /// slots from `base` (0 where floor(k) is outside 0..n). Indices are masked
 /// into the slots, whatever the program.
 #[inline(always)]
-pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
+pub(crate) fn pick(sc: &Sc, base: u8, n: u8, k: i32) -> i32 {
     let i = k >> 16;
     if i < 0 || i >= n as i32 {
         return 0;
     }
-    let m = MAX_SCALARS - 1;
-    sc[sc[(base as usize + i as usize) & m] as usize & m]
+    sc[sc[(base as usize + i as usize) & (SC - 1)] as usize & (SC - 1)]
 }
 
 /// The scalar evaluation of one arithmetic op: the per-frame and per-row

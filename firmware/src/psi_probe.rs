@@ -536,9 +536,9 @@ fn fastdiv_probe(start: Instant, stack0: u32) {
     s.reset();
     let (mut ok, mut bad) = (0, 0);
     for &(name, src, ms, want) in psi::golden::FRAMES {
-        if compile(src, &mut prog, true, true).is_err() {
+        if let Err(e) = compile(src, &mut prog, true, true) {
             bad += 1;
-            say!(error, "psi-probe: golden {name}: does not compile");
+            say!(error, "psi-probe: golden {name}: does not compile: {}", e.msg);
             continue;
         }
         psi::render_with::<128>(&prog, &mut s, &psi::golden::inputs(ms), &t, &mut out);
@@ -1138,9 +1138,9 @@ fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
         if heap_low("golden frames") {
             break;
         }
-        if compile(src, &mut prog, true, true).is_err() {
+        if let Err(e) = compile(src, &mut prog, true, true) {
             bad += 1;
-            say!(error, "psi-probe: golden {name}: does not compile");
+            say!(error, "psi-probe: golden {name}: does not compile: {}", e.msg);
             continue;
         }
         let u = o.then_some(under.as_slice());
@@ -2477,15 +2477,22 @@ pub(crate) mod jit2 {
         let mut under = vec![0u8; psi::W * psi::H * 3];
         psi::golden::picture(&mut under);
         let mut ink = psi::Ink::boxed();
-        let (mut ok, mut bad, mut vm) = (0u32, 0u32, 0u32);
+        let (mut ok, mut bad, mut vm, mut skipped) = (0u32, 0u32, 0u32, 0u32);
         let mut why: Vec<(&str, u32)> = Vec::new();
         let mut code = 0usize;
         let plain = psi::golden::FRAMES.iter().map(|&(n, src, ms, want)| (n, src, ms, false, want, false));
         let over = psi::golden::OVER.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, false));
         let drawn = psi::golden::DRAWN.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, true));
         for (name, src, ms, o, want, draws) in plain.chain(over).chain(drawn) {
-            if compile(src, &mut prog, true, true).is_err() {
-                say!(error, "psi-probe: jit2: golden {name}: does not compile");
+            if let Err(e) = compile(src, &mut prog, true, true) {
+                // (The probe's heap, not the formula: the player never
+                // compiles. Skipped, said, not a difference.)
+                if e.msg == psi::NO_MEMORY {
+                    say!(info, "psi-probe: jit2: golden {name}: skipped, no heap to compile it here (heap {} B free, largest block {} B)", heap(), crate::state::largest_free_block());
+                    skipped += 1;
+                    continue;
+                }
+                say!(error, "psi-probe: jit2: golden {name}: does not compile: {}", e.msg);
                 bad += 1;
                 continue;
             }
@@ -2532,7 +2539,7 @@ pub(crate) mod jit2 {
             }
         }
         say!(info,
-            "psi-probe: jit2: golden frames through kernels: {ok} match the host/wasm hashes, {bad} differ{}; {vm} on the VM {why:?}; {code} B of code in all",
+            "psi-probe: jit2: golden frames through kernels: {ok} match the host/wasm hashes, {bad} differ{}; {vm} on the VM {why:?}; {skipped} skipped (the probe's heap); {code} B of code in all",
             if bad == 0 { " (bit-identical)" } else { "" }
         );
         (ok, bad)
