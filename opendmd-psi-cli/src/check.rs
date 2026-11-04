@@ -12,7 +12,8 @@
 //! Options: `--out FILE.png` (default: the formula's name with .png, or
 //! `formula.png` from stdin; `--out -` for none), `--frames N` (8, spread
 //! over one loop; a still formula gets 1), `--ms 0,250,…` (exact times
-//! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders; default a
+//! instead, each with its own cost: its scenes by the rows they are on, its
+//! draw arms), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders; default a
 //! `control` line's default, 0.5 for one read without), `--clock HH:MM:SS`
 //! (10:09:30), `--over` (draw over the sample picture even if the formula
 //! doesn't read it; it is used anyway whenever it does), `--hash` (each
@@ -34,7 +35,7 @@
 use opendmd_psi::golden::fnv;
 use opendmd_psi::syntax::{compile_observed, Defined, Level, Sink};
 use opendmd_psi::{
-    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_OPS,
+    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_STEPS,
     MAX_SCALARS, OWN, REGS, W,
 };
 use std::io::Read;
@@ -139,7 +140,7 @@ pub fn run(args: Vec<String>) -> i32 {
     .map(|e| e.1)
     .collect();
     println!(
-        "ok: {} of {MAX_OPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
+        "ok: {} of {MAX_STEPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.steps(),
         prog.draw_steps(),
         prog.layers(),
@@ -291,6 +292,7 @@ pub fn run(args: Vec<String>) -> i32 {
     // The frames: over one loop; a clock-only formula over a day; a still one once.
     let moves = inputs & 8 != 0;
     let clocked = inputs & 16 != 0 && !moves;
+    let explicit = ms_list.is_some();
     let times: Vec<(u32, (u8, u8, u8))> = match ms_list {
         Some(v) => v.into_iter().map(|ms| (ms, clock)).collect(),
         None if moves => (0..frames)
@@ -321,6 +323,8 @@ pub fn run(args: Vec<String>) -> i32 {
     let mut still = Still::new();
     still.take(&prog);
     let mut shots = Vec::new();
+    // Each frame's own cost (`--ms`): its scenes by the rows they are on.
+    let mut costs: Vec<(u32, u32, [u8; 16])> = Vec::new();
     // A slider not given: its control's default, else ½.
     let slider = |k: usize| match sl[k] {
         Some(v) => q(v),
@@ -339,6 +343,9 @@ pub fn run(args: Vec<String>) -> i32 {
             ..Inputs::default()
         };
         inp.set_ms(&prog, u64::from(ms));
+        let look = under.is_some();
+        let ran = opendmd_psi::scene_rows(&prog, &mut scratch, &inp, &OWN);
+        costs.push((prog.tier_us_frame(look, &ran), prog.vm_us_frame(look, &ran), ran.rows));
         let mut frame = vec![0u8; W * H * 3];
         render_rows_ink(
             &prog,
@@ -386,6 +393,29 @@ pub fn run(args: Vec<String>) -> i32 {
     if hash {
         for (l, s) in label.iter().zip(&shots) {
             println!("frame {l}: {:#x}", fnv(s));
+        }
+    }
+    // With `--ms`, each frame's cost as the panel draws it: every scene by
+    // the rows its `when` is on in that frame (the line above counts the
+    // two costliest on every row).
+    if explicit {
+        let tier = if prog.jit_takes() { "with the JIT" } else { "on the VM" };
+        for (l, &(t, v, rows)) in label.iter().zip(&costs) {
+            let on: Vec<String> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, &n)| n > 0)
+                .map(|(s, n)| format!("scene {s} {n} rows"))
+                .collect();
+            println!(
+                "frame {l}: ~{:.1} ms {tier}, ~{:.1} without ({})",
+                f64::from(t) / 1000.0,
+                f64::from(v) / 1000.0,
+                if on.is_empty() { "no scene on".to_string() } else { on.join(", ") }
+            );
+        }
+        if let Some((l, &(t, _, _))) = label.iter().zip(&costs).max_by_key(|(_, c)| c.0) {
+            println!("worst frame: {l}, ~{:.1} ms {tier}", f64::from(t) / 1000.0);
         }
     }
     let out = out.unwrap_or_else(|| {
