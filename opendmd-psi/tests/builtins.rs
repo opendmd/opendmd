@@ -252,7 +252,7 @@ fn spec_limits() -> String {
         ),
         (
             "steps (per frame, draw, per row, per pixel, and one per layer)",
-            n(p::MAX_OPS),
+            n(p::MAX_STEPS),
         ),
         ("values held a pixel at once", n(p::REGS)),
         (

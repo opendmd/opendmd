@@ -680,8 +680,8 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 
 | limit | value | error says |
 |---|---|---|
-| source | 16,384 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes formulas up to 4,500 bytes once compiled) | too long |
-| steps | 512 in all: per frame + draw + per row + per pixel + one per layer | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
+| source | 32,768 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes formulas up to 4,500 bytes once compiled) | too long |
+| steps | 768 in all: per frame + draw + per row + per pixel + one per layer (the column run's and the still cache's markers not counted) | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
 | live per-pixel values at once | 12 | holds more than 12 values at once |
 | constants + per-frame/per-row values held at once | 241 with the inputs, ~232 of your own (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs N numbers and once-a-frame values, more than the 241 it can hold (with the steps by section) |
 | nesting | 48 levels of brackets, operators and function calls | nested too deeply |
@@ -839,7 +839,11 @@ row (and the JIT once a pixel: a branch), skips its steps and zeroes what
 is read after; its values never share a step with the same value outside
 it, and none goes in the still cache or the column run. **The estimate
 counts every step outside scenes plus the two costliest scenes** (the
-panel budgets for two scenes at once: a transition shows two). An
+panel budgets for two scenes at once: a transition shows two). `psi check
+--ms …` also costs each frame listed as the panel draws it: every scene by
+the rows its `when` is on in that frame (a scene `when city * (py < 13)`
+costs 13 rows' worth), the draw stage's arms that frame takes, and the
+worst of them. An
 environment cycle is the idiom — each place a scene, the colour reading
 all of them, the weights making at most two non-zero at a time:
 

@@ -1184,6 +1184,109 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
     }
 }
 
+/// What this frame runs, as the panel draws it: for each scene (`scene NAME
+/// when …`, by its number) how many rows its `when` is on in — the frame's
+/// steps run with these inputs, then each row's, a row-section guard
+/// tested where it stands and a pixel-section guard against the row's
+/// values — and the way each of the draw stage's `if`s outside loops goes
+/// (its values outside loops worked out; its lines not drawn).
+/// [`Program::tier_us_frame`] costs a frame by it.
+pub fn scene_rows<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    inputs: &Inputs,
+    tables: &Tables,
+) -> crate::program::SceneFrame {
+    let mut on = [0u8; 16];
+    let mut out = crate::program::SceneFrame::default();
+    if prog.slow_marker().is_some() {
+        return out;
+    }
+    let ns = prog.n_scalars as usize;
+    scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
+    let sc = &mut scratch.sc;
+    sc[S_T as usize] = inputs.t;
+    sc[S_HOUR as usize] = (inputs.hour as i32) << 16;
+    sc[S_MINUTE as usize] = (inputs.minute as i32) << 16;
+    sc[S_SECOND as usize] = (inputs.second as i32) << 16;
+    sc[S_A as usize] = inputs.a;
+    sc[S_B as usize] = inputs.b;
+    sc[S_C as usize] = inputs.c;
+    if prog.uses & SEEDED != 0 {
+        sc[S_SEED as usize] = inputs.seed;
+    }
+    let fe = prog.frame_end as usize;
+    if prog.forever() {
+        wset(&mut scratch.lanes[REGS], 0, inputs.tw);
+    }
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
+        if code::is_wide(op.code) {
+            wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
+        } else {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
+    }
+    // The draw stage's `if`s outside loops: its values outside loops worked
+    // out in order (an untaken arm's too: they are its own), each `if`'s
+    // way read where it stands.
+    let (mut depth, mut nth) = (0usize, 0u32);
+    for op in &prog.ops[fe.min(prog.draw_end as usize)..prog.draw_end as usize] {
+        match op.code {
+            code::FOR => depth += 1,
+            code::END => depth = depth.saturating_sub(1),
+            code::IF if depth == 0 => {
+                if nth < 32 {
+                    out.known |= 1 << nth;
+                    if scratch.sc[op.a as usize] != 0 {
+                        out.taken |= 1 << nth;
+                    }
+                }
+                nth += 1;
+            }
+            c if depth == 0 && code::writes_scalar(c) => {
+                scalar(&mut scratch.sc, op, tables, &prog.tables)
+            }
+            _ => {}
+        }
+    }
+    let turns = prog.turns();
+    let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
+    for row in 0..H {
+        let py = (row as i32) << 16;
+        scratch.sc[S_PY as usize] = py;
+        scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
+        let mut seen = 0u16;
+        let mut k = prog.draw_end as usize;
+        while k < turns.start {
+            let op = &prog.ops[k];
+            k += 1;
+            if op.code == code::GUARD {
+                if scratch.sc[op.a as usize] == 0 {
+                    let end = (k + op.b as usize).min(turns.start);
+                    for o in &prog.ops[k..end] {
+                        scratch.sc[o.d as usize] = 0;
+                    }
+                    k = end;
+                } else {
+                    seen |= 1 << (op.c >> 4);
+                }
+                continue;
+            }
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
+        for op in &prog.ops[re..pe] {
+            if op.code == code::GUARD && scratch.sc[op.a as usize] != 0 {
+                seen |= 1 << (op.c >> 4);
+            }
+        }
+        for (s, n) in on.iter_mut().enumerate() {
+            *n += u8::from(seen & (1 << s) != 0);
+        }
+    }
+    out.rows = on;
+    out
+}
+
 /// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
 /// the road 3,347 µs against main's 3,393; `noise_o` and the other row
 /// helpers they call stay in IRAM), and IRAM is short.

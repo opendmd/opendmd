@@ -241,12 +241,14 @@ rgb(0.5, #f00, 1)
 --- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 === E401
-<<8200*x >>
---- 1:16385 too long: a formula can be 16384 characters at most
+<<16400*x >>
+--- 1:32769 too long: a formula can be 32768 characters at most
 
 === E402
-gray(<<200; + ;sin(x * {k})>>)
---- 1:1 this formula is too long for the panel: 599 steps (per frame 0, draw 0, per row 0, per pixel 599), the limit is 512
+v = x
+<<260;\n;v = sin(v*1.01 + x)>>
+gray(v)
+--- 262:1 this formula is too long for the panel: 781 steps (per frame 0, draw 0, per row 0, per pixel 781), the limit is 768
 
 === E403
 <<14;\n;w{k} = sin(x * {k})>>
@@ -567,15 +569,15 @@ pal(p, x)
 --- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
 
 === E923
-palette p1 = #f00
-palette p2 = #0f0
-palette p3 = #00f
-palette p4 = #fff
-palette p5 = #ff0
-palette p6 = #0ff
-palette p7 = #f0f
-palette p8 = #888
-palette p9 = #444
+palette p1 = #111, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p2 = #222, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p3 = #333, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p4 = #444, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p5 = #555, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p6 = #666, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p7 = #777, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p8 = #888, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
+palette p9 = #999, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010
 pal(p9, x)
 --- 9:1 a formula can have 8 palettes of its own at most
 
