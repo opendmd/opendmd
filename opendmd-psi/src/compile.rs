@@ -6805,7 +6805,7 @@ fn finish(
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
-    let mut seen = (Vec::new(), Vec::new());
+    let mut seen = (Vec::new(), Vec::new(), None);
     emit(
         &p.dag,
         &steps,
@@ -7534,7 +7534,7 @@ fn emit(
     reuse: bool,
     slow: Option<Slow>,
     prog: &mut Program,
-    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>),
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
@@ -7544,7 +7544,7 @@ fn emit(
             0,
             0,
             format!(
-                "this formula is too long for the panel: {steps} steps (per frame {f}, draw {d}, per row {r}, per pixel {p}), the limit is {MAX_OPS}"
+                "this formula is too long for the panel: {steps} steps (per frame {f}, draw {d}, per row {r}, per pixel {p}), the limit is {MAX_STEPS}"
             ),
         )
     };
@@ -7656,7 +7656,7 @@ fn emit(
         sec[3] += steps.len() + usize::from(slow.is_some()) + markers;
         sec
     };
-    if total > MAX_OPS {
+    if total > MAX_STEPS {
         return Err(too_long(total, sections(0)));
     }
     // Where each node's value lives: a slot of `vs` (`VS` + its index,
@@ -8077,6 +8077,9 @@ fn emit(
         .map(|i| value_ns(nodes[i].code))
         .sum();
     let mut layout = None;
+    // Why a column run the formula has was left out, the first time a
+    // layout with it is given up (said in a note: it costs a 32nd as much).
+    let mut col_lost: Option<&'static str> = None;
     // A formula that cycles a palette (`cycle`) asks the still cache first:
     // its picture is usually still, and with the index cached a frame is
     // the palette's turn and a look-up (console-lessons 2.1). The others
@@ -8111,8 +8114,12 @@ fn emit(
         {
             continue;
         }
-        // The markers are steps too: at the step limit, the plain layout.
+        // The markers are not the formula's steps: `MAX_OPS` has room for
+        // both past `MAX_STEPS`, so this holds at the cap.
         if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
+            if use_col {
+                col_lost.get_or_insert("its marker does not fit the program");
+            }
             continue;
         }
         let lay = pixel_seq(
@@ -8137,6 +8144,9 @@ fn emit(
             ));
         }
         if lay.run_len > 255 || lay.col_len > 255 {
+            if lay.col_len > 255 {
+                col_lost.get_or_insert("it is over 255 steps");
+            }
             continue;
         }
         let mut lay = lay;
@@ -8144,12 +8154,20 @@ fn emit(
             let runs = [lay.run_len, lay.col_len, lay.slow_len];
             match scene_blocks(dag, steps, &sc, &lay.seq, runs) {
                 Some(seq) => lay.seq = seq,
-                None => continue,
+                None => {
+                    if lay.col_len > 0 {
+                        col_lost.get_or_insert("the scenes' steps could not be laid out around it");
+                    }
+                    continue;
+                }
             }
         }
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
+        }
+        if use_col {
+            col_lost.get_or_insert("it holds more values at once than the registers");
         }
     }
     let Some((lay, cached, (regs, used))) = layout else {
@@ -8174,7 +8192,10 @@ fn emit(
         } else {
             Vec::new()
         };
+        seen.2 = if col_len > 0 { None } else { col_lost };
     }
+    #[cfg(not(feature = "syntax"))]
+    let _ = col_lost;
     let mut marker = None;
     // Each guard: its step, its item, its scene.
     let mut guards: Vec<(usize, usize, u8)> = Vec::new();
@@ -8259,11 +8280,15 @@ fn emit(
                 });
             }
         }
-        if ops.len() > MAX_OPS {
-            return Err(too_long(
-                ops.len(),
-                sections(ops.len().saturating_sub(total)),
-            ));
+        // (The column run's and the still cache's markers are not the
+        // formula's steps: `MAX_OPS` has room for them past the cap.)
+        let marks = ops
+            .iter()
+            .filter(|o| matches!(o.code, code::COLUMN | code::STILL))
+            .count();
+        if ops.len() > MAX_OPS || ops.len() - marks > MAX_STEPS {
+            let steps = ops.len() - marks;
+            return Err(too_long(steps, sections(steps.saturating_sub(total))));
         }
     }
     // Each guard's run (its scene's values after it, a step each) and the

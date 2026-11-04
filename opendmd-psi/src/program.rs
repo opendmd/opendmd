@@ -22,8 +22,12 @@ pub const W: usize = 128;
 pub const H: usize = 32;
 
 /// Steps a formula may take in all (per-frame, per-row, per-pixel and the
-/// colour): the cap the compiler holds every program to.
-pub const MAX_OPS: usize = 512;
+/// colour): the cap the compiler holds every formula to.
+pub const MAX_STEPS: usize = 512;
+/// Steps a program may hold: the formula's [`MAX_STEPS`] and the markers
+/// the compiler adds for the column run and the still cache, which do not
+/// count against the cap (a formula at the cap keeps its column run).
+pub const MAX_OPS: usize = MAX_STEPS + 2;
 /// Scalar slots: the inputs, the constants, and every per-frame and per-row
 /// value. An operand byte below [`LANE`] is one of them; the 15 lane
 /// operands (`x`, `px`, `i` and the [`REGS`] registers) take the top.
@@ -846,18 +850,20 @@ impl Program {
         )
     }
 
-    /// Steps in all, as the formula's limit counts them ([`MAX_OPS`]): the
-    /// fused runs' markers (`crate::fuse`) not counted.
+    /// Steps in all, as the formula's limit counts them ([`MAX_STEPS`]):
+    /// the fused runs' markers (`crate::fuse`) and the column run's and the
+    /// still cache's not counted.
     pub fn steps(&self) -> usize {
         self.len() - self.fused()
     }
 
-    /// The fused runs' markers.
+    /// The markers the cap does not count: the fused runs', the column
+    /// run's and the still cache's.
     fn fused(&self) -> usize {
         let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
         self.ops[re.min(pe)..pe]
             .iter()
-            .filter(|o| o.code == code::FUSE)
+            .filter(|o| matches!(o.code, code::FUSE | code::COLUMN | code::STILL))
             .count()
     }
 

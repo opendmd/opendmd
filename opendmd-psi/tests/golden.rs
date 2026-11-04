@@ -1176,17 +1176,17 @@ fn scalar_cap_is_a_friendly_error() {
 
 #[test]
 fn op_cap_is_a_friendly_error() {
-    // 2 steps a line, 300 lines.
+    // 2 steps a line, 450 lines.
     let mut src = String::from("v0 = x\n");
-    for k in 1..=300 {
+    for k in 1..=450 {
         src += &format!("v{k} = sin(v{}) + x\n", k - 1);
     }
-    src += "gray(v300)";
+    src += "gray(v450)";
     let e = compile(&src).unwrap_err();
     assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
     assert!(
         e.msg
-            .contains("601 steps (per frame 0, draw 0, per row 0, per pixel 601)"),
+            .contains("901 steps (per frame 0, draw 0, per row 0, per pixel 901)"),
         "{}",
         e.msg
     );

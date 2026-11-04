@@ -34,7 +34,7 @@
 use opendmd_psi::golden::fnv;
 use opendmd_psi::syntax::{compile_observed, Defined, Level, Sink};
 use opendmd_psi::{
-    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_OPS,
+    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_STEPS,
     MAX_SCALARS, OWN, REGS, W,
 };
 use std::io::Read;
@@ -139,7 +139,7 @@ pub fn run(args: Vec<String>) -> i32 {
     .map(|e| e.1)
     .collect();
     println!(
-        "ok: {} of {MAX_OPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
+        "ok: {} of {MAX_STEPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.steps(),
         prog.draw_steps(),
         prog.layers(),
