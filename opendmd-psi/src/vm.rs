@@ -277,6 +277,52 @@ fn run3<const N: usize, A: Src, B: Src, C: Src>(
     }
 }
 
+/// A fused compare (`SEL_*`, `CNT_*`) along the lane, its operands read
+/// with a stride (0: a value for the lane): one function in IRAM for the
+/// six and every kind of operand (`tern!`'s seven loops each would be
+/// ~1 KB of IRAM a step), each a loop of its own.
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn cmp_lane<const N: usize>(d: &mut [i32; N], code: u8, args: [Arg; 3]) {
+    let mut one = [0i32; 3];
+    let mut p = [core::ptr::null::<i32>(); 3];
+    let mut st = [0usize; 3];
+    for (k, x) in args.into_iter().enumerate() {
+        match x {
+            Arg::Lane(q) => (p[k], st[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..3 {
+        if st[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    let [(pa, sa), (pb, sb), (pc, sc)] = [(p[0], st[0]), (p[1], st[1]), (p[2], st[2])];
+    macro_rules! each {
+        ($f:expr) => {{
+            let (mut pa, mut pb, mut pc) = (pa, pb, pc);
+            for o in d.iter_mut() {
+                // SAFETY: a lane's pointer is to N values (the destination
+                // is never one of them: the compiler allocates it apart), a
+                // value's is `one`, read with stride 0.
+                *o = unsafe { $f(*pa, *pb, *pc) };
+                pa = pa.wrapping_add(sa);
+                pb = pb.wrapping_add(sb);
+                pc = pc.wrapping_add(sc);
+            }
+        }};
+    }
+    match code {
+        code::SEL_LT => each!(fixed::sel_lt),
+        code::SEL_LE => each!(fixed::sel_le),
+        code::CNT_LT => each!(fixed::cnt_lt),
+        code::CNT_LE => each!(fixed::cnt_le),
+        code::CNT_GT => each!(fixed::cnt_gt),
+        _ => each!(fixed::cnt_ge),
+    }
+}
+
 /// `noise(x, y, z)` at a whole `z` along the lane ([`fixed::noise_flat`]),
 /// `x` and `y` read with a stride (0: a value for the lane): one loop for
 /// every kind of operand.
@@ -1650,6 +1696,7 @@ pub(crate) fn lane_draw<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        SEL_LT..=CNT_GE => cmp_lane(d, op.code, [a, b, c]),
         _ => {
             let mut one = [0i32; 3];
             let mut p = [core::ptr::null::<i32>(); 3];
@@ -1812,6 +1859,7 @@ pub(crate) fn lane_op<const N: usize>(
         TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        SEL_LT..=CNT_GE => cmp_lane(d, op.code, [a, b, c]),
         // `mix` from IRAM with its operands as the bundled Formulas have
         // them (scalar/lane: SLS, SSL, LLS; each also lowers to the JIT);
         // the four orders none uses from flash, their 2.7 KB of IRAM the

@@ -330,6 +330,21 @@ pub(crate) mod code {
     /// `BLEND_*`), with a coverage operand (`d` for rgb and hsv, `b` for
     /// pal and gray).
     pub const OUT_LAYER: u8 = 100;
+    // Fused compares (P0b-4, psb ABI 2), any level, above the colours
+    // (`OUT_LAYER` + 4 × 6 blends ends at 123): the compiler makes them from
+    // a comparison only one step reads (`fuse_compares`). `SEL_LT d, a, b,
+    // c`: `c` where a < b, else 0 (`(a < b) * c`, `(b > a) * c`); `SEL_LE`:
+    // where a <= b (`(a <= b) * c`, `(b >= a) * c`, `step(a, b) * c`).
+    // `CNT_* d, a, b, c`: how many of `a op b`, `a op c` hold, 0..2 (`(v >=
+    // lo) + (v >= hi)`: a band's index).
+    pub const SEL_LT: u8 = 0xf0;
+    pub const SEL_LE: u8 = 0xf1;
+    pub const CNT_LT: u8 = 0xf2;
+    pub const CNT_LE: u8 = 0xf3;
+    pub const CNT_GT: u8 = 0xf4;
+    pub const CNT_GE: u8 = 0xf5;
+    pub const CMP_FIRST: u8 = SEL_LT;
+    pub const CMP_LAST: u8 = CNT_GE;
 
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
@@ -373,7 +388,7 @@ pub(crate) mod code {
 
     /// A step that writes pixels rather than a value.
     pub fn is_colour(c: u8) -> bool {
-        c >= OUT_RGB
+        (OUT_RGB..CMP_FIRST).contains(&c)
     }
 
     /// For a colour step: the `OUT_*` kind (`OUT_RGB` .. `OUT_GRAY`) and
@@ -409,6 +424,7 @@ pub(crate) mod code {
             END => 2,
             LINE_FROM..=DOT => 3,
             STILL | COLUMN | FUSE => 0,
+            CMP_FIRST..=CMP_LAST => 3,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -520,6 +536,8 @@ pub(crate) mod code {
             U_R..=INKN => ["ur", "ug", "ub", "ul", "ink", "inkn"][(c - U_R) as usize],
             TURN => "turn",
             SLOW => "slow",
+            CMP_FIRST..=CMP_LAST => ["sel_lt", "sel_le", "cnt_lt", "cnt_le", "cnt_gt", "cnt_ge"]
+                [(c - CMP_FIRST) as usize],
             FOR..=FUSE => [
                 "for",
                 "end",
@@ -1188,6 +1206,9 @@ impl Program {
             None => (0..0, 1),
         };
         let mut slow_ns = 0;
+        // The kernel's guards' scenes (bit s: a guard of scene s), for
+        // their cost on the rows each is off.
+        let mut kernel_guards = 0u32;
         // Scenes (`code::GUARD`): each one's steps apart, then the two
         // costliest counted ("the panel budgets for two scenes at once").
         let guards = self.guard_runs();
@@ -1212,7 +1233,12 @@ impl Program {
                         k += op.a as usize;
                     }
                     Some(None) => {}
-                    None => kp += self.jit_step_ns(k, op),
+                    None => {
+                        if op.code == code::GUARD {
+                            kernel_guards |= 1 << ((op.c >> 4) & 15);
+                        }
+                        kp += self.jit_step_ns(k, op)
+                    }
                 }
             } else {
                 if op.code == code::FUSE {
@@ -1246,20 +1272,37 @@ impl Program {
         // one frame: every scene, by the rows it is on (a row step's 10 µs
         // a frame is 32 rows' worth).
         let (mut top, mut next, mut framed) = (0u32, 0u32, 0u32);
+        let (mut top_s, mut next_s) = (usize::MAX, usize::MAX);
+        // A kernel guard's zeros and jump on each row its scene is off.
+        let off_row = GUARD_JIT_OFF_NS * JIT_PATH_PCT / 100 * W as u32;
         for (s, &(sp, sk, ss, sr)) in scene.iter().enumerate() {
             let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
             let c = p * (W * H) as u32 / 1000 + sr * 10;
             if let Some(r) = frame.map(|f| &f.rows) {
                 let n = u32::from(r[s].min(H as u8));
                 framed += (p * W as u32 * n) / 1000 + sr * 10 * n / H as u32;
+                if jit && kernel_guards & (1 << s) != 0 {
+                    framed += off_row * (H as u32 - n) / 1000;
+                }
             }
             if c > top {
                 (top, next) = (c, top);
+                (top_s, next_s) = (s, top_s);
             } else if c > next {
                 next = c;
+                next_s = s;
             }
         }
-        let scenes = if frame.is_some() { framed } else { top + next };
+        // The two costliest on, the rest off on every row.
+        let off_all: u32 = (0..16)
+            .filter(|&s| jit && kernel_guards & (1 << s) != 0 && s != top_s && s != next_s)
+            .map(|_| off_row * H as u32 / 1000)
+            .sum();
+        let scenes = if frame.is_some() {
+            framed
+        } else {
+            top + next + off_all
+        };
         // `cycle`'s turns: a palette copied each row, on top of a row
         // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
@@ -1307,7 +1350,8 @@ impl Program {
     fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         if op.code == GUARD {
-            return GUARD_JIT_NS;
+            // (Counted by its scene's rows: `estimate_with`.)
+            return 0;
         }
         if !is_colour(op.code) {
             return jit_value_ns(op.code);
@@ -1437,7 +1481,21 @@ impl Program {
         w.map(|k| &self.ops[k]).is_some_and(|o| {
             matches!(
                 o.code,
-                FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT | SPR
+                FLOOR
+                    | SELECT
+                    | LT
+                    | LE
+                    | GT
+                    | GE
+                    | EQ
+                    | NE
+                    | AND
+                    | OR
+                    | NOT
+                    | STEP
+                    | BIT
+                    | SPR
+                    | CNT_LT..=CNT_GE
             )
         })
     }
@@ -2209,8 +2267,13 @@ impl Program {
         let body = &self.ops[at + 1..end];
         let prim = |c: u8| matches!(c, code::LINE_FROM | code::LINE_TO | code::DOT);
         let value = |c: u8| {
-            matches!(c, 0..=code::LAST_BIN | 32..=code::LAST_UN | 64..=code::LAST_TERN)
-                && code::writes_scalar(c)
+            matches!(
+                c,
+                0..=code::LAST_BIN
+                    | 32..=code::LAST_UN
+                    | 64..=code::LAST_TERN
+                    | code::CMP_FIRST..=code::CMP_LAST
+            ) && code::writes_scalar(c)
         };
         // Registers: the counter first, then each slot the body writes as
         // it is first written.
@@ -2352,6 +2415,7 @@ pub(crate) fn lane_loop(c: u8) -> bool {
             | TAB
             | SELECT
             | CLAMP
+            | SEL_LT..=CNT_GE
     )
 }
 
@@ -2397,7 +2461,12 @@ pub(crate) const TWEEN_US: u32 = 9;
 /// 128, and while it is off its values' lanes zeroed (a guess until
 /// paint-probe measures it); in the kernel a test and a branch a pixel.
 pub(crate) const GUARD_NS: u32 = 4;
-pub(crate) const GUARD_JIT_NS: u32 = 8;
+/// In the kernel (P0b, the guards tested once a row): nothing a pixel on
+/// a row its scene is on (the driver patched the run in), and on a row it
+/// is off the run's first bytes are zeros and a jump past it, ~4
+/// instructions (an instruction count until paint-probe measures it; it
+/// was a test and a branch a pixel either way, a guess of 8).
+pub(crate) const GUARD_JIT_OFF_NS: u32 = 17;
 /// A paint primitive's call: its values gathered, the call, its
 /// coordinates to pixels, ns (paint-probe on the spare: `pset` off the
 /// panel 16 times a frame).
@@ -2429,6 +2498,10 @@ pub(crate) fn value_ns(c: u8) -> u32 {
     use code::*;
     match c {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
+        // A fused compare (`cmp_lane`: three strided operands, one loop):
+        // a guess until paint-probe measures it, a little over `select`'s
+        // fast3 (60) for the strided loads.
+        SEL_LT..=CNT_GE => 65,
         BIT => 55,
         MUL => 86,
         // The narrowed steps (`range`), measured by psi-probe on the spare
@@ -2512,6 +2585,11 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         MUL => 54,
         ABS | NEG | NOT | SAW | SQR => 17,
         LT | LE | GT | GE | EQ | NE | STEP => 17,
+        // `sel_*`: a move, a branch, a move (3 instructions, a compare's
+        // 17 for 4 with its shift); `cnt_*`: two branches over two adds
+        // and the shift (6). Instruction counts until paint-probe.
+        SEL_LT | SEL_LE => 14,
+        CNT_LT..=CNT_GE => 24,
         AND | OR => 25,
         TRI => 49,
         SIN => 60,
@@ -2656,6 +2734,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         RECIP => fixed::recip(a),
         SELECT => fixed::select(a, b, x),
         CLAMP => fixed::clamp(a, b, x),
+        SEL_LT..=CNT_GE => fixed::cmp_fused(c, a, b, x),
         MIX => fixed::mix(a, b, x),
         SMOOTH => fixed::smooth(a, b, x),
         NOISE => fixed::noise(a, b, x),

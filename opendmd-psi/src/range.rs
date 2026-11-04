@@ -213,6 +213,8 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
             r
         }
         SELECT => b.union(c),
+        SEL_LT | SEL_LE => c.union(Iv::point(0)),
+        CNT_LT..=CNT_GE => Iv(0, 2 * ONE as i64),
         CLAMP => {
             let m = Iv(a.0.max(b.0), a.1.max(b.1));
             Iv(m.0.min(c.0), m.1.min(c.1))

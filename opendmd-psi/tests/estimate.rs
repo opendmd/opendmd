@@ -22,10 +22,11 @@
 mod measured;
 
 /// Compiled as measured: no runs, and the checked steps only (the
-/// measurements predate the narrowed ones, `range`).
+/// measurements predate the narrowed ones, `range`), each comparison a
+/// step (they predate the fused compares, P0b-4).
 fn compile(src: &str) -> Result<opendmd_psi::Program, opendmd_psi::Error> {
     let mut p = opendmd_psi::Program::default();
-    opendmd_psi::compile_with(src, &mut p, false, false)?;
+    opendmd_psi::compile_measured(src, &mut p, false, false, false)?;
     Ok(p)
 }
 /// `src` as a look, `blend` at `k` %, compiled as measured.
@@ -84,9 +85,10 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         }
     }
     // Draw loops as lanes: what each loop adds over the one-dot base.
+    // (Without the fused compares: the rows predate them.)
     let est_of = |src: &str| {
         let mut p = opendmd_psi::Program::default();
-        opendmd_psi::compile_into(src, &mut p).unwrap();
+        opendmd_psi::compile_measured(src, &mut p, true, true, false).unwrap();
         p.esp32_us_still() as f64
     };
     let base = est_of("draw { dot(-1, -1, t) }\ngray(ink)");

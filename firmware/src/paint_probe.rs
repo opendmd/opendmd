@@ -33,6 +33,14 @@
 //!   steps and draw stage, and its rows, directly (VM, kernel); the overlay
 //!   alone; every estimate (`esp32_us`, `_jit`, `draw_us`, `paint_us`,
 //!   `overlay_us`, the `UAT` steps).
+//! - `cmp NAME` (P0b-4 and the guards a row, 2026-11-04): direct runs
+//!   (VM, kernel) from the case's first frame: the fused compares' rows
+//!   (`sel4`, `cnt2`: four `(a < b) * v`, two `(v >= a) + (v >= b)` pairs)
+//!   fused and not, the scenes' guards on, off and by rows against the same
+//!   steps without scenes and with none (`guards base`), and Endless road
+//!   V2 at four of the sweep's frames fused and not; each unfused twin's
+//!   frames against its fused case's; the static and the frame's own
+//!   estimates.
 //!
 //! Each case's kernel frames are compared with the VM's (FNV-1a of the
 //! first frames); the last line before `done`:
@@ -134,16 +142,21 @@ struct Direct {
     hash: u64,
 }
 
-/// Inputs for frame `n` of `prog` (20 ms apart within its loop).
-fn inputs_at(prog: &psi::Program, n: u32) -> psi::Inputs {
+/// Inputs for frame `n` of `prog` (20 ms apart within its loop); from
+/// `start` ms (a `cmp` case's), `t` growing on in a `loop forever` one.
+fn inputs_at(prog: &psi::Program, n: u32, start: Option<u32>) -> psi::Inputs {
     let mut i = psi::golden::inputs(0);
     let lp = prog.loop_ms().max(1);
-    i.set_ms(prog, u64::from(n * 20 % lp));
+    match start {
+        Some(s) if prog.forever() => i.set_ms(prog, u64::from(s) + u64::from(n * 20)),
+        Some(s) => i.set_ms(prog, u64::from((s + n * 20) % lp)),
+        None => i.set_ms(prog, u64::from(n * 20 % lp)),
+    }
     i
 }
 
 /// `prog` drawn directly by the VM, [`N`] frames after 4 untimed.
-fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Direct {
+fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: Option<u32>) -> Direct {
     let t = fx_psi::tables();
     let mut s = zeroed::<psi::Scratch<128>>();
     s.reset();
@@ -151,7 +164,7 @@ fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Direc
     let (mut fr, mut dr, mut rw) = (Vec::with_capacity(N as usize), Vec::with_capacity(N as usize), Vec::with_capacity(N as usize));
     let mut hash = 0u64;
     for n in 0..N + 4 {
-        let inputs = inputs_at(prog, n);
+        let inputs = inputs_at(prog, n, start);
         let c0 = ccount();
         psi::render_rows_ink::<128>(prog, &mut s, Some(&mut ink), &inputs, &t, under, u32::MAX, out);
         let c1 = ccount();
@@ -172,7 +185,7 @@ fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Direc
 
 /// `prog` drawn directly by its kernel, or why the JIT refuses it.
 #[cfg(feature = "jit")]
-fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Result<Direct, &'static str> {
+fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: Option<u32>) -> Result<Direct, &'static str> {
     use psi::jit::stats as js;
     let mut k = psi::jit::emit(prog)?;
     let t = fx_psi::tables();
@@ -183,7 +196,7 @@ fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Resu
     let mut hash = 0u64;
     let _ = js::take();
     for n in 0..N + 4 {
-        let inputs = inputs_at(prog, n);
+        let inputs = inputs_at(prog, n, start);
         let c0 = ccount();
         k.render(prog, &mut s, Some(&mut ink), None, &inputs, &t, under, u32::MAX, out, None);
         let c1 = ccount();
@@ -203,7 +216,7 @@ fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8]) -> Resu
 }
 
 #[cfg(not(feature = "jit"))]
-fn jit_direct(_: &psi::Program, _: Option<&[u8]>, _: &mut [u8]) -> Result<Direct, &'static str> {
+fn jit_direct(_: &psi::Program, _: Option<&[u8]>, _: &mut [u8], _: Option<u32>) -> Result<Direct, &'static str> {
     Err("no JIT in this build")
 }
 
@@ -334,6 +347,8 @@ fn rows(tally: &mut Tally) {
     let mut base: Option<(u32, u32)> = None;
     // The overlay's three: alone (empty, full), the rows (empty, full, none).
     let (mut alone, mut ov_rows, mut ov_est) = ([0u32; 2], [0u32; 3], 0);
+    // A `cmp` case's fused frames, for its unfused twin.
+    let mut fused_hash: Option<(&str, u64)> = None;
     for &(group, name, px, psb) in CASES {
         if heap() < 40 * 1024 {
             say(format!("psi-probe: paint: stopped before {name}: heap {} B free", heap()));
@@ -341,10 +356,42 @@ fn rows(tally: &mut Tally) {
         }
         let Some(prog) = loaded(name, psb) else { continue };
         let under = (group == "under" || (group == "formula" && prog.over())).then_some(pic.as_slice());
-        let vm = vm_direct(&prog, under, &mut out);
-        let jit = jit_direct(&prog, under, &mut out);
+        let start = (group == "cmp").then_some(px);
+        let vm = vm_direct(&prog, under, &mut out, start);
+        let jit = jit_direct(&prog, under, &mut out, start);
         let j = tally.jit(&vm, &jit);
         match group {
+            "cmp" => {
+                // A fused case and its unfused twin draw the same frames.
+                let twin = match name.strip_suffix(" unfused") {
+                    Some(stem) => match fused_hash.take() {
+                        Some((s, h)) if s == stem => {
+                            if h != vm.hash {
+                                tally.differ += 1;
+                                " (FRAMES DIFFER from the fused)"
+                            } else {
+                                " (the fused frames)"
+                            }
+                        }
+                        _ => "",
+                    },
+                    None => {
+                        if let Some(stem) = name.strip_suffix(" fused") {
+                            fused_hash = Some((stem, vm.hash));
+                        }
+                        ""
+                    }
+                };
+                let t = fx_psi::tables();
+                let mut s = zeroed::<psi::Scratch<128>>();
+                s.reset();
+                let ran = psi::scene_rows(&prog, &mut s, &inputs_at(&prog, 0, start), &t);
+                say(format!(
+                    "psi-probe: paint: cmp {name}: {} steps, vm rows {} frame {} us{twin}, {j}; est vm {} jit {} (this frame: vm {} jit {})",
+                    prog.steps(), vm.rows, vm.frame, prog.esp32_us_still(), prog.esp32_us_jit_still(),
+                    prog.vm_us_frame(false, &ran), prog.tier_us_frame(false, &ran)
+                ));
+            }
             "step" => {
                 let jd = jit.as_ref().map_or(vm.draw, |j| j.draw);
                 let (bv, bj) = *base.get_or_insert((vm.draw, jd));

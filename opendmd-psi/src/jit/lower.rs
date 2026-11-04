@@ -138,6 +138,9 @@ pub struct Lowered {
     /// slow layers' steps are the VM's), each row drawn over the picture
     /// under (the held slow layers), or over what the row holds without one.
     pub rate: bool,
+    /// The scenes' guards, each patched on or off a row by the driver (the
+    /// code as emitted has them all on).
+    pub guards: Vec<GuardSite>,
 }
 
 // The register map.
@@ -233,6 +236,10 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     }
     let mut code = e.c.bytes;
     let mut words = e.words;
+    let mut guards = e.sites;
+    for g in &mut guards {
+        g.on = code[g.at..g.at + g.off.len()].to_vec();
+    }
     let rows_at = match lower_rows_from(prog, words.clone()) {
         Ok(r) => {
             code.resize(code.len().next_multiple_of(4), 0);
@@ -292,6 +299,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         calls: e.calls,
         rows_at,
         rate: prog.slow_marker().is_some(),
+        guards,
     })
 }
 
@@ -414,8 +422,31 @@ struct Emitter<'a> {
     uses_src: bool,
     /// `hsv` through its helper (else inline, when the registers allow).
     hsv_call: bool,
-    /// The open guard: its "off" branch, and SAR's state at it.
-    guards: Vec<(Fixup, bool)>,
+    /// The open guard: where its run starts, its condition, and SAR's
+    /// state there.
+    guards: Vec<(usize, u8, bool)>,
+    /// Each guard's site, as [`Lowered::guards`] has them.
+    sites: Vec<GuardSite>,
+}
+
+/// A scene's guard in the kernel (P0b, the guards tested once a row): its
+/// run's first bytes are its "on" form (the steps, as emitted); its "off"
+/// form, written over them by the driver for a row whose `cond` is 0, sets
+/// the values the run gives the steps after it to 0 and jumps past the
+/// run. No test or branch a pixel either way: the driver patches a site
+/// only when its condition changes from one row to the next
+/// ([`super::patch_guards`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardSite {
+    /// The run's first byte in the code.
+    pub at: usize,
+    /// The scalar slot the guard tests (a frame's or a row's value).
+    pub cond: u8,
+    /// The bytes there when it is on (the run's own, filled in once the
+    /// code is whole) and when it is off (the zeros and the jump), the same
+    /// length.
+    pub on: Vec<u8>,
+    pub off: Vec<u8>,
 }
 
 /// Give each value a register from `pool` (a linear scan over the items:
@@ -510,6 +541,7 @@ impl<'a> Emitter<'a> {
             uses_src,
             hsv_call,
             guards: Vec::new(),
+            sites: Vec::new(),
         };
         e.choose_hoists(&spare);
         if hot {
@@ -550,6 +582,7 @@ impl<'a> Emitter<'a> {
             uses_src: false,
             hsv_call: true,
             guards: Vec::new(),
+            sites: Vec::new(),
         }
     }
 
@@ -634,8 +667,34 @@ impl<'a> Emitter<'a> {
             return Ok(());
         }
         match code {
-            ADD | SUB | MUL | MASK | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP
-            | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW | SQR | SELECT | CLAMP => {}
+            ADD
+            | SUB
+            | MUL
+            | MASK
+            | LT
+            | LE
+            | GT
+            | GE
+            | EQ
+            | NE
+            | AND
+            | OR
+            | MIN
+            | MAX
+            | STEP
+            | NEG
+            | NOT
+            | ABS
+            | FLOOR
+            | FRAC
+            | SIN
+            | COS
+            | TRI
+            | SAW
+            | SQR
+            | SELECT
+            | CLAMP
+            | SEL_LT..=CNT_GE => {}
             _ => return Err("a row step the kernel has no template for"),
         }
         self.free = (4..=15).rev().filter(|&r| r != CALLEE).collect();
@@ -964,11 +1023,14 @@ impl<'a> Emitter<'a> {
     // --- Scenes' guards ----------------------------------------------------
 
     /// A guard at item `k`: the values from before the kernel its run reads
-    /// first and the steps after read too, loaded; then on into the run
-    /// when `cond` is not 0, else to [`guard_end`](Self::guard_end)'s
-    /// zeros.
+    /// first and the steps after read too, loaded; then its run, which the
+    /// driver turns into [`guard_end`](Self::guard_end)'s zeros and jump
+    /// for the rows `cond` is 0 on (no test in the kernel).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn guard(&mut self, k: usize, cond: u8) -> Result<(), Refusal> {
+        if is_lane(cond) {
+            return Err("an unexpected layout");
+        }
         for r in 0..REGS {
             if let Some(id) = self.livein[r] {
                 if self.vals[id].start == k && !self.valid[id] {
@@ -978,19 +1040,17 @@ impl<'a> Emitter<'a> {
                 }
             }
         }
-        let t = self.val(cond)?;
-        let on = self.c.bz_fwd(Zero::Nez, t);
-        let off = self.c.j_fwd();
-        self.c.bind(on);
-        self.guards.push((off, self.sar16));
+        self.guards.push((self.c.here(), cond, self.sar16));
         Ok(())
     }
 
-    /// A guard's run ends at item `k`: off, the values it wrote that are
-    /// read after it 0 (the VM's mask); SAR known only if both ways set it.
+    /// A guard's run ends at item `k`: its "off" form (the values it wrote
+    /// that are read after it 0, the VM's mask, then a jump to here), the
+    /// run padded to its length if it is shorter; SAR known only if both
+    /// ways set it.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn guard_end(&mut self, k: usize) {
-        let Some((off, sar)) = self.guards.pop() else {
+        let Some((at, cond, sar)) = self.guards.pop() else {
             return;
         };
         let kg = (0..k)
@@ -1003,12 +1063,33 @@ impl<'a> Emitter<'a> {
             .filter(|v| !v.livein && v.start > kg && v.start < k && v.end > k)
             .map(|v| v.gpr)
             .collect();
-        let join = self.c.j_fwd();
-        self.c.bind(off);
-        for g in outs {
-            self.c.movi(g, 0);
+        // The zeros' length, then the run padded (with moves of the pixel
+        // counter to itself: a2..a15 hold nothing else to keep) to hold
+        // them and the jump.
+        let mut z = Code::new();
+        for &g in &outs {
+            z.movi(g, 0);
         }
-        self.c.bind(join);
+        while self.c.here() - at < z.here() + 3 {
+            if self.c.here() - at + 2 == z.here() + 3 {
+                self.c.mov_n(PIX, PIX);
+            } else {
+                self.c.or(PIX, PIX, PIX);
+            }
+        }
+        let end = self.c.here();
+        // The jump after the zeros lands on the run's end (its offset as
+        // from where the stub sits: its first byte is the run's).
+        let mut off = z;
+        off.j(end - at);
+        // (The rest of the run's bytes stay: never reached while off.)
+        let bytes = off.bytes;
+        self.sites.push(GuardSite {
+            at,
+            cond,
+            on: Vec::new(),
+            off: bytes,
+        });
         self.sar16 &= sar;
     }
 
@@ -1308,6 +1389,33 @@ impl<'a> Emitter<'a> {
             SELECT => {
                 c.mov(d, cc);
                 c.movnez(d, b, a);
+            }
+            SEL_LT | SEL_LE => {
+                // `cc` where a < b (a <= b: b >= a), else 0.
+                c.mov(d, cc);
+                let f = if op.code == SEL_LT {
+                    c.b_fwd(Cond::Lt, a, b)
+                } else {
+                    c.b_fwd(Cond::Ge, b, a)
+                };
+                c.movi(d, 0);
+                c.bind(f);
+            }
+            CNT_LT..=CNT_GE => {
+                // 1 for each of `a op b`, `a op cc` that holds (a branch
+                // over its add when it does not), then << 16.
+                c.movi(d, 0);
+                for y in [b, cc] {
+                    let f = match op.code {
+                        CNT_LT => c.b_fwd(Cond::Ge, a, y),
+                        CNT_LE => c.b_fwd(Cond::Lt, y, a),
+                        CNT_GT => c.b_fwd(Cond::Ge, y, a),
+                        _ => c.b_fwd(Cond::Lt, a, y),
+                    };
+                    c.addi(d, d, 1);
+                    c.bind(f);
+                }
+                c.slli(d, d, 16);
             }
             CLAMP => {
                 c.max(d, a, b);

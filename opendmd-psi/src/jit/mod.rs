@@ -61,6 +61,43 @@ pub(crate) trait Target {
     fn run(&mut self, ctx: &mut [u32], out: *mut u8);
     /// Run the row stage's function (at `at` in the code) on `sc`.
     fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32);
+    /// Write `bytes` over the code at `at` (a guard turned on or off).
+    fn patch(&mut self, at: usize, bytes: &[u8]);
+    /// Which guards the code has on now (bit j, `Lowered::guards[j]`; as
+    /// emitted, all).
+    fn guards_on(&mut self) -> &mut u32;
+}
+
+/// Each scene's guard on or off for the row about to be drawn, by its
+/// condition (worked out for the row by now): the sites whose condition
+/// changed since the last row patched (P0b: the test once a row, none a
+/// pixel).
+#[inline]
+#[cfg_attr(
+    all(target_os = "espidf", feature = "sram1-iram"),
+    link_section = ".iram1.s1"
+)]
+pub(crate) fn patch_guards<T: Target>(t: &mut T, low: &Lowered, sc: &Sc) {
+    let n = low.guards.len();
+    if n == 0 {
+        return;
+    }
+    let mask = if n >= 32 { u32::MAX } else { (1u32 << n) - 1 };
+    let mut want = 0u32;
+    for (j, g) in low.guards.iter().enumerate() {
+        want |= u32::from(sc[g.cond as usize] != 0) << j;
+    }
+    let have = t.guards_on();
+    let diff = (*have ^ want) & mask;
+    if diff == 0 {
+        return;
+    }
+    *have = (*have & !mask) | want;
+    for (j, g) in low.guards.iter().enumerate() {
+        if diff & (1 << j) != 0 {
+            t.patch(g.at, if want & (1 << j) != 0 { &g.on } else { &g.off });
+        }
+    }
 }
 
 /// A colour as a word: `r | g << 8 | b << 16`.
@@ -493,6 +530,7 @@ pub(crate) fn frame<T: Target>(
             // SAFETY: as above: W × 3 bytes at `d`, not `src`'s.
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
         }
+        patch_guards(t, low, &scratch.sc);
         t.run(ctx, d);
         if let Some(p) = paint {
             // SAFETY: `dest` gives the row's W × 3 bytes at `d`.
@@ -712,9 +750,34 @@ mod device {
     type KernelFn = extern "C" fn(*mut u32, *mut u8);
     type RowsFn = extern "C" fn(*mut u32, *mut i32);
 
-    struct Device(KernelFn);
+    /// The kernel's function, its block's first word, and which of its
+    /// guards are on (`Kernel::guards_on`).
+    struct Device<'k>(KernelFn, &'k mut u32);
 
-    impl Target for Device {
+    impl Target for Device<'_> {
+        fn patch(&mut self, at: usize, bytes: &[u8]) {
+            // A byte at a time into its word (IRAM takes only word
+            // accesses): a few bytes, when a guard's condition changes.
+            let base = self.0 as usize;
+            for (i, &b) in bytes.iter().enumerate() {
+                let a = base + at + i;
+                let w = (a & !3) as *mut u32;
+                let sh = (a & 3) * 8;
+                // SAFETY: within the block (a site is inside the code,
+                // `lower`'s), word-aligned.
+                unsafe {
+                    let v = w.read_volatile();
+                    w.write_volatile((v & !(0xff << sh)) | u32::from(b) << sh);
+                }
+            }
+            // A data barrier (`memw`), as after the code was copied in: the
+            // stores done before the kernel is called (no instruction cache
+            // to flush for internal SRAM).
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        }
+        fn guards_on(&mut self) -> &mut u32 {
+            self.1
+        }
         fn addr(&mut self, p: *const u8, _: usize) -> u32 {
             p as usize as u32
         }
@@ -741,6 +804,8 @@ mod device {
         code_bytes: usize,
         low: Lowered,
         ctx: Vec<u32>,
+        /// Which guards the code has on (as copied in, all).
+        guards_on: u32,
     }
 
     // SAFETY: the block is owned memory like a `Box`'s; nothing else
@@ -774,6 +839,7 @@ mod device {
             code_bytes,
             low,
             ctx,
+            guards_on: u32::MAX,
         })
     }
 
@@ -827,10 +893,13 @@ mod device {
             self.block as usize
         }
 
-        fn device(&self) -> Device {
+        fn device(block: *mut u32, guards_on: &mut u32) -> Device<'_> {
             // SAFETY: the block holds a function of this signature
             // (`lower`'s prologue and epilogue: the windowed ABI).
-            Device(unsafe { core::mem::transmute::<*mut u32, KernelFn>(self.block) })
+            Device(
+                unsafe { core::mem::transmute::<*mut u32, KernelFn>(block) },
+                guards_on,
+            )
         }
 
         /// Render the rows `rows` has a bit for of a frame of the program
@@ -922,7 +991,7 @@ mod device {
             if self.low.rate && under.is_none() {
                 crate::rate::draw_slow::<128>(prog, scratch, inputs, tables, rows, out);
             }
-            let mut d = self.device();
+            let mut d = Self::device(self.block, &mut self.guards_on);
             let base = out.as_mut_ptr();
             // SAFETY: row < 32, within `out` (asserted above).
             let dest = |row: usize| unsafe { base.add(row * W * 3) };
@@ -1023,7 +1092,7 @@ mod device {
                 // SAFETY: j < 3: within `buf`.
                 unsafe { base.add(j * W * 3) }
             };
-            let mut d = self.device();
+            let mut d = Self::device(self.block, &mut self.guards_on);
             frame(
                 &mut d,
                 &self.low,

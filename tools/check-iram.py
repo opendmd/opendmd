@@ -45,6 +45,7 @@ REQUIRED = [
     (r"^opendmd_psi::vm::run2_hot::", "hash's lane loops"),
     (r"^opendmd_psi::jit::changed_groups$", "the JIT's per-row compare"),
     (r"^opendmd_psi::jit::device::shim_pick$", "the JIT's pick helper, a pixel"),
+    (r"^opendmd_psi::vm::cmp_lane::<128>$", "the fused compares' lane loop (P0b-4)"),
 ]
 
 # With SRAM1 as IRAM (FW_SRAM1_IRAM=1, the `sram1-iram` feature): .iram0.text
