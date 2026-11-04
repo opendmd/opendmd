@@ -38,9 +38,12 @@
 //!   (`sel4`, `cnt2`: four `(a < b) * v`, two `(v >= a) + (v >= b)` pairs)
 //!   fused and not, the scenes' guards on, off and by rows against the same
 //!   steps without scenes and with none (`guards base`), and Endless road
-//!   V2 at four of the sweep's frames fused and not; each unfused twin's
-//!   frames against its fused case's; the static and the frame's own
-//!   estimates.
+//!   V2 at four of the sweep's frames and in the city (fused: unfused it
+//!   no longer fits the steps); psb ABI 3's store (`store low`, `store
+//!   low+f`, `store high`: the same reads in the store's first numbers and
+//!   past 900) and built-in inputs (`inputs`, `inputs const`); each unfused
+//!   twin's frames against its fused case's; the static and the frame's
+//!   own estimates.
 //!
 //! Each case's kernel frames are compared with the VM's (FNV-1a of the
 //! first frames); the last line before `done`:
