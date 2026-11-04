@@ -1,7 +1,7 @@
 // The home page's live panels (site/pages/home.html: every element with a
 // `data-formula`, the hero's and the Formulas door's): a bundled Formula
-// each, drawn at the browser's frame rate through psiled.js, the Psi
-// reference's own drawing. tools/site.py copies this file to the site's
+// each (the hero's the first of its show, hero.js), drawn at the
+// browser's frame rate through psiled.js, the Psi reference's own drawing. tools/site.py copies this file to the site's
 // root and loads it on the home page only.
 // A panel's recorded still (its `.led` picture, site-art.py) is the
 // poster: shown at once, and kept when the visitor prefers less motion,
@@ -22,7 +22,9 @@ if (boxes.length && !less.matches) {
 
 // Each panel its own Psi (one compiled formula apiece), so both can play
 // at once without compiling again every frame.
-function go() { boxes.forEach((b, i) => live(b, i).catch(() => {})); }
+// The hero's panel plays a little show instead (`data-show`: hero.js,
+// fetched only now).
+function go() { boxes.forEach((b, i) => (b.dataset.show ? import('./hero.js').then((m) => m.show(b, i, less)) : live(b, i)).catch(() => {})); }
 
 async function live(box, slot) {
   const pic = box.querySelector('.led');

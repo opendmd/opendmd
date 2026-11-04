@@ -3,7 +3,12 @@
      LEDs, {{led:NAME:alt}} the same with no alt text (beside its own words);
      {{tiles}} the grid of them. Links are relative to the site's root. A panel's
      data-formula (a bundled Formula) plays live in place of its still once the page has
-     loaded (opendmd-web/share/ref/home.js); the hero's caption names its Formula. -->
+     loaded (opendmd-web/share/ref/home.js); the hero's caption names its Formula.
+     The hero's data-show is a little playlist, played as the panel plays one
+     (hero.js): each <li> a bundled Formula (data-formula) or a GIF of the site's
+     art ({{art:NAME}}, its address) with a look over it (data-look), how long it
+     plays (data-ms), the panel's transition that brings it in (data-in, kind:ms),
+     and its caption. -->
 <section class="hero">
 <div class="hero-text">
 <a class="chip" href="guide/hardware.html">For the DMDoS LED display</a>
@@ -18,8 +23,14 @@ build playlists, make your own art, and add Formulas, little animations you can 
 <li>Free, and you can go back to DMDoS any time</li>
 </ul>
 </div>
-<div class="hero-panel"><div class="bezel" data-formula="formulas/src/endless-road.psi">{{led:endless-road}}</div>
-<p class="cap">Endless road, one of the Formulas that come with OpenDMD.</p></div>
+<div class="hero-panel"><div class="bezel" data-formula="formulas/src/endless-road.psi" data-show="hero-show">{{led:endless-road}}</div>
+<p class="cap">Endless road, one of the Formulas that come with OpenDMD.</p>
+<ol id="hero-show" hidden>
+<li data-formula="formulas/src/endless-road.psi" data-ms="8000" data-in="push:700">Endless road, one of the Formulas that come with OpenDMD.</li>
+<li data-gif="{{art:kenney-walk}}" data-ms="6000" data-in="dissolve:700">A GIF from your SD card, played as the panel plays it.</li>
+<li data-formula="formulas/src/starfield.psi" data-ms="6000" data-in="wipe_left:700">Starfield, another Formula.</li>
+<li data-gif="{{art:kenney-run}}" data-look="formulas/src/old-tv.psi" data-ms="7000" data-in="blinds:700">Old TV, a look laid over a GIF.</li>
+</ol></div>
 </section>
 
 <section class="band" aria-labelledby="start">

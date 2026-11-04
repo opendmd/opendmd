@@ -1,7 +1,8 @@
 // Formulas drawn live in the site's LED panels: a 128x32 canvas inside a
 // `.led` (site.css's dot mask), each frame drawn as the panel draws it by
 // the demo's Psi (pkg-psi). Shared by the Psi reference's examples
-// (dev/psi/psiref.js), the home page's panels (home.js) and the gallery's
+// (dev/psi/psiref.js), the home page's panels (home.js, and its hero's
+// show, hero.js) and the gallery's
 // tiles on hover (formulas/ftiles.js); tools/site.py copies it to the
 // site's root. No imports: the wasm loads only when `psi()` is first called.
 
@@ -54,11 +55,21 @@ export function panel(label) {
 // over `under` (12,288 B of RGB) for one that draws over a GIF, with the
 // wall clock and the sliders. Counts the frames in the canvas's
 // data-frames.
-export function paint({ P, mem }, info, x, ms, under = null, d = new Date(), a = UNSET, b = UNSET, c = UNSET) {
+export function paint(L, info, x, ms, under = null, d = new Date(), a = UNSET, b = UNSET, c = UNSET) {
+  blit(x, rgbAt(L, info, ms, under, d, a, b, c));
+}
+
+// The compiled formula's frame at `ms`, as paint() draws it: 128 x 32 RGB,
+// a view of the module's memory (good until its next call).
+export function rgbAt({ P, mem }, info, ms, under = null, d = new Date(), a = UNSET, b = UNSET, c = UNSET) {
   const over = !!(info[5] & 32);
   if (over && under) new Uint8Array(mem.buffer, P.under(), 12288).set(under);
   P[over ? 'frameOver' : 'frame'](ms, d.getHours(), d.getMinutes(), d.getSeconds(), a, b, c);
-  const rgb = new Uint8Array(mem.buffer, P.pixels(), 12288);
+  return new Uint8Array(mem.buffer, P.pixels(), 12288);
+}
+
+// Put 128 x 32 RGB on `x`'s canvas (panel()).
+export function blit(x, rgb) {
   x.img ||= x.ctx.createImageData(128, 32);
   const o = x.img.data;
   for (let k = 0, j = 0; k < 16384; k += 4, j += 3) { o[k] = rgb[j]; o[k + 1] = rgb[j + 1]; o[k + 2] = rgb[j + 2]; o[k + 3] = 255; }
