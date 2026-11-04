@@ -943,3 +943,31 @@ f(x)
 fn p(v) = hsv(v, 1, 1)
 gray(p(x))
 --- 2:6 `p(…)` is a whole colour: use it alone on the colour line (only `#…` and `rgb(r, g, b)` go into sums)
+
+=== E970
+scene s when x > 0.5 {
+  v = y
+}
+gray(v)
+--- 1:14 a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 at the left to 1 at the right)
+
+=== E971
+scene s when t > 1 {
+  gray(x)
+}
+gray(0)
+--- 2:3 a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)
+
+=== E972
+<<16;\n;scene s{k} when t > {k} { v{k} = x*{k} }>>
+gray(v1)
+--- 16:1 a formula can have 15 scenes at most
+
+=== E973
+loop 4
+scene s when t > 1 {
+  v = sin(x*9)
+}
+layer rate 4 { gray(v) }
+layer add { gray(y*0.1) }
+--- 6:13 a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out

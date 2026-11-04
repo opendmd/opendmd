@@ -122,6 +122,10 @@ under(px + floor(sin(t*2)*2), py) * v
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
 - `palette P = #000, #f80, #fff` your own palette for `pal(P, v)` (8 in
   all; `pal` and `cycle` read 3 of them).
+- `scene NAME when c { v = … }`: values whose steps run only while `c`
+  (once a frame or a row, e.g. `city * (py < 20)`) is not 0; after it each
+  name reads 0 while it is off. The estimate counts two scenes at once:
+  an environment per scene, a transition two.
 - `palette S = tween(day, night, w)` mixes two palettes once a frame (`w`
   0..1, of `t` or sliders, not the pixel); tweens nest; `tween(a, b, w),
   tween(c, d, v)` fills the low and high 16 entries from palettes of ≤ 16

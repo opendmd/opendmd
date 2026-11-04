@@ -74,6 +74,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
           | "palette" NAME "=" [ NAME ] COLOUR { "," [ NAME ] COLOUR }   -- 1..32 colours (section 6)
           | "palette" NAME "=" tween [ "," tween ]   -- mixed once a frame; two: the halves (section 6)
+          | "scene" NAME "when" e "{" { NAME "=" expr sep } "}"   -- e once a frame or a row; its names 0 while e is 0 (section 13)
 tween     = "tween" "(" psrc "," psrc "," e ")"   -- e once a frame, held to 0..1
 psrc      = PALETTE | tween                    -- yours, a built-in (not gray), or another tween
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
@@ -815,6 +816,36 @@ Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
+
+
+**Scenes.** `scene city when c { … }` holds `name = …` lines whose row and
+pixel steps run only while `c` is not 0 — `c` once a frame (`t`, the
+clock, sliders) or once a row (`py`, `y`, a row value: the scene is skipped
+on the rows it can't touch), never per pixel (E970). After the block a
+name it set reads its value while `c` is on and **0 while it is off**
+(inside, the names read their values as usual). Only `name = …` lines go
+in a scene (E971); 15 scenes at most (E972); a `rate` layer can't read a
+scene's per-pixel values (E973). The panel tests a scene's `when` once a
+row (and the JIT once a pixel: a branch), skips its steps and zeroes what
+is read after; its values never share a step with the same value outside
+it, and none goes in the still cache or the column run. **The estimate
+counts every step outside scenes plus the two costliest scenes** (the
+panel budgets for two scenes at once: a transition shows two). An
+environment cycle is the idiom — each place a scene, the colour reading
+all of them, the weights making at most two non-zero at a time:
+
+```psi
+loop 8
+city = frac(t/8) > 0.5
+scene towers when city * (py < 20) {
+  h = hash(floor(px/6), 3)
+  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)
+}
+scene sea when 1 - city {
+  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5
+}
+rgb(lit, wave*0.3 + lit*0.5, wave)
+```
 
 ## 14. Idioms
 

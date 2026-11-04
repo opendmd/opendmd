@@ -244,6 +244,12 @@ pub(crate) mod code {
     // value the same all frame, the wide part's remainder carried in.
     pub const MULR: u8 = 78;
     pub const LAST_TERN: u8 = 78;
+    // A scene's guard (`scene NAME when c { … }`), before its row steps or
+    // its pixel steps: `GUARD d, a, b, c`: while slot `a` is 0 the `b` steps
+    // after it are skipped, their values 0 — in the row section each one's
+    // slot, in the pixel section the registers of the mask `d | (c & 15) <<
+    // 8` (the run's values read after it); `c >> 4` the scene's number.
+    pub const GUARD: u8 = 79;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -345,7 +351,7 @@ pub(crate) mod code {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
             LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END | TURN | SLOW => false,
-            ARGS | PAINT | IF | JUMP | TWEEN => false,
+            ARGS | PAINT | IF | JUMP | TWEEN | GUARD => false,
             c => !is_colour(c),
         }
     }
@@ -373,7 +379,7 @@ pub(crate) mod code {
         match c {
             ARGS | PAINT => 3,
             UAT => 2,
-            TWEEN => 1,
+            TWEEN | GUARD => 1,
             IF => 1,
             JUMP => 0,
             0..=LAST_BIN => 2,
@@ -490,6 +496,7 @@ pub(crate) mod code {
             JUMP => "jump",
             UAT => "under_at",
             TWEEN => "tween",
+            GUARD => "guard",
             PALIDX => "palidx",
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
@@ -511,6 +518,12 @@ pub(crate) mod code {
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
+}
+
+/// A pixel section guard's registers (`code::GUARD`: bit r, register r).
+#[inline(always)]
+pub(crate) fn guard_mask(op: &Op) -> u16 {
+    op.d as u16 | ((op.c & 15) as u16) << 8
 }
 
 /// One step: `d = code(a, b, c)`. For `OUT_PAL`, `d` is the palette.
@@ -1103,9 +1116,18 @@ impl Program {
             None => (0..0, 1),
         };
         let mut slow_ns = 0;
+        // Scenes (`code::GUARD`): each one's steps apart, then the two
+        // costliest counted ("the panel budgets for two scenes at once").
+        let guards = self.guard_runs();
+        let mut scene = [(0u32, 0u32, 0u32, 0u32); 16];
         let mut k = self.row_end as usize;
         while k < self.len() {
             let op = &self.ops[k];
+            let s = guards
+                .iter()
+                .find(|g| g.0.contains(&k) && g.0.start > self.row_end as usize)
+                .map_or(0, |g| g.1 as usize);
+            let before = (px, kp, saved);
             if skip.contains(&k) {
             } else if slow.contains(&k) {
                 slow_ns += self.step_ns(k, op);
@@ -1131,9 +1153,30 @@ impl Program {
                     ns
                 };
             }
+            if s != 0 {
+                let sc = &mut scene[s % 16];
+                sc.0 += px - before.0;
+                sc.1 += kp - before.1;
+                sc.2 += saved - before.2;
+                (px, kp, saved) = before;
+            }
             k += 1;
         }
-        let row = self.counts().1 as u32;
+        // A scene's row steps (its guard's run in the row section).
+        let mut row = self.counts().1 as u32;
+        for (r, sn) in &guards {
+            if r.start <= self.row_end as usize {
+                scene[*sn as usize % 16].3 += r.len() as u32;
+                row -= r.len() as u32;
+            }
+        }
+        let mut costs: [u32; 16] = core::array::from_fn(|j| {
+            let (sp, sk, ss, sr) = scene[j];
+            let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
+            p * (W * H) as u32 / 1000 + sr * 10
+        });
+        costs.sort_unstable();
+        let scenes = costs[15] + costs[14];
         // `cycle`'s turns: a palette copied each row, on top of a row
         // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
@@ -1169,6 +1212,7 @@ impl Program {
             + row * 10
             + turns
             + tweens
+            + scenes
             + self.draw_cost(lanes, usize::MAX)
             + self.overlay_us()
             + extra)
@@ -1179,6 +1223,9 @@ impl Program {
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
     fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
+        if op.code == GUARD {
+            return GUARD_JIT_NS;
+        }
         if !is_colour(op.code) {
             return jit_value_ns(op.code);
         }
@@ -1222,6 +1269,7 @@ impl Program {
     fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         match op.code {
+            GUARD => GUARD_NS,
             c if is_colour(c) => {
                 // Measured on the device (psi-probe, 2026-10-26): a
                 // colour's write — a lane's `chan` per pixel, ~5 for one
@@ -1328,6 +1376,19 @@ impl Program {
             k -= 1;
         }
         k..re
+    }
+
+    /// Each scene's guarded runs (`code::GUARD`, in the row and the pixel
+    /// sections): the steps it skips, and the scene's number.
+    pub(crate) fn guard_runs(&self) -> alloc::vec::Vec<(core::ops::Range<usize>, u8)> {
+        let (de, pe) = (self.draw_end as usize, self.len().min(MAX_OPS));
+        (de.min(pe)..pe)
+            .filter(|&g| self.ops[g].code == code::GUARD)
+            .map(|g| {
+                let op = &self.ops[g];
+                (g + 1..(g + 1 + op.b as usize).min(pe), op.c >> 4)
+            })
+            .collect()
     }
 
     /// The tweens (`code::TWEEN`): the frame section's last steps, run
@@ -1802,6 +1863,13 @@ impl Program {
                 alloc::format!("{}; {} steps", crate::fuse::name(op.d), op.a)
             } else if op.code == code::TURN {
                 alloc::format!("{args}; palette {}", op.b)
+            } else if op.code == code::GUARD {
+                alloc::format!(
+                    "{args}; skip {}, scene {}, mask {:#05x}",
+                    op.b,
+                    op.c >> 4,
+                    guard_mask(op)
+                )
             } else if op.code == code::TWEEN {
                 let src = |v: u8| match v {
                     v if v < TW_LIVE => alloc::format!("store{v}"),
@@ -1846,6 +1914,7 @@ impl Program {
                     code::END
                         | code::IF
                         | code::JUMP
+                        | code::GUARD
                         | code::LINE_FROM
                         | code::LINE_TO
                         | code::DOT
@@ -2191,6 +2260,11 @@ pub(crate) const TURN_US: u32 = 90;
 /// mixes on bytes), µs (a count of its instructions until paint-probe
 /// measures it).
 pub(crate) const TWEEN_US: u32 = 6;
+/// A scene's guard in the pixel section, ns a pixel: one test a lane of
+/// 128, and while it is off its values' lanes zeroed (a guess until
+/// paint-probe measures it); in the kernel a test and a branch a pixel.
+pub(crate) const GUARD_NS: u32 = 4;
+pub(crate) const GUARD_JIT_NS: u32 = 8;
 /// A paint primitive's call: its values gathered, the call, its
 /// coordinates to pixels, ns (paint-probe on the spare: `pset` off the
 /// panel 16 times a frame).

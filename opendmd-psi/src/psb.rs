@@ -385,7 +385,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
             return bad;
         }
-        let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
+        let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | GUARD | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
             || matches!(c, U_R..=INKN | TURN | SLOW | FOR..=COLUMN)
             || is_colour(c) && colour_ok(c);
         if !known {
@@ -398,12 +398,20 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             TURN => row,
             SLOW => k == re,
             STILL | COLUMN | U_R..=INKN | PICK | UAT => pixel,
+            GUARD => row || pixel,
             W_FIRST..=W_LAST => !pixel && !row,
             _ if is_colour(c) => pixel,
             _ => true,
         };
         if !placed {
             return bad;
+        }
+        if c == GUARD {
+            // Its run is checked below, with the markers'.
+            if !scalar(op.a) {
+                return bad;
+            }
+            continue;
         }
         if c == TWEEN {
             // The frame section's last steps only: live slots or working
@@ -721,6 +729,57 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         .any(|o| is_colour(o.code))
     {
         return bad;
+    }
+    // Scenes' guards: a run inside its section, of value steps (no marker,
+    // no guard, no turn), each scene's number; in the pixel section after
+    // the runs and the slow layers, its mask exactly the registers its run
+    // writes that a step after it reads before writing (what the JIT
+    // zeroes too); in the row section no mask.
+    let slow_end = p.slow_marker().map_or(0, |m| m + 1 + p.ops[m].a as usize);
+    for k in de..pe {
+        let op = &p.ops[k];
+        if op.code != GUARD {
+            continue;
+        }
+        let pixel = k >= re;
+        let end = k + 1 + op.b as usize;
+        let sect_end = if pixel { pe } else { re };
+        if end > sect_end || !(1..=15).contains(&(op.c >> 4)) {
+            return bad;
+        }
+        let run = &p.ops[k + 1..end];
+        let odd = |o: &Op| matches!(o.code, GUARD | STILL | COLUMN | SLOW | TURN | TWEEN);
+        if run.iter().any(odd) {
+            return bad;
+        }
+        if !pixel {
+            if op.d != 0 || op.c & 15 != 0 || !run.iter().all(|o| writes_scalar(o.code)) {
+                return bad;
+            }
+            continue;
+        }
+        if k < runs_end || k < slow_end || run.iter().any(|o| is_colour(o.code)) {
+            return bad;
+        }
+        let mut mask = 0u16;
+        for o in run {
+            if !is_colour(o.code) && o.code != FUSE && reg(o.d) {
+                let r = lane_no(o.d) - L_REG0;
+                let after = &p.ops[end..pe];
+                let read = after
+                    .iter()
+                    .position(|a| a.code != FUSE && operands(a).0[..operands(a).1].contains(&o.d));
+                let written = after.iter().position(|a| {
+                    a.code != FUSE && !is_colour(a.code) && a.code != GUARD && a.d == o.d
+                });
+                if read.is_some_and(|rp| written.is_none_or(|wp| rp <= wp)) {
+                    mask |= 1 << r;
+                }
+            }
+        }
+        if mask != crate::program::guard_mask(op) {
+            return bad;
+        }
     }
     // Nothing but values between the slow layers (or the row steps) and the
     // first colour that is not a slow layer's.

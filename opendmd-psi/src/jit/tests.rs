@@ -894,6 +894,28 @@ fn tweened_palettes_draw_the_same_through_kernels() {
     }
 }
 
+/// Scenes (`scene NAME when c { … }`): the kernel's branch a pixel and its
+/// zeros, and the row function's, the bytes of the VM's frame, the scene on
+/// and off within a frame and from frame to frame.
+#[test]
+fn scenes_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 8\non = frac(t/8) > 0.5\nscene a when on * (py < 20) {\n  h = hash(floor(px/6), 3)\n  w = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n  lit = w * (hash(floor(px/2), floor(py/3)) > 0.5)\n}\nscene b when 1 - on {\n  wave = sin(x*12 + t*2 + y*6) * 0.5 + 0.5\n}\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+        "loop 4\nscene s when py > 10 + 8*sin(t*1.57) {\n  r = y*2\n  g = sin(x*8 + r)\n  n = noise(x*6, y*3, t)\n}\npal(fire, g*0.5 + n*0.5 + r*0.1)",
+        "loop 4\nk = x*3\nscene s when t > 1 {\n  d = len(x - 0.5, y - 0.5)\n  e = k + d\n}\nrgb(frac(e), d, k/3)",
+        "look\nloop 4\nscene s when t > 2 {\n  m = atan2(x - 0.5, y - 0.5) + len(x, y)\n}\nunder * 0.5 + rgb(m, m, m) * 0.5",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let low = lower(&prog).unwrap_or_else(|w| panic!("{src}: the JIT refuses: {w}"));
+        assert!(low.rows_at.is_some(), "{src}: the row function");
+        let times = [0, 130, 1000, 1500, 2470, 3300, 5555, 7990];
+        if let Err(why) = same_as_vm("scene", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
 /// `layer rate N`: the kernel draws the fast part over the held slow
 /// layers, the bytes of the VM's frame.
 #[test]

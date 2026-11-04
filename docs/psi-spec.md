@@ -71,6 +71,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
           | "palette" NAME "=" [ NAME ] COLOUR { "," [ NAME ] COLOUR }   -- 1..32 colours (section 6)
           | "palette" NAME "=" tween [ "," tween ]   -- mixed once a frame; two: the halves (section 6)
+          | "scene" NAME "when" e "{" { NAME "=" expr sep } "}"   -- e once a frame or a row; its names 0 while e is 0 (section 13)
 tween     = "tween" "(" psrc "," psrc "," e ")"   -- e once a frame, held to 0..1
 psrc      = PALETTE | tween                    -- yours, a built-in (not gray), or another tween
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
@@ -261,6 +262,7 @@ example is compiled by the tests.
 | `rgb(r, g, b)` | red, green, blue: 0 to 1 | <code class="psi-ex">rgb(x, y, 1 - x)</code> |
 | `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray | <code class="psi-ex">pal(fire, y)</code> |
 | `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `scene s when c { v = … }` | values worked out only while c (once a frame or a row) is not 0; after it its names are 0 while it is off; the estimate counts two scenes at once | <code class="psi-ex">loop 4; on = frac(t/4) &gt; 0.5; scene s when on { w = sin(x&#42;9 + t&#42;3)&#42;0.5 + 0.5 }; gray(w)</code> |
 | `palette sky = tween(day, night, w)` | a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours | <code class="psi-ex">loop 8; palette day = &#35;48c, &#35;adf, &#35;ffc; palette night = &#35;002, &#35;124, &#35;346; palette sky = tween(day, night, 0.5 + 0.5&#42;sin(t&#42;0.785)); pal(sky, y)</code> |
 | `palette sea = deep #024, foam #fff` | a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many) | <code class="psi-ex">palette sea = deep &#35;024, mid &#35;08c, foam &#35;fff; pal(sea, sea.mid + sea.step&#42;(y &gt; 0.5))</code> |
 | `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k | <code class="psi-ex">pal(fire, y) &#42; x</code> |
@@ -1926,5 +1928,29 @@ Use one of the listed blends.
 > text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)
 
 Take them out.
+
+<h4 id="E970">E970 · a scene's <code>when</code> that changes along a row</h4>
+
+> a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`
+
+Make `when` a value of t, the clock, the sliders or the row (py, y); choose per pixel inside the scene instead.
+
+<h4 id="E971">E971 · something other than values in a scene</h4>
+
+> a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)
+
+Keep `name = …` lines in the scene; put colours, `draw`, `layer`, `palette` and another scene outside it.
+
+<h4 id="E972">E972 · too many scenes</h4>
+
+> a formula can have … scenes at most
+
+Join scenes that share a condition, or pick inside one.
+
+<h4 id="E973">E973 · a <code>rate</code> layer reading a scene</h4>
+
+> a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out
+
+Work the value out outside the scene, or leave `rate` out.
 
 <!-- psi-errors end -->

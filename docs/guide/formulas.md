@@ -587,6 +587,29 @@ to 64 characters wide and 32 tall. Use the numbers for colours —
 little more on the panel than a few drawn lines: Endless road draws its car
 as 17 spans to stay at 100 frames a second.
 
+**Scenes.** A formula that shows one place, then another (a desert, a
+city, a tunnel), can put each place's lines in a scene:
+
+```
+loop 8
+city = frac(t/8) > 0.5
+scene towers when city * (py < 20) {
+  h = hash(floor(px/6), 3)
+  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)
+}
+scene sea when 1 - city {
+  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5
+}
+rgb(lit, wave*0.3 + lit*0.5, wave)
+```
+
+The panel works a scene's lines out only while its `when` is not 0 —
+`when` may use the time, the sliders or the row (`py`), so a scene can
+skip the rows it doesn't draw on — and after the scene its names are 0
+while it is off. Only `name = …` lines go inside. The cost the editor
+shows counts the lines outside scenes and the two dearest scenes, since a
+change from one place to the next shows two at once.
+
 **Limits.** A formula can be 4,096 characters and 512 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the

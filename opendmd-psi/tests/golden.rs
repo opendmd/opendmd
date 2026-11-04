@@ -2682,3 +2682,40 @@ fn the_draw_stage_past_step_255_draws_the_same() {
         );
     }
 }
+
+/// `scene NAME when c { … }` (psi-p0, P0b-1): the frames of the formula
+/// written without it, each name it sets `c ? v : 0` after it — whether
+/// `c` is once a frame or once a row, on or off, its values row values or
+/// per pixel, read by the colour or by other values, through the kernel
+/// widths and a psb.
+#[test]
+fn scenes_draw_what_they_stand_for() {
+    let cases = [
+        (
+            "loop 8\non = frac(t/8) > 0.5\nscene a when on * (py < 20) {\n  h = hash(floor(px/6), 3)\n  w = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n  lit = w * (hash(floor(px/2), floor(py/3)) > 0.5)\n}\nscene b when 1 - on {\n  wave = sin(x*12 + t*2 + y*6) * 0.5 + 0.5\n}\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+            "loop 8\non = frac(t/8) > 0.5\nca = on * (py < 20)\nh0 = hash(floor(px/6), 3)\nw0 = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h0 > 0.3)\nlit0 = w0 * (hash(floor(px/2), floor(py/3)) > 0.5)\nh = ca ? h0 : 0\nlit = ca ? lit0 : 0\ncb = 1 - on\nwave = cb ? sin(x*12 + t*2 + y*6) * 0.5 + 0.5 : 0\nrgb(lit, wave*0.3 + lit*0.5, wave + h*0.2*(py < 20))",
+        ),
+        (
+            "loop 4\nscene s when py > 10 + 8*sin(t*1.57) {\n  r = y*2\n  k = 3\n  v = x\n  g = sin(x*8 + r)\n}\nrgb(r, v*0.5 + g*0.5, k/3)",
+            "loop 4\nc = py > 10 + 8*sin(t*1.57)\nr = c ? y*2 : 0\nk = c ? 3 : 0\nv = c ? x : 0\ng = c ? sin(x*8 + y*2) : 0\nrgb(r, v*0.5 + g*0.5, k/3)",
+        ),
+        (
+            "loop 2\nscene s when t < 1 {\n  q = x*x + y*y\n}\nq2 = q*0.5\nlayer { gray(q2) }\nlayer add { hsv(x + t, 1, q) }",
+            "loop 2\nc = t < 1\nq = c ? x*x + y*y : 0\nq2 = q*0.5\nlayer { gray(q2) }\nlayer add { hsv(x + t, 1, q) }",
+        ),
+    ];
+    for (with, without) in cases {
+        let a = compile(with).unwrap_or_else(|e| panic!("{}", e.render(with)));
+        let b = compile(without).unwrap_or_else(|e| panic!("{}", e.render(without)));
+        assert!(a.listing().contains("guard("), "{with}\n{}", a.listing());
+        let bytes = opendmd_psi::build(with).unwrap();
+        let mut c = Program::default();
+        opendmd_psi::psb::load_into(&bytes, opendmd_psi::psb::Which::Play, &mut c).expect("loads");
+        for ms in [0, 400, 990, 1500, 1990, 2700, 3999, 5300, 7999] {
+            let want = frame::<128>(&b, ms);
+            assert!(frame::<128>(&a, ms) == want, "{with}\nat {ms} ms\n{}", a.listing());
+            assert!(frame::<64>(&a, ms) == want, "{with}\nat {ms} ms (64 lanes)");
+            assert!(frame::<128>(&c, ms) == want, "{with}\nat {ms} ms (from its psb)");
+        }
+    }
+}

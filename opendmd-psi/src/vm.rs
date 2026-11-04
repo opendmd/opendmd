@@ -1052,6 +1052,16 @@ pub(crate) fn frame<const N: usize>(
                     }
                     continue;
                 }
+                if op.code == code::GUARD {
+                    // A scene's pixel steps: skipped while its `when` is 0,
+                    // the values read after them 0.
+                    k += 1;
+                    if scratch.sc[op.a as usize] == 0 {
+                        guard_off(scratch, &mut alias, op);
+                        k += op.b as usize;
+                    }
+                    continue;
+                }
                 if op.code == code::FUSE {
                     // A fused run (`crate::fuse`): its kernel on a frame
                     // that runs the narrowed steps, else its steps.
@@ -1132,6 +1142,19 @@ pub(crate) fn reg_index(v: u8) -> usize {
     (lane_no(v).saturating_sub(L_I) as usize).clamp(1, REGS)
 }
 
+/// A scene's guard off (`code::GUARD`): the registers of its mask 0 for
+/// the lane (no longer a still cache's lane). Out of the frame loop's IRAM.
+#[inline(never)]
+pub(crate) fn guard_off<const N: usize>(s: &mut Scratch<N>, al: &mut Alias, op: &Op) {
+    let mask = guard_mask(op);
+    for r in 0..REGS {
+        if mask & (1 << r) != 0 {
+            al[r + 1] = core::ptr::null();
+            s.lanes[r + 1].fill(0);
+        }
+    }
+}
+
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
 /// pixel `at`.
 #[inline(never)]
@@ -1176,7 +1199,21 @@ pub(crate) fn row_steps<const N: usize>(
     own: &mut Pals,
 ) {
     let turns = prog.turns();
-    for op in &prog.ops[prog.draw_end as usize..turns.start] {
+    let mut k = prog.draw_end as usize;
+    while k < turns.start {
+        let op = &prog.ops[k];
+        k += 1;
+        if op.code == code::GUARD {
+            // A scene's row steps: while its `when` is 0, each one's slot 0.
+            if scratch.sc[op.a as usize] == 0 {
+                let end = (k + op.b as usize).min(turns.start);
+                for o in &prog.ops[k..end] {
+                    scratch.sc[o.d as usize] = 0;
+                }
+                k = end;
+            }
+            continue;
+        }
         scalar(&mut scratch.sc, op, tables, &prog.tables);
     }
     for op in &prog.ops[turns] {

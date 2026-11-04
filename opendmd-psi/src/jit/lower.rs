@@ -196,6 +196,13 @@ enum Item {
         pk: Op,
         col: Op,
     },
+    /// A scene's guard (`code::GUARD`): the items up to its `GuardEnd` run
+    /// while scalar `cond` is not 0; else the values they write that are
+    /// read after are 0.
+    Guard {
+        cond: u8,
+    },
+    GuardEnd,
 }
 
 #[inline]
@@ -224,6 +231,8 @@ fn reads(it: &Item) -> ([u8; 4], usize) {
             }
         }
         Item::PickPal { m, .. } => ([m, 0, 0, 0], 1),
+        Item::Guard { cond } => ([cond, 0, 0, 0], 1),
+        Item::GuardEnd => ([0; 4], 0),
     }
 }
 
@@ -382,11 +391,36 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
     let mut e = Emitter::bare(prog);
     e.words = words;
     e.c.entry(FRAME);
-    for op in &prog.ops[de..re] {
+    let mut k = de;
+    while k < re {
+        let op = prog.ops[k];
+        k += 1;
+        if op.code == code::GUARD {
+            // A scene's row steps: while its `when` is 0, their slots 0.
+            let end = (k + op.b as usize).min(re);
+            let slot = |v: u8| i32::from(v) * 4;
+            e.c.l32i(10, SC, slot(op.a));
+            let on = e.c.bz_fwd(Zero::Nez, 10);
+            let off = e.c.j_fwd();
+            e.c.bind(on);
+            for o in &prog.ops[k..end] {
+                e.row_step(*o)?;
+            }
+            let join = e.c.j_fwd();
+            e.c.bind(off);
+            e.c.movi(10, 0);
+            for o in &prog.ops[k..end] {
+                e.c.s32i(10, SC, slot(o.d));
+            }
+            e.c.bind(join);
+            e.sar16 = false;
+            k = end;
+            continue;
+        }
         // (`cycle`'s turns, the section's last steps: the driver's, after
         // the function: `program::turn_rows`.)
         if op.code != code::TURN {
-            e.row_step(*op)?;
+            e.row_step(op)?;
         }
     }
     e.c.retw_n();
@@ -427,8 +461,23 @@ fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> 
     let ops = &prog.ops[..pe];
     let mut out = Vec::new();
     let mut k = start;
+    // Where the open guard's run ends.
+    let mut guard_end = usize::MAX;
     while k < pe {
+        if k == guard_end {
+            out.push(Item::GuardEnd);
+            guard_end = usize::MAX;
+        }
         let op = ops[k];
+        if op.code == code::GUARD {
+            if guard_end != usize::MAX {
+                return Err("an unexpected layout");
+            }
+            guard_end = k + 1 + op.b as usize;
+            out.push(Item::Guard { cond: op.a });
+            k += 1;
+            continue;
+        }
         if op.code == code::SLOW {
             // The slow layers: the VM's (`crate::rate`).
             k += 1 + op.a as usize;
@@ -449,6 +498,9 @@ fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> 
         supported(op.code)?;
         out.push(Item::Step(op));
         k += 1;
+    }
+    if guard_end != usize::MAX {
+        return Err("an unexpected layout");
     }
     match out.last() {
         Some(Item::Step(op)) if code::is_colour(op.code) => {}
@@ -554,6 +606,8 @@ struct Emitter<'a> {
     uses_src: bool,
     /// `hsv` through its helper (else inline, when the registers allow).
     hsv_call: bool,
+    /// The open guard: its "off" branch, and SAR's state at it.
+    guards: Vec<(Fixup, bool)>,
 }
 
 /// The values of `items` (each with its interval) and which value each
@@ -594,6 +648,24 @@ fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
             });
             cur[w] = Some(vals.len() - 1);
             wv[k] = cur[w];
+        }
+    }
+    // A value from before the kernel read first inside a guard's run and
+    // again after it is loaded at the guard (both ways on have it).
+    let mut g = None;
+    for (k, it) in items.iter().enumerate() {
+        match it {
+            Item::Guard { .. } => g = Some(k),
+            Item::GuardEnd => {
+                if let Some(kg) = g.take() {
+                    for v in vals.iter_mut() {
+                        if v.livein && v.start > kg && v.start < k && v.end > k {
+                            v.start = kg;
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     for (k, it) in items.iter().enumerate() {
@@ -709,6 +781,7 @@ impl<'a> Emitter<'a> {
             hot,
             uses_src,
             hsv_call,
+            guards: Vec::new(),
         };
         e.choose_hoists(&spare);
         if hot {
@@ -748,6 +821,7 @@ impl<'a> Emitter<'a> {
             hot: true,
             uses_src: false,
             hsv_call: true,
+            guards: Vec::new(),
         }
     }
 
@@ -1141,6 +1215,8 @@ impl<'a> Emitter<'a> {
                 Item::Step(op) => self.step(k, op)?,
                 Item::SelPal { c, a, b, col } => self.sel_pal(k, c, a, b, col)?,
                 Item::PickPal { m, pk, col } => self.pick_pal(m, pk, col)?,
+                Item::Guard { cond } => self.guard(k, cond)?,
+                Item::GuardEnd => self.guard_end(k),
             }
         }
         self.c.addi_n(PIX, PIX, 1);
@@ -1155,6 +1231,57 @@ impl<'a> Emitter<'a> {
         }
         self.c.retw_n();
         Ok(())
+    }
+
+    // --- Scenes' guards ----------------------------------------------------
+
+    /// A guard at item `k`: the values from before the kernel its run reads
+    /// first and the steps after read too, loaded; then on into the run
+    /// when `cond` is not 0, else to [`guard_end`](Self::guard_end)'s
+    /// zeros.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn guard(&mut self, k: usize, cond: u8) -> Result<(), Refusal> {
+        for r in 0..REGS {
+            if let Some(id) = self.livein[r] {
+                if self.vals[id].start == k && !self.valid[id] {
+                    let h = self.vals[id].gpr;
+                    self.lane_into(h, L_REG0 + r as u8);
+                    self.valid[id] = true;
+                }
+            }
+        }
+        let t = self.val(cond)?;
+        let on = self.c.bz_fwd(Zero::Nez, t);
+        let off = self.c.j_fwd();
+        self.c.bind(on);
+        self.guards.push((off, self.sar16));
+        Ok(())
+    }
+
+    /// A guard's run ends at item `k`: off, the values it wrote that are
+    /// read after it 0 (the VM's mask); SAR known only if both ways set it.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn guard_end(&mut self, k: usize) {
+        let Some((off, sar)) = self.guards.pop() else {
+            return;
+        };
+        let kg = (0..k)
+            .rev()
+            .find(|&j| matches!(self.items[j], Item::Guard { .. }))
+            .unwrap_or(0);
+        let outs: Vec<Reg> = self
+            .vals
+            .iter()
+            .filter(|v| !v.livein && v.start > kg && v.start < k && v.end > k)
+            .map(|v| v.gpr)
+            .collect();
+        let join = self.c.j_fwd();
+        self.c.bind(off);
+        for g in outs {
+            self.c.movi(g, 0);
+        }
+        self.c.bind(join);
+        self.sar16 &= sar;
     }
 
     // --- Steps -----------------------------------------------------------
@@ -2423,7 +2550,7 @@ fn needs_call(hsv_call: bool, it: &Item) -> bool {
                     && op.d & PAL_SCALED != 0)
         }
         Item::SelPal { col, .. } => col.d & PAL_SCALED != 0 && is_lane(col.c),
-        Item::PickPal { .. } => false,
+        Item::PickPal { .. } | Item::Guard { .. } | Item::GuardEnd => false,
     }
 }
 
