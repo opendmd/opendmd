@@ -148,7 +148,7 @@ sunRow = 7.5 + clamp(light*-24, -2.5, 20) + city*16
 palette S = tween(tween(tween(tween(tween(dDay, dDusk, 1 - day), dNight, night), tween(cDay, cNight, night), city), tun, tunnel),
   tween(f2Day, f2Night, night), forestH),
   tween(tween(tween(cDay, cNight, night), tween(tween(fDay, fAut, autumn), fNight, night), fSide),
-    tween(tween(dDay, dDusk, 1 - day), dNight, night), dBack)
+    tween(dDay, dNight, night), dBack)
 -- the road, the car and the forest's far things read the high half in
 -- the forest; the verge's stripes (the desert's by day); the headlights
 -- (by night, in the tunnel)
@@ -171,12 +171,18 @@ lineOn = max(city > .5, tunnel) * 32
 -- growing down the road (its foot's row, its half width, its top's row);
 -- the mask: the tube inside the mouth, outside the exit, all through the
 -- tunnel; the pixels not the tube's read the palette's high half (the
--- city outside the mouth, the forest inside the exit)
+-- city outside the mouth, the forest inside the exit). The mouth is an
+-- underpass the road dives into: its top under the horizon (the city
+-- stays above and behind it), set in a concrete face that grows up over
+-- the sky as the car goes in, with retaining walls either side of the
+-- ramp down to it; the exit an arch the road climbs out through.
 portalP = inMouth ? mouthP : exitP
 portalOn = inMouth + inExit
 footRow = 19.5 - portalP*portalP*19.5
 portalW = (50.7 - 2.6*footRow) * 1.5 * widthK
-topRow = 19.5 + (19.5 - footRow)*1.1
+topRow = inMouth ? footRow + (19.5 - footRow)*.9 : 19.5 + (19.5 - footRow)*1.1
+faceTop = inMouth * (topRow + 1.5 + portalP*portalP*portalP*13)
+faceW = portalW*1.35 + 3
 mBase = tunnel - inMouth
 mSign = inMouth - inExit
 halfOther = portalOn*.5
@@ -184,14 +190,11 @@ cityDraw = city * (tCT < 170)
 -- The tunnel: the tube's width against the road's; the car lit as it
 -- passes under each lamp
 tubeW = widthK*1.05
-strobe = tunnel * ((frac(run) + .8) % 1 < .35) / 32
+strobe = tunnel * (frac(run) < .35) / 32
 -- The forest: trunks far (thin, dense, fogged) and mid (wider, sparser),
 -- turning with the road at their own rates; the canopy's leaves faster
 -- still; a clearing now and then and as the trees thin; light through
 -- the leaves by day; fog on the far road
-farTr = heading*-28
-midTr = heading*-70
-leafShift = heading*-110
 clearing = smoothstep(.6, .72, noise(driven, 13, 0))
 gapK = 1.3 + clearing*5 + (1 - forest)*12
 lightOn = forestH * (1 - night)
@@ -201,7 +204,6 @@ rutOn = forest > .6
 
 canPart = 11*forest
 fernFrom = 31 - 18*forest + tunnel*99
-fogOn = forestH > .5
 fSky = forest > .5
 
 -- For the draw stage, once a frame: the sun's size, where the roadside
@@ -215,7 +217,7 @@ octBendD = octave*bendAmp
 idBase = floor(nearShift/16)*2
 roofLeft = floor(.9999 - nearShift)
 roofInk = neon*.6875
-shaftInk = lightOn*.09375
+shaftInk = lightOn*.125
 forestNear = forest*.8
 gantryHW = 65.91*widthK
 
@@ -298,17 +300,13 @@ draw {
         roadX = 64 - (heading - noise(driven + ahead*.0075, 0, 0))*bendAmp
         near = (ahead < 11) * .03125
         gantry = near * (k%3 < 1)
-        post = near - gantry
         left = roadX - hw
         right = roadX + hw
-        side = k%2 ? right : left
         topY = baseY - 26*size
         line(left, topY, right, topY, gantry*19)
         line(left, topY, left, baseY, gantry*19)
         line(right, topY, right, baseY, gantry*19)
         dot(roadX, topY, gantry*20)
-        line(side, baseY, side, topY, post*19)
-        dot(side, topY, post*21)
       }
     }
   }
@@ -338,9 +336,9 @@ below = py > 12
 belowF = below/32
 depth = depthAt[py]
 rowDriven = driven + depth
-scene desertRows when desert {
+scene desertRows when desert*below {
   -- the hills; the bends' second octave; the heat shimmer on the far
-  -- rows (a pixel at most, under a hertz)
+  -- rows (a pixel at most, under a hertz): the road's rows only
   hd = hillAt[py]
   hillW = clamp((noise(driven + depth, 5, 0) - height - hd*slope) * hd * hillAmp, -15.6, 5.2)
   bendD = noise(rowDriven*3, 9, 0)*octBendD + floor((noise(py*1.7, t*.6, 0)*10 - 5)*hd + .5)
@@ -355,34 +353,30 @@ beamRow = hw*beamAt[py]*beamOn
 lineRow = (hw*.02 + .6) * stripe * lineOn
 sky = skyAt[py]
 yuA = below*99 + 31 - py
--- the forest's fog on the far road's rows
-fogRow = fogOn * (py > 12) * (py < 16)
 
 -- ---- Columns (once a column): the horizon's silhouettes ----
 -- the desert's dunes in two layers (sharp crests: 1 - |sin|) and a mesa,
--- the city's two rows of towers, the forest's trunks (far: 1-2 px in 6,
--- most cells; mid: 2-4 px in 13, fewer); the far layer and the near, and
+-- the city's two rows of towers, the forest's trunks on the towers'
+-- cells and hashes (far: 1-2 px in 6, most cells; mid: 2-4 px in 8,
+-- fewer); the far layer and the near, and
 -- the bits by row of the towers' windows or the forest's leaves and ferns
 dFar = duneH * (5.5 - 4*abs(sin((px + farDune) / 150)) + 1.2*sin((px + farDune) / 41))
 nearU = px + nearDune
 mesa = clamp((12 - abs(nearU%173 - 86)) * 2, 0, 8)
 dNear = duneH * max(3.5 - 4.5*abs(sin(nearU/110)) + .8*sin(nearU/29), mesa)
 nearAt = px + nearShift
-tNear = (nearAt%8 < 7) * hash(floor(nearAt/8), seed) * nearH
+nh = hash(floor(nearAt/8), seed)
+tNear = (nearAt%8 < 7) * nh * nearH
+mo = nearAt%8 - frac(nh*7)*5
+nearTop = max(dNear, max(tNear, (frac(nh*3) < forest*.6) * (mo >= 0) * (mo < 2 + frac(nh*13)*2) * (forest*13)))
 farAt = px + farShift
-tFar = hash(seed, floor(farAt/6))*farH
-windows = forest > 0 ? floor(hash(floor((px + leafShift) / 2), 27) * 32767) :
+fh = hash(seed, floor(farAt/6))
+tFar = fh*farH
+fo = farAt%6 - frac(fh*7)*3.5
+farTop = max(max(dFar, tFar), (fh < forest*.85) * (fo >= 0) * (fo < 1 + (frac(fh*13) > .5)) * (forest*13))
+windows = forest > 0 ? floor(hash(floor((px + nearShift) / 2), 27) * 32767) :
   (max(tNear, tFar) > dFar) * bit(42, nearAt%8) * floor(hash(floor(nearAt) + winEpoch, seed) * 127)
-nearTop = max(dNear, tNear)
-farTop = max(dFar, tFar)
-fu = px + farTr
-fh = hash(floor(fu/6), 21)
-fo = fu%6 - frac(fh*7)*3.5
-farTop = max(farTop, (fh < forest*.85) * (fo >= 0) * (fo < 1 + (frac(fh*13) > .5)) * (forest*13))
-mu = px + midTr
-mh = hash(floor(mu/13), 24)
-mo = mu%13 - frac(mh*7)*8
-nearTop = 19 + max(nearTop, (mh < forest*.7) * (mo >= 0) * (mo < 2 + frac(mh*13)*2.5) * (forest*13))
+nearTop = 19 + nearTop
 farTop = max(19 + farTop, nearTop)
 
 -- ---- Pixels ----
@@ -411,48 +405,56 @@ scene tube when tunnel {
   -- The tube: its half width at the row's depth (the ceiling's rows at
   -- the depth mirrored), round the road's middle there, so the half bends
   -- curve it whole; ribbed walls from the edge line out and up, at three
-  -- times the stripes' rate; a lamp strip down the ceiling's middle, lit
-  -- in passing bands, with a glow either side; the lane line dashed.
+  -- times the stripes' rate; the lane line dashed; on the ceiling a lamp
+  -- strip down its middle, lit in passing bands, with a glow either side.
   tHW = halfAt[below ? py : 25 - py] * tubeW
   ribK = 8 + (frac(phase*3) < .5)
   lampRow = (1 - below) * (phase < .35) * 1.6
   glowRow = (1 - below) * (3 + (phase < .35)*2)
-
-  tubeK = max(max((offRoad > tHW) * ribK, (offRoad < lampRow) * 12),
-    max((offRoad < glowRow) * 4, (offRoad < lineRow) * 12))
+  tubeK = max(max((offRoad > tHW) * ribK, (offRoad < lineRow) * 12),
+    max((offRoad < lampRow) * 12, (offRoad < glowRow) * 4))
 }
 kT = max(k, tubeK)
-scene trees when forest {
-  -- The canopy: full over the top rows, ragged (its leaf bits) over the
-  -- three under them, a V of sky over the road (wider in a clearing); lit
-  -- and dark leaves by the bits, two rows a clump. Ferns over the verge,
-  -- lit where the bits say (not through the exit's arch: their colour is
-  -- the low half's). Ruts either side of the middle. (The light on the
-  -- road is the near trees' shafts, drawn: each tied to its tree.)
+scene canopy when forest * (1 - below) {
+  -- The canopy, over the sky's rows: full over the top rows, ragged (its
+  -- leaf bits) over the three under them, a V of sky over the road (wider
+  -- in a clearing); lit and dark leaves by the bits, two rows a clump
   lb = bit(windows, floor(py*.5))
-  fernRow = below * (py > fernFrom) * 16
-
   canA = py < canFull ? 1 : (py < canPart) * 15
   canB = (py < canFull) * 14
-  gapRow = below*999 + (11.5 - py)*gapK
-  gapK4 = (1 - below) * 4 * fSky
-  rutC = hw*.42
-  rutW = below*max(hw*.05, .5)*rutOn
-  treeK = max(lb * (offRoad >= hw) * fernRow,
-    max(offRoad > gapRow ? lb*canA + canB : gapK4, (abs(offRoad - rutC) < rutW) * 12))
+  gapRow = (11.5 - py) * gapK
+  treeK = offRoad > gapRow ? lb*canA + canB : 4*fSky
 }
 kO = max(kO, treeK)
-scene portal when portalOn * (31 - py > footRow) * (31 - py < topRow) {
-  -- inside the portal's rectangle
-  inP = offRoad < portalW
+scene ground when forest*below {
+  -- Over the road's rows: ferns over the verge, lit where the leaf bits
+  -- say (not through the exit's arch: their colour is the low half's);
+  -- ruts either side of the middle. (The light on the road is the near
+  -- trees' shafts, drawn: each tied to its tree.)
+  fern = bit(windows, floor(py*.5))
+  fernRow = (py > fernFrom) * 16
+  rutC = hw*.42
+  rutW = max(hw*.05, .5)*rutOn
+  groundK = max(fern * (offRoad >= hw) * fernRow, (abs(offRoad - rutC) < rutW) * 12)
 }
+kO = max(kO, groundK)
+scene portal when portalOn * (31 - py < max(topRow, faceTop)) {
+  -- inside the portal's rectangle; round it the mouth's concrete face,
+  -- and on the ramp's rows the retaining walls from the road's edge out,
+  -- wider toward the face (one scene: each guard costs every frame)
+  inRow = 31 - py > footRow
+  inP = inRow * (31 - py < topRow) * (offRoad < portalW)
+  wallOut = inRow ? faceW : ew + (faceW - ew)*clamp((31 - py) / max(footRow, .5), 0, 1)
+  faceK = inMouth * (offRoad < wallOut) * (offRoad >= (1 - inRow) * ew) * 26
+}
+kO = max(kO, faceK)
 m = mBase + mSign*inP
 k = max(m ? kT : kO, ink(32))
 pal(S, pick(k,
-    fogRow ? 7/32 : stripe + (5/32 + hc), fogRow ? 8/32 : stripe + (7/32 + hc),
+    stripe + (5/32 + hc), stripe + (7/32 + hc),
     below ? 9/32 + stripe*vergeK + hc : fSky ? 9/32 : sky + hc,
-    forestH > 0 ? 6/32 : min(sky + 1/32, 4/32), fSky ? 4/32 + hc : 15/32, 8/32, 15/32, 7/32,
+    min(sky + 1/32, 4/32), fSky ? 4/32 + hc : 15/32, 8/32, 15/32, 7/32,
     13/32 + hc, 14/32 + hc, 15/32, 15/32, 8/32 + hc, 10/32 + hc,
     2/32 + hc, 3/32 + hc, 3/32,
     forestH > 0 ? 4/32 : neon*8/32, 5/32, 7/32, 12/32, neon ? 15/32 : 7/32, 12/32,
-    11/32 + hc - strobe, hc, 12/32 + hc) + halfOther - m*halfOther)
+    11/32 + hc - strobe, hc, 12/32 + hc, 7/32 + py%2/32) + halfOther - m*halfOther)
