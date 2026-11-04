@@ -1050,7 +1050,9 @@ EMU_LEAK_IMAGE = $(EMU_DIR)/leak/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-leak:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/leak/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/leak/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census FW_RELEASE_TARGET_DIR=$(EMU_DIR)/leak/target DIST=$(EMU_DIR)/leak/dist UPDATER_BUILD=$(EMU_UPDATER)
+	@# (A diagnostic image, never a release: the census is ~7.7 KB of it, so
+	@# it is held to 32 KB of spare, not the release's 64; the probes' are 8.)
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/leak/target DIST=$(EMU_DIR)/leak/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-leak: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
