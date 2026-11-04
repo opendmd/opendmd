@@ -144,6 +144,7 @@ impl WifiManager {
     ) -> anyhow::Result<Self> {
         let wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
         let wifi = BlockingWifi::wrap(wifi, sysloop)?;
+        crate::heapmap::cp("wifi: EspWifi::new");
 
         // Must happen before any set_configuration/start, AP mode included.
         // SAFETY: an argument-only driver setting, called before the driver is
@@ -222,7 +223,9 @@ impl WifiManager {
                 None => best.push(candidate),
             }
         }
-        best.sort_by_key(|ap| std::cmp::Reverse(ap.rssi));
+        // Unstable: the stable sort keeps a 4 KB scratch buffer on the
+        // stack (the network worker's; ties in RSSI may come in any order).
+        best.sort_unstable_by_key(|ap| std::cmp::Reverse(ap.rssi));
         Ok(best)
     }
 
@@ -376,6 +379,7 @@ impl WifiManager {
         if !self.wifi.is_started().unwrap_or(false) {
             self.wifi.start()?;
         }
+        crate::heapmap::cp("wifi: started (sta)");
 
         info!("scanning for '{ssid}'");
         // A scan right after an association was abandoned can fail while
@@ -459,6 +463,7 @@ impl WifiManager {
             self.wifi.stop()?;
         }
         self.wifi.start()?;
+        crate::heapmap::cp("wifi: started (ap)");
 
         if let Ok(ip_info) = self.wifi.wifi().ap_netif().get_ip_info() {
             // SAFETY: the netif handle is null-checked; every pointer handed to

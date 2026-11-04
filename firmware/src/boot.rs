@@ -352,19 +352,25 @@ fn run(task: BootTask) {
         error.clone(),
         bus.attempts(),
     );
+    crate::heapmap::cp("card mounted (sdspi + fatfs)");
 
     if let Some(c) = card {
         // The card's settings over the device's (or written from them).
         let (snapshot, card_settings) = crate::settings_card::adopt_at_mount(&settings);
+        crate::heapmap::cp("card settings adopted");
         let mut handover = prepare(c, &snapshot, &status);
+        crate::heapmap::cp("playlist index (prepare)");
         handover.settings = card_settings;
         start_http(ctx);
+        crate::heapmap::cp("httpd + stream task");
         let _ = tx.send(Event::Ready(Box::new(handover)));
         let ready = t0.elapsed().as_millis();
         crate::www::init();
         // A pack an update left on the card, when flash has none (`www.rs`).
         crate::www::restore_from_card();
+        crate::heapmap::cp("www pack");
         start_network(net);
+        crate::heapmap::cp("net-worker spawned");
         log::info!(
             "boot: card handed over {ready} ms after the boot task started; boot task done in {} ms (stack {} B unused)",
             t0.elapsed().as_millis(),

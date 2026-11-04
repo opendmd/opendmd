@@ -119,6 +119,9 @@ fn now_ms() -> u32 {
 
 /// The network worker's turn: the filling task started when the display
 /// core follows a file and the task is not up.
+// Not inlined into the network worker's loop: its frame would be under
+// the firmware signature check (`ota::verify_signature`, ~6.5 KB deep).
+#[inline(never)]
 pub fn tick() {
     {
         let Some(s) = try_locked() else { return };
@@ -464,6 +467,11 @@ fn run() {
         }
         STACK_LOW.fetch_min(stack_low(), Relaxed);
     }
+}
+
+/// The ring is held and a file followed (`misslog`'s `net`).
+pub fn active() -> bool {
+    ACTIVE.load(Relaxed)
 }
 
 /// `/api/status`'s card part: `,"readahead":{...}`.

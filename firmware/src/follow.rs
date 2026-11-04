@@ -394,6 +394,8 @@ impl Poller {
 
     /// Poll if it is time; act on what changed. `online`: the station is
     /// associated (nothing is tried in AP mode or while WiFi is down).
+    // Not inlined into the network worker's loop (see `cache::run_count`).
+    #[inline(never)]
     pub fn tick(&mut self, online: bool) {
         let cfg = Cfg::read(&self.settings, &self.status);
         if cfg != self.cfg {
@@ -681,6 +683,8 @@ impl Poller {
     /// `POST /api/follow/test`: `get_version` (no code needed), then
     /// `get_status` with the code, against `host` (the saved one if empty)
     /// — nothing is saved or changed. A JSON object for the reply.
+    // Not inlined into the network worker's loop (see `cache::run_count`).
+    #[inline(never)]
     pub fn test(&mut self, host: &str, code: Option<&str>) -> String {
         let host = if host.trim().is_empty() {
             self.cfg.host.clone()
@@ -986,7 +990,9 @@ fn cap_dir() {
     if files.len() <= config::FOLLOW_CTX_MAX {
         return;
     }
-    files.sort();
+    // Unstable (the paths differ, so the order is the same): the stable
+    // sort keeps a 4 KB scratch buffer on the network worker's stack.
+    files.sort_unstable();
     let extra = files.len() - config::FOLLOW_CTX_MAX;
     for (_, p) in files.into_iter().take(extra) {
         match fs::remove_file(&p) {
