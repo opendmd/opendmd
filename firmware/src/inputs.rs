@@ -57,18 +57,18 @@ pub fn set_place(place: Option<Place>) {
 #[optimize(size)] // (CPU0: no frame runs it)
 #[inline(never)]
 pub fn refresh_sky() {
-    let Some((unix, offset)) = crate::clock::utc_and_offset() else {
+    let Some((unix, yday)) = crate::clock::utc_and_yday() else {
         return;
     };
     let place = PLACE.lock().map(|p| *p).unwrap_or(None);
-    inputs::set_sky(unix, offset, place);
+    inputs::set_sky(unix, yday as u16, place);
     SKY_MINUTE.store((unix / 60) as u32, Relaxed);
 }
 
 /// The network worker's loop: the sky once a minute, and at once when the
 /// clock is first set.
 pub fn tick() {
-    let Some((unix, _)) = crate::clock::utc_and_offset() else {
+    let Some((unix, _)) = crate::clock::utc_and_yday() else {
         return;
     };
     if (unix / 60) as u32 != SKY_MINUTE.load(Relaxed) {

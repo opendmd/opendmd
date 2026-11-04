@@ -96,29 +96,16 @@ pub fn wall_now() -> Option<opendmd_core::synth::WallTime> {
     })
 }
 
-/// Unix seconds (UTC) and the local zone's offset from UTC then
-/// (seconds), for the sky's inputs (`inputs.rs`); `None` before the first
-/// sync. newlib's `tm` has no `tm_gmtoff`: the offset is the local time's
-/// fields less UTC's (`gmtime_r`), the dates at most a day apart.
+/// Unix seconds (UTC) and the local day of the year (0 on 1 January), for
+/// the sky's inputs (`inputs.rs`); `None` before the first sync.
 #[optimize(size)] // (CPU0, once a minute)
 #[inline(never)]
-pub fn utc_and_offset() -> Option<(i64, i64)> {
+pub fn utc_and_yday() -> Option<(i64, i64)> {
     let now = unix_now();
     if now < VALID_AFTER {
         return None;
     }
-    // SAFETY: as in `local_tm`; `gmtime_r` likewise.
-    let (mut l, mut u): (esp_idf_sys::tm, esp_idf_sys::tm) = unsafe { (std::mem::zeroed(), std::mem::zeroed()) };
-    if unsafe { esp_idf_sys::localtime_r(&now, &mut l).is_null() || esp_idf_sys::gmtime_r(&now, &mut u).is_null() } {
-        return None;
-    }
-    // The day apart: −1, 0 or 1 (across a new year, by the year).
-    let days = match l.tm_year.cmp(&u.tm_year) {
-        std::cmp::Ordering::Equal => l.tm_yday - u.tm_yday,
-        o => o as i32,
-    };
-    let secs = |t: &esp_idf_sys::tm| t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
-    Some((now, i64::from(days * 86_400 + secs(&l) - secs(&u))))
+    Some((now, i64::from(local_tm()?.tm_yday)))
 }
 
 /// Local weekday and minute, for the schedule; `None` before the first sync.

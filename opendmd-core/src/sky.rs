@@ -303,6 +303,13 @@ pub fn yearday(local: i64) -> u16 {
 /// can't be known (no place: the sun and the season).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn inputs(unix: i64, utc_offset: i64, place: Option<Place>) -> Sky {
+    inputs_but_yearday(unix, i32::from(yearday(unix + utc_offset)) << 16, place)
+}
+
+/// [`inputs`] with the day of the year given (Q16.16; the panel's calendar
+/// has it).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn inputs_but_yearday(unix: i64, yearday: i32, place: Option<Place>) -> Sky {
     let sun = place.map(|p| {
         let (lam, alt) = sun(unix, p);
         (q16_of(alt), season(lam, p))
@@ -312,7 +319,7 @@ pub fn inputs(unix: i64, utc_offset: i64, place: Option<Place>) -> Sky {
         sun_alt: sun.map(|s| s.0),
         moon_phase: moon_phase(unix),
         season: sun.map(|s| s.1),
-        yearday: i32::from(yearday(unix + utc_offset)) << 16,
+        yearday,
     }
 }
 

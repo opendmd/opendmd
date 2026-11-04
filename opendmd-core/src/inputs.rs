@@ -204,13 +204,15 @@ pub fn snapshot() -> (Table, u64) {
     (t, now)
 }
 
-/// The sky's keys for `unix` (UTC seconds), the local `utc_offset`
-/// (seconds) and the location if one is set, into the panel's table:
-/// `moon.phase` and `yearday` from the clock alone, the sun's keys and
-/// `season` only with a location (cleared without one).
+/// The sky's keys for `unix` (UTC seconds), the local day of the year
+/// `yday` (0 on 1 January: the device's calendar has it, the same number
+/// `sky::yearday` works out in the browser) and the location if one is
+/// set, into the panel's table: `moon.phase` and `yearday` from the clock
+/// alone, the sun's keys and `season` only with a location (cleared
+/// without one).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn set_sky(unix: i64, utc_offset: i64, place: Option<crate::sky::Place>) {
-    let s = crate::sky::inputs(unix, utc_offset, place);
+pub fn set_sky(unix: i64, yday: u16, place: Option<crate::sky::Place>) {
+    let s = crate::sky::inputs_but_yearday(unix, i32::from(yday) << 16, place);
     let now = now_ms();
     let Ok(mut t) = TABLE.lock() else {
         return;
