@@ -403,6 +403,11 @@ function build(root, o) {
         r = null;
       }
       if (r && !r.ok) throw new Error(`That site refused to send it (${r.status})`);
+      // A page, not a picture: the site's relay reads what it names.
+      if (r && /^text\/html/.test(r.headers.get('Content-Type') || '')) {
+        if (!o.relay) throw new Error('That address is a page, not a picture: save the picture from it, then add the file here');
+        r = null;
+      }
       b = r ? await r.blob() : await o.relay(u);
     } catch (e) {
       if (tok === S.tok) msg.textContent = e.message;
@@ -411,7 +416,7 @@ function build(root, o) {
     if (tok !== S.tok) return false;
     let host = '';
     try { host = new URL(u).hostname; } catch { /* (relative) */ }
-    return load(b, { label: host || 'From the address' });
+    return load(b, { label: host || 'From the address', link: b.link });
   }
 
   // Build the stage for the fit; `auto` also re-picks window and motion.

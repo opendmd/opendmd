@@ -58,3 +58,9 @@ body>.banner{border:0;border-radius:0;margin:0}
 #c-ask{margin-top:14px}#c-ask label{font-weight:600}
 #c-ask .row{display:flex;gap:8px;margin-top:6px}#c-ask .row input{flex:1;min-width:0}
 #c-where{margin:12px 0 0}
+/* Search elsewhere (create.js): other sites' search as links, under Your own. */
+#c-elsewhere{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+#c-elsewhere .lbl{font-size:13px;color:var(--mut);margin-bottom:6px}
+#c-elsewhere .chips{margin-top:8px}
+.cpage main a.chip{text-decoration:none;font-size:14px;padding:6px 12px}
+.cpage main a.chip:hover{border-color:var(--acc)}

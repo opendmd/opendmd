@@ -40,6 +40,19 @@ runs against the same server (--base).
   stills stay; the gallery's tiles: hovering one plays it (changing
   pixels), leaving brings its thumbnail back, keyboard focus plays one
   too, one at a time; screenshots in target/site-worker-test/ (--shots);
+- Create Art's relay (POST /api/fetch, site/worker/src/relay.ts), against
+  local sites (RelayUpstream: SITE_TEST_RELAY_UPSTREAM sends
+  .relay-test.invalid hosts and their DNS questions here): callers that
+  are not this site refused, every other method, addresses refused as
+  written (http, ports, users, IPs in every form, local and reserved
+  names, address-spelling DNS, our own hosts) and by their DNS answers
+  (private, loopback, mapped, 6to4, CGNAT, behind a CNAME), redirects (3
+  followed, a 4th refused, each re-checked), types by their first bytes,
+  16 MB on the header and while streaming, a page's address answered with
+  what it names, the site asked with our User-Agent and no cookie, no
+  address in cf dev's log, the rate limit (30 a minute per IP); in
+  Chromium /create/?url= through it (a GIF, a page, a video, a refusal).
+  Live (--base), the refusals that need no other site;
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
   and /f/ with a gallery Formula;
@@ -997,6 +1010,15 @@ class RelayUpstream:
             "/a.json": (b'{"gif": "https://example.com/a.gif"}' + b" " * 64, "application/json"),
             "/a.exe": (b"MZ\x90\x00" + junk, "video/mp4"),
             "/page.html": (page, "text/html; charset=utf-8"),
+            "/rel.gif": (self.gif, "image/gif"),
+            "/embed.html": (b'<html><head><meta property="og:video" content="https://ok.relay-test.invalid/player">'
+                            b'<meta property="og:video:type" content="text/html"><meta property="og:image" content="http://ok.relay-test.invalid/a.jpg">'
+                            b'<meta property="og:image" content="javascript:alert(1)"></head></html>', "text/html"),
+            "/bare.html": (b"<!doctype html><html><head><title>nothing</title></head><body>no pictures</body></html>", "text/html"),
+            "/long.html": (b"<!doctype html><html><head>" + b"<!-- x -->" * 60000 + b'<meta property="og:image" content="https://ok.relay-test.invalid/a.gif"></head></html>',
+                           "text/html"),
+            "/untyped.html": (b'  <!DOCTYPE html><html><head><meta content="https://ok.relay-test.invalid/a.gif" property="og:image"></head></html>',
+                              "application/octet-stream"),
             "/clip.webm": ((ROOT / "tools/fixtures/video/clip.webm").read_bytes(), "video/webm"),
         }
         self.redirects = {
@@ -1219,8 +1241,20 @@ def relay_local(base: str, up: RelayUpstream) -> None:
     check(st == 502 and why == "upstream", f"relay: the site's 404, 502 upstream ({st} {why})")
     st, why, h = R.why("https://ok.relay-test.invalid/r-nowhere")
     check(st == 502 and why == "upstream", f"relay: a redirect with no Location, 502 upstream ({st} {why})")
-    st, why, h = R.why("https://ok.relay-test.invalid/page.html")
-    check(st == 415 and why == "type", f"relay: a page is not a picture, 415 ({st} {why})")
+    st, h, body = R.ask("https://ok.relay-test.invalid/page.html")
+    d = json.loads(body) if st == 200 else {}
+    want = ["https://ok.relay-test.invalid/rel.gif", "https://ok.relay-test.invalid/a.mp4", "https://ok.relay-test.invalid/still.jpg"]
+    check(st == 200 and h.get("X-Relayed") == "page" and d == {"media": want} and h.get("Cache-Control") == "no-store",
+          f"relay: a page's address answers what it names, GIFs, then videos, then stills, never the page ({st} {d})")
+    st, h, body = R.ask("https://ok.relay-test.invalid/embed.html")
+    d = json.loads(body) if st == 200 else {}
+    check(st == 200 and d == {"media": ["https://ok.relay-test.invalid/a.jpg"]},
+          f"relay: an embedded player is not a video, http:// made https://, javascript: dropped ({st} {d})")
+    st, h, body = R.ask("https://ok.relay-test.invalid/untyped.html")
+    check(st == 200 and json.loads(body) == {"media": ["https://ok.relay-test.invalid/a.gif"]}, f"relay: a page sent as octet-stream is known by its first bytes ({st})")
+    for path, what in (("/bare.html", "a page that names nothing"), ("/long.html", "a page's tags past 512 KB")):
+        st, why, _ = R.why("https://ok.relay-test.invalid" + path)
+        check(st == 415 and why == "type", f"relay: {what}, 415 ({st} {why})")
     log = (ROOT / "target/site-dev.log").read_text(errors="replace")
     check("relay-test.invalid" not in log, "relay: no address in cf dev's log (it is the request body, never the URL)")
 
@@ -1271,6 +1305,16 @@ def relay_browser(base: str, shots: Path) -> None:
             page.wait_for_timeout(100)
         check(page.inner_text("#st-msg") == "That address isn’t a picture or a video",
               f"relay in Chromium: a refusal said plainly ('{page.inner_text('#st-msg')}')")
+        page.fill("#st-url", "https://ok.relay-test.invalid/page.html")
+        page.click("#st-url-go")
+        for _ in range(200):
+            if page.inner_text("#st-msg").startswith("ok.relay-test.invalid: 88"):
+                break
+            page.wait_for_timeout(100)
+        check(page.inner_text("#st-msg").startswith("ok.relay-test.invalid: 88 × 31 · 4 frames")
+              and page.get_attribute("#st-seen", "href") == "https://ok.relay-test.invalid/page.html",
+              f"relay in Chromium: a page's address loads the GIF it names, Seen on… links the page ('{page.inner_text('#st-msg')}')")
+        page.click("#st-change")
         page.fill("#st-url", "https://ok.relay-test.invalid/clip.webm")
         page.click("#st-url-go")
         for _ in range(300):

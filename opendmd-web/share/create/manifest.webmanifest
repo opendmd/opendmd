@@ -1,0 +1,26 @@
+{
+  "name": "OpenDMD Create Art",
+  "short_name": "Create Art",
+  "description": "Make a GIF for the OpenDMD LED display from a GIF, a picture or a video.",
+  "id": "/create/",
+  "start_url": "/create/",
+  "scope": "/create/",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "share_target": {
+    "action": "/create/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [{ "name": "media", "accept": ["image/gif", "image/*", "video/mp4", "video/webm", ".gif", ".mp4", ".webm"] }]
+    }
+  }
+}

@@ -41,6 +41,12 @@
 //     sniff, nosniff, a CSP that runs nothing, CORP same-origin;
 //   - the size while streaming: a counting TransformStream errors the
 //     stream past 16 MB (a body with no length, or one that lied);
+//   - a page's address (a Tenor, Reddit, Imgur link): HTML, read up to
+//     512 KB (or its </head>), answers JSON {media: [...]} with X-Relayed:
+//     page, never the page itself: its og:video / og:image /
+//     twitter:player:stream / twitter:image / link rel=image_src, https
+//     only, GIFs first, then videos, then stills, at most 6; the page then
+//     asks for one of them (the same guards again). None: 415 (why "type");
 //   - nothing logged: no console.log here, and the address is never in
 //     the request's URL (above).
 //
@@ -57,6 +63,7 @@ export interface RelayEnv {
 }
 
 export const MAX_BYTES = 16 << 20;
+const HTML_MAX = 512 << 10;
 const HOPS = 3;
 const TIMEOUT_MS = 15_000;
 const UA = "OpenDMD-CreateArt/1 (+https://opendmd.dev/create/)";
@@ -245,6 +252,12 @@ export function sniff(b: Uint8Array): Kind {
   return null;
 }
 
+function looksHtml(head: Uint8Array, ctype: string): boolean {
+  if (/^\s*(text\/html|application\/xhtml\+xml)/i.test(ctype)) return true;
+  const t = new TextDecoder().decode(head.subarray(0, 64)).replace(/^﻿/, "").trimStart().toLowerCase();
+  return t.startsWith("<!doctype html") || t.startsWith("<html") || t.startsWith("<head") || t.startsWith("<meta");
+}
+
 /** At least `n` bytes from the stream (fewer at its end), and what is left. */
 async function head(reader: ReadableStreamDefaultReader<Uint8Array>, n: number): Promise<{ bytes: Uint8Array; done: boolean }> {
   const parts: Uint8Array[] = [];
@@ -267,6 +280,74 @@ function join(parts: Uint8Array[], len: number): Uint8Array {
     o += p.length;
   }
   return out;
+}
+
+// ------------------------------------------------------------ pages
+
+/** og:video, og:image and their kin from a page's HTML, best first. */
+export function mediaOf(html: string, base: URL): string[] {
+  const found: { url: string; rank: number; order: number }[] = [];
+  const attr = (tag: string, name: string) => {
+    const m = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag);
+    return m ? (m[2] ?? m[3] ?? m[4] ?? "") : null;
+  };
+  const types: Record<string, string> = {};
+  const metas = html.match(/<meta\b[^>]*>/gi) ?? [];
+  for (const tag of metas) {
+    const key = (attr(tag, "property") ?? attr(tag, "name") ?? "").toLowerCase();
+    const v = attr(tag, "content");
+    if (v && (key === "og:video:type" || key === "og:image:type")) types[key] = v.toLowerCase();
+  }
+  const add = (raw: string | null, rank: number) => {
+    if (!raw) return;
+    let u: URL;
+    try {
+      u = new URL(decode(raw.trim()), base);
+    } catch {
+      return;
+    }
+    if (u.protocol === "http:") u.protocol = "https:";
+    if (u.protocol !== "https:") return;
+    if (/\.gif(\?|$)/i.test(u.pathname)) rank = Math.min(rank, 0);
+    found.push({ url: u.href, rank, order: found.length });
+  };
+  const videoOk = !types["og:video:type"] || /^video\/(mp4|webm)/.test(types["og:video:type"]);
+  const imageGif = types["og:image:type"] === "image/gif";
+  for (const tag of metas) {
+    const key = (attr(tag, "property") ?? attr(tag, "name") ?? "").toLowerCase();
+    const v = attr(tag, "content");
+    if (["og:video:secure_url", "og:video:url", "og:video"].includes(key) && videoOk) add(v, 1);
+    else if (key === "twitter:player:stream") add(v, 1);
+    else if (["og:image:secure_url", "og:image:url", "og:image"].includes(key)) add(v, imageGif ? 0 : 2);
+    else if (key === "twitter:image" || key === "twitter:image:src") add(v, 3);
+  }
+  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+    if ((attr(tag, "rel") ?? "").toLowerCase() === "image_src") add(attr(tag, "href"), 3);
+  }
+  const seen = new Set<string>();
+  return found
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .map((f) => f.url)
+    .filter((u) => !seen.has(u) && !!seen.add(u))
+    .slice(0, 6);
+}
+
+function decode(s: string): string {
+  return s.replace(/&(amp|quot|#39|#x27|lt|gt);/g, (_, e) => ({ amp: "&", quot: '"', "#39": "'", "#x27": "'", lt: "<", gt: ">" })[e as string] ?? "");
+}
+
+async function readPage(reader: ReadableStreamDefaultReader<Uint8Array>, first: Uint8Array, done: boolean): Promise<string> {
+  const dec = new TextDecoder();
+  let text = dec.decode(first, { stream: true });
+  let len = first.length;
+  while (!done && len < HTML_MAX && !/<\/head\s*>/i.test(text)) {
+    const r = await reader.read();
+    if (r.done) break;
+    len += r.value.length;
+    text += dec.decode(r.value, { stream: true });
+  }
+  reader.cancel().catch(() => {});
+  return text.slice(0, HTML_MAX);
 }
 
 // ------------------------------------------------------------ the route
@@ -321,7 +402,8 @@ export async function relay(request: Request, url: URL, env: RelayEnv): Promise<
       throw new Refused(502, "upstream", "That site refused to send it.", { status: res.status });
     }
     const len = Number(res.headers.get("Content-Length") ?? "");
-    if (len > MAX_BYTES) {
+    const ctype = res.headers.get("Content-Type") ?? "";
+    if (len > MAX_BYTES && !/^\s*text\/html/i.test(ctype)) {
       res.body.cancel().catch(() => {});
       throw new Refused(413, "size", "That file is too big (over 16 MB).");
     }
@@ -329,6 +411,13 @@ export async function relay(request: Request, url: URL, env: RelayEnv): Promise<
     const { bytes, done } = await head(reader, 16);
     const kind = sniff(bytes);
     if (!kind) {
+      if (looksHtml(bytes, ctype)) {
+        const media = mediaOf(await readPage(reader, bytes, done), u);
+        if (!media.length) throw new Refused(415, "type", "That page has no picture or video we can find.");
+        return new Response(JSON.stringify({ media }) + "\n", {
+          headers: { ...HEADERS, "Content-Type": "application/json; charset=utf-8", "X-Relayed": "page" },
+        });
+      }
       reader.cancel().catch(() => {});
       throw new Refused(415, "type", "That is not a picture or a video.");
     }
