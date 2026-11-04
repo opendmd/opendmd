@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-psi-cli"
-version = "1.0.0-beta.12"
+version = "1.0.0-beta.13"
 edition = "2021"
 description = "psi: check and format Psi Formulas from the command line (errors with codes, the panel's estimates, a contact sheet; the canonical layout)."
 license = "MIT OR Apache-2.0"
