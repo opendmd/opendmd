@@ -31,6 +31,16 @@ Pick a source:
 - **Your own:** choose a file, or paste a web address. You can also drop a
   picture onto the page, or paste one you've copied.
 
+Some sites don't let other pages load their pictures. On
+[opendmd.dev/create/](https://opendmd.dev/create/) Create Art then fetches
+the picture for you, through the OpenDMD website, and keeps nothing; it
+says so plainly if the file is too big (over 16 MB), isn't a picture or a
+video, or the site refused. In your panel's own web app, download the
+picture and add the file instead.
+
+On the website, `opendmd.dev/create/?url=` followed by a picture's address
+opens it in Create Art straight away.
+
 Click a result to load it. Searching for art needs an internet connection
 (the computer or phone you're using needs it, not the display): the list of
 games comes from the OpenDMD website, the pictures from where they're kept.
