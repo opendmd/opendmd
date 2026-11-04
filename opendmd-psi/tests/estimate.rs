@@ -288,3 +288,61 @@ fn the_estimate_counts_two_scenes() {
     let (one, _) = est(1, "");
     assert!(two > one + one / 2, "{one} {two}");
 }
+
+/// P0b-4's fused compares and the guards a row against the spare
+/// (`measured::P0B4`): each frame's own estimate (`tier_us_frame` with the
+/// JIT, against the direct kernel frame; `vm_us_frame` without, against
+/// the direct VM frame ×1.15 as the rows above) within ±15 % for the
+/// guards and Endless road V2; for the fused compares' rows (a dozen
+/// steps, where the fixed costs weigh), what fusing changes, est against
+/// measured, within 0.6-1.6×.
+#[test]
+fn the_fused_compares_and_guards_as_measured() {
+    use opendmd_psi::{golden, scene_rows, Inputs, Scratch, OWN};
+    let road = include_str!("../../opendmd-web/experiments/road-v2/road-v2.psi");
+    let mut bad = Vec::new();
+    let mut rows = Vec::new();
+    let mut ests = Vec::new();
+    for &(name, body, fused, start, vm_us, jit_us) in measured::P0B4 {
+        let src = if body == "road" {
+            road.to_string()
+        } else if name.starts_with("guards") && name != "guards base" {
+            measured::p0b4_guards(body)
+        } else {
+            format!("{}{body}\n", measured::P0B4_U)
+        };
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_measured(&src, &mut p, true, true, fused).unwrap();
+        let mut inp: Inputs = golden::inputs(0);
+        inp.set_ms(&p, u64::from(start));
+        let ran = scene_rows(&p, &mut Scratch::<128>::new(), &inp, &OWN);
+        let (ej, ev) = (p.tier_us_frame(false, &ran), p.vm_us_frame(false, &ran));
+        let (rj, rv) = (ej as f64 / jit_us as f64, ev as f64 / (vm_us as f64 * 1.15));
+        rows.push(format!(
+            "{name:<30} jit {jit_us:>5} est {ej:>5} ({:+.0} %)  vm {vm_us:>5} est {ev:>5} ({:+.0} %)",
+            (rj - 1.0) * 100.0,
+            (rv - 1.0) * 100.0
+        ));
+        ests.push((ej as f64 / 1.15, ev as f64 / 1.15));
+        let whole = name.starts_with("road") || (name.starts_with("guards") && name != "guards base");
+        if whole && (!(0.85..=1.15).contains(&rj) || !(0.85..=1.15).contains(&rv)) {
+            bad.push(name.to_string());
+        }
+    }
+    // The fused rows against their unfused twins: what fusing saves.
+    for k in [0, 2] {
+        let (f, u) = (measured::P0B4[k], measured::P0B4[k + 1]);
+        for (tier, m, e) in [
+            ("jit", f.5 as f64 - u.5 as f64, ests[k].0 - ests[k + 1].0),
+            ("vm", f.4 as f64 - u.4 as f64, ests[k].1 - ests[k + 1].1),
+        ] {
+            let r = e / m;
+            rows.push(format!("{} fusing, {tier}: measured {m:+.0} µs, est {e:+.0}", f.0));
+            if !(0.6..=1.6).contains(&r) {
+                bad.push(format!("{} {tier}", f.0));
+            }
+        }
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
+}
