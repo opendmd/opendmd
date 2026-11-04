@@ -62,6 +62,7 @@ mod heapmap;
 mod http;
 mod httpd;
 mod improv;
+mod inputs;
 mod logring;
 mod misslog;
 mod membank;
@@ -288,6 +289,22 @@ pub fn still_gate(take: usize) -> bool {
     ok
 }
 
+/// May a Formula's JIT kernel be built now (`fx_psi::JitGate`): its build
+/// takes `take` B of small blocks for a moment, and an infallible one the
+/// heap can't give aborts. Room for it and 4 KB besides, and a 4 KB block
+/// (its largest, the lowering's step table, measured 4.3 KB on the host
+/// for Endless road V2): else the Formula stays on the VM and asks again
+/// a second later.
+#[cfg(feature = "psi")]
+pub fn jit_gate(take: usize) -> bool {
+    let free = free_heap() as usize;
+    let ok = free >= take + 4 * 1024 && largest_free_block() >= 4 * 1024;
+    if !ok {
+        log::info!("formula: JIT kernel not built yet ({take} B): heap {free} B free, largest block {} B", largest_free_block());
+    }
+    ok
+}
+
 /// The card's settings at the handover (`settings_card`): `new` in force,
 /// and what differs from the settings it replaces applied the way a
 /// settings change is (the brightness under safe start's ceiling, the
@@ -484,6 +501,8 @@ fn main() -> Result<()> {
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
     heapmap::cp("formulas installed");
+    // The built-in inputs' table (`inputs.rs`) times its changes by this.
+    inputs::install_clock();
 
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
@@ -605,6 +624,9 @@ fn main() -> Result<()> {
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_jit(settings.formula_jit);
     clock::set_timezone(&settings.tz, &settings.tz_name);
+    // The location the built-in inputs' sky is worked out for (the
+    // network worker writes the sky once SNTP has set the clock).
+    inputs::set_place(settings.location);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
     // Formulas time their frames (the governor: `fx_psi::Governor`).
@@ -614,6 +636,8 @@ fn main() -> Result<()> {
     // And keep their still caches to what the heap can spare.
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_still_gate(Some(still_gate));
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_jit_gate(Some(jit_gate));
     let mut sched = Scheduling::new(&settings.schedule);
     heapmap::cp("settings applied, schedule");
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
@@ -2629,6 +2653,8 @@ impl Scheduling {
     /// The schedule's fields in status.
     fn publish(&self, status: &Mutex<Status>) {
         let d = &self.decision;
+        // `night` for Formulas: the night window has the panel dimmed.
+        inputs::night(d.mode == schedule::Mode::Dim);
         let mut s = status.lock().unwrap();
         s.mode = d.mode.as_str();
         s.mode_until = d.mode_until.map(schedule::format_hhmm);

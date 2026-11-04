@@ -168,9 +168,61 @@ fn formulas() {
     frame(0, 0, 0, 0, 1 << 14, 0, 0);
     assert_eq!(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) }, &unset[..]);
     assert_eq!(unset[0], 64);
+    built_in_inputs();
     // (The module's state is a static: one test.)
     #[cfg(not(target_arch = "wasm32"))]
     every_example_as_a_look();
+}
+
+/// The editor's built-in inputs: the world the preview draws with, the
+/// sky at a moment, and the list of what a formula reads. (Part of
+/// [`formulas`]: the state is a static.)
+fn built_in_inputs() {
+    let px = |ms| drawn(ms)[0];
+    // Defaults: daylight 1.
+    assert!(compile("loop 4\ngray(daylight)"));
+    assert_eq!(builtins(), r#"[{"id":1,"name":"daylight","lo":0,"hi":1,"default":1,"whole":false,"reads":1}]"#);
+    assert_eq!(px(0), 255);
+    world_set(1, 1 << 15, 1 << 16, 0);
+    assert_eq!(px(0), 128);
+    // Held to its range.
+    world_set(1, 5 << 16, 0, 0);
+    assert_eq!(px(0), 255);
+    world_reset();
+    assert_eq!(world(1), [1 << 16, 1 << 16, world::SINCE_NEVER]);
+    assert_eq!(px(0), 255);
+
+    // A change: `was` the old value, `since` 0; then the page's own since.
+    assert!(compile("loop 4\ngray(mix(was(replay.game), replay.game, min(1, since(replay.game))))"));
+    assert_eq!(
+        builtins(),
+        r#"[{"id":10,"name":"replay.game","lo":0,"hi":1,"default":0,"whole":false,"reads":7}]"#
+    );
+    world_change(10, 1 << 15);
+    assert_eq!(world(10), [1 << 15, 0, 0]);
+    assert_eq!(px(0), 0, "just changed: since 0");
+    world_set(10, 1 << 15, 0, 1 << 16);
+    assert_eq!(px(0), 128, "a second on");
+    world_reset();
+    assert!(compile("gray(x)"));
+    assert_eq!(builtins(), "[]");
+
+    // The sky: London, midday at midsummer 2026 (UTC+1) and midnight.
+    let noon = sky(1_781_956_800.0, 3600, 51.5, -0.13);
+    assert_eq!(noon.len(), 8);
+    assert_eq!(noon[0], 1 << 16, "daylight at noon");
+    assert!(noon[1] > 10_000, "the sun about 62° up: {}", noon[1]);
+    assert!((170 << 16..=173 << 16).contains(&noon[4]), "yearday {}", noon[4] >> 16);
+    assert!(noon[3] > 30_000, "season about midsummer: {}", noon[3]);
+    assert_eq!(&noon[5..], [13, 0, 0], "13:00 local");
+    let night = sky(1_781_956_800.0 + 12.0 * 3600.0, 3600, 51.5, -0.13);
+    assert_eq!(night[0], 0, "daylight at 01:00");
+    assert!(night[1] < 0);
+    assert_eq!(&night[5..], [1, 0, 0]);
+    // No place: the sun and the season unknown, the rest as ever.
+    let none = sky(1_781_956_800.0, 0, f64::NAN, f64::NAN);
+    assert_eq!([none[0], none[1], none[3]], [UNSET; 3]);
+    assert_eq!(none[2], noon[2]);
 }
 
 /// The examples gallery: every one compiles, is short, and is light or

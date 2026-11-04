@@ -57,11 +57,16 @@ const take = (src) => T(() => src != null && (src === held || (P.compile(src.sli
 // `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
 // preview clock), so one that follows the clock doesn't come out dark at night.
 // `gms`: where the GIF under it is (its own clock: ms since the preview started).
+// The built-in inputs are their defaults but in the editor's preview while its
+// controls are in use (`f.w`, js/fconds.js: the world and the clock it sets).
+let wd = 0;
 function draw(f, ms, still, gms = ms) {
   if (!take(f.src)) return null;
-  const d = new Date();
-  const [hh, mm, ss] = still ? [10, 9, 30] : [d.getHours(), d.getMinutes(), d.getSeconds()];
+  const d = new Date(), w = !still && f.w?.on && f.w;
   return T(() => {
+    if (w) w.apply(P); else if (wd) P.worldReset();
+    wd = !!w;
+    const [hh, mm, ss] = still ? [10, 9, 30] : w?.hms || [d.getHours(), d.getMinutes(), d.getSeconds()];
     if (over) new Uint8Array(P.mem.buffer, P.under(), 12288).set(underAt(gms));
     P[over ? 'frameOver' : 'frame'](ms, hh, mm, ss, Q(f.a), Q(f.b), Q(f.c));
     return new Uint8Array(P.mem.buffer, P.pixels(), 12288);
@@ -187,7 +192,7 @@ function loop(now) {
     const g = v.d || D, n = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)), k = Math.floor((now - v.t0) / g), i = k % n;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : i;
-    if (key === v.i && !v.dirty) continue;
+    if (key === v.i && !v.dirty && !v.f.w?.on) continue;
     v.i = key; v.dirty = false;
     const rgb = draw(v.f, i * g, false, now - v.t0);
     if (rgb) { v.pv.p.showRgb(rgb); v.canvas.dataset.frames = -~v.canvas.dataset.frames; }
@@ -474,7 +479,12 @@ const VARS = [
   ['r, angle', 'distance and angle (turns, clockwise from the right) from the middle'],
   ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
   ['ul', 'how bright that is'],
-  ['under(x, y)', 'the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel\'s']
+  ['under(x, y)', 'the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel\'s'],
+  ['daylight', 'how light it is outside where the panel is, 0 at night to 1 by day (twilight between); the panel\'s location in Settings, else 1'],
+  ['sun.alt', 'the sun\'s height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location'],
+  ['moon.phase, season, yearday', 'the moon (0 new, 0.5 full), the time of year (0 midwinter, 0.5 midsummer) and the day of the year (0 on 1 January)'],
+  ['night, bright', '1 while night mode dims the panel; the panel\'s brightness, 0 to 1'],
+  ['replay.playing, replay.platform, replay.game', 'RePlayOS: 1 while a game plays; its platform as a number (0 none); a number 0 to 1 for the game, the same each time it plays']
 ];
 const FUNCS = [
   ['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'],
@@ -490,6 +500,8 @@ const FUNCS = [
   ['hash(a, b)', 'random 0 to 1'],
   ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
   ['pick(k, a, b, …)', 'a at k = 0, b at 1, …; else 0'],
+  ['since(replay.game)', 'seconds since a built-in input last changed (32767 when it never has): a flash is max(0, 1 - since(replay.game))'],
+  ['was(replay.game)', 'a built-in input\'s value before its last change: mix(was(k), k, min(1, since(k))) fades from the old to the new'],
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
   ['glyph(\'A\', col, row)', 'the same for a character'],
   ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
@@ -521,7 +533,7 @@ const DRAW = [
   ['if c { … } else { … }', 'inside draw: only when c is not 0', 'if  {\n  \n}'],
   ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],
-  ['table T = 1, -2, 0.5', 'numbers, 256 in all (tables and sprites)', 'table T = '],
+  ['table T = 1, -2, 0.5', 'numbers, 256 a table and 1024 in all (tables and sprites)', 'table T = '],
   ['T[k]', 'number k of table T, from 0 (0 outside it)'],
   ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
   ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']
@@ -570,13 +582,16 @@ function editor() {
   const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true },
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
+  // A formula that reads a built-in input: its controls (js/fconds.js).
+  const cond = h('div', { hidden: true });
+  let W = null;
   const under = overRow('psi-ed-under');
   const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }, () => keep()); } }, 'Set as the panel’s look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
   const top = h('div.psi-top', canvas, cap, under);
-  const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
+  const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
@@ -584,7 +599,7 @@ function editor() {
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
-  const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
+  const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; }, get w() { return cond.hidden ? null : W?.w; } };
 
   // The draft kept in this browser (the web app's; the site's page tells its own of each change).
   const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
@@ -652,6 +667,10 @@ function editor() {
       good = f.src;
       top.classList.remove('stale');
       sliders(sl, f, () => { stash(); pv.dirty = true; PS?.follow(live); });
+      // (What it reads, while the module holds it.)
+      const bi = i[5] & 128 && JSON.parse(T(() => P.builtins(), '[]'));
+      cond.hidden = !bi;
+      if (bi) import('./fconds.js').then((m) => { (W ??= m.conditions(P, cond)).keys(bi, i[5] & 16); });
       play(pv, live, i);
       PS?.follow(live);
     } else {
@@ -866,6 +885,7 @@ function editor() {
       ta.value = f.src;
       bad = null;
       good = null;
+      W?.reset();
       paint();
       pv ??= view(canvas);
       compile();

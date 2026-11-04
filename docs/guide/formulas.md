@@ -133,6 +133,16 @@ last version that worked, dimmed.
 - **Name and look:** `name "My sunrise"` and `about "…"` at the top say
   what it is called and what it is; `look screen 40` says it can be the
   panel's look, drawn over every GIF with that blend and amount.
+- **Try it out:** a formula that reads the world around the panel
+  (`daylight`, `night`, `replay.game`, `since(…)` …) gets a block of its
+  own under the preview. **Time travel** moves the sun, the moon and the
+  clock to another moment: a time of day and a date, and **Play** runs a
+  whole day in about 30 seconds, at your panel's location (Settings ›
+  Schedule › Location), else London. **Start a game** and **Back to the
+  menu**, **Night on**, and a slider for each value it reads make a change
+  as the panel would, so `since` and `was` play out as they will there.
+  **Back to the defaults** undoes it all. It is only the preview: the
+  gallery, thumbnails and Save as GIF show the defaults.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps the formula in this browser, under its name.
@@ -217,6 +227,33 @@ The [language reference](../psi-spec.md) has all of it in one place.
 | `w`, `h` | 128 and 32 |
 | `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the top to 0.5 at the bottom |
 | `r`, `angle` | how far the pixel is from the middle (round, though the panel is 4 times wider than tall: `r < 0.4` is a disc), and its angle round the middle, in turns |
+
+**The world around the panel.** A few values come from the panel itself,
+the same for every pixel of a frame, read by name like `hour`:
+
+| name | what | without it |
+| --- | --- | --- |
+| `daylight` | how light it is outside, 0 at night to 1 by day, with twilight between (the sun from 6° under the horizon to 6° over) | 1 |
+| `sun.alt` | the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night | 0.1 |
+| `moon.phase` | the moon, in turns: 0 new, 0.5 full | 0.5 |
+| `season` | the time of year for your half of the world, in turns: 0 midwinter, 0.5 midsummer | 0.5 |
+| `yearday` | the day of the year, 0 on 1 January | 172 |
+| `night` | 1 while night mode has the panel dimmed, else 0 | 0 |
+| `bright` | the panel's brightness, 0 to 1 | 1 |
+| `replay.playing` | 1 while RePlayOS plays a game (with Follow RePlayOS on) | 0 |
+| `replay.platform` | the game's platform as a number, 0 when none | 0 |
+| `replay.game` | a number for the game, 0 to 1: different for each game, the same each time it plays | 0 |
+
+The sun, `season` and `daylight` need the panel's location (Settings › Schedule › Location: two numbers, kept on the panel only); the moon and the date need
+the clock. Until then, and in the editor's preview and the gallery, each
+reads the value in the last column, so a formula always looks right.
+
+Two functions tell when one of them changed: `since(replay.game)` is the
+seconds since it last changed (32767 when it never has), and
+`was(replay.game)` its value before. A flash when a game starts is
+`max(0, 1 - since(replay.game))`; a fade from the old game's colour to the
+new one is `mix(was(replay.game), replay.game, min(1, since(replay.game)))`.
+The editor's time travel and its "change" buttons preview them.
 
 **Functions.** Waves and angles are in *turns*, not degrees or radians:
 `sin(0.25)` is 1, and `sin` repeats every 1.

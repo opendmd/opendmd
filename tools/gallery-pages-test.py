@@ -222,7 +222,8 @@ def main() -> int:
         newer = gp.ABI_SERVED + 1
         want = f'<p class="fneeds">Needs firmware {gp.ABI_FIRMWARE[newer]} or later</p>' if newer in gp.ABI_FIRMWARE else '<p class="fneeds">Needs newer firmware</p>'
         check(gp.needs(e | {"abi": gp.ABI_SERVED}) == "" and gp.needs(e | {"abi": newer}) == want, f"a tile: a format newer than the latest release plays says which firmware it needs ({want})")
-        check(gp.needs({"abi": 3}) == '<p class="fneeds">Needs newer firmware</p>', "a tile: a format no release is named for says so")
+        unnamed = max(gp.ABI_FIRMWARE) + 1
+        check(gp.needs({"abi": unnamed}) == '<p class="fneeds">Needs newer firmware</p>', f"a tile: a format no release is named for says so (ABI {unnamed})")
         check(gp.cost({"us": 1}) == "" and gp.needs({}) == "", "a tile: a row stored before the migration says nothing")
     finally:
         if not a.keep:

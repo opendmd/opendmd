@@ -1974,11 +1974,12 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-15:] == ["attract", "look", "glow", "look_formula", "boot_show",
-                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
+    check(list(cfg0)[-17:] == ["attract", "look", "glow", "look_formula", "boot_show",
+                              "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "lat", "lon",
+                              "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"formula_jit/formula_arena/formula_keep/api_key_set, then the panel keys, end the object ({list(cfg0)[-15:]})")
+          f"formula_jit/formula_arena/formula_keep/api_key_set/lat/lon, then the panel keys, end the object ({list(cfg0)[-17:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
@@ -4056,6 +4057,8 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
     formulas_more(browser, base, errors)
     formulas_combine_checks(browser, base, errors)
+    formulas_inputs_checks(browser, base, errors)
+    location_checks(browser, base, errors)
 
 
 def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
@@ -4557,7 +4560,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     enc = page.evaluate("(s) => import('./js/psishow.js').then(m => m.fpath({src: s, a: 0.5}))", src)
     psb = enc[len("@formula?psb="):-len("&a=0.5")] if enc.startswith("@formula?psb=") and enc.endswith("&a=0.5") else ""
     raw = base64.urlsafe_b64decode(psb + "=" * (-len(psb) % 4)) if psb else b""
-    check(raw[:4] == b"PSB\x02" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
+    check(raw[:4] == b"PSB\x03" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
     clear_toasts(page)
     page.click("#psi-show")
     t = last_toast(page, "ok")
@@ -4800,7 +4803,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
           and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
           f"looks: Set as the panel’s look saves it on the panel and names its file ('{t}'; {c5['look_formula']!r})")
     compiled = urllib.request.urlopen(base + "/formulas/matrix-glow.psb", timeout=30).read() if saved else b""
-    check(compiled[:4] == b"PSB\x02", "looks: the saved Formula's compiled file is beside it")
+    check(compiled[:4] == b"PSB\x03", "looks: the saved Formula's compiled file is beside it")
     # Off: the line goes.
     page.click("#psi-set-btn")
     page.wait_for_selector("#psi-set #psi-set-look", timeout=10000)
@@ -4823,6 +4826,150 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
 
 def psi_frames(page: Page, sel: str) -> int:
     return int(page.get_attribute(sel, "data-frames") or 0)
+
+
+def canvas_light(page: Page, sel: str) -> float:
+    """How light a canvas is: its mean of R, G and B, 0..255."""
+    return page.evaluate("""(sel) => {
+        const c = document.querySelector(sel), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i+1] + d[i+2];
+        return n / (d.length / 4 * 3);
+    }""", sel)
+
+
+def set_range(page: Page, sel: str, v: int) -> None:
+    """A range input moved to `v`, as a drag ends (its input event)."""
+    page.eval_on_selector(sel, "(e, v) => { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); }", v)
+    page.wait_for_timeout(300)
+
+
+def location_checks(browser, base: str, errors: list[str]) -> None:
+    """Settings › Schedule › Location: /api/config's `lat`/`lon` (both or
+    neither, in range, rounded to 0.01°, never in status), the fields saving
+    as they change, "Use this browser's location" rounded before it is sent,
+    Clear, and the privacy words."""
+    c = get_json(base + "/api/config")
+    check(c.get("lat", 0) is None and c.get("lon", 0) is None and "lat" not in get_json(base + "/api/status"),
+          f"location: /api/config has lat and lon, null until set, and status has neither ({c.get('lat')}, {c.get('lon')})")
+    for bad in ({"lat": 51.5}, {"lon": 0}, {"lat": 91, "lon": 0}, {"lat": 10, "lon": -180.5}, {"lat": "51", "lon": 0}, {"lat": 51.5, "lon": None}):
+        check(put_status(base, bad) == 400, f"location: {bad} refused (400)")
+    page = new_page(browser, "laptop", errors)
+    page.context.grant_permissions(["geolocation"], origin=base)
+    page.context.set_geolocation({"latitude": 53.34987, "longitude": -6.26031})
+    asked: list[str] = []
+    page.on("request", lambda r: r.method == "PUT" and r.url.endswith("/api/config") and asked.append(r.post_data or ""))
+    sent = lambda: json.loads(asked[-1]) if asked else None
+    page.goto(base + "/")
+    goto_view(page, "settings/time")
+    page.wait_for_selector("#loc #loc-lat", timeout=10000)
+    words = page.inner_text("#loc")
+    check("Location" in words and "stays on your panel" in words and "isn’t written to the card or shared" in words
+          and "Not set" in words and page.locator("#loc-clear:visible").count() == 0,
+          f"location: the card says what it is for and that it stays on the panel; nothing set, no Clear ({words[:160]!r})")
+    page.fill("#loc-lat", "51.5074")
+    page.fill("#loc-lon", "-0.1278")
+    page.locator("#loc-lon").blur()
+    wait_config(base, lambda c: c.get("lat") == 51.51 and c.get("lon") == -0.13)
+    page.wait_for_function("/51.51°N, 0.13°W/.test(document.querySelector('#loc-now').textContent)", timeout=5000)
+    check(sent() == {"lat": 51.51, "lon": -0.13}, f"location: typed, saved rounded to 0.01° ({asked[-1:]})")
+    page.click("#loc-clear")
+    wait_config(base, lambda c: c.get("lat") is None and c.get("lon") is None)
+    check(sent() == {"lat": None, "lon": None}, f"location: Clear sends both null ({asked[-1:]})")
+    page.click("#loc-here")
+    # (Headless Chromium's position can take seconds.)
+    page.wait_for_function("document.querySelector('#loc-lat').value == '53.35'", timeout=30000)
+    check(sent() == {"lat": 53.35, "lon": -6.26} and page.input_value("#loc-lat") == "53.35",
+          f"location: this browser's location, rounded in the page before it is sent ({asked[-1:]})")
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    page.context.close()
+
+
+def formulas_inputs_checks(browser, base: str, errors: list[str]) -> None:
+    """The editor's built-in inputs (js/fconds.js): nothing for a formula that
+    reads none (the module not even loaded); for `daylight` the defaults
+    first, then time travel (midnight dark, noon light, Play moves the clock,
+    the place said: London without a location, the panel's once set); Start
+    a game / Back to the menu as changes whose `since` grows in the page;
+    Night on/off; Back to the defaults."""
+    page = new_page(browser, "laptop", errors)
+    loaded: list[str] = []
+    page.on("request", lambda r: "fconds.js" in r.url and loaded.append(r.url))
+    page.goto(base + "/#formulas")
+    formula_editor(page, "loop 4\ngray(x)")
+    check(page.locator("#psi-cond:visible").count() == 0 and not loaded,
+          f"formulas inputs: a formula reading no built-in has no such controls, and fconds.js isn't loaded ({loaded})")
+    page.fill("#psi-src", "loop 4\ngray(daylight)")
+    page.wait_for_selector("#psi-cond:visible", timeout=10000)
+    page.wait_for_timeout(300)
+    reads, light = page.inner_text("#psi-cond-reads"), canvas_light(page, "#psi-ed-panel")
+    check(reads == "It reads daylight" and light > 60 and page.locator("#psi-tt:checked").count() == 0
+          and page.locator("#psi-cond-daylight").count() == 1,
+          f"formulas inputs: daylight read, at its default (light {light:.0f}), time travel off, a slider for it ({reads!r})")
+    page.check("#psi-tt")
+    page.wait_for_selector("#psi-tt-box:visible", timeout=5000)
+    set_range(page, "#psi-tt-date", 172)
+    set_range(page, "#psi-tt-time", 0)
+    dark = canvas_light(page, "#psi-ed-panel")
+    set_range(page, "#psi-tt-time", 12 * 60)
+    noon = canvas_light(page, "#psi-ed-panel")
+    where = page.inner_text("#psi-tt-where")
+    check(dark < 10 < 60 < noon and page.inner_text("#psi-tt-t") == "12:00" and "51.5°N" in where
+          and page.is_disabled("#psi-cond-daylight"),
+          f"formulas inputs: time travel at midnight dark ({dark:.0f}), at noon light ({noon:.0f}), at London with no location ({where!r}), the slider follows it")
+    page.click("#psi-tt-play")
+    t0 = page.inner_text("#psi-tt-t")
+    page.wait_for_timeout(1500)
+    t1 = page.inner_text("#psi-tt-t")
+    check(page.inner_text("#psi-tt-play") == "Pause" and t1 != t0, f"formulas inputs: Play runs the day ({t0} → {t1})")
+    page.click("#psi-tt-play")
+    # A clock formula follows the moment too.
+    page.uncheck("#psi-tt")
+    page.wait_for_timeout(300)
+    check(canvas_light(page, "#psi-ed-panel") > 60, "formulas inputs: time travel off, the defaults again")
+    # since / was: Start a game flashes, then settles; Back to the menu.
+    page.fill("#psi-src", "loop 4\ngray(max(0, 1 - since(replay.playing)) * 0.8 + replay.playing * 0.2)")
+    page.wait_for_selector("#psi-cond-game", timeout=10000)
+    page.wait_for_timeout(300)
+    idle = canvas_light(page, "#psi-ed-panel")
+    page.click("#psi-cond-game")
+    page.wait_for_timeout(120)
+    flash = canvas_light(page, "#psi-ed-panel")
+    page.wait_for_timeout(1500)
+    playing = canvas_light(page, "#psi-ed-panel")
+    page.click("#psi-cond-menu")
+    page.wait_for_timeout(1500)
+    menu = canvas_light(page, "#psi-ed-panel")
+    reads = page.inner_text("#psi-cond-reads")
+    check(idle < 5 and flash > playing > menu + 5 and menu < 5 and page.locator("#psi-tt:visible").count() == 0
+          and "since(replay.playing)" in reads,
+          f"formulas inputs: Start a game is a change (flash {flash:.0f}, then playing {playing:.0f}), Back to the menu (menu {menu:.0f}); no time travel for it ({reads!r})")
+    page.fill("#psi-src", "loop 4\ngray(night)")
+    page.wait_for_selector("#psi-cond-night", timeout=10000)
+    page.wait_for_timeout(300)
+    off = canvas_light(page, "#psi-ed-panel")
+    page.click("#psi-cond-night")
+    page.wait_for_timeout(300)
+    on_ = canvas_light(page, "#psi-ed-panel")
+    label = page.inner_text("#psi-cond-night")
+    page.click("#psi-cond-reset")
+    page.wait_for_timeout(300)
+    back = canvas_light(page, "#psi-ed-panel")
+    check(off < 5 and on_ > 60 and label == "Night off" and back < 5,
+          f"formulas inputs: Night on ({off:.0f} → {on_:.0f}, now {label!r}), Back to the defaults ({back:.0f})")
+    # The panel's location, once set, is where time travel is.
+    put_json(base + "/api/config", {"lat": 53.35, "lon": -6.26})
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    formula_editor(page, "loop 4\ngray(daylight)")
+    page.wait_for_selector("#psi-cond:visible", timeout=10000)
+    page.check("#psi-tt")
+    where = page.inner_text("#psi-tt-where")
+    check(where == "At your panel’s location" and page.locator("#psi-tt-here:visible").count() == 0,
+          f"formulas inputs: with a location in Settings, time travel is there ({where!r})")
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    page.context.close()
 
 
 def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:

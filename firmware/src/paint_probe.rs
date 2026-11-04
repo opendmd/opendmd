@@ -38,9 +38,12 @@
 //!   (`sel4`, `cnt2`: four `(a < b) * v`, two `(v >= a) + (v >= b)` pairs)
 //!   fused and not, the scenes' guards on, off and by rows against the same
 //!   steps without scenes and with none (`guards base`), and Endless road
-//!   V2 at four of the sweep's frames fused and not; each unfused twin's
-//!   frames against its fused case's; the static and the frame's own
-//!   estimates.
+//!   V2 at four of the sweep's frames and in the city (fused: unfused it
+//!   no longer fits the steps); psb ABI 3's store (`store low`, `store
+//!   low+f`, `store high`: the same reads in the store's first numbers and
+//!   past 900) and built-in inputs (`inputs`, `inputs const`); each unfused
+//!   twin's frames against its fused case's; the static and the frame's
+//!   own estimates.
 //!
 //! Each case's kernel frames are compared with the VM's (FNV-1a of the
 //! first frames); the last line before `done`:
@@ -187,6 +190,10 @@ fn vm_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: O
 #[cfg(feature = "jit")]
 fn jit_direct(prog: &psi::Program, under: Option<&[u8]>, out: &mut [u8], start: Option<u32>) -> Result<Direct, &'static str> {
     use psi::jit::stats as js;
+    // (No room for the kernel's build: said, never an abort.)
+    if !crate::jit_gate(fx_psi::jit_build_bytes(prog)) {
+        return Err("no heap to build the kernel here");
+    }
     let mut k = psi::jit::emit(prog)?;
     let t = fx_psi::tables();
     let mut s = zeroed::<psi::Scratch<128>>();
@@ -301,7 +308,10 @@ fn real_path(name: &str, psb: &[u8], over: bool, canvas: &mut Canvas) -> [Option
                 say(format!("psi-probe: paint: formula {name}: no room for the look's buffers ({} B free)", heap()));
                 break;
             }
-            let mut pic = vec![0u8; psi::W * psi::H * 3];
+            let Some(mut pic) = frame_buf() else {
+                say(format!("psi-probe: paint: formula {name}: no room for the picture under it ({} B free)", heap()));
+                break;
+            };
             psi::golden::picture(&mut pic);
             canvas.as_mut_bytes().copy_from_slice(&pic);
             drop(pic);
@@ -338,10 +348,21 @@ fn real_path(name: &str, psb: &[u8], over: bool, canvas: &mut Canvas) -> [Option
     got
 }
 
+/// A frame's bytes (12 KB), or `None` when the heap hasn't them: the probe
+/// refuses on a short heap, as the player does, never aborts.
+fn frame_buf() -> Option<Vec<u8>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(psi::W * psi::H * 3).ok()?;
+    v.resize(psi::W * psi::H * 3, 0);
+    Some(v)
+}
+
 /// The cases in order: the steps, the overlay, `under`, the Formulas.
 fn rows(tally: &mut Tally) {
-    let mut out = vec![0u8; psi::W * psi::H * 3];
-    let mut pic = vec![0u8; psi::W * psi::H * 3];
+    let (Some(mut out), Some(mut pic)) = (frame_buf(), frame_buf()) else {
+        say(format!("psi-probe: paint: no room for its frames ({} B free): stopped", heap()));
+        return;
+    };
     psi::golden::picture(&mut pic);
     let mut canvas = Canvas::new();
     let mut base: Option<(u32, u32)> = None;
@@ -446,6 +467,7 @@ pub fn run(root: &str) {
     let start = Instant::now();
     psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
     fx_psi::set_still_gate(Some(crate::still_gate));
+    fx_psi::set_jit_gate(Some(crate::jit_gate));
     say(format!("psi-probe: paint: start, {} cases, heap {} B free", CASES.len(), heap()));
     let mut tally = Tally::default();
     rows(&mut tally);

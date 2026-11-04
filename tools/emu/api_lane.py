@@ -445,7 +445,24 @@ class Lane:
         api.call("PUT", "/api/config", {"dwell_max": "seven"}, want=(400,))
         _, cfg3 = api.json("GET", "/api/config")
         self.expect(cfg3.get("dwell_max") == self.dwell_set, "config", "a refused PUT changed dwell_max")
-        self.ok("status, config", f"GET both; PUT dwell_max {self.dwell0} -> {self.dwell_set} read back; a bad value 400, nothing changed")
+        # The location: a pair, rounded to 0.01°, kept by the device (never the card's file,
+        # never /api/status); one half alone, or off the globe, is a 400 with nothing saved.
+        self.expect(cfg.get("lat", 0) is None and cfg.get("lon", 0) is None, "location", f"no location yet, read lat {cfg.get('lat')} lon {cfg.get('lon')}")
+        api.json("PUT", "/api/config", {"lat": 51.5074, "lon": -0.1278})
+        _, c = api.json("GET", "/api/config")
+        self.expect((c.get("lat"), c.get("lon")) == (51.51, -0.13), "location", f"read back {c.get('lat')}, {c.get('lon')}; set 51.5074, -0.1278")
+        for bad in ({"lat": 10}, {"lon": 10}, {"lat": 91, "lon": 0}, {"lat": 0, "lon": -180.5}, {"lat": None, "lon": 3}):
+            api.call("PUT", "/api/config", bad, want=(400,))
+        _, c = api.json("GET", "/api/config")
+        self.expect((c.get("lat"), c.get("lon")) == (51.51, -0.13), "location", f"a refused PUT changed it: {c.get('lat')}, {c.get('lon')}")
+        self.expect("51.51" not in json.dumps(api.status()), "location", "the location is in /api/status")
+        api.json("PUT", "/api/config", {"lat": None, "lon": None})
+        _, c = api.json("GET", "/api/config")
+        self.expect(c.get("lat", 0) is None and c.get("lon", 0) is None, "location", f"cleared, read {c.get('lat')}, {c.get('lon')}")
+        api.json("PUT", "/api/config", {"lat": -33.8688, "lon": 151.2093})
+        _, c = api.json("GET", "/api/config")
+        self.expect((c.get("lat"), c.get("lon")) == (-33.87, 151.21), "location", f"read back {c.get('lat')}, {c.get('lon')}")
+        self.ok("status, config", f"GET both; PUT dwell_max {self.dwell0} -> {self.dwell_set} read back; a bad value 400, nothing changed; lat/lon set, rounded, refused alone or off the globe, cleared, set again")
 
     def files(self, api):
         g = self.gifs
@@ -955,6 +972,7 @@ class Lane:
         self.expect(settings is not None, "card", "no /opendmd.json on the card")
         js = json.loads(settings)
         self.expect(js.get("dwell_max") == self.dwell_set, "card", f"/opendmd.json has dwell_max {js.get('dwell_max')}, the last saved was {self.dwell_set}")
+        self.expect("lat" not in js and "lon" not in js, "card", "/opendmd.json holds the location (the device keeps it itself)")
         for p, data in self.expected.items():
             self.expect(read(p) == data, "card", f"{p} on the card is not the bytes uploaded")
         for p in sorted(self.absent):

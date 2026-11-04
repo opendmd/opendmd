@@ -68,7 +68,7 @@ def urlencoded(pairs: list[tuple[str, str]]) -> str:
 # the first release of each version (site/worker/src/gallery.ts has a copy).
 # Change both when a release ships a new ABI: ABI 2 is in 1.0.0-beta.14.
 ABI_SERVED = 2
-ABI_FIRMWARE = {1: "1.0.0-beta.13", 2: "1.0.0-beta.14"}
+ABI_FIRMWARE = {1: "1.0.0-beta.13", 2: "1.0.0-beta.14", 3: "1.0.0-beta.15"}
 
 
 def cost(e: dict) -> str:

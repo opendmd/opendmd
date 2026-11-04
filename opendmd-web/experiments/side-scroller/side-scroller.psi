@@ -1,0 +1,293 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Sprout run"
+about "A little hooded runner crossing hills that never end, clearing every gap"
+loop forever
+fps 50
+
+-- Side-scroller (docs/research/side-scroller.md). Psi keeps nothing between
+-- frames, so this is an auto-runner: the world is cut into cycles of 72 px,
+-- each cycle's level, jump and obstacle come from hashes of its number, and
+-- the ground is built to fit the jump, so every jump clears what is there.
+-- The runner stays at column 32; the world goes by at 50 px/s, a pixel a
+-- frame; gravity is 255 px/s/s.
+
+-- ---- Colours: 32 entries, nearer layers on higher entries ----
+-- 1-4 sky, 5 star, 6 sun glow, 7 sun or moon, 8-9 cloud, 10-11 far hills,
+-- 12-14 trees, 15 water, 16-20 grass and earth, 21 outline, 22-23 wood,
+-- 24 thorn, 25-26 the beetle, 27-31 the runner
+palette day = #000, #4aa8f0, #78c4f8, #a8dcfa, #d8f0f8, #fff, #fff6c0, #fffbe8,
+  #c8dcf0, #fff, #8c9ad8, #a8b8ec, #2c6c62, #3a8a74, #5aac80, #3a78c0,
+  #a8e060, #6cb040, #c87040, #a85834, #7a3c2c, #2a1a2e, #e0a050, #a06428,
+  #3c7a3c, #7a4ab0, #b088e0, #fff0d8, #e8384a, #ffd23a, #2aa0a0, #6a3a2a
+palette dusk = #000, #3a3080, #8a4a9a, #e07080, #ffb070, #fff, #ffc080, #ffe0a0,
+  #c07080, #ffc0a0, #6a4a90, #8a5aa0, #2a3a5a, #3a4a6a, #5a5a7a, #4a3a7a,
+  #b0a050, #708040, #b05040, #883828, #602828, #20141e, #c07848, #804828,
+  #3a5a3a, #6a3a90, #9a70c0, #f0d0c0, #d83040, #f0b030, #208890, #5a3020
+palette night = #000, #040818, #0a1430, #142048, #1e3058, #fff, #304870, #e8f0ff,
+  #2a3a5a, #4a5a80, #1a2448, #243460, #0a1e24, #102a30, #1a3a3a, #0a1a3a,
+  #2a5040, #1a3a2c, #3a2a3a, #2c2030, #201828, #0a0610, #5a4a50, #3a2a30,
+  #142a1c, #3a2a5a, #5a4a80, #a8b0c8, #8a3040, #b0a050, #1a6070, #2a1a1a
+
+-- The runner: seven frames of 8 x 10 side by side (0-3 the run, 4
+-- rising, 5 falling, 6 crouched before a jump and on landing)
+sprite hero {
+  key . 0, o 21, c 27, r 28, y 29, s 30, b 31
+  ....y......y........y......y.........y....yy............
+  ...yy.....yy.......yy.....yy........yy.....y............
+  ..oooo....oooo....oooo....oooo....oooo....oooo......y...
+  .osssso..osssso..osssso..osssso..osssso..osssso....yy...
+  .osccoc..osccoc..osccoc..osccoc..osccoc..osccoc...oooo..
+  .osccco..osccco..osccco..osccco..osccco..osccco..osssso.
+  rrrrrro.rrrrrro..rrrrro.rrrrrro.rrrrrro.rrrrrro..osccoc.
+  r.osso...rosso..rr.osso.r.osso..r..ossoo..ossso.rrrrrrr.
+  .ob..bo...obo....ob.bo.....obo...obo.bo...ob..bor.osssoo
+  ob....bo..bbo....bo..bo....obb...bb..bb..ob....b.obb.bbo
+}
+-- The ground: 8 columns that repeat, a left and a right edge, then the
+-- same ten for a floating slab (four rows, then nothing)
+sprite tile {
+  key . 0, G 16, g 17, e 18, m 19, d 20, o 21
+  GGGGGGGGGGGGGGGGGGGG
+  GGgGGGGgGgGGgGGGGgGg
+  ggggggggooeggeggegoo
+  egmeegeeoodmddmdmddd
+  eeeemeeeoo..........
+  emeeeemeoo..........
+  eeemeeeeoo..........
+  meeeedeeoo..........
+  eeeedmmeoo..........
+  emeeeeemoo..........
+  eeemeeeeoo..........
+  mmeeemeeoo..........
+  emmmmemmoo..........
+  mmmmdmmmoo..........
+  mdmmmmdmoo..........
+  dmmdmmmdoo..........
+}
+-- In the way: a crate, a stump, a thorn bush, the beetle's two steps
+sprite props {
+  key . 0, o 21, w 22, W 23, t 24, b 25, l 26, c 27
+  oooooooo................................
+  owwwwwWo................................
+  oWowwoWo.oooooo...........oooo....oooo..
+  owWowWwoowwWwwwo.........obllbo..obllbo.
+  owwWowwooWwwwwWo.t..t..tocblbbboocblbbbo
+  oWowwoWoowWwwWwoottotto.obbbbbboobbbbbbo
+  owwwwwWooWwwwwWotttttttt.oooooo..oooooo.
+  oooooooooWWwwWWootttttto.o.o.o.oo.o.o.o.
+}
+sprite gem {
+  key . 0, W #fff, P #ff5ad0, D #a02890
+  ..W..
+  .WPP.
+  WPPPD
+  .PPD.
+  ..D..
+}
+sprite spark {
+  key . 0, W #fff
+  ..W..
+  .....
+  W.W.W
+  .....
+  ..W..
+}
+
+-- ---- The clock: where the runner is ----
+-- X: the runner's place in the world, in whole pixels (a new stretch of
+-- world each play); n0 its cycle's number, held to 16384 (6.5 hours of
+-- cycles, then the world starts over); uc its place in the cycle
+X = floor(t*50 + .5) + floor(seed*8000)*72
+n0 = floor(X/72)%16384
+uc = X%72
+X8 = X%8
+-- the layers' offsets, in whole pixels, each held to its pattern's length
+Cl = floor(X%15360/10 + t%768*2) % 1536
+Hl = floor(X%8000/5)
+Tl = floor(X%5632/2)
+starX = X%12800/100
+twk = floor(X%1024/16)
+step = (X%12 > 5) * 8
+
+-- ---- Each cycle, from its number ----
+-- its level (0-3: the ground's top is row 28 - 4 * level) and whether it
+-- floats (a slab four rows deep over a pit)
+fn lev(n) = floor(clamp(noise(n*.7, 7.3 + seed*50, 0)*7 - 2, 0, 3.99))
+fn flo(n, l) = (hash(n, 5.1 + seed) > .68) * (l > 1)
+-- its jump into the next: 0 none, 1 a gap, 2 up a ledge, 3 a hop down,
+-- 4 something in the way; a gap whenever either side floats
+fn kind(n, d, f) {
+  r = hash(n, 9.7 + seed)
+  max(f, r < .4) ? 1 : d > 0 ? 2 : d < 0 ? 3 : (r < .82) * 4
+}
+-- its length in pixels (gravity makes the rest: a long jump is a high one,
+-- so the higher the ground the shorter, to keep the runner on the panel)
+fn jlen(n, k, l, d) = min(pick(k, 0, 25, 22, 14, 30) + floor(hash(n, 4.4 + seed) * pick(k, 0, 12, 6, 7, 9)),
+  36 - 5*l - 3*max(d, 0))
+-- what is in the way (kind 4): a crate, a stump or thorns by how much room
+-- the jump leaves over its middle, or the beetle (who walks to meet the
+-- runner there): its column in `props`, 999 for nothing
+fn thing(n, k, j) {
+  room = j*j/2500*127.5*(.25 - 49/max(j*j, 1)) - 1
+  k == 4 ? ((hash(n, 2.9 + seed) < .35) * (room >= 7) ? 24 : room >= 8 ? 0 : room >= 6 ? 8 : 16) : 999
+}
+-- its left edge in the cycle (m: the cycle's place from the runner's)
+fn place(m, j, p) {
+  mid = 72 - j/2
+  floor((p == 24 ? clamp(mid + .32*(mid + 72*m - uc), 6, 66) : mid) - 3.5)
+}
+
+-- the five cycles the panel shows: the runner's (0), one behind, three on
+Lm = lev(n0 - 1)
+L0 = lev(n0)
+L1 = lev(n0 + 1)
+L2 = lev(n0 + 2)
+L3 = lev(n0 + 3)
+Fm = flo(n0 - 1, Lm)
+F0 = flo(n0, L0)
+F1 = flo(n0 + 1, L1)
+F2 = flo(n0 + 2, L2)
+F3 = flo(n0 + 3, L3)
+Km = kind(n0 - 1, L0 - Lm, Fm + F0)
+K0 = kind(n0, L1 - L0, F0 + F1)
+K1 = kind(n0 + 1, L2 - L1, F1 + F2)
+K2 = kind(n0 + 2, L3 - L2, F2 + F3)
+Jm = jlen(n0 - 1, Km, Lm, L0 - Lm)
+J0 = jlen(n0, K0, L0, L1 - L0)
+J1 = jlen(n0 + 1, K1, L1, L2 - L1)
+J2 = jlen(n0 + 2, K2, L2, L3 - L2)
+Pm = thing(n0 - 1, Km, Jm)
+P0 = thing(n0, K0, J0)
+P1 = thing(n0 + 1, K1, J1)
+P2 = thing(n0 + 2, K2, J2)
+-- where each cycle's ground stops (e0) and starts again at the next level
+-- (e1): a gap from 2 px after take-off to 3 before landing, a ledge's
+-- wall under the arc's last third, a hop's edge 3 px after take-off
+fn edge0(k, j) = pick(k, 99, 74 - j, 72 - floor(j*.38), 75 - j, 99)
+fn edge1(k, j) = pick(k, 99, 69, 72 - floor(j*.38), 75 - j, 99)
+Am = edge0(Km, Jm)
+A0 = edge0(K0, J0)
+A1 = edge0(K1, J1)
+A2 = edge0(K2, J2)
+Bm = edge1(Km, Jm)
+B0 = edge1(K0, J0)
+B1 = edge1(K1, J1)
+B2 = edge1(K2, J2)
+Om = place(-1, Jm, Pm)
+O0 = place(0, J0, P0)
+O1 = place(1, J1, P1)
+O2 = place(2, J2, P2)
+
+-- ---- The runner: its arc, height and frame ----
+-- it takes off J0 before the cycle's end and lands at its end
+take = 72 - J0
+jumping = (J0 > 0) * (uc >= take)
+T = max(J0, 1)/50
+vy = 4*(L1 - L0)/T + 127.5*T
+tau = max(uc - take, 0) / 50
+yJ = (vy*tau - 127.5*tau*tau) * jumping
+heroTop = floor(28.5 - 4*L0 - yJ) - 10
+crouch = max((J0 > 0) * (uc >= take - 3) * (uc < take), (Jm > 0) * (uc < 3))
+frame = jumping ? (vy - 255*tau > 0 ? 4 : 5) : crouch ? 6 : floor(uc%24/6)
+
+-- ---- Day and night: a day of 160 s, the sun then the moon ----
+dph = frac(t/160 + seed)
+el = sin(dph)
+dayW = smoothstep(0, .35, el)
+nightW = smoothstep(0, -.3, el)
+palette S = tween(tween(dusk, day, dayW), night, nightW)
+arc = frac(dph*2)
+sunX = 8 + arc*112
+sunY = 24 - sin(arc*.5)*19
+
+draw {
+  -- the sun (by day) or the moon (by night), a line a row, in its glow
+  for k < 9 {
+    e = k - 4
+    half = sqrt(max(12.5 - e*e, 0))
+    line(sunX - half - 2, sunY + e, sunX + half + 2, sunY + e, 6/32)
+    line(sunX - half, sunY + e, sunX + half, sunY + e, 7/32)
+  }
+  if nightW > .3 {
+    for k < 20 {
+      dot((hash(k, 1)*128 - starX) % 128, hash(k, 2)*13, (hash(k, twk) > .15) * 5 / 32)
+    }
+  }
+  -- the seeds on each jump's arc (and on the flat): gone once passed
+  for m < 4 {
+    kk = pick(m, Km, K0, K1, K2)
+    jj = pick(m, Jm, J0, J1, J2)
+    la = pick(m, Lm, L0, L1, L2)
+    lb = pick(m, L0, L1, L2, L3)
+    tt = jj*jj/2500*127.5
+    for g < 3 {
+      p = .3 + g*.2
+      gu = kk > 0 ? 72 - jj + p*jj : 26 + g*10
+      gy = 23 - 4*la - (kk > 0)*(4*(lb - la)*p + tt*p*(1 - p))
+      sx = 32 + 72*(m - 1) + gu - uc
+      if sx > 34 {
+        spr(gem, sx - 2, gy - 2)
+      } else {
+        if sx > 26 {
+          spr(spark, sx - 2, gy - 2)
+        }
+      }
+    }
+  }
+}
+
+-- ---- Once a column: the layers' tops ----
+-- clouds: cells of 32 px, most with a cloud, flat bottoms on row 8, puffs
+-- along the top
+cu = Cl + px
+ch = hash(floor(cu/32)%48, 3.3 + seed)
+cdx = cu%32 - 16
+th = (ch > .3)*(ch*5 + 1.5 - cdx*cdx*(.03 - ch*.015)) + tri(cu%6/12)*1.5
+cTop = th > 1.5 ? 10 - th : 99
+-- far hills: two waves that come round in 1600 px
+hu = (Hl + px) / 1600
+hT = 12 - 3*sin(hu*3 + seed) - 2*sin(hu*11 + .2)
+-- trees: rounded crowns in two rows, a cell of 11 px each
+tu = Tl + px
+tf = tu%11 - 5
+tf2 = (tu + 5)%11 - 5
+tT = min(21 - hash(floor(tu/11)%256, 4.2 + seed)*7 + tf*tf*.2,
+  24 - hash(floor((tu + 5) / 11) % 256, 6.1 + seed)*7 + tf2*tf2*.2)
+
+-- ---- Once a column: the ground ----
+-- which cycle the column is in (rel -1..2 from the runner's) and where
+w = uc + px - 32
+rel = floor(w/72)
+u = w - rel*72
+sel = rel + 1
+e0 = pick(sel, Am, A0, A1, A2)
+e1 = pick(sel, Bm, B0, B1, B2)
+-- which cycle's ground: this one's before e1, the next one's from it
+at = sel + (u >= e1)
+gT = (u >= e0) * (u < e1) ? 99 : 28 - 4*pick(at, Lm, L0, L1, L2, L3)
+-- the tile's column: 0-7 along, 8 and 9 the edges (e1 always starts
+-- ground after a gap or a step; e0 ends it before one, or before a hop
+-- down); 10 on for a floating slab (four rows deep)
+tileU = (u == e1 ? 8 : u == e0 - 1 ? 9 : (X8 + px) % 8) + pick(at, Fm, F0, F1, F2, F3)*10
+ob = u - pick(sel, Om, O0, O1, O2)
+pk = pick(sel, Pm, P0, P1, P2)
+oU = (ob >= 0) * (ob < 8) ? ob + pk + (pk == 24)*step : -1
+hU = (px >= 28) * (px < 36) ? px - 28 + frame*8 : -1
+
+-- ---- Pixels: each layer over the last ----
+-- (rows: the sky's bands, the clouds' rows (above row 10 only), the water)
+skyK = 1 + min(floor(py/6), 3)
+cRow = py < 10 ? py : -99
+cloudK = py < 9 ? 9 : 8
+k = max(skyK, ink(32))
+k = cRow >= cTop ? cloudK : k
+k = py >= hT ? 10 + (py < hT + 1) : k
+-- the trees lit along their crowns
+k = max(k, pick(py - tT, 14, 14, 13, 13, 13, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12))
+k = max(k, (py > 29) * 15)
+gv = py - gT
+k = max(k, tile[tileU, gv])
+k = max(k, props[oU, gv + 8])
+k = max(k, hero[hU, py - heroTop])
+pal(S, k/32)

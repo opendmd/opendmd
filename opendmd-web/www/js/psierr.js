@@ -169,7 +169,11 @@ const C = [
   [970, 57, "a scene's `when` is worked out once a frame or once a row"],
   [971, 40, "a scene holds values: `name = …` lines"],
   [972, 14, "scenes at most"],
-  [973, 52, "a `rate` layer can't read a scene's per-pixel values"]
+  [973, 52, "a `rate` layer can't read a scene's per-pixel values"],
+  [974, 32, "numbers at most — this one has"],
+  [975, 26, "is not a built-in input: `"],
+  [976, 29, "takes a built-in input's name"],
+  [977, 23, "built-in inputs at most"]
 ];
 // psi-errors end
 

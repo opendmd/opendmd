@@ -40,7 +40,9 @@ pub const LANES: usize = psi::LANES;
 
 /// The compiled formula, its working memory and its options.
 pub struct PsiFx {
-    prog: psi::Program,
+    /// Its program, with the store its formula needs (none: a zeroed
+    /// `PsiFx`'s, before its open).
+    prog: ProgBox,
     scratch: psi::Scratch<LANES>,
     /// The draw stage's canvas (4 KB, 8 KB when it paints), held only
     /// while the formula draws (`draw { }`); `None` is all-zero, so the
@@ -151,6 +153,42 @@ pub fn set_still_gate(gate: Option<StillGate>) {
     STILL_GATE.store(a, Ordering::Relaxed);
     #[cfg(test)]
     STILL_GATE.with(|g| g.store(a, Ordering::Relaxed));
+}
+
+/// May a formula's JIT kernel be built now, its lowering and code taking
+/// about `bytes` of the heap for a moment ([`jit_build_bytes`])? The
+/// firmware's says whether the heap has that and its floor besides; none
+/// installed (the host): yes. Refused, the formula stays on the VM and asks
+/// again a second later: the build's working memory is small allocations
+/// that would abort the player, not refuse, on a short heap.
+pub type JitGate = fn(usize) -> bool;
+
+static JIT_GATE: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the [`JitGate`].
+pub fn set_jit_gate(gate: Option<JitGate>) {
+    JIT_GATE.store(gate.map_or(0, |f| f as usize), Ordering::Relaxed);
+}
+
+#[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+fn jit_build_allowed(bytes: usize) -> bool {
+    match JIT_GATE.load(Ordering::Relaxed) {
+        0 => true,
+        // SAFETY: stored by `set_jit_gate` from a `JitGate` (a fn pointer,
+        // never null, the size of a `usize`).
+        a => {
+            let gate = unsafe { std::mem::transmute::<usize, JitGate>(a) };
+            gate(bytes)
+        }
+    }
+}
+
+/// What a kernel's build takes of the heap at its peak, about: the
+/// lowering's tables (measured on the host at ~20 B a step with 64-bit
+/// pointers, Endless road V2's 751 steps 14.7 KB; less on the ESP32) and
+/// the code (a few KB).
+pub fn jit_build_bytes(prog: &psi::Prog) -> usize {
+    prog.len() * 16 + 6 * 1024
 }
 
 fn still_allowed(bytes: usize) -> bool {
@@ -489,19 +527,64 @@ pub(crate) fn refuse_loads(n: u32) {
 pub const NOT_PREPARED: &str =
     "this Formula is not on the card, or not prepared for the panel yet: open the OpenDMD app";
 
-/// Load the compiled Formula `psb` (program `which`) into `prog`: checked
-/// and finished for the player ([`psi::psb::load_into`]).
-fn load_into(psb: &[u8], which: psi::psb::Which, prog: &mut psi::Program) -> Result<(), psi::Error> {
+/// A formula's program on the heap, with the store its formula needs
+/// ([`psi::Prog`]: its tables and sprites, a power of two of numbers, 4 for
+/// a formula with none), or none: an all-zero one (a zeroed [`PsiFx`]'s,
+/// before its open gives it one; nothing reads it then). (No static empty
+/// program to read instead: it would be 6.4 KB of the app's flash.)
+pub struct ProgBox(Option<Box<psi::Prog>>);
+
+impl ProgBox {
+    /// A copy in a box of its own, or `None` when the heap has none.
+    fn try_clone(&self) -> Option<ProgBox> {
+        match &self.0 {
+            Some(p) => Some(ProgBox(Some(p.try_boxed_copy()?))),
+            None => Some(ProgBox(None)),
+        }
+    }
+
+    /// The heap it holds (B).
+    pub fn bytes(&self) -> usize {
+        self.0.as_deref().map_or(0, std::mem::size_of_val)
+    }
+}
+
+impl std::ops::Deref for ProgBox {
+    type Target = psi::Prog;
+    fn deref(&self) -> &psi::Prog {
+        self.0.as_deref().expect("a formula's program, given at its open")
+    }
+}
+
+impl std::fmt::Debug for ProgBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl PartialEq for ProgBox {
+    fn eq(&self, o: &ProgBox) -> bool {
+        **self == **o
+    }
+}
+
+/// Load the compiled Formula `psb` (program `which`) into a program of the
+/// store it needs: checked and finished for the player
+/// ([`psi::psb::load_into`]).
+fn load_boxed(psb: &[u8], which: psi::psb::Which) -> Result<ProgBox, psi::Error> {
     #[cfg(test)]
     if REFUSE.with(|r| r.replace(r.get().saturating_sub(1)) > 0) {
-        prog.clear();
         return Err(no_memory());
     }
-    psi::psb::load_into(psb, which, prog).map_err(|m| psi::Error {
+    let err = |m: &str| psi::Error {
         start: 0,
         end: 0,
         msg: m.to_string(),
-    })
+    };
+    let words = psi::psb::store_needed(psb, which).map_err(err)?;
+    let mut p = hinted(ARENA_PROG, || psi::Prog::try_boxed(words)).ok_or_else(no_memory)?;
+    psi::psb::load_into(psb, which, &mut p).map_err(err)?;
+    Ok(ProgBox(Some(p)))
 }
 
 /// Install the clock that turns the governor on (the firmware's
@@ -597,8 +680,27 @@ pub fn beam_us() -> u32 {
     BEAM_US.load(Ordering::Relaxed)
 }
 
+/// Whether `prog` reads a built-in input (`daylight`, `since(night)` …).
+fn reads_world(prog: &psi::Prog) -> bool {
+    prog.inputs() & 128 != 0
+}
+
+/// The built-in inputs from the panel's table ([`crate::inputs`]): each
+/// key's value, the one before and the seconds since it changed; a key
+/// with no value its default (what previews show).
+pub fn fill_world(world: &mut psi::World) {
+    let (t, now) = crate::inputs::snapshot();
+    for k in 1..psi::world::MAX_KEYS.min(crate::inputs::KEYS) {
+        let r = t.read(k as u8, now);
+        let def = psi::world::key_by_id(k as u8).map_or(0, |key| key.default);
+        world.value[k] = r.value.unwrap_or(def);
+        world.was[k] = r.was.unwrap_or(def);
+        world.since[k] = r.since;
+    }
+}
+
 /// Whether `prog` reads the wall clock (`hour`, `minute`, `second`).
-fn reads_clock(prog: &psi::Program) -> bool {
+fn reads_clock(prog: &psi::Prog) -> bool {
     prog.inputs() & 16 != 0
 }
 
@@ -761,13 +863,13 @@ fn query(query: &str) -> Query<'static> {
     q
 }
 
-/// Load `q` into `prog` and hold it to what the [`Governor`] can keep in
+/// Load `q`'s program and hold it to what the [`Governor`] can keep in
 /// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
-/// slowest step 80 ms) 32 ms. The estimate and the frame time asked (ms:
-/// the path's `fps=`, else the formula's `fps N`, else 20).
-fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> {
+/// slowest step 80 ms) 32 ms. The program, the estimate and the frame time
+/// asked (ms: the path's `fps=`, else the formula's `fps N`, else 20).
+fn compile(q: &Query) -> Result<(ProgBox, u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
-    load_into(&q.psb, psi::psb::Which::Play, prog)?;
+    let prog = load_boxed(&q.psb, psi::psb::Which::Play)?;
     if let Some((c, t0)) = t0 {
         set_stat(2, c().wrapping_sub(t0));
     }
@@ -788,7 +890,7 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> 
             ),
         });
     }
-    Ok((est, delay))
+    Ok((prog, est, delay))
 }
 
 /// What the governor starts from: the estimate with the still cache when
@@ -796,7 +898,7 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> 
 /// (it is taken on the first frame, which the governor leaves out), else
 /// `est` (every step every frame). The refusal limit is always held to
 /// `est`: the cache may be refused or let go at any time.
-fn start_estimate(prog: &psi::Program, est: u32) -> u32 {
+fn start_estimate(prog: &psi::Prog, est: u32) -> u32 {
     let still = prog.still_lanes() > 0 && still_allowed(psi::Still::bytes_for(prog));
     match (still, jit_built()) {
         (true, true) => prog.esp32_us_jit_still(),
@@ -828,7 +930,7 @@ pub const NO_CANVAS: &str = "the player is short of memory just now: try again i
 /// fitted (the paint plane taken or let go); refused, it is left as it was
 /// for the program it serves.
 fn canvas_for(
-    prog: &psi::Program,
+    prog: &psi::Prog,
     held: &mut Option<Box<psi::Ink>>,
 ) -> Result<Option<Box<psi::Ink>>, psi::Error> {
     if !prog.draws() {
@@ -910,8 +1012,12 @@ impl PsiFx {
     }
 
     fn open(q: &Query) -> Result<PsiBox, psi::Error> {
+        // (The box first, as before the store was sized per Formula: on a
+        // short heap it is the one refused, before the load's own working
+        // memory is asked for.)
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
-        let (est, delay) = compile(q, &mut fx.prog)?;
+        let (prog, est, delay) = compile(q)?;
+        fx.prog = prog;
         fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
         fx.delay_ms = delay;
@@ -950,10 +1056,7 @@ impl PsiFx {
     /// (3.4 KB) is allocated, and only while loading.
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = resolve(q)?;
-        // SAFETY: `Program` is integers all the way down: zero is valid.
-        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
-        prog.clear();
-        let (est, delay) = compile(&q, &mut prog)?;
+        let (prog, est, delay) = compile(&q)?;
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
         self.ink = canvas_for(&prog, &mut self.ink)?;
@@ -964,7 +1067,7 @@ impl PsiFx {
             self.still.release();
             set_still_held(0);
         }
-        self.prog = *prog;
+        self.prog = prog;
         // Another program: its slow layers are drawn again (or their
         // picture let go).
         if self.prog.rate().is_none() {
@@ -1002,7 +1105,7 @@ impl PsiFx {
         Duration::from_millis(u64::from(self.loop_frames() * self.ms()))
     }
 
-    pub fn program(&self) -> &psi::Program {
+    pub fn program(&self) -> &psi::Prog {
         &self.prog
     }
 }
@@ -1102,6 +1205,9 @@ pub const PLANE_BYTES: usize = std::mem::size_of::<psi::Plane>();
 pub static ARENA_HINT: AtomicUsize = AtomicUsize::new(0);
 pub const ARENA_FX: usize = 1;
 pub const ARENA_CANVAS: usize = 2;
+/// The formula's program (its store sized by the formula: the arena's slot
+/// holds the biggest).
+pub const ARENA_PROG: usize = 3;
 
 /// Run `f` with [`ARENA_HINT`] at `hint`.
 fn hinted<T>(hint: usize, f: impl FnOnce() -> T) -> T {
@@ -1189,6 +1295,9 @@ impl PsiFx {
             self.inputs.hour = now.hour;
             self.inputs.minute = now.minute;
             self.inputs.second = now.second;
+        }
+        if reads_world(&self.prog) {
+            fill_world(&mut self.inputs.world);
         }
         let d = self.render(canvas);
         self.drawn = self.drawn.saturating_add(1);
@@ -1604,7 +1713,7 @@ pub const COVERS: &str =
 /// changed are drawn again, with the same `t`. One that reads neither is
 /// drawn only where the picture changes.
 pub struct FormulaLook {
-    prog: Box<psi::Program>,
+    prog: ProgBox,
     /// Boxed, so a `FormulaLook` (two of them in the firmware's main loop)
     /// is small on the main task's stack: the picture's dirty map alone is
     /// 516 B.
@@ -1685,9 +1794,7 @@ impl FormulaLook {
     }
 
     fn open(q: &Query) -> Result<FormulaLook, psi::Error> {
-        // SAFETY: `Program` is integers all the way down: zero is valid.
-        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
-        let est = Self::compile(q, &mut prog)?;
+        let (prog, est) = Self::compile(q)?;
         let mut look = FormulaLook {
             prog,
             held: None,
@@ -1711,12 +1818,11 @@ impl FormulaLook {
         path.strip_prefix(crate::synth::FORMULA).unwrap_or(path)
     }
 
-    fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
+    fn compile(q: &Query) -> Result<(ProgBox, u32), psi::Error> {
         // Its look program: its own `look screen 40` line composed in by
         // the compiler (else the program as it plays).
-        load_into(&q.psb, psi::psb::Which::Look, prog)?;
+        let prog = load_boxed(&q.psb, psi::psb::Which::Look)?;
         if !prog.over() {
-            prog.clear();
             return Err(psi::Error {
                 start: 0,
                 end: 0,
@@ -1725,7 +1831,6 @@ impl FormulaLook {
         }
         let est = prog.esp32_us();
         if est > LOOK_MAX_EST_US {
-            prog.clear();
             return Err(psi::Error {
                 start: 0,
                 end: 0,
@@ -1736,7 +1841,7 @@ impl FormulaLook {
                 ),
             });
         }
-        Ok(est)
+        Ok((prog, est))
     }
 
     /// A look's frame time asked: its path's `fps=`, else 20 ms. A
@@ -1792,9 +1897,7 @@ impl FormulaLook {
     /// the buffers and the governor stay. On an error nothing changes.
     pub fn retune(&mut self, path: &str) -> Result<(), psi::Error> {
         let q = resolve(Self::query_of(path))?;
-        // SAFETY: as in `from_path`.
-        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
-        let est = Self::compile(&q, &mut prog)?;
+        let (prog, est) = Self::compile(&q)?;
         self.prog = prog;
         // Another program: its kernel (if any) is made at its next frame.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -1817,13 +1920,14 @@ impl FormulaLook {
         Ok(())
     }
 
-    pub fn program(&self) -> &psi::Program {
+    pub fn program(&self) -> &psi::Prog {
         &self.prog
     }
 
     /// Whether it has frames of its own (it reads `t` or the clock).
     pub fn is_animated(&self) -> bool {
-        self.prog.inputs() & 24 != 0
+        // (`t`, the clock, or a built-in input: those move a second at most.)
+        self.prog.inputs() & (24 | 128) != 0
     }
 
     /// Its own frames' grid (ms): its frame time if it reads `t`, a second
@@ -2005,6 +2109,9 @@ impl FormulaLook {
                 self.inputs.hour = w.hour;
                 self.inputs.minute = w.minute;
                 self.inputs.second = w.second;
+            }
+            if reads_world(&self.prog) {
+                fill_world(&mut self.inputs.world);
             }
             // The next frame of its own: on its grid, held as the governor
             // says, never in the past.
@@ -2198,6 +2305,9 @@ mod jit {
         best: [u32; 2],
         /// Why the VM draws this formula (`None`: not decided yet).
         why: Option<&'static str>,
+        /// When the heap last had no room for the kernel's build (the
+        /// clock's µs | 1; 0: not refused).
+        gate_tried: u32,
     }
 
     /// Why, with the switch off.
@@ -2220,7 +2330,7 @@ mod jit {
         /// The kernel, if it draws this frame (a trial's frames kernel and
         /// VM in turn). Not made yet: made now, and the VM draws this frame
         /// (the check reads its bytes).
-        pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Program) -> Option<&mut psi::jit::Kernel> {
+        pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Prog) -> Option<&mut psi::jit::Kernel> {
             if !super::jit_allowed() {
                 if self.why != Some(OFF) {
                     *self = Jit { why: Some(OFF), ..Jit::default() };
@@ -2238,6 +2348,17 @@ mod jit {
                 set_jit_status(which, false, LOOK_RATE, 0);
             }
             if self.kernel.is_none() && self.why.is_none() {
+                // (A short heap: on the VM for now, asked again a second
+                // later.)
+                let now = super::clock().map_or(0, |c| c());
+                if self.gate_tried != 0 && now.wrapping_sub(self.gate_tried) < 1_000_000 {
+                    return None;
+                }
+                if !super::jit_build_allowed(super::jit_build_bytes(prog)) {
+                    self.gate_tried = now | 1;
+                    return None;
+                }
+                self.gate_tried = 0;
                 match psi::jit::emit(prog) {
                     Ok(k) => {
                         log::info!("formula: kernel of {} B at {:#x}, to be checked", k.code_bytes(), k.addr());
@@ -2299,7 +2420,7 @@ mod jit {
         pub(super) fn check(
             &mut self,
             which: usize,
-            prog: &psi::Program,
+            prog: &psi::Prog,
             scratch: &mut psi::Scratch<{ super::LANES }>,
             ink: Option<&mut psi::Ink>,
             inputs: &psi::Inputs,
@@ -2319,9 +2440,12 @@ mod jit {
                 }
                 Ok(false) => {} // a checked frame: next time
                 Err((row, x)) => {
+                    // (No listing here: it and the float formatting it
+                    // pulls in were ~6 KB of the app; `psi check
+                    // --listing` on the host gives it for the formula.)
                     log::error!(
-                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM\n{}",
-                        prog.listing()
+                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM ({} steps)",
+                        prog.steps()
                     );
                     self.kernel = None;
                     self.why = Some(DIFFERS);
@@ -2416,7 +2540,6 @@ mod alloc_box {
             // canvas, an `Option<Box<_>>`, whose all-zero value is `None`:
             // all-zero is a valid value of it.
             let mut b = PsiBox(super::hinted(super::ARENA_FX, || unsafe { super::try_zeroed::<PsiFx>() })?);
-            b.0.prog.clear();
             b.0.scratch.reset();
             b.0.delay_ms = 20;
             b.0.gov = super::Governor::default();
@@ -2446,7 +2569,10 @@ mod alloc_box {
     impl Clone for PsiBox {
         fn clone(&self) -> PsiBox {
             let mut b = PsiBox::new();
-            b.0.prog = self.0.prog;
+            // (As `new`: the heap's refusal is an abort.)
+            b.0.prog = self.0.prog.try_clone().unwrap_or_else(|| {
+                std::alloc::handle_alloc_error(opendmd_psi::Prog::layout(self.0.prog.store_len()))
+            });
             // (A clone that can't have its canvas draws nothing: `ink` 0.)
             b.0.ink = super::canvas_for(&b.0.prog, &mut None).unwrap_or(None);
             b.0.clock = self.0.clock;
@@ -3382,7 +3508,7 @@ mod tests {
             let Some(Fx::Psi(fx)) = Fx::parse(&p) else {
                 panic!("{name}: {p}")
             };
-            assert!(*fx.program() == psi::compile(src).unwrap(), "{name}");
+            assert!(*fx.program() == *psi::compile(src).unwrap(), "{name}");
             let g = psi::golden::inputs(0);
             assert_eq!(
                 (fx.inputs.a, fx.inputs.b, fx.inputs.c),
@@ -3429,7 +3555,7 @@ mod tests {
         psi::look::set(src, blend, k).unwrap()
     }
 
-    fn over_prog(prog: &psi::Program, ms: u32, under: &Canvas) -> Vec<u8> {
+    fn over_prog(prog: &psi::Prog, ms: u32, under: &Canvas) -> Vec<u8> {
         let mut want = vec![0u8; psi::W * psi::H * 3];
         let inputs = psi::Inputs {
             t: psi::Inputs::at_ms(ms),
@@ -3580,7 +3706,7 @@ mod tests {
         let mine =
             FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
         let theirs = psi::look::compose(body, "screen", 40).unwrap();
-        assert!(*mine.prog == theirs);
+        assert!(*mine.prog == *theirs);
         assert_eq!(mine.inputs.a, 1 << 15);
         // `look` alone is the formula itself: one that covers the GIF is
         // still no look.

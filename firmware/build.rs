@@ -120,6 +120,17 @@ fn main() {
     // The paint probe's cases (`paint-probe`, src/paint_probe.rs), compiled
     // here (the image has no compiler): (group, name, pixels, psb).
     std::fs::write(out_dir.join("probe_paint.rs"), paint_cases(&dir, &strip)).expect("writing probe_paint.rs");
+    // The psi probe's whole-store Formula (psb ABI 3: 1,024 numbers, its
+    // program 10.5 KB), compiled here: on the device its compile alone
+    // needs more heap than the probe has by then.
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    let f = filler.join(", ");
+    let store = format!(
+        "loop 8\ntable F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\ntable F3 = {f}, 4\n\
+gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]*0.1 + t/8 + daylight*0.1))\n"
+    );
+    let psb = opendmd_psi::build(&store).unwrap_or_else(|e| panic!("the store case: {}", e.render(&store)));
+    std::fs::write(out_dir.join("probe_store.rs"), format!("&{psb:?}\n")).expect("writing probe_store.rs");
     let raw = std::fs::read_to_string("web/setup.html").expect("reading web/setup.html");
     let mut tera = Tera::default();
     tera.add_raw_template("setup", &raw)
@@ -257,10 +268,24 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
         ("guards rows".into(), 0, three("py < 16"), true),
         ("guards base".into(), 0, format!("{base}gray(frac(u*0.1))\n"), true),
     ];
+    // (V2 fused only: it has grown past what its unfused steps fit in, with
+    // its lamp posts; P0b-4 measured the pairs.)
     for (place, ms) in [("exit", 2_056_049u32), ("mouth", 733_049), ("forest-desert", 544_049), ("desert", 2_177_549)] {
         cmp.push((format!("road-v2 {place} fused"), ms, road.clone(), true));
-        cmp.push((format!("road-v2 {place} unfused"), ms, road.clone(), false));
     }
+    // V2 in the city (its lamp posts), and psb ABI 3: the same table and
+    // sprite reads in the store's first numbers and past 900 (the store
+    // sized 1,024; the helpers mask by its length), and built-in inputs
+    // against the same constants.
+    cmp.push(("road-v2 city fused".into(), 128_049, road.clone(), true));
+    let reads = "table T = 0.1, 0.5, 0.9, 0.3, 0.7\nsprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(frac(T[x*5 + t] + s[x*18 + t, y*2] + T[y*5]*0.3 + s[x*9, y*2 + t]))\n";
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    let fill = format!("table F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\n", f = filler.join(", "));
+    cmp.push(("store low".into(), 0, format!("loop 8\n{reads}"), true));
+    cmp.push(("store high".into(), 0, format!("loop 8\n{fill}{reads}").replace("gray(frac(", "gray(frac(F2[250]*0.01 + "), true));
+    cmp.push(("store low+f".into(), 0, format!("loop 8\n{reads}").replace("gray(frac(", "gray(frac(0.03 + "), true));
+    cmp.push(("inputs".into(), 0, format!("{base}gray(frac(u*daylight + sun.alt + y*moon.phase + since(night)*0.001 + was(bright)))\n"), true));
+    cmp.push(("inputs const".into(), 0, format!("{base}gray(frac(u*1 + 0.1 + y*0.5 + 32767*0.001 + 1))\n"), true));
     for (name, ms, src, fused) in cmp {
         let psb = opendmd_psi::build_with(&src, fused).unwrap_or_else(|e| panic!("cmp case {name}: {}", e.render(&src)));
         list += &format!("    (\"cmp\", {name:?}, {ms}, &{psb:?}),\n");
