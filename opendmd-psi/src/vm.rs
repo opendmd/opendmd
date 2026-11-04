@@ -77,15 +77,15 @@ pub fn q16(num: i32, den: i32) -> i32 {
 
 /// The VM's working memory for a lane width `N` (64 or 128): the lane
 /// registers, the `i` lane, the scalar slots, and the `x`/`px` columns
-/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,192 B
-/// at 128 lanes, 4,864 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
+/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,704 B
+/// at 128 lanes, 5,376 B at 64, and racing the beam's 12 B. Plain integers, so a zeroed allocation plus `reset` is a
 /// valid one. (`repr(C)`: the beam's fields after the VM's, which keep
 /// their offsets.)
 #[repr(C)]
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
     pub(crate) lanes: [[i32; N]; REGS + 1],
-    pub(crate) sc: [i32; MAX_SCALARS],
+    pub(crate) sc: Sc,
     pub(crate) xs: [i32; W],
     pub(crate) pxs: [i32; W],
     /// Racing the beam, while a frame is drawn ([`render_rows_beam`]):
@@ -106,7 +106,7 @@ impl<const N: usize> Scratch<N> {
     pub fn new() -> Self {
         let mut s = Scratch {
             lanes: [[0; N]; REGS + 1],
-            sc: [0; MAX_SCALARS],
+            sc: [0; SC],
             xs: [0; W],
             pxs: [0; W],
             order: 0,
@@ -928,12 +928,19 @@ pub(crate) fn frame<const N: usize>(
     if prog.forever() {
         wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
-    for op in &prog.ops[..fe] {
+    // (Its tweens, the section's last steps, with its own palettes below.)
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
         if code::is_wide(op.code) {
             wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
         } else {
             scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
+    }
+    // A formula's own palettes, worked out once for the frame (before the
+    // draw stage, whose values may take the tweens' weights' slots).
+    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
+    if prog.uses & OWNPAL != 0 {
+        own_palettes(prog, &scratch.sc, &mut own);
     }
     let ink: Option<&Ink> = match ink {
         Some(k) if prog.draws() => {
@@ -973,11 +980,6 @@ pub(crate) fn frame<const N: usize>(
     // without their loops in the download.
     let narrow = !cfg!(target_arch = "wasm32") && crate::range::inputs_in_range(prog, inputs);
     let uses_i = prog.uses & USES_I != 0;
-    // A formula's own palettes, unpacked once for the frame.
-    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
-    if prog.uses & OWNPAL != 0 {
-        unpack_palettes(&prog.tables, &mut own);
-    }
     let backdrop = prog.uses & BACKDROP != 0 || fast;
     // Each row's values and what it changed (`Rows`): the row as it was
     // kept when `changed` asks.
@@ -1127,7 +1129,7 @@ pub(crate) type Alias = [*const i32; REGS + 1];
 /// destination).
 #[inline(always)]
 pub(crate) fn reg_index(v: u8) -> usize {
-    ((v & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS)
+    (lane_no(v).saturating_sub(L_I) as usize).clamp(1, REGS)
 }
 
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
@@ -1325,21 +1327,16 @@ impl<'a> Rows<'a> {
 }
 
 #[inline(always)]
-pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
+pub(crate) fn scalar(sc: &mut Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
     let v = scalar_value(sc, op, t, tabs);
-    sc[(op.d & 0x7f) as usize] = v;
+    sc[op.d as usize] = v;
 }
 
 /// What a scalar step works out (`scalar` stores it in its `d`).
 #[inline(always)]
-pub(crate) fn scalar_value(
-    sc: &[i32; MAX_SCALARS],
-    op: &Op,
-    t: &Tables,
-    tabs: &[i32; MAX_TABLE],
-) -> i32 {
-    // Operands of scalar steps are always scalar slots (< 128).
-    let g = |v: u8| sc[(v & 0x7f) as usize];
+pub(crate) fn scalar_value(sc: &Sc, op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
+    // Operands of scalar steps are always scalar slots (< LANE).
+    let g = |v: u8| sc[v as usize];
     match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
@@ -1355,7 +1352,7 @@ pub(crate) fn scalar_value(
 /// Endless road ~1.1 ms a frame on the spare — roadprobe-b, two a row).
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
+fn noise_o(x: i32, y: i32, z: i32, sc: &Sc, c: u8) -> i32 {
     fixed::noise_off(x, y, z, ctx(sc, c))
 }
 
@@ -1369,7 +1366,7 @@ fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
 /// Noise context `c - NOISE_O`'s three lattice offsets: its slots
 /// ([`noise_slot`]; 0 for an axis without one).
 #[inline(always)]
-fn ctx(sc: &[i32; MAX_SCALARS], c: u8) -> [u32; 3] {
+fn ctx(sc: &Sc, c: u8) -> [u32; 3] {
     let k = noise_slot(c.wrapping_sub(code::NOISE_O) as usize % NOISE_CTX, 0);
     [sc[k] as u32, sc[k + 1] as u32, sc[k + 2] as u32]
 }
@@ -1392,9 +1389,9 @@ pub(crate) fn wset(l: &mut [i32], k: usize, v: i64) {
 /// `t` and what is made from it; `w` the lane holding the wide values),
 /// out of line and in flash: the frame loop that calls it is in IRAM.
 #[inline(never)]
-pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
+pub(crate) fn wide_step(sc: &mut Sc, w: &mut [i32], op: &Op) {
     use code::*;
-    let s = |v: u8| sc[(v & 0x7f) as usize];
+    let s = |v: u8| sc[v as usize];
     let (a, d) = (wget(w, op.a as usize), op.d);
     let out = match op.code {
         W_ADD => a.wrapping_add(wget(w, op.b as usize)),
@@ -1422,7 +1419,7 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
                 ),
                 _ => fixed::w_reduce(a),
             };
-            sc[(d & 0x7f) as usize] = v;
+            sc[d as usize] = v;
             return;
         }
     };
@@ -1443,10 +1440,10 @@ impl<const N: usize> Scratch<N> {
     /// The operand `v` for the lane at column `base`.
     #[inline(always)]
     fn arg(&self, al: &Alias, v: u8, base: usize) -> Arg {
-        if v & LANE == 0 {
-            return Arg::Sc(self.sc[(v & 0x7f) as usize]);
+        if !is_lane(v) {
+            return Arg::Sc(self.sc[v as usize]);
         }
-        Arg::Lane(match v & !LANE {
+        Arg::Lane(match lane_no(v) {
             L_X => self.xs[base..base + N].as_ptr(),
             L_PX => self.pxs[base..base + N].as_ptr(),
             l => {
@@ -1546,15 +1543,7 @@ pub(crate) fn lane_draw<const N: usize>(
 /// turn by turn ([`lane_draw`]).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
-fn value_of(
-    op: &Op,
-    x: i32,
-    y: i32,
-    z: i32,
-    sc: &[i32; MAX_SCALARS],
-    t: &Tables,
-    tabs: &[i32; MAX_TABLE],
-) -> i32 {
+fn value_of(op: &Op, x: i32, y: i32, z: i32, sc: &Sc, t: &Tables, tabs: &[i32; MAX_TABLE]) -> i32 {
     use code::*;
     match op.code {
         SHR => x >> (op.c & 31),
@@ -1615,7 +1604,7 @@ pub(crate) fn lane_op<const N: usize>(
     // same step (`compile` allocates it that way), so the `&mut` lane does
     // not alias the source pointers.
     let di = reg_index(op.d);
-    debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
+    debug_assert!(is_lane(op.d) && lane_no(op.d) >= L_REG0);
     al[di] = core::ptr::null();
     let d: &mut [i32; N] = &mut s.lanes[di];
     let code = if narrow {
@@ -1882,7 +1871,7 @@ fn colours(p: &[[u8; 3]; 32], v: [i32; 2], k: i32) -> [[u8; 3]; 2] {
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn pick_colours(
-    sc: &[i32; MAX_SCALARS],
+    sc: &Sc,
     pk: &Op,
     p: &[[u8; 3]; 32],
     k: i32,

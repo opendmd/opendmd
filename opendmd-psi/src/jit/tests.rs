@@ -876,6 +876,24 @@ fn cycled_palettes_draw_the_same_through_kernels() {
     }
 }
 
+/// Tweens of palettes (worked out once a frame, before the kernel's words):
+/// the bytes of the VM's frame, as the palette changes from frame to frame.
+#[test]
+fn tweened_palettes_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 8\npalette d = #048, #8cf, #fff\npalette n = #002, #124, #468\npalette s = tween(d, n, 0.5 + 0.5*sin(t*0.8))\npal(s, y) * (0.5 + x/2)",
+        "loop 8\npalette a = #f00, #0f0\npalette b = #00f, #ff0, #0ff\npalette s = tween(tween(a, b, t/8), fire, frac(t/3))\ncycle(s, x + y, t/4 + py/40)",
+        "loop 8\npalette a = #f80, #fc0, #08f, #fff\npalette b = #400, #320, #002, #224\npalette c = #f0f, #0ff, #888, #ccc\nw = frac(t/8)\npalette s = tween(a, b, w), tween(c, b, 1 - w)\npal(s, floor(px/8)/16) * (py > 15 ? 1 : 0.5)",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let times = [0, 130, 1000, 2470, 5555, 7990];
+        if let Err(why) = same_as_vm("tween", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
 /// `layer rate N`: the kernel draws the fast part over the held slow
 /// layers, the bytes of the VM's frame.
 #[test]
