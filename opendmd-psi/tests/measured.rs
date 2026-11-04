@@ -291,3 +291,64 @@ pub const CONSOLEB: &[(&str, &str, u32)] = &[
         2571,
     ),
 ];
+
+// The paint primitives (paint-probe on the spare, 2026-11-04,
+// 1.0.0-beta.12-paint80-15d18, 80 MHz flash): each `for k < 16 { … }` over
+// `gray(x)` with a sprite `ship` (5 × 4), the frame steps and the draw stage
+// alone (the VM's stamps), p50 µs a frame: the fit set for `paint_ns`.
+pub const PAINT_SPRITE: &str = "sprite ship {\n  key . 0, W #fff\n  ..W..\n  .WWW.\n  WWWWW\n  W.W.W\n}\n";
+pub const PAINT: &[(&str, &str, u32)] = &[
+    ("base", "pset(-9, -9, #f00)", 43),
+    ("pset", "pset(64, 16, #f00)", 45),
+    ("line 1", "line(10, 16, 10, 16, #f00)", 58),
+    ("line 32", "line(0, 16, 31, 16, #f00)", 213),
+    ("line 128", "line(0, 0, 127, 31, #f00)", 695),
+    ("rect off", "rect(-30, -30, -20, -20, #f00)", 56),
+    ("rect 64", "rect(60, 12, 67, 19, #f00)", 224),
+    ("rect 2048", "rect(32, 0, 95, 31, #f00)", 4347),
+    ("rectfill off", "rectfill(-30, -30, -20, -20, #f00)", 56),
+    ("rectfill 64", "rectfill(60, 12, 67, 19, #f00)", 237),
+    ("rectfill 2048", "rectfill(32, 0, 95, 31, #f00)", 4975),
+    ("circ off", "circ(-40, 16, 6, #f00)", 99),
+    ("circ 100", "circ(64, 16, 3, #f00)", 1121),
+    ("circ 1024", "circ(64, 16, 14, #f00)", 14081),
+    ("circfill off", "circfill(-40, 16, 6, #f00)", 99),
+    ("circfill 100", "circfill(64, 16, 3, #f00)", 763),
+    ("circfill 1024", "circfill(64, 16, 14, #f00)", 7056),
+    ("trifill off", "trifill(-30, -30, -20, -30, -25, -20, #f00)", 68),
+    ("trifill 110", "trifill(60, 12, 68, 12, 64, 20, #f00)", 1782),
+    ("trifill 4096", "trifill(0, 31, 64, 0, 127, 31, #f00)", 54830),
+    ("spr off", "spr(ship, -20, -20)", 155),
+    ("spr 20", "spr(ship, 60, 4)", 166),
+    ("print 5", "print(\"SCORE\", 2, 1, #ff0)", 453),
+    ("print num 4", "print(1234, 30, 1, #ff0, small, 4)", 329),
+    ("cls", "cls(#f00)", 130),
+];
+// The paint plane over a frame (the same run): the VM's rows, µs a frame,
+// with no plane, an empty one and a full one (`cls`); the overlay alone 197
+// and 401.
+pub const OVERLAY_ROWS: [u32; 3] = [700, 896, 1101];
+// `under(x, y)` looks over the golden picture (the same run): the VM's frame
+// directly, p50 µs (the real path adds ~5 %).
+pub const UNDER: &[(&str, &str, u32)] = &[
+    ("uat 3", "look\nunder(px + a, py)\n", 5068),
+    ("uat 6", "look\nunder(px + a, py)*0.5 + under(px - a, py)*0.5\n", 10314),
+    (
+        "uat 12",
+        "look\nunder(px + a, py)*0.25 + under(px - a, py)*0.25 + under(px, py + a)*0.25 + under(px, py - a)*0.25\n",
+        19786,
+    ),
+];
+// Formulas that paint or read the picture elsewhere, on the real path (the
+// same run; palm and paint-heavy as looks: they paint without a colour
+// line), VM and JIT p50 µs a frame.
+pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
+    ("functions", include_str!("../../docs/research/psi-rebuild-device/functions.psi"), 7330, 6799),
+    ("paint-heavy", include_str!("../../docs/research/psi-rebuild-device/paint-heavy.psi"), 6407, 5569),
+    ("palm", include_str!("../../docs/research/psi-rebuild-device/palm.psi"), 3233, 2385),
+    // (The JIT's under(x, y) template, the second run, paint80-f6aa6.)
+    ("pixelate", include_str!("../../docs/research/psi-rebuild-device/pixelate.psi"), 5318, 2645),
+    ("under-shake", include_str!("../../docs/research/psi-rebuild-device/under-shake.psi"), 5312, 2563),
+    // (Painted, the second run.)
+    ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
+];

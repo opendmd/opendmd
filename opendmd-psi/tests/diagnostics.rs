@@ -624,9 +624,9 @@ const GROUPS: &[(u16, &str)] = &[
     (2, "Names"),
     (3, "Placement and levels"),
     (4, "Limits"),
-    (5, "Parts and layers"),
+    (5, "Layers"),
     (6, "Version"),
-    (7, "The draw stage"),
+    (7, "The draw stage, paint and functions"),
     (8, "Frame rate"),
     (
         9,

@@ -823,6 +823,35 @@ fn helpers_draw_the_same_through_kernels() {
     assert_eq!(lowered, cases.len());
 }
 
+/// `under(x, y)` (`UAT`) through kernels, over the picture and without
+/// one: in the panel and past each edge, rounded both ways, a scalar
+/// coordinate (a row value), values near the top of the range (the
+/// saturating `add` of ½), mixed and scaled, beside a layer.
+#[test]
+fn under_at_draws_the_same_through_kernels() {
+    let cases = [
+        "look\nunder(px + a, py)",
+        "look\nunder(floor(px/4)*4 + 2, floor(py/4)*4 + 2)",
+        "look\nunder(px + floor(sin(t*2)*2), py)",
+        "look\nunder(127 - px, py - 0.5)",
+        "look\nunder(px*3 - 200, py*2 - 20)",
+        "look\nunder(px - 0.5, py + 0.4999)",
+        "look\nunder(px*1000 + t*30000, py*-1000)",
+        "look\nunder(x*32767 + 32760, y*32767 - 32767)",
+        "look\nmix(under, under(px, py - 2), 0.5)",
+        "look\nunder(px + a, py)*0.25 + under(px - a, py)*0.25 + under(px, py + a)*0.25 + under(px, py - a)*0.25",
+        "look\nlayer { gray(x) }\nlayer screen { under(px + 3, py + 1) * 0.6 }",
+        "look\nfn sh(d) = under(px + d, py)\nsh(2)*0.5 + sh(-2)*0.5",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        assert!(prog.uat_steps() > 0, "{src}: no UAT step");
+        if let Err(w) = same_as_vm("under", src, &prog, &[0, 777, 1234, 4321, 7999]) {
+            panic!("{src}: the VM draws it ({w})");
+        }
+    }
+}
+
 /// `cycle`: the turned palettes through kernels, turned once a frame and
 /// once a row (the row's colour words and memos filled again each row),
 /// scaled, fused and as layers.

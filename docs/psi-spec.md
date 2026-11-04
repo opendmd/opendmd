@@ -1153,7 +1153,7 @@ The panel didn't have the memory to compile this Formula just then (a GIF, a loo
 
 Try again, or make the Formula smaller.
 
-### Parts and layers (E5xx)
+### Layers (E5xx)
 
 <h4 id="E509">E509 · a layer inside a layer</h4>
 
@@ -1187,7 +1187,7 @@ Write `psi 1`.
 
 Move `psi 1` to the first line.
 
-### The draw stage (E7xx)
+### The draw stage, paint and functions (E7xx)
 
 <h4 id="E701">E701 · <code>draw { }</code> or a table inside a layer</h4>
 

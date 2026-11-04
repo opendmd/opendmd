@@ -105,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -557,7 +557,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
-	$(if $(filter psi-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
+	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
@@ -1087,3 +1087,20 @@ emu-image-probe:
 emu-probe: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe &&) \
 	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# The paint probe (firmware/src/paint_probe.rs, the paint-probe feature: the paint steps,
+# the overlay, `under(x, y)`, the Formulas that use them, each beside the cost
+# model's estimate) in the spare's 4mb layout: its .odfw in $(EMU_DIR)/paint/dist
+# goes to the spare by OTA; `make emu-paint-probe` boots it in the emulator
+# (its paint line: each case's kernel frames against the VM's; correctness only).
+# (Its version says what it is: $(FW_VERSION)-paint-<commit>, -paint80- for a
+# FW_FLASH_FREQ=80 build, the devices' clock; the descriptor holds 31
+# characters with " 4mb", so 5 of the commit's.)
+EMU_PAINT_VERSION ?= $(FW_VERSION)-paint$(filter 80,$(FW_FLASH_FREQ))-$(shell git rev-parse --short=5 HEAD)
+EMU_PAINT_IMAGE = $(EMU_DIR)/paint/dist/opendmd-$(EMU_PAINT_VERSION)-4mb-full.bin
+emu-image-paint:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/paint/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/paint/dist/opendmd-*-4mb-app.bin
+	$(MAKE) --no-print-directory fw-release-variant FW_VERSION=$(EMU_PAINT_VERSION) VARIANT=4mb FW_RELEASE_FEATURES=paint-probe FW_APP_SPARE=8192 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/paint/target DIST=$(EMU_DIR)/paint/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-paint-probe: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-paint &&) \
+	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PAINT_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)

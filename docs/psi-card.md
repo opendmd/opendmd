@@ -95,7 +95,9 @@ draw {
 
 A formula with `look` at its top may be drawn over every GIF. The picture
 under it: `ur ug ub` (0..1) and `ul` (brightness) at the pixel;
-`under(x, y)` the picture at another pixel, as a colour; a coverage below
+`under(x, y)` the picture at another pixel, as a colour (**only in the
+colour line** or a colour function: not in a name, `gray(…)` or `draw`,
+where it is "unknown function"); a coverage below
 1, or a `layer add { … }` / `screen` / `multiply` blend, lets it show.
 `look screen 40` says how it goes on (blend, amount).
 
@@ -110,22 +112,38 @@ under(px + floor(sin(t*2)*2), py) * v
 ## Layers, sliders, sprites
 
 - `layer [over|add|multiply|screen|max|min] { … colour }` stack bottom to top.
-- At the top: `name "Sunset"`, `about "…"`, `control speed 0..4 = 1
-  "Speed"` (a slider, read as `speed`), `look`.
+- **The header comes first**: `name "Sunset"`, `about "…"`, `look`,
+  `control speed 0..4 = 1 "Speed"` (a slider, read as `speed`), in any
+  order, before every other line (`loop`, `fps`, tables, names, `draw`):
+  anything else first and `name` is error E951. Comments may go anywhere.
 - `fps 100` for fast motion (light formulas only); `layer rate 4 { … }` a
   slow bottom layer redrawn every 4th frame.
 - `table T = 0.2, 0.9, 0.5` numbers, read as `T[k]`.
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
 - `palette P = #000, #f80, #fff` your own palette for `pal(P, v)`.
 
+```psi
+name "Dusk"
+loop 8
+mix(#102040, #ff8040, y + sin(t/8)*0.1)
+```
+
 ## Cost: keep it light
 
 The panel has ~8 ms a frame (12 for a look over a GIF). `psi check` says
 the cost and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
 and `/` cost most; a value of only `t`, the clock and sliders is worked out
-once a frame, of `y` once a row — free. Drawing costs by the shapes, not the
-pixels: prefer `draw` for scenes (objects, sprites, text) and per-pixel
-maths for fields (plasma, fire, sky).
+once a frame, of `y` once a row — free. Lines and dots cost by the line, not
+the pixel; painted filled shapes by the pixels they cover. Prefer `draw`
+for scenes (objects, sprites, text) and per-pixel maths for fields
+(plasma, fire, sky). Two habits keep a shader light:
+
+- Lift what doesn't need the pixel out of it: `s = sin(t/8)` (once a
+  frame) and `row = noise(y*4, t, 0)` (once a row), then use `s` and
+  `row` in the per-pixel lines.
+- One `noise` a pixel, not three or four: layer it with cheap waves
+  (`noise(x*6, y*3, t)*0.7 + sin(x*3 + t/4)*0.3`); a whole third value
+  (`noise(x*6, y*3 - t, 0)`) costs half.
 
 ## Mistakes to avoid
 
