@@ -5,6 +5,9 @@
 // sharing is submitting to the gallery, reviewed on GitHub).
 //
 //   /api/health     200 {"ok": true, "site": "opendmd-site", "version": …}
+//   POST /api/fetch Create Art's relay (src/relay.ts): one picture or video
+//                   from another site (its address the body), for /create/
+//                   only, streamed, never stored
 //   /api/*          404 JSON
 //   www.opendmd.dev/…  301 to https://opendmd.dev/… (for the paths that
 //                   reach the Worker; a zone redirect rule does the rest)
@@ -28,10 +31,11 @@
 // from the asset layer or through env.ASSETS here.
 
 import * as gallery from "./gallery";
+import * as relay from "./relay";
 
 declare const __SITE_VERSION__: string;
 
-interface Env extends gallery.GalleryEnv {
+interface Env extends gallery.GalleryEnv, relay.RelayEnv {
   ASSETS: { fetch(request: Request | string): Promise<Response> };
   DB: D1Database;
 }
@@ -81,6 +85,7 @@ async function api(request: Request, url: URL, env: Env, ctx: ExecutionContext):
     if (r.busy) return json({ error: "a sync started a moment ago: try again in a few seconds" }, 429, { "Retry-After": "10" });
     return json(r, r.ok ? 200 : 502);
   }
+  if (url.pathname === "/api/fetch") return relay.relay(request, url, env);
   if (url.pathname === "/api/health") {
     const allow = "GET, HEAD, OPTIONS";
     if (m === "OPTIONS") return options(allow, true);

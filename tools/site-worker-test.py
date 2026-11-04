@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["playwright>=1.45"]
+# dependencies = ["playwright>=1.45", "pillow>=10"]
 # ///
 """The opendmd-site Worker (site/worker/) over HTTP, against `cf dev`
 serving a built site (make site):
@@ -135,10 +135,11 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start_dev(site: Path, port: int, gallery_source: str) -> subprocess.Popen:
+def start_dev(site: Path, port: int, gallery_source: str, relay_upstream: str = "") -> subprocess.Popen:
     if not (WORKER / "node_modules/.bin/cf").exists():
         raise SystemExit("site/worker has no node_modules: make site-worker-deps")
     env = {**os.environ, "SITE_DIR": str(site.resolve()), "SITE_DEV_PORT": str(port), "SITE_TEST_GALLERY_SOURCE": gallery_source,
+           "SITE_TEST_RELAY_UPSTREAM": relay_upstream,
            "SITE_VERSION": subprocess.run(["git", "describe", "--always", "--dirty", "--tags", "--match", "v*"], cwd=ROOT,
                                           capture_output=True, text=True).stdout.strip() or "dev"}
     log = open(ROOT / "target/site-dev.log", "w")
@@ -941,6 +942,337 @@ def gallery_live(base: str, site: Path, tool: Path) -> None:
 
 
 
+# ---------------------------------------------------------------- Create Art's relay
+
+RELAY_MAX = 16 << 20
+
+
+def relay_gif() -> bytes:
+    """A 4-frame 88x31 GIF (a box moving right), as site-smoke's."""
+    from PIL import Image, ImageDraw
+    frames = []
+    for i in range(4):
+        f = Image.new("RGB", (88, 31), (20, 30, 120))
+        ImageDraw.Draw(f).rectangle([4 + 18 * i, 6, 24 + 18 * i, 24], fill=(250, 210, 30))
+        frames.append(f)
+    out = io.BytesIO()
+    frames[0].save(out, "GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    return out.getvalue()
+
+
+class RelayUpstream:
+    """The sites the relay fetches from, local. With SITE_TEST_RELAY_UPSTREAM
+    set, the Worker sends https://<name>.relay-test.invalid/<path> here as
+    /<name>.relay-test.invalid/<path> (after every guard has passed on the
+    address as written), and asks its DNS questions here too
+    (/dns-query?name=&type=, as 1.1.1.1's JSON API answers them). `seen`:
+    every media request that arrived (host, path, headers)."""
+
+    SUFFIX = ".relay-test.invalid"
+    # Names whose records the relay must refuse (the first label decides).
+    DNS = {"rebind": [(1, "10.1.2.3")], "loop6": [(28, "::1")], "mapped": [(28, "::ffff:127.0.0.1")],
+           "meta": [(1, "169.254.169.254")], "cgnat": [(1, "100.64.0.9")], "sixtofour": [(28, "2002:c0a8:0101::1")],
+           "cname": [(5, "internal.example."), (1, "192.168.7.7")], "mixed": [(1, "93.184.216.34"), (1, "127.0.0.1")]}
+
+    def __init__(self):
+        self.seen: list[tuple[str, str, dict]] = []
+        self.gif = relay_gif()
+        junk = bytes(range(256)) * 8
+        page = (b"<!doctype html><html><head><title>A GIF</title>"
+                b'<meta property="og:image" content="https://ok.relay-test.invalid/still.jpg">'
+                b'<meta property="og:video" content="https://ok.relay-test.invalid/a.mp4"><meta property="og:video:type" content="video/mp4">'
+                b'<meta name="twitter:image" content="/rel.gif"></head><body>' + b"x" * 4000 + b"</body></html>")
+        self.files = {
+            "/a.gif": (self.gif, "image/gif"),
+            "/a.png": (b"\x89PNG\r\n\x1a\n" + junk, "image/png"),
+            "/a.webp": (b"RIFF\x24\x08\x00\x00WEBPVP8 " + junk, "image/webp"),
+            "/a.jpg": (b"\xff\xd8\xff\xe0\x00\x10JFIF" + junk, "image/jpeg"),
+            "/a.mp4": (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + junk, "video/mp4"),
+            "/a.webm": (b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01" + junk, "video/webm"),
+            "/a.avif": (b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1" + junk, "image/avif"),
+            "/lies.txt": (self.gif, "text/plain"),
+            "/fake.gif": (b"<!doctype html><html><body>not a picture</body></html>" + junk, "image/gif"),
+            "/a.json": (b'{"gif": "https://example.com/a.gif"}' + b" " * 64, "application/json"),
+            "/a.exe": (b"MZ\x90\x00" + junk, "video/mp4"),
+            "/page.html": (page, "text/html; charset=utf-8"),
+        }
+        self.redirects = {
+            "/r1": "https://ok.relay-test.invalid/a.gif", "/r2": "/r1", "/r3": "r2", "/r4": "/r3",
+            "/r-private": "https://127.0.0.1/a.gif", "/r-meta": "https://169.254.169.254/latest/meta-data/",
+            "/r-http": "http://ok.relay-test.invalid/a.gif", "/r-rebind": "https://rebind.relay-test.invalid/a.gif",
+            "/r-local": "https://localhost/a.gif", "/r-port": "https://ok.relay-test.invalid:8080/a.gif",
+        }
+        up = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                u = urllib.parse.urlsplit(self.path)
+                if u.path == "/dns-query":
+                    return self.dns(urllib.parse.parse_qs(u.query))
+                host, _, rest = u.path.lstrip("/").partition("/")
+                path = "/" + rest
+                up.seen.append((host, path, {k.lower(): v for k, v in self.headers.items()}))
+                if path in up.redirects:
+                    return self.send(302, b"", "text/plain", {"Location": up.redirects[path]})
+                if path == "/r-nowhere":
+                    return self.send(302, b"", "text/plain")
+                if path in up.files:
+                    body, ctype = up.files[path]
+                    return self.send(200, body, ctype)
+                if path == "/big-len.gif":
+                    # Says 20 MB; the relay must refuse it on the header.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/gif")
+                    self.send_header("Content-Length", str(20 << 20))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(up.gif[:64])
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
+                if path == "/big.gif":
+                    # No length: 17 MB, chunked; the relay must stop at 16.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/gif")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    chunk = b"\0" * 65536
+                    try:
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(up.gif), up.gif))
+                        for _ in range(17 * 16):
+                            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                        self.wfile.write(b"0\r\n\r\n")
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
+                self.send(404, b"not here", "text/plain")
+
+            def dns(self, q):
+                name = q.get("name", [""])[0].rstrip(".")
+                typ = {"A": 1, "AAAA": 28}.get(q.get("type", [""])[0], 0)
+                label = name.split(".")[0]
+                if label == "nx":
+                    d = {"Status": 3}
+                elif label in up.DNS:
+                    d = {"Status": 0, "Answer": [{"name": name, "type": t, "data": v} for t, v in up.DNS[label] if t in (typ, 5)]}
+                else:
+                    d = {"Status": 0, "Answer": [{"name": name, "type": 1, "data": "93.184.216.34"}] if typ == 1 else []}
+                self.send(200, json.dumps(d).encode(), "application/dns-json")
+
+            def send(self, status, body, ctype, extra=None):
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                for k, v in (extra or {}).items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def hosts(self) -> set[str]:
+        return {h for h, _, _ in self.seen}
+
+
+class Relay:
+    """POST /api/fetch as the page asks it; a fresh CF-Connecting-IP every
+    20 requests, so the rate limit (30 a minute per IP) is only met where a
+    check means to meet it."""
+
+    n = 0  # (across instances: every check's requests count)
+    run = os.getpid() & 0xffff  # (cf dev keeps its counts across a restart: a run of its own)
+
+    def __init__(self, base: str):
+        self.base = base
+
+    def ip(self) -> str:
+        Relay.n += 1
+        return f"2001:db8:{Relay.run:x}::{Relay.n // 20 + 1:x}"
+
+    def ask(self, address: str, headers: dict | None = None, method: str = "POST"):
+        h = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": self.ip(), "Content-Type": "text/plain;charset=UTF-8", **(headers or {})}
+        h = {k: v for k, v in h.items() if v is not None}
+        return get(self.base, "/api/fetch", method, h, address.encode() if method == "POST" else None)
+
+    def why(self, address: str, headers: dict | None = None):
+        st, h, body = self.ask(address, headers)
+        try:
+            return st, json.loads(body).get("why"), h
+        except ValueError:
+            return st, None, h
+
+
+def relay_guards(base: str) -> None:
+    """The relay's refusals that never reach another site: the caller, the
+    method, the address as written (live too: no fetch is made)."""
+    R = Relay(base)
+    ok = "https://ok.relay-test.invalid/a.gif"
+    for what, hdr in (("no Sec-Fetch-Site, Origin or Referer", {"Sec-Fetch-Site": None}),
+                      ("Sec-Fetch-Site: cross-site", {"Sec-Fetch-Site": "cross-site"}),
+                      ("Sec-Fetch-Site: same-site", {"Sec-Fetch-Site": "same-site"}),
+                      ("Sec-Fetch-Site: none (typed into the address bar)", {"Sec-Fetch-Site": "none"}),
+                      ("another site's Origin", {"Sec-Fetch-Site": None, "Origin": "https://evil.example"}),
+                      ("another site's Referer", {"Sec-Fetch-Site": None, "Referer": "https://evil.example/x"}),
+                      ("same-origin claimed, another Origin", {"Sec-Fetch-Site": "cross-site", "Origin": base})):
+        st, why, h = R.why(ok, hdr)
+        check(st == 403 and why == "caller" and h.get("Cache-Control") == "no-store", f"relay: {what} refused, 403 ({st} {why})")
+    for m in ("GET", "PUT", "DELETE"):
+        st, h, _ = R.ask(ok, method=m)
+        check(st == 405 and h.get("Allow") == "POST", f"relay: {m} refused, 405, Allow: POST ({st} {h.get('Allow')})")
+    bad = ["http://ok.relay-test.invalid/a.gif", "ftp://ok.relay-test.invalid/a.gif", "https://ok.relay-test.invalid:8443/a.gif",
+           "https://user:pw@ok.relay-test.invalid/a.gif", "https://127.0.0.1/a.gif", "https://2130706433/a.gif",
+           "https://0x7f000001/a.gif", "https://0177.0.0.1/a.gif", "https://127.1/a.gif", "https://[::1]/a.gif",
+           "https://[::ffff:127.0.0.1]/a.gif", "https://10.0.0.1/a.gif", "https://192.168.1.50/a.gif",
+           "https://172.16.0.1/a.gif", "https://169.254.169.254/latest/meta-data/", "https://100.64.0.1/a.gif",
+           "https://8.8.8.8/a.gif", "https://[2606:4700::1111]/a.gif", "https://localhost/a.gif", "https://a.localhost/a.gif",
+           "https://opendmd.local/a.gif", "https://metadata.google.internal/a.gif", "https://router/a.gif",
+           "https://router.lan/a.gif", "https://box.home.arpa/a.gif", "https://127.0.0.1.nip.io/a.gif",
+           "https://10-0-0-1.sslip.io/a.gif", "https://localtest.me/a.gif", "https://x.lvh.me/a.gif",
+           "https://img.10.0.0.1.example.com/a.gif", "https://opendmd.dev/art/wordmark.png",
+           "https://www.opendmd.dev/a.gif", "https://opendmd-site.someone.workers.dev/a.gif", "https://x.pages.dev/a.gif",
+           "https://elsewhere.invalid/a.gif", "javascript:alert(1)", "file:///etc/passwd", "data:image/gif;base64,R0lGOD"]
+    wrong = []
+    for u in bad:
+        st, why, _ = R.why(u)
+        if st != 400 or why != "address":
+            wrong.append(f"{u} {st} {why}")
+    check(not wrong, f"relay: {len(bad)} addresses refused as written, 400 (https only, port 443, no user, no IP in any form, "
+          f"no local or reserved name, no address-spelling DNS, none of ours) {wrong[:4]}")
+    for u, what in (("", "nothing"), ("not a url", "not an address"), ("https://ok.relay-test.invalid/" + "a" * 3000, "over 2 KB")):
+        st, why, _ = R.why(u)
+        check(st == 400 and why == "url", f"relay: {what} refused, 400 url ({st} {why})")
+
+
+def relay_local(base: str, up: RelayUpstream) -> None:
+    """The relay against the local sites: types, sizes, redirects, DNS."""
+    R = Relay(base)
+    gif = up.gif
+    st, h, body = R.ask("https://ok.relay-test.invalid/a.gif", {"Cookie": "session=1", "Referer": base + "/create/"})
+    check(st == 200 and body == gif and h.get("Content-Type") == "image/gif" and h.get("X-Relayed") == "1",
+          f"relay: a GIF streamed back as it is ({st}, {len(body)} B, {h.get('Content-Type')})")
+    check(h.get("Cache-Control") == "no-store" and h.get("X-Content-Type-Options") == "nosniff"
+          and h.get("Cross-Origin-Resource-Policy") == "same-origin" and "sandbox" in (h.get("Content-Security-Policy") or "")
+          and h.get("Access-Control-Allow-Origin") is None and h.get("Set-Cookie") is None,
+          "relay: no-store, nosniff, CORP same-origin, a sandbox CSP, no CORS, no cookie")
+    sent = up.seen[-1][2] if up.seen else {}
+    check(sent.get("user-agent", "").startswith("OpenDMD-CreateArt/1") and "cookie" not in sent and "referer" not in sent
+          and "origin" not in sent, f"relay: the site is asked with our own User-Agent, no cookie, no Referer, no Origin ({sorted(sent)})")
+    for what, hdr in (("Origin of this site", {"Sec-Fetch-Site": None, "Origin": base}),
+                      ("Referer of this site", {"Sec-Fetch-Site": None, "Referer": base + "/create/"})):
+        st, h, body = R.ask("https://ok.relay-test.invalid/a.gif", hdr)
+        check(st == 200 and body == gif, f"relay: no Sec-Fetch-Site, {what}: allowed ({st})")
+    for path, ctype in (("/a.png", "image/png"), ("/a.webp", "image/webp"), ("/a.jpg", "image/jpeg"),
+                        ("/a.mp4", "video/mp4"), ("/a.webm", "video/webm"), ("/lies.txt", "image/gif")):
+        st, h, body = R.ask("https://ok.relay-test.invalid" + path)
+        check(st == 200 and h.get("Content-Type") == ctype and body == up.files[path][0],
+              f"relay: {path} sniffed as {ctype} ({st} {h.get('Content-Type')})")
+    for path, what in (("/fake.gif", "HTML sent as image/gif"), ("/a.json", "JSON"), ("/a.avif", "an AVIF still"),
+                       ("/a.exe", "a program sent as video/mp4")):
+        st, why, h = R.why("https://ok.relay-test.invalid" + path)
+        check(st == 415 and why == "type", f"relay: {what} refused by its first bytes, 415 ({st} {why})")
+    st, why, _ = R.why("https://ok.relay-test.invalid/big-len.gif")
+    check(st == 413 and why == "size", f"relay: Content-Length over 16 MB refused, 413 ({st} {why})")
+    got, broke = 0, False
+    req = urllib.request.Request(base + "/api/fetch", method="POST", data=b"https://ok.relay-test.invalid/big.gif",
+                                 headers={"User-Agent": UA, "Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": R.ip()})
+    try:
+        with OPENER.open(req, timeout=60) as r:
+            st = r.status
+            while True:
+                b = r.read(1 << 16)
+                if not b:
+                    break
+                got += len(b)
+    except Exception:  # noqa: BLE001 (IncompleteRead, a reset: the stream was cut)
+        broke = True
+    check(st == 200 and got <= RELAY_MAX and got < len(gif) + (17 << 20) and broke,
+          f"relay: a body with no length stopped at 16 MB, the stream cut ({got:,} B of {len(gif) + (17 << 20):,}, cut: {broke})")
+    for path in ("/r1", "/r3"):
+        st, h, body = R.ask("https://ok.relay-test.invalid" + path)
+        check(st == 200 and body == gif, f"relay: {path} followed ({'1 redirect' if path == '/r1' else '3 redirects, relative ones too'}) ({st})")
+    st, why, _ = R.why("https://ok.relay-test.invalid/r4")
+    check(st == 502 and why == "redirects", f"relay: a 4th redirect refused, 502 ({st} {why})")
+    for path, what in (("/r-private", "127.0.0.1"), ("/r-meta", "169.254.169.254"), ("/r-http", "http://"),
+                       ("/r-local", "localhost"), ("/r-port", "another port"), ("/r-rebind", "a name that resolves to 10.1.2.3")):
+        st, why, _ = R.why("https://ok.relay-test.invalid" + path)
+        check(st == 400 and why == "address", f"relay: a redirect to {what} refused, 400 ({st} {why})")
+    for name in up.DNS:
+        st, why, _ = R.why(f"https://{name}.relay-test.invalid/a.gif")
+        check(st == 400 and why == "address", f"relay: {name}: {up.DNS[name][-1][1]} in its DNS answer, refused ({st} {why})")
+    st, why, _ = R.why("https://nx.relay-test.invalid/a.gif")
+    check(st == 502 and why == "dns", f"relay: a name that does not resolve, 502 dns ({st} {why})")
+    reached = {h.split(".")[0] for h in up.hosts()}
+    check(not reached & (set(up.DNS) | {"nx"}), f"relay: none of the refused names was ever asked for anything ({sorted(reached)})")
+    st, why, h = R.why("https://ok.relay-test.invalid/missing.gif")
+    check(st == 502 and why == "upstream", f"relay: the site's 404, 502 upstream ({st} {why})")
+    st, why, h = R.why("https://ok.relay-test.invalid/r-nowhere")
+    check(st == 502 and why == "upstream", f"relay: a redirect with no Location, 502 upstream ({st} {why})")
+    st, why, h = R.why("https://ok.relay-test.invalid/page.html")
+    check(st == 415 and why == "type", f"relay: a page is not a picture, 415 ({st} {why})")
+    log = (ROOT / "target/site-dev.log").read_text(errors="replace")
+    check("relay-test.invalid" not in log, "relay: no address in cf dev's log (it is the request body, never the URL)")
+
+
+def relay_rate(base: str) -> None:
+    """The rate limit: 30 a minute per IP, then 429 with Retry-After (last:
+    it spends the minute)."""
+    hdr = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": f"2001:db8:{Relay.run:x}:1::77", "Content-Type": "text/plain"}
+    sts, last = [], None
+    for _ in range(40):
+        st, h, _ = get(base, "/api/fetch", "POST", hdr, b"not a url")
+        sts.append(st)
+        if st == 429:
+            last = h
+            break
+    n = sum(1 for s in sts if s == 400)
+    check(last is not None and last.get("Retry-After") == "60" and 25 <= n <= 35,
+          f"relay: try {n + 1} in a minute from one IP: 429, Retry-After 60 ({sts[-3:]})")
+    st, _, _ = get(base, "/api/fetch", "POST", {**hdr, "CF-Connecting-IP": f"2001:db8:{Relay.run:x}:1::78"}, b"not a url")
+    check(st == 400, f"relay: another IP is not held back ({st})")
+
+
+def relay_browser(base: str, shots: Path) -> None:
+    """/create/?url= in Chromium: the browser cannot reach a .relay-test.invalid
+    host (as it cannot read a site with no CORS headers), so the page goes
+    through the real relay; a refusal said in plain words."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(viewport={"width": 1280, "height": 800}, extra_http_headers={"CF-Connecting-IP": f"2001:db8:{Relay.run:x}:2::1"})
+        page = ctx.new_page()
+        csp: list[str] = []
+        page.on("console", lambda m: m.type == "error" and "Content Security Policy" in m.text and csp.append(m.text[:160]))
+        page.goto(base + "/create/?url=" + urllib.parse.quote("https://ok.relay-test.invalid/a.gif", safe=""))
+        page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+        for _ in range(200):
+            if page.evaluate("document.querySelector('#studio').dataset.animated === '1'"):
+                break
+            page.wait_for_timeout(100)
+        msg = page.inner_text("#st-msg")
+        check(msg.startswith("ok.relay-test.invalid: 88 × 31 · 4 frames"), f"relay in Chromium: /create/?url= loads a GIF the browser can't reach, through the relay ('{msg}')")
+        page.click("#st-change")
+        page.fill("#st-url", "https://ok.relay-test.invalid/a.json")
+        page.click("#st-url-go")
+        for _ in range(100):
+            if not page.inner_text("#st-msg").startswith("Loading"):
+                break
+            page.wait_for_timeout(100)
+        check(page.inner_text("#st-msg") == "That address isn’t a picture or a video",
+              f"relay in Chromium: a refusal said plainly ('{page.inner_text('#st-msg')}')")
+        check(not csp, f"relay in Chromium: no CSP violation {csp[:2]}")
+        ctx.close()
+        browser.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("site", type=Path, help="make site's output, the folder cf dev serves")
@@ -960,12 +1292,14 @@ def main() -> int:
         raise SystemExit(f"no {a.gallery_tool}: make gallery-tool")
     proc = None
     repo = None
+    upstream = None
     if a.base:
         base = a.base.rstrip("/")
     else:
         port = a.port or free_port()
         repo = FixtureRepo()
-        proc = start_dev(a.site, port, repo.url)
+        upstream = RelayUpstream()
+        proc = start_dev(a.site, port, repo.url, upstream.url)
         base = f"http://127.0.0.1:{port}"
     smoke = 0
     try:
@@ -986,6 +1320,12 @@ def main() -> int:
         csp_in_browser(base)
         print("live Formulas: the home page's panels, the gallery's tiles")
         live_panels(base, a.shots)
+        print(f"Create Art's relay (/api/fetch){': local sites' if upstream else ': the guards only (live)'}")
+        relay_guards(base)
+        if upstream:
+            relay_local(base, upstream)
+            relay_browser(base, a.shots)
+            relay_rate(base)
         print(f"site-worker-test: {'ok' if not failures else f'{len(failures)} failures'}")
         if a.smoke:
             print(f"site-smoke --base {base}")

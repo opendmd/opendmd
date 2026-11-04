@@ -36,6 +36,9 @@ export default defineWranglerConfig({
     __SITE_VERSION__: JSON.stringify(process.env.SITE_VERSION ?? "dev"),
     __GALLERY_EXAMPLES__: JSON.stringify(examples),
     __GALLERY_SOURCE__: JSON.stringify(gallerySource),
+    // Create Art's relay (src/relay.ts): site-worker-test's local server for
+    // .relay-test.invalid hosts and their DNS answers; empty (off) otherwise.
+    __RELAY_TEST_UPSTREAM__: JSON.stringify(process.env.SITE_TEST_RELAY_UPSTREAM || ""),
   },
   dev: {
     ip: "127.0.0.1",

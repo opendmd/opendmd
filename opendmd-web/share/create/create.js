@@ -11,7 +11,12 @@
 //
 // `?q=<words>&platform=<P>` searches at once: Game art on that platform when
 // it has one, else GifCities (the Studio's `app.artFind`; the web app's
-// Library links here with its words).
+// Library links here with its words). `?url=<address>` opens that picture.
+//
+// An address the browser may not fetch (a site with no CORS headers) comes
+// through the site's relay, /api/fetch (site/worker/src/relay.ts): only
+// for this page, pictures and videos only, nothing kept. Its refusals are
+// said here in plain words.
 
 import { init } from '../demo/js/web.js';
 import { app } from '../demo/js/state.js';
@@ -19,6 +24,23 @@ import { READY, IMPORT, MAX_GIF } from '../demo/js/importgif.js';
 import { addr, addressForm, handOff } from '../panel.js';
 
 const $ = (id) => document.getElementById(id);
+const WHY = {
+  size: 'That file is too big (over 16 MB): pick a shorter or smaller one',
+  type: 'That address isn’t a picture or a video',
+  rate: 'Too many tries in a minute: wait a moment, then try again',
+  refused: 'That site refused to send it: download the picture, then add the file here',
+};
+
+async function relay(u) {
+  let r;
+  try { r = await fetch('/api/fetch', { method: 'POST', body: u }); } catch { throw new Error('opendmd.dev could not be reached: check your connection'); }
+  if (!r.ok) {
+    const why = await r.json().then((d) => d.why, () => '');
+    throw new Error(WHY[why] || WHY.refused);
+  }
+  // (Past 16 MB the relay stops sending: the body ends in an error.)
+  try { return await r.blob(); } catch { throw new Error(WHY.size); }
+}
 const say = (t) => { $('c-cap').hidden = !t; $('c-cap').textContent = t || ''; };
 
 // #create is aria-busy until the Studio is up: what a test waits for.
@@ -30,12 +52,14 @@ async function start() {
   app.site = true;
   const { mount } = await import('../demo/js/studio.js');
   const send = Object.assign(document.createElement('button'), { id: 'c-send', className: 'pri', textContent: 'Send to my panel' });
-  const st = await mount($('c-ed'), { css: false, acts: [send] });
+  const st = await mount($('c-ed'), { css: false, acts: [send], relay });
   $('st-save').classList.remove('pri'); // (Send is the page's first way; Download the other)
   const q = new URLSearchParams(location.search);
   const words = (q.get('q') || '').trim().slice(0, 100);
   if (words) app.artFind = { q: words, platform: (q.get('platform') || '').toUpperCase() };
   await st.show();
+  const link = (q.get('url') || '').trim();
+  if (/^https?:\/\//i.test(link)) st.open(link);
 
   // (In the click or the form's submit: the window opens at once, the GIF
   // follows when it is made — an animation's every frame is rendered first.)

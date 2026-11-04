@@ -69,7 +69,8 @@ let art = null; // the wasm module
 
 // The view: built once, into `root`. The site's Create Art page (share/create/)
 // mounts it too, with `o`: `css: false` (its own stylesheet imports the
-// Studio's), `acts` (buttons beside Save) — and reads what Save would write
+// Studio's), `acts` (buttons beside Save), `relay` (an address the browser
+// may not fetch, through the site) — and reads what Save would write
 // through `ready()` and `out()`.
 export async function mount(root, o = {}) {
   [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
@@ -351,16 +352,32 @@ function build(root, o) {
     naming();
   }
 
+  // An address: asked directly (most GIF sites allow it). When the browser
+  // refuses (the site sends no CORS headers), the site's page asks again
+  // through its relay (`o.relay(u)`: a Blob, or an Error saying why in
+  // plain words); the panel's web app has none and says what to do.
   async function fromUrl(u) {
-    if (!u) return;
+    if (!u) return false;
+    const tok = ++S.tok;
     msg.textContent = 'Loading…';
-    let r;
-    try { r = await fetch(u); } catch {
-      msg.textContent = 'That site doesn’t allow it — save the image and drop it here';
-      return;
+    seen.hidden = true;
+    let b;
+    try {
+      let r;
+      try { r = await fetch(u); } catch {
+        if (!o.relay) throw new Error('That site doesn’t allow it: download the picture, then add the file here');
+        r = null;
+      }
+      if (r && !r.ok) throw new Error(`That site refused to send it (${r.status})`);
+      b = r ? await r.blob() : await o.relay(u);
+    } catch (e) {
+      if (tok === S.tok) msg.textContent = e.message;
+      return false;
     }
-    if (!r.ok) { msg.textContent = `That address did not give a picture (${r.status})`; return; }
-    await load(await r.blob(), { label: 'From the address' });
+    if (tok !== S.tok) return false;
+    let host = '';
+    try { host = new URL(u).hostname; } catch { /* (relative) */ }
+    return load(b, { label: host || 'From the address' });
   }
 
   // Build the stage for the fit; `auto` also re-picks window and motion.
@@ -862,6 +879,8 @@ function build(root, o) {
   return {
     el,
     load,
+    // The site's `?url=`: the address in Your own, loaded.
+    open(u) { useSource('own'); url.value = u; return fromUrl(u); },
     // The site's page: a picture in and named, nothing being saved.
     ready: () => !!(S.studio && S.path && !S.saving),
     // The site's page: what Save would write, {gif, name, title, platform,

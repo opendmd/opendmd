@@ -45,7 +45,9 @@ build URL serves. There the art index must also carry
   downloaded with its frames; your own file; none of the words users never
   see; a phone's width; Send to my panel (the address asked once, the
   panel's page opened at #import, the GIF sent to it on its ready with its
-  fields, Download after, a blocked pop-up said);
+  fields, Download after, a blocked pop-up said); `?url=` opening a
+  picture, asked directly where the host allows it and through the relay
+  (stubbed) where it doesn't, the relay's refusals said in plain words;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -149,11 +151,12 @@ def new_page(browser, size: str, errors: list[str], scheme: str | None = None) -
     page = ctx.new_page()
     # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.)
     # (/f/#gallery=no-such-formula asks for a file that isn't there, on purpose.)
-    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/formulas/src/no-such-formula"))
+    # (Create Art's relay refusals and the hosts that refuse the browser, stubbed: on purpose.)
+    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/formulas/src/no-such-formula", "/api/fetch", "nocors.example"))
             and errors.append(f"[{size}] console: {m.text} ({m.location.get('url')})"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     page.on("response", lambda r: r.status >= 400 and "/demo/api/" not in r.url and "/api/status" not in r.url
-            and "/formulas/src/no-such-formula" not in r.url and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
+            and "/formulas/src/no-such-formula" not in r.url and "/api/fetch" not in r.url and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
     return page
 
 
@@ -551,6 +554,63 @@ def create_page(browser, base: str, site: Path, errors: list[str], shots: Path |
         check(not off and any("/art-index/v1/SNES.json" in u for u in asked), f"/create/: Game art's index same-origin, nothing asked of opendmd.dev {off[:2]}")
         check(not page.evaluate("window.__csp || []"), f"/create/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
         page.context.close()
+
+
+C_WHY = {  # create.js' words for the relay's refusals (site/worker/src/relay.ts `why`)
+    "size": "That file is too big (over 16 MB): pick a shorter or smaller one",
+    "type": "That address isn’t a picture or a video",
+    "rate": "Too many tries in a minute: wait a moment, then try again",
+    "upstream": "That site refused to send it: download the picture, then add the file here",
+    "redirects": "That site refused to send it: download the picture, then add the file here",
+}
+
+
+def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/create/'s addresses: `?url=` opens one; a host that allows the
+    browser is asked directly, one that doesn't (no CORS: the fetch throws)
+    through the relay, /api/fetch (stubbed here: tools/site-worker-test.py
+    runs the real one); each refusal said in plain words."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    asked: list[str] = []
+    answer = {"status": 200, "why": None}
+    page.route("https://cors.example/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=gif, headers={
+        "content-type": "image/gif", "access-control-allow-origin": "*"})))
+    page.route("https://nocors.example/**", lambda r: (asked.append(r.request.url), r.abort()))
+
+    def relay(r):
+        asked.append(f"{r.request.method} {r.request.url} {r.request.post_data}")
+        if answer["why"]:
+            r.fulfill(status=answer["status"], body=json.dumps({"error": "x", "why": answer["why"]}), headers={"content-type": "application/json"})
+        else:
+            r.fulfill(status=200, body=gif, headers={"content-type": "image/gif", "x-relayed": "1"})
+    page.route(f"{base}/api/fetch", relay)
+    page.goto(f"{base}/create/?url=" + urllib.parse.quote("https://cors.example/wide.gif", safe=""))
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    wait_js(page, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    check(asked == ["https://cors.example/wide.gif"] and page.inner_text("#st-msg").startswith("cors.example: 88 × 31 · 4 frames"),
+          f"/create/?url=: opens the picture, asked directly when the site allows it ({asked}, '{page.inner_text('#st-msg')}')")
+    asked.clear()
+    page.click("#st-change")
+    page.fill("#st-url", "https://nocors.example/pic.gif")
+    page.click("#st-url-go")
+    wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('nocors.example: 88')", timeout=20000)
+    check(asked == ["https://nocors.example/pic.gif", f"POST {base}/api/fetch https://nocors.example/pic.gif"],
+          f"/create/: a site that refuses the browser, through the relay ({asked})")
+    for why, status in (("size", 413), ("type", 415), ("rate", 429), ("upstream", 502), ("redirects", 502)):
+        answer.update(status=status, why=why)
+        if page.is_hidden("#st-url"):  # (Find stays open after a refusal)
+            page.click("#st-change")
+        page.fill("#st-url", f"https://nocors.example/{why}.gif")
+        page.click("#st-url-go")
+        wait_js(page, "!/^Loading/.test(document.querySelector('#st-msg').textContent)", timeout=10000)
+        check(page.inner_text("#st-msg") == C_WHY[why], f"/create/: the relay's '{why}' said plainly ('{page.inner_text('#st-msg')}')")
+    check(not page.evaluate("window.__csp || []"), f"/create/ addresses: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
 
 
 PANEL_IMPORT_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { const d = e.data, g = d && d.gif; "
@@ -1713,6 +1773,7 @@ def main() -> int:
         print("Create Art (/create/)")
         create_page(browser, base, a.site, errors, a.shots)
         create_send(browser, base, a.site, errors)
+        create_links(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
