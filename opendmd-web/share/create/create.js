@@ -16,7 +16,8 @@
 // An address the browser may not fetch (a site with no CORS headers) comes
 // through the site's relay, /api/fetch (site/worker/src/relay.ts): only
 // for this page, pictures and videos only, nothing kept. Its refusals are
-// said here in plain words.
+// said here in plain words. A video (MP4, WebM: from a file, a link or the
+// relay) is played into frames by ./video.js, imported only then.
 
 import { init } from '../demo/js/web.js';
 import { app } from '../demo/js/state.js';
@@ -52,7 +53,7 @@ async function start() {
   app.site = true;
   const { mount } = await import('../demo/js/studio.js');
   const send = Object.assign(document.createElement('button'), { id: 'c-send', className: 'pri', textContent: 'Send to my panel' });
-  const st = await mount($('c-ed'), { css: false, acts: [send], relay });
+  const st = await mount($('c-ed'), { css: false, acts: [send], relay, video: () => import('./video.js') });
   $('st-save').classList.remove('pri'); // (Send is the page's first way; Download the other)
   const q = new URLSearchParams(location.search);
   const words = (q.get('q') || '').trim().slice(0, 100);

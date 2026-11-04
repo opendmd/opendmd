@@ -41,6 +41,14 @@ picture and add the file instead.
 On the website, `opendmd.dev/create/?url=` followed by a picture's address
 opens it in Create Art straight away.
 
+### Videos
+
+On the website Create Art also takes MP4 and WebM videos, from a file, a
+link or a share: many "GIFs" on the web are really videos. The first 10
+seconds become up to 20 frames a second, fitted to the panel; trim and
+edit them on the timeline as for any animation. In your panel's own web
+app, make the video into a GIF on the website first.
+
 Click a result to load it. Searching for art needs an internet connection
 (the computer or phone you're using needs it, not the display): the list of
 games comes from the OpenDMD website, the pictures from where they're kept.

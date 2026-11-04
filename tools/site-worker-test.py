@@ -344,6 +344,8 @@ def headers(base: str, site: Path) -> None:
         "/f/": ("'wasm-unsafe-eval'", "connect-src", None, "no-cache"),
         # Create Art: the Studio's wasm, its sources' pictures, a picture from any https address.
         "/create/": ("connect-src 'self' https:", None, None, "no-cache"),
+        # (and a video from a blob: address: video in)
+        "/create/create.js": ("media-src 'self' blob:", None, None, "no-cache"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
         "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
         "/psiled.js": (None, None, None, "no-cache"),
@@ -995,6 +997,7 @@ class RelayUpstream:
             "/a.json": (b'{"gif": "https://example.com/a.gif"}' + b" " * 64, "application/json"),
             "/a.exe": (b"MZ\x90\x00" + junk, "video/mp4"),
             "/page.html": (page, "text/html; charset=utf-8"),
+            "/clip.webm": ((ROOT / "tools/fixtures/video/clip.webm").read_bytes(), "video/webm"),
         }
         self.redirects = {
             "/r1": "https://ok.relay-test.invalid/a.gif", "/r2": "/r1", "/r3": "r2", "/r4": "/r3",
@@ -1268,6 +1271,19 @@ def relay_browser(base: str, shots: Path) -> None:
             page.wait_for_timeout(100)
         check(page.inner_text("#st-msg") == "That address isn’t a picture or a video",
               f"relay in Chromium: a refusal said plainly ('{page.inner_text('#st-msg')}')")
+        page.fill("#st-url", "https://ok.relay-test.invalid/clip.webm")
+        page.click("#st-url-go")
+        for _ in range(300):
+            if page.evaluate("document.querySelector('#studio').dataset.video === '1'"):
+                break
+            page.wait_for_timeout(100)
+        n = int(page.evaluate("document.querySelector('#studio').dataset.srcFrames || 0"))
+        check(36 <= n <= 42 and page.inner_text("#st-msg").startswith("ok.relay-test.invalid: 160 × 90 video"),
+              f"relay in Chromium: a video through the relay, {n} frames on the timeline ('{page.inner_text('#st-msg')}')")
+        if shots:
+            shots.mkdir(parents=True, exist_ok=True)
+            page.evaluate("scrollTo(0, 0)")
+            page.screenshot(path=str(shots / "create-video-relay.png"), full_page=True)
         check(not csp, f"relay in Chromium: no CSP violation {csp[:2]}")
         ctx.close()
         browser.close()

@@ -48,6 +48,9 @@ build URL serves. There the art index must also carry
   fields, Download after, a blocked pop-up said); `?url=` opening a
   picture, asked directly where the host allows it and through the relay
   (stubbed) where it doesn't, the relay's refusals said in plain words;
+  video in: a WebM from a file and an MP4 through the relay as frames on
+  the timeline (the reader loaded only then), fitted, trimmed and
+  downloaded with the motion kept;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -610,6 +613,73 @@ def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
         wait_js(page, "!/^Loading/.test(document.querySelector('#st-msg').textContent)", timeout=10000)
         check(page.inner_text("#st-msg") == C_WHY[why], f"/create/: the relay's '{why}' said plainly ('{page.inner_text('#st-msg')}')")
     check(not page.evaluate("window.__csp || []"), f"/create/ addresses: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
+
+
+VIDEO_FIXTURES = ROOT / "tools/fixtures/video"
+
+
+def box_xs(im: Image.Image, frames: int) -> list[int]:
+    """Where the yellow box starts in each frame of a GIF (-1: not seen)."""
+    xs = []
+    for i in range(frames):
+        im.seek(i)
+        rgb = im.convert("RGB")
+        xs.append(min((x for x in range(128) for y in range(32) if (lambda p: p[0] > 180 and p[1] > 140 and p[2] < 110)(rgb.getpixel((x, y)))), default=-1))
+    return xs
+
+
+def create_video(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """Video in: a WebM (VP9) from a file and an MP4 (AV1: Playwright's
+    Chromium has no H.264) through the relay (stubbed), each 2 s of 160x90
+    at 30 frames a second with a yellow box moving right. Each becomes ~40
+    frames (at most 20 a second) on the timeline, fitted to the panel;
+    trimmed, downloaded: 128x32 with the box moving right."""
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(urllib.parse.urlsplit(r.url).path))
+    mp4 = (VIDEO_FIXTURES / "clip.mp4").read_bytes()
+    page.route("https://nocors.example/**", lambda r: r.abort())
+    page.route(f"{base}/api/fetch", lambda r: r.fulfill(status=200, body=mp4, headers={"content-type": "video/mp4", "x-relayed": "1"}))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(not any(p.endswith("/create/video.js") for p in asked), "/create/ video: the video reader not loaded with the page")
+    page.click("#st-src [data-v=own]")
+    accept = page.get_attribute("#st-file", "accept")
+    check(accept == "image/*,video/mp4,video/webm" and "video" in page.inner_text("#st-own"), f"/create/ video: Choose takes videos ({accept})")
+    page.set_input_files("#st-file", str(VIDEO_FIXTURES / "clip.webm"))
+    wait_js(page, "document.querySelector('#studio').dataset.video === '1'", timeout=30000)
+    d = c_data(page)
+    n = int(d.get("srcFrames", 0))
+    msg = page.inner_text("#st-msg")
+    check(36 <= n <= 42 and msg == f"Video: 160 × 90 video · {n} frames" and d.get("animated") == "1" and d.get("fit") == "fit"
+          and page.is_visible("#st-tl") and any(p.endswith("/create/video.js") for p in asked),
+          f"/create/ video: a 2 s WebM from a file, {n} frames on the timeline, fitted to the panel ('{msg}', {d.get('fit')})")
+    page.fill("#st-title", "Box")
+    wait_js(page, "/^Box.*\\.gif$/.test(document.querySelector('#studio').dataset.name || '')", timeout=5000)
+    if shots:
+        page.evaluate("scrollTo(0, 0)")
+        page.screenshot(path=str(shots / "create-video.png"), full_page=True)
+    page.click("#st-tl .st-cell >> nth=0")
+    page.click("#st-del")
+    wait_js(page, f"document.querySelector('#studio').dataset.frames === '{n - 1}'", timeout=5000)
+    im = c_download(page)
+    xs = box_xs(im, im.n_frames)
+    moving = [x for x in xs if x >= 0]
+    check(im.size == (128, 32) and im.n_frames == n - 1 and len(moving) >= n // 2 and moving == sorted(moving) and moving[-1] > moving[0],
+          f"/create/ video: downloaded 128x32, the first frame deleted, the box moving right ({im.n_frames} frames, box at {xs[:3]}…{xs[-3:]})")
+    page.click("#st-change")
+    page.fill("#st-url", "https://nocors.example/clip.mp4")
+    page.click("#st-url-go")
+    wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('nocors.example: 160 × 90 video')", timeout=30000)
+    d = c_data(page)
+    check(36 <= int(d.get("srcFrames", 0)) <= 42 and d.get("video") == "1",
+          f"/create/ video: an MP4 through the relay, {d.get('srcFrames')} frames ('{page.inner_text('#st-msg')}')")
+    check(not page.evaluate("window.__csp || []"), f"/create/ video: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 
 
@@ -1774,6 +1844,7 @@ def main() -> int:
         create_page(browser, base, a.site, errors, a.shots)
         create_send(browser, base, a.site, errors)
         create_links(browser, base, a.site, errors)
+        create_video(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
