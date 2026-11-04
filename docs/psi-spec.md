@@ -281,9 +281,9 @@ example is compiled by the tests.
 | limit | at most |
 | --- | --- |
 | a formula's text, comments included | 16,384 characters |
-| steps (per frame, per row, per pixel, and one per layer) | 256 |
+| steps (per frame, per row, per pixel, and one per layer) | 512 |
 | values held a pixel at once | 12 |
-| constants and per-frame and per-row values held at once | 128 |
+| constants and per-frame and per-row values held at once | 241 |
 | nesting of brackets, operators and function calls | 48 |
 | `table`, `sprite` and `palette` numbers, in all | 256 |
 | loop turns a frame in `draw { }` | 2,048 |
@@ -1107,7 +1107,7 @@ Shorten the formula.
 
 <h4 id="E402">E402 · too many steps</h4>
 
-> this formula is too long for the panel: … steps, the limit is … (or: … — simplify it)
+> this formula is too long for the panel: … steps (per frame …, draw …, per row …, per pixel …), the limit is … (or: … — simplify it)
 
 The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.
 
@@ -1121,9 +1121,9 @@ Set fewer names, or use each value sooner.
 
 <h4 id="E404">E404 · too many numbers</h4>
 
-> this formula needs more than … numbers and once-a-frame values: use fewer
+> this formula needs … numbers and once-a-frame values, more than the … it can hold (steps: per frame …, draw …, per row …, per pixel …): use fewer
 
-Use fewer different numbers and steps.
+Use fewer different numbers and steps: the section with the most steps is the place to look.
 
 <h4 id="E405">E405 · nested too deeply</h4>
 
@@ -1635,13 +1635,13 @@ Write 1 to 32 colours, each as #f80.
 
 > a formula can have … palettes of its own at most
 
-Use fewer palettes.
+Use fewer palettes (a palette in a tween's half takes half of one).
 
-<h4 id="E924">E924 · too many numbers in tables, sprites and palettes</h4>
+<h4 id="E924">E924 · too many numbers in tables and sprites</h4>
 
-> tables, sprites and palettes hold 256 numbers in all — this would make …
+> tables and sprites hold 256 numbers in all — this would make …
 
-Make the tables, sprites and palettes smaller.
+Make the tables and sprites smaller.
 
 <h4 id="E925">E925 · a palette's colour named twice</h4>
 
@@ -1682,7 +1682,7 @@ loop 4
 cycle(fire, x, t/4 + y)
 ```
 
-<h4 id="E932">E932 · <code>cycle</code> of gray</h4>
+<h4 id="E932">E932 · <code>cycle</code> or <code>tween</code> of gray</h4>
 
 > `cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`
 
@@ -1690,9 +1690,9 @@ Write your own palette.
 
 <h4 id="E933">E933 · too many palettes with <code>cycle</code></h4>
 
-> a formula holds … palettes: its own (… here) and one more for each turn `cycle` gives (… here)
+> a formula holds … palettes that `pal` and `cycle` read: its own (… here) and one more for each turn `cycle` gives (… here)
 
-Use fewer palettes, or turn fewer by different values.
+Read fewer palettes with `pal` and `cycle` (tweens may read more), or turn fewer by different values.
 
 <h4 id="E934">E934 · <code>cycle</code> without its turn</h4>
 
@@ -1705,6 +1705,30 @@ Write the turn after the picture: `cycle(palette, v, turn)`.
 > `…` takes a palette (and how much of the pixel it covers, 0 to 1, if you like); found …
 
 Give it a palette and a value (`cycle` also takes the picture and the turn).
+
+<h4 id="E936">E936 · a tween mixed by a value that changes across the panel</h4>
+
+> `tween` mixes a palette once a frame (by t or a frame value), but `…` (line …) is per pixel: it reads `…`
+
+Mix it by t, a value of t, a slider or another once-a-frame value.
+
+<h4 id="E937">E937 · a palette's half of the wrong palettes</h4>
+
+> a palette's half is a tween of palettes of your own with 16 colours at most: `…` is not one
+
+In a half, tween palettes of your own of 16 colours or fewer (tweens of them inside are fine).
+
+<h4 id="E938">E938 · a tween painted with</h4>
+
+> `…` is a tween, worked out every frame: paint takes a palette of colours (`palette p = #000, #fff`)
+
+Paint with a palette of colours, or with `pal(P, v)` of one of the tween's palettes.
+
+<h4 id="E939">E939 · tweens nested too deeply</h4>
+
+> the tweens need more than … palettes worked out at once: nest them less deeply, or tween fewer palettes that only tweens read
+
+Nest tweens less deeply (a tween as the first palette costs nothing), or read the palettes they make with `pal`.
 
 <h4 id="E941">E941 · <code>rate</code> above the bottom</h4>
 

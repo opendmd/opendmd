@@ -83,14 +83,8 @@ pub(crate) fn name(kind: u8) -> &'static str {
 
 #[inline]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn is_lane(v: u8) -> bool {
-    v & LANE != 0
-}
-
-#[inline]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_reg(v: u8) -> bool {
-    v & LANE != 0 && v & !LANE >= L_REG0
+    is_lane(v) && lane_no(v) >= L_REG0
 }
 
 /// The register a pixel step writes, if it writes one.

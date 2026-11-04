@@ -495,7 +495,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 2876 + 4 * crate::program::MAX_PAINT);
+    assert!(core::mem::size_of::<Program>() <= 6_300);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -530,10 +530,8 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    assert_eq!(
-        core::mem::size_of::<Program>(),
-        2876 + 4 * crate::program::MAX_PAINT
-    );
+    // (512 steps, 241 values, the palette store: 3,388 B before.)
+    assert_eq!(core::mem::size_of::<Program>(), 6144);
     // The ink plane and the paint plane's pointer (the plane itself, 4 KB
     // more, only for a formula that paints).
     assert_eq!(
@@ -542,8 +540,9 @@ fn sizes() {
     );
     // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
     let beam = 3 * core::mem::size_of::<usize>();
-    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192 + beam);
-    assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864 + beam);
+    // (The scalar slots one for every operand byte: 256, 128 before.)
+    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8704 + beam);
+    assert_eq!(core::mem::size_of::<Scratch<64>>(), 5376 + beam);
 }
 
 #[test]
@@ -2292,10 +2291,7 @@ fn sprite_error_messages() {
         keys.join(", ")
     ))
     .unwrap_err();
-    if !e
-        .msg
-        .contains("tables, sprites and palettes hold 256 numbers in all")
-    {
+    if !e.msg.contains("tables and sprites hold 256 numbers in all") {
         bad.push(alloc::format!("E917: {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -2391,9 +2387,9 @@ const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
         "E922",
     ),
     (
-        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npal(p4, x)",
-        "3 palettes of its own at most",
-        4,
+        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npalette p5 = #ff0\npalette p6 = #0ff\npalette p7 = #f0f\npalette p8 = #888\npalette p9 = #444\npal(p9, x)",
+        "8 palettes of its own at most",
+        9,
         1,
         "E923",
     ),
@@ -2442,23 +2438,19 @@ fn palette_error_messages() {
     if !e.msg.contains("1 to 32 colours") {
         bad.push(alloc::format!("E922 33: {}", e.msg));
     }
-    // 200 table numbers and two palettes: past 256.
+    // Palettes have a store of their own: 200 table numbers and two
+    // palettes fit; 200 and 60 more table numbers don't.
     let nums: alloc::vec::Vec<alloc::string::String> =
         (0..200).map(|k| alloc::format!("{k}")).collect();
-    let e = compile(&alloc::format!(
+    assert!(compile(&alloc::format!(
         "table T = {}\npalette p = #f00\npalette q = #0f0\npal(q, T[x])",
         nums.join(", ")
     ))
-    .unwrap_err();
-    if !e
-        .msg
-        .contains("tables, sprites and palettes hold 256 numbers")
-    {
-        bad.push(alloc::format!("E924: {}", e.msg));
-    }
+    .is_ok());
     let e = compile(&alloc::format!(
-        "palette p = #f00\npalette q = #0f0\ntable T = {}\npal(q, T[x])",
-        nums.join(", ")
+        "table T = {}\ntable U = -{}\ngray(T[x] + U[x])",
+        nums.join(", "),
+        nums[..60].join(", -")
     ))
     .unwrap_err();
     if !e.msg.contains("256") {

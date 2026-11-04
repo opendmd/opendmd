@@ -135,8 +135,9 @@ pub fn run(args: Vec<String>) -> i32 {
     .map(|e| e.1)
     .collect();
     println!(
-        "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
+        "ok: {} of {MAX_OPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.steps(),
+        prog.draw_steps(),
         prog.layers(),
         if prog.layers() == 1 { "" } else { "s" },
         prog.regs(),

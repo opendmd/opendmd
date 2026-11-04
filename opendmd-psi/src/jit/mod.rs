@@ -102,7 +102,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             }
         }
         hid::NOISE_O => {
-            let sc = &*(ptr(a[3]) as *const [i32; MAX_SCALARS]);
+            let sc = &*(ptr(a[3]) as *const Sc);
             let k = noise_slot(
                 (a[4] as u8).wrapping_sub(code::NOISE_O) as usize % NOISE_CTX,
                 0,
@@ -119,7 +119,7 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
             tab(tabs, a[2] as u8, a[3] as u8, i(0))
         }
         hid::PICK => {
-            let sc = &*(ptr(a[1]) as *const [i32; MAX_SCALARS]);
+            let sc = &*(ptr(a[1]) as *const Sc);
             pick(sc, a[2] as u8, a[3] as u8, i(0))
         }
         hid::SPR => {
@@ -163,7 +163,7 @@ fn colour_of(st: &Rows<'_>, pal: u8, v: i32, k: u8, shift: u8) -> u32 {
     let k = if k == NONE {
         fixed::ONE
     } else {
-        st.scratch.sc[(k & 0x7f) as usize] >> shift
+        st.scratch.sc[k as usize] >> shift
     };
     pack(fixed::scale_rgb(p[fixed::pal_index(v)], k))
 }
@@ -173,7 +173,10 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 
 /// Fill the words that change from row to row (`per_row`), or those that
 /// do not (once a frame, before the rows).
-#[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+#[cfg_attr(
+    all(target_os = "espidf", feature = "sram1-iram"),
+    link_section = ".iram1.s1"
+)]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
@@ -196,11 +199,11 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                 };
                 t.addr(p as *const u8, W * 4)
             }
-            Word::Scalar(k) => s.sc[(k & 0x7f) as usize] as u32,
+            Word::Scalar(k) => s.sc[k as usize] as u32,
             Word::Pal(k) => t.addr(palette(st.tables, st.own, k).as_ptr() as *const u8, 96),
             Word::Sin => t.addr(st.tables.sin.as_ptr() as *const u8, 512),
             Word::Helper(id) => t.helper(id),
-            Word::Sc => t.addr(s.sc.as_ptr() as *const u8, MAX_SCALARS * 4),
+            Word::Sc => t.addr(s.sc.as_ptr() as *const u8, SC * 4),
             Word::Tabs => t.addr(st.prog.tables.as_ptr() as *const u8, MAX_TABLE * 4),
             Word::Glyphs(c) => {
                 let g = &st.glyphs[(c.saturating_sub(code::DIGIT) as usize).min(4)];
@@ -209,12 +212,10 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                     core::mem::size_of::<Glyphs>(),
                 )
             }
-            Word::Colour { pal, v, k, shift } => {
-                colour_of(st, pal, s.sc[(v & 0x7f) as usize], k, shift)
-            }
+            Word::Colour { pal, v, k, shift } => colour_of(st, pal, s.sc[v as usize], k, shift),
             Word::Entry { pal, v } => {
                 let p = palette(st.tables, st.own, pal);
-                t.addr(p[fixed::pal_index(s.sc[(v & 0x7f) as usize])].as_ptr(), 3)
+                t.addr(p[fixed::pal_index(s.sc[v as usize])].as_ptr(), 3)
             }
             Word::Init(c) | Word::Const(c) => c as u32,
             Word::Ink => match st.ink {
@@ -236,7 +237,7 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                     0
                 }
             }
-            Word::Cover(k) => s.sc[(k & 0x7f) as usize].clamp(0, fixed::ONE) as u32,
+            Word::Cover(k) => s.sc[k as usize].clamp(0, fixed::ONE) as u32,
             Word::Pick {
                 pal,
                 b,
@@ -304,12 +305,19 @@ pub(crate) fn frame<T: Target>(
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
-    for op in &prog.ops[..fe] {
+    // (Its tweens, the section's last steps, with its own palettes below.)
+    for op in &prog.ops[..prog.tweens().start.min(fe)] {
         if code::is_wide(op.code) {
             vm::wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
         } else {
             vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
+    }
+    // A formula's own palettes, worked out once for the frame (before the
+    // draw stage, whose values may take the tweens' weights' slots).
+    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
+    if prog.uses & OWNPAL != 0 {
+        own_palettes(prog, &scratch.sc, &mut own);
     }
     #[cfg(feature = "stats")]
     clk.lap(stats::FRAME);
@@ -347,10 +355,6 @@ pub(crate) fn frame<T: Target>(
         }
         _ => Cache::Off,
     };
-    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
-    if prog.uses & OWNPAL != 0 {
-        unpack_palettes(&prog.tables, &mut own);
-    }
     let glyphs = [
         glyphs(tables, code::DIGIT),
         glyphs(tables, code::GLYPH),
@@ -665,22 +669,44 @@ mod device {
     /// `div`'s and `noise_o`'s helpers, the next most called (Endless road's
     /// kernels): in SRAM1's IRAM with the `sram1-iram` build, else as the
     /// generic shims are.
-    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    #[cfg_attr(
+        all(target_os = "espidf", feature = "sram1-iram"),
+        link_section = ".iram1.s1"
+    )]
     extern "C" fn shim_div(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
         // SAFETY: as `shim`.
         unsafe { eval_helper(hid::DIV, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
-    #[cfg_attr(all(target_os = "espidf", feature = "sram1-iram"), link_section = ".iram1.s1")]
+    #[cfg_attr(
+        all(target_os = "espidf", feature = "sram1-iram"),
+        link_section = ".iram1.s1"
+    )]
     extern "C" fn shim_noise_o(a: u32, b: u32, c: u32, d: u32, e: u32) -> u32 {
         // SAFETY: as `shim`.
         unsafe { eval_helper(hid::NOISE_O, [a, b, c, d, e], &|p| p as usize as *mut u8) }
     }
 
     const SHIMS: [Shim; hid::COUNT as usize] = [
-        shim_div, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
-        shim::<8>, shim_noise_o, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim_pick,
-        shim::<15>, shim::<16>, shim::<17>, shim::<18>,
+        shim_div,
+        shim::<1>,
+        shim::<2>,
+        shim::<3>,
+        shim::<4>,
+        shim::<5>,
+        shim::<6>,
+        shim::<7>,
+        shim::<8>,
+        shim_noise_o,
+        shim::<10>,
+        shim::<11>,
+        shim::<12>,
+        shim::<13>,
+        shim_pick,
+        shim::<15>,
+        shim::<16>,
+        shim::<17>,
+        shim::<18>,
     ];
 
     type KernelFn = extern "C" fn(*mut u32, *mut u8);

@@ -1158,7 +1158,7 @@ fn random_draw_blocks_render_or_refuse() {
 
 #[test]
 fn scalar_cap_is_a_friendly_error() {
-    let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
+    let body: Vec<String> = (1..=250).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
     assert!(
@@ -1166,18 +1166,30 @@ fn scalar_cap_is_a_friendly_error() {
         "{}",
         e.msg
     );
+    // It tells how many, past the limit, and the steps by section.
+    assert!(
+        e.msg.contains("needs 259 numbers") && e.msg.contains("per pixel 501"),
+        "{}",
+        e.msg
+    );
 }
 
 #[test]
 fn op_cap_is_a_friendly_error() {
-    // 2 steps a line, 150 lines.
+    // 2 steps a line, 300 lines.
     let mut src = String::from("v0 = x\n");
-    for k in 1..=150 {
+    for k in 1..=300 {
         src += &format!("v{k} = sin(v{}) + x\n", k - 1);
     }
-    src += "gray(v150)";
+    src += "gray(v300)";
     let e = compile(&src).unwrap_err();
     assert!(e.msg.contains("too long for the panel"), "{}", e.msg);
+    assert!(
+        e.msg
+            .contains("601 steps (per frame 0, draw 0, per row 0, per pixel 601)"),
+        "{}",
+        e.msg
+    );
 }
 
 /// Division by a constant (2026-10-26): once a frame or a row it is a true
@@ -2567,4 +2579,106 @@ fn random_rate_formulas_hold_the_same_frames() {
         }
     }
     assert!(ok > 100, "only {ok} compiled");
+}
+
+/// `tween` (psi-p0): each entry of the palette `pal` reads is its
+/// palettes' entries mixed channel by channel, `p + ((q − p)·w + ½) >> 16`
+/// with w held to 0..1 — whole, in halves (each half's palettes over 16
+/// entries: 16 colours are its entries), and at the slider's ends.
+#[test]
+fn tweens_mix_entry_by_entry() {
+    use opendmd_psi::Inputs;
+    let col = |k: u32, s: u32| {
+        ((k * 37 + s) % 256) << 16 | ((k * 91 + 2 * s) % 256) << 8 | ((k * 13 + 3 * s) % 256)
+    };
+    let list = |n: u32, s: u32| {
+        (0..n)
+            .map(|k| format!("#{:06x}", col(k, s)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mix = |p: u32, q: u32, w: i32| -> [u8; 3] {
+        let mut o = [0u8; 3];
+        for (k, sh) in [16, 8, 0].into_iter().enumerate() {
+            let (x, y) = (((p >> sh) & 255) as i32, ((q >> sh) & 255) as i32);
+            o[k] = (x + (((y - x) * w + 0x8000) >> 16)) as u8;
+        }
+        o
+    };
+    let whole = format!(
+        "palette p = {}\npalette q = {}\npalette s = tween(p, q, a)\npal(s, floor(px/4)/32)",
+        list(32, 5),
+        list(32, 200)
+    );
+    let halves = format!(
+        "palette p = {}\npalette q = {}\npalette s = tween(p, q, a), tween(q, p, b)\npal(s, floor(px/4)/32)",
+        list(16, 9),
+        list(16, 77)
+    );
+    for (src, halved) in [(whole, false), (halves, true)] {
+        let prog = compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+        for (a, b) in [
+            (0, 0),
+            (1 << 16, 1 << 16),
+            (1 << 15, 1 << 14),
+            (-5, 99_999),
+            (12_345, 54_321),
+        ] {
+            let mut inputs = inputs(0);
+            (inputs.a, inputs.b) = (a, b);
+            let inputs = Inputs { ..inputs };
+            let mut out = vec![0u8; W * H * 3];
+            opendmd_psi::render_with::<128>(&prog, &mut Scratch::new(), &inputs, &OWN, &mut out);
+            for e in 0..32u32 {
+                let px = (e * 4) as usize;
+                let want = match (halved, e < 16) {
+                    (false, _) => mix(col(e, 5), col(e, 200), a.clamp(0, 1 << 16)),
+                    (true, true) => mix(col(e, 9), col(e, 77), a.clamp(0, 1 << 16)),
+                    (true, false) => mix(col(e - 16, 77), col(e - 16, 9), b.clamp(0, 1 << 16)),
+                };
+                assert_eq!(
+                    &out[px * 3..px * 3 + 3],
+                    &want,
+                    "{src}\nentry {e} at a={a} b={b}"
+                );
+            }
+        }
+    }
+}
+
+/// The draw stage past step 255 (psi-p0: its jumps' targets are 16 bits):
+/// a loop with an `if … else` and an `if` after it, laid out after 351
+/// steps once a frame, draws what it draws after none.
+#[test]
+fn the_draw_stage_past_step_255_draws_the_same() {
+    let draw = "draw {\n  for j < 40 {\n    if j % 3 == 0 { dot(j*3 + z, 5 + floor(t), 1) } else { line(j*3, 10 + z, j*3 + 2, 24, 0.5, 1) }\n  }\n  if frac(t/2) > 0.5 { line(0, 30, 127, 30 + z) } else { line(0, 1, 127, 1) }\n}\ngray(ink)";
+    let mut long = String::from("loop 8\n");
+    for k in 1..=70 {
+        long += &format!(
+            "k{k} = sin(t*{:.4} + {:.4})\n",
+            1.0 + k as f64 / 997.0,
+            k as f64 / 131.0
+        );
+    }
+    let terms: Vec<String> = (1..=70)
+        .map(|k| format!("k{k}*{:.5}", k as f64 / 7001.0))
+        .collect();
+    // (Every value of `s` is under 1000: z is 0, worked out at 351 steps.)
+    long += &format!(
+        "s = {}\nz = min(s, -1000) + 1000\n{draw}",
+        terms.join(" + ")
+    );
+    let short = format!("loop 8\nz = 0\n{draw}");
+    let (a, b) = (compile(&long).unwrap(), compile(&short).unwrap());
+    assert!(a.counts().0 > 255, "{:?}", a);
+    for ms in [0, 1100, 3300, 7900] {
+        assert!(
+            frame_ink::<128>(&a, ms, None) == frame_ink::<128>(&b, ms, None),
+            "at {ms} ms"
+        );
+        assert!(
+            frame_ink::<64>(&a, ms, None) == frame_ink::<128>(&b, ms, None),
+            "at {ms} ms, 64 lanes"
+        );
+    }
 }

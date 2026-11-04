@@ -16,13 +16,14 @@
 //!                       programs declare controls or a look: their meta)
 //! name_len(u8) name(UTF-8, ≤ 60)
 //! program [look program]
-//! program = len(u16) header ops init tables meta   (len: the bytes after it)
+//! program = len(u16) header ops init tables paint store meta   (len: the bytes after it)
 //! header  = frame_end draw_end row_end pixel_end (u16 each)
 //!           n_scalars regs uses frame_ms (u8 each)  loop_ms(u32)
 //! ops     = pixel_end × (code d a b c)
 //! init    = (n_scalars − 9) × i32   (the inputs' slots are always 0)
-//! tables  = lo(u16) pals(u8)  lo × i32 (from 0)  pals × 32 × i32 (from the top)
+//! tables  = lo(u16)  lo × i32 (from 0)
 //! paint   = n(u8)  n × u32 (the paint palette from entry 0)
+//! store   = n(u8)  n × 32 × u32 (the palette store from slot 0)
 //! meta    = kind[3] look amount (u8)  lo[3] hi[3] def[3] (i32)   (with flag bit 1)
 //! ```
 //!
@@ -34,7 +35,8 @@
 use crate::fixed;
 use crate::meta::Meta;
 use crate::program::{
-    code, Op, Program, LANE, L_REG0, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, S_FIRST_FREE, WIDE,
+    code, is_lane, lane_no, Op, Program, LANES, L_REG0, MAX_OPS, MAX_PALETTES, MAX_SCALARS,
+    MAX_TABLE, REGS, S_FIRST_FREE, TWEEN_TEMPS, TW_HIGH, TW_LOW, USER_PALETTES, WIDE,
 };
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -42,7 +44,7 @@ use alloc::vec::Vec;
 /// The program format and the meaning of its steps. Bumped with any change
 /// to either; the web app reads the player's from `/api/status`
 /// (`psi_abi`) and the www pack carries the compiler that writes it.
-pub const ABI: u8 = 1;
+pub const ABI: u8 = 2;
 
 const MAGIC: &[u8; 3] = b"PSB";
 const F_LOOK: u8 = 1;
@@ -103,35 +105,34 @@ fn put_program(o: &mut Vec<u8>, p: &Program, meta: bool) {
     o.extend_from_slice(&p.loop_ms.to_le_bytes());
     for op in &p.ops[..(p.pixel_end as usize).min(MAX_OPS)] {
         // A lane loop's mark is the player's to make.
-        let c = if op.code == code::FOR { 0 } else { op.c };
+        let c = if op.code == code::FOR {
+            op.c & !LANES
+        } else {
+            op.c
+        };
         o.extend_from_slice(&[op.code, op.d, op.a, op.b, c]);
     }
     debug_assert!(p.init[..S_FIRST_FREE as usize].iter().all(|&v| v == 0));
     for v in &p.init[S_FIRST_FREE as usize..(p.n_scalars as usize).min(MAX_SCALARS)] {
         o.extend_from_slice(&v.to_le_bytes());
     }
-    // The formula's own palettes sit at the top of the tables, the rest
-    // from the bottom: the zeros between them are left out.
-    let pals = (0..crate::program::USER_PALETTES)
-        .rev()
-        .find(|&j| {
-            let a = crate::program::user_palette_at(j);
-            p.tables[a..a + 32].iter().any(|&v| v != 0)
-        })
-        .map_or(0, |j| j + 1);
-    let top = MAX_TABLE - 32 * pals;
-    let lo = p.tables[..top]
-        .iter()
-        .rposition(|&v| v != 0)
-        .map_or(0, |k| k + 1);
+    let lo = p.tables.iter().rposition(|&v| v != 0).map_or(0, |k| k + 1);
     o.extend_from_slice(&(lo as u16).to_le_bytes());
-    o.push(pals as u8);
-    for v in p.tables[..lo].iter().chain(&p.tables[top..]) {
+    for v in &p.tables[..lo] {
         o.extend_from_slice(&v.to_le_bytes());
     }
     let np = p.paint.iter().rposition(|&c| c != 0).map_or(0, |k| k + 1);
     o.push(np as u8);
     for c in &p.paint[..np] {
+        o.extend_from_slice(&c.to_le_bytes());
+    }
+    let ns = p
+        .pals
+        .iter()
+        .rposition(|&c| c != 0)
+        .map_or(0, |k| k / 32 + 1);
+    o.push(ns as u8);
+    for c in &p.pals[..32 * ns] {
         o.extend_from_slice(&c.to_le_bytes());
     }
     let m = &p.meta;
@@ -292,14 +293,10 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
         prog.init[k] = r.i32()?;
     }
     let lo = r.u16()? as usize;
-    let pals = r.u8()? as usize;
-    if pals > crate::program::USER_PALETTES || lo > MAX_TABLE - 32 * pals {
+    if lo > MAX_TABLE {
         return Err(NOT_PSB);
     }
     for k in 0..lo {
-        prog.tables[k] = r.i32()?;
-    }
-    for k in MAX_TABLE - 32 * pals..MAX_TABLE {
         prog.tables[k] = r.i32()?;
     }
     let np = r.u8()? as usize;
@@ -308,6 +305,13 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
     }
     for k in 0..np {
         prog.paint[k] = r.u32()? & 0xff_ffff;
+    }
+    let ns = r.u8()? as usize;
+    if ns > MAX_PALETTES {
+        return Err(NOT_PSB);
+    }
+    for k in 0..32 * ns {
+        prog.pals[k] = r.u32()? & 0xff_ffff;
     }
     let mut m = Meta::default();
     if flags & F_META == 0 {
@@ -364,9 +368,9 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
     }
     let regs = p.regs;
     // A scalar operand: a slot in use. A lane: x, px, i or a register in use.
-    let scalar = |v: u8| v & LANE == 0 && (v as usize) < ns;
-    let lane = |v: u8| v & LANE != 0 && ((v & !LANE) < L_REG0 || (v & !LANE) - L_REG0 < regs);
-    let reg = |v: u8| v & LANE != 0 && (v & !LANE) >= L_REG0 && (v & !LANE) - L_REG0 < regs;
+    let scalar = |v: u8| !is_lane(v) && (v as usize) < ns;
+    let lane = |v: u8| is_lane(v) && (lane_no(v) < L_REG0 || lane_no(v) - L_REG0 < regs);
+    let reg = |v: u8| is_lane(v) && lane_no(v) >= L_REG0 && lane_no(v) - L_REG0 < regs;
     let operand = |v: u8, pixel: bool| scalar(v) || (pixel && lane(v));
     // The steps a section may hold, and their operands.
     let mut depth = 0usize;
@@ -381,7 +385,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
             return bad;
         }
-        let known = matches!(c, 0..=LAST_BIN | ARGS..=UAT | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
+        let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
             || matches!(c, U_R..=INKN | TURN | SLOW | FOR..=COLUMN)
             || is_colour(c) && colour_ok(c);
         if !known {
@@ -400,6 +404,23 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         };
         if !placed {
             return bad;
+        }
+        if c == TWEEN {
+            // The frame section's last steps only: live slots or working
+            // palettes from the store, live slots or working palettes.
+            let src = |v: u8| (v as usize) < MAX_PALETTES + USER_PALETTES + TWEEN_TEMPS;
+            if k >= fe
+                || p.ops[k + 1..fe].iter().any(|o| o.code != TWEEN)
+                || op.d & !(7 | TW_LOW | TW_HIGH) != 0
+                || op.d & (TW_LOW | TW_HIGH) == TW_LOW | TW_HIGH
+                || (op.d & 7) as usize >= USER_PALETTES + TWEEN_TEMPS
+                || !src(op.a)
+                || !src(op.b)
+                || !scalar(op.c)
+            {
+                return bad;
+            }
+            continue;
         }
         if c == TURN {
             // The row section's last steps only.
@@ -441,7 +462,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         }
         match c {
             FOR => {
-                if depth == 2 || !scalar(op.d) || !scalar(op.a) || op.c != 0 {
+                if depth == 2 || !scalar(op.d) || !scalar(op.a) || op.c & LANES != 0 {
                     return bad;
                 }
                 let n = p.init[op.a as usize];
@@ -449,13 +470,13 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                     return bad;
                 }
                 // Its END.
-                let e = op.b as usize;
+                let e = op.target();
                 if e <= k
                     || e >= de
                     || p.ops[e].code != END
                     || p.ops[e].a != op.d
                     || p.ops[e].b != op.a
-                    || p.ops[e].c as usize != k + 1
+                    || p.ops[e].target() != k + 1
                 {
                     return bad;
                 }
@@ -464,7 +485,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
                 continue;
             }
             END => {
-                if depth == 0 || p.ops[fors[depth - 1]].b as usize != k {
+                if depth == 0 || p.ops[fors[depth - 1]].target() != k {
                     return bad;
                 }
                 depth -= 1;
@@ -504,7 +525,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
             IF | JUMP => {
                 // Forward, inside the draw stage, and not into or out of a
                 // loop (the loops' FOR and END balance between).
-                let to = op.b as usize;
+                let to = op.target();
                 if (c == IF && !scalar(op.a)) || to <= k || to > de {
                     return bad;
                 }

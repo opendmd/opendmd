@@ -201,14 +201,14 @@ enum Item {
 #[inline]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_lane(v: u8) -> bool {
-    v & LANE != 0
+    crate::program::is_lane(v)
 }
 
 /// The Psi register (0-based) an operand names, if it is one.
 #[inline]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn reg_of(v: u8) -> Option<usize> {
-    let l = v & !LANE;
+    let l = lane_no(v);
     (is_lane(v) && l >= L_REG0).then(|| (l - L_REG0) as usize)
 }
 
@@ -301,15 +301,15 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         Err(_) => None,
     };
     // Slots a row writes: y, py and the row steps' values.
-    let mut row_slot = [false; MAX_SCALARS];
+    let mut row_slot = [false; crate::program::SC];
     row_slot[S_Y as usize] = true;
     row_slot[S_PY as usize] = true;
     for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
         if code::writes_scalar(op.code) {
-            row_slot[(op.d & 0x7f) as usize] = true;
+            row_slot[op.d as usize] = true;
         }
     }
-    let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
+    let rs = |k: u8| k != NONE && row_slot[k as usize];
     // The palettes `cycle` turns: turned each row (`TURN`), so a colour of
     // one is a row's.
     let turned = |pal: u8| {
@@ -334,8 +334,8 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
                 pal, b, n, i, k, ..
             } => {
                 let m = (n as usize).min(PICK_MAX);
-                let choice = (i as usize) < m
-                    && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                let choice =
+                    (i as usize) < m && rs(prog.init_at((b as usize + i as usize) as u8) as u8);
                 choice || rs(k) || turned(pal)
             }
             _ => false,
@@ -756,7 +756,7 @@ impl<'a> Emitter<'a> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn row_step(&mut self, op: Op) -> Result<(), Refusal> {
         use code::*;
-        let slot = |v: u8| i32::from(v & 0x7f) * 4;
+        let slot = |v: u8| i32::from(v) * 4;
         // (`eval`: a narrowed step is its checked form here.)
         let code = match op.code {
             ADD_W => ADD,
@@ -863,11 +863,11 @@ impl<'a> Emitter<'a> {
                 let (v, n) = reads(it);
                 let cover = code::is_colour(op.code) && code::colour_parts(op.code).1.is_some();
                 for (j, &x) in v[..n].iter().enumerate() {
-                    match x & !LANE {
+                    match lane_no(x) {
                         // (A layer's scalar coverage is read as `Cover`.)
                         _ if !is_lane(x) && cover && j + 1 == n => note(Word::Cover(x)),
                         _ if !is_lane(x) => note(Word::Scalar(x)),
-                        L_X | L_I => note(Word::Lane(x & !LANE)),
+                        L_X | L_I => note(Word::Lane(lane_no(x))),
                         _ => {}
                     }
                 }
@@ -1046,7 +1046,7 @@ impl<'a> Emitter<'a> {
             self.c.l32i(t, CTX, off);
             return Ok(t);
         }
-        match v & !LANE {
+        match lane_no(v) {
             L_PX => {
                 // px = the pixel << 16 (exactly the VM's column: N = W, base 0).
                 let t = self.tmp()?;
@@ -1055,7 +1055,7 @@ impl<'a> Emitter<'a> {
             }
             L_X | L_I => {
                 let t = self.tmp()?;
-                self.lane_into(t, v & !LANE);
+                self.lane_into(t, lane_no(v));
                 Ok(t)
             }
             l => {
@@ -1640,9 +1640,9 @@ impl<'a> Emitter<'a> {
                 Arg::Out => self.c.mov(t, OUT),
                 Arg::Stack(off) => self.c.addi(t, 1, off),
                 Arg::Val(v) if !is_lane(v) => self.load_word(t, Word::Scalar(v)),
-                Arg::Val(v) => match v & !LANE {
+                Arg::Val(v) => match lane_no(v) {
                     L_PX => self.c.slli(t, PIX, 16),
-                    L_X | L_I => self.lane_into(t, v & !LANE),
+                    L_X | L_I => self.lane_into(t, lane_no(v)),
                     l => {
                         let id = self.cur[(l - L_REG0) as usize]
                             .ok_or("a register read before it is written")?;
