@@ -23,7 +23,7 @@ pub const H: usize = 32;
 
 /// Steps a formula may take in all (per-frame, per-row, per-pixel and the
 /// colour): the cap the compiler holds every formula to.
-pub const MAX_STEPS: usize = 512;
+pub const MAX_STEPS: usize = 768;
 /// Steps a program may hold: the formula's [`MAX_STEPS`] and the markers
 /// the compiler adds for the column run and the still cache, which do not
 /// count against the cap (a formula at the cap keeps its column run).
@@ -788,8 +788,9 @@ pub struct Program {
     pub(crate) pals: [u32; MAX_PALETTES * 32],
 }
 
-// (The budget: 6.3 KB at the limits, `docs/research/endless-road-v2.md` §5.)
-const _: () = assert!(core::mem::size_of::<Program>() <= 6_300);
+// (The budget: 6.3 KB at P0's limits, `docs/research/endless-road-v2.md`
+// §5; +1.3 KB for 768 steps, P2.)
+const _: () = assert!(core::mem::size_of::<Program>() <= 7_600);
 
 impl core::fmt::Debug for Program {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

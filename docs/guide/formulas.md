@@ -610,7 +610,7 @@ while it is off. Only `name = …` lines go inside. The cost the editor
 shows counts the lines outside scenes and the two dearest scenes, since a
 change from one place to the next shows two at once.
 
-**Limits.** A formula can be 4,096 characters and 512 steps (the editor
+**Limits.** A formula can be 4,096 characters and 768 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
 biggest number of the right sign rather than an error.
