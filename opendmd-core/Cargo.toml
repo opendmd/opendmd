@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-core"
-version = "1.0.0-beta.13"
+version = "1.0.0-beta.14"
 edition = "2021"
 description = "Platform-independent core for OpenDMD: 128x32 canvas, GIF playback, manifest/tag parsing, playlist engine."
 license = "MIT OR Apache-2.0"
