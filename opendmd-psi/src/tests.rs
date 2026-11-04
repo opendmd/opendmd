@@ -526,6 +526,32 @@ fn compact_compiles_the_same() {
     );
 }
 
+/// One frame's cost counts each scene by the rows its `when` is on in that
+/// frame, and the draw stage's arm it takes: the docs' environment cycle,
+/// its towers on rows 0-19 while the city is on, the sea all rows while it
+/// is off.
+#[test]
+fn a_frame_costs_the_scenes_and_rows_it_runs() {
+    let src = "loop 8\ncity = frac(t/8) > 0.5\nscene towers when city * (py < 20) {\n  h = hash(floor(px/6), 3)\n  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)\n}\nscene sea when 1 - city {\n  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5\n}\ndraw {\n  if city { for k < 40 { line(k*3, 0, k*3, 31, 0.5) } } else { dot(1, 1, 0.5) }\n}\nrgb(lit, wave*0.3 + lit*0.5 + ink, wave)";
+    let p = compile(src).unwrap();
+    let mut s = Scratch::<128>::new();
+    let at = |ms: u64, s: &mut Scratch<128>| {
+        let mut inp = Inputs::default();
+        inp.set_ms(&p, ms);
+        scene_rows(&p, s, &inp, &OWN)
+    };
+    let (sea, city) = (at(1000, &mut s), at(5000, &mut s));
+    assert_eq!(&sea.rows[1..3], &[0, 32]);
+    assert_eq!(&city.rows[1..3], &[20, 0]);
+    assert_eq!((sea.known & 1, sea.taken & 1, city.taken & 1), (1, 0, 1));
+    // Each frame no more than the two costliest scenes on every row and
+    // the costlier arm; the city's frame, with its lines, more than the
+    // sea's.
+    let (a, b) = (p.tier_us_frame(false, &sea), p.tier_us_frame(false, &city));
+    assert!(a <= p.tier_us(false) && b <= p.tier_us(false), "{a} {b} {}", p.tier_us(false));
+    assert!(b > a, "{a} {b}");
+}
+
 /// Palettes of 16 colours or fewer that only tweens' halves read take half
 /// a store place each: ten of them fit the store's eight places.
 #[test]
