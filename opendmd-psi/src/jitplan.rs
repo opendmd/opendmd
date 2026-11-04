@@ -4,6 +4,17 @@
 //! (no encoder): [`jit_takes`] is the editor's "does the panel's JIT take
 //! it" (P0b-2), the same rules the lowering refuses by.
 
+// (Without the lowering — the player off the ESP32, the web app — only
+// what `jit_takes` reads is used.)
+#![cfg_attr(
+    not(any(
+        test,
+        feature = "docs",
+        all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
+    )),
+    allow(dead_code)
+)]
+
 use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K};
 use crate::program::*;
 use alloc::vec::Vec;
