@@ -21,6 +21,17 @@ pub(crate) fn glyphs<'a>(t: &Tables<'a>, c: u8) -> Glyphs<'a> {
 pub const W: usize = 128;
 pub const H: usize = 32;
 
+/// What one frame of a program runs (`crate::scene_rows`): each scene's
+/// rows on (`rows[s]` for scene `s`), and how the draw stage's `if`s
+/// outside loops go (bit k of `taken` for the k-th, known where bit k of
+/// `known` is set). [`Program::tier_us_frame`] costs the frame by it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneFrame {
+    pub rows: [u8; 16],
+    pub known: u32,
+    pub taken: u32,
+}
+
 /// Steps a formula may take in all (per-frame, per-row, per-pixel and the
 /// colour): the cap the compiler holds every formula to.
 pub const MAX_STEPS: usize = 768;
@@ -1045,11 +1056,11 @@ impl Program {
     /// were measured so.
     #[doc(hidden)]
     pub fn esp32_us_turns(&self) -> u32 {
-        self.estimate_with(None, false, false)
+        self.estimate_with(None, false, false, None)
     }
 
     fn estimate(&self, still: Option<usize>) -> u32 {
-        self.estimate_with(still, true, false)
+        self.estimate_with(still, true, false, None)
     }
 
     /// [`esp32_us`](Self::esp32_us) as the ESP32's JIT draws it (its
@@ -1061,13 +1072,13 @@ impl Program {
     /// the label and the governor's start, never a limit (the limits stay
     /// the VM's: the JIT may be off).
     pub fn esp32_us_jit(&self) -> u32 {
-        self.estimate_with(None, true, true).min(self.esp32_us())
+        self.estimate_with(None, true, true, None).min(self.esp32_us())
     }
 
     /// [`esp32_us_jit`](Self::esp32_us_jit) with a filled still cache, as
     /// [`esp32_us_still`](Self::esp32_us_still).
     pub fn esp32_us_jit_still(&self) -> u32 {
-        self.estimate_with(self.still_marker(), true, true)
+        self.estimate_with(self.still_marker(), true, true, None)
             .min(self.esp32_us_still())
     }
 
@@ -1094,6 +1105,29 @@ impl Program {
         }
     }
 
+    /// [`tier_us`](Self::tier_us) for one frame, its scenes counted as the
+    /// panel draws them: each by the rows its `when` is on in that frame
+    /// (from [`crate::scene_rows`]), every scene on, none off, and the draw
+    /// stage's `if` arms it takes — where `tier_us` counts the two
+    /// costliest scenes on all 32 rows and the costlier arm of each `if`.
+    /// The JIT's figure where it takes the program, else the VM's.
+    pub fn tier_us_frame(&self, look: bool, frame: &SceneFrame) -> u32 {
+        let still = if look { None } else { self.still_marker() };
+        let vm = self.estimate_with(still, true, false, Some(frame));
+        if self.jit_takes() {
+            self.estimate_with(still, true, true, Some(frame)).min(vm)
+        } else {
+            vm
+        }
+    }
+
+    /// The VM's figure for one frame (the "without the JIT" beside
+    /// [`tier_us_frame`](Self::tier_us_frame)).
+    pub fn vm_us_frame(&self, look: bool, frame: &SceneFrame) -> u32 {
+        let still = if look { None } else { self.still_marker() };
+        self.estimate_with(still, true, false, Some(frame))
+    }
+
     /// The first step a kernel draws: after the column run, and after the
     /// still cache's run with what is laid out before its marker (the VM
     /// runs those as lanes).
@@ -1110,7 +1144,15 @@ impl Program {
         }
     }
 
-    fn estimate_with(&self, still: Option<usize>, lanes: bool, jit: bool) -> u32 {
+    /// `frame`: one frame's scenes and draw arms (`tier_us_frame`); `None`:
+    /// the two costliest scenes on every row, the costlier arms.
+    fn estimate_with(
+        &self,
+        still: Option<usize>,
+        lanes: bool,
+        jit: bool,
+        frame: Option<&SceneFrame>,
+    ) -> u32 {
         let (skip, cached) = match still {
             Some(k) => {
                 let op = &self.ops[k];
@@ -1200,18 +1242,24 @@ impl Program {
                 row -= r.len() as u32;
             }
         }
-        // (The two largest by a scan: a sort's code is ~3 KB of wasm.)
-        let (mut top, mut next) = (0u32, 0u32);
-        for &(sp, sk, ss, sr) in &scene {
+        // (The two largest by a scan: a sort's code is ~3 KB of wasm.) For
+        // one frame: every scene, by the rows it is on (a row step's 10 µs
+        // a frame is 32 rows' worth).
+        let (mut top, mut next, mut framed) = (0u32, 0u32, 0u32);
+        for (s, &(sp, sk, ss, sr)) in scene.iter().enumerate() {
             let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
             let c = p * (W * H) as u32 / 1000 + sr * 10;
+            if let Some(r) = frame.map(|f| &f.rows) {
+                let n = u32::from(r[s].min(H as u8));
+                framed += (p * W as u32 * n) / 1000 + sr * 10 * n / H as u32;
+            }
             if c > top {
                 (top, next) = (c, top);
             } else if c > next {
                 next = c;
             }
         }
-        let scenes = top + next;
+        let scenes = if frame.is_some() { framed } else { top + next };
         // `cycle`'s turns: a palette copied each row, on top of a row
         // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
@@ -1248,7 +1296,7 @@ impl Program {
             + turns
             + tweens
             + scenes
-            + self.draw_cost(lanes, usize::MAX)
+            + self.draw_cost_with(lanes, usize::MAX, frame.map(|f| (f.known, f.taken)))
             + self.overlay_us()
             + extra)
             * 115
@@ -1586,6 +1634,14 @@ impl Program {
     /// [`draw_us`](Self::draw_us), with (`lanes`) or without the loops run
     /// as lanes (and the one whose `FOR` is at `turned` a turn at a time).
     fn draw_cost(&self, lanes: bool, turned: usize) -> u32 {
+        self.draw_cost_with(lanes, turned, None)
+    }
+
+    /// [`draw_cost`](Self::draw_cost) for one frame when `ifs` says how its
+    /// `if`s outside loops went (bit k of the second for the k-th such `if`,
+    /// known where bit k of the first is set): the arm taken, else (not
+    /// known) the costlier.
+    fn draw_cost_with(&self, lanes: bool, turned: usize, ifs: Option<(u32, u32)>) -> u32 {
         if !self.draws() {
             return 0;
         }
@@ -1601,23 +1657,65 @@ impl Program {
         // (the else arm's first step, the end, `ns` at the IF, the then
         // arm's cost once its JUMP is reached).
         let mut arms = [(0usize, 0usize, 0u64, 0u64); 4];
+        // For one frame (`ifs`): each open arm's way, 1 taken, 2 not, 0 not
+        // known; and the `if`s outside loops counted, and the loops' depth.
+        let mut way = [0u8; 4];
+        let (mut nth, mut depth) = (0u32, 0usize);
         let mut open = 0usize;
         type Arms = [(usize, usize, u64, u64); 4];
-        fn close(arms: &Arms, open: &mut usize, at: usize, ns: &mut u64) {
-            while *open > 0 && arms[*open - 1].1 > 0 && at >= arms[*open - 1].1 {
-                let (_, _, ns0, then) = arms[*open - 1];
-                *ns = ns0 + then.max(*ns - ns0);
+        fn close(arms: &Arms, way: &[u8; 4], open: &mut usize, at: usize, ns: &mut u64) {
+            loop {
+                if *open == 0 {
+                    break;
+                }
+                let (start, end, ns0, then) = arms[*open - 1];
+                let w = way[*open - 1];
+                if end > 0 && at >= end {
+                    *ns = ns0
+                        + match w {
+                            1 => then,
+                            2 => *ns - ns0,
+                            _ => then.max(*ns - ns0),
+                        };
+                } else if end == 0 && at == start && w != 0 {
+                    // (An `if` with no `else`, its way known: its steps
+                    // only when taken.)
+                    if w == 2 {
+                        *ns = ns0;
+                    }
+                } else {
+                    break;
+                }
                 *open -= 1;
             }
         }
         let end = (self.draw_end as usize).min(MAX_OPS);
         self.draw_walk(|at, op, mult| {
-            close(&arms, &mut open, at, &mut ns);
+            close(&arms, &way, &mut open, at, &mut ns);
+            match op.code {
+                code::FOR => depth += 1,
+                code::END => depth = depth.saturating_sub(1),
+                _ => {}
+            }
             match op.code {
                 code::IF if open < arms.len() => {
                     arms[open] = (op.target(), 0, ns, 0);
+                    way[open] = match ifs {
+                        Some((known, taken)) if depth == 0 && nth < 32 && known & (1 << nth) != 0 => {
+                            if taken & (1 << nth) != 0 { 1 } else { 2 }
+                        }
+                        _ => 0,
+                    };
+                    if depth == 0 {
+                        nth += 1;
+                    }
                     open += 1;
                     return;
+                }
+                code::IF => {
+                    if depth == 0 {
+                        nth += 1;
+                    }
                 }
                 code::JUMP if open > 0 && arms[open - 1].0 == at + 1 && arms[open - 1].1 == 0 => {
                     let a = &mut arms[open - 1];
@@ -1682,7 +1780,7 @@ impl Program {
             };
             ns = ns.saturating_add(cost * mult as u64);
         });
-        close(&arms, &mut open, end, &mut ns);
+        close(&arms, &way, &mut open, end, &mut ns);
         (ns / 1000).min(u32::MAX as u64) as u32
     }
 

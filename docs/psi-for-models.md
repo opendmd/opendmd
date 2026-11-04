@@ -839,7 +839,11 @@ row (and the JIT once a pixel: a branch), skips its steps and zeroes what
 is read after; its values never share a step with the same value outside
 it, and none goes in the still cache or the column run. **The estimate
 counts every step outside scenes plus the two costliest scenes** (the
-panel budgets for two scenes at once: a transition shows two). An
+panel budgets for two scenes at once: a transition shows two). `psi check
+--ms …` also costs each frame listed as the panel draws it: every scene by
+the rows its `when` is on in that frame (a scene `when city * (py < 13)`
+costs 13 rows' worth), the draw stage's arms that frame takes, and the
+worst of them. An
 environment cycle is the idiom — each place a scene, the colour reading
 all of them, the weights making at most two non-zero at a time:
 

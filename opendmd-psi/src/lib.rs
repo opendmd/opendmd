@@ -78,7 +78,7 @@ pub use compile::{
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{
-    Op, Program, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
+    Op, Program, SceneFrame, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
 };
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
@@ -91,7 +91,7 @@ pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
 pub use vm::stats;
 pub use vm::{
-    pair_row, q16, render_rows, render_rows_beam, render_rows_changed, render_rows_ink,
+    pair_row, q16, scene_rows, render_rows, render_rows_beam, render_rows_changed, render_rows_ink,
     render_rows_ink_turns, render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START,
     Q16_ONE,
 };
