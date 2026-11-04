@@ -81,6 +81,10 @@ required-features = ["tables"]
 name = "bench"
 required-features = ["tables"]
 
+[[example]]
+name = "road_sweep"
+required-features = ["tables", "compiler"]
+
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
