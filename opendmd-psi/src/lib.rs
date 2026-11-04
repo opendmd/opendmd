@@ -78,7 +78,7 @@ pub use compile::{
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{
-    Op, Program, H, MAX_OPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
+    Op, Program, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
 };
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};

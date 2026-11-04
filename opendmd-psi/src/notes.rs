@@ -119,7 +119,7 @@ impl<'s> Parser<'s> {
     pub(super) fn layout_notes(
         &mut self,
         prog: &mut Program,
-        (cached, col): &(Vec<usize>, Vec<usize>),
+        (cached, col, col_lost): &(Vec<usize>, Vec<usize>, Option<&'static str>),
     ) {
         let dag = &self.dag;
         let n = dag.nodes.len();
@@ -184,6 +184,15 @@ impl<'s> Parser<'s> {
             }
             let (a, b) = first.unwrap_or((0, 0));
             notes.push((a, b, t));
+        }
+        // A column run the formula has, left out (then every pixel works
+        // its values out: the frame can cost several times as much).
+        if let Some(why) = col_lost {
+            notes.push((
+                0,
+                0,
+                format!("column run: left out ({why}): its values are worked out for every pixel, not once a column"),
+            ));
         }
         // The heaviest per-pixel value that would be still but for a value
         // that moves (a control, `t`): what keeps it out.

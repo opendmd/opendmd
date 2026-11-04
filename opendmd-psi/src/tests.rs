@@ -288,10 +288,10 @@ fn levels_run_as_rarely_as_they_can() {
     assert!(p.listing().contains("recip"), "{}", p.listing());
     assert!(!p.listing().contains("div"), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
-    // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
-    // marker is one step more)
-    // and its `sin(x*3 + t/8)` once a column: a column run, one more)
-    assert_eq!(plasma.counts(), (2, 5, 15));
+    // (its `len(x-0.5, y-0.5)*6` is worked out once, and its `sin(x*3 +
+    // t/8)` once a column: the still cache's and the column run's markers
+    // are not counted as steps)
+    assert_eq!(plasma.counts(), (2, 5, 13));
     assert_eq!(plasma.still_lanes(), 1);
     assert_eq!(plasma.column_run().len(), 4, "{}", plasma.listing());
     let ring = compile(sketches::RING_CLOCK).unwrap();
@@ -530,8 +530,9 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    // (512 steps, 241 values, the palette store: 3,388 B before.)
-    assert_eq!(core::mem::size_of::<Program>(), 6144);
+    // (512 steps and the two markers, 241 values, the palette store: 3,388
+    // B before P0.)
+    assert_eq!(core::mem::size_of::<Program>(), 6156);
     // The ink plane and the paint plane's pointer (the plane itself, 4 KB
     // more, only for a formula that paints).
     assert_eq!(
@@ -1183,10 +1184,10 @@ fn pick_is_the_chain_it_replaces() {
     assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
     assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
     // In a colour expression (read three times) a pick is one step (and
-    // all of it once a column: the column run's marker is one more).
+    // all of it once a column; the column run's marker is not counted).
     assert_eq!(
         px("#f80 * pick(px/32, 0.5, 1)"),
-        5,
+        4,
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
