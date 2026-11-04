@@ -5421,6 +5421,12 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
           f"studio address: a site that refuses the browser is said, with what to do ('{page.inner_text('#st-msg')}')")
     page.unroute("https://refuses.example/**")
     expected.remove("refuses.example")
+    # A video: the panel's app has no video reader (the site's Create Art has).
+    page.set_input_files("#st-file", str(REPO / "tools/fixtures/video/clip.webm"))
+    page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('That is a video')", timeout=10000)
+    check(page.inner_text("#st-msg") == "That is a video: Create Art on opendmd.dev makes videos into GIFs; here, pick a GIF or a picture"
+          and page.get_attribute("#st-file", "accept") == "image/*",
+          f"studio video: the panel's app says where videos can be made into GIFs ('{page.inner_text('#st-msg')}')")
     page.click("#st-src [data-v=gameart]")
     page.click("#st-change")
     goto_view(page, "library")

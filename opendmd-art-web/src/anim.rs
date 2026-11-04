@@ -143,8 +143,11 @@ pub struct Anim {
     pub loops: u32,
     /// Decoding stopped at a frame that would not decode.
     pub damaged: bool,
-    /// A Formula's frames cut short of a whole loop ([`frames`](Self::frames)).
+    /// A Formula's frames cut short of a whole loop ([`frames`](Self::frames)),
+    /// or a video's cut at the length kept ([`video`](Self::video)).
     pub cut: bool,
+    /// Frames from a video ([`video`](Self::video)): no pixel grid to find.
+    pub video: bool,
     look: Look,
     look_set: bool,
     flip: bool,
@@ -197,6 +200,7 @@ impl Anim {
             },
             damaged: false,
             cut: false,
+            video: false,
             look: Look {
                 fit: Fit::Pixels,
                 lift: false,
@@ -231,31 +235,66 @@ impl Anim {
         Some(a)
     }
 
+    /// Frames from a video, drawn by the page (the site's Create Art):
+    /// `w` x `h` RGB888 (the page scales them down to fit [`BUDGET`]) from
+    /// a video of `ow` x `oh`, each with its own delay; `first` now, the
+    /// rest by [`push_delay`](Self::push_delay), then [`end`](Self::end).
+    pub fn video(first: &[u8], w: usize, h: usize, ow: usize, oh: usize, delay_ms: u32) -> Option<Anim> {
+        let most = (BUDGET / (w * h * 3).max(1)).min(MAX_FRAMES);
+        if w == 0 || h == 0 || first.len() != w * h * 3 || most == 0 {
+            return None;
+        }
+        let mut a = Anim::sized(w, h, most, false);
+        a.orig = (ow.max(1), oh.max(1));
+        a.video = true;
+        a.keep(&rgb_image(first, w, h), delay_ms);
+        Some(a)
+    }
+
     /// The next of [`frames`](Self::frames)' frames, at the first's delay;
     /// true once all of them are in (more are ignored).
     pub fn push(&mut self, rgb: &[u8]) -> bool {
-        if self.frames.len() < self.in_file && rgb.len() == W * H * 3 {
-            let d = self.delays[0];
-            self.keep(&rgb_image(rgb, W, H), d);
+        let d = self.delays[0];
+        self.push_delay(rgb, d)
+    }
+
+    /// The next frame at its own delay; true once all of them are in (more,
+    /// or one of the wrong size, are ignored).
+    pub fn push_delay(&mut self, rgb: &[u8], delay_ms: u32) -> bool {
+        if self.frames.len() < self.in_file && rgb.len() == self.w * self.h * 3 {
+            self.keep(&rgb_image(rgb, self.w, self.h), delay_ms);
         }
         self.frames.len() >= self.in_file
     }
 
+    /// No more frames are coming (a video's): the ones in are all of them;
+    /// `cut`: the video went on past them.
+    pub fn end(&mut self, cut: bool) {
+        self.in_file = self.frames.len();
+        self.cut = cut;
+    }
+
     /// An empty animation of `n` frames of the panel's size.
     fn panel(n: usize, cut: bool) -> Anim {
+        Anim::sized(W, H, n, cut)
+    }
+
+    /// An empty animation of `n` frames of `w` x `h`.
+    fn sized(w: usize, h: usize, n: usize, cut: bool) -> Anim {
         Anim {
             dec: None,
-            orig: (W, H),
+            orig: (w, h),
             in_file: n,
             scale: Scale { k: 1, x0: 0, y0: 0 },
             reduce: 1,
-            w: W,
-            h: H,
-            frames: Vec::with_capacity(n),
-            delays: Vec::with_capacity(n),
+            w,
+            h,
+            frames: Vec::with_capacity(n.min(1024)),
+            delays: Vec::with_capacity(n.min(1024)),
             loops: 0,
             damaged: false,
             cut,
+            video: false,
             look: Look {
                 fit: Fit::Pixels,
                 lift: false,

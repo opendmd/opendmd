@@ -62,6 +62,9 @@ async function run(step, alive, progress) {
     if (alive && !alive()) return false;
   }
 }
+// An MP4 (an ftyp box that is not an AVIF/HEIF still) or a WebM, by its first bytes.
+const isVideo = (head, type) => (head.slice(4, 8) === 'ftyp' && !/^(avi[fs]|hei[cfx]|mif1|msf1)/.test(head.slice(8, 12)))
+  || head.startsWith('\x1a\x45\xdf\xa3') || type.startsWith('video/');
 const HOLDS = [['No pause', 0], ['Pause 1.5 s', 1500], ['Pause 3 s', 3000]];
 const MAX_PX = 4e6; // bigger pictures are scaled down on the way in
 
@@ -70,7 +73,8 @@ let art = null; // the wasm module
 // The view: built once, into `root`. The site's Create Art page (share/create/)
 // mounts it too, with `o`: `css: false` (its own stylesheet imports the
 // Studio's), `acts` (buttons beside Save), `relay` (an address the browser
-// may not fetch, through the site) — and reads what Save would write
+// may not fetch, through the site), `video` (the site's video reader, a
+// module: MP4 and WebM become frames) — and reads what Save would write
 // through `ready()` and `out()`.
 export async function mount(root, o = {}) {
   [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
@@ -100,7 +104,7 @@ function build(root, o) {
 
   // --- 1 Find: the web (find.js' sources, in their order) or your own picture.
   const SRC = [...sources.map((x) => [x.id, x.label]), ['own', 'Your own']];
-  const file = h('input', { type: 'file', accept: 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
+  const file = h('input', { type: 'file', accept: o.video ? 'image/*,video/mp4,video/webm' : 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
   const url = h('input', { type: 'text', id: id('url'), inputMode: 'url', placeholder: 'Picture address (https://…)' });
   const msg = h('span.cap', { id: id('msg'), 'aria-live': 'polite' });
   const seen = h('a', { id: id('seen'), target: '_blank', rel: 'noopener', hidden: true }, 'Seen on…');
@@ -111,7 +115,7 @@ function build(root, o) {
   const src = seg('src', SRC, (v) => useSource(v, true));
   const web = h('div', { id: id('web') }, narrow, h('div.row.st-q', h('div.grow', q), h('button', { id: id('go'), onclick: search }, 'Search')), results);
   const own = h('div', { id: id('own'), hidden: true },
-    h('div.row', h('label.btn', 'Choose a picture or GIF…', file), h('span.cap', 'or drop or paste one here')),
+    h('div.row', h('label.btn', o.video ? 'Choose a picture, GIF or video…' : 'Choose a picture or GIF…', file), h('span.cap', 'or drop or paste one here')),
     h('div.row.st-url', h('div.grow', url), h('button', { id: id('url-go'), onclick: () => fromUrl(url.value.trim()) }, 'Load')));
   // Folded, "Change picture"; open with a picture in, "Keep this picture".
   const change = h('button.sm', { id: id('change'), onclick: () => fold(!el.classList.contains('found')) }, 'Change picture');
@@ -264,8 +268,9 @@ function build(root, o) {
     const tok = ++S.tok;
     msg.textContent = 'Reading…';
     seen.hidden = true;
-    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-    if (String.fromCharCode(...head) === 'GIF8') {
+    const head = String.fromCharCode(...new Uint8Array(await blob.slice(0, 12).arrayBuffer()));
+    if (isVideo(head, blob.type)) return loadVideo(blob, from, tok);
+    if (head.startsWith('GIF8')) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       if (art.gifFrames(bytes) > 1) return loadGif(bytes, from, tok);
     }
@@ -318,6 +323,35 @@ function build(root, o) {
     return true;
   }
 
+  // A video (MP4, WebM): the site's reader (`o.video`) plays it into
+  // frames, handed to the art module as they come; then the timeline, as
+  // for a GIF. The panel's own app has no reader and says where to go.
+  async function loadVideo(blob, from, tok) {
+    if (!o.video) { msg.textContent = 'That is a video: Create Art on opendmd.dev makes videos into GIFs; here, pick a GIF or a picture'; return false; }
+    const t0 = performance.now();
+    const alive = () => tok === S.tok;
+    let st = null;
+    try {
+      const r = await (await o.video()).frames(blob, {
+        alive,
+        progress: (t, of) => { msg.textContent = `Reading the video… ${secs(t * 1000)} of ${secs(of * 1000)} s`; },
+        put: (rgb, ms, i) => { if (st) st.pushFrame(rgb, ms); else st = art.Studio.fromVideo(rgb, i.w, i.h, i.ow, i.oh, ms); },
+      });
+      if (!r || !alive()) { st?.free(); return false; }
+      st.end(r.cut);
+      adopt(st, from);
+      msg.textContent = `${from.label || 'Video'}: ${r.ow} × ${r.oh} video · ${st.sourceFrames} frames`
+        + (r.cut ? ` · the first ${secs(r.secs * 1000)} s of it` : '');
+      Object.assign(el.dataset, { tImport: Math.round(performance.now() - t0), video: 1 });
+      restage(true);
+      return true;
+    } catch (e) {
+      st?.free();
+      if (alive()) msg.textContent = e.message || String(e);
+      return false;
+    }
+  }
+
   // A new picture in the Studio: its fields, the timeline for an animation.
   function adopt(st, from) {
     stop();
@@ -347,7 +381,7 @@ function build(root, o) {
     smoothSet(false);
     if (anim) animate(st);
     else A.on = false;
-    Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '' });
+    Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '', video: '' });
     text(true);
     naming();
   }
@@ -856,8 +890,9 @@ function build(root, o) {
   }
 
   // --- Drop and paste, while open
+  const media = (x) => /^(image|video)\//.test(x.type);
   const onPaste = (e) => {
-    const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
+    const f = [...(e.clipboardData?.files || [])].find(media);
     if (f) { e.preventDefault(); load(f, { label: 'Pasted' }); return; }
     const t = e.clipboardData?.getData('text/plain')?.trim();
     if (t && /^https?:\/\//.test(t) && e.target === document.body) { url.value = t; fromUrl(t); }
@@ -867,7 +902,7 @@ function build(root, o) {
   el.addEventListener('drop', (e) => {
     e.preventDefault();
     el.classList.remove('drop');
-    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/'));
+    const f = [...e.dataTransfer.files].find(media);
     if (f) load(f, { label: 'Dropped' });
     else { const u = e.dataTransfer.getData('text/uri-list').split('\n')[0].trim(); if (u) { url.value = u; fromUrl(u); } }
   });
