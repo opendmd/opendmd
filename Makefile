@@ -527,14 +527,16 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # which also sets the bootloader's and the app's image headers), and the app
 # descriptor's version as the release sets it ("<version> <variant>",
 # `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
-# The flash clock (FW_FLASH_FREQ=40|80, MHz; DIO either way). The app sets
+# The flash clock (FW_FLASH_FREQ=80|40, MHz, 80 by default; DIO
+# either way; FW_FLASH_FREQ=40 for a board whose flash cannot run at 80 MHz,
+# docs/notes/flash-clock.md). The app sets
 # SPI0's clock itself at start-up from its own image header
 # (esp_system/port/cpu_start.c: bootloader_flash_clock_config(&app header),
 # ESP32 without PSRAM), so 80 reaches a board by OTA with its bootloader
 # left at 40: the app image's header (espflash --flash-freq) and the IDF's
 # own idea of it (CONFIG_ESPTOOLPY_FLASHFREQ_*, which the flash driver's
 # SPI1 uses) both follow this. `/api/firmware` `flash` reads the clock back.
-FW_FLASH_FREQ ?= 40
+FW_FLASH_FREQ ?= 80
 # SRAM1 as IRAM (FW_SRAM1_IRAM=1): IDF's ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM,
 # up to 40 KB more IRAM (0x400A0000..), each byte used taken from the top of
 # the D/IRAM heap (heap/port/esp32/memory_layout.c reserves _heap_end..
@@ -611,7 +613,7 @@ MONITOR_BAUD := 921600
 # dual-OTA one before it) wants `make fw-erase` first (NVS goes too); see
 # docs/deploying.md. VARIANT=8mb for an 8 MB board (an 8 MB board in development).
 fw-flash: fw-build web updater
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(UPDATER_BIN) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(UPDATER_BIN) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
 
 # NOTE: do NOT capture serial with `cat $(PORT)` or stty tricks — they toggle
 # DTR/RTS and the DevKit V1's auto-reset circuit reboots (or holds) the chip,
@@ -882,7 +884,7 @@ fw-sign:
 # DMDoS, other firmware or an older table: `make fw-erase` first.
 fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]

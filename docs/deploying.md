@@ -226,6 +226,14 @@ web app over the smaller `www` partition (1,310,720 B: one pack for both). Signi
 per layout; `FW_RELEASE_TARGET_DIR=/roomier/dir make fw-release` puts it
 elsewhere (the 8mb build in its `v8mb/`).
 
+**The flash clock is 80 MHz by default** (the app's image header says so and
+the app sets SPI0's clock from it at start-up; the updater and the
+bootloader stay at 40). `FW_FLASH_FREQ=40 make fw-release` builds for a board
+whose flash cannot run at 80 MHz (a board that crash-loops right after an
+80 MHz install or update); the target checks the app header's clock
+against it. Which boards need it, and how a board recovers:
+`docs/notes/flash-clock.md`.
+
 ### Releasing (local)
 
 While GitHub Actions is unavailable (the private repo has no build minutes

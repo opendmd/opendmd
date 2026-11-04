@@ -106,6 +106,17 @@ installer's 8 MB button does to a DevKit exactly is not tested on a board;
 either way the firmware won't start, and installing again with the DevKit
 button and Erase ticked recovers it.
 
+## If a board can't run its flash at 80 MHz
+
+Builds run the flash at 80 MHz by default; the app sets the clock from its
+own image header, the updater and bootloader stay at 40. A board whose
+flash or wiring cannot do 80 MHz would boot-loop after an update (the
+updater cannot notice, there is no rollback and no earlier image, and the
+updater is no longer reachable), and only a USB install of a 40 MHz build
+(`FW_FLASH_FREQ=40 make fw-release`) recovers it; BOOT only lets the
+installer connect. Details, the clocks of each stage and the proposals to
+make it safer: [`notes/flash-clock.md`](notes/flash-clock.md).
+
 ## Why not two app slots
 
 The release image is ~2.3 MB and the web app pack has its own 1.25 MB
