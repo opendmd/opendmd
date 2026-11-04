@@ -390,7 +390,18 @@ SHARE_USES = ("pkg/", "pkg-psi/", "js/wasm.js", "js/web.js", "js/build.js", "js/
 # create-art: ~2.7 KB for C1, ~3.8 KB with Send to my panel). It is the web app's Studio on the demo's files (js/studio.js,
 # js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
 # printed as the page's first-visit total for information.
-CREATE_GZ_BUDGET = 5 * 1024
+# 8 KB since byo-gif (2026-11-04, raised under the standing OK for budget
+# lines): the relay's refusals in plain words, ?url=, a page's address, the
+# search links and the bookmarklet under Your own, the pick-up of a shared
+# file, and the share target's manifest and service worker (sw.js, fetched
+# when the page registers it): 7,457 B gz. The app icons (PNG, fetched only when
+# the page is installed) are printed, not counted.
+CREATE_GZ_BUDGET = 8 * 1024
+# Create Art's video reader (`create/video.js`: an MP4 or WebM played into
+# frames for the Studio; site-only, imported only when a video arrives): a
+# line of its own, <= 3 KB (2026-11-04, branch byo-gif: ~1.5 KB gz).
+VIDEO_GZ_BUDGET = 3 * 1024
+VIDEO_JS = "video.js"
 CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
                "js/gifs.js", "js/details.js", "js/prepare.js", "app.css", "studio.css", "find.css", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
@@ -553,6 +564,7 @@ def main() -> int:
         ftsort = (0, 0)
         hero = (0, 0)
         craw = cgz = 0
+        video = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
                 b = p.read_bytes()
@@ -575,6 +587,11 @@ def main() -> int:
             b = p.read_bytes()
             g = len(gzip.compress(b, 9, mtime=0))
             print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
+            if p.relative_to(share).parts[0] == "create" and p.suffix == ".png":
+                continue
+            if p.relative_to(share).parts[0] == "create" and p.name == VIDEO_JS:
+                video = (len(b), g)
+                continue
             if p.relative_to(share).parts[0] == "create":
                 craw += len(b)
                 cgz += g
@@ -593,6 +610,9 @@ def main() -> int:
         print(f"{'create':<10} raw {craw:>9,}           gz {cgz:>9,} / {CREATE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {cgz + demo_gz(CREATE_USES):,} B gz)")
         ok &= cgz <= CREATE_GZ_BUDGET
+        verdict = "ok" if 0 < video[1] <= VIDEO_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'video':<10} raw {video[0]:>9,}           gz {video[1]:>9,} / {VIDEO_GZ_BUDGET // 1024} KB {verdict}")
+        ok &= 0 < video[1] <= VIDEO_GZ_BUDGET
         verdict = "ok" if rgz <= PSIREF_GZ_BUDGET else "OVER BUDGET"
         print(f"{'psiref':<10} raw {rraw:>9,}           gz {rgz:>9,} / {PSIREF_GZ_BUDGET // 1024} KB {verdict}")
         for name, (raw, gz) in sorted(live.items()):

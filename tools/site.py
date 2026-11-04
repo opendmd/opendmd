@@ -374,9 +374,10 @@ CSP = {
     "home": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # Create Art's page: the demo's wasm (the Studio's, the panel preview's), Game art's and
     # GifCities' pictures (js/find.js), your own picture (blob:) or one from any https address
-    # (the Studio fetches it: the address field), so connect-src takes https:.
+    # (the Studio fetches it: the address field), so connect-src takes https:; a video plays
+    # from a blob: address into frames (create/video.js), so media-src takes blob:.
     "create": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
-                               "https://raw.githubusercontent.com")
+                               "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
     + "; connect-src 'self' https:",
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the

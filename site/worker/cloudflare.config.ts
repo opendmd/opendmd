@@ -45,6 +45,11 @@ export default defineConfig({
       ASSETS: { type: "assets" },
       // The gallery store (cf d1 create --name opendmd-site, 2026-10-29).
       DB: { type: "d1", name: "opendmd-site", id: "72a1c0cf-e5c6-4c75-8ad1-8aaa2c6f3857" },
+      // Create Art's relay (/api/fetch, src/relay.ts): 30 loads a minute per
+      // visitor's IP (Workers Rate Limiting, per location and approximate;
+      // a link that names a page costs two). The namespace is ours to pick,
+      // unique in the account; nothing to create before a deploy.
+      RELAY_LIMIT: { type: "rate-limit", namespace: "1101", simple: { limit: 30, period: 60 } },
     },
     // The gallery sync (S6, src/gallery.ts): every 5 minutes it asks GitHub
     // for the public repo's main (one small request) and, only when it

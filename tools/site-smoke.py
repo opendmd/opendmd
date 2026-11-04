@@ -45,7 +45,15 @@ build URL serves. There the art index must also carry
   downloaded with its frames; your own file; none of the words users never
   see; a phone's width; Send to my panel (the address asked once, the
   panel's page opened at #import, the GIF sent to it on its ready with its
-  fields, Download after, a blocked pop-up said);
+  fields, Download after, a blocked pop-up said); `?url=` opening a
+  picture, asked directly where the host allows it and through the relay
+  (stubbed) where it doesn't, the relay's refusals said in plain words;
+  video in: a WebM from a file and an MP4 through the relay as frames on
+  the timeline (the reader loaded only then), fitted, trimmed and
+  downloaded with the motion kept; the hand-offs: other sites' search as
+  links (new tab, "pixel art" and the words), the bookmarklet, the manifest
+  and the service worker (scope /create/; a shared GIF and a shared link
+  through the share target's POST; nothing else answered by it);
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -149,11 +157,13 @@ def new_page(browser, size: str, errors: list[str], scheme: str | None = None) -
     page = ctx.new_page()
     # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.)
     # (/f/#gallery=no-such-formula asks for a file that isn't there, on purpose.)
-    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/formulas/src/no-such-formula"))
+    # (Create Art's relay refusals, the hosts that refuse the browser (stubbed) and a GET of
+    # the share target's address (only its POST is the worker's): on purpose.)
+    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/formulas/src/no-such-formula", "/api/fetch", "nocors.example", "/create/share"))
             and errors.append(f"[{size}] console: {m.text} ({m.location.get('url')})"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     page.on("response", lambda r: r.status >= 400 and "/demo/api/" not in r.url and "/api/status" not in r.url
-            and "/formulas/src/no-such-formula" not in r.url and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
+            and "/formulas/src/no-such-formula" not in r.url and "/api/fetch" not in r.url and "/create/share" not in r.url and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
     return page
 
 
@@ -551,6 +561,213 @@ def create_page(browser, base: str, site: Path, errors: list[str], shots: Path |
         check(not off and any("/art-index/v1/SNES.json" in u for u in asked), f"/create/: Game art's index same-origin, nothing asked of opendmd.dev {off[:2]}")
         check(not page.evaluate("window.__csp || []"), f"/create/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
         page.context.close()
+
+
+C_WHY = {  # create.js' words for the relay's refusals (site/worker/src/relay.ts `why`)
+    "size": "That file is too big (over 16 MB): pick a shorter or smaller one",
+    "type": "That address isn’t a picture or a video",
+    "rate": "Too many tries in a minute: wait a moment, then try again",
+    "upstream": "That site refused to send it: download the picture, then add the file here",
+    "redirects": "That site refused to send it: download the picture, then add the file here",
+}
+
+
+def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/create/'s addresses: `?url=` opens one; a host that allows the
+    browser is asked directly, one that doesn't (no CORS: the fetch throws)
+    through the relay, /api/fetch (stubbed here: tools/site-worker-test.py
+    runs the real one); each refusal said in plain words."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    asked: list[str] = []
+    answer = {"status": 200, "why": None}
+    page.route("https://cors.example/**", lambda r: (asked.append(r.request.url), r.fulfill(status=200, body=gif, headers={
+        "content-type": "image/gif", "access-control-allow-origin": "*"})))
+    page.route("https://nocors.example/**", lambda r: (asked.append(r.request.url), r.abort()))
+
+    def relay(r):
+        asked.append(f"{r.request.method} {r.request.url} {r.request.post_data}")
+        if answer["why"]:
+            r.fulfill(status=answer["status"], body=json.dumps({"error": "x", "why": answer["why"]}), headers={"content-type": "application/json"})
+        else:
+            r.fulfill(status=200, body=gif, headers={"content-type": "image/gif", "x-relayed": "1"})
+    page.route(f"{base}/api/fetch", relay)
+    page.goto(f"{base}/create/?url=" + urllib.parse.quote("https://cors.example/wide.gif", safe=""))
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    wait_js(page, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    check(asked == ["https://cors.example/wide.gif"] and page.inner_text("#st-msg").startswith("cors.example: 88 × 31 · 4 frames"),
+          f"/create/?url=: opens the picture, asked directly when the site allows it ({asked}, '{page.inner_text('#st-msg')}')")
+    asked.clear()
+    page.click("#st-change")
+    page.fill("#st-url", "https://nocors.example/pic.gif")
+    page.click("#st-url-go")
+    wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('nocors.example: 88')", timeout=20000)
+    check(asked == ["https://nocors.example/pic.gif", f"POST {base}/api/fetch https://nocors.example/pic.gif"],
+          f"/create/: a site that refuses the browser, through the relay ({asked})")
+    for why, status in (("size", 413), ("type", 415), ("rate", 429), ("upstream", 502), ("redirects", 502)):
+        answer.update(status=status, why=why)
+        if page.is_hidden("#st-url"):  # (Find stays open after a refusal)
+            page.click("#st-change")
+        page.fill("#st-url", f"https://nocors.example/{why}.gif")
+        page.click("#st-url-go")
+        wait_js(page, "!/^Loading/.test(document.querySelector('#st-msg').textContent)", timeout=10000)
+        check(page.inner_text("#st-msg") == C_WHY[why], f"/create/: the relay's '{why}' said plainly ('{page.inner_text('#st-msg')}')")
+    check(not page.evaluate("window.__csp || []"), f"/create/ addresses: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
+
+
+VIDEO_FIXTURES = ROOT / "tools/fixtures/video"
+
+
+def box_xs(im: Image.Image, frames: int) -> list[int]:
+    """Where the yellow box starts in each frame of a GIF (-1: not seen)."""
+    xs = []
+    for i in range(frames):
+        im.seek(i)
+        rgb = im.convert("RGB")
+        xs.append(min((x for x in range(128) for y in range(32) if (lambda p: p[0] > 180 and p[1] > 140 and p[2] < 110)(rgb.getpixel((x, y)))), default=-1))
+    return xs
+
+
+def create_video(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """Video in: a WebM (VP9) from a file and an MP4 (AV1: Playwright's
+    Chromium has no H.264) through the relay (stubbed), each 2 s of 160x90
+    at 30 frames a second with a yellow box moving right. Each becomes ~40
+    frames (at most 20 a second) on the timeline, fitted to the panel;
+    trimmed, downloaded: 128x32 with the box moving right."""
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(urllib.parse.urlsplit(r.url).path))
+    mp4 = (VIDEO_FIXTURES / "clip.mp4").read_bytes()
+    page.route("https://nocors.example/**", lambda r: r.abort())
+    page.route(f"{base}/api/fetch", lambda r: r.fulfill(status=200, body=mp4, headers={"content-type": "video/mp4", "x-relayed": "1"}))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(not any(p.endswith("/create/video.js") for p in asked), "/create/ video: the video reader not loaded with the page")
+    page.click("#st-src [data-v=own]")
+    accept = page.get_attribute("#st-file", "accept")
+    check(accept == "image/*,video/mp4,video/webm" and "video" in page.inner_text("#st-own"), f"/create/ video: Choose takes videos ({accept})")
+    page.set_input_files("#st-file", str(VIDEO_FIXTURES / "clip.webm"))
+    wait_js(page, "document.querySelector('#studio').dataset.video === '1'", timeout=30000)
+    d = c_data(page)
+    n = int(d.get("srcFrames", 0))
+    msg = page.inner_text("#st-msg")
+    check(36 <= n <= 42 and msg == f"Video: 160 × 90 video · {n} frames" and d.get("animated") == "1" and d.get("fit") == "fit"
+          and page.is_visible("#st-tl") and any(p.endswith("/create/video.js") for p in asked),
+          f"/create/ video: a 2 s WebM from a file, {n} frames on the timeline, fitted to the panel ('{msg}', {d.get('fit')})")
+    page.fill("#st-title", "Box")
+    wait_js(page, "/^Box.*\\.gif$/.test(document.querySelector('#studio').dataset.name || '')", timeout=5000)
+    if shots:
+        page.evaluate("scrollTo(0, 0)")
+        page.screenshot(path=str(shots / "create-video.png"), full_page=True)
+    page.click("#st-tl .st-cell >> nth=0")
+    page.click("#st-del")
+    wait_js(page, f"document.querySelector('#studio').dataset.frames === '{n - 1}'", timeout=5000)
+    im = c_download(page)
+    xs = box_xs(im, im.n_frames)
+    moving = [x for x in xs if x >= 0]
+    check(im.size == (128, 32) and im.n_frames == n - 1 and len(moving) >= n // 2 and moving == sorted(moving) and moving[-1] > moving[0],
+          f"/create/ video: downloaded 128x32, the first frame deleted, the box moving right ({im.n_frames} frames, box at {xs[:3]}…{xs[-3:]})")
+    page.click("#st-change")
+    page.fill("#st-url", "https://nocors.example/clip.mp4")
+    page.click("#st-url-go")
+    wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('nocors.example: 160 × 90 video')", timeout=30000)
+    d = c_data(page)
+    check(36 <= int(d.get("srcFrames", 0)) <= 42 and d.get("video") == "1",
+          f"/create/ video: an MP4 through the relay, {d.get('srcFrames')} frames ('{page.inner_text('#st-msg')}')")
+    check(not page.evaluate("window.__csp || []"), f"/create/ video: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
+
+
+
+def create_elsewhere(browser, base: str, site: Path, errors: list[str], shots: Path) -> None:
+    """/create/'s hand-offs: under Your own, other sites' search as links
+    (new tab, "pixel art" and the words); the bookmarklet; the manifest and
+    the service worker (scope /create/, the share target: a shared GIF as a
+    multipart POST to /create/share opens in the Studio, a shared link as
+    ?url=), and nothing else answered by the worker."""
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")}))(r.fetch()))
+    page.route("https://cors.example/**", lambda r: r.fulfill(status=200, body=gif, headers={"content-type": "image/gif", "access-control-allow-origin": "*"}))
+    page.goto(f"{base}/create/")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    page.click("#st-src [data-v=own]")
+    names = page.eval_on_selector_all("#c-chips a", "els => els.map(e => e.textContent)")
+    check(names == ["Tenor", "Klipy", "GIPHY", "Google", "Bing", "DuckDuckGo", "Reddit", "Tumblr", "DeviantArt", "Imgur"] and page.is_visible("#c-chips"),
+          f"/create/ elsewhere: the search links under Your own ({names})")
+    page.fill("#c-words", "mega man")
+    links = dict(page.eval_on_selector_all("#c-chips a", "els => els.map(e => [e.textContent, e.href])"))
+    attrs = page.eval_on_selector_all("#c-chips a", "els => els.map(e => e.target + ' ' + e.rel)")
+    want = {"Tenor": "https://tenor.com/search/pixel-art-mega-man-gifs", "Klipy": "https://klipy.com/search/pixel-art-mega-man",
+            "GIPHY": "https://giphy.com/search/pixel-art-mega-man",
+            "Google": "https://www.google.com/search?tbm=isch&tbs=itp:animated&q=pixel+art+mega+man",
+            "Bing": "https://www.bing.com/images/search?qft=+filterui:photo-animatedgif&q=pixel+art+mega+man",
+            "DuckDuckGo": "https://duckduckgo.com/?iax=images&ia=images&iaf=type:gif&q=pixel+art+mega+man",
+            "Reddit": "https://www.reddit.com/r/PixelArt/search/?restrict_sr=1&q=mega+man",
+            "Tumblr": "https://www.tumblr.com/search/pixel%20art%20mega%20man",
+            "DeviantArt": "https://www.deviantart.com/search?q=pixel+art+mega+man+gif", "Imgur": "https://imgur.com/search?q=pixel+art+mega+man"}
+    bad = {k: v for k, v in links.items() if want.get(k) != v}
+    check(not bad and set(attrs) == {"_blank noopener noreferrer"}, f"/create/ elsewhere: each a new tab with “pixel art” and the words {bad} {set(attrs)}")
+    hint = page.inner_text("#c-elsewhere")
+    check("Bring it back: paste its link or the picture here, or drag it onto this page." in hint, "/create/ elsewhere: the hint on bringing a GIF back")
+    bm = page.get_attribute("#c-bm", "href") or ""
+    check(bm == f"javascript:void(open('{base}/create/?url='+encodeURIComponent(location.href)))",
+          f"/create/ elsewhere: the bookmarklet opens the page it is pressed on in Create Art ({bm[:90]})")
+    page.click("#c-bm")  # (on our own page it does nothing: no navigation, no CSP report)
+    if shots:
+        page.evaluate("scrollTo(0, 0)")
+        page.screenshot(path=str(shots / "create-elsewhere.png"), full_page=True)
+    # The manifest and the worker.
+    st, mf = page.evaluate("""async () => { const r = await fetch('manifest.webmanifest'); return [r.status, await r.json()]; }""")
+    tgt = mf.get("share_target", {})
+    check(st == 200 and mf.get("scope") == "/create/" and mf.get("start_url") == "/create/" and tgt.get("action") == "/create/share"
+          and tgt.get("method") == "POST" and tgt.get("enctype") == "multipart/form-data" and tgt.get("params", {}).get("files", [{}])[0].get("name") == "media"
+          and {i["sizes"] for i in mf.get("icons", [])} == {"192x192", "512x512"},
+          f"/create/manifest.webmanifest: the share target (POST multipart, files as media), scope /create/, icons ({st})")
+    icons = [page.evaluate(f"fetch('{i['src']}').then(r => r.ok && r.headers.get('content-type'))") for i in mf.get("icons", [])]
+    check(icons == ["image/png", "image/png"], f"/create/: the icons are there ({icons})")
+    scope = page.evaluate("navigator.serviceWorker.ready.then(r => r.scope)")
+    check(scope == f"{base}/create/", f"/create/: its service worker, scope /create/ ({scope})")
+    page.reload()
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    check(page.evaluate("!!navigator.serviceWorker.controller"), "/create/: the page under its worker after a reload")
+    # A shared GIF: the share sheet's multipart POST, as a form sends it.
+    page.evaluate("""(b64) => { const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const f = document.createElement('form'); f.method = 'POST'; f.action = 'share'; f.enctype = 'multipart/form-data';
+        const i = document.createElement('input'); i.type = 'file'; i.name = 'media'; const t = new DataTransfer();
+        t.items.add(new File([bytes], 'shared.gif', { type: 'image/gif' })); i.files = t.files; f.append(i);
+        document.body.append(f); f.submit(); }""", __import__("base64").b64encode(gif).decode())
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    wait_js(page, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    left = page.evaluate("caches.open('create-shared').then(c => c.keys()).then(k => k.length)")
+    check(page.inner_text("#st-msg").startswith("Shared: 88 × 31 · 4 frames") and page.url == f"{base}/create/" and left == 0,
+          f"/create/ share target: a shared GIF opens in the Studio, put aside only until then ('{page.inner_text('#st-msg')}', {page.url}, {left} left)")
+    # A shared link (text with an address in it, as most apps share).
+    page.evaluate("""() => { const f = document.createElement('form'); f.method = 'POST'; f.action = 'share'; f.enctype = 'multipart/form-data';
+        for (const [k, v] of [['title', 'A GIF'], ['text', 'look at this https://cors.example/shared.gif']]) {
+          const i = document.createElement('input'); i.name = k; i.value = v; f.append(i); }
+        document.body.append(f); f.submit(); }""")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('cors.example: 88')", timeout=20000)
+    check(urllib.parse.urlsplit(page.url).query == "url=https%3A%2F%2Fcors.example%2Fshared.gif",
+          f"/create/ share target: a shared link opens as ?url= ({page.url})")
+    # Nothing else is the worker's: a GET of the share address is the site's.
+    st = page.evaluate("fetch('share').then(r => r.status)")
+    check(st == 404, f"/create/: the worker answers only the share POST (GET /create/share: {st}, the site's 404)")
+    check(not page.evaluate("window.__csp || []"), f"/create/ elsewhere: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
 
 
 PANEL_IMPORT_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('message', (e) => { const d = e.data, g = d && d.gif; "
@@ -1713,6 +1930,9 @@ def main() -> int:
         print("Create Art (/create/)")
         create_page(browser, base, a.site, errors, a.shots)
         create_send(browser, base, a.site, errors)
+        create_links(browser, base, a.site, errors)
+        create_video(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
+        create_elsewhere(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)

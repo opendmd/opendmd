@@ -440,7 +440,7 @@ site-deploy-built: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
 	@case "$$(git describe --always --dirty --tags --match 'v*')" in *-dirty) echo "refusing: the working tree is dirty; commit first"; exit 1;; esac
 	$(MAKE) site-d1-migrate
-	unset SITE_TEST_GALLERY_SOURCE; $(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
+	unset SITE_TEST_GALLERY_SOURCE SITE_TEST_RELAY_UPSTREAM; $(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
 	@# The gallery store: this build's examples and the public repo's gallery/ now, not at the next cron.
 	@curl -fsS -X POST -A 'opendmd-site-deploy/1 (+https://opendmd.dev)' --retry 3 --retry-delay 11 --retry-all-errors \
 		https://opendmd.dev/api/gallery/sync -o /dev/null -w 'gallery sync: %{http_code}\n' || echo "gallery sync: not now (the cron runs it within 5 minutes)"

@@ -5416,6 +5416,27 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
           f"studio save: the GIF's {len(frames)} frames and delays equal the Rust pipeline's ({same} identical)")
     plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
     check(path in plist, "studio save: appended to cachetest")
+    # An address whose site refuses the browser (no CORS): the panel's app has
+    # no relay (the site's Create Art has), so it says what to do instead.
+    page.route("https://refuses.example/**", lambda r: r.abort())
+    expected.append("refuses.example")  # (the refused load's console line is the point here)
+    page.click("#st-change")
+    page.click("#st-src [data-v=own]")
+    page.fill("#st-url", "https://refuses.example/a.gif")
+    page.click("#st-url-go")
+    page.wait_for_function("document.querySelector('#st-msg').textContent.includes('download')", timeout=10000)
+    check(page.inner_text("#st-msg") == "That site doesn’t allow it: download the picture, then add the file here",
+          f"studio address: a site that refuses the browser is said, with what to do ('{page.inner_text('#st-msg')}')")
+    page.unroute("https://refuses.example/**")
+    expected.remove("refuses.example")
+    # A video: the panel's app has no video reader (the site's Create Art has).
+    page.set_input_files("#st-file", str(REPO / "tools/fixtures/video/clip.webm"))
+    page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('That is a video')", timeout=10000)
+    check(page.inner_text("#st-msg") == "That is a video: Create Art on opendmd.dev makes videos into GIFs; here, pick a GIF or a picture"
+          and page.get_attribute("#st-file", "accept") == "image/*",
+          f"studio video: the panel's app says where videos can be made into GIFs ('{page.inner_text('#st-msg')}')")
+    page.click("#st-src [data-v=gameart]")
+    page.click("#st-change")
     goto_view(page, "library")
     page.unroute(SITE_ART + "SNES.json")
     page.unroute("https://raw.githubusercontent.com/**")
