@@ -711,6 +711,15 @@ then × 1.15 for what playing it adds (the copy to the panel, the picture
 under a look), where every colour costs 120 to write when it varies per
 pixel (about 5 when it is one value along a row), so `gray(x)` is 165.
 It is calibrated on the device (within ~12 % for layers and looks).
+**The JIT's estimate is the tier where it draws**: the panel compiles the
+pixel and row stages of most formulas (the JIT: its steps cost ~a third
+of the VM's), and where its kernel takes the formula `psi check`, the
+editor's light / medium / heavy and the limits count the JIT's estimate,
+the VM's shown beside it as "without the JIT" (`psi check` says when the
+JIT refuses one, and why: then the VM's counts). The JIT's estimate is
+fitted to the panel's effect path (−13 % to +11 % on the measured
+Formulas); the frame the panel reports while it plays adds racing the
+beam and the writes (~15 % more, the VM's the same).
 **Hoisting is automatic**: a value is computed as rarely as its inputs
 change — constants once, `t`/clock/slider-only values once a frame,
 `y`/`py`-only values once per row (32 times), the rest per pixel. So

@@ -53,6 +53,7 @@ pub mod reference;
     all(feature = "jit", target_arch = "xtensa", target_os = "espidf")
 ))]
 pub mod jit;
+mod jitplan;
 #[cfg(feature = "compiler")]
 pub mod look;
 mod meta;

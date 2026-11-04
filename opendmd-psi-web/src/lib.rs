@@ -260,8 +260,10 @@ pub fn error_at() -> Vec<u32> {
 /// as a look with the JIT (no still cache; never more than [6]), estimated
 /// µs a frame as an effect with its still cache on the VM (the gallery
 /// checker's weight rule: `opendmd-gallery`'s `MAX_US`, which the site's
-/// Worker applies to the gallery files it syncs)]`; empty before anything
-/// compiled.
+/// Worker applies to the gallery files it syncs), 1 when the panel's JIT
+/// takes it (`Program::jit_takes`: then [11] and [13] are the tier and what
+/// the limits count, [14] and [6] the "without the JIT" figures; 0: the VM
+/// draws it, [14] and [6] are)]`; empty before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -286,6 +288,7 @@ pub fn info() -> Vec<u32> {
         p.still_lanes() as u32,
         p.esp32_us_jit(),
         p.esp32_us_still(),
+        u32::from(p.jit_takes()),
     ]
 }
 

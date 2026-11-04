@@ -1064,6 +1064,29 @@ impl Program {
             .min(self.esp32_us_still())
     }
 
+    /// Whether the panel's JIT draws this program's pixel stage (its
+    /// kernel takes it): the editor's and the limits' tier
+    /// ([`tier_us`](Self::tier_us)).
+    pub fn jit_takes(&self) -> bool {
+        crate::jitplan::jit_takes(self)
+    }
+
+    /// What the panel takes a frame, µs, for the tier and the limits
+    /// (P0b-2): [`esp32_us_jit_still`](Self::esp32_us_jit_still) where the
+    /// JIT takes it ([`jit_takes`](Self::jit_takes)), else
+    /// [`esp32_us_still`](Self::esp32_us_still); as a look (`look`: no still
+    /// cache) [`esp32_us_jit`](Self::esp32_us_jit) or
+    /// [`esp32_us`](Self::esp32_us). The VM's figure is the "without the
+    /// JIT" one shown beside it.
+    pub fn tier_us(&self, look: bool) -> u32 {
+        match (self.jit_takes(), look) {
+            (true, false) => self.esp32_us_jit_still(),
+            (true, true) => self.esp32_us_jit(),
+            (false, false) => self.esp32_us_still(),
+            (false, true) => self.esp32_us(),
+        }
+    }
+
     /// The first step a kernel draws: after the column run, and after the
     /// still cache's run with what is laid out before its marker (the VM
     /// runs those as lanes).
@@ -2262,9 +2285,9 @@ pub(crate) const HELD_COPY_NS: u32 = 5;
 /// µs a frame against `pal(fire, frac(x*3))`'s 735).
 pub(crate) const TURN_US: u32 = 90;
 /// A tween of a palette once a frame (`code::TWEEN`: 32 entries, 96
-/// mixes on bytes), µs (a count of its instructions until paint-probe
-/// measures it).
-pub(crate) const TWEEN_US: u32 = 6;
+/// mixes on bytes), µs: paint80-713cd on the spare, p0-tween's frame
+/// steps (six) and its four tweens with the store's unpacking 44 µs a frame.
+pub(crate) const TWEEN_US: u32 = 9;
 /// A scene's guard in the pixel section, ns a pixel: one test a lane of
 /// 128, and while it is off its values' lanes zeroed (a guess until
 /// paint-probe measures it); in the kernel a test and a branch a pixel.

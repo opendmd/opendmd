@@ -140,7 +140,8 @@ mix(#102040, #ff8040, y + sin(t/8)*0.1)
 ## Cost: keep it light
 
 The panel has ~8 ms a frame (12 for a look over a GIF). `psi check` says
-the cost and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
+the cost (with the JIT where it takes the formula, the VM's beside it)
+and names the heaviest lines. Per pixel, `noise`, `atan2`, `len`
 and `/` cost most; a value of only `t`, the clock and sliders is worked out
 once a frame, of `y` once a row — free. Lines and dots cost by the line, not
 the pixel; painted filled shapes by the pixels they cover. Prefer `draw`
