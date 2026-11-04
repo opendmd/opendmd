@@ -63,8 +63,12 @@ offset  size  field
 - **Alignment**: 4 bytes for file data is all the flash cache and `memcpy`
   want. The header is not padded to anything larger.
 - **Content type** is not stored: the firmware derives it from the path's
-  extension (`files::mime_for`, the table it always used), and the cache
-  policy from the path (`files::cache_for`).
+  extension (`files::mime_for`, the table it always used). Every file goes
+  out `Cache-Control: no-cache` with `ETag: "<the header's CRC, 8 hex
+  digits>"`, and a request whose `If-None-Match` names it gets `304 Not
+  Modified` (`www::not_modified`): any change to the pack changes every
+  file's ETag. The web app asks for its wasm modules at `?v=<build id>`
+  addresses besides (docs/notes/web-app.md "Module addresses").
 
 ## What goes in
 

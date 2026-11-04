@@ -13,7 +13,8 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
-  www         PUT /api/www with the web app's pack
+  www         PUT /api/www with the web app's pack; GET / and a wasm at its ?v= address:
+              no-cache, the pack's CRC as ETag, 304 for If-None-Match naming it, 200 for another
   bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
               5, 5 uploads of 300 KB at once beside status reads; each 200, or 503 + Retry-After
               and 200 when asked again; never a 408; the network answering; nothing held after;
@@ -269,12 +270,13 @@ class Api:
         self.lock = threading.Lock()
         self.stats = {"requests": 0, "busy_retries": 0}
 
-    def raw(self, method, path, body=None, timeout=60.0):
+    def raw(self, method, path, body=None, timeout=60.0, extra=None):
         data, headers = None, {}
         if isinstance(body, (bytes, bytearray)):
             data, headers = bytes(body), {"Content-Type": "application/octet-stream"}
         elif body is not None:
             data, headers = json.dumps(body).encode(), {"Content-Type": "application/json"}
+        headers.update(extra or {})
         r = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         with self.lock:
             self.stats["requests"] += 1
@@ -564,7 +566,27 @@ class Lane:
         code, headers, page = api.raw("GET", "/")
         ctype = {k.lower(): v for k, v in headers.items()}.get("content-type", "")
         self.expect(code == 200 and ctype.startswith("text/html") and len(page) > 200, "www", f"GET /: HTTP {code}, {ctype}, {len(page)} B")
-        self.ok("www pack", f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it")
+        # Caching (www.rs "Caching"): no-cache, the pack's CRC as every file's ETag, a 304 for it
+        # (answered on the httpd task), and the wasm at its build's address (?v=, js/wasm.js).
+        tag = f'"{struct.unpack_from("<I", pack, 12)[0]:08x}"'
+        lower = lambda h: {k.lower(): v for k, v in h.items()}
+        h = lower(headers)
+        self.expect(h.get("etag") == tag and h.get("cache-control") == "no-cache", "www",
+                    f"GET /: ETag {h.get('etag')} (the pack's CRC is {tag}), Cache-Control {h.get('cache-control')}")
+        code, h304, body = api.raw("GET", "/", extra={"If-None-Match": tag})
+        self.expect(code == 304 and not body and lower(h304).get("etag") == tag, "www", f"GET / with its ETag: HTTP {code}, {len(body)} B")
+        wasm = "/pkg-psi/opendmd_psi_web_bg.wasm?v=0123456789abcdef"
+        code, hw, body = api.raw("GET", wasm)
+        hw = lower(hw)
+        self.expect(code == 200 and hw.get("etag") == tag and hw.get("cache-control") == "no-cache" and hw.get("content-encoding") == "gzip"
+                    and hw.get("content-type") == "application/wasm" and len(body) > 10000, "www",
+                    f"GET {wasm}: HTTP {code}, {hw.get('content-type')}, {hw.get('etag')}, {hw.get('cache-control')}, {len(body)} B")
+        code304, _, body304 = api.raw("GET", wasm, extra={"If-None-Match": f'W/"00000000", {tag}'})
+        code_other, _, _ = api.raw("GET", wasm, extra={"If-None-Match": '"00000000"'})
+        self.expect(code304 == 304 and not body304 and code_other == 200, "www",
+                    f"the wasm with its ETag in a list: HTTP {code304}; with another: HTTP {code_other}")
+        self.ok("www pack", f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it; "
+                f"no-cache, ETag {tag}, 304 for it (/ and the wasm at ?v=), 200 for another")
 
     # -- simultaneous uploads (the spare's wedge recipe) -------------------------
 

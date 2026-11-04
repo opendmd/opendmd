@@ -560,6 +560,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if portal_target(&c).is_some() {
             return send_setup(req);
         }
+        // The browser's copy is this pack's: 304, no hand-off (www.rs "Caching").
+        if www::not_modified(req)? {
+            return Ok(());
+        }
         stream::hand_off(req, move |req| match www::serve(req, "index.html")? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => {
@@ -1740,6 +1744,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // card).
     server.route("/www/*", Method::Get, |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/www/"));
+        if www::not_modified(req)? {
+            return Ok(());
+        }
         stream::hand_off(req, move |req| match www::serve(req, &rel)? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => req.not_found(&format!("/www/{rel}")),
@@ -1776,6 +1783,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Decided here, where the context is: what to say if the pack has no
         // such file (in AP mode, the portal).
         let target = portal_target(&c);
+        // Only a file this pack served carries its ETag back.
+        if www::not_modified(req)? {
+            return Ok(());
+        }
         stream::hand_off(req, move |req| {
             match www::serve(req, rel.trim_start_matches('/'))? {
                 www::Served::Sent => Ok(()),

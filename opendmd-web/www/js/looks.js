@@ -12,10 +12,11 @@ import { app } from './state.js';
 import { h, toast } from './util.js';
 import { path as fpath, controls as ctlOf, num, compiler, hasCompiler } from './psikit.js';
 import { line, onCard, stemTitle } from './fstore.js';
+import { load } from './wasm.js';
 
 export const BLENDS = [['over', 'Over'], ['screen', 'Screen'], ['add', 'Add'], ['multiply', 'Multiply'], ['max', 'Lighten'], ['min', 'Darken']];
 let mod = null;
-export const psi = () => (mod ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); if (!hasCompiler()) compiler(m); return m; }).catch((e) => { mod = null; throw e; }));
+export const psi = () => (mod ??= load('pkg-psi', 'look').then(([m]) => { if (!hasCompiler()) compiler(m); return m; }).catch((e) => { mod = null; throw e; }));
 
 // What a formula declares (psikit `controls`).
 export { ctlOf as decl };

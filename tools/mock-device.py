@@ -111,6 +111,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `GET /sets/<name>.txt` and deleted at `DELETE /api/files/sets/<name>.txt`.
 - **`.gz` preference is `www/`-only**, and unconditional (no `Accept-Encoding`
   check) — the content type still comes from the logical, un-gzipped name.
+- **The web app's files go out `no-cache` with an `ETag`**, and an
+  `If-None-Match` naming it gets `304 Not Modified` (firmware `www.rs`
+  "Caching"; the firmware's ETag is the pack's CRC, here each file's CRC-32).
+  **`GET /mock/www-cache?legacy=1`** (mock only) serves them as 1.0.0-beta.13
+  and earlier did instead (`pkg/` and the wasm `max-age=3600`, no ETag) until
+  `?legacy=0`: web-smoke's www update pass loads the app that way first.
 - **Directory listings are unsorted** (`os.scandir` order, standing in for
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
@@ -417,6 +423,7 @@ import threading
 import time
 import traceback
 import urllib.parse
+import zlib
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -831,16 +838,50 @@ def mime_for(rel: str) -> str:
 
 
 def cache_for(rel: str) -> str:
+    """A card file's cache policy (firmware files::cache_for); the web app's is WWW_CACHE."""
     if is_root_manifest_name(rel):
         return "no-cache"
     if rel.lower().endswith(".meta"):
         return "no-cache"
-    if "/pkg/" in f"/{rel}":
-        return "max-age=3600"
     ext = Path(rel).suffix.lstrip(".").lower()
     if ext in ("html", "htm", "js", "mjs", "json"):
         return "no-cache"
     return "max-age=3600"
+
+
+def beta13_cache_for(rel: str) -> str:
+    """The web app's cache policy up to 1.0.0-beta.13 (GET /mock/www-cache?legacy=1)."""
+    if "/pkg/" in f"/{rel}":
+        return "max-age=3600"
+    ext = Path(rel).suffix.lstrip(".").lower()
+    return "no-cache" if ext in ("html", "htm", "js", "mjs", "json", "txt") else "max-age=3600"
+
+
+# The web app's files (the firmware's www pack, `www::serve`): every one
+# `no-cache` with an ETag, and `If-None-Match` answered 304 Not Modified, so
+# a reload costs a few small answers and an updated app is never mixed with
+# an earlier one. The firmware's ETag is the pack's CRC (one value for every
+# file of a pack); here each file's own CRC-32, kept by size and mtime:
+# either way it changes when the file does.
+WWW_CACHE = "no-cache"
+_etags: dict[Path, tuple[int, int, str]] = {}
+
+
+def www_etag(actual: Path) -> str:
+    st = actual.stat()
+    hit = _etags.get(actual)
+    if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+        return hit[2]
+    tag = f'"{zlib.crc32(actual.read_bytes()):08x}"'
+    _etags[actual] = (st.st_size, st.st_mtime_ns, tag)
+    return tag
+
+
+def etag_matches(header: str | None, tag: str) -> bool:
+    """`If-None-Match` against our ETag: `*`, or the tag in its list (weak or not)."""
+    if not header:
+        return False
+    return any(t.strip() in ("*", tag, "W/" + tag) for t in header.split(","))
 
 
 def is_manifest_path(rel: str) -> bool:
@@ -2925,17 +2966,23 @@ def make_handler(ctx: Context, quiet: bool):
                 return True
             return False
 
-        def stream_file(self, actual: Path, logical_rel: str, gzipped: bool) -> None:
+        def stream_file(self, actual: Path, logical_rel: str, gzipped: bool, www: bool = False) -> None:
             try:
                 size = actual.stat().st_size
             except OSError:
                 self.send_error_json(404, logical_rel)
                 return
+            legacy = www and getattr(ctx, "www_legacy", False)
+            if www and not legacy and self.not_modified(actual):
+                return
             self.send_response(200, "OK")
             self.send_header("Content-Type", mime_for(logical_rel))
             if gzipped:
                 self.send_header("Content-Encoding", "gzip")
-            self.send_header("Cache-Control", cache_for(logical_rel))
+            self.send_header("Cache-Control", beta13_cache_for(logical_rel) if legacy
+                             else WWW_CACHE if www else cache_for(logical_rel))
+            if www and not legacy:
+                self.send_header("ETag", www_etag(actual))
             self.send_header("Content-Length", str(size))
             self.end_headers()
             if self.command != "HEAD":
@@ -2943,6 +2990,20 @@ def make_handler(ctx: Context, quiet: bool):
                     shutil.copyfileobj(f, self.wfile)
             self._resp_status = 200
             self._resp_bytes = size
+
+        def not_modified(self, actual: Path) -> bool:
+            """The firmware's `www::not_modified`: a 304 (ETag and
+            Cache-Control, no body) when the browser's copy is this one."""
+            tag = www_etag(actual)
+            if not etag_matches(self.headers.get("If-None-Match"), tag):
+                return False
+            self.send_response(304, "Not Modified")
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", WWW_CACHE)
+            self.end_headers()
+            self._resp_status = 304
+            self._resp_bytes = 0
+            return True
 
         def serve_www_rel(self, rel: str) -> bool:
             out = []
@@ -2962,10 +3023,10 @@ def make_handler(ctx: Context, quiet: bool):
                 return False
             gz = base.with_name(base.name + ".gz") if rel else None
             if gz is not None and gz.is_file():
-                self.stream_file(gz, rel, gzipped=True)
+                self.stream_file(gz, rel, gzipped=True, www=True)
                 return True
             if base.is_file():
-                self.stream_file(base, rel, gzipped=False)
+                self.stream_file(base, rel, gzipped=False, www=True)
                 return True
             return False
 
@@ -3029,6 +3090,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
+                (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -4538,6 +4600,16 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, {"ok": True, "from": src, "to": dst, "copy": copy,
                                  "smooth": smooth, "failed": failed})
 
+        def h_mock_www_cache(self, path):
+            # GET /mock/www-cache?legacy=1|0 (mock only): the web app's files
+            # served as 1.0.0-beta.13 did (max-age=3600 for pkg/ and the wasm,
+            # no ETag), or as the firmware does now.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            v = query_param(q, "legacy")
+            if v is not None:
+                ctx.www_legacy = v == "1"
+            self.send_json(200, {"legacy": getattr(ctx, "www_legacy", False)})
+
         def h_mock_stale_names(self, path):
             # GET /mock/stale-names?hide=<card path> (mock only): names
             # listings (`?names=1`) leave that file out, as a stale names file.
@@ -4646,13 +4718,17 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
         def send_error_json(self, code, message):
             self.send_json(code, {"error": message})
 
-        def stream_file(self, actual: Path, logical_rel: str, gzipped: bool):
+        def stream_file(self, actual: Path, logical_rel: str, gzipped: bool, www: bool = False):
             size = actual.stat().st_size
+            if www and self.not_modified(actual):
+                return
             self.send_response(200, "OK")
             self.send_header("Content-Type", mime_for(logical_rel))
             if gzipped:
                 self.send_header("Content-Encoding", "gzip")
-            self.send_header("Cache-Control", cache_for(logical_rel))
+            self.send_header("Cache-Control", WWW_CACHE if www else cache_for(logical_rel))
+            if www:
+                self.send_header("ETag", www_etag(actual))
             self.send_header("Content-Length", str(size))
             self.end_headers()
             if self.command != "HEAD":
@@ -4661,16 +4737,30 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
             self._resp_status = 200
             self._resp_bytes = size
 
+        def not_modified(self, actual: Path) -> bool:
+            """The firmware's `www::not_modified`: a 304 (ETag and
+            Cache-Control, no body) when the browser's copy is this one."""
+            tag = www_etag(actual)
+            if not etag_matches(self.headers.get("If-None-Match"), tag):
+                return False
+            self.send_response(304, "Not Modified")
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", WWW_CACHE)
+            self.end_headers()
+            self._resp_status = 304
+            self._resp_bytes = 0
+            return True
+
         def serve_www_rel(self, rel: str) -> bool:
             base = www_root / rel if rel else www_root
             if base.is_dir():
                 return False
             gz = base.with_name(base.name + ".gz") if rel else None
             if gz is not None and gz.is_file():
-                self.stream_file(gz, rel, gzipped=True)
+                self.stream_file(gz, rel, gzipped=True, www=True)
                 return True
             if base.is_file():
-                self.stream_file(base, rel, gzipped=False)
+                self.stream_file(base, rel, gzipped=False, www=True)
                 return True
             return False
 
