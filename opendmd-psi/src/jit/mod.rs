@@ -225,6 +225,17 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                 Some(u) => t.addr(u[st.row * W * 3..].as_ptr(), W * 3),
                 None => t.addr(ZEROS.as_ptr(), W * 3),
             },
+            Word::Picture => match st.under {
+                Some(u) => t.addr(u.as_ptr(), W * H * 3),
+                None => t.addr(ZEROS.as_ptr(), W * 3),
+            },
+            Word::PictureMask => {
+                if st.under.is_some() {
+                    u32::MAX
+                } else {
+                    0
+                }
+            }
             Word::Cover(k) => s.sc[(k & 0x7f) as usize].clamp(0, fixed::ONE) as u32,
             Word::Pick {
                 pal,
