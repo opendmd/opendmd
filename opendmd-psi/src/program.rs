@@ -2881,17 +2881,15 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         // (paint80-f6aa6): 3, 6 and 12 steps 2,306 / 4,052 / 7,505 µs a
         // frame, pixelate 2,645 on the real path: within -3..+12 %.
         UAT => 75,
-        // Helper calls (`hid::TAB`, `hid::SPR`): paint80-3e6de's `store
-        // low` drew 3,613 µs a frame on the kernel against 1,723
-        // estimated with the VM's less 60 (40 and 60): +330 ns a pixel
-        // over the path's 1.4 for one table read and two sprite reads,
-        // split evenly. Slower than the VM's lane loops (the call and its
-        // five arguments a pixel): `esp32_us_jit` keeps the VM's figure
-        // then, as the player keeps the faster. Not a regression of the
-        // store sized per Formula (the store's place changes nothing);
-        // a kernel template for `TAB` (its read inline) is the way down.
-        TAB => 150,
-        SPR => 170,
+        // Inline since paint80-3e6de showed the helper calls slower than
+        // the VM's lane loops (3,607 µs a frame against 3,259 for one table
+        // and two sprite reads a pixel): a table's entry ~9 instructions
+        // (the index against its length, the load), a sprite's pixel ~25
+        // (its shape known when the kernel is made: both bounds, the
+        // row's word, the pixel's bits by `ssr`/`src`, the key's number).
+        // Instruction counts until the spare measures them.
+        TAB => 40,
+        SPR => 110,
         c => value_ns(c).saturating_sub(60).max(60),
     }
 }
@@ -2929,11 +2927,11 @@ pub(crate) fn word(tabs: &[i32], i: usize) -> i32 {
 pub(crate) struct SprHead {
     pub(crate) w: u32,
     pub(crate) h: u32,
-    lb: u32,
-    lg: u32,
-    wpr: usize,
-    at: usize,
-    data: usize,
+    pub(crate) lb: u32,
+    pub(crate) lg: u32,
+    pub(crate) wpr: usize,
+    pub(crate) at: usize,
+    pub(crate) data: usize,
 }
 
 impl SprHead {
