@@ -353,6 +353,9 @@ fn run(worker: NetWorker) {
         }
 
         crate::clock::log_new_syncs();
+        // The sky's inputs for Formulas: once a minute, and as soon as
+        // SNTP first sets the clock (`inputs.rs`).
+        crate::inputs::tick();
         crate::diag::check("net-worker: loop");
 
         // The name mDNS answers to: it takes `<name>-2` if another device

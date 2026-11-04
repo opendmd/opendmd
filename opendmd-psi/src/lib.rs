@@ -80,7 +80,7 @@ pub use compile::{
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{
-    empty, Op, Prog, Program, ProgramOf, SceneFrame, H, MAX_INS, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE,
+    Op, Prog, Program, ProgramOf, SceneFrame, H, MAX_INS, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE,
     MAX_TABLE_LEN, MIN_STORE, REGS, USER_PALETTES, W, store_words,
 };
 pub use world::World;

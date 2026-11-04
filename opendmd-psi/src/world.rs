@@ -19,7 +19,7 @@
 use crate::fixed::ONE;
 
 /// A built-in key: its number in the psb, its name, range and default
-/// (Q16.16), whether it is a whole number, and what it means.
+/// (Q16.16), and whether it is a whole number (what it means: [`about`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
     pub id: u8,
@@ -28,7 +28,6 @@ pub struct Key {
     pub hi: i32,
     pub default: i32,
     pub whole: bool,
-    pub about: &'static str,
 }
 
 /// Key numbers (the psb's; never reused: a new key takes the next).
@@ -78,7 +77,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: ONE,
         whole: false,
-        about: "how light it is outside, 0 at night to 1 by day (civil twilight between, the sun 6° under the horizon to 6° over); 1 without a location",
     },
     Key {
         id: id::SUN_ALT,
@@ -87,7 +85,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE / 4,
         default: 6554,
         whole: false,
-        about: "the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location",
     },
     Key {
         id: id::MOON_PHASE,
@@ -96,7 +93,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: ONE / 2,
         whole: false,
-        about: "the moon's phase in turns: 0 new, 0.5 full; 0.5 before the clock is set",
     },
     Key {
         id: id::SEASON,
@@ -105,7 +101,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: ONE / 2,
         whole: false,
-        about: "the time of year in turns for the panel's hemisphere: 0 midwinter, 0.5 midsummer; 0.5 without a location",
     },
     Key {
         id: id::YEARDAY,
@@ -114,7 +109,6 @@ pub const KEYS: [Key; 10] = [
         hi: 365 << 16,
         default: 172 << 16,
         whole: true,
-        about: "the day of the year, 0 on 1 January to 365; 172 (midsummer) before the clock is set",
     },
     Key {
         id: id::NIGHT,
@@ -123,7 +117,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: 0,
         whole: true,
-        about: "1 while the panel's night mode has it dimmed, else 0",
     },
     Key {
         id: id::BRIGHT,
@@ -132,7 +125,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: ONE,
         whole: false,
-        about: "the panel's brightness, 0 to 1 of its maximum",
     },
     Key {
         id: id::REPLAY_PLAYING,
@@ -141,7 +133,6 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: 0,
         whole: true,
-        about: "1 while RePlayOS plays a game, else 0 (and 0 when it isn't followed)",
     },
     Key {
         id: id::REPLAY_PLATFORM,
@@ -150,7 +141,6 @@ pub const KEYS: [Key; 10] = [
         hi: MAX_PLATFORM << 16,
         default: 0,
         whole: true,
-        about: "the playing game's platform as a number (its place in the panel's platform list, from 1); 0 when none",
     },
     Key {
         id: id::REPLAY_GAME,
@@ -159,9 +149,30 @@ pub const KEYS: [Key; 10] = [
         hi: ONE,
         default: 0,
         whole: false,
-        about: "a number for the playing game, 0 to 1: different for each game, the same each time it plays (a hue, a seed); 0 when none",
     },
 ];
+
+/// What each of [`KEYS`] means, in its order (the compiler's and the
+/// tools': the player carries none of it).
+#[cfg(feature = "compiler")]
+pub const ABOUT: [&str; 10] = [
+    "how light it is outside, 0 at night to 1 by day (civil twilight between, the sun 6° under the horizon to 6° over); 1 without a location",
+    "the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location",
+    "the moon's phase in turns: 0 new, 0.5 full; 0.5 before the clock is set",
+    "the time of year in turns for the panel's hemisphere: 0 midwinter, 0.5 midsummer; 0.5 without a location",
+    "the day of the year, 0 on 1 January to 365; 172 (midsummer) before the clock is set",
+    "1 while the panel's night mode has it dimmed, else 0",
+    "the panel's brightness, 0 to 1 of its maximum",
+    "1 while RePlayOS plays a game, else 0 (and 0 when it isn't followed)",
+    "the playing game's platform as a number (its place in the panel's platform list, from 1); 0 when none",
+    "a number for the playing game, 0 to 1: different for each game, the same each time it plays (a hue, a seed); 0 when none",
+];
+
+/// What key `id` means ("" for none).
+#[cfg(feature = "compiler")]
+pub fn about(id: u8) -> &'static str {
+    KEYS.iter().position(|k| k.id == id).map_or("", |i| ABOUT[i])
+}
 
 /// The key named `name` (`sun.alt`).
 pub fn key(name: &str) -> Option<&'static Key> {

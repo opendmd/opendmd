@@ -960,42 +960,6 @@ impl core::ops::DerefMut for Program {
     }
 }
 
-/// The empty program ([`Prog::clear`]'s), as a constant: what a player
-/// holding none reads ([`empty`]).
-static EMPTY: ProgramOf<[i32; MIN_STORE]> = ProgramOf {
-    ops: [Op {
-        code: 0,
-        d: 0,
-        a: 0,
-        b: 0,
-        c: 0,
-    }; MAX_OPS],
-    init: [0; MAX_SCALARS],
-    frame_end: 0,
-    draw_end: 0,
-    row_end: 0,
-    pixel_end: 0,
-    n_scalars: S_FIRST_FREE,
-    regs: 0,
-    uses: 0,
-    frame_ms: 0,
-    loop_ms: 8000,
-    meta: crate::meta::Meta::NONE,
-    paint: [0; MAX_PAINT],
-    pals: [0; MAX_PALETTES * 32],
-    ins: Ins {
-        n: 0,
-        base: 0,
-        keys: [0; MAX_INS],
-    },
-    tables: [0; MIN_STORE],
-};
-
-/// The empty program, for a player that holds none yet.
-pub fn empty() -> &'static Prog {
-    &EMPTY
-}
-
 impl Prog {
     /// The memory a [`Prog`] of `words` numbers takes.
     pub fn layout(words: usize) -> core::alloc::Layout {

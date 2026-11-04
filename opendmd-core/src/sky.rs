@@ -31,6 +31,7 @@ pub struct Place {
 impl Place {
     /// A place from degrees, rounded to 0.01° and held to the globe
     /// (latitude ±90, longitude ±180). `None` for a number that isn't one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn from_degrees(lat: f64, lon: f64) -> Option<Place> {
         if !lat.is_finite() || !lon.is_finite() || lat.abs() > 90.0 || lon.abs() > 180.0 {
             return None;
@@ -55,6 +56,8 @@ const Q48: i64 = 1 << 48;
 /// `c0 + rate·n` turns for `n` days (and `secs` more) since J2000, as Q32
 /// turns: `c0` and `rate` in Q48 turns (the rate a day, its whole turns
 /// left out).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+#[inline(never)]
 fn lin(c0: i64, rate: i64, days: i64, secs: i64) -> u32 {
     let v = c0
         .wrapping_add(rate.wrapping_mul(days))
@@ -84,6 +87,8 @@ const ONE30: i64 = 1 << 30;
 
 /// sin and cos of `a` (Q32 turns), Q30: the quarter turn's polynomial
 /// (Taylor to θ⁷ and θ⁸ on ±π/4: within 4e-7).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+#[inline(never)]
 pub fn sin_cos(a: u32) -> (i64, i64) {
     // The nearest quarter turn: a + 1/8 turn, its top two bits.
     let b = a.wrapping_add(1 << 29);
@@ -135,6 +140,8 @@ const ATANS: [u32; 30] = {
 
 /// atan2(y, x) for x ≥ 0 (Q30 or any common scale), Q32 turns as a signed
 /// number (−¼..¼): the CORDIC's vectoring.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+#[inline(never)]
 fn atan2_right(mut y: i64, mut x: i64) -> i32 {
     let mut a: i64 = 0;
     for (i, &t) in ATANS.iter().enumerate() {
@@ -153,6 +160,8 @@ fn atan2_right(mut y: i64, mut x: i64) -> i32 {
 }
 
 /// The integer square root of `v` (floor).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+#[inline(never)]
 fn isqrt(v: u64) -> u64 {
     if v < 2 {
         return v;
@@ -176,6 +185,8 @@ fn isqrt(v: u64) -> u64 {
 }
 
 /// arcsin of `s` (Q30, held to ±1), Q32 turns signed (−¼..¼).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+#[inline(never)]
 fn asin(s: i64) -> i32 {
     let s = s.clamp(-ONE30, ONE30);
     let c = isqrt((ONE30 * ONE30 - s * s) as u64) as i64;
@@ -184,6 +195,7 @@ fn asin(s: i64) -> i32 {
 
 /// The sun for `unix` (seconds, UTC): its ecliptic longitude λ (Q32 turns)
 /// and, at `place`, its altitude (Q32 turns, signed).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sun(unix: i64, place: Place) -> (u32, i32) {
     let d = unix - J2000;
     let (days, secs) = (d.div_euclid(DAY), d.rem_euclid(DAY));
@@ -221,12 +233,14 @@ fn q16_of(a: i32) -> i32 {
 }
 
 /// `sun.alt`: the sun's altitude in turns, Q16.16 (−0.25..0.25).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sun_alt(unix: i64, place: Place) -> i32 {
     q16_of(sun(unix, place).1)
 }
 
 /// `daylight` for an altitude (Q16.16 turns): `smoothstep` from −6° to +6°
 /// (civil twilight), Q16.16 0..1.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn daylight(alt: i32) -> i32 {
     // −6° and +6° in Q16.16 turns: ∓65536/60.
     let (lo, span) = (-65_536 / 60, 2 * 65_536 / 60);
@@ -238,6 +252,7 @@ pub fn daylight(alt: i32) -> i32 {
 /// `season` from the sun's ecliptic longitude (Q32 turns): 0 at the
 /// December solstice (λ = ¾ turn), ½ at the June one; half a turn on in the
 /// southern hemisphere. Q16.16 0..1.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn season(lam: u32, place: Place) -> i32 {
     let mut s = lam.wrapping_sub(3 << 30);
     if place.lat_c < 0 {
@@ -252,6 +267,7 @@ const NEW_MOON: i64 = 947_182_440;
 const SYNODIC_MS: i64 = 2_551_442_877;
 
 /// `moon.phase` for `unix`: 0 new, ½ full, Q16.16 0..1.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn moon_phase(unix: i64) -> i32 {
     let ms = (unix - NEW_MOON).wrapping_mul(1000).rem_euclid(SYNODIC_MS);
     (ms * 65_536 / SYNODIC_MS) as i32
@@ -259,6 +275,7 @@ pub fn moon_phase(unix: i64) -> i32 {
 
 /// `yearday` for a local time (`unix` plus the UTC offset, seconds): the
 /// day of the year, 0 on 1 January (365 on 31 December of a leap year).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn yearday(local: i64) -> u16 {
     let days = local.div_euclid(DAY);
     // Howard Hinnant's civil_from_days: the year of `days`, then 1 January.
@@ -284,6 +301,7 @@ pub fn yearday(local: i64) -> u16 {
 /// `utc_offset` (seconds) and `place` if one is set: (`daylight`,
 /// `sun.alt`, `moon.phase`, `season`, `yearday`), Q16.16; `None` where it
 /// can't be known (no place: the sun and the season).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn inputs(unix: i64, utc_offset: i64, place: Option<Place>) -> Sky {
     let sun = place.map(|p| {
         let (lam, alt) = sun(unix, p);

@@ -708,6 +708,8 @@ impl Panel {
         self.wanted_brightness = brightness;
         let applied = opendmd_core::brightness::effective(brightness, self.max_brightness);
         self.cfg.brightness = applied;
+        // `bright` for Formulas (written on a change only).
+        crate::inputs::bright(applied, self.max_brightness);
         // Every settings PUT re-applied it (and the schedule's ticks): each
         // a pass over the whole DMA buffer on the display core, a raced
         // Formula's frame late (display-isolation, 2026-11-02). Unchanged:

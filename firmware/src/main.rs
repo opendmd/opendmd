@@ -62,6 +62,7 @@ mod heapmap;
 mod http;
 mod httpd;
 mod improv;
+mod inputs;
 mod logring;
 mod misslog;
 mod membank;
@@ -484,6 +485,8 @@ fn main() -> Result<()> {
     // `@formula:<name>`: the bundled Formulas, built in.
     formulas::install();
     heapmap::cp("formulas installed");
+    // The built-in inputs' table (`inputs.rs`) times its changes by this.
+    inputs::install_clock();
 
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
@@ -605,6 +608,9 @@ fn main() -> Result<()> {
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_jit(settings.formula_jit);
     clock::set_timezone(&settings.tz, &settings.tz_name);
+    // The location the built-in inputs' sky is worked out for (the
+    // network worker writes the sky once SNTP has set the clock).
+    inputs::set_place(settings.location);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
     // Formulas time their frames (the governor: `fx_psi::Governor`).
@@ -2629,6 +2635,8 @@ impl Scheduling {
     /// The schedule's fields in status.
     fn publish(&self, status: &Mutex<Status>) {
         let d = &self.decision;
+        // `night` for Formulas: the night window has the panel dimmed.
+        inputs::night(d.mode == schedule::Mode::Dim);
         let mut s = status.lock().unwrap();
         s.mode = d.mode.as_str();
         s.mode_until = d.mode_until.map(schedule::format_hhmm);

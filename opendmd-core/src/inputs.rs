@@ -99,6 +99,7 @@ impl Table {
 
     /// Key `k` takes `v` at `now_ms` from `source`: a change (its `was` the
     /// value it had, or none) when it had no value or another one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn set(&mut self, k: u8, v: i32, now_ms: u64, source: Source) {
         let Some(e) = self.entries.get_mut(k as usize) else {
             return;
@@ -117,6 +118,7 @@ impl Table {
 
     /// Key `k` has no value any more (its source lost it): a change, to the
     /// default, if it had one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn clear(&mut self, k: u8, now_ms: u64) {
         let Some(e) = self.entries.get_mut(k as usize) else {
             return;
@@ -129,6 +131,7 @@ impl Table {
     }
 
     /// Key `k` as a frame at `now_ms` reads it.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn read(&self, k: u8, now_ms: u64) -> Read {
         let Some(e) = self.entries.get(k as usize) else {
             return Read {
@@ -177,6 +180,7 @@ fn now_ms() -> u64 {
 }
 
 /// [`Table::set`] on the panel's table, now.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn set(k: u8, v: i32, source: Source) {
     let now = now_ms();
     if let Ok(mut t) = TABLE.lock() {
@@ -185,6 +189,7 @@ pub fn set(k: u8, v: i32, source: Source) {
 }
 
 /// [`Table::clear`] on the panel's table, now.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clear(k: u8) {
     let now = now_ms();
     if let Ok(mut t) = TABLE.lock() {
@@ -203,6 +208,7 @@ pub fn snapshot() -> (Table, u64) {
 /// (seconds) and the location if one is set, into the panel's table:
 /// `moon.phase` and `yearday` from the clock alone, the sun's keys and
 /// `season` only with a location (cleared without one).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn set_sky(unix: i64, utc_offset: i64, place: Option<crate::sky::Place>) {
     let s = crate::sky::inputs(unix, utc_offset, place);
     let now = now_ms();
@@ -225,6 +231,7 @@ pub fn set_sky(unix: i64, utc_offset: i64, place: Option<crate::sky::Place>) {
 
 /// The sky's keys cleared (the clock lost, say): the Formulas read their
 /// defaults.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clear_sky() {
     let now = now_ms();
     if let Ok(mut t) = TABLE.lock() {
@@ -236,6 +243,7 @@ pub fn clear_sky() {
 
 /// `replay.game`'s number for a game: a hash of its name (FNV-1a, folded
 /// to 16 bits), Q16.16 in 0..1, never 0 (0 is "no game").
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn game_hash(name: &str) -> i32 {
     let mut h: u32 = 0x811c_9dc5;
     for b in name.bytes() {
