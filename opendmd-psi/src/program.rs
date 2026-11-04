@@ -2132,6 +2132,11 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         INK | U_R | U_G | U_B => 26,
         INKN => 34,
         U_L => 70,
+        // `under(x, y)`'s template: two coordinates rounded and held (8
+        // instructions each), the index, a mask, a byte read and `byte`
+        // (~24 in all, U_R's 26 ns for 8): a guess until paint-probe
+        // measures it.
+        UAT => 75,
         c => value_ns(c).saturating_sub(60).max(60),
     }
 }

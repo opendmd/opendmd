@@ -254,7 +254,10 @@ fn the_paint_and_under_estimates_fit_the_spare() {
     for &(name, src, vm, jit) in measured::PAINT_FORMULAS {
         let p = opendmd_psi::compile(src).unwrap();
         row(format!("formula {name} (vm)"), vm, p.esp32_us(), 0.15);
-        row(format!("formula {name} (jit)"), jit, p.esp32_us_jit(), 0.20);
+        // (The JIT refused `UAT` then: those rows are the VM's.)
+        if p.uat_steps() == 0 {
+            row(format!("formula {name} (jit)"), jit, p.esp32_us_jit(), 0.20);
+        }
     }
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
