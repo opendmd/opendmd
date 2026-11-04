@@ -44,11 +44,23 @@
 //! also one at a time). What `/api/status` and `GET /api/www` read is a
 //! separate small [`Info`], never the mapping's lock, so neither waits for a
 //! response or an update.
+//!
+//! **Caching.** Every file goes out `Cache-Control: no-cache` with an
+//! `ETag`, the mapped pack's CRC (`"1a2b3c4d"`: one value for every file of
+//! a pack, new with any change to any file), and a request whose
+//! `If-None-Match` names it is answered `304 Not Modified` by
+//! [`not_modified`] on the httpd task, before any hand-off: a reload costs a
+//! few dozen header-only answers, and a browser never runs an earlier
+//! pack's file with a later one's. (Releases up to 1.0.0-beta.13 sent the
+//! wasm `max-age=3600`, and wasm-pack's names carry no hash: an updated app
+//! ran the old compiler. The web app now also asks for every wasm module at
+//! an address with its build's id, `?v=`, js/wasm.js, which is what gets a
+//! browser holding such an hour-long copy past it.)
 
 use anyhow::Result;
 use esp_idf_sys as sys;
 use opendmd_core::www_pack::{Header, Pack, PackError, HEADER_LEN};
-use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -66,6 +78,58 @@ const SECTOR: usize = 4096;
 /// on the serving task's stack (see [`serve`]): no heap, and the flash is only
 /// ever read on CPU0.
 const STAGING: usize = 1024;
+
+/// The mapped pack's CRC, its files' ETag ([`not_modified`]); 0 while none
+/// is mapped (and for the one pack in 2^32 whose CRC is 0: no 304s then).
+/// Read by the httpd task without [`MAP`]'s lock, which a response holds
+/// for its whole length.
+static ETAG_CRC: AtomicU32 = AtomicU32::new(0);
+
+/// `"<crc as 8 hex digits>"`, on the stack.
+fn etag_text(crc: u32, out: &mut [u8; 10]) -> &str {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out[0] = b'"';
+    out[9] = b'"';
+    for i in 0..8 {
+        out[1 + i] = HEX[(crc >> (28 - 4 * i)) as usize & 0xF];
+    }
+    std::str::from_utf8(out).unwrap_or("\"\"")
+}
+
+/// Put `mapping` (or nothing) in [`MAP`] and publish its ETag: cleared
+/// before an unmap, set once the new pack is mapped.
+fn set_mapping(map: &mut Option<Mapping>, mapping: Option<Mapping>) {
+    let crc = mapping
+        .as_ref()
+        .and_then(|m| Header::parse(m.bytes()).ok())
+        .map_or(0, |h| h.crc32);
+    if crc == 0 {
+        ETAG_CRC.store(0, Relaxed);
+    }
+    *map = mapping;
+    ETAG_CRC.store(crc, Relaxed);
+}
+
+/// Answer `304 Not Modified` (no body) if the request's `If-None-Match`
+/// names the mapped pack's ETag: the browser's copy is this pack's file.
+/// On the httpd task, before the hand-off to the stream task (a 304 needs
+/// no place in its queue): an atomic load, a 64 B header read, no lock.
+/// True when it answered.
+pub fn not_modified(req: &mut Req) -> Result<bool> {
+    let crc = ETAG_CRC.load(Relaxed);
+    if crc == 0 {
+        return Ok(false);
+    }
+    let mut buf = [0u8; 10];
+    let tag = etag_text(crc, &mut buf);
+    if !req.header_names(c"If-None-Match", tag) {
+        return Ok(false);
+    }
+    req.header("ETag", tag)?;
+    req.header("Cache-Control", "no-cache")?;
+    req.send_status(304, "304 Not Modified", "text/plain", b"")?;
+    Ok(true)
+}
 
 /// The live mapping of the pack. Held by a response for its whole length
 /// and by an update from before the unmap to after the remap.
@@ -258,12 +322,12 @@ pub fn init() {
                 mapping.ptr,
                 t.elapsed().as_millis()
             );
-            *map = Some(mapping);
+            set_mapping(&mut map, Some(mapping));
             set_info(info);
         }
         Err(e) => {
             log::warn!("www: no web app: {e}");
-            *map = None;
+            set_mapping(&mut map, None);
             set_info(broken(e));
         }
     }
@@ -305,7 +369,10 @@ pub fn serve(req: &mut Req, rel: &str) -> Result<Served> {
     if entry.gzip {
         req.header("Content-Encoding", "gzip")?;
     }
-    req.header("Cache-Control", files::cache_for(&logical))?;
+    // no-cache + the pack's ETag: see "Caching" above.
+    let mut tag = [0u8; 10];
+    req.header("ETag", etag_text(pack.header().crc32, &mut tag))?;
+    req.header("Cache-Control", "no-cache")?;
     req.begin_sized("200 OK", files::mime_for(&logical), entry.data.len() as u64)?;
     // **Every read of the mapping happens here, on CPU0.** lwip copies a
     // send buffer into its pbufs on the tcpip task (priority 18): before
@@ -791,7 +858,7 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
 
     let mut map = MAP.lock().unwrap_or_else(|p| p.into_inner());
     // Unmap before the first erase: nothing may read the old pack from here.
-    *map = None;
+    set_mapping(&mut map, None);
     set_info(Info {
         error: Some("the web app is being updated; reload in a moment".into()),
         ..broken(String::new())
@@ -857,7 +924,7 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
                 t.elapsed().as_millis(),
                 info.entries
             );
-            *map = Some(mapping);
+            set_mapping(&mut map, Some(mapping));
             drop(map);
             set_info(info);
             up.json(&info_json())
@@ -911,11 +978,11 @@ pub fn restore_from_card() {
         );
         staged.check(&header, &mut buf)?;
         let mut map = MAP.lock().unwrap_or_else(|p| p.into_inner());
-        *map = None;
+        set_mapping(&mut map, None);
         write_pack(part, &head, &header, len, &mut Body::Card(staged), &mut buf)
             .map_err(|(why, _)| Unfit::Unreadable(why))?;
         let (mapping, info) = load().map_err(Unfit::Unreadable)?;
-        *map = Some(mapping);
+        set_mapping(&mut map, Some(mapping));
         drop(map);
         let v = info.version.clone().unwrap_or_default();
         set_info(info);

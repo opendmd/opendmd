@@ -25,7 +25,9 @@ runs against the same server (--base).
 - _redirects: every line a 301 to where it says, which answers 200;
 - _headers: one CSP on every response, the right one per path; nosniff;
   no COOP/COEP; CORS * on install/, art-index/, formulas/src/; release.json for 60 s,
-  the version-named release files immutable, the rest 600 s;
+  the version-named release files immutable, the web app's files and the
+  pages and scripts on them (demo/, f/, create/, dev/psi/, psiled.js, …)
+  no-cache, the rest 600 s;
 - www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (against
   opendmd.dev only; skipped under cf dev and against a workers.dev URL);
 - every request names itself in User-Agent: Cloudflare's Browser Integrity
@@ -316,6 +318,7 @@ def redirects(base: str, site: Path) -> None:
 
 def headers(base: str, site: Path) -> None:
     ver = json.loads((site / "install/release.json").read_text())["version"]
+    demo_v = re.search(r"V = '([0-9a-f]+)'", (site / "demo/js/build.js").read_text()).group(1)
     want = {  # path: (CSP must contain, must not contain, CORS, Cache-Control)
         # The home page's live panels and the gallery's tiles on hover: Psi's wasm, nothing more.
         "/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
@@ -330,13 +333,20 @@ def headers(base: str, site: Path) -> None:
         "/install/firmware/manifest-4mb.json": (None, None, "*", "public, max-age=600"),
         "/install/firmware/updater.bin": (None, None, "*", "public, max-age=600"),
         "/art-index/v1/GB.json": (None, None, "*", "public, max-age=600"),
-        "/demo/": ("connect-src 'self' https://gifcities.archive.org", None, None, "public, max-age=600"),
-        "/demo/app.js": (None, None, None, "public, max-age=600"),
-        "/f/": ("'wasm-unsafe-eval'", "connect-src", None, "public, max-age=600"),
+        # The web app's files and the pages and scripts on them: revalidated
+        # every load (no-cache; Cloudflare's ETag and 304), so a deploy is never
+        # half old (tools/site.py APP_PATHS, js/wasm.js).
+        "/demo/": ("connect-src 'self' https://gifcities.archive.org", None, None, "no-cache"),
+        "/demo/app.js": (None, None, None, "no-cache"),
+        "/demo/js/build.js": (None, None, None, "no-cache"),
+        f"/demo/pkg-psi/opendmd_psi_web_bg.wasm?v={demo_v}": (None, None, None, "no-cache"),
+        "/f/": ("'wasm-unsafe-eval'", "connect-src", None, "no-cache"),
         # Create Art: the Studio's wasm, its sources' pictures, a picture from any https address.
-        "/create/": ("connect-src 'self' https:", None, None, "public, max-age=600"),
+        "/create/": ("connect-src 'self' https:", None, None, "no-cache"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
-        "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
+        "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
+        "/psiled.js": (None, None, None, "no-cache"),
+        "/formulas/ftiles.js": (None, None, None, "no-cache"),
     }
     bad = []
     for path, (has, hasnt, cors, cache) in want.items():
@@ -448,6 +458,8 @@ def live_panels(base: str, shots: Path) -> None:
         early = page.evaluate("""() => { const load = performance.getEntriesByType('navigation')[0].loadEventStart;
             return performance.getEntriesByType('resource').filter(e => e.name.includes('/pkg-psi/') && e.startTime < load).length; }""")
         check(poster and psi and early == 0, f"home: the hero's still first, Psi loaded only after the page ({len(psi)} requests, {early} early)")
+        check(all(re.search(r"[?&]v=[0-9a-f]{16}$", u) for u in psi),
+              f"home: Psi's module and wasm asked for at the build's address, ?v= (js/wasm.js) {[u.rsplit('/', 1)[-1] for u in psi][:4]}")
         check(bool(a and b and b["h"] != a["h"] and b["frames"] > a["frames"]),
               f"home: the hero plays Endless road live (lit {a and a['lit']} of 4096, frames {a and a['frames']} -> {b and b['frames']})")
         d1 = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{door}'); return x && x.frames >= 10 && x.lit > 20 && x; }}")

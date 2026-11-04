@@ -19,6 +19,7 @@ import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSel
 import { popup, closeMenu, actions } from './overrides.js';
 import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC, compiler } from './psikit.js';
 import * as S from './fstore.js';
+import { load } from './wasm.js';
 
 let P = null, mod = null, gen = 0;
 // The site's Formula page's options (`editorPage`), else null: the web app.
@@ -26,7 +27,7 @@ let PAGE = null;
 // The site whose gallery and reference these are: the demo's and /f/'s
 // own, else opendmd.dev.
 const ROOT = () => (app.demo || PAGE ? new URL('../', location.href).href : SITE);
-const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; compiler(P); })
+const psi = () => (mod ??= load('pkg-psi', gen || '').then(([m, x]) => { P = { ...m, mem: x.memory }; compiler(P); })
   .catch((e) => { mod = null; throw e; }));
 // A trap (a bug) leaves the module unusable: a fresh instance takes over.
 function restart() {

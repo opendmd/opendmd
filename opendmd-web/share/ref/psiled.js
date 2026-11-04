@@ -4,7 +4,9 @@
 // (dev/psi/psiref.js), the home page's panels (home.js, and its hero's
 // show, hero.js) and the gallery's
 // tiles on hover (formulas/ftiles.js); tools/site.py copies it to the
-// site's root. No imports: the wasm loads only when `psi()` is first called.
+// site's root. The wasm loads only when `psi()` is first called, at this
+// build's address (the demo's js/wasm.js).
+import { load } from './demo/js/wasm.js';
 
 export const UNSET = -2147483648; // a slider left at the formula's default
 
@@ -15,8 +17,8 @@ const loading = new Map();
 // another instance; the wasm file is the same, fetched once).
 export function psi(slot = 0) {
   if (!loading.has(slot)) {
-    loading.set(slot, import('./demo/pkg-psi/opendmd_psi_web.js' + (slot ? '?' + slot : ''))
-      .then(async (P) => ({ P, mem: (await P.default()).memory })));
+    loading.set(slot, load('pkg-psi', slot ? String(slot) : '')
+      .then(([P, x]) => ({ P, mem: x.memory })));
   }
   return loading.get(slot);
 }

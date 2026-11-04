@@ -13,7 +13,7 @@
 // it has one, else GifCities (the Studio's `app.artFind`; the web app's
 // Library links here with its words).
 
-import init from '../demo/pkg/opendmd_web.js';
+import { init } from '../demo/js/web.js';
 import { app } from '../demo/js/state.js';
 import { READY, IMPORT, MAX_GIF } from '../demo/js/importgif.js';
 import { addr, addressForm, handOff } from '../panel.js';

@@ -603,6 +603,35 @@ impl Req {
         Some(String::from_utf8_lossy(&buf[..len]).into_owned())
     }
 
+    /// Whether a request header names `want`: equal to it, or one of a
+    /// comma-separated list, a weak `W/` form too (`If-None-Match`). Read
+    /// into a 64 B stack buffer, no heap: this runs on the httpd task
+    /// (~1 KB free at its deepest, `config::HTTP_STACK`), and a longer value
+    /// counts as not naming it.
+    pub fn header_names(&self, field: &CStr, want: &str) -> bool {
+        // SAFETY: a live request and a NUL-terminated field name.
+        let len = unsafe { sys::httpd_req_get_hdr_value_len(self.raw, field.as_ptr()) };
+        let mut buf = [0u8; 64];
+        if len == 0 || len >= buf.len() {
+            return false;
+        }
+        // SAFETY: `buf` holds `len` bytes and the NUL.
+        let err = unsafe {
+            sys::httpd_req_get_hdr_value_str(
+                self.raw,
+                field.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                len + 1,
+            )
+        };
+        err == sys::ESP_OK
+            && std::str::from_utf8(&buf[..len]).is_ok_and(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .any(|t| t == want || t.strip_prefix("W/") == Some(want))
+            })
+    }
+
     fn method_name(&self) -> &'static str {
         // SAFETY: a plain field read on a live request.
         match unsafe { (*self.raw).method } as u32 {

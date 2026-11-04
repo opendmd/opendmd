@@ -19,7 +19,7 @@
 // or navigate to http, never fetch from it. A gallery tile's Open on my
 // panel comes marked `&panel=1`: with the address known it goes straight on.
 
-import init from '../demo/pkg/opendmd_web.js';
+import { init } from '../demo/js/web.js';
 import { from, unheader, vals, num, READY, REMIX, MAX_SRC } from '../demo/js/psikit.js';
 import { addr, addressForm, handOff } from '../panel.js';
 

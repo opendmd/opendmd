@@ -240,7 +240,11 @@ check-wasm:
 # firmware/src/http.rs both ways on every build. www/licenses.txt
 # (gitignored) is the two committed third-party notices, firmware's then the
 # web app's (licenses/, `make notices`), served as text from the pack:
-# Settings -> Device -> About links it.
+# Settings -> Device -> About links it. www/js/build.js (gitignored) is
+# the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/ and
+# pkg-psi/) that js/wasm.js puts on every wasm module's address, so a
+# browser never runs an earlier build's module (docs/notes/web-app.md
+# "Module addresses").
 WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
@@ -249,6 +253,8 @@ web:
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
+	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
+	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
 	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json
 	git describe --always --dirty --tags --match 'v*' > $(WEB_WWW)/version.txt
