@@ -29,9 +29,10 @@ palette road = black #000, road #403, roadStripe #806, yellow #ec0, red #f00,
   #126, #17f, #25f, #42f, #50f, #70e, #a0e, #d0d, horizon #f48
 
 -- The car: 17 spans, each `from*32 + to` in carSpan and
--- `row*16 + tag` in carRow (tag 8 body, 9 glass, 10 lights)
+-- `row*16 + tag` in carRow (its row down from the top; tag 8 body, 9
+-- glass, 10 lights)
 table carSpan = 273, 242, 273, 211, 242, 118, 56, 69, 242, 663, 56, 69, 242, 663, 56, 56, 25
-table carRow = 136, 120, 121, 104, 105, 88, 72, 74, 73, 74, 56, 58, 57, 58, 40, 24, 9
+table carRow = 376, 392, 393, 408, 409, 424, 440, 442, 441, 442, 456, 458, 457, 458, 472, 488, 505
 
 -- Three hill peaks: the middle (64 less it) and the half width
 table peakMid = 56, -6, -62
@@ -131,7 +132,7 @@ draw {
     span = carSpan[k]/32
     rowInk = carRow[k]/16
     carY = floor(rowInk)
-    line(floor(span) - carLeft, 31 - (carY), frac(span)*32 - carLeft, 31 - (carY), frac(rowInk))
+    line(floor(span) - carLeft, carY, frac(span)*32 - carLeft, carY, frac(rowInk))
   }
 }
 
