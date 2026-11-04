@@ -375,6 +375,7 @@ fn run(worker: NetWorker) {
         let before = crate::state::free_heap();
         crate::fatidx::tick();
         crate::heapmap::cp_if_moved("fat index tick first took heap", before);
+        crate::netstat::tick();
         #[cfg(feature = "emu-census")]
         census();
 
@@ -778,6 +779,88 @@ extern "C" {
     /// held` (and the pcbs and sockets holding them, when any are): the
     /// frames lwIP keeps in the WiFi driver's receive buffers.
     fn opendmd_netdiag();
+    /// Sockets with a connection (a count of the socket table, no walk).
+    fn opendmd_netdiag_socks() -> i32;
+    /// Post a count of what lwIP holds to its thread (`netdiag_snap`).
+    fn opendmd_netdiag_snap();
+    static netdiag_snap: [i32; 6];
+}
+
+/// `emu-census` builds: the low watch, a task on CPU0 that reads the free
+/// heap every millisecond and keeps the least of each 5 s window, with the
+/// Rust allocator's bytes and the sockets open at that moment; `census`
+/// logs it (`lowwatch:`). The API lane reads it beside the bursts.
+#[cfg(feature = "emu-census")]
+mod lowwatch {
+    use std::sync::atomic::{AtomicI32, AtomicU32, Ordering::Relaxed};
+    pub static LOW: AtomicU32 = AtomicU32::new(u32::MAX);
+    pub static RUST: AtomicI32 = AtomicI32::new(0);
+    pub static SOCKS: AtomicI32 = AtomicI32::new(0);
+    pub static UPLOADS: AtomicU32 = AtomicU32::new(0);
+    pub static PHASE: AtomicU32 = AtomicU32::new(0);
+    static SNAP_DUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static SNAP: [AtomicI32; 6] = [const { AtomicI32::new(0) }; 6];
+
+    fn rust_live() -> i32 {
+        #[cfg(feature = "psi")]
+        return crate::arena::RUST_LIVE.load(Relaxed) as i32;
+        #[cfg(not(feature = "psi"))]
+        return 0;
+    }
+
+    pub fn start() {
+        let _ = esp_idf_hal::task::thread::ThreadSpawnConfiguration {
+            name: Some(b"lowwatch\0"),
+            stack_size: 3072,
+            priority: 6,
+            pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
+            ..Default::default()
+        }
+        .set();
+        let _ = std::thread::Builder::new().stack_size(3072).spawn(|| loop {
+            let f = crate::state::free_heap();
+            if f < LOW.load(Relaxed) {
+                LOW.store(f, Relaxed);
+                RUST.store(rust_live(), Relaxed);
+                // SAFETY: a count of lwIP's socket table.
+                SOCKS.store(unsafe { super::opendmd_netdiag_socks() }, Relaxed);
+                UPLOADS.store(crate::stream::uploads(), Relaxed);
+                PHASE.store(crate::stream::phase(), Relaxed);
+                // SAFETY: posts a count to lwIP's thread.
+                unsafe { super::opendmd_netdiag_snap() };
+                SNAP_DUE.store(true, Relaxed);
+            } else if SNAP_DUE.swap(false, Relaxed) {
+                // The count posted at the low ran meanwhile (the tcpip thread
+                // is above this one): keep it with the low.
+                for (k, v) in SNAP.iter().enumerate() {
+                    // SAFETY: plain reads of C ints written by the snapshot.
+                    v.store(unsafe { std::ptr::read_volatile(&super::netdiag_snap[k]) }, Relaxed);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        });
+        let _ = esp_idf_hal::task::thread::ThreadSpawnConfiguration::default().set();
+    }
+
+    /// The window's line, and a new window.
+    pub fn take() -> String {
+        let low = LOW.swap(u32::MAX, Relaxed);
+        format!(
+            "lowwatch: window low {low} B free (rust {} B, sockets {}, uploads {}); now {} B free, rust {} B; at it: phase {:#x}, lwip rx {} pbufs {} B, tx {} B, pcbs {} tw {} socks {}",
+            RUST.load(Relaxed),
+            SOCKS.load(Relaxed),
+            UPLOADS.load(Relaxed),
+            crate::state::free_heap(),
+            rust_live(),
+            PHASE.load(Relaxed),
+            SNAP[0].load(Relaxed),
+            SNAP[1].load(Relaxed),
+            SNAP[2].load(Relaxed),
+            SNAP[3].load(Relaxed),
+            SNAP[4].load(Relaxed),
+            SNAP[5].load(Relaxed),
+        )
+    }
 }
 
 /// The emulator's leak lane (feature `emu-census`): the heap's blocks in
@@ -790,6 +873,11 @@ fn census() {
     // SAFETY: a plain IDF call.
     let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1000) as u32;
     if now.wrapping_sub(NET_LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 5_000 {
+        if NET_LAST.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            lowwatch::start();
+        } else {
+            log::info!("{}", lowwatch::take());
+        }
         NET_LAST.store(now, std::sync::atomic::Ordering::Relaxed);
         // SAFETY: posts a walk to lwIP's own thread; no arguments.
         unsafe { opendmd_netdiag() };

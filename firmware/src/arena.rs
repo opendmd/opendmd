@@ -38,6 +38,19 @@ mod on {
 
     pub struct Alloc;
 
+    /// `emu-census` builds: the bytes the Rust allocator holds for its
+    /// callers (as asked), for the low watch (`net_worker`).
+    #[cfg(feature = "emu-census")]
+    pub static RUST_LIVE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    #[cfg(feature = "emu-census")]
+    #[inline(always)]
+    fn note(d: isize) {
+        RUST_LIVE.fetch_add(d, Relaxed);
+    }
+    #[cfg(not(feature = "emu-census"))]
+    #[inline(always)]
+    fn note(_d: isize) {}
+
     // The heap map's allocator (`heapmap`, a diagnostic build) is the
     // global one there, and serves the arena's slots through `claim`.
     #[cfg_attr(not(feature = "heapmap"), global_allocator)]
@@ -83,6 +96,7 @@ mod on {
     unsafe impl GlobalAlloc for Alloc {
         #[inline(never)]
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            note(l.size() as isize);
             if let Some(p) = claim(l) {
                 return p;
             }
@@ -92,6 +106,7 @@ mod on {
 
         #[inline(never)]
         unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            note(l.size() as isize);
             if let Some(p) = claim(l) {
                 // SAFETY: the slot is `l.size()` bytes of the arena, ours now.
                 unsafe { p.write_bytes(0, l.size()) };
@@ -103,6 +118,7 @@ mod on {
 
         #[inline(never)]
         unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            note(-(l.size() as isize));
             if !release(p) {
                 // SAFETY: not the arena's, so the system's.
                 unsafe { System.dealloc(p, l) }
@@ -111,6 +127,7 @@ mod on {
 
         #[inline(never)]
         unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+            note(new as isize - l.size() as isize);
             if !release_check(p) {
                 // SAFETY: not the arena's, so the system's.
                 return unsafe { System.realloc(p, l, new) };
@@ -157,5 +174,7 @@ mod on {
 
 #[cfg(feature = "psi")]
 pub use on::{reserve, span, BUSY, HITS};
+#[cfg(all(feature = "psi", feature = "emu-census"))]
+pub use on::RUST_LIVE;
 #[cfg(all(feature = "psi", feature = "heapmap"))]
 pub use on::{claim, release, release_check as holds};

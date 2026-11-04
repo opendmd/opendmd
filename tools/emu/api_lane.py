@@ -16,7 +16,8 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   www         PUT /api/www with the web app's pack
   bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
               5, 5 uploads of 300 KB at once beside status reads; each 200, or 503 + Retry-After
-              and 200 when asked again; never a 408; the network answering; nothing held after
+              and 200 when asked again; never a 408; the network answering; nothing held after;
+              the least free heap of each round (the census image's low watch) over BURST_HEAP_MIN
   load x3     uploads read back, settings saves, saves into a big folder, listings and status
               reads (display-stress's loads), each on its own connection at once by default
               (--connections 2: status polls beside the rest; 1: one at a time), then 60 s quiet:
@@ -66,12 +67,35 @@ ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # emptied folder went through `std::fs::remove_file`, which FatFs's f_unlink does for an empty
 # directory too, so the branch that calls `fatidx::dir_changed()` was never taken. The firmware
 # now tells a directory apart first; `final_a` checks the index is stale at once after.
+# BURST_HEAP (net-wedge2): the spare's heap went to 8 KB (ESP-IDF's minimum) under five 300 KB
+# uploads at once beside a status read a second, and with it the WiFi driver, which allocates its
+# frame buffers from the heap, stopped delivering: refusals 10.5 s late, status reads timing out.
+# The emu-census image's low watch (a task reading the free heap every ms, `lowwatch:` every 5 s
+# with what was held at the low) put the lows of the bursts in a status read during an upload:
+# the whole answer and every part of it at once (~5 KB of Rust strings), its ~3.7 KB of segments,
+# and the upload's received frames (up to the WiFi driver's six buffers, ~10 KB). The answer is
+# written out in pieces now (http.rs), a status read below 10 KB free is a 503, and a client that
+# gave up has its unacknowledged reply aborted, not retransmitted to nobody (netstat.rs).
+# Two bounds, per round:
+# - BURST_HEAP_MIN, the least free heap: 20 KB. The census image plays at 53-58 KB at its quiet
+#   lows (~26 KB above the spare); the bursts' lows were 29.7-45 KB, the player's share moving them
+#   by up to ~15 KB (a dissolve's buffers at a switch, the read-ahead ring), so this alone is a
+#   coarse check: under 20 KB here the spare would be at nothing.
+# - BURST_NET_MAX, what the C side (lwIP, the WiFi driver, FatFs: everything but the Rust
+#   allocator, which the player's GIFs dominate) holds at the low above its quiet level in the same
+#   rounds: 22 KB. By construction one upload and one status read can hold ~20 KB there (six
+#   receive buffers ~10 KB, one reply's segments ~4.4 KB, a few pcbs and sockets, the upload's FIL);
+#   measured 11-18 KB. More means something grew per connection: a second reply in flight, refused
+#   uploads' frames kept, replies piling up behind a client that left.
+BURST_HEAP_MIN = 20 * 1024
+BURST_NET_MAX = 22 * 1024
 # The heap census: the least of the last quiet spell against the first's (as emu-leak).
 LEAK_BLOCKS, LEAK_BYTES = 24, 2048
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 GIF_START = re.compile(r"\] (/gifs/\S+\.gif) <- (prepared|original)")
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
+CENSUS_TOTAL = re.compile(r"census: \d+ blocks in use, (\d+) B allocated, (\d+) B free")
 BUILT = re.compile(r"fat index: built (\d+) records .*stale (true|false)")
 BUILD_STARTED = re.compile(r"fat index: build started")
 FATIDX_WARN = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)|raw read of .* differs")
@@ -79,6 +103,7 @@ DELETE_LINE = re.compile(r"DELETE (/cache/\S+) \(recursive\): (\d+) entries remo
 HEARTBEAT = re.compile(r"heartbeat: heap (\d+) B free \(floor (\d+) B.*main stack (\d+) B unused.*drain stack (\d+) B unused")
 HTTPD_STACK = re.compile(r"httpd task: stack high-water (\d+) B unused")
 NETDIAG_SUM = re.compile(r"netdiag: sum: (\d+) sockets open, \d+ TIME_WAIT pcbs, (\d+) rx pbufs held")
+LOWWATCH = re.compile(r"lowwatch: window low (\d+) B free \(rust (-?\d+) B, sockets (\d+), uploads (\d+)\); now (\d+) B free, rust (-?\d+) B")
 WORKER_STACK = re.compile(r"fat index: built .* (\d+) B of the worker's stack unused")
 
 
@@ -336,6 +361,7 @@ class Lane:
         self.heap_free_min = None
         root = a.emu_dir / "card" / "root" / "gifs" / "Other"
         self.gifs = [p.read_bytes() for p in sorted(root.glob("*.gif"))[:6]]
+        self.card_gif = "/gifs/Other/" + sorted(root.glob("*.gif"))[0].name if self.gifs else None
         if len(self.gifs) < 6:
             raise LaneFail(f"fewer than 6 GIFs in {root} (run mkcard.py)")
 
@@ -371,6 +397,10 @@ class Lane:
         self.emu = emu
         try:
             self.boot_checks(emu, api)
+            if os.environ.get("EMU_API_ONLY") == "bursts":
+                # (A diagnostic shortcut: the bursts alone, then stop.)
+                self.bursts(emu, api)
+                return
             self.basics(api)
             self.files(api)
             self.play(emu, api)
@@ -546,12 +576,22 @@ class Lane:
         408, never no answer; every status read answers; the network answers after every round (the
         wedge: no TCP, ping or ARP answered again until a reset); and, 20 s after the last round,
         lwIP holds no received frame (`netdiag: sum`, emu-census builds)."""
+        # A card GIF on the panel first: the heap bound is about the network, and a Formula
+        # left on from `play` (kept) holds ~20 KB more than a GIF.
+        mark = emu.mark()
+        api.json("POST", "/api/play", {"path": self.card_gif})
+        emu.wait_for(re.compile(re.escape(f"] {self.card_gif} <- ")), 60, mark, f"`{self.card_gif} <- `")
         work = self.logs / f"burst-{self.stamp}"
         work.mkdir(parents=True, exist_ok=True)
         src = work / "blob.bin"
         src.write_bytes(blob(77, 300 * 1024))
         log, codes = [], {}
+        burst_lows: list[int] = []
+        net_at_low: list[int] = []
+        net_quiet: list[int] = []
+        status_wall: list[float] = []
         for rnd, n in enumerate(BURST_ROUNDS, 1):
+            round_mark = emu.mark()
             errors: list[str] = []
             lock = threading.Lock()
 
@@ -583,7 +623,9 @@ class Lane:
             while any(t.is_alive() for t in threads):
                 emu.check()
                 try:
+                    t_s = time.time()
                     code, _, _ = api.raw("GET", "/api/status", timeout=15)
+                    status_wall.append(time.time() - t_s)
                     if code != 200:
                         errors.append(f"status beside round {rnd}: HTTP {code}")
                 except LaneFail as e:
@@ -596,6 +638,21 @@ class Lane:
                 api.raw("GET", "/api/status", timeout=15)
             except LaneFail as e:
                 errors.append(f"after round {rnd}: {e}")
+            lows = [(int(m[1]), int(m[2]), int(m[3])) for _, m in emu.find(LOWWATCH, round_mark)]
+            censuses = emu.find(CENSUS_TOTAL)
+            total = (int(censuses[-1][1][1]) + int(censuses[-1][1][2])) if censuses else None
+            if lows and total:
+                # The C side at each window's low, and at its end (mostly quiet: a sample).
+                for _, m in emu.find(LOWWATCH, round_mark):
+                    net_at_low.append(total - int(m[1]) - int(m[2]))
+                    net_quiet.append(total - int(m[5]) - int(m[6]))
+            if lows:
+                low = min(lows)
+                burst_lows.append(low[0])
+                print(f"api: burst round {rnd} ({n} at once): heap low {low[0]} B (rust {low[1]} B, {low[2]} sockets) over {len(lows)} windows", flush=True)
+                if low[0] < BURST_HEAP_MIN:
+                    errors.append(f"the heap went to {low[0]} B free (BURST_HEAP_MIN {BURST_HEAP_MIN} B): "
+                                  + "; ".join(m.string.split("lowwatch: ")[1][:220] for _, m in emu.find(LOWWATCH, round_mark) if int(m[1]) == low[0])[:400])
             if errors:
                 raise LaneFail(f"burst round {rnd} ({n} uploads at once): " + "; ".join(errors[:4]) + f" (so far: {', '.join(log[-12:])})")
         for i in range(1, max(BURST_ROUNDS) + 1):
@@ -608,6 +665,11 @@ class Lane:
         time.sleep(25)
         sums = [(int(m[1]), int(m[2])) for _, m in emu.find(NETDIAG_SUM, mark)]
         self.expect(sums and sums[-1][1] == 0, "bursts", f"lwIP still holds received frames after the bursts (sockets, frames per walk): {sums}")
+        self.expect(burst_lows and net_at_low, "bursts", "no `lowwatch:`/`census:` lines beside the bursts: is this an emu-census image?")
+        net_grew = max(net_at_low) - min(net_quiet)
+        self.expect(net_grew <= BURST_NET_MAX, "burst heap",
+                    f"the C side (lwIP, WiFi, FatFs) held {net_grew} B more at a low than when quiet (BURST_NET_MAX {BURST_NET_MAX} B)")
+        self.ok("burst heap", f"least free heap per round {burst_lows} B (low watch, every ms), none under BURST_HEAP_MIN {BURST_HEAP_MIN} B; the C side {net_grew} B over its quiet level at the worst (BURST_NET_MAX {BURST_NET_MAX} B); {len(status_wall)} status reads beside them, the slowest {max(status_wall or [0]):.2f} s wall (not a timing check)")
         self.ok("bursts", f"rounds of {'/'.join(map(str, BURST_ROUNDS))} 300 KB uploads at once beside status reads: every one 200 in the end (answers {dict(sorted(codes.items()))}), the network answering after each; quiet after: {sums[-1][0]} sockets, {sums[-1][1]} frames held")
 
     # -- the load -------------------------------------------------------------
@@ -962,8 +1024,9 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        lane.card_checks()
-        lane.run_b()
+        if os.environ.get("EMU_API_ONLY") != "bursts":
+            lane.card_checks()
+            lane.run_b()
     except LaneFail as e:
         if network_wedged(lane):
             e = LaneFail(f"{e} -- the network wedged: no TCP answer while the player plays on (RX_BUFFERS in api_lane.py)")
