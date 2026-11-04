@@ -92,12 +92,13 @@ pub fn sin_cos(a: u32) -> (i64, i64) {
     // 2π·2^30/2^32 = π/2, 1,686,629,713 / 2^30).
     let r = (b & ((1 << 30) - 1)) as i64 - (1 << 29);
     let th = (r * 1_686_629_713) >> 30;
-    let t2 = (th * th) >> 30;
+    // (A product of two Q30 numbers.)
+    let m = |a: i64, b: i64| (a * b) >> 30;
+    let t2 = m(th, th);
     // sin θ = θ(1 − θ²/6(1 − θ²/20(1 − θ²/42)))
-    let s = th * (ONE30 - (t2 * (ONE30 - (t2 * (ONE30 - t2 / 42) >> 30) / 20) >> 30) / 6) >> 30;
+    let s = m(th, ONE30 - m(t2, ONE30 - m(t2, ONE30 - t2 / 42) / 20) / 6);
     // cos θ = 1 − θ²/2(1 − θ²/12(1 − θ²/30(1 − θ²/56)))
-    let c = ONE30
-        - (t2 * (ONE30 - (t2 * (ONE30 - (t2 * (ONE30 - t2 / 56) >> 30) / 30) >> 30) / 12) >> 30) / 2;
+    let c = ONE30 - m(t2, ONE30 - m(t2, ONE30 - m(t2, ONE30 - t2 / 56) / 30) / 12) / 2;
     // Each quarter turn: (s, c) → (c, −s).
     match quarter {
         0 => (s, c),
@@ -231,7 +232,7 @@ pub fn daylight(alt: i32) -> i32 {
     let (lo, span) = (-65_536 / 60, 2 * 65_536 / 60);
     let t = ((alt as i64 - lo as i64) * 65_536 / span as i64).clamp(0, 65_536);
     // t²(3 − 2t)
-    ((t * t >> 16) * (3 * 65_536 - 2 * t) >> 16) as i32
+    ((((t * t) >> 16) * (3 * 65_536 - 2 * t)) >> 16) as i32
 }
 
 /// `season` from the sun's ecliptic longitude (Q32 turns): 0 at the
@@ -387,7 +388,7 @@ mod tests {
         assert!((s - 32_768).abs() < 400, "{s}");
         let sydney = Place::from_degrees(-33.87, 151.21).unwrap();
         let s = season(lam, sydney);
-        assert!(s < 400 || s > 65_536 - 400, "{s}");
+        assert!(!(400..=65_536 - 400).contains(&s), "{s}");
     }
 
     #[test]
@@ -396,7 +397,7 @@ mod tests {
         let full = moon_phase(1_772_537_880);
         assert!((full - 32_768).abs() < 1_500, "{full}");
         let new = moon_phase(1_773_883_380);
-        assert!(new < 1_500 || new > 65_536 - 1_500, "{new}");
+        assert!(!(1_500..=65_536 - 1_500).contains(&new), "{new}");
         assert_eq!(yearday(946_684_800), 0); // 2000-01-01
         assert_eq!(yearday(951_782_400), 59); // 2000-02-29
         assert_eq!(yearday(978_220_800), 365); // 2000-12-31
