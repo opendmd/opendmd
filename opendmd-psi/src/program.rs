@@ -2798,9 +2798,15 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         TRI | SAW | SQR => 60,
         SQRT => 229,
         SELECT | CLAMP => 60,
-        PICK | TAB => 100,
-        // A sprite's pixel: a table read, a shift and a mask (a guess until
-        // psi-probe measures it, as the design guessed).
+        PICK => 100,
+        // A table's entry and a sprite's pixel (a header decoded, a word
+        // read, a shift and a mask, the key's number read): Neon city's
+        // rows fit these. (paint80-3e6de's `store low`, one `T[…]` and two
+        // `s[…, …]` a pixel and little else, drew 3,297 µs against 2,604
+        // estimated: −21 %, left as it is, since raising them puts Neon
+        // city 16 % over. The store's place, its first numbers or past
+        // 900, changes nothing.)
+        TAB => 100,
         SPR => 120,
         MIX => 130,
         SMOOTH => 214,
@@ -2875,6 +2881,17 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         // (paint80-f6aa6): 3, 6 and 12 steps 2,306 / 4,052 / 7,505 µs a
         // frame, pixelate 2,645 on the real path: within -3..+12 %.
         UAT => 75,
+        // Helper calls (`hid::TAB`, `hid::SPR`): paint80-3e6de's `store
+        // low` drew 3,613 µs a frame on the kernel against 1,723
+        // estimated with the VM's less 60 (40 and 60): +330 ns a pixel
+        // over the path's 1.4 for one table read and two sprite reads,
+        // split evenly. Slower than the VM's lane loops (the call and its
+        // five arguments a pixel): `esp32_us_jit` keeps the VM's figure
+        // then, as the player keeps the faster. Not a regression of the
+        // store sized per Formula (the store's place changes nothing);
+        // a kernel template for `TAB` (its read inline) is the way down.
+        TAB => 150,
+        SPR => 170,
         c => value_ns(c).saturating_sub(60).max(60),
     }
 }
