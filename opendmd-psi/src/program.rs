@@ -1206,9 +1206,12 @@ impl Program {
             None => (0..0, 1),
         };
         let mut slow_ns = 0;
-        // The kernel's guards' scenes (bit s: a guard of scene s), for
-        // their cost on the rows each is off.
-        let mut kernel_guards = 0u32;
+        // The pixel section's guards' scenes (bit s: a guard of scene s),
+        // for their cost on the rows each is on and off.
+        let pixel_guards: u32 = self.ops[self.row_end as usize..self.len()]
+            .iter()
+            .filter(|o| o.code == code::GUARD)
+            .fold(0, |m, o| m | 1 << ((o.c >> 4) & 15));
         // Scenes (`code::GUARD`): each one's steps apart, then the two
         // costliest counted ("the panel budgets for two scenes at once").
         let guards = self.guard_runs();
@@ -1233,12 +1236,7 @@ impl Program {
                         k += op.a as usize;
                     }
                     Some(None) => {}
-                    None => {
-                        if op.code == code::GUARD {
-                            kernel_guards |= 1 << ((op.c >> 4) & 15);
-                        }
-                        kp += self.jit_step_ns(k, op)
-                    }
+                    None => kp += self.jit_step_ns(k, op),
                 }
             } else {
                 if op.code == code::FUSE {
@@ -1273,16 +1271,24 @@ impl Program {
         // a frame is 32 rows' worth).
         let (mut top, mut next, mut framed) = (0u32, 0u32, 0u32);
         let (mut top_s, mut next_s) = (usize::MAX, usize::MAX);
-        // A kernel guard's zeros and jump on each row its scene is off.
-        let off_row = GUARD_JIT_OFF_NS * JIT_PATH_PCT / 100 * W as u32;
+        // A kernel guard's zeros and jump on each row its scene is off,
+        // its cost on the rows it is on (the VM's: its lanes zeroed).
+        let (on_row, off_row) = if jit {
+            (
+                GUARD_JIT_ON_NS * JIT_PATH_PCT / 100 * W as u32,
+                GUARD_JIT_OFF_NS * JIT_PATH_PCT / 100 * W as u32,
+            )
+        } else {
+            (0, GUARD_VM_OFF_NS * W as u32)
+        };
         for (s, &(sp, sk, ss, sr)) in scene.iter().enumerate() {
             let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
             let c = p * (W * H) as u32 / 1000 + sr * 10;
             if let Some(r) = frame.map(|f| &f.rows) {
                 let n = u32::from(r[s].min(H as u8));
                 framed += (p * W as u32 * n) / 1000 + sr * 10 * n / H as u32;
-                if jit && kernel_guards & (1 << s) != 0 {
-                    framed += off_row * (H as u32 - n) / 1000;
+                if pixel_guards & (1 << s) != 0 {
+                    framed += (on_row * n + off_row * (H as u32 - n)) / 1000;
                 }
             }
             if c > top {
@@ -1295,8 +1301,11 @@ impl Program {
         }
         // The two costliest on, the rest off on every row.
         let off_all: u32 = (0..16)
-            .filter(|&s| jit && kernel_guards & (1 << s) != 0 && s != top_s && s != next_s)
-            .map(|_| off_row * H as u32 / 1000)
+            .filter(|&s| pixel_guards & (1 << s) != 0)
+            .map(|s| {
+                let row = if s == top_s || s == next_s { on_row } else { off_row };
+                row * H as u32 / 1000
+            })
             .sum();
         let scenes = if frame.is_some() {
             framed
@@ -2461,11 +2470,20 @@ pub(crate) const TWEEN_US: u32 = 9;
 /// 128, and while it is off its values' lanes zeroed (a guess until
 /// paint-probe measures it); in the kernel a test and a branch a pixel.
 pub(crate) const GUARD_NS: u32 = 4;
-/// In the kernel (P0b, the guards tested once a row): nothing a pixel on
-/// a row its scene is on (the driver patched the run in), and on a row it
-/// is off the run's first bytes are zeros and a jump past it, ~4
-/// instructions (an instruction count until paint-probe measures it; it
-/// was a test and a branch a pixel either way, a guess of 8).
+/// On the VM, a guard's rows off more: its values' lanes zeroed (512 B
+/// each a lane). paint80-01e06 on the spare (2026-11-04): three scenes
+/// off 2,018 µs against an estimate of 1,871 without it (+12 ns a pixel
+/// each).
+pub(crate) const GUARD_VM_OFF_NS: u32 = 12;
+/// In the kernel (P0b, the guards tested once a row, sites patched by the
+/// driver): on a row its scene is on, the run as if there were no guard;
+/// off, the run's first bytes are zeros and a jump past it.
+/// paint80-01e06 on the spare: three scenes on 3,944 µs against 3,859
+/// without scenes (+6.8 ns a pixel each, the path's ×1.4 in: 4 here; the
+/// register layout round the runs), off 1,199 µs rows against an estimate
+/// of 1,243 at 17, by rows 2,589 against 2,576. (It was a test and a
+/// branch a pixel either way, guessed at 8.)
+pub(crate) const GUARD_JIT_ON_NS: u32 = 4;
 pub(crate) const GUARD_JIT_OFF_NS: u32 = 17;
 /// A paint primitive's call: its values gathered, the call, its
 /// coordinates to pixels, ns (paint-probe on the spare: `pset` off the
@@ -2498,10 +2516,14 @@ pub(crate) fn value_ns(c: u8) -> u32 {
     use code::*;
     match c {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
-        // A fused compare (`cmp_lane`: three strided operands, one loop):
-        // a guess until paint-probe measures it, a little over `select`'s
-        // fast3 (60) for the strided loads.
-        SEL_LT..=CNT_GE => 65,
+        // A fused compare (`cmp_lane`: three strided operands, one element
+        // a turn). paint80-01e06 on the spare (2026-11-04): four `sel_lt`
+        // 136 µs a frame over the compares and multiplies they replace
+        // (+8 ns a pixel each over the pair), two `cnt_ge` 55
+        // µs under theirs (−7 each against 128): the strided loop is no
+        // faster than two of `fast2`'s.
+        SEL_LT | SEL_LE => 95,
+        CNT_LT..=CNT_GE => 120,
         BIT => 55,
         MUL => 86,
         // The narrowed steps (`range`), measured by psi-probe on the spare
@@ -2585,11 +2607,13 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         MUL => 54,
         ABS | NEG | NOT | SAW | SQR => 17,
         LT | LE | GT | GE | EQ | NE | STEP => 17,
-        // `sel_*`: a move, a branch, a move (3 instructions, a compare's
-        // 17 for 4 with its shift); `cnt_*`: two branches over two adds
-        // and the shift (6). Instruction counts until paint-probe.
+        // `sel_*`: a move, a branch, a move; `cnt_*`: two branches over
+        // two adds, then the shift. paint80-01e06 on the spare: four
+        // `sel_lt` 174 µs a frame under the compares and multiplies (−10.6
+        // ns a pixel each, ×1.4 the path: 22 − 7.6), two `cnt_ge` 215
+        // under theirs (−26.2 each: 36 − 18.7).
         SEL_LT | SEL_LE => 14,
-        CNT_LT..=CNT_GE => 24,
+        CNT_LT..=CNT_GE => 17,
         AND | OR => 25,
         TRI => 49,
         SIN => 60,
