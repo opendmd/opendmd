@@ -5,7 +5,7 @@ about "Desert, megacity, tunnel, forest: the whole cycle in one rough sketch"
 loop forever
 fps 50
 
--- `psi check` refuses this file: 405 steps (the cap is 256) and 168 values
+-- `psi check` refuses this file: 416 steps (the cap is 256) and 169 values
 -- (128). That is its finding; see docs/research/endless-road-v2.md §3, §9.
 -- A ROUGH SKETCH for docs/research/endless-road-v2.md: every environment
 -- and every transition in one program, drawn crudely, to see where four
@@ -41,6 +41,11 @@ inTunnel = tc >= 188 and tc < 213
 mouth = (tc >= 180 and tc < 188) or (tc >= 213 and tc < 219)
 exiting = tc >= 213
 mouthP = exiting ? pTF : pCT
+-- the road eases to straight and flat for the mouth and the exit (8 s
+-- before each), and bends again 8 s after; the tunnel itself is straight
+straight = smoothstep(172, 180, tc) * (1 - smoothstep(221, 229, tc))
+bendAmp = 2000 - straight*2000
+hillAmp = 26667 - straight*26667
 city = pDC*(tc < 188)                    -- how much city: towers grow with it
 forest = pTF*(1 - pFD)*(tc >= 213)       -- how dense the forest is
 desert = (tc < 105)*(1 - pDC) + (tc >= 294)*pFD
@@ -78,9 +83,9 @@ towerGrow = city*13
 twinkle = floor((t*3) % 997)*(city < .6)
 
 -- ---- The tunnel's mouth (a box growing from the horizon) ----
-mouthW = 6 + mouthP*mouthP*140
-mouthTop = 19.5 + mouthP*mouthP*13
-mouthBot = 19.5 - mouthP*mouthP*20
+mouthBase = 19.5 - mouthP*mouthP*19.5       -- the road row its foot is on
+mouthW = (50.7 - 2.6*mouthBase)*1.6          -- the road's width there, and a bit
+mouthTop = 19.5 + (19.5 - mouthBase)*1.1     -- its ceiling over the horizon
 
 draw {
   -- The hills (desert only)
@@ -143,11 +148,12 @@ draw {
 -- ---- Rows ----
 yu = 31 - py
 below = yu < 19
-depth = below * .1125 / (19.5 - yu)
+tunRow = below ? yu : 39 - yu                -- the sky mirrors the road's depth
+depth = .1125 / (19.5 - tunRow)
 rowDriven = driven + depth
-halfWidth = below*(50.7 - 2.6*(yu - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2)))
+halfWidth = below*(50.7 - 2.6*(yu - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * hillAmp, -6, 2)))
 stripe = (frac(39/max(halfWidth, 1.3) + t*10) < .5) * -p.step
-offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*2000))
+offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*bendAmp))
 beam = (abs(yu - 12.5) < 4) * halfWidth * .5
 sky = floor(skyBase - yu*skyStep) * p.step
 -- the city: towers above the horizon (the column run), lit windows
@@ -160,9 +166,8 @@ farTop = max(19.5 + hash(seed, floor((px + nearShift*.44) / 6))*towerGrow*.7, ne
 windows = bit(42, nearAt%8)*floor(hash(floor(nearAt) + twinkle, seed)*127)
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
 -- the tunnel: walls either side of the road, a ceiling over it, lamps
-tunRow = below ? yu : 39 - yu
 tunHalf = (50.7 - 2.6*tunRow)*1.5
-inMouthRow = mouth * (yu > mouthBot) * (yu < mouthTop)
+inMouthRow = mouth * (yu > mouthBase) * (yu < mouthTop)
 tunnelHere = inTunnel + inMouthRow*((offRoad < mouthW) != exiting)
 wall = offRoad > tunHalf
 lamp = (not below) * (offRoad < 2) * (stripe < 0)
