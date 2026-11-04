@@ -240,6 +240,25 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
         include_str!("../../opendmd-web/formulas/plasma.psi"),
         2657,
     ),
+    // psi-p0 on the spare (paint80-713cd, 2026-11-04,
+    // ~/scratch/opendmd-psi-p0-paint-probe-spare1.txt): the effect path
+    // with the JIT on, as the other rows (the tween's VM frame is 757: the
+    // player keeps the faster).
+    (
+        "p0 Megacity sketch",
+        include_str!("../../docs/research/psi-rebuild-device/p0-road-v2-city.psi"),
+        6245,
+    ),
+    (
+        "p0 big",
+        include_str!("../../docs/research/psi-rebuild-device/p0-big.psi"),
+        1429,
+    ),
+    (
+        "p0 tween",
+        include_str!("../../docs/research/psi-rebuild-device/p0-tween.psi"),
+        818,
+    ),
 ];
 pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
     (

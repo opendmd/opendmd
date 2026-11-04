@@ -69,6 +69,11 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
+          | "palette" NAME "=" [ NAME ] COLOUR { "," [ NAME ] COLOUR }   -- 1..32 colours (section 6)
+          | "palette" NAME "=" tween [ "," tween ]   -- mixed once a frame; two: the halves (section 6)
+          | "scene" NAME "when" e "{" { NAME "=" expr sep } "}"   -- e once a frame or a row; its names 0 while e is 0 (section 13)
+tween     = "tween" "(" psrc "," psrc "," e ")"   -- e once a frame, held to 0..1
+psrc      = PALETTE | tween                    -- yours, a built-in (not gray), or another tween
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
           | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
           | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
@@ -244,7 +249,7 @@ example is compiled by the tests.
 | `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
-| `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
+| `table T = 1, -2, 0.5` | numbers, 256 in all (tables and sprites) | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
 | `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
 | `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(py/4) - 2&#93;)</code> |
 | `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, py % 5&#93;</code> |
@@ -256,7 +261,9 @@ example is compiled by the tests.
 | `hsv(hue, sat, val)` | colour: hue in turns, 0 to 1 each | <code class="psi-ex">hsv(x, 1, y)</code> |
 | `rgb(r, g, b)` | red, green, blue: 0 to 1 | <code class="psi-ex">rgb(x, y, 1 - x)</code> |
 | `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray | <code class="psi-ex">pal(fire, y)</code> |
-| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `scene s when c { v = … }` | values worked out only while c (once a frame or a row) is not 0; after it its names are 0 while it is off; the estimate counts two scenes at once | <code class="psi-ex">loop 4; on = frac(t/4) &gt; 0.5; scene s when on { w = sin(x&#42;9 + t&#42;3)&#42;0.5 + 0.5 }; gray(w)</code> |
+| `palette sky = tween(day, night, w)` | a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours | <code class="psi-ex">loop 8; palette day = &#35;48c, &#35;adf, &#35;ffc; palette night = &#35;002, &#35;124, &#35;346; palette sky = tween(day, night, 0.5 + 0.5&#42;sin(t&#42;0.785)); pal(sky, y)</code> |
 | `palette sea = deep #024, foam #fff` | a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many) | <code class="psi-ex">palette sea = deep &#35;024, mid &#35;08c, foam &#35;fff; pal(sea, sea.mid + sea.step&#42;(y &gt; 0.5))</code> |
 | `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k | <code class="psi-ex">pal(fire, y) &#42; x</code> |
 | `cycle(fire, v, s)` | palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame | <code class="psi-ex">loop 4; cycle(fire, x, t/4)</code> |
@@ -281,11 +288,13 @@ example is compiled by the tests.
 | limit | at most |
 | --- | --- |
 | a formula's text, comments included | 16,384 characters |
-| steps (per frame, per row, per pixel, and one per layer) | 256 |
+| steps (per frame, draw, per row, per pixel, and one per layer) | 512 |
 | values held a pixel at once | 12 |
-| constants and per-frame and per-row values held at once | 128 |
+| constants and per-frame and per-row values held at once | 241 |
 | nesting of brackets, operators and function calls | 48 |
-| `table`, `sprite` and `palette` numbers, in all | 256 |
+| `table` and `sprite` numbers, in all | 256 |
+| palettes of your own (of colours) | 8 |
+| palettes `pal` and `cycle` read | 3 |
 | loop turns a frame in `draw { }` | 2,048 |
 | lines and dots a frame | 2,048 |
 | line steps a frame | 16,384 |
@@ -322,7 +331,7 @@ The `psi` command checks and formats formulas on a computer
 
 ```text
 $ psi check storm-front.psi --out -
-ok: 41 of 256 steps (per frame 11, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 128 values
+ok: 41 of 512 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
@@ -1107,7 +1116,7 @@ Shorten the formula.
 
 <h4 id="E402">E402 · too many steps</h4>
 
-> this formula is too long for the panel: … steps, the limit is … (or: … — simplify it)
+> this formula is too long for the panel: … steps (per frame …, draw …, per row …, per pixel …), the limit is … (or: … — simplify it)
 
 The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.
 
@@ -1121,9 +1130,9 @@ Set fewer names, or use each value sooner.
 
 <h4 id="E404">E404 · too many numbers</h4>
 
-> this formula needs more than … numbers and once-a-frame values: use fewer
+> this formula needs … numbers and once-a-frame values, more than the … it can hold (steps: per frame …, draw …, per row …, per pixel …): use fewer
 
-Use fewer different numbers and steps.
+Use fewer different numbers and steps: the section with the most steps is the place to look.
 
 <h4 id="E405">E405 · nested too deeply</h4>
 
@@ -1635,13 +1644,13 @@ Write 1 to 32 colours, each as #f80.
 
 > a formula can have … palettes of its own at most
 
-Use fewer palettes.
+Use fewer palettes (a palette in a tween's half takes half of one).
 
-<h4 id="E924">E924 · too many numbers in tables, sprites and palettes</h4>
+<h4 id="E924">E924 · too many numbers in tables and sprites</h4>
 
-> tables, sprites and palettes hold 256 numbers in all — this would make …
+> tables and sprites hold 256 numbers in all — this would make …
 
-Make the tables, sprites and palettes smaller.
+Make the tables and sprites smaller.
 
 <h4 id="E925">E925 · a palette's colour named twice</h4>
 
@@ -1682,7 +1691,7 @@ loop 4
 cycle(fire, x, t/4 + y)
 ```
 
-<h4 id="E932">E932 · <code>cycle</code> of gray</h4>
+<h4 id="E932">E932 · <code>cycle</code> or <code>tween</code> of gray</h4>
 
 > `cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`
 
@@ -1690,9 +1699,9 @@ Write your own palette.
 
 <h4 id="E933">E933 · too many palettes with <code>cycle</code></h4>
 
-> a formula holds … palettes: its own (… here) and one more for each turn `cycle` gives (… here)
+> a formula holds … palettes that `pal` and `cycle` read: its own (… here) and one more for each turn `cycle` gives (… here)
 
-Use fewer palettes, or turn fewer by different values.
+Read fewer palettes with `pal` and `cycle` (tweens may read more), or turn fewer by different values.
 
 <h4 id="E934">E934 · <code>cycle</code> without its turn</h4>
 
@@ -1705,6 +1714,30 @@ Write the turn after the picture: `cycle(palette, v, turn)`.
 > `…` takes a palette (and how much of the pixel it covers, 0 to 1, if you like); found …
 
 Give it a palette and a value (`cycle` also takes the picture and the turn).
+
+<h4 id="E936">E936 · a tween mixed by a value that changes across the panel</h4>
+
+> `tween` mixes a palette once a frame (by t or a frame value), but `…` (line …) is per pixel: it reads `…`
+
+Mix it by t, a value of t, a slider or another once-a-frame value.
+
+<h4 id="E937">E937 · a palette's half of the wrong palettes</h4>
+
+> a palette's half is a tween of palettes of your own with 16 colours at most: `…` is not one
+
+In a half, tween palettes of your own of 16 colours or fewer (tweens of them inside are fine).
+
+<h4 id="E938">E938 · a tween painted with</h4>
+
+> `…` is a tween, worked out every frame: paint takes a palette of colours (`palette p = #000, #fff`)
+
+Paint with a palette of colours, or with `pal(P, v)` of one of the tween's palettes.
+
+<h4 id="E939">E939 · tweens nested too deeply</h4>
+
+> the tweens need more than … palettes worked out at once: nest them less deeply, or tween fewer palettes that only tweens read
+
+Nest tweens less deeply (a tween as the first palette costs nothing), or read the palettes they make with `pal`.
 
 <h4 id="E941">E941 · <code>rate</code> above the bottom</h4>
 
@@ -1895,5 +1928,29 @@ Use one of the listed blends.
 > text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)
 
 Take them out.
+
+<h4 id="E970">E970 · a scene's <code>when</code> that changes along a row</h4>
+
+> a scene's `when` is worked out once a frame or once a row (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`
+
+Make `when` a value of t, the clock, the sliders or the row (py, y); choose per pixel inside the scene instead.
+
+<h4 id="E971">E971 · something other than values in a scene</h4>
+
+> a scene holds values: `name = …` lines (its colours, drawing and palettes go outside it)
+
+Keep `name = …` lines in the scene; put colours, `draw`, `layer`, `palette` and another scene outside it.
+
+<h4 id="E972">E972 · too many scenes</h4>
+
+> a formula can have … scenes at most
+
+Join scenes that share a condition, or pick inside one.
+
+<h4 id="E973">E973 · a <code>rate</code> layer reading a scene</h4>
+
+> a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out
+
+Work the value out outside the scene, or leave `rate` out.
 
 <!-- psi-errors end -->

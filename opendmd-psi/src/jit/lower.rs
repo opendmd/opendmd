@@ -23,7 +23,7 @@
 
 use super::enc::*;
 use crate::fixed;
-use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
+use crate::fuse::PICK_MAX;
 use crate::program::*;
 use alloc::vec::Vec;
 
@@ -117,8 +117,8 @@ pub mod hid {
     pub const COUNT: u8 = 19;
 }
 
-/// Why a formula plays on the VM: shown in `/api/status` (`formula.jit`).
-pub type Refusal = &'static str;
+pub use crate::jitplan::Refusal;
+use crate::jitplan::*;
 
 /// A lowered pixel stage.
 pub struct Lowered {
@@ -176,63 +176,6 @@ const fn cold_slot_end() -> i32 {
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn cold_slot(r: Reg) -> i32 {
     32 + (i32::from(r) - 5) * 4
-}
-
-/// One unit of the kernel: a step, or a fused colour the kernel draws in
-/// one piece (as the VM's fused runs, `crate::fuse`).
-#[derive(Clone, Copy, Debug)]
-enum Item {
-    Step(Op),
-    /// `pal(P, select(c, A, B)) [* k]`: c a lane, A and B scalars.
-    SelPal {
-        c: u8,
-        a: u8,
-        b: u8,
-        col: Op,
-    },
-    /// `pal(P, pick(m, …)) [* k]`: m a lane, k a scalar or none.
-    PickPal {
-        m: u8,
-        pk: Op,
-        col: Op,
-    },
-}
-
-#[inline]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn is_lane(v: u8) -> bool {
-    v & LANE != 0
-}
-
-/// The Psi register (0-based) an operand names, if it is one.
-#[inline]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn reg_of(v: u8) -> Option<usize> {
-    let l = v & !LANE;
-    (is_lane(v) && l >= L_REG0).then(|| (l - L_REG0) as usize)
-}
-
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn reads(it: &Item) -> ([u8; 4], usize) {
-    match *it {
-        Item::Step(op) => code::operands(&op),
-        Item::SelPal { c, col, .. } => {
-            if col.d & PAL_SCALED != 0 {
-                ([c, col.c, 0, 0], 2)
-            } else {
-                ([c, 0, 0, 0], 1)
-            }
-        }
-        Item::PickPal { m, .. } => ([m, 0, 0, 0], 1),
-    }
-}
-
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn writes(it: &Item) -> Option<usize> {
-    match *it {
-        Item::Step(op) if !code::is_colour(op.code) => reg_of(op.d),
-        _ => None,
-    }
 }
 
 /// Where the kernel starts: after the column run and the still cache's run
@@ -301,15 +244,15 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         Err(_) => None,
     };
     // Slots a row writes: y, py and the row steps' values.
-    let mut row_slot = [false; MAX_SCALARS];
+    let mut row_slot = [false; crate::program::SC];
     row_slot[S_Y as usize] = true;
     row_slot[S_PY as usize] = true;
     for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
         if code::writes_scalar(op.code) {
-            row_slot[(op.d & 0x7f) as usize] = true;
+            row_slot[op.d as usize] = true;
         }
     }
-    let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
+    let rs = |k: u8| k != NONE && row_slot[k as usize];
     // The palettes `cycle` turns: turned each row (`TURN`), so a colour of
     // one is a row's.
     let turned = |pal: u8| {
@@ -334,8 +277,8 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
                 pal, b, n, i, k, ..
             } => {
                 let m = (n as usize).min(PICK_MAX);
-                let choice = (i as usize) < m
-                    && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                let choice =
+                    (i as usize) < m && rs(prog.init_at((b as usize + i as usize) as u8) as u8);
                 choice || rs(k) || turned(pal)
             }
             _ => false,
@@ -382,11 +325,36 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
     let mut e = Emitter::bare(prog);
     e.words = words;
     e.c.entry(FRAME);
-    for op in &prog.ops[de..re] {
+    let mut k = de;
+    while k < re {
+        let op = prog.ops[k];
+        k += 1;
+        if op.code == code::GUARD {
+            // A scene's row steps: while its `when` is 0, their slots 0.
+            let end = (k + op.b as usize).min(re);
+            let slot = |v: u8| i32::from(v) * 4;
+            e.c.l32i(10, SC, slot(op.a));
+            let on = e.c.bz_fwd(Zero::Nez, 10);
+            let off = e.c.j_fwd();
+            e.c.bind(on);
+            for o in &prog.ops[k..end] {
+                e.row_step(*o)?;
+            }
+            let join = e.c.j_fwd();
+            e.c.bind(off);
+            e.c.movi(10, 0);
+            for o in &prog.ops[k..end] {
+                e.c.s32i(10, SC, slot(o.d));
+            }
+            e.c.bind(join);
+            e.sar16 = false;
+            k = end;
+            continue;
+        }
         // (`cycle`'s turns, the section's last steps: the driver's, after
         // the function: `program::turn_rows`.)
         if op.code != code::TURN {
-            e.row_step(*op)?;
+            e.row_step(op)?;
         }
     }
     e.c.retw_n();
@@ -402,99 +370,6 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
     })
 }
 
-/// Is `code` a step the kernel has (a template or a helper)?
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn supported(c: u8) -> Result<(), Refusal> {
-    use code::*;
-    match c {
-        ADD | SUB | MUL | ADD_W | SUB_W | MUL_W | MUL_N | MASK | LT | LE | GT | GE | EQ | NE
-        | AND | OR | MIN | MAX | STEP | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW
-        | SQR | SHR | SELECT | CLAMP => Ok(()),
-        DIV | MOD | ATAN2 | HASH | LEN | BIT | SQRT | RECIP | PICK | TAB | SPR | MIX | SMOOTH
-        | NOISE | MULR => Ok(()),
-        DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
-        OUT_RGB | OUT_HSV | OUT_PAL | OUT_GRAY => Ok(()),
-        U_R..=U_L | INK | INKN | UAT => Ok(()),
-        c if (OUT_LAYER..OUT_LAYER + 4 * crate::fixed::BLENDS as u8).contains(&c) => Ok(()),
-        STILL | COLUMN => Err("an unexpected layout"),
-        _ => Err("a step the kernel has no template for"),
-    }
-}
-
-/// The kernel's units, from `ops[start..pe]`.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> {
-    let ops = &prog.ops[..pe];
-    let mut out = Vec::new();
-    let mut k = start;
-    while k < pe {
-        let op = ops[k];
-        if op.code == code::SLOW {
-            // The slow layers: the VM's (`crate::rate`).
-            k += 1 + op.a as usize;
-            continue;
-        }
-        if op.code == code::FUSE {
-            let n = op.a as usize;
-            let run = &ops[(k + 1).min(pe)..(k + 1 + n).min(pe)];
-            if let Some(it) = fused(op.d, run) {
-                out.push(it);
-                k += 1 + n;
-            } else {
-                // The steps one at a time: the same values.
-                k += 1;
-            }
-            continue;
-        }
-        supported(op.code)?;
-        out.push(Item::Step(op));
-        k += 1;
-    }
-    match out.last() {
-        Some(Item::Step(op)) if code::is_colour(op.code) => {}
-        Some(Item::SelPal { .. } | Item::PickPal { .. }) => {}
-        _ => return Err("an unexpected layout"),
-    }
-    Ok(out)
-}
-
-/// A fused colour the kernel draws in one piece, when its operands are of
-/// the kinds the VM's kernel takes too (else `None`: the steps).
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn fused(kind: u8, run: &[Op]) -> Option<Item> {
-    match (kind, run) {
-        (F_SELPAL | F_SELPAL_K, [sel, col])
-            if sel.code == code::SELECT
-                && col.code == code::OUT_PAL
-                && is_lane(sel.a)
-                && !is_lane(sel.b)
-                && !is_lane(sel.c)
-                && col.a == sel.d =>
-        {
-            Some(Item::SelPal {
-                c: sel.a,
-                a: sel.b,
-                b: sel.c,
-                col: *col,
-            })
-        }
-        (F_PICKPAL, [pk, col])
-            if pk.code == code::PICK
-                && col.code == code::OUT_PAL
-                && is_lane(pk.a)
-                && col.a == pk.d
-                && (col.d & PAL_SCALED == 0 || !is_lane(col.c)) =>
-        {
-            Some(Item::PickPal {
-                m: pk.a,
-                pk: *pk,
-                col: *col,
-            })
-        }
-        _ => None,
-    }
-}
-
 /// An operand argument of a helper call.
 #[derive(Clone, Copy)]
 enum Arg {
@@ -504,21 +379,6 @@ enum Arg {
     Out,
     /// The address of a frame slot (a1 + the offset).
     Stack(i32),
-}
-
-/// A value a Psi register holds in the kernel: written by an item (or, for
-/// a register read before any item writes it, its lane from before the
-/// kernel: `livein`), alive until its last read; an address register for
-/// that span.
-#[derive(Clone, Copy, Debug)]
-struct Val {
-    start: usize,
-    end: usize,
-    livein: bool,
-    /// Alive across a helper call (then it wants a5..a7, which a call
-    /// keeps).
-    crosses: bool,
-    gpr: Reg,
 }
 
 struct Emitter<'a> {
@@ -554,68 +414,8 @@ struct Emitter<'a> {
     uses_src: bool,
     /// `hsv` through its helper (else inline, when the registers allow).
     hsv_call: bool,
-}
-
-/// The values of `items` (each with its interval) and which value each
-/// register reads first, and each item writes.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
-    let mut vals: Vec<Val> = Vec::new();
-    let mut cur: [Option<usize>; REGS] = [None; REGS];
-    let mut livein: [Option<usize>; REGS] = [None; REGS];
-    let mut wv = alloc::vec![None; items.len()];
-    for (k, it) in items.iter().enumerate() {
-        let (v, n) = reads(it);
-        for &x in &v[..n] {
-            let Some(r) = reg_of(x) else { continue };
-            match cur[r] {
-                Some(id) => vals[id].end = k,
-                None => {
-                    vals.push(Val {
-                        start: k,
-                        end: k,
-                        livein: true,
-                        crosses: false,
-                        gpr: 0,
-                    });
-                    let id = vals.len() - 1;
-                    cur[r] = Some(id);
-                    livein[r] = Some(id);
-                }
-            }
-        }
-        if let Some(w) = writes(it) {
-            vals.push(Val {
-                start: k,
-                end: k,
-                livein: false,
-                crosses: false,
-                gpr: 0,
-            });
-            cur[w] = Some(vals.len() - 1);
-            wv[k] = cur[w];
-        }
-    }
-    for (k, it) in items.iter().enumerate() {
-        if hot_call(hsv_call, it) {
-            for v in vals.iter_mut() {
-                // (Its own result, and operands read for the last time, need not survive.)
-                if v.start <= k && v.end > k && !(v.start == k && !v.livein) {
-                    v.crosses = true;
-                }
-            }
-        }
-    }
-    (vals, livein, wv)
-}
-
-/// The most values alive at once.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn pressure(vals: &[Val], n: usize) -> usize {
-    (0..n)
-        .map(|k| vals.iter().filter(|v| v.start <= k && k <= v.end).count())
-        .max()
-        .unwrap_or(0)
+    /// The open guard: its "off" branch, and SAR's state at it.
+    guards: Vec<(Fixup, bool)>,
 }
 
 /// Give each value a register from `pool` (a linear scan over the items:
@@ -709,6 +509,7 @@ impl<'a> Emitter<'a> {
             hot,
             uses_src,
             hsv_call,
+            guards: Vec::new(),
         };
         e.choose_hoists(&spare);
         if hot {
@@ -748,6 +549,7 @@ impl<'a> Emitter<'a> {
             hot: true,
             uses_src: false,
             hsv_call: true,
+            guards: Vec::new(),
         }
     }
 
@@ -756,7 +558,7 @@ impl<'a> Emitter<'a> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn row_step(&mut self, op: Op) -> Result<(), Refusal> {
         use code::*;
-        let slot = |v: u8| i32::from(v & 0x7f) * 4;
+        let slot = |v: u8| i32::from(v) * 4;
         // (`eval`: a narrowed step is its checked form here.)
         let code = match op.code {
             ADD_W => ADD,
@@ -863,11 +665,11 @@ impl<'a> Emitter<'a> {
                 let (v, n) = reads(it);
                 let cover = code::is_colour(op.code) && code::colour_parts(op.code).1.is_some();
                 for (j, &x) in v[..n].iter().enumerate() {
-                    match x & !LANE {
+                    match lane_no(x) {
                         // (A layer's scalar coverage is read as `Cover`.)
                         _ if !is_lane(x) && cover && j + 1 == n => note(Word::Cover(x)),
                         _ if !is_lane(x) => note(Word::Scalar(x)),
-                        L_X | L_I => note(Word::Lane(x & !LANE)),
+                        L_X | L_I => note(Word::Lane(lane_no(x))),
                         _ => {}
                     }
                 }
@@ -1046,7 +848,7 @@ impl<'a> Emitter<'a> {
             self.c.l32i(t, CTX, off);
             return Ok(t);
         }
-        match v & !LANE {
+        match lane_no(v) {
             L_PX => {
                 // px = the pixel << 16 (exactly the VM's column: N = W, base 0).
                 let t = self.tmp()?;
@@ -1055,7 +857,7 @@ impl<'a> Emitter<'a> {
             }
             L_X | L_I => {
                 let t = self.tmp()?;
-                self.lane_into(t, v & !LANE);
+                self.lane_into(t, lane_no(v));
                 Ok(t)
             }
             l => {
@@ -1141,6 +943,8 @@ impl<'a> Emitter<'a> {
                 Item::Step(op) => self.step(k, op)?,
                 Item::SelPal { c, a, b, col } => self.sel_pal(k, c, a, b, col)?,
                 Item::PickPal { m, pk, col } => self.pick_pal(m, pk, col)?,
+                Item::Guard { cond } => self.guard(k, cond)?,
+                Item::GuardEnd => self.guard_end(k),
             }
         }
         self.c.addi_n(PIX, PIX, 1);
@@ -1155,6 +959,57 @@ impl<'a> Emitter<'a> {
         }
         self.c.retw_n();
         Ok(())
+    }
+
+    // --- Scenes' guards ----------------------------------------------------
+
+    /// A guard at item `k`: the values from before the kernel its run reads
+    /// first and the steps after read too, loaded; then on into the run
+    /// when `cond` is not 0, else to [`guard_end`](Self::guard_end)'s
+    /// zeros.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn guard(&mut self, k: usize, cond: u8) -> Result<(), Refusal> {
+        for r in 0..REGS {
+            if let Some(id) = self.livein[r] {
+                if self.vals[id].start == k && !self.valid[id] {
+                    let h = self.vals[id].gpr;
+                    self.lane_into(h, L_REG0 + r as u8);
+                    self.valid[id] = true;
+                }
+            }
+        }
+        let t = self.val(cond)?;
+        let on = self.c.bz_fwd(Zero::Nez, t);
+        let off = self.c.j_fwd();
+        self.c.bind(on);
+        self.guards.push((off, self.sar16));
+        Ok(())
+    }
+
+    /// A guard's run ends at item `k`: off, the values it wrote that are
+    /// read after it 0 (the VM's mask); SAR known only if both ways set it.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn guard_end(&mut self, k: usize) {
+        let Some((off, sar)) = self.guards.pop() else {
+            return;
+        };
+        let kg = (0..k)
+            .rev()
+            .find(|&j| matches!(self.items[j], Item::Guard { .. }))
+            .unwrap_or(0);
+        let outs: Vec<Reg> = self
+            .vals
+            .iter()
+            .filter(|v| !v.livein && v.start > kg && v.start < k && v.end > k)
+            .map(|v| v.gpr)
+            .collect();
+        let join = self.c.j_fwd();
+        self.c.bind(off);
+        for g in outs {
+            self.c.movi(g, 0);
+        }
+        self.c.bind(join);
+        self.sar16 &= sar;
     }
 
     // --- Steps -----------------------------------------------------------
@@ -1640,9 +1495,9 @@ impl<'a> Emitter<'a> {
                 Arg::Out => self.c.mov(t, OUT),
                 Arg::Stack(off) => self.c.addi(t, 1, off),
                 Arg::Val(v) if !is_lane(v) => self.load_word(t, Word::Scalar(v)),
-                Arg::Val(v) => match v & !LANE {
+                Arg::Val(v) => match lane_no(v) {
                     L_PX => self.c.slli(t, PIX, 16),
-                    L_X | L_I => self.lane_into(t, v & !LANE),
+                    L_X | L_I => self.lane_into(t, lane_no(v)),
                     l => {
                         let id = self.cur[(l - L_REG0) as usize]
                             .ok_or("a register read before it is written")?;
@@ -2380,51 +2235,6 @@ impl<'a> Emitter<'a> {
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn slot(h: Reg) -> i32 {
     (i32::from(h) - 8) * 4
-}
-
-/// Whether an item calls a helper on every pixel (a colour's memo misses
-/// call one now and then: "cold", after which the hoists are loaded again;
-/// they do not make the kernel one with calls for its registers).
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn hot_call(hsv_call: bool, it: &Item) -> bool {
-    needs_call(hsv_call, it)
-        && !matches!(*it, Item::Step(op)
-            if code::is_colour(op.code) && code::colour_parts(op.code).0 == code::OUT_PAL)
-        && !matches!(*it, Item::SelPal { .. })
-}
-
-/// Whether an item calls a helper.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn needs_call(hsv_call: bool, it: &Item) -> bool {
-    use code::*;
-    match *it {
-        Item::Step(op) => {
-            matches!(
-                op.code,
-                DIV | MOD
-                    | ATAN2
-                    | HASH
-                    | LEN
-                    | BIT
-                    | SQRT
-                    | RECIP
-                    | PICK
-                    | TAB
-                    | SPR
-                    | MIX
-                    | SMOOTH
-                    | NOISE
-                    | MULR
-            ) || (DIGIT..=DIGIT_B).contains(&op.code)
-                || (NOISE_O..=NOISE_O_LAST).contains(&op.code)
-                || (hsv_call && is_colour(op.code) && colour_parts(op.code).0 == OUT_HSV)
-                || (is_colour(op.code)
-                    && colour_parts(op.code).0 == OUT_PAL
-                    && op.d & PAL_SCALED != 0)
-        }
-        Item::SelPal { col, .. } => col.d & PAL_SCALED != 0 && is_lane(col.c),
-        Item::PickPal { .. } => false,
-    }
 }
 
 /// A fixed order among hoist candidates used as often, so the unstable

@@ -114,8 +114,12 @@ pub fn run(args: Vec<String>) -> i32 {
     let (f, r, x) = prog.counts();
     let inputs = prog.inputs();
     let plain_us = prog.esp32_us();
-    // As the player draws it: with its still cache when it has values for one.
-    let us = prog.esp32_us_still();
+    // As the player draws it: with its still cache when it has values for one,
+    // and with the JIT where its kernel takes the formula (P0b-2: the tier
+    // and the limits count what the panel draws; the VM's beside it).
+    let vm_us = prog.esp32_us_still();
+    let jit_ok = opendmd_psi::jit::refusal(&prog).is_none();
+    let us = if jit_ok { prog.esp32_us_jit_still() } else { vm_us };
     let rating = match us {
         0..=5000 => "light",
         5001..=8000 => "medium",
@@ -135,8 +139,9 @@ pub fn run(args: Vec<String>) -> i32 {
     .map(|e| e.1)
     .collect();
     println!(
-        "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
+        "ok: {} of {MAX_OPS} steps (per frame {f}, draw {}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
         prog.steps(),
+        prog.draw_steps(),
         prog.layers(),
         if prog.layers() == 1 { "" } else { "s" },
         prog.regs(),
@@ -202,12 +207,21 @@ pub fn run(args: Vec<String>) -> i32 {
             reads.join(", ")
         }
     );
-    println!(
-        "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
-        us as f64 / 1000.0
-    );
+    if us < vm_us {
+        println!(
+            "panel: ~{:.1} ms a frame with the JIT, ~{:.1} without: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
+            us as f64 / 1000.0,
+            vm_us as f64 / 1000.0
+        );
+    } else {
+        println!(
+            "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
+            us as f64 / 1000.0
+        );
+    }
     // The panel's JIT (pixel and row stages compiled; never slower: the
-    // player keeps whichever draws faster). The limits stay the VM's.
+    // player keeps whichever draws faster): where it takes the formula,
+    // its estimate is the tier and what the limits count.
     let jit = prog.esp32_us_jit_still();
     match opendmd_psi::jit::refusal(&prog) {
         Some(why) => println!(
@@ -218,10 +232,10 @@ pub fn run(args: Vec<String>) -> i32 {
                 String::new()
             }
         ),
-        None if jit < us => println!(
-            "JIT: yes, ~{:.1} ms a frame compiled (the VM's ~{:.1} ms is what the limits count)",
+        None if jit < vm_us => println!(
+            "JIT: yes, ~{:.1} ms a frame compiled (what the tier and the limits count; ~{:.1} ms without the JIT)",
             jit as f64 / 1000.0,
-            us as f64 / 1000.0
+            vm_us as f64 / 1000.0
         ),
         None => println!("JIT: yes, but no faster by the estimate (the panel keeps whichever draws faster)"),
     }

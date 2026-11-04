@@ -273,7 +273,8 @@ A last line that is just a number is `gray` of it.
 
 **Your own palettes.** `palette sea = #001020, #0060a0, #40c0e0, #ffffff`
 on a line near the top makes a palette of your own colours (up to 32 of
-them, and up to three palettes in a formula), used like the others:
+them, and up to eight palettes in a formula, three of them read with
+`pal` or `cycle`), used like the others:
 `pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
 last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
 the third. In between you get the nearest colour, in bands — handy with a
@@ -305,10 +306,31 @@ cycle(glow, wave/6, t/8)
 one that changes with the row (`py`). Turning by the row is how the
 copper-bar skies of the 16-bit machines were made: `cycle(sunset, 0, t/6
 + py/40)` gives each row its own place in the palette. It takes `* k` and
-a coverage as `pal` does. A formula has room for three palettes in all:
-its own `palette` lines and each palette `cycle` turns by another value.
-The gallery's **Cycled plasma**, **Waterfall** and **Copper sky** are made
-this way.
+a coverage as `pal` does. `pal` and `cycle` read three palettes at most:
+your own ones they name, and one more for each palette `cycle` turns by
+another value. The gallery's **Cycled plasma**, **Waterfall** and **Copper
+sky** are made this way.
+
+**Tweening palettes.** `palette sky = tween(day, night, w)` is a palette
+that slides from `day` to `night` as `w` goes from 0 to 1, colour by
+colour: dusk and dawn without a single extra step a pixel, because the
+panel mixes the 32 colours once a frame. `w` is worked out once a frame —
+the time, the clock, a slider or a value of them, never the pixel's
+place. Tweens go inside tweens (`tween(tween(dDay, dNight, night),
+tween(cDay, cNight, night), dusk)`), and a built-in palette may be one of
+the two. Two tweens with a comma between fill the palette's halves: its
+first 16 colours from the first, the last 16 from the second, each made of
+your own palettes of 16 colours or fewer — then `pal(sky, e/32)` is colour
+`e` of the first half and `pal(sky, (16 + e)/32)` of the second, so one
+pixel's choice between two scenes is a number added, not a second palette.
+
+```
+loop 8
+palette day = #4080c0, #a0d0ff, #fff0c0
+palette night = #000010, #102040, #304060
+palette sky = tween(day, night, 0.5 + 0.5*sin(t*0.785))
+pal(sky, y)
+```
 
 **Colours by name.** `#ff8800` is a colour, the way web pages write them.
 It can be the whole last line, and you can do sums with colours there:
@@ -565,7 +587,30 @@ to 64 characters wide and 32 tall. Use the numbers for colours —
 little more on the panel than a few drawn lines: Endless road draws its car
 as 17 spans to stay at 100 frames a second.
 
-**Limits.** A formula can be 4,096 characters and 256 steps (the editor
+**Scenes.** A formula that shows one place, then another (a desert, a
+city, a tunnel), can put each place's lines in a scene:
+
+```
+loop 8
+city = frac(t/8) > 0.5
+scene towers when city * (py < 20) {
+  h = hash(floor(px/6), 3)
+  lit = (frac(px/6) > 0.3) * (frac(py/3) > 0.4) * (h > 0.3)
+}
+scene sea when 1 - city {
+  wave = sin(x*12 + t*2 + y*6)*0.5 + 0.5
+}
+rgb(lit, wave*0.3 + lit*0.5, wave)
+```
+
+The panel works a scene's lines out only while its `when` is not 0 —
+`when` may use the time, the sliders or the row (`py`), so a scene can
+skip the rows it doesn't draw on — and after the scene its names are 0
+while it is off. Only `name = …` lines go inside. The cost the editor
+shows counts the lines outside scenes and the two dearest scenes, since a
+change from one place to the next shows two at once.
+
+**Limits.** A formula can be 4,096 characters and 512 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
 biggest number of the right sign rather than an error.
@@ -658,7 +703,10 @@ Formulas are made to run on the panel's own small processor too, which
 draws every pixel 50 times a second (100 with `fps 100`, for a formula
 that is light: about 5 ms a frame or less). The editor rates each one **light**,
 **medium** or **heavy** for the panel (hover for an estimate in
-milliseconds); all the examples are light or medium.
+milliseconds); all the examples are light or medium. The panel compiles
+most formulas to its own machine code, which is faster; the rating is
+for what the panel will run, and the hover also says how long a frame
+takes without it.
 
 - Cheap: `+ - *`, the waves (`sin`, `cos`, `tri`, `saw`, `sqr`), `abs`,
   `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`, `digit`,
