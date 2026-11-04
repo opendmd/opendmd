@@ -496,3 +496,30 @@ fn pushed_frames_become_an_animation() {
         assert_eq!(px(&a, i, 64, 16), [v, v, v]);
     }
 }
+
+// --- A video's frames, drawn by the page (the site's Create Art) ----------
+
+#[test]
+fn video_frames_keep_their_size_and_delays() {
+    // 200x90 frames (any size, not the panel's), each with its own delay;
+    // the count is open until `end`, which says whether the video went on.
+    let (w, h) = (200, 90);
+    let f = |v: u8| vec![v; w * h * 3];
+    assert!(Anim::video(&f(1)[..10], w, h, 1280, 576, 50).is_none(), "a wrong size is refused");
+    let mut a = Anim::video(&f(10), w, h, 1280, 576, 50).unwrap();
+    assert!(a.video && a.orig == (1280, 576) && (a.w, a.h) == (w, h));
+    assert!(!a.push_delay(&f(20), 60));
+    assert!(!a.push_delay(&[1, 2, 3], 70), "a wrong size is not a frame");
+    assert!(!a.push_delay(&f(30), 100));
+    a.end(true);
+    assert_eq!((a.len(), a.in_file, a.cut), (3, 3, true));
+    assert_eq!(a.delays, [50, 60, 100]);
+    assert!(a.push_delay(&f(40), 50), "none after the end");
+    assert_eq!(a.len(), 3);
+    for (i, v) in [10, 20, 30].into_iter().enumerate() {
+        assert_eq!(px(&a, i, 100, 45), [v, v, v]);
+    }
+    // As many frames as the memory budget holds, no more.
+    let big = Anim::video(&vec![0; 1024 * 1024 * 3], 1024, 1024, 1024, 1024, 50).unwrap();
+    assert_eq!(big.in_file, BUDGET / (1024 * 1024 * 3));
+}

@@ -129,6 +129,52 @@ impl Studio {
         self.anim.as_mut().is_none_or(|a| a.push(rgb))
     }
 
+    /// A video's frames, drawn by the page (the site's Create Art, from a
+    /// `<video>`): `width` x `height` RGB888 from a video of `videoWidth` x
+    /// `videoHeight`, `first` now at `delayMs`, the rest by `pushFrame`,
+    /// then `end`. Throws on a frame of the wrong size.
+    #[wasm_bindgen(js_name = fromVideo)]
+    pub fn from_video(
+        first: &[u8],
+        width: usize,
+        height: usize,
+        video_width: usize,
+        video_height: usize,
+        delay_ms: u32,
+    ) -> Result<Studio, JsError> {
+        let a = Anim::video(first, width, height, video_width, video_height, delay_ms)
+            .ok_or_else(|| JsError::new("not a frame of that size"))?;
+        let raw = a.image(0);
+        let stage = pipeline::stage_frame(&raw, Fit::Pixels, false);
+        Ok(Studio {
+            raw,
+            scale: Scale { k: 1, x0: 0, y0: 0 },
+            stage,
+            frames: 0,
+            colours: 0,
+            duration_ms: 0.0,
+            anim: Some(a),
+            fit: Fit::Pixels,
+            lift: false,
+            text: None,
+            seq: Vec::new(),
+        })
+    }
+
+    /// The next of `fromVideo`'s frames, shown for `delayMs`; true once no
+    /// more fit (the memory budget).
+    #[wasm_bindgen(js_name = pushFrame)]
+    pub fn push_frame(&mut self, rgb: &[u8], delay_ms: u32) -> bool {
+        self.anim.as_mut().is_none_or(|a| a.push_delay(rgb, delay_ms))
+    }
+
+    /// No more of `fromVideo`'s frames (`cut`: the video went on).
+    pub fn end(&mut self, cut: bool) {
+        if let Some(a) = self.anim.as_mut() {
+            a.end(cut);
+        }
+    }
+
     /// Decode up to `n` more frames; true once all are in.
     pub fn decode(&mut self, n: u32) -> bool {
         self.anim.as_mut().is_none_or(|a| a.decode(n as usize))
@@ -187,7 +233,7 @@ impl Studio {
         match &self.anim {
             // Frames are kept at their native pixels already; a big picture
             // with no pixel grid is a video still or a photo: Fit.
-            Some(a) if a.scale.k == 1 && a.orig.0.max(a.orig.1) > 640 => Fit::Smooth,
+            Some(a) if a.video || (a.scale.k == 1 && a.orig.0.max(a.orig.1) > 640) => Fit::Smooth,
             _ => pipeline::auto_fit(&self.raw, self.scale),
         }
         .name()
