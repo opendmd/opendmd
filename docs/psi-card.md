@@ -120,7 +120,12 @@ under(px + floor(sin(t*2)*2), py) * v
   slow bottom layer redrawn every 4th frame.
 - `table T = 0.2, 0.9, 0.5` numbers, read as `T[k]`.
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
-- `palette P = #000, #f80, #fff` your own palette for `pal(P, v)`.
+- `palette P = #000, #f80, #fff` your own palette for `pal(P, v)` (8 in
+  all; `pal` and `cycle` read 3 of them).
+- `palette S = tween(day, night, w)` mixes two palettes once a frame (`w`
+  0..1, of `t` or sliders, not the pixel); tweens nest; `tween(a, b, w),
+  tween(c, d, v)` fills the low and high 16 entries from palettes of ≤ 16
+  colours (entry e of a half: `pal(S, e/32)`, upper `pal(S, (16 + e)/32)`).
 
 ```psi
 name "Dusk"
