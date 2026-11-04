@@ -273,7 +273,8 @@ A last line that is just a number is `gray` of it.
 
 **Your own palettes.** `palette sea = #001020, #0060a0, #40c0e0, #ffffff`
 on a line near the top makes a palette of your own colours (up to 32 of
-them, and up to three palettes in a formula), used like the others:
+them, and up to eight palettes in a formula, three of them read with
+`pal` or `cycle`), used like the others:
 `pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
 last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
 the third. In between you get the nearest colour, in bands — handy with a
@@ -305,10 +306,31 @@ cycle(glow, wave/6, t/8)
 one that changes with the row (`py`). Turning by the row is how the
 copper-bar skies of the 16-bit machines were made: `cycle(sunset, 0, t/6
 + py/40)` gives each row its own place in the palette. It takes `* k` and
-a coverage as `pal` does. A formula has room for three palettes in all:
-its own `palette` lines and each palette `cycle` turns by another value.
-The gallery's **Cycled plasma**, **Waterfall** and **Copper sky** are made
-this way.
+a coverage as `pal` does. `pal` and `cycle` read three palettes at most:
+your own ones they name, and one more for each palette `cycle` turns by
+another value. The gallery's **Cycled plasma**, **Waterfall** and **Copper
+sky** are made this way.
+
+**Tweening palettes.** `palette sky = tween(day, night, w)` is a palette
+that slides from `day` to `night` as `w` goes from 0 to 1, colour by
+colour: dusk and dawn without a single extra step a pixel, because the
+panel mixes the 32 colours once a frame. `w` is worked out once a frame —
+the time, the clock, a slider or a value of them, never the pixel's
+place. Tweens go inside tweens (`tween(tween(dDay, dNight, night),
+tween(cDay, cNight, night), dusk)`), and a built-in palette may be one of
+the two. Two tweens with a comma between fill the palette's halves: its
+first 16 colours from the first, the last 16 from the second, each made of
+your own palettes of 16 colours or fewer — then `pal(sky, e/32)` is colour
+`e` of the first half and `pal(sky, (16 + e)/32)` of the second, so one
+pixel's choice between two scenes is a number added, not a second palette.
+
+```
+loop 8
+palette day = #4080c0, #a0d0ff, #fff0c0
+palette night = #000010, #102040, #304060
+palette sky = tween(day, night, 0.5 + 0.5*sin(t*0.785))
+pal(sky, y)
+```
 
 **Colours by name.** `#ff8800` is a colour, the way web pages write them.
 It can be the whole last line, and you can do sums with colours there:
@@ -565,7 +587,7 @@ to 64 characters wide and 32 tall. Use the numbers for colours —
 little more on the panel than a few drawn lines: Endless road draws its car
 as 17 spans to stay at 100 frames a second.
 
-**Limits.** A formula can be 4,096 characters and 256 steps (the editor
+**Limits.** A formula can be 4,096 characters and 512 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
 biggest number of the right sign rather than an error.

@@ -69,6 +69,10 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
           | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
+          | "palette" NAME "=" [ NAME ] COLOUR { "," [ NAME ] COLOUR }   -- 1..32 colours (section 6)
+          | "palette" NAME "=" tween [ "," tween ]   -- mixed once a frame; two: the halves (section 6)
+tween     = "tween" "(" psrc "," psrc "," e ")"   -- e once a frame, held to 0..1
+psrc      = PALETTE | tween                    -- yours, a built-in (not gray), or another tween
 dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
           | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
           | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
@@ -244,7 +248,7 @@ example is compiled by the tests.
 | `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
-| `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
+| `table T = 1, -2, 0.5` | numbers, 256 in all (tables and sprites) | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
 | `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
 | `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(py/4) - 2&#93;)</code> |
 | `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, py % 5&#93;</code> |
@@ -256,7 +260,8 @@ example is compiled by the tests.
 | `hsv(hue, sat, val)` | colour: hue in turns, 0 to 1 each | <code class="psi-ex">hsv(x, 1, y)</code> |
 | `rgb(r, g, b)` | red, green, blue: 0 to 1 | <code class="psi-ex">rgb(x, y, 1 - x)</code> |
 | `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray | <code class="psi-ex">pal(fire, y)</code> |
-| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `palette sky = tween(day, night, w)` | a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours | <code class="psi-ex">loop 8; palette day = &#35;48c, &#35;adf, &#35;ffc; palette night = &#35;002, &#35;124, &#35;346; palette sky = tween(day, night, 0.5 + 0.5&#42;sin(t&#42;0.785)); pal(sky, y)</code> |
 | `palette sea = deep #024, foam #fff` | a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many) | <code class="psi-ex">palette sea = deep &#35;024, mid &#35;08c, foam &#35;fff; pal(sea, sea.mid + sea.step&#42;(y &gt; 0.5))</code> |
 | `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k | <code class="psi-ex">pal(fire, y) &#42; x</code> |
 | `cycle(fire, v, s)` | palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame | <code class="psi-ex">loop 4; cycle(fire, x, t/4)</code> |
@@ -281,11 +286,13 @@ example is compiled by the tests.
 | limit | at most |
 | --- | --- |
 | a formula's text, comments included | 16,384 characters |
-| steps (per frame, per row, per pixel, and one per layer) | 512 |
+| steps (per frame, draw, per row, per pixel, and one per layer) | 512 |
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 241 |
 | nesting of brackets, operators and function calls | 48 |
-| `table`, `sprite` and `palette` numbers, in all | 256 |
+| `table` and `sprite` numbers, in all | 256 |
+| palettes of your own (of colours) | 8 |
+| palettes `pal` and `cycle` read | 3 |
 | loop turns a frame in `draw { }` | 2,048 |
 | lines and dots a frame | 2,048 |
 | line steps a frame | 16,384 |
@@ -322,7 +329,7 @@ The `psi` command checks and formats formulas on a computer
 
 ```text
 $ psi check storm-front.psi --out -
-ok: 41 of 256 steps (per frame 11, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 128 values
+ok: 41 of 512 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)

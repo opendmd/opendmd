@@ -4524,7 +4524,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     enc = page.evaluate("(s) => import('./js/psishow.js').then(m => m.fpath({src: s, a: 0.5}))", src)
     psb = enc[len("@formula?psb="):-len("&a=0.5")] if enc.startswith("@formula?psb=") and enc.endswith("&a=0.5") else ""
     raw = base64.urlsafe_b64decode(psb + "=" * (-len(psb) % 4)) if psb else b""
-    check(raw[:4] == b"PSB\x01" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
+    check(raw[:4] == b"PSB\x02" and raw[6:6 + raw[5]].decode() == "Ü", f"formulas panel: the formula's path as the device reads it ({enc[:60]})")
     clear_toasts(page)
     page.click("#psi-show")
     t = last_toast(page, "ok")
@@ -4767,7 +4767,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
           and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
           f"looks: Set as the panel’s look saves it on the panel and names its file ('{t}'; {c5['look_formula']!r})")
     compiled = urllib.request.urlopen(base + "/formulas/matrix-glow.psb", timeout=30).read() if saved else b""
-    check(compiled[:4] == b"PSB\x01", "looks: the saved Formula's compiled file is beside it")
+    check(compiled[:4] == b"PSB\x02", "looks: the saved Formula's compiled file is beside it")
     # Off: the line goes.
     page.click("#psi-set-btn")
     page.wait_for_selector("#psi-set #psi-set-look", timeout=10000)
