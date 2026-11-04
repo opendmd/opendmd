@@ -170,11 +170,14 @@ fn spec_names() -> String {
     let pals: Vec<&str> = builtins::PALETTES.iter().map(|e| e.0).collect();
     let fonts: Vec<&str> = builtins::FONTS.iter().map(|e| e.0).collect();
     let blends: Vec<&str> = builtins::BLENDS.iter().map(|e| e.0).collect();
+    let keys: Vec<&str> = opendmd_psi::world::KEYS.iter().map(|k| k.name).collect();
     let mut s = format!("<!-- psi-builtins: names ({MD_HOW}) -->\n");
     s.push_str("| kind | names |\n| --- | --- |\n");
     for (kind, names) in [
         ("values", code_list(&values)),
         ("values about the middle", code_list(&builtins::LATER)),
+        ("built-in inputs (the panel's own values)", code_list(&keys)),
+        ("their events", code_list(&["since(KEY)", "was(KEY)"])),
         ("constants", code_list(&consts)),
         ("functions (how many values)", funcs.join(", ")),
         (
@@ -264,6 +267,11 @@ fn spec_limits() -> String {
             n(p::MAX_DEPTH),
         ),
         ("`table` and `sprite` numbers, in all", n(p::MAX_TABLE)),
+        ("numbers in one `table`", n(p::MAX_TABLE_LEN)),
+        (
+            "built-in inputs read (each `since` and `was` one more)",
+            n(p::MAX_INS),
+        ),
         ("palettes of your own (of colours)", n(p::MAX_PALETTES)),
         ("palettes `pal` and `cycle` read", n(p::USER_PALETTES)),
         ("loop turns a frame in `draw { }`", n(p::TURNS as usize)),
@@ -376,6 +384,10 @@ fn the_guide_and_the_models_name_every_built_in() {
         for n in names.filter(|&n| n != "fract") {
             assert!(words.contains(n), "{doc} never names `{n}`");
         }
+        // The built-in inputs, dotted names whole, and their events.
+        for k in opendmd_psi::world::KEYS.iter().map(|k| k.name).chain(["since(", "was("]) {
+            assert!(text.contains(k), "{doc} never names `{k}`");
+        }
     }
 }
 
@@ -465,6 +477,9 @@ fn every_call_in_the_cheat_sheet_is_a_built_in() {
                     || head == "ink"
                     // `tween(P, Q, w)`: a palette line's (a special form)
                     || head == "tween"
+                    // `since(KEY)`, `was(KEY)`: a built-in input's events
+                    || head == "since"
+                    || head == "was"
                     // a function the row itself defines (`fn ring(cx, r) = …`)
                     || label.starts_with(&format!("fn {head}("));
                 assert!(

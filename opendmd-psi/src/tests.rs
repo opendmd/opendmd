@@ -495,7 +495,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 7_600);
+    assert!(core::mem::size_of::<crate::ProgramOf<[i32; 0]>>() <= 6_500);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -571,7 +571,11 @@ fn sizes() {
     // draw stage's canvas).
     // (768 steps and the two markers, 241 values, the palette store: 3,388
     // B before P0, 6,156 at 512 steps.)
-    assert_eq!(core::mem::size_of::<Program>(), 7436);
+    // (ABI 3: the store sized by the formula, after the fixed part: a
+    // whole `Program`'s 1,024 numbers, a player's `Prog` its own.)
+    assert_eq!(core::mem::size_of::<Program>(), 10_536);
+    assert_eq!(core::mem::size_of::<crate::ProgramOf<[i32; 0]>>(), 6_440);
+    assert_eq!(crate::Prog::layout(256).size(), 6_440 + 1_024);
     // The ink plane and the paint plane's pointer (the plane itself, 4 KB
     // more, only for a formula that paints).
     assert_eq!(
@@ -1471,8 +1475,8 @@ fn draw_error_messages() {
     let big: alloc::vec::Vec<alloc::string::String> =
         (0..257).map(|k| alloc::format!("{k}")).collect();
     let e = compile(&alloc::format!("table T = {}\ngray(T[0])", big.join(", "))).unwrap_err();
-    if !e.msg.contains("up to 256 in all") {
-        bad.push(alloc::format!("E707 257 numbers: {}", e.msg));
+    if !e.msg.contains("a table holds 256 numbers at most") {
+        bad.push(alloc::format!("E974 257 numbers: {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
@@ -1523,9 +1527,11 @@ fn draw_values_run_as_rarely_as_they_can() {
 fn tables_read_floor_k() {
     let c = compile("table T = 1, 0.5, 0.25\ngray(T[1.9] + T[3] + T[-0.5])").unwrap();
     assert_eq!(c.listing(), compile("gray(0.5)").unwrap().listing());
-    let p = compile("table T = 0.1, 0.2, 0.3, 0.4\ntable U = 0.2, 0.3\nrgb(T[px % 5], U[py % 3], T[second % 5])").unwrap();
-    // Two tables, the second inside the first: 4 numbers held.
-    assert_eq!(&p.tables[..5], &[q(0.1), q(0.2), q(0.3), q(0.4), 0]);
+    let p = compile("table T = 0.1, 0.2, 0.3, 0.4\ntable U = 0.2, 0.3\ntable V = 0.1, 0.2\nrgb(T[px % 5], U[py % 3] + V[3], T[second % 5])").unwrap();
+    // Three tables: the second at the next place in fours (a step names
+    // a table's place in fours), the third inside the first: 6 numbers
+    // held.
+    assert_eq!(&p.tables[..7], &[q(0.1), q(0.2), q(0.3), q(0.4), q(0.2), q(0.3), 0]);
     let mut out = [0u8; W * H * 3];
     let inputs = Inputs {
         second: 3,
@@ -2327,12 +2333,17 @@ fn sprite_error_messages() {
         .enumerate()
         .map(|(k, c)| alloc::format!("{c} {k}"))
         .collect();
-    let e = compile(&alloc::format!(
-        "table T = 1, 2\nsprite s {{\nkey {}\n{big}}}\ngray(s[0, 0] + T[0])",
-        keys.join(", ")
-    ))
-    .unwrap_err();
-    if !e.msg.contains("tables and sprites hold 256 numbers in all") {
+    // Four of them (each 273 numbers, a row apart so none is stored once
+    // for another) pass the 1,024.
+    let mut src = alloc::string::String::from("table T = 1, 2\n");
+    let rows: alloc::vec::Vec<&str> = big.lines().collect();
+    for s in 0..4 {
+        let mine: alloc::string::String = (0..32).map(|k| alloc::format!("{}\n", rows[(k + s) % 32])).collect();
+        src += &alloc::format!("sprite s{s} {{\nkey {}\n{mine}}}\n", keys.join(", "));
+    }
+    src += "gray(s0[0, 0] + s1[0, 0] + s2[0, 0] + s3[0, 0] + T[0])";
+    let e = compile(&src).unwrap_err();
+    if !e.msg.contains("tables and sprites hold 1024 numbers in all") {
         bad.push(alloc::format!("E917: {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -2489,12 +2500,15 @@ fn palette_error_messages() {
     ))
     .is_ok());
     let e = compile(&alloc::format!(
-        "table T = {}\ntable U = -{}\ngray(T[x] + U[x])",
+        "table T = {}\ntable U = -{}\ntable V = 1{}\ntable X = 2{}\ntable Y = 3{}\ngray(T[x] + U[x] + V[x] + X[x] + Y[x])",
         nums.join(", "),
-        nums[..60].join(", -")
+        nums[..60].join(", -"),
+        ", 9".repeat(255),
+        ", 8".repeat(255),
+        ", 7".repeat(255),
     ))
     .unwrap_err();
-    if !e.msg.contains("256") {
+    if !e.msg.contains("1024") {
         bad.push(alloc::format!("E924 (table after): {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
@@ -2583,7 +2597,7 @@ fn cycle_error_messages() {
 
 // --- `layer rate N { }`: slow layers (console-lessons Phase B) ------------------
 
-fn frame_of(p: &Program, i: &Inputs) -> alloc::vec::Vec<u8> {
+fn frame_of(p: &Prog, i: &Inputs) -> alloc::vec::Vec<u8> {
     let mut out = alloc::vec![0u8; W * H * 3];
     render_rows::<128>(p, &mut Scratch::new(), i, &OWN, None, u32::MAX, &mut out);
     out
@@ -3445,4 +3459,147 @@ fn fused_compares_are_exact() {
             }
         }
     }
+}
+
+// --- built-in inputs and the store (psb ABI 3) -----------------------------------
+
+/// A built-in reads its default without a live value (what previews
+/// show), a live value when the world has one, held to its range; a frame
+/// value (no step per pixel); the slots it takes are the player's.
+#[test]
+fn built_in_inputs_read_their_defaults_and_live_values() {
+    let p = compile("gray(daylight * x + replay.game * y)").unwrap();
+    assert_eq!(p.ins.n, 2);
+    assert!(p.listing().contains("daylight") && p.listing().contains("replay.game"));
+    let at = |w: crate::World| frame_of(&p, &Inputs { world: w, ..Default::default() });
+    // Defaults: daylight 1, replay.game 0.
+    let d = at(crate::World::default());
+    assert_eq!(d, frame_of(&compile("gray(1 * x + 0 * y)").unwrap(), &Inputs::default()));
+    let mut w = crate::World::default();
+    w.value[world::id::DAYLIGHT as usize] = q(0.25);
+    w.value[world::id::REPLAY_GAME as usize] = q(0.5);
+    assert_eq!(at(w), frame_of(&compile("gray(0.25 * x + 0.5 * y)").unwrap(), &Inputs::default()));
+    // Out of range: held to it.
+    w.value[world::id::DAYLIGHT as usize] = q(7.0);
+    w.value[world::id::REPLAY_GAME as usize] = q(-3.0);
+    assert_eq!(at(w), d);
+    // Every key reads, by its name; one set as the formula's own is its.
+    for k in &world::KEYS {
+        let p = compile(&alloc::format!("gray({})", k.name)).unwrap_or_else(|e| panic!("{}: {}", k.name, e.msg));
+        assert_eq!(p.builtins().next().map(|(key, what)| (key.id, what)), Some((k.id, world::VALUE)));
+    }
+    let own = compile("night = 0.5\ngray(night)").unwrap();
+    assert_eq!(own.ins.n, 0);
+    // A palette or a group name of the formula's own wins over a group.
+    assert!(compile("palette sun = alt #f80, #fff\npal(sun, sun.alt)").unwrap().ins.n == 0);
+    // `inputs()`: bit 7, and a `since` moves with time (bit 3).
+    assert_eq!(p.inputs() & 0x88, 0x80);
+    assert_eq!(compile("gray(since(night))").unwrap().inputs() & 0x88, 0x88);
+}
+
+/// `since(KEY)` and `was(KEY)`: frame values the player fills, 32767 and
+/// the default when the key never changed; `World::change` is a change.
+#[test]
+fn since_and_was_are_frame_values() {
+    let p = compile("gray(min(since(replay.game), 1) * x + was(replay.game) * y)").unwrap();
+    let mut w = crate::World::default();
+    let at = |w: crate::World| frame_of(&p, &Inputs { world: w, ..Default::default() });
+    assert_eq!(at(w), frame_of(&compile("gray(x)").unwrap(), &Inputs::default()));
+    w.change(world::id::REPLAY_GAME, q(0.5));
+    assert_eq!(w.since[world::id::REPLAY_GAME as usize], 0);
+    w.change(world::id::REPLAY_GAME, q(0.75));
+    w.since[world::id::REPLAY_GAME as usize] = q(0.5);
+    assert_eq!(at(w), frame_of(&compile("gray(0.5 * x + 0.5 * y)").unwrap(), &Inputs::default()));
+    // The same value again is no change.
+    w.change(world::id::REPLAY_GAME, q(0.75));
+    assert_eq!(w.since[world::id::REPLAY_GAME as usize], q(0.5));
+    // One slot each: value, since and was of a key are three reads.
+    let p = compile("gray(sun.alt + since(sun.alt) + was(sun.alt))").unwrap();
+    assert_eq!(p.ins.n, 3);
+    assert_eq!(compile("gray(since(daylight) + since(daylight))").unwrap().ins.n, 1);
+}
+
+/// The inputs travel in the psb (flag bit 2) and the player checks them:
+/// a known key, each once, in order, in slots of their own no step writes.
+#[test]
+fn input_slots_survive_the_psb_and_the_verifier() {
+    let src = "loop forever\nv = noise(t*0.1, y, 0)\ngray(v * daylight + seed * was(night) + since(replay.game) * 0)";
+    let full = compile(src).unwrap();
+    let b = crate::build(src).unwrap();
+    let mut p = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
+    assert_eq!(p.ins, full.ins);
+    assert!(p.ins.base as usize > crate::program::S_FIRST_FREE as usize);
+    let mut bad = |f: &dyn Fn(&mut Prog)| {
+        let mut q = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
+        // (Its portable form: the verifier's.)
+        crate::psb::load_portable(&b, crate::psb::Which::Play, &mut q).unwrap();
+        f(&mut q);
+        assert!(crate::psb::verify(&q).is_err());
+    };
+    bad(&|q| q.ins.keys[0] = 63);
+    bad(&|q| q.ins.keys[0] |= 3 << 6);
+    bad(&|q| q.ins.base = 3);
+    bad(&|q| q.ins.n = 0);
+    bad(&|q| q.ins.keys.swap(0, 1));
+    bad(&|q| {
+        let s = q.ins.base;
+        let k = (0..q.len()).find(|&k| crate::program::code::writes_scalar(q.ops[k].code) && !crate::program::is_lane(q.ops[k].d)).unwrap();
+        q.ops[k].d = s;
+    });
+    // Frames are the same through the psb.
+    let mut w = crate::World::default();
+    w.change(world::id::NIGHT, ONE);
+    let inputs = Inputs { world: w, seed: q(0.3), ..golden::inputs(1000) };
+    assert_eq!(frame_of(&p, &inputs), frame_of(&full, &inputs));
+    p.clear();
+}
+
+/// The player's program holds the store its formula needs, a power of two
+/// (a formula with no tables 4 numbers: ~1 KB less than before ABI 3), and
+/// draws what the whole program draws; a store too small is refused.
+#[test]
+fn a_prog_holds_the_store_its_formula_needs() {
+    for (name, src) in crate::psb::fuzz::sources() {
+        let b = crate::build(&src).unwrap();
+        let p = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let full = compile(&src).unwrap();
+        assert_eq!(p.store_len(), store_words(full.used()), "{name}");
+        assert!(*p == *full, "{name}");
+        let inputs = golden::inputs(1500);
+        assert!(frame_of(&p, &inputs) == frame_of(&full, &inputs), "{name}");
+    }
+    assert_eq!(store_words(0), 4);
+    assert_eq!(store_words(5), 8);
+    assert_eq!(store_words(1024), 1024);
+    let b = crate::build("table T = 0.1, 0.2, 0.3, 0.4, 0.5\ngray(T[x*5])").unwrap();
+    let mut small = Prog::try_boxed(4).unwrap();
+    assert_eq!(
+        crate::psb::load_into(&b, crate::psb::Which::Play, &mut small),
+        Err(crate::psb::SMALL_STORE)
+    );
+    assert_eq!(crate::psb::store_needed(&b, crate::psb::Which::Play), Ok(5));
+    assert!(core::mem::size_of_val(&*small) < core::mem::size_of::<Program>() - 4000);
+}
+
+/// The store past 256 numbers: tables and sprites placed after 900
+/// numbers read right per frame, per row and per pixel, through the psb's
+/// smaller store too.
+#[test]
+fn the_store_reaches_past_256_numbers() {
+    let filler: alloc::vec::Vec<alloc::string::String> = (0..250).map(|k| alloc::format!("{}", k % 7)).collect();
+    let mut src = alloc::string::String::new();
+    for k in 0..3 {
+        src += &alloc::format!("table F{k} = {}, {k}.5\n", filler.join(", "));
+    }
+    src += "table T = 0.1, 0.5, 0.9\nsprite s {\nkey . 0, X 1, Y 0.5\nXY.\n.YX\n}\n";
+    src += "gray(T[px % 3] * 0.5 + s[px % 3, py % 2] * 0.5 + F2[250] * 0.01 + F0[second] * 0.01 + F1[py % 3] * 0.01)";
+    let p = compile(&src).unwrap();
+    assert!(p.used() > 760, "{}", p.used());
+    let want = "gray(pick(px % 3, 0.1, 0.5, 0.9) * 0.5 + pick(px % 3 + (py % 2)*3, 1, 0.5, 0, 0, 0.5, 1) * 0.5 + 2.5 * 0.01 + 2 * 0.01 + pick(py % 3, 0, 1, 2) * 0.01)";
+    let inputs = golden::inputs(0);
+    assert_eq!(frame_of(&p, &inputs), frame_of(&compile(want).unwrap(), &inputs));
+    let b = crate::build(&src).unwrap();
+    let q = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
+    assert_eq!(q.store_len(), 1024);
+    assert_eq!(frame_of(&q, &inputs), frame_of(&p, &inputs));
 }

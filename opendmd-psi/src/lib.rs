@@ -67,6 +67,7 @@ mod still;
 pub mod syntax;
 mod tables;
 mod vm;
+pub mod world;
 
 #[cfg(feature = "compiler")]
 pub use compile::{
@@ -79,8 +80,10 @@ pub use compile::{
 pub use draw::{Ink, Plane, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta, BLENDS};
 pub use program::{
-    Op, Program, SceneFrame, H, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE, REGS, USER_PALETTES, W,
+    empty, Op, Prog, Program, ProgramOf, SceneFrame, H, MAX_INS, MAX_OPS, MAX_STEPS, MAX_PALETTES, MAX_SCALARS, MAX_TABLE,
+    MAX_TABLE_LEN, MIN_STORE, REGS, USER_PALETTES, W, store_words,
 };
+pub use world::World;
 pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
 /// (psi-probe's references for `fixed::sqrt` and `len`.)
@@ -194,7 +197,7 @@ pub fn build_with(src: &str, cmp: bool) -> Result<alloc::vec::Vec<u8>, Error> {
         }
         _ => None,
     };
-    Ok(psb::encode(name, &play, look.as_deref()))
+    Ok(psb::encode(name, &play, look.as_deref().map(|l| -> &Prog { l })))
 }
 
 #[cfg(feature = "compiler")]
@@ -210,7 +213,7 @@ pub fn compile_plain(src: &str) -> Result<Program, Error> {
 
 /// [`render_with`] at the default lane width, [`LANES`].
 pub fn render(
-    prog: &Program,
+    prog: &Prog,
     scratch: &mut Scratch<LANES>,
     inputs: &Inputs,
     tables: &Tables,
@@ -274,6 +277,7 @@ pub mod golden {
             c: 3 << 14,
             tw: Inputs::wide_ms(ms as u64),
             seed: SEED,
+            world: Default::default(),
         }
     }
 

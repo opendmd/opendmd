@@ -44,6 +44,16 @@ pub struct Meta {
 }
 
 impl Meta {
+    /// None declared (`Default`'s, as a constant).
+    pub(crate) const NONE: Meta = Meta {
+        kind: [NONE; 3],
+        look: 0,
+        amount: 0,
+        lo: [0; 3],
+        hi: [0; 3],
+        def: [0; 3],
+    };
+
     /// Slot `k`'s control (0 `a`, 1 `b`, 2 `c`), `None` when undeclared (a
     /// formula that reads `a` without a `control` line: a slider 0 to 1,
     /// default 0, as before the declarations).

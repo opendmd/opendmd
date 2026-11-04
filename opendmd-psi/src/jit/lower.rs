@@ -185,13 +185,13 @@ fn cold_slot(r: Reg) -> i32 {
 /// (with the values laid out before the still marker): the driver runs
 /// those as lanes, the VM's way.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn main_start(prog: &Program) -> usize {
+pub fn main_start(prog: &Prog) -> usize {
     prog.kernel_start()
 }
 
 /// Lower `prog`'s pixel stage, or say why the VM must draw it.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
+pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
     let (pe, start) = (prog.len(), main_start(prog));
     if start >= pe {
         return Err("no pixel steps");
@@ -318,14 +318,14 @@ const SC: Reg = 3;
 
 /// Lower `prog`'s row steps, or say why the VM runs them.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub fn lower_rows(prog: &Program) -> Result<LoweredRows, Refusal> {
+pub fn lower_rows(prog: &Prog) -> Result<LoweredRows, Refusal> {
     lower_rows_from(prog, Vec::new())
 }
 
 /// [`lower_rows`] with `words` (the pixel kernel's) first: the two share
 /// one `ctx`.
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refusal> {
+fn lower_rows_from(prog: &Prog, words: Vec<Word>) -> Result<LoweredRows, Refusal> {
     let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
     if re <= de {
         return Err("no row steps");
@@ -390,7 +390,7 @@ enum Arg {
 }
 
 struct Emitter<'a> {
-    prog: &'a Program,
+    prog: &'a Prog,
     items: &'a [Item],
     c: Code,
     words: Vec<Word>,
@@ -485,7 +485,7 @@ impl<'a> Emitter<'a> {
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn new(
-        prog: &'a Program,
+        prog: &'a Prog,
         items: &'a [Item],
         t: usize,
         hsv_call: bool,
@@ -560,7 +560,7 @@ impl<'a> Emitter<'a> {
 
     /// An emitter with no items, values or hoists (the row stage's).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn bare(prog: &'a Program) -> Emitter<'a> {
+    fn bare(prog: &'a Prog) -> Emitter<'a> {
         Emitter {
             prog,
             items: &[],
@@ -626,12 +626,14 @@ impl<'a> Emitter<'a> {
                     Arg::Word(Word::Tabs),
                     Arg::Imm(i32::from(op.b)),
                     Arg::Imm(i32::from(op.c)),
+                    Arg::Imm(self.prog.tables.len() as i32),
                 ],
                 SPR => alloc::vec![
                     Arg::Val(op.a),
                     Arg::Val(op.b),
                     Arg::Word(Word::Tabs),
                     Arg::Imm(i32::from(op.c)),
+                    Arg::Imm(self.prog.tables.len() as i32),
                 ],
                 NOISE_O..=NOISE_O_LAST => alloc::vec![
                     Arg::Val(op.a),
@@ -1157,6 +1159,7 @@ impl<'a> Emitter<'a> {
                     Arg::Word(Word::Tabs),
                     Arg::Imm(i32::from(op.b)),
                     Arg::Imm(i32::from(op.c)),
+                    Arg::Imm(self.prog.tables.len() as i32),
                 ];
                 return self.call(k, hid::TAB, &args, Some(op.d));
             }
@@ -1175,6 +1178,7 @@ impl<'a> Emitter<'a> {
                     Arg::Val(op.b),
                     Arg::Word(Word::Tabs),
                     Arg::Imm(i32::from(op.c)),
+                    Arg::Imm(self.prog.tables.len() as i32),
                 ];
                 return self.call(k, hid::SPR, &args, Some(op.d));
             }

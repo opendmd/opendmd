@@ -158,6 +158,34 @@ computer.
 | `angle` | the angle about the middle in turns, −½..½, 0 to the right, ¼ down (clockwise): `atan2(cy, cx)` | pixel |
 | `ink` | what the `draw { }` block put at this pixel, 0..1 (section 10) | pixel |
 
+**The panel's own values (built-in inputs).** Read by name with no line
+of their own, once a frame (hoisted, no per-pixel cost), each held to its
+range; with no live value (no location set, the clock not set, RePlayOS
+off, and always in previews and the gallery) each reads its default:
+
+| name | range | default | meaning |
+|---|---|---|---|
+| `daylight` | 0..1 | 1 | `smoothstep` of the sun from −6° to +6°: 0 night, 1 day |
+| `sun.alt` | −0.25..0.25 turns | 0.1 | the sun's height: 0 the horizon, 0.25 overhead |
+| `moon.phase` | 0..1 turns | 0.5 | 0 new, 0.5 full (needs only the clock) |
+| `season` | 0..1 turns | 0.5 | 0 midwinter, 0.5 midsummer, for the panel's hemisphere |
+| `yearday` | 0..365 whole | 172 | the day of the year, 0 on 1 January (needs only the clock) |
+| `night` | 0 or 1 | 0 | night mode has the panel dimmed |
+| `bright` | 0..1 | 1 | the panel's brightness over its maximum |
+| `replay.playing` | 0 or 1 | 0 | RePlayOS plays a game |
+| `replay.platform` | 0..127 whole | 0 | the platform's place in the panel's platform list, from 1 |
+| `replay.game` | 0..1 | 0 | a hash of the game's name: the same each time it plays |
+
+`since(KEY)` is the seconds since `KEY` last changed (0..32767; 32767 when
+it never has); `was(KEY)` is its value before that change (its default when
+it never changed). Both are frame values. `KEY` is written as above, dotted
+names whole. A name like `daylight` may be set as your own (then it is
+yours); a dotted one can't. A formula reads 24 of these at most (each
+`since` and `was` one more). "The panel knows the sun" is `since(sun.alt) <
+32767` (the device moves `sun.alt` every minute or so once it has a
+location): a formula can follow the real sun when it can and its own cycle
+otherwise.
+
 `cx cy r angle` are exactly the formulas after their colons: the same
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
 are 0. **Any built-in value or function name may be set as your own**
@@ -693,10 +721,11 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
-| `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
+| `table` numbers | 256 a table; 1,024 in all (sprites and texts share them; each table and sprite starts at a multiple of 4) | a table holds 256 numbers at most / tables and sprites hold 1024 numbers in all |
+| built-in inputs read | 24 (each `since` and `was` one more) | built-in inputs at most |
 | `palette` (your own) | 1 to 32 colours; 8 palettes of colours (a store of their own; one in a tween's half takes half a place); `pal` and `cycle` read 3 (with `cycle`'s turns) | a palette is 1 to 32 colours / 8 palettes of its own at most / holds 3 palettes that `pal` and `cycle` read |
 | `tween` | its weight once a frame; 4 working palettes at once; a half's palettes 16 colours at most | mixes a palette once a frame / palettes worked out at once / a palette's half is a tween of palettes of your own |
-| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables and sprites hold 256 numbers in all |
+| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 1,024 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables and sprites hold 1024 numbers in all |
 | `draw { }` blocks | one | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 

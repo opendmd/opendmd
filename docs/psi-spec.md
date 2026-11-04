@@ -150,6 +150,15 @@ to it.
 - **Time.** `t` is seconds into the loop (`loop N`, 8 when left out), always
   a whole number of frames (`fps 25`, `50` or `100`; 50 when left out); with
   `loop forever`, seconds since the formula started, growing without end.
+- **The panel's own values** (`daylight`, `sun.alt`, `moon.phase`,
+  `season`, `yearday`, `night`, `bright`, `replay.playing`,
+  `replay.platform`, `replay.game`) are read by name and are the same for
+  every pixel of a frame. Each has a range it is held to and a default it
+  reads when the panel has no value for it (no location set, the clock not
+  set, RePlayOS not followed); previews and the gallery always draw at the
+  defaults. `since(KEY)` is the seconds since one last changed (32767 when
+  it never has) and `was(KEY)` its value before that change: a formula
+  stays a function of its inputs, with no memory of its own.
 
 ## Every name
 
@@ -158,6 +167,8 @@ to it.
 | --- | --- |
 | values | `x`, `y`, `px`, `py`, `i`, `t`, `hour`, `minute`, `second`, `a`, `b`, `c`, `ur`, `ug`, `ub`, `ul`, `ink`, `seed` |
 | values about the middle | `cx`, `cy`, `r`, `angle` |
+| built-in inputs (the panel's own values) | `daylight`, `sun.alt`, `moon.phase`, `season`, `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`, `replay.game` |
+| their events | `since(KEY)`, `was(KEY)` |
 | constants | `w`, `h` |
 | functions (how many values) | `sin` (1), `cos` (1), `tri` (1), `saw` (1), `sqr` (1), `abs` (1), `floor` (1), `frac` (1), `fract` (1), `sqrt` (1), `min` (2), `max` (2), `step` (2), `hash` (2), `len` (2), `atan2` (2), `clamp` (3), `mix` (3), `smoothstep` (3), `noise` (3), `select` (3), `bit` (2), `digit(…)` (3 values and a font), `glyph(…)` (3 values and a font), `pick(k, a, b, …)` |
 | colours (how many values, before the coverage) | `rgb` (3), `hsv` (3), `pal` (2), `gray` (1), `cycle` (3) |
@@ -197,6 +208,11 @@ example is compiled by the tests.
 | `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 | <code class="psi-ex">rgb(ub, ug, ur)</code> |
 | `ul` | how bright that is | <code class="psi-ex">pal(fire, ul)</code> |
 | `under(x, y)` | the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel's | <code class="psi-ex">loop 2; under(floor(px/4)&#42;4 + 2 + floor(sin(t/2)&#42;2), floor(py/4)&#42;4 + 2)</code> |
+| `daylight` | how light it is outside where the panel is, 0 at night to 1 by day (twilight between); the panel's location in Settings, else 1 | <code class="psi-ex">mix(&#35;081030, &#35;70b0ff, daylight) &#42; (1 - y&#42;0.5)</code> |
+| `sun.alt` | the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location | <code class="psi-ex">s = 16 - sun.alt&#42;120; mix(&#35;102040, &#35;ffd060, len(px - 64, py - s) &lt; 4)</code> |
+| `moon.phase, season, yearday` | the moon (0 new, 0.5 full), the time of year (0 midwinter, 0.5 midsummer) and the day of the year (0 on 1 January) | <code class="psi-ex">hsv(season + 0.3, 0.6, (abs(px - 64) &lt; 6) &#42; (abs(py - 16) &lt; 6) &#42; step(x, moon.phase + 0.4))</code> |
+| `night, bright` | 1 while night mode dims the panel; the panel's brightness, 0 to 1 | <code class="psi-ex">gray(mix(1, 0.3, night) &#42; y)</code> |
+| `replay.playing, replay.platform, replay.game` | RePlayOS: 1 while a game plays; its platform as a number (0 none); a number 0 to 1 for the game, the same each time it plays | <code class="psi-ex">hsv(replay.game + x&#42;0.2, replay.playing, 0.3 + 0.7&#42;y)</code> |
 
 #### Functions and statements
 
@@ -215,6 +231,8 @@ example is compiled by the tests.
 | `hash(a, b)` | random 0 to 1 | <code class="psi-ex">gray(hash(px, py) &gt; 0.9)</code> |
 | `select(c, a, b)` | a when c is true (not 0), else b; or c ? a : b | <code class="psi-ex">gray(select(x &lt; 0.5, y, 1 - y))</code> |
 | `pick(k, a, b, …)` | a at k = 0, b at 1, …; else 0 | <code class="psi-ex">pal(rainbow, pick(floor(x&#42;4), 0, 0.3, 0.6, 0.9))</code> |
+| `since(replay.game)` | seconds since a built-in input last changed (32767 when it never has): a flash is max(0, 1 - since(replay.game)) | <code class="psi-ex">k = max(0, 1 - since(replay.game)); hsv(replay.game, 1 - k, max(k, y))</code> |
+| `was(replay.game)` | a built-in input's value before its last change: mix(was(k), k, min(1, since(k))) fades from the old to the new | <code class="psi-ex">hsv(mix(was(replay.game), replay.game, min(1, since(replay.game))), 1, y)</code> |
 | `digit(n, col, row)` | the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font | <code class="psi-ex">gray(digit(second % 10, floor(px/4) - 14, floor(py/4)))</code> |
 | `glyph('A', col, row)` | the same for a character | <code class="psi-ex">gray(glyph('A', floor(px/4) - 14, floor(py/4)))</code> |
 | `bit(n, i)` | bit i of a whole number: 1 or 0 | <code class="psi-ex">gray(bit(px, floor(py/4)))</code> |
@@ -249,7 +267,7 @@ example is compiled by the tests.
 | `if c { … } else { … }` | inside draw: only when c is not 0 | <code class="psi-ex">draw { for k &lt; 16 { if k % 2 == 0 { rectfill(k&#42;8, 4, k&#42;8 + 6, 27, &#35;f80) } else { circfill(k&#42;8 + 3, 16, 3, &#35;0ff) } } }</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
 | `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
-| `table T = 1, -2, 0.5` | numbers, 256 in all (tables and sprites) | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
+| `table T = 1, -2, 0.5` | numbers, 256 a table and 1024 in all (tables and sprites) | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
 | `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
 | `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(py/4) - 2&#93;)</code> |
 | `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, py % 5&#93;</code> |
@@ -292,7 +310,9 @@ example is compiled by the tests.
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 241 |
 | nesting of brackets, operators and function calls | 48 |
-| `table` and `sprite` numbers, in all | 256 |
+| `table` and `sprite` numbers, in all | 1,024 |
+| numbers in one `table` | 256 |
+| built-in inputs read (each `since` and `was` one more) | 24 |
 | palettes of your own (of colours) | 8 |
 | palettes `pal` and `cycle` read | 3 |
 | loop turns a frame in `draw { }` | 2,048 |
@@ -1254,7 +1274,7 @@ gray(ink)
 
 <h4 id="E707">E707 · a table that is not numbers</h4>
 
-> a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`
+> a table holds numbers only, as in `table T = 1, -2, 0.5`
 
 Write only numbers in the table.
 
@@ -1360,7 +1380,7 @@ Split the text into two `print`s.
 
 <h4 id="E725">E725 · no room for a text</h4>
 
-> this text doesn't fit: tables, sprites and texts hold 256 numbers in all
+> this text doesn't fit: tables, sprites and texts hold 1024 numbers in all
 
 Use shorter texts, or fewer tables and sprites.
 
@@ -1648,7 +1668,7 @@ Use fewer palettes (a palette in a tween's half takes half of one).
 
 <h4 id="E924">E924 · too many numbers in tables and sprites</h4>
 
-> tables and sprites hold 256 numbers in all — this would make …
+> tables and sprites hold 1024 numbers in all — this would make …
 
 Make the tables and sprites smaller.
 
@@ -1952,5 +1972,29 @@ Join scenes that share a condition, or pick inside one.
 > a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out
 
 Work the value out outside the scene, or leave `rate` out.
+
+<h4 id="E974">E974 · a table too long</h4>
+
+> a table holds 256 numbers at most — this one has …: split it in two
+
+Split the table in two and read the second half from the other.
+
+<h4 id="E975">E975 · a built-in input that doesn't exist</h4>
+
+> `….…` is not a built-in input: `…` has …
+
+Use one of the names listed, as `sun.alt` or `replay.game`.
+
+<h4 id="E976">E976 · <code>since</code> or <code>was</code> of something that isn't a built-in input</h4>
+
+> `…(…)` takes a built-in input's name, as in `…(replay.game)`: …
+
+Give it one of the built-in inputs listed (`since` and `was` follow the panel's own values, not the formula's).
+
+<h4 id="E977">E977 · too many built-in inputs</h4>
+
+> a formula can read … built-in inputs at most (each `since` and `was` one more) — this one reads …
+
+Read fewer built-in inputs, or fewer `since` and `was` of them.
 
 <!-- psi-errors end -->
