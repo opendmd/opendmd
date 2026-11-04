@@ -1,6 +1,7 @@
 # netdiag.c: the emulator's walk of lwIP's held frames (emu-census builds
-# only call it; the linker drops it from the rest). Hence lwip below.
-idf_component_register(SRCS "hub75_shim.cpp" "netdiag.c"
+# only call it; the linker drops it from the rest); netstat.c: `/api/status`
+# `net`'s counts and the abort of a dead connection at close. Hence lwip below.
+idf_component_register(SRCS "hub75_shim.cpp" "netdiag.c" "netstat.c"
                        INCLUDE_DIRS "include"
                        REQUIRES ESP32-HUB75-MatrixPanel-I2S-DMA esp_timer lwip)
 

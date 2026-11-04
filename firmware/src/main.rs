@@ -66,6 +66,7 @@ mod logring;
 mod misslog;
 mod membank;
 mod net_worker;
+mod netstat;
 mod nvs_config;
 mod ota;
 mod pace;
@@ -1950,6 +1951,7 @@ fn main() -> Result<()> {
                         _ => false,
                     };
                     log_started(playing.ordinal, &playing.path, served);
+                    misslog::switched();
                     probe::switch_frame(tick_us, eng.started_ahead());
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
@@ -2068,6 +2070,8 @@ fn main() -> Result<()> {
                             open_path_us: pre_split.1 + open_split.1,
                             open_builder_us: pre_builder + builder_wait,
                             open_catalog_us: pre_catalog + catalog_us,
+                            net: misslog::net_now(),
+                            heap: free_heap(),
                         });
                         // A frame a person could see late while the builder
                         // drips, or at the GIF change that stopped it: hold
