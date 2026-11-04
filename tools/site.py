@@ -229,8 +229,10 @@ PSI_HEAD = '<script type="module" src="psiref.js"></script>'
 # The home page's panel plays a bundled Formula live once the page has
 # loaded (opendmd-web/share/ref/home.js, on psiled.js, the reference's
 # drawing; both copied to the root): the demo's Psi again, so CSP["home"].
+# Its hero plays a little show (hero.js, imported by home.js once it runs):
+# Formulas, the site's own GIFs and a look, with the panel's transitions.
 HOME_HEAD = '<script type="module" src="home.js"></script>'
-ROOT_SCRIPTS = ("psiled.js", "home.js")  # from opendmd-web/share/ref/
+ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js")  # from opendmd-web/share/ref/
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
 # on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
 GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="module" src="ftsort.js"></script>'
@@ -586,12 +588,17 @@ def tiles(art: dict) -> str:
 # The home page (site/pages/home.html).
 HOME = "site/pages/home.html"
 HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
-HOME_FORMULA = re.compile(r'data-formula="formulas/src/([\w.-]+\.psi)"')
+HOME_FORMULA = re.compile(r'data-(?:formula|look)="formulas/src/([\w.-]+\.psi)"')
+# The hero show's transitions (opendmd-core compositor.rs `Kind::name`), as
+# data-in="kind:ms" (ms 20..2000, as the panel clamps them).
+HOME_TRANSITION = re.compile(r'data-in="([\w-]+):(\d+)"')
+TRANSITIONS = ("none", "dissolve", "wipe_left", "wipe_right", "wipe_down", "wipe_up", "blinds", "push", "fade")
 
 
 def home(art: dict, assets: set[str]) -> str:
     """The home page's body: its {{led:NAME}} (`{{led:NAME:}}`: no alt
-    text) and {{tiles}} filled in, its comment dropped, its pictures noted."""
+    text), {{art:NAME}} (that animation's GIF, its address) and {{tiles}}
+    filled in, its comment dropped, its pictures noted."""
     items = {i["name"]: i for i in art["items"]}
     text = re.sub(r"<!--.*?-->\s*", "", (ROOT / HOME).read_text(encoding="utf-8"), count=1, flags=re.S)
 
@@ -601,8 +608,13 @@ def home(art: dict, assets: set[str]) -> str:
             return tiles(art)
         if name not in items:
             raise SystemExit(f"{HOME}: no animation {name!r} in the site's art")
+        if what == "art":
+            return html.escape("art/" + items[name]["gif"])
         return led("", items[name], alt=None if alt is None else "")
-    text = re.sub(r"\{\{(tiles|led):?([\w-]*)(:)?\}\}", fill, text)
+    text = re.sub(r"\{\{(tiles|led|art):?([\w-]*)(:)?\}\}", fill, text)
+    for m in HOME_TRANSITION.finditer(text):
+        if m.group(1) not in TRANSITIONS or not 20 <= int(m.group(2)) <= 2000:
+            raise SystemExit(f"{HOME}: data-in={m.group(0)[8:]} is not one of the panel's transitions ({', '.join(TRANSITIONS)}) over 20..2000 ms")
     # The live panel's Formula: an example, bundled (the caption says it
     # comes with OpenDMD).
     for m in HOME_FORMULA.finditer(text):

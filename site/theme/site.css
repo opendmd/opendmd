@@ -128,6 +128,10 @@ background:linear-gradient(135deg,rgba(247,165,49,.13),rgba(255,79,139,.06) 60%,
 .ticks li{position:relative;padding-left:24px;margin:4px 0}
 .ticks li::before{content:"";position:absolute;left:4px;top:.45em;width:6px;height:10px;border:solid var(--green);border-width:0 2px 2px 0;transform:rotate(45deg)}
 .hero-panel .cap{margin:10px 2px 0;font-size:13px;color:var(--mut);text-align:center}
+/* The hero's show (hero.js): a click pauses it; captions change, so two lines are kept on a phone */
+.hero-panel .bezel[data-live]{position:relative;cursor:pointer}
+.hero-panel .bezel[data-live]:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.hero-panel .bezel[data-paused]::after{content:"";position:absolute;top:16px;right:16px;width:4px;height:12px;border:solid rgba(255,255,255,.55);border-width:0 4px;pointer-events:none}
 .band{margin:72px 0 0}
 .band>p{max-width:var(--text)}
 .intro{color:var(--mut);margin:0 0 18px;max-width:var(--text)}
@@ -243,6 +247,7 @@ main.cheat td{padding:3px 8px}
   body{font-size:16px}
   .banner{font-size:13px;padding:6px 12px}
   .hero-panel{order:-1}
+  .hero-panel .cap{min-height:2lh}
   .top .bar{padding:8px 16px}
   .brand .led{width:105px}
   .topnav{display:none}

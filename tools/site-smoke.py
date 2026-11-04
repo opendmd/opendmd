@@ -23,6 +23,9 @@ build URL serves. There the art index must also carry
   under the page's _headers policy; and none of the words users never see
   (cache, ODM, bucket, manifest, pack, bundle) on the home, install, guide
   and gallery pages;
+- the home page's hero show (hero.js): live on its first item, on to the
+  second with its caption, no layout shift, no console errors; stopped
+  off-screen and by a click; the still kept when less motion is asked for;
 - /f/ (a Formula's page, the web app's editor): opened as the Psi
   reference leaves one (`#open`): the name as text (markup stays text), the
   code highlighted, the preview lit and moving, a slider, live edits, none
@@ -1349,6 +1352,60 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
             page.context.close()
 
 
+def hero_show(browser, base: str, errors: list[str]) -> None:
+    """The home page's hero plays its little show (hero.js): it goes live,
+    moves on to the next item with its caption and no layout shift and no
+    console error; it stops off-screen and on a click; with less motion
+    asked for, the still stays."""
+    hero = "document.querySelector('.hero-panel .bezel')"
+    frames = f"+{hero}.querySelector('canvas')?.dataset.frames || 0"
+    for size in SIZES:
+        page = new_page(browser, size, errors)
+        console: list[str] = []
+        page.on("console", lambda m: m.type in ("error", "warning") and console.append(m.text[:160]))
+        page.on("pageerror", lambda e: console.append(str(e)[:160]))
+        page.goto(base + "/")
+        wait_js(page, f"{hero}.dataset.live === 'on' && {hero}.dataset.item === '0' && ({frames}) > 5", timeout=20000)
+        items = page.eval_on_selector_all("#hero-show li", "els => els.map(e => e.textContent.trim())")
+        box = "(r => [r.top, r.height])(document.querySelector('.hero-panel').getBoundingClientRect())"
+        h1 = "document.querySelector('.hero h1').getBoundingClientRect().top"
+        before = page.evaluate(f"[{box}, {h1}]")
+        check(len(items) >= 4 and page.inner_text(".hero-panel .cap").strip() == items[0],
+              f"home ({size}): the hero's show is live on its first item ({len(items)} items)")
+        wait_js(page, f"{hero}.dataset.item === '1'", timeout=20000)
+        after = page.evaluate(f"[{box}, {h1}]")
+        check(page.inner_text(".hero-panel .cap").strip() == items[1],
+              f"home ({size}): the show moves on to its second item, the caption with it")
+        check(before == after, f"home ({size}): no layout shift as the show moves on {before} {after}")
+        # Off-screen it stops; back on screen it goes on.
+        page.evaluate("scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(300)
+        n = page.evaluate(frames)
+        page.wait_for_timeout(500)
+        check(page.evaluate(frames) == n, f"home ({size}): the show stops off-screen")
+        page.evaluate("scrollTo(0, 0)")
+        wait_js(page, f"({frames}) > {n}", timeout=5000)
+        # A click pauses it, another plays it.
+        page.click(".hero-panel .bezel")
+        page.wait_for_timeout(200)
+        n = page.evaluate(frames)
+        page.wait_for_timeout(500)
+        check(page.evaluate(f"{hero}.hasAttribute('data-paused')") and page.evaluate(frames) == n,
+              f"home ({size}): a click pauses the show")
+        page.click(".hero-panel .bezel")
+        wait_js(page, f"({frames}) > {n}", timeout=5000)
+        check(not console, f"home ({size}): no console errors from the show {console[:2]}")
+        page.context.close()
+    # Less motion: the still stays, nothing plays.
+    page = new_page(browser, "laptop", errors)
+    page.emulate_media(reduced_motion="reduce")
+    page.goto(base + "/")
+    page.wait_for_timeout(2500)
+    check(page.evaluate(f"!{hero}.querySelector('canvas') && !!{hero}.querySelector('picture.led img')"),
+          "home: with less motion asked for, the hero keeps its still")
+    page.context.close()
+
+
 def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     """The key pages, /f/ (an example, as the gallery's Open gives it) and
     the gallery, at both sizes in both themes: the whole page
@@ -1649,6 +1706,8 @@ def main() -> int:
         browser = p.chromium.launch(headless=True)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
         structure(browser, base, a.site, errors)
+        print("the home page's hero show")
+        hero_show(browser, base, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
         print("Create Art (/create/)")
