@@ -23,7 +23,8 @@ probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw c
        Time gate with the heap short that is not played once Time gate goes (or, shorter
        still, not refused with the playlist going on), or a card Formula sent over a card
        Formula (Neon city, Wormhole run) that is not played; prints EMU_PROBE_OK
-       and the correctness lines.
+       and the correctness lines. A paint-probe image (`make emu-image-paint`) needs only its own
+       `paint: N cases, 0 differ`.
 rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's build to finish
        (`fat index: built N records ...`, its heap floor and stack), with the panel playing: N > 0,
        stale false, no transition cut during it, no `fat index:` warning; prints EMU_RIG_OK, the
@@ -126,8 +127,9 @@ SETTINGS = re.compile(r"psi-probe: settings file: a save cut between its renames
 NAMES = re.compile(r"psi-probe: names file: (\d+) folders match their listings, (\d+) differ")
 READAHEAD = re.compile(r"psi-probe: read-ahead: (\d+) B read a block a frame, (the same as FatFs's|DIFFERS from FatFs's); (\d+) served from the ring|psi-probe: read-ahead: NOT CHECKED")
 RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
+PAINT = re.compile(r"psi-probe: paint: (\d+) cases, (\d+) differ")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ahead|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file|read-ahead|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -194,6 +196,7 @@ def main():
     readahead = None
     names_file = None
     settings_file = None
+    paint = None
     differ_bad = []
     lines = []
     built = None
@@ -307,6 +310,9 @@ def main():
                 m = READAHEAD.search(line)
                 if m:
                     readahead = (line, m[2], int(m[3]) if m[3] else 0)
+                m = PAINT.search(line)
+                if m:
+                    paint = (line, int(m[1]), int(m[2]))
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -390,6 +396,20 @@ def main():
             die(f"no `psi-probe: done` within {seconds} emulated s / {wall} s wall")
         if differ_bad:
             die("differ with a non-zero count:\n" + "\n".join(differ_bad))
+        # The paint probe's image (`make emu-image-paint`): its own summary
+        # line (each case's kernel frames against the VM's), nothing else.
+        if "psi-probe: done: paint" in done_at:
+            if not paint:
+                die("the paint rows' summary line is missing")
+            if paint[1] == 0 or paint[2] != 0:
+                die(f"paint rows: {paint[0]}")
+            print("--- correctness lines:")
+            for l in lines:
+                if PROBE_KEYS.search(l):
+                    print(l[:300])
+            print(f"paint: {paint[1]} cases, {paint[2]} differ")
+            print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+            return
         if not golden:
             die("the golden-frames result line is missing")
         if golden[1] == 0 or golden[2] != 0:

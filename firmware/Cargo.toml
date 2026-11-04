@@ -85,6 +85,11 @@ bench = []
 # not with `probe`, whose frame-timing histograms are ~12.5 KB of .bss (the
 # start heap lang-probe-a lacked, 2026-10-28).
 psi-probe = ["psi", "opendmd-core/psi-stats", "opendmd-core/psi-compiler"]
+# The paint probe (src/paint_probe.rs): the paint steps, the overlay and
+# `under(x, y)` timed against the cost model, once at boot (`psi-probe:
+# paint:` lines, /filelist-paint-probe.txt). No compiler (build.rs compiles
+# its cases): it fits the 4mb layout. `make emu-image-paint`.
+paint-probe = ["psi", "opendmd-core/psi-stats"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
