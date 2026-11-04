@@ -69,6 +69,13 @@ pub enum Word {
     /// The picture under the formula at the row's first pixel (a row of
     /// zeros without one: `ur ug ub ul` read 0).
     Under,
+    /// The whole picture under the formula, at its first pixel (`UAT`:
+    /// `under(x, y)` reads anywhere in it); a row of zeros without one.
+    Picture,
+    /// What a `UAT` index is masked with: all ones over a picture, 0
+    /// without one (then every read is the zeros' first bytes: 0, as the
+    /// VM's `under_at` gives).
+    PictureMask,
     /// A layer's coverage, scalar slot `k`'s value clamped to 0..1 (as
     /// `fixed::cover` clamps it).
     Cover(u8),
@@ -407,7 +414,7 @@ fn supported(c: u8) -> Result<(), Refusal> {
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
         OUT_RGB | OUT_HSV | OUT_PAL | OUT_GRAY => Ok(()),
-        U_R..=U_L | INK | INKN => Ok(()),
+        U_R..=U_L | INK | INKN | UAT => Ok(()),
         c if (OUT_LAYER..OUT_LAYER + 4 * crate::fixed::BLENDS as u8).contains(&c) => Ok(()),
         STILL | COLUMN => Err("an unexpected layout"),
         _ => Err("a step the kernel has no template for"),
@@ -879,6 +886,10 @@ impl<'a> Emitter<'a> {
                 match op.code {
                     code::INK | code::INKN => note(Word::Ink),
                     code::U_R..=code::U_L => note(Word::Under),
+                    code::UAT => {
+                        note(Word::Picture);
+                        note(Word::PictureMask);
+                    }
                     _ => {}
                 }
                 for _ in 0..chans {
@@ -1232,6 +1243,7 @@ impl<'a> Emitter<'a> {
                 return self.call(k, hid::SPR, &args, Some(op.d));
             }
             INK | U_R..=U_L => return self.read_pixel(k, op.code),
+            UAT => return self.under_at(k, op),
             INKN => return self.ink_levels(k, op.a),
             DIGIT..=DIGIT_B => {
                 let args = [
@@ -1491,6 +1503,53 @@ impl<'a> Emitter<'a> {
             }
         }
         let c = &mut self.c;
+        c.slli(d, t, 8);
+        c.add(d, d, t);
+        c.srli(t, t, 7);
+        c.add(d, d, t);
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `under(x, y)`'s channel `op.c`: the picture's byte at the pixel
+    /// nearest (x, y) held to the panel, as 0..1 — `vm::under_at`'s
+    /// `(fixed::add(v, ½) >> 16).clamp(..)` for each (the saturating add as
+    /// `max(v + ½, v)`: where `v + ½` wraps, `v` is within ½ of the top and
+    /// clamps the same), the index masked by [`Word::PictureMask`] (no
+    /// picture: 0), then `fixed::byte`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn under_at(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let a = self.val(op.a)?;
+        let b = self.val(op.b)?;
+        let (id, d) = self.dst(k)?;
+        if a == d || b == d {
+            return Err("a step reads its own register");
+        }
+        let t = self.tmp()?;
+        let u = self.tmp()?;
+        let c = &mut self.c;
+        for (r, v, top) in [(t, a, W as i32 - 1), (d, b, H as i32 - 1)] {
+            c.addmi(r, v, 0x4000);
+            c.addmi(r, r, 0x4000);
+            c.max(r, r, v);
+            c.srai(r, r, 16);
+            c.movi(u, 0);
+            c.max(r, r, u);
+            c.movi(u, top);
+            c.min(r, r, u);
+        }
+        self.release(a);
+        self.release(b);
+        let c = &mut self.c;
+        c.slli(d, d, 7);
+        c.add(t, t, d);
+        c.addx2(t, t, t);
+        let m = self.word_in(u, Word::PictureMask);
+        self.c.and(t, t, m);
+        let p = self.word_in(u, Word::Picture);
+        let c = &mut self.c;
+        c.add(t, t, p);
+        c.l8ui(t, t, i32::from(op.c.min(2)));
         c.slli(d, t, 8);
         c.add(d, d, t);
         c.srli(t, t, 7);
@@ -2380,6 +2439,8 @@ fn word_rank(w: Word) -> u32 {
         Word::Const(c) => 0x500 | (c as u32 >> 12 & 0xff) | (c as u32 & 0xfff) << 8,
         Word::Ink => 0x600,
         Word::Under => 0x601,
+        Word::Picture => 0x602,
+        Word::PictureMask => 0x603,
         Word::Cover(k) => 0x700 | u32::from(k),
         _ => 0xfff,
     }

@@ -18,8 +18,8 @@ fps 100
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
--- with its stripe's, lane line, kerb); then what is drawn, the later over
--- the earlier: the rain (under everything else drawn), the car, the neon
+-- with its stripe's, lane line, kerb); then what is painted: the rain,
+-- the car (its own colours are the sprite's), the neon
 palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   #6a1658, #a02870, farTower #3a1450, nearTower #08060e, window #90e8ff,
   pavement #120c1c, #1a1224, asphalt #0e0a16, #130e1c, wet #2a0e30,
@@ -37,10 +37,19 @@ table across = 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
 -- Powers of two: a tower's windows are this many random bits
 table twos = 1, 2, 4, 8, 16, 32, 64
 
--- The car from behind: 11 spans, each `from + (to + (row + colour)/16)/64`
--- with colour its place in the palette (car, glass, red, the cyan glow)
-table car = 10.335678, 8.365952, 9.350372, 5.41185, 2.457748, 3.4422,
-  2.456772, 2.455795, 3.111069, 24.439194, 1.469696
+-- The car from behind: dark, a glass window, a red light bar, a cyan
+-- glow under it
+sprite car {
+  key . 0, C #303850, G #5878a8, R #ff2030, X #20f0ff
+  .........CCCCCCCCCCCC.........
+  .......CGGGGGGGGGGGGGGC.......
+  ....CCCCCCCCCCCCCCCCCCCCCC....
+  .CRRRRRRRRRRRRRRRRRRRRRRRRRRC.
+  .CCCCCCCCCCCCCCCCCCCCCCCCCCCC.
+  .CCCCCCCCCCCCCCCCCCCCCCCCCCCC.
+  ..CCCCC................CCCCC..
+  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+}
 
 -- How far we have driven, in bends (from somewhere else each play);
 -- the road's heading here, and where its middle would be if it ran
@@ -69,9 +78,25 @@ holo = floor(t*3)
 shower = clamp(noise(t/20 + seed*50, 4, 0)*2.5 - .6, .3, 1)
 
 draw {
-  -- What is drawn is its colour's place in the palette, so the later
-  -- colours win where things cross. (Small things are dots: a line costs
-  -- a dozen pixels' walk however short it is.)
+  -- Painted, back to front: the rain under everything else, then the
+  -- car, then the neon and the holo screen. (Each colour is its place in
+  -- the palette.)
+
+  -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
+  -- one slant, spread evenly across and each at its own height, falling
+  -- down and to the right; as many as the shower brings
+  for k < 21 {
+    if k/21 < shower {
+      dropX = frac(k/21 + t*.49)*150 - 12
+      dropY = 31 - frac(hash(k, 3) - t*4)*44
+      pset(dropX, dropY, pal(city, city.rain))
+      pset(dropX + .5, dropY + 1, pal(city, city.rain))
+      pset(dropX + 1, dropY + 2, pal(city, city.rain))
+    }
+  }
+
+  -- The car
+  spr(car, 1 - carLeft, 24)
 
   -- Neon on the near row's towers, worked out as the pixels do (tower
   -- `id` has the columns where floor((px + nearShift)/8) is `id`, the
@@ -85,7 +110,7 @@ draw {
     left = floor(id*8 + towerLeft)
     top = floor(hash(id%22, seed)*13 + 21.9999)
     edge = id%2 or top > 31
-    line(left + edge*6, 31 - (top), left + 6, 31 - (edge ? 20 : top), city.violet + (id + turn%4*(id%3 < 1))%4*city.step)
+    line(left + edge*6, 31 - top, left + 6, edge ? 11 : 31 - top, pal(city, city.violet + (id + turn%4*(id%3 < 1))%4*city.step))
   }
 
   -- One tower carries a holo screen across its face, under its roof
@@ -93,27 +118,12 @@ draw {
   -- now and then one dropping out
   screenX = floor((156.9999 - nearShift) % 176) - 20
   screenTop = floor(hash(17, seed)*13 + 19.9999)
-  for k < 4 {
-    line(screenX + 1, 31 - (screenTop - k), screenX + 5, 31 - (screenTop - k), (screenTop > 23) * (hash(k, holo) > .2) * (city.violet + (holo - k)%5*city.step))
-  }
-
-  -- The car, span by span
-  for k < 11 {
-    span = frac(car[k])*64
-    rowInk = frac(span)*16
-    line(floor(car[k]) - carLeft, 31 - (floor(rowInk)), floor(span) - carLeft, 31 - (floor(rowInk)), frac(rowInk))
-  }
-
-  -- Rain, as 16-bit consoles drew it: 21 short streaks (three dots) at
-  -- one slant, spread evenly across and each at its own height, falling
-  -- down and to the right; as many as the shower brings
-  for k < 21 {
-    dropX = frac(k/21 + t*.49)*150 - 12
-    dropY = frac(hash(k, 3) - t*4) * 44
-    rainInk = (k/21 < shower) * city.rain
-    dot(dropX, 31 - (dropY), rainInk)
-    dot(dropX + .5, 31 - (dropY - 1), rainInk)
-    dot(dropX + 1, 31 - (dropY - 2), rainInk)
+  if screenTop > 23 {
+    for k < 4 {
+      if hash(k, holo) > .2 {
+        line(screenX + 1, 31 - screenTop + k, screenX + 5, 31 - screenTop + k, pal(city, city.violet + (holo - k)%5*city.step))
+      }
+    }
   }
 }
 
@@ -145,11 +155,11 @@ windows = bit(42, nearAt%8)*floor(hash(floor(nearAt), seed)*twos[nearHeight/2])
 -- there; above it, the towers: 0 sky, 1 the far row, 2 the near row, 3 a
 -- lit window. Each number's colour is the street's below the horizon
 -- (the asphalt wet near the horizon, where it shows the haze) and the
--- sky's above it; what was drawn goes over it (the road's cyan lines
--- are the window's colour, low in the palette, so the car covers them).
+-- sky's above it; what is painted goes over it (the road's cyan lines
+-- are the window's colour).
 towers = (skyRow < farTop) + (skyRow < nearTop) + bit(windows, windowRow)
-pal(city, max(pick(across[px*scale + start] + towers,
-      below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
-      below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
-      below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
-      below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt), ink))
+pal(city, pick(across[px*scale + start] + towers,
+    below ? city.pavement + stripe*city.step : (33 - (31 - py)) / 2 * city.step,
+    below ? ((31 - py) > 12 - shower*6 ? city.wet : city.asphalt) + stripe*city.step : city.farTower,
+    below ? (stripe ? city.lane : city.asphalt) : city.nearTower,
+    below ? (stripe ? city.kerb : city.window) : city.window, stripe ? city.window : city.asphalt))

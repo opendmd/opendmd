@@ -2309,6 +2309,18 @@ pub mod stats {
         };
         STILL1.store(still1, Relaxed);
     }
+
+    /// The paint plane laid over a whole frame (`out`, W × H × 3 bytes) as
+    /// the VM and the JIT's driver lay it, a row at a time: psi-probe times
+    /// the overlay alone with it. Nothing for a formula that doesn't paint
+    /// or a canvas without the plane.
+    pub fn paint_rows(prog: &Program, ink: &Ink, out: &mut [u8]) {
+        if let Some(p) = crate::draw::paint_of(prog, Some(ink)) {
+            for (row, span) in out.chunks_exact_mut(W * 3).enumerate().take(H) {
+                crate::draw::paint_row(prog, p, row, span);
+            }
+        }
+    }
 }
 
 /// `under(x', y')`'s channel `op.c` for a lane: the picture under the

@@ -678,7 +678,11 @@ milliseconds); all the examples are light or medium.
 - A function costs what its lines cost, once for each call: called at
   two places, about twice.
 - Drawing costs by the line, not by the pixel: a few hundred lines a frame
-  is light. A loop's lines count as often as it turns.
+  is light. A loop's lines count as often as it turns. Painted shapes are
+  the exception: a filled box, circle or triangle costs by the pixels it
+  covers (a triangle across the whole panel is ~3 ms), so paint the small
+  things and leave big areas of colour to the colour line. Laying the
+  paint over the picture costs about a fifth of a millisecond a frame.
 - Anything worked out from the pixel's column and the time only
   (`sin(x*3 + t/8)`) is worked out once a frame for each column, not for
   every pixel: almost free.
