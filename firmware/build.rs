@@ -231,18 +231,20 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
     // golden::SEED, 0.3) fused and not.
     let road = std::fs::read_to_string("../opendmd-web/experiments/road-v2/road-v2.psi").expect("road-v2.psi");
     println!("cargo:rerun-if-changed=../opendmd-web/experiments/road-v2/road-v2.psi");
-    let base = "loop 8\n";
-    let sel4 = format!("{base}gray(frac((x < y)*x + (y < frac(x*3))*y + (x*2 < y)*0.5 + (y <= x*0.7)*0.25))\n");
-    let cnt2 = format!("{base}gray(frac(((x >= y) + (x >= y*0.5))*0.2 + ((y >= x*0.5) + (y >= x*0.3))*0.2))\n");
+    // (Each reads `t` through `u`: no still cache takes them, so a pair
+    // differs only by its fused steps.)
+    let base = "loop 8\nu = frac(x + t/8)\n";
+    let sel4 = format!("{base}gray(frac((u < y)*u + (y < frac(u*3))*y + (u*2 < y)*0.5 + (y <= u*0.7)*0.25))\n");
+    let cnt2 = format!("{base}gray(frac(((u >= y) + (u >= y*0.5))*0.2 + ((y >= u*0.5) + (y >= u*0.3))*0.2))\n");
     let three = |when: &str| {
         let mut f = String::from(base);
         for k in 1..=3 {
             match when {
-                "" => f += &format!("b{k}a = sin(x*{k}.7 + y)*0.3\nb{k}b = sin(y*{k}.3 + x)*0.3\n"),
-                w => f += &format!("scene s{k} when {w} {{\n  b{k}a = sin(x*{k}.7 + y)*0.3\n  b{k}b = sin(y*{k}.3 + x)*0.3\n}}\n"),
+                "" => f += &format!("b{k}a = sin(u*{k}.7 + y)*0.3\nb{k}b = sin(y*{k}.3 + u)*0.3\n"),
+                w => f += &format!("scene s{k} when {w} {{\n  b{k}a = sin(u*{k}.7 + y)*0.3\n  b{k}b = sin(y*{k}.3 + u)*0.3\n}}\n"),
             }
         }
-        f + "gray(frac(x*0.1 + b1a + b1b + b2a + b2b + b3a + b3b))\n"
+        f + "gray(frac(u*0.1 + b1a + b1b + b2a + b2b + b3a + b3b))\n"
     };
     let mut cmp: Vec<(String, u32, String, bool)> = vec![
         ("sel4 fused".into(), 0, sel4.clone(), true),
@@ -253,7 +255,7 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
         ("guards on".into(), 0, three("t >= 0"), true),
         ("guards off".into(), 0, three("t < 0"), true),
         ("guards rows".into(), 0, three("py < 16"), true),
-        ("guards base".into(), 0, format!("{base}gray(frac(x*0.1))\n"), true),
+        ("guards base".into(), 0, format!("{base}gray(frac(u*0.1))\n"), true),
     ];
     for (place, ms) in [("exit", 2_056_049u32), ("mouth", 733_049), ("forest-desert", 544_049), ("desert", 2_177_549)] {
         cmp.push((format!("road-v2 {place} fused"), ms, road.clone(), true));
