@@ -245,8 +245,10 @@ rgb(0.5, #f00, 1)
 --- 1:32769 too long: a formula can be 32768 characters at most
 
 === E402
-gray(<<260; + ;sin(x * {k})>>)
---- 1:1 this formula is too long for the panel: 779 steps (per frame 0, draw 0, per row 0, per pixel 779), the limit is 768
+v = x
+<<260;\n;v = sin(v*1.01 + x)>>
+gray(v)
+--- 262:1 this formula is too long for the panel: 781 steps (per frame 0, draw 0, per row 0, per pixel 781), the limit is 768
 
 === E403
 <<14;\n;w{k} = sin(x * {k})>>
