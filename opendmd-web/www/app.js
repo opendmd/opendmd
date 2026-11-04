@@ -5,7 +5,7 @@
 // first opened; `#studio`, Create Art's old address, still leads there). Each view is a module with
 // `mount(el) -> {show, hide}`, mounted on first visit.
 
-import init from './pkg/opendmd_web.js';
+import { init } from './js/web.js';
 import { app } from './js/state.js';
 import { detect, demoCard, LocalSource } from './js/source.js';
 import { $, h, clear, emit, toast } from './js/util.js';

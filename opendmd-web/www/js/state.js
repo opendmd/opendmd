@@ -7,7 +7,7 @@
 // exists, previews fetch it first and fall back to the GIF, and nothing here
 // ever shows its path.
 
-import * as wasm from '../pkg/opendmd_web.js';
+import wasm from './web.js';
 import { emit, toast, base } from './util.js';
 
 // Root manifests with a name people know them by. Anything else shows its

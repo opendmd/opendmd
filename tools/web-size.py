@@ -383,7 +383,7 @@ FSUBMIT = {"js/fsubmit.js"}
 # 14 (Add to my panel), 13 (short links), 12.
 SHARE_GZ_BUDGET = 8 * 1024
 # What the formula page loads from the demo (its own files aside).
-SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
+SHARE_USES = ("pkg/", "pkg-psi/", "js/wasm.js", "js/web.js", "js/build.js", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
               "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
 # Create Art's page on the site (`--share`'s create/: its page, script and
 # style; never packed): a line of its own, <= 5 KB (2026-11-02, branch
@@ -391,7 +391,7 @@ SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js"
 # js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
 # printed as the page's first-visit total for information.
 CREATE_GZ_BUDGET = 5 * 1024
-CREATE_USES = ("pkg/", "pkg-art/", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
+CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js/state.js", "js/util.js", "js/preview.js", "js/artmod.js", "js/studio.js", "js/find.js", "js/importgif.js",
                "js/gifs.js", "js/details.js", "js/prepare.js", "app.css", "studio.css", "find.css", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}

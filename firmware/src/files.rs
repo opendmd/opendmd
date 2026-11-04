@@ -157,29 +157,22 @@ pub fn mime_for(path: &str) -> &'static str {
     }
 }
 
-/// Cache policy by path.
-///
-/// `wasm-pack` puts no hash in its filenames, so `pkg/` cannot be immutable
-/// however much we would like it to be: an hour is the compromise between a
-/// fast reload and a stale wasm module after `make www-push`. The HTML and JS
-/// that reference it are revalidated every time.
+/// Cache policy for a card file, by path. (The web app is not on the card:
+/// `www::serve` sends every one of its files `no-cache` with an ETag, see
+/// [`crate::www::not_modified`].)
 pub fn cache_for(path: &str) -> &'static str {
     // A manifest is replaced in place by the install path; never let a
     // browser keep an old copy for an hour.
     if is_root_manifest_name(path) {
         return "no-cache";
     }
-    if path.contains("/pkg/") {
-        "max-age=3600"
-    } else {
-        match Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-        {
-            "html" | "htm" | "js" | "mjs" | "json" | "meta" | "txt" => "no-cache",
-            _ => "max-age=3600",
-        }
+    match Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+    {
+        "html" | "htm" | "js" | "mjs" | "json" | "meta" | "txt" => "no-cache",
+        _ => "max-age=3600",
     }
 }
 

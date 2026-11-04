@@ -25,6 +25,7 @@ opendmd-web/www/pkg-art/
 opendmd-web/www/pkg-psi/
 opendmd-web/www/**/*.gz
 opendmd-web/www/version.txt
+opendmd-web/www/js/build.js
 opendmd-web/www/licenses.txt
 # Written by make web from opendmd-web/formulas/*.psi (the -- bundle ones: tools/formulas-json.py).
 opendmd-web/www/formulas.json

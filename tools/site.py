@@ -390,6 +390,14 @@ CSP = {
 CACHE_DEFAULT = "public, max-age=600"   # what GitHub Pages sent (the art index's ETag behaviour)
 CACHE_SHORT = "public, max-age=60"      # install/release.json, beta.json: the update check
 CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release files
+# The web app's files and every page script that imports them (the demo, /f/,
+# /create/, the live panels on psiled.js): revalidated on every load
+# (Cloudflare's assets answer If-None-Match with a 304), never kept ten
+# minutes, so a deploy is never half old: an earlier js/build.js beside a
+# later app.js would ask for an earlier wasm module (js/wasm.js).
+CACHE_APP = "no-cache"
+APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/dev/psi/*", "/panel.js",
+             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
 CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
 
@@ -404,6 +412,8 @@ def headers_file() -> str:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
     for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
+    for path in APP_PATHS:
+        rules.append((path, ["! Cache-Control", f"Cache-Control: {CACHE_APP}"]))
     for name in ("release.json", "beta.json"):
         rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))
     # opendmd-<version>-…: named by the release (a published tag is never

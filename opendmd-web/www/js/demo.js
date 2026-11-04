@@ -209,7 +209,7 @@ document.head.append(style);
 let driven = '', lookOn = '', lookErr = '', psi = null;
 const dropKey = () => { try { localStorage.removeItem('odmd.apiKey'); } catch { /* none */ } };
 let live = true;
-const pkg = () => (psi ??= import('../pkg-psi/opendmd_psi_web.js?demo').then(async (m) => ({ ...m, mem: (await m.default()).memory })));
+const pkg = () => (psi ??= import('./wasm.js').then((W) => W.load('pkg-psi', 'demo')).then(([m, x]) => ({ ...m, mem: x.memory })));
 function apply() {
   if (!live) return;
   const r = evaluate(), c = S.c, b = Math.min(r.b ?? c.brightness, c.max_brightness);

@@ -304,6 +304,14 @@ game" finds Super Metroid in the real SNES index and loads its pictures
 from GitHub; nothing saved) and one write: save a set
 named `smoke` and delete it. No preparing, no filelist or config changes.
 
+www update pass (also alone: --www-update-only): the app is served as two
+builds whose wasm modules and glue are marked (tools/www-build-id.py
+writes each one's js/build.js); the first with 1.0.0-beta.13's headers
+(the wasm kept an hour), then the files replaced by the second and a plain
+reload: every wasm module, and its glue, must be the second build's (the
+beta.13 -> beta.14 failure: an old Psi compiler run by a new app). Also:
+a wasm file goes out no-cache with an ETag, and 304 for it.
+
 Screenshots of every view at 1280x800 and 390x844 go to target/web-smoke/.
 Any console error or page error fails the run.
 """
@@ -572,7 +580,7 @@ def canvas_sum(page: Page, sel: str) -> int:
 # The Now preview, hooked at Preview.load: the canvas just before the new
 # file goes in (the old picture), and the new file's path and bytes.
 HOOK_LOAD = """async () => {
-    const m = await import('./pkg/opendmd_web.js');
+    const m = (await import('./js/web.js')).default;  // the app's instance (js/wasm.js)
     const P = m.Preview.prototype;
     P.__orig ??= P.load;
     window.__tr = null;
@@ -592,7 +600,7 @@ MID_TRANSITION = """async () => {
     const c = document.querySelector('#now-panel');
     const mid = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     const dt = performance.now() - window.__tr.at;
-    const m = await import('./pkg/opendmd_web.js');
+    const m = (await import('./js/web.js')).default;  // the app's instance (js/wasm.js)
     m.Preview.prototype.load = m.Preview.prototype.__orig;
     const { look } = await import('./js/preview.js');
     const o = document.createElement('canvas');
@@ -1898,7 +1906,7 @@ AMBER_PIXELS = """(sel) => {
 # A Preview built on a detached 128 px canvas (scale 1, flat: its pixels are the
 # panel's), showing `path` after `look`; the 128x32 RGBA bytes as a list.
 WASM_CANVAS = """async ([path, look]) => {
-    const m = await import('./pkg/opendmd_web.js');
+    const m = (await import('./js/web.js')).default;  // the app's instance (js/wasm.js)
     const o = document.createElement('canvas');
     o.width = 128;
     const p = new m.Preview(o, 2.2, 1, 0.22, true);
@@ -3893,7 +3901,10 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.evaluate("location.hash = '#library/formula'")
     page.wait_for_function("location.hash == '#formulas/edit'", timeout=20000)
     open_formulas(page)
-    psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
+    # (Each at its build's address, ?v=<build id>: js/wasm.js.)
+    psi = [u for u in asked if "pkg-psi/" in u and urllib.parse.urlsplit(u).path.endswith(".wasm")]
+    check(bool(psi) and all(re.search(r"\?v=[0-9a-f]{16}$", u) for u in psi),
+          f"formulas: the module's wasm asked for at the build's address ({[u.rsplit('/', 1)[-1] for u in psi]})")
     examples = bundled()
     tiles = page.eval_on_selector_all("#psi-ex .psi-tile", "els => els.map(e => e.dataset.name)")
     more = page.get_attribute("#psi-more", "href")
@@ -7342,18 +7353,138 @@ def report_errors(name: str, errors: list[str]) -> None:
         print("  !!   " + e)
 
 
+# The www update (the beta.13 -> beta.14 failure): a browser that loaded one
+# build must run the next build's wasm modules after a plain reload, never
+# the ones it kept. Each tree is the built app marked: a custom section in
+# every wasm (`opendmd-test-build`, "<dir>:<label>": inert, read back from
+# the compiled module) and a line in every wasm-pack glue that records its
+# label when it runs; a different version.txt; js/build.js written again
+# (tools/www-build-id.py); the .gz beside each changed file made again (the
+# mock serves those first, as the pack does).
+WWW_PKGS = {"pkg": "opendmd_web", "pkg-psi": "opendmd_psi_web", "pkg-art": "opendmd_art_web"}
+WASM_SPY = """(() => {
+  const rec = (m) => { try { const s = WebAssembly.Module.customSections(m, 'opendmd-test-build');
+    (globalThis.__odmWasm ??= []).push(s.length ? new TextDecoder().decode(s[0]) : 'unmarked'); } catch (e) {} };
+  const st = WebAssembly.instantiateStreaming, it = WebAssembly.instantiate;
+  if (st) WebAssembly.instantiateStreaming = async function (...a) { const r = await st.apply(this, a); rec(r.module); return r; };
+  WebAssembly.instantiate = async function (...a) { const r = await it.apply(this, a);
+    if (r instanceof WebAssembly.Instance) { if (a[0] instanceof WebAssembly.Module) rec(a[0]); } else if (r && r.module) rec(r.module); return r; };
+})();"""
+
+
+def leb128(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b, n = n & 0x7F, n >> 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def mark_www(src: Path, dst: Path, label: str) -> None:
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src, dst)
+    changed = []
+    for d, name in WWW_PKGS.items():
+        wasm = dst / d / f"{name}_bg.wasm"
+        name_b, payload = b"opendmd-test-build", f"{d}:{label}".encode()
+        body = leb128(len(name_b)) + name_b + payload
+        wasm.write_bytes(wasm.read_bytes() + b"\x00" + leb128(len(body)) + body)
+        glue = dst / d / f"{name}.js"
+        glue.write_text(glue.read_text() + f"\n(globalThis.__odmBuilds ??= []).push('{d}:{label}');\n")
+        changed += [wasm, glue]
+    (dst / "version.txt").write_text(f"v1.0.0-test-{label}\n")
+    if (dst / "js" / "build.js").is_file():  # (main's app had no build id)
+        subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "www-build-id.py"), str(dst)], check=True, stdout=subprocess.DEVNULL)
+        changed.append(dst / "js" / "build.js")
+    for f in changed:
+        gz = f.with_name(f.name + ".gz")
+        if gz.exists():
+            gz.write_bytes(gzip.compress(f.read_bytes(), 9, mtime=0))
+
+
+def www_update_pass(browser) -> None:
+    print("\n== www update: a plain reload after the web app is replaced runs the new wasm modules")
+    work = OUT / "www-update"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    old, new, live = work / "old", work / "new-build", work / "live"
+    mark_www(www_snapshot(), old, "old")
+    mark_www(www_snapshot(), new, "new-build")
+    shutil.copytree(old, live)
+    overlay = work / "overlay"
+    overlay.mkdir()
+    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--www", str(live)])
+    errors: list[str] = []
+    try:
+        # The mock serves the web app as the firmware does: no-cache, an ETag, 304s.
+        st, h = status_of(urllib.request.Request(base + "/pkg-psi/opendmd_psi_web_bg.wasm"))
+        tag = h.get("ETag")
+        st2, _ = status_of(urllib.request.Request(base + "/pkg-psi/opendmd_psi_web_bg.wasm", headers={"If-None-Match": tag or '"none"'}))
+        check(st == 200 and h.get("Cache-Control") == "no-cache" and bool(tag) and st2 == 304,
+              f"www update: a wasm file goes out no-cache with an ETag, 304 when the browser has it ({st} {h.get('Cache-Control')} {tag} -> {st2})")
+        # The first build is served as 1.0.0-beta.13 served it (the wasm and
+        # pkg/ kept an hour, no ETag): what a browser holds when the update comes.
+        check(get_json(base + "/mock/www-cache?legacy=1")["legacy"], "www update: the first build served with beta.13's headers")
+        # A context of its own, without new_page's route for the art index:
+        # Playwright turns the HTTP cache off in a context with routes, and
+        # the browser's cache is what this is about.
+        page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
+        page.on("console", lambda m: m.type == "error" and errors.append(f"console: {m.text}"))
+        page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+        page.add_init_script(WASM_SPY)
+
+        def loaded(what: str) -> tuple[list[str], list[str]]:
+            """Load the app's three wasm modules as it does (the Formulas view,
+            then the Studio's module); what the glue and the wasm said."""
+            try:
+                page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+                goto_view(page, "formulas")
+                page.wait_for_function("(globalThis.__odmBuilds || []).some(b => b.startsWith('pkg-psi:'))", timeout=20000)
+                page.evaluate("import('./js/artmod.js').then(m => m.art())")
+                page.wait_for_function("['pkg:', 'pkg-psi:', 'pkg-art:'].every(d => (globalThis.__odmWasm || []).some(b => b.startsWith(d)))", timeout=20000)
+            except PlaywrightTimeoutError as e:
+                check(False, f"www update: {what}: the app's three wasm modules loaded ({str(e).splitlines()[0]})")
+            return page.evaluate("[globalThis.__odmBuilds || [], globalThis.__odmWasm || []]")
+
+        page.goto(base + "/")
+        glue, wasm = loaded("first load")
+        check(glue and wasm and all(b.endswith(":old") for b in glue + wasm),
+              f"www update: the first load runs the first build (glue {sorted(set(glue))}, wasm {sorted(set(wasm))})")
+        # The update: every file replaced by the next build's, then a plain reload.
+        goto_view(page, "now")  # (the address the reload reloads)
+        shutil.rmtree(live)
+        shutil.copytree(new, live)
+        check(not get_json(base + "/mock/www-cache?legacy=0")["legacy"], "www update: the new build served with today's headers")
+        page.reload()
+        glue, wasm = loaded("after the update")
+        dirs = {b.split(":")[0] for b in wasm}
+        check(dirs == set(WWW_PKGS) and set(glue) >= {f"{d}:new-build" for d in WWW_PKGS}
+              and all(b.endswith(":new-build") for b in glue + wasm),
+              f"www update: after a plain reload every wasm module and its glue is the new build's (glue {sorted(set(glue))}, wasm {sorted(set(wasm))})")
+        page.context.close()
+    finally:
+        proc.terminate()
+        proc.wait()
+    check(not errors, f"www update: zero console/page errors {errors[:3]}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", help="also run the read-mostly pass against this device URL")
     ap.add_argument("--device-only", action="store_true")
+    ap.add_argument("--www-update-only", action="store_true", help="only the www update pass (a reload after the app is replaced)")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=[f"--host-resolver-rules={LOCAL_RULE}"])
-        if not args.device_only:
+        if args.www_update_only:
+            www_update_pass(browser)
+        elif not args.device_only:
             mock_pass(browser)
             sd_unreadable_pass(browser)
             sd_slowed_pass(browser)
+            www_update_pass(browser)
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()
