@@ -695,6 +695,7 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | `noise` of a growing value (section 11) | 870 | | | |
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 70 | | `ul` | 140 |
+| `under(x, y)` (each channel; the JIT's ~75) | 275 | | | |
 | `digit` `glyph` | 240 | | `bit` | 55 |
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
 | a sprite's pixel, `s[u, v]` | 120 | | | |
@@ -712,6 +713,22 @@ lines and dots are drawn turn by turn as above; so 192 streaks of ~15
 steps each are ~1 ms of values (two lanes of 128) plus their lines, not
 ~2.5 ms. A loop inside another, or one under 32 turns, runs a turn at a
 time.
+
+**Painting** adds, a frame, for each call as often as it runs: ~1.7 µs,
+then what it walks at its kind's price (measured on the device): `pset`
+nothing more; `line` ~300 ns a pixel of its longer side; `rect` and
+`rectfill` ~130 and ~150 ns a pixel of their box plus ~0.3 µs a row;
+`circfill` ~430 ns a pixel of its box (2r + 4 square), `circ` ~330 plus
+~800 for each pixel inside it (it tests the neighbours), each with ~3 µs
+to start; `trifill` ~830 ns a pixel of its box plus ~0.6 µs a row (the
+dearest: a triangle across the panel is ~3.4 ms); `spr` ~350 ns a cell of
+the sprite; `print` ~140 ns a cell of its characters (35 a character, 24
+small; a number ~4 µs more); `cls` ~5 µs. Then laying the paint over the
+picture: ~0.2 ms a frame, ~0.4 ms when everything is painted (a `cls`).
+So paint small things freely; a big filled shape costs by its pixels (a
+128 × 16 `rectfill` ~0.3 ms, the same as a `trifill` box a sixth of it),
+and a field of colour is cheaper as the colour line. The JIT does not
+change the draw stage: it costs the same either way.
 
 **Common pairs are one step** (the same picture, worked out in one pass):
 a checker `(floor(u) + floor(v)) % 2` (~75 ns saved), `a*k + c` (~20),
