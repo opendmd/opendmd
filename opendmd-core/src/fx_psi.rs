@@ -2440,9 +2440,12 @@ mod jit {
                 }
                 Ok(false) => {} // a checked frame: next time
                 Err((row, x)) => {
+                    // (No listing here: it and the float formatting it
+                    // pulls in were ~6 KB of the app; `psi check
+                    // --listing` on the host gives it for the formula.)
                     log::error!(
-                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM\n{}",
-                        prog.listing()
+                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM ({} steps)",
+                        prog.steps()
                     );
                     self.kernel = None;
                     self.why = Some(DIFFERS);
