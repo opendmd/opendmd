@@ -469,6 +469,11 @@ fn run() {
     }
 }
 
+/// The ring is held and a file followed (`misslog`'s `net`).
+pub fn active() -> bool {
+    ACTIVE.load(Relaxed)
+}
+
 /// `/api/status`'s card part: `,"readahead":{...}`.
 pub fn status_json() -> String {
     let active = ACTIVE.load(Relaxed);

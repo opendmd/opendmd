@@ -1,0 +1,81 @@
+// The network side's view of lwIP for `/api/status` `net` (every build;
+// `src/netstat.rs`). Each walk runs on the tcpip thread (tcpip_callback),
+// so the pcb lists are not changing under it; the network worker posts one
+// a second, and the counts are read whenever.
+//
+// And the close of a connection whose client has gone: `opendmd_close_dead`
+// aborts (RST, the pcb freed at once) a connection in CLOSE_WAIT that still
+// has data the client never acknowledged; a plain close would keep the pcb,
+// that data and its retransmissions (up to TCP_MAXRTX, minutes) for nobody.
+#include <stdint.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "lwip/tcpip.h"
+#include "lwip/priv/tcp_priv.h"
+#include "lwip/priv/sockets_priv.h"
+#include "lwip/api.h"
+#include "lwip/sockets.h"
+
+// pcbs, TIME_WAIT pcbs, rx pbufs held, tx bytes queued, most retransmissions
+// of one segment (nrtx) among the pcbs, walks done
+volatile int opendmd_netstat[6];
+volatile int opendmd_netstat_aborted;
+
+static int seg_pbufs(struct tcp_seg *s) {
+    int n = 0;
+    for (; s; s = s->next) n += pbuf_clen(s->p);
+    return n;
+}
+static int seg_bytes(struct tcp_seg *s) {
+    int n = 0;
+    for (; s; s = s->next) n += s->p ? s->p->tot_len : 0;
+    return n;
+}
+
+static void walk(void *arg) {
+    (void)arg;
+    int pcbs = 0, tw = 0, rx = 0, tx = 0, rtx = 0;
+    for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
+        pcbs++;
+        if (p->refused_data) rx += pbuf_clen(p->refused_data);
+#if TCP_QUEUE_OOSEQ
+        rx += seg_pbufs(p->ooseq);
+#endif
+        tx += seg_bytes(p->unacked) + seg_bytes(p->unsent);
+        if (p->nrtx > rtx) rtx = p->nrtx;
+    }
+    for (struct tcp_pcb *p = tcp_tw_pcbs; p; p = p->next) tw++;
+    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
+        struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
+        if (!s || !s->conn) continue;
+        if (s->lastdata.pbuf) rx += pbuf_clen(s->lastdata.pbuf);
+        if (sys_mbox_valid(&s->conn->recvmbox)) rx += uxQueueMessagesWaiting(s->conn->recvmbox->os_mbox);
+    }
+    opendmd_netstat[0] = pcbs;
+    opendmd_netstat[1] = tw;
+    opendmd_netstat[2] = rx;
+    opendmd_netstat[3] = tx;
+    opendmd_netstat[4] = rtx;
+    opendmd_netstat[5]++;
+}
+
+void opendmd_netstat_post(void) {
+    tcpip_callback(walk, NULL);
+}
+
+static void close_dead(void *arg) {
+    int fd = (int)(intptr_t)arg;
+    struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
+    if (!s || !s->conn || NETCONNTYPE_GROUP(s->conn->type) != NETCONN_TCP) return;
+    struct tcp_pcb *p = s->conn->pcb.tcp;
+    if (p && p->state == CLOSE_WAIT && (p->unacked || p->unsent)) {
+        opendmd_netstat_aborted++;
+        tcp_abort(p); // the netconn's error callback lets go of the pcb
+    }
+}
+
+// Before `close(fd)`, on the task closing it: posted ahead of the close's own
+// message to the tcpip thread, which handles them in order.
+void opendmd_close_dead(int fd) {
+    tcpip_callback(close_dead, (void *)(intptr_t)fd);
+}

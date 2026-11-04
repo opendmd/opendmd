@@ -119,6 +119,19 @@ CONFIG_LWIP_IPV6=n
 # already. A window caps bytes, not frames: small segments held five
 # buffers for 2.6 KB.
 CONFIG_LWIP_TCP_OOSEQ_TIMEOUT=1
+#
+# The first retransmission: 1 s (RFC 6298's initial RTO), not ESP-IDF's
+# 1500 ms. A connection's segments sent before any RTT sample (its reply,
+# every time: a status read or a 503 is one exchange) go again after 1, 3
+# and 7 s here, against 1.5, 4.5 and 10.5 s (lwIP doubles from the start
+# value). The spare under five 300 KB uploads at once (net-wedge2): every
+# refusal and the winning upload's reply came 10.5-11 s late, the third send
+# of the reply, and a status read gave up at 5 s, while the heap stood at 8
+# KB and the WiFi driver, which allocates its frame buffers from it, could
+# not take them. The heap is kept off that floor now (http.rs, netstat.rs);
+# this shortens what a lost reply costs when it happens anyway. Once a
+# connection has an RTT sample (a LAN's few ms) the timer is its own.
+CONFIG_LWIP_TCP_RTO_TIME=1000
 CONFIG_LWIP_TCP_WND_DEFAULT=5760
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=6

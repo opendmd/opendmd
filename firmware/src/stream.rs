@@ -113,6 +113,26 @@ pub const MAX_UPLOADS: u32 = 1;
 const UPLOAD_RETRY_AFTER: &str = "2";
 /// Uploads queued or being received.
 static UPLOADS: AtomicU32 = AtomicU32::new(0);
+/// The emulator's low watch (`emu-census`): what the httpd task (low byte:
+/// 1 status, 2 an upload refused, 3 another handler) and this task (second
+/// byte: 1 an upload, 3 a download) are doing.
+#[cfg(feature = "emu-census")]
+static PHASE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "emu-census")]
+pub fn set_phase(shift: u32, v: u32) {
+    let _ = PHASE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| Some((p & !(0xff << shift)) | (v << shift)));
+}
+#[cfg(not(feature = "emu-census"))]
+#[inline(always)]
+pub fn set_phase(_shift: u32, _v: u32) {}
+#[cfg(feature = "emu-census")]
+pub fn phase() -> u32 {
+    PHASE.load(Ordering::Relaxed)
+}
+/// Uploads queued or being received (`net.heap_low`, `misses.recent.net`).
+pub fn uploads() -> u32 {
+    UPLOADS.load(Ordering::Relaxed)
+}
 /// A transfer is under way on the task: set when a job is taken (under the
 /// queue's lock), cleared when it is done, for an upload as soon as its
 /// reply is out (its connection's close is still awaited, but nothing more
@@ -388,6 +408,7 @@ fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
     // On the httpd task: no lingering over the rest of the body. Closing
     // with the body unread resets the connection after the reply; curl and
     // Chromium read a reply that came before the reset.
+    set_phase(0, 2);
     refused.no_linger();
     refused.header("Retry-After", UPLOAD_RETRY_AFTER);
     let _ = refused.error(
@@ -395,6 +416,7 @@ fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
         "503 Service Unavailable",
         "busy with another upload; retry shortly",
     );
+    crate::netstat::sample(crate::netstat::At::Refusal);
     Ok(())
 }
 
@@ -480,11 +502,16 @@ fn run(queue: &'static Queue) {
             let _busy = crate::cache_builder::busy();
             match job {
                 Job::Download { req, work } => {
+                    set_phase(8, 3);
                     httpd::run_detached(req, work);
                     BUSY.store(false, Ordering::Release);
                 }
-                Job::Upload { up, work } => run_upload(up, work, true),
+                Job::Upload { up, work } => {
+                    set_phase(8, 1);
+                    run_upload(up, work, true)
+                }
             }
+            set_phase(8, 0);
         }
         // The FAT lock and the SPI bus are shared with the player: a turn for
         // everyone between files as well as between chunks.
