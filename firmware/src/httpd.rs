@@ -388,7 +388,10 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
     if let Some(close) = gate(&mut req) {
         return if close { sys::ESP_FAIL } else { sys::ESP_OK };
     }
+    crate::netstat::sample(crate::netstat::At::Request);
+    crate::stream::set_phase(0, if req.path() == "/api/status" { 1 } else { 3 });
     let result = (*handler)(&mut req);
+    crate::stream::set_phase(0, 0);
     stack_low_water("httpd", &HTTPD_STACK_LOW);
     crate::diag::check("httpd: handler end");
     #[cfg(feature = "diag-heap")]
@@ -1448,6 +1451,10 @@ unsafe extern "C" fn close_session(_hd: sys::httpd_handle_t, fd: i32) {
         sys::lwip_shutdown(fd, sys::SHUT_RDWR as i32);
         *session.gone.lock().unwrap_or_else(|p| p.into_inner()) = true;
     }
+    // A client that closed its end with some of our reply unacknowledged
+    // (it gave up: a poll's timeout) is aborted, not left retransmitting
+    // to nobody with that reply held in the heap (net-wedge2).
+    crate::netstat::close_dead(fd);
     // SAFETY: httpd hands us the fd to close; this is what it would have done.
     sys::close(fd);
 }

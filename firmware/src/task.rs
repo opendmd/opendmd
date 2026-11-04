@@ -66,6 +66,17 @@ pub fn spawn_core0_joinable(
     priority: u8,
     f: Box<dyn FnOnce() + Send>,
 ) -> io::Result<std::thread::JoinHandle<()>> {
+    // The heap map (a diagnostic build): a checkpoint as the task starts
+    // and as it ends, the first time each name does.
+    #[cfg(feature = "heapmap")]
+    let f: Box<dyn FnOnce() + Send> = {
+        let tag = std::str::from_utf8(name.strip_suffix(b"\0").unwrap_or(name)).unwrap_or("?");
+        Box::new(move || {
+            crate::heapmap::cp_k("task start: ", tag);
+            f();
+            crate::heapmap::cp_k("task end: ", tag);
+        })
+    };
     let previous = ThreadSpawnConfiguration::get();
     let set = ThreadSpawnConfiguration {
         name: Some(name),

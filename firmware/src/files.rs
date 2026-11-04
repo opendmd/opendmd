@@ -571,6 +571,7 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
                 break Err((e, status));
             }
         };
+        crate::netstat::sample(crate::netstat::At::Upload);
         if let Err(e) = wait_for_heap() {
             break Err((e, Some((503, "503 Service Unavailable"))));
         }

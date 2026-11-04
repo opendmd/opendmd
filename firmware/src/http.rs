@@ -105,9 +105,9 @@ pub enum NetCommand {
         reply: mpsc::Sender<String>,
     },
     /// `PUT /api/firmware`: check a bundle header's Ed25519 signature
-    /// (`ota::verify_signature`). Here because the network worker's 12 KB
-    /// stack has room for it (~8.5 KB at most, measured from the ELF's
-    /// frames) and the stream task's 6 KB does not.
+    /// (`ota::verify_signature`). Here because the network worker's stack
+    /// has room for it (9.4 KB used at most with it, `config::NET_WORKER_STACK`)
+    /// and the stream task's 7 KB does not.
     VerifyBundle {
         header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
         reply: mpsc::Sender<Result<opendmd_core::ota::Meta, opendmd_core::ota::OtaError>>,
@@ -581,11 +581,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let line = crate::diag::channel_torture(n, &which);
             return req.ok("text/plain", line.as_bytes());
         }
-        // The settings' part first (never both locks at once).
-        let looks = {
-            let set = c.settings.lock().unwrap();
-            looks_json(&set)
-        };
         // Measurement (display-isolation): the heap's use per SRAM pool, or
         // the player's longest card read and open since the last ask.
         if query_param(req.query(), "pools").as_deref() == Some("1") {
@@ -594,31 +589,105 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
             return req.json(&crate::membank::take_read_max());
         }
+        // The heap map (a `heapmap` build only): the whole of it, fresh,
+        // in parts of a few KB each (`heapmap::part`).
+        if query_param(req.query(), "heapmap").as_deref() == Some("1") {
+            if let Some(first) = crate::heapmap::part(0) {
+                req.begin_chunked("200 OK", "application/json")?;
+                req.chunk(first.as_bytes())?;
+                drop(first);
+                let mut k = 1;
+                while let Some(p) = crate::heapmap::part(k) {
+                    req.chunk(p.as_bytes())?;
+                    k += 1;
+                }
+                return req.finish();
+            }
+        }
+        // The settings' part, made when it is written (last): the status
+        // copy holds no lock by then, so never both locks at once. With
+        // the heap map's short form, as `"heapmap"`, in every status.
+        let looks = || {
+            let looks = {
+                let set = c.settings.lock().unwrap();
+                looks_json(&set)
+            };
+            match crate::heapmap::status_brief() {
+                Some(h) => format!(r#""heapmap":{h},{looks}"#),
+                None => looks,
+            }
+        };
         let recent = query_param(req.query(), "recent").as_deref() == Some("1");
         // A status read costs CPU0 ~7 ms of formatting (code and strings
         // from flash, whose bus CPU1 shares): answered from the last one
-        // for `STATUS_CACHE` (the web app polls once a second; a client
-        // polling faster gets the same JSON within it). The lock is held
-        // only to copy the status (µs), never while formatting. The next
-        // answer says what it took (`display.status_lock_us`,
-        // `status_build_us`, `status_cached`).
+        // for `STATUS_CACHE` (a client polling faster than that gets the
+        // same JSON within it). The lock is held only to copy the status
+        // (µs), never while formatting. The next answer says what it took
+        // (`display.status_lock_us`, `status_build_us`, `status_cached`).
         let t0 = std::time::Instant::now();
-        if let Some(json) = cached_status(recent) {
-            STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return req.json(&json);
-        }
-        let snap = {
-            let s = c.status.lock().unwrap();
-            let held = std::time::Instant::now();
-            let copy = s.clone();
-            STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
-            copy
+        // The last answer, if it is fresh: sent from where it is kept (no
+        // copy). A stale one is freed here, before a new one is built.
+        let fast = {
+            let mut last = STATUS_LAST.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(kept) = last.as_ref().filter(|k| k.recent == recent && k.at.elapsed() < STATUS_CACHE) {
+                STATUS_CACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return req.json(&kept.json);
+            }
+            *last = None;
+            // A client reading faster than `STATUS_CACHE` (the read before
+            // this one came within it): this answer is kept for its next.
+            let prev = STATUS_READ.lock().unwrap_or_else(|p| p.into_inner()).replace(t0);
+            prev.is_some_and(|p| t0.duration_since(p) < STATUS_CACHE)
         };
-        let json = status_json(&snap, &looks, recent);
+        // net-wedge2: below this the answer is a 503 at once. Its ~3.7 KB of
+        // segments stay in lwIP until the client's ACK, and the radio copies
+        // each frame into a buffer of its own; the WiFi driver allocates its
+        // receive and transmit buffers from the same heap, and on the spare
+        // a heap taken to 8 KB under five uploads at once left device-sent
+        // frames undelivered for seconds (every refusal 10.5 s late: the
+        // third send of a first segment, lwIP's 1.5 + 3 + 6 s).
+        let free = crate::state::free_heap();
+        if free < STATUS_MIN_HEAP {
+            STATUS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            req.header("Retry-After", "1")?;
+            return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+        }
+        let snap = status_snapshot(&c.status);
+        if fast {
+            // One block for the answer, the size of the last one and some:
+            // no regrowth while it is written, and no abort when the heap
+            // has no such block.
+            let mut json = String::new();
+            let want = STATUS_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize + STATUS_SLACK;
+            if json.try_reserve_exact(want).is_err() {
+                req.header("Retry-After", "1")?;
+                return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+            }
+            status_json(&snap, &looks, recent, &mut json);
+            drop(snap);
+            STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
+            STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+            let sent = req.json(&json);
+            *STATUS_LAST.lock().unwrap_or_else(|p| p.into_inner()) = Some(KeptStatus { at: std::time::Instant::now(), recent, json });
+            return sent;
+        }
+        // net-wedge2: written out as it is made, in pieces of at most
+        // `STATUS_PIECE` (chunked), never whole: the whole answer (~3.6 KB)
+        // and every part of it at once (the old single `write!`'s
+        // arguments) were the emulator's lowest heap under uploads beside
+        // status reads (the low watch: the httpd task in a status read, the
+        // stream task in an upload, every time).
+        let Some(mut out) = Piecewise::new(req) else {
+            req.header("Retry-After", "1")?;
+            return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+        };
+        out.req.begin_chunked("200 OK", "application/json")?;
+        status_json(&snap, &looks, recent, &mut out);
         drop(snap);
+        let len = out.finish()?;
+        STATUS_LEN.store(len as u32, std::sync::atomic::Ordering::Relaxed);
         STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
-        keep_status(recent, &json);
-        req.json(&json)
+        req.finish()
     })?;
 
     let c = ctx.clone();
@@ -1588,6 +1657,28 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         };
         crate::fatidx::touched(&path);
+        // A directory is told apart before anything is removed: FatFs's
+        // `f_unlink`, behind `remove_file`, removes an empty directory as
+        // readily as a file, so an emptied category deleted through
+        // `remove_file` never reached `dir_changed` and the index went on
+        // pointing into it (EMPTY_FOLDER, the emulator's API lane).
+        if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+            // An empty category (a directory under gifs/) goes: what is left
+            // when its last GIF was deleted or moved away. The index stops
+            // using its records first (`dir_changed`).
+            if files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) {
+                crate::fatidx::dir_changed();
+            }
+            return match std::fs::remove_dir(&path) {
+                Ok(()) => {
+                    if files::under(&path, config::CACHE_ROOT) {
+                        crate::cache::invalidate();
+                    }
+                    req.json(r#"{"ok":true}"#)
+                }
+                Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
+            };
+        }
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 crate::fatidx::note_gone(&path);
@@ -1603,18 +1694,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     crate::cache::invalidate();
                 }
                 req.json(r#"{"ok":true}"#)
-            }
-            // An empty category (a directory under gifs/) goes too: what is
-            // left when its last GIF was deleted or moved away.
-            Err(_)
-                if std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
-                    && files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) =>
-            {
-                crate::fatidx::dir_changed();
-                match std::fs::remove_dir(&path) {
-                    Ok(()) => req.json(r#"{"ok":true}"#),
-                    Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
-                }
             }
             Err(e) => req.not_found(&format!("{rel}: {e}")),
         }
@@ -2350,29 +2429,14 @@ fn applied_json(a: &Applied) -> String {
 /// with the panel, correcting for its own request latency the NTP way.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
-fn status_json(s: &Status, looks: &str, recent: bool) -> String {
+fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut dyn std::fmt::Write) {
+    // In parts (net-wedge2): each `write!`'s arguments are made, written
+    // and dropped before the next part's, so the strings the parts are
+    // made of never all exist at once.
     let t = s.epoch.elapsed();
-    // `?recent=1`: Recently played, newest first, and which is on screen.
-    let recent = if recent {
-        let paths: Vec<String> = s.recent.paths().map(|p| json_string(&p)).collect();
-        format!(r#""recent":[{}],"recent_at":{},"#, paths.join(","), s.recent.cursor())
-    } else {
-        String::new()
-    };
-    let www = crate::www::info();
-    format!(
-        concat!(
-            r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
-            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},{}"#,
-            r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
-            r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
-            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"#,
-            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},{},"#,
-            r#""overrides":{},"hidden":{},"#,
-            r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
-            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
-            r#"{}}}"#
-        ),
+    let _ = write!(
+        out,
+        r#"{{"version":{},"variant":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
         psi_abi(),
@@ -2382,6 +2446,10 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         json_string(s.wifi),
         json_string(&s.hostname),
         json_string(&s.mdns),
+    );
+    let _ = write!(
+        out,
+        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"#,
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),
@@ -2390,12 +2458,30 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         formula_json(&s.path),
         kept_json(s),
         s.paused,
-        recent,
-        s.entries,
-        json_string(&s.manifest),
-        json_string(s.index_state),
-        opt_json(www.version.as_deref().filter(|_| www.ok)),
-        crate::www::info_json(),
+    );
+    // `?recent=1`: Recently played, newest first, and which is on screen.
+    if recent {
+        let _ = out.write_str(r#""recent":["#);
+        for (k, p) in s.recent.paths().enumerate() {
+            let _ = write!(out, "{}{}", if k == 0 { "" } else { "," }, json_string(&p));
+        }
+        let _ = write!(out, r#"],"recent_at":{},"#, s.recent.cursor());
+    }
+    {
+        let www = crate::www::info();
+        let _ = write!(
+            out,
+            r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
+            s.entries,
+            json_string(&s.manifest),
+            json_string(s.index_state),
+            opt_json(www.version.as_deref().filter(|_| www.ok)),
+            crate::www::info_json(),
+        );
+    }
+    let _ = write!(
+        out,
+        r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
         s.heap_free,
         s.heap_floor,
         s.heap_idf_min,
@@ -2403,19 +2489,36 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.heap_floor_at
             .as_ref()
             .map_or_else(|| "null".to_string(), |a| a.json()),
+    );
+    let _ = write!(
+        out,
+        r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":"#,
         s.refresh_hz,
         s.deadline_misses,
         s.worst_lateness_ms,
-        {
-            // `misses` with `recent` (the last late frames' phases) inside.
-            let mut j = s.misses.json();
-            j.pop();
-            j + &crate::misslog::json() + "}"
-        },
+    );
+    {
+        // `misses` with `recent` (the last late frames' phases) inside.
+        let mut j = s.misses.json();
+        j.pop();
+        let _ = out.write_str(&j);
+        drop(j);
+        let _ = out.write_str(&crate::misslog::json());
+        let _ = out.write_str(&crate::misslog::transfer_json());
+        let _ = out.write_str("}");
+    }
+    let _ = write!(
+        out,
+        r#","gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"net":{},"#,
         s.gifs_started,
         crate::httpd::streams_aborted(),
         crate::logring::drops(),
         stream::stack_low().map_or_else(|| "null".to_string(), |v| v.to_string()),
+        net_json(),
+    );
+    let _ = write!(
+        out,
+        r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{}"#,
         s.sd_mounted,
         s.sd_usable(),
         s.sd_capacity_bytes,
@@ -2424,11 +2527,25 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json() + &crate::fatidx::status_json() + &crate::settings_card::status_json() + &crate::cardspeed::yields_json() + &crate::readahead::status_json(),
+    );
+    // (The card's own part first, then the rest, each with its comma.)
+    let _ = out.write_str(",");
+    let _ = out.write_str(&crate::sdhealth::status_json());
+    let _ = out.write_str(&crate::fatidx::status_json());
+    let _ = out.write_str(&crate::settings_card::status_json());
+    let _ = out.write_str(&crate::cardspeed::yields_json());
+    let _ = out.write_str(&crate::readahead::status_json());
+    let _ = write!(
+        out,
+        r#",{}}},"reset_reason":{},"reset_note":{},{},"#,
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),
         crate::restarts::status_json(),
+    );
+    let _ = write!(
+        out,
+        r#""overrides":{},"hidden":{},"mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
         s.overrides,
         s.hidden,
         json_string(s.mode),
@@ -2437,13 +2554,17 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         json_string(&s.tz_name),
         crate::clock::synced_ago_secs().map_or_else(|| "null".to_string(), |n| n.to_string()),
         opt_json(s.wake_until.as_deref()),
+    );
+    let _ = write!(
+        out,
+        r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"#,
         s.rule.map_or_else(|| "null".to_string(), |r| r.to_string()),
         opt_json(s.rule_set.as_deref()),
         opt_json(s.rule_until.as_deref()),
         crate::cache_builder::status_json(s.entries, crate::cache::peek()),
-        crate::follow::status_json(),
-        looks,
-    )
+    );
+    let _ = write!(out, r#""context":{},"#, crate::follow::status_json());
+    let _ = write!(out, "{}}}", looks());
 }
 
 /// `now_playing`'s `,"kept_s":N` while a Formula sent to the panel is kept
@@ -2603,28 +2724,120 @@ fn looks_json(set: &Settings) -> String {
     )
 }
 
+/// Below this much free heap a status read is a 503 at once (see the
+/// handler): the reply's segments and the radio's copies of them would take
+/// what the WiFi driver needs for its own buffers.
+const STATUS_MIN_HEAP: u32 = 10 * 1024;
+/// Status reads refused for [`STATUS_MIN_HEAP`] (`net.status_refused`).
+static STATUS_REFUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The largest piece of a status answer sent at once (its buffer, on the
+/// heap: the httpd task's stack has ~1 KB to spare).
+const STATUS_PIECE: usize = 768;
+
+/// A status answer written out as it is made: `fmt::Write` into a buffer of
+/// [`STATUS_PIECE`], each full one sent as a chunk. The first failed send
+/// is kept and ends the writing (the rest is dropped).
+struct Piecewise<'a> {
+    req: &'a mut Req,
+    buf: Vec<u8>,
+    sent: usize,
+    failed: Option<anyhow::Error>,
+}
+
+impl<'a> Piecewise<'a> {
+    fn new(req: &'a mut Req) -> Option<Self> {
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(STATUS_PIECE).ok()?;
+        Some(Piecewise { req, buf, sent: 0, failed: None })
+    }
+
+    fn flush(&mut self) {
+        crate::netstat::sample(crate::netstat::At::Status);
+        if self.failed.is_none() && !self.buf.is_empty() {
+            if let Err(e) = self.req.chunk(&self.buf) {
+                self.failed = Some(e);
+            }
+            self.sent += self.buf.len();
+        }
+        self.buf.clear();
+    }
+
+    /// The last piece out: the bytes written, or the send that failed.
+    fn finish(mut self) -> Result<usize> {
+        self.flush();
+        match self.failed.take() {
+            Some(e) => Err(e),
+            None => Ok(self.sent),
+        }
+    }
+}
+
+impl std::fmt::Write for Piecewise<'_> {
+    fn write_str(&mut self, mut s: &str) -> std::fmt::Result {
+        if self.failed.is_some() {
+            return Err(std::fmt::Error);
+        }
+        while !s.is_empty() {
+            let room = STATUS_PIECE - self.buf.len();
+            let n = s.len().min(room);
+            self.buf.extend_from_slice(&s.as_bytes()[..n]);
+            s = &s[n..];
+            if self.buf.len() == STATUS_PIECE {
+                self.flush();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `"net":{...}`: the network side's heap and lwIP's state (`netstat`), and
+/// the status reads refused for the heap.
+fn net_json() -> String {
+    let n = crate::netstat::json();
+    format!(
+        r#"{},"status_refused":{}}}"#,
+        &n[..n.len() - 1],
+        STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 /// How long a status answer is reused for another read.
 const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// The last status answer (with or without `recent`), and when it was made.
-static STATUS_LAST: std::sync::Mutex<Option<(std::time::Instant, bool, String)>> = std::sync::Mutex::new(None);
+/// The status, copied under its lock (µs), on the heap: as a local of the
+/// handler the copy (~1.5 KB) sat on the httpd task's stack under the whole
+/// of `status_json` (728 B of 6.5 KB left in the emulator).
+#[inline(never)]
+fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
+    let s = status.lock().unwrap();
+    let held = std::time::Instant::now();
+    let copy = Box::new(s.clone());
+    STATUS_LOCK_US.store(held.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
+    copy
+}
+
+/// A status answer kept for a fast poller: when it was made, with or
+/// without `recent`, the JSON.
+struct KeptStatus {
+    at: std::time::Instant,
+    recent: bool,
+    json: String,
+}
+
+/// The last status answer, kept only while reads come faster than
+/// [`STATUS_CACHE`] (httpd's only; freed by the next read when stale).
+static STATUS_LAST: std::sync::Mutex<Option<KeptStatus>> = std::sync::Mutex::new(None);
+
+/// When the last status read came (no heap: an `Instant`).
+static STATUS_READ: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// The last answer's length: the next one's buffer is reserved at this
+/// plus [`STATUS_SLACK`] (the first at 4 KB less the slack).
+static STATUS_LEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(3584);
+const STATUS_SLACK: usize = 512;
 
 /// Reads answered from the last answer (`display.status_cached`).
 static STATUS_CACHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// The last answer, if it is fresh and of the same kind (httpd's only).
-fn cached_status(recent: bool) -> Option<String> {
-    let last = STATUS_LAST.lock().ok()?;
-    last.as_ref()
-        .filter(|(at, r, _)| *r == recent && at.elapsed() < STATUS_CACHE)
-        .map(|(_, _, j)| j.clone())
-}
-
-fn keep_status(recent: bool, json: &str) {
-    if let Ok(mut last) = STATUS_LAST.lock() {
-        *last = Some((std::time::Instant::now(), recent, json.to_string()));
-    }
-}
 
 /// The last `/api/status`: how long it held `status` (µs) to copy it, and
 /// the whole build with the settings' part.

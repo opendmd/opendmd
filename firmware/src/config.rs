@@ -419,10 +419,18 @@ pub const IMPROV_STALE: Duration = Duration::from_secs(15);
 pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 
 /// Network worker thread: pinned to CPU0, named. stripe-dashboard uses 16 KB
-/// here; 12 KB is what fits alongside the panel, the manifest index and a
-/// playing GIF, and the deepest path (scan -> connect) has been exercised on
-/// the rig at this size.
-pub const NET_WORKER_STACK: usize = 12 * 1024;
+/// here. The deepest path is the firmware signature check
+/// (`ota::verify_signature`, ~6.5 KB of curve25519-dalek frames) on top of
+/// the worker loop's own frame. Measured (heap-map build in the emulator,
+/// rig-scale card, 2026-11-03): 11,032 B used of 12 KB while the loop's
+/// frame was 2,768 B (the cache count, the FAT index tick and Follow
+/// inlined into it) — 1,256 B to spare. With those kept out of the loop
+/// (`#[inline(never)]`: its frame is 1,184 B) and the scan's and Follow's
+/// stable sorts (a 4 KB scratch on the stack each) made unstable: 9,448 B
+/// at most over two signature checks, two scans, Follow polling and its
+/// test, a cache count, `/api/wifi/scan` and two rig-scale FAT index
+/// builds. 11 KB leaves 1,816 B over that.
+pub const NET_WORKER_STACK: usize = 11 * 1024;
 /// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
 /// handed over): the web app's CRC pass, the HTTP server's start, the mount
 /// attempts and the playlist index (opened, or built: one streaming pass
@@ -481,7 +489,10 @@ pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// (2026-10-26): `/api/cache/list`'s bucket walk left **784 B** of 6 KB
 /// (`stream_stack` in `/api/status`, the spare, its populated 11k-copy card,
 /// 3 runs; a `gifs/Consoles` listing and `/api/cache/failed` went no
-/// deeper), so 7 KB, for ~1.8 KB spare.
+/// deeper), so 7 KB, for ~1.8 KB spare. Checked again in the emulator
+/// (2026-11-03, rig-scale card: `/api/cache/list`, uploads, a www push,
+/// two firmware PUTs): 5,412 B used, 1,756 B left; 6.5 KB would leave
+/// under the 1.5 KB a cut must keep, so it stays.
 pub const STREAM_STACK: usize = 7 * 1024;
 /// An upload (`PUT /api/files/…`, `/api/manifest`, `/api/sets/…`) is received
 /// on the stream task, and gives up when one read waits this long for data.

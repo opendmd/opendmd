@@ -4,8 +4,9 @@
 # ///
 """Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
 
-    uv run tools/emu/run.py smoke|probe|nocard|rig --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+    uv run tools/emu/run.py smoke|probe|nocard|rig|leak|heapmap --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
         [--built-after EPOCH]
+    uv run tools/emu/run.py api --image FULL.bin --www-pack www.pack --bundle B.odfw --psb F.b64 [--formula F.psi] [--card SD.img]
 
 The image must be the one that boots: its app descriptor's ELF SHA-256 is checked against
 the boot log's `ELF file SHA256:` line, and with --built-after (the Makefile passes the time it
@@ -29,13 +30,20 @@ rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's bui
        build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
        emu-rig-tight) the heap is the spare's (~45 KB free while playing).
 leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
-       up and 40 more (8 samples at least), the least blocks in use and bytes allocated of the
+       up and 60 more (8 samples at least), the least blocks in use and bytes allocated of the
        second half of the samples against the first half's must not have grown past 24 blocks /
-       2 KB; prints EMU_LEAK_OK.
+       2 KB (while they have, it plays on, to 140 after the warm-up at most); prints EMU_LEAK_OK.
+heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
+       pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
+       `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
+api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy of the image's NVS,
+       the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
+       (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
+       (tools/emu/api_lane.py says what each covers); prints EMU_API_OK.
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
-import argparse, os, re, signal, subprocess, sys, time
+import argparse, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
@@ -81,7 +89,31 @@ NOCARD = [
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
 ]
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
-LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 40, 24, 2048
+# 60 after the warm-up (was 40): a sample's level depends on where in a GIF it
+# falls (~194, 199, 209 or 219 KB allocated in the census image), and with 40
+# GIFs a half could miss the lowest phase by chance alone (heap-trim 84b2527:
+# 193,880 B in the first half, the second's least 199,312 B, both levels seen
+# in either half of the passing run before it): ~12 samples, 6 a half.
+LEAK_WARM, LEAK_GIFS, LEAK_BLOCKS, LEAK_BYTES = 10, 60, 24, 2048
+# The emulator is deterministic, so a half that misses the lowest phase misses
+# it on every run of that image (net-wedge e973481: 194,224 B once in the first
+# half, the second's least 199,428 B, a level the first half had three times).
+# So after the 60, while the halves do not compare flat, it plays on, to 140 at
+# most: a leak lifts every level for good and fails there; a flat heap meets
+# its lowest phase again.
+LEAK_GIFS_MAX = 140
+
+
+def leak_halves(census):
+    """The leak verdict's figures: the least blocks and bytes of the first and second half of
+    the census samples after the warm-up, the GIFs they span, and whether that is flat."""
+    after = [c for c in census if c[0] >= LEAK_WARM]
+    half = len(after) // 2
+    warm, late = after[:half], after[half:]
+    b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
+    y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
+    flat = b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES
+    return b0, b1, y0, y1, after[-1][0] - after[0][0], flat
 HEARTBEAT_FLOOR = re.compile(r"heartbeat: heap \d+ B free \(floor (\d+) B")
 RIG_BUILT = re.compile(r"fat index: built (\d+) records .*transitions cut during it (\d+);.* stale (true|false)")
 RIG_FAILED = re.compile(r"^W \(\d+\) \S+: fat index: (?!.*no raw reads)")
@@ -100,7 +132,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (settings file|raw reads|names file|read-ah
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -109,6 +141,12 @@ def main():
     ap.add_argument("--rom", type=Path)
     ap.add_argument("--min-gifs", type=int, default=3)
     ap.add_argument("--built-after", type=float, help="refuse an image file older than this (epoch s)")
+    ap.add_argument("--www-pack", type=Path, help="api: the pack PUT to /api/www")
+    ap.add_argument("--bundle", type=Path, help="api: the signed bundle PUT to /api/firmware")
+    ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
+    ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=5,
+                    help="api: the load's connections at once: 5 (the default: display-stress's five loads each on its own, and the simultaneous-upload bursts), 2 (status polls beside the rest) or 1")
+    ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
     a = ap.parse_args()
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
@@ -126,9 +164,11 @@ def main():
     want_sha = image_elf_sha(a.image)
     if not want_sha:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
+    if a.mode == "api":
+        return api(a, sim, rom, want_sha)
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
-    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500}.get(a.mode, 400)
+    seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)
     wall = a.wall or {"smoke": 900, "rig": 5400, "leak": 5400}.get(a.mode, 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -185,16 +225,31 @@ def main():
                 if rx.search(line):
                     failure = f"{name}: {line[:200]}"
             if failure:
+                # The register dump and backtrace that follow, for the log.
+                for _ in range(40):
+                    more = p.stdout.readline()
+                    if not more:
+                        break
+                    lf.write(more)
+                    lines.append(ANSI.sub("", more.rstrip("\n")))
                 break
+            if a.mode == "heapmap":
+                if SMOKE[4][1].search(line):
+                    gifs += 1
+                if re.search(r"heapmap: report \d+ end", line):
+                    seen["report"] = line
+                continue
             if a.mode == "leak":
                 if SMOKE[4][1].search(line):
                     gifs += 1
                 m = CENSUS.search(line)
                 if m:
                     census.append((gifs, int(m[1]), int(m[2])))
-                # 10 GIFs to warm up, then 40 more, with census lines after.
-                if len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
-                    break
+                # 10 GIFs to warm up, then 60 more, with census lines after;
+                # on to LEAK_GIFS_MAX while the halves do not compare flat.
+                if m and len([c for c in census if c[0] >= LEAK_WARM + LEAK_GIFS]) >= 3 and len([c for c in census if c[0] >= LEAK_WARM]) >= 8:
+                    if leak_halves(census)[5] or gifs >= LEAK_WARM + LEAK_GIFS_MAX:
+                        break
             elif a.mode == "rig":
                 m = HEARTBEAT_FLOOR.search(line)
                 if m:
@@ -278,6 +333,13 @@ def main():
         die(failure)
     if booted_sha is None:
         die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
+    if a.mode == "heapmap":
+        if "report" not in seen or gifs == 0:
+            die(f"no heap map report or no GIF within {seconds} emulated s / {wall} s wall (GIF starts {gifs})")
+        n = sum(1 for l in lines if "heapmap:" in l)
+        print(f"pass  {n} heapmap lines, GIF starts {gifs}")
+        print(f"EMU_HEAPMAP_OK ({took:.0f} s wall)")
+        return
     if a.mode == "leak":
         # The census swings with what is held at the sample (a decoder's
         # pieces, the ring or not): the least of the first half of the
@@ -285,16 +347,12 @@ def main():
         after = [c for c in census if c[0] >= LEAK_WARM]
         if len(after) < 6 or after[-1][0] < LEAK_WARM + LEAK_GIFS:
             die(f"not enough census lines ({len(after)} after the warm-up) within {seconds} emulated s (GIF starts {gifs})")
-        half = len(after) // 2
-        warm, late = after[:half], after[half:]
-        b0, b1 = min(c[1] for c in warm), min(c[1] for c in late)
-        y0, y1 = min(c[2] for c in warm), min(c[2] for c in late)
-        span = after[-1][0] - after[0][0]
+        b0, b1, y0, y1, span, flat = leak_halves(census)
         print(f"census: {len(census)} lines; least blocks {b0} -> {b1}, least allocated {y0} -> {y1} B, first half against second, over {span} GIFs")
         # A std thread's leftovers were ~4 blocks and ~190 B a GIF: 40 GIFs
         # were ~160 blocks and ~7.6 KB. Flat means within one GIF's own
         # churn (a decoder's pieces, the ring held or not).
-        if b1 - b0 > LEAK_BLOCKS or y1 - y0 > LEAK_BYTES:
+        if not flat:
             die(f"the heap grew across {span} GIFs: blocks {b0} -> {b1}, allocated {y0} -> {y1} B")
         print(f"EMU_LEAK_OK ({took:.0f} s wall)")
         return
@@ -391,6 +449,29 @@ def main():
                 print(l[:230])
         print(f"golden: {golden[1]} match, {golden[2]} differ")
         print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+
+
+def api(a, sim, rom, want_sha):
+    """The API lane (api_lane.py), inside its own network namespace: run.py runs itself again
+    under `unshare -rn` (an unprivileged user and network namespace with only a loopback)."""
+    import api_lane
+    for what, p in (("--www-pack", a.www_pack), ("--bundle", a.bundle), ("--psb", a.psb)):
+        if not p or not p.exists():
+            sys.exit(f"EMU_API_FAIL: {what} missing: {p}")
+    try:
+        a.seeded = api_lane.seeded_image(a.image, EMU_DIR / "api")
+    except api_lane.LaneFail as e:
+        sys.exit(f"EMU_API_FAIL: {e}")
+    if os.environ.get("EMU_API_NETNS") != "1":
+        if not shutil.which("unshare"):
+            sys.exit("EMU_API_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+        env = {**os.environ, "EMU_API_NETNS": "1"}
+        os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
+    ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
+    if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
+        sys.exit("EMU_API_FAIL: cannot bring up the loopback in the lane's network namespace")
+    a.emu_dir, a.want_sha = EMU_DIR, want_sha
+    sys.exit(api_lane.run(a, sim, rom, FAIL))
 
 
 main()

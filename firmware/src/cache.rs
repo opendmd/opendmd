@@ -48,7 +48,7 @@ use opendmd_core::filter::Filter;
 use opendmd_core::layout::{self, CacheCount};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -192,15 +192,42 @@ pub fn snapshot() -> State {
     STATE.lock().unwrap().clone()
 }
 
+/// A count waits for a transfer to end ([`run_count`]).
+static DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// The network worker's turn (each loop, at least once a second): a count
+/// put off for a transfer is asked for again once the transfer is over.
+pub fn tick() {
+    if DEFERRED.load(Relaxed)
+        && !crate::cache_builder::transfer_in_flight()
+        && DEFERRED.swap(false, Relaxed)
+    {
+        wake();
+    }
+}
+
 /// The network worker's side of [`NetCommand::CountCache`]: wait for the
 /// requests to go quiet, count, publish. Returns early if the count is
 /// already current (a queued duplicate).
+// Not inlined into the network worker's loop: its frame would be under
+// the firmware signature check (`ota::verify_signature`, ~6.5 KB deep).
+#[inline(never)]
 pub fn run_count() {
     loop {
+        // A firmware signature check waits for the worker: it goes first
+        // (`ota::verify_waiting`), this count after it, from the start.
+        if crate::ota::verify_waiting() {
+            wake();
+            return;
+        }
         // Debounce: start only once nothing has invalidated for a while.
         let gen = loop {
             let g = GEN.load(Relaxed);
             thread::sleep(config::CACHE_DEBOUNCE);
+            if crate::ota::verify_waiting() {
+                wake();
+                return;
+            }
             if GEN.load(Relaxed) == g {
                 break g;
             }
@@ -223,6 +250,16 @@ pub fn run_count() {
             s.counting = false;
             return;
         }
+        // Not beside a transfer (an upload, a firmware or www pack being
+        // staged, a listing): its buffers and the count's key slice (up to
+        // 12 KB) beside a GIF's start took the emulator's heap to a 9 KB
+        // floor once the count went back to work behind a signature check
+        // while the firmware staged. Left to [`tick`], which asks again
+        // once the card is free; the worker is not held meanwhile.
+        if crate::cache_builder::transfer_in_flight() {
+            DEFERRED.store(true, Relaxed);
+            return;
+        }
         let started = Instant::now();
         // Not beside a cache builder file. The builder does not start one
         // while a count is pending (it waits for `counting`), but one it
@@ -233,6 +270,10 @@ pub fn run_count() {
         // It is seconds (a file is 0.2-6 s at full speed); bounded all the
         // same.
         while crate::cache_builder::holding() && started.elapsed() < config::CACHE_BUILDER_WAIT {
+            if crate::ota::verify_waiting() {
+                wake();
+                return;
+            }
             thread::sleep(Duration::from_millis(50));
         }
         match count(&manifest, &platforms, gen) {
@@ -256,7 +297,8 @@ pub fn run_count() {
                 );
                 return;
             }
-            // Superseded mid-count: go round again.
+            // Superseded mid-count, or stopped for a signature check: go
+            // round again (which gives way to the check first).
             Ok(None) => continue,
             Err(e) => {
                 log::warn!("cache: counting {manifest} failed: {e:#}");
@@ -417,7 +459,7 @@ struct Abortable<R> {
 
 impl<R: Read> Read for Abortable<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if GEN.load(Relaxed) != self.gen {
+        if GEN.load(Relaxed) != self.gen || crate::ota::verify_waiting() {
             return Err(io::Error::other("superseded"));
         }
         let n = self.inner.read(buf)?;
@@ -471,7 +513,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         keys.clear();
         let mut hi = lo;
         loop {
-            if GEN.load(Relaxed) != gen {
+            if GEN.load(Relaxed) != gen || crate::ota::verify_waiting() {
                 return Ok(None);
             }
             dirs += walk_bucket(&parents, hi as u8, config::CACHE_PACE_SLEEP, |path| {
@@ -524,7 +566,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
             match layout::count_prepared(reader, &filter, (lo as u8, hi as u8), &keys, passes == 0)
             {
                 Ok(c) => c,
-                Err(_) if GEN.load(Relaxed) != gen => return Ok(None),
+                Err(_) if GEN.load(Relaxed) != gen || crate::ota::verify_waiting() => return Ok(None),
                 Err(e) => return Err(e.into()),
             };
         pass_ms += tp.elapsed().as_millis();
