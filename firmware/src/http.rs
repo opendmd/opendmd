@@ -1151,8 +1151,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // of the parent directory under the FATFS lock — cheap in a bucket or
     // `www/`, ~330-550 ms in the 3,781-entry `gifs/Consoles`, where the
     // player's next open waits behind it — but still far cheaper than listing
-    // the parent. `size` is null for a directory.
-    server.route("/api/stat", Method::Get, |req| {
+    // the parent. `size` is null for a directory. (Not `/api/stat`: EasyPrivacy
+    // blocks that path in uBlock Origin and Brave; `make blocklist-check`.)
+    server.route("/api/exists", Method::Get, |req| {
         let Some(card) = query_param(req.query(), "path") else {
             return req.bad_request("path= required");
         };

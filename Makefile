@@ -104,12 +104,19 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate release
+
+# No request URL the web app or the site makes may match EasyPrivacy or EasyList
+# (uBlock Origin / Brave blocked /api/stat?). Fetches the lists once a day into
+# target/blocklists/ and works offline from that cache (BLOCKLIST_ARGS=--offline);
+# not part of `make test`, which needs no network.
+blocklist-check:
+	uv run tools/blocklist-check.py $(BLOCKLIST_ARGS)
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
