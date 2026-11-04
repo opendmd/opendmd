@@ -1,0 +1,411 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Sprout run, close"
+about "The hooded runner up close: scarf flying, sprout bobbing, leaping boulders and gaps"
+loop forever
+fps 50
+
+-- The close-up side-scroller (docs/research/side-scroller.md, section 7):
+-- the runner is the star, 25 px tall, built from five sprite parts read
+-- per pixel (head, torso, legs running, legs in the air, the sprout) so
+-- the frames combine (3 heads x 5 torsos x 7 legs) within the 256-number
+-- store; the scarf is maths. The world is a strip of ground and two close
+-- layers, going by at 100 px/s, two pixels a frame. The auto-runner of
+-- side-scroller.psi, rescaled: cycles of 160 px, gravity 220 px/s/s, and
+-- a camera that follows the runner up (75 %) so the ground drops away
+-- under a jump.
+
+-- ---- Colours: 32 entries, nearer on higher entries ----
+-- 1-3 sky, 4-6 sun or moon and stars, 7-8 far trees, 9-11 near bushes,
+-- 12-14 boulders and logs, 15-17 soil and pebbles, 18-20 grass, 21-31 the
+-- runner (21 outline, 22-24 hood and tunic, 25-26 skin, 27 eye, 28 cheek,
+-- 29-30 scarf, 31 sprout; trousers are 22, boots 15, the sprout's dark 18)
+palette day = #000, #5ab0f0, #8ccaf6, #c8e6f8, #fff2b0, #fffbe6, #fff, #6a9ab8,
+  #88b6cc, #2f6a4a, #3f8a58, #5aa868, #5a4038, #8a6a52, #b8946c, #5a2e22,
+  #8a4a30, #b07850, #3e8a34, #66b040, #a6dc5a, #23182a, #1e7078, #2aa0a0,
+  #6ad0c4, #ffd8b0, #e0a888, #fff, #ff8a8a, #e8384a, #a01c34, #c8e040
+palette dusk = #000, #3a2a78, #9a4a8a, #f09070, #ffc080, #ffe0a0, #fff, #5a4a80,
+  #7a5a8a, #24384a, #34505a, #4a6a60, #4a3036, #74505a, #a07468, #4a2228,
+  #7a3a30, #a0604a, #3a6040, #5a8048, #90b060, #20141e, #1a5a6a, #2a8090,
+  #6ab0b0, #f8c0a0, #d08a80, #fff0e0, #f07a80, #e03040, #901830, #c0c040
+palette night = #000, #040a1c, #0a1834, #142a4a, #304870, #e8f0ff, #fff, #12203a,
+  #1a2c48, #0c1e20, #12302c, #1a4038, #1a1820, #2a2830, #3e3a44, #1a1018,
+  #2a1c24, #40303a, #12301c, #1c4428, #2c5a34, #0a0610, #14485a, #1e6a7a,
+  #3a8a98, #b8b0c0, #8a8098, #e8f0ff, #a06070, #a02838, #601424, #8a9a40
+
+-- ---- The runner, in parts (frames stacked down each sheet) ----
+-- head 16 x 9: looking ahead, excited (in the air), blinking
+sprite head {
+  key . 0, o 21, D 22, M 23, L 24, s 25, S 26, w 27, k 28
+  ......oooooo....
+  ....ooLLLLMMoo..
+  ...oLLMMMMMMMMo.
+  ..oLMMMMMMoooooo
+  ..oMMMMMMossssso
+  .oMMMMMMosswosko
+  .oDMMMMMosswosso
+  .oDDMMMMoSsssoo.
+  ..oDDDDDDooooo..
+  ......oooooo....
+  ....ooLLLLMMoo..
+  ...oLLMMMMMMMMo.
+  ..oLMMMMMMoooooo
+  ..oMMMMMMossssso
+  .oMMMMMMoswwosko
+  .oDMMMMMoswwosso
+  .oDDMMMMoSsosoo.
+  ..oDDDDDDooooo..
+  ......oooooo....
+  ....ooLLLLMMoo..
+  ...oLLMMMMMMMMo.
+  ..oLMMMMMMoooooo
+  ..oMMMMMMossssso
+  .oMMMMMMosssssko
+  .oDMMMMMosoooso.
+  .oDDMMMMoSsssoo.
+  ..oDDDDDDooooo..
+}
+-- torso 16 x 6: arm forward, down, back, both up (rising), out (falling)
+sprite torso {
+  key . 0, o 21, T 22, t 23, l 24, s 25, r 29, R 30, b 15
+  ....oorrrrro....
+  ...orRRRRrrro...
+  ...otttttlltoo..
+  ...otTTtttltTso.
+  ...obbbbbbbo.oo.
+  ....otttttto....
+  ....oorrrrro....
+  ...orRRRRrrro...
+  ...ottTttlltoo..
+  ...ottTtttlto...
+  ...obbsbbbbbo...
+  ....otttttto....
+  ....oorrrrro....
+  ...orRRRRrrro...
+  ..oTottttlltoo..
+  .osTotttttlto...
+  ..o.obbbbbbbo...
+  ....otttttto....
+  ..s..oorrrro..s.
+  ..T.orRRRrrro.T.
+  ..ToottttttlooT.
+  ...otttttttlo...
+  ...obbbbbbbbo...
+  ....otttttto....
+  ....oorrrrro....
+  ...orRRRRrrro...
+  .ssTotttttltTss.
+  ...otttttttlo...
+  ...obbbbbbbbo...
+  ....otttttto....
+}
+-- legs 16 x 7, two colours and the outline (2 bits): the run's four
+sprite legsRun {
+  key . 0, o 21, p 22, b 15
+  ....opppppo.....
+  ...oppppppo.....
+  ..opp.o.oppo....
+  .opp.....oppo...
+  .obo......opo...
+  obbo......obbo..
+  ooo.......obbbo.
+  ....opppppo.....
+  ....oppppo......
+  .....oppo.......
+  .....oppoo......
+  .....opobbo.....
+  .....obbbbo.....
+  ......oooo......
+  ....opppppo.....
+  ...opppppppo....
+  ..oppo...oppo...
+  .obbo.....oppo..
+  .oo........opo..
+  ..........obbo..
+  ..........obbbo.
+  ....opppppo.....
+  ....oppppppo....
+  ....opo.oppo....
+  ....opo..obbo...
+  ....opo...oo....
+  ....obbo........
+  ....obbbo.......
+}
+-- tucked, reaching down, crouched
+sprite legsAir {
+  key . 0, o 21, p 22, b 15
+  ....opppppo.....
+  ...opppppppo....
+  ...oppppppppo...
+  ...obbo..obbo...
+  ...ooo...ooo....
+  ................
+  ................
+  ....opppppo.....
+  ....opppppo.....
+  ...oppo.oppo....
+  ...opo...opo....
+  ..obbo...obbo...
+  ..obbo...obbo...
+  ..ooo....oooo...
+  ....opppppo.....
+  ...oppppppppo...
+  ..oppo....oppo..
+  .oppo......oppo.
+  ..opo......opo..
+  .obbo......obbo.
+  .oooo......oooo.
+}
+-- the sprout on the hood, leaves up and drooping
+sprite sprout {
+  key . 0, o 21, g 31, G 18
+  ....gg....gg....
+  ....ggg..ggg....
+  .....gGooGg.....
+  .......oo.......
+  .......oo.......
+  ................
+  ....gg....gg....
+  ....gggooggg....
+  .....G.oo.G.....
+  .......oo.......
+}
+sprite gem {
+  key . 0, W #fff, P #ff5ad0, D #a02890
+  ...W...
+  ..WPP..
+  .WPPPP.
+  WPPPPPD
+  .PPPPD.
+  ..PPD..
+  ...D...
+}
+sprite spark {
+  key . 0, W #fff
+  ..W..
+  .....
+  W.W.W
+  .....
+  ..W..
+}
+
+-- ---- The clock ----
+X = floor(t*100 + .5) + floor(seed*4000)*160
+n0 = floor(X/160)%8192
+uc = X%160
+Xg = X%4096
+-- the layers' offsets, each held to its pattern's length
+Fl = floor(X%16000/4)
+Nl = floor(X%7200/2)
+-- the scarf's flutter (3 a second) and the blink's clock
+flut = X%800/33.333
+blinkOn = hash(floor(X%32000/40), 7.7) > .88
+
+-- ---- Each cycle, from its number ----
+-- level 0-2 (the ground's top 6 px a level up)
+fn lev(n) = floor(clamp(noise(n*.8, 3.1 + seed*40, 0)*5 - 1.2, 0, 2.99))
+-- its jump into the next: 0 none, 1 a gap, 2 up a ledge, 3 a hop down,
+-- 4 something in the way
+fn kind(n, d) {
+  r = hash(n, 9.7 + seed)
+  r < .4 ? 1 : d > 0 ? 2 : d < 0 ? 3 : (r < .85) * 4
+}
+-- its length, held so that the arc stays on the panel
+fn jlen(n, k, l, d) = min(pick(k, 0, 54, 50, 40, 58) + floor(hash(n, 4.4 + seed) * pick(k, 0, 13, 10, 10, 9)),
+  66 - 5*max(d, 0))
+-- what is in the way (kind 4): 0 a boulder, 1 a log, 2 a thorn bush, 9
+-- nothing; its height, held to the room the arc leaves over it
+fn room(j) = j*j/10000*110*(.25 - 144/max(j*j, 1)) - 1
+fn thing(n, k, j) = k == 4 ? floor(hash(n, 2.9 + seed) * 2.99) : 9
+fn tall(p, j) = min(pick(p, 9, 6, 8), room(j))
+fn edge0(k, j) = pick(k, 999, 165 - j, 160 - floor(j*.36), 165 - j, 999)
+fn edge1(k, j) = pick(k, 999, 155, 160 - floor(j*.36), 165 - j, 999)
+
+-- the cycles the panel shows: one behind, the runner's, one ahead
+Lm = lev(n0 - 1)
+L0 = lev(n0)
+L1 = lev(n0 + 1)
+L2 = lev(n0 + 2)
+Km = kind(n0 - 1, L0 - Lm)
+K0 = kind(n0, L1 - L0)
+K1 = kind(n0 + 1, L2 - L1)
+Jm = jlen(n0 - 1, Km, Lm, L0 - Lm)
+J0 = jlen(n0, K0, L0, L1 - L0)
+J1 = jlen(n0 + 1, K1, L1, L2 - L1)
+Am = edge0(Km, Jm)
+A0 = edge0(K0, J0)
+A1 = edge0(K1, J1)
+Bm = edge1(Km, Jm)
+B0 = edge1(K0, J0)
+B1 = edge1(K1, J1)
+Pm = thing(n0 - 1, Km, Jm)
+P0 = thing(n0, K0, J0)
+P1 = thing(n0 + 1, K1, J1)
+Hm = tall(Pm, Jm)
+H0 = tall(P0, J0)
+H1 = tall(P1, J1)
+-- the rows any of them can touch: from the highest top to the lowest foot
+fn rtop(p, l, hh) = p < 9 ? 27 - 6*l - hh : 99
+fn rfoot(p, l) = p < 9 ? 27 - 6*l : -99
+rockTop = min(min(rtop(Pm, Lm, Hm), rtop(P0, L0, H0)), rtop(P1, L1, H1))
+rockFoot = max(max(rfoot(Pm, Lm), rfoot(P0, L0)), rfoot(P1, L1))
+
+-- ---- The runner ----
+take = 160 - J0
+jumping = (J0 > 0) * (uc >= take)
+T = max(J0, 1)/100
+vy = 6*(L1 - L0)/T + 110*T
+tau = max(uc - take, 0) / 100
+vNow = vy - 220*tau
+hR = 6*L0 + (vy*tau - 110*tau*tau)*jumping
+-- the camera follows 75 % of the height; the feet's row
+cam = hR*.75
+F = floor(26.5 - hR*.25)
+-- squash before take-off and on landing, stretch as it leaves the ground
+crouch = max((Jm > 0) * (uc < 10), (J0 > 0) * (uc >= take - 8) * (uc < take))
+launch = jumping * (vNow > vy*.55)
+sy = crouch ? 1.25 : launch ? .85 : 1
+sx = crouch ? .85 : launch ? 1.1 : 1
+-- the run's frame (a step every 12 px) and the bob on the passing frames
+rf = floor(uc%48/12)
+bob = rf % 2 * (1 - jumping) * (1 - crouch)
+airF = jumping ? (vNow > 0 ? 0 : 1) : crouch ? 2 : -1
+torsoF = jumping ? (vNow > 0 ? 3 : 4) : pick(rf, 0, 1, 2, 1)
+headF = jumping ? 1 : blinkOn ? 2 : 0
+sproutF = jumping ? (vNow > 0) : rf%2
+-- the scarf: from the neck back, trailing down as it rises, up as it falls
+neckY = F - 11/sy - bob
+slope = jumping ? (vNow > 0 ? .35 : -.25) : .1
+
+-- ---- Day and night: a day of 160 s ----
+dph = frac(t/160 + seed)
+el = sin(dph)
+dayW = smoothstep(0, .35, el)
+nightW = smoothstep(0, -.3, el)
+palette S = tween(tween(dusk, day, dayW), night, nightW)
+arc = frac(dph*2)
+sunX = 70 + arc*50
+sunY = 12 - sin(arc*.5)*9 + cam*.1
+
+draw {
+  for k < 7 {
+    e = k - 3
+    half = sqrt(max(10 - e*e, 0))
+    line(sunX - half, sunY + e, sunX + half, sunY + e, 5/32)
+  }
+  if nightW > .3 {
+    for k < 10 {
+      dot((hash(k, 1)*128 - Xg/64) % 128, hash(k, 2)*10, (hash(k, floor(Xg/24)) > .15) * 6 / 32)
+    }
+  }
+  -- two seeds on each arc, at the runner's chest; gone once passed
+  -- (the runner's cycle and the next: the one behind is all collected)
+  for m < 2 {
+    kk = pick(m, K0, K1)
+    jj = pick(m, J0, J1)
+    la = pick(m, L0, L1)
+    lb = pick(m, L1, L2)
+    tt = jj*jj/10000*110
+    for g < 2 {
+      p = .35 + g*.3
+      gu = kk > 0 ? 160 - jj + p*jj : 70 + g*30
+      h = 6*la + (kk > 0)*(6*(lb - la)*p + tt*p*(1 - p))
+      sx = 30 + 160*m + gu - uc
+      gy = 27 - h + cam - 14
+      if sx > 37 {
+        spr(gem, sx - 3, gy - 3)
+      } else {
+        if sx > 22 {
+          spr(spark, sx - 2, gy - 2)
+        }
+      }
+    }
+  }
+}
+
+-- ---- Once a column ----
+-- far trees (a quarter of the speed): rolling, with round tops
+fu = Fl + px
+ff = fu%9 - 4.5
+fT = 15 + cam*.25 - 3*tri(fu/4000*7 + seed) - 1.5*tri(fu/4000*23 + .3) + ff*ff*.1
+-- near bushes (half the speed): round, 18 px a bush
+nu = Nl + px
+nf = nu%18 - 9
+nT = 18 + cam*.5 - hash(floor(nu/18)%200, 4.2 + seed)*7 + nf*nf*.08
+-- the ground: which cycle (rel -1..1) and where in it
+w = uc + px - 30
+rel = floor(w/160)
+u = w - rel*160
+sel = rel + 1
+e0 = pick(sel, Am, A0, A1)
+e1 = pick(sel, Bm, B0, B1)
+lv = pick(sel + (u >= e1), Lm, L0, L1, L2)
+blade = floor(hash(floor((Xg + px) / 2) % 2048, 2.2 + seed) * 2.6)
+gT = (u >= e0) * (u < e1) ? 99 : 27 - 6*lv + cam - blade
+-- what is in the way: its outline across (boulder: a dome, log: flat with
+-- steep ends, thorns: spiked), its top
+pk = pick(sel, Pm, P0, P1)
+dx = u - (160 - pick(sel, Jm, J0, J1)/2)
+adx = abs(dx)
+shape = sqrt(clamp((pick(pk, 9.5, 11.5, 9) - adx) * pick(pk, .105, .6, .2), 0, 1)) * (1 - (pk == 2)*.35*abs(tri(dx/4)))
+oT = shape > .05 ? 27 - 6*pick(sel, Lm, L0, L1) + cam - pick(sel, Hm, H0, H1)*shape : 99
+-- the scarf's top row, column by column (99: no scarf)
+sd = 25 - px
+sY = (sd >= 0) * (sd < 14) ? neckY + sd*slope + sin(px/8 + flut)*sd*.07 : 99
+-- the runner's column in its sheets (held in when it squashes)
+hU = floor((px - 30)*sx + 8)
+
+-- ---- Rows: where each part of the runner is ----
+a = floor((F - py)*sy + .5)
+lr = 6 - a
+lin = (lr >= 0) * (lr < 7)
+runV = lin * (airF < 0) ? lr + rf*7 : -1
+airV = lin * (airF >= 0) ? lr + airF*7 : -1
+ab = a - bob
+tr = 12 - ab
+torsoV = (tr >= 0) * (tr < 6) ? tr + torsoF*6 : -1
+hr = 21 - ab
+headV = (hr >= 0) * (hr < 9) ? hr + headF*9 : -1
+sr = 25 - ab + bob
+sproutV = (sr >= 0) * (sr < 5) ? sr + sproutF*5 : -1
+skyK = py < 7 ? 1 : py < 14 ? 2 : 3
+
+-- ---- Pixels: each layer over the last (by its palette entries) ----
+k = max(skyK, ink(32))
+k = py >= fT ? 7 + (py < fT + 1) : k
+-- (the bushes lit along their top three rows; written so, not as a `pick`,
+-- it keeps the column run within the registers)
+k = py >= nT ? max(k, 11 - (py > nT + 2)*2) : k
+scene rocks when(py >= rockTop + cam - 1) * (py <= rockFoot + cam) {
+  cRock = pick(min(py - oT, 4), 14, 13, 13, 13, 12)
+}
+k = max(k, cRock)
+gv = py - gT
+k = max(k, pick(min(gv, 9), 20, 19, 19, 18, 16, 16, 16, 16, 16, 15))
+scene scarf when abs(py - neckY - 2) < 5 {
+  cScarf = pick(py - sY, 29, 30)
+}
+k = max(k, cScarf)
+-- the runner's parts, each only on its own rows (a scene a part; its
+-- value is 0 on the other rows)
+scene legsA when runV >= 0 {
+  clegsA = legsRun[hU, runV]
+}
+k = max(k, clegsA)
+scene legsB when airV >= 0 {
+  clegsB = legsAir[hU, airV]
+}
+k = max(k, clegsB)
+scene body when torsoV >= 0 {
+  cbody = torso[hU, torsoV]
+}
+k = max(k, cbody)
+scene face when headV >= 0 {
+  cface = head[hU, headV]
+}
+k = max(k, cface)
+scene leaf when sproutV >= 0 {
+  cleaf = sprout[hU, sproutV]
+}
+k = max(k, cleaf)
+pal(S, k/32)
