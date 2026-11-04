@@ -3,7 +3,7 @@
 // wrangler.config.ts from the site being served, so the Worker checks a
 // gallery Formula with exactly the compiler the page draws it with.
 
-import { initSync, compile, error, errorAt, info, controls, frame, frameOver, pixels, under } from "../psi/opendmd_psi_web.js";
+import { initSync, compile, program, error, errorAt, info, controls, frame, frameOver, pixels, under } from "../psi/opendmd_psi_web.js";
 import wasm from "../psi/opendmd_psi_web_bg.wasm";
 
 let mem: WebAssembly.Memory | null = null;
@@ -25,6 +25,9 @@ export interface Compiled {
   meta: { name: string | null; about: string | null; look: [string, number] | null; controls: Control[] };
   /** pkg-psi info(): [steps, …, loop ms (4), inputs (5), …, µs with the still cache on the VM (14)] */
   info: number[];
+  /** pkg-psi program(): the Formula compiled for the panel, its length and the format's version (byte 3). */
+  psb: number;
+  abi: number;
 }
 
 /** Compile `src` for the gallery's checker (src/check.ts): its
@@ -48,7 +51,8 @@ export function compiled(src: string): Compiled | { ok: false; error: string; at
     return { ok: false, error: "the checker could not read its declarations", at: 0 };
   }
   // (controls() compiles into the module's other program: the one drawn is still this.)
-  return { ok: true, meta, info: info_ };
+  const psb = program(src);
+  return { ok: true, meta, info: info_, psb: psb.length, abi: psb[3] ?? 0 };
 }
 
 // The picture a Formula that draws over a GIF is previewed over (inputs bit

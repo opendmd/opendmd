@@ -8,7 +8,8 @@
 
 import { compiled, type Compiled } from "./psi";
 
-export const MAX_FILE = 4096;
+export const MAX_FILE = 20 * 1024;
+export const MAX_PSB = 4500;
 export const MAX_NAME = 40;
 export const MAX_DESCRIPTION = 120;
 export const MAX_AUTHOR = 40;
@@ -33,6 +34,11 @@ export interface Entry {
   loop_ms: number;
   inputs: number;
   us: number;
+  /** µs a frame with the panel's JIT (info[11]; info[13] for one that draws over a GIF). */
+  jit_us: number;
+  /** The Formula compiled for the panel: bytes, and the format's version. */
+  psb_len: number;
+  abi: number;
 }
 
 export type Verdict = { ok: true; entry: Entry; program: Compiled } | { ok: false; problems: string[] };
@@ -207,6 +213,11 @@ export function checkFile(slug: string, bytes: Uint8Array): Verdict {
   if (us > MAX_US) {
     problems.push(`the formula is too heavy for the panel: about ${(us / 1000).toFixed(1)} ms a frame, ${(MAX_US / 1000).toFixed(0)} ms at most`);
   }
+  // The Formula as compiled for the panel (a `@formula?psb=…` link carries it).
+  if (c.psb === 0) problems.push("the formula could not be prepared for the panel");
+  else if (c.psb > MAX_PSB) {
+    problems.push(`the formula is too long for the panel to take in a link: ${c.psb} bytes once prepared, ${MAX_PSB} at most; cut tables or repeated steps (comments and spaces cost nothing)`);
+  }
   if (problems.length) return { ok: false, problems };
   // (controls() writes the amount as a number: 100 for `look` alone)
   const look = c.meta.look ? ([c.meta.look[0], Math.round(c.meta.look[1])] as [string, number]) : null;
@@ -217,6 +228,7 @@ export function checkFile(slug: string, bytes: Uint8Array): Verdict {
       slug, name: name!, about: about!, author, licence, bundle, look,
       controls: c.meta.controls.map((k) => k.label),
       src, loop_ms: c.info[4], inputs: c.info[5], us,
+      jit_us: c.info[5] & 32 ? c.info[13] : c.info[11], psb_len: c.psb, abi: c.abi,
     },
   };
 }

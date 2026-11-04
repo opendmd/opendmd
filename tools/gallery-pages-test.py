@@ -213,6 +213,14 @@ def main() -> int:
             except SystemExit as e:
                 stopped = str(e)
             check("every example needs its date" in stopped, f"{what}: the build stops ({stopped[:120]})")
+        # A tile says what a Formula costs and, when its compiled form is newer than the oldest release served, which firmware it needs.
+        e = {"us": 6500, "jit_us": 4200, "abi": gp.ABI_SERVED}
+        check("Light · about 4.2 ms a frame" in gp.cost(e) and gp.needs(e) == "", "a tile: its tier and the speed-up's estimate; nothing about firmware for a format the oldest release plays")
+        e = {"us": 9000, "jit_us": 8100, "abi": gp.ABI_SERVED + 1}
+        check("Heavy · about 8.1 ms a frame" in gp.cost(e) and gp.needs(e) == '<p class="fneeds">Needs newer firmware</p>', "a tile: Heavy over 8 ms; a newer format with no release named says so")
+        gp.ABI_FIRMWARE[gp.ABI_SERVED + 1] = "1.0.0-beta.99"
+        check(gp.needs(e) == '<p class="fneeds">Needs firmware 1.0.0-beta.99 or later</p>', "a tile: \"Needs firmware 1.0.0-beta.99 or later\"")
+        check(gp.cost({"us": 1}) == "" and gp.needs({}) == "", "a tile: a row stored before the migration says nothing")
     finally:
         if not a.keep:
             shutil.rmtree(tmp, ignore_errors=True)

@@ -99,11 +99,11 @@ export async function seed(env: GalleryEnv, origin = "https://opendmd.dev"): Pro
     examples.map(async (e) =>
       db
         .prepare(
-          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated, added) " +
-            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 'ok', ?, ?)",
+          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, psb_len, abi, jit_us, sha, thumb, status, updated, added) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, 'ok', ?, ?)",
         )
         .bind(e.bundle ? "bundle" : "example", e.slug, e.file, e.src, e.name, e.about, e.author, e.licence, e.look ? JSON.stringify(e.look) : null,
-          JSON.stringify(e.controls), e.us, e.loop_ms, e.inputs, await blobSha(new TextEncoder().encode(e.file)), t, Math.floor(Date.parse(e.added) / 1000)),
+          JSON.stringify(e.controls), e.us, e.loop_ms, e.inputs, e.psb_len, e.abi, e.jit_us, await blobSha(new TextEncoder().encode(e.file)), t, Math.floor(Date.parse(e.added) / 1000)),
     ),
   );
   await db.batch([db.prepare("delete from gallery where source in ('bundle', 'example')"), ...rows, metaSet(db, "examples", __GALLERY_EXAMPLES__)]);
@@ -278,12 +278,12 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
       writes.push(
         db.prepare(
           // `added`: when first accepted, kept through later versions (a file that went and came back: again).
-          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, sha, thumb, status, updated, added) " +
-            "values ('gallery', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'ok', ?15, ?15) on conflict(source, slug) do update set " +
-            "file = ?2, src = ?3, name = ?4, about = ?5, author = ?6, licence = ?7, look = ?8, controls = ?9, esp32_us = ?10, loop_ms = ?11, inputs = ?12, " +
+          "insert into gallery (source, slug, file, src, name, about, author, licence, look, controls, esp32_us, loop_ms, inputs, psb_len, abi, jit_us, sha, thumb, status, updated, added) " +
+            "values ('gallery', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?16, ?17, ?18, ?13, ?14, 'ok', ?15, ?15) on conflict(source, slug) do update set " +
+            "file = ?2, src = ?3, name = ?4, about = ?5, author = ?6, licence = ?7, look = ?8, controls = ?9, esp32_us = ?10, loop_ms = ?11, inputs = ?12, psb_len = ?16, abi = ?17, jit_us = ?18, " +
             "sha = ?13, thumb = ?14, updated = ?15, added = case when gallery.status = 'gone' or gallery.added is null then ?15 else gallery.added end, status = 'ok'",
         ).bind(slug, file, e.src, e.name, e.about, e.author, e.licence, e.look ? JSON.stringify(e.look) : null, JSON.stringify(e.controls), e.us,
-          e.loop_ms, e.inputs, sha, pic, t),
+          e.loop_ms, e.inputs, sha, pic, t, e.psb_len, e.abi, e.jit_us),
         db.prepare("delete from gallery_refused where slug = ?").bind(slug),
       );
     }
@@ -321,6 +321,9 @@ interface Row {
   sha: string;
   esp32_us: number;
   loop_ms: number;
+  psb_len: number | null;
+  abi: number | null;
+  jit_us: number | null;
   status: string;
   updated: number;
   added: number | null;
@@ -331,7 +334,7 @@ interface Row {
 async function listed(env: GalleryEnv, ctx: ExecutionContext | null, origin: string): Promise<{ rows: Row[]; meta: Record<string, string> } | null> {
   const db = env.DB;
   const [rows, meta] = await db.batch([
-    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated, added from gallery where status = 'ok'"),
+    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, psb_len, abi, jit_us, status, updated, added from gallery where status = 'ok'"),
     db.prepare("select key, value from meta where key in ('examples', 'synced', 'commit')"),
   ]);
   const m = Object.fromEntries((meta.results as { key: string; value: string }[]).map((r) => [r.key, r.value]));
@@ -372,6 +375,9 @@ interface Tile {
   controls: string[];
   src: string;
   added: string | null; // ISO time (`iso`)
+  us: number;
+  jit_us: number | null;
+  abi: number | null;
 }
 
 /** gallery_page.py `iso`: UTC to the second. */
@@ -380,6 +386,26 @@ const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d{3}Z$/,
 /** gallery_page.py `share_hash`: by name, never the text. */
 function shareHash(e: Tile): string {
   return "#" + urlencoded([["gallery", e.slug]]);
+}
+
+// gallery_page.py ABI_SERVED, ABI_FIRMWARE: the compiled format's version the
+// oldest release the site serves plays, and the first release of each newer one.
+const ABI_SERVED = 1;
+const ABI_FIRMWARE: Record<number, string> = { 1: "1.0.0-beta.13" };
+
+/** gallery_page.py `cost`: what a Formula costs on the panel, as the web app says it. */
+function cost(e: Tile): string {
+  if (e.jit_us == null) return "";
+  const tier = e.jit_us <= 5000 ? "Light" : e.jit_us <= 8000 ? "Medium" : "Heavy";
+  const tip = `About ${(e.jit_us / 1000).toFixed(1)} ms a frame on the panel, ${(e.us / 1000).toFixed(1)} ms without its speed-up (light: under 5 ms; medium: under 8; the gallery takes up to 10)`;
+  return `<p class="fcost" title="${esc(tip)}">${tier} · about ${(e.jit_us / 1000).toFixed(1)} ms a frame</p>`;
+}
+
+/** gallery_page.py `needs`: the firmware a Formula needs, when it is newer than the oldest the site serves. */
+function needs(e: Tile): string {
+  if (e.abi == null || e.abi <= ABI_SERVED) return "";
+  const v = ABI_FIRMWARE[e.abi];
+  return `<p class="fneeds">${v ? `Needs firmware ${esc(v)} or later` : "Needs newer firmware"}</p>`;
 }
 
 /** gallery_page.py `tile`. */
@@ -397,6 +423,7 @@ function tile(e: Tile, pic: string): string {
     `<picture class="led"><img src="${esc(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>` +
     `<h3>${esc(e.name)}${badges}</h3><p class="fdesc">${esc(e.about)}</p>` +
     (e.controls.length ? `<p class="fctl">Controls: ${esc(e.controls.join(", "))}</p>` : "") +
+    cost(e) + needs(e) +
     `<p class="fby">by ${esc(e.author)} · <a href="${url}" rel="license">${lic}</a></p>` +
     `<p class="facts"><a class="cta add" href="../f/${h}&amp;panel=1">Open on my panel</a>` +
     `<a class="cta alt" href="../f/${h}">Open</a></p></li>`
@@ -430,6 +457,7 @@ function order(tiles: Tile[]): Tile[] {
 const asTile = (r: Row): Tile => ({
   slug: r.slug, name: r.name, about: r.about, author: r.author, licence: r.licence, bundle: r.source === "bundle",
   look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), src: r.src, added: r.added == null ? null : iso(r.added),
+  us: r.esp32_us, jit_us: r.jit_us, abi: r.abi,
 });
 
 /** The two lists between their markers, from the store's rows. */
@@ -521,7 +549,7 @@ export async function file(request: Request, env: GalleryEnv, ctx: ExecutionCont
 export async function api(env: GalleryEnv): Promise<unknown> {
   const db = env.DB;
   const [rows, meta, refused] = await db.batch([
-    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, status, updated, added from gallery where status = 'ok' order by source, slug"),
+    db.prepare("select source, slug, name, about, author, licence, look, controls, src, sha, esp32_us, loop_ms, psb_len, abi, jit_us, status, updated, added from gallery where status = 'ok' order by source, slug"),
     db.prepare("select key, value from meta where key in ('examples', 'synced', 'commit')"),
     db.prepare("select slug, sha, problems, seen from gallery_refused order by slug"),
   ]);
@@ -533,7 +561,7 @@ export async function api(env: GalleryEnv): Promise<unknown> {
     examples_build: m.examples === __GALLERY_EXAMPLES__ ? "this" : m.examples ? "another" : null,
     entries: (rows.results as Row[]).map((r) => ({
       source: r.source, slug: r.slug, name: r.name, about: r.about, author: r.author, licence: r.licence,
-      look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), esp32_us: r.esp32_us, loop_ms: r.loop_ms,
+      look: r.look ? JSON.parse(r.look) : null, controls: JSON.parse(r.controls), esp32_us: r.esp32_us, loop_ms: r.loop_ms, jit_us: r.jit_us, psb_len: r.psb_len, abi: r.abi,
       sha: r.sha, updated: r.updated, added: r.added, src: r.src,
     })),
     refused: (refused.results as { slug: string; sha: string; problems: string; seen: number }[]).map((x) => ({ ...x, problems: JSON.parse(x.problems) })),

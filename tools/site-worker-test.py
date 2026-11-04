@@ -685,7 +685,7 @@ def compare_store(base: str, site: Path, tool: Path, shown: Path, refused_want: 
     d = gallery_api(base)
     good, bad = native(tool, shown)
     stored = {e["slug"]: e for e in d.get("entries", []) if e["source"] == "gallery"}
-    fields = ("name", "about", "author", "licence", "look", "controls", "src", "loop_ms")
+    fields = ("name", "about", "author", "licence", "look", "controls", "src", "loop_ms", "jit_us", "psb_len", "abi")
     diff = [f"{s}.{k}: {stored.get(s, {}).get(k)!r} != {e[k]!r}" for s, e in good.items() for k in fields if stored.get(s, {}).get(k) != e[k]]
     diff += [f"{s}.us: {stored[s]['esp32_us']} != {e['us']}" for s, e in good.items() if s in stored and stored[s]["esp32_us"] != e["us"]]
     check(set(stored) == set(good) and not diff and not bad,
@@ -767,7 +767,9 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
     ex = json.loads((site / "formulas/gallery.json").read_text())["examples"]
     some = next(e for e in ex if not e["bundle"] and len(e["file"]) < 3500)
     ripple = (HEADER + 'name "Site test ripple"\nabout "Rings rippling out from the middle, for the site\'s tests"\n'
-              'control speed 0..1 = 0.4 "Speed"\nloop 4\npal(rainbow, frac(len(x - 0.5, (y - 0.5)/4)*3 - t/4 + speed))\n')
+              'control speed 0..1 = 0.4 "Speed"\nloop 4\npal(rainbow, frac(len(x - 0.5, (y - 0.5)/4)*3 - t/4 + speed))\n'
+              # (12 KB with its comments: the gallery's size rules are the device's, a file that compiles small is taken.)
+              + '-- padding padding\n' * 600)
     glow = '-- author: Fixture & Co\n-- licence: CC-BY-4.0\n' + (
         'name "Site test glow & \'shine\'"\nabout "A light over the GIF, for the site\'s tests"\ncontrol size = 0.4 "Light size"\nlook\nloop 8\n'
         'dx = cx - 0.35*sin(t/8)*4; dy = cy - 0.3*sin(t/4)\nlayer multiply { gray(clamp(1.4 - (dx*dx + dy*dy)/(0.08 + size*0.5), 0.12, 1)) }\n')
@@ -783,6 +785,8 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         "site-test-heavy.psi": HEADER + 'name "Site test heavy"\nabout "Too heavy for the panel"\nloop 4\n' + "".join(
             f"v{k} = atan2(sin(x*{k % 9 + 1} + y*{k % 7 + 2} + t/4), {'v' + str(k - 1) if k else 'y'} + 2)\n" for k in range(20)) + "gray(v19)\n",
         "Bad_Name.psi": ripple,
+        # A file over 20 KB is refused (the 12 KB ripple is taken).
+        "site-test-huge.psi": ripple + "-- padding padding\n" * 1200,
         "site-test-link.psi": ("link", "site-test-ripple.psi"),
         "site-test-dir.psi": ("dir",),
         "site-test-exec.psi": ("exec", stars),
@@ -814,8 +818,8 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         want_refused = {**bad, "site-test-link": ["not a regular file (a link or a folder)"],
                         "site-test-dir": ["not a regular file (a link or a folder)"],
                         "site-test-exec": ["the file is executable: a gallery file is a plain text file (mode 100644)"]}
-        check({"site-test-broken", "site-test-reserved", "site-test-crlf", "site-test-heavy", "Bad_Name"} <= set(bad) and set(good) == {
-            "site-test-ripple", "site-test-glow", "copycat"}, f"the fixture: opendmd-gallery passes 3 and refuses the bad ones ({sorted(good)}, {sorted(bad)})")
+        check({"site-test-broken", "site-test-reserved", "site-test-crlf", "site-test-heavy", "site-test-huge", "Bad_Name"} <= set(bad) and set(good) == {
+            "site-test-ripple", "site-test-glow", "copycat"}, f"the fixture: opendmd-gallery passes 3 (the 12 KB one among them) and refuses the bad ones ({sorted(good)}, {sorted(bad)})")
         shown_a = tmp / "a-shown"
         write_state({k: v for k, v in state_a.items() if k[:-4] in good}, shown_a)
         before = compare_store(base, site, tool, shown_a, want_refused, "cron run", tmp)

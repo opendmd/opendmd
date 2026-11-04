@@ -168,6 +168,7 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 .ftile .fdesc{flex:1}
 .ftile .fby{color:var(--mut);font-size:13px;margin:6px 0 4px}
 .ftile .fctl{color:var(--mut);font-size:13px;margin-top:4px}
+.ftile .fcost,.ftile .fneeds{color:var(--mut);font-size:13px;margin-top:4px}
 .ftile .fbadge{display:inline-block;vertical-align:middle;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:6px;font:12px/1.6 system-ui,sans-serif;color:var(--mut)}
 .ftile .facts .cta{padding:6px 14px;font-size:14px}
 .ftile .facts .add{display:block;text-align:center;margin:6px 0 2px}
