@@ -280,6 +280,14 @@ tick, config safe, status 20 MHz without fallback, its caption,
 POST /api/card/full-speed a 409), Fast (40 MHz, its caution); `full` over
 the API is accepted, `auto` is a 400.
 
+No-Formulas pass: a fourth mock with `--no-formulas` (a firmware build
+without them, `features` []): POST /api/play of a Formula is the 501 with
+the firmware's words, and the app's Send to panel toasts them; Formulas is
+one note (#f-none, no editor); Settings › Look has the note (#st-look-none),
+not the Formula look picker, and Playback no Formula keep; a playlist with
+two Formulas plays its two GIFs (`entries` 2) and the editor marks the
+Formulas "skipped on this player".
+
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
 listed in `expected` and are not counted as console errors.
@@ -2744,7 +2752,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     goto_view(page, "settings/device")
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
-    check(sorted(fw) == ["build", "flash_size", "last", "log", "pending", "variant", "version"] and fw["pending"] is None
+    check(sorted(fw) == ["build", "features", "flash_size", "last", "log", "pending", "variant", "version"] and fw["features"] == ["formulas", "jit"] and fw["pending"] is None
           and fw["variant"] == "4mb" and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
     got = page.evaluate("async (cases) => { const { older } = await import('/js/firmware.js');"
                         " return cases.map(([a, b]) => older(a, b)); }", [[a, b] for a, b, _ in OLDER_CASES])
@@ -7335,6 +7343,71 @@ def device_pass(browser, device: str) -> None:
         proc.terminate()
     report_errors("device", errors)
 
+NO_FORMULAS = "Formulas aren\u2019t in this firmware build"
+
+
+def no_formulas_pass(browser) -> None:
+    """`mock-device.py --no-formulas`: a firmware build without Formulas
+    (`features` []). Formulas is one note, Settings has no Formula look or
+    keep control, a Formula sent to the panel shows the firmware's 501 words,
+    and a playlist's Formula entries are marked as skipped (the player skips
+    them)."""
+    overlay = OUT / "overlay-noformulas"
+    shutil.rmtree(overlay, ignore_errors=True)
+    (overlay / "sets").mkdir(parents=True)
+    (overlay / "formulas").mkdir(parents=True)
+    gifs = card_gifs()[:2]
+    (overlay / "formulas" / "smoke.psi").write_text('name "Smoke road"\n')
+    (overlay / "sets" / "fmix.txt").write_text("\n".join([gifs[0], "@formula:plasma", gifs[1], "/formulas/smoke.psi?a=0.5"]) + "\n")
+    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--no-formulas"])
+    errors: list[str] = []
+    try:
+        print(f"\n== mock device without Formulas at {base}")
+        st, fw = get_json(base + "/api/status"), get_json(base + "/api/firmware")
+        check(st["features"] == [] and st["psi_abi"] is None and fw["features"] == [],
+              f"no formulas: status and firmware features [] ({st['features']}, psi_abi {st['psi_abi']})")
+        code, reply = post_code(base + "/api/play", {"path": "@formula:plasma"})
+        check(code == 501 and (reply or {}).get("error") == NO_FORMULAS, f"no formulas: POST /api/play of a Formula is a 501 that says why ({code} {reply})")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/#formulas")
+        page.wait_for_selector("#f-none", timeout=20000)
+        text = page.inner_text("#view-formulas")
+        check(NO_FORMULAS in text and "Lite" not in text
+              and page.locator("#view-formulas textarea, #view-formulas canvas, #view-formulas .cm-editor").count() == 0,
+              f"no formulas: Formulas is the note alone, no editor ({text[:80]!r})")
+        shot(page, "noformulas-formulas", "laptop")
+        goto_view(page, "settings/look")
+        page.wait_for_selector("#st-look-none", timeout=20000)
+        check(page.locator("#st-look-formula").count() == 0, "no formulas: Settings › Look has the note, no Formula look picker")
+        goto_view(page, "settings/play")
+        page.wait_for_selector("#st-tab-play", timeout=20000)
+        check(page.locator("#st-keep").count() == 0, "no formulas: Settings › Playback has no Formula keep setting")
+        # A Formula sent to the panel from the app: the firmware's words.
+        expected.append("/api/play")
+        try:
+            page.evaluate("async () => { const { app } = await import('/js/state.js'); await app.play('@formula:plasma'); }")
+            t = last_toast(page, "bad")
+        finally:
+            expected.remove("/api/play")
+        check(t == NO_FORMULAS, f"no formulas: Send to panel of a Formula toasts the firmware's words ({t!r})")
+        # The playlist with Formulas: its GIFs play, its Formulas are marked.
+        put_json(base + "/api/config", {"set": "fmix"})
+        st = get_json(base + "/api/status")
+        check(st["entries"] == 2, f"no formulas: the player skips the playlist's Formulas ({st['entries']} entries of 4 lines)")
+        goto_view(page, "sets")
+        page.wait_for_selector("#sets-list [data-path='/sets/fmix.txt']", timeout=20000)
+        page.click("#sets-list [data-path='/sets/fmix.txt'] button.pl")
+        page.wait_for_function("document.querySelectorAll('#set-entries .vrow[data-path]').length === 4", timeout=20000)
+        skipped = page.eval_on_selector_all("#set-entries .vrow.skip", "els => els.map((e) => [e.dataset.path, e.querySelector('.tag').textContent])")
+        check(sorted(p for p, _ in skipped) == ["/formulas/smoke.psi?a=0.5", "@formula:plasma"]
+              and all(t == "Formula: skipped on this player" for _, t in skipped),
+              f"no formulas: the playlist's two Formulas are marked as skipped ({skipped})")
+        shot(page, "noformulas-playlist", "laptop")
+        page.context.close()
+    finally:
+        proc.terminate()
+    report_errors("mock (no Formulas)", errors)
+
 
 def report_errors(name: str, errors: list[str]) -> None:
     check(not errors, f"{name}: zero console/page errors")
@@ -7354,6 +7427,7 @@ def main() -> int:
             mock_pass(browser)
             sd_unreadable_pass(browser)
             sd_slowed_pass(browser)
+            no_formulas_pass(browser)
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()

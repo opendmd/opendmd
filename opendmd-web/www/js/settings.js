@@ -9,7 +9,7 @@
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
 
-import { app, playlistLabel, setPath } from './state.js';
+import { app, playlistLabel, setPath, NO_FORMULAS } from './state.js';
 import { timeCard, scheduleCard } from './schedule.js';
 import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
@@ -90,6 +90,7 @@ export async function mount(el) {
   const lfEdit = h('button.sm', { id: 'st-look-change', hidden: true, onclick: () => { app.psiEdit = { f: { ...lfs[lf.value] }, settings: 1 }; app.go('formulas/edit'); } }, 'Change…');
   let lfs = [], L = null, M = null;
   async function lookFormulas() {
+    if (app.noFormulas) return; // a build without Formulas: no Formula looks (the tab says so)
     let ex;
     let mine;
     try { [ex, L, mine] = await Promise.all([examples(), import('./looks.js'), import('./fstore.js').then((S) => S.loaded())]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
@@ -217,15 +218,16 @@ export async function mount(el) {
           h('label.stack', 'Playlist', f.set),
           h('div.stack', 'Platforms', h('div.row', platVal, h('button', { id: 'st-plat-btn', 'aria-haspopup': 'dialog', onclick: (e) => platSheet(e.currentTarget) }, 'Choose…'))),
           h('label.stack', 'Each GIF stays', h('div.row', f.dwell_min, '–', f.dwell_max, 's')),
-          h('label.stack', 'A Formula you show on the panel stays', f.formula_keep),
+          !app.noFormulas && h('label.stack', 'A Formula you show on the panel stays', f.formula_keep),
           h('label', f.shuffle, 'Shuffle'))))),
     look: () => {
       import('./boot.js').then((m) => m.bootCard(boot));
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
-          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
-          h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.'),
+          ...(app.noFormulas ? [h('p.cap', { id: 'st-look-none', style: 'margin-top:12px' }, `No Formula over the GIFs: ${NO_FORMULAS.replace(/^F/, 'f')}`)]
+            : [(lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
+              h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.')]),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

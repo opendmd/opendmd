@@ -31,8 +31,8 @@ REQUIRED = [
     (r"^<opendmd_psi::vm::Rows>::begin::<128>$", "the VM's per-row entry"),
     (r"^<opendmd_psi::vm::Rows>::finish$", "the VM's per-row compare"),
     (r"^opendmd_psi::vm::fused::<128>$", "the fused runs"),
-    (r"^opendmd_firmware::panel::beam::pair$", "the raced pair hook"),
-    (r"^opendmd_firmware::panel::write_pair$", "the pair writer"),
+    (r"^opendmd_firmware::panel::beam::pair$", "the raced pair hook (Formulas only)"),
+    (r"^opendmd_firmware::panel::write_pair$", "the pair writer (Formulas only)"),
     (r"^opendmd_firmware::panel::write_row$", "the row writer"),
     (r"^hub75_draw_span$", "the shim's span writer"),
     (r"^hub75_draw_row_pair$", "the shim's row-pair writer"),
@@ -45,6 +45,18 @@ REQUIRED = [
     (r"^opendmd_psi::vm::run2_hot::", "hash's lane loops"),
     (r"^opendmd_psi::jit::changed_groups$", "the JIT's per-row compare"),
     (r"^opendmd_psi::jit::device::shim_pick$", "the JIT's pick helper, a pixel"),
+]
+
+# A build without Formulas (FW_DISABLE=formulas): the GIF path's hottest
+# code, in the IRAM the Formulas' code leaves (opendmd-core `player`). Measured in
+# esp32sim (8 s of GIF playback with transitions, block profile, 2026-11-04):
+# 29 % of the instructions came from flash, these five 23 % of all of them.
+REQUIRED_NO_FORMULAS = [
+    (r"^<opendmd_core::gifslim::Lzw>::run::<", "the LZW decoder's loop (13 % of a GIF's instructions)"),
+    (r"^<opendmd_core::gifslim::Painter>::segment$", "the painter (6.5 %)"),
+    (r"^opendmd_core::compositor::compose_step$", "a transition's step"),
+    (r"^<opendmd_core::compositor::At>::value$", "a transition's pixel"),
+    (r"^<opendmd_core::canvas::DirtyMap>::mark_run$", "the dirty runs"),
 ]
 
 # With SRAM1 as IRAM (FW_SRAM1_IRAM=1, the `sram1-iram` feature): .iram0.text
@@ -93,12 +105,13 @@ def main():
         parts = line.split(maxsplit=2)
         if len(parts) == 3 and parts[1] in ("T", "t"):
             syms.append((int(parts[0], 16), parts[2].strip()))
-    # A build without Psi (no `psi` feature) has no VM to place.
+    # A build without Psi (`formulas` off) has no VM to
+    # place, and no raced pairs (only Formulas race the beam).
     psi = any(n.startswith("opendmd_psi::") for _, n in syms)
     bad = []
-    required = REQUIRED + (REQUIRED_S1 if hi > SRAM1_START else [])
+    required = REQUIRED + (REQUIRED_S1 if hi > SRAM1_START else []) + ([] if psi else REQUIRED_NO_FORMULAS)
     for pat, why in required:
-        if not psi and "opendmd_psi" in pat:
+        if not psi and ("opendmd_psi" in pat or "Formulas only" in why):
             continue
         r = re.compile(pat)
         hits = [(a, n) for a, n in syms if r.search(n)]
@@ -111,7 +124,8 @@ def main():
         print("IRAM placement: hot functions outside IRAM:\n" + "\n".join(bad))
         sys.exit(1)
     s1 = f", {hi - SRAM1_START:,} B of it in SRAM1" if hi > SRAM1_START else ""
-    print(f"IRAM placement: {len(required)} hot functions in .iram0.text ({hi - lo:,} B{s1})")
+    n = sum(1 for pat, why in required if psi or not ("opendmd_psi" in pat or "Formulas only" in why))
+    print(f"IRAM placement: {n} hot functions in .iram0.text ({hi - lo:,} B{s1}){'' if psi else ', a build without Formulas'}")
 
 
 if __name__ == "__main__":

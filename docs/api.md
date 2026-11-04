@@ -82,7 +82,10 @@ Errors: `400` neither card-absolute nor a live item, or a bad formula;
 GIF, a live item this firmware does not know (`@nonsense`), or a retired
 `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
 Formulas replace them (play one as @formula?psb=…)`); `503` no
-playlist running; `413` body over 8 KB, or an inline formula over 6,144 B.
+playlist running; `413` body over 8 KB, or an inline formula over 6,144 B;
+`501` a Formula (any of the three forms, or `"over"`/`"live"`) on a build
+without Formulas (`/api/status` `features` lacks `"formulas"`):
+`{"error":"Formulas aren’t in this firmware build"}`.
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
@@ -125,6 +128,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | field | meaning |
 |---|---|
 | `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit; `"8mb"`, an 8 MB board in development) |
+| `features` | the optional components this build has: `["formulas","jit"]` in a release; a build can leave them out (`"formulas"` missing: `/api/play` of a Formula is a `501`, a `look_formula` a `400`, a playlist's Formula lines are skipped) |
 | `psi_abi` | the compiled Formulas this player plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the player's clock, ms, as the reply was built |
@@ -274,7 +278,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
@@ -759,7 +763,7 @@ staged on the card (one is needed), checked and installed (`docs/ota.md`);
 
 ### GET /api/firmware
 
-`{"version","build","variant","flash_size","flash","pending","last","log"}`: the
+`{"version","build","variant","features","flash_size","flash","pending","last","log"}` (`features` as in `/api/status`): the
 running version (a bundle's, and `/api/status`'s; `build` its image
 descriptor, `"<version> <variant>"`), the flash layout it is built for
 (`variant`: `4mb` or `8mb`) and the flash chip's real size in bytes
