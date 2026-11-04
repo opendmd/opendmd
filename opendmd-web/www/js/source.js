@@ -106,7 +106,7 @@ export class DeviceSource {
   play(path) { return this.json('POST', '/api/play', { path }); }
   // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
   // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
-  stat(path) { return this.json('GET', '/api/stat?path=' + encodeURIComponent(path)); }
+  stat(path) { return this.json('GET', '/api/exists?path=' + encodeURIComponent(path)); }
   // The playback cache: {total, prepared, state: "ready"|"counting"}; the
   // card paths of every prepared copy; and forgetting a GIF's copy.
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }

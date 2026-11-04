@@ -342,7 +342,7 @@ def main():
     big, fallback = [], []
     for n in random.sample(names, min(60, len(names))):
         path = f"/gifs/Consoles/{n}"
-        st, data, _, _ = request(dev, "GET", f"/api/stat?path={urllib.parse.quote(path)}")
+        st, data, _, _ = request(dev, "GET", f"/api/exists?path={urllib.parse.quote(path)}")
         size = (json.loads(data).get("size") or 0) if st == 200 else 0
         (big if size > 1_000_000 else fallback if size > 300_000 else []).append(path)
         if len(big) >= 6:
