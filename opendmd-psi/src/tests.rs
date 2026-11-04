@@ -526,6 +526,19 @@ fn compact_compiles_the_same() {
     );
 }
 
+/// Palettes of 16 colours or fewer that only tweens' halves read take half
+/// a store place each: ten of them fit the store's eight places.
+#[test]
+fn half_palettes_take_half_a_place() {
+    let mut src = String::from("loop 8\nw = frac(t/8)\n");
+    for k in 0..10 {
+        src += &format!("palette h{k} = #{k}00, #0{k}0, #00{k}, #{k}{k}{k}\n");
+    }
+    src += "palette S = tween(tween(tween(h0, h1, w), tween(h2, h3, w), w), tween(h4, h5, w), w), tween(tween(h6, h7, w), tween(h8, h9, w), w)\n";
+    src += "pal(S, floor(x*32)/32)";
+    compile(&src).unwrap_or_else(|e| panic!("{}", e.render(&src)));
+}
+
 #[test]
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
@@ -2388,7 +2401,7 @@ const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
         "E922",
     ),
     (
-        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npalette p5 = #ff0\npalette p6 = #0ff\npalette p7 = #f0f\npalette p8 = #888\npalette p9 = #444\npal(p9, x)",
+        "palette p1 = #111, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p2 = #222, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p3 = #333, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p4 = #444, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p5 = #555, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p6 = #666, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p7 = #777, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p8 = #888, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npalette p9 = #999, #001, #002, #003, #004, #005, #006, #007, #008, #009, #00a, #00b, #00c, #00d, #00e, #00f, #010\npal(p9, x)",
         "8 palettes of its own at most",
         9,
         1,
