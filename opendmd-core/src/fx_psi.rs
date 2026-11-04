@@ -155,6 +155,42 @@ pub fn set_still_gate(gate: Option<StillGate>) {
     STILL_GATE.with(|g| g.store(a, Ordering::Relaxed));
 }
 
+/// May a formula's JIT kernel be built now, its lowering and code taking
+/// about `bytes` of the heap for a moment ([`jit_build_bytes`])? The
+/// firmware's says whether the heap has that and its floor besides; none
+/// installed (the host): yes. Refused, the formula stays on the VM and asks
+/// again a second later: the build's working memory is small allocations
+/// that would abort the player, not refuse, on a short heap.
+pub type JitGate = fn(usize) -> bool;
+
+static JIT_GATE: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the [`JitGate`].
+pub fn set_jit_gate(gate: Option<JitGate>) {
+    JIT_GATE.store(gate.map_or(0, |f| f as usize), Ordering::Relaxed);
+}
+
+#[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+fn jit_build_allowed(bytes: usize) -> bool {
+    match JIT_GATE.load(Ordering::Relaxed) {
+        0 => true,
+        // SAFETY: stored by `set_jit_gate` from a `JitGate` (a fn pointer,
+        // never null, the size of a `usize`).
+        a => {
+            let gate = unsafe { std::mem::transmute::<usize, JitGate>(a) };
+            gate(bytes)
+        }
+    }
+}
+
+/// What a kernel's build takes of the heap at its peak, about: the
+/// lowering's tables (measured on the host at ~20 B a step with 64-bit
+/// pointers, Endless road V2's 751 steps 14.7 KB; less on the ESP32) and
+/// the code (a few KB).
+pub fn jit_build_bytes(prog: &psi::Prog) -> usize {
+    prog.len() * 16 + 6 * 1024
+}
+
 fn still_allowed(bytes: usize) -> bool {
     #[cfg(not(test))]
     let a = STILL_GATE.load(Ordering::Relaxed);
@@ -2269,6 +2305,9 @@ mod jit {
         best: [u32; 2],
         /// Why the VM draws this formula (`None`: not decided yet).
         why: Option<&'static str>,
+        /// When the heap last had no room for the kernel's build (the
+        /// clock's µs | 1; 0: not refused).
+        gate_tried: u32,
     }
 
     /// Why, with the switch off.
@@ -2309,6 +2348,17 @@ mod jit {
                 set_jit_status(which, false, LOOK_RATE, 0);
             }
             if self.kernel.is_none() && self.why.is_none() {
+                // (A short heap: on the VM for now, asked again a second
+                // later.)
+                let now = super::clock().map_or(0, |c| c());
+                if self.gate_tried != 0 && now.wrapping_sub(self.gate_tried) < 1_000_000 {
+                    return None;
+                }
+                if !super::jit_build_allowed(super::jit_build_bytes(prog)) {
+                    self.gate_tried = now | 1;
+                    return None;
+                }
+                self.gate_tried = 0;
                 match psi::jit::emit(prog) {
                     Ok(k) => {
                         log::info!("formula: kernel of {} B at {:#x}, to be checked", k.code_bytes(), k.addr());
