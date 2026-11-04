@@ -31,6 +31,11 @@ Pick a source:
 - **Your own:** choose a file, or paste a web address. You can also drop a
   picture onto the page, or paste one you've copied.
 
+Click a result to load it. Searching for art needs an internet connection
+(the computer or phone you're using needs it, not the display): the list of
+games comes from the OpenDMD website, the pictures from where they're kept.
+If it can't be reached, Find says so; **Try again** when you're back online.
+
 Some sites don't let other pages load their pictures. On
 [opendmd.dev/create/](https://opendmd.dev/create/) Create Art then fetches
 the picture for you, through the OpenDMD website, and keeps nothing; it
@@ -39,7 +44,29 @@ video, or the site refused. In your panel's own web app, download the
 picture and add the file instead.
 
 On the website, `opendmd.dev/create/?url=` followed by a picture's address
-opens it in Create Art straight away.
+opens it in Create Art straight away. The address of a page works too (a
+Tenor, GIPHY, Reddit or Imgur link, as their Share buttons give it):
+Create Art finds the GIF or video on it.
+
+### Bringing a GIF from another site
+
+On the website, **Your own** has links that search other sites for pixel
+art with your words: Tenor, Klipy, GIPHY, Google and Bing images (animated
+only), DuckDuckGo, Reddit's r/PixelArt, Tumblr, DeviantArt and Imgur. Each
+opens in a new tab. When you find one, bring it back:
+
+- **On a computer:** right-click the GIF and pick **Copy Image Address**
+  (or **Copy Image**), then paste it into Create Art; or drag the GIF onto
+  the page. The **Open in Create Art** bookmarklet does it in one press:
+  drag it from Your own to your bookmarks bar, then press it on a page
+  with a GIF.
+- **On Android:** install Create Art (your browser's menu → **Add to Home
+  screen** or **Install app**). It then appears in the Share menu: share a
+  GIF, a video or a link to **Create Art** and it opens there.
+- **On iPhone and iPad:** there is no Share menu entry for websites. Touch
+  and hold the GIF, then **Copy** (or **Save to Photos**), or press Share →
+  **Copy** on a link. In Create Art paste it into the address box (or press
+  **Choose a picture, GIF or video…** and pick it from Photos).
 
 ### Videos
 
@@ -48,11 +75,6 @@ link or a share: many "GIFs" on the web are really videos. The first 10
 seconds become up to 20 frames a second, fitted to the panel; trim and
 edit them on the timeline as for any animation. In your panel's own web
 app, make the video into a GIF on the website first.
-
-Click a result to load it. Searching for art needs an internet connection
-(the computer or phone you're using needs it, not the display): the list of
-games comes from the OpenDMD website, the pictures from where they're kept.
-If it can't be reached, Find says so; **Try again** when you're back online.
 
 ## 2. Frame
 
