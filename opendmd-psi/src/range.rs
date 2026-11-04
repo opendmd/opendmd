@@ -270,9 +270,15 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 /// ESP32.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-pub(crate) fn narrow(prog: &mut Prog) {
+pub(crate) fn narrow(prog: &mut Prog) -> bool {
     use code::*;
-    let mut sc = alloc::vec![FULL; SC];
+    // (Fallibly: the player loads on a short heap, where a refusal is the
+    // answer, never an abort.)
+    let mut sc = alloc::vec::Vec::new();
+    if sc.try_reserve_exact(SC).is_err() {
+        return false;
+    }
+    sc.resize(SC, FULL);
     for (k, v) in sc
         .iter_mut()
         .enumerate()
@@ -438,4 +444,5 @@ pub(crate) fn narrow(prog: &mut Prog) {
         regs[di.min(REGS)] = r;
         *slot = op;
     }
+    true
 }

@@ -2467,14 +2467,19 @@ impl Prog {
     /// narrowed steps (`narrow`), the fused runs (`fuse`), and the draw
     /// loops that run as lanes, decided once.
     #[inline(never)]
-    pub(crate) fn finish(&mut self, narrow: bool, fuse: bool) {
+    /// False when the heap had no room for the narrowing's working memory
+    /// (4 KB: nothing changed then).
+    pub(crate) fn finish(&mut self, narrow: bool, fuse: bool) -> bool {
         if narrow {
-            crate::range::narrow(self);
+            if !crate::range::narrow(self) {
+                return false;
+            }
             if fuse {
                 crate::fuse::fuse(self);
             }
         }
         self.mark_lane_loops();
+        true
     }
 
     /// Mark each draw loop that may run as lanes (its FOR's `c`,

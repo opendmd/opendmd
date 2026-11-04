@@ -976,8 +976,11 @@ impl PsiFx {
     }
 
     fn open(q: &Query) -> Result<PsiBox, psi::Error> {
-        let (prog, est, delay) = compile(q)?;
+        // (The box first, as before the store was sized per Formula: on a
+        // short heap it is the one refused, before the load's own working
+        // memory is asked for.)
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
+        let (prog, est, delay) = compile(q)?;
         fx.prog = prog;
         fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
