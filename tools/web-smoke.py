@@ -4066,6 +4066,20 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     again = page.locator("#toasts .toast:has-text('on the panel now')").count()
     check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psb", "kept-here.psi"],
           f"formulas on the panel: not copied again ({again} toasts)")
+    # A compiled file left from before an update (another version in its
+    # header, the player and the app agreeing on the new one) is compiled again.
+    kept_psb = overlay / "formulas" / "kept-here.psb"
+    now_psb = kept_psb.read_bytes()
+    kept_psb.write_bytes(now_psb[:3] + bytes([now_psb[3] - 1]) + now_psb[4:])
+    page.reload()
+    open_formulas(page)
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Kept here']", timeout=10000)
+    for _ in range(40):
+        if kept_psb.read_bytes() == now_psb:
+            break
+        page.wait_for_timeout(250)
+    check(kept_psb.read_bytes() == now_psb,
+          f"formulas on the panel: a compiled file of an older version is compiled again (header byte {kept_psb.read_bytes()[3]}, want {now_psb[3]})")
     # A bundled one's details: Add to playlist names it.
     page.click("#psi-ex .psi-tile[data-name='Starfield']")
     page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Starfield'", timeout=20000)

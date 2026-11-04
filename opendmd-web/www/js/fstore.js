@@ -154,20 +154,36 @@ export const psb = (file) => file.replace(/\.psi$/i, '.psb');
 async function compile(file, src) {
   await app.src.writeFile(psb(file), new Blob([program(src)]));
   built.add(psb(file).toLowerCase());
+  checked.add(psb(file).toLowerCase());
+}
+
+// Whether `file`'s compiled Formula is this app's version: its header's
+// fourth byte (`PSB` + version). An empty one (the source did not compile)
+// or one that can't be read is left as it is; each is read once a session.
+const checked = new Set();
+async function current(file) {
+  const p = psb(file).toLowerCase();
+  if (checked.has(p)) return true;
+  const b = await app.src.readBytes(psb(file)).catch(() => null);
+  if (b && b.length > 3 && b[3] !== abi()) return false;
+  checked.add(p);
+  return true;
 }
 
 // The panel's compiled Formulas brought up to date: every one of yours with
-// no compiled file (copied onto the card by a computer), or all of them
-// when the player plays another version of compiled Formulas than this
-// app writes (`/api/status` `psi_abi`, after an update). How many.
-// `say()` before the first one is compiled; the ones that failed, counted.
+// no compiled file (copied onto the card by a computer) or one of another
+// version than this app writes (left from before an update: the player and
+// this app agree on the version once both are updated, so each file's own
+// header says), or all of them when the player plays another version than
+// this app writes (`/api/status` `psi_abi`). `say()` before the first one is
+// compiled; the ones that failed, counted.
 export async function prepare(say) {
   if (!card) return 0;
   const stale = app.status?.psi_abi != null && app.status.psi_abi !== abi();
   if (stale && app.status.psi_abi > abi()) return 0;
   let n = 0, bad = 0;
   for (const f of cache) {
-    if (!f.file || (!stale && built.has(psb(f.file).toLowerCase()))) continue;
+    if (!f.file || (!stale && built.has(psb(f.file).toLowerCase()) && await current(f.file))) continue;
     if (!n && !bad) say?.();
     await compile(f.file, f.src).then(() => n++, () => bad++);
   }
