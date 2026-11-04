@@ -202,6 +202,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   and the PUT reply and `/api/config` carry both. Status has `max_brightness`,
   `brightness_safe_max` and `safe_start_until` (30 for the mock's first 30 s,
   then null; the mock's "panel" is not held down, there is none).
+- **Location.** `lat` and `lon` in `/api/config` (numbers to 2 decimals, or
+  both null: not set); a PUT sets both (rounded to 0.01°) or clears both
+  with nulls; one without the other, a non-number or out of range (±90,
+  ±180) is a 400. Never in status (the firmware's sky inputs follow it).
 - **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
   `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
   `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
@@ -667,6 +671,8 @@ DEFAULT_SETTINGS = {
     "formula_arena": False,     # dev: a Formula's memory set aside at boot
     "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
     "api_key": "",              # "" = no key asked; never echoed back
+    "lat": None,                # the panel's location, 0.01° (both or neither);
+    "lon": None,                # in /api/config only, never in status
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
@@ -1120,7 +1126,7 @@ def live_parse(path: str):
     return head[1:], params
 
 
-PSI_ABI = 2
+PSI_ABI = 3
 # A build without Formulas (`--no-formulas`; the firmware without `psi`):
 # its own words for a Formula asked of it.
 NO_FORMULAS = "Formulas aren’t in this firmware build"
@@ -3459,6 +3465,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "formula_arena": s["formula_arena"],
                     "formula_keep": s["formula_keep"],
                     "api_key_set": bool(s["api_key"]),
+                    "lat": s["lat"],
+                    "lon": s["lon"],
                 }
                 self.panel_poll()
                 obj.update(ctx.panel.fields())
@@ -3631,6 +3639,25 @@ def make_handler(ctx: Context, quiet: bool):
                         next_settings[field] = max(1, v)
                     else:
                         next_settings[field] = v
+
+                # The location: "lat" and "lon" together, both numbers
+                # (rounded to 0.01°) or both null (cleared).
+                if "lat" in patch or "lon" in patch:
+                    if ("lat" in patch) != ("lon" in patch):
+                        self.send_error_json(400, "lat and lon go together: both numbers, or both null to clear")
+                        return
+                    la, lo = patch["lat"], patch["lon"]
+                    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                    if la is None and lo is None:
+                        next_settings["lat"] = next_settings["lon"] = None
+                    elif not (num(la) and num(lo)):
+                        self.send_error_json(400, "lat and lon must be numbers (degrees), or both null to clear")
+                        return
+                    elif abs(la) > 90 or abs(lo) > 180:
+                        self.send_error_json(400, "lat must be -90..=90 and lon -180..=180")
+                        return
+                    else:
+                        next_settings["lat"], next_settings["lon"] = round(la, 2), round(lo, 2)
 
                 # "attract_set" is null-or-string, so it is not in
                 # FIELD_TYPES; validated the same way as "set" below.
