@@ -345,6 +345,13 @@ fn load_raw(b: &[u8], which: Which, prog: &mut Program) -> Result<(), Refusal> {
 /// cache, the slow layers and the JIT's lowering take as given from the
 /// compiler. Rejects, never repairs.
 pub fn verify(p: &Program) -> Result<(), Refusal> {
+    verify_codes(p, true)
+}
+
+/// [`verify`], with (`fused`) or without the fused compares among the
+/// steps it knows: without, as the ABI 2 players before P0b-4 check a
+/// program (their refusal of one that has them is the tests').
+fn verify_codes(p: &Program, fused: bool) -> Result<(), Refusal> {
     use code::*;
     let bad = Err("a damaged Formula: open the OpenDMD app to prepare it again");
     let (fe, de, re, pe) = (
@@ -387,6 +394,7 @@ pub fn verify(p: &Program) -> Result<(), Refusal> {
         }
         let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | GUARD | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
             || matches!(c, U_R..=INKN | TURN | SLOW | FOR..=COLUMN)
+            || (fused && (CMP_FIRST..=CMP_LAST).contains(&c))
             || is_colour(c) && colour_ok(c);
         if !known {
             return bad;
@@ -1035,6 +1043,40 @@ mod tests {
         assert!(verify(&b).is_ok());
         b.uses &= !crate::program::PAINTS;
         assert!(verify(&b).is_err());
+    }
+
+    /// A Formula with the fused compares (P0b-4) is ABI 2: it loads, plays
+    /// and keeps its steps; a player of ABI 2 from before them (its
+    /// verifier without their codes) refuses it as damaged, without a
+    /// panic, and plays nothing.
+    #[test]
+    fn fused_compares_load_and_older_players_refuse_them() {
+        let src = "k = (px >= 40) + (px >= 80)\nr = (py < 16) * 0.5\ngray(k*0.4 + r)";
+        let b = crate::build(src).unwrap();
+        assert_eq!(b[3], ABI);
+        let mut p = Program::default();
+        load_portable(&b, Which::Play, &mut p).unwrap();
+        let has = |p: &Program| {
+            p.ops[..p.len()]
+                .iter()
+                .any(|o| (code::CMP_FIRST..=code::CMP_LAST).contains(&o.code))
+        };
+        assert!(has(&p), "{}", p.listing());
+        assert!(verify(&p).is_ok());
+        let old = verify_codes(&p, false);
+        assert_eq!(
+            old,
+            Err("a damaged Formula: open the OpenDMD app to prepare it again")
+        );
+        // A program without them is the same to both.
+        let plain = crate::build("gray(x)").unwrap();
+        let mut q = Program::default();
+        load_portable(&plain, Which::Play, &mut q).unwrap();
+        assert!(!has(&q) && verify_codes(&q, false).is_ok());
+        // And loaded whole, it draws.
+        let mut f = Program::default();
+        load_into(&b, Which::Play, &mut f).unwrap();
+        draw(&f, 0);
     }
 
     #[test]

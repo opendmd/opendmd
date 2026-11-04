@@ -1012,17 +1012,20 @@ const LV_LOOP2: u8 = 3;
 const LV_ROW: u8 = 4;
 const LV_PIXEL: u8 = 5;
 
-const K_CONST: u8 = 200;
-const K_INPUT: u8 = 201;
+/// Node kinds that are not steps: above every op code (the fused
+/// compares are 0xf0..=0xf5), `code >= K_CONST` is "not a step".
+const K_CONST: u8 = 250;
+const _: () = assert!(code::CMP_LAST < K_CONST);
+const K_INPUT: u8 = 251;
 /// A `for` loop's counter (`val`: the loop's number), given a scalar slot
 /// when the loop is laid out.
-const K_COUNTER: u8 = 202;
+const K_COUNTER: u8 = 252;
 /// A value that grows without end plus a small one that varies more than
 /// once a frame (`t*0.15 + x`: `a` the wide part, `b` the small one), at
 /// the small one's level. Never laid out: whatever takes it is rewritten
 /// ([`Dag::wide_op`]) into the wide part's way back to a Q16.16 and the
 /// small one (`noise(w + s)` is a `NOISE_O` of `frac(w) + s`).
-const K_SPLIT: u8 = 203;
+const K_SPLIT: u8 = 253;
 /// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
 const WIDE_T: i32 = 0x100;
 
@@ -6345,12 +6348,49 @@ pub fn compile_portable(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, false, true, false)
 }
 
+/// [`compile_portable`] with (`cmp`) or without the fused compares (P0b-4;
+/// the same bytes): the paint probe's before and after.
+#[doc(hidden)]
+pub fn compile_portable_with(src: &str, prog: &mut Program, cmp: bool) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (true, false, true, false, false, cmp),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
 /// [`compile_into`] without the fused runs' markers (`crate::fuse`; the
 /// same bytes): for the tests that compare, and psi-probe's before and
 /// after.
 #[doc(hidden)]
 pub fn compile_unfused(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_impl(src, prog, true, true, true, false)
+}
+
+/// [`compile_with`] with (`cmp`) or without the fused compares (P0b-4,
+/// `fuse_compares`; the same bytes): without, each comparison a step of
+/// its own, as the device measured the estimate's rows before them (the
+/// estimate's tests, psi-probe's before and after, the tests that
+/// compare).
+#[doc(hidden)]
+pub fn compile_measured(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+    cmp: bool,
+) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (runs, narrow, true, true, false, cmp),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
 }
 
 /// [`compile_with`] with (`reuse`) or without scalar slots used again once
@@ -6381,7 +6421,7 @@ fn compile_impl(
     compile_full(
         src,
         prog,
-        (runs, narrow, reuse, fuse, false),
+        (runs, narrow, reuse, fuse, false, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -6398,7 +6438,7 @@ fn compile_impl(
 fn compile_full<'s>(
     src: &'s str,
     prog: &mut Program,
-    (runs, narrow, reuse, fuse, look): (bool, bool, bool, bool, bool),
+    (runs, narrow, reuse, fuse, look, cmp): (bool, bool, bool, bool, bool, bool),
     mut declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 ) -> Result<Info, Error> {
@@ -6407,7 +6447,7 @@ fn compile_full<'s>(
         src,
         prog,
         runs,
-        reuse,
+        (reuse, cmp),
         look,
         declared.as_deref_mut(),
         #[cfg(feature = "syntax")]
@@ -6420,7 +6460,7 @@ fn compile_full<'s>(
             src,
             prog,
             false,
-            reuse,
+            (reuse, cmp),
             look,
             declared,
             #[cfg(feature = "syntax")]
@@ -6454,7 +6494,7 @@ pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error
     compile_full(
         src,
         prog,
-        (true, false, true, false, false),
+        (true, false, true, false, false, true),
         Some(&mut d),
         #[cfg(feature = "syntax")]
         None,
@@ -6468,7 +6508,7 @@ fn compile_inner<'s>(
     src: &'s str,
     prog: &mut Program,
     runs: bool,
-    reuse: bool,
+    (reuse, cmp): (bool, bool),
     look: bool,
     declared: Option<&mut Declared>,
     #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
@@ -6547,7 +6587,7 @@ fn compile_inner<'s>(
     let body = p.body(Tok::Eof);
     #[cfg(feature = "syntax")]
     p.observe();
-    finish(src, &mut p, body?, prog, (runs, reuse, look), declared)
+    finish(src, &mut p, body?, prog, (runs, reuse, look, cmp), declared)
 }
 
 /// The rest of [`compile_inner`], once the formula is read: the program
@@ -6559,7 +6599,7 @@ fn finish(
     p: &mut Parser<'_>,
     body: Body,
     prog: &mut Program,
-    (runs, reuse, look): (bool, bool, bool),
+    (runs, reuse, look, cmp): (bool, bool, bool, bool),
     declared: Option<&mut Declared>,
 ) -> Result<Info, Error> {
     if let Some(v) = body.loop_v {
@@ -6811,6 +6851,9 @@ fn finish(
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
     let mut seen = (Vec::new(), Vec::new(), None);
+    if cmp {
+        fuse_compares(&mut p.dag, &steps, &p.draw, &tweens)?;
+    }
     emit(
         &p.dag,
         &steps,
@@ -7082,7 +7125,7 @@ pub fn compile_look(src: &str, prog: &mut Program) -> Result<Info, Error> {
     compile_full(
         src,
         prog,
-        (true, false, true, false, true),
+        (true, false, true, false, true, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -7101,7 +7144,7 @@ pub fn compile_look_with(
     compile_full(
         src,
         prog,
-        (runs, narrow, true, true, true),
+        (runs, narrow, true, true, true, true),
         None,
         #[cfg(feature = "syntax")]
         None,
@@ -7151,7 +7194,13 @@ pub fn compile_observed<'s>(
     prog: &mut Program,
     sink: &'s mut (dyn crate::syntax::Sink + 's),
 ) -> Result<Info, Error> {
-    compile_full(src, prog, (true, true, true, true, false), None, Some(sink))
+    compile_full(
+        src,
+        prog,
+        (true, true, true, true, false, true),
+        None,
+        Some(sink),
+    )
 }
 
 #[cfg(feature = "syntax")]
@@ -7410,6 +7459,204 @@ impl Step {
             .chain(self.alpha)
             .chain(self.turn)
     }
+}
+
+/// A comparison node as `x op y`, op `LT` or `LE` (`a > b` is `b < a`,
+/// `step(e, x)` is `e <= x`), or `None` for any other node.
+fn as_lt_le(m: &Node) -> Option<(u8, Id, Id)> {
+    match m.code {
+        code::LT => Some((code::LT, m.a, m.b)),
+        code::GT => Some((code::LT, m.b, m.a)),
+        code::LE => Some((code::LE, m.a, m.b)),
+        code::GE => Some((code::LE, m.b, m.a)),
+        // step(e, x): x >= e
+        code::STEP => Some((code::LE, m.a, m.b)),
+        _ => None,
+    }
+}
+
+/// A comparison node's two readings as `s op t` (op `LT LE GT GE`): with
+/// its first operand as `s`, and with its second.
+fn as_sided(m: &Node) -> Option<[(u8, Id, Id); 2]> {
+    use code::*;
+    let (a, b) = (m.a, m.b);
+    Some(match m.code {
+        LT => [(LT, a, b), (GT, b, a)],
+        GT => [(GT, a, b), (LT, b, a)],
+        LE => [(LE, a, b), (GE, b, a)],
+        GE => [(GE, a, b), (LE, b, a)],
+        // step(e, x): x >= e
+        STEP => [(LE, a, b), (GE, b, a)],
+        _ => return None,
+    })
+}
+
+/// P0b-4: a comparison only one step reads, fused into that step, so the
+/// two are one step (one less against the cap, and one loop or a short
+/// branch instead of a compare and a multiply or an add):
+///
+/// - `cmp * v`, `v * cmp`, `cmp ? v : 0`, `cmp ? 0 : v` → `SEL_LT`/`SEL_LE`;
+/// - `cmp1 + cmp2` of one value against two (`(v >= lo) + (v >= hi)`) →
+///   `CNT_*`.
+///
+/// Exact: `mul(1, v)` is `v` and `mul(0, v)` is 0 (neither saturates), and
+/// the count is the sum of two 0s or 1s. The comparison stays a node, read
+/// by nothing (`emit` leaves it out). Only where the comparison is worked
+/// out as often as the step that reads it (a row's comparison read per
+/// pixel stays a row step: once a row against a test a pixel), and never
+/// across scenes.
+#[inline(never)]
+fn fuse_compares(
+    dag: &mut Dag,
+    steps: &[Step],
+    draw: &[DItem],
+    tweens: &[TweenOp],
+) -> Result<(), Error> {
+    let n = dag.nodes.len();
+    // What is live, and how many live steps read each node.
+    let mut live = try_vec(false, n)?;
+    let mut uses = try_vec(0u16, n)?;
+    let root = |x: Id, live: &mut Vec<bool>, uses: &mut Vec<u16>| {
+        if let Some(l) = live.get_mut(x as usize) {
+            *l = true;
+            uses[x as usize] = uses[x as usize].saturating_add(1);
+        }
+    };
+    for st in steps {
+        for x in st.reads() {
+            root(x, &mut live, &mut uses);
+        }
+    }
+    for item in draw {
+        let one;
+        let ids: &[Id] = match item {
+            DItem::Line(v) => v,
+            DItem::Dot(v) => v,
+            DItem::Paint(_, v, k) => &v[..*k as usize],
+            DItem::If(c) | DItem::For(c, _) => {
+                one = [*c];
+                &one
+            }
+            _ => &[],
+        };
+        for &x in ids {
+            root(x, &mut live, &mut uses);
+        }
+    }
+    for tw in tweens {
+        root(tw.w, &mut live, &mut uses);
+    }
+    for k in 0..dag.conds.len() {
+        let c = dag.conds[k];
+        root(c, &mut live, &mut uses);
+    }
+    for i in (0..n).rev() {
+        if !live[i] || dag.nodes[i].code >= K_CONST {
+            continue;
+        }
+        let xs: Vec<Id> = reads(dag, i).collect();
+        for x in xs {
+            live[x as usize] = true;
+            uses[x as usize] = uses[x as usize].saturating_add(1);
+        }
+    }
+    let sc: Vec<u8> = (0..n).map(|i| dag.scene_of(i)).collect();
+    // What the column run and the still cache could take: a comparison
+    // they would work out once a column (or keep) is not fused into a step
+    // they would not (crt's channel masks: once a column, against a
+    // compare a pixel).
+    let (col, still) = (column_nodes(dag), still_nodes(dag));
+    let apart = |x: Id, y: Id| {
+        let (x, y) = (x as usize, y as usize);
+        (col[x] && !col[y]) || (still[x] && !still[y])
+    };
+    // A comparison `x` the step `i` may take in: read once (by `i`), as
+    // often as `i`, in `i`'s scene or none.
+    let takes = |dag: &Dag, i: usize, x: Id| {
+        let x = x as usize;
+        x < i
+            && uses[x] == 1
+            && dag.nodes[x].level == dag.nodes[i].level
+            && (sc[x] == 0 || sc[x] == sc[i])
+            && as_lt_le(&dag.nodes[x]).is_some()
+    };
+    for i in 0..n {
+        if !live[i] {
+            continue;
+        }
+        let m = dag.nodes[i];
+        let zero = |x: Id| dag.konst(x) == Some(0);
+        let sel = match m.code {
+            code::MUL if takes(dag, i, m.a) => Some((m.a, m.b, false)),
+            code::MUL if takes(dag, i, m.b) => Some((m.b, m.a, false)),
+            code::SELECT if zero(m.c) && takes(dag, i, m.a) => Some((m.a, m.b, false)),
+            code::SELECT if zero(m.b) && takes(dag, i, m.a) => Some((m.a, m.c, true)),
+            _ => None,
+        };
+        if let Some((cmp, v, not)) = sel {
+            let Some((op, x, y)) = as_lt_le(&dag.nodes[cmp as usize]) else {
+                continue;
+            };
+            if apart(cmp, v) {
+                continue;
+            }
+            // not (x < y) is y <= x; not (x <= y) is y < x.
+            let (code, a, b) = match (op, not) {
+                (code::LT, false) => (code::SEL_LT, x, y),
+                (_, false) => (code::SEL_LE, x, y),
+                (code::LT, true) => (code::SEL_LE, y, x),
+                (_, true) => (code::SEL_LT, y, x),
+            };
+            dag.nodes[i] = Node {
+                code,
+                a,
+                b,
+                c: v,
+                val: 0,
+                ..m
+            };
+            live[cmp as usize] = false;
+            continue;
+        }
+        if m.code == code::ADD
+            && m.a != m.b
+            && takes(dag, i, m.a)
+            && takes(dag, i, m.b)
+            && !apart(m.a, m.b)
+            && !apart(m.b, m.a)
+        {
+            let (Some(p), Some(q)) = (
+                as_sided(&dag.nodes[m.a as usize]),
+                as_sided(&dag.nodes[m.b as usize]),
+            ) else {
+                continue;
+            };
+            let found = p.iter().find_map(|&(o1, s1, t1)| {
+                q.iter()
+                    .find(|&&(o2, s2, _)| o2 == o1 && s2 == s1)
+                    .map(|&(_, _, t2)| (o1, s1, t1, t2))
+            });
+            if let Some((op, s, t1, t2)) = found {
+                let code = match op {
+                    code::LT => code::CNT_LT,
+                    code::LE => code::CNT_LE,
+                    code::GT => code::CNT_GT,
+                    _ => code::CNT_GE,
+                };
+                live[m.a as usize] = false;
+                live[m.b as usize] = false;
+                dag.nodes[i] = Node {
+                    code,
+                    a: s,
+                    b: t1,
+                    c: t2,
+                    val: 0,
+                    ..m
+                };
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A formula's slow layers (`layer rate N { }`): the first `layers`
