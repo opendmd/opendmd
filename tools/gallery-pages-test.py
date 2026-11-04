@@ -219,7 +219,9 @@ def main() -> int:
         check("Light · about 4.2 ms a frame" in c and "6.5 ms without the JIT" in c and gp.needs(e) == "", "a tile: the tier's figure, the VM's in the hover text; nothing about firmware for a format the latest release plays")
         e = {"us": 8100, "vm_us": 8100, "abi": 2}
         check("Heavy · about 8.1 ms a frame" in gp.cost(e) and "without the JIT" not in gp.cost(e), "a tile: Heavy over 8 ms; no 'without the JIT' where the JIT does not take it")
-        check(gp.ABI_SERVED == 1 and gp.needs(e) == '<p class="fneeds">Needs firmware 1.0.0-beta.14 or later</p>', "a tile: an ABI-2 Formula says \"Needs firmware 1.0.0-beta.14 or later\"")
+        newer = gp.ABI_SERVED + 1
+        want = f'<p class="fneeds">Needs firmware {gp.ABI_FIRMWARE[newer]} or later</p>' if newer in gp.ABI_FIRMWARE else '<p class="fneeds">Needs newer firmware</p>'
+        check(gp.needs(e | {"abi": gp.ABI_SERVED}) == "" and gp.needs(e | {"abi": newer}) == want, f"a tile: a format newer than the latest release plays says which firmware it needs ({want})")
         check(gp.needs({"abi": 3}) == '<p class="fneeds">Needs newer firmware</p>', "a tile: a format no release is named for says so")
         check(gp.cost({"us": 1}) == "" and gp.needs({}) == "", "a tile: a row stored before the migration says nothing")
     finally:
