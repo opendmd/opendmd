@@ -1092,8 +1092,10 @@ emu-probe: emu-build emu-card
 # model's estimate) in the spare's 4mb layout: its .odfw in $(EMU_DIR)/paint/dist
 # goes to the spare by OTA; `make emu-paint-probe` boots it in the emulator
 # (its paint line: each case's kernel frames against the VM's; correctness only).
-# (Its version says what it is: $(FW_VERSION)-paint-<commit>.)
-EMU_PAINT_VERSION = $(FW_VERSION)-paint-$(shell git rev-parse --short=7 HEAD)
+# (Its version says what it is: $(FW_VERSION)-paint-<commit>, -paint80- for a
+# FW_FLASH_FREQ=80 build, the devices' clock; the descriptor holds 31
+# characters with " 4mb", so 5 of the commit's.)
+EMU_PAINT_VERSION ?= $(FW_VERSION)-paint$(filter 80,$(FW_FLASH_FREQ))-$(shell git rev-parse --short=5 HEAD)
 EMU_PAINT_IMAGE = $(EMU_DIR)/paint/dist/opendmd-$(EMU_PAINT_VERSION)-4mb-full.bin
 emu-image-paint:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
