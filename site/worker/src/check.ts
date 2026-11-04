@@ -8,7 +8,7 @@
 
 import { compiled, type Compiled } from "./psi";
 
-export const MAX_FILE = 20 * 1024;
+export const MAX_FILE = 36 * 1024;
 export const MAX_PSB = 4500;
 export const MAX_NAME = 40;
 export const MAX_DESCRIPTION = 120;

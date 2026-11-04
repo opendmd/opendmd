@@ -190,16 +190,16 @@ fn hostile_characters() {
 
 #[test]
 fn size_compile_and_cost() {
-    let big = format!("{GOOD}{}", "-- padding\n".repeat(2000));
+    let big = format!("{GOOD}{}", "-- padding\n".repeat(3600));
     assert!(big.len() > MAX_FILE);
-    assert!(has(&check_file("x", big.as_bytes()).unwrap_err(), "20480 at most"));
+    assert!(has(&check_file("x", big.as_bytes()).unwrap_err(), "36864 at most"));
     // A 12 KB file that compiles small is fine: the source bound is the compiler's.
     let long = format!("{GOOD}{}", "-- padding padding\n".repeat(600));
     assert!(long.len() > 11_000 && long.len() < MAX_FILE);
     let e = check_file("x", long.as_bytes()).unwrap();
     assert!(e.psb_len < MAX_PSB && e.abi == opendmd_psi::psb::ABI && e.us <= e.vm_us, "{e:?}");
-    // Over the compiler's own bound (16,384 characters), under the file's: its sentence.
-    let over = format!("{GOOD}{}", "-- padding padding\n".repeat(900));
+    // Over the compiler's own bound (32,768 characters), under the file's: its sentence.
+    let over = format!("{GOOD}{}", "-- padding padding\n".repeat(1800));
     assert!(over.len() > opendmd_psi::MAX_SOURCE && over.len() < MAX_FILE);
     assert!(has(&problems("x", &over), "too long"), "{:?}", problems("x", &over));
     // Over 4,500 B compiled: its length, the limit and what to cut.

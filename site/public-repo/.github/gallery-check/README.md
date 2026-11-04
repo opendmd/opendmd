@@ -21,7 +21,7 @@ fails unless every change:
   no subfolder, no symbolic link, submodule or executable file, at most 20
   files;
 - has a slug of lower-case letters, digits and single hyphens (≤ 48);
-- is at most 20 KB of UTF-8 text with LF line endings, no control characters
+- is at most 36 KB of UTF-8 text with LF line endings, no control characters
   (a tab only in the formula), no invisible, joining or direction-changing
   characters (the "Trojan Source" ones: U+202A–202E, U+2066–2069, …), no
   private-use ones, no more than two accents stacked on a letter;

@@ -75,7 +75,7 @@ def cases():
         ("a good formula", lambda f: write(f, "gallery/spiral-sweep.psi", GOOD), True, "ok   \"gallery/spiral-sweep.psi\""),
         ("outside gallery/: path traversal, a folder, a dotted name", lambda f: (write(f, "x/evil.psi", GOOD), write(f, "gallery/sub/nested.psi", GOOD),
                                                                                write(f, "gallery/..psi", GOOD)), False, "only files in gallery/"),
-        ("a huge file", lambda f: write(f, "gallery/huge.psi", GOOD + "-" * 22000), False, "20480 at most"),
+        ("a huge file", lambda f: write(f, "gallery/huge.psi", GOOD + "-" * 40000), False, "36864 at most"),
         ("over 4,500 bytes once compiled (7.7 KB of source: tables, palettes, paint colours)", lambda f: write(f, "gallery/long-compiled.psi", FIXTURES / "gallery-over-4500.psi"), False, "4863 bytes once prepared, 4500 at most"),
         ("heavy on the VM but light with the JIT (the gate counts the tier)", lambda f: write(f, "gallery/jit-only.psi", FIXTURES / "gallery-jit-only.psi"), True, "ok   \"gallery/jit-only.psi\""),
         ("a 12 KB file that compiles small", lambda f: write(f, "gallery/long.psi", GOOD + "-- padding padding\n" * 600), True, "ok   \"gallery/long.psi\""),

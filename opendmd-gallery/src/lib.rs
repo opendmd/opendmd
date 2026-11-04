@@ -48,7 +48,7 @@ pub mod png;
 /// says so) and room for the header. This is only the public repo's guard
 /// against a huge file on disk; what the panel minds is the formula's
 /// compiled length ([`MAX_PSB`]) and its cost ([`MAX_US`]).
-pub const MAX_FILE: usize = 20 * 1024;
+pub const MAX_FILE: usize = 36 * 1024;
 
 /// The most a formula may be once compiled for the panel (the bytes a
 /// `@formula?psb=…` link carries), so that link, with its name and sliders,

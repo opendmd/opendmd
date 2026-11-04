@@ -52,7 +52,7 @@ pal(rainbow, frac(d*(1 + width*2) - t/2))
   a frame as the editor estimates it (with the display's speed-up where it applies).
 - Once compiled for the display, the formula is at most 4,500 bytes (the
   check tells you the number; tables and repeated steps are what add up,
-  comments and spaces cost nothing). The file itself is at most 20 KB, and
+  comments and spaces cost nothing). The file itself is at most 36 KB, and
   the formula in it at most 16,384 characters.
 
 One formula per file; one or a few files per pull request; only files in

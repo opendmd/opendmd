@@ -797,8 +797,8 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         "site-test-heavy.psi": HEADER + 'name "Site test heavy"\nabout "Too heavy for the panel"\nloop 4\n' + "".join(
             f"v{k} = atan2(sin(x*{k % 9 + 1} + y*{k % 7 + 2} + t/4), {'v' + str(k - 1) if k else 'y'} + 2)\n" for k in range(20)) + "gray(v19)\n",
         "Bad_Name.psi": ripple,
-        # A file over 20 KB is refused (the 12 KB ripple is taken).
-        "site-test-huge.psi": ripple + "-- padding padding\n" * 1200,
+        # A file over 36 KB is refused (the 12 KB ripple is taken).
+        "site-test-huge.psi": ripple + "-- padding padding\n" * 2000,
         # Over 4,500 B compiled (a file of 7.7 KB) is refused; one the VM draws in 40 ms and the JIT in 7.4, compiled 4.1 KB, is taken (the tier is the gate).
         "site-test-long.psi": (ROOT / "tools/fixtures/gallery-over-4500.psi").read_text(),
         "site-test-jit.psi": (ROOT / "tools/fixtures/gallery-jit-only.psi").read_text(),

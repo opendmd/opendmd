@@ -322,7 +322,7 @@ GIF as a look, and for the gallery).
   compiles.
 - **In the gallery** a formula is a file of two comment lines (`--
   author: …` and `-- licence: CC0-1.0`) and then the formula: at most
-  16,384 characters, 4,500 bytes once compiled, 20 KB for the file.
+  32,768 characters, 4,500 bytes once compiled, 36 KB for the file.
 
 ## Tools
 

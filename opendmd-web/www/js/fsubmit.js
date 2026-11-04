@@ -70,7 +70,7 @@ export function form(P, get) {
     if (!x.ok) out.push('The formula has to work first.');
     else if (est(x.info) > MAX_US) out.push('This formula is too heavy for the panel: the gallery takes ones up to 10 ms a frame.');
     if (x.src.replace(/\r\n?/g, '\n').split('\n').some((l) => BAD.test(l.replace(/\t/g, '')))) out.push('The formula has an invisible or special character in it.');
-    if (new TextEncoder().encode(fileText(x)).length > 20480) out.push('The file would be over 20 KB: the gallery takes shorter formulas.');
+    if (new TextEncoder().encode(fileText(x)).length > 36864) out.push('The file would be over 36 KB: the gallery takes shorter formulas.');
     const n = x.ok ? P.program(x.src).length : 0;
     if (n > 4500) out.push(`This formula is too long for the panel to take in a link: ${n} bytes once prepared, 4500 at most. Cut tables or repeated steps (comments and spaces cost nothing).`);
     return out;
