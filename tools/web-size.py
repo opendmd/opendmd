@@ -293,7 +293,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # value (P1), `ink(n)` (P3), rebinding (P2), named palette entries (P6)
 # and the reworded sentences (P8): the wasm 92,107 B gz on main, the line
 # ~90 -> 91 KB at P1 (93,199 B). Raised under the budget authority.
-PSI_WASM_GZ_BUDGET = 125 * 1024  # 110 until psi-p0 (2026-11-04: 512 steps, 241 values, palette tweens with their store, scenes and their guards, the counts in E402/E404: the compiler, the verifier the demo links and the estimate, +12.7 KB gz over main's 111.8; raised under the standing OK for budget lines); 106 until the display-isolation merge (2026-11-03: the demo's Formula look is loaded from the compiled Formula the app sends, `asLookPsb` — the player's psb loader and verifier now linked into the wasm: +4.1 KB gz, 111,183 B; raised under the standing OK for budget lines); 104 until psi-perf (2026-11-02: the paint primitives costed by the pixels they examine, their boxes from constant values, so the editor's estimate stays the panel's: +0.7 KB gz, 107,018 B; raised under the standing OK for budget lines); 96 until psi-rebuild (2026-10-31: the scene stage — paint, if, print — and `under(x, y)`, +6.5 KB gz; the player lost ~100 KB of compiler for it; the owner's OK 2026-10-31); 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+PSI_WASM_GZ_BUDGET = 135 * 1024  # 125 until psi-round3 (2026-11-04: Psi ABI 3's built-in inputs, since/was and the 1,024-number store in the compiler, +6.0 KB gz to 133,887 B, and the editor's exports for them — worldReset/worldSet/worldChange/world, sky() with opendmd-core's sky.rs included as it is, builtins() — +2.9 KB gz to 136,764 B; raised under the standing OK for budget lines); 110 until psi-p0 (2026-11-04: 512 steps, 241 values, palette tweens with their store, scenes and their guards, the counts in E402/E404: the compiler, the verifier the demo links and the estimate, +12.7 KB gz over main's 111.8; raised under the standing OK for budget lines); 106 until the display-isolation merge (2026-11-03: the demo's Formula look is loaded from the compiled Formula the app sends, `asLookPsb` — the player's psb loader and verifier now linked into the wasm: +4.1 KB gz, 111,183 B; raised under the standing OK for budget lines); 104 until psi-perf (2026-11-02: the paint primitives costed by the pixels they examine, their boxes from constant values, so the editor's estimate stays the panel's: +0.7 KB gz, 107,018 B; raised under the standing OK for budget lines); 96 until psi-rebuild (2026-10-31: the scene stage — paint, if, print — and `under(x, y)`, +6.5 KB gz; the player lost ~100 KB of compiler for it; the owner's OK 2026-10-31); 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -350,7 +350,7 @@ PSI_WASM_GZ_BUDGET = 125 * 1024  # 110 until psi-p0 (2026-11-04: 512 steps, 241 
 # 32 KB since formula-refs (2026-10-29): Endless road readable again (names,
 # comments: its text no longer has to fit a 2 KB path), +~0.8 KB gz of
 # formulas.json; bundled links and their details, +~0.2 KB.
-FORMULAS_GZ_BUDGET = 34 * 1024  # 33 until psi-p0 (the cheat sheet's `tween` and `scene` rows: +0.9 KB gz); 32 until f-editor (the site's editor page mounts it alone, Open on my panel's arrival by name or postMessage: ~+0.2 KB); 30 until formula-refs; 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+FORMULAS_GZ_BUDGET = 35 * 1024  # 34 until psi-round3 (the editor's built-in inputs: the world drawn with, the import of js/fconds.js and its place; +0.6 KB gz, 34,956 B); 33 until psi-p0 (the cheat sheet's `tween` and `scene` rows: +0.9 KB gz); 32 until f-editor (the site's editor page mounts it alone, Open on my panel's arrival by name or postMessage: ~+0.2 KB); 30 until formula-refs; 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
@@ -372,6 +372,17 @@ FSHEET = {"js/fsheet.js"}
 # 3,132 B gz, 2026-11-02).
 FSTORE_GZ_BUDGET = 3584
 FSTORE = {"js/fstore.js"}
+# The editor's built-in inputs (js/fconds.js, psi-round3, 2026-11-04: time
+# travel, Start a game / Back to the menu / Night, a slider per built-in read;
+# imported by js/formulas.js only for a formula that reads one), a line of
+# its own, <= 4 KB; and Settings › Schedule › Location (js/location.js:
+# latitude, longitude, the browser's location on a click, Clear; imported
+# with the tab on a player that keeps one), <= 2 KB. (Measured 3,187 and
+# 1,427 B gz.)
+FCONDS_GZ_BUDGET = 4 * 1024
+FCONDS = {"js/fconds.js"}
+LOCATION_GZ_BUDGET = 2 * 1024
+LOCATION = {"js/location.js"}
 # Submit to the gallery (js/fsubmit.js, branch f-editor, 2026-10-30): the
 # form, for the web app's editor and the site's Formula page; imported when
 # it first opens (the site's page: once the editor is up). ~3.0 KB gz.
@@ -504,6 +515,10 @@ def main() -> int:
             kind = "fsheet"
         elif rel in FSTORE:
             kind = "fstore"
+        elif rel in FCONDS:
+            kind = "fconds"
+        elif rel in LOCATION:
+            kind = "location"
         elif rel in FSUBMIT:
             kind = "fsubmit"
         elif rel in STUDIO:
@@ -636,6 +651,7 @@ def main() -> int:
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
+                         ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET),
                          ("other", None)):

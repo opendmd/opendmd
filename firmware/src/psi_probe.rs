@@ -1590,6 +1590,52 @@ fn bundled(canvas: &mut Canvas) {
         if ok(&canvas_r) { "refused" } else { "NOT refused" },
         heap()
     );
+    store_short_heap(canvas);
+}
+
+/// psb ABI 3: a Formula with the whole store (1,024 numbers: its program
+/// 10.5 KB) opened and drawn, its kernel built, with the heap down to 8, 18
+/// and 30 KB free: each is refused or plays, never aborts (the player's
+/// open, its load's narrowing and its kernel's build all ask the heap
+/// first). The line: `psi-probe: store, short heap: …`.
+fn store_short_heap(canvas: &mut Canvas) {
+    use opendmd_core::fx::Effect as _;
+    // (Compiled by build.rs: its compile here needs more heap than this.)
+    const PSB: &[u8] = include!(concat!(env!("OUT_DIR"), "/probe_store.rs"));
+    let psb = PSB;
+    let ballast = |left: usize| -> Vec<Vec<u8>> {
+        let mut b: Vec<Vec<u8>> = Vec::new();
+        let _ = b.try_reserve(512);
+        for size in [4096usize, 256] {
+            while heap() as usize > left + size && b.len() < b.capacity() {
+                let mut v = Vec::new();
+                if v.try_reserve_exact(size).is_err() {
+                    break;
+                }
+                v.resize(size, 1u8);
+                b.push(v);
+            }
+        }
+        b
+    };
+    let mut said = Vec::new();
+    for left in [8 * 1024, 18 * 1024, 30 * 1024] {
+        let b = ballast(left);
+        let h = heap();
+        let r = match fx_psi::PsiFx::from_bytes(psb, "") {
+            Ok(mut fx) => {
+                let delay = fx.delay();
+                for k in 0..4 {
+                    fx.frame(delay * k, canvas);
+                }
+                "played".to_string()
+            }
+            Err(e) => format!("refused ({})", e.msg),
+        };
+        drop(b);
+        said.push(format!("{h} B free: {r}"));
+    }
+    say!(info, "psi-probe: store, short heap: {} (none aborted); heap {} B free after", said.join("; "), heap());
 }
 
 /// The card's Formula the probe plays (tools/ci-card.py writes it).
@@ -2375,6 +2421,7 @@ pub fn run(root: &str) {
     // `CONSOLE_ONLY`, `FASTDIV_ONLY`.)
     psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
     fx_psi::set_still_gate(Some(crate::still_gate));
+    fx_psi::set_jit_gate(Some(crate::jit_gate));
 
     speed2(&mut out);
     say!(info, "psi-probe: main stack {} B unused after the speed2 rows", stack_unused());
@@ -2494,6 +2541,14 @@ pub(crate) mod jit2 {
                 }
                 say!(error, "psi-probe: jit2: golden {name}: does not compile: {}", e.msg);
                 bad += 1;
+                continue;
+            }
+            // (The kernel's build takes small blocks infallibly: skipped
+            // on a heap that hasn't room for it, as the player's JIT gate
+            // does, never an abort.)
+            if !crate::jit_gate(opendmd_core::fx_psi::jit_build_bytes(&prog)) {
+                say!(info, "psi-probe: jit2: golden {name}: skipped, no heap to build its kernel here (heap {} B free)", heap());
+                skipped += 1;
                 continue;
             }
             let mut k = match psi::jit::emit(&prog) {

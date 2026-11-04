@@ -299,7 +299,9 @@ fn the_estimate_counts_two_scenes() {
 #[test]
 fn the_fused_compares_and_guards_as_measured() {
     use opendmd_psi::{golden, scene_rows, Inputs, Scratch, OWN};
-    let road = include_str!("../../opendmd-web/experiments/road-v2/road-v2.psi");
+    // (The road as it was measured, P0b-4; V2 has moved on since: its
+    // lamp posts and the real sun.)
+    let road = include_str!("road-v2-p0b4.psi");
     let mut bad = Vec::new();
     let mut rows = Vec::new();
     let mut ests = Vec::new();

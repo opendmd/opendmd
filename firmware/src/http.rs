@@ -164,6 +164,72 @@ where
     <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
+/// A member `"key": number|null` of the JSON object `body` (`lat`, `lon`),
+/// read by hand rather than through serde, whose float parsing is ~1.5 KB
+/// of the app (nothing else reads a float): `None` absent, `Some(None)`
+/// null, `Some(Some(v))` the number in hundredths, rounded half away from
+/// zero (`i32::MIN` for anything that isn't a plain decimal). serde has
+/// already checked that `body` is JSON, and skips these members.
+#[optimize(size)] // (CPU0, a config change)
+fn hundredths(body: &[u8], key: &[u8]) -> Option<Option<i32>> {
+    let mut from = 0;
+    while let Some(k) = body[from..].windows(key.len()).position(|w| w == key) {
+        let at = from + k;
+        from = at + 1;
+        // A member's name, not a string's insides: after `{` or `,`.
+        let before = body[..at].iter().rev().find(|c| !c.is_ascii_whitespace());
+        if !matches!(before, Some(b'{' | b',')) {
+            continue;
+        }
+        let mut i = at + key.len();
+        let skip = |i: &mut usize| {
+            while body.get(*i).is_some_and(u8::is_ascii_whitespace) {
+                *i += 1;
+            }
+        };
+        skip(&mut i);
+        if body.get(i) != Some(&b':') {
+            continue;
+        }
+        i += 1;
+        skip(&mut i);
+        if body[i..].starts_with(b"null") {
+            return Some(None);
+        }
+        let neg = body.get(i) == Some(&b'-');
+        i += usize::from(neg);
+        // Whole degrees (4 digits at most), then up to three decimals:
+        // thousandths, rounded to hundredths.
+        let (mut v, mut n, mut dot, mut dec) = (0i64, 0, false, 0);
+        while let Some(&c) = body.get(i) {
+            match c {
+                b'0'..=b'9' if dec < 3 && (dot || n < 4) => {
+                    v = v * 10 + i64::from(c - b'0');
+                    if dot {
+                        dec += 1;
+                    } else {
+                        n += 1;
+                    }
+                }
+                b'0'..=b'9' if dot => {}
+                b'.' if !dot && n > 0 => dot = true,
+                b',' | b'}' | b' ' | b'\t' | b'\r' | b'\n' if n > 0 => break,
+                _ => return Some(Some(i32::MIN)),
+            }
+            i += 1;
+        }
+        if n == 0 {
+            return Some(Some(i32::MIN));
+        }
+        for _ in dec..3 {
+            v *= 10;
+        }
+        let v = ((v + 5) / 10) as i32;
+        return Some(Some(if neg { -v } else { v }));
+    }
+    None
+}
+
 /// `panel`: absent, `null` (the defaults) or an object.
 fn double_option_panel<'de, D>(d: D) -> Result<Option<Option<PanelWire>>, D::Error>
 where
@@ -433,6 +499,19 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         };
         next.card_speed = mode;
     }
+    match (patch.lat, patch.lon) {
+        (None, None) => {}
+        (Some(None), Some(None)) => next.location = None,
+        (Some(Some(lat_c)), Some(Some(lon_c))) => match (lat_c.unsigned_abs() <= 9_000, lon_c.unsigned_abs() <= 18_000) {
+            (true, true) => next.location = Some(opendmd_core::sky::Place { lat_c, lon_c }),
+            _ => {
+                return Err(PatchErr::bad(
+                    "lat must be a number from -90 to 90 and lon one from -180 to 180 (degrees)",
+                ))
+            }
+        },
+        _ => return Err(PatchErr::bad("lat and lon go together: give both numbers, or both null")),
+    }
     if next.dwell_max < next.dwell_min {
         return Err(PatchErr::bad("dwell_max must be >= dwell_min"));
     }
@@ -492,6 +571,14 @@ pub struct ConfigPatch {
     /// `safe`, `fast` or `full` (`opendmd_core::card_speed`): in effect at
     /// once when a card is mounted (`cardspeed::set_mode`).
     pub(crate) card_speed: Option<String>,
+    /// The location in degrees (rounded to 0.01°), both or neither; both
+    /// `null` clears it. Kept in NVS only (never the card's file:
+    /// `settings_card` has no group for them).
+    /// (In hundredths of a degree: read from the body by [`hundredths`].)
+    #[serde(skip)]
+    pub(crate) lat: Option<Option<i32>>,
+    #[serde(skip)]
+    pub(crate) lon: Option<Option<i32>>,
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
@@ -740,13 +827,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
-        let patch: ConfigPatch = match serde_json::from_slice(&body) {
+        let mut patch: ConfigPatch = match serde_json::from_slice(&body) {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
+        (patch.lat, patch.lon) = (hundredths(&body, b"\"lat\""), hundredths(&body, b"\"lon\""));
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
+        let sky_before = (next.location, next.tz.clone());
         if let Some(p) = patch.pace_on_pct {
             crate::pace::set_on_pct(p);
         }
@@ -805,6 +894,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
         let card_speed = next.card_speed;
+        // The sky's inputs depend on the location and the zone.
+        let sky_changed = (next.location, next.tz.clone()) != sky_before;
+        let location = next.location;
         // The shared copy and the log line are this handler's (CPU0), once
         // the main task has applied it: the display core neither clones
         // the settings nor formats a line for a PUT.
@@ -843,6 +935,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     shared.panel_split
                 );
                 *c.settings.lock().unwrap() = shared;
+                // In effect at once: the sky's inputs for the new location
+                // (or zone), here on CPU0 (the zone is already set).
+                if sky_changed {
+                    crate::inputs::set_place(location);
+                }
                 // Durable at once on the card (CPU0; `settings_card`).
                 crate::settings_card::save_shared(&c.settings);
                 if let Some(name) = renamed {
@@ -2936,7 +3033,8 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
+            r#""lat":{},"lon":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2969,7 +3067,16 @@ fn settings_json(s: &Settings) -> String {
         s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
+        s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lat_c)),
+        s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lon_c)),
     )
+}
+
+/// Hundredths of a degree as a JSON number with two decimals (`-0.13`).
+fn centi_degrees(c: i32) -> String {
+    let sign = if c < 0 { "-" } else { "" };
+    let a = c.unsigned_abs();
+    format!("{sign}{}.{:02}", a / 100, a % 100)
 }
 
 fn scan_json(aps: &[ScannedAp]) -> String {

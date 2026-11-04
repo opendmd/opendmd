@@ -492,7 +492,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 707,
         title: "a table that is not numbers",
-        sentence: "a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`",
+        sentence: "a table holds numbers only, as in `table T = 1, -2, 0.5`",
         fix: "Write only numbers in the table.",
         matches: &["a table holds numbers only"],
     },
@@ -597,7 +597,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 725,
         title: "no room for a text",
-        sentence: "this text doesn't fit: tables, sprites and texts hold 256 numbers in all",
+        sentence: "this text doesn't fit: tables, sprites and texts hold 1024 numbers in all",
         fix: "Use shorter texts, or fewer tables and sprites.",
         matches: &["this text doesn't fit"],
     },
@@ -870,7 +870,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 924,
         title: "too many numbers in tables and sprites",
-        sentence: "tables and sprites hold 256 numbers in all — this would make …",
+        sentence: "tables and sprites hold 1024 numbers in all — this would make …",
         fix: "Make the tables and sprites smaller.",
         matches: &["tables and sprites hold"],
     },
@@ -1167,6 +1167,34 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "a `rate` layer can't read a scene's per-pixel values: work them out outside the scene, or leave `rate` out",
         fix: "Work the value out outside the scene, or leave `rate` out.",
         matches: &["a `rate` layer can't read a scene's per-pixel values"],
+    },
+    ErrorDoc {
+        code: 974,
+        title: "a table too long",
+        sentence: "a table holds 256 numbers at most — this one has …: split it in two",
+        fix: "Split the table in two and read the second half from the other.",
+        matches: &["numbers at most — this one has"],
+    },
+    ErrorDoc {
+        code: 975,
+        title: "a built-in input that doesn't exist",
+        sentence: "`….…` is not a built-in input: `…` has …",
+        fix: "Use one of the names listed, as `sun.alt` or `replay.game`.",
+        matches: &["is not a built-in input: `"],
+    },
+    ErrorDoc {
+        code: 976,
+        title: "`since` or `was` of something that isn't a built-in input",
+        sentence: "`…(…)` takes a built-in input's name, as in `…(replay.game)`: …",
+        fix: "Give it one of the built-in inputs listed (`since` and `was` follow the panel's own values, not the formula's).",
+        matches: &["takes a built-in input's name"],
+    },
+    ErrorDoc {
+        code: 977,
+        title: "too many built-in inputs",
+        sentence: "a formula can read … built-in inputs at most (each `since` and `was` one more) — this one reads …",
+        fix: "Read fewer built-in inputs, or fewer `since` and `was` of them.",
+        matches: &["built-in inputs at most"],
     },
 ];
 

@@ -179,6 +179,13 @@ Settings has four tabs, and everything saves as you change it (a green
   the panel plays when it powers on.
 - **Schedule:**
   - **Time** sets your time zone, for the clock and schedules.
+  - **Location** is where the panel is, roughly (latitude and longitude,
+    to about a kilometre), so Formulas can follow the real sun: daylight,
+    dawn and dusk, the seasons. Type the two numbers (a map app shows
+    them), or press **Use this browser’s location** (browsers only share it
+    with secure https pages, so on the panel's own page you'll usually type
+    them); **Clear** removes it. It stays on your panel: it is never written
+    to the card or shared.
   - **Schedule** picks a playlist or brightness for certain days and times
     ("weekday evenings: Consoles"). The first rule that matches wins, and
     your normal settings come back when it ends.
