@@ -4,7 +4,8 @@
 // one requestAnimationFrame loop that ticks only the previews that are on
 // screen.
 
-import { Preview, defaultBloom } from '../pkg/opendmd_web.js';
+import web from './web.js';
+const { Preview, defaultBloom } = web;
 import { h, store, on } from './util.js';
 import { app } from './state.js';
 
