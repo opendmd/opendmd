@@ -120,6 +120,17 @@ fn main() {
     // The paint probe's cases (`paint-probe`, src/paint_probe.rs), compiled
     // here (the image has no compiler): (group, name, pixels, psb).
     std::fs::write(out_dir.join("probe_paint.rs"), paint_cases(&dir, &strip)).expect("writing probe_paint.rs");
+    // The psi probe's whole-store Formula (psb ABI 3: 1,024 numbers, its
+    // program 10.5 KB), compiled here: on the device its compile alone
+    // needs more heap than the probe has by then.
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    let f = filler.join(", ");
+    let store = format!(
+        "loop 8\ntable F0 = {f}, 1\ntable F1 = {f}, 2\ntable F2 = {f}, 3\ntable F3 = {f}, 4\n\
+gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]*0.1 + t/8 + daylight*0.1))\n"
+    );
+    let psb = opendmd_psi::build(&store).unwrap_or_else(|e| panic!("the store case: {}", e.render(&store)));
+    std::fs::write(out_dir.join("probe_store.rs"), format!("&{psb:?}\n")).expect("writing probe_store.rs");
     let raw = std::fs::read_to_string("web/setup.html").expect("reading web/setup.html");
     let mut tera = Tera::default();
     tera.add_raw_template("setup", &raw)
