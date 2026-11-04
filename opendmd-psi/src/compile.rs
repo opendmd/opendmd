@@ -4133,7 +4133,12 @@ impl<'s> Parser<'s> {
         let j = match self.palettes.iter().position(same) {
             Some(j) => j,
             None => {
-                if self.palettes.iter().filter(|p| p.tween.is_none()).count() >= MAX_PALETTES {
+                // (In halves of a store place, as the store lays them out: a
+                // palette of 16 colours or fewer may go in a tween's half;
+                // the layout's own check, `lay_palettes`, has the last word.)
+                let halves = |p: &OwnPal| if p.half.is_some() { 1 } else { 2 };
+                let held: usize = self.palettes.iter().filter(|p| p.tween.is_none()).map(halves).sum();
+                if held + if half.is_some() { 1 } else { 2 } > 2 * MAX_PALETTES {
                     // E923.
                     return self.err(
                         kw,
