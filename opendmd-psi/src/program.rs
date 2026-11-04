@@ -1170,13 +1170,18 @@ impl Program {
                 row -= r.len() as u32;
             }
         }
-        let mut costs: [u32; 16] = core::array::from_fn(|j| {
-            let (sp, sk, ss, sr) = scene[j];
+        // (The two largest by a scan: a sort's code is ~3 KB of wasm.)
+        let (mut top, mut next) = (0u32, 0u32);
+        for &(sp, sk, ss, sr) in &scene {
             let p = if jit { sk * JIT_PATH_PCT / 100 } else { sp }.saturating_sub(ss);
-            p * (W * H) as u32 / 1000 + sr * 10
-        });
-        costs.sort_unstable();
-        let scenes = costs[15] + costs[14];
+            let c = p * (W * H) as u32 / 1000 + sr * 10;
+            if c > top {
+                (top, next) = (c, top);
+            } else if c > next {
+                next = c;
+            }
+        }
+        let scenes = top + next;
         // `cycle`'s turns: a palette copied each row, on top of a row
         // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
