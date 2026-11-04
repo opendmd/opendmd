@@ -346,6 +346,9 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
     ("functions", include_str!("../../docs/research/psi-rebuild-device/functions.psi"), 7330, 6799),
     ("paint-heavy", include_str!("../../docs/research/psi-rebuild-device/paint-heavy.psi"), 6407, 5569),
     ("palm", include_str!("../../docs/research/psi-rebuild-device/palm.psi"), 3233, 2385),
-    ("pixelate", include_str!("../../docs/research/psi-rebuild-device/pixelate.psi"), 5316, 5312),
-    ("under-shake", include_str!("../../docs/research/psi-rebuild-device/under-shake.psi"), 5313, 5308),
+    // (The JIT's under(x, y) template, the second run, paint80-f6aa6.)
+    ("pixelate", include_str!("../../docs/research/psi-rebuild-device/pixelate.psi"), 5318, 2645),
+    ("under-shake", include_str!("../../docs/research/psi-rebuild-device/under-shake.psi"), 5312, 2563),
+    // (Painted, the second run.)
+    ("Neon city", include_str!("../../opendmd-web/formulas/neon-city.psi"), 4289, 4037),
 ];

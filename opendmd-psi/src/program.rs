@@ -2134,8 +2134,9 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         U_L => 70,
         // `under(x, y)`'s template: two coordinates rounded and held (8
         // instructions each), the index, a mask, a byte read and `byte`
-        // (~24 in all, U_R's 26 ns for 8): a guess until paint-probe
-        // measures it.
+        // (~24 in all, U_R's 26 ns for 8). Paint-probe on the spare
+        // (paint80-f6aa6): 3, 6 and 12 steps 2,306 / 4,052 / 7,505 µs a
+        // frame, pixelate 2,645 on the real path: within -3..+12 %.
         UAT => 75,
         c => value_ns(c).saturating_sub(60).max(60),
     }
