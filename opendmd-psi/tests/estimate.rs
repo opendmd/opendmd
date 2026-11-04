@@ -214,3 +214,48 @@ fn the_cycled_and_slow_formulas_estimate_their_frames() {
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
 }
+
+/// The paint primitives' draw stage, the overlay, `under(x, y)` and the
+/// Formulas that use them against paint-probe's rows on the spare
+/// (2026-11-04): each primitive's draw stage within 15 % of `draw_us`
+/// (the fit set, three sizes a kind), the `UAT` looks and the Formulas
+/// within 15 % (the VM; the JIT's within 20 %).
+#[test]
+fn the_paint_and_under_estimates_fit_the_spare() {
+    // (Compiled as the player has them: with the runs and the narrowed
+    // steps, as `psi build` made the probe's cases.)
+    let mut bad = Vec::new();
+    let mut rows = Vec::new();
+    let mut row = |what: String, us: u32, est: u32, tol: f64| {
+        let r = est as f64 / us as f64;
+        rows.push(format!("{what:<30} measured {us:>6} est {est:>6} ({:+.0} %)", (r - 1.0) * 100.0));
+        if !(1.0 - tol..=1.0 + tol).contains(&r) {
+            bad.push(what);
+        }
+    };
+    for &(name, body, us) in measured::PAINT {
+        let src = format!("{}draw {{\n  for k < 16 {{\n    {body}\n  }}\n}}\ngray(x)\n", measured::PAINT_SPRITE);
+        let p = opendmd_psi::compile(&src).unwrap();
+        row(format!("paint {name}"), us, p.draw_us(), 0.15);
+    }
+    // The overlay: what the plane adds to the rows, empty and full.
+    let [none, empty, full] = measured::OVERLAY_ROWS;
+    let painter = opendmd_psi::compile("draw {\n  pset(-9, -9, #f00)\n}\ngray(x)\n").unwrap();
+    let clearer = opendmd_psi::compile("draw {\n  cls(#f00)\n}\ngray(x)\n").unwrap();
+    // (Half-way for a painter without `cls`: its plane is partly painted.)
+    row("overlay, a painter".into(), (empty + full) / 2 - none, painter.overlay_us(), 0.15);
+    row("overlay, cls".into(), full - none, clearer.overlay_us(), 0.15);
+    for &(name, src, us) in measured::UNDER {
+        let p = opendmd_psi::compile(src).unwrap();
+        // (Measured directly: a look's real path adds ~5 %, as pixelate's
+        // and under-shake's rows show.)
+        row(format!("under {name}"), us * 105 / 100, p.esp32_us(), 0.15);
+    }
+    for &(name, src, vm, jit) in measured::PAINT_FORMULAS {
+        let p = opendmd_psi::compile(src).unwrap();
+        row(format!("formula {name} (vm)"), vm, p.esp32_us(), 0.15);
+        row(format!("formula {name} (jit)"), jit, p.esp32_us_jit(), 0.20);
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "outside: {bad:?}\n{}", rows.join("\n"));
+}
