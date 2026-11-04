@@ -251,7 +251,7 @@ pub fn run(args: Vec<String>) -> i32 {
         n(p),
         n(MAX_PATH),
         n(MAX_LOOK_PATH),
-        if src.len() > GALLERY_MAX { format!("; over the gallery's {} B", n(GALLERY_MAX)) } else { String::new() }
+        if psb > GALLERY_MAX { format!("; over the gallery's {} B compiled", n(GALLERY_MAX)) } else { format!("; compiled {} B of the gallery's {}", n(psb), n(GALLERY_MAX)) }
     );
     if prog.still_lanes() > 0 {
         println!(
@@ -656,7 +656,8 @@ pub fn read(path: &str) -> String {
 // opendmd-gallery): what `psi check` measures a Formula against.
 const MAX_LOOK_PATH: usize = 2048;
 const MAX_PATH: usize = 6144;
-const GALLERY_MAX: usize = 4096;
+// (opendmd-gallery's MAX_PSB: the compiled length it takes.)
+const GALLERY_MAX: usize = 4500;
 
 fn q(v: f64) -> i32 {
     q16((v.clamp(-32767.0, 32767.0) * 10000.0).round() as i32, 10000)

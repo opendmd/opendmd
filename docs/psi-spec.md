@@ -321,8 +321,8 @@ GIF as a look, and for the gallery).
   6,144 bytes at most; 2,048 for a look set that way). The panel never
   compiles.
 - **In the gallery** a formula is a file of two comment lines (`--
-  author: …` and `-- licence: CC0-1.0`) and then the formula, 4,096 bytes
-  at most.
+  author: …` and `-- licence: CC0-1.0`) and then the formula: at most
+  16,384 characters, 4,500 bytes once compiled, 20 KB for the file.
 
 ## Tools
 
