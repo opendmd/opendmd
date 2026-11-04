@@ -1288,6 +1288,42 @@ impl Program {
             .collect()
     }
 
+    /// The paint primitives' part of [`draw_us`](Self::draw_us), µs (each
+    /// [`paint_ns`](Self::paint_ns) as often as it runs): psi-probe's paint
+    /// rows print it beside the draw stage they measure.
+    #[doc(hidden)]
+    pub fn paint_us(&self) -> u32 {
+        let mut ns = 0u64;
+        self.draw_walk(|at, op, mult| {
+            if op.code == code::PAINT {
+                ns = ns.saturating_add(self.paint_ns(at) * u64::from(mult));
+            }
+        });
+        (ns / 1000).min(u32::MAX as u64) as u32
+    }
+
+    /// The paint plane's overlay in [`esp32_us`](Self::esp32_us), µs a
+    /// frame before the real paths' 15 % (0 for a formula that doesn't
+    /// paint).
+    #[doc(hidden)]
+    pub fn overlay_us(&self) -> u32 {
+        if self.paints() {
+            PAINT_ROWS_US
+        } else {
+            0
+        }
+    }
+
+    /// The pixel steps that read the picture elsewhere (`under(x, y)`, a
+    /// step a channel): psi-probe's `UAT` rows.
+    #[doc(hidden)]
+    pub fn uat_steps(&self) -> usize {
+        self.ops[self.row_end as usize..self.len()]
+            .iter()
+            .filter(|op| op.code == code::UAT)
+            .count()
+    }
+
     /// [`draw_us`](Self::draw_us), with (`lanes`) or without the loops run
     /// as lanes (and the one whose `FOR` is at `turned` a turn at a time).
     fn draw_cost(&self, lanes: bool, turned: usize) -> u32 {

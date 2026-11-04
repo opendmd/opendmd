@@ -75,6 +75,8 @@ mod panel;
 mod probe;
 #[cfg(feature = "psi-probe")]
 mod psi_probe;
+#[cfg(feature = "paint-probe")]
+mod paint_probe;
 #[cfg(feature = "psi")]
 #[cfg(feature = "psi-probe")]
 mod psi_stack;
@@ -1630,6 +1632,8 @@ fn main() -> Result<()> {
             // there) and the httpd and the network are up (see psi_probe).
             #[cfg(feature = "psi-probe")]
             psi_probe::run(config::SD_MOUNT);
+            #[cfg(feature = "paint-probe")]
+            paint_probe::run(config::SD_MOUNT);
             CARD_READY.store(true, Ordering::Relaxed);
             fatidx::mounted();
             // A look kept on the card was set before the card was there.
