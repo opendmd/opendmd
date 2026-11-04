@@ -288,7 +288,7 @@ example is compiled by the tests.
 | limit | at most |
 | --- | --- |
 | a formula's text, comments included | 16,384 characters |
-| steps (per frame, draw, per row, per pixel, and one per layer) | 512 |
+| steps (per frame, draw, per row, per pixel, and one per layer) | 768 |
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 241 |
 | nesting of brackets, operators and function calls | 48 |
@@ -331,7 +331,7 @@ The `psi` command checks and formats formulas on a computer
 
 ```text
 $ psi check storm-front.psi --out -
-ok: 41 of 512 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
+ok: 41 of 768 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
 panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)

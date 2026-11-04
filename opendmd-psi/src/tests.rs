@@ -495,7 +495,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 6_300);
+    assert!(core::mem::size_of::<Program>() <= 7_600);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -530,9 +530,9 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    // (512 steps and the two markers, 241 values, the palette store: 3,388
-    // B before P0.)
-    assert_eq!(core::mem::size_of::<Program>(), 6156);
+    // (768 steps and the two markers, 241 values, the palette store: 3,388
+    // B before P0, 6,156 at 512 steps.)
+    assert_eq!(core::mem::size_of::<Program>(), 7436);
     // The ink plane and the paint plane's pointer (the plane itself, 4 KB
     // more, only for a formula that paints).
     assert_eq!(

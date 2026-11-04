@@ -681,7 +681,7 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 | limit | value | error says |
 |---|---|---|
 | source | 16,384 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes files of 4 KB) | too long |
-| steps | 512 in all: per frame + draw + per row + per pixel + one per layer (the column run's and the still cache's markers not counted) | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
+| steps | 768 in all: per frame + draw + per row + per pixel + one per layer (the column run's and the still cache's markers not counted) | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
 | live per-pixel values at once | 12 | holds more than 12 values at once |
 | constants + per-frame/per-row values held at once | 241 with the inputs, ~232 of your own (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs N numbers and once-a-frame values, more than the 241 it can hold (with the steps by section) |
 | nesting | 48 levels of brackets, operators and function calls | nested too deeply |
