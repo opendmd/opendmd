@@ -282,9 +282,10 @@ pub fn has_look(b: &[u8]) -> Result<bool, Refusal> {
 pub fn load_into(b: &[u8], which: Which, prog: &mut Prog) -> Result<(), Refusal> {
     let r = load_raw(b, which, prog).and_then(|()| verify(prog));
     match r {
+        Ok(()) if prog.finish(true, true) => Ok(()),
         Ok(()) => {
-            prog.finish(true, true);
-            Ok(())
+            prog.clear();
+            Err(NO_HEAP)
         }
         Err(e) => {
             prog.clear();
