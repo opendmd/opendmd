@@ -140,21 +140,45 @@ pub fn compile(src: &str) -> Result<Program, Error> {
 }
 
 #[cfg(feature = "compiler")]
+/// A zeroed [`Program`] on the heap, never on the stack (`compile_into`
+/// and its kin take a zeroed one: `program_is_plain_data`); an error, not
+/// an abort, when the heap can't give it (the panel's probe builds at the
+/// rig's heap).
+fn zeroed_program() -> Result<alloc::boxed::Box<Program>, Error> {
+    let layout = core::alloc::Layout::new::<Program>();
+    // SAFETY: `Program` is not zero-sized; a non-null block of `layout`
+    // from the global allocator is what `Box` frees, and a Program is
+    // integers and arrays of integers all the way down: all-zero is valid.
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) } as *mut Program;
+    if p.is_null() {
+        return Err(Error {
+            start: 0,
+            end: 0,
+            msg: alloc::string::String::from("not enough memory to compile this formula right now"),
+        });
+    }
+    Ok(unsafe { alloc::boxed::Box::from_raw(p) })
+}
+
+#[cfg(feature = "compiler")]
 /// A Formula compiled for the player ([`psb`]): its program, and when its
 /// `look` line composes a blend or an amount, its program as a look.
 pub fn build(src: &str) -> Result<alloc::vec::Vec<u8>, Error> {
     let mut d = Declared::default();
-    let mut tmp = Program::default();
-    compile_declared(src, &mut tmp).map(|x| d = x)?;
+    // (One program on the heap, zeroed in place, for the declarations and
+    // then the player's (each compile clears it): a Program is 7.4 KB, and
+    // the panel's probe builds on its main task's 16 KB stack, or on a
+    // thread whose stack is taken from the same heap.)
+    let mut play = zeroed_program()?;
+    compile_declared(src, &mut play).map(|x| d = x)?;
     let name = d
         .name
         .and_then(|(a, b)| src.get(a as usize..b as usize))
         .unwrap_or("");
-    let mut play = alloc::boxed::Box::new(Program::default());
     compile_portable(src, &mut play)?;
     let look = match play.meta().look() {
         Some((blend, amount)) if blend != "over" || amount < 100 => {
-            let mut l = alloc::boxed::Box::new(Program::default());
+            let mut l = zeroed_program()?;
             compile_look(src, &mut l)?;
             Some(l)
         }

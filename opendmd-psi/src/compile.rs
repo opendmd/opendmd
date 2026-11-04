@@ -35,7 +35,7 @@ mod notes;
 /// from the card is compacted first (8 KB at most), an inline path is 6 KB.
 pub const MAX_SOURCE: usize = 32 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
-pub const MAX_NODES: usize = 2048;
+pub const MAX_NODES: usize = 1024;
 /// Brackets, operators and function calls nested this deep: bounds the
 /// parser's stack. The compiler runs off the device now (the browser's
 /// wasm, 1 MB of stack; the CLI and the simulator): 48 levels at the
@@ -1090,7 +1090,7 @@ struct Dag {
     conds: Vec<Id>,
 }
 
-/// Index slots: a power of two, twice [`MAX_NODES`] (8 KB, freed with the
+/// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
 /// rest when `compile_into` returns).
 const SLOTS: usize = 2 * MAX_NODES;
 const NO: Id = Id::MAX;
