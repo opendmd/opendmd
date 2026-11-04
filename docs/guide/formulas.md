@@ -703,7 +703,10 @@ Formulas are made to run on the panel's own small processor too, which
 draws every pixel 50 times a second (100 with `fps 100`, for a formula
 that is light: about 5 ms a frame or less). The editor rates each one **light**,
 **medium** or **heavy** for the panel (hover for an estimate in
-milliseconds); all the examples are light or medium.
+milliseconds); all the examples are light or medium. The panel compiles
+most formulas to its own machine code, which is faster; the rating is
+for what the panel will run, and the hover also says how long a frame
+takes without it.
 
 - Cheap: `+ - *`, the waves (`sin`, `cos`, `tri`, `saw`, `sqr`), `abs`,
   `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`, `digit`,

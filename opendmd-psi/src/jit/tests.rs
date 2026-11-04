@@ -1157,3 +1157,66 @@ fn damaged_programs_lower_safely() {
     }
     println!("{lowered} damaged programs lowered, {differ} drew otherwise than the VM");
 }
+
+/// P0b-2: the editor's "does the panel's JIT take it" (`Program::jit_takes`,
+/// the lowering's rules without emitting) is the lowering's answer — over
+/// the bundled Formulas, the goldens, the sketches, the device cases and
+/// random formulas, wide ones (many values alive at once) among them.
+#[test]
+fn jit_takes_is_lower() {
+    let mut srcs: Vec<String> = bundled().into_iter().map(|(_, s)| s).collect();
+    for &(_, s, _, _) in crate::golden::FRAMES {
+        srcs.push(s.into());
+    }
+    for &(_, s, _, _, _) in crate::golden::DRAWN.iter().chain(crate::golden::OVER) {
+        srcs.push(s.into());
+    }
+    for (_, s) in crate::sketches::ALL {
+        srcs.push(s.into());
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/research/psi-rebuild-device");
+    for e in std::fs::read_dir(dev).unwrap().flatten() {
+        if e.path().extension().is_some_and(|x| x == "psi") {
+            srcs.push(std::fs::read_to_string(e.path()).unwrap());
+        }
+    }
+    let mut r = Rng(0x1d17_0b5e_55ed_0b2b);
+    for k in 0..600usize {
+        // 1 to 12 values alive at once into the colour.
+        let n = 4 + k % 9;
+        let mut src = String::from("loop 4\n");
+        for j in 0..n {
+            let f = ["sin", "frac", "abs", "noise", "hash", "floor"][(j + k) % 6];
+            let a = match f {
+                "noise" => format!("noise(x*{j}.3, y*{k}, t)"),
+                "hash" => format!("hash(px*{}, py)", j + 1),
+                _ => format!("{f}(x*{j}.7 + y*{}.1 + {})", k % 7, expr(&mut r, 1)),
+            };
+            src += &format!("v{j} = {a}\n");
+        }
+        let sum: Vec<String> = (0..n).map(|j| format!("v{j}*{}.{j}", j % 3)).collect();
+        let v = sum.join(" + ");
+        src += &match k % 3 {
+            0 => format!("gray({v})"),
+            1 => format!("hsv(x, 1, {v})"),
+            _ => format!("pal(fire, {v})"),
+        };
+        srcs.push(src);
+    }
+    let (mut yes, mut no, mut bad) = (0, 0, Vec::new());
+    for src in &srcs {
+        let Ok(prog) = compile(src) else { continue };
+        let real = crate::jit::refusal(&prog);
+        if prog.jit_takes() != real.is_none() {
+            bad.push(format!("{real:?}: {src}"));
+        }
+        if real.is_none() {
+            yes += 1;
+        } else {
+            no += 1;
+        }
+    }
+    println!("jit_takes: {yes} taken, {no} refused, {} disagree", bad.len());
+    assert!(bad.is_empty(), "{}", bad.join("\n---\n"));
+    assert!(yes > 200 && no > 20, "{yes} {no}");
+}

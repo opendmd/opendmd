@@ -8875,14 +8875,29 @@ fn scene_blocks(
             Item::Colour(c) => steps[c].reads().any(|x| dep[x as usize]),
             _ => false,
         };
-        let w: Vec<Item> = seq[first..=last].to_vec();
-        if w.iter().any(|it| matches!(it, Item::Still | Item::Column | Item::Slow)) {
+        if seq[first..=last]
+            .iter()
+            .any(|it| matches!(it, Item::Still | Item::Column | Item::Slow))
+        {
             return None;
         }
-        let mut out: Vec<Item> = w.iter().copied().filter(|it| !needs(it)).collect();
-        out.extend(w.iter().copied().filter(|it| of(it)));
-        out.extend(w.iter().copied().filter(|it| needs(it) && !of(it)));
-        seq.splice(first..=last, out);
+        // The three groups, in place: a stable partition by rank.
+        let rank = |it: &Item| {
+            if of(it) {
+                1u8
+            } else {
+                2 * u8::from(needs(it))
+            }
+        };
+        let mut out: Vec<Item> = Vec::with_capacity(last + 1 - first);
+        for g in 0..3 {
+            for it in &seq[first..=last] {
+                if rank(it) == g {
+                    out.push(*it);
+                }
+            }
+        }
+        seq[first..=last].copy_from_slice(&out);
     }
     // A guard before each scene's values (one run each, as above).
     let mut out = Vec::with_capacity(seq.len() + scenes as usize);
