@@ -15,6 +15,8 @@ import { declText, est } from './psikit.js';
 const REPO = 'https://github.com/opendmd/opendmd.github.io';
 // GitHub refuses very long addresses: past this, the file is copied instead.
 const MAX_URL = 6000;
+// The gallery's cost limit (opendmd-gallery MAX_US, the Worker's check.ts): psikit `est`, the tier (the JIT's estimate where it takes the Formula), in µs a frame.
+const MAX_US = 10000;
 // The characters the checker refuses (controls, invisible, direction-changing, private use).
 const BAD = /[\0-\x08\x0a-\x1f\x7f-\xa0\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\uffff\ue000-\uf8ff\udb40-\udb43\udb80-\udbff]/;
 const slug = (s) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/, '');
@@ -66,7 +68,7 @@ export function form(P, get) {
     }
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(file.value) || ['readme', 'index'].includes(file.value)) out.push('The file name can be lower-case letters, digits and single hyphens.');
     if (!x.ok) out.push('The formula has to work first.');
-    else if (est(x.info) > 8000) out.push('This formula is too heavy for the panel: the gallery takes ones under 8 ms a frame.');
+    else if (est(x.info) > MAX_US) out.push('This formula is too heavy for the panel: the gallery takes ones up to 10 ms a frame.');
     if (x.src.replace(/\r\n?/g, '\n').split('\n').some((l) => BAD.test(l.replace(/\t/g, '')))) out.push('The formula has an invisible or special character in it.');
     if (new TextEncoder().encode(fileText(x)).length > 20480) out.push('The file would be over 20 KB: the gallery takes shorter formulas.');
     const n = x.ok ? P.program(x.src).length : 0;
