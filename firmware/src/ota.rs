@@ -425,10 +425,11 @@ pub fn info_json(card_mounted: bool) -> String {
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
     let (mhz, mode) = flash_clock();
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
+        r#"{{"version":{},"build":{},"variant":{},"features":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
         json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
+        crate::state::features_json(),
         flash_size(),
         opt(pending),
         opt(last),

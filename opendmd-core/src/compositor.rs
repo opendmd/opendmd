@@ -312,6 +312,7 @@ impl At {
         }
     }
 
+    #[cfg_attr(all(target_os = "espidf", not(feature = "psi")), link_section = ".iram1.gif")]
     fn value(&self, x: usize, y: usize, old: &[Rgb], new: &[Rgb]) -> Rgb {
         let i = y * WIDTH + x;
         match self.kind {
@@ -414,6 +415,8 @@ pub fn compose(
 /// and Fade move every pixel, so they visit them all. The result, the marks
 /// and the count are exactly [`compose`]'s.
 #[allow(clippy::too_many_arguments)]
+// (In IRAM in a firmware without Formulas, with `At::value`: a transition's steps.)
+#[cfg_attr(all(target_os = "espidf", not(feature = "psi")), link_section = ".iram1.gif")]
 pub fn compose_step(
     kind: Kind,
     duration: Duration,

@@ -121,6 +121,8 @@ blocklist-check:
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota
+	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features player,ota --lib a_player_without_formulas
 	@echo "==> Testing $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(SIM)"
@@ -476,6 +478,7 @@ clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"
@@ -524,9 +527,27 @@ clean:
 # (fw-build, fw-flash) always add `dev-credentials`, which compiles the
 # firmware/.env WiFi seed in; fw-release never does.
 FW_FEATURES ?=
-FW_DEV_FEATURES = dev-credentials,bench$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
+FW_DEV_FEATURES = dev-credentials,bench$(if $(strip $(FW_DISABLE)),$(if $(strip $(FW_ENABLED)),$(comma)$(subst $(eval) ,$(comma),$(strip $(FW_ENABLED)))))$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
 comma := ,
-FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
+FW_CARGO_FEATURES = $(FW_NO_DEFAULT)--features $(FW_DEV_FEATURES)
+
+# The components a build can leave out (firmware/Cargo.toml's default
+# features; docs/notes/firmware-build.md "Feature flags"): all on unless
+# FW_DISABLE names them, e.g. `make fw-release FW_DISABLE=formulas`
+# (`formulas` off takes `jit` with it). Such a build is
+# `--no-default-features --features <the rest>`, in every firmware target
+# (fw-build, fw-flash, fw-release, fw-release-flash, the emu images);
+# `/api/status` `features` says what it has. Give a release build with
+# components off its own FW_RELEASE_TARGET_DIR and DIST: its files have
+# the release's names.
+FW_OPTIONAL := formulas jit
+FW_DISABLE ?=
+FW_DISABLED = $(subst $(comma), ,$(FW_DISABLE))
+FW_ENABLED = $(filter-out $(FW_DISABLED) $(if $(filter formulas,$(FW_DISABLED)),jit),$(FW_OPTIONAL))
+FW_NO_DEFAULT = $(if $(FW_DISABLE),--no-default-features )
+ifneq ($(filter-out $(FW_OPTIONAL),$(subst $(comma), ,$(FW_DISABLE))),)
+$(error FW_DISABLE=$(FW_DISABLE): the components a build can leave out are $(FW_OPTIONAL))
+endif
 
 # Every build ends with tools/check-iram.py (the hot loops and the raced
 # pair writer must be linked into IRAM: from flash their cost depends on the
@@ -663,9 +684,9 @@ fw-clippy: fw-sdkconfig-flavour
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
-	@echo "==> Clippy firmware, release feature set (the defaults: psi, jit)"
+	@echo "==> Clippy firmware, release feature set (the defaults: formulas, jit)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
-	@echo "==> Clippy firmware, no features (without psi)"
+	@echo "==> Clippy firmware, no features (FW_DISABLE=formulas: without Formulas or the JIT)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
 
 fw-fmt:
@@ -739,7 +760,7 @@ FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFI
 # the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
 FW_COMMA := ,
-FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram)))
+FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram) $(if $(FW_DISABLE),$(FW_ENABLED))))
 DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
@@ -769,7 +790,7 @@ fw-release: web
 fw-release-variant:
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
-	@echo "==> Release build, $(FW_VARIANT) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
+	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
 	@mkdir -p $(FW_RELEASE_VTARGET) $(DIST)
 	@$(FW_FRAGMENT) > $(FW_RELEASE_SDKCONFIG_FRAG)
 	@# The generated sdkconfig keeps the values it has over changed defaults
@@ -783,7 +804,7 @@ fw-release-variant:
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
 	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size: a fragment
 	@# that failed to apply would build a 4 MB image under an 8mb name.
 	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \
@@ -795,8 +816,10 @@ fw-release-variant:
 	$(MAKE) --no-print-directory updater
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_RELEASE_BINARY)'
-	@# The third-party notices: the committed ones must be what this build links.
-	$(MAKE) --no-print-directory notices-check
+	@# The third-party notices: the committed ones must be what this build links
+	@# (a build with components off links a subset of the default build's
+	@# crates: the default build's check covers it).
+	$(if $(FW_DISABLE),@echo "notices: not checked with FW_DISABLE=$(FW_DISABLE) (a subset of the default build's crates)",$(MAKE) --no-print-directory notices-check)
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
