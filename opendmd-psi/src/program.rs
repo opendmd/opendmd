@@ -2905,7 +2905,20 @@ pub(crate) fn tab(tables: &[i32], start: u8, last: u8, k: i32) -> i32 {
     if i < 0 || i > last as i32 {
         return 0;
     }
-    tables[(store_at(start) + i as usize) & (tables.len() - 1)]
+    word(tables, store_at(start) + i as usize)
+}
+
+/// Store word `i` masked into `tabs`, without a bounds check: every store
+/// is a power of two of numbers (`Program`'s 1,024, `Prog::try_boxed`'s
+/// `store_words`), so the mask keeps any index inside it. On the VM's and
+/// the kernel's per-pixel path (a bounds check there cost the draw stage
+/// and the row steps a compare and a branch a read).
+#[inline(always)]
+pub(crate) fn word(tabs: &[i32], i: usize) -> i32 {
+    debug_assert!(tabs.len().is_power_of_two());
+    // SAFETY: `tabs.len()` is a power of two (above), so `i & (len − 1)`
+    // is below it.
+    unsafe { *tabs.get_unchecked(i & (tabs.len() - 1)) }
 }
 
 /// A sprite's shape (`sprite NAME { … }`), from its header word in the
@@ -2927,7 +2940,7 @@ impl SprHead {
     #[inline(always)]
     pub(crate) fn new(tabs: &[i32], at: u8) -> SprHead {
         let at = store_at(at) & (tabs.len() - 1);
-        let hd = tabs[at] as u32;
+        let hd = word(tabs, at) as u32;
         let (w, h, lb, keys) = (hd & 0xff, (hd >> 8) & 0xff, (hd >> 16) & 3, (hd >> 20) & 31);
         // Pixels a word: 32, 16 or 8 (as its log2).
         let lg = 5 - lb.min(2);
@@ -2952,11 +2965,9 @@ impl SprHead {
         if x >= self.w || y >= self.h {
             return 0;
         }
-        let word = tabs
-            [(self.data + y as usize * self.wpr + (x >> self.lg) as usize) & (tabs.len() - 1)]
-            as u32;
-        let k = (word >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
-        tabs[(self.at + 1 + k as usize) & (tabs.len() - 1)]
+        let w = word(tabs, self.data + y as usize * self.wpr + (x >> self.lg) as usize) as u32;
+        let k = (w >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
+        word(tabs, self.at + 1 + k as usize)
     }
 
     /// The words it takes in the tables, its header first.
