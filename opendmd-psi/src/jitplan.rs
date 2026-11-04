@@ -316,8 +316,6 @@ pub(crate) fn needs_call(hsv_call: bool, it: &Item) -> bool {
                     | SQRT
                     | RECIP
                     | PICK
-                    | TAB
-                    | SPR
                     | MIX
                     | SMOOTH
                     | NOISE

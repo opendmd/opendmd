@@ -1153,16 +1153,7 @@ impl<'a> Emitter<'a> {
                 ];
                 return self.call(k, hid::NOISE_O, &args, Some(op.d));
             }
-            TAB => {
-                let args = [
-                    Arg::Val(op.a),
-                    Arg::Word(Word::Tabs),
-                    Arg::Imm(i32::from(op.b)),
-                    Arg::Imm(i32::from(op.c)),
-                    Arg::Imm(self.prog.tables.len() as i32),
-                ];
-                return self.call(k, hid::TAB, &args, Some(op.d));
-            }
+            TAB => return self.table_read(k, op),
             PICK => {
                 let args = [
                     Arg::Val(op.a),
@@ -1172,16 +1163,7 @@ impl<'a> Emitter<'a> {
                 ];
                 return self.call(k, hid::PICK, &args, Some(op.d));
             }
-            SPR => {
-                let args = [
-                    Arg::Val(op.a),
-                    Arg::Val(op.b),
-                    Arg::Word(Word::Tabs),
-                    Arg::Imm(i32::from(op.c)),
-                    Arg::Imm(self.prog.tables.len() as i32),
-                ];
-                return self.call(k, hid::SPR, &args, Some(op.d));
-            }
+            SPR => return self.sprite_read(k, op),
             INK | U_R..=U_L => return self.read_pixel(k, op.code),
             UAT => return self.under_at(k, op),
             INKN => return self.ink_levels(k, op.a),
@@ -1521,6 +1503,105 @@ impl<'a> Emitter<'a> {
         c.add(d, d, t);
         c.srli(t, t, 7);
         c.add(d, d, t);
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `T[k]` (`program::tab`), inline: floor(k) against the table's
+    /// length (an unsigned compare: below 0 is huge), then the word at the
+    /// store's base + 4·(4·start + i), else 0. The verifier holds the table
+    /// inside the store, so the index needs no mask here. (A helper call
+    /// was slower than the VM's lane loop: paint80-3e6de.)
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn table_read(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let a = self.val(op.a)?;
+        let (id, d) = self.dst(k)?;
+        let i = self.tmp()?;
+        self.c.srai(i, a, 16);
+        self.release(a);
+        let u = self.tmp()?;
+        let v = self.tmp()?;
+        self.c.movi(u, i32::from(op.c) + 1);
+        self.c.movi(v, 0);
+        let out = self.c.b_fwd(Cond::Geu, i, u);
+        let base = self.word_in(u, Word::Tabs);
+        self.c.addx4(i, i, base);
+        let off = (crate::program::store_at(op.b) * 4) as i32;
+        if off & !255 != 0 {
+            self.c.addmi(i, i, off & !255);
+        }
+        self.c.l32i_wide(v, i, off & 255);
+        self.c.bind(out);
+        self.c.mov(d, v);
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `S[u, v]` (`SprHead::read`), inline, the sprite's shape known here
+    /// (the store is the program's): floor(u), floor(v) against its width
+    /// and height (unsigned: below 0 is outside), the row's word, the
+    /// pixel's bits out of it (`ssr` and `src` by its place in the word),
+    /// then its key's number; 0 outside.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn sprite_read(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let hd = crate::program::SprHead::new(&self.prog.tables, op.c);
+        let ua = self.val(op.a)?;
+        let x = self.tmp()?;
+        self.c.srai(x, ua, 16);
+        self.release(ua);
+        let va = self.val(op.b)?;
+        let y = self.tmp()?;
+        self.c.srai(y, va, 16);
+        self.release(va);
+        let (id, d) = self.dst(k)?;
+        let t = self.tmp()?;
+        let z = self.tmp()?;
+        let c = &mut self.c;
+        c.movi(z, 0);
+        c.movi(t, hd.w as i32);
+        let f1 = c.b_fwd(Cond::Geu, x, t);
+        c.movi(t, hd.h as i32);
+        let f2 = c.b_fwd(Cond::Geu, y, t);
+        // The word: data + y·wpr + (x >> lg).
+        if hd.wpr == 1 {
+            c.mov(t, y);
+        } else if hd.wpr.is_power_of_two() {
+            c.slli(t, y, hd.wpr.trailing_zeros());
+        } else {
+            c.movi(t, hd.wpr as i32);
+            c.mull(t, y, t);
+        }
+        c.srli(y, x, hd.lg);
+        c.add(t, t, y);
+        let base = self.word_in(y, Word::Tabs);
+        let c = &mut self.c;
+        c.addx4(t, t, base);
+        let off = (hd.data * 4) as i32;
+        if off & !255 != 0 {
+            c.addmi(t, t, off & !255);
+        }
+        c.l32i_wide(t, t, off & 255);
+        // The pixel's bits: (x mod the pixels a word) << lb, then its
+        // key's 1 << lb bits.
+        c.extui(x, x, 0, hd.lg);
+        if hd.lb > 0 {
+            c.slli(x, x, hd.lb);
+        }
+        c.ssr(x);
+        c.src(t, z, t);
+        // SAR back to the multiplies' 16: they hoist it out of the pixel
+        // loop, so the next pixel's would read this one's.
+        c.ssai(16);
+        c.extui(t, t, 0, 1 << hd.lb);
+        c.addx4(t, t, base);
+        let off = ((hd.at + 1) * 4) as i32;
+        if off & !255 != 0 {
+            c.addmi(t, t, off & !255);
+        }
+        c.l32i_wide(z, t, off & 255);
+        c.bind(f1);
+        c.bind(f2);
+        c.mov(d, z);
         self.wrote(k, id);
         Ok(())
     }

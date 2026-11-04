@@ -1325,3 +1325,34 @@ fn built_ins_and_the_big_store_draw_the_same_through_kernels() {
         }
     }
 }
+
+/// The kernel's inline table and sprite reads (no helper call): sprites
+/// and tables at the store's start and past 750 numbers, read at a row's
+/// value, a constant and per pixel, out of range both ways (below 0, past
+/// the end), with a multiply after them in the same pixel loop (the sprite
+/// read moves SAR, which the multiplies hoist).
+#[test]
+fn inline_table_and_sprite_reads_draw_as_the_vm() {
+    let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
+    for pre in [0usize, 1, 3] {
+        let mut big = String::new();
+        for j in 0..pre {
+            big += &format!("table F{j} = {}, {j}.5\n", filler.join(", "));
+        }
+        for v in ["y * 3", "py % 2", "0", "y * 2.5 - 0.5"] {
+            let src = format!(
+                "{big}table T = 0.1, 0.5, 0.9, 0.3\nsprite s {{\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}}\n\
+                 gray(s[x * 20 - 1, {v}] * 0.5 + T[x * 6 - 1] * 0.3 + (x * 0.7) * (y * 0.3))"
+            );
+            let p = compile(&src).unwrap();
+            let low = lower(&p).unwrap_or_else(|e| panic!("{src}: {e}"));
+            for ms in [0, 2500] {
+                let mut inputs = golden::inputs(ms);
+                inputs.set_ms(&p, u64::from(ms));
+                let want = vm_frame(&p, &inputs, None, PLAIN);
+                let (got, _) = kernel_frame(&p, &low, &inputs, None, PLAIN);
+                assert!(first_diff(&got, &want).is_none(), "{src} at {ms} ms: {:?}", first_diff(&got, &want));
+            }
+        }
+    }
+}
