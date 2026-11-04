@@ -198,10 +198,14 @@ fn size_compile_and_cost() {
     assert!(long.len() > 11_000 && long.len() < MAX_FILE);
     let e = check_file("x", long.as_bytes()).unwrap();
     assert!(e.psb_len < MAX_PSB && e.abi == opendmd_psi::psb::ABI && e.us <= e.vm_us, "{e:?}");
-    // Over the compiler's own bound (16,384 characters), under the file's: its sentence.
-    let over = format!("{GOOD}{}", "-- padding padding\n".repeat(900));
-    assert!(over.len() > opendmd_psi::MAX_SOURCE && over.len() < MAX_FILE);
-    assert!(has(&problems("x", &over), "too long"), "{:?}", problems("x", &over));
+    // Over the compiler's own bound, under the file's: its sentence. (Since
+    // road-v2-p1 the compiler takes 32,768 characters, past the file's
+    // 20,480: no such file, and the file's limit is the one met.)
+    if opendmd_psi::MAX_SOURCE < MAX_FILE {
+        let over = format!("{GOOD}{}", "-- padding padding\n".repeat(900));
+        assert!(over.len() > opendmd_psi::MAX_SOURCE && over.len() < MAX_FILE);
+        assert!(has(&problems("x", &over), "too long"), "{:?}", problems("x", &over));
+    }
     // Over 4,500 B compiled: its length, the limit and what to cut.
     assert!(too_long_prepared(MAX_PSB).is_none());
     let long = too_long_prepared(5120).unwrap();
