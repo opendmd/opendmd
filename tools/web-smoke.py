@@ -3901,7 +3901,10 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.evaluate("location.hash = '#library/formula'")
     page.wait_for_function("location.hash == '#formulas/edit'", timeout=20000)
     open_formulas(page)
-    psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
+    # (Each at its build's address, ?v=<build id>: js/wasm.js.)
+    psi = [u for u in asked if "pkg-psi/" in u and urllib.parse.urlsplit(u).path.endswith(".wasm")]
+    check(bool(psi) and all(re.search(r"\?v=[0-9a-f]{16}$", u) for u in psi),
+          f"formulas: the module's wasm asked for at the build's address ({[u.rsplit('/', 1)[-1] for u in psi]})")
     examples = bundled()
     tiles = page.eval_on_selector_all("#psi-ex .psi-tile", "els => els.map(e => e.dataset.name)")
     more = page.get_attribute("#psi-more", "href")
