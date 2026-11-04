@@ -1599,6 +1599,7 @@ fn bundled(canvas: &mut Canvas) {
 /// open, its load's narrowing and its kernel's build all ask the heap
 /// first). The line: `psi-probe: store, short heap: …`.
 fn store_short_heap(canvas: &mut Canvas) {
+    use opendmd_core::fx::Effect as _;
     let filler: Vec<String> = (0..250).map(|k| format!("{}", k % 9)).collect();
     let f = filler.join(", ");
     let src = format!(
