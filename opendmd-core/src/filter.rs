@@ -187,7 +187,7 @@ impl Filter {
 
 fn sorted(set: &HashSet<String>) -> Vec<&str> {
     let mut v: Vec<&str> = set.iter().map(String::as_str).collect();
-    v.sort_unstable();
+    heap_sort(&mut v);
     v
 }
 
@@ -228,6 +228,37 @@ impl Fnv1a {
 
     fn finish(&self) -> u64 {
         self.0
+    }
+}
+
+
+/// A heapsort (unstable, in place, O(n log n)) where `sort_unstable`'s
+/// pattern-defeating quicksort and its sorting networks are ~9 KB of
+/// flash an element type (psi-settle, 2026-11-05: the firmware's headroom).
+fn heap_sort<T: Ord>(v: &mut [T]) {
+    fn sift<T: Ord>(v: &mut [T], mut root: usize, end: usize) {
+        loop {
+            let mut child = 2 * root + 1;
+            if child >= end {
+                return;
+            }
+            if child + 1 < end && v[child] < v[child + 1] {
+                child += 1;
+            }
+            if v[root] >= v[child] {
+                return;
+            }
+            v.swap(root, child);
+            root = child;
+        }
+    }
+    let n = v.len();
+    for k in (0..n / 2).rev() {
+        sift(v, k, n);
+    }
+    for end in (1..n).rev() {
+        v.swap(0, end);
+        sift(v, 0, end);
     }
 }
 
@@ -384,5 +415,27 @@ mod tests {
         let c = Filter::new().exclude_categories(["MD"]);
         let d = Filter::new().exclude_flag("MD");
         assert_ne!(c.fingerprint(), d.fingerprint());
+    }
+}
+
+#[cfg(test)]
+mod heap_sort_tests {
+    #[test]
+    fn heap_sort_sorts() {
+        let mut r = 0x1234_5678u32;
+        for n in [0usize, 1, 2, 3, 7, 64, 1000] {
+            let mut v: Vec<u32> = (0..n)
+                .map(|_| {
+                    r ^= r << 13;
+                    r ^= r >> 17;
+                    r ^= r << 5;
+                    r % 97
+                })
+                .collect();
+            let mut w = v.clone();
+            w.sort();
+            super::heap_sort(&mut v);
+            assert_eq!(v, w);
+        }
     }
 }

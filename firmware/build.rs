@@ -290,7 +290,10 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
     // (`div_s`), four a pixel of each kind against the multiplies they
     // were (`div4 mul`, `div4 frame mul`: the old reciprocal's form) and the
     // same with none (`div base`).
-    let w = "loop 8\nw = (x + t/8)*100\ns = a*4 + 1.5\nz = a - 0.5\n";
+    // (`w` reads `y` and `t`: neither the column run nor the still cache
+    // takes it, so every division is a pixel's. paint80-c10d6's read
+    // `x + t/8` only: its divisions ran once a column.)
+    let w = "loop 8\nw = (x + y*0.37 + t/8)*100\ns = a*4 + 1.5\nz = a - 0.5\n";
     for (name, e) in [
         ("div base", "frac(w)"),
         ("div4 mul", "frac(w*0.125 + w*0.0625 + w*0.03125 + w*0.015625)"),
