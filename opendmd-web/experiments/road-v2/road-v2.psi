@@ -191,10 +191,10 @@ mBase = tunnel - inMouth
 mSign = inMouth - inExit
 halfOther = portalOn*.5
 cityDraw = city * (tCT < 170)
--- The tunnel: the tube's width against the road's; the car lit as it
--- passes under each lamp
+-- The tunnel: the tube's width against the road's (the car is not
+-- strobed by the lamps: a whole-body flash six times a second read as a
+-- flicker, not as light; the walls carry the speed)
 tubeW = widthK*1.05
-strobe = tunnel * (frac(run) < .35) / 32
 -- The forest: trunks far (thin, dense, fogged) and mid (wider, sparser),
 -- turning with the road at their own rates; the canopy's leaves faster
 -- still; a clearing now and then and as the trees thin; light through
@@ -204,7 +204,6 @@ gapK = 1.3 + clearing*5 + (1 - forest)*12
 lightOn = forestH * (1 - night)
 -- as the trees thin: the canopy's rows go up, the ferns back to the car
 canFull = 8*forest
-rutOn = forest > .6
 
 canPart = 11*forest
 fernFrom = 31 - 18*forest + tunnel*99
@@ -360,7 +359,12 @@ scene desertRows when desert*below {
 baseHW = halfAt[py] + hillW
 hw = baseHW*widthK
 ew = hw*edgeK
-phase = frac(39/max(below ? baseHW : halfAt[25 - py], 1.3) + run)
+pRaw = 39/max(below ? baseHW : halfAt[25 - py], 1.3) + run
+phase = frac(pRaw)
+-- the forest's leaf and fern bits by the row's depth: two clumps a road
+-- stripe, so the canopy overhead and the ferns either side stream past
+-- with the road (not still while the road runs straight)
+leafI = (pRaw*2 - abs(py - 12)*.5) % 15
 stripe = (phase < .5) * belowF
 centre = noise(rowDriven, 0, 0)*bendAmp + roadMid + bendD
 beamRow = hw*beamAt[py]*beamOn
@@ -390,6 +394,14 @@ fo = farAt%6 - frac(fh*7)*3.5
 farTop = max(max(dFar, tFar), (fh < forest*.85) * (fo >= 0) * (fo < 1 + (frac(fh*13) > .5)) * (forest*13))
 windows = forest > 0 ? floor(hash(floor((px + nearShift) / 2), 27) * 32767) :
   (max(tNear, tFar) > dFar) * bit(42, nearAt%8) * floor(hash(floor(nearAt) + winEpoch, seed) * 127)
+-- the tunnel's walls by column (a wall pixel's depth is how far out it
+-- is from the vanishing point, near enough the panel's middle: see the
+-- tube): 8 on a rib, else 9; the wall lamps' row there between the
+-- ribs (99: none)
+wallX = abs(px - 64)
+ribP = frac(80/wallX + run) - (wallX < 15)
+ribBar = 9 - (ribP < .25)
+wallLamp = ribP > .8 ? floor(12 - wallX*.125) : 99
 nearTop = 19 + nearTop
 farTop = max(19 + farTop, nearTop)
 
@@ -418,22 +430,26 @@ kO = max(max(k, cityK), (yuA < farTop)*(w*2 + 8) + (yuA < nearTop))
 scene tube when tunnel {
   -- The tube: its half width at the row's depth (the ceiling's rows at
   -- the depth mirrored), round the road's middle there, so the half bends
-  -- curve it whole; ribbed walls from the edge line out and up, at three
-  -- times the stripes' rate; the lane line dashed; on the ceiling a lamp
-  -- strip down its middle, lit in passing bands, with a glow either side.
+  -- curve it whole; the lane line dashed; on the ceiling a lamp strip down
+  -- its middle, lit in passing dashes.
+  -- The walls are upright: a wall pixel's depth is its distance out
+  -- (where the tube is that wide), not its row's, so the ribs are upright
+  -- bars, two a road stripe, sweeping out past the car at its speed, and
+  -- a row of wall lamps between them runs to the vanishing point (the
+  -- lamps' row is always out on the wall). Too far in (ribs under 3 px
+  -- apart) the wall is plain and its lamps one strip: no moire.
   tHW = halfAt[below ? py : 25 - py] * tubeW
-  ribK = 8 + (frac(phase*3) < .5)
+  wallK = (offRoad > tHW) * ((py == wallLamp)*3 + ribBar)
   lampRow = (1 - below) * (phase < .35) * 1.6
-  glowRow = (1 - below) * (3 + (phase < .35)*2)
-  tubeK = max(max((offRoad > tHW) * ribK, (offRoad < lineRow) * 12),
-    max((offRoad < lampRow) * 12, (offRoad < glowRow) * 4))
+  -- (the lane line below the horizon, the lamp strip above: one test)
+  tubeK = max(wallK, (offRoad < lineRow + lampRow) * 12)
 }
 kT = max(k, tubeK)
 scene canopy when forest * (1 - below) {
   -- The canopy, over the sky's rows: full over the top rows, ragged (its
   -- leaf bits) over the three under them, a V of sky over the road (wider
   -- in a clearing); lit and dark leaves by the bits, two rows a clump
-  lb = bit(windows, floor(py*.5))
+  lb = bit(windows, leafI)
   canA = py < canFull ? 1 : (py < canPart) * 15
   canB = (py < canFull) * 14
   gapRow = (11.5 - py) * gapK
@@ -445,10 +461,10 @@ scene ground when forest*below {
   -- say (not through the exit's arch: their colour is the low half's);
   -- ruts either side of the middle. (The light on the road is the near
   -- trees' shafts, drawn: each tied to its tree.)
-  fern = bit(windows, floor(py*.5))
+  fern = bit(windows, leafI)
   fernRow = (py > fernFrom) * 16
   rutC = hw*.42
-  rutW = max(hw*.05, .5)*rutOn
+  rutW = max(hw*.05, .5)*fSky
   groundK = max(fern * (offRoad >= hw) * fernRow, (abs(offRoad - rutC) < rutW) * 12)
 }
 kO = max(kO, groundK)
@@ -471,4 +487,4 @@ pal(S, pick(k,
     13/32 + hc, 14/32 + hc, 15/32, 15/32, 8/32 + hc, 10/32 + hc,
     2/32 + hc, 3/32 + hc, 3/32,
     forestH > 0 ? 4/32 : neon*8/32, 5/32, 7/32, 12/32, neon ? 15/32 : 7/32, 12/32,
-    11/32 + hc - strobe, hc, 12/32 + hc, 7/32 + py%2/32) + halfOther - m*halfOther)
+    11/32 + hc, hc, 12/32 + hc, 7/32 + py%2/32) + halfOther - m*halfOther)
