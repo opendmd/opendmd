@@ -36,7 +36,7 @@ the firmware is back with the bundle's version.
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
 """
-import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time
+import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time, zlib
 import http.client, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -595,6 +595,22 @@ class Lane:
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
         lower = lambda h: {k.lower(): v for k, v in h.items()}
+        # Only a signed pack (docs/www-pack.md "Signature"): an unsigned one is a 422 at its
+        # header, the same pack with one byte changed (its CRC made to match) a 422 once read.
+        if pack[19] & 1:
+            unsigned = bytearray(pack[:-72])
+            unsigned[19] &= ~1
+            unsigned[8:12] = struct.pack("<I", len(unsigned))
+            unsigned[12:16] = struct.pack("<I", zlib.crc32(bytes(unsigned[64:])))
+            code, _, body = api.raw("PUT", "/api/www", bytes(unsigned), timeout=300)
+            self.expect(code == 422 and b"not signed" in body, "www", f"an unsigned pack: HTTP {code} {body[:120]!r}")
+            forged = bytearray(pack)
+            forged[200] ^= 1
+            forged[12:16] = struct.pack("<I", zlib.crc32(bytes(forged[64:])))
+            code, _, body = api.raw("PUT", "/api/www", bytes(forged), timeout=300)
+            self.expect(code == 422 and b"signature" in body, "www", f"an altered pack: HTTP {code} {body[:120]!r}")
+            _, info = api.json("GET", "/api/www")
+            self.expect(info.get("ok") is True, "www", f"after the refusals the web app in flash is as it was: {info}")
         # The Host gate (docs/api.md "Security"): a name that is not the panel's is a 421 for
         # every route, GETs included; 127.0.0.1 and localhost (this port forward) answer.
         for path in ("/", "/api/status"):
@@ -628,7 +644,8 @@ class Lane:
         code_other, _, _ = api.raw("GET", wasm, extra={"If-None-Match": '"00000000"'})
         self.expect(code304 == 304 and not body304 and code_other == 200, "www",
                     f"the wasm with its ETag in a list: HTTP {code304}; with another: HTTP {code_other}")
-        self.ok("www pack", f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it; "
+        self.ok("www pack", f"an unsigned and an altered pack refused (422); Host evil.example 421; "
+                f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it with its CSP; "
                 f"no-cache, ETag {tag}, 304 for it (/ and the wasm at ?v=), 200 for another")
 
     # -- simultaneous uploads (the spare's wedge recipe) -------------------------

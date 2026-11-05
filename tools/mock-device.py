@@ -319,6 +319,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `Content-Disposition: attachment`. `POST /api/follow/test` naming another
   host than the saved one, with no `code`, is a 400 when a code is saved;
   `PUT /api/config` with a new `follow_host` and no `follow_code` forgets the
+  saved code. `PUT /api/www` takes only a signed pack (header byte 19 bit 0,
+  the 72-byte trailer, against `--ota-pub`): 422 otherwise.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, flash_size, pending, last, log}` (`log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
@@ -1714,6 +1716,28 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if named != 0:
         raise ValueError(f"the image names signing key {named}, but key 0 signed it")
     return version
+
+
+def www_signature_check(data: bytes, pub) -> None:
+    """opendmd_core::ota::www (docs/www-pack.md "Signature"): ValueError(reason)
+    unless the pack is signed by `pub` (key 0)."""
+    from nacl.exceptions import BadSignatureError
+    if not data[19] & 1:
+        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+    t = data[-72:]
+    if len(data) < 64 + 72 or t[:4] != b"ODWS" or t[5:8] != b"\0\0\0":
+        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+    if t[4] != 0:
+        raise ValueError(f"signed with key {t[4]}, which this player does not know")
+    body = bytearray(data[:-72])
+    body[12:16] = b"\0" * 4
+    msg = b"ODWPSIG1" + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
+    if pub is None:
+        raise ValueError("the firmware's public key is invalid")
+    try:
+        pub.verify(msg, t[8:])
+    except BadSignatureError:
+        raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
 
 
 def host_port(s: str) -> str:
@@ -4388,10 +4412,26 @@ def make_handler(ctx: Context, quiet: bool):
             if len(data) < 64 or total != length or vlen > 44:
                 self.send_error_json(400, f"not a www pack: the header's length {total} is not the body's {length}")
                 return
+            if ctx.sd_state != "ok":
+                self.send_error_json(503, "no card (or one that cannot be read): a web app update is staged on the card, insert one",
+                                     {"Retry-After": "10"})
+                return
+            if not data[19] & 1:
+                self.send_error_json(422, "not signed: this player takes only a release's web app pack (signed); "
+                                          "the web app in flash is unchanged")
+                return
+            if zlib.crc32(data[64:]) != int.from_bytes(data[12:16], "little"):
+                self.send_error_json(422, "CRC mismatch; the web app in flash is unchanged")
+                return
+            try:
+                www_signature_check(data, ctx.ota_pub)
+            except ValueError as e:
+                self.send_error_json(422, f"{e}; the web app in flash is unchanged")
+                return
             # The update, simulated: what is served stays the same, the
             # version reported becomes the pack header's (bytes 20..20+len).
             ctx.www_pushed = data[20:20 + vlen].decode("utf-8", "replace") or None
-            ctx.www_staged = ctx.sd_state == "ok"
+            ctx.www_staged = True
             self.send_json(200, {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged})
 
         def h_firmware_get(self, path):

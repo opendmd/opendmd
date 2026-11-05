@@ -228,6 +228,8 @@ in `~/.config/opendmd/opendmd.key`, read by `tools/fw-sign.py` (pinned
 the repo. CI builds and tests with a throwaway key (`FW_SIGN_KEY`,
 `FW_SIGN_PUB`); its release workflow is not the way releases are made.
 
+The web app pack is signed with the same key and key ids
+(`docs/www-pack.md` "Signature").
 
 ## The flow
 
@@ -302,7 +304,8 @@ browser doing the fetching: the player itself never goes to the internet.
 - **Update.** Everything needed is downloaded into memory first, with
   progress, and checked: the firmware's header must carry the release's
   version and the player's layout, the pack must start `ODWP` with its header's length equal to
-  the download, its version `www_version`, and at most 1,310,720 B. A
+  the download, its version `www_version`, and at most 1,310,720 B (the
+  player then checks its signature). A
   failure there installs nothing. Then the firmware, if it is newer:
   `PUT /api/firmware` and the wait for the restart, exactly as "Update from
   file…" does (`/api/status` polled every 2 s until it reports the new
@@ -328,10 +331,11 @@ browser doing the fetching: the player itself never goes to the internet.
 
 ## Related protections
 
-- `PUT /api/www` keeps serving the old pack until the new one has verified
-  on the card (staged, then read back whole, size and CRC, every card
-  read retried): only then is the partition erased and written from the
-  card, header last (`docs/www-pack.md`). If the copy still fails after
+- `PUT /api/www` takes only a pack signed with the release key, and keeps
+  serving the old pack until the new one has verified on the card (staged,
+  then read back whole, size, CRC and signature, every card read retried):
+  only then is the partition erased and written from the card, header
+  last (`docs/www-pack.md`). Without a usable card it is refused. If the copy still fails after
   the erase, the checked pack stays on the card and the next boot writes
   it.
 - Every request must name the panel in its `Host` (421 otherwise: DNS

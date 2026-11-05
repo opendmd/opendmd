@@ -112,6 +112,12 @@ pub enum NetCommand {
         header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
         reply: mpsc::Sender<Result<(opendmd_core::ota::Meta, u8), opendmd_core::ota::OtaError>>,
     },
+    /// `PUT /api/www`: check a web app pack's signature
+    /// (`ota::serve_verify_www`), on this stack for the same reason.
+    VerifyWww {
+        signed: Box<opendmd_core::ota::www::Signed>,
+        reply: mpsc::Sender<Result<(opendmd_core::ota::Meta, u8), opendmd_core::ota::OtaError>>,
+    },
     /// Improv Serial over USB (`improv.rs`): a scan, or WiFi details to
     /// join and save. The worker sends the answer itself.
     Improv(crate::improv::Job),
@@ -1531,7 +1537,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let st = c.status.lock().unwrap();
             if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
         };
-        stream::receive(req, move |up| www::receive(up, card))
+        let net = c.net.clone();
+        stream::receive(req, move |up| www::receive(up, card, &net))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed

@@ -750,6 +750,8 @@ browser), not someone on the same WiFi: it is plain HTTP.
   never as HTML or SVG, always with nosniff and `Content-Security-Policy:
   sandbox; default-src 'none'`: a file anyone wrote to the card never runs
   as a page of the panel's.
+- **Updates are signed.** `PUT /api/firmware` and `PUT /api/www` take only
+  what the release key signed (`docs/ota.md`, `docs/www-pack.md`).
 
 ```sh
 K='Authorization: Bearer <key>'
@@ -777,22 +779,26 @@ curl -s $DMD/api/www
 
 ### PUT /api/www
 
-Write a new pack (the whole file). Its header is checked before anything
+Write a new pack (the whole file): a release's, signed with the release
+key (`docs/www-pack.md` "Signature"). Its header is checked before anything
 is erased: not a pack, an unknown format, or a length not the body's is a
-`400` at once, and the app in flash stays. With a card, the pack is staged
-there and read back (size, CRC; failed reads retried): a `408` (cut short),
-`422` (bad CRC) or `500` (unreadable) leaves the old app. Then it is
+`400` at once, an unsigned pack a `422` at once, and the app in flash stays.
+With a card, the pack is staged there and read back (size, CRC, the
+signature; failed reads retried): a `408` (cut short), `422` (bad CRC or
+signature) or `500` (unreadable) leaves the old app. Then it is
 written to flash (~7 s for 800 KB) and served at once, no reboot. If that
 write fails (`500`), pages are `503` and the next restart writes the pack
-from the card, or push again. Without a usable card, a `408`/`422` leaves
-pages `503` until a good pack is written.
+from the card, or push again. Without a usable card it is a `503` (a
+pack is staged on the card, as a firmware update is), and the app in
+flash stays.
 
-Reply: `GET /api/www`'s object (`staged` false: no card staging). `411` no
-length; `413` too big. Any good pack is accepted, older or newer: check the
-version `GET /api/www` reports (`make www-push HOST=…` does).
+Reply: `GET /api/www`'s object. `411` no
+length; `413` too big. Any signed pack is accepted, older or newer: check
+the version `GET /api/www` reports (`make www-push HOST=…` signs a local
+build with `FW_SIGN_KEY` and does).
 
 ```sh
-curl -s -X PUT --data-binary @opendmd-web/www.pack $DMD/api/www
+curl -s -X PUT --data-binary @dist/opendmd-1.0.0-www.pack $DMD/api/www
 curl -s $DMD/api/www
 ```
 

@@ -341,7 +341,9 @@ else
   pack="$DIST/opendmd-$VERSION-www.pack"
   wv="$(uv run --quiet python -I -c 'import sys; b = open(sys.argv[1], "rb").read(64); assert b[:4] == b"ODWP"; print(b[20:20 + b[18]].decode())' "$pack")"
   [ "$wv" = "v$VERSION" ] || die "the www pack's version is '$wv', want 'v$VERSION' (a dirty tree or another tag?)"
-  pass "www pack: '$wv'"
+  uv run --quiet tools/fw-sign.py verify-www "$pack" --pub firmware/keys/opendmd.pub >/dev/null ||
+    die "opendmd-$VERSION-www.pack is not signed with the committed firmware/keys/opendmd.pub's key"
+  pass "www pack: '$wv', signed (verifies against firmware/keys/opendmd.pub)"
 
   step "4. Collect this version's assets"
   rm -rf "$ASSETS"; mkdir -p "$ASSETS"

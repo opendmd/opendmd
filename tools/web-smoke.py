@@ -264,7 +264,7 @@ Unreadable-card pass: a second mock with `--sd unreadable` (a card that
 mounts but cannot be read, exFAT): status `sd` {mounted: true, readable:
 false, error naming FAT32}, the Now page's Card line "Not readable: needs
 FAT32" in red and its "Format card…" line, and PUT /api/www replying
-staged false. Then the format: POST /api/card/format without `confirm` is
+503 (a pack is staged on the card or not at all). Then the format: POST /api/card/format without `confirm` is
 a 400; the dialog (warning, red button) cancelled changes nothing; Format
 card shows progress with `sd.formatting` true (a second POST: 409), ends
 "Done" with the card readable, and a format of the now readable card is a
@@ -342,6 +342,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -2695,13 +2696,45 @@ def fake_app(path: Path, variant: str) -> None:
     path.write_bytes(bytes(b))
 
 
+_WWW_KEY: list[Path] = []
+
+
+def www_key() -> tuple[Path, Path]:
+    """One throwaway key pair for the run (tools/fw-sign.py keygen): the
+    bundles and the www packs the mocks are given are signed with it, and
+    every mock that takes either is started with `--ota-pub` its public half."""
+    if not _WWW_KEY:
+        d = Path(tempfile.mkdtemp(prefix="web-smoke-key-"))
+        subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py"), "keygen", "--key", str(d / "k"),
+                        "--pub", str(d / "p")], check=True, stdout=subprocess.DEVNULL)
+        _WWW_KEY.extend([d / "k", d / "p"])
+    return _WWW_KEY[0], _WWW_KEY[1]
+
+
+def signed_www(pack: bytes) -> bytes:
+    """`pack` signed with the run's key (tools/fw-sign.py sign-www), as a
+    release's is: the mock, like the firmware, takes only a signed pack."""
+    key, _ = www_key()
+    d = Path(tempfile.mkdtemp(prefix="web-smoke-www-"))
+    try:
+        (d / "in.pack").write_bytes(pack)
+        subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py"), "sign-www", str(d / "in.pack"),
+                        "--out", str(d / "out.pack"), "--key", str(key)], check=True, stdout=subprocess.DEVNULL)
+        return (d / "out.pack").read_bytes()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def ota_bundles(tmp: Path) -> dict[str, Path]:
     """A throwaway key pair, a fake app image signed as OTA_VERSION, a copy
     of the bundle with one image byte flipped (tools/fw-sign.py), a file
     that is not a bundle at all, and bundles for the other flash layout
     (8mb: the mock is a 4mb player)."""
     sign = ["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py")]
-    subprocess.run([*sign, "keygen", "--key", str(tmp / "k"), "--pub", str(tmp / "p")], check=True, stdout=subprocess.DEVNULL)
+    key, pub = www_key()
+    shutil.copy(key, tmp / "k")
+    os.chmod(tmp / "k", 0o600)
+    shutil.copy(pub, tmp / "p")
     fake_app(tmp / "app.bin", "4mb")
     fake_app(tmp / "app8.bin", "8mb")
     good = tmp / "opendmd-9.9.9-smoke.odfw"
@@ -2893,12 +2926,12 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
     shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
-    built = (REPO / "opendmd-web" / "www.pack").read_bytes()
+    built = signed_www((REPO / "opendmd-web" / "www.pack").read_bytes())
     pack = bytearray(built)
     wv = f"v{UPD_VERSION}".encode()
     pack[18] = len(wv)
     pack[20:64] = wv.ljust(44, b"\0")
-    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(bytes(pack))
+    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(signed_www(bytes(pack)))
     fw0 = get_json(base + "/api/firmware")["version"]
     w0 = get_json(base + "/api/www")["version"]
 
@@ -7266,7 +7299,16 @@ def www_mock_checks(page: Page, base: str, version: str) -> None:
     st = get_json(base + "/api/status")
     check(st.get("www") == w and st.get("www_version") == version, "web app: /api/status carries www and www_version")
     pack = REPO / "opendmd-web" / "www.pack"
-    for body, want in ((pack.read_bytes(), 200), (b"not a pack at all", 400)):
+    unsigned = pack.read_bytes()
+    good = signed_www(unsigned)
+    forged = bytearray(good)
+    forged[100] ^= 1  # a changed byte, its CRC made to match: only the signature tells
+    forged[12:16] = zlib.crc32(bytes(forged[64:])).to_bytes(4, "little")
+    for body, want in ((unsigned, 422), (bytes(forged), 422)):
+        code, reply = put_www(base, body)
+        check(code == want and get_json(base + "/api/www")["staged"] is None,
+              f"web app: PUT /api/www of an {'unsigned' if body is unsigned else 'altered'} pack -> {code} (refused, nothing staged)")
+    for body, want in ((good, 200), (b"not a pack at all", 400)):
         code, reply = put_www(base, body)
         check(code == want, f"web app: PUT /api/www ({len(body):,} B) -> {code}")
         if want == 200:
@@ -7296,7 +7338,7 @@ def sd_unreadable_pass(browser) -> None:
     read (exFAT). Status says so, the Now page names it, nothing is staged;
     then Now's "Format card…" dialog formats it and the card reads, and a
     second format is refused (409: only an unreadable card is formatted)."""
-    proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable"])
+    proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable", "--ota-pub", str(www_key()[1])])
     errors: list[str] = []
     try:
         print(f"\n== mock device with an unreadable card at {base}")
@@ -7316,9 +7358,9 @@ def sd_unreadable_pass(browser) -> None:
         check(card == ["Not readable: needs FAT32", True], f"unreadable card: Settings › Device's Card line says so, in red ({card})")
         goto_view(page, "now")
         shot(page, "now-sd-unreadable", "laptop")
-        code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
-        check(code == 200 and reply is not None and reply.get("staged") is False,
-              f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")
+        code, reply = put_www(base, signed_www((REPO / "opendmd-web" / "www.pack").read_bytes()))
+        check(code == 503 and get_json(base + "/api/www")["ok"],
+              f"unreadable card: PUT /api/www is a 503 (staged on the card or not at all), the web app as it was ({code})")
         code, reply = post_code(base + "/api/card/format", {})
         check(code == 400, f"card format: no confirm is a 400 ({code} {reply})")
         # The dialog: Cancel changes nothing.

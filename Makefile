@@ -829,11 +829,14 @@ fw-release-variant:
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
 	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
-	@size=$$(stat -c %s $(WWW_PACK)); \
-	 echo "$(WWW_PACK): $$size B of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
+	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
+	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
 	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
 	$(MAKE) --no-print-directory fw-sign
-	cp $(WWW_PACK) $(FW_WWW_IMAGE)
+	@# The www pack, signed with the same key (docs/www-pack.md "Signature"):
+	@# from 1.0.0-beta.15 on a player takes only a signed one over PUT /api/www.
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py verify-www $(FW_WWW_IMAGE) --pub $(FW_SIGN_PUB)
 	cp $(FW_RELEASE_BOOTLOADER) $(FW_DIST_BOOTLOADER)
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
@@ -926,7 +929,7 @@ fw-release-flash:
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
 www-push:
 	@test -n "$(HOST)" || { echo "usage: make www-push HOST=<ip-or-name> [WWW_PACK=$(WWW_PACK)]"; exit 2; }
-	tools/www-push.sh $(HOST) $(WWW_PACK)
+	FW_SIGN_KEY=$(FW_SIGN_KEY) tools/www-push.sh $(HOST) $(WWW_PACK)
 
 # The updater (ota/updater, docs/ota.md): a small C ESP-IDF app for the
 # ota_0 partition that copies a staged firmware image from the card into
@@ -1073,10 +1076,14 @@ emu-api-psb:
 	@mkdir -p $(EMU_DIR)/api
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
 	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
+# The pack it pushes is this build's, signed (PUT /api/www takes no other).
+EMU_API_WWW = $(EMU_DIR)/api/www.pack
 emu-api: emu-build emu-card emu-api-psb
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
-	  --www-pack $(WWW_PACK) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
+	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
 # The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (the spare, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin
