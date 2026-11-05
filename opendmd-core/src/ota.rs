@@ -531,16 +531,11 @@ pub struct KeyTail {
 impl KeyTail {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn update(&mut self, data: &[u8]) {
-        if data.len() >= KEY_TRAILER_LEN {
-            self.buf
-                .copy_from_slice(&data[data.len() - KEY_TRAILER_LEN..]);
-            self.len = KEY_TRAILER_LEN;
-            return;
-        }
-        let keep = (KEY_TRAILER_LEN - data.len()).min(self.len);
-        self.buf.copy_within(self.len - keep..self.len, 0);
-        self.buf[keep..keep + data.len()].copy_from_slice(data);
-        self.len = keep + data.len();
+        // The last `n` bytes of `data` go in at the end, the rest move up.
+        let n = data.len().min(KEY_TRAILER_LEN);
+        self.buf.copy_within(n.., 0);
+        self.buf[KEY_TRAILER_LEN - n..].copy_from_slice(&data[data.len() - n..]);
+        self.len = (self.len + n).min(KEY_TRAILER_LEN);
     }
 
     /// The key id the trailer names, `None` without one.
