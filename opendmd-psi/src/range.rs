@@ -37,6 +37,7 @@ use crate::vm::Inputs;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Iv(pub i64, pub i64);
 
+#[cfg(feature = "syntax")]
 pub(crate) const FULL_IV: Iv = FULL;
 
 const LO: i64 = i32::MIN as i64;
