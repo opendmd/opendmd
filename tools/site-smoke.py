@@ -1803,10 +1803,14 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
                 except PlaywrightTimeout:
                     undrawn.append(k)
                     continue
-                lit_n = page.evaluate(f"""() => {{ const c = document.querySelectorAll('.psi-live canvas')[{k}];
+                # Some examples are dark for part of their loop (a scene that is
+                # on half of every 4 s): lit at some point within 5 s.
+                lit_js = f"""() => {{ const c = document.querySelectorAll('.psi-live canvas')[{k}];
                     const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
-                    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n; }}""")
-                if lit_n < 12:
+                    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n >= 12; }}"""
+                try:
+                    wait_js(page, lit_js, 5000)
+                except PlaywrightTimeout:
                     dark.append(k)
                 links.append(box.locator("a.psi-open").get_attribute("href"))
             check(n >= 60 and recipes >= 7 and not undrawn and not dark,
