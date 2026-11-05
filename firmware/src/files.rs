@@ -35,13 +35,23 @@ use crate::state::free_heap;
 /// again when the stream task starts it: a response that begins has room to
 /// finish, and one that would not is refused whole rather than cut short.
 pub fn affordable(req: &mut Req) -> Result<bool> {
+    // Queued transfers run one after another: none counts against another
+    // (`transfers: 0`); the block is the chunk buffer's.
     let free = free_heap();
-    if free >= config::STREAM_START_HEAP {
+    let largest = crate::state::largest_free_block() as u32;
+    let heap = opendmd_core::admit::Heap {
+        free,
+        largest,
+        transfers: 0,
+    };
+    let ask = opendmd_core::admit::Ask::transfer(config::IO_CHUNK as u32);
+    let Err(r) = opendmd_core::admit::admit(ask, heap) else {
         return Ok(true);
-    }
+    };
     log::warn!(
-        "refusing {}: {free} B free, a response needs {} B to start",
+        "refusing {}: {} ({free} B free, largest block {largest} B; a response needs {} B to start)",
         req.path(),
+        r.why(),
         config::STREAM_START_HEAP
     );
     req.header("Retry-After", "2")?;

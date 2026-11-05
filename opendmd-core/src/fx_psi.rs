@@ -2395,6 +2395,13 @@ mod jit {
                         self.kernel = Some(Box::new(k));
                         self.checked = false;
                     }
+                    // A short or fragmented heap mid-build (the lowering
+                    // takes its tables fallibly): on the VM for now, asked
+                    // again a second later, as when the gate refuses.
+                    Err(psi::jit::NO_MEMORY) => {
+                        log::info!("formula: on the VM for now ({})", psi::jit::NO_MEMORY);
+                        self.gate_tried = now | 1;
+                    }
                     Err(why) => {
                         log::info!("formula: on the VM ({why})");
                         self.why = Some(why);
