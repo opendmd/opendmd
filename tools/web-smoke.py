@@ -3007,6 +3007,8 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         t = check_now(release("old.json", version="0.0.1"))
         check(t == f"This player’s firmware ({fw0}) is newer than the latest release (0.0.1)" and not upd(),
               f"update: firmware ahead of the release -> '{t}' (no web app offered either)")
+        check("/install/old.json" in asked and not any(a.startswith("/install/old.json?") for a in asked),
+              "update: a feed of one's own is asked as given (no ?v=, only opendmd.dev's is told the version)")
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
         frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named
@@ -3066,16 +3068,21 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
             rel_asked.append(route.request.url)
             route.fulfill(status=200, body=(inst / "release.json").read_text(),
                           headers={"content-type": "application/json", "access-control-allow-origin": "*"})
-        page.context.route("https://opendmd.dev/install/release.json", official)
+        is_feed = lambda u: u.split("?")[0] == "https://opendmd.dev/install/release.json"  # noqa: E731
+        page.context.route(is_feed, official)
         page.goto(base + "/?updates=" + urllib.parse.quote(f"{site}/install/old.json") + "#settings/device")
         goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
         n_before = len(asked)
         t = check_now()
-        check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == ["https://opendmd.dev/install/release.json"]
-              and not any(a.endswith(("/old.json", "/release.json")) for a in asked[n_before:]),
-              f"update: after the update (a release build) only opendmd.dev's feed is read, ?updates= and odmd.updates ignored -> '{t}'")
-        page.context.unroute("https://opendmd.dev/install/release.json")
+        # The official feed is told the firmware version and the flash layout
+        # (the site counts checks by them: site/worker/src/counts.ts), and nothing else.
+        lay = get_json(base + "/api/firmware").get("variant") or ""
+        feed = f"https://opendmd.dev/install/release.json?v={urllib.parse.quote(UPD_VERSION, safe='')}&layout={lay}"
+        check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == [feed]
+              and not any(a.split("?")[0].endswith(("/old.json", "/release.json")) for a in asked[n_before:]),
+              f"update: after the update (a release build) only opendmd.dev's feed is read, as {feed}, ?updates= and odmd.updates ignored -> '{t}' {rel_asked}")
+        page.context.unroute(is_feed)
     finally:
         for e in (site, "/api/firmware", "/api/status"):
             expected.remove(e)
