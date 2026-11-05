@@ -216,6 +216,7 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 )]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
+    let mut div: Option<(i32, fixed::DivBy)> = None;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
         if row != per_row {
             continue;
@@ -237,6 +238,16 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
                 t.addr(p as *const u8, W * 4)
             }
             Word::Scalar(k) => s.sc[k as usize] as u32,
+            Word::Div { v, part } => {
+                // (Its five parts in a row: the divisor's worked out once.)
+                let b = s.sc[v as usize];
+                let by = match div {
+                    Some((x, by)) if x == b => by,
+                    _ => fixed::DivBy::new(b),
+                };
+                div = Some((b, by));
+                lower::div_word(&by, part)
+            }
             Word::Pal(k) => t.addr(palette(st.tables, st.own, k).as_ptr() as *const u8, 96),
             Word::Sin => t.addr(st.tables.sin.as_ptr() as *const u8, 512),
             Word::Helper(id) => t.helper(id),

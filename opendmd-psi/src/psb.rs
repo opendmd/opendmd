@@ -482,7 +482,7 @@ fn verify_codes(p: &Prog, fused: bool) -> Result<(), Refusal> {
         let draw = (fe..de).contains(&k);
         let row = (de..re).contains(&k);
         // Steps the player works out itself (narrowing, fusing).
-        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
+        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | DIV_S | FUSE) {
             return bad;
         }
         let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | GUARD | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)

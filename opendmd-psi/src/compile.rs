@@ -1075,10 +1075,6 @@ struct Dag {
     /// formula quadratic (~0.2-0.35 ms on the host, tens of ms on the
     /// ESP32, per live edit).
     index: Vec<Id>,
-    /// The multiplies that per-pixel divisions by a constant became, as
-    /// (the multiply, the dividend, the divisor): a `floor` of one is
-    /// rebuilt with 1/k rounded up ([`fixed::recip_up`]).
-    divs: Vec<(Id, Id, i32)>,
     /// Each `pick`'s choices (a `PICK` node's `b` is its index here).
     picks: Vec<Vec<Id>>,
     /// A `loop forever` formula: `t` is wide ([`WIDE_T`]).
@@ -1311,38 +1307,13 @@ impl Dag {
             }
             (code::ADD, Some(0), _) | (code::MUL, Some(ONE), _) => return Ok(b),
             (code::MUL, Some(0), _) | (code::MUL, _, Some(0)) => return self.constant(0, at),
-            // x / k, x per pixel: x · (1/k), exact for powers of two. Once a
-            // frame or a row it stays a true division (exact, and it costs
-            // nothing per pixel), so `floor(minute/10)` is 5 at 50.
-            (code::DIV, None, Some(k)) if k != 0 && self.level(a) == LV_PIXEL => {
-                let r = self.constant(fixed::recip(k), at)?;
-                let m = self.op(code::MUL, [a, r, 0], at)?;
-                if self.konst(m).is_none() && !self.divs.iter().any(|d| d.0 == m) {
-                    self.divs.push((m, a, k));
-                }
-                return Ok(m);
-            }
-            // floor(x / k) per pixel: 1/k rounded up instead, so a whole
-            // number over a whole number that divides it floors to exactly
-            // that (rounded down, floor(px/10) was 1 at px = 20).
-            (code::FLOOR, None, _) if self.divs.iter().any(|d| d.0 == a) => {
-                let &(_, x, k) = self.divs.iter().find(|d| d.0 == a).unwrap();
-                let r = self.constant(fixed::recip_up(k), at)?;
-                let m = self.op(code::MUL, [x, r, 0], at)?;
-                if m != a {
-                    return self.op(code::FLOOR, [m, 0, 0], at);
-                }
-            }
             // 1 / x: `recip`, exactly `div(1, x)` (on the ESP32 one 32-bit
             // division where `div`'s general path takes two and a Knuth
             // digit).
             (code::DIV, Some(ONE), None) => return self.op(code::RECIP, [b, 0, 0], at),
-            // x / s, s per frame or per row: one division there, a multiply
-            // per pixel.
-            (code::DIV, None, None) if self.level(a) == LV_PIXEL && self.level(b) < LV_PIXEL => {
-                let r = self.op(code::RECIP, [b, 0, 0], at)?;
-                return self.op(code::MUL, [a, r, 0], at);
-            }
+            // (`x / k` and `x / s` per pixel stay divisions: the same value
+            // at every level. The player divides a lane by one divisor
+            // without dividing, `range::narrow`'s `div_s`.)
             // x % 2^k: a mask.
             (code::MOD, None, Some(k)) if k > 0 && (k as u32).is_power_of_two() => {
                 let m = self.constant(k - 1, at)?;
@@ -6659,7 +6630,6 @@ fn compile_inner<'s>(
         dag: Dag {
             nodes,
             index,
-            divs: Vec::new(),
             picks: Vec::new(),
             forever: false,
             ctx: Vec::new(),
@@ -6972,7 +6942,6 @@ fn finish(
     p.palette_names = Vec::new();
     p.pnodes = Vec::new();
     p.dag.index = Vec::new();
-    p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
