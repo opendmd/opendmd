@@ -190,10 +190,10 @@ curl -s "$DMD/api/exists?path=/filelist.txt"
 ### POST /api/reboot
 
 Replies `{"ok":true,"rebooting":true}`, stops any card write, restarts.
-Bench test hooks: `?sd_fail=N` (next N card mounts fail),
-`?sd_io_fail=N&sd_io_boots=B` (N card reads fail on each of B boots),
-`?sd_fallback=clear` (forget the card's slow clock at the next boot; see
-`POST /api/card/full-speed` for the live way), and in `bench` builds only
+Test hooks, in `bench` builds only (a release has none): `?sd_fail=N`
+(next N card mounts fail), `?sd_io_fail=N&sd_io_boots=B` (N card reads
+fail on each of B boots), `?sd_fallback=clear` (forget the card's slow
+clock at the next boot; see `POST /api/card/full-speed` for the live way),
 `?panic=1` (replies `{"ok":true,"panicking":true}`, then panics on purpose;
 `reset_reason` in `/api/status` reads `panic` after the restart, and
 `restarts[0]` is `{"reason":"panic", "where":"http.rs:… test panic …"}`), and
@@ -679,7 +679,10 @@ game runs, the attract playlist (or `attract`) in the menus. Set with
 
 Ask the box for its version and status, saving nothing:
 `{"host"?: string, "code"?: string}` (absent: the saved ones; an empty body
-is fine). Up to ~20 s.
+is fine). Up to ~20 s. The saved code goes only to the saved host: a
+`host` that is another one needs its own `code` (`400` without, when a
+code is saved). Likewise `PUT /api/config` with a new `follow_host` and no
+`follow_code` forgets the saved code.
 
 Reply: `{"ok","reachable","version","status","view","system","game","error"}`;
 `status` is the box's HTTP status (401: wrong code). An early failure has
@@ -694,7 +697,12 @@ curl -s $DMD/api/follow/test --json '{"host":"192.168.1.20","code":"1234"}'
 The player joins the WiFi network in its settings. With none, or after
 failing to join twice, it raises an open network, `OpenDMD-Setup`, as a
 captive portal (unknown paths redirect to `/`), and restarts every 10
-minutes to try again.
+minutes to try again. While it is the setup network, only setting up WiFi
+answers: `/`, `/setup`, the probes, `GET /api/status`, `GET /api/config`,
+`PUT /api/config`
+(`wifi_ssid`, `wifi_pass`, `hostname`, `api_key` only; anything else in
+the body is ignored), `GET /api/wifi/scan` and `POST /api/reboot`. Every other route and
+card file is a `403`; any other page redirects to the setup page.
 
 | method | path | what |
 |---|---|---|
@@ -713,15 +721,39 @@ curl -s -X POST $DMD/api/reboot
 ## Security
 
 This keeps out casual use (a guest, a script, another web page in your
-browser), not someone on the same WiFi: it is plain HTTP.
+browser), not someone on the same WiFi: it is plain HTTP. **The key is the
+only lock, and it travels in clear text on your network.**
 
+- **Host.** Every request, `GET` included, must name the panel in its
+  `Host` header: `opendmd.local`, `<hostname>.local` (or the name mDNS
+  answers to after a clash; after a rename, the old name too until the
+  restart), the bare names, the panel's current IP address, or
+  `localhost`/`127.0.0.1` (any port). Anything else is a `421`
+  ("this panel answers only to its own names"): a web page whose DNS name was pointed
+  at the panel (DNS rebinding) cannot use it. A request with no `Host`
+  (HTTP/1.0) is fine. Reach the panel by one of those names; a name your
+  router hands out (`opendmd.lan`) is refused.
 - A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
   is a `403` (no `Origin`, as from curl, is fine).
-- **API key** (Settings → Device → Security): with `api_key` set (`PUT
+- **API key** (Settings → Device → Security; the web app shows a banner
+  while there is none, and `/setup` offers one): with `api_key` set (`PUT
   /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
-  `api_key_set`), the API and the card's files need `Authorization: Bearer
-  <key>` or `?key=<key>`, else `401`. Not the web app's files or `/setup`,
-  nor in setup mode (`OpenDMD-Setup`), where a lost key can be cleared.
+  `api_key_set`), the API and the card's files (`/gifs/`, `/cache/`,
+  `/sets/`, `/formulas/`, `/filelist*`) need `Authorization: Bearer <key>`
+  or `?key=<key>`, else `401`. Not the web app's files or `/setup`, nor in
+  setup mode (`OpenDMD-Setup`), where a lost key can be cleared (and only
+  the WiFi set up: see "Network"). `?key=` is for curl: a browser keeps it
+  in its history; the web app sends the header. The panel never logs it.
+- **Headers.** The web app's files and `/setup` carry a
+  `Content-Security-Policy` (`frame-ancestors 'none'`: never in a frame)
+  and `X-Content-Type-Options: nosniff`. A card
+  file goes out as the image it is (`image/gif`, `png`, `jpeg`, `webp`) or
+  as `application/octet-stream` with `Content-Disposition: attachment`,
+  never as HTML or SVG, always with nosniff and `Content-Security-Policy:
+  sandbox; default-src 'none'`: a file anyone wrote to the card never runs
+  as a page of the panel's.
+- **Updates are signed.** `PUT /api/firmware` and `PUT /api/www` take only
+  what the release key signed (`docs/ota.md`, `docs/www-pack.md`).
 
 ```sh
 K='Authorization: Bearer <key>'
@@ -749,22 +781,26 @@ curl -s $DMD/api/www
 
 ### PUT /api/www
 
-Write a new pack (the whole file). Its header is checked before anything
+Write a new pack (the whole file): a release's, signed with the release
+key (`docs/www-pack.md` "Signature"). Its header is checked before anything
 is erased: not a pack, an unknown format, or a length not the body's is a
-`400` at once, and the app in flash stays. With a card, the pack is staged
-there and read back (size, CRC; failed reads retried): a `408` (cut short),
-`422` (bad CRC) or `500` (unreadable) leaves the old app. Then it is
+`400` at once, an unsigned pack a `422` at once, and the app in flash stays.
+With a card, the pack is staged there and read back (size, CRC, the
+signature; failed reads retried): a `408` (cut short), `422` (bad CRC or
+signature) or `500` (unreadable) leaves the old app. Then it is
 written to flash (~7 s for 800 KB) and served at once, no reboot. If that
 write fails (`500`), pages are `503` and the next restart writes the pack
-from the card, or push again. Without a usable card, a `408`/`422` leaves
-pages `503` until a good pack is written.
+from the card, or push again. Without a usable card it is a `503` (a
+pack is staged on the card, as a firmware update is), and the app in
+flash stays.
 
-Reply: `GET /api/www`'s object (`staged` false: no card staging). `411` no
-length; `413` too big. Any good pack is accepted, older or newer: check the
-version `GET /api/www` reports (`make www-push HOST=…` does).
+Reply: `GET /api/www`'s object. `411` no
+length; `413` too big. Any signed pack is accepted, older or newer: check
+the version `GET /api/www` reports (`make www-push HOST=…` signs a local
+build with `FW_SIGN_KEY` and does).
 
 ```sh
-curl -s -X PUT --data-binary @opendmd-web/www.pack $DMD/api/www
+curl -s -X PUT --data-binary @dist/opendmd-1.0.0-www.pack $DMD/api/www
 curl -s $DMD/api/www
 ```
 
@@ -798,8 +834,9 @@ layout (the bundle's must be the player's `variant`), size, SHA-256,
 Ed25519 signature and the image's app descriptor are checked: a failure is
 a `422` with the reason, nothing staged; cut short `408`; no card `503`.
 Another key's bundle, or one for the other layout, is refused once the
-140-byte header is in. Any validly
-signed bundle is accepted, older ones too. Then
+140-byte header is in; the key the image's key trailer names must be the
+one that signed it. Any validly signed bundle is accepted, older ones too,
+unless the firmware was built with a rollback floor (`docs/ota.md`). Then
 `{"ok":true,"version":"…","rebooting":true}`; the panel is dark ~45 s from
 the end of the upload to playback while it installs.
 

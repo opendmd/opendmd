@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenDMD installer</title>
 <meta name="description" content="Install or update the OpenDMD firmware and web app over USB, from the browser: on an ESP32 DevKit V1.">
-<!-- ESP Web Tools, pinned. The flashing itself is esptool-js over Web Serial. -->
-<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<!-- ESP Web Tools 10.4.0, served from here (esp-web-tools/: the npm package's dist/web/,
+     unchanged; licenses/THIRD-PARTY-LICENSES-installer.txt). The flashing itself is
+     esptool-js over Web Serial. -->
+<script type="module" src="esp-web-tools/install-button.js"></script>
 <style>
   :root {
     --bg: #f6f7f9; --fg: #16181d; --muted: #5b6270; --card: #ffffff; --line: #dde1e7;
@@ -142,7 +144,8 @@
   <p>OpenDMD is open source, MIT or Apache 2.0. The firmware and the web app this page installs are built on other
     open-source software, listed with their licences in <a href="firmware/THIRD-PARTY-LICENSES-firmware.txt">the
     firmware's notices</a> and <a href="firmware/THIRD-PARTY-LICENSES-web.txt">the web app's</a>. This page uses
-    <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> (Apache 2.0), loaded from jsDelivr.</p>
+    <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> (Apache 2.0), served with this page:
+    <a href="esp-web-tools/THIRD-PARTY-LICENSES-installer.txt">its notices</a>.</p>
 </footer>
 <script type="module">
   const hex = (n) => '0x' + n.toString(16).toUpperCase();

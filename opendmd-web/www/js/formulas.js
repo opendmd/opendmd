@@ -305,14 +305,15 @@ export async function mount(el) {
 }
 
 // `#gallery=<slug>` or `#remix` (the site's Open on my panel, app.js keeps
-// it in app.remix): the Formula saved under Your formulas as it arrives
-// (js/fstore.js: on the panel, else this browser), then into the editor:
-// change it, show it, add it to a playlist. A gallery one by name (a
-// bundled one is here already: nothing to save; else fetched from the
-// site); an edited one sent by the site's page that opened this one
-// (postMessage: its origin opendmd.dev, or this page's own for the demo
-// and the tests), never in the link. One that doesn't work isn't saved:
-// said, and kept as a draft not saved yet.
+// it in app.remix): into the editor, to change it, show it, add it to a
+// playlist. A gallery one by name (a bundled one is here already; else
+// fetched from the site) opens as a draft not saved yet: a link anyone can
+// craft writes nothing to the card, Save does. An edited one sent by the
+// site's page that opened this one (postMessage: its origin opendmd.dev, or
+// this page's own for the demo and the tests), never in the link, is saved
+// under Your formulas as it arrives (js/fstore.js: on the panel, else this
+// browser): its person pressed Open on my panel there. One that doesn't
+// work isn't saved: said, and kept as a draft not saved yet.
 async function remixed() {
   const r = app.remix;
   if (!r) return;
@@ -322,7 +323,12 @@ async function remixed() {
   let f;
   try { f = ex ? { name: ex.name, src: ex.src } : r.gallery ? await fetchFormula(ROOT(), r.gallery) : await sent(); } catch (e) { toast(`Couldn’t open that Formula: ${e.message || e}`, 'bad'); return; }
   f = { ...f, ...r.f };
-  if (!ex) {
+  if (r.gallery && !ex) {
+    await psi();
+    f.name = ctlOf(f)?.name || f.name;
+    f.unsaved = true;
+    toast(`“${f.name || 'This formula'}” is open. Save keeps it under Your formulas`, 'ok');
+  } else if (!ex) {
     try { f = await arrived(f); } catch (e) { toast(`“${f.name || 'This formula'}” isn’t saved: ${e.message || e}`, 'bad'); f.unsaved = true; }
   }
   app.psiOpen = f;

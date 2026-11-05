@@ -1369,13 +1369,16 @@ fn heap_low(section: &str) -> bool {
 
 /// What compiling leaves behind: one formula compiled on the player's
 /// formula stack (`psi_stack::compile`, a FreeRTOS task since speed-d) 200
-/// times at a builder's pace (20 ms apart), then on the old std thread 50
-/// times, the heap before and after each.
+/// times at a builder's pace (20 ms apart), then on the old std thread 40
+/// times, the heap before and after each. (The std thread leaks ~180 B a
+/// compile for good: 50 of them, 9 KB, left the jit2 goldens after them a
+/// few hundred bytes from failing an allocation once the hardening branch's
+/// ~250 B of boot heap came, 2026-11-05.)
 #[inline(never)]
 fn compile_leak() {
     let mut prog = zeroed::<psi::Program>();
     let src = bundled_src("tunnel");
-    for (how, n) in [("formula stack (task)", 200u32), ("old std thread", 50)] {
+    for (how, n) in [("formula stack (task)", 200u32), ("old std thread", 40)] {
         std::thread::sleep(Duration::from_millis(50));
         let (h0, b0) = (heap(), crate::state::largest_free_block());
         let mut done = 0;

@@ -26,7 +26,8 @@ offset  size  field
     12     4  CRC-32 of bytes [64, total length)
     16     2  entry count
     18     1  version string length (<= 44)
-    19     1  reserved, 0
+    19     1  flags: bit 0 = signed (the last 72 bytes are the
+              signature trailer, below); 0 before 1.0.0-beta.15
     20    44  version string, UTF-8, zero-padded
     64        entry table: count x 16 B, sorted by path
               path strings, back to back (UTF-8, no terminators)
@@ -105,6 +106,41 @@ it. `opendmd-pack www-info <pack>` prints the header and every entry and
 verifies the CRC. `tools/web-size.py` prints the same `pack:` line under
 its gzip budgets (which are about load time over WiFi, not flash).
 
+## Signature
+
+A release's pack is signed with the release key (the firmware bundles'
+Ed25519 key, `docs/ota.md` "Keys"): `tools/fw-sign.py sign-www <pack>
+--out <signed>` (run by `make fw-release` for the pack in `dist/`, and by
+`make www-push` on a local build). Signing sets bit 0 of byte 19, grows the
+total length by 72 bytes and appends the trailer:
+
+```
+offset  size  field
+     0     4  "ODWS"
+     4     1  key id (0: the first release key)
+     5     3  zero
+     8    64  Ed25519 signature over "ODWPSIG1" | key id | SHA-256 of the
+              pack's bytes before the trailer, with the CRC field (bytes
+              12..16) taken as zeros
+```
+
+then computes the CRC last, over everything after the header, trailer
+included. So the CRC still covers the whole body and the signature
+everything but the CRC; the entries never point into the trailer.
+`opendmd_core::ota::www` (`PackHasher`, `verify`) is the firmware's side;
+`fw-sign.py verify-www` checks a file the same way.
+
+**Old firmware and new packs.** Firmware before 1.0.0-beta.15 reads byte 19
+as reserved and never looks at it, nor at bytes past the last file: it
+checks the header, the length against the body, the entries and the CRC,
+all of which a signed pack passes. So a beta.14 panel updating to beta.15
+takes the beta.15 pack whichever goes first (`make ota-compat` runs
+beta.14's own reader on one). **From beta.15 on, `PUT /api/www` takes only
+signed packs**: an unsigned one is a `422` at its header, before anything is
+touched, and one whose signature does not verify a `422` too. A pack written
+over USB (`make fw-flash`, the installer) is not checked: that is physical
+access.
+
 ## On the device
 
 - **Boot** (`www::init`, on the main task before the card is mounted): read
@@ -131,13 +167,17 @@ its gzip budgets (which are about load time over WiFi, not flash).
   whole pack as the body, `Content-Length` required (411 without, 413 over
   the partition). The first 64 bytes are read and parsed before anything is
   erased — not a pack, or a header whose total length differs from the
-  body's, is a 400 (answered at once, without waiting for the rest of the
-  body) and the app in flash stays. Then:
+  body's, is a 400, a header without the signed flag a 422 (answered at
+  once, without waiting for the rest of the body) and the app in flash
+  stays. The signature is checked over the staged copy as it is read back
+  for the CRC (the SHA-256 in the same pass), on the network worker
+  (Ed25519's ~8 KB of frames do not fit the stream task's stack, as for a
+  bundle), before anything is erased. Then:
   - **With a card** (the usual case), the whole pack, header first, is
     received onto the card, `/update/www.pack.part` (the GIF upload path:
     a 2 KB buffer, one open file), and **read back whole before anything
-    in flash is touched**: its size, and its CRC against the header's,
-    all while the old pack stays mapped. An upload cut short (408), a
+    in flash is touched**: its size, its CRC against the header's and its
+    signature, all while the old pack stays mapped. An upload cut short (408), a
     client that went away, a card write that failed (500), a CRC that
     does not match (422) or a card that will not read the file back (500,
     `reading the staged pack from the card at byte N failed 4 times: …;
@@ -158,28 +198,31 @@ its gzip budgets (which are about load time over WiFi, not flash).
     saying so, pages are 503, and the checked pack **stays on the card**.
     At the next boot, once the card is mounted and `www::init` has found no
     pack in flash, `www::restore_from_card` checks the staged file again
-    (size, CRC) and writes it the same way (logged: `www: pack '…' written
+    (size, CRC, and that its signed digest is the one the failed update
+    verified, kept in RTC memory: a power cut forgets it, and the pack then
+    stays on the card until a push replaces it; the network worker, which
+    has the stack for Ed25519, is not running yet) and writes it the same
+    way (logged: `www: pack '…' written
     from the card in N s; the web app is back`). A staged file found while
     flash holds a good pack is stale and deleted; one that is not a good
     pack is deleted; one the card will not read stays for the next boot.
     A new push replaces it either way. The boot task does this before it
     starts the network, so WiFi comes up that much later (~9 s for 877 KB).
-  - **Without a card** (none, one that cannot be read, or one where
-    `/update/www.pack.part` cannot be created), the body is written to
-    flash as it arrives: a failure part-way leaves no web app
-    until a good pack is written (the setup page and the API carry on).
-    The log says which it was: `www: staging on the card (…)` only once
-    the staging file exists, otherwise `www: no card staging (<reason>):
-    writing to flash from the upload, the old web app is replaced during
-    the transfer`; the reply's `staged` is false, and `make www-push`
-    prints a warning.
-  - **The header is written last** either way. Under the mapping's lock:
+  - **Without a card** (none, or one that cannot be read) the update is
+    a 503, and one where `/update/www.pack.part` cannot be created a 500:
+    the pack is staged on the card or not at all, since its signature is
+    checked on the staged copy before flash is touched (as a firmware
+    update needs a card). Until 1.0.0-beta.15 such a pack went to flash
+    as it arrived (`"staged":false`). A web app can always be written
+    over USB.
+  - **The header is written last**. Under the mapping's lock:
     unmap; erase sector 0 and the sectors ahead of each piece
     (`esp_partition_erase_range`, then a 20 ms pause so the display loop
     runs: an erase stops both CPUs' flash caches) and write the body from
     offset 64 (`esp_partition_write`), leaving the header's 64 bytes erased;
     read the body back from flash and compute its CRC; only if it matches
-    the header's, write the 64-byte header into the erased bytes; then
+    the header's (the staged copy's signature verified already), write the
+    64-byte header into the erased bytes; then
     parse, CRC-check and map again. So **a pack header in flash always
     means a whole pack whose CRC verified from flash**: a reset or a
     failure during the write leaves an erased header ("no web app"), never
