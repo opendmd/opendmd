@@ -1708,6 +1708,11 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if desc is None or not desc.endswith(" " + bundle) or len(desc) <= len(bundle) + 1:
         raise ValueError(f"the image inside is not an OpenDMD {bundle} build "
                          f"(its app descriptor says '{desc if desc is not None else 'nothing: no app descriptor'}')")
+    # opendmd_core::ota::check_key_id: the key trailer (none: key 0) names key 0.
+    tail = image[-16:]
+    named = tail[8] if len(tail) == 16 and tail[:8] == b"ODFWKEY1" and tail[9:] == b"\0" * 7 else 0
+    if named != 0:
+        raise ValueError(f"the image names signing key {named}, but key 0 signed it")
     return version
 
 

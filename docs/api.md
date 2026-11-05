@@ -826,8 +826,9 @@ layout (the bundle's must be the player's `variant`), size, SHA-256,
 Ed25519 signature and the image's app descriptor are checked: a failure is
 a `422` with the reason, nothing staged; cut short `408`; no card `503`.
 Another key's bundle, or one for the other layout, is refused once the
-140-byte header is in. Any validly
-signed bundle is accepted, older ones too. Then
+140-byte header is in; the key the image's key trailer names must be the
+one that signed it. Any validly signed bundle is accepted, older ones too,
+unless the firmware was built with a rollback floor (`docs/ota.md`). Then
 `{"ok":true,"version":"…","rebooting":true}`; the panel is dark ~45 s from
 the end of the upload to playback while it installs.
 
