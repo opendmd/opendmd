@@ -605,6 +605,14 @@ pub fn stack_low_water(task: &str, low: &std::sync::atomic::AtomicU32) {
     }
 }
 
+/// `uri` for the log: a query with a `key=` in it is never written down.
+pub fn log_uri(uri: &str) -> &str {
+    match uri.find("key=") {
+        Some(_) => uri.split('?').next().unwrap_or(""),
+        None => uri,
+    }
+}
+
 /// One in-flight request.
 ///
 /// `keep` exists because `httpd_resp_set_status`, `_set_type` and `_set_hdr`
@@ -1006,7 +1014,7 @@ impl Req {
         if self.streaming() {
             self.log_cut(&format!("{e:#}"));
         } else {
-            log::warn!("{} {}: {e:#}", self.method_name(), self.uri());
+            log::warn!("{} {}: {e:#}", self.method_name(), log_uri(self.uri()));
         }
     }
 

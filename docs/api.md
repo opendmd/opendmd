@@ -736,9 +736,12 @@ browser), not someone on the same WiFi: it is plain HTTP.
   is a `403` (no `Origin`, as from curl, is fine).
 - **API key** (Settings → Device → Security): with `api_key` set (`PUT
   /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
-  `api_key_set`), the API and the card's files need `Authorization: Bearer
-  <key>` or `?key=<key>`, else `401`. Not the web app's files or `/setup`,
-  nor in setup mode (`OpenDMD-Setup`), where a lost key can be cleared.
+  `api_key_set`), the API and the card's files (`/gifs/`, `/cache/`,
+  `/sets/`, `/formulas/`, `/filelist*`) need `Authorization: Bearer <key>`
+  or `?key=<key>`, else `401`. Not the web app's files or `/setup`, nor in
+  setup mode (`OpenDMD-Setup`), where a lost key can be cleared (and only
+  the WiFi set up: see "Network"). `?key=` is for curl: a browser keeps it
+  in its history; the web app sends the header. The panel never logs it.
 - **Headers.** The web app's files and `/setup` carry a
   `Content-Security-Policy` (`frame-ancestors 'none'`: never in a frame)
   and `X-Content-Type-Options: nosniff`. A card
