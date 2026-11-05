@@ -273,6 +273,9 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
         for t in 0..=7 {
             e = match Emitter::new(prog, &items, t, hsv_call) {
                 Ok(e) => e,
+                // A short heap is not a way that doesn't fit: said as
+                // such, so the build is asked again (not a fixed refusal).
+                Err(NO_MEMORY) => return Err(NO_MEMORY),
                 // (An inline `hsv` keeps its values in more registers
                 // than the call does: the call's way may fit.)
                 Err(_) if !hsv_call => continue 'ways,

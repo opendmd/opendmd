@@ -2400,6 +2400,7 @@ mod jit {
                     // again a second later, as when the gate refuses.
                     Err(psi::jit::NO_MEMORY) => {
                         log::info!("formula: on the VM for now ({})", psi::jit::NO_MEMORY);
+                        set_jit_status(which, false, psi::jit::NO_MEMORY, 0);
                         self.gate_tried = now | 1;
                     }
                     Err(why) => {

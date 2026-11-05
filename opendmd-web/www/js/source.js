@@ -92,7 +92,7 @@ export class DeviceSource {
 
   // `recent`: with the Recently played list (`recent`, `recent_at`).
   status(recent) { return this.json('GET', '/api/status' + (recent ? '?recent=1' : ''), undefined, 8000); }
-  config() { return this.json('GET', '/api/config'); }
+  config() { return sent(() => this.json('GET', '/api/config'), 1); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
   // device, which takes seconds; the firmware waits up to 60 s for it.
   putConfig(patch) { return sent(() => this.json('PUT', '/api/config', patch), 1); }
