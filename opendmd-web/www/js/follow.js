@@ -38,10 +38,10 @@ export function followCard() {
   async function playlists() {
     const cur = app.config?.attract_set ?? null, keep = attract.value;
     const lists = await app.playlists().catch(() => []);
-    clear(attract, h('option', { value: '*' }, 'The current playlist'), h('option', { value: '@' }, 'The clock'),
+    clear(attract, h('option', { value: '*' }, 'The current playlist'),
       lists.map((p) => h('option', { value: p.value }, p.label)));
     if (cur != null && ![...attract.options].some((o) => o.value === cur)) attract.append(h('option', { value: cur }, cur || 'All files'));
-    attract.value = app.config?.attract == 'clock' ? '@' : cur ?? '*';
+    attract.value = cur ?? '*';
     if (keep && [...attract.options].some((o) => o.value === keep)) attract.value = keep;
   }
   playlists();
@@ -54,7 +54,7 @@ export function followCard() {
   const head = h('h3', 'Follow RePlayOS'), run = saver(head);
   const save = () => {
     const a = attract.value;
-    const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: a == '*' || a == '@' ? null : a, attract: a == '@' ? 'clock' : '' };
+    const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: a == '*' ? null : a };
     if (code.value) patch.follow_code = code.value;
     // The saved code goes only to the saved address: a new one forgets it.
     const moved = !code.value && app.config?.follow_code_set && patch.follow_host.toLowerCase() !== (app.config.follow_host || '').trim().toLowerCase();
@@ -91,6 +91,7 @@ export function followCard() {
       h('label.stack', 'RePlayOS address', host),
       h('label.stack', 'NET CONTROL code', code),
       h('label.stack', 'Attract playlist', attract)),
+    h('p.cap', 'A playlist can hold Formulas as well as GIFs: for a clock in the menus, add the Big clock Formula to one'),
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'fo-test', onclick: test }, 'Test')),
     result, state);
   state.textContent = followLine(app.status) ?? 'Not following';

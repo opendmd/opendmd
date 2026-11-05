@@ -1114,14 +1114,10 @@ impl Runner {
         eff
     }
 
-    /// The attract playlist (or live item) would not build: play without
+    /// The attract playlist would not build: play without
     /// the overlay.
     pub fn attract_failed(&mut self) {
         self.attract_broken = true;
-    }
-
-    pub fn attract_is_broken(&self) -> bool {
-        self.attract_broken
     }
 
     /// The context playlist the engine should be on, if any.

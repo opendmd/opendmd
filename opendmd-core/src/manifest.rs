@@ -124,7 +124,7 @@ impl Entry {
     /// Parse a manifest path into an entry. Never fails: worst case the title
     /// is the whole filename stem.
     pub fn from_path(path: &str) -> Entry {
-        // A virtual file (`@clock`, `@text?msg=…`): what it shows is its
+        // A virtual file (`@card:…`, a Formula): what it shows is its
         // title; no category, no platform.
         if crate::synth::is_virtual(path) || crate::synth::formula_file(path).is_some() {
             return Entry {
@@ -176,9 +176,11 @@ pub fn parse_manifest(text: &str) -> Vec<Entry> {
 }
 
 /// Is `line` a built-in effect's (`@fx:tunnel?…`, `@fx:psi?…`), from before
-/// they were Formulas? It names nothing now: [`scan`] and
-/// [`parse_manifest`] skip it with one log line each time they read it, so a
-/// stale playlist plays the rest (`@formula?src=…` is a Formula's line).
+/// they were Formulas, or a live item's (`@clock…`, `@text?msg=…`), from
+/// before GIFs and Formulas were all a playlist holds? It names nothing now:
+/// [`scan`] and [`parse_manifest`] skip it with one log line each time they
+/// read it, so a stale playlist plays the rest (`@formula?src=…` is a
+/// Formula's line).
 fn retired(line: &str) -> bool {
     if skips_formula(line) {
         let cut = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
@@ -188,10 +190,17 @@ fn retired(line: &str) -> bool {
         );
         return true;
     }
+    let cut = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
+    if crate::synth::is_retired_live(line) {
+        log::info!(
+            "playlist: skipping {cut:?}{}: the clock and scrolling text are gone (a Formula draws a clock)",
+            if cut.len() < line.len() { "…" } else { "" }
+        );
+        return true;
+    }
     if !crate::synth::is_retired_effect(line) {
         return false;
     }
-    let cut = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
     log::warn!(
         "playlist: skipping {cut:?}{}: the built-in effects are gone (Formulas replace them)",
         if cut.len() < line.len() { "…" } else { "" }
@@ -796,19 +805,19 @@ mod tests {
     /// (and `count_prepared` with them); any other build keeps them.
     #[test]
     fn a_player_without_formulas_skips_their_lines() {
-        let text = "/gifs/A/One.gif\n@formula:plasma\n@formula?psb=AAAA\n/formulas/my-road.psi?a=0.5\n@clock\n/gifs/A/Two.gif\n";
+        let text = "/gifs/A/One.gif\n@formula:plasma\n@formula?psb=AAAA\n/formulas/my-road.psi?a=0.5\n@card:A|\n/gifs/A/Two.gif\n";
         let got: Vec<String> = parse_manifest(text).into_iter().map(|e| e.path).collect();
         let mut scanned = Vec::new();
         scan(text.as_bytes(), |_, e| scanned.push(e.path.clone())).unwrap();
         if cfg!(all(feature = "player", not(feature = "psi"))) {
-            assert_eq!(got, ["/gifs/A/One.gif", "@clock", "/gifs/A/Two.gif"]);
+            assert_eq!(got, ["/gifs/A/One.gif", "@card:A|", "/gifs/A/Two.gif"]);
             assert!(skips_formula("@formula:plasma") && skips_formula("/formulas/x.psi"));
         } else {
             assert_eq!(got.len(), 6);
             assert!(!skips_formula("@formula:plasma"));
         }
         assert_eq!(scanned, got);
-        assert!(!skips_formula("/gifs/A/One.gif") && !skips_formula("@clock"));
+        assert!(!skips_formula("/gifs/A/One.gif") && !skips_formula("@card:A|"));
         let n = crate::layout::count_prepared(text.as_bytes(), &crate::filter::Filter::default(), (0, 255), &[], true).unwrap();
         assert_eq!(n.total, if cfg!(all(feature = "player", not(feature = "psi"))) { 3 } else { 6 });
     }
@@ -1481,7 +1490,9 @@ mod tests {
 
     /// A playlist from before the built-in effects were Formulas: its
     /// `@fx:` lines (the natives', and the Formula path's old `@fx:psi`
-    /// name) are skipped, each with one log line, and the rest plays.
+    /// name) are skipped, each with one log line, and the rest plays. So
+    /// are the clock's and the scrolling text's (`@clock…`, `@text?…`),
+    /// more quietly (an info line).
     #[test]
     fn retired_effect_lines_are_skipped_and_logged() {
         use std::sync::Mutex;
@@ -1507,11 +1518,14 @@ mod tests {
                     @fx:tunnel?palette=fire&retired-test=1\n\
                     @clock\n\
                     @fx:psi?src=gray(x)&name=retired-test\r\n\
-                    @formula?src=gray(x)&name=Kept\n";
+                    @clock?style=small&seconds=1\n\
+                    @text?msg=Hi&retired-test=1\n\
+                    @formula?src=gray(x)&name=Kept\n\
+                    @card:Kept|\n";
         let want = [
             "/gifs/Consoles/SNES_Plok_08.gif",
-            "@clock",
             "@formula?src=gray(x)&name=Kept",
+            "@card:Kept|",
         ];
         let paths = |v: Vec<Entry>| v.into_iter().map(|e| e.path).collect::<Vec<_>>();
         assert_eq!(paths(parse_manifest(text)), want);

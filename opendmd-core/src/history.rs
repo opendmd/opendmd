@@ -45,7 +45,7 @@ impl Default for History {
 
 /// The stored form of `path`, or `None` if it is not recorded: Follow
 /// RePlayOS's power-on effect and title cards (`@power-on`, `@card:…`) are
-/// not things a user plays, and a path must be card-absolute or a live item.
+/// not things a user plays, and a path must be card-absolute or a virtual file.
 fn compact(path: &str) -> Option<&str> {
     // (The editor's sent Formula is held only while it plays: not one to
     // play again from here.)
@@ -205,7 +205,7 @@ mod tests {
         let mut h = History::new();
         assert!(h.is_empty());
         h.started(&g("A"));
-        h.started("@clock?seconds=1");
+        h.started("@formula:big-clock?a=0.5");
         h.started("/cache/X/ab/B.gif");
         h.started("/gifs/C.GIF");
         assert_eq!(
@@ -213,13 +213,13 @@ mod tests {
             [
                 "/gifs/C.GIF",
                 "/cache/X/ab/B.gif",
-                "@clock?seconds=1",
+                "@formula:big-clock?a=0.5",
                 &g("A")
             ]
         );
         assert_eq!(
             h.buf,
-            "Consoles/A\n@clock?seconds=1\n/cache/X/ab/B.gif\n/gifs/C.GIF\n"
+            "Consoles/A\n@formula:big-clock?a=0.5\n/cache/X/ab/B.gif\n/gifs/C.GIF\n"
         );
         assert_eq!(h.len(), 4);
         assert_eq!(h.cursor(), 0);
@@ -232,7 +232,7 @@ mod tests {
         h.started("@card:Sonic|Mega Drive");
         h.started("relative.gif");
         h.started("/gifs/a\nb.gif");
-        h.started(&format!("@text?msg={}", "x".repeat(MAX_ENTRY)));
+        h.started(&format!("@formula?psb={}", "x".repeat(MAX_ENTRY)));
         h.started("@formula:~sent?a=0.5");
         assert!(h.is_empty());
         assert_eq!(
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(h.buf.capacity(), BYTES);
         let long = "y".repeat(MAX_ENTRY - 20);
         for i in 0..10 {
-            h.started(&format!("@text?msg={long}{i}"));
+            h.started(&format!("@formula?psb={long}{i}"));
             assert!(h.buf.len() <= BYTES);
         }
         assert_eq!(h.len(), 3, "three 192 B entries fit in 640 B");
@@ -323,9 +323,9 @@ mod tests {
         h.back_failed();
         assert_eq!(h.back().unwrap(), g("B"), "still one back from the newest");
         // Something else started before B did: recorded as usual.
-        h.started("@clock");
+        h.started("@formula:big-clock");
         assert_eq!(h.cursor(), 0);
-        assert_eq!(list(&h)[0], "@clock");
+        assert_eq!(list(&h)[0], "@formula:big-clock");
         assert_eq!(h.back().unwrap(), g("C"));
     }
 

@@ -1,5 +1,5 @@
-// The GIF tree: the card's folders (gifs/<Category>, then Live,
-// then the system `_x` ones) opening into their GIFs, for the Library and
+// The GIF tree: the card's folders (gifs/<Category>, then the system
+// `_x` ones) opening into their GIFs, for the Library and
 // the playlist editor's Add pane. One VList of folder rows (`.vdir`) and
 // the open folders' GIF rows (`.vrow`), so only what is in view exists
 // (Consoles' 3,781 rows are ~21 elements). A search filters every folder
@@ -17,7 +17,6 @@ import { h, clear, on, store, label, niceName, isSys, byNice } from './util.js';
 
 await new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './tree.css', onload: res, onerror: res })));
 
-const LIVE = { '@': 'Live' };
 const lists = new Map(), got = new Map(), trees = new Set();
 // The last count seen per folder on this card, shown (muted) until it is
 // listed again.
@@ -71,18 +70,18 @@ export function chipRow(el, n, on, key, apply, name = (v) => v) {
 export class Tree {
   // o: {picked: Set of paths, ticking() -> bool, onPick(it), onMenu(it, x, y),
   // onHold(it), extra(it, row) -> nodes, mark(it) -> bool (✓ in the playlist),
-  // live(cat) -> items (Live; none: no such folder), onUpdate(stats),
+  // onUpdate(stats),
   // onOpen(open folders), open: [cats], rowHeight}
   constructor(o) {
     this.o = o;
     this.q = '';
     this.plats = new Set();
-    this.open = new Set(o.open || []);
+    // (`@` was the Live folder, gone: one remembered open is let go.)
+    this.open = new Set((o.open || []).filter((c) => c !== '@'));
     this.shut = new Set(); // folders closed during this search
     this.folders = [];
     this.rows = [];
     this.res = [];
-    this.liveGot = new Map();
     this.failed = new Set(); // folders whose listing failed: a row to retry
     this.cur = '';
     this.vl = new VList({
@@ -108,18 +107,17 @@ export class Tree {
     this.dirty = false;
     let dirs = [];
     try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { this.o.onError?.('listing the folders: ' + e.message); }
-    const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: LIVE[cat] || niceName(cat), live: !!LIVE[cat] };
-    this.folders = [...dirs.filter((d) => !isSys(d)), ...(this.o.live ? ['@'] : []), ...dirs.filter(isSys)].map(f);
+    const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: niceName(cat) };
+    this.folders = [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)].map(f);
     for (const c of this.open) this.fill(c);
     this.update();
     return this.folders;
   }
-  real() { return this.folders.filter((f) => !f.live).map((f) => f.cat); }
-  items(cat) { return LIVE[cat] ? this.liveGot.get(cat) : got.get(cat); }
+  real() { return this.folders.map((f) => f.cat); }
+  items(cat) { return got.get(cat); }
   // Ask for a folder's GIFs; the tree updates when they come.
   fill(cat) {
     if (this.items(cat)) return Promise.resolve(this.items(cat));
-    if (LIVE[cat]) return Promise.resolve(this.o.live?.(cat)).then((l) => { this.liveGot.set(cat, l || []); this.update(); return l; });
     this.failed.delete(cat);
     return listCat(cat).then((l) => { if (!l) this.failed.add(cat); this.update(); return l; });
   }
@@ -153,7 +151,6 @@ export class Tree {
     const [text, okQ, okP] = this.match(), rows = [], res = [], pc = new Map();
     let pool = 0, matched = 0;
     for (const f of this.folders) {
-      if (text && f.live) continue; // a search is of GIFs
       const items = this.items(f.cat), open = text ? !this.shut.has(f.cat) : this.open.has(f.cat);
       let hits = null;
       if (items && (text || open)) {
@@ -214,8 +211,8 @@ export class Tree {
         return;
       }
       r.setAttribute('aria-expanded', String(it.open));
-      const fl = tick && !it.live && (it.hits || this.items(it.cat)), all = fl && fl.length && fl.every((x) => picked.has(x.path));
-      const box = tick && !it.live && h('input', { type: 'checkbox', checked: !!all, indeterminate: !all && fl && fl.some((x) => picked.has(x.path)), 'aria-label': 'Tick every GIF in ' + it.name, onclick: (e) => { e.stopPropagation(); this.tickFolder(it); } });
+      const fl = tick && (it.hits || this.items(it.cat)), all = fl && fl.length && fl.every((x) => picked.has(x.path));
+      const box = tick && h('input', { type: 'checkbox', checked: !!all, indeterminate: !all && fl && fl.some((x) => picked.has(x.path)), 'aria-label': 'Tick every GIF in ' + it.name, onclick: (e) => { e.stopPropagation(); this.tickFolder(it); } });
       clear(r, box, h('i.tw', it.open ? '▾' : '▸'), h('span.t', it.name), it.n != null && h('span.n' + (it.old ? '.muted' : ''), it.n.toLocaleString()));
       return;
     }
