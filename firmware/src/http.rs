@@ -1648,43 +1648,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             log::warn!("settings: a save stopped between its renames on purpose (bench); restarting");
         }
         info!("reboot requested over HTTP");
-        // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
-        // fail, to exercise the no-card boot without touching the card.
-        if let Some(n) = query_param(req.query(), "sd_fail").and_then(|v| v.parse::<u32>().ok()) {
-            info!(
-                "the next boot's first {} card mount(s) will fail on purpose",
-                n.min(20)
-            );
-            crate::sd::simulate_mount_failures(n.min(20));
-        }
-        // Test hook: `?sd_io_fail=N[&sd_io_boots=B]` — on each of the next
-        // B boots (default 1, at most 5), from 10 s after boot, the player's
-        // next N card reads of a file that had read fail with EIO (after
-        // them, any `sd_fail` mount failures): N >= 3 trips the card
-        // failure (`sdhealth`), so B boots in a row run the restart chain.
-        if let Some(n) = query_param(req.query(), "sd_io_fail").and_then(|v| v.parse::<u32>().ok()) {
-            let boots = query_param(req.query(), "sd_io_boots")
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(1)
-                .min(5);
-            info!(
-                "the player's first {} card read(s) will fail on purpose on each of the next {boots} boot(s)",
-                n.min(20)
-            );
-            crate::sdhealth::simulate_io_failures(n.min(20), boots);
-        }
-        // `?sd_fallback=clear`: the next boot forgets the slow-clock record
-        // (NVS and RTC) and the card-failure restart count — the bench's
-        // stand-in for inserting a different card.
-        if query_param(req.query(), "sd_fallback").as_deref() == Some("clear") {
-            info!("the next boot forgets the card's slow clock and its card-failure restarts");
-            crate::sdhealth::request_clear();
-        }
+        // The card-failure test hooks (`bench` builds only: a release has
+        // none, so a LAN caller cannot make the next boots fail on purpose).
+        #[cfg(feature = "bench")]
+        let hooked = card_test_hooks(req.query());
+        #[cfg(not(feature = "bench"))]
+        let hooked = false;
         // A plain reboot (the UI's button, no hook) is a person's fresh
         // start: the card-failure restart count goes, the slow clock stays.
-        let hooked = ["sd_fail", "sd_io_fail", "sd_fallback"]
-            .iter()
-            .any(|k| query_param(req.query(), k).is_some());
         if !hooked {
             crate::sdhealth::request_fresh_start();
         }
@@ -1932,6 +1903,48 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     Ok(server)
+}
+
+/// `POST /api/reboot`'s card-failure test hooks (`bench` only; see the
+/// route): `?sd_fail=N`, `?sd_io_fail=N[&sd_io_boots=B]`,
+/// `?sd_fallback=clear`. Whether any was asked for.
+#[cfg(feature = "bench")]
+fn card_test_hooks(query: Option<&str>) -> bool {
+    // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
+    // fail, to exercise the no-card boot without touching the card.
+    if let Some(n) = query_param(query, "sd_fail").and_then(|v| v.parse::<u32>().ok()) {
+        info!(
+            "the next boot's first {} card mount(s) will fail on purpose",
+            n.min(20)
+        );
+        crate::sd::simulate_mount_failures(n.min(20));
+    }
+    // Test hook: `?sd_io_fail=N[&sd_io_boots=B]` — on each of the next
+    // B boots (default 1, at most 5), from 10 s after boot, the player's
+    // next N card reads of a file that had read fail with EIO (after
+    // them, any `sd_fail` mount failures): N >= 3 trips the card
+    // failure (`sdhealth`), so B boots in a row run the restart chain.
+    if let Some(n) = query_param(query, "sd_io_fail").and_then(|v| v.parse::<u32>().ok()) {
+        let boots = query_param(query, "sd_io_boots")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1)
+            .min(5);
+        info!(
+            "the player's first {} card read(s) will fail on purpose on each of the next {boots} boot(s)",
+            n.min(20)
+        );
+        crate::sdhealth::simulate_io_failures(n.min(20), boots);
+    }
+    // `?sd_fallback=clear`: the next boot forgets the slow-clock record
+    // (NVS and RTC) and the card-failure restart count — the bench's
+    // stand-in for inserting a different card.
+    if query_param(query, "sd_fallback").as_deref() == Some("clear") {
+        info!("the next boot forgets the card's slow clock and its card-failure restarts");
+        crate::sdhealth::request_clear();
+    }
+    ["sd_fail", "sd_io_fail", "sd_fallback"]
+        .iter()
+        .any(|k| query_param(query, k).is_some())
 }
 
 /// A JSON listing (`/api/files`, `/api/cache/list`, `/api/cache/failed`)
