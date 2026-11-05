@@ -567,6 +567,8 @@ C_WHY = {  # create.js' words for the relay's refusals (site/worker/src/relay.ts
     "size": "That file is too big (over 16 MB): pick a shorter or smaller one",
     "type": "That address isn’t a picture or a video",
     "rate": "Too many tries in a minute: wait a moment, then try again",
+    "busy": "opendmd.dev is fetching a lot for everyone just now: try again later, or download the picture and add the file here",
+    "token": "Reload this page, then try again",
     "upstream": "That site refused to send it: download the picture, then add the file here",
     "redirects": "That site refused to send it: download the picture, then add the file here",
 }
@@ -589,8 +591,17 @@ def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
         "content-type": "image/gif", "access-control-allow-origin": "*"})))
     page.route("https://nocors.example/**", lambda r: (asked.append(r.request.url), r.abort()))
 
+    minted: list[str] = []
+    sent: list[str | None] = []
+
+    def token(r):
+        minted.append(r.request.method)
+        r.fulfill(status=200, body=json.dumps({"token": f"t{len(minted)}", "ttl": 900}), headers={"content-type": "application/json"})
+    page.route(f"{base}/api/fetch/token", token)
+
     def relay(r):
         asked.append(f"{r.request.method} {r.request.url} {r.request.post_data}")
+        sent.append(r.request.headers.get("x-relay-token"))
         if answer["why"]:
             r.fulfill(status=answer["status"], body=json.dumps({"error": "x", "why": answer["why"]}), headers={"content-type": "application/json"})
         else:
@@ -608,7 +619,8 @@ def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
     wait_js(page, "document.querySelector('#st-msg').textContent.startsWith('nocors.example: 88')", timeout=20000)
     check(asked == ["https://nocors.example/pic.gif", f"POST {base}/api/fetch https://nocors.example/pic.gif"],
           f"/create/: a site that refuses the browser, through the relay ({asked})")
-    for why, status in (("size", 413), ("type", 415), ("rate", 429), ("upstream", 502), ("redirects", 502)):
+    check(minted == ["POST"] and sent == ["t1"], f"/create/: the relay's token asked once (POST /api/fetch/token) and sent with the load ({minted} {sent})")
+    for why, status in (("size", 413), ("type", 415), ("rate", 429), ("busy", 503), ("token", 403), ("upstream", 502), ("redirects", 502)):
         answer.update(status=status, why=why)
         if page.is_hidden("#st-url"):  # (Find stays open after a refusal)
             page.click("#st-change")
@@ -616,6 +628,8 @@ def create_links(browser, base: str, site: Path, errors: list[str]) -> None:
         page.click("#st-url-go")
         wait_js(page, "!/^Loading/.test(document.querySelector('#st-msg').textContent)", timeout=10000)
         check(page.inner_text("#st-msg") == C_WHY[why], f"/create/: the relay's '{why}' said plainly ('{page.inner_text('#st-msg')}')")
+        if why == "token":
+            check(sent[-2:] == ["t1", "t2"] and len(minted) == 2, f"/create/: a refused token: a new one asked, the load tried once more, then said ({sent[-2:]} {minted})")
     check(not page.evaluate("window.__csp || []"), f"/create/ addresses: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 
@@ -648,6 +662,7 @@ def create_video(browser, base: str, site: Path, errors: list[str], shots: Path 
     page.on("request", lambda r: asked.append(urllib.parse.urlsplit(r.url).path))
     mp4 = (VIDEO_FIXTURES / "clip.mp4").read_bytes()
     page.route("https://nocors.example/**", lambda r: r.abort())
+    page.route(f"{base}/api/fetch/token", lambda r: r.fulfill(status=200, body='{"token": "t", "ttl": 900}', headers={"content-type": "application/json"}))
     page.route(f"{base}/api/fetch", lambda r: r.fulfill(status=200, body=mp4, headers={"content-type": "video/mp4", "x-relayed": "1"}))
     page.goto(f"{base}/create/")
     page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)

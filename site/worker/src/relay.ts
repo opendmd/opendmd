@@ -12,11 +12,29 @@
 // Agreement §2.2.1(j); the doc's "Terms and legal").
 //
 // Guards, in order (each refusal JSON {error, why} with no-store):
+//   - the host: only on opendmd.dev (and cf dev's 127.0.0.1 / localhost);
+//     anywhere else index.ts answers 404 (`home` below; cloudflare.config.ts
+//     also turns workers.dev and preview URLs off);
 //   - the caller: POST from our own page: Sec-Fetch-Site same-origin, or
 //     (a browser that sends none) an Origin, or failing that a Referer, of
 //     this origin; else 403 (why "caller"); another method 405;
+//   - the page's token: X-Relay-Token, from POST /api/fetch/token (same
+//     caller fence), an HMAC of its time and the caller's network (the
+//     IPv4 address, or the IPv6 /64), good for 15 minutes; the key is a
+//     random one kept in D1 (meta 'relay_key', made on first use); else 403
+//     (why "token": the page asks for a new one and tries once more). This
+//     stops a bare curl, not a determined script: the token is one same-
+//     origin-looking POST away (docs/research/tenor.md §5, "Caller");
 //   - the rate: the RELAY_LIMIT binding (cloudflare.config.ts), keyed on
-//     CF-Connecting-IP; 429 with Retry-After (why "rate");
+//     CF-Connecting-IP's network (an IPv6 /64, not the address: one host has
+//     2^64 of them); 429 with Retry-After (why "rate");
+//   - the address as written (below), then everyone's budget: GLOBAL_MINUTE
+//     a minute and GLOBAL_DAY a day across all callers, two counters in D1
+//     (meta 'relay_minute', 'relay_day'); over either, 503 with Retry-After
+//     (why "busy"), as is a D1 that can't be asked (fail closed);
+//   - the host denylist: D1 meta 'relay_deny', host names separated by
+//     spaces, commas or lines, each refusing itself and its subdomains;
+//     changed without a deploy (docs/research/tenor.md §5); 400 (why "address");
 //   - the address, at every hop: https only, port 443, no user or password,
 //     no IP literal in any form the URL parser knows (decimal, hex, IPv6),
 //     no localhost, single-label, .local/.internal/.lan/.home.arpa/... name,
@@ -47,6 +65,10 @@
 //     twitter:player:stream / twitter:image / link rel=image_src, https
 //     only, GIFs first, then videos, then stills, at most 6; the page then
 //     asks for one of them (the same guards again). None: 415 (why "type");
+//   - the address body itself: at most 2 KB, counted as it is read (a
+//     body with no Content-Length too);
+//   - CPU: every pattern run over a page is linear (tags as [^<>]*, the
+//     </head> search over the newest chunk only, at most 512 tags looked at);
 //   - nothing logged: no console.log here, and the address is never in
 //     the request's URL (above).
 //
@@ -60,10 +82,17 @@ declare const __RELAY_TEST_UPSTREAM__: string;
 
 export interface RelayEnv {
   RELAY_LIMIT?: { limit(o: { key: string }): Promise<{ success: boolean }> };
+  DB?: D1Database;
 }
 
 export const MAX_BYTES = 16 << 20;
 const HTML_MAX = 512 << 10;
+const BODY_MAX = 2048;
+const TAGS_MAX = 512;
+/** Everyone's loads together (a page's address costs two). */
+export const GLOBAL_MINUTE = 120;
+export const GLOBAL_DAY = 3000;
+const TOKEN_TTL = 15 * 60;
 const HOPS = 3;
 const TIMEOUT_MS = 15_000;
 const UA = "OpenDMD-CreateArt/1 (+https://opendmd.dev/create/)";
@@ -80,10 +109,11 @@ const HEADERS = {
   "Referrer-Policy": "no-referrer",
 };
 
-type Why = "caller" | "rate" | "url" | "address" | "dns" | "redirects" | "upstream" | "timeout" | "size" | "type";
+type Why = "caller" | "token" | "busy" | "rate" | "url" | "address" | "dns" | "redirects" | "upstream" | "timeout" | "size" | "type";
 
 class Refused extends Error {
-  constructor(readonly status: number, readonly why: Why, message: string, readonly extra: Record<string, unknown> = {}) {
+  constructor(readonly status: number, readonly why: Why, message: string, readonly extra: Record<string, unknown> = {},
+              readonly headers: Record<string, string> = {}) {
     super(message);
   }
 }
@@ -91,8 +121,128 @@ class Refused extends Error {
 function refuse(e: Refused, more: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ error: e.message, why: e.why, ...e.extra }) + "\n", {
     status: e.status,
-    headers: { ...HEADERS, "Content-Type": "application/json; charset=utf-8", ...more },
+    headers: { ...HEADERS, "Content-Type": "application/json; charset=utf-8", ...e.headers, ...more },
   });
+}
+
+/** The relay, its token and the gallery sync answer only here: not on
+ * workers.dev or a version's preview URL, where an old version (with the
+ * production D1) would otherwise keep running (index.ts). */
+export function home(request: Request, url: URL): boolean {
+  const host = (TEST && request.headers.get("X-Relay-Test-Host")) || url.hostname;
+  return host === "opendmd.dev" || host === "127.0.0.1" || host === "localhost";
+}
+
+// ------------------------------------------------------------ the client
+
+/** Who a rate is counted for: an IPv4 address, or an IPv6 /64 (one
+ * subscriber's network: it holds 2^64 addresses). */
+export function clientKey(ip: string | null): string {
+  if (!ip) return "local";
+  if (!ip.includes(":")) return ip;
+  const w = v6words(ip);
+  return w ? w.slice(0, 4).map((x) => x.toString(16)).join(":") + "::/64" : "v6:" + ip;
+}
+
+const b64url = (b: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+let relayKey: Promise<CryptoKey> | null = null;
+/** The token key: random, made once and kept in D1 (no secret to set up). */
+function key(db: D1Database): Promise<CryptoKey> {
+  relayKey ??= (async () => {
+    const fresh = [...crypto.getRandomValues(new Uint8Array(32))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const [, got] = await db.batch([
+      db.prepare("insert into meta (key, value) values ('relay_key', ?1) on conflict(key) do nothing").bind(fresh),
+      db.prepare("select value from meta where key = 'relay_key'"),
+    ]);
+    const hex = (got.results[0] as { value: string } | undefined)?.value ?? "";
+    if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("no relay key");
+    const raw = Uint8Array.from(hex.match(/../g)!, (h) => parseInt(h, 16));
+    return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  })().catch((e) => {
+    relayKey = null;
+    throw e;
+  });
+  return relayKey;
+}
+
+const unavailable = () => new Refused(503, "busy", "Create Art can't fetch from other sites just now: try again in a while.", {}, { "Retry-After": "60" });
+
+async function mint(env: RelayEnv, client: string): Promise<string> {
+  if (!env.DB) throw unavailable();
+  const ts = String(Math.floor(Date.now() / 1000));
+  const sig = await crypto.subtle.sign("HMAC", await key(env.DB).catch(() => { throw unavailable(); }), new TextEncoder().encode(`${ts}|${client}`));
+  return `${ts}.${b64url(sig)}`;
+}
+
+async function tokenOk(env: RelayEnv, client: string, token: string | null): Promise<boolean> {
+  if (!env.DB) throw unavailable();
+  const m = /^(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(token ?? "");
+  if (!m) return false;
+  const age = Math.floor(Date.now() / 1000) - Number(m[1]);
+  if (age < -60 || age > TOKEN_TTL) return false;
+  return crypto.subtle.verify("HMAC", await key(env.DB).catch(() => { throw unavailable(); }), unb64url(m[2]), new TextEncoder().encode(`${m[1]}|${client}`));
+}
+
+async function limited(env: RelayEnv, client: string): Promise<Response | null> {
+  if (!env.RELAY_LIMIT) return null;
+  const { success } = await env.RELAY_LIMIT.limit({ key: client });
+  return success ? null : refuse(new Refused(429, "rate", "Too many tries in a minute: wait a moment and try again."), { "Retry-After": "60" });
+}
+
+/** POST /api/fetch/token: the page's token (`{token, ttl}`), for this caller's network. */
+export async function token(request: Request, url: URL, env: RelayEnv): Promise<Response> {
+  try {
+    if (request.method !== "POST") return refuse(new Refused(405, "caller", "method not allowed"), { Allow: "POST" });
+    if (!sameOrigin(request, url.origin)) throw new Refused(403, "caller", "Only Create Art on this site can use this.");
+    const client = clientKey(request.headers.get("CF-Connecting-IP"));
+    const slow = await limited(env, client);
+    if (slow) return slow;
+    return new Response(JSON.stringify({ token: await mint(env, client), ttl: TOKEN_TTL }) + "\n", {
+      headers: { ...HEADERS, "Content-Type": "application/json; charset=utf-8" },
+    });
+  } catch (e) {
+    return refuse(e instanceof Refused ? e : unavailable());
+  }
+}
+
+// ------------------------------------------------------------ everyone's budget
+
+// One row a counter: "<minute or day number> <count>", restarted when the number moves on.
+const BUMP = `insert into meta (key, value) values (?1, ?2 || ' 1')
+  on conflict(key) do update set value = case
+    when substr(meta.value, 1, length(?2) + 1) = ?2 || ' ' then ?2 || ' ' || (cast(substr(meta.value, length(?2) + 2) as integer) + 1)
+    else ?2 || ' 1' end
+  returning value`;
+
+/** Counts this load against everyone's minute and day; the host denylist. */
+async function budget(env: RelayEnv, request: Request): Promise<string[]> {
+  const db = env.DB;
+  if (!db) throw unavailable();
+  const cap = (h: string, d: number) => (TEST && Number(request.headers.get(h))) || d;
+  const now = Date.now();
+  let r: D1Result[];
+  try {
+    r = await db.batch([
+      db.prepare(BUMP).bind("relay_minute", String(Math.floor(now / 60_000))),
+      db.prepare(BUMP).bind("relay_day", String(Math.floor(now / 86_400_000))),
+      db.prepare("select value from meta where key = 'relay_deny'"),
+    ]);
+  } catch {
+    throw unavailable();
+  }
+  const count = (x: D1Result) => Number(String((x.results[0] as { value?: string } | undefined)?.value ?? "").split(" ")[1] ?? 0);
+  if (count(r[0]) > cap("X-Relay-Test-Minute-Cap", GLOBAL_MINUTE)) {
+    throw new Refused(503, "busy", "Lots of people are fetching through Create Art right now: wait a minute and try again.", {}, { "Retry-After": "60" });
+  }
+  if (count(r[1]) > cap("X-Relay-Test-Day-Cap", GLOBAL_DAY)) {
+    const left = 86_400 - Math.floor((now % 86_400_000) / 1000);
+    throw new Refused(503, "busy", "Create Art has fetched all it can for today: try again tomorrow, or download the picture and add the file here.", {},
+      { "Retry-After": String(left) });
+  }
+  const deny = String((r[2].results[0] as { value?: string } | undefined)?.value ?? "");
+  return deny.toLowerCase().split(/[\s,]+/).map((h) => h.replace(/^\*?\./, "").replace(/\.$/, "")).filter(Boolean);
 }
 
 // ------------------------------------------------------------ the caller
@@ -219,10 +369,12 @@ async function resolves(host: string): Promise<void> {
   if (ips.some(privateIp)) throw new Refused(400, "address", "That address is not on the public internet.");
 }
 
-async function checked(u: URL, ownHost: string): Promise<void> {
+async function checked(u: URL, ownHost: string, deny: string[]): Promise<void> {
   const why = badAddress(u, ownHost);
   if (why) throw new Refused(400, "address", `That address can't be used (${why}).`);
-  await resolves(u.hostname.toLowerCase().replace(/\.$/, ""));
+  const host = u.hostname.toLowerCase().replace(/\.$/, "");
+  if (deny.some((d) => host === d || host.endsWith("." + d))) throw new Refused(400, "address", "That address can't be used (that site has asked not to be fetched from here).");
+  await resolves(host);
 }
 
 /** The test hook: a .relay-test.invalid address, from the local server. */
@@ -292,7 +444,9 @@ export function mediaOf(html: string, base: URL): string[] {
     return m ? (m[2] ?? m[3] ?? m[4] ?? "") : null;
   };
   const types: Record<string, string> = {};
-  const metas = html.match(/<meta\b[^>]*>/gi) ?? [];
+  // [^<>]*, not [^>]*: `<meta<meta<meta…` with no `>` would rescan the
+  // rest of the page from every start (quadratic); this stops at the next `<`.
+  const metas = (html.match(/<meta\b[^<>]*>/gi) ?? []).slice(0, TAGS_MAX);
   for (const tag of metas) {
     const key = (attr(tag, "property") ?? attr(tag, "name") ?? "").toLowerCase();
     const v = attr(tag, "content");
@@ -321,7 +475,7 @@ export function mediaOf(html: string, base: URL): string[] {
     else if (["og:image:secure_url", "og:image:url", "og:image"].includes(key)) add(v, imageGif ? 0 : 2);
     else if (key === "twitter:image" || key === "twitter:image:src") add(v, 3);
   }
-  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+  for (const tag of (html.match(/<link\b[^<>]*>/gi) ?? []).slice(0, TAGS_MAX)) {
     if ((attr(tag, "rel") ?? "").toLowerCase() === "image_src") add(attr(tag, "href"), 3);
   }
   const seen = new Set<string>();
@@ -336,18 +490,47 @@ function decode(s: string): string {
   return s.replace(/&(amp|quot|#39|#x27|lt|gt);/g, (_, e) => ({ amp: "&", quot: '"', "#39": "'", "#x27": "'", lt: "<", gt: ">" })[e as string] ?? "");
 }
 
+/** A page's HTML up to its </head> or 512 KB, whatever its chunks' sizes.
+ * Each chunk is searched for </head> with only a short overlap of the text
+ * before it (searching the whole text again per chunk was quadratic). */
 async function readPage(reader: ReadableStreamDefaultReader<Uint8Array>, first: Uint8Array, done: boolean): Promise<string> {
+  const END = /<\/head\s{0,16}>/i;
   const dec = new TextDecoder();
-  let text = dec.decode(first, { stream: true });
-  let len = first.length;
-  while (!done && len < HTML_MAX && !/<\/head\s*>/i.test(text)) {
+  let len = Math.min(first.length, HTML_MAX);
+  let text = dec.decode(first.subarray(0, len), { stream: true });
+  let found = END.test(text);
+  while (!done && !found && len < HTML_MAX) {
     const r = await reader.read();
     if (r.done) break;
-    len += r.value.length;
-    text += dec.decode(r.value, { stream: true });
+    const chunk = r.value.subarray(0, HTML_MAX - len);
+    len += chunk.length;
+    const more = dec.decode(chunk, { stream: true });
+    found = END.test(text.slice(-24) + more);
+    text += more;
   }
   reader.cancel().catch(() => {});
-  return text.slice(0, HTML_MAX);
+  return text;
+}
+
+/** The request's body, the address: at most 2 KB, counted as it comes
+ * (Content-Length is only a hint: a chunked body has none). */
+async function address(request: Request): Promise<string> {
+  if (Number(request.headers.get("Content-Length") ?? 0) > BODY_MAX) throw new Error("too long");
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    n += value.length;
+    if (n > BODY_MAX) {
+      reader.cancel().catch(() => {});
+      throw new Error("too long");
+    }
+    parts.push(value);
+  }
+  return new TextDecoder().decode(join(parts, n));
 }
 
 // ------------------------------------------------------------ the route
@@ -356,24 +539,28 @@ export async function relay(request: Request, url: URL, env: RelayEnv): Promise<
   try {
     if (request.method !== "POST") return refuse(new Refused(405, "caller", "method not allowed"), { Allow: "POST" });
     if (!sameOrigin(request, url.origin)) throw new Refused(403, "caller", "Only Create Art on this site can use this.");
-    if (env.RELAY_LIMIT) {
-      const key = request.headers.get("CF-Connecting-IP") ?? "local";
-      const { success } = await env.RELAY_LIMIT.limit({ key });
-      if (!success) return refuse(new Refused(429, "rate", "Too many tries in a minute: wait a moment and try again."), { "Retry-After": "60" });
+    const client = clientKey(request.headers.get("CF-Connecting-IP"));
+    if (!(await tokenOk(env, client, request.headers.get("X-Relay-Token")))) {
+      throw new Refused(403, "token", "Reload Create Art and try again.");
     }
+    const slow = await limited(env, client);
+    if (slow) return slow;
     let u: URL;
     try {
-      if (Number(request.headers.get("Content-Length") ?? 0) > 2048) throw new Error();
-      const raw = (await request.text()).trim();
-      if (!raw || raw.length > 2048) throw new Error();
+      const raw = (await address(request)).trim();
+      if (!raw || raw.length > BODY_MAX) throw new Error();
       u = new URL(raw);
     } catch {
       throw new Refused(400, "url", "That is not a web address.");
     }
+    // The address as written first: what is refused anyway costs no one's budget.
+    const why = badAddress(u, url.hostname);
+    if (why) throw new Refused(400, "address", `That address can't be used (${why}).`);
+    const deny = await budget(env, request);
 
     let res: Response | null = null;
     for (let hop = 0; ; hop++) {
-      await checked(u, url.hostname);
+      await checked(u, url.hostname, deny);
       try {
         res = await fetch(target(u), {
           method: "GET",

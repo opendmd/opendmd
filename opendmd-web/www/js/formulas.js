@@ -360,7 +360,7 @@ function sent() {
       res(f);
     }
     addEventListener('message', on);
-    o.postMessage({ type: READY }, '*');
+    for (const f of from) o.postMessage({ type: READY }, f);
   });
 }
 

@@ -39,14 +39,29 @@ const WHY = {
   size: 'That file is too big (over 16 MB): pick a shorter or smaller one',
   type: 'That address isn’t a picture or a video',
   rate: 'Too many tries in a minute: wait a moment, then try again',
+  busy: 'opendmd.dev is fetching a lot for everyone just now: try again later, or download the picture and add the file here',
+  token: 'Reload this page, then try again',
   refused: 'That site refused to send it: download the picture, then add the file here',
 };
 
-async function relay(u, deep) {
+// The relay's token (POST /api/fetch/token): asked once, again when it is
+// near its end or the relay refuses it (a new network, say), then once more.
+let token = null;
+async function relayToken(fresh) {
+  if (fresh || !token || Date.now() > token.until) {
+    const r = await fetch('/api/fetch/token', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) throw new Error(WHY[d.why] || WHY.refused);
+    token = { t: d.token, until: Date.now() + (d.ttl - 60) * 1000 };
+  }
+  return token.t;
+}
+async function relay(u, deep, again) {
   let r;
-  try { r = await fetch('/api/fetch', { method: 'POST', body: u }); } catch { throw new Error('opendmd.dev could not be reached: check your connection'); }
+  try { r = await fetch('/api/fetch', { method: 'POST', body: u, headers: { 'X-Relay-Token': await relayToken(again) } }); } catch (e) { throw e instanceof TypeError ? new Error('opendmd.dev could not be reached: check your connection') : e; }
   if (!r.ok) {
     const why = await r.json().then((d) => d.why, () => '');
+    if (why === 'token' && !again) return relay(u, deep, true);
     throw new Error(WHY[why] || WHY.refused);
   }
   if (r.headers.get('X-Relayed') === 'page') {

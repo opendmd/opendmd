@@ -369,8 +369,9 @@ function build(root, o) {
     if (from.title != null) title.value = from.title;
     author.value = f.author || ''; // another picture is not the last GIF's author's
     el.classList.add('has');
-    seen.hidden = !from.link;
-    if (from.link) seen.href = from.link;
+    const link = /^https?:\/\//i.test(from.link || '') ? from.link : ''; // (a javascript: link would run on a click)
+    seen.hidden = !link;
+    if (link) seen.href = link;
     fold(true);
     imp.scrollIntoView?.({ block: 'nearest' });
     const anim = st.animated;

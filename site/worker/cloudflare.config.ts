@@ -16,10 +16,12 @@
 //   make site-deploy         make site, then cf deploy (the owner's OAuth login, or CLOUDFLARE_API_TOKEN)
 //
 // What a deploy does with this file as it is: creates or updates the Worker
-// script "opendmd-site" with its assets, on opendmd-site.<account
-// subdomain>.workers.dev (workersDev) and per-version preview URLs
-// (previewUrls). Since the cutover (S3) it also serves opendmd.dev and
-// www.opendmd.dev (`domains`). The gallery store (S6): the D1 database
+// script "opendmd-site" with its assets, on opendmd.dev and www.opendmd.dev
+// only (`domains`, since the cutover S3). workers.dev and the per-version
+// preview URLs are off (2026-11-05, security review M4): they ran the same
+// Worker with the production D1, an old version's bugs included, and
+// nothing needs them now that opendmd.dev serves. (The code refuses the
+// relay, the sync and seeding off opendmd.dev as well: src/relay.ts `home`.) The gallery store (S6): the D1 database
 // opendmd-site (DB; its schema in migrations/, applied by make
 // site-d1-migrate, which make site-deploy-built runs first; the S5 short
 // links that shared it are gone, 0003), a cron that syncs the public repo's
@@ -46,9 +48,12 @@ export default defineConfig({
       // The gallery store (cf d1 create --name opendmd-site, 2026-10-29).
       DB: { type: "d1", name: "opendmd-site", id: "72a1c0cf-e5c6-4c75-8ad1-8aaa2c6f3857" },
       // Create Art's relay (/api/fetch, src/relay.ts): 30 loads a minute per
-      // visitor's IP (Workers Rate Limiting, per location and approximate;
-      // a link that names a page costs two). The namespace is ours to pick,
-      // unique in the account; nothing to create before a deploy.
+      // visitor's network, an IPv4 address or an IPv6 /64 (Workers Rate
+      // Limiting, per location and approximate; a link that names a page
+      // costs two, a token one). The namespace is ours to pick, unique in
+      // the account; nothing to create before a deploy. Everyone's minute
+      // and day caps are counters in DB (relay.ts GLOBAL_MINUTE, GLOBAL_DAY:
+      // the binding's period is at most a minute, and per location).
       RELAY_LIMIT: { type: "rate-limit", namespace: "1101", simple: { limit: 30, period: 60 } },
     },
     // The gallery sync (S6, src/gallery.ts): every 5 minutes it asks GitHub
@@ -56,8 +61,8 @@ export default defineConfig({
     // moved, fetches that commit's gallery/ into the store, so a merged
     // contribution is on opendmd.dev within minutes, without a deploy.
     triggers: [triggers.scheduled({ schedule: "*/5 * * * *" })],
-    workersDev: true,
-    previewUrls: true,
+    workersDev: false,
+    previewUrls: false,
     observability: { enabled: true },
     // Custom domains (S3, 2026-10-28): Cloudflare writes the proxied DNS
     // records and the certificate. www → apex is the Worker's for /api/* and

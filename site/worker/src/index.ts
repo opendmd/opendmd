@@ -8,9 +8,13 @@
 //   POST /api/fetch Create Art's relay (src/relay.ts): one picture or video
 //                   from another site (its address the body), for /create/
 //                   only, streamed, never stored
+//   POST /api/fetch/token  the relay's token for the page (src/relay.ts)
 //   /api/*          404 JSON
 //   www.opendmd.dev/…  301 to https://opendmd.dev/… (for the paths that
 //                   reach the Worker; a zone redirect rule does the rest)
+//   any other host (workers.dev, a preview URL, should either be on again):
+//                   the relay, its token and the gallery sync 404, and
+//                   /formulas/* only the assets (no store, so no seeding)
 //
 // The gallery store (S6, src/gallery.ts, "S6 as built"):
 //
@@ -72,9 +76,12 @@ async function api(request: Request, url: URL, env: Env, ctx: ExecutionContext):
     try {
       return json(await gallery.api(env), 200, { ...CORS, "Cache-Control": "public, max-age=30" });
     } catch (e) {
-      return json({ error: `the gallery store can't be read: ${(e as Error).message}` }, 503, CORS);
+      console.log(JSON.stringify({ galleryApi: (e as Error).message }));
+      return json({ error: "the gallery store can't be read just now" }, 503, CORS);
     }
   }
+  const offHome = url.pathname === "/api/gallery/sync" || url.pathname === "/api/fetch" || url.pathname === "/api/fetch/token";
+  if (offHome && !relay.home(request, url)) return json({ error: "not found" }, 404, CORS);
   if (url.pathname === "/api/gallery/sync") {
     // Anyone may ask: it only does sooner what the cron does, from the
     // public repo, and one run at a time (10 s apart at least).
@@ -86,6 +93,7 @@ async function api(request: Request, url: URL, env: Env, ctx: ExecutionContext):
     return json(r, r.ok ? 200 : 502);
   }
   if (url.pathname === "/api/fetch") return relay.relay(request, url, env);
+  if (url.pathname === "/api/fetch/token") return relay.token(request, url, env);
   if (url.pathname === "/api/health") {
     const allow = "GET, HEAD, OPTIONS";
     if (m === "OPTIONS") return options(allow, true);
@@ -97,6 +105,8 @@ async function api(request: Request, url: URL, env: Env, ctx: ExecutionContext):
 
 async function formulas(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return env.ASSETS.fetch(request);
+  // Off opendmd.dev the store is not touched: an old version would seed its own examples into it.
+  if (!relay.home(request, url)) return env.ASSETS.fetch(request);
   if (url.pathname === "/formulas/") return gallery.page(request, env, ctx);
   const s = GALLERY_SRC.exec(url.pathname);
   if (s) return gallery.file(request, env, ctx, "src", s[1]);

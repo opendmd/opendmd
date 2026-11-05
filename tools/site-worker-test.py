@@ -169,6 +169,8 @@ def start_dev(site: Path, port: int, gallery_source: str, relay_upstream: str = 
         with sqlite3.connect(db) as c:
             if c.execute("select 1 from sqlite_master where name = 'gallery'").fetchone():
                 c.executescript("delete from gallery; delete from gallery_refused; delete from meta;")
+                # The relay's host denylist (src/relay.ts, meta 'relay_deny'), as the owner would set it.
+                c.execute("insert into meta (key, value) values ('relay_deny', ?)", (RELAY_DENY,))
                 wiped += 1
     if wiped != 1:
         raise SystemExit(f"{wiped} local D1 databases with a gallery table under site/worker/.wrangler/state: expected 1")
@@ -960,6 +962,7 @@ def gallery_live(base: str, site: Path, tool: Path) -> None:
 # ---------------------------------------------------------------- Create Art's relay
 
 RELAY_MAX = 16 << 20
+RELAY_DENY = "denied.relay-test.invalid,\n*.alsodenied.relay-test.invalid"
 
 
 def relay_gif() -> bytes:
@@ -1020,6 +1023,10 @@ class RelayUpstream:
             "/untyped.html": (b'  <!DOCTYPE html><html><head><meta content="https://ok.relay-test.invalid/a.gif" property="og:image"></head></html>',
                               "application/octet-stream"),
             "/clip.webm": ((ROOT / "tools/fixtures/video/clip.webm").read_bytes(), "video/webm"),
+            # Quadratic for the old patterns (<meta\b[^>]*> from every start; ~16 s of CPU at this size).
+            "/meta-bomb.html": (b"<!doctype html><html><head>" + b"<meta" * 100000, "text/html"),
+            "/link-bomb.html": (b"<!doctype html><html><head>" + b"<link" * 100000, "text/html"),
+            "/attr-bomb.html": (b"<!doctype html><html><head><meta content" + b" content" * 60000 + b">", "text/html"),
         }
         self.redirects = {
             "/r1": "https://ok.relay-test.invalid/a.gif", "/r2": "/r1", "/r3": "r2", "/r4": "/r3",
@@ -1046,6 +1053,21 @@ class RelayUpstream:
                 if path in up.files:
                     body, ctype = up.files[path]
                     return self.send(200, body, ctype)
+                if path == "/head-chunks.html":
+                    # 8000 small chunks and no </head>: the old read searched the whole text again per chunk.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    try:
+                        self.wfile.write(b"1b\r\n<!doctype html><html><head>\r\n")
+                        for _ in range(8000):
+                            self.wfile.write(b"40\r\n" + b"</head " * 9 + b"x\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                    except OSError:
+                        pass
+                    self.close_connection = True
+                    return
                 if path == "/big-len.gif":
                     # Says 20 MB; the relay must refuse it on the header.
                     self.send_response(200)
@@ -1108,23 +1130,41 @@ class RelayUpstream:
         return {h for h, _, _ in self.seen}
 
 
+def relay_token(base: str, ip: str, headers: dict | None = None):
+    """POST /api/fetch/token as the page asks it: (status, headers, JSON)."""
+    h = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": ip, **(headers or {})}
+    return post(base, "/api/fetch/token", b"", {k: v for k, v in h.items() if v is not None})
+
+
 class Relay:
-    """POST /api/fetch as the page asks it; a fresh CF-Connecting-IP every
-    20 requests, so the rate limit (30 a minute per IP) is only met where a
-    check means to meet it."""
+    """POST /api/fetch as the page asks it, with the page's token; a fresh
+    network (an IPv6 /64: the rate is counted per /64) every 20 requests, so
+    the rate limit (30 a minute) is only met where a check means to meet it.
+    The checks of their own use :1::/64 (relay_rate), :2:: (the browser)
+    and :3:: (relay_fence); this helper :1000:: on."""
 
     n = 0  # (across instances: every check's requests count)
     run = os.getpid() & 0xffff  # (cf dev keeps its counts across a restart: a run of its own)
+    tokens: dict[str, str] = {}
 
     def __init__(self, base: str):
         self.base = base
 
     def ip(self) -> str:
         Relay.n += 1
-        return f"2001:db8:{Relay.run:x}::{Relay.n // 20 + 1:x}"
+        return f"2001:db8:{Relay.run:x}:{0x1000 + Relay.n // 20:x}::1"
+
+    def token(self, ip: str) -> str:
+        if ip not in Relay.tokens:
+            st, _, d = relay_token(self.base, ip)
+            Relay.tokens[ip] = d.get("token", "") if st == 200 else ""
+        return Relay.tokens[ip]
 
     def ask(self, address: str, headers: dict | None = None, method: str = "POST"):
-        h = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": self.ip(), "Content-Type": "text/plain;charset=UTF-8", **(headers or {})}
+        ip = (headers or {}).get("CF-Connecting-IP") or self.ip()
+        h = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": ip, "Content-Type": "text/plain;charset=UTF-8", **(headers or {})}
+        if "X-Relay-Token" not in h:
+            h["X-Relay-Token"] = self.token(ip)
         h = {k: v for k, v in h.items() if v is not None}
         return get(self.base, "/api/fetch", method, h, address.encode() if method == "POST" else None)
 
@@ -1207,8 +1247,9 @@ def relay_local(base: str, up: RelayUpstream) -> None:
     st, why, _ = R.why("https://ok.relay-test.invalid/big-len.gif")
     check(st == 413 and why == "size", f"relay: Content-Length over 16 MB refused, 413 ({st} {why})")
     got, broke = 0, False
+    ip = R.ip()
     req = urllib.request.Request(base + "/api/fetch", method="POST", data=b"https://ok.relay-test.invalid/big.gif",
-                                 headers={"User-Agent": UA, "Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": R.ip()})
+                                 headers={"User-Agent": UA, "Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": ip, "X-Relay-Token": R.token(ip)})
     try:
         with OPENER.open(req, timeout=60) as r:
             st = r.status
@@ -1259,10 +1300,89 @@ def relay_local(base: str, up: RelayUpstream) -> None:
     check("relay-test.invalid" not in log, "relay: no address in cf dev's log (it is the request body, never the URL)")
 
 
+def relay_fence(base: str, up: RelayUpstream) -> None:
+    """The token, everyone's budget, the denylist, the address body's cap,
+    linear page reads, and nothing of the relay or the store off opendmd.dev
+    (the security review's M4)."""
+    R = Relay(base)
+    gif, ok = up.gif, "https://ok.relay-test.invalid/a.gif"
+    ip = f"2001:db8:{Relay.run:x}:3::1"
+    st, h, d = relay_token(base, ip)
+    tok = d.get("token", "")
+    check(st == 200 and re.fullmatch(r"\d+\.[A-Za-z0-9_-]{43}", tok) and d.get("ttl") == 900 and h.get("Cache-Control") == "no-store",
+          f"relay token: POST /api/fetch/token from the page: a token for 15 minutes, no-store ({st} {d})")
+    for what, hdr in (("Sec-Fetch-Site: cross-site", {"Sec-Fetch-Site": "cross-site"}),
+                      ("another site's Origin", {"Sec-Fetch-Site": None, "Origin": "https://evil.example"})):
+        st, h, d = relay_token(base, ip, {k: v for k, v in hdr.items()})
+        check(st == 403 and d.get("why") == "caller", f"relay token: {what} refused, 403 ({st} {d.get('why')})")
+    st, h, _ = get(base, "/api/fetch/token", "GET", {"Sec-Fetch-Site": "same-origin"})
+    check(st == 405 and h.get("Allow") == "POST", f"relay token: GET refused, 405 ({st})")
+    sig = tok.split(".")[-1]
+    flip = tok[:-1] + ("A" if tok[-1] != "A" else "B")
+    for what, t in (("no token", None), ("an empty token", ""), ("a malformed token", "hello"), ("a token with one character changed", flip),
+                    ("a token with its time moved on an hour", f"{int(tok.split('.')[0]) + 3600}.{sig}"),
+                    ("a token with its time moved back an hour", f"{int(tok.split('.')[0]) - 3600}.{sig}"),
+                    ("another network's token", Relay(base).token(f"2001:db8:{Relay.run:x}:3fff::9"))):
+        st, why, h = R.why(ok, {"CF-Connecting-IP": ip, "X-Relay-Token": t})
+        check(st == 403 and why == "token", f"relay: {what} refused, 403 token ({st} {why})")
+    st, h, body = R.ask(ok, {"CF-Connecting-IP": f"2001:db8:{Relay.run:x}:3:ab::cd", "X-Relay-Token": tok})
+    check(st == 200 and body == gif, f"relay: the token is good across its /64 (another address there) ({st})")
+    # Everyone's budget (the caps lowered for the test: the counts are real).
+    for what, hdr in (("minute", "X-Relay-Test-Minute-Cap"), ("day", "X-Relay-Test-Day-Cap")):
+        st, h, body = R.ask(ok, {hdr: "1"})
+        d = json.loads(body) if body.startswith(b"{") else {}
+        ra = int(h.get("Retry-After") or 0)
+        check(st == 503 and d.get("why") == "busy" and 0 < ra <= (60 if what == "minute" else 86400) and "try again" in d.get("error", ""),
+              f"relay: everyone's {what} cap met: 503 busy, Retry-After {ra}, said plainly ('{d.get('error')}')")
+    st, h, body = R.ask(ok)
+    check(st == 200 and body == gif, f"relay: under the caps again, loads ({st})")
+    asked = len(up.seen)
+    for u in ("https://denied.relay-test.invalid/a.gif", "https://cdn.denied.relay-test.invalid/a.gif", "https://alsodenied.relay-test.invalid/a.gif"):
+        st, why, _ = R.why(u)
+        check(st == 400 and why == "address", f"relay: {urllib.parse.urlsplit(u).hostname} on the denylist (D1 meta relay_deny), 400 ({st} {why})")
+    check(len(up.seen) == asked, "relay: a denied host is never asked")
+    st, h, body = R.ask("https://notdenied.relay-test.invalid/a.gif")
+    check(st == 200, f"relay: a name that only ends like a denied one is not denied ({st})")
+    # The address body: 2 KB counted as it is read, with no Content-Length (chunked).
+    import http.client
+    hp = urllib.parse.urlsplit(base)
+    for n, want in ((200, 200), (5000, 400)):
+        conn = http.client.HTTPConnection(hp.hostname, hp.port, timeout=30)
+        ip2 = R.ip()
+        body = b"https://ok.relay-test.invalid/a.gif?" + b"a" * n
+        conn.request("POST", "/api/fetch", body=iter([body[:100], body[100:]]), encode_chunked=True,
+                     headers={"User-Agent": UA, "Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": ip2, "X-Relay-Token": R.token(ip2)})
+        r = conn.getresponse()
+        got = r.read()
+        conn.close()
+        why = json.loads(got).get("why") if got.startswith(b"{") else None
+        check(r.status == want and (want == 200 or why == "url"),
+              f"relay: a chunked address body (no Content-Length) of {len(body):,} B: {want} ({r.status} {why})")
+    # Linear page reads: input that was quadratic for the old patterns.
+    for path, what in (("/meta-bomb.html", "100,000 '<meta' with no '>'"), ("/link-bomb.html", "100,000 '<link' with no '>'"),
+                       ("/attr-bomb.html", "a 480 KB tag of 'content' with no '='"), ("/head-chunks.html", "8,000 small chunks with no </head>")):
+        t = time.monotonic()
+        st, why, _ = R.why("https://ok.relay-test.invalid" + path)
+        dt = time.monotonic() - t
+        check(st == 415 and why == "type" and dt < 3, f"relay: a page of {what}: 415 in {dt:.2f} s (under 3 s)")
+    # Off opendmd.dev (workers.dev, a preview URL): no relay, token, sync or store.
+    for host, want in (("opendmd-site.someone.workers.dev", 404), ("abc123-opendmd-site.someone.workers.dev", 404)):
+        off = {"X-Relay-Test-Host": host, "CF-Connecting-IP": ip}
+        sts = [relay_token(base, ip, off)[0], R.ask(ok, off)[0], post(base, "/api/gallery/sync", b"", off)[0]]
+        check(sts == [want] * 3, f"relay: on {host}: /api/fetch/token, /api/fetch and /api/gallery/sync {want} ({sts})")
+        st, h, _ = get(base, "/formulas/", "GET", off)
+        check(st == 200 and h.get("X-Gallery") is None, f"relay: on {host}: /formulas/ the asset, the store untouched (no seeding) ({st} {h.get('X-Gallery')})")
+        st, _, _ = get(base, "/api/health", "GET", off)
+        check(st == 200, f"relay: on {host}: /api/health still answers ({st})")
+    st, _, d = relay_token(base, ip, {"X-Relay-Test-Host": "opendmd.dev"})
+    check(st == 200 and d.get("token"), f"relay: on opendmd.dev the token is given ({st})")
+
+
 def relay_rate(base: str) -> None:
-    """The rate limit: 30 a minute per IP, then 429 with Retry-After (last:
-    it spends the minute)."""
-    hdr = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": f"2001:db8:{Relay.run:x}:1::77", "Content-Type": "text/plain"}
+    """The rate limit: 30 a minute per network (an IPv4 address, an IPv6
+    /64), then 429 with Retry-After (last: it spends the minute)."""
+    ip = f"2001:db8:{Relay.run:x}:1::77"
+    hdr = {"Sec-Fetch-Site": "same-origin", "CF-Connecting-IP": ip, "Content-Type": "text/plain", "X-Relay-Token": Relay(base).token(ip)}
     sts, last = [], None
     for _ in range(40):
         st, h, _ = get(base, "/api/fetch", "POST", hdr, b"not a url")
@@ -1272,9 +1392,13 @@ def relay_rate(base: str) -> None:
             break
     n = sum(1 for s in sts if s == 400)
     check(last is not None and last.get("Retry-After") == "60" and 25 <= n <= 35,
-          f"relay: try {n + 1} in a minute from one IP: 429, Retry-After 60 ({sts[-3:]})")
-    st, _, _ = get(base, "/api/fetch", "POST", {**hdr, "CF-Connecting-IP": f"2001:db8:{Relay.run:x}:1::78"}, b"not a url")
-    check(st == 400, f"relay: another IP is not held back ({st})")
+          f"relay: try {n + 2} in a minute from one network (the token one of them): 429, Retry-After 60 ({sts[-3:]})")
+    sts = [get(base, "/api/fetch", "POST", {**hdr, "CF-Connecting-IP": f"2001:db8:{Relay.run:x}:1:{x}::{x}"}, b"not a url")[0]
+           for x in ("1", "ab", "ffff")]
+    check(sts == [429] * 3, f"relay: other addresses in the same IPv6 /64 are held back too (the /64 is the key, not the address) ({sts})")
+    ip2 = f"2001:db8:{Relay.run:x}:3fff::77"
+    st, _, _ = get(base, "/api/fetch", "POST", {**hdr, "CF-Connecting-IP": ip2, "X-Relay-Token": Relay(base).token(ip2)}, b"not a url")
+    check(st == 400, f"relay: another /64 is not held back ({st})")
 
 
 def relay_browser(base: str, shots: Path) -> None:
@@ -1384,6 +1508,7 @@ def main() -> int:
         relay_guards(base)
         if upstream:
             relay_local(base, upstream)
+            relay_fence(base, upstream)
             relay_browser(base, a.shots)
             relay_rate(base)
         print(f"site-worker-test: {'ok' if not failures else f'{len(failures)} failures'}")

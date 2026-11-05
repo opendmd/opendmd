@@ -40,6 +40,6 @@ export function received() {
       end(res, { file: new File([d.gif], name, { type: 'image/gif' }), init });
     }
     addEventListener('message', on);
-    o.postMessage({ type: READY }, '*');
+    for (const f of from) o.postMessage({ type: READY }, f);
   });
 }
