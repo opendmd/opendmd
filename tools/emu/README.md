@@ -120,6 +120,13 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
   upload: the whole answer and all its parts at once (~5 KB of strings), its ~3.7 KB of segments
   and the upload's received frames (up to six buffers, ~10 KB). The answer is written in pieces
   now, refused under 10 KB free, and a client that gave up has its reply aborted at close.
+- **STALLED_BODY** (net-stall, 2026-11-05): a JSON body read on the httpd task that stopped part
+  way held the task, and every other client, for 3 x 10 s of receive timeouts and 10 s more of
+  httpd's purge (the spare: live edits timing out at 20 s beside simultaneous uploads, status
+  polls' SYNs dropped while nothing was accepted). One 2 s timeout ends it now: a 503 +
+  `Retry-After`, the connection dropped, `net.body_stalled`. The lane sends such a body and a
+  status read beside it. (Connect times are not seen here: the emulator's NAT completes the
+  host's handshake itself, so a SYN the firmware drops never shows.)
 - The httpd task's stack: 736-1024 B of 6656 B unused under the lane.
 
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air

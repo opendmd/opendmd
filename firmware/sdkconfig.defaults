@@ -60,7 +60,19 @@ CONFIG_ESP_WIFI_ENABLED=y
 # throughput at a few Mbit/s, which is irrelevant here — the files are 100 KB
 # GIFs over a LAN and the bottleneck is the SD card's SPI bus, not the air.
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
+# Received frames lwIP holds (each one of these until the socket is read;
+# see "The receive side" below). A dynamic buffer is allocated per frame, the
+# frame's size, so the count costs nothing until frames are held. Six was
+# not enough beside an upload: the one being received keeps its window full
+# while the card writes, ~5760 B in four to six frames (the client sends a
+# full segment and a partial one per 2 KB read), which left the rest of the
+# network one buffer or none. A new connection's SYN, a status request, the
+# ACKs of a reply in flight, and a refused upload's first frames all met a
+# driver dropping everything (the spare under simultaneous uploads: 13 of
+# 214 status polls took 1 or 2 s to connect, one reply stalled 10 s, two
+# uploads starved into a reset; net-stall, 2026-11-05). Eight leaves two or
+# more besides; the two extra cost up to ~3.3 KB of heap, only while held.
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_MGMT_SBUF_NUM=6
 CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
@@ -82,8 +94,9 @@ CONFIG_LWIP_MAX_SOCKETS=14
 CONFIG_LWIP_IPV6=n
 # The receive side is bounded by the WiFi driver, not the heap. Without
 # LWIP_L2_TO_L3_COPY every received frame stays in one of the driver's
-# DYNAMIC_RX_BUFFER_NUM (6) buffers for as long as lwIP holds its pbuf, and
-# with all six held the driver drops every frame: TCP, ARP and ping alike
+# DYNAMIC_RX_BUFFER_NUM (8; 6 until net-stall) buffers for as long as lwIP
+# holds its pbuf, and with all of them held the driver drops every frame:
+# TCP, ARP and ping alike
 # (net-wedge, 2026-11-03; measured with the emulator's netdiag walk of
 # lwIP's pcbs and sockets, `emu-census` builds).
 #
@@ -92,7 +105,7 @@ CONFIG_LWIP_IPV6=n
 # (TCP_QUEUE_OOSEQ), also on connections already closed, and dropped them
 # only after TCP_OOSEQ_TIMEOUT (6) RTOs without a frame received. Two 408'd
 # uploads left in FIN_WAIT_1 (no socket) held 4 + 2 such segments, all six
-# buffers, so the ACK of their FIN could never come in; each FIN
+# buffers (then), so the ACK of their FIN could never come in; each FIN
 # retransmission doubled the RTO, and with it the expiry, which the time
 # since the last frame never caught up with: nothing received again (the
 # spare's wedge: no HTTP, ping or ARP, for good). With a factor of 1 it

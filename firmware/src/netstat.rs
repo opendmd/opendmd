@@ -10,7 +10,7 @@
 //!   what lwIP held just after (the walk posted at the low).
 //! - **lwIP** (`components/hub75_shim/netstat.c`, walked on its own thread
 //!   once a second by the network worker): pcbs, TIME_WAIT pcbs, received
-//!   frames held (each one of the WiFi driver's six receive buffers), bytes
+//!   frames held (each one of the WiFi driver's eight receive buffers), bytes
 //!   queued to send (kept until the client's ACK), and the most
 //!   retransmissions of one segment; now and the most over the window.
 //! - **Dead connections aborted at close** ([`close_dead`]).
