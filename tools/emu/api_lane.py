@@ -577,6 +577,13 @@ class Lane:
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
+        # The Host gate (docs/api.md "Security"): a name that is not the panel's is a 421 for
+        # every route, GETs included; 127.0.0.1 and localhost (this port forward) answer.
+        for path in ("/", "/api/status"):
+            code, _, body = api.raw("GET", path, extra={"Host": f"evil.example:{PORT}"})
+            self.expect(code == 421 and b"answers only to" in body, "www", f"GET {path} with Host evil.example: HTTP {code} {body[:100]!r}")
+        code, _, _ = api.raw("GET", "/api/status", extra={"Host": f"localhost:{PORT}"})
+        self.expect(code == 200, "www", f"GET /api/status with Host localhost: HTTP {code}")
         _, r = api.json("PUT", "/api/www", pack, timeout=300)
         self.expect(r.get("ok") is True and r.get("error") is None, "www", f"PUT /api/www answered {r}")
         _, info = api.json("GET", "/api/www")

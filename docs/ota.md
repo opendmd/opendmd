@@ -290,8 +290,10 @@ browser doing the fetching: the player itself never goes to the internet.
   card, header last (`docs/www-pack.md`). If the copy still fails after
   the erase, the checked pack stays on the card and the next boot writes
   it.
-- Mutating `/api` requests reject a foreign `Origin` header and require
-  `Content-Type: application/json` where a JSON body is expected.
+- Every request must name the panel in its `Host` (421 otherwise: DNS
+  rebinding); mutating `/api` requests reject a foreign `Origin` header
+  and require `Content-Type: application/json` where a JSON body is
+  expected (`docs/api.md` "Security").
 - Optional API key (`api_key` setting; `Authorization: Bearer`).
 
 ## Testing

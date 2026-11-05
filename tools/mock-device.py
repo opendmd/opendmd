@@ -297,7 +297,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   theirs (newest first, at most 8), and `reset_reason`/`reset_note` follow
   the newest.
 - **Security** (docs/api.md "Security"), checked in `route` before any
-  handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
+  handler: a `Host` that is not one of the panel's names (`opendmd.local`,
+  `<hostname>[.local]`, the address the request came in on, `localhost`,
+  `127.0.0.1`, any port) is a 421 `{"error":"this panel answers to …"}`,
+  every method (DNS rebinding; no `Host`: allowed); a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
   `{"error":"cross-origin request refused"}` (no `Origin`: allowed); with
   `api_key` set (`PUT /api/config`, 8..64 of `A-Za-z0-9._~-`, `""` clears;
@@ -747,6 +750,7 @@ STATUS_TEXT = {
     411: "Length Required",
     413: "Payload Too Large",
     415: "Unsupported Media Type",
+    421: "Misdirected Request",
     422: "Unprocessable Entity",
     500: "Internal Server Error",
     503: "Service Unavailable",
@@ -850,6 +854,32 @@ def mime_for(rel: str) -> str:
 
 
 CARD_PREFIXES = ("/gifs/", "/cache/", "/sets/", "/formulas/", "/filelist")
+
+
+def host_name(h: str) -> str:
+    """access.rs host_name: no port, lowercased, no trailing dot."""
+    h = h.strip().lower().rstrip("/")
+    if h.startswith("["):
+        return h.split("]", 1)[0] + "]" if "]" in h else h
+    if ":" in h:
+        name, port = h.rsplit(":", 1)
+        if port.isdigit():
+            h = name
+    return h[:-1] if h.endswith(".") else h
+
+
+def host_allowed(host: str, hostname: str, ip: str, was: str = "") -> bool:
+    """access.rs host_allowed: the panel's own names (DNS rebinding), and
+    the one before its last rename (`was`)."""
+    h = host_name(host)
+    if not h:
+        return False
+    if h in ("localhost", "127.0.0.1", "[::1]", "opendmd.local", "opendmd"):
+        return True
+    for n in (hostname.strip().lower(), was.strip().lower()):
+        if n and h in (n, n + ".local"):
+            return True
+    return bool(ip) and h == ip.lower()
 
 
 def cache_for(rel: str) -> str:
@@ -2976,6 +3006,12 @@ def make_handler(ctx: Context, quiet: bool):
                 self.drain()
                 self.send_error_json(503, "restarting", {"Retry-After": "1"})
                 return True
+            host = self.headers.get("Host")
+            if host is not None:
+                here = self.connection.getsockname()[0] if self.connection else ""
+                if not host_allowed(host, ctx.settings["hostname"], here, getattr(ctx, "hostname_was", "")):
+                    self.refuse(421, "this panel answers only to its own names: opendmd.local, <its name>.local or its IP address")
+                    return True
             origin = self.headers.get("Origin")
             if method in ("POST", "PUT", "DELETE") and origin is not None \
                     and host_port(origin) != host_port(self.headers.get("Host") or ""):
@@ -3775,6 +3811,8 @@ def make_handler(ctx: Context, quiet: bool):
                 # check every request makes, before any handler) look
                 # without the lock: an empty moment between the two was a
                 # KeyError, a 500, to a request that came in just then.
+                if next_settings["hostname"] != before["hostname"]:
+                    ctx.hostname_was = before["hostname"]  # httpd::set_names: the old name follows
                 ctx.settings.update(next_settings)
                 card_speed_applied = None
                 if "card_speed" in patch:

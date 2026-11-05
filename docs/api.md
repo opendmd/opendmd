@@ -715,6 +715,15 @@ curl -s -X POST $DMD/api/reboot
 This keeps out casual use (a guest, a script, another web page in your
 browser), not someone on the same WiFi: it is plain HTTP.
 
+- **Host.** Every request, `GET` included, must name the panel in its
+  `Host` header: `opendmd.local`, `<hostname>.local` (or the name mDNS
+  answers to after a clash; after a rename, the old name too until the
+  restart), the bare names, the panel's current IP address, or
+  `localhost`/`127.0.0.1` (any port). Anything else is a `421`
+  ("this panel answers only to its own names"): a web page whose DNS name was pointed
+  at the panel (DNS rebinding) cannot use it. A request with no `Host`
+  (HTTP/1.0) is fine. Reach the panel by one of those names; a name your
+  router hands out (`opendmd.lan`) is refused.
 - A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
   is a `403` (no `Origin`, as from curl, is fine).
 - **API key** (Settings → Device → Security): with `api_key` set (`PUT

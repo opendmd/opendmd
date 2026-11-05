@@ -3094,6 +3094,21 @@ def origin_checks(browser, base: str) -> None:
     check(codes == (200, 200, 200, 403, 403), f"origin: its own (any case, :80 dropped) allowed, others not {codes}")
 
 
+def rebinding_and_header_checks(base: str, overlay: Path) -> None:
+    """docs/api.md "Security": a Host that is not the panel's is a 421 for
+    every route (DNS rebinding: the page's own name, which its Origin
+    matches); the web app's files carry the CSP and nosniff; a card
+    file is never a page (its image type, or a download in a sandbox)."""
+    port = base.rsplit(":", 1)[1]
+    for u, m in (("/", "GET"), ("/api/status", "GET"), ("/api/config", "GET"), ("/gifs/x.gif", "GET"), ("/api/skip", "POST")):
+        code, _ = status_of(urllib.request.Request(base + u, method=m, data=b"" if m == "POST" else None,
+                                                   headers={"Host": f"evil.example:{port}", "Origin": f"http://evil.example:{port}"}))
+        check(code == 421, f"rebinding: {m} {u} with Host evil.example -> {code}")
+    codes = [status_of(urllib.request.Request(base + "/api/status", headers={"Host": h}))[0]
+             for h in (f"127.0.0.1:{port}", f"localhost:{port}", "opendmd.local", "OpenDMD.local:80", "opendmd-mock.local")]
+    check(codes == [200] * 5, f"rebinding: the panel's own names -> 200 {codes}")
+
+
 def key_checks(browser, page: Page, base: str) -> None:
     """The optional API key: Settings -> Advanced -> Security, the 401s, the
     key dialog in a fresh browser, and off again. Last: nothing after it may
@@ -3773,6 +3788,7 @@ def mock_pass(browser) -> None:
         formulas_demo_pass(browser, base, errors)
         json_type_checks(base)
         origin_checks(browser, base)
+        rebinding_and_header_checks(base, overlay)
         firmware_checks(page, base, ota)
         update_checks(page, base, ota)
         key_checks(browser, page, base)

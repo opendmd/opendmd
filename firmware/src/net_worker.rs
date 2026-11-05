@@ -74,6 +74,7 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
             crate::state::NET_UP.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         crate::improv::set_network(s.wifi, &s.ip);
+        crate::httpd::set_names(&s.hostname, &s.mdns, &s.ip);
     }
 }
 
@@ -127,6 +128,7 @@ fn rename(status: &Arc<Mutex<Status>>, hostname: &str) {
     crate::improv::set_hostname(hostname);
     if let Ok(mut s) = status.lock() {
         s.hostname = hostname.to_string();
+        crate::httpd::set_names(&s.hostname, &s.mdns, &s.ip);
     }
     info!("[net] renamed to {hostname}");
 }
@@ -758,6 +760,7 @@ fn publish_mdns(status: &Arc<Mutex<Status>>) {
                 );
             }
             s.mdns = name;
+            crate::httpd::set_names(&s.hostname, &s.mdns, &s.ip);
         }
     }
 }

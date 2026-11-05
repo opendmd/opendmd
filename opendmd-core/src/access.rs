@@ -2,9 +2,17 @@
 //! request gate (`firmware/src/httpd.rs`), here so it is tested on the host.
 //! `docs/api.md`, "Security", is the user-facing description.
 //!
-//! Three rules, none of which is a defence against someone on the same WiFi
+//! Four rules, none of which is a defence against someone on the same WiFi
 //! (the device speaks plain HTTP):
 //!
+//! - **Host.** Every request, `GET` included, must name the panel in its
+//!   `Host` header: `opendmd.local`, `<hostname>.local` (the configured
+//!   name, and the one mDNS answers to), the bare names, the panel's
+//!   current address, or `localhost` (the emulator's port forward). Anything
+//!   else is a 421: a page whose DNS name was re-pointed at the panel (DNS
+//!   rebinding) sends its own name, which matches its `Origin`, so the
+//!   Origin rule alone cannot catch it. No `Host` at all (HTTP/1.0 scripts)
+//!   is fine: a browser always sends one.
 //! - **Origin.** A mutating request (`POST`, `PUT`, `DELETE`) whose `Origin`
 //!   header names another host than its `Host` header is refused (403): a
 //!   page from elsewhere cannot drive the player through a browser on the
@@ -46,6 +54,58 @@ pub fn is_card_path(path: &str) -> bool {
         || path.starts_with("/formulas/")
         || path.starts_with("/filelist")
 }
+
+/// `host[:port]` (a `Host` header) without its port, lowercased, a trailing
+/// dot dropped (`[::1]:8080` is `[::1]`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn host_name(s: &str) -> String {
+    let s = s.trim().to_ascii_lowercase();
+    let name = match s.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => &s,
+    };
+    name.strip_suffix('.').unwrap_or(name).to_string()
+}
+
+/// The names the panel answers to, beside `opendmd.local` and `localhost`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Names<'a> {
+    /// The configured name (`hostname`), "" if none.
+    pub hostname: &'a str,
+    /// The name mDNS answers to (`<hostname>-2` after a clash), "" if none.
+    pub mdns: &'a str,
+    /// The panel's current address (the station's, or the setup network's).
+    pub ip: &'a str,
+    /// The name it had before its last rename this boot: a page still open
+    /// at the old address must be able to follow it to the new one.
+    pub was: &'a str,
+}
+
+/// Is `host` (a request's `Host` header) one of the panel's own names? Any
+/// port: the name is what DNS rebinding controls, not the port.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn host_allowed(host: &str, names: &Names) -> bool {
+    let h = host_name(host);
+    if h.is_empty() {
+        return false;
+    }
+    if matches!(
+        h.as_str(),
+        "localhost" | "127.0.0.1" | "[::1]" | "opendmd.local" | "opendmd"
+    ) {
+        return true;
+    }
+    // (`h` is lowercase; a stored name is too: `hostname::valid`.)
+    let bare = h.strip_suffix(".local").unwrap_or(&h);
+    [names.hostname, names.mdns, names.was]
+        .iter()
+        .any(|n| !n.is_empty() && bare.eq_ignore_ascii_case(n))
+        || (!names.ip.is_empty() && h == names.ip)
+}
+
+/// The 421's words.
+pub const MISDIRECTED: &str =
+    "this panel answers only to its own names: opendmd.local, <its name>.local or its IP address";
 
 fn host_part(s: &str) -> String {
     let s = s.trim().to_ascii_lowercase();
@@ -170,4 +230,69 @@ mod tests {
         assert!(!key_ok(k, None, None));
         assert!(!key_ok(k, None, Some("s3cret-key-12345")));
     }
+
+    #[test]
+    fn hosts() {
+        let n = Names {
+            hostname: "Den",
+            mdns: "den-2",
+            ip: "192.168.1.69",
+            was: "",
+        };
+        for h in [
+            "opendmd.local",
+            "OpenDMD.local:80",
+            "opendmd.local.",
+            "opendmd",
+            "den.local",
+            "DEN.local:80",
+            "den",
+            "den-2.local",
+            "192.168.1.69",
+            "192.168.1.69:80",
+            "localhost:8080",
+            "127.0.0.1:8080",
+            "[::1]:8080",
+        ] {
+            assert!(host_allowed(h, &n), "{h}");
+        }
+        for h in [
+            "evil.example",
+            "evil.example:80",
+            "den.local.evil.example",
+            "opendmd.local.evil.example",
+            "den.evil",
+            "den-3.local",
+            "192.168.1.70",
+            "192.168.1.6",
+            "10.0.2.15",
+            "",
+            " ",
+            "[::2]:80",
+            "localhost.evil.example",
+        ] {
+            assert!(!host_allowed(h, &n), "{h}");
+        }
+        // No name, no mDNS yet, no address: only the fixed names.
+        let none = Names::default();
+        assert!(host_allowed("opendmd.local", &none));
+        assert!(host_allowed("127.0.0.1:8080", &none));
+        assert!(!host_allowed(".local", &none));
+        assert!(!host_allowed("192.168.4.1", &none));
+        let ap = Names {
+            ip: "192.168.4.1",
+            ..none
+        };
+        assert!(host_allowed("192.168.4.1", &ap));
+        // Renamed: the old name follows until the restart.
+        let renamed = Names {
+            hostname: "kitchen",
+            was: "den",
+            ..none
+        };
+        assert!(host_allowed("den.local", &renamed));
+        assert!(host_allowed("kitchen.local", &renamed));
+        assert!(!host_allowed("hall.local", &renamed));
+    }
+
 }
