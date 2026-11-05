@@ -12,7 +12,9 @@
 // app (PUT /api/www, docs/www-pack.md), then the page reloads: its code is
 // the old web app's. The firmware is the release's file for the player's
 // flash layout (`variants.<variant>.firmware`; a release.json from before
-// there were two names only `firmware`, the 4mb one).
+// there were two names only `firmware`, the 4mb one). The official feed is
+// asked as release.json?v=<firmware version>&layout=<4mb|8mb>, which the
+// site counts (site/worker/src/counts.ts); a feed of your own is asked as given.
 
 import { app } from './state.js';
 import { h, store, SITE } from './util.js';
@@ -76,7 +78,9 @@ export async function check(ui) {
     // Another feed only for a development build (its version says so: the
     // player's web app, which no link can change).
     const own = wver(wv)[1] && (new URLSearchParams(location.search).get('updates') || store.get('updates', ''));
-    const u = new URL(own || RELEASE, location.href).href;
+    // The release feed is told the firmware version and flash layout, nothing
+    // else: the site counts update checks by them, a total a day (/stats).
+    const u = new URL(own || `${RELEASE}?v=${encodeURIComponent(bare(fwv ?? ''))}&layout=${encodeURIComponent(variant ?? '')}`, location.href).href;
     const from = new URL(u).origin === new URL(RELEASE).origin ? '' : ` (from ${new URL(u).host})`;
     const rel = await get(u, 'The release information');
     if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);

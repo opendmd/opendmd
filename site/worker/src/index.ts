@@ -1,5 +1,6 @@
-// The opendmd-site Worker. It runs only for /api/* and /formulas/*
-// (cloudflare.config.ts `runWorkerFirst`); everything else is a static
+// The opendmd-site Worker. It runs only for /api/*, /formulas/*, /stats and
+// the counted install paths (cloudflare.config.ts `runWorkerFirst`);
+// everything else is a static
 // asset, the Formula page /f/ among them (it names a gallery Formula,
 // `#gallery=<slug>`: there are no anonymous short links, 2026-10-30;
 // sharing is submitting to the gallery, reviewed on GitHub).
@@ -15,6 +16,16 @@
 //   any other host (workers.dev, a preview URL, should either be on again):
 //                   the relay, its token and the gallery sync 404, and
 //                   /formulas/* only the assets (no store, so no seeding)
+//
+// Anonymous usage counts (src/counts.ts, migrations/0006_counts.sql): daily
+// totals only, nothing about who asked.
+//
+//   /install/release.json?v=&layout=   the web app's update check: the
+//                   asset unchanged, a "check" counted after (waitUntil)
+//   /install/firmware/opendmd-<v>-<variant>-{app,full}.bin   an install:
+//                   the asset unchanged, an "install" counted after
+//   /stats          the public page of those counts (stats.html as built,
+//                   the numbers written in; not linked, noindex)
 //
 // The gallery store (S6, src/gallery.ts, "S6 as built"):
 //
@@ -34,12 +45,13 @@
 // Asset responses carry target/site/_headers' headers whether they come
 // from the asset layer or through env.ASSETS here.
 
+import * as counts from "./counts";
 import * as gallery from "./gallery";
 import * as relay from "./relay";
 
 declare const __SITE_VERSION__: string;
 
-interface Env extends gallery.GalleryEnv, relay.RelayEnv {
+interface Env extends gallery.GalleryEnv, relay.RelayEnv, counts.CountsEnv {
   ASSETS: { fetch(request: Request | string): Promise<Response> };
   DB: D1Database;
 }
@@ -123,6 +135,9 @@ export default {
     }
     if (url.pathname.startsWith("/api/")) return api(request, url, env, ctx);
     if (url.pathname.startsWith("/formulas/")) return formulas(request, url, env, ctx);
+    if (url.pathname === "/stats" || url.pathname === "/stats/") return counts.page(request, url, env);
+    // The installer's release images and the update check: the asset as it is, counted after.
+    if (counts.counted(url.pathname)) return counts.serve(request, url, env, ctx);
     return env.ASSETS.fetch(request);
   },
 
