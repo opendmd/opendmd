@@ -1356,3 +1356,42 @@ fn inline_table_and_sprite_reads_draw_as_the_vm() {
         }
     }
 }
+
+/// `div_s` (a lane divided by a scalar, language review A1) through the
+/// kernel's every form against the VM's `fixed::DivBy`: a shift, a magic
+/// number, a constant 0, a constant with neither, and a frame's or a row's
+/// divisor known past ±1 or not at all (0, tiny, negative), with the
+/// sliders swept.
+#[test]
+fn divisions_by_a_scalar_draw_as_the_vm() {
+    let srcs = [
+        "gray(frac(px/3) + frac(px/7) + frac((px - 64)/10) + frac((px - 64)/-3))",
+        "gray(frac((px - 64)/8) + frac((px - 64)/-4) + frac(px/16384) + frac((px - 64)/-16384))",
+        "gray(frac((px - 64)/2.5) + frac((px - 64)/0.3) + frac((px - 64)/0.0003) + frac((px - 64)/-0.7))",
+        "gray(frac((px - 64)/1.7) + frac((px - 64)/127.3) + frac((px - 64)/255.9) + frac(x/1.0001))",
+        "gray((px - 64)/0 + 0.5)",
+        "s = a*4 + 1.5\ngray(frac((px - 64)/s))",
+        "s = a - 0.5\ngray(frac((px - 64)*0.01/s) + (px - 64)/s/10000)",
+        "s = -a*3 - 1.25\ngray(frac((px - 64)/s))",
+        "s = floor(y*4) - 2\ngray(frac((px - 64)/s) + (px - 64)/s/10000)",
+        "s = (y - 0.5)*0.001\ngray(frac(x/s) + x/s/10000)",
+        "s = (y - 0.5)*0.00002\ngray(frac(x/s) + x/s/10000)",
+        "s = t - 2\ngray(frac((px - 64)/s) + (px - 64)/s/10000)",
+    ];
+    for src in srcs {
+        let p = compile(src).unwrap();
+        assert!(p.listing().contains("div_s"), "{src}\n{}", p.listing());
+        let low = lower(&p).unwrap_or_else(|e| panic!("{src}: {e}"));
+        for (ms, a) in [(0, 0), (700, 1 << 14), (2000, 1 << 15), (2600, 3 << 14), (3999, 1 << 16)] {
+            let mut inputs = golden::inputs(ms);
+            inputs.set_ms(&p, u64::from(ms));
+            inputs.a = a;
+            if !crate::range::inputs_in_range(&p, &inputs) {
+                continue;
+            }
+            let want = vm_frame(&p, &inputs, None, PLAIN);
+            let (got, _) = kernel_frame(&p, &low, &inputs, None, PLAIN);
+            assert!(first_diff(&got, &want).is_none(), "{src} at {ms} ms, a {a}: {:?}\n{}", first_diff(&got, &want), p.listing());
+        }
+    }
+}

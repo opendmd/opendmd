@@ -263,16 +263,17 @@ fn constants_fold_and_values_share() {
     // `x - 0.5` written twice is one step; x*1 and x+0 are x.
     let p = compile("u = x - 0.5\nv = (x - 0.5) * 1 + 0\nrgb(u, v, 0)").unwrap();
     assert_eq!(p.len(), 2, "{}", p.listing());
-    // Division by a constant is a multiply; % by a power of two a mask.
-    // (Before narrowing: then the multiply by 1/4 is a shift.)
+    // Division by a constant stays a division (the same value at every
+    // level); % by a power of two is a mask. (Narrowed, the division by a
+    // scalar is `div_s`: no division instruction.)
     let mut p = Program::default();
     crate::compile_with("gray(x / 4 + x % 0.5)", &mut p, true, false).unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
-    assert!(codes.contains(&code::MUL) && codes.contains(&code::MASK));
-    assert!(!codes.contains(&code::DIV) && !codes.contains(&code::MOD));
+    assert!(codes.contains(&code::DIV) && codes.contains(&code::MASK));
+    assert!(!codes.contains(&code::MUL) && !codes.contains(&code::MOD));
     let p = compile("gray(x / 4 + x % 0.5)").unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
-    assert!(codes.contains(&code::SHR) && codes.contains(&code::ADD_W));
+    assert!(codes.contains(&code::DIV_S) && codes.contains(&code::ADD_W));
 }
 
 #[test]
@@ -280,9 +281,11 @@ fn levels_run_as_rarely_as_they_can() {
     // t-only: per frame; y-only: per row; x: per pixel.
     let p = compile("a1 = sin(t/4)\nb1 = y * a1\nrgb(x + b1, 0, 0)").unwrap();
     assert_eq!(p.counts(), (2, 1, 2), "{}", p.listing());
-    // Division by a per-row value: one reciprocal a row, a multiply a pixel.
+    // Division by a per-row value: the divisor a row, the division a pixel
+    // (`div_s`: the divisor's multiplier worked out once a lane).
     let p = compile("gray(x / (y + 1))").unwrap();
-    assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
+    assert_eq!(p.counts(), (0, 1, 2), "{}", p.listing());
+    assert!(p.listing().contains("div_s"), "{}", p.listing());
     // One over a pixel value: `recip` (the same bits as the division).
     let p = compile("gray(1 / (px + 1))").unwrap();
     assert!(p.listing().contains("recip"), "{}", p.listing());
@@ -3602,4 +3605,53 @@ fn the_store_reaches_past_256_numbers() {
     let q = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
     assert_eq!(q.store_len(), 1024);
     assert_eq!(frame_of(&q, &inputs), frame_of(&p, &inputs));
+}
+
+/// Language review A1: `/` gives the same value at every level (the spec:
+/// "levels change only the cost, never the result"). Each pair below is
+/// one value worked out once a frame (or a row) and the same value worked
+/// out per pixel; their frames are the same bytes all through the loop.
+#[test]
+fn division_is_the_same_at_every_level() {
+    let pairs = [
+        // The review's pair: `k/3` once a frame against per pixel.
+        (
+            "loop 4\nk = floor(t*50) % 128\nv = k/3\ngray(frac(v))",
+            "loop 4\nk = floor(t*50) % 128 + (px > 200)\nv = k/3\ngray(frac(v))",
+        ),
+        // A negative dividend (truncation towards zero, not a floor).
+        (
+            "loop 2\nv = (t - 1 - 0.0000153)/2\ngray(0.5 + v * 1000)",
+            "loop 2\nv = (t - 1 - 0.0000153 + (px > 200))/2\ngray(0.5 + v * 1000)",
+        ),
+        // Large and fractional constant divisors, and a slider's.
+        (
+            "loop 2\nk = t*1000\ngray(frac(k/21846*1000) + frac(k/3000) + frac(k/2.5) + frac(k/(a*3+0.7)))",
+            "loop 2\nk = t*1000 + (px > 200)\ngray(frac(k/21846*1000) + frac(k/3000) + frac(k/2.5) + frac(k/(a*3+0.7)))",
+        ),
+        // By a per-row value that is 0 on some rows: the ends of the
+        // numerator's sign, as once a row.
+        (
+            "loop 2\ns = floor(y*2)\nv = (t*0.001 - 0.0005)/s\ngray(frac(v))",
+            "loop 2\ns = floor(y*2)\nv = (t*0.001 - 0.0005 + (px > 200))/s\ngray(frac(v))",
+        ),
+    ];
+    for (once, per_pixel) in pairs {
+        let (p, q) = (compile(once).unwrap(), compile(per_pixel).unwrap());
+        assert!(q.listing().contains("div_s"), "{}", q.listing());
+        for ms in (0..2000).step_by(20) {
+            let i = Inputs { t: Inputs::at_ms(ms), a: q16(1, 3), ..Default::default() };
+            let (a, b) = (frame_of(&p, &i), frame_of(&q, &i));
+            // (The per-pixel one differs only past column 200: none here.)
+            assert!(a == b, "{once:?} at {ms} ms");
+        }
+    }
+    // `px / 21846` is `px / 21846`, not `px / 32768` (it was a shift).
+    let p = compile("gray(px/21846*1000)").unwrap();
+    let f = frame_of(&p, &Inputs::default());
+    let want = |px: i32| fixed::chan(fixed::mul(fixed::div(px << 16, 21846 << 16), 1000 << 16));
+    for px in [0usize, 63, 127] {
+        assert_eq!(f[px * 3], want(px as i32), "px {px}");
+    }
+    assert!(f[127 * 3] > 0);
 }

@@ -757,7 +757,9 @@ change — constants once, `t`/clock/slider-only values once a frame,
 `x y px py i` (0..1, 0..127, …), `t` (0 to the loop's length), the sliders
 (0..1), the clock, `min`, `floor`, `sin`, `%`, comparisons and the
 constants, and a `+ − *` whose result can't leave the number range skips
-its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
+its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift,
+and a division by a number or by a value the same along a row is a few
+multiplies (exactly the division: `/` gives the same at every level).
 `min(near, 10)*min(near, 10)` is cheaper than an unbounded `near*near`.
 
 | per pixel | ns | | per pixel | ns |
@@ -765,7 +767,7 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
 | + − that can't overflow | 28 | | `*` that can't overflow | 41 (37 when the product is small) |
-| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 | | | |
+| `*` by 1/2ⁿ (`*0.5`, `*0.125`) | 33 | | `/` by a number, or by a value the same along the row (`/3`, `/s`) | 95 (`/2ⁿ` 40) |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value | 360 (`1/v` 230) | | `hash` | 220 |

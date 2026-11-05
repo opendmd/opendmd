@@ -1820,6 +1820,19 @@ pub(crate) fn lane_op<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
+        // (`b` is a scalar: `range::narrow` makes no other.)
+        DIV_S => match b {
+            Arg::Sc(v) => match fixed::DivBy::shift(v) {
+                // By ±2^j: a shift towards zero.
+                Some((j, false)) => un!(fast1, d, a, |x| fixed::shr_trunc(x, j)),
+                Some((j, true)) => un!(fast1, d, a, |x| -fixed::shr_trunc(x, j)),
+                None => {
+                    let by = fixed::DivBy::new(v);
+                    un!(fast1, d, a, |x| by.div(x))
+                }
+            },
+            Arg::Lane(_) => bin!(run2, d, a, b, fixed::div),
+        },
         MOD => bin!(run2, d, a, b, fixed::modulo),
         MASK => bin!(fast2, d, a, b, fixed::mask),
         LT => bin!(fast2, d, a, b, fixed::lt),

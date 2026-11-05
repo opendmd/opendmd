@@ -17,7 +17,11 @@
 //!   scalar kept in `b` so out of range it is `mul(v, b)` again;
 //! - `add`/`sub`/`mul` whose exact result always fits an i32 as `add_w`,
 //!   `sub_w`, `mul_w` (no saturation test), and a `mul` whose 64-bit
-//!   product always fits an i32 as `mul_n` (one 32-bit multiply).
+//!   product always fits an i32 as `mul_n` (one 32-bit multiply);
+//! - `div(v, s)` with `s` a scalar (the same across the lane) as `div_s`:
+//!   the same value for *any* inputs ([`crate::fixed::DivBy`]), with what
+//!   the ranges say of `s` in its `c` (`DIV_BIG`, `DIV_POS`) for the JIT,
+//!   which runs only in range.
 //!
 //! In range those give exactly what the checked steps give (saturation
 //! only ever acts outside i32). A frame whose inputs are outside the
@@ -104,6 +108,7 @@ pub(crate) fn checked(c: u8) -> u8 {
         // (A shift keeps the scalar it stands for in `b`: its constant may
         // be one only for inputs in range.)
         code::MUL_W | code::MUL_N | code::SHR => code::MUL,
+        code::DIV_S => code::DIV,
         c => c,
     }
 }
@@ -142,7 +147,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32]) -> Iv {
         SUB | SUB_W => sub_iv(a, b).sat(),
         MUL | MUL_W | MUL_N => mul_iv(a, b).sat(),
         SHR => Iv(a.0 >> (op.c & 31), a.1 >> (op.c & 31)),
-        DIV => div_iv(a, b),
+        DIV | DIV_S => div_iv(a, b),
         RECIP => div_iv(Iv::point(ONE), a),
         MOD => mod_iv(b),
         MASK => {
@@ -400,6 +405,14 @@ pub(crate) fn narrow(prog: &mut Prog) -> bool {
         let (a, b) = (lane(&regs, &sc, op.a), lane(&regs, &sc, op.b));
         let lanes = is_lane;
         match op.code {
+            DIV if !lanes(op.b) => {
+                op.code = DIV_S;
+                op.c = if b.0 > ONE as i64 || b.1 < -(ONE as i64) {
+                    DIV_BIG
+                } else {
+                    0
+                } | if b.0 > 0 { DIV_POS } else { 0 };
+            }
             ADD if add_iv(a, b).fits() => op.code = ADD_W,
             SUB if sub_iv(a, b).fits() => op.code = SUB_W,
             MUL => {

@@ -89,7 +89,7 @@ pub(crate) fn supported(c: u8) -> Result<(), Refusal> {
     match c {
         ADD | SUB | MUL | ADD_W | SUB_W | MUL_W | MUL_N | MASK | LT | LE | GT | GE | EQ | NE
         | AND | OR | MIN | MAX | STEP | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW
-        | SQR | SHR | SELECT | CLAMP | SEL_LT..=CNT_GE => Ok(()),
+        | SQR | SHR | SELECT | CLAMP | SEL_LT..=CNT_GE | DIV_S => Ok(()),
         DIV | MOD | ATAN2 | HASH | LEN | BIT | SQRT | RECIP | PICK | TAB | SPR | MIX | SMOOTH
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),

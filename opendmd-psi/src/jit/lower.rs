@@ -33,6 +33,60 @@ const ONE_Q: i32 = 1 << 16;
 /// "No slot" in a [`Word`] (a scale of 1).
 pub const NONE: u8 = 0xff;
 
+/// [`Word::Div`]'s parts: the divisor's magnitude, the multiplier, `E`,
+/// the magnitude from which the quotient is held, the divisor's sign.
+pub const DIV_D: u8 = 0;
+pub const DIV_M: u8 = 1;
+pub const DIV_E: u8 = 2;
+pub const DIV_T: u8 = 3;
+pub const DIV_BS: u8 = 4;
+
+/// [`Word::Div`]'s value for a divisor `by`.
+pub fn div_word(by: &fixed::DivBy, part: u8) -> u32 {
+    match part {
+        DIV_D => by.d,
+        DIV_M => by.m,
+        DIV_E => by.e(),
+        DIV_T => by.t,
+        _ => by.bs as u32,
+    }
+}
+
+/// How the kernel divides a lane by a scalar (`div_s`).
+#[derive(Clone, Copy, Debug)]
+enum DivPlan {
+    /// By a constant 0: 0 stays 0, the rest the ends of their sign.
+    Zero,
+    /// By a constant ±2^j (j 1..=15): a shift towards zero.
+    Shift { j: u32, neg: bool },
+    /// By a constant with a magic number (`fixed::DivBy::magic`).
+    Magic { m: u32, s: u32, neg: bool },
+    /// `fixed::DivBy`'s steps, its parts in words (`Div`, or `Const` for a
+    /// constant); `big`, `pos` what is known of the divisor.
+    General { w: [Word; 5], big: bool, pos: bool },
+}
+
+impl DivPlan {
+    /// The words its template reads, once for each read (the hoists'
+    /// counts).
+    fn words(&self) -> Vec<Word> {
+        match *self {
+            DivPlan::Zero | DivPlan::Shift { .. } => Vec::new(),
+            DivPlan::Magic { m, .. } => alloc::vec![Word::Const(m as i32)],
+            DivPlan::General { w, big, pos } => {
+                let mut v = alloc::vec![w[0], w[0], w[1], w[2]];
+                if !big {
+                    v.push(w[3]);
+                }
+                if !pos {
+                    v.push(w[4]);
+                }
+                v
+            }
+        }
+    }
+}
+
 /// What a word of `ctx` holds for a row: the driver works each out from
 /// the VM's state after the row's steps (`super::fill`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +113,10 @@ pub enum Word {
     Colour { pal: u8, v: u8, k: u8, shift: u8 },
     /// The address of palette `pal`'s entry for `sc[v]`.
     Entry { pal: u8, v: u8 },
+    /// Part `part` of `fixed::DivBy::new(sc[v])` for a `div_s` (a lane
+    /// divided by scalar `v`): [`DIV_D`], [`DIV_M`], [`DIV_E`], [`DIV_T`],
+    /// [`DIV_BS`].
+    Div { v: u8, part: u8 },
     /// A constant (a colour memo's start: the kernel writes it).
     Init(i32),
     /// A constant the kernel only reads (hoisted: `chan`'s).
@@ -273,7 +331,7 @@ pub fn lower(prog: &Prog) -> Result<Lowered, Refusal> {
             // (A register's lane: its still cache's alias moves each row.)
             Word::Lane(l) => l >= L_REG0,
             Word::Ink | Word::Under => true,
-            Word::Scalar(k) | Word::Cover(k) => rs(k),
+            Word::Scalar(k) | Word::Cover(k) | Word::Div { v: k, .. } => rs(k),
             Word::Colour { pal, v, k, .. } => rs(v) || rs(k) || turned(pal),
             Word::Entry { pal, v } => rs(v) || turned(pal),
             // (A memo starts again each row, as the VM's each lane.)
@@ -725,8 +783,15 @@ impl<'a> Emitter<'a> {
             if let Item::Step(op) = it {
                 let (v, n) = reads(it);
                 let cover = code::is_colour(op.code) && code::colour_parts(op.code).1.is_some();
+                if op.code == code::DIV_S {
+                    for w in self.div_plan(op).words() {
+                        note(w);
+                    }
+                }
                 for (j, &x) in v[..n].iter().enumerate() {
                     match lane_no(x) {
+                        // (`div_s`'s divisor is read as its plan's words.)
+                        _ if op.code == code::DIV_S && j == 1 => {}
                         // (A layer's scalar coverage is read as `Cover`.)
                         _ if !is_lane(x) && cover && j + 1 == n => note(Word::Cover(x)),
                         _ if !is_lane(x) => note(Word::Scalar(x)),
@@ -1164,6 +1229,7 @@ impl<'a> Emitter<'a> {
                 return self.call(k, hid::PICK, &args, Some(op.d));
             }
             SPR => return self.sprite_read(k, op),
+            DIV_S => return self.div_s(k, op),
             INK | U_R..=U_L => return self.read_pixel(k, op.code),
             UAT => return self.under_at(k, op),
             INKN => return self.ink_levels(k, op.a),
@@ -1543,6 +1609,162 @@ impl<'a> Emitter<'a> {
     /// pixel's bits out of it (`ssr` and `src` by its place in the word),
     /// then its key's number; 0 outside.
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn div_plan(&self, op: &Op) -> DivPlan {
+        let Some(b) = self.prog.const_value(op.b, self.prog.len()) else {
+            let w = |part| Word::Div { v: op.b, part };
+            return DivPlan::General {
+                w: [w(DIV_D), w(DIV_M), w(DIV_E), w(DIV_T), w(DIV_BS)],
+                big: op.c & code::DIV_BIG != 0,
+                pos: op.c & code::DIV_POS != 0,
+            };
+        };
+        let d = b.unsigned_abs();
+        if b == 0 {
+            return DivPlan::Zero;
+        }
+        if d.is_power_of_two() && (17..=31).contains(&d.trailing_zeros()) {
+            return DivPlan::Shift {
+                j: d.trailing_zeros() - 16,
+                neg: b < 0,
+            };
+        }
+        if let Some((m, s)) = fixed::DivBy::magic(b) {
+            return DivPlan::Magic { m, s, neg: b < 0 };
+        }
+        let by = fixed::DivBy::new(b);
+        let w = |part| Word::Const(div_word(&by, part) as i32);
+        DivPlan::General {
+            w: [w(DIV_D), w(DIV_M), w(DIV_E), w(DIV_T), w(DIV_BS)],
+            big: by.t == u32::MAX,
+            pos: b > 0,
+        }
+    }
+
+    /// `div_s`: a lane divided by a scalar, exactly `fixed::div` (the VM's
+    /// `fixed::DivBy`, or for a constant divisor a shift or a magic
+    /// number's multiply).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn div_s(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let plan = self.div_plan(&op);
+        let (id, d) = self.dst(k)?;
+        let a = self.val(op.a)?;
+        if a == d {
+            return Err("a step reads its own register");
+        }
+        match plan {
+            DivPlan::Zero => {
+                let t = self.tmp()?;
+                self.c.srai(d, a, 31);
+                self.max_i32(t);
+                self.c.xor(d, d, t);
+                self.c.moveqz(d, a, a);
+            }
+            DivPlan::Shift { j, neg } => {
+                // trunc(a / 2^j) = (a + (a < 0 ? 2^j − 1 : 0)) >> j.
+                let t = self.tmp()?;
+                let c = &mut self.c;
+                c.srai(t, a, 31);
+                c.extui(t, t, 0, j);
+                c.add(t, a, t);
+                c.srai(d, t, j);
+                if neg {
+                    c.neg(d, d);
+                }
+            }
+            DivPlan::Magic { m, s, neg } => {
+                let sg = self.tmp()?;
+                let w = self.tmp()?;
+                self.c.srai(sg, a, 31);
+                self.c.xor(d, a, sg);
+                self.c.sub(d, d, sg);
+                let mr = self.word_in(w, Word::Const(m as i32));
+                let c = &mut self.c;
+                c.muluh(d, d, mr);
+                match s {
+                    0 => {}
+                    1..=15 => c.srli(d, d, s),
+                    _ => c.extui(d, d, s, 32 - s),
+                }
+                if neg {
+                    // The result's sign: a's flipped (~sg = −sg − 1).
+                    c.neg(sg, sg);
+                    c.addi(sg, sg, -1);
+                }
+                c.xor(d, d, sg);
+                c.sub(d, d, sg);
+            }
+            DivPlan::General { w, big, pos } => {
+                let [wd, wm, we, wt, wb] = w;
+                let sg = self.tmp()?;
+                let t = self.tmp()?;
+                let q = self.tmp()?;
+                let x = self.tmp()?;
+                self.c.srai(sg, a, 31);
+                self.c.xor(d, a, sg);
+                self.c.sub(d, d, sg);
+                // n = |a| in d; held to the ends from t on.
+                let sat = if big {
+                    None
+                } else {
+                    let r = self.word_in(t, wt);
+                    Some(self.c.b_fwd(Cond::Geu, d, r))
+                };
+                let mr = self.word_in(t, wm);
+                if big {
+                    // E ≥ 32: the product's high word >> (E − 32).
+                    self.c.muluh(q, d, mr);
+                    let er = self.word_in(t, we);
+                    self.c.ssr(er);
+                    self.c.movi(x, 0);
+                    self.c.src(q, x, q);
+                } else {
+                    self.c.mull(x, d, mr);
+                    self.c.muluh(q, d, mr);
+                    let er = self.word_in(t, we);
+                    self.c.ssr(er);
+                    // E < 32: (hi:lo) >> E; else hi >> (E − 32).
+                    let small = self.c.bbci_fwd(er, 5);
+                    self.c.movi(x, 0);
+                    self.c.src(q, x, q);
+                    let join = self.c.j_fwd();
+                    self.c.bind(small);
+                    self.c.src(q, q, x);
+                    self.c.bind(join);
+                }
+                // The remainder n·2^16 − q·d (below 2d): one more past d.
+                self.c.slli(x, d, 16);
+                let dr = self.word_in(t, wd);
+                self.c.mull(d, q, dr);
+                self.c.sub(x, x, d);
+                let near = self.c.b_fwd(Cond::Ltu, x, dr);
+                self.c.addi(q, q, 1);
+                self.c.bind(near);
+                if !pos {
+                    let br = self.word_in(t, wb);
+                    self.c.xor(sg, sg, br);
+                }
+                self.c.xor(d, q, sg);
+                self.c.sub(d, d, sg);
+                if let Some(f) = sat {
+                    let done = self.c.j_fwd();
+                    self.c.bind(f);
+                    if !pos {
+                        let br = self.word_in(t, wb);
+                        self.c.xor(sg, sg, br);
+                    }
+                    self.max_i32(d);
+                    self.c.xor(d, d, sg);
+                    self.c.bind(done);
+                }
+                // SAR back to the multiplies' 16 (hoisted out of the loop).
+                self.c.ssai(16);
+                self.sar16 = true;
+            }
+        }
+        self.wrote(k, id);
+        Ok(())
+    }
+
     fn sprite_read(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         let hd = crate::program::SprHead::new(&self.prog.tables, op.c);
         let ua = self.val(op.a)?;
@@ -2445,6 +2667,7 @@ fn word_rank(w: Word) -> u32 {
         Word::Picture => 0x602,
         Word::PictureMask => 0x603,
         Word::Cover(k) => 0x700 | u32::from(k),
+        Word::Div { v, part } => 0x1_0000 | u32::from(part) << 8 | u32::from(v),
         _ => 0xfff,
     }
 }
