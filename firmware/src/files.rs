@@ -233,7 +233,11 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     };
     let (mut reads, mut rd_tot, mut rd_max) = (0u32, 0u32, 0u32);
     req.header("Cache-Control", cache_for(path))?;
-    req.begin_sized("200 OK", mime_for(path), total)?;
+    // Inert bytes, never a page of the panel's (docs/api.md "Security"): an
+    // image as itself, anything else a download in a sandbox.
+    let media = opendmd_core::access::card_media_type(path);
+    req.card_headers(media.is_some())?;
+    req.begin_sized("200 OK", media.unwrap_or("application/octet-stream"), total)?;
 
     let mut left = total;
     while left > 0 {

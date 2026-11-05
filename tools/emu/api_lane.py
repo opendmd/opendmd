@@ -493,6 +493,23 @@ class Lane:
             code, data = get(p)
             self.expect(code == 200 and data == want, "read back", f"GET {p}: HTTP {code}, {len(data)} B, {'same' if data == want else 'DIFFERENT'} bytes")
         self.ok("uploads", f"PUT 5 files (a 300 KB one), ?new=1 created one and answered 409 over an existing one (left as it was), a replace; read back byte for byte")
+        # A card file is never a page (docs/api.md "Security"): a GIF as image/gif, anything
+        # else (an .html written to the card) a sandboxed download.
+        put(f"{d}/emu-page.html", b"<script>alert(1)</script>")
+        self.expected[f"{d}/emu-page.html"] = b"<script>alert(1)</script>"
+        heads = {}
+        for p in (f"{d}/emu-a.gif", f"{d}/emu-page.html"):
+            code, h, _ = api.raw("GET", q(p))
+            heads[p] = (code, {k.lower(): v for k, v in h.items()})
+        ca, ha = heads[f"{d}/emu-a.gif"]
+        cp, hp = heads[f"{d}/emu-page.html"]
+        self.expect(ca == 200 and ha.get("content-type") == "image/gif" and ha.get("x-content-type-options") == "nosniff"
+                    and ha.get("content-security-policy", "").startswith("sandbox") and "content-disposition" not in ha,
+                    "card headers", f"a GIF: {ha.get('content-type')}, {ha.get('content-security-policy')}")
+        self.expect(cp == 200 and hp.get("content-type") == "application/octet-stream" and hp.get("content-disposition") == "attachment"
+                    and hp.get("content-security-policy", "").startswith("sandbox"), "card headers",
+                    f"an .html on the card: {hp.get('content-type')}, {hp.get('content-disposition')}")
+        self.ok("card headers", "a GIF goes out as image/gif, an .html on the card as a sandboxed download (octet-stream, attachment)")
 
         # Moves: to another folder, onto an existing name (409), from nowhere (404).
         _, r = api.json("POST", "/api/files/move", {"from": f"{d}/emu-c.gif", "to": "/gifs/EmuApi2/emu-c2.gif"})
@@ -514,7 +531,7 @@ class Lane:
         api.call("DELETE", "/api/files" + q("/gifs/EmuApiEmpty/e.gif"))
         self.absent.add("/gifs/EmuApiEmpty/e.gif")
         self.ok("move, delete", "moved to a new folder (read back the same, the old name 404); onto an existing name 409, from nowhere 404; deleted (404 after, a second delete 404)")
-        self.listing(api, d, {"emu-a.gif", "emu-b.gif", "emu-big.bin"})
+        self.listing(api, d, {"emu-a.gif", "emu-b.gif", "emu-big.bin", "emu-page.html"})
         self.listing(api, "/gifs/EmuApi2", {"emu-c2.gif"})
 
     def listing(self, api, d, want: set):
@@ -577,6 +594,7 @@ class Lane:
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
+        lower = lambda h: {k.lower(): v for k, v in h.items()}
         # The Host gate (docs/api.md "Security"): a name that is not the panel's is a 421 for
         # every route, GETs included; 127.0.0.1 and localhost (this port forward) answer.
         for path in ("/", "/api/status"):
@@ -593,8 +611,9 @@ class Lane:
         # Caching (www.rs "Caching"): no-cache, the pack's CRC as every file's ETag, a 304 for it
         # (answered on the httpd task), and the wasm at its build's address (?v=, js/wasm.js).
         tag = f'"{struct.unpack_from("<I", pack, 12)[0]:08x}"'
-        lower = lambda h: {k.lower(): v for k, v in h.items()}
         h = lower(headers)
+        self.expect("frame-ancestors 'none'" in h.get("content-security-policy", "") and h.get("x-content-type-options") == "nosniff",
+                    "www", f"GET /: the security headers {h.get('content-security-policy', '')[:50]!r}")
         self.expect(h.get("etag") == tag and h.get("cache-control") == "no-cache", "www",
                     f"GET /: ETag {h.get('etag')} (the pack's CRC is {tag}), Cache-Control {h.get('cache-control')}")
         code, h304, body = api.raw("GET", "/", extra={"If-None-Match": tag})
