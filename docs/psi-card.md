@@ -24,7 +24,7 @@ what you need for most formulas. Check with `psi check FILE`.
   `moon.phase` (0 new, 0.5 full), `season` (0 midwinter, 0.5 midsummer),
   `yearday`, `night` (1 while dimmed), `bright`, `replay.playing`,
   `replay.platform`, `replay.game` (0..1 per game). `since(k)`: seconds
-  since `k` changed (32767 never); `was(k)`: its value before. Previews use
+  since `k` changed (held at 32766; 32767 never); `was(k)`: its value before. Previews use
   the defaults.
 - Colour line, one of: `rgb(r, g, b)` (0..1 each), `hsv(h, s, v)` (h in
   turns), `gray(v)`, `pal(P, v)` (palettes `fire ice ocean chrono amber

@@ -263,16 +263,17 @@ fn constants_fold_and_values_share() {
     // `x - 0.5` written twice is one step; x*1 and x+0 are x.
     let p = compile("u = x - 0.5\nv = (x - 0.5) * 1 + 0\nrgb(u, v, 0)").unwrap();
     assert_eq!(p.len(), 2, "{}", p.listing());
-    // Division by a constant is a multiply; % by a power of two a mask.
-    // (Before narrowing: then the multiply by 1/4 is a shift.)
+    // Division by a constant stays a division (the same value at every
+    // level); % by a power of two is a mask. (Narrowed, the division by a
+    // scalar is `div_s`: no division instruction.)
     let mut p = Program::default();
     crate::compile_with("gray(x / 4 + x % 0.5)", &mut p, true, false).unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
-    assert!(codes.contains(&code::MUL) && codes.contains(&code::MASK));
-    assert!(!codes.contains(&code::DIV) && !codes.contains(&code::MOD));
+    assert!(codes.contains(&code::DIV) && codes.contains(&code::MASK));
+    assert!(!codes.contains(&code::MUL) && !codes.contains(&code::MOD));
     let p = compile("gray(x / 4 + x % 0.5)").unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
-    assert!(codes.contains(&code::SHR) && codes.contains(&code::ADD_W));
+    assert!(codes.contains(&code::DIV_S) && codes.contains(&code::ADD_W));
 }
 
 #[test]
@@ -280,9 +281,11 @@ fn levels_run_as_rarely_as_they_can() {
     // t-only: per frame; y-only: per row; x: per pixel.
     let p = compile("a1 = sin(t/4)\nb1 = y * a1\nrgb(x + b1, 0, 0)").unwrap();
     assert_eq!(p.counts(), (2, 1, 2), "{}", p.listing());
-    // Division by a per-row value: one reciprocal a row, a multiply a pixel.
+    // Division by a per-row value: the divisor a row, the division a pixel
+    // (`div_s`: the divisor's multiplier worked out once a lane).
     let p = compile("gray(x / (y + 1))").unwrap();
-    assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
+    assert_eq!(p.counts(), (0, 1, 2), "{}", p.listing());
+    assert!(p.listing().contains("div_s"), "{}", p.listing());
     // One over a pixel value: `recip` (the same bits as the division).
     let p = compile("gray(1 / (px + 1))").unwrap();
     assert!(p.listing().contains("recip"), "{}", p.listing());
@@ -1180,11 +1183,10 @@ fn centred_values_are_what_they_stand_for() {
         "r = x\ncx = y\npy = 0.5\nangle = 1\ncy = 0\npick = 0.25\nrgb(r, cx, py + angle + cy + pick)",
         "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
     );
-    // A function called `pick` is still the function.
-    same(
-        "fn pick(a, b) = a*b\ngray(pick(x, y))",
-        "fn q(a, b) = a*b\ngray(q(x, y))",
-    );
+    // A `fn` takes no built-in function's name (language review A2: a
+    // later built-in can't be shadowed by a function, only by a value).
+    let e = compile("fn pick(a, b) = a*b\ngray(pick(x, y))").unwrap_err();
+    assert!(e.msg.contains("is a built-in function"), "{}", e.msg);
 }
 
 /// `pick(k, …)` against the chain of `?:` it replaces, byte for byte; one
@@ -1341,7 +1343,7 @@ fn colour_and_pick_errors() {
         ),
         (
             "mix(hsv(x, 1, 1), #000, x)",
-            "is a whole colour: it can't be added to others",
+            "is a whole colour: it can't be combined with others",
             1,
             5,
         ),
@@ -3490,8 +3492,17 @@ fn built_in_inputs_read_their_defaults_and_live_values() {
     }
     let own = compile("night = 0.5\ngray(night)").unwrap();
     assert_eq!(own.ins.n, 0);
-    // A palette or a group name of the formula's own wins over a group.
-    assert!(compile("palette sun = alt #f80, #fff\npal(sun, sun.alt)").unwrap().ins.n == 0);
+    // A dotted input's group is no name of the formula's (language review
+    // A2): not a value's, a palette's, a table's or a function's.
+    for src in [
+        "sun = 1\ngray(sun.alt)",
+        "palette sun = alt #f80, #fff\npal(sun, 0.5)",
+        "table moon = 1, 2\ngray(moon[0])",
+        "fn replay(a) = a\ngray(replay(x))",
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains("is the built-in inputs' name"), "{src}: {}", e.msg);
+    }
     // `inputs()`: bit 7, and a `since` moves with time (bit 3).
     assert_eq!(p.inputs() & 0x88, 0x80);
     assert_eq!(compile("gray(since(night))").unwrap().inputs() & 0x88, 0x88);
@@ -3513,6 +3524,14 @@ fn since_and_was_are_frame_values() {
     // The same value again is no change.
     w.change(world::id::REPLAY_GAME, q(0.75));
     assert_eq!(w.since[world::id::REPLAY_GAME as usize], q(0.5));
+    // A change's seconds are held at 32,766: 32,767 is "never changed"
+    // (language review A5), however long ago the change was.
+    let k = world::input_byte(world::id::REPLAY_GAME, world::SINCE);
+    assert_eq!(crate::World::default().read(k), world::SINCE_NEVER);
+    w.since[world::id::REPLAY_GAME as usize] = world::SINCE_NEVER - 1;
+    assert_eq!(w.read(k), world::SINCE_HELD);
+    w.since[world::id::REPLAY_GAME as usize] = i32::MAX;
+    assert_eq!(w.read(k), world::SINCE_HELD);
     // One slot each: value, since and was of a key are three reads.
     let p = compile("gray(sun.alt + since(sun.alt) + was(sun.alt))").unwrap();
     assert_eq!(p.ins.n, 3);
@@ -3602,4 +3621,155 @@ fn the_store_reaches_past_256_numbers() {
     let q = crate::psb::load_boxed(&b, crate::psb::Which::Play).unwrap();
     assert_eq!(q.store_len(), 1024);
     assert_eq!(frame_of(&q, &inputs), frame_of(&p, &inputs));
+}
+
+/// Language review A1: `/` gives the same value at every level (the spec:
+/// "levels change only the cost, never the result"). Each pair below is
+/// one value worked out once a frame (or a row) and the same value worked
+/// out per pixel; their frames are the same bytes all through the loop.
+#[test]
+fn division_is_the_same_at_every_level() {
+    let pairs = [
+        // The review's pair: `k/3` once a frame against per pixel.
+        (
+            "loop 4\nk = floor(t*50) % 128\nv = k/3\ngray(frac(v))",
+            "loop 4\nk = floor(t*50) % 128 + (px > 200)\nv = k/3\ngray(frac(v))",
+        ),
+        // A negative dividend (truncation towards zero, not a floor).
+        (
+            "loop 2\nv = (t - 1 - 0.0000153)/2\ngray(0.5 + v * 1000)",
+            "loop 2\nv = (t - 1 - 0.0000153 + (px > 200))/2\ngray(0.5 + v * 1000)",
+        ),
+        // Large and fractional constant divisors, and a slider's.
+        (
+            "loop 2\nk = t*1000\ngray(frac(k/21846*1000) + frac(k/3000) + frac(k/2.5) + frac(k/(a*3+0.7)))",
+            "loop 2\nk = t*1000 + (px > 200)\ngray(frac(k/21846*1000) + frac(k/3000) + frac(k/2.5) + frac(k/(a*3+0.7)))",
+        ),
+        // By a per-row value that is 0 on some rows: the ends of the
+        // numerator's sign, as once a row.
+        (
+            "loop 2\ns = floor(y*2)\nv = (t*0.001 - 0.0005)/s\ngray(frac(v))",
+            "loop 2\ns = floor(y*2)\nv = (t*0.001 - 0.0005 + (px > 200))/s\ngray(frac(v))",
+        ),
+    ];
+    for (once, per_pixel) in pairs {
+        let (p, q) = (compile(once).unwrap(), compile(per_pixel).unwrap());
+        assert!(q.listing().contains("div_s"), "{}", q.listing());
+        for ms in (0..2000).step_by(20) {
+            let i = Inputs { t: Inputs::at_ms(ms), a: q16(1, 3), ..Default::default() };
+            let (a, b) = (frame_of(&p, &i), frame_of(&q, &i));
+            // (The per-pixel one differs only past column 200: none here.)
+            assert!(a == b, "{once:?} at {ms} ms");
+        }
+    }
+    // `px / 21846` is `px / 21846`, not `px / 32768` (it was a shift).
+    let p = compile("gray(px/21846*1000)").unwrap();
+    let f = frame_of(&p, &Inputs::default());
+    let want = |px: i32| fixed::chan(fixed::mul(fixed::div(px << 16, 21846 << 16), 1000 << 16));
+    for px in [0usize, 63, 127] {
+        assert_eq!(f[px * 3], want(px as i32), "px {px}");
+    }
+    assert!(f[127 * 3] > 0);
+}
+
+/// Language review A2: one name rule. A formula's own value wins wherever
+/// the name is read as a value; a call `name(…)` is always the built-in
+/// function (`since`, `was`, `under`, `ink` as `sin`); a `fn` takes no
+/// built-in function's name nor a value's; `since(k)` of a name the formula
+/// set is refused, not read two ways.
+#[test]
+fn one_name_rule() {
+    let mut pic = alloc::vec![0u8; W * H * 3];
+    golden::picture(&mut pic);
+    let draw = |p: &Prog| {
+        let mut out = alloc::vec![0u8; W * H * 3];
+        render_rows::<128>(p, &mut Scratch::new(), &golden::inputs(500), &OWN, Some(&pic), u32::MAX, &mut out);
+        out
+    };
+    let same = |a: &str, b: &str| {
+        let (p, q) = (compile(a).unwrap(), compile(b).unwrap());
+        assert!(p.counts() == q.counts() && draw(&p) == draw(&q), "{a} vs {b}");
+    };
+    same("sin = 0.5\ngray(sin(y) + sin)", "gray(sin(y) + 0.5)");
+    same("since = 1\ngray(since(replay.game) * 0 + since)", "gray(since(replay.game) * 0 + 1)");
+    same("was = 0.25\ngray(was(night) + was)", "gray(was(night) + 0.25)");
+    let (a, b) = (
+        compile("ink = 0.5\ndraw { dot(1, 1, 1) }\ngray(ink(4) + ink)").unwrap(),
+        compile("draw { dot(1, 1, 1) }\ngray(ink(4) + 0.5)").unwrap(),
+    );
+    assert_eq!(a.counts(), b.counts());
+    assert!(a.listing().contains("inkn") && frame_of(&a, &Inputs::default()) == frame_of(&b, &Inputs::default()));
+    same("under = 0.5\nrgb(under(px + 1, py) * under)", "rgb(under(px + 1, py) * 0.5)");
+    for (src, says) in [
+        ("fn sin(a) = a*2\ngray(sin(x))", "is a built-in function"),
+        ("fn since(a) = a\ngray(since(x))", "is a built-in function"),
+        ("fn under(a, b) = a\ngray(under(x, y))", "is a built-in function"),
+        ("fn line(a) = a\ngray(line(x))", "is a built-in function"),
+        ("f = 3\nfn f(a) = a\ngray(f(x))", "is already the name of a value"),
+        ("fn f(a) = a\nf = 3\ngray(f(x))", "is already the name of a function"),
+        ("daylight = 0.5\ngray(since(daylight))", "is this formula's own value here"),
+        ("night = 1\ngray(was(night))", "is this formula's own value here"),
+        ("moon = 1\ngray(moon)", "is the built-in inputs' name"),
+        ("fire = 0.5\ngray(fire)", "is a palette's name"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
+    // The built-ins are still read where the formula has not set the name.
+    same("gray(since(daylight) * 0 + daylight)", "gray(since(daylight) * 0 + daylight)");
+}
+
+/// Language review A4: `a < b < c` is refused, with the `and` to write.
+#[test]
+fn chained_comparisons_are_refused() {
+    for (src, says) in [
+        ("gray(0 < x < 0.5)", "write `0 < x and x < 0.5`"),
+        ("gray(x >= 0.2 <= y)", "write `x >= 0.2 and 0.2 <= y`"),
+        ("v = px + 1 == py == 3\ngray(v)", "write `px + 1 == py and py == 3`"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
+    // Brackets say what is meant, and `and` joins two.
+    compile("gray((0 < x) < 0.5)").unwrap();
+    compile("gray(0 < x and x < 0.5)").unwrap();
+}
+
+/// Language review B6: the misleading E304 and `under` sentences.
+#[test]
+fn colour_errors_say_what_went_wrong() {
+    for (src, says) in [
+        ("gray(under(px, py))", "`under(x, y)` is a colour, not a number"),
+        ("x > 0.5 ? pal(fire, x) : #000", "can't be combined with others by `+`, `*`, `? :`"),
+        ("mix(#a00, #00b, x) * pal(fire, x)", "can't be combined with others"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
+}
+
+/// Language review B1: a note where a sum or product can pass the number
+/// range and goes into something that cares; none where it only meets a
+/// clamp, a compare or a colour.
+#[cfg(feature = "syntax")]
+#[test]
+fn saturation_is_noted_where_it_matters() {
+    struct N(Vec<String>);
+    impl crate::syntax::Sink for N {
+        fn note(&mut self, _: (usize, usize), text: &str) {
+            self.0.push(text.into());
+        }
+    }
+    let notes = |src: &str| -> Vec<String> {
+        let mut n = N(Vec::new());
+        let mut p = Program::default();
+        crate::syntax::compile_observed(src, &mut p, &mut n).unwrap();
+        n.0
+    };
+    let has = |src: &str| notes(src).iter().any(|m| m.contains("can pass ±32,768"));
+    assert!(has("j = px\ngray(frac(127.5*j*j/2500/1000))"));
+    assert!(has("loop 3600\nv = t*t\ngray(frac(v))"));
+    assert!(!has("gray(x*30000)"));
+    assert!(!has("gray(px*px*px > 5)"));
+    assert!(!has("gray(frac(px*py*0.1))"));
 }

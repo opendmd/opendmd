@@ -66,6 +66,9 @@ pub struct Entry {
 /// `since` of a key that never changed, and its cap: 32,767 s, Q16.16
 /// (`opendmd_psi::world::SINCE_NEVER`).
 pub const SINCE_NEVER: i32 = 32767 << 16;
+/// A real change's `since` is held a second below it
+/// (`opendmd_psi::world::SINCE_HELD`).
+pub const SINCE_HELD: i32 = 32766 << 16;
 
 /// The table.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -143,7 +146,8 @@ impl Table {
             SINCE_NEVER
         } else {
             let ms = now_ms.saturating_sub(e.changed_ms);
-            ((ms * 65_536 / 1000).min(SINCE_NEVER as u64)) as i32
+            // (Held at 32,766 s: 32,767 is "never changed".)
+            ((ms * 65_536 / 1000).min(SINCE_HELD as u64)) as i32
         };
         Read {
             value: e.live.then_some(e.value),
@@ -278,8 +282,8 @@ mod tests {
         t.clear(id::NIGHT, 6_000);
         let r = t.read(id::NIGHT, 6_000);
         assert_eq!((r.value, r.was, r.since), (None, Some(0), 0));
-        // Held at 32,767 s.
-        assert_eq!(t.read(id::NIGHT, 6_000 + 40_000_000).since, SINCE_NEVER);
+        // Held at 32,766 s (32,767 is "never changed").
+        assert_eq!(t.read(id::NIGHT, 6_000 + 40_000_000).since, SINCE_HELD);
         // Keys out of the table are ignored.
         t.set(200, 1, 1, Source::Sky);
         assert_eq!(t.read(200, 1).value, None);
