@@ -36,7 +36,7 @@ the firmware is back with the bundle's version.
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
 """
-import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time
+import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time, zlib
 import http.client, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -493,6 +493,23 @@ class Lane:
             code, data = get(p)
             self.expect(code == 200 and data == want, "read back", f"GET {p}: HTTP {code}, {len(data)} B, {'same' if data == want else 'DIFFERENT'} bytes")
         self.ok("uploads", f"PUT 5 files (a 300 KB one), ?new=1 created one and answered 409 over an existing one (left as it was), a replace; read back byte for byte")
+        # A card file is never a page (docs/api.md "Security"): a GIF as image/gif, anything
+        # else (an .html written to the card) a sandboxed download.
+        put(f"{d}/emu-page.html", b"<script>alert(1)</script>")
+        self.expected[f"{d}/emu-page.html"] = b"<script>alert(1)</script>"
+        heads = {}
+        for p in (f"{d}/emu-a.gif", f"{d}/emu-page.html"):
+            code, h, _ = api.raw("GET", q(p))
+            heads[p] = (code, {k.lower(): v for k, v in h.items()})
+        ca, ha = heads[f"{d}/emu-a.gif"]
+        cp, hp = heads[f"{d}/emu-page.html"]
+        self.expect(ca == 200 and ha.get("content-type") == "image/gif" and ha.get("x-content-type-options") == "nosniff"
+                    and ha.get("content-security-policy", "").startswith("sandbox") and "content-disposition" not in ha,
+                    "card headers", f"a GIF: {ha.get('content-type')}, {ha.get('content-security-policy')}")
+        self.expect(cp == 200 and hp.get("content-type") == "application/octet-stream" and hp.get("content-disposition") == "attachment"
+                    and hp.get("content-security-policy", "").startswith("sandbox"), "card headers",
+                    f"an .html on the card: {hp.get('content-type')}, {hp.get('content-disposition')}")
+        self.ok("card headers", "a GIF goes out as image/gif, an .html on the card as a sandboxed download (octet-stream, attachment)")
 
         # Moves: to another folder, onto an existing name (409), from nowhere (404).
         _, r = api.json("POST", "/api/files/move", {"from": f"{d}/emu-c.gif", "to": "/gifs/EmuApi2/emu-c2.gif"})
@@ -514,7 +531,7 @@ class Lane:
         api.call("DELETE", "/api/files" + q("/gifs/EmuApiEmpty/e.gif"))
         self.absent.add("/gifs/EmuApiEmpty/e.gif")
         self.ok("move, delete", "moved to a new folder (read back the same, the old name 404); onto an existing name 409, from nowhere 404; deleted (404 after, a second delete 404)")
-        self.listing(api, d, {"emu-a.gif", "emu-b.gif", "emu-big.bin"})
+        self.listing(api, d, {"emu-a.gif", "emu-b.gif", "emu-big.bin", "emu-page.html"})
         self.listing(api, "/gifs/EmuApi2", {"emu-c2.gif"})
 
     def listing(self, api, d, want: set):
@@ -577,6 +594,30 @@ class Lane:
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
+        lower = lambda h: {k.lower(): v for k, v in h.items()}
+        # Only a signed pack (docs/www-pack.md "Signature"): an unsigned one is a 422 at its
+        # header, the same pack with one byte changed (its CRC made to match) a 422 once read.
+        if pack[19] & 1:
+            unsigned = bytearray(pack[:-72])
+            unsigned[19] &= ~1
+            unsigned[8:12] = struct.pack("<I", len(unsigned))
+            unsigned[12:16] = struct.pack("<I", zlib.crc32(bytes(unsigned[64:])))
+            code, _, body = api.raw("PUT", "/api/www", bytes(unsigned), timeout=300)
+            self.expect(code == 422 and b"not signed" in body, "www", f"an unsigned pack: HTTP {code} {body[:120]!r}")
+            forged = bytearray(pack)
+            forged[200] ^= 1
+            forged[12:16] = struct.pack("<I", zlib.crc32(bytes(forged[64:])))
+            code, _, body = api.raw("PUT", "/api/www", bytes(forged), timeout=300)
+            self.expect(code == 422 and b"signature" in body, "www", f"an altered pack: HTTP {code} {body[:120]!r}")
+            _, info = api.json("GET", "/api/www")
+            self.expect(info.get("ok") is True, "www", f"after the refusals the web app in flash is as it was: {info}")
+        # The Host gate (docs/api.md "Security"): a name that is not the panel's is a 421 for
+        # every route, GETs included; 127.0.0.1 and localhost (this port forward) answer.
+        for path in ("/", "/api/status"):
+            code, _, body = api.raw("GET", path, extra={"Host": f"evil.example:{PORT}"})
+            self.expect(code == 421 and b"answers only to" in body, "www", f"GET {path} with Host evil.example: HTTP {code} {body[:100]!r}")
+        code, _, _ = api.raw("GET", "/api/status", extra={"Host": f"localhost:{PORT}"})
+        self.expect(code == 200, "www", f"GET /api/status with Host localhost: HTTP {code}")
         _, r = api.json("PUT", "/api/www", pack, timeout=300)
         self.expect(r.get("ok") is True and r.get("error") is None, "www", f"PUT /api/www answered {r}")
         _, info = api.json("GET", "/api/www")
@@ -586,8 +627,9 @@ class Lane:
         # Caching (www.rs "Caching"): no-cache, the pack's CRC as every file's ETag, a 304 for it
         # (answered on the httpd task), and the wasm at its build's address (?v=, js/wasm.js).
         tag = f'"{struct.unpack_from("<I", pack, 12)[0]:08x}"'
-        lower = lambda h: {k.lower(): v for k, v in h.items()}
         h = lower(headers)
+        self.expect("frame-ancestors 'none'" in h.get("content-security-policy", "") and h.get("x-content-type-options") == "nosniff",
+                    "www", f"GET /: the security headers {h.get('content-security-policy', '')[:50]!r}")
         self.expect(h.get("etag") == tag and h.get("cache-control") == "no-cache", "www",
                     f"GET /: ETag {h.get('etag')} (the pack's CRC is {tag}), Cache-Control {h.get('cache-control')}")
         code, h304, body = api.raw("GET", "/", extra={"If-None-Match": tag})
@@ -602,7 +644,8 @@ class Lane:
         code_other, _, _ = api.raw("GET", wasm, extra={"If-None-Match": '"00000000"'})
         self.expect(code304 == 304 and not body304 and code_other == 200, "www",
                     f"the wasm with its ETag in a list: HTTP {code304}; with another: HTTP {code_other}")
-        self.ok("www pack", f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it; "
+        self.ok("www pack", f"an unsigned and an altered pack refused (422); Host evil.example 421; "
+                f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it with its CSP; "
                 f"no-cache, ETag {tag}, 304 for it (/ and the wasm at ?v=), 200 for another")
 
     # -- simultaneous uploads (the spare's wedge recipe) -------------------------
@@ -1004,7 +1047,7 @@ class Lane:
             _, r = api.json("PUT", "/api/firmware", self.a.bundle.read_bytes(), timeout=600)
             took = time.time() - t0
             self.expect(r.get("ok") is True and r.get("rebooting") is True, "ota", f"PUT /api/firmware answered {r}")
-            emu.wait_for(re.compile(r"signature ok; staging it on the card"), 5, mark, "`signature ok`")
+            emu.wait_for(re.compile(r"signature ok( \(key \d+\))?; staging it on the card"), 5, mark, "`signature ok`")
             emu.wait_for(re.compile(r"staged and verified .* restarting into the updater"), 60, mark, "`restarting into the updater`")
             emu.wait_for(re.compile(r"rst:0x"), 60, mark, "the restart into the updater")
             back = time.time()

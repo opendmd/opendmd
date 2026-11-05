@@ -56,11 +56,14 @@ export function followCard() {
     const a = attract.value;
     const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: a == '*' || a == '@' ? null : a, attract: a == '@' ? 'clock' : '' };
     if (code.value) patch.follow_code = code.value;
+    // The saved code goes only to the saved address: a new one forgets it.
+    const moved = !code.value && app.config?.follow_code_set && patch.follow_host.toLowerCase() !== (app.config.follow_host || '').trim().toLowerCase();
     return run(async () => {
       if (patch.follow && !patch.follow_host) throw new Error('enter the RePlayOS box’s address first');
       await app.src.putConfig(patch);
       code.value = '';
       await app.refreshConfig();
+      if (moved) { result.className = 'muted'; result.textContent = 'New address: type its NET CONTROL code again.'; }
     });
   };
   on_.onchange = attract.onchange = code.onchange = save;

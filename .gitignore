@@ -37,6 +37,16 @@ __pycache__/
 
 # Firmware signing keys: only the public half is committed (firmware/keys/opendmd.pub).
 *.key
+*.pem
+
+# Secrets anywhere in the tree: .env files (firmware/.env's bench WiFi and
+# any other), wrangler's local secrets (site/worker/.dev.vars). The examples
+# (names, no values) stay committed.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
 
 # Experiment outputs made from third-party art (DMDoS pack GIFs, homebrew
 # ROMs, console logos): regenerate locally, never commit (CLAUDE.md "Content

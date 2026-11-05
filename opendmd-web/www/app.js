@@ -8,7 +8,7 @@
 import { init } from './js/web.js';
 import { app, NO_FORMULAS } from './js/state.js';
 import { detect, demoCard, LocalSource } from './js/source.js';
-import { $, h, clear, emit, toast } from './js/util.js';
+import { $, h, clear, emit, on, toast } from './js/util.js';
 import { closeMenu } from './js/overrides.js';
 
 await init();
@@ -100,6 +100,8 @@ if (found) {
   const s = found.status;
   // The device's name; its address and version are in Settings → About.
   $('#where').textContent = s.hostname || 'OpenDMD player';
+  // No API key: one banner offering to set one (js/keynag.js), gone once set.
+  on('config', (c) => { if (c && c.api_key_set === false) import('./js/keynag.js').then((m) => m.show()); else $('#keynag')?.remove(); });
   app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
   route();
 } else if ((app.demo = await demoCard(app.wasm.cardPath))) {

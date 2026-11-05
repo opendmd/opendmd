@@ -168,8 +168,13 @@ type Handler = Box<dyn Fn(&mut Req) -> Result<()> + Send + Sync + 'static>;
 /// and by `PUT /api/config`.
 static API_KEY: Mutex<String> = Mutex::new(String::new());
 /// The device is the setup access point: no key is asked, so a lost key can
-/// be cleared from the setup network.
+/// be cleared from the setup network, and only the setup routes answer
+/// (`opendmd_core::access::setup_route`).
 static SETUP_MODE: AtomicBool = AtomicBool::new(false);
+/// The names a request's `Host` may carry besides the fixed ones
+/// (`opendmd_core::access::host_allowed`): the configured name, the one
+/// mDNS answers to, the current address. Kept by [`set_names`].
+static NAMES: Mutex<[String; 4]> = Mutex::new([String::new(), String::new(), String::new(), String::new()]);
 
 pub fn set_api_key(key: &str) {
     *API_KEY.lock().unwrap_or_else(|p| p.into_inner()) = key.to_string();
@@ -179,16 +184,103 @@ pub fn set_setup_mode(on: bool) {
     SETUP_MODE.store(on, Ordering::Relaxed);
 }
 
-/// Every request passes here before its handler (see [`trampoline`]): the
-/// API key where one is set (401), then a mutating request from a page on
-/// another host (403). `Some(close)` if it was refused (the answer is sent;
-/// `close` drops the connection rather than letting httpd read the rest of
-/// a large body on its own task).
+/// Whether the device is the setup network now (the settings handlers ask).
+pub fn setup_mode() -> bool {
+    SETUP_MODE.load(Ordering::Relaxed)
+}
+
+/// The panel's own names, from the status (`hostname`, `mdns`, `ip`):
+/// called wherever the network worker changes one of them. A rename keeps
+/// the name before it too (`access::Names::was`), until the restart.
+#[optimize(size)]
+pub fn set_names(hostname: &str, mdns: &str, ip: &str) {
+    // (No request can arrive before the network worker's first `publish`,
+    // which calls this: the names are never stale at a request.)
+    let mut n = NAMES.lock().unwrap_or_else(|p| p.into_inner());
+    if n[0] != hostname {
+        n[3] = std::mem::replace(&mut n[0], hostname.to_string());
+    }
+    n[1] = mdns.to_string();
+    n[2] = ip.to_string();
+}
+
+/// Answer a refused request; `close` drops the connection after it.
+fn refuse(req: &mut Req, close: bool, code: u16, status: &str, why: &str) -> Option<bool> {
+    if close {
+        let _ = req.header("Connection", "close");
+    }
+    let _ = req.error(code, status, why);
+    Some(close)
+}
+
+/// Every request passes here before its handler (see [`trampoline`]): a
+/// `Host` that is not one of the panel's names (421, DNS rebinding), the
+/// setup network's short list of routes (403), the API key where one is set
+/// (401), then a mutating request from a page on another host (403).
+/// `Some(close)` if it was refused (the answer is sent; `close` drops the
+/// connection rather than letting httpd read the rest of a large body on
+/// its own task). Never inlined: its header buffers (257 B each) are off
+/// the stack before the handler runs, whose depth is what the httpd task's
+/// ~1 KB of headroom is kept for (`config::HTTP_STACK`).
+#[inline(never)]
+#[optimize(size)]
 fn gate(req: &mut Req) -> Option<bool> {
-    use opendmd_core::access;
+    use opendmd_core::access::{self, Setup};
     let path = req.path().to_string();
     let close = req.content_len() > 8192;
-    if access::needs_key(&path) && !SETUP_MODE.load(Ordering::Relaxed) {
+    let setup = SETUP_MODE.load(Ordering::Relaxed);
+    let get = req.method_name() == "GET";
+    // Where the setup network sends a page it does not serve.
+    let portal = || {
+        let ip = NAMES.lock().unwrap_or_else(|p| p.into_inner())[2].clone();
+        format!("http://{}/", if ip.is_empty() { "192.168.4.1" } else { &ip })
+    };
+    // A `Host` too long to read is refused like a foreign one; none at all
+    // (an HTTP/1.0 script) is not a browser, so not a rebinding.
+    let host = req.request_header(c"Host");
+    if req.header_len(c"Host") > 0 {
+        let host = host.as_deref().unwrap_or_default();
+        let refused = {
+            let n = NAMES.lock().unwrap_or_else(|p| p.into_inner());
+            let names = access::Names {
+                hostname: &n[0],
+                mdns: &n[1],
+                ip: &n[2],
+                was: &n[3],
+            };
+            !access::host_allowed(host, &names)
+        };
+        if refused {
+            // The setup network answers every name with itself (its DNS):
+            // a phone's captive-portal probe for another host is sent to
+            // the setup page.
+            if setup && get {
+                let _ = req.redirect(&portal());
+                return Some(false);
+            }
+            log::warn!("{path}: 421, Host {host}");
+            return refuse(req, close, 421, "421 Misdirected Request", access::MISDIRECTED);
+        }
+    }
+    if setup {
+        match access::setup_route(req.method_name(), &path) {
+            Setup::Allow => {}
+            Setup::Portal => {
+                let _ = req.redirect(&portal());
+                return Some(false);
+            }
+            Setup::Refuse => {
+                return refuse(
+                    req,
+                    close,
+                    403,
+                    "403 Forbidden",
+                    "the setup network only sets up WiFi",
+                );
+            }
+        }
+    }
+    if access::needs_key(&path) && !setup {
         let key = API_KEY.lock().unwrap_or_else(|p| p.into_inner()).clone();
         if !key.is_empty() {
             let auth = req.request_header(c"Authorization");
@@ -196,27 +288,19 @@ fn gate(req: &mut Req) -> Option<bool> {
             if !access::key_ok(&key, auth.as_deref(), q.as_deref()) {
                 log::info!("{} {path}: 401, no or wrong API key", req.method_name());
                 let _ = req.header("WWW-Authenticate", "Bearer");
-                if close {
-                    let _ = req.header("Connection", "close");
-                }
-                let _ = req.error(401, "401 Unauthorized", "API key required");
-                return Some(close);
+                return refuse(req, close, 401, "401 Unauthorized", "API key required");
             }
         }
     }
-    if req.method_name() != "GET" {
+    if !get {
         if let Some(origin) = req.request_header(c"Origin") {
-            let host = req.request_header(c"Host").unwrap_or_default();
+            let host = host.unwrap_or_default();
             if !access::same_origin(&origin, &host) {
                 log::warn!(
                     "{} {path}: 403, a page from {origin} (the device is {host})",
                     req.method_name()
                 );
-                if close {
-                    let _ = req.header("Connection", "close");
-                }
-                let _ = req.error(403, "403 Forbidden", "cross-origin request refused");
-                return Some(close);
+                return refuse(req, close, 403, "403 Forbidden", "cross-origin request refused");
             }
         }
     }
@@ -279,6 +363,10 @@ impl Server {
             cfg.ctrl_port = 32768;
             cfg.max_open_sockets = max_sockets;
             cfg.max_uri_handlers = max_handlers;
+            // Enough for the most any response sets: the web app's five
+            // (Content-Encoding, ETag, Cache-Control, CSP, nosniff), a card
+            // file's four or five (Cache-Control, nosniff, CSP,
+            // Content-Disposition, Retry-After). 8 B of heap a slot.
             cfg.max_resp_headers = 8;
             cfg.backlog_conn = 5;
             cfg.lru_purge_enable = true;
@@ -516,6 +604,14 @@ pub fn stack_low_water(task: &str, low: &std::sync::atomic::AtomicU32) {
     }
 }
 
+/// `uri` for the log: a query with a `key=` in it is never written down.
+pub fn log_uri(uri: &str) -> &str {
+    match uri.find("key=") {
+        Some(_) => uri.split('?').next().unwrap_or(""),
+        None => uri,
+    }
+}
+
 /// One in-flight request.
 ///
 /// `keep` exists because `httpd_resp_set_status`, `_set_type` and `_set_hdr`
@@ -578,6 +674,12 @@ impl Req {
     /// The raw query string, if any.
     pub fn query(&self) -> Option<&str> {
         self.uri().split_once('?').map(|(_, q)| q)
+    }
+
+    /// A request header's length, 0 if it is absent.
+    pub fn header_len(&self, field: &CStr) -> usize {
+        // SAFETY: a live request and a NUL-terminated field name.
+        unsafe { sys::httpd_req_get_hdr_value_len(self.raw, field.as_ptr()) }
     }
 
     /// A request header's value (at most 256 B; longer is treated as absent).
@@ -738,6 +840,25 @@ impl Req {
         Ok(())
     }
 
+    /// The web app's security headers (`opendmd_core::access::APP_CSP`):
+    /// its policy (`frame-ancestors 'none'`: never in a frame), no type
+    /// sniffing.
+    pub fn app_headers(&mut self, csp: &'static str) -> Result<()> {
+        self.header("Content-Security-Policy", csp)?;
+        self.header("X-Content-Type-Options", "nosniff")
+    }
+
+    /// A card file's: no sniffing and a sandbox whatever it holds; not an
+    /// image (`media` false), a download as well.
+    pub fn card_headers(&mut self, media: bool) -> Result<()> {
+        self.header("X-Content-Type-Options", "nosniff")?;
+        self.header("Content-Security-Policy", "sandbox; default-src 'none'")?;
+        if !media {
+            self.header("Content-Disposition", "attachment")?;
+        }
+        Ok(())
+    }
+
     /// Send a complete response in one call.
     pub fn send_status(
         &mut self,
@@ -892,7 +1013,7 @@ impl Req {
         if self.streaming() {
             self.log_cut(&format!("{e:#}"));
         } else {
-            log::warn!("{} {}: {e:#}", self.method_name(), self.uri());
+            log::warn!("{} {}: {e:#}", self.method_name(), log_uri(self.uri()));
         }
     }
 

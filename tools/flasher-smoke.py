@@ -28,6 +28,7 @@ person, and there is no board on the other end of a headless browser.
 import functools
 import http.server
 import json
+import os
 import shutil
 import sys
 import threading
@@ -37,7 +38,7 @@ from playwright.sync_api import sync_playwright
 
 REPO = Path(__file__).resolve().parents[1]
 SITE = REPO / "target" / "flasher-smoke"
-DIST = REPO / "dist"
+DIST = Path(os.environ.get("DIST") or REPO / "dist")
 failures = 0
 # The third-party notices fw-release puts in dist/, linked from the page's footer.
 NOTICES = ("THIRD-PARTY-LICENSES-firmware.txt", "THIRD-PARTY-LICENSES-web.txt")
@@ -71,6 +72,9 @@ def main() -> int:
     shutil.rmtree(SITE, ignore_errors=True)
     (SITE / "firmware").mkdir(parents=True)
     shutil.copy(REPO / "flasher" / "index.html", SITE / "index.html")
+    # ESP Web Tools, served beside the page (flasher/esp-web-tools/), as `make flasher` does.
+    shutil.copytree(REPO / "flasher" / "esp-web-tools", SITE / "esp-web-tools")
+    shutil.copy(REPO / "licenses" / "THIRD-PARTY-LICENSES-installer.txt", SITE / "esp-web-tools")
     all_parts: dict[str, list] = {}
     for v, m in ms.items():
         shutil.copy(manifests[v], SITE / "firmware" / manifests[v].name)
@@ -109,9 +113,12 @@ def main() -> int:
         page.on("console", lambda msg: msg.type == "error" and errors.append(msg.text))
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("response", lambda r: r.status >= 400 and errors.append(f"HTTP {r.status} {r.url}"))
+        loaded: list[str] = []
+        page.on("request", lambda r: loaded.append(r.url))
         page.goto(base + "/")
         page.wait_for_function("customElements.get('esp-web-install-button') !== undefined", timeout=30000)
-        check(True, "ESP Web Tools 10.4.0 loaded from jsDelivr, <esp-web-install-button> defined")
+        check(True, "ESP Web Tools 10.4.0 loaded from the page's own esp-web-tools/, <esp-web-install-button> defined")
+        check(not any("jsdelivr" in u for u in loaded), f"nothing loaded from a CDN ({[u for u in loaded if 'jsdelivr' in u][:2]})")
         check(page.evaluate("'serial' in navigator && window.isSecureContext"), "Web Serial present, secure context")
         page.wait_for_timeout(1500)
         for v in SHOWN:

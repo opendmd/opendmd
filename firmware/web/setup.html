@@ -54,12 +54,14 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <input id="host" value="opendmd" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
 <p class="hint" id="hosthint" style="margin:4px 0 0;font-size:13px">Give each display its own name if you have more than one. It becomes <b id="hosturl">http://opendmd.local/</b></p>
 <div class="msg err" id="hostnote" hidden></div>
+<label for="key">Key (optional: without one, anyone on your WiFi can change this display)</label>
+<input id="key" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="8 or more letters and digits">
 <button id="savewifi">Connect</button>
 <div class="msg" id="wifimsg"></div>
-<p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button> &middot; <a href="/index.html">Use the web app without WiFi</a></p>
+<p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button><span id="appl"> &middot; <a href="/index.html">Open the web app</a></span></p>
 </section>
 
-<details>
+<details id="adv">
 <summary>Advanced and recovery</summary>
 
 <section>
@@ -68,7 +70,9 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <button class="alt" id="refresh">Refresh</button>
 </section>
 
-<section>
+<p class="hint" id="apnote" hidden>On the setup network the display only sets up WiFi. Join your own network to use the rest.</p>
+
+<section id="player">
 <h2>Player</h2>
 <div class="row">
   <div><label for="bright">Brightness (0-255)</label><input id="bright" type="number" min="0" max="255"></div>
@@ -90,7 +94,7 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div class="msg" id="cfgmsg"></div>
 </section>
 
-<section>
+<section id="upsec">
 <h2>Upload a file to the card</h2>
 <label for="dest">Destination path on the card</label>
 <input id="dest" value="/sets/example.txt">
@@ -101,7 +105,7 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div class="msg" id="upmsg"></div>
 </section>
 
-<section>
+<section id="wwwsec">
 <h2>Web app</h2>
 <p class="hint">The web app is stored on the display. To repair it, pick the <code>opendmd-&hellip;-www.pack</code>
 file from a release. For firmware, use <b>Check for updates</b> in the web app, or the installer.</p>
@@ -125,11 +129,22 @@ const kb = n => (n / 1024).toFixed(1) + ' KB';
 // (opendmd_core::hostname::valid).
 const hostOk = n => /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n);
 const hostVal = () => $('host').value.trim().toLowerCase();
+// The API key, if this panel has one (the web app keeps it as odmd.apiKey on
+// this address): sent with every request. The setup network asks for none.
+let key = (() => { try { return JSON.parse(localStorage.getItem('odmd.apiKey')) || ''; } catch (e) { return ''; } })();
+const auth = h => key ? Object.assign({}, h, { Authorization: 'Bearer ' + key }) : (h || {});
+const get = path => fetch(path, { headers: auth() });
+const keyOk = k => /^[A-Za-z0-9._~-]{8,64}$/.test(k);
 $('host').oninput = () => { $('hosturl').textContent = 'http://' + (hostVal() || 'opendmd') + '.local/'; };
 
 async function loadStatus() {
   try {
-    const s = await (await fetch('/api/status')).json();
+    const s = await (await get('/api/status')).json();
+    // On the setup network only the WiFi can be set: no web app, no card.
+    const ap = s.wifi === 'ap';
+    $('appl').hidden = ap;
+    for (const id of ["player", "upsec", "wwwsec"]) $(id).hidden = ap;
+    $('apnote').hidden = !ap;
     const np = s.now_playing || {};
     const rows = [
       ['Version', s.version + ', ' + ({ '4mb': 'DevKit (4 MB)', '8mb': '8 MB build' }[s.variant] || s.variant)],
@@ -156,18 +171,19 @@ async function loadStatus() {
 
 async function loadConfig() {
   try {
-    const c = await (await fetch('/api/config')).json();
+    const c = await (await get('/api/config')).json();
     $('ssid').value = c.wifi_ssid; $('bright').value = c.brightness;
     $('dmin').value = c.dwell_min; $('dmax').value = c.dwell_max;
     $('platforms').value = c.platforms; $('set').value = c.set;
     $('shuffle').value = String(c.shuffle);
     if (c.wifi_pass_set) $('pass').placeholder = 'saved; leave blank to keep it';
     if (c.hostname) { $('host').value = c.hostname; $('host').oninput(); }
+    if (c.api_key_set) $('key').placeholder = 'a key is set; leave blank to keep it';
   } catch (e) { /* the setup page is useful even if this fails */ }
 }
 
 async function put(path, body) {
-  const r = await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: 'PUT', headers: auth({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status });
   return j;
@@ -180,7 +196,7 @@ $('refresh').onclick = loadStatus;
 async function scan() {
   const box = $('nets');
   try {
-    const aps = await (await fetch('/api/wifi/scan')).json();
+    const aps = await (await get('/api/wifi/scan')).json();
     box.replaceChildren(...aps.map(a => {
       const b = document.createElement('button');
       const name = document.createElement('span'), info = document.createElement('small');
@@ -214,12 +230,16 @@ $('savewifi').onclick = async () => {
   if (!hostOk(host)) return say('wifimsg', 'The display name can only use a-z, 0-9 and hyphens (up to 32, no hyphen at the start or end).', 'err');
   const body = { wifi_ssid: ssid, hostname: host };
   if ($('pass').value) body.wifi_pass = $('pass').value;
+  const k = $('key').value.trim();
+  if (k && !keyOk(k)) return say('wifimsg', 'The key needs 8 to 64 letters, numbers or . _ ~ - (no spaces).', 'err');
+  if (k) body.api_key = k;
   say('wifimsg', 'Saving…');
   try {
     await put('/api/config', body);
+    if (k) { key = k; try { localStorage.setItem('odmd.apiKey', JSON.stringify(k)); } catch (e) { /* private mode */ } }
     say('wifimsg', 'Saved. The display is restarting to join “' + ssid + '”.\n\nRejoin your usual WiFi, then open http://' + host + '.local/ to start using it. ' +
         'If the setup network comes back instead, the name or password was wrong: join it again and retry.', 'ok');
-    await fetch('/api/reboot', { method: 'POST' });
+    await fetch('/api/reboot', { method: 'POST', headers: auth() });
   } catch (e) {
     // 409: another device already answers to <name>.local (not on the
     // setup network, which has no mDNS; /setup on the home network can).
@@ -244,7 +264,7 @@ for (const [id, path] of [['skip', '/api/skip'], ['pause', '/api/pause'], ['rein
   $(id).onclick = async () => {
     say('cfgmsg', '…');
     try {
-      const j = await (await fetch(path, { method: 'POST' })).json();
+      const j = await (await fetch(path, { method: 'POST', headers: auth() })).json();
       say('cfgmsg', JSON.stringify(j), 'ok');
       loadStatus();
     } catch (e) { say('cfgmsg', 'failed: ' + e, 'err'); }
@@ -256,6 +276,7 @@ function send(method, url, data, progressEl, msgEl, done) {
   const xhr = new XMLHttpRequest();
   xhr.open(method, url);
   xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  if (key) xhr.setRequestHeader('Authorization', 'Bearer ' + key);
   progressEl.hidden = false;
   xhr.upload.onprogress = e => { if (e.lengthComputable) progressEl.value = (e.loaded / e.total) * 100; };
   xhr.onload = () => {
@@ -278,7 +299,7 @@ $('upload').onclick = () => {
 
 async function loadWww() {
   try {
-    const w = await (await fetch('/api/www')).json();
+    const w = await (await get('/api/www')).json();
     say('wwwinfo', w.ok ? 'in flash: ' + w.version + ' (' + w.entries + ' files, ' + kb(w.bytes) + ')'
                         : 'no web app: ' + (w.error || 'unknown'), w.ok ? 'ok' : 'err');
   } catch (e) { say('wwwinfo', 'offline', 'err'); }
@@ -294,7 +315,7 @@ $('wwwgo').onclick = () => {
 
 $('reboot').onclick = async () => {
   say('wwwmsg', 'rebooting…');
-  await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
+  await fetch('/api/reboot', { method: 'POST', headers: auth() }).catch(() => {});
 };
 
 loadConfig(); scan(); loadStatus(); loadWww(); setInterval(loadStatus, 10000);

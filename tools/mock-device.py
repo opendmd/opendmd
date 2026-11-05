@@ -297,17 +297,30 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   theirs (newest first, at most 8), and `reset_reason`/`reset_note` follow
   the newest.
 - **Security** (docs/api.md "Security"), checked in `route` before any
-  handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
+  handler: a `Host` that is not one of the panel's names (`opendmd.local`,
+  `<hostname>[.local]`, the address the request came in on, `localhost`,
+  `127.0.0.1`, any port) is a 421 `{"error":"this panel answers to …"}`,
+  every method (DNS rebinding; no `Host`: allowed); a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
   `{"error":"cross-origin request refused"}` (no `Origin`: allowed); with
   `api_key` set (`PUT /api/config`, 8..64 of `A-Za-z0-9._~-`, `""` clears;
   `GET /api/config` shows only `api_key_set`) every `/api/*` request and
-  every `GET` of `/gifs/*`, `/cache/*`, `/sets/*`, `/filelist*` needs
+  every `GET` of `/gifs/*`, `/cache/*`, `/sets/*`, `/formulas/*`, `/filelist*` needs
   `Authorization: Bearer <key>` or `?key=<key>`, else 401 `{"error":"API key
   required"}` + `WWW-Authenticate: Bearer` (the web app's own files never
   do; setup mode is not modelled); and the JSON routes (`JSON_ROUTES`) with
   a non-empty body whose `Content-Type` is not `application/json` are a 415
-  `{"error":"Content-Type must be application/json"}`.
+  `{"error":"Content-Type must be application/json"}`. The web app's files
+  and `/setup` carry the firmware's `Content-Security-Policy` (`APP_CSP`,
+  `SETUP_CSP`) and `X-Content-Type-Options: nosniff`;
+  a card file goes out as its image type or
+  `application/octet-stream` (never HTML or SVG) with nosniff,
+  `Content-Security-Policy: sandbox; default-src 'none'` and, for a non-image,
+  `Content-Disposition: attachment`. `POST /api/follow/test` naming another
+  host than the saved one, with no `code`, is a 400 when a code is saved;
+  `PUT /api/config` with a new `follow_host` and no `follow_code` forgets the
+  saved code. `PUT /api/www` takes only a signed pack (header byte 19 bit 0,
+  the 72-byte trailer, against `--ota-pub`): 422 otherwise.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, flash_size, pending, last, log}` (`log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
@@ -747,6 +760,7 @@ STATUS_TEXT = {
     411: "Length Required",
     413: "Payload Too Large",
     415: "Unsupported Media Type",
+    421: "Misdirected Request",
     422: "Unprocessable Entity",
     500: "Internal Server Error",
     503: "Service Unavailable",
@@ -847,6 +861,50 @@ def mime_for(rel: str) -> str:
         "ico": "image/x-icon",
         "txt": "text/plain; charset=utf-8",
     }.get(ext, "application/octet-stream")
+
+
+# opendmd_core::access::APP_CSP and SETUP_CSP, as the firmware sends them.
+APP_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+           "style-src 'self' 'unsafe-inline'; img-src * data: blob:; media-src 'self' blob:; connect-src *; "
+           "object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+SETUP_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+CARD_CSP = "sandbox; default-src 'none'"
+CARD_PREFIXES = ("/gifs/", "/cache/", "/sets/", "/formulas/", "/filelist")
+
+
+def card_media_type(rel: str) -> str | None:
+    """opendmd_core::access::card_media_type: an image's own type, else None
+    (sent as application/octet-stream, as a download)."""
+    name = rel.rsplit("/", 1)[-1]
+    ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+    return {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp"}.get(ext)
+
+
+def host_name(h: str) -> str:
+    """access.rs host_name: no port, lowercased, no trailing dot."""
+    h = h.strip().lower().rstrip("/")
+    if h.startswith("["):
+        return h.split("]", 1)[0] + "]" if "]" in h else h
+    if ":" in h:
+        name, port = h.rsplit(":", 1)
+        if port.isdigit():
+            h = name
+    return h[:-1] if h.endswith(".") else h
+
+
+def host_allowed(host: str, hostname: str, ip: str, was: str = "") -> bool:
+    """access.rs host_allowed: the panel's own names (DNS rebinding), and
+    the one before its last rename (`was`)."""
+    h = host_name(host)
+    if not h:
+        return False
+    if h in ("localhost", "127.0.0.1", "[::1]", "opendmd.local", "opendmd"):
+        return True
+    for n in (hostname.strip().lower(), was.strip().lower()):
+        if n and h in (n, n + ".local"):
+            return True
+    return bool(ip) and h == ip.lower()
 
 
 def cache_for(rel: str) -> str:
@@ -1652,7 +1710,34 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if desc is None or not desc.endswith(" " + bundle) or len(desc) <= len(bundle) + 1:
         raise ValueError(f"the image inside is not an OpenDMD {bundle} build "
                          f"(its app descriptor says '{desc if desc is not None else 'nothing: no app descriptor'}')")
+    # opendmd_core::ota::check_key_id: the key trailer (none: key 0) names key 0.
+    tail = image[-16:]
+    named = tail[8] if len(tail) == 16 and tail[:8] == b"ODFWKEY1" and tail[9:] == b"\0" * 7 else 0
+    if named != 0:
+        raise ValueError(f"the image names signing key {named}, but key 0 signed it")
     return version
+
+
+def www_signature_check(data: bytes, pub) -> None:
+    """opendmd_core::ota::www (docs/www-pack.md "Signature"): ValueError(reason)
+    unless the pack is signed by `pub` (key 0)."""
+    from nacl.exceptions import BadSignatureError
+    if not data[19] & 1:
+        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+    t = data[-72:]
+    if len(data) < 64 + 72 or t[:4] != b"ODWS" or t[5:8] != b"\0\0\0":
+        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+    if t[4] != 0:
+        raise ValueError(f"signed with key {t[4]}, which this player does not know")
+    body = bytearray(data[:-72])
+    body[12:16] = b"\0" * 4
+    msg = b"ODWPSIG1" + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
+    if pub is None:
+        raise ValueError("the firmware's public key is invalid")
+    try:
+        pub.verify(msg, t[8:])
+    except BadSignatureError:
+        raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
 
 
 def host_port(s: str) -> str:
@@ -2973,6 +3058,12 @@ def make_handler(ctx: Context, quiet: bool):
                 self.drain()
                 self.send_error_json(503, "restarting", {"Retry-After": "1"})
                 return True
+            host = self.headers.get("Host")
+            if host is not None:
+                here = self.connection.getsockname()[0] if self.connection else ""
+                if not host_allowed(host, ctx.settings["hostname"], here, getattr(ctx, "hostname_was", "")):
+                    self.refuse(421, "this panel answers only to its own names: opendmd.local, <its name>.local or its IP address")
+                    return True
             origin = self.headers.get("Origin")
             if method in ("POST", "PUT", "DELETE") and origin is not None \
                     and host_port(origin) != host_port(self.headers.get("Host") or ""):
@@ -2980,7 +3071,7 @@ def make_handler(ctx: Context, quiet: bool):
                 return True
             key = ctx.settings["api_key"]
             if key and (path.startswith("/api/") or (method == "GET" and (
-                    path.startswith(("/gifs/", "/cache/", "/sets/", "/filelist"))))):
+                    path.startswith(CARD_PREFIXES)))):
                 auth = self.headers.get("Authorization") or ""
                 if auth != "Bearer " + key and query_param(query, "key") != key:
                     self.refuse(401, "API key required", {"WWW-Authenticate": "Bearer"})
@@ -3001,7 +3092,11 @@ def make_handler(ctx: Context, quiet: bool):
             if www and not legacy and self.not_modified(actual):
                 return
             self.send_response(200, "OK")
-            self.send_header("Content-Type", mime_for(logical_rel))
+            if www:
+                self.send_header("Content-Type", mime_for(logical_rel))
+                self.app_headers(APP_CSP)
+            else:
+                self.card_headers(logical_rel)
             if gzipped:
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Cache-Control", beta13_cache_for(logical_rel) if legacy
@@ -3015,6 +3110,20 @@ def make_handler(ctx: Context, quiet: bool):
                     shutil.copyfileobj(f, self.wfile)
             self._resp_status = 200
             self._resp_bytes = size
+
+        def app_headers(self, csp: str) -> None:
+            """Req::app_headers: the web app's and the setup page's."""
+            self.send_header("Content-Security-Policy", csp)
+            self.send_header("X-Content-Type-Options", "nosniff")
+
+        def card_headers(self, rel: str) -> None:
+            """files::serve: a card file is never a page (docs/api.md "Security")."""
+            media = card_media_type(rel)
+            self.send_header("Content-Type", media or "application/octet-stream")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CARD_CSP)
+            if media is None:
+                self.send_header("Content-Disposition", "attachment")
 
         def not_modified(self, actual: Path) -> bool:
             """The firmware's `www::not_modified`: a 304 (ETag and
@@ -3149,6 +3258,7 @@ def make_handler(ctx: Context, quiet: bool):
                     .replace("{{ variant_name }}", OTA_BOARDS[ctx.variant]).encode())
             self.send_response(200, "OK")
             self.send_header("Content-Type", "text/html")
+            self.app_headers(SETUP_CSP)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -3205,7 +3315,7 @@ def make_handler(ctx: Context, quiet: bool):
         def stream_paced(self, fpath: Path, rel: str, io: dict) -> None:
             data = fpath.read_bytes()
             self.send_response(200, "OK")
-            self.send_header("Content-Type", mime_for(rel))
+            self.card_headers(rel)
             self.send_header("Cache-Control", cache_for(rel))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -3674,6 +3784,11 @@ def make_handler(ctx: Context, quiet: bool):
                 if next_settings["dwell_max"] < next_settings["dwell_min"]:
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
+                # The saved RePlayOS code is for the saved address: a new
+                # address without a code of its own forgets it (http.rs, M1).
+                if "follow_host" in patch and "follow_code" not in patch and \
+                        next_settings["follow_host"].strip().lower() != before["follow_host"].strip().lower():
+                    next_settings["follow_code"] = ""
 
                 # A name another device answers to is refused, nothing
                 # saved (http.rs asks the network worker last, before the
@@ -3772,6 +3887,8 @@ def make_handler(ctx: Context, quiet: bool):
                 # check every request makes, before any handler) look
                 # without the lock: an empty moment between the two was a
                 # KeyError, a 500, to a request that came in just then.
+                if next_settings["hostname"] != before["hostname"]:
+                    ctx.hostname_was = before["hostname"]  # httpd::set_names: the old name follows
                 ctx.settings.update(next_settings)
                 card_speed_applied = None
                 if "card_speed" in patch:
@@ -3928,7 +4045,12 @@ def make_handler(ctx: Context, quiet: bool):
             host_in = req.get("host")
             host = host_in.strip() if isinstance(host_in, str) and host_in.strip() else saved_host
             code_in = req.get("code")
-            code = code_in if isinstance(code_in, str) else saved_code
+            # The saved code goes only to the saved address (http.rs, M1).
+            same = host.strip().lower() == saved_host.strip().lower()
+            if not isinstance(code_in, str) and saved_code and not same:
+                self.send_error_json(400, "a new address needs its NET CONTROL code")
+                return
+            code = code_in if isinstance(code_in, str) else saved_code if same else ""
             if not host:
                 self.send_json(200, {"ok": False, "reachable": False, "error": "no host"})
                 return
@@ -4290,10 +4412,26 @@ def make_handler(ctx: Context, quiet: bool):
             if len(data) < 64 or total != length or vlen > 44:
                 self.send_error_json(400, f"not a www pack: the header's length {total} is not the body's {length}")
                 return
+            if ctx.sd_state != "ok":
+                self.send_error_json(503, "no card (or one that cannot be read): a web app update is staged on the card, insert one",
+                                     {"Retry-After": "10"})
+                return
+            if not data[19] & 1:
+                self.send_error_json(422, "not signed: this player takes only a release's web app pack (signed); "
+                                          "the web app in flash is unchanged")
+                return
+            if zlib.crc32(data[64:]) != int.from_bytes(data[12:16], "little"):
+                self.send_error_json(422, "CRC mismatch; the web app in flash is unchanged")
+                return
+            try:
+                www_signature_check(data, ctx.ota_pub)
+            except ValueError as e:
+                self.send_error_json(422, f"{e}; the web app in flash is unchanged")
+                return
             # The update, simulated: what is served stays the same, the
             # version reported becomes the pack header's (bytes 20..20+len).
             ctx.www_pushed = data[20:20 + vlen].decode("utf-8", "replace") or None
-            ctx.www_staged = ctx.sd_state == "ok"
+            ctx.www_staged = True
             self.send_json(200, {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged})
 
         def h_firmware_get(self, path):

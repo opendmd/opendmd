@@ -249,7 +249,8 @@ fi
 
 [ -f "$FW_SIGN_KEY" ] || die "no signing key at $FW_SIGN_KEY"
 [ "$(stat -c %s "$FW_SIGN_KEY")" -eq 32 ] || die "$FW_SIGN_KEY is not a 32-byte key"
-pass "signing key present (32 bytes; its contents are never read here)"
+[ $(( 8#$(stat -c %a "$FW_SIGN_KEY") & 8#077 )) -eq 0 ] || die "$FW_SIGN_KEY is readable by others (mode $(stat -c %a "$FW_SIGN_KEY")): chmod 600 it"
+pass "signing key present (32 bytes, mode $(stat -c %a "$FW_SIGN_KEY"); its contents are never read here)"
 
 # ---- 2. bump --------------------------------------------------------------
 
@@ -341,7 +342,9 @@ else
   pack="$DIST/opendmd-$VERSION-www.pack"
   wv="$(uv run --quiet python -I -c 'import sys; b = open(sys.argv[1], "rb").read(64); assert b[:4] == b"ODWP"; print(b[20:20 + b[18]].decode())' "$pack")"
   [ "$wv" = "v$VERSION" ] || die "the www pack's version is '$wv', want 'v$VERSION' (a dirty tree or another tag?)"
-  pass "www pack: '$wv'"
+  uv run --quiet tools/fw-sign.py verify-www "$pack" --pub firmware/keys/opendmd.pub >/dev/null ||
+    die "opendmd-$VERSION-www.pack is not signed with the committed firmware/keys/opendmd.pub's key"
+  pass "www pack: '$wv', signed (verifies against firmware/keys/opendmd.pub)"
 
   step "4. Collect this version's assets"
   rm -rf "$ASSETS"; mkdir -p "$ASSETS"

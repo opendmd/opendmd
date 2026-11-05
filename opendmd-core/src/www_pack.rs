@@ -17,7 +17,8 @@
 //!     12     4  CRC-32 (IEEE, as zlib) of bytes [header length, total length)
 //!     16     2  entry count
 //!     18     1  version string length (<= 44)
-//!     19     1  reserved (0)
+//!     19     1  flags: bit 0 = signed (the last 72 bytes are the
+//!               signature trailer, `ota::www`); 0 before 1.0.0-beta.15
 //!     20    44  version string, UTF-8, zero-padded (`git describe` of the app)
 //!     64        entries: count x 16 B, sorted by path (bytewise, strictly)
 //!               path strings, back to back, UTF-8, no terminators
@@ -44,6 +45,15 @@ pub const ENTRY_LEN: usize = 16;
 pub const VERSION_MAX: usize = 44;
 /// Entry flag: the data is gzip, to be sent with `Content-Encoding: gzip`.
 pub const FLAG_GZIP: u16 = 1;
+/// Header flag (byte 19): the pack ends with a signature trailer of
+/// [`SIG_TRAILER_LEN`] bytes, inside its total length and its CRC
+/// (`opendmd_core::ota::www`, `tools/fw-sign.py sign-www`). Firmware from
+/// before 1.0.0-beta.15 reads byte 19 as reserved and never looks at it, nor
+/// at bytes past the last file: it takes a signed pack as it took any.
+pub const FLAG_SIGNED: u8 = 1;
+/// The signature trailer's length: "ODWS", the key id, 3 zero bytes, the
+/// Ed25519 signature.
+pub const SIG_TRAILER_LEN: usize = 72;
 
 /// Why bytes are not a pack, or not a good one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +122,8 @@ pub struct Header {
     pub total_len: u32,
     pub crc32: u32,
     pub count: u16,
+    /// Byte 19: [`FLAG_SIGNED`] or 0.
+    pub flags: u8,
     version: [u8; VERSION_MAX],
     version_len: u8,
 }
@@ -140,6 +152,7 @@ impl Header {
         let crc32 = u32_at(bytes, 12);
         let count = u16_at(bytes, 16);
         let version_len = bytes[18];
+        let flags = bytes[19];
         if version_len as usize > VERSION_MAX {
             return Err(PackError::BadHeader("version string too long"));
         }
@@ -154,13 +167,24 @@ impl Header {
         if std::str::from_utf8(&version[..version_len as usize]).is_err() {
             return Err(PackError::BadHeader("version string is not UTF-8"));
         }
+        if flags & FLAG_SIGNED != 0 && (total_len as usize) < min + SIG_TRAILER_LEN {
+            return Err(PackError::BadHeader(
+                "a signed pack shorter than its entry table and signature",
+            ));
+        }
         Ok(Header {
             total_len,
             crc32,
             count,
+            flags,
             version,
             version_len,
         })
+    }
+
+    /// The pack carries a signature trailer ([`FLAG_SIGNED`]).
+    pub fn signed(&self) -> bool {
+        self.flags & FLAG_SIGNED != 0
     }
 
     /// The web app's version string (`git describe`).

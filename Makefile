@@ -107,7 +107,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate release
 
@@ -829,11 +829,14 @@ fw-release-variant:
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
 	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
-	@size=$$(stat -c %s $(WWW_PACK)); \
-	 echo "$(WWW_PACK): $$size B of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
+	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
+	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
 	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
 	$(MAKE) --no-print-directory fw-sign
-	cp $(WWW_PACK) $(FW_WWW_IMAGE)
+	@# The www pack, signed with the same key (docs/www-pack.md "Signature"):
+	@# from 1.0.0-beta.15 on a player takes only a signed one over PUT /api/www.
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py verify-www $(FW_WWW_IMAGE) --pub $(FW_SIGN_PUB)
 	cp $(FW_RELEASE_BOOTLOADER) $(FW_DIST_BOOTLOADER)
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
@@ -922,11 +925,19 @@ fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
 	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
+# The older firmware takes what is signed now: an older release's own
+# opendmd-core (OTA_COMPAT_TAG, a detached worktree under target/) checks a
+# bundle and a www pack signed now (tools/ota-compat.sh; throwaway-key ones,
+# or OTA_COMPAT_FILES="<bundle> <pub> <www>"). OTA_COMPAT_OK.
+OTA_COMPAT_TAG ?= v1.0.0-beta.14
+ota-compat:
+	tools/ota-compat.sh $(OTA_COMPAT_TAG) $(OTA_COMPAT_FILES)
+
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
 www-push:
 	@test -n "$(HOST)" || { echo "usage: make www-push HOST=<ip-or-name> [WWW_PACK=$(WWW_PACK)]"; exit 2; }
-	tools/www-push.sh $(HOST) $(WWW_PACK)
+	FW_SIGN_KEY=$(FW_SIGN_KEY) tools/www-push.sh $(HOST) $(WWW_PACK)
 
 # The updater (ota/updater, docs/ota.md): a small C ESP-IDF app for the
 # ota_0 partition that copies a staged firmware image from the card into
@@ -982,6 +993,7 @@ flasher:
 	@for v in $(FW_VARIANTS); do test -f $(DIST)/manifest-$$v.json || { echo "no $(DIST)/manifest-$$v.json: run make fw-release first"; exit 2; }; done
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
 	cp flasher/index.html $(FLASHER_SITE)/
+	cp -r flasher/esp-web-tools $(FLASHER_SITE)/ && cp licenses/THIRD-PARTY-LICENSES-installer.txt $(FLASHER_SITE)/esp-web-tools/
 	cp $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FW_WWW_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
 	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
 	  $(DIST)/opendmd-$(FW_VERSION)-$$v-app.bin $(DIST)/opendmd-$(FW_VERSION)-$$v-full.bin $(FLASHER_SITE)/firmware/ || exit 1; done
@@ -1073,10 +1085,14 @@ emu-api-psb:
 	@mkdir -p $(EMU_DIR)/api
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
 	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
+# The pack it pushes is this build's, signed (PUT /api/www takes no other).
+EMU_API_WWW = $(EMU_DIR)/api/www.pack
 emu-api: emu-build emu-card emu-api-psb
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
-	  --www-pack $(WWW_PACK) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
+	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
 # The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (the spare, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin

@@ -29,7 +29,12 @@ updater leaves after an update (a mismatch is a warning in the log).
 `make fw-ota` waits for exactly that string.
 
 **Older bundles.** A validly signed bundle is installed whatever its
-version: going back is a feature (a release that misbehaves). The web
+version: going back is a feature (a release that misbehaves). A firmware
+can be built with a **rollback floor** instead, off by default:
+`make fw-release FW_OTA_FLOOR=1.0.0` (`OPENDMD_OTA_FLOOR`, read at compile
+time) refuses any bundle older than that version with a 422 at its header
+("firmware X is older than 1.0.0, the oldest this player installs";
+`opendmd_core::ota::check_floor`, the same order as `older()`). The web
 app's Firmware card reads the chosen file's header and, when its version
 is older than the running one (semver-ish: dot-separated numbers, a
 pre-release before its release; `older()` in `js/firmware.js`), asks
@@ -181,9 +186,51 @@ sig       64 B, Ed25519 over (magic|version|length|sha256)
 
 Header 140 B, then the image. The public key is compiled into the firmware
 (`firmware/keys/opendmd.pub`, 32 B, committed); the private key never enters
-the repo (`~/.config/opendmd/opendmd.key`, created by `tools/fw-sign.py
-keygen`). `make fw-release` signs; a bundle that fails to verify is refused
-by the device with a 422 and nothing on the card changes.
+the repo (`~/.config/opendmd/opendmd.key`, mode 0600, created by
+`tools/fw-sign.py keygen`; the tool refuses a key file others can read).
+`make fw-release` signs; a bundle that fails to verify is refused by the
+device with a 422 and nothing on the card changes.
+
+**The key trailer** (1.0.0-beta.15 on). `fw-sign.py sign` appends 16
+bytes to the app image before it hashes and signs it:
+
+```
+magic     "ODFWKEY1"                                  8 B
+key id    u8: 0 is the first release key (opendmd.pub)
+reserved  7 zero bytes
+```
+
+They are part of the image as the header counts it (`length`, `sha256`),
+so a firmware from before (beta.14 and earlier) verifies such a bundle
+exactly as it did any: to it they are image bytes. The updater writes
+them into the factory partition after the app image, where
+`esp_image_verify` (which sizes the image from its own segment headers)
+never reads. A firmware that knows the trailer checks the id against the
+key that verified the header (`opendmd_core::ota::check_key_id`); a bundle
+without one, from an earlier release, counts as key 0. The proof that old
+firmware takes the new format: `opendmd_core::ota`'s test
+`a_keyed_bundle_passes_the_beta14_checks` (the verification functions are
+unchanged since beta.14) and `make ota-compat`, which runs the beta.14
+tag's own `opendmd-core` against a bundle and a www pack signed now.
+
+## Keys
+
+The firmware trusts the keys in `ota::KEYS` (id, public key); today only
+key 0. **Rotating** later: make a new key, add it as id 1 to `KEYS` in a
+release signed with key 0 (every player takes it), then sign later
+releases with key 1 (`KEY_ID` in `tools/fw-sign.py`); retire key 0 from
+`KEYS` once no player needs it. A leak of key 0 before that means a USB
+reinstall for every player that never got the release with key 1.
+
+**Local-only signing.** Releases are signed on the owner's machine
+(`make release`, `tools/release.sh`): the private key exists only there,
+in `~/.config/opendmd/opendmd.key`, read by `tools/fw-sign.py` (pinned
+`pynacl==1.5.0`) and never copied into a build directory, a CI runner or
+the repo. CI builds and tests with a throwaway key (`FW_SIGN_KEY`,
+`FW_SIGN_PUB`); its release workflow is not the way releases are made.
+
+The web app pack is signed with the same key and key ids
+(`docs/www-pack.md` "Signature").
 
 ## The flow
 
@@ -241,10 +288,14 @@ browser doing the fetching: the player itself never goes to the internet.
   for the web apps from before there were two. The page is plain HTTP
   from the player and fetches this over HTTPS; the site sends
   `Access-Control-Allow-Origin: *`, and the request carries no credentials
-  or custom headers, so there is no preflight. The player sends no
-  Content-Security-Policy, so nothing stops the page connecting there.
-  For testing, `?updates=<url>` in the page's address, or localStorage
-  `odmd.updates` (a JSON string), names another `release.json`.
+  or custom headers, so there is no preflight. The player's
+  Content-Security-Policy allows `connect-src *`. For testing, and in a
+  **development build of the web app only** (its version, as `GET /api/www`
+  reports it, is a `git describe` past a tag or `-dirty`), `?updates=<url>`
+  in the page's address, or localStorage `odmd.updates` (a JSON string),
+  names another `release.json`, and the "is out" line names that feed's
+  host. A release's web app reads opendmd.dev's alone: no link can point
+  its updates elsewhere.
 - **What counts as newer.** The firmware: the release's `version` against
   `GET /api/firmware`'s, with `older()` (1.0.0 is newer than 0.3.13). The web
   app: `www_version` against `GET /api/www`'s `version`, `git describe`
@@ -258,7 +309,8 @@ browser doing the fetching: the player itself never goes to the internet.
 - **Update.** Everything needed is downloaded into memory first, with
   progress, and checked: the firmware's header must carry the release's
   version and the player's layout, the pack must start `ODWP` with its header's length equal to
-  the download, its version `www_version`, and at most 1,310,720 B. A
+  the download, its version `www_version`, and at most 1,310,720 B (the
+  player then checks its signature). A
   failure there installs nothing. Then the firmware, if it is newer:
   `PUT /api/firmware` and the wait for the restart, exactly as "Update from
   file…" does (`/api/status` polled every 2 s until it reports the new
@@ -284,14 +336,17 @@ browser doing the fetching: the player itself never goes to the internet.
 
 ## Related protections
 
-- `PUT /api/www` keeps serving the old pack until the new one has verified
-  on the card (staged, then read back whole, size and CRC, every card
-  read retried): only then is the partition erased and written from the
-  card, header last (`docs/www-pack.md`). If the copy still fails after
+- `PUT /api/www` takes only a pack signed with the release key, and keeps
+  serving the old pack until the new one has verified on the card (staged,
+  then read back whole, size, CRC and signature, every card read retried):
+  only then is the partition erased and written from the card, header
+  last (`docs/www-pack.md`). Without a usable card it is refused. If the copy still fails after
   the erase, the checked pack stays on the card and the next boot writes
   it.
-- Mutating `/api` requests reject a foreign `Origin` header and require
-  `Content-Type: application/json` where a JSON body is expected.
+- Every request must name the panel in its `Host` (421 otherwise: DNS
+  rebinding); mutating `/api` requests reject a foreign `Origin` header
+  and require `Content-Type: application/json` where a JSON body is
+  expected (`docs/api.md` "Security").
 - Optional API key (`api_key` setting; `Authorization: Bearer`).
 
 ## Testing

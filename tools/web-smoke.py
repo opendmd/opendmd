@@ -264,7 +264,7 @@ Unreadable-card pass: a second mock with `--sd unreadable` (a card that
 mounts but cannot be read, exFAT): status `sd` {mounted: true, readable:
 false, error naming FAT32}, the Now page's Card line "Not readable: needs
 FAT32" in red and its "Format card…" line, and PUT /api/www replying
-staged false. Then the format: POST /api/card/format without `confirm` is
+503 (a pack is staged on the card or not at all). Then the format: POST /api/card/format without `confirm` is
 a 400; the dialog (warning, red button) cancelled changes nothing; Format
 card shows progress with `sd.formatting` true (a second POST: 409), ends
 "Done" with the card readable, and a format of the now readable card is a
@@ -342,6 +342,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -726,13 +727,20 @@ def retried(url: str) -> bool:
     return any(p in url for p in ("/gifs/", "/api/files", "/api/cache/list", "/api/cache/failed"))
 
 
-def new_page(browser, size: str, errors: list[str]) -> Page:
+def new_page(browser, size: str, errors: list[str], banner: bool = False) -> Page:
     w, h = SIZES[size]
     phone = size == "phone"
+    # bypass_csp: Playwright's wait_for_function evaluates strings, which the
+    # panel's CSP refuses (as it should); csp_checks loads the app without it.
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3 if phone else 1,
-                              is_mobile=phone, has_touch=phone)
+                              is_mobile=phone, has_touch=phone, bypass_csp=True)
     site_art_index(ctx)
     page = ctx.new_page()
+    # The no-key banner (js/keynag.js) is "Not now" for this visit, as a
+    # person would leave it: the layout checks measure the views without it.
+    # key_checks looks at it on a page of its own (banner=True).
+    if not banner:
+        page.add_init_script("try { sessionStorage.setItem('odmd.keynag', 'later'); } catch (e) {}")
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
             and not ("status of 503" in m.text and retried(m.location.get("url", "")))
@@ -2693,13 +2701,45 @@ def fake_app(path: Path, variant: str) -> None:
     path.write_bytes(bytes(b))
 
 
+_WWW_KEY: list[Path] = []
+
+
+def www_key() -> tuple[Path, Path]:
+    """One throwaway key pair for the run (tools/fw-sign.py keygen): the
+    bundles and the www packs the mocks are given are signed with it, and
+    every mock that takes either is started with `--ota-pub` its public half."""
+    if not _WWW_KEY:
+        d = Path(tempfile.mkdtemp(prefix="web-smoke-key-"))
+        subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py"), "keygen", "--key", str(d / "k"),
+                        "--pub", str(d / "p")], check=True, stdout=subprocess.DEVNULL)
+        _WWW_KEY.extend([d / "k", d / "p"])
+    return _WWW_KEY[0], _WWW_KEY[1]
+
+
+def signed_www(pack: bytes) -> bytes:
+    """`pack` signed with the run's key (tools/fw-sign.py sign-www), as a
+    release's is: the mock, like the firmware, takes only a signed pack."""
+    key, _ = www_key()
+    d = Path(tempfile.mkdtemp(prefix="web-smoke-www-"))
+    try:
+        (d / "in.pack").write_bytes(pack)
+        subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py"), "sign-www", str(d / "in.pack"),
+                        "--out", str(d / "out.pack"), "--key", str(key)], check=True, stdout=subprocess.DEVNULL)
+        return (d / "out.pack").read_bytes()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def ota_bundles(tmp: Path) -> dict[str, Path]:
     """A throwaway key pair, a fake app image signed as OTA_VERSION, a copy
     of the bundle with one image byte flipped (tools/fw-sign.py), a file
     that is not a bundle at all, and bundles for the other flash layout
     (8mb: the mock is a 4mb player)."""
     sign = ["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py")]
-    subprocess.run([*sign, "keygen", "--key", str(tmp / "k"), "--pub", str(tmp / "p")], check=True, stdout=subprocess.DEVNULL)
+    key, pub = www_key()
+    shutil.copy(key, tmp / "k")
+    os.chmod(tmp / "k", 0o600)
+    shutil.copy(pub, tmp / "p")
     fake_app(tmp / "app.bin", "4mb")
     fake_app(tmp / "app8.bin", "8mb")
     good = tmp / "opendmd-9.9.9-smoke.odfw"
@@ -2891,12 +2931,12 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
     shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
-    built = (REPO / "opendmd-web" / "www.pack").read_bytes()
+    built = signed_www((REPO / "opendmd-web" / "www.pack").read_bytes())
     pack = bytearray(built)
     wv = f"v{UPD_VERSION}".encode()
     pack[18] = len(wv)
     pack[20:64] = wv.ljust(44, b"\0")
-    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(bytes(pack))
+    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(signed_www(bytes(pack)))
     fw0 = get_json(base + "/api/firmware")["version"]
     w0 = get_json(base + "/api/www")["version"]
 
@@ -2951,7 +2991,8 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               f"update: firmware ahead of the release -> '{t}' (no web app offered either)")
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
-        check(t.startswith(f"Firmware {UPD_VERSION} is out (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
+        frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named
+        check(t.startswith(f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
         page.click("#fw-upd")
         page.wait_for_function("() => /404/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=20000)
@@ -2980,7 +3021,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               f"update: a refused firmware stops there, the web app untouched -> '{t}'")
         # The real thing: both, then the reload.
         t = check_now(release("release.json"))
-        want = f"Firmware {UPD_VERSION} is out (this player has {fw0}). Web app {UPD_VERSION} is out"
+        want = f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}). Web app {UPD_VERSION} is out"
         check(t.startswith(want) and "The panel goes dark" in t and upd() == 1, f"update: both offered -> '{t}'")
         page.locator("#st-fw").screenshot(path=str(OUT / "settings-update-laptop.png"))
         page.evaluate("""() => { sessionStorage.setItem('upd', '[]');
@@ -2999,10 +3040,24 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         fw, w = get_json(base + "/api/firmware"), get_json(base + "/api/www")
         check(fw["version"] == UPD_VERSION and w["version"] == f"v{UPD_VERSION}" and w["ok"],
               f"update: the mock runs firmware {fw['version']}, web app {w['version']}, and the page reloaded")
+        # Now a release build: `odmd.updates` (still set) and `?updates=` are
+        # ignored, the feed is opendmd.dev's (a stand-in here).
+        rel_asked: list[str] = []
+
+        def official(route):
+            rel_asked.append(route.request.url)
+            route.fulfill(status=200, body=(inst / "release.json").read_text(),
+                          headers={"content-type": "application/json", "access-control-allow-origin": "*"})
+        page.context.route("https://opendmd.dev/install/release.json", official)
+        page.goto(base + "/?updates=" + urllib.parse.quote(f"{site}/install/old.json") + "#settings/device")
         goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
+        n_before = len(asked)
         t = check_now()
-        check(t == f"Up to date ({UPD_VERSION})" and not upd(), f"update: after the update -> '{t}'")
+        check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == ["https://opendmd.dev/install/release.json"]
+              and not any(a.endswith(("/old.json", "/release.json")) for a in asked[n_before:]),
+              f"update: after the update (a release build) only opendmd.dev's feed is read, ?updates= and odmd.updates ignored -> '{t}'")
+        page.context.unroute("https://opendmd.dev/install/release.json")
     finally:
         for e in (site, "/api/firmware", "/api/status"):
             expected.remove(e)
@@ -3046,7 +3101,7 @@ def origin_checks(browser, base: str) -> None:
     before = get_json(base + "/api/status")["now_playing"]
     victim = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
                   if not f["dir"] and f["name"].endswith(".gif") and f"/gifs/Consoles/{f['name']}" != before["path"])
-    ctx = browser.new_context()
+    ctx = browser.new_context(bypass_csp=True)
     page = ctx.new_page()
     seen: dict[str, int] = {}
     page.on("response", lambda r: r.url.startswith(base + "/api/") and seen.__setitem__(r.url[len(base):], r.status))
@@ -3094,6 +3149,99 @@ def origin_checks(browser, base: str) -> None:
     check(codes == (200, 200, 200, 403, 403), f"origin: its own (any case, :80 dropped) allowed, others not {codes}")
 
 
+def rebinding_and_header_checks(base: str, overlay: Path) -> None:
+    """docs/api.md "Security": a Host that is not the panel's is a 421 for
+    every route (DNS rebinding: the page's own name, which its Origin
+    matches); the web app's files carry the CSP and nosniff; a card
+    file is never a page (its image type, or a download in a sandbox)."""
+    port = base.rsplit(":", 1)[1]
+    for u, m in (("/", "GET"), ("/api/status", "GET"), ("/api/config", "GET"), ("/gifs/x.gif", "GET"), ("/api/skip", "POST")):
+        code, _ = status_of(urllib.request.Request(base + u, method=m, data=b"" if m == "POST" else None,
+                                                   headers={"Host": f"evil.example:{port}", "Origin": f"http://evil.example:{port}"}))
+        check(code == 421, f"rebinding: {m} {u} with Host evil.example -> {code}")
+    codes = [status_of(urllib.request.Request(base + "/api/status", headers={"Host": h}))[0]
+             for h in (f"127.0.0.1:{port}", f"localhost:{port}", "opendmd.local", "OpenDMD.local:80", "opendmd-mock.local")]
+    check(codes == [200] * 5, f"rebinding: the panel's own names -> 200 {codes}")
+    code, hd = status_of(urllib.request.Request(base + "/index.html"))
+    csp = hd.get("Content-Security-Policy") or ""
+    check(code == 200 and "frame-ancestors 'none'" in csp and "script-src 'self' 'wasm-unsafe-eval'" in csp
+          and hd.get("X-Content-Type-Options") == "nosniff",
+          f"headers: the web app's CSP (frame-ancestors 'none') and nosniff ({csp[:60]}…)")
+    code, hd = status_of(urllib.request.Request(base + "/setup"))
+    check(code == 200 and "frame-ancestors 'none'" in (hd.get("Content-Security-Policy") or ""), "headers: /setup's CSP")
+    gif = card_gifs()[0]
+    code, hd = status_of(urllib.request.Request(base + urllib.parse.quote(gif)))
+    check(code == 200 and hd.get("Content-Type") == "image/gif" and hd.get("X-Content-Type-Options") == "nosniff"
+          and hd.get("Content-Security-Policy", "").startswith("sandbox") and "Content-Disposition" not in hd,
+          f"headers: a GIF is image/gif, nosniff, sandboxed ({hd.get('Content-Type')})")
+    for name in ("evil.html", "evil.svg", "evil.js"):
+        body = b"<script>alert(1)</script>" if not name.endswith(".svg") else b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>"
+        req = urllib.request.Request(base + "/api/files/gifs/" + name, data=body, method="PUT",
+                                     headers={"Content-Type": "application/octet-stream"})
+        urllib.request.urlopen(req, timeout=30).read()
+        code, hd = status_of(urllib.request.Request(base + "/gifs/" + name))
+        check(code == 200 and hd.get("Content-Type") == "application/octet-stream" and hd.get("Content-Disposition") == "attachment"
+              and hd.get("Content-Security-Policy", "").startswith("sandbox") and hd.get("X-Content-Type-Options") == "nosniff",
+              f"headers: /gifs/{name} on the card is a sandboxed download, never a page ({hd.get('Content-Type')})")
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/gifs/" + name, method="DELETE"), timeout=30).read()
+    code, hd = status_of(urllib.request.Request(base + "/filelist.txt"))
+    check(code == 200 and hd.get("Content-Type") == "application/octet-stream" and hd.get("Content-Disposition") == "attachment",
+          f"headers: /filelist.txt is a download ({hd.get('Content-Type')})")
+
+
+def csp_checks(browser, base: str) -> None:
+    """The panel's CSP as the browser enforces it (every other page here
+    bypasses it, for Playwright's string-evaluated waits): each view, the
+    Formulas editor's wasm, Create Art's module and the setup page load
+    with no violation. Polled with evaluate, never wait_for_function."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    seen: list[str] = []
+    page.on("console", lambda m: m.type == "error" and "Content Security Policy" in m.text and seen.append(m.text[:160]))
+
+    def until(js: str, ms: int = 20000) -> bool:
+        for _ in range(ms // 100):
+            if page.evaluate(js):
+                return True
+            page.wait_for_timeout(100)
+        return False
+    try:
+        page.goto(base + "/")
+        ok = until("!!document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')")
+        missed = [] if ok else ["now"]
+        for v, sel in (("library", "#view-library > *"), ("sets", "#view-sets > *"),
+                       ("formulas", "#psi-ex .psi-tile"), ("create", "#studio"), ("settings", "#st-tabs")):
+            page.evaluate(f"location.hash = '#{v}'")
+            if not until(f"!!document.querySelector({json.dumps(sel)})"):
+                missed.append(v)
+        page.goto(base + "/setup")
+        if not until("!!document.querySelector('#savewifi')"):
+            missed.append("setup")
+        page.wait_for_timeout(500)
+        seen += page.evaluate("window.__csp || []")
+        check(not missed and not seen, f"csp: the app's views and /setup load under the panel's CSP "
+              f"{'clean' if not seen else seen[:3]}{f' (did not load: {missed})' if missed else ''}")
+    finally:
+        ctx.close()
+
+
+def follow_code_checks(base: str) -> None:
+    """The RePlayOS code goes only to the saved address (docs/api.md): a
+    test of another host needs its own code; a new follow_host forgets it."""
+    check(put_status(base, {"follow_host": "127.0.0.1:9", "follow_code": "secret-code"}) == 200
+          and get_json(base + "/api/config")["follow_code_set"] is True, "follow: a host and a code saved")
+    code, reply = post_code(base + "/api/follow/test", {"host": "evil.test:55356"})
+    check(code == 400 and "NET CONTROL code" in (reply or {}).get("error", ""),
+          f"follow: a test of another host without a code -> {code} ({reply})")
+    code, _ = post_code(base + "/api/follow/test", {"host": "127.0.0.1:9"})
+    check(code == 200, f"follow: the saved host without a code -> {code}")
+    check(put_status(base, {"follow_host": "evil.test:55356"}) == 200 and get_json(base + "/api/config")["follow_code_set"] is False,
+          "follow: a new follow_host without a code forgets the saved one")
+    check(put_status(base, {"follow_host": "", "follow_code": ""}) == 200, "follow: cleared again")
+
+
 def key_checks(browser, page: Page, base: str) -> None:
     """The optional API key: Settings -> Advanced -> Security, the 401s, the
     key dialog in a fresh browser, and off again. Last: nothing after it may
@@ -3102,6 +3250,30 @@ def key_checks(browser, page: Page, base: str) -> None:
           "key: a bad api_key is a 400")
     cfg = get_json(base + "/api/config")
     check(cfg.get("api_key_set") is False and "api_key" not in cfg, "key: config has api_key_set false, never the key")
+    # No key: one banner, plain words, offering to set one (js/keynag.js);
+    # Not now hides it for this visit only.
+    nag_errors: list[str] = []
+    nag = new_page(browser, "laptop", nag_errors, banner=True)
+    nag.goto(base + "/")
+    nag.wait_for_selector("#keynag", timeout=20000)
+    page_was, page = page, nag
+    t = page.inner_text("#keynag")
+    check("Anyone on your WiFi" in t and "Set a key" in t and not re.search(r"cache|copy|bucket", t, re.I),
+          f"key: the no-key banner says so plainly ({t!r})")
+    page.click("#keynag-later")
+    page.reload()
+    page.wait_for_selector("#nav", timeout=20000)
+    page.wait_for_timeout(1500)
+    check(page.locator("#keynag").count() == 0, "key: Not now hides the banner for this visit")
+    page.evaluate("sessionStorage.removeItem('odmd.keynag')")
+    page.reload()
+    page.wait_for_selector("#keynag", timeout=20000)
+    page.click("#keynag-set")
+    page.wait_for_selector("#sec-key", timeout=20000)
+    check(page.evaluate("location.hash") == "#settings/device" and page.locator("#keynag").count() == 0,
+          "key: Set a key opens Settings › Device, where the switch is")
+    page.context.close()
+    page = page_was
     goto_view(page, "settings/device")
     page.wait_for_selector("#sec-key", timeout=20000)
     check(not page.is_checked("#sec-key") and "plain HTTP" in page.inner_text("#st-sec"), "key: Security card, switch off")
@@ -3120,8 +3292,8 @@ def key_checks(browser, page: Page, base: str) -> None:
         gif = card_gifs()[0]
         gif_url = base + urllib.parse.quote(gif)
         codes = [status_of(urllib.request.Request(u))[0] for u in (gif_url, base + "/filelist.txt", base + "/sets/x.txt",
-                                                                  base + "/cache/x.gif")]
-        check(codes == [401] * 4, f"key: card files without it -> {codes}")
+                                                                  base + "/cache/x.gif", base + "/formulas/x.psi")]
+        check(codes == [401] * 5, f"key: card files (Formulas too) without it -> {codes}")
         k = {"Authorization": "Bearer " + key}
         codes = [status_of(urllib.request.Request(base + "/api/config", headers=k))[0],
                  status_of(urllib.request.Request(base + "/api/status?key=" + key))[0],
@@ -3141,7 +3313,7 @@ def key_checks(browser, page: Page, base: str) -> None:
               "key: after a reload the switch is on, the key not shown, no dialog")
         # Another browser: the dialog; a wrong key asks again; the right one works.
         fresh: list[str] = []
-        other = new_page(browser, "laptop", fresh)
+        other = new_page(browser, "laptop", fresh, banner=True)
         other.goto(base + "/")
         other.wait_for_selector("#key-dlg[open]", timeout=20000)
         check("This player needs its API key" in other.inner_text("#key-dlg"), "key: a fresh browser gets the key dialog")
@@ -3157,6 +3329,7 @@ def key_checks(browser, page: Page, base: str) -> None:
         wait_lit(other, "#now-panel", "key: now")
         check(other.locator("#key-dlg").count() == 0 and json.loads(other.evaluate("localStorage.getItem('odmd.apiKey')")) == key,
               "key: the right key loads Now (preview lit) and is kept")
+        check(other.locator("#keynag").count() == 0, "key: with a key set, no banner")
         other.context.close()
         bad = [e for e in fresh if "HTTP 401" not in e and "401 (Unauthorized)" not in e]
         check(not bad, f"key: the fresh browser's only errors are its 401s {bad[:3]}")
@@ -3773,6 +3946,9 @@ def mock_pass(browser) -> None:
         formulas_demo_pass(browser, base, errors)
         json_type_checks(base)
         origin_checks(browser, base)
+        rebinding_and_header_checks(base, overlay)
+        csp_checks(browser, base)
+        follow_code_checks(base)
         firmware_checks(page, base, ota)
         update_checks(page, base, ota)
         key_checks(browser, page, base)
@@ -4376,11 +4552,13 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     (`#gallery=<slug>`: a bundled one is built in, another fetched from
     opendmd.dev/formulas/src/, here a stand-in) or, edited, by postMessage
     from the page that opened it (`#remix`, from opendmd.dev or the app's
-    own origin only), never in the link. It is saved on the panel as it
-    arrives (under Your formulas, kept over a reload; the same text not
-    twice; a bundled one needs nothing; one that doesn't work isn't saved,
-    and comes back as not saved yet) and opens in the editor; a name it
-    doesn't have, no opener, or an opener elsewhere: said plainly."""
+    own origin only), never in the link. A gallery one opens as a draft,
+    saved by Save only (a link writes nothing to the card); a sent one is
+    saved on the panel as it arrives (under Your formulas, kept over a
+    reload; the same text not twice; a bundled one needs nothing; one that
+    doesn't work isn't saved, and comes back as not saved yet) and opens in
+    the editor; a name it doesn't have, no opener, or an opener elsewhere:
+    said plainly."""
     raw = (REPO / "opendmd-web/formulas/searchlight.psi").read_text()
     src = raw.split("\n", 2)[2]
     f = overlay / "formulas" / "searchlight.psi"
@@ -4404,12 +4582,17 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
     check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"],
           f"remix: a gallery Formula is fetched by name and opens in the editor ({got[1:]}, {asked})")
-    # Saved on the panel as it arrives (no Save pressed), and said.
+    # Not saved by the link (anyone can craft one): a draft, until Save.
     t = toast_or_none(page, "ok")
     page.wait_for_timeout(300)
-    check(f.exists() and f.read_text() == src and "Your formulas" in t,
-          f"remix: a gallery Formula is saved on the panel as it arrives (/formulas/searchlight.psi, '{t}')")
+    check(not f.exists() and "Save keeps it" in t,
+          f"remix: a gallery Formula opens as a draft, nothing written to the card ('{t}')")
     shot(page, "formulas-remix", "laptop")
+    page.click("#psi-save")
+    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    page.wait_for_timeout(300)
+    check(f.exists() and f.read_text() == src,
+          "remix: Save keeps the gallery Formula on the panel (/formulas/searchlight.psi)")
     # Still there after a reload, under Your formulas, with the slider as sent.
     page.goto(base + "/#formulas")
     page.reload()
@@ -5133,7 +5316,8 @@ def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
     """At 360 px: no sideways scroll in the gallery, the Details sheet
     (Escape closes it) or the editor; a tap on a number brings the strip,
     whose + changes it."""
-    ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True)
+    ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True,
+                              bypass_csp=True)
     page = ctx.new_page()
     page.on("pageerror", lambda e: errors.append(f"[360] pageerror: {e}"))
     page.goto(base + "/#formulas")
@@ -7180,7 +7364,16 @@ def www_mock_checks(page: Page, base: str, version: str) -> None:
     st = get_json(base + "/api/status")
     check(st.get("www") == w and st.get("www_version") == version, "web app: /api/status carries www and www_version")
     pack = REPO / "opendmd-web" / "www.pack"
-    for body, want in ((pack.read_bytes(), 200), (b"not a pack at all", 400)):
+    unsigned = pack.read_bytes()
+    good = signed_www(unsigned)
+    forged = bytearray(good)
+    forged[100] ^= 1  # a changed byte, its CRC made to match: only the signature tells
+    forged[12:16] = zlib.crc32(bytes(forged[64:])).to_bytes(4, "little")
+    for body, want in ((unsigned, 422), (bytes(forged), 422)):
+        code, reply = put_www(base, body)
+        check(code == want and get_json(base + "/api/www")["staged"] is None,
+              f"web app: PUT /api/www of an {'unsigned' if body is unsigned else 'altered'} pack -> {code} (refused, nothing staged)")
+    for body, want in ((good, 200), (b"not a pack at all", 400)):
         code, reply = put_www(base, body)
         check(code == want, f"web app: PUT /api/www ({len(body):,} B) -> {code}")
         if want == 200:
@@ -7210,7 +7403,7 @@ def sd_unreadable_pass(browser) -> None:
     read (exFAT). Status says so, the Now page names it, nothing is staged;
     then Now's "Format card…" dialog formats it and the card reads, and a
     second format is refused (409: only an unreadable card is formatted)."""
-    proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable"])
+    proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable", "--ota-pub", str(www_key()[1])])
     errors: list[str] = []
     try:
         print(f"\n== mock device with an unreadable card at {base}")
@@ -7230,9 +7423,9 @@ def sd_unreadable_pass(browser) -> None:
         check(card == ["Not readable: needs FAT32", True], f"unreadable card: Settings › Device's Card line says so, in red ({card})")
         goto_view(page, "now")
         shot(page, "now-sd-unreadable", "laptop")
-        code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
-        check(code == 200 and reply is not None and reply.get("staged") is False,
-              f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")
+        code, reply = put_www(base, signed_www((REPO / "opendmd-web" / "www.pack").read_bytes()))
+        check(code == 503 and get_json(base + "/api/www")["ok"],
+              f"unreadable card: PUT /api/www is a 503 (staged on the card or not at all), the web app as it was ({code})")
         code, reply = post_code(base + "/api/card/format", {})
         check(code == 400, f"card format: no confirm is a 400 ({code} {reply})")
         # The dialog: Cancel changes nothing.
@@ -7683,7 +7876,7 @@ def www_update_pass(browser) -> None:
         # A context of its own, without new_page's route for the art index:
         # Playwright turns the HTTP cache off in a context with routes, and
         # the browser's cache is what this is about.
-        page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
+        page = browser.new_context(viewport={"width": 1280, "height": 800}, bypass_csp=True).new_page()
         page.on("console", lambda m: m.type == "error" and errors.append(f"console: {m.text}"))
         page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
         page.add_init_script(WASM_SPY)
