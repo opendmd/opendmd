@@ -721,7 +721,8 @@ curl -s -X POST $DMD/api/reboot
 ## Security
 
 This keeps out casual use (a guest, a script, another web page in your
-browser), not someone on the same WiFi: it is plain HTTP.
+browser), not someone on the same WiFi: it is plain HTTP. **The key is the
+only lock, and it travels in clear text on your network.**
 
 - **Host.** Every request, `GET` included, must name the panel in its
   `Host` header: `opendmd.local`, `<hostname>.local` (or the name mDNS
@@ -734,7 +735,8 @@ browser), not someone on the same WiFi: it is plain HTTP.
   router hands out (`opendmd.lan`) is refused.
 - A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
   is a `403` (no `Origin`, as from curl, is fine).
-- **API key** (Settings → Device → Security): with `api_key` set (`PUT
+- **API key** (Settings → Device → Security; the web app shows a banner
+  while there is none, and `/setup` offers one): with `api_key` set (`PUT
   /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
   `api_key_set`), the API and the card's files (`/gifs/`, `/cache/`,
   `/sets/`, `/formulas/`, `/filelist*`) need `Authorization: Bearer <key>`

@@ -48,6 +48,8 @@ Device, with js/firmware.js), <= 3 KB (2 KB until Moving pictures, 2,353 B
 gz with it), and
 so does its guided "Test panel timing" (`js/paneltest.js`: the A/B
 questions and the save; imported on the first click), <= 2 KB, and
+so does the first-run banner offering an API key (`js/keynag.js`, imported
+only while the panel has none), <= 1 KB, and
 so does Now's card format dialog (`js/card.js`: "Format
 card…" for a card the panel can't read, the POST and the wait for it;
 imported when first opened), <= 2 KB, and so does Settings' Device tab
@@ -174,6 +176,10 @@ PANEL_GZ_BUDGET = 3 * 1024
 PANEL = {"js/panel.js"}
 PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
+# The first-run nudge to set an API key (js/keynag.js, imported only while
+# the panel has none; the security review's H3, 2026-11-05): <= 1 KB.
+KEYNAG_GZ_BUDGET = 1024
+KEYNAG = {"js/keynag.js"}
 DEVICE_GZ_BUDGET = 7 * 1024 + 512  # +512 2026-10-26: enterprise networks shown as not joinable
 DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
@@ -543,6 +549,8 @@ def main() -> int:
             kind = "panel"
         elif rel in PANEL_TEST:
             kind = "panel test"
+        elif rel in KEYNAG:
+            kind = "keynag"
         elif rel in CARD:
             kind = "card"
         elif rel in DEVICE:
@@ -648,7 +656,7 @@ def main() -> int:
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
-                         ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
+                         ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("keynag", KEYNAG_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
