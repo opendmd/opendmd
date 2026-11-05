@@ -1313,7 +1313,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             }
         }
         if len == 0 || got < len {
-            return req.bad_request("the body is the compiled Formula (Content-Length bytes)");
+            return req.bad_request("the body is the compiled Formula");
         }
         send_play(req, &c, path, live, over, Some(psb))
     })?;

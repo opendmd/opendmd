@@ -792,9 +792,6 @@ impl Query<'_> {
 /// The sentence for `@formula:<name>` when no bundled Formula has that name
 /// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
 pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
-/// The sentence for [`crate::synth::SENT`] once its Formula was let go
-/// (`NotFound` too).
-pub const SENT_GONE: &str = "that Formula is no longer on the panel: show it again";
 
 /// What follows `@formula` on a path: `?psb=…&…` (or the query alone,
 /// `psb=…`), or `:<name>?<opts>` for a bundled Formula (any `psb=` there is
@@ -811,7 +808,7 @@ fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
     };
     if name == crate::synth::SENT_NAME {
         let mut q = query(opts);
-        q.held = Some(crate::synth::sent().ok_or_else(|| err(SENT_GONE))?);
+        q.held = Some(crate::synth::sent().ok_or_else(|| err(NO_SUCH_FORMULA))?);
         return Ok(q);
     }
     let psb = crate::synth::valid_formula_name(name)
@@ -972,7 +969,7 @@ fn canvas_for(
 /// compiler's sentence (the firmware's `/api/play` makes it a 400; an
 /// unknown `@` path is `InvalidData`, a 415).
 pub fn io_error(e: psi::Error) -> std::io::Error {
-    let kind = if e.msg == NO_SUCH_FORMULA || e.msg == SENT_GONE {
+    let kind = if e.msg == NO_SUCH_FORMULA {
         std::io::ErrorKind::NotFound
     } else {
         std::io::ErrorKind::InvalidInput
@@ -1095,10 +1092,11 @@ impl PsiFx {
         } else {
             self.held_tried = 0;
         }
-        // Another program: its kernel (if any) is made at the next frame.
+        // Another program: its kernel (if any) is made once the edits pause
+        // (`Jit::settling`), the VM drawing meanwhile.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         {
-            self.jit = jit::Jit::default();
+            self.jit = jit::Jit::settling(0);
         }
         self.clock = reads_clock(&self.prog);
         self.full = 0;
@@ -1917,10 +1915,10 @@ impl FormulaLook {
         let q = resolve(Self::query_of(path))?;
         let (prog, est) = Self::compile(&q)?;
         self.prog = prog;
-        // Another program: its kernel (if any) is made at its next frame.
+        // Another program: its kernel (if any) is made once the edits pause.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         {
-            self.jit = jit::Jit::default();
+            self.jit = jit::Jit::settling(1);
         }
         // Held: a look that starts drawing takes its canvas now (if the heap
         // hasn't it, `apply` asks again a second later and `ink` reads 0
@@ -2340,6 +2338,19 @@ mod jit {
     const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
 
     impl Jit {
+        /// After a live edit: no kernel until the edits have paused for
+        /// half a second (the short-heap gate's 1 s wait, started 0.5 s
+        /// early), so a burst of edits makes and checks one kernel, not
+        /// one per edit; the VM draws meanwhile.
+        pub(super) fn settling(which: usize) -> Self {
+            set_jit_status(which, false, "being checked", 0);
+            let now = super::clock().map_or(0, |c| c());
+            Jit {
+                gate_tried: now.wrapping_sub(500_000) | 1,
+                ..Jit::default()
+            }
+        }
+
         /// The kernel's block address, 0 for none (`BUFFERS`).
         pub(super) fn kernel_addr(&self) -> usize {
             self.kernel.as_ref().map_or(0, |k| k.addr())
@@ -3295,7 +3306,7 @@ mod tests {
         let e = io_error(PsiFx::from_query(rest).err().unwrap());
         assert_eq!(
             (e.kind(), e.to_string()),
-            (std::io::ErrorKind::NotFound, SENT_GONE.to_string())
+            (std::io::ErrorKind::NotFound, NO_SUCH_FORMULA.to_string())
         );
         assert_eq!(
             crate::synth::title(crate::synth::SENT).as_deref(),

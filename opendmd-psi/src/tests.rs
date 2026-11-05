@@ -3773,3 +3773,16 @@ fn saturation_is_noted_where_it_matters() {
     assert!(!has("gray(px*px*px > 5)"));
     assert!(!has("gray(frac(px*py*0.1))"));
 }
+
+/// A slot read without a `control` line plays held to 0..1 (`&a=30` from a
+/// script left the JIT's kernel waiting forever for inputs in range); a
+/// declared one is the formula's to clamp.
+#[test]
+fn an_undeclared_slot_is_held_to_0_1() {
+    let one = crate::fixed::ONE;
+    let p = crate::compile("gray(a)").unwrap();
+    let m = p.meta();
+    assert_eq!(m.values([Some(30 * one), Some(-one), None]), [one, 0, 0]);
+    let p = crate::compile("control k 0..40 = 2\ngray(k / 40)").unwrap();
+    assert_eq!(p.meta().value(0, Some(30 * one)), 30 * one);
+}
