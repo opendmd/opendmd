@@ -3120,8 +3120,8 @@ def key_checks(browser, page: Page, base: str) -> None:
         gif = card_gifs()[0]
         gif_url = base + urllib.parse.quote(gif)
         codes = [status_of(urllib.request.Request(u))[0] for u in (gif_url, base + "/filelist.txt", base + "/sets/x.txt",
-                                                                  base + "/cache/x.gif")]
-        check(codes == [401] * 4, f"key: card files without it -> {codes}")
+                                                                  base + "/cache/x.gif", base + "/formulas/x.psi")]
+        check(codes == [401] * 5, f"key: card files (Formulas too) without it -> {codes}")
         k = {"Authorization": "Bearer " + key}
         codes = [status_of(urllib.request.Request(base + "/api/config", headers=k))[0],
                  status_of(urllib.request.Request(base + "/api/status?key=" + key))[0],

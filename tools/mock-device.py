@@ -302,7 +302,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `{"error":"cross-origin request refused"}` (no `Origin`: allowed); with
   `api_key` set (`PUT /api/config`, 8..64 of `A-Za-z0-9._~-`, `""` clears;
   `GET /api/config` shows only `api_key_set`) every `/api/*` request and
-  every `GET` of `/gifs/*`, `/cache/*`, `/sets/*`, `/filelist*` needs
+  every `GET` of `/gifs/*`, `/cache/*`, `/sets/*`, `/formulas/*`, `/filelist*` needs
   `Authorization: Bearer <key>` or `?key=<key>`, else 401 `{"error":"API key
   required"}` + `WWW-Authenticate: Bearer` (the web app's own files never
   do; setup mode is not modelled); and the JSON routes (`JSON_ROUTES`) with
@@ -847,6 +847,9 @@ def mime_for(rel: str) -> str:
         "ico": "image/x-icon",
         "txt": "text/plain; charset=utf-8",
     }.get(ext, "application/octet-stream")
+
+
+CARD_PREFIXES = ("/gifs/", "/cache/", "/sets/", "/formulas/", "/filelist")
 
 
 def cache_for(rel: str) -> str:
@@ -2980,7 +2983,7 @@ def make_handler(ctx: Context, quiet: bool):
                 return True
             key = ctx.settings["api_key"]
             if key and (path.startswith("/api/") or (method == "GET" and (
-                    path.startswith(("/gifs/", "/cache/", "/sets/", "/filelist"))))):
+                    path.startswith(CARD_PREFIXES)))):
                 auth = self.headers.get("Authorization") or ""
                 if auth != "Bearer " + key and query_param(query, "key") != key:
                     self.refuse(401, "API key required", {"WWW-Authenticate": "Bearer"})

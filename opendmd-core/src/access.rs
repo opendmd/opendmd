@@ -32,10 +32,18 @@ pub fn valid_key(k: &str) -> bool {
 /// Does a request for `path` (no query) need the key when one is set? The
 /// API and the card's files; not the web app's own files or `/setup`.
 pub fn needs_key(path: &str) -> bool {
-    path.starts_with("/api/")
-        || path.starts_with("/gifs/")
+    path.starts_with("/api/") || is_card_path(path)
+}
+
+/// Is `path` (no query) one of the card's files served as they are
+/// (`/gifs/`, `/cache/`, `/sets/`, `/formulas/`, `/filelist*`)? They go out
+/// as inert bytes (`card_media_type`), never as a page of the panel's.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn is_card_path(path: &str) -> bool {
+    path.starts_with("/gifs/")
         || path.starts_with("/cache/")
         || path.starts_with("/sets/")
+        || path.starts_with("/formulas/")
         || path.starts_with("/filelist")
 }
 
@@ -109,6 +117,7 @@ mod tests {
             "/sets/x.txt",
             "/filelist.txt",
             "/filelist.hall",
+            "/formulas/plasma.psi",
         ] {
             assert!(needs_key(p), "{p}");
         }
