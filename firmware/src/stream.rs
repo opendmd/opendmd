@@ -99,6 +99,10 @@ use crate::config;
 use crate::files;
 use crate::httpd::{self, Detached, Req, Respond, Upload, UploadAborted};
 use crate::state::free_heap;
+use opendmd_core::admit;
+
+// The core's floor is the stream task's start threshold.
+const _: () = assert!(admit::FLOOR == config::STREAM_START_HEAP);
 
 /// Requests waiting behind the one being streamed.
 pub const QUEUE_DEPTH: usize = 2;
@@ -132,6 +136,11 @@ pub fn phase() -> u32 {
 /// Uploads queued or being received (`net.heap_low`, `misses.recent.net`).
 pub fn uploads() -> u32 {
     UPLOADS.load(Ordering::Relaxed)
+}
+/// Transfers under way on the task (0 or 1): a heavy request elsewhere
+/// counts its swing against the heap (`opendmd_core::admit`).
+pub fn transfers() -> u32 {
+    u32::from(BUSY.load(Ordering::Relaxed))
 }
 /// A transfer is under way on the task: set when a job is taken (under the
 /// queue's lock), cleared when it is done, for an upload as soon as its
@@ -353,7 +362,20 @@ where
 
 /// [`receive`]'s body, once: not monomorphised for every upload route.
 fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
-    let up = req.take_over()?;
+    let mut up = req.take_over()?;
+    // At the door, for the heap (`opendmd_core::admit`: the start
+    // threshold, and a block for the chunk buffer): refused like a busy
+    // slot (no linger, 503 + Retry-After), and nothing queued. (No
+    // transfer's swing: an upload is only taken with the task idle.)
+    let heap = admit::Heap {
+        transfers: 0,
+        ..crate::http::heap_now()
+    };
+    if !upload_affordable(&mut up, heap) {
+        // (Before its body is read: no lingering over the rest of it.)
+        up.no_linger();
+        return Ok(());
+    }
     let queue = match QUEUE.get() {
         Some(q) if STARTED.load(Ordering::Acquire) => q,
         // No task: on the httpd task, as before (the connection is still
@@ -442,22 +464,15 @@ fn run_upload(mut up: Upload, work: UploadWork, counted: bool) {
 
 fn run_upload_inner(up: &mut Upload, work: UploadWork) {
     up.start_clock();
-    // As for a download: a transfer starts only with room to finish. The
-    // chunk buffer is taken fallibly as well (`files::stream_body_to`).
-    let free = free_heap();
-    if free < config::STREAM_START_HEAP {
-        log::warn!(
-            "refusing {} {}: {free} B free, a transfer needs {} B to start",
-            up.method(),
-            up.path(),
-            config::STREAM_START_HEAP
-        );
-        up.header("Retry-After", "2");
-        let _ = up.error(
-            503,
-            "503 Service Unavailable",
-            "the player needs the heap right now; retry shortly",
-        );
+    // As for a download: a transfer starts only with room to finish (the
+    // start threshold and a block for the chunk buffer, which is taken
+    // fallibly as well: `files::stream_body_to`).
+    let heap = admit::Heap {
+        free: free_heap(),
+        largest: crate::state::largest_free_block() as u32,
+        transfers: 0,
+    };
+    if !upload_affordable(up, heap) {
         return;
     }
     if let Err(e) = work(up) {
@@ -483,6 +498,27 @@ fn run_upload_inner(up: &mut Upload, work: UploadWork) {
     } else if !up.responded() {
         let _ = up.error(500, "500 Internal Server Error", "no response");
     }
+}
+
+/// May an upload start with the heap at `heap` (`opendmd_core::admit`: the
+/// start threshold and a block for its chunk buffer)? If not it has been
+/// answered `503` + `Retry-After: 2` and logged.
+#[inline(never)]
+fn upload_affordable(up: &mut Upload, heap: admit::Heap) -> bool {
+    let Err(r) = admit::admit(admit::Ask::transfer(config::IO_CHUNK as u32), heap) else {
+        return true;
+    };
+    log::warn!(
+        "refusing {} {}: {} ({} B free, largest block {} B), 503",
+        up.method(),
+        up.path(),
+        r.why(),
+        heap.free,
+        heap.largest
+    );
+    up.header("Retry-After", "2");
+    let _ = up.error(503, "503 Service Unavailable", admit::BUSY);
+    false
 }
 
 fn run(queue: &'static Queue) {

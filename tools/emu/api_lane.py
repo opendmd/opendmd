@@ -763,6 +763,8 @@ class Lane:
         net_at_low: list[int] = []
         net_quiet: list[int] = []
         status_wall: list[float] = []
+        dwell = getattr(self, "dwell_set", None)
+        saves = 0
         for rnd, n in enumerate(BURST_ROUNDS, 1):
             round_mark = emu.mark()
             errors: list[str] = []
@@ -793,6 +795,7 @@ class Lane:
             threads = [threading.Thread(target=one, args=(i,), daemon=True) for i in range(1, n + 1)]
             for t in threads:
                 t.start()
+            beat = 0
             while any(t.is_alive() for t in threads):
                 emu.check()
                 try:
@@ -801,6 +804,12 @@ class Lane:
                     status_wall.append(time.time() - t_s)
                     if code != 200:
                         errors.append(f"status beside round {rnd}: HTTP {code}")
+                    # A settings save (a JSON body, the heavy door: 200, or 503 + Retry-After
+                    # and 200 when asked again, as the web app does) every third read.
+                    beat += 1
+                    if beat % 3 == 0 and dwell is not None:
+                        api.call("PUT", "/api/config", {"dwell_max": dwell})
+                        saves += 1
                 except LaneFail as e:
                     errors.append(f"status beside round {rnd}: {e}")
                     break
@@ -843,6 +852,9 @@ class Lane:
         self.expect(net_grew <= BURST_NET_MAX, "burst heap",
                     f"the C side (lwIP, WiFi, FatFs) held {net_grew} B more at a low than when quiet (BURST_NET_MAX {BURST_NET_MAX} B)")
         self.ok("burst heap", f"least free heap per round {burst_lows} B (low watch, every ms), none under BURST_HEAP_MIN {BURST_HEAP_MIN} B; the C side {net_grew} B over its quiet level at the worst (BURST_NET_MAX {BURST_NET_MAX} B); {len(status_wall)} status reads beside them, the slowest {max(status_wall or [0]):.2f} s wall (not a timing check)")
+        net = (api.status() or {}).get("net") or {}
+        self.expect("heavy_refused" in net, "bursts", f"no net.heavy_refused in /api/status: {sorted(net)}")
+        self.ok("heavy door", f"{saves} settings saves beside the uploads, each 200 in the end; net.heavy_refused {net.get('heavy_refused')}, status_refused {net.get('status_refused')}")
         self.ok("bursts", f"rounds of {'/'.join(map(str, BURST_ROUNDS))} 300 KB uploads at once beside status reads: every one 200 in the end (answers {dict(sorted(codes.items()))}), the network answering after each; quiet after: {sums[-1][0]} sockets, {sums[-1][1]} frames held")
 
     # -- the load -------------------------------------------------------------

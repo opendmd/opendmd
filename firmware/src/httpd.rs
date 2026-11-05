@@ -778,13 +778,18 @@ impl Req {
         }
     }
 
-    /// Read the whole body, refusing anything over `limit`.
-    pub fn read_to_vec(&mut self, limit: usize) -> Result<Vec<u8>> {
+    /// Read the whole body, refusing anything over `limit`; `Ok(None)`
+    /// when the heap has no block for it (taken fallibly: `with_capacity`
+    /// would abort the board on a fragmented heap).
+    pub fn read_to_vec(&mut self, limit: usize) -> Result<Option<Vec<u8>>> {
         let declared = self.content_len();
         if declared > limit {
             bail!("body of {declared} B exceeds the {limit} B limit");
         }
-        let mut out = Vec::with_capacity(declared.min(limit));
+        let mut out = Vec::new();
+        if out.try_reserve_exact(declared).is_err() {
+            return Ok(None);
+        }
         let mut buf = [0u8; 1024];
         loop {
             let n = self.read(&mut buf)?;
@@ -794,9 +799,12 @@ impl Req {
             if out.len() + n > limit {
                 bail!("body exceeds the {limit} B limit");
             }
+            if out.try_reserve(n).is_err() {
+                return Ok(None);
+            }
             out.extend_from_slice(&buf[..n]);
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     fn set_status(&mut self, status: &str) -> Result<()> {
