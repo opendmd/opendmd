@@ -43,7 +43,11 @@
 //!   low+f`, `store high`: the same reads in the store's first numbers and
 //!   past 900) and built-in inputs (`inputs`, `inputs const`); each unfused
 //!   twin's frames against its fused case's; the static and the frame's
-//!   own estimates.
+//!   own estimates. And the divisions (psi-settle, 2026-11-04: `/` per
+//!   pixel is `div_s` now): four a pixel by ±2^j, whole numbers,
+//!   fractions, a frame's value known past 1, any frame value and a row's,
+//!   against `div base` and the multiplies they were (`div4 mul`, `div4
+//!   frame mul`).
 //!
 //! Each case's kernel frames are compared with the VM's (FNV-1a of the
 //! first frames); the last line before `done`:

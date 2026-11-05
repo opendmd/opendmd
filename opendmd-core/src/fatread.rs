@@ -153,7 +153,7 @@ pub fn chain(
     // A loop would revisit a cluster: the runs cover `need` clusters, so
     // any overlap between them is one.
     let mut sorted = ext.runs.clone();
-    sorted.sort_unstable();
+    heap_sort(&mut sorted);
     if sorted.windows(2).any(|w| w[0].0 + w[0].1 > w[1].0) {
         return Err(bad("chain loops"));
     }
@@ -537,6 +537,37 @@ impl<F, R, const N: usize> Slots<F, R, N> {
         on_release(k);
         let f = self.files[k].swap(std::ptr::null_mut(), AcqRel);
         (!f.is_null()).then_some((f, raw))
+    }
+}
+
+
+/// A heapsort (unstable, in place, O(n log n)) where `sort_unstable`'s
+/// pattern-defeating quicksort and its sorting networks are ~9 KB of
+/// flash an element type (psi-settle, 2026-11-05: the firmware's headroom).
+fn heap_sort<T: Ord>(v: &mut [T]) {
+    fn sift<T: Ord>(v: &mut [T], mut root: usize, end: usize) {
+        loop {
+            let mut child = 2 * root + 1;
+            if child >= end {
+                return;
+            }
+            if child + 1 < end && v[child] < v[child + 1] {
+                child += 1;
+            }
+            if v[root] >= v[child] {
+                return;
+            }
+            v.swap(root, child);
+            root = child;
+        }
+    }
+    let n = v.len();
+    for k in (0..n / 2).rev() {
+        sift(v, k, n);
+    }
+    for end in (1..n).rev() {
+        v.swap(0, end);
+        sift(v, 0, end);
     }
 }
 

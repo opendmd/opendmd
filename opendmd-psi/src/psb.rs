@@ -482,7 +482,7 @@ fn verify_codes(p: &Prog, fused: bool) -> Result<(), Refusal> {
         let draw = (fe..de).contains(&k);
         let row = (de..re).contains(&k);
         // Steps the player works out itself (narrowing, fusing).
-        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | FUSE) {
+        if matches!(c, ADD_W | SUB_W | MUL_W | MUL_N | SHR | DIV_S | FUSE) {
             return bad;
         }
         let known = matches!(c, 0..=LAST_BIN | ARGS..=TWEEN | GUARD | 32..=LAST_UN | PALIDX | W_FIRST..=W_LAST | 64..=LAST_TERN)
@@ -580,6 +580,28 @@ fn verify_codes(p: &Prog, fused: bool) -> Result<(), Refusal> {
                 }
                 // Its END.
                 let e = op.target();
+                // Its count a constant while it runs (security review M9):
+                // END compares the counter with the live slot (`draw.rs`)
+                // and the frame's estimate multiplies by this initial
+                // value, so no step before the loop's end may write the
+                // slot or count in it — nor, in a loop inside another, any
+                // step before the outer loop's end (its next turn runs this
+                // one again). After that the compiler may reuse the slot.
+                let last = if depth == 1 {
+                    p.ops[fors[0]].target()
+                } else {
+                    e
+                };
+                // (Nor one the player fills: a built-in input, `seed`.)
+                if ins.holds(op.a)
+                    || (op.a == crate::program::S_SEED && p.uses & crate::program::SEEDED != 0)
+                    || p.ops[..=last.min(pe - 1)].iter().any(|o| {
+                        ((writes_scalar(o.code) || o.code == FOR) && o.d == op.a)
+                            || (o.code == END && o.a == op.a)
+                    })
+                {
+                    return bad;
+                }
                 if e <= k
                     || e >= de
                     || p.ops[e].code != END
@@ -893,6 +915,12 @@ fn colour_ok(c: u8) -> bool {
     c >= OUT_RGB && (c < OUT_LAYER || c - OUT_LAYER < 4 * blends)
 }
 
+/// A sprite's shape fits the store, and every pixel's key is one of its
+/// keys (security review M3): the JIT reads a pixel's key's number at
+/// `at + 1 + k` with no mask (`jit::lower`'s `sprite_read`), so `k` must
+/// stay below the key count (or be 0, which reads the sprite's own first
+/// word after its header: with no keys, a data word). The VM masks every
+/// read into the store anyway; the two then read the same word.
 fn spr_ok(p: &Prog, place: u8) -> bool {
     let at = crate::program::store_at(place);
     if at >= p.tables.len() {
@@ -900,7 +928,19 @@ fn spr_ok(p: &Prog, place: u8) -> bool {
     }
     let h = crate::program::SprHead::new(&p.tables, place);
     let keys = ((p.tables[at] as u32) >> 20) & 31;
-    h.w >= 1 && h.w <= 64 && h.h >= 1 && h.h <= 32 && keys <= 16 && at + h.words() <= p.tables.len()
+    if !(h.w >= 1 && h.w <= 64 && h.h >= 1 && h.h <= 32 && keys <= 16)
+        || at + h.words() > p.tables.len()
+    {
+        return false;
+    }
+    let (bits, per) = (1u32 << h.lb, 1u32 << h.lg);
+    (0..h.h).all(|y| {
+        (0..h.w).all(|x| {
+            let w = p.tables[h.data + y as usize * h.wpr + (x >> h.lg) as usize] as u32;
+            let k = (w >> ((x & (per - 1)) * bits)) & ((1 << bits) - 1);
+            k == 0 || k < keys
+        })
+    })
 }
 
 fn verify_meta(m: &Meta) -> Result<(), ()> {
@@ -1050,6 +1090,8 @@ mod tests {
     use super::*;
     use crate::{compile, golden, render_rows_still, Ink, Scratch, Still, H, W};
 
+    const DAMAGED: Refusal = "a damaged Formula: open the OpenDMD app to prepare it again";
+
     #[test]
     fn a_built_formula_loads_as_the_compiled_program() {
         for (name, src) in sources() {
@@ -1170,6 +1212,107 @@ mod tests {
         let mut f = crate::program::Program::default();
         load_into(&b, Which::Play, &mut f).unwrap();
         draw(&f, 0);
+    }
+
+    /// The bytes of `src` with `f` applied to its portable program, as a
+    /// crafted `.psb` would carry them.
+    fn crafted(src: &str, f: &dyn Fn(&mut crate::program::Program)) -> Vec<u8> {
+        let mut p = crate::program::Program::default();
+        load_portable(&crate::build(src).unwrap(), Which::Play, &mut p).unwrap();
+        assert!(verify(&p).is_ok());
+        f(&mut p);
+        encode("crafted", &p, None)
+    }
+
+    /// Security review M3: a sprite's pixels name its keys. The review's
+    /// case (a 1 × 1 sprite of 4-bit pixels and no keys, its one pixel 15,
+    /// at the end of a 1,024-number store) and a pixel past a real key
+    /// count are refused; the JIT's unmasked key read could otherwise go
+    /// 13 words past the store.
+    #[test]
+    fn a_sprite_pixel_past_its_keys_is_refused() {
+        let src = "sprite s {\nkey A 0.25, B 0.5, C 0.75\nABC\nCBA\n}\ngray(s[px/8, py/8])";
+        let ok = crafted(src, &|_| {});
+        let mut p = crate::program::Program::default();
+        assert!(load_into(&ok, Which::Play, &mut p).is_ok());
+        let spr = |p: &crate::program::Program| {
+            p.ops[..p.len()]
+                .iter()
+                .find(|o| o.code == code::SPR)
+                .unwrap()
+                .c
+        };
+        // Pixel 0 of row 0 made 3 (2 bits a pixel, 3 keys: 0..=2).
+        let bad = crafted(src, &|p| {
+            let at = crate::program::store_at(spr(p));
+            let data = at + 1 + 3;
+            p.tables[data] |= 3;
+        });
+        assert_eq!(load_into(&bad, Which::Play, &mut p).err(), Some(DAMAGED));
+        // The review's: the store's last place, w = h = 1, lb = 2, no keys,
+        // the pixel 15.
+        let review = crafted("table t = 1, 2\ngray(t[x])", &|p| {
+            let at = MAX_TABLE - 4;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
+            p.tables[at + 1] = 0xf;
+            let k = p.len() - 1;
+            let col = p.ops[k];
+            // A sprite read in the pixel step before the colour.
+            p.ops[k - 1] = Op {
+                code: code::SPR,
+                d: p.ops[k - 1].d,
+                a: p.ops[k - 1].a,
+                b: p.ops[k - 1].a,
+                c: (at / 4) as u8,
+            };
+            p.ops[k] = col;
+        });
+        assert_eq!(load_into(&review, Which::Play, &mut p).err(), Some(DAMAGED));
+        // The same with its pixel 0 is a sprite like any other.
+        let fine = crafted("table t = 1, 2\ngray(t[x])", &|p| {
+            let at = MAX_TABLE - 4;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
+            p.tables[at + 1] = 0;
+            let k = p.len() - 1;
+            p.ops[k - 1] = Op {
+                code: code::SPR,
+                d: p.ops[k - 1].d,
+                a: p.ops[k - 1].a,
+                b: p.ops[k - 1].a,
+                c: (at / 4) as u8,
+            };
+        });
+        assert!(load_into(&fine, Which::Play, &mut p).is_ok());
+    }
+
+    /// Security review M9: a draw loop's count is a constant. A step that
+    /// writes the FOR's count slot (here the loop's own body setting it
+    /// to 1,024 after the estimate counted 1) is refused.
+    #[test]
+    fn a_draw_loop_count_written_by_a_step_is_refused() {
+        let src = "draw { for k < 2 { dot(k, 0, 1) } }\ngray(ink)";
+        let ok = crafted(src, &|_| {});
+        let mut p = crate::program::Program::default();
+        assert!(load_into(&ok, Which::Play, &mut p).is_ok());
+        let bad = crafted(src, &|p| {
+            let (fe, de) = (p.frame_end as usize, p.draw_end as usize);
+            let f = (fe..de).find(|&k| p.ops[k].code == code::FOR).unwrap();
+            let count = p.ops[f].a;
+            // A new constant slot of 1,024 and a step in the body copying it
+            // into the count: the body's DOT becomes `count = max(big, big)`.
+            let big = p.n_scalars;
+            p.n_scalars += 1;
+            p.init[big as usize] = 1024 << 16;
+            let dot = (f + 1..de).find(|&k| p.ops[k].code == code::DOT).unwrap();
+            p.ops[dot] = Op {
+                code: code::MAX,
+                d: count,
+                a: big,
+                b: big,
+                c: 0,
+            };
+        });
+        assert_eq!(load_into(&bad, Which::Play, &mut p).err(), Some(DAMAGED));
     }
 
     #[test]

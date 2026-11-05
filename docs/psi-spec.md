@@ -17,15 +17,28 @@ search box filters the built-ins and the error codes (press `/`), and
 
 This page describes **Psi 1**. A formula may say which version it is
 written for with `psi 1` on its first line; it never needs to, because a
-formula without the line is version 1, and always will be.
+formula without the line is version 1. (The editor does not write the
+line: it will once there is a version 2.)
 
-- Within version 1, new built-in names may be added. A name a formula sets
-  is that formula's own, even where a later version made it a built-in, so
-  a formula saved before a name existed means what it meant (the names
-  under "Every name" that a formula may set).
+**The promise starts at OpenDMD 1.0.0.** Psi 1 is the language as OpenDMD
+1.0.0 ships it; before that, through the betas, it changed freely (`y`
+turned to count down, `part` and `frame { }` went, `/` became exact at
+every level) without a new version. From 1.0.0:
+
+- Within version 1, new built-in names may be added, under the name rule
+  ("Every name"): a name a formula sets is that formula's own, even where
+  a later version made it a built-in, so a formula saved before a name
+  existed means what it meant.
 - Anything that would change the pixels of a formula that compiled under
-  version 1, or refuse one, is a new version. The tests hold every example
-  and gallery formula to the same frames.
+  version 1, or refuse one, is a new version ("What stays the same" lists
+  what that covers). The tests hold every example and gallery formula to
+  the same frames.
+- **The compiled form is another axis.** A compiled Formula (`.psb`) carries
+  a program format number, the *ABI* (3 at 1.0.0): the steps the player
+  runs and what each means. It is a cache, not the language: it may change
+  at any release, and a panel that meets another ABI's bytes says so and the
+  app prepares the Formula again from its text. A new ABI is never a new
+  Psi version, and a new Psi version need not be a new ABI.
 - A formula written for a later version than the panel has (`psi 2` on a
   version 1 panel) is refused with a clear sentence (`E601`) rather than
   failing somewhere in the middle.
@@ -92,7 +105,7 @@ expr      = or [ "?" expr ":" expr ]           -- both arms are always evaluated
 or        = and { ("or" | "||") and }
 and       = not { ("and" | "&&") not }
 not       = ("not" | "!") not | cmp
-cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
+cmp       = sum [ ("<" | "<=" | ">" | ">=" | "==" | "!=") sum ]   -- one: E218
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
@@ -120,10 +133,13 @@ formula, of a function and of a layer; with layers, every colour is inside one.
 ## Numbers
 
 Every value is a fixed-point number, from −32,768 to 32,767.99998 in steps
-of 1/65,536 (Q16.16). Arithmetic saturates rather than wrapping. `a / 0` is
-the largest number of `a`'s sign (0 for `0 / 0`); `a % 0` is 0; `%` is
-floored (`-1 % 3` is 2). Comparisons and `and`, `or`, `not` give 1 or 0;
-any number but 0 is true. Both sides of `? :` are worked out.
+of 1/65,536 (Q16.16). Arithmetic saturates rather than wrapping. `a / b` is
+the exact quotient truncated towards zero to a step (`-1/65536 / 2` is 0),
+held to the ends; `a / 0` is the largest number of `a`'s sign (0 for
+`0 / 0`); `a % 0` is 0; `%` is floored (`-1 % 3` is 2). Comparisons and
+`and`, `or`, `not` give 1 or 0; any number but 0 is true, and comparisons
+don't chain: `0 < x < 0.5` is refused (`E218`: write `0 < x and x < 0.5`).
+Both sides of `? :` are worked out.
 
 Where a function is defined by a table (`sin`, `noise`, `hash`, `atan2`,
 the palettes, the fonts) the table is the definition. The normative
@@ -136,7 +152,10 @@ to it.
 - **Levels.** Each value is worked out as rarely as what it reads changes:
   constants once, values of the time, the clock and the controls once a
   frame, values of `y`, `py` and `cy` once a row,
-  the rest once a pixel. This changes only the cost, never the result.
+  the rest once a pixel. This changes only the cost, never the result: a
+  division per pixel by a constant or a frame's or row's value gives the
+  same bits as the same division once a frame (the panel divides a row of
+  pixels by one divisor with multiplies, exactly).
 - **Layers** (`layer [blend] [rate N] { … }`) are drawn bottom to top, each
   with its own names and colour, onto what is below with its blend (`over`,
   `add`, `multiply`, `screen`, `max`, `min`); a colour's last value says how
@@ -156,8 +175,9 @@ to it.
   every pixel of a frame. Each has a range it is held to and a default it
   reads when the panel has no value for it (no location set, the clock not
   set, RePlayOS not followed); previews and the gallery always draw at the
-  defaults. `since(KEY)` is the seconds since one last changed (32767 when
-  it never has) and `was(KEY)` its value before that change: a formula
+  defaults. `since(KEY)` is the seconds since one last changed, held at
+  32766 (about 9 hours), and 32767 when it never has, so `since(k) < 32767`
+  means "it has changed"; `was(KEY)` is its value before that change: a formula
   stays a function of its inputs, with no memory of its own.
 
 ## Every name
@@ -179,8 +199,11 @@ to it.
 | drawing | `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print` |
 | declarations | `psi`, `name`, `about`, `control`, `look` |
 | words that are keywords in one place only | `fps`, `forever`, `sprite`, `palette`, `key`, `rate` |
+| words of the draw stage and scenes (names elsewhere) | `if`, `else`, `when`, `scene`, `tween` |
+| the picture under | `under`, `under(x, y)` |
+| the built-in inputs' groups (never a name) | `sun`, `moon`, `replay` |
 
-A formula may set a name added after people had saved formulas, and then it is the formula's own: `cx`, `cy`, `r`, `angle`, `bit`, `digit`, `glyph`, `pick`, `cycle` and `seed`, `ink`, `line`, `dot`, `forever`.
+**The name rule.** A formula's own names win. Any built-in value's name, and any built-in function's or drawing call's, may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`): from the line that sets it, the name reads as the formula's value wherever a value is read, and a call `name(…)` is still the built-in function (`since`, `was`, `under` and `ink(n)` as `sin`). Not names: the keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216). A `fn`, table, sprite or palette of the formula's takes a name of its own: no built-in function's (E215) and no value's it has set (E203). `since(k)` and `was(k)` read the built-in inputs only: of a name the formula set they are refused (E217), never read two ways on one line. A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.
 <!-- psi-builtins end -->
 
 ## What each does
@@ -299,6 +322,59 @@ example is compiled by the tests.
 | `control mode = calm, wild` | buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch | <code class="psi-ex">control mode = calm, wild; hsv(x, 1, pick(mode, 0.5, 1))</code> |
 | `look screen 40` | it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100) | <code class="psi-ex">look screen 40; pal(fire, y)</code> |
 <!-- psi-builtins end -->
+
+## What stays the same
+
+From OpenDMD 1.0.0 everything below is observable in a formula's pixels or
+in whether it compiles, so changing any of it is a Psi 2 (see "Versions").
+Machinery that gives the same bytes is not on the list and may change at
+any release: the `.psb` ABI, the steps and their narrowed and fused forms,
+the JIT, the still cache, the column run, the cost model and its tiers
+(a formula refused as too heavy is a product limit, not the language),
+and the error sentences (the codes are only ever added; a retired code is
+never used again).
+
+- **Syntax and acceptance.** The keywords, the palette names and the
+  dotted inputs' groups (`sun`, `moon`, `replay`) are not names; the name
+  rule ("Every name"); declarations first; `psi N` on the first line only;
+  `{` on the line that opens it; `;` as a separator; `--` and `//`
+  comments; a line going on after an operator or `,`; literal counts for
+  `for`, `ink(n)` and `look`; comparisons don't chain; the colour grammar
+  (what is a channel expression, what is a whole colour, `pal(P, k) * e` the
+  one scaled whole colour, coverage on the outermost colour only). Grammar
+  that is refused today may be accepted later (`else if`).
+- **Limits only grow**: a formula that fits keeps fitting (the table
+  below).
+- **Numbers.** Q16.16 with `+ - *`, negation and `abs` saturating; `*`
+  rounding down; `/` truncating towards zero, exact at every level; `/ 0`,
+  `0 / 0`, `% 0`; floored `%`; `floor` and `frac` of negatives; `sqrt` of 0
+  and below is 0; `abs` of the lowest number is the highest.
+- **Tables are definitions**: `sin`/`cos` (256 entries, interpolated),
+  `sqrt`, `atan2`, `noise`, `hash`, the three fonts, the hsv conversion,
+  `ul`'s weights, the blends and coverage in 8-bit channels, `cycle`'s
+  turn, tweens' rounding, and the palettes as they are:
+  - `pal(P, k)` reads one of the palette's **32 entries, the nearest** to
+    `k`, with no blending between them (so a three-colour palette bands
+    rather than ramps; an interpolated read would be a new name);
+  - `rainbow` is **black at 0** and dark at 1, its hues between;
+  - `ocean` is **the same table as `ice`** (one palette, two names).
+- **Inputs.** `x` and `y` across and down, `cx cy r angle` as defined,
+  `angle` clockwise with a quarter down, `t` a whole number of frames,
+  `loop` 8 and `fps` 50 when left out (and 25, 50 or 100 only), the
+  controls' ranges and defaults, each built-in input's range and default,
+  `since`'s 32766 for a change and 32767 for never, `hour minute second`
+  whole.
+- **Reads outside their range give 0**: `pick` past its choices, `T[k]`
+  past a table, `S[u, v]` outside a sprite, `digit` and `glyph` outside the
+  cell.
+- **The draw stage**: ink keeps the brighter value, paint is painter's
+  order over the colour line, `line` and `dot` with no ink draw 1, the caps
+  skip the rest the same way on every panel.
+- **Scenes, rates and layers**: a scene's names read 0 while it is off, the
+  `rate` bands' schedule, layers blended bottom to top, a look ignored
+  when the formula plays alone; `loop forever`'s growing `t`, its `seed`
+  per play, and the growing-value forms it accepts (more may be accepted
+  later, never fewer).
 
 ## Limits
 
@@ -904,7 +980,7 @@ gray(sin(x))
 
 A value may be set again (`v = v * 2` reads the `v` before it), but functions, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
 
-Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs.)
+Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs, and none of them takes a value's name.)
 
 Before:
 
@@ -928,7 +1004,7 @@ gray(T[0] * k)
 
 The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn`) can't be names; any built-in value or function's name can (it is then yours).
 
-Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value or function's name may be yours).
+Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value's name may be yours, and a built-in function's as a value; not a palette's or `sun`, `moon` or `replay`).
 
 Before:
 
@@ -1032,6 +1108,30 @@ Use one of the listed blends.
 
 Write the number of levels, as `ink(16)`, and draw with inks `k/16`.
 
+<h4 id="E215">E215 · a function named as a built-in one</h4>
+
+> `…(…)` is a built-in function: a `fn` takes a name of its own
+
+Name the function something else, as `fn wave(a) = …`. (A value may take a built-in function's name: `sin = 0.5`, and `sin(…)` is still the function.)
+
+<h4 id="E216">E216 · a name that is the dotted inputs' group</h4>
+
+> `…` is the built-in inputs' name (…); pick another name
+
+Pick another name: `sun`, `moon` and `replay` are the start of the built-in inputs `sun.alt`, `moon.phase`, `replay.game` and the rest.
+
+<h4 id="E217">E217 · <code>since(…)</code> or <code>was(…)</code> of the formula's own value</h4>
+
+> `…` is this formula's own value here: `…(…)` reads a built-in input, so give yours another name
+
+Rename your value (`light = …`): the formula's own names win everywhere, so `since(daylight)` would otherwise mean two things on one line.
+
+<h4 id="E218">E218 · a chained comparison</h4>
+
+> comparisons don't chain: write `… and …` (`…` would compare `…`, 1 or 0, with …)
+
+Join two comparisons with `and`: `0 < x and x < 0.5` (a comparison gives 1 or 0, so `0 < x < 0.5` would compare that with 0.5).
+
 ### Placement and levels (E3xx)
 
 <h4 id="E301">E301 · a <code>frame { }</code> block</h4>
@@ -1104,7 +1204,7 @@ layer add { gray(y) }
 
 <h4 id="E304">E304 · a colour function in a sum of colours</h4>
 
-> `…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
+> `…(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)
 
 Use `#…` or `rgb(…)` in the sum, or give the function its own line.
 

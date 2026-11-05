@@ -286,6 +286,27 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
     cmp.push(("store low+f".into(), 0, format!("loop 8\n{reads}").replace("gray(frac(", "gray(frac(0.03 + "), true));
     cmp.push(("inputs".into(), 0, format!("{base}gray(frac(u*daylight + sun.alt + y*moon.phase + since(night)*0.001 + was(bright)))\n"), true));
     cmp.push(("inputs const".into(), 0, format!("{base}gray(frac(u*1 + 0.1 + y*0.5 + 32767*0.001 + 1))\n"), true));
+    // Language review A1 (psi-settle): `/` per pixel is a division now
+    // (`div_s`), four a pixel of each kind against the multiplies they
+    // were (`div4 mul`, `div4 frame mul`: the old reciprocal's form) and the
+    // same with none (`div base`).
+    // (`w` reads `y` and `t`: neither the column run nor the still cache
+    // takes it, so every division is a pixel's. paint80-c10d6's read
+    // `x + t/8` only: its divisions ran once a column.)
+    let w = "loop 8\nw = (x + y*0.37 + t/8)*100\ns = a*4 + 1.5\nz = a - 0.5\n";
+    for (name, e) in [
+        ("div base", "frac(w)"),
+        ("div4 mul", "frac(w*0.125 + w*0.0625 + w*0.03125 + w*0.015625)"),
+        ("div4 pow2", "frac(w/8 + w/16 + w/32 + w/64)"),
+        ("div4 whole", "frac(w/3 + w/5 + w/7 + w/9)"),
+        ("div4 fraction", "frac(w/2.5 + w/1.7 + w/127.3 + w/0.3)"),
+        ("div4 frame mul", "frac(w*(1/s) + w*(1/(s + 1)) + w*(1/(s + 2)) + w*(1/(s + 3)))"),
+        ("div4 frame", "frac(w/s + w/(s + 1) + w/(s + 2) + w/(s + 3))"),
+        ("div4 any", "frac(w/z + w/(z + 0.1) + w/(z + 0.2) + w/(z + 0.3))"),
+        ("div4 row", "frac(w/(y + 1) + w/(y + 2) + w/(y + 3) + w/(y + 4))"),
+    ] {
+        cmp.push((name.into(), 0, format!("{w}gray({e})\n"), true));
+    }
     for (name, ms, src, fused) in cmp {
         let psb = opendmd_psi::build_with(&src, fused).unwrap_or_else(|e| panic!("cmp case {name}: {}", e.render(&src)));
         list += &format!("    (\"cmp\", {name:?}, {ms}, &{psb:?}),\n");

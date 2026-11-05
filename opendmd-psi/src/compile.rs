@@ -1075,10 +1075,6 @@ struct Dag {
     /// formula quadratic (~0.2-0.35 ms on the host, tens of ms on the
     /// ESP32, per live edit).
     index: Vec<Id>,
-    /// The multiplies that per-pixel divisions by a constant became, as
-    /// (the multiply, the dividend, the divisor): a `floor` of one is
-    /// rebuilt with 1/k rounded up ([`fixed::recip_up`]).
-    divs: Vec<(Id, Id, i32)>,
     /// Each `pick`'s choices (a `PICK` node's `b` is its index here).
     picks: Vec<Vec<Id>>,
     /// A `loop forever` formula: `t` is wide ([`WIDE_T`]).
@@ -1311,38 +1307,13 @@ impl Dag {
             }
             (code::ADD, Some(0), _) | (code::MUL, Some(ONE), _) => return Ok(b),
             (code::MUL, Some(0), _) | (code::MUL, _, Some(0)) => return self.constant(0, at),
-            // x / k, x per pixel: x · (1/k), exact for powers of two. Once a
-            // frame or a row it stays a true division (exact, and it costs
-            // nothing per pixel), so `floor(minute/10)` is 5 at 50.
-            (code::DIV, None, Some(k)) if k != 0 && self.level(a) == LV_PIXEL => {
-                let r = self.constant(fixed::recip(k), at)?;
-                let m = self.op(code::MUL, [a, r, 0], at)?;
-                if self.konst(m).is_none() && !self.divs.iter().any(|d| d.0 == m) {
-                    self.divs.push((m, a, k));
-                }
-                return Ok(m);
-            }
-            // floor(x / k) per pixel: 1/k rounded up instead, so a whole
-            // number over a whole number that divides it floors to exactly
-            // that (rounded down, floor(px/10) was 1 at px = 20).
-            (code::FLOOR, None, _) if self.divs.iter().any(|d| d.0 == a) => {
-                let &(_, x, k) = self.divs.iter().find(|d| d.0 == a).unwrap();
-                let r = self.constant(fixed::recip_up(k), at)?;
-                let m = self.op(code::MUL, [x, r, 0], at)?;
-                if m != a {
-                    return self.op(code::FLOOR, [m, 0, 0], at);
-                }
-            }
             // 1 / x: `recip`, exactly `div(1, x)` (on the ESP32 one 32-bit
             // division where `div`'s general path takes two and a Knuth
             // digit).
             (code::DIV, Some(ONE), None) => return self.op(code::RECIP, [b, 0, 0], at),
-            // x / s, s per frame or per row: one division there, a multiply
-            // per pixel.
-            (code::DIV, None, None) if self.level(a) == LV_PIXEL && self.level(b) < LV_PIXEL => {
-                let r = self.op(code::RECIP, [b, 0, 0], at)?;
-                return self.op(code::MUL, [a, r, 0], at);
-            }
+            // (`x / k` and `x / s` per pixel stay divisions: the same value
+            // at every level. The player divides a lane by one divisor
+            // without dividing, `range::narrow`'s `div_s`.)
             // x % 2^k: a mask.
             (code::MOD, None, Some(k)) if k > 0 && (k as u32).is_power_of_two() => {
                 let m = self.constant(k - 1, at)?;
@@ -2179,6 +2150,15 @@ const NO_CH: u8 = 3;
 /// Inside `rgb(r, g, b)`'s values (for the error a colour there gets).
 const IN_RGB: u8 = 4;
 
+/// A built-in function's name (a call of it), which a `fn` may not take
+/// (language review A2).
+fn is_builtin_function(name: &str) -> bool {
+    FUNCS.iter().any(|e| e.0 == name)
+        || COLOURS.iter().any(|e| e.0 == name)
+        || PRIMITIVES.contains(&name)
+        || matches!(name, "since" | "was" | "under" | "ink" | "tween")
+}
+
 /// What a name is being set as ([`Parser::new_name`]): a value (set
 /// again, or shadowing one from outside, as often as you like), a loop
 /// counter (may shadow a value), a control, or a part, table, sprite or
@@ -2528,7 +2508,7 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.peek().tok == Tok::LParen && self.text(t) == "pick" => {
                     self.pick(t)?
                 }
-                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && self.lookup_local("under").is_none() && self.func_named("under").is_none() => {
+                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && (self.peek().tok == Tok::LParen || self.lookup_local("under").is_none()) => {
                     self.under_atom(t)?
                 }
                 Tok::Name => self.name(t)?,
@@ -2577,7 +2557,11 @@ impl<'s> Parser<'s> {
             self.next();
             #[cfg(feature = "syntax")]
             let rs = self.peek().start;
+            let mid = self.peek().start;
             let rhs = self.expr(rbp)?;
+            if lbp == 5 && infix_bp(self.peek().tok).is_some_and(|b| b.0 == 5) {
+                return Err(self.chained(t.start, op, mid));
+            }
             #[cfg(feature = "syntax")]
             let span = (rs, self.toks[self.pos - 1].get().end);
             #[cfg(feature = "syntax")]
@@ -2596,6 +2580,33 @@ impl<'s> Parser<'s> {
             }
         }
         Ok(lhs)
+    }
+
+    /// E218: `a < b < c` (the cursor on the second comparison): Psi
+    /// refuses to chain comparisons rather than read it as `(a < b) < c`.
+    #[cold]
+    #[inline(never)]
+    fn chained(&mut self, start: usize, op: Token, mid: usize) -> Error {
+        let mid_end = self.toks[self.pos.saturating_sub(1)].get().end;
+        let op2 = self.next();
+        let third = self.peek().start;
+        let end = match self.expr(6) {
+            Ok(_) => self.toks[self.pos.saturating_sub(1)].get().end,
+            Err(_) => op2.end,
+        };
+        let (a, o1, b, o2) = (
+            sub(self.src, start, op.start).trim(),
+            self.text(op),
+            sub(self.src, mid, mid_end).trim(),
+            self.text(op2),
+        );
+        let c = if end > third { sub(self.src, third, end).trim() } else { "…" };
+        // E218.
+        Error::new(
+            op2.start,
+            op2.end,
+            format!("comparisons don't chain: write `{a} {o1} {b} and {b} {o2} {c}` (`{a} {o1} {b} {o2} {c}` would compare `{a} {o1} {b}`, 1 or 0, with {c})"),
+        )
     }
 
     /// Whether names set in `scope` can be seen here: this scope's and its
@@ -2656,7 +2667,7 @@ impl<'s> Parser<'s> {
             if let Some(k) = self.func_named(name) {
                 return self.call_value(t, k);
             }
-            if matches!(name, "since" | "was") && self.lookup_local(name).is_none() {
+            if matches!(name, "since" | "was") {
                 return self.since_was(t, name == "since");
             }
             if name == "rgb" && self.env.ch < NO_CH {
@@ -2741,6 +2752,12 @@ impl<'s> Parser<'s> {
             let name = self.text(n);
             if self.peek().tok == Tok::Dot && crate::world::is_group(name) {
                 Some(self.dotted_key(n)?.0)
+            } else if crate::world::key(name).is_some() && self.lookup_local(name).is_some() {
+                // E217 (the formula's own names win everywhere).
+                return self.err(
+                    n,
+                    format!("`{name}` is this formula's own value here: `{f}(…)` reads a built-in input, so give yours another name"),
+                );
             } else {
                 crate::world::key(name)
             }
@@ -2784,12 +2801,15 @@ impl<'s> Parser<'s> {
         let msg = if self.peek().tok == Tok::LParen {
             if self.env.ch < NO_CH && COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "`{name}(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)"
+                    "`{name}(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)"
                 )
             } else if COLOURS.iter().any(|e| e.0 == name) {
                 format!(
                     "`{name}(…)` is a whole colour: it can only be the last line (of the formula or a layer)"
                 )
+            } else if name == "under" {
+                // E302 (`under(x, y)` where a number goes).
+                format!("`{name}(x, y)` is a colour, not a number: use it on the last line, as `under(px + 2, py)` or `under(px, py) * 0.5`")
             } else if PRIMITIVES.contains(&name) {
                 format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
             } else if self.lookup_value(name).is_some() {
@@ -2826,9 +2846,7 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
         match self.peek().tok {
-            Tok::LParen if name == "ink" && self.lookup_local(name).is_none() => {
-                Some(self.ink_levels(t))
-            }
+            Tok::LParen if name == "ink" => Some(self.ink_levels(t)),
             Tok::Dot => {
                 if let Some(k) = self.palette_named(name) {
                     return Some(self.palette_entry(t, k));
@@ -3345,7 +3363,11 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
-                Tok::Name if self.text(t) == "under" && self.lookup_local("under").is_none() => {
+                Tok::Name
+                    if self.text(t) == "under"
+                        && (self.toks[k + 1].get().tok == Tok::LParen
+                            || self.lookup_local("under").is_none()) =>
+                {
                     return true
                 }
                 Tok::Name
@@ -3518,9 +3540,11 @@ impl<'s> Parser<'s> {
     /// not a name already set here (E203).
     fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
-        // A built-in value or function's name may be the formula's own (it
-        // then reads as the formula's; a call is still the function): only
-        // the keywords are not names.
+        // A built-in value's name, or a built-in function's, may be the
+        // formula's own value (it then reads as the formula's everywhere; a
+        // call `name(…)` is still the function): only the keywords, the
+        // palettes and the dotted inputs' groups are not names (and a `fn`
+        // takes no built-in function's: `fn_def`).
         if KEYWORDS.contains(&name) {
             return self.err(
                 t,
@@ -3531,6 +3555,19 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 format!("`{name}` is a palette's name; pick another name"),
+            );
+        }
+        if crate::world::is_group(name) {
+            let keys: Vec<&str> = crate::world::KEYS
+                .iter()
+                .filter(|k| k.name.split_once('.').is_some_and(|(g, _)| g == name))
+                .map(|k| k.name)
+                .collect();
+            let has = keys.join(", ");
+            // E216.
+            return self.err(
+                t,
+                format!("`{name}` is the built-in inputs' name ({has}); pick another name"),
             );
         }
         let local = self.lookup_local(name);
@@ -5190,7 +5227,14 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name || self.tok(self.pos).tok != Tok::LParen {
             return self.err(kw, "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw");
         }
-        let name = self.new_name(n, Naming::Value)?;
+        let name = self.new_name(n, Naming::Thing)?;
+        if is_builtin_function(name) {
+            // E215.
+            return self.err(
+                n,
+                format!("`{name}(…)` is a built-in function: a `fn` takes a name of its own"),
+            );
+        }
         self.next();
         let mut params = Vec::new();
         while self.peek().tok != Tok::RParen {
@@ -6659,7 +6703,6 @@ fn compile_inner<'s>(
         dag: Dag {
             nodes,
             index,
-            divs: Vec::new(),
             picks: Vec::new(),
             forever: false,
             ctx: Vec::new(),
@@ -6972,7 +7015,6 @@ fn finish(
     p.palette_names = Vec::new();
     p.pnodes = Vec::new();
     p.dag.index = Vec::new();
-    p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]

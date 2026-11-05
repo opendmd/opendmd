@@ -95,7 +95,7 @@ expr      = or [ "?" expr ":" expr ]           -- both arms are always evaluated
 or        = and { ("or" | "||") and }
 and       = not { ("and" | "&&") not }
 not       = ("not" | "!") not | cmp
-cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
+cmp       = sum [ ("<" | "<=" | ">" | ">=" | "==" | "!=") sum ]   -- one: E218
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
@@ -130,12 +130,12 @@ Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
 **saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
 (0 for 0/0); `a % 0` is 0; a character in single quotes is its ASCII code
 (`'A'` is 65, `'0'` 48, `' '` 32; one character, no strings); `%` is floored (`-1 % 3` is 2; `v % 1` is
-`frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
-Division by a constant is exact once a frame or a row (`floor(minute/10)`
-is 5 from 50 to 59); per pixel it is a multiply by 1/k, which `floor`
-takes rounded up, so `floor(n/k)` is exact for whole numbers with
-n·k < 65,536 (`floor(px/10)`, `floor(i/12)`); elsewhere `px/3` may be off
-by a step or two of 1/65,536. The same formula gives the same bytes on the panel, in the browser and on a
+`frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true;
+comparisons don't chain (`0 < x < 0.5` is refused: write `0 < x and x <
+0.5`). `a / b` is the exact quotient truncated towards zero to a step, at
+every level: `floor(px/10)` is exact, `floor(minute/10)` is 5 from 50 to
+59, and a value worked out per pixel is the same as once a frame. The same
+formula gives the same bytes on the panel, in the browser and on a
 computer.
 
 ## 4. Values
@@ -176,11 +176,12 @@ off, and always in previews and the gallery) each reads its default:
 | `replay.platform` | 0..127 whole | 0 | the platform's place in the panel's platform list, from 1 |
 | `replay.game` | 0..1 | 0 | a hash of the game's name: the same each time it plays |
 
-`since(KEY)` is the seconds since `KEY` last changed (0..32767; 32767 when
-it never has); `was(KEY)` is its value before that change (its default when
+`since(KEY)` is the seconds since `KEY` last changed (0..32766, held
+there after about 9 hours; 32767 only when it never has); `was(KEY)` is its value before that change (its default when
 it never changed). Both are frame values. `KEY` is written as above, dotted
 names whole. A name like `daylight` may be set as your own (then it is
-yours); a dotted one can't. A formula reads 24 of these at most (each
+yours, and `since(daylight)` is refused: name yours something else); a
+dotted one can't, nor `sun`, `moon` or `replay` alone. A formula reads 24 of these at most (each
 `since` and `was` one more). "The panel knows the sun" is `since(sun.alt) <
 32767` (the device moves `sun.alt` every minute or so once it has a
 location): a formula can follow the real sun when it can and its own cycle
@@ -188,10 +189,12 @@ otherwise.
 
 `cx cy r angle` are exactly the formulas after their colons: the same
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
-are 0. **Any built-in value or function name may be set as your own**
+are 0. **Any built-in value or function name may be set as your own value**
 (`b = 0.5`, `r = 3`, `len = 2`): from then on the name is yours (a call,
-`len(…)`, is still the function). Only the words of the language (`loop
-layer part use draw for table fn`) and palette names can't be names.
+`len(…)`, is still the function; so are `since(…)`, `was(…)`, `under(…)`
+and `ink(n)`). Only the words of the language (`loop layer part use draw
+for table fn`), palette names and `sun moon replay` can't be names, and a
+`fn` can't take a built-in function's name (`fn sin` is E215).
 
 ### What a formula says it is: the declarations
 
@@ -757,7 +760,9 @@ change — constants once, `t`/clock/slider-only values once a frame,
 `x y px py i` (0..1, 0..127, …), `t` (0 to the loop's length), the sliders
 (0..1), the clock, `min`, `floor`, `sin`, `%`, comparisons and the
 constants, and a `+ − *` whose result can't leave the number range skips
-its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
+its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift,
+and a division by a number or by a value the same along a row is a few
+multiplies (exactly the division: `/` gives the same at every level).
 `min(near, 10)*min(near, 10)` is cheaper than an unbounded `near*near`.
 
 | per pixel | ns | | per pixel | ns |
@@ -765,7 +770,7 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
 | + − that can't overflow | 28 | | `*` that can't overflow | 41 (37 when the product is small) |
-| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 | | | |
+| `*` by 1/2ⁿ (`*0.5`, `*0.125`) | 33 | | `/` by a number, or by a value the same along the row (`/3`, `/s`) | 136 (`/2ⁿ` 53; 253 by a value that can be under 1) |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value | 360 (`1/v` 230) | | `hash` | 220 |
@@ -1336,9 +1341,9 @@ A whole-day cycle from `hour` and `minute`.
 
 ```psi example=day-sky
 -- follows the clock: dark at night, blue by day, warm near sunrise and sunset
-day = (hour + minute/60)/24; sun = -cos(day)
-light = clamp(sun*1.5 + 0.3, 0, 1)
-warm = clamp(1 - abs(sun)*3, 0, 1) * (1 - y)
+day = (hour + minute/60)/24; high = -cos(day)
+light = clamp(high*1.5 + 0.3, 0, 1)
+warm = clamp(1 - abs(high)*3, 0, 1) * (1 - y)
 rgb(0.02 + light*(0.6 - 0.4*y) + warm*0.9, 0.02 + light*(0.8 - 0.35*y) + warm*0.35, 0.1 + light*(0.9 - 0.1*y))
 ```
 

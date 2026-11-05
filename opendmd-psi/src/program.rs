@@ -347,6 +347,20 @@ pub(crate) mod code {
     pub const CNT_GE: u8 = 0xf5;
     pub const CMP_FIRST: u8 = SEL_LT;
     pub const CMP_LAST: u8 = CNT_GE;
+    // `div(a, b)` per pixel where `b` is the same across the lane (a
+    // constant, a frame's or a row's value): written by `range::narrow`
+    // over a laid-out program (never in a `.psb`), the same value as `DIV`
+    // by [`crate::fixed::DivBy`] (multiplies, no division). `c`: what the
+    // ranges say of `b` for inputs in range ([`DIV_BIG`], [`DIV_POS`]).
+    pub const DIV_S: u8 = 0xf6;
+    /// `DIV_S`'s `c`: |b| > 1 (no quotient reaches the ends, `E ≥ 32`).
+    pub const DIV_BIG: u8 = 1;
+    /// `DIV_S`'s `c`: b > 0.
+    pub const DIV_POS: u8 = 2;
+    /// `DIV_S`'s `c`: a ≥ 0 (the JIT skips the magnitude and the sign).
+    pub const DIV_NONNEG: u8 = 4;
+    /// `DIV_S`'s `c`: |b| may be under 1 (the VM's slow case: the costs).
+    pub const DIV_SMALL: u8 = 8;
 
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
@@ -427,6 +441,7 @@ pub(crate) mod code {
             LINE_FROM..=DOT => 3,
             STILL | COLUMN | FUSE => 0,
             CMP_FIRST..=CMP_LAST => 3,
+            DIV_S => 2,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -540,6 +555,7 @@ pub(crate) mod code {
             SLOW => "slow",
             CMP_FIRST..=CMP_LAST => ["sel_lt", "sel_le", "cnt_lt", "cnt_le", "cnt_gt", "cnt_ge"]
                 [(c - CMP_FIRST) as usize],
+            DIV_S => "div_s",
             FOR..=FUSE => [
                 "for",
                 "end",
@@ -1588,6 +1604,32 @@ impl Prog {
             // (Counted by its scene's rows: `estimate_with`.)
             return 0;
         }
+        if op.code == DIV_S {
+            // Fitted to paint80-ab8b5's div4 rows on the spare (2026-11-05,
+            // each over `div4 mul`'s shifts, four a pixel): a constant's
+            // magic number 34-39 ns (±2^j, whole numbers), the general
+            // steps 89 for a divisor past ±1, 113 at ±1 or more, 115 where
+            // it may be under 1. Of a dividend never below 0 (no magnitude
+            // or sign: a shift alone for ±2^j, the multiply and its
+            // shift): instruction counts.
+            let nonneg = op.c & DIV_NONNEG != 0;
+            return match self.const_value(op.b, self.len()) {
+                Some(b) if nonneg && crate::fixed::DivBy::shift(b).is_some() => 6,
+                Some(b) if crate::fixed::DivBy::magic(b).is_some() => {
+                    if nonneg {
+                        15
+                    } else {
+                        37
+                    }
+                }
+                Some(b) if b.unsigned_abs() > ONE as u32 => 89,
+                Some(b) if b.unsigned_abs() == ONE as u32 => 113,
+                Some(_) => 115,
+                _ if op.c & DIV_BIG != 0 => 89,
+                _ if op.c & DIV_SMALL == 0 => 113,
+                _ => jit_value_ns(op.code),
+            };
+        }
         if !is_colour(op.code) {
             return jit_value_ns(op.code);
         }
@@ -1693,6 +1735,12 @@ impl Prog {
             // A whole constant `z`: four corners, not eight (a guess until
             // psi-probe measures it).
             NOISE if self.const_value(op.c, at).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
+            // By a constant ±2^j: a shift towards zero, `shr`'s and a few
+            // more (a guess until psi-probe measures it).
+            DIV_S if self.const_value(op.b, self.len()).and_then(crate::fixed::DivBy::shift).is_some() => DIV_SHIFT_NS,
+            // (paint80-ab8b5: 136 ns a pixel for a constant or a divisor of
+            // ±1 or more, 253 for one that may be under 1.)
+            DIV_S if op.c & DIV_SMALL != 0 && self.const_value(op.b, self.len()).is_none() => DIV_SMALL_NS,
             c => value_ns(c),
         }
     }
@@ -1709,8 +1757,9 @@ impl Prog {
             let o = &self.ops[k];
             !is_colour(o.code) && !matches!(o.code, STILL | COLUMN | FUSE) && o.d == v
         });
-        // (A shift of a stepped value, `floor(q)/8`, is stepped.)
-        if let Some(k) = w.filter(|&k| self.ops[k].code == SHR) {
+        // (A shift of a stepped value, or a division by a scalar,
+        // `floor(q)/8`, is stepped.)
+        if let Some(k) = w.filter(|&k| matches!(self.ops[k].code, SHR | DIV_S)) {
             return self.stepped(k, self.ops[k].a);
         }
         w.map(|k| &self.ops[k]).is_some_and(|o| {
@@ -2789,6 +2838,12 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // ±15 %; RECIP (`1 / v` since fast-div) is `128 / v`'s less the
         // 52 cycles the micro rows saw it save.
         DIV => 360,
+        // `fixed::DivBy` along the lane: two multiplies, a compare and the
+        // shifts, and the divisor's own once a lane. paint80-ab8b5 on the
+        // spare (2026-11-05): four a pixel over `div4 mul`'s shifts, 136 ns
+        // each for whole numbers, fractions, a frame's and a row's
+        // divisor (`DIV_SMALL_NS` where it may be under ±1).
+        DIV_S => 136,
         RECIP => 230,
         ATAN2 => 384,
         LEN => 472,
@@ -2831,6 +2886,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         _ => 0,
     }
 }
+
+/// A pixel's `div_s` by a constant ±2^j on the VM, ns (`shr`'s 33 and two
+/// instructions: a guess until psi-probe measures it).
+pub(crate) const DIV_SHIFT_NS: u32 = 53;
+/// A pixel's `div_s` on the VM by a divisor that may be under ±1
+/// (paint80-ab8b5's `div4 any`: 253 ns over `div4 mul`'s shift).
+pub(crate) const DIV_SMALL_NS: u32 = 253;
 
 /// The JIT's loop around a pixel (its counter, output pointer, branch),
 /// ns: jit1-b's `gray(x)` kernel 107 ns a pixel less its colour (27).
@@ -2890,6 +2952,10 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         // Instruction counts until the spare measures them.
         TAB => 40,
         SPR => 110,
+        // `fixed::DivBy`'s steps inline (~18 instructions where the ranges
+        // say the divisor is past ±1, ~27 where they don't; a constant's:
+        // `jit_step_ns`). Instruction counts until the spare measures them.
+        DIV_S => 115,
         c => value_ns(c).saturating_sub(60).max(60),
     }
 }
@@ -3000,7 +3066,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         ADD | ADD_W => fixed::add(a, b),
         SUB | SUB_W => fixed::sub(a, b),
         MUL | MUL_W | MUL_N => fixed::mul(a, b),
-        DIV => fixed::div(a, b),
+        DIV | DIV_S => fixed::div(a, b),
         MOD => fixed::modulo(a, b),
         MASK => fixed::mask(a, b),
         LT => fixed::lt(a, b),

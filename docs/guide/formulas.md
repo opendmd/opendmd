@@ -249,7 +249,8 @@ the clock. Until then, and in the editor's preview and the gallery, each
 reads the value in the last column, so a formula always looks right.
 
 Two functions tell when one of them changed: `since(replay.game)` is the
-seconds since it last changed (32767 when it never has), and
+seconds since it last changed (held at 32766, about 9 hours; 32767 only
+when it never has), and
 `was(replay.game)` its value before. A flash when a game starts is
 `max(0, 1 - since(replay.game))`; a fade from the old game's colour to the
 new one is `mix(was(replay.game), replay.game, min(1, since(replay.game)))`.

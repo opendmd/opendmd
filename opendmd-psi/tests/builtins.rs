@@ -194,14 +194,21 @@ fn spec_names() -> String {
             "words that are keywords in one place only",
             code_list(&builtins::CONTEXT_WORDS),
         ),
+        (
+            "words of the draw stage and scenes (names elsewhere)",
+            code_list(&["if", "else", "when", "scene", "tween"]),
+        ),
+        ("the picture under", code_list(&["under", "under(x, y)"])),
+        (
+            "the built-in inputs' groups (never a name)",
+            code_list(&["sun", "moon", "replay"]),
+        ),
     ] {
         s.push_str(&format!("| {kind} | {} |\n", cell(&names)));
     }
-    s.push_str(&format!(
-        "\nA formula may set a name added after people had saved formulas, and then it is the formula's own: {}, {} and `seed`, `ink`, `line`, `dot`, `forever`.\n",
-        code_list(&builtins::LATER),
-        code_list(&builtins::LATER_FUNCS)
-    ));
+    s.push_str(
+        "\n**The name rule.** A formula's own names win. Any built-in value's name, and any built-in function's or drawing call's, may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`): from the line that sets it, the name reads as the formula's value wherever a value is read, and a call `name(…)` is still the built-in function (`since`, `was`, `under` and `ink(n)` as `sin`). Not names: the keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216). A `fn`, table, sprite or palette of the formula's takes a name of its own: no built-in function's (E215) and no value's it has set (E203). `since(k)` and `was(k)` read the built-in inputs only: of a name the formula set they are refused (E217), never read two ways on one line. A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
+    );
     s.push_str("<!-- psi-builtins end -->\n");
     s
 }
