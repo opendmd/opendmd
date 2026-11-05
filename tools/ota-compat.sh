@@ -36,8 +36,9 @@ open(sys.argv[1], "wb").write(img)' "$tmp/app.bin"
   sign sign-www "$root/opendmd-web/www.pack" --out "$tmp/www.pack" --key "$tmp/k" >/dev/null
   bundle=$tmp/b.odfw pub=$tmp/p www=$tmp/www.pack
 fi
+bundle=$(realpath "$bundle") pub=$(realpath "$pub") www=$(realpath "$www")
 cp "$root/tools/fixtures/ota-compat.rs" "$tree/opendmd-core/tests/ota_compat.rs"
-(cd "$tree/opendmd-core" && OTA_COMPAT_BUNDLE=$(realpath "$bundle") OTA_COMPAT_PUB=$(realpath "$pub") OTA_COMPAT_WWW=$(realpath "$www") \
+(cd "$tree/opendmd-core" && OTA_COMPAT_BUNDLE=$bundle OTA_COMPAT_PUB=$pub OTA_COMPAT_WWW=$www \
   RUSTUP_TOOLCHAIN=stable cargo test -q --features ota --test ota_compat -- --nocapture)
 rm -f "$tree/opendmd-core/tests/ota_compat.rs"
 echo "OTA_COMPAT_OK $tag"
