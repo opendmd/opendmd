@@ -727,7 +727,7 @@ def retried(url: str) -> bool:
     return any(p in url for p in ("/gifs/", "/api/files", "/api/cache/list", "/api/cache/failed"))
 
 
-def new_page(browser, size: str, errors: list[str]) -> Page:
+def new_page(browser, size: str, errors: list[str], banner: bool = False) -> Page:
     w, h = SIZES[size]
     phone = size == "phone"
     # bypass_csp: Playwright's wait_for_function evaluates strings, which the
@@ -736,6 +736,11 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
                               is_mobile=phone, has_touch=phone, bypass_csp=True)
     site_art_index(ctx)
     page = ctx.new_page()
+    # The no-key banner (js/keynag.js) is "Not now" for this visit, as a
+    # person would leave it: the layout checks measure the views without it.
+    # key_checks looks at it on a page of its own (banner=True).
+    if not banner:
+        page.add_init_script("try { sessionStorage.setItem('odmd.keynag', 'later'); } catch (e) {}")
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
             and not ("status of 503" in m.text and retried(m.location.get("url", "")))
@@ -3245,6 +3250,30 @@ def key_checks(browser, page: Page, base: str) -> None:
           "key: a bad api_key is a 400")
     cfg = get_json(base + "/api/config")
     check(cfg.get("api_key_set") is False and "api_key" not in cfg, "key: config has api_key_set false, never the key")
+    # No key: one banner, plain words, offering to set one (js/keynag.js);
+    # Not now hides it for this visit only.
+    nag_errors: list[str] = []
+    nag = new_page(browser, "laptop", nag_errors, banner=True)
+    nag.goto(base + "/")
+    nag.wait_for_selector("#keynag", timeout=20000)
+    page_was, page = page, nag
+    t = page.inner_text("#keynag")
+    check("Anyone on your WiFi" in t and "Set a key" in t and not re.search(r"cache|copy|bucket", t, re.I),
+          f"key: the no-key banner says so plainly ({t!r})")
+    page.click("#keynag-later")
+    page.reload()
+    page.wait_for_selector("#nav", timeout=20000)
+    page.wait_for_timeout(1500)
+    check(page.locator("#keynag").count() == 0, "key: Not now hides the banner for this visit")
+    page.evaluate("sessionStorage.removeItem('odmd.keynag')")
+    page.reload()
+    page.wait_for_selector("#keynag", timeout=20000)
+    page.click("#keynag-set")
+    page.wait_for_selector("#sec-key", timeout=20000)
+    check(page.evaluate("location.hash") == "#settings/device" and page.locator("#keynag").count() == 0,
+          "key: Set a key opens Settings › Device, where the switch is")
+    page.context.close()
+    page = page_was
     goto_view(page, "settings/device")
     page.wait_for_selector("#sec-key", timeout=20000)
     check(not page.is_checked("#sec-key") and "plain HTTP" in page.inner_text("#st-sec"), "key: Security card, switch off")
@@ -3284,7 +3313,7 @@ def key_checks(browser, page: Page, base: str) -> None:
               "key: after a reload the switch is on, the key not shown, no dialog")
         # Another browser: the dialog; a wrong key asks again; the right one works.
         fresh: list[str] = []
-        other = new_page(browser, "laptop", fresh)
+        other = new_page(browser, "laptop", fresh, banner=True)
         other.goto(base + "/")
         other.wait_for_selector("#key-dlg[open]", timeout=20000)
         check("This player needs its API key" in other.inner_text("#key-dlg"), "key: a fresh browser gets the key dialog")
@@ -3300,6 +3329,7 @@ def key_checks(browser, page: Page, base: str) -> None:
         wait_lit(other, "#now-panel", "key: now")
         check(other.locator("#key-dlg").count() == 0 and json.loads(other.evaluate("localStorage.getItem('odmd.apiKey')")) == key,
               "key: the right key loads Now (preview lit) and is kept")
+        check(other.locator("#keynag").count() == 0, "key: with a key set, no banner")
         other.context.close()
         bad = [e for e in fresh if "HTTP 401" not in e and "401 (Unauthorized)" not in e]
         check(not bad, f"key: the fresh browser's only errors are its 401s {bad[:3]}")

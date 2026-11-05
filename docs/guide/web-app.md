@@ -224,8 +224,12 @@ Settings has four tabs, and everything saves as you change it (a green
     undone unless you press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
   - **Firmware** shows the version and installs updates (see
     [Updating](updating.md)).
-  - **Security** can require a key before the player can be controlled,
-    for shared networks. The web app asks for it once.
+  - **Security** can require a key before the player can be controlled.
+    Without one, anyone on your WiFi can change the panel, so the web app
+    shows a banner offering to set one until you do (the setup page offers
+    one too). Each browser asks for the key once. The key is the only lock,
+    and it travels in clear text on your network: keep the panel on a
+    network you trust.
 
 ## On a phone
 
