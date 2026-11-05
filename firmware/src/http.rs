@@ -3108,15 +3108,17 @@ impl std::fmt::Write for Piecewise<'_> {
     }
 }
 
-/// `"net":{...}`: the network side's heap and lwIP's state (`netstat`), and
-/// the status reads refused for the heap.
+/// `"net":{...}`: the network side's heap and lwIP's state (`netstat`), the
+/// status reads refused for the heap, and the bodies the httpd task gave up
+/// waiting for (`httpd::BodyStalled`).
 fn net_json() -> String {
     let n = crate::netstat::json();
     format!(
-        r#"{},"status_refused":{},"heavy_refused":{}}}"#,
+        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{}}}"#,
         &n[..n.len() - 1],
         STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
-        HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+        HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
+        crate::httpd::bodies_stalled()
     )
 }
 

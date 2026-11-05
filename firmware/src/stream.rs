@@ -38,7 +38,7 @@
 //!
 //! **One upload at a time, none waiting** ([`MAX_UPLOADS`]). A waiting
 //! upload's client has sent its window already, and each of those frames
-//! stays in one of the WiFi driver's six receive buffers until its turn
+//! stays in one of the WiFi driver's receive buffers (eight) until its turn
 //! comes (see "The receive side" in `sdkconfig.defaults`). The window caps
 //! the bytes, not the frames: in the emulator a waiting upload held five
 //! buffers for 2.6 KB of small segments, and the one being received starved

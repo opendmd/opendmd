@@ -9,6 +9,9 @@ collides with another run.
 
 Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the card out):
   basics      GET /api/status and /api/config; PUT a setting, read back; a bad PUT is a 400
+  stalled     a PUT /api/config whose body stops part way: a 503 + Retry-After after one receive
+              timeout, the connection dropped, net.body_stalled counted, nothing saved, and a
+              status read sent meanwhile answered (STALLED_BODY)
   files       uploads (PUT /api/files/..., ?new=1 and its 409, a replace), read back byte for
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
@@ -40,7 +43,7 @@ the firmware is back with the bundle's version.
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
 """
-import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time, zlib
+import base64, contextlib, hashlib, json, os, random, re, shutil, signal, socket, struct, subprocess, sys, threading, time, zlib
 import http.client, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -412,7 +415,13 @@ class Lane:
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "stalled":
+                # (A diagnostic shortcut: the stalled body alone, then stop.)
+                self.dwell_set = int(api.json("GET", "/api/config")[1]["dwell_max"])
+                self.stalled_body(api)
+                return
             self.basics(api)
+            self.stalled_body(api)
             self.files(api)
             self.play(emu, api)
             if getattr(self.a, "long_psb", None):
@@ -474,6 +483,42 @@ class Lane:
         _, c = api.json("GET", "/api/config")
         self.expect((c.get("lat"), c.get("lon")) == (-33.87, 151.21), "location", f"read back {c.get('lat')}, {c.get('lon')}")
         self.ok("status, config", f"GET both; PUT dwell_max {self.dwell0} -> {self.dwell_set} read back; a bad value 400, nothing changed; lat/lon set, rounded, refused alone or off the globe, cleared, set again")
+
+    def stalled_body(self, api):
+        """STALLED_BODY (net-stall): a JSON body that stops part way. The httpd task reads it, and
+        serves no one else meanwhile: it waited 3 x 10 s for the rest, then 10 s more purging it,
+        so under simultaneous uploads (their frames holding the WiFi driver's receive buffers) one
+        live edit's stalled body held every client, status polls and the refusals that would
+        have freed those buffers included. Now one receive timeout (2 s) ends it: a 503 with
+        Retry-After (the web app asks again), the connection dropped, `net.body_stalled`
+        counted; and a status read sent meanwhile is answered, after that wait, not 30-40 s
+        later. (The wait itself is not checked: emulated time is not wall time.)"""
+        before = ((api.status() or {}).get("net") or {}).get("body_stalled")
+        self.expect(before is not None, "stalled body", "no net.body_stalled in /api/status")
+        body = json.dumps({"dwell_max": self.dwell_set}).encode()
+        head = (f"PUT /api/config HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {len(body) + 64}\r\n\r\n").encode()
+        with socket.create_connection(("127.0.0.1", PORT), timeout=30) as s:
+            s.sendall(head + body[:6])
+            time.sleep(0.5)
+            t0 = time.time()
+            code, _, _ = api.raw("GET", "/api/status", timeout=20)
+            status_s = time.time() - t0
+            self.expect(code == 200, "stalled body", f"a status read beside a stalled body: HTTP {code}")
+            got = b""
+            try:
+                while chunk := s.recv(4096):
+                    got += chunk
+            except (ConnectionResetError, TimeoutError, socket.timeout):
+                pass
+        line = got.split(b"\r\n", 1)[0]
+        self.expect(b" 503 " in line + b" ", "stalled body", f"the stalled PUT was answered {line[:80]!r} (want 503), {len(got)} B")
+        self.expect(re.search(rb"(?im)^retry-after:\s*\d", got), "stalled body", f"its 503 has no Retry-After: {got[:300]!r}")
+        net = (api.status() or {}).get("net") or {}
+        self.expect((net.get("body_stalled") or 0) > before, "stalled body", f"net.body_stalled {before} -> {net.get('body_stalled')}")
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("dwell_max") == self.dwell_set, "stalled body", f"the stalled PUT changed dwell_max to {cfg.get('dwell_max')}")
+        self.ok("stalled body", f"a PUT whose body stopped: {line.decode(errors='replace')} with Retry-After, dropped, net.body_stalled {before} -> {net.get('body_stalled')}; a status read beside it answered in {status_s:.1f} s wall")
 
     def files(self, api):
         g = self.gifs
@@ -1210,7 +1255,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled"):
             lane.card_checks()
             lane.run_b()
     except LaneFail as e:
