@@ -168,7 +168,8 @@ type Handler = Box<dyn Fn(&mut Req) -> Result<()> + Send + Sync + 'static>;
 /// and by `PUT /api/config`.
 static API_KEY: Mutex<String> = Mutex::new(String::new());
 /// The device is the setup access point: no key is asked, so a lost key can
-/// be cleared from the setup network.
+/// be cleared from the setup network, and only the setup routes answer
+/// (`opendmd_core::access::setup_route`).
 static SETUP_MODE: AtomicBool = AtomicBool::new(false);
 /// The names a request's `Host` may carry besides the fixed ones
 /// (`opendmd_core::access::host_allowed`): the configured name, the one
@@ -181,6 +182,11 @@ pub fn set_api_key(key: &str) {
 
 pub fn set_setup_mode(on: bool) {
     SETUP_MODE.store(on, Ordering::Relaxed);
+}
+
+/// Whether the device is the setup network now (the settings handlers ask).
+pub fn setup_mode() -> bool {
+    SETUP_MODE.load(Ordering::Relaxed)
 }
 
 /// The panel's own names, from the status (`hostname`, `mdns`, `ip`):
@@ -219,7 +225,7 @@ fn refuse(req: &mut Req, close: bool, code: u16, status: &str, why: &str) -> Opt
 #[inline(never)]
 #[optimize(size)]
 fn gate(req: &mut Req) -> Option<bool> {
-    use opendmd_core::access;
+    use opendmd_core::access::{self, Setup};
     let path = req.path().to_string();
     let close = req.content_len() > 8192;
     let setup = SETUP_MODE.load(Ordering::Relaxed);
@@ -254,6 +260,25 @@ fn gate(req: &mut Req) -> Option<bool> {
             }
             log::warn!("{} {path}: 421, Host {host} is not this panel", req.method_name());
             return refuse(req, close, 421, "421 Misdirected Request", access::MISDIRECTED);
+        }
+    }
+    if setup {
+        match access::setup_route(req.method_name(), &path) {
+            Setup::Allow => {}
+            Setup::Portal => {
+                let _ = req.redirect(&portal());
+                return Some(false);
+            }
+            Setup::Refuse => {
+                log::info!("{} {path}: 403, not on the setup network", req.method_name());
+                return refuse(
+                    req,
+                    close,
+                    403,
+                    "403 Forbidden",
+                    "the setup network only sets up WiFi",
+                );
+            }
         }
     }
     if access::needs_key(&path) && !setup {

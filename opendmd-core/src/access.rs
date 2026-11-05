@@ -107,6 +107,53 @@ pub fn host_allowed(host: &str, names: &Names) -> bool {
 pub const MISDIRECTED: &str =
     "this panel answers only to its own names: opendmd.local, <its name>.local or its IP address";
 
+/// What the gate does with a request while the panel is the open setup
+/// network (`SETUP_MODE`): the WiFi setup, and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setup {
+    /// One of the routes the setup page needs.
+    Allow,
+    /// A page or probe from anywhere: sent to the setup page (the captive
+    /// portal).
+    Portal,
+    /// Not on the setup network (403).
+    Refuse,
+}
+
+/// The phones' and laptops' captive-portal probes (`http.rs` registers
+/// each).
+pub const PORTAL_PROBES: [&str; 6] = [
+    "/hotspot-detect.html", // Apple
+    "/generate_204",        // Android
+    "/gen_204",             // Android, older
+    "/ncsi.txt",            // Windows
+    "/connecttest.txt",     // Windows 10+
+    "/canonical.html",      // Firefox
+];
+
+/// While in setup mode: the setup page, its status, the WiFi scan, the
+/// settings (`PUT /api/config` limited to [`SETUP_CONFIG_KEYS`] by its
+/// handler) and the restart that joins the network. Every other API route
+/// and every card file is refused; any other page is the setup page.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn setup_route(method: &str, path: &str) -> Setup {
+    let get = method == "GET";
+    match path {
+        "/" | "/setup" if get => Setup::Allow,
+        "/api/status" | "/api/config" | "/api/wifi/scan" if get => Setup::Allow,
+        "/api/config" if method == "PUT" => Setup::Allow,
+        "/api/reboot" if method == "POST" => Setup::Allow,
+        p if get && PORTAL_PROBES.contains(&p) => Setup::Allow,
+        p if get && !p.starts_with("/api/") && !is_card_path(p) => Setup::Portal,
+        _ => Setup::Refuse,
+    }
+}
+
+/// The settings `PUT /api/config` may change on the setup network: the
+/// WiFi, the display's name and the API key (set, or `""` to clear a lost
+/// one).
+pub const SETUP_CONFIG_KEYS: [&str; 4] = ["wifi_ssid", "wifi_pass", "hostname", "api_key"];
+
 fn host_part(s: &str) -> String {
     let s = s.trim().to_ascii_lowercase();
     let s = s.strip_suffix('/').unwrap_or(&s);
@@ -295,4 +342,47 @@ mod tests {
         assert!(!host_allowed("hall.local", &renamed));
     }
 
+    #[test]
+    fn setup_mode() {
+        use Setup::*;
+        for (m, p) in [
+            ("GET", "/"),
+            ("GET", "/setup"),
+            ("GET", "/api/status"),
+            ("GET", "/api/config"),
+            ("PUT", "/api/config"),
+            ("GET", "/api/wifi/scan"),
+            ("POST", "/api/reboot"),
+            ("GET", "/generate_204"),
+            ("GET", "/hotspot-detect.html"),
+        ] {
+            assert_eq!(setup_route(m, p), Allow, "{m} {p}");
+        }
+        for (m, p) in [
+            ("GET", "/index.html"),
+            ("GET", "/js/app.js"),
+            ("GET", "/www/index.html"),
+            ("GET", "/favicon.ico"),
+        ] {
+            assert_eq!(setup_route(m, p), Portal, "{m} {p}");
+        }
+        for (m, p) in [
+            ("PUT", "/api/www"),
+            ("PUT", "/api/firmware"),
+            ("PUT", "/api/files/gifs/x.gif"),
+            ("DELETE", "/api/files/gifs"),
+            ("GET", "/api/files"),
+            ("GET", "/gifs/A/b.gif"),
+            ("GET", "/formulas/a.psi"),
+            ("GET", "/filelist.txt"),
+            ("POST", "/api/skip"),
+            ("PUT", "/api/manifest"),
+            ("POST", "/api/follow/test"),
+            ("GET", "/api/www"),
+            ("POST", "/"),
+            ("POST", "/api/card/format"),
+        ] {
+            assert_eq!(setup_route(m, p), Refuse, "{m} {p}");
+        }
+    }
 }

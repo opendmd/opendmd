@@ -56,10 +56,10 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div class="msg err" id="hostnote" hidden></div>
 <button id="savewifi">Connect</button>
 <div class="msg" id="wifimsg"></div>
-<p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button> &middot; <a href="/index.html">Use the web app without WiFi</a></p>
+<p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button><span id="appl"> &middot; <a href="/index.html">Open the web app</a></span></p>
 </section>
 
-<details>
+<details id="adv">
 <summary>Advanced and recovery</summary>
 
 <section>
@@ -68,7 +68,9 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <button class="alt" id="refresh">Refresh</button>
 </section>
 
-<section>
+<p class="hint" id="apnote" hidden>On the setup network the display only sets up WiFi. Join your own network to use the rest.</p>
+
+<section id="player">
 <h2>Player</h2>
 <div class="row">
   <div><label for="bright">Brightness (0-255)</label><input id="bright" type="number" min="0" max="255"></div>
@@ -90,7 +92,7 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div class="msg" id="cfgmsg"></div>
 </section>
 
-<section>
+<section id="upsec">
 <h2>Upload a file to the card</h2>
 <label for="dest">Destination path on the card</label>
 <input id="dest" value="/sets/example.txt">
@@ -101,7 +103,7 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div class="msg" id="upmsg"></div>
 </section>
 
-<section>
+<section id="wwwsec">
 <h2>Web app</h2>
 <p class="hint">The web app is stored on the display. To repair it, pick the <code>opendmd-&hellip;-www.pack</code>
 file from a release. For firmware, use <b>Check for updates</b> in the web app, or the installer.</p>
@@ -130,6 +132,11 @@ $('host').oninput = () => { $('hosturl').textContent = 'http://' + (hostVal() ||
 async function loadStatus() {
   try {
     const s = await (await fetch('/api/status')).json();
+    // On the setup network only the WiFi can be set: no web app, no card.
+    const ap = s.wifi === 'ap';
+    $('appl').hidden = ap;
+    for (const id of ["player", "upsec", "wwwsec"]) $(id).hidden = ap;
+    $('apnote').hidden = !ap;
     const np = s.now_playing || {};
     const rows = [
       ['Version', s.version + ', ' + ({ '4mb': 'DevKit (4 MB)', '8mb': '8 MB build' }[s.variant] || s.variant)],
