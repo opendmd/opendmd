@@ -49,15 +49,11 @@ export async function mount(el) {
   const ov = new Overrides();
   ov.onChange = () => tree.refresh();
 
-  // Live: its items (and the text's form, in liveBox).
-  const liveBox = h('div', { id: 'lib-live', hidden: true });
-  const liveOn = () => { liveBox.hidden = search.value.trim() ? true : !(current?.path[0] == '@' || tree.open.has('@')); };
   const tree = new Tree({
     picked: app.selection,
     ticking: () => selecting,
     open: store.get('lib.open', null) ?? ['Consoles'],
-    onOpen: (o) => { store.set('lib.open', o); liveOn(); },
-    live: async () => (await import('./live.js')).items(liveBox, preview, () => tree.refresh()),
+    onOpen: (o) => store.set('lib.open', o),
     onPick: (it) => preview(it),
     onMenu: (it, x, y) => menu(ov, it.path, x, y),
     onHold: (it) => { selMode(true); toggle(it.path, true); },
@@ -92,7 +88,7 @@ export async function mount(el) {
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
-      canvas, cap, body, liveBox));
+      canvas, cap, body));
 
   // On a phone the chips scroll sideways: fade an edge while more is off that side.
   const r2 = h('div.lib-r2', { id: 'lib-r2' }, chips);
@@ -119,7 +115,6 @@ export async function mount(el) {
     current = it;
     tree.cur = it.path;
     it.pick?.();
-    liveOn();
     tree.refresh();
     side.classList.add('open');
     body.hidden = false;
@@ -205,7 +200,6 @@ export async function mount(el) {
     if (was && !q) plats.clear();
     was = q;
     tree.filter(search.value, plats);
-    liveOn();
   }
   function counted(st) {
     const text = search.value.trim();
@@ -227,7 +221,7 @@ export async function mount(el) {
 
   const opts = () => {
     // The folder open (one), else the picked GIF's, else the first open.
-    const open = [...tree.open].filter((x) => x[0] != '@'), cur = current?.path.startsWith('/gifs/') && current.path.split('/')[2];
+    const open = [...tree.open], cur = current?.path.startsWith('/gifs/') && current.path.split('/')[2];
     const c = (open.length === 1 ? open[0] : cur) || open[0] || '';
     return { category: c, categories: tree.real(), platforms: [...new Set(tree.rows.filter((r) => r.path).map((r) => r.e.platform).filter(Boolean))] };
   };

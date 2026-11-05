@@ -5,7 +5,7 @@
 
 import { app } from './state.js';
 import { actions, closeMenu } from './overrides.js';
-import { h, clear, on, toast, lines, note, isSys, byNice } from './util.js';
+import { h, clear, on, toast, lines, note, isSys, byNice, gone } from './util.js';
 
 export async function mount(el) {
   const setsList = h('div.list', { id: 'sets-list' });
@@ -62,7 +62,7 @@ export async function mount(el) {
       }
       const text = await app.text(p.path).catch(() => null);
       if (t !== ctok) return;
-      if (text != null) n.textContent = lines(text).length.toLocaleString();
+      if (text != null) n.textContent = lines(text).filter((p) => !gone(p)).length.toLocaleString();
     }
   }
 
@@ -70,7 +70,7 @@ export async function mount(el) {
     try {
       const text = await app.text(p.path, true);
       if (text == null) throw new Error('not served by this source');
-      app.draft.paths = lines(text);
+      app.draft.paths = lines(text).filter((p) => !gone(p));
       app.draft.name = p.root ? '' : p.value;
       app.draft.path = p.path;
       delete app.draft.copyName;

@@ -1107,7 +1107,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     tab("time")
     page.uncheck("#sc-night-on")
     page.click("#sc-add")
-    page.select_option("#sc-set", "Sprites and Clock")
+    page.select_option("#sc-set", "Sprites")
     for d in page.query_selector_all("#sc-days .chip:not(.on)"):
         d.click()
     page.fill("#sc-from", "00:00")
@@ -1116,7 +1116,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
     now()
     rule = page.inner_text("#now-banner") if page.is_visible("#now-banner") else ""
-    check(rule.startswith("Schedule: Sprites and Clock") and page.input_value("#sim-list") == "/sets/Sprites and Clock.txt",
+    check(rule.startswith("Schedule: Sprites") and page.input_value("#sim-list") == "/sets/Sprites.txt",
           f"demo settings: a rule's playlist plays, with Now's banner ('{rule}')")
     tab("time")
     page.click("#sc-rules [data-rule='0'] button:has-text('Delete')")

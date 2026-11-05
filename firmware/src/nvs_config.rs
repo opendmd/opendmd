@@ -79,8 +79,6 @@ const KEY_CARD_SPEED: &str = "card_speed";
 /// longitude in hundredths of a degree, both or neither.
 const KEY_LAT: &str = "lat_c";
 const KEY_LON: &str = "lon_c";
-/// The longest `attract` value (`text:` and the message).
-pub const ATTRACT_MAX: usize = 205;
 /// The panel timing (`opendmd_core::panel_timing`): the saved settings and
 /// a trial staged for the next boot, both in `PanelTiming::to_nvs` form.
 /// Not part of [`Settings`]: the main task's `Tuner` owns them.
@@ -156,10 +154,10 @@ pub struct Settings {
     /// The playlist attract mode plays (a `set` value); `None` = whatever
     /// would play anyway (the saved playlist, or the schedule's).
     pub attract_set: Option<String>,
-    /// What attract mode shows instead of a playlist: `""` (the playlist,
-    /// as before), `"clock"` (the live clock), `"text:<message>"` (the
-    /// scrolling text). See [`attract_path`]; a stored `"fx:…"` (a built-in
-    /// effect, gone) reads as `""`, with a log line.
+    /// What attract mode shows instead of a playlist: only `""` (the
+    /// playlist) now. A stored `"fx:…"` (a built-in effect), `"clock"` or
+    /// `"text:<message>"` (the live items) — all gone — reads as `""`, with
+    /// a log line; for a clock, `attract_set` names a playlist of a Formula.
     pub attract: String,
     /// The DMD tint (`opendmd_core::look`), applied at the blit.
     pub look: Look,
@@ -205,26 +203,10 @@ pub struct Settings {
     pub location: Option<Place>,
 }
 
-/// Is `v` an `attract` value `PUT /api/config` may store?
+/// Is `v` an `attract` value `PUT /api/config` may store? Only `""`: the
+/// live items (`"clock"`, `"text:…"`) and the built-in effects are gone.
 pub fn valid_attract(v: &str) -> bool {
-    match v.strip_prefix("text:") {
-        _ if v.is_empty() || v == "clock" => true,
-        Some(msg) => {
-            !msg.trim().is_empty() && v.len() <= ATTRACT_MAX && !msg.chars().any(char::is_control)
-        }
-        None => false,
-    }
-}
-
-/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`),
-/// `None` for the playlist.
-pub fn attract_path(v: &str) -> Option<String> {
-    use opendmd_core::synth;
-    match v.strip_prefix("text:") {
-        _ if v == "clock" => Some(synth::CLOCK.to_string()),
-        Some(msg) if !msg.trim().is_empty() => Some(synth::text_path(msg)),
-        _ => None,
-    }
+    v.is_empty()
 }
 
 impl Default for Settings {
@@ -406,10 +388,11 @@ impl Config {
             attract: self
                 .get_string(KEY_ATTRACT)
                 .filter(|s| {
-                    // The built-in effects' form (`fx:tunnel…`) is gone.
-                    if s.starts_with("fx:") {
+                    // The built-in effects' form (`fx:tunnel…`) and the
+                    // live items (`clock`, `text:…`) are gone.
+                    if !valid_attract(s) {
                         log::warn!(
-                            "attract: {:?} is no longer a live item (the built-in effects are gone); showing the playlist",
+                            "attract: {:?} is gone (GIFs and Formulas are what plays); showing the playlist",
                             s.chars().take(48).collect::<String>()
                         );
                     }

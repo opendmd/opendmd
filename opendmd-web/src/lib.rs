@@ -24,7 +24,6 @@ use opendmd_core::layout;
 use opendmd_core::look::{GlowLevel, Look as Tint};
 use opendmd_core::manifest::{normalize_title as core_normalize, Entry};
 use opendmd_core::overrides::{parse_meta, render_meta, Dwell, MetaLine, Override};
-use opendmd_core::synth::{self, WallTime};
 use opendmd_render::BLOOM_STRENGTH;
 use player::{Look, Player, Tick};
 use std::time::Duration;
@@ -287,22 +286,6 @@ fn at(ms: f64) -> Duration {
     Duration::from_secs_f64(ms.max(0.0) / 1000.0)
 }
 
-/// The live clock's time (`@clock`): the browser's local time.
-fn browser_time() -> Option<WallTime> {
-    let d = js_sys::Date::new_0();
-    let wd = d.get_day() as u8;
-    Some(WallTime {
-        year: d.get_full_year() as u16,
-        month: d.get_month() as u8 + 1,
-        day: d.get_date() as u8,
-        weekday: if wd == 0 { 7 } else { wd },
-        hour: d.get_hours() as u8,
-        minute: d.get_minutes() as u8,
-        second: d.get_seconds() as u8,
-        millis: d.get_milliseconds() as u16,
-    })
-}
-
 #[wasm_bindgen]
 impl Preview {
     #[wasm_bindgen(constructor)]
@@ -314,7 +297,6 @@ impl Preview {
         flat: bool,
     ) -> Result<Preview, JsValue> {
         console_error_panic_hook::set_once();
-        synth::set_wall_clock(Some(browser_time));
         let scale = (canvas.width() as usize / opendmd_core::canvas::WIDTH).clamp(1, 32);
         let player = Player::new(
             scale,

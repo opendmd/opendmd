@@ -178,9 +178,13 @@ pub fn count_prepared<R: std::io::BufRead>(
             .strip_prefix('\u{feff}')
             .unwrap_or(&raw)
             .trim_end_matches(['\n', '\r', ' ', '\t']);
-        // A retired effect's line is skipped, as `manifest::scan` does
+        // A retired effect's or live item's line is skipped, as `manifest::scan` does
         // (which logs it).
-        if line.is_empty() || crate::synth::is_retired_effect(line) || crate::manifest::skips_formula(line) {
+        if line.is_empty()
+            || crate::synth::is_retired_effect(line)
+            || crate::synth::is_retired_live(line)
+            || crate::manifest::skips_formula(line)
+        {
             continue;
         }
         if parse && !filter.matches(&crate::manifest::Entry::from_path(line)) {

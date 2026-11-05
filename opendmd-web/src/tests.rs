@@ -455,14 +455,14 @@ mod js {
 }
 
 #[test]
-fn a_live_item_plays_with_no_bytes_and_the_panel_look_applies() {
+fn a_virtual_file_plays_with_no_bytes_and_the_panel_look_applies() {
     // Flat at scale 1: the RGBA is the canvas as the panel shows it.
     let mut p = Player::new(1, Look { flat: true, ..LOOK });
     p.set_transition(Transition::new(
         opendmd_core::compositor::Kind::None,
         ms(400),
     ));
-    p.load("@text?msg=Hi&scroll=0&font=normal", Vec::new(), ms(0));
+    p.load("@card:Hi|", Vec::new(), ms(0));
     assert_eq!(p.tick(ms(0)).unwrap(), Tick::Frame);
     let lit = |p: &Player| {
         p.rgba()
@@ -486,7 +486,7 @@ fn a_live_item_plays_with_no_bytes_and_the_panel_look_applies() {
         opendmd_core::look::Look::Colour,
         opendmd_core::look::GlowLevel::Short,
     );
-    p.load("@text?msg=&scroll=0", Vec::new(), ms(1000));
+    p.load("@card:|", Vec::new(), ms(1000));
     assert_eq!(p.tick(ms(1000)).unwrap(), Tick::Frame);
     assert_eq!(lit(&p), n, "held on the first frame");
     let mut t = 1000;

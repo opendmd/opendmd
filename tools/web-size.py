@@ -22,11 +22,9 @@ page load from flash; 56 KB until display names and the platform chips,
 refresh, 2026-10-22, which treats 60 KB as a ceiling). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
-above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
-scrolling text and the effects' option forms, imported only when either
-category is chosen) have a line of their own too, <= 4 KB, and so does
-Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
-`boot_show` select and the previews of the start-up show), <= 2 KB, and Settings' Power card (`js/power.js`: the Maximum brightness
+above. Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
+`boot_show` select and the previews of the start-up show) has a line of its own
+too, <= 2 KB, and so does Settings' Power card (`js/power.js`: the Maximum brightness
 control and its warning), <= 2 KB, and the Library's Add GIFs and Edit
 details dialogs with Delete (`js/details.js`, imported when first used),
 <= 8 KB, and so does the Library's search of the web (`js/find.js` +
@@ -149,8 +147,6 @@ JS_CSS_GZ_BUDGET = 60 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
-LIVE_GZ_BUDGET = 4 * 1024
-LIVE = {"js/live.js"}
 BOOT_GZ_BUDGET = 2 * 1024
 BOOT = {"js/boot.js"}
 POWER_GZ_BUDGET = 2 * 1024
@@ -529,8 +525,6 @@ def main() -> int:
             kind = "fsubmit"
         elif rel in STUDIO:
             kind = "studio"
-        elif rel in LIVE:
-            kind = "live"
         elif rel in BOOT:
             kind = "boot"
         elif rel in POWER:
@@ -653,7 +647,7 @@ def main() -> int:
         ok &= sgz <= SHARE_GZ_BUDGET and rgz <= PSIREF_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
-                         ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
+                         ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("import", IMPORT_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("keynag", KEYNAG_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),

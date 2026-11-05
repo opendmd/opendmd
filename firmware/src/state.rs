@@ -100,11 +100,10 @@ pub fn largest_free_block() -> usize {
     unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
 }
 
-/// The phosphor glow holds its 12 KB copy now (`/api/status` `glow_held`),
-/// and Follow RePlayOS's attract mode shows its live item (`attract_live`,
-/// the path from the `attract` setting) instead of a playlist. Flags the
-/// main loop sets rather than [`Status`] fields, so the looks pass costs
-/// the status object no heap; `look` and `glow` are read from the settings.
+/// The phosphor glow holds its 12 KB copy now (`/api/status` `glow_held`).
+/// A flag the main loop sets rather than a [`Status`] field, so the looks
+/// pass costs the status object no heap; `look` and `glow` are read from
+/// the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
 
 /// The display loop's command handling (step 1: what the HTTP handlers
@@ -137,7 +136,6 @@ pub static PUBLISH_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::At
 pub static PIXELS_PUSHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 #[cfg(feature = "probe")]
 pub static MAIN_STACK_UNUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-pub static ATTRACT_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// Safe start (`main.rs` `SafeStart`): the uptime second at which the
 /// brightness ceiling lifts from `min(max_brightness, BRIGHTNESS_SAFE_MAX)`

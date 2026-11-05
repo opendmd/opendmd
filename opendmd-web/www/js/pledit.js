@@ -108,7 +108,6 @@ export function editor(se, ctx) {
     rowHeight: 40,
     open: store.get('pl.open', []),
     onOpen: (o) => store.set('pl.open', o),
-    live: async () => (await import('./live.js')).items(h('div'), () => {}, () => tree.refresh()),
     mark: (it) => have.has(it.path),
     extra: (it) => it.e.platform && h('span.tag', it.e.platform),
     onTick: () => foot(),

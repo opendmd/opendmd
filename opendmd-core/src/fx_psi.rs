@@ -3481,10 +3481,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), psi::psb::NOT_PSB);
-        assert!(src.retune("@clock").is_none());
+        assert!(src.retune("@power-on").is_none());
         assert!(src.retune("@formulas").is_none());
         let mut clock =
-            crate::synth::SynthSource::new(crate::synth::open("@clock").unwrap()).unwrap();
+            crate::synth::SynthSource::new(crate::synth::open("@power-on").unwrap()).unwrap();
         assert!(
             clock.retune(&b).is_none(),
             "a formula only replaces a formula"
@@ -3546,7 +3546,7 @@ mod tests {
             p.len()
         );
         open(&p).unwrap();
-        let text = format!("@text?msg={}", "x".repeat(600));
+        let text = format!("@card:{}", "x".repeat(600));
         assert_eq!(open(&text).unwrap_err().kind(), ErrorKind::InvalidData);
     }
 
