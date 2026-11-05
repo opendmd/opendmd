@@ -993,6 +993,7 @@ flasher:
 	@for v in $(FW_VARIANTS); do test -f $(DIST)/manifest-$$v.json || { echo "no $(DIST)/manifest-$$v.json: run make fw-release first"; exit 2; }; done
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
 	cp flasher/index.html $(FLASHER_SITE)/
+	cp -r flasher/esp-web-tools $(FLASHER_SITE)/ && cp licenses/THIRD-PARTY-LICENSES-installer.txt $(FLASHER_SITE)/esp-web-tools/
 	cp $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FW_WWW_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
 	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
 	  $(DIST)/opendmd-$(FW_VERSION)-$$v-app.bin $(DIST)/opendmd-$(FW_VERSION)-$$v-full.bin $(FLASHER_SITE)/firmware/ || exit 1; done
