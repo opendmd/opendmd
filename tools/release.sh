@@ -249,7 +249,8 @@ fi
 
 [ -f "$FW_SIGN_KEY" ] || die "no signing key at $FW_SIGN_KEY"
 [ "$(stat -c %s "$FW_SIGN_KEY")" -eq 32 ] || die "$FW_SIGN_KEY is not a 32-byte key"
-pass "signing key present (32 bytes; its contents are never read here)"
+[ $(( 8#$(stat -c %a "$FW_SIGN_KEY") & 8#077 )) -eq 0 ] || die "$FW_SIGN_KEY is readable by others (mode $(stat -c %a "$FW_SIGN_KEY")): chmod 600 it"
+pass "signing key present (32 bytes, mode $(stat -c %a "$FW_SIGN_KEY"); its contents are never read here)"
 
 # ---- 2. bump --------------------------------------------------------------
 

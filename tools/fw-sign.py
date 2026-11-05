@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pynacl>=1.5"]
+# dependencies = ["pynacl==1.5.0"]
 # ///
 """Sign, verify and inspect OpenDMD firmware bundles (docs/ota.md).
 
@@ -96,6 +96,12 @@ def die(msg: str, code: int = 1) -> None:
 
 
 def load_key(path: Path) -> SigningKey:
+    try:
+        mode = path.stat().st_mode
+    except OSError as e:
+        die(f"cannot read the private key {path}: {e} (make one with `keygen`)")
+    if mode & 0o077:
+        die(f"{path} is readable by others (mode {mode & 0o777:o}): chmod 600 {path}")
     try:
         seed = path.read_bytes()
     except OSError as e:
