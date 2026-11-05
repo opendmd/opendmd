@@ -308,9 +308,11 @@ impl DivBy {
         // floor(n·2^16 / d) = floor(n·2^p / k): 2^16 and d's common twos
         // taken out.
         let tz = d.trailing_zeros().min(16);
-        let (k, p) = (u128::from(d >> tz), 16 - tz);
-        for s in 0..32u32 {
-            let big = 1u128 << (32 + s + p);
+        let (k, p) = (u64::from(d >> tz), 16 - tz);
+        // (m < 2^32 needs 2^(s+p) < k < 2^32: every power here fits 64
+        // bits, and no 128-bit division is linked.)
+        for s in 0..32 - p {
+            let big = 1u64 << (32 + s + p);
             let m = big.div_ceil(k);
             if m >> 32 != 0 {
                 return None;
@@ -319,7 +321,7 @@ impl DivBy {
             // plus n·e / (k·2^(32+s)), under the 1/k a fraction's
             // remainder leaves when n·e < 2^(32+s) (n ≤ 2^31).
             let e = m * k - big;
-            if (e << 31) < (1u128 << (32 + s)) {
+            if (e << 31) < (1u64 << (32 + s)) {
                 return Some((m as u32, s));
             }
         }
