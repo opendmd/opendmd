@@ -357,6 +357,10 @@ pub(crate) mod code {
     pub const DIV_BIG: u8 = 1;
     /// `DIV_S`'s `c`: b > 0.
     pub const DIV_POS: u8 = 2;
+    /// `DIV_S`'s `c`: a ≥ 0 (the JIT skips the magnitude and the sign).
+    pub const DIV_NONNEG: u8 = 4;
+    /// `DIV_S`'s `c`: |b| may be under 1 (the VM's slow case: the costs).
+    pub const DIV_SMALL: u8 = 8;
 
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
@@ -1601,11 +1605,28 @@ impl Prog {
             return 0;
         }
         if op.code == DIV_S {
-            // A constant divisor: a magic number's multiply (~8
-            // instructions) or the general steps; else the ranges'.
+            // Fitted to paint80-ab8b5's div4 rows on the spare (2026-11-05,
+            // each over `div4 mul`'s shifts, four a pixel): a constant's
+            // magic number 34-39 ns (±2^j, whole numbers), the general
+            // steps 89 for a divisor past ±1, 113 at ±1 or more, 115 where
+            // it may be under 1. Of a dividend never below 0 (no magnitude
+            // or sign: a shift alone for ±2^j, the multiply and its
+            // shift): instruction counts.
+            let nonneg = op.c & DIV_NONNEG != 0;
             return match self.const_value(op.b, self.len()) {
-                Some(b) if crate::fixed::DivBy::magic(b).is_some() => 35,
-                _ if op.c & DIV_BIG != 0 => 80,
+                Some(b) if nonneg && crate::fixed::DivBy::shift(b).is_some() => 6,
+                Some(b) if crate::fixed::DivBy::magic(b).is_some() => {
+                    if nonneg {
+                        15
+                    } else {
+                        37
+                    }
+                }
+                Some(b) if b.unsigned_abs() > ONE as u32 => 89,
+                Some(b) if b.unsigned_abs() == ONE as u32 => 113,
+                Some(_) => 115,
+                _ if op.c & DIV_BIG != 0 => 89,
+                _ if op.c & DIV_SMALL == 0 => 113,
                 _ => jit_value_ns(op.code),
             };
         }
@@ -1717,6 +1738,9 @@ impl Prog {
             // By a constant ±2^j: a shift towards zero, `shr`'s and a few
             // more (a guess until psi-probe measures it).
             DIV_S if self.const_value(op.b, self.len()).and_then(crate::fixed::DivBy::shift).is_some() => DIV_SHIFT_NS,
+            // (paint80-ab8b5: 136 ns a pixel for a constant or a divisor of
+            // ±1 or more, 253 for one that may be under 1.)
+            DIV_S if op.c & DIV_SMALL != 0 && self.const_value(op.b, self.len()).is_none() => DIV_SMALL_NS,
             c => value_ns(c),
         }
     }
@@ -2815,13 +2839,11 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // 52 cycles the micro rows saw it save.
         DIV => 360,
         // `fixed::DivBy` along the lane: two multiplies, a compare and the
-        // shifts, and the divisor's own once a lane (a 64-bit division, ~1
-        // µs: ~8 ns a pixel). paint80-c10d6 on the spare (2026-11-05): four
-        // `w/(y + k)` a pixel, 2,851 µs a frame over `div base` with their
-        // three adds (174 ns a pixel each, less `add_w`'s 28). (Its other
-        // `div4` rows divided in the column run, once a column: not a
-        // pixel's cost.)
-        DIV_S => 145,
+        // shifts, and the divisor's own once a lane. paint80-ab8b5 on the
+        // spare (2026-11-05): four a pixel over `div4 mul`'s shifts, 136 ns
+        // each for whole numbers, fractions, a frame's and a row's
+        // divisor (`DIV_SMALL_NS` where it may be under ±1).
+        DIV_S => 136,
         RECIP => 230,
         ATAN2 => 384,
         LEN => 472,
@@ -2867,7 +2889,10 @@ pub(crate) fn value_ns(c: u8) -> u32 {
 
 /// A pixel's `div_s` by a constant ±2^j on the VM, ns (`shr`'s 33 and two
 /// instructions: a guess until psi-probe measures it).
-pub(crate) const DIV_SHIFT_NS: u32 = 40;
+pub(crate) const DIV_SHIFT_NS: u32 = 53;
+/// A pixel's `div_s` on the VM by a divisor that may be under ±1
+/// (paint80-ab8b5's `div4 any`: 253 ns over `div4 mul`'s shift).
+pub(crate) const DIV_SMALL_NS: u32 = 253;
 
 /// The JIT's loop around a pixel (its counter, output pointer, branch),
 /// ns: jit1-b's `gray(x)` kernel 107 ns a pixel less its colour (27).

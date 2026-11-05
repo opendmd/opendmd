@@ -236,12 +236,12 @@ fn the_cost_table_is_the_estimates() {
             "gray(x*px*0.125)",
         ),
         (
-            "| `/` by a number, or by a value the same along the row (`/3`, `/s`) | 145 ",
-            145,
+            "| `/` by a number, or by a value the same along the row (`/3`, `/s`) | 136 ",
+            136,
             "gray(x*px)",
             "gray(x*px/3)",
         ),
-        ("(`/2ⁿ` 40) |", 40, "gray(x*px)", "gray(x*px/8)"),
+        ("(`/2ⁿ` 53;", 53, "gray(x*px)", "gray(x*px/8)"),
     ];
     for &(row, ns, base, more) in narrowed {
         assert!(
