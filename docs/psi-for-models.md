@@ -95,7 +95,7 @@ expr      = or [ "?" expr ":" expr ]           -- both arms are always evaluated
 or        = and { ("or" | "||") and }
 and       = not { ("and" | "&&") not }
 not       = ("not" | "!") not | cmp
-cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
+cmp       = sum [ ("<" | "<=" | ">" | ">=" | "==" | "!=") sum ]   -- one: E218
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
@@ -130,12 +130,12 @@ Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
 **saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
 (0 for 0/0); `a % 0` is 0; a character in single quotes is its ASCII code
 (`'A'` is 65, `'0'` 48, `' '` 32; one character, no strings); `%` is floored (`-1 % 3` is 2; `v % 1` is
-`frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
-Division by a constant is exact once a frame or a row (`floor(minute/10)`
-is 5 from 50 to 59); per pixel it is a multiply by 1/k, which `floor`
-takes rounded up, so `floor(n/k)` is exact for whole numbers with
-n·k < 65,536 (`floor(px/10)`, `floor(i/12)`); elsewhere `px/3` may be off
-by a step or two of 1/65,536. The same formula gives the same bytes on the panel, in the browser and on a
+`frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true;
+comparisons don't chain (`0 < x < 0.5` is refused: write `0 < x and x <
+0.5`). `a / b` is the exact quotient truncated towards zero to a step, at
+every level: `floor(px/10)` is exact, `floor(minute/10)` is 5 from 50 to
+59, and a value worked out per pixel is the same as once a frame. The same
+formula gives the same bytes on the panel, in the browser and on a
 computer.
 
 ## 4. Values
@@ -176,11 +176,12 @@ off, and always in previews and the gallery) each reads its default:
 | `replay.platform` | 0..127 whole | 0 | the platform's place in the panel's platform list, from 1 |
 | `replay.game` | 0..1 | 0 | a hash of the game's name: the same each time it plays |
 
-`since(KEY)` is the seconds since `KEY` last changed (0..32767; 32767 when
-it never has); `was(KEY)` is its value before that change (its default when
+`since(KEY)` is the seconds since `KEY` last changed (0..32766, held
+there after about 9 hours; 32767 only when it never has); `was(KEY)` is its value before that change (its default when
 it never changed). Both are frame values. `KEY` is written as above, dotted
 names whole. A name like `daylight` may be set as your own (then it is
-yours); a dotted one can't. A formula reads 24 of these at most (each
+yours, and `since(daylight)` is refused: name yours something else); a
+dotted one can't, nor `sun`, `moon` or `replay` alone. A formula reads 24 of these at most (each
 `since` and `was` one more). "The panel knows the sun" is `since(sun.alt) <
 32767` (the device moves `sun.alt` every minute or so once it has a
 location): a formula can follow the real sun when it can and its own cycle
@@ -188,10 +189,12 @@ otherwise.
 
 `cx cy r angle` are exactly the formulas after their colons: the same
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
-are 0. **Any built-in value or function name may be set as your own**
+are 0. **Any built-in value or function name may be set as your own value**
 (`b = 0.5`, `r = 3`, `len = 2`): from then on the name is yours (a call,
-`len(…)`, is still the function). Only the words of the language (`loop
-layer part use draw for table fn`) and palette names can't be names.
+`len(…)`, is still the function; so are `since(…)`, `was(…)`, `under(…)`
+and `ink(n)`). Only the words of the language (`loop layer part use draw
+for table fn`), palette names and `sun moon replay` can't be names, and a
+`fn` can't take a built-in function's name (`fn sin` is E215).
 
 ### What a formula says it is: the declarations
 
