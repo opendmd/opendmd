@@ -182,7 +182,10 @@ async function tokenOk(env: RelayEnv, client: string, token: string | null): Pro
   if (!m) return false;
   const age = Math.floor(Date.now() / 1000) - Number(m[1]);
   if (age < -60 || age > TOKEN_TTL) return false;
-  return crypto.subtle.verify("HMAC", await key(env.DB).catch(() => { throw unavailable(); }), unb64url(m[2]), new TextEncoder().encode(`${m[1]}|${client}`));
+  const raw = unb64url(m[2]);
+  // Only the canonical spelling: no second token for the same signature (padding bits in the last character).
+  if (b64url(raw.buffer) !== m[2]) return false;
+  return crypto.subtle.verify("HMAC", await key(env.DB).catch(() => { throw unavailable(); }), raw, new TextEncoder().encode(`${m[1]}|${client}`));
 }
 
 async function limited(env: RelayEnv, client: string): Promise<Response | null> {

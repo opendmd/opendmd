@@ -1318,8 +1318,12 @@ def relay_fence(base: str, up: RelayUpstream) -> None:
     st, h, _ = get(base, "/api/fetch/token", "GET", {"Sec-Fetch-Site": "same-origin"})
     check(st == 405 and h.get("Allow") == "POST", f"relay token: GET refused, 405 ({st})")
     sig = tok.split(".")[-1]
-    flip = tok[:-1] + ("A" if tok[-1] != "A" else "B")
-    for what, t in (("no token", None), ("an empty token", ""), ("a malformed token", "hello"), ("a token with one character changed", flip),
+    # A character in the middle (the last base64 character carries padding bits: changing it can keep the same bytes).
+    i = len(tok) - 20
+    flip = tok[:i] + ("A" if tok[i] != "A" else "B") + tok[i + 1:]
+    # The same signature spelled another way (a padding bit flipped in the last character).
+    alias = tok[:-1] + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".index(tok[-1]) ^ 1]
+    for what, t in (("no token", None), ("an empty token", ""), ("a malformed token", "hello"), ("a token with one character changed", flip), ("the same token spelled another way", alias),
                     ("a token with its time moved on an hour", f"{int(tok.split('.')[0]) + 3600}.{sig}"),
                     ("a token with its time moved back an hour", f"{int(tok.split('.')[0]) - 3600}.{sig}"),
                     ("another network's token", Relay(base).token(f"2001:db8:{Relay.run:x}:3fff::9"))):
