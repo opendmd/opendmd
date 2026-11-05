@@ -186,9 +186,10 @@ sig       64 B, Ed25519 over (magic|version|length|sha256)
 
 Header 140 B, then the image. The public key is compiled into the firmware
 (`firmware/keys/opendmd.pub`, 32 B, committed); the private key never enters
-the repo (`~/.config/opendmd/opendmd.key`, created by `tools/fw-sign.py
-keygen`). `make fw-release` signs; a bundle that fails to verify is refused
-by the device with a 422 and nothing on the card changes.
+the repo (`~/.config/opendmd/opendmd.key`, mode 0600, created by
+`tools/fw-sign.py keygen`; the tool refuses a key file others can read).
+`make fw-release` signs; a bundle that fails to verify is refused by the
+device with a 422 and nothing on the card changes.
 
 **The key trailer** (1.0.0-beta.15 on). `fw-sign.py sign` appends 16
 bytes to the app image before it hashes and signs it:
