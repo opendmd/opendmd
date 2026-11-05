@@ -4539,11 +4539,13 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     (`#gallery=<slug>`: a bundled one is built in, another fetched from
     opendmd.dev/formulas/src/, here a stand-in) or, edited, by postMessage
     from the page that opened it (`#remix`, from opendmd.dev or the app's
-    own origin only), never in the link. It is saved on the panel as it
-    arrives (under Your formulas, kept over a reload; the same text not
-    twice; a bundled one needs nothing; one that doesn't work isn't saved,
-    and comes back as not saved yet) and opens in the editor; a name it
-    doesn't have, no opener, or an opener elsewhere: said plainly."""
+    own origin only), never in the link. A gallery one opens as a draft,
+    saved by Save only (a link writes nothing to the card); a sent one is
+    saved on the panel as it arrives (under Your formulas, kept over a
+    reload; the same text not twice; a bundled one needs nothing; one that
+    doesn't work isn't saved, and comes back as not saved yet) and opens in
+    the editor; a name it doesn't have, no opener, or an opener elsewhere:
+    said plainly."""
     raw = (REPO / "opendmd-web/formulas/searchlight.psi").read_text()
     src = raw.split("\n", 2)[2]
     f = overlay / "formulas" / "searchlight.psi"
@@ -4567,12 +4569,17 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
     check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"],
           f"remix: a gallery Formula is fetched by name and opens in the editor ({got[1:]}, {asked})")
-    # Saved on the panel as it arrives (no Save pressed), and said.
+    # Not saved by the link (anyone can craft one): a draft, until Save.
     t = toast_or_none(page, "ok")
     page.wait_for_timeout(300)
-    check(f.exists() and f.read_text() == src and "Your formulas" in t,
-          f"remix: a gallery Formula is saved on the panel as it arrives (/formulas/searchlight.psi, '{t}')")
+    check(not f.exists() and "Save keeps it" in t,
+          f"remix: a gallery Formula opens as a draft, nothing written to the card ('{t}')")
     shot(page, "formulas-remix", "laptop")
+    page.click("#psi-save")
+    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    page.wait_for_timeout(300)
+    check(f.exists() and f.read_text() == src,
+          "remix: Save keeps the gallery Formula on the panel (/formulas/searchlight.psi)")
     # Still there after a reload, under Your formulas, with the slider as sent.
     page.goto(base + "/#formulas")
     page.reload()
