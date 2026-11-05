@@ -840,7 +840,16 @@ impl<'a> Emitter<'a> {
                 note(Word::Lane(L_REG0 + r as u8));
             }
         }
-        counts.sort_unstable_by_key(|&(w, n)| (core::cmp::Reverse(n), word_rank(w)));
+        // (An insertion sort: the list is short, and `sort_unstable`'s is
+        // ~3.7 KB of flash for this one type.)
+        let key = |&(w, n): &(Word, u32)| (core::cmp::Reverse(n), word_rank(w));
+        for i in 1..counts.len() {
+            let mut j = i;
+            while j > 0 && key(&counts[j]) < key(&counts[j - 1]) {
+                counts.swap(j, j - 1);
+                j -= 1;
+            }
+        }
         for (&(w, _), &r) in counts.iter().zip(spare.iter()) {
             self.hoist.push((w, r));
         }

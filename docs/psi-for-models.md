@@ -770,7 +770,7 @@ multiplies (exactly the division: `/` gives the same at every level).
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
 | + − that can't overflow | 28 | | `*` that can't overflow | 41 (37 when the product is small) |
-| `*` by 1/2ⁿ (`*0.5`, `*0.125`) | 33 | | `/` by a number, or by a value the same along the row (`/3`, `/s`) | 95 (`/2ⁿ` 40) |
+| `*` by 1/2ⁿ (`*0.5`, `*0.125`) | 33 | | `/` by a number, or by a value the same along the row (`/3`, `/s`) | 145 (`/2ⁿ` 40) |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value | 360 (`1/v` 230) | | `hash` | 220 |

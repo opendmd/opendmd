@@ -2815,9 +2815,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // 52 cycles the micro rows saw it save.
         DIV => 360,
         // `fixed::DivBy` along the lane: two multiplies, a compare and the
-        // shifts (a guess until psi-probe measures it), and the divisor's
-        // own once a lane (a 64-bit division, ~1 µs: ~8 ns a pixel).
-        DIV_S => 95,
+        // shifts, and the divisor's own once a lane (a 64-bit division, ~1
+        // µs: ~8 ns a pixel). paint80-c10d6 on the spare (2026-11-05): four
+        // `w/(y + k)` a pixel, 2,851 µs a frame over `div base` with their
+        // three adds (174 ns a pixel each, less `add_w`'s 28). (Its other
+        // `div4` rows divided in the column run, once a column: not a
+        // pixel's cost.)
+        DIV_S => 145,
         RECIP => 230,
         ATAN2 => 384,
         LEN => 472,
