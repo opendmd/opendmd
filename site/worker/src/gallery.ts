@@ -390,7 +390,7 @@ function shareHash(e: Tile): string {
 
 // gallery_page.py ABI_SERVED, ABI_FIRMWARE: the compiled format's version the
 // newest release the site serves plays, and the first release of each version.
-const ABI_SERVED = 2;
+const ABI_SERVED = 3;
 const ABI_FIRMWARE: Record<number, string> = { 1: "1.0.0-beta.13", 2: "1.0.0-beta.14", 3: "1.0.0-beta.15" };
 
 /** gallery_page.py `cost`: what a Formula costs on the panel, as the web app says it. */

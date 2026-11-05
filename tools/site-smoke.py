@@ -1486,7 +1486,9 @@ def reachable(site: Path) -> None:
                 todo.append(nxt)
     moved = {ln.split()[0].lstrip("/") for ln in (site / "_redirects").read_text().splitlines() if ln.strip()}
     pages = {p.relative_to(site).as_posix() for p in site.rglob("*.html")}
-    want = {p for p in pages if not p.startswith("demo/") and p != "404.html" and p not in moved}
+    # /stats is public but unlinked on purpose (the owner's call).
+    unlinked = {"404.html", "stats.html"}
+    want = {p for p in pages if not p.startswith("demo/") and p not in unlinked and p not in moved}
     missing = sorted(want - seen)
     check(not missing and len(want) > 15, f"every page reachable from the home page by its links ({len(want)} pages){': ' + ', '.join(missing[:8]) if missing else ''}")
     bad = []
@@ -1801,10 +1803,14 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
                 except PlaywrightTimeout:
                     undrawn.append(k)
                     continue
-                lit_n = page.evaluate(f"""() => {{ const c = document.querySelectorAll('.psi-live canvas')[{k}];
+                # Some examples are dark for part of their loop (a scene that is
+                # on half of every 4 s): lit at some point within 5 s.
+                lit_js = f"""() => {{ const c = document.querySelectorAll('.psi-live canvas')[{k}];
                     const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
-                    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n; }}""")
-                if lit_n < 12:
+                    for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n >= 12; }}"""
+                try:
+                    wait_js(page, lit_js, 5000)
+                except PlaywrightTimeout:
                     dark.append(k)
                 links.append(box.locator("a.psi-open").get_attribute("href"))
             check(n >= 60 and recipes >= 7 and not undrawn and not dark,
