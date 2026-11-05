@@ -396,6 +396,11 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         {
             return Err(PatchErr::bad("follow_host must be a host name or address, optionally :port"));
         }
+        // The saved code is for the saved address: a new address without a
+        // code of its own forgets it, so it is never sent anywhere else.
+        if !same_follow_host(&v, &next.follow_host) && patch.follow_code.is_none() {
+            next.follow_code.clear();
+        }
         next.follow_host = v;
     }
     if let Some(v) = patch.follow_code.clone() {
@@ -601,6 +606,11 @@ pub struct ConfigPatch {
 struct FormatRequest {
     #[serde(default)]
     confirm: bool,
+}
+
+/// Two RePlayOS addresses are the same box (case and spaces aside).
+fn same_follow_host(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
 }
 
 /// Wire format for `POST /api/wake`.
@@ -1485,6 +1495,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
             }
         };
+        // The saved code goes only to the saved address: a test of another
+        // one brings its own code (M1, docs/api.md).
+        if t.code.is_none() {
+            let set = c.settings.lock().unwrap();
+            if !set.follow_code.is_empty() && !t.host.trim().is_empty() && !same_follow_host(&t.host, &set.follow_host) {
+                drop(set);
+                return req.bad_request("a new address needs its NET CONTROL code");
+            }
+        }
         let (tx, rx) = mpsc::channel();
         let cmd = NetCommand::FollowTest {
             host: t.host,
