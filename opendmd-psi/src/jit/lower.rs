@@ -55,11 +55,8 @@ pub fn div_word(by: &fixed::DivBy, part: u8) -> u32 {
 /// How the kernel divides a lane by a scalar (`div_s`).
 #[derive(Clone, Copy, Debug)]
 enum DivPlan {
-    /// By a constant 0: 0 stays 0, the rest the ends of their sign.
-    Zero,
-    /// By a constant ±2^j (j 1..=15): a shift towards zero.
-    Shift { j: u32, neg: bool },
-    /// By a constant with a magic number (`fixed::DivBy::magic`).
+    /// By a constant with a magic number (`fixed::DivBy::magic`: every
+    /// whole number, ±2^j among them, and most fractions).
     Magic { m: u32, s: u32, neg: bool },
     /// `fixed::DivBy`'s steps, its parts in words (`Div`, or `Const` for a
     /// constant); `big`, `pos` what is known of the divisor.
@@ -71,7 +68,6 @@ impl DivPlan {
     /// counts).
     fn words(&self) -> Vec<Word> {
         match *self {
-            DivPlan::Zero | DivPlan::Shift { .. } => Vec::new(),
             DivPlan::Magic { m, .. } => alloc::vec![Word::Const(m as i32)],
             DivPlan::General { w, big, pos } => {
                 let mut v = alloc::vec![w[0], w[0], w[1], w[2]];
@@ -1618,16 +1614,6 @@ impl<'a> Emitter<'a> {
                 pos: op.c & code::DIV_POS != 0,
             };
         };
-        let d = b.unsigned_abs();
-        if b == 0 {
-            return DivPlan::Zero;
-        }
-        if d.is_power_of_two() && (17..=31).contains(&d.trailing_zeros()) {
-            return DivPlan::Shift {
-                j: d.trailing_zeros() - 16,
-                neg: b < 0,
-            };
-        }
         if let Some((m, s)) = fixed::DivBy::magic(b) {
             return DivPlan::Magic { m, s, neg: b < 0 };
         }
@@ -1641,8 +1627,9 @@ impl<'a> Emitter<'a> {
     }
 
     /// `div_s`: a lane divided by a scalar, exactly `fixed::div` (the VM's
-    /// `fixed::DivBy`, or for a constant divisor a shift or a magic
-    /// number's multiply).
+    /// `fixed::DivBy`, or for a constant divisor a magic number's
+    /// multiply).
+    #[inline(never)]
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn div_s(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
         let plan = self.div_plan(&op);
@@ -1652,25 +1639,6 @@ impl<'a> Emitter<'a> {
             return Err("a step reads its own register");
         }
         match plan {
-            DivPlan::Zero => {
-                let t = self.tmp()?;
-                self.c.srai(d, a, 31);
-                self.max_i32(t);
-                self.c.xor(d, d, t);
-                self.c.moveqz(d, a, a);
-            }
-            DivPlan::Shift { j, neg } => {
-                // trunc(a / 2^j) = (a + (a < 0 ? 2^j − 1 : 0)) >> j.
-                let t = self.tmp()?;
-                let c = &mut self.c;
-                c.srai(t, a, 31);
-                c.extui(t, t, 0, j);
-                c.add(t, a, t);
-                c.srai(d, t, j);
-                if neg {
-                    c.neg(d, d);
-                }
-            }
             DivPlan::Magic { m, s, neg } => {
                 let sg = self.tmp()?;
                 let w = self.tmp()?;

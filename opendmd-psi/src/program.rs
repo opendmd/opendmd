@@ -1601,10 +1601,9 @@ impl Prog {
             return 0;
         }
         if op.code == DIV_S {
-            // A constant divisor: a shift (~5 instructions), a magic
-            // number's multiply (~8) or the general steps; else the ranges'.
+            // A constant divisor: a magic number's multiply (~8
+            // instructions) or the general steps; else the ranges'.
             return match self.const_value(op.b, self.len()) {
-                Some(b) if crate::fixed::DivBy::shift(b).is_some() => 22,
                 Some(b) if crate::fixed::DivBy::magic(b).is_some() => 35,
                 _ if op.c & DIV_BIG != 0 => 80,
                 _ => jit_value_ns(op.code),
