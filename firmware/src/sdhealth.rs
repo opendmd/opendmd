@@ -640,6 +640,8 @@ pub fn capped_error(attempt: u32, last: Option<&str>) -> String {
 /// Arm the I/O test hook (`POST /api/reboot?sd_io_fail=N&sd_io_boots=B`):
 /// on each of the next `boots` boots, from 10 s after boot, the player's
 /// next `n` card reads of files that had read fail with `EIO`.
+/// (`bench` builds only: a release has no way to arm it.)
+#[cfg(feature = "bench")]
 pub fn simulate_io_failures(n: u32, boots: u32) {
     set(w!(RTC.sim_per_boot), n);
     set(w!(RTC.sim_boots), boots);
