@@ -1204,7 +1204,7 @@ layer add { gray(y) }
 
 <h4 id="E304">E304 · a colour function in a sum of colours</h4>
 
-> `…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
+> `…(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)
 
 Use `#…` or `rgb(…)` in the sum, or give the function its own line.
 

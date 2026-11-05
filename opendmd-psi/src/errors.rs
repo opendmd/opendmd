@@ -359,9 +359,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 304,
         title: "a colour function in a sum of colours",
-        sentence: "`…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)",
+        sentence: "`…(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)",
         fix: "Use `#…` or `rgb(…)` in the sum, or give the function its own line.",
-        matches: &["is a whole colour: it can't be added to others"],
+        matches: &["is a whole colour: it can't be combined with others"],
     },
     ErrorDoc {
         code: 305,
