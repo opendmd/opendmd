@@ -236,8 +236,12 @@ ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js")  # from opendmd-web/share/ref
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
 # on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
 GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="module" src="ftsort.js"></script>'
-INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
-                'install-button.js?module"></script>')
+# ESP Web Tools 10.4.0, served from the site (flasher/esp-web-tools/: the npm
+# package's dist/web/, unchanged; its notices in
+# licenses/THIRD-PARTY-LICENSES-installer.txt): no CDN on the page that
+# flashes boards over Web Serial (the security review's M6).
+INSTALL_HEAD = '<script type="module" src="esp-web-tools/install-button.js"></script>'
+INSTALL_VENDOR = ROOT / "flasher/esp-web-tools"
 # Every flash layout (the firmware's `variant`): the board, the words on its
 # button, and what it says about the board.
 BOARDS = {
@@ -273,6 +277,8 @@ FILES = {
     # The third-party notices (tools/notices.py, `make notices`).
     "licenses/THIRD-PARTY-LICENSES-firmware.txt": "licenses/THIRD-PARTY-LICENSES-firmware.txt",
     "licenses/THIRD-PARTY-LICENSES-web.txt": "licenses/THIRD-PARTY-LICENSES-web.txt",
+    # The installer's (ESP Web Tools and what it bundles; written by hand).
+    "licenses/THIRD-PARTY-LICENSES-installer.txt": "licenses/THIRD-PARTY-LICENSES-installer.txt",
 }
 # The licences page (licenses/index.html), linked from every page's footer.
 LICENCES_PAGE = "licenses/index.html"
@@ -310,8 +316,9 @@ with each licence's full text:
   driver, and the Rust crates.
 - **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and the
   headings' font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
-- **The installer** uses [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0),
-  which your browser loads from jsDelivr.
+- **[The installer](THIRD-PARTY-LICENSES-installer.txt)** uses
+  [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0), served from this site
+  with what it bundles (esptool-js, Lit, Material Web, pako).
 
 The player carries the firmware's and the web app's notices too: in the web app, **Settings ›
 Device › About › Open-source licences**.
@@ -345,8 +352,8 @@ LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 # rule first drops it (`! Name`) and sets its own. One CSP per path. One
 # block per pattern: a second block for the same pattern replaces the first
 # (measured with wrangler dev), so headers_file merges them. No
-# COOP/COEP: no wasm here uses threads, and COEP would block ESP Web Tools
-# from jsDelivr and Create Art's picture fetches.
+# COOP/COEP: no wasm here uses threads, and COEP would block Create Art's
+# picture fetches.
 CSP_BASE = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 CSP = {
@@ -357,9 +364,8 @@ CSP = {
     # sent and the stricter won); it only lets same-origin scripts compile
     # wasm.
     "docs": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
-    # The installer: ESP Web Tools (and the modules it imports) from jsDelivr.
-    "install": CSP_BASE.replace("script-src 'self'", "script-src 'self' https://cdn.jsdelivr.net")
-    + "; connect-src 'self' https://cdn.jsdelivr.net",
+    # The installer: ESP Web Tools and its modules, served from here.
+    "install": CSP_BASE + "; connect-src 'self'",
     # A Formula's page: the demo's wasm and the editor's GIF picker (blob:);
     # Open on my panel navigates to or opens the panel's page, never fetches.
     "f": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob:")
@@ -406,13 +412,16 @@ def headers_file() -> str:
     """target/site/_headers."""
     rules: list[tuple[str, list[str]]] = [
         ("/*", ["X-Content-Type-Options: nosniff", "Referrer-Policy: strict-origin-when-cross-origin",
-                "Permissions-Policy: serial=(self), usb=(self), camera=(), microphone=(), geolocation=(), payment=()",
+                "Permissions-Policy: serial=(), usb=(), camera=(), microphone=(), geolocation=(), payment=()",
                 f"Cache-Control: {CACHE_DEFAULT}", f"Content-Security-Policy: {CSP['docs']}"]),
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
     for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
+    # Web Serial and WebUSB only where boards are flashed.
+    rules.append(("/install/*", ["! Permissions-Policy",
+                                 "Permissions-Policy: serial=(self), usb=(self), camera=(), microphone=(), geolocation=(), payment=()"]))
     for path in APP_PATHS:
         rules.append((path, ["! Cache-Control", f"Cache-Control: {CACHE_APP}"]))
     for name in ("release.json", "beta.json"):
@@ -968,6 +977,9 @@ def main() -> None:
     for src, dst in FILES.items():
         (out / dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / src, out / dst)
+    # ESP Web Tools beside the install page (INSTALL_HEAD), with its notices.
+    shutil.copytree(INSTALL_VENDOR, out / "install/esp-web-tools")
+    shutil.copyfile(ROOT / "licenses/THIRD-PARTY-LICENSES-installer.txt", out / "install/esp-web-tools/THIRD-PARTY-LICENSES-installer.txt")
     # The 404 page: links absolute (it answers at any depth), nothing marked.
     (out / NOT_FOUND_PAGE).write_text(render(NOT_FOUND_PAGE, "Not found · OpenDMD", markdown.Markdown().convert(NOT_FOUND),
                                              art["wordmark"]), encoding="utf-8")

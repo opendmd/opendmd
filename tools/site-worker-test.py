@@ -340,7 +340,7 @@ def headers(base: str, site: Path) -> None:
         "/guide/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
         # (60 s once the gallery store serves it; 600 s as built)
         "/formulas/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, ("public, max-age=60", "public, max-age=600")),
-        "/install/": ("script-src 'self' https://cdn.jsdelivr.net", "wasm", "*", "public, max-age=600"),
+        "/install/": ("script-src 'self'; object-src", "jsdelivr", "*", "public, max-age=600"),
         "/install/release.json": (None, None, "*", "public, max-age=60"),
         f"/install/firmware/opendmd-{ver}-4mb.odfw": (None, None, "*", "public, max-age=31536000, immutable"),
         f"/install/firmware/opendmd-{ver}-www.pack": (None, None, "*", "public, max-age=31536000, immutable"),
@@ -381,8 +381,10 @@ def headers(base: str, site: Path) -> None:
             why.append(f"Cache-Control {h.get('Cache-Control')}")
         if h.get("X-Content-Type-Options") != "nosniff" or h.get("Referrer-Policy") != "strict-origin-when-cross-origin":
             why.append("nosniff/Referrer-Policy")
-        if "serial=(self)" not in (h.get("Permissions-Policy") or ""):
-            why.append("Permissions-Policy")
+        # Web Serial and WebUSB only on the installer's pages.
+        pp = h.get("Permissions-Policy") or ""
+        if ("serial=(self)" in pp) != path.startswith("/install/") or "serial=" not in pp or pp.count("serial=") != 1:
+            why.append(f"Permissions-Policy {pp[:40]}")
         if h.get("Cross-Origin-Opener-Policy") or h.get("Cross-Origin-Embedder-Policy"):
             why.append("COOP/COEP")
         if why:
