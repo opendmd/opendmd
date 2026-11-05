@@ -1820,7 +1820,9 @@ pub(crate) fn lane_op<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
-        // (`b` is a scalar: `range::narrow` makes no other.)
+        // (`b` is a scalar: `range::narrow` makes no other. Not in wasm,
+        // which runs the checked steps, as the other narrowed ones.)
+        #[cfg(not(target_arch = "wasm32"))]
         DIV_S => match b {
             Arg::Sc(v) => match fixed::DivBy::shift(v) {
                 // By ±2^j: a shift towards zero.

@@ -1253,7 +1253,7 @@ mod tests {
         // the pixel 15.
         let review = crafted("table t = 1, 2\ngray(t[x])", &|p| {
             let at = MAX_TABLE - 4;
-            p.tables[at] = (1 | 1 << 8 | 2 << 16) as i32;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
             p.tables[at + 1] = 0xf;
             let k = p.len() - 1;
             let col = p.ops[k];
@@ -1271,7 +1271,7 @@ mod tests {
         // The same with its pixel 0 is a sprite like any other.
         let fine = crafted("table t = 1, 2\ngray(t[x])", &|p| {
             let at = MAX_TABLE - 4;
-            p.tables[at] = (1 | 1 << 8 | 2 << 16) as i32;
+            p.tables[at] = 1 | 1 << 8 | 2 << 16;
             p.tables[at + 1] = 0;
             let k = p.len() - 1;
             p.ops[k - 1] = Op {

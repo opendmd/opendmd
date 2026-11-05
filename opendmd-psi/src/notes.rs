@@ -12,7 +12,7 @@ fn group(v: i64) -> String {
     let d = v.to_string();
     let mut o = String::new();
     for (k, ch) in d.chars().enumerate() {
-        if k > 0 && (d.len() - k) % 3 == 0 {
+        if k > 0 && (d.len() - k).is_multiple_of(3) {
             o.push(',');
         }
         o.push(ch);
@@ -418,9 +418,9 @@ impl<'s> Parser<'s> {
                     | code::DIV
             )
         };
-        for i in 0..n {
-            if !raw[i] || out.len() >= 3 {
-                continue;
+        for (i, _) in raw.iter().enumerate().filter(|r| *r.1) {
+            if out.len() >= 3 {
+                break;
             }
             let Some(user) = (0..n).find(|&j| {
                 let m = &dag.nodes[j];
