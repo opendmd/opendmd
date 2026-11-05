@@ -4605,7 +4605,11 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     # A gallery Formula the panel doesn't come with, a slider moved on the site.
     page.goto(base + "/#gallery=searchlight&a=0.6")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    page.wait_for_timeout(500)
+    # (The editor opens before the fetched text is in it: wait for its name.)
+    try:
+        page.wait_for_function("document.querySelector('#psi-name')?.value !== ''", timeout=10000)
+    except Exception:
+        pass
     got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
     check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"],
           f"remix: a gallery Formula is fetched by name and opens in the editor ({got[1:]}, {asked})")
