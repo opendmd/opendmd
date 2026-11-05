@@ -43,8 +43,11 @@ export const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
 // A playlist line that names a Formula, not a GIF: inline or by name
 // (`@formula…`), or one of the user's on the card (`/formulas/x.psi?a=…`).
 export const isFormula = (p) => p.startsWith('@formula') || /^\/.*\.psi(\?|$)/i.test(p);
-// Drawn by the player, not read as a GIF: a live item or a Formula.
+// Drawn by the player, not read as a GIF: a title card or a Formula.
 export const drawn = (p) => p[0] == '@' || isFormula(p);
+// A playlist line the player skips, so the editor drops it: the clock's or
+// the scrolling text's (`@clock…`, `@text?…`), which are gone.
+export const gone = (p) => /^@(clock|text)(\?|$)/.test(p);
 // How long a Formula sent to the panel stays (config `formula_keep`): a select of the choices.
 export const keepSelect = (id, v) => h('select', { id }, [['turn', 'One turn'], ['1m', '1 minute'], ['5m', '5 minutes'], ['hold', 'Until I change it']].map(([k, l]) => h('option', { value: k, selected: k == (v || 'turn') }, l)));
 

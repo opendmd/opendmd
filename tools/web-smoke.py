@@ -26,8 +26,8 @@ every view like a person would:
             folders with matches, open, counted), platform chip SNES,
             preview one, send it to the panel; no checkboxes until Select,
             then select three (a row tap picks in Select mode)
-  Tree      a fresh browser, laptop and phone: the folders (Live, then
-            system ones; no Effects), ⊟, the keys (↓ → → ↓ Enter ← ←), Consoles'
+  Tree      a fresh browser, laptop and phone: the folders (the card's,
+            then system ones; no Live, no Effects), ⊟, the keys (↓ → → ↓ Enter ← ←), Consoles'
             3,781 GIFs in a few dozen rows with End reaching the last,
             #library/NEW%202021, Select's folder tick
   Thumbs    a fresh browser, the mock pacing card files (GET /mock/io
@@ -149,20 +149,21 @@ every view like a person would:
             show in /api/config and /api/status (glow_held 12288 while
             playing), the Now preview wears amber (every bright pixel r > g
             > b; now-amber-laptop.png), back to Full colour / Off; the bad
-            look/glow/attract values are 400s
-  No effects  the built-in effects are gone: the Library has the Live folder and
-            no Effects folder, tab or fx- form; on the mock POST /api/play of
+            look/glow/attract values are 400s (attract "clock" and "text:.."
+            too: only "" is left)
+  No effects  the built-in effects are gone: the Library has no Effects
+            folder, tab or fx- form; on the mock POST /api/play of
             an @fx: path is a 415 ("Formulas replace them"), attract "fx:.." is
             a 400, an @fx: line in a playlist is skipped and the rest plays
-  Live      Library -> Live: five rows (four clocks and a scrolling text),
-            the text form, a preview, the text row following #live-msg;
-            Send to panel of the clock and the text (title, frame advancing;
-            library-live-laptop.png); POST /api/play of live items 200, of
-            @nonsense 415; the simulator (opendmd-sim --play
-            '@text?msg=OpenDMD&scroll=0' --screenshot-canvas, default and
-            --look amber) and a wasm Preview on a detached canvas draw the
-            same 128x32 pixels (the device pass skips the simulator and
-            sending; it does the read-only checks and the look round trip)
+  No live   the clock and scrolling text are gone: no Live folder, no
+            #lib-live form, no "The clock" in Follow's attract select, the
+            editor's gone() drops @clock / @text lines; on the mock POST
+            /api/play of @clock / @text is a 415 ("are gone"), of @nonsense
+            415, and @clock / @text playlist lines are skipped; the
+            simulator (opendmd-sim --play '@card:OpenDMD|' --screenshot-canvas,
+            default and --look amber) and a wasm Preview on a detached canvas
+            draw the same 128x32 pixels (the device pass skips the simulator
+            and the API; it does the read-only checks and the look round trip)
   Start-up  Settings -> Start-up (js/boot.js): #st-boot off/short/full shows
             the config's boot_show; saved as the other value and back (the
             device pass too: it restores it); "long", "" and 2 are 400s;
@@ -775,7 +776,7 @@ TREE = "document.querySelector('#lib-list')?._tree"
 
 
 def pick_cat(page: Page, value: str) -> None:
-    """Library: the folder `value` (a directory under gifs/, `@` Live) open at the top, the others closed: `#library/<folder>`, what a
+    """Library: the folder `value` (a directory under gifs/) open at the top, the others closed: `#library/<folder>`, what a
     link to a folder does. A search or a platform chip would filter it: they
     are cleared first."""
     page.evaluate("location.hash = '#library'")
@@ -1483,8 +1484,8 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def tree_checks(browser, base: str, errors: list[str]) -> None:
-    """The Library's folder tree in a fresh browser: the folders (Live
-    after the card's, system ones last), ⊟, the keys (↓ → → ↓ Enter
+    """The Library's folder tree in a fresh browser: the folders (the
+    card's, system ones last; no Live), ⊟, the keys (↓ → → ↓ Enter
     ← ←), Consoles virtualised (3,781 GIFs, a few dozen rows in the page,
     the last GIF reached by End), a link to a folder, Select's folder tick;
     shots at laptop and phone widths."""
@@ -1496,9 +1497,9 @@ def tree_checks(browser, base: str, errors: list[str]) -> None:
         page.wait_for_function(f"{TREE}.rows.every(r => !r.path)", timeout=5000)
         folders = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
         real = [f for f in folders if not f[0].startswith("_")]
-        check(real[-1:] == [["@", "Live"]] and len(real) > 2 and not any(f[0] == "@fx" or f[1] == "Effects" for f in folders)
+        check(len(real) > 2 and not any(f[0].startswith("@") or f[1] in ("Live", "Effects") for f in folders)
               and page.locator("#lib-cats, #lib-csel").count() == 0,
-              f"tree [{size}]: the card's folders, then Live, system ones last; no Effects, no tabs, no select ({folders[-3:]})")
+              f"tree [{size}]: the card's folders, system ones last; no Live, no Effects, no tabs, no select ({folders[-3:]})")
         if size == "phone":
             pick_cat(page, "Consoles")
             shot(page, "library-tree", "phone")
@@ -1923,7 +1924,7 @@ def wait_auto_text(page: Page, pattern: str, timeout_ms: int = 20000) -> str:
     return page.inner_text("#pc-auto")
 
 
-# --- Looks and live items ---------------------------------------------------------
+# --- Looks ------------------------------------------------------------------------
 
 AMBER_PIXELS = """(sel) => {
     const c = document.querySelector(sel);
@@ -1964,7 +1965,8 @@ def put_status(url: str, obj) -> int:
 
 
 def look_validation(base: str) -> None:
-    for bad in ({"look": "purple"}, {"glow": "medium"}, {"attract": "text:"}, {"attract": "bogus"}):
+    for bad in ({"look": "purple"}, {"glow": "medium"}, {"attract": "text:"}, {"attract": "bogus"},
+                {"attract": "clock"}, {"attract": "text:Hello"}):
         check(put_status(base, bad) == 400, f"settings: {bad} refused (400)")
 
 
@@ -2012,10 +2014,10 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     mock_keys = set(cfg0) - {"panel", "panel_now", "panel_next", "panel_trial_s"}
     check(len(fw) > 20 and set(fw) == mock_keys and "look_formula" in fw,
           f"config: the mock's keys are the firmware's settings_json ({len(fw)}; only in the firmware {sorted(set(fw) - mock_keys)}, only in the mock {sorted(mock_keys - set(fw))})")
-    check(list(st0)[-9:] == ["look", "glow", "glow_held", "formula_look", "attract_live", "max_brightness",
-                             "brightness_safe_max", "safe_start_until", "scan"],
-          f"status: look/glow/glow_held/formula_look/attract_live/max_brightness/brightness_safe_max/safe_start_until/scan"
-          f" end the object ({list(st0)[-9:]})")
+    check(list(st0)[-8:] == ["look", "glow", "glow_held", "formula_look", "max_brightness",
+                             "brightness_safe_max", "safe_start_until", "scan"] and "attract_live" not in st0,
+          f"status: look/glow/glow_held/formula_look/max_brightness/brightness_safe_max/safe_start_until/scan"
+          f" end the object, no attract_live ({list(st0)[-8:]})")
     ssu = st0["safe_start_until"]
     check(ssu is None or (isinstance(ssu, int) and ssu >= st0["uptime_secs"] - 1),
           f"status: safe_start_until is null or an uptime not yet passed ({ssu}, uptime {st0['uptime_secs']})")
@@ -2440,108 +2442,81 @@ def panel_test_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"panel": None})
 
 
-def open_live(page: Page) -> None:
+def no_live_checks(page: Page, base: str, mock: bool) -> None:
+    """The clock and the scrolling text are gone: no Live folder or form in
+    the Library, no "The clock" in Follow's attract select, the editor drops
+    their lines; on the mock, POST /api/play of them is a 415 that says so,
+    attract "clock" / "text:.." a 400 that says so, and a playlist's
+    @clock / @text lines are skipped while the rest plays."""
     goto_view(page, "library")
-    pick_cat(page, "@")
-    # A search left over from the Library checks filters the Live rows too.
-    page.fill("#lib-search", "")
-    page.wait_for_selector("#lib-live #live-msg", timeout=10000)
-    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length >= 5", timeout=10000)
-
-
-def live_rows(page: Page) -> list[str]:
-    return page.eval_on_selector_all("#lib-list .vrow:not([hidden])", "els => els.map(e => e.dataset.path)")
-
-
-def live_checks(page: Page, base: str, mock: bool) -> None:
-    """Library -> Live: the clocks and the scrolling text; the form; a preview;
-    on the mock, sent to the panel (and POST /api/play directly)."""
-    goto_view(page, "library")
-    page.wait_for_function(f"{TREE}?.folders.some(f => f.cat === '@')", timeout=30000)
+    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=30000)
     opts = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
-    # System lists (a leading "_", e.g. a card's _bench) sort after Live.
-    real = [o for o in opts if not o[0].startswith("_")]
-    check(real[-1:] == [["@", "Live"]] and len(real) > 2 and not any(o[0] == "@fx" or o[1] == "Effects" for o in opts),
-          f"library: the folders end with Live, no Effects folder (system lists after) ({opts[-3:]})")
-    open_live(page)
-    rows = live_rows(page)
-    want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
-    check(rows == want, f"library: Live lists five rows ({rows})")
-    titles = page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.map(e => e.textContent)")
-    check(len(set(titles)) == 5 and titles[1] == "Clock with seconds", f"library: the Live rows have names of their own ({titles})")
-    check(page.is_visible("#lib-live") and page.input_value("#live-msg") == "OpenDMD"
-          and page.eval_on_selector_all("#live-speed option", "els => els.map(e => e.value)") == ["60", "40", "25"],
-          "library: Live form: #live-msg 'OpenDMD', #live-speed 60/40/25")
-    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
-    wait_lit(page, "#lib-panel", "library live clock")
-    cap = page.inner_text("#lib-d-title")
-    check("clock" in cap.lower() and "@" not in cap, f"library: previewing the clock ('{cap}')")
-    page.fill("#live-msg", "Hello smoke")
-    page.dispatch_event("#live-msg", "change")
-    # Leave the field now (its own change on blur redraws the list, which would
-    # swallow the next click on a row).
-    page.evaluate("document.activeElement.blur()")
-    page.wait_for_timeout(400)
-    page.wait_for_function("[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === '@text?msg=Hello%20smoke')", timeout=5000)
-    check(live_rows(page)[-1] == "@text?msg=Hello%20smoke", f"library: the text row follows the field ({live_rows(page)[-1]})")
-    wait_lit(page, "#lib-panel", "library live text")
-    no_leaks(page, "library (live)")
-    page.evaluate("window.scrollTo(0, 0)")
-    shot(page, "library-live", "laptop")
+    check(not any(o[0].startswith("@") or o[1] == "Live" for o in opts) and page.locator("#lib-live, #live-msg, #live-speed").count() == 0,
+          f"library: no Live folder, no live form ({opts[-3:]})")
+    gone = page.evaluate("import('./js/util.js').then(m => ['@clock', '@clock?seconds=1', '@text?msg=Hi', '@card:A|', '@formula:big-clock', '/gifs/@clock.gif'].map(m.gone))")
+    check(gone == [True, True, True, False, False, False], f"playlists: the editor drops @clock / @text lines, nothing else ({gone})")
+    goto_view(page, "settings/time")
+    page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
+    attract = page.eval_on_selector_all("#fo-attract option", "els => els.map(e => [e.value, e.textContent])")
+    check(not any(v == "@" or "clock" in label.lower() for v, label in attract),
+          f"settings: Follow's attract offers playlists only, no 'The clock' ({attract[:3]})")
+    no_leaks(page, "library (no live)")
     if not mock:
-        page.fill("#live-msg", "OpenDMD")
-        page.dispatch_event("#live-msg", "change")
         return
     expected.append("/api/play")
-    for i, (path, title) in enumerate((("@clock", "Clock"), ("@text?msg=Hello%20smoke", "Hello smoke"))):
-        page.click(f"#lib-list .vrow:not([hidden])[data-path='{path}']")
-        page.wait_for_function(f"document.querySelector('#lib-play').dataset.path === {json.dumps(path)}", timeout=10000)
-        page.click("#lib-play")
-        cur = wait_playing(base, path)
-        np_ = get_json(base + "/api/status")["now_playing"]
-        check(cur == path and np_["title"] == title, f"library: Send to panel -> now_playing {path} '{np_['title']}'")
-        f0 = np_["frame"]
-        time.sleep(1.1)
-        f1 = get_json(base + "/api/status")["now_playing"]["frame"]
-        check(f1 > f0, f"status: {path} frame advances ({f0} -> {f1})")
-    # The API directly.
-    for path in ("@clock", "@text?msg=OpenDMD", "@clock?style=big&seconds=1&date=1&h12=1&color=FF8800",
-                 "@text?msg=Hi&speed=25&font=small&color=00FF00&scroll=0"):
+    for path in ("@clock", "@clock?style=big&seconds=1&date=1&h12=1&color=FF8800", "@text?msg=OpenDMD",
+                 "@text?msg=Hi&speed=25&font=small&color=00FF00&scroll=0", "@nonsense"):
         try:
-            r = post_json(base + "/api/play", {"path": path})
-            check(r.get("ok") is True and r.get("path") == path, f"api: POST /api/play {path} -> 200")
+            post_json(base + "/api/play", {"path": path})
+            check(False, f"api: POST /api/play {path} refused")
         except urllib.error.HTTPError as e:
-            check(False, f"api: POST /api/play {path} -> {e.code}")
-    try:
-        post_json(base + "/api/play", {"path": "@nonsense"})
-        check(False, "api: POST /api/play @nonsense refused")
-    except urllib.error.HTTPError as e:
-        check(e.code == 415, f"api: POST /api/play @nonsense -> {e.code} (415)")
+            msg = json.loads(e.read().decode()).get("error", "")
+            gone_msg = path == "@nonsense" or "are gone" in msg
+            check(e.code == 415 and gone_msg, f"api: POST /api/play {path} -> {e.code} '{msg[:60]}' (415)")
     expected.remove("/api/play")
+    for bad in ({"attract": "clock"}, {"attract": "text:Hello"}):
+        try:
+            put_json(base + "/api/config", bad)
+            check(False, f"settings: {bad} refused")
+        except urllib.error.HTTPError as e:
+            msg = json.loads(e.read().decode()).get("error", "")
+            check(e.code == 400 and "are gone" in msg and "attract_set" in msg, f"settings: {bad} -> {e.code} '{msg[:60]}…' (400)")
+    gif = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
+               if f["name"].lower().endswith(".gif"))
+    before = get_json(base + "/api/config").get("set", "")
+    put_text(base + "/api/files/sets/liveold.txt", f"@clock\n{gif}\n@text?msg=Hi&speed=30\n@clock?seconds=1\n{gif}\n")
+    try:
+        put_json(base + "/api/config", {"set": "liveold"})
+        st = get_json(base + "/api/status")
+        check(st.get("entries") == 2, f"playlists: @clock / @text lines are skipped, the two GIFs stay ({st.get('entries')})")
+        cur = wait_playing(base, gif)
+        check(cur == gif, f"playlists: the playlist with the old lines plays its GIF ({cur})")
+    finally:
+        put_json(base + "/api/config", {"set": before})
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/liveold.txt", method="DELETE"), timeout=30).read()
 
 
 def no_effects_checks(page: Page, base: str, mock: bool) -> None:
-    """The built-in effects are gone: the Library has the Live folder and no
+    """The built-in effects are gone: the Library has no
     Effects folder, tab or fx- form (nor has the playlist editor's picker);
     on the mock, POST /api/play of an @fx: path is a 415 naming Formulas,
     attract "fx:.." a 400, and a playlist with an old @fx: line still plays
     its other entries."""
     goto_view(page, "library")
     page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=30000)
-    pick_cat(page, "@")
     folders = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
     labels = page.eval_on_selector_all("#lib-list .vrow.dir, #lib-list [role=treeitem], #lib-list .folder", "els => els.map(e => e.textContent.trim())")
     fx_ids = page.eval_on_selector_all("[id^='fx-']", "els => els.map(e => e.id)")
-    check(any(f[0] == "@" and f[1] == "Live" for f in folders) and not any(f[0] == "@fx" or f[1] == "Effects" for f in folders),
-          f"library: the Live folder and no Effects folder ({folders[-3:]})")
+    check(not any(f[0] == "@fx" or f[1] == "Effects" for f in folders),
+          f"library: no Effects folder ({folders[-3:]})")
     check(not any("Effects" in t for t in labels) and fx_ids == [] and "Effects" not in page.inner_text("#view-library"),
           f"library: no tree folder labelled Effects, no fx- element, no Effects tab ({fx_ids})")
-    # The playlist editor's picker has only Live (no Effects).
+    # The playlist editor's picker has no Effects.
     goto_view(page, "sets")
     picker = page.eval_on_selector_all("#set-cat option, #set-cats button, #set-cats a", "els => els.map(e => e.textContent.trim())")
     check("Effects" not in picker and "Effects" not in page.inner_text("#view-sets"), f"playlists: no Effects in the editor's picker ({picker})")
-    pl = page.evaluate("import('./js/state.js').then(m => ['/sets/Sprites_and_Clock.txt', '/sets/_x.txt', '/filelist.hall'].map(m.playlistLabel))")
-    check(pl == ["Sprites and Clock", "_x", "Halloween"], f"playlists: names on the card read as words ({pl})")
+    pl = page.evaluate("import('./js/state.js').then(m => ['/sets/Sprites_and_Stars.txt', '/sets/_x.txt', '/filelist.hall'].map(m.playlistLabel))")
+    check(pl == ["Sprites and Stars", "_x", "Halloween"], f"playlists: names on the card read as words ({pl})")
     no_leaks(page, "library (no effects)")
     if not mock:
         return
@@ -2556,28 +2531,28 @@ def no_effects_checks(page: Page, base: str, mock: bool) -> None:
     expected.remove("/api/play")
     for bad in ({"attract": "fx:nonsense"}, {"attract": "fx:tunnel?palette=fire"}):
         check(put_status(base, bad) == 400, f"settings: {bad} -> 400")
-    # A playlist with an old @fx: line between a GIF and a clock: the line is
+    # A playlist with an old @fx: line between two GIFs: the line is
     # skipped, the others stay (2 entries) and play.
     gif = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
                if f["name"].lower().endswith(".gif"))
     before = get_json(base + "/api/config").get("set", "")
-    put_text(base + "/api/files/sets/fxold.txt", f"{gif}\n@fx:tunnel\n@clock\n")
+    put_text(base + "/api/files/sets/fxold.txt", f"{gif}\n@fx:tunnel\n{gif}\n")
     try:
         put_json(base + "/api/config", {"set": "fxold"})
         st = get_json(base + "/api/status")
         check(st.get("entries") == 2, f"playlists: an @fx: line is skipped, the other two entries stay ({st.get('entries')})")
-        expected.append("/api/play")
-        post_json(base + "/api/play", {"path": "@clock"})
-        cur = wait_playing(base, "@clock")
-        expected.remove("/api/play")
-        check(cur == "@clock", f"playlists: the playlist with the retired line still plays its clock ({cur})")
+        cur = wait_playing(base, gif)
+        check(cur == gif, f"playlists: the playlist with the retired line still plays its GIF ({cur})")
     finally:
         put_json(base + "/api/config", {"set": before})
         urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/fxold.txt", method="DELETE"), timeout=30).read()
 
 
-def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scroll=0", at_ms: int | None = None) -> bytes:
-    """The desktop simulator's canvas for `@text?msg=OpenDMD&scroll=0` after
+SIM_CARD = "@card:OpenDMD|"
+
+
+def sim_png(root: Path, look: str, out: Path, path: str = SIM_CARD, at_ms: int | None = None) -> bytes:
+    """The desktop simulator's canvas for `path` (a title card) after
     `look` (or `at_ms` into it), as 128x32 RGBA bytes."""
     from PIL import Image
     (root / "gifs").mkdir(parents=True, exist_ok=True)
@@ -2597,19 +2572,19 @@ def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scr
 
 
 def sim_checks(page: Page) -> None:
-    """A live text plays in the page's wasm Preview pixel for pixel as in the
-    desktop simulator (default look, and amber)."""
+    """A title card plays in the page's wasm Preview pixel for pixel as in
+    the desktop simulator (default look, and amber)."""
     goto_view(page, "now")
     tmp = OUT / "sim"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     for look in ("colour", "amber"):
         want = sim_png(tmp / "root", look, tmp / f"sim-{look}.png")
-        got = bytes(page.evaluate(WASM_CANVAS, ["@text?msg=OpenDMD&scroll=0", "" if look == "colour" else look]))
+        got = bytes(page.evaluate(WASM_CANVAS, [SIM_CARD, "" if look == "colour" else look]))
         lit_n = sum(1 for i in range(0, len(want), 4) if max(want[i:i + 3]) > 60)
         diff = sum(1 for i in range(0, len(want), 4) if want[i:i + 3] != got[i:i + 3])
         check(len(got) == len(want) and diff == 0 and lit_n > 50,
-              f"sim: @text?msg=OpenDMD&scroll=0 ({look}) identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
+              f"sim: {SIM_CARD} ({look}) identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
     # The start-up show's status card: the same core in both.
     want = sim_png(tmp / "root", "colour", tmp / "sim-boot.png", BOOT_CARD)
     got = bytes(page.evaluate(WASM_CANVAS, [BOOT_CARD, ""]))
@@ -3441,7 +3416,7 @@ def mock_pass(browser) -> None:
         boot_checks(page, base, True)
         power_checks(page, base)
         panel_checks(page, base)
-        live_checks(page, base, True)
+        no_live_checks(page, base, True)
         no_effects_checks(page, base, True)
         sim_checks(page)
         post_json(base + "/api/skip", {})
@@ -5537,7 +5512,7 @@ def now_edit_checks(page: Page, base: str) -> None:
     def on_screen(p):
         post_json(base + "/api/play", {"path": p})
         goto_view(page, "now")
-        # (A live item's path is not in #now-path: the recent list marks it.)
+        # (A drawn path is not in #now-path: the recent list marks it.)
         page.wait_for_function(f"document.querySelector('#now-recent > div.cur')?.dataset.path === {json.dumps(p)}", timeout=10000)
 
     def studio_has(p):
@@ -5582,12 +5557,12 @@ def now_edit_checks(page: Page, base: str) -> None:
           "now edit: the Formula opens in the editor as the example it is, comments and all")
     # (A Formula sent from the editor is longer than an entry of Recently
     # played may be: the panel doesn't list it there.)
-    # The clock: said, not offered.
-    on_screen("@clock")
+    # The start-up show: said, not offered.
+    on_screen("@boot?len=card")
     page.wait_for_function("document.querySelector('#now-live').textContent !== ''", timeout=10000)
-    clock_row = page.locator("#now-recent > div[data-path='@clock'] button[aria-label^='Edit']").count()
-    check(page.is_hidden("#now-edit") and page.inner_text("#now-live") == "Clock: drawn by the panel itself, not a GIF" and clock_row == 0,
-          f"now edit: the clock says '{page.inner_text('#now-live')}', no button")
+    card_row = page.locator("#now-recent > div[data-path='@boot?len=card'] button[aria-label^='Edit']").count()
+    check(page.is_hidden("#now-edit") and page.inner_text("#now-live") == "Startup: drawn by the panel itself, not a GIF" and card_row == 0,
+          f"now edit: the start-up show says '{page.inner_text('#now-live')}', no button")
     shot(page, "now-edit", "laptop")
     page.remove_listener("request", log)
     on_screen(a)
@@ -5599,14 +5574,22 @@ def location_hash(page: Page) -> str:
 
 def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     """Recently played in the web demo (local mode): a playlist of three
-    live items, Next twice, Previous twice back to the first, a tap on an
-    entry plays it."""
+    GIFs (one 128x32 picture drawn here), Next twice, Previous twice back
+    to the first, a tap on an entry plays it."""
+    import io
+    from PIL import Image
     page = new_page(browser, "laptop", errors)
-    text = "@clock\n@text?msg=Mid\n@text?msg=Hi\n"
+    buf = io.BytesIO()
+    Image.new("RGB", (128, 32), (255, 170, 0)).save(buf, "GIF")
+    gif = buf.getvalue()
+    names = ["/gifs/Demo/Clock.gif", "/gifs/Demo/Mid.gif", "/gifs/Demo/Hi.gif"]
+    text = "".join(n + "\n" for n in names)
+    index = [{"path": "/filelist.txt", "size": len(text)}] + [{"path": n, "size": len(gif)} for n in names]
     page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
-    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body=json.dumps([{"path": "/filelist.txt", "size": len(text)}]),
+    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body=json.dumps(index),
                                                      headers={"content-type": "application/json"}))
     page.route("**/demo/filelist.txt", lambda r: r.fulfill(status=200, body=text, headers={"content-type": "text/plain"}))
+    page.route("**/demo/gifs/Demo/*.gif", lambda r: r.fulfill(status=200, body=gif, headers={"content-type": "image/gif"}))
     page.goto(base + "/")
     page.wait_for_function("document.querySelector('#now-title')?.textContent === 'Clock'", timeout=20000)
     titles = lambda: page.eval_on_selector_all("#now-recent > div", "els => els.map(e => (e.classList.contains('cur') ? '*' : '') + e.querySelector('.grow').textContent)")
@@ -7764,12 +7747,12 @@ def device_pass(browser, device: str) -> None:
         check(page.is_checked("#pc-always") == (a.get("mode") == "always"), f"device auto: card reads '{t}'")
         no_leaks(page, "device settings")
         shot(page, "device-settings", "laptop")
-        # Looks and live items, light: the API shapes, the validation (nothing
+        # Looks, light: the API shapes, the validation (nothing
         # saved), the Playback card's round trip back to the original values,
-        # and the Live list and preview (nothing sent to the panel).
+        # and that the Live folder is gone (nothing sent to the panel).
         look_checks(page, base, False)
         boot_checks(page, base, False)
-        live_checks(page, base, False)
+        no_live_checks(page, base, False)
         no_effects_checks(page, base, False)
         studio_device(page)
         # The one write: save and delete a set named smoke (never activated).

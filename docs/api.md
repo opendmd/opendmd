@@ -62,7 +62,7 @@ one), then the playlist carries on.
 Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
 `/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?psb=…`) or
-a live item (see "Live items"). `"live":true`: only replace a formula on screen (`409` if
+a virtual file (see "Virtual files"). `"live":true`: only replace a formula on screen (`409` if
 none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
@@ -80,11 +80,12 @@ playlist change). A live edit keeps it kept. While it is kept, `/api/status`
 
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
-Errors: `400` neither card-absolute nor a live item, or a bad formula;
+Errors: `400` neither card-absolute nor a Formula, or a bad formula (`path must be card-absolute and stay on the card, or a Formula (@formula…)`);
 `404` the file does not open, or no bundled Formula has that name
 (`there is no bundled Formula by that name`; what was playing carries on); `415` not a
-GIF, a live item this firmware does not know (`@nonsense`), or a retired
-`@fx:` path: the built-in effects are gone (`the built-in effects are gone:
+GIF, a virtual file this firmware does not know (`@nonsense`), a retired
+`@clock`/`@text` path (`the clock and the scrolling text are gone: play a
+Formula (a clock is one, @formula:big-clock)`), or a retired `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
 Formulas replace them (play one as @formula?psb=…)`); `503` no
 playlist running; `413` body over 8 KB, or an inline formula over 6,144 B
 (send a longer one as `POST /api/play/formula`);
@@ -94,7 +95,7 @@ without Formulas (`/api/status` `features` lacks `"formulas"`):
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
-curl -s $DMD/api/play --json '{"path":"@clock?seconds=1&date=1"}'
+curl -s $DMD/api/play --json '{"path":"@formula:big-clock"}'
 ```
 
 ### POST /api/play/formula
@@ -191,7 +192,6 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
-| `attract_live` | the live item Follow RePlayOS shows in the menus, else null |
 | `max_brightness`, `brightness_safe_max`, `safe_start_until` | the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after) |
 | `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one whose own frame time is over three quarters of its budget for 2 for ~4,096 frames; a lighter one keeps its rate), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
 | `display` | how the display loop kept its time, since boot: `{wakes, wake_late, wake_max_us, spin_us, publish_skipped, status_lock_us, status_build_us, status_cached, pre_start, commands}` — the loop's wakes, those over 100 µs after their time and the latest (µs), the µs it spun waiting for its frame (it blocks until 0.4 ms before, then spins), frames whose status publish was skipped because a status read held it (the display never waits for one), the last status read's time holding that lock (a copy) and building in all (µs), status reads answered from the last answer (it is reused for 100 ms); `pre_start {n, us, mean_us, max_us, spikes}` a raced frame's time from the wake to its start (the loop's work, the tick, the frame's steps and draw stage; `spikes` over its running mean by 300 µs); `commands {n, us, max_us}` the loop's handling of what the HTTP handlers asked (loops that had any, µs in all, the longest); `buffers` where the display's hot memory is (a measurement: each `{at, bytes, pool}` or `null`, `pool` IDF's SRAM pool such as `SRAM2/15` or `SRAM1/7`): `formula` (the playing Formula's program and VM scratch), `ink`, `plane`, `kernel` (its JIT code), `arena` (`formula_arena`), `canvas`, `dma_rows` (the panel's DMA rows, `{at, end, bytes, pool, pool_end}`), `dma_desc`; `arena` `{hits, busy}` while `formula_arena` is in force, else `null`; `card_read_max_us` the player's longest single card read since the last `?take_read_max=1`; `uploads` `{paced, rate_kb_s, paced_ms, on_pct}`: uploads are read at `rate_kb_s` at most while a Formula plays near its frame budget (its mean render over `on_pct` % of the frame time, 60 by default, until 10 points under), full speed otherwise; `paced_ms` the time slept for it since boot. A dev field of `PUT /api/config`, `pace_on_pct` (1..100, live only, never saved), moves the start for a test |
@@ -308,7 +308,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
-| `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
+| `attract` | string, `""` | only `""` (the playlist): anything else (`"clock"`, `"text:…"`, `"fx:…"`) is `400` (`attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set`). A `clock`, `text:…` or `fx:` value stored by an earlier firmware reads as `""`, with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
 | `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
@@ -699,7 +699,7 @@ curl -s $DMD/api/cache/forget --json '{"path":"/gifs/Consoles/SNES_Super_Metroid
 ## Follow RePlayOS
 
 With `follow` on, the panel follows a RePlayOS box: the game's art while a
-game runs, the attract playlist (or `attract`) in the menus. Set with
+game runs, the attract playlist in the menus (`attract` is always `""` now). Set with
 `PUT /api/config` (`follow`, `follow_host`, `follow_code`, `attract_set`,
 `attract`); its state is `/api/status` `context`.
 
@@ -872,29 +872,12 @@ the end of the upload to playback while it installs.
 curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
 ```
 
-## Live items
+## Virtual files
 
 Paths beginning with `@` are drawn, not read from the card: for
-`POST /api/play`, a playlist line, `attract`. Options follow `?` as
+`POST /api/play`, a playlist line. Options follow `?` as
 `key=value` pairs joined by `&`; unknown keys and bad values are ignored
 (the default stays). Colours are `RRGGBB` (or `%23RRGGBB`, `#RRGGBB`).
-
-**`@clock`** — the time (local, from the network; `--:--` until set).
-`style=big|small` (default big), `seconds=1`, `date=1` (the date under it),
-`h12=1` (12-hour), `color=RRGGBB`. One loop is one second.
-
-```sh
-curl -s $DMD/api/play --json '{"path":"@clock?style=small&seconds=1&color=ff8000"}'
-```
-
-**`@text`** — scrolling text. `msg=<url-encoded>` (≤ 200 characters, ASCII
-shown), `speed=<ms per pixel>` (20..=1000, default 40),
-`font=big|normal|small` (default big), `color=RRGGBB`, `scroll=0` (still,
-centred, if it fits). A loop is one pass across the panel.
-
-```sh
-curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
-```
 
 **`@formula`** — a formula (the app's Formulas), **compiled**: the player
 never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
@@ -933,6 +916,13 @@ curl -s $DMD/api/play --json "{\"path\":\"@formula?psb=$(psi build my.psi --base
 curl -s $DMD/api/play --json '{"path":"@formula:endless-road"}'
 curl -s $DMD/api/play --json '{"path":"/formulas/my-road.psi?a=0.4"}'
 ```
+
+**Retired: `@clock`, `@text`.** The clock (`@clock…`) and the scrolling text
+(`@text?msg=…`) are gone: a Formula draws a clock (`@formula:big-clock`).
+`POST /api/play` answers `415` for either. In a playlist such a line is
+skipped as the playlist is read, with an info-level log line (`playlist:
+skipping "…": the clock and scrolling text are gone (a Formula draws a
+clock)`); the rest of the playlist plays.
 
 **Retired: `@fx:`.** The built-in effects (`@fx:tunnel`, `@fx:rotozoom`,
 `@fx:starfield`, `@fx:wire`) and the old Formula path `@fx:psi?src=…` are

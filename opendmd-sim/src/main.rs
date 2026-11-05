@@ -34,7 +34,7 @@ const POLL: Duration = Duration::from_millis(5);
     version,
     about = "Play a DMDoS card's GIFs in a 128x32 desktop window",
     after_help = "With no card, a folder picker opens; cancel it (or pass --demo) for the built-in demo \
-                  of Formulas and live items."
+                  of Formulas and title cards."
 )]
 struct Args {
     /// A card (a folder holding filelist.txt), any folder of GIFs, or one
@@ -46,8 +46,8 @@ struct Args {
     #[arg(long)]
     root: Option<PathBuf>,
 
-    /// Play the built-in demo: Formulas, the clock and scrolling
-    /// text, no card needed (also what plays when the folder picker is
+    /// Play the built-in demo: the start-up show, title cards and
+    /// Formulas, no card needed (also what plays when the folder picker is
     /// cancelled).
     #[arg(long, conflicts_with_all = ["card", "root", "manifest", "play"])]
     demo: bool,
@@ -147,7 +147,7 @@ struct Args {
     glow: GlowLevel,
 
     /// Play just this path instead of the manifest: a card path, or a
-    /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`,
+    /// virtual file (`@card:Title|Subtitle`, `@boot?len=full`,
     /// `@formula?src=…`, a bundled Formula by name: `@formula:endless-road`),
     /// or a Formula's file on the card (`/formulas/x.psi?a=0.5`).
     #[arg(long)]
@@ -280,7 +280,7 @@ fn parse_glow(s: &str) -> Result<GlowLevel, String> {
 }
 
 /// The host's offset from UTC in seconds, from `date +%z` (`+0100`); 0 if
-/// that is not available. Read once: the live clock's local time.
+/// that is not available. Read once: the local time Formulas read.
 fn utc_offset() -> i64 {
     let out = std::process::Command::new("date").arg("+%z").output().ok();
     let s = out
@@ -303,7 +303,7 @@ fn utc_offset() -> i64 {
 
 static UTC_OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
 
-/// The live clock's source: the host's local time.
+/// The local time Formulas read (`hour`, `minute`, …): the host's.
 fn host_time() -> Option<WallTime> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -488,14 +488,14 @@ fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
     bail!("the engine produced no frame")
 }
 
-/// The built-in demo: live items only, drawn by the engine, so nothing is
-/// read from disk and nothing third-party is shown: the clock, scrolling
-/// text and (with `psi`) a Formula after each ([`DEMO_FORMULAS`]).
+/// The built-in demo: virtual files only, drawn by the engine, so nothing is
+/// read from disk and nothing third-party is shown: the start-up show,
+/// title cards and (with `psi`) a Formula after each ([`DEMO_FORMULAS`]).
 const DEMO: &[&str] = &[
-    "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
-    "@clock?style=big&date=1",
-    "@text?msg=Open%20a%20folder%20of%20GIFs%20to%20play%20your%20own&speed=30&color=00ccff",
-    "@clock?style=small&seconds=1&date=1",
+    "@boot?len=full",
+    "@card:OpenDMD|open firmware for LED panels",
+    "@power-on",
+    "@card:Open a folder of GIFs|to play your own",
 ];
 
 /// The demo's Formulas (`opendmd-psi/formulas/`), played as their paths.
@@ -723,7 +723,7 @@ fn choose_card(args: &Args) -> Result<Card> {
         bail!("--manifest needs --root (or a card folder)");
     }
     if let Some(p) = &args.play {
-        // A live item needs no card; a card path is opened from here.
+        // A virtual file needs no card; a card path is opened from here.
         return Ok(Card {
             root: PathBuf::from("."),
             playlist: Playlist::Lines(format!("{p}\n")),
@@ -736,7 +736,7 @@ fn choose_card(args: &Args) -> Result<Card> {
     match pick_folder() {
         Some(dir) => Card::open(args, &dir),
         None => {
-            println!("No folder chosen: playing the built-in demo (Formulas and live items)\n");
+            println!("No folder chosen: playing the built-in demo (Formulas and title cards)\n");
             Ok(Card::demo())
         }
     }
@@ -1067,7 +1067,7 @@ mod tests {
             "--root",
             "card",
             "--play",
-            "@clock",
+            "@card:A|B",
             "--screenshot-canvas",
             "f.png",
             "--screenshot-at",
@@ -1075,7 +1075,7 @@ mod tests {
         ]);
         let card = choose_card(&a).unwrap();
         assert_eq!(card.root, Path::new("card"));
-        assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "@clock\n"));
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "@card:A|B\n"));
         // Headless with no card: the demo, never a dialog.
         let card = choose_card(&args(&["--screenshot", "x.png"])).unwrap();
         assert!(matches!(&card.playlist, Playlist::Lines(t) if *t == demo_lines()));

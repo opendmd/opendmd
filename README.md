@@ -76,7 +76,6 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without
   changing the file.
-- **Live items:** a clock and scrolling text, drawn on the panel and usable in any playlist.
 - **Formulas:** a few lines of maths that draw the panel's pixels. Ten come with the panel (two
   clocks, Matrix, a starfield, and six looks to draw over any GIF: scanlines, an old TV, a vignette,
   sepia, glitter, a corner clock); the online [gallery](https://opendmd.dev/formulas/) has the
@@ -139,5 +138,5 @@ the player itself carry them (Settings › Device › About › Open-source lice
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
 [dmdos.net](https://dmdos.net/), or make your own with Create Art. The animations on the
-OpenDMD site are OpenDMD's own Formulas and live items, recorded from the simulator, and the
+OpenDMD site are OpenDMD's own Formulas, recorded from the simulator, and the
 CC0 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites.

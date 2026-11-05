@@ -140,7 +140,7 @@ function status(recent) {
     schedule: { rule: r.rule, set: r.set, until: r.until },
     context: { enabled: c.follow, state: 'unreachable', error: 'the demo can’t reach your network' },
     look: c.look, glow: c.glow, glow_held: 0, formula_look: c.look_formula ? { error: lookErr || null, held: 1 } : null,
-    attract_live: null, max_brightness: c.max_brightness, brightness_safe_max: SAFE, safe_start_until: null,
+    max_brightness: c.max_brightness, brightness_safe_max: SAFE, safe_start_until: null,
   };
   if (recent) Object.assign(s, { recent: cur.path ? [cur.path] : [], recent_at: 0 });
   return s;

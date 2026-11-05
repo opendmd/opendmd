@@ -2,7 +2,7 @@
 //! (`opendmd_core::fx_psi::FormulaLook`), from two places —
 //!
 //! - the **Look setting's formula** (`look_formula` in `/api/config`, kept
-//!   in NVS): over every GIF, transition and live item, until it is cleared;
+//!   in NVS): over every GIF, transition and title card, until it is cleared;
 //! - **Show on panel, over the GIF** from the Formulas editor (`POST
 //!   /api/play` with `"over":true`): over the file on screen until the
 //!   playlist moves on to another (the same lifetime as Show on panel),

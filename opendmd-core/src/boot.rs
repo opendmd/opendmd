@@ -1,7 +1,7 @@
 //! The startup sequence ("boot show") and the status card.
 //!
 //! Both are built on the wordmark: "OpenDMD" in the panel's big font (the
-//! 5x7 font at twice its size, what `@text` draws by default: 68 x 14 px),
+//! 5x7 font at twice its size: 68 x 14 px),
 //! amber (`ffaa00`) on black, centred across the panel.
 //!
 //! **The show** plays on the panel from the moment it lights until the
@@ -33,8 +33,7 @@
 //! scene began and the [`Info`] strings: nothing is remembered between
 //! frames, nothing is allocated (the text is drawn from up to two string
 //! slices), and the name is drawn from the font's own rows ([`crate::text`],
-//! pixel for pixel what `@text?msg=OpenDMD&scroll=0&color=ffaa00` draws,
-//! unit-tested). So the firmware's show, the simulator and the browser
+//! pixel for pixel what `text::draw_text_with` draws, unit-tested). So the firmware's show, the simulator and the browser
 //! draw the same pixels: the virtual file [`PATH`]
 //! (`@boot[?len=short|full|card&v=<version>&ip=<address>&ap=<network>&note=<text>]`,
 //! parsed by [`crate::synth`]) plays the show once (or the card for one
@@ -610,15 +609,12 @@ mod tests {
 
     #[test]
     fn the_wordmark_is_what_text_draws() {
-        // `@text?msg=OpenDMD&scroll=0&color=ffaa00`, the site's wordmark,
-        // is the same pixels as the card's name, moved.
-        use crate::synth::{self, SynthSource};
-        let mut src =
-            SynthSource::new(synth::open("@text?msg=OpenDMD&scroll=0&color=ffaa00").unwrap())
-                .unwrap();
+        // "OpenDMD" in the big font, amber, centred: the same pixels as
+        // the card's name, moved (the site's wordmark is cut from the card).
         let mut site = Canvas::new();
-        src.next_frame(&mut site).unwrap();
         let y = (HEIGHT as i32 - LOGO_H) / 2;
+        let w = text::text_width(Font::Normal, "OpenDMD", 2) as i32;
+        text::draw_text_with(&mut site, (WIDTH as i32 - w) / 2, y, "OpenDMD", AMBER, Font::Normal, 2);
         let mut c = Canvas::new();
         card(&mut c, 0, &Info::default(), None);
         assert_eq!(band(&site, y), band(&c, CARD_Y));

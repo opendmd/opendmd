@@ -7,8 +7,8 @@
     uv run tools/site-art.py OUT_DIR [--sim PATH]
 
 - strip/*.gif: the animations for the strip across the top of every page
-  and the landing page's tiles: Formulas (opendmd-web/formulas/*.psi), the clock and
-  scrolling text, recorded from the simulator's raw canvas
+  and the landing page's tiles: Formulas (opendmd-web/formulas/*.psi) and a title
+  card, recorded from the simulator's raw canvas
   (--screenshot-canvas) a frame at a time, one whole loop each; and the
   Kenney "Pixel Platformer" (CC0) sprites the demo card has too, re-encoded
   lighter.
@@ -18,7 +18,8 @@
   (scene:…).
 - strip/*.png: a still of each, which the site shows instead when the
   visitor asks for reduced motion.
-- wordmark.png: "OpenDMD" in the panel's own font, cropped.
+- wordmark.png: "OpenDMD" in the panel's own font, cropped (from the
+  status card with nothing to say, `@boot?len=card`: the name alone).
 - art.json: what is where, with alt text and captions, for tools/site.py.
 
 Recordings already in OUT_DIR are kept while their recipe is unchanged
@@ -43,25 +44,23 @@ KENNEY = PROCESS / "out"
 # `-- bundle`), then the formula, whose `name "…"` line names it.
 FORMULAS = ROOT / "opendmd-web/formulas"
 
-# name, source (a live item, formula:NAME[?--formula-opts] -- an example in
+# name, source (a virtual file, formula:NAME[?--formula-opts] -- an example in
 # opendmd-web/formulas/ --, kenney:FILE, or scene:SCRIPT: a scene() in a script under
 # opendmd-web/experiments/art/process/), ms a frame, colours, where it shows
 # (strip, tiles, hero, doors: the home page's Get started), alt text, caption.
 ART = [
-    ("press-start", "@text?msg=PRESS%20START&speed=20&color=ff3366", 40, 16, "strip tiles",
-     "PRESS START scrolling across the panel in pink", "Scrolling text"),
+    ("copper-bars", "formula:Copper bars", 40, 24, "strip tiles",
+     "Shiny Amiga-style bars bouncing up and down", "Copper bars (a Formula)"),
     ("tunnel", "formula:Tunnel", 80, 32, "strip tiles",
      "A checkered tunnel turning and cycling colour", "Tunnel (a Formula)"),
     ("kenney-walk", "kenney:b_walk.gif", 0, 32, "strip tiles",
      "Pixel-art characters walking across the panel", "Kenney Pixel Platformer sprites (CC0)"),
     ("wire-cube", "formula:Wireframe cube", 40, 24, "strip tiles",
      "A turning wireframe cube", "Wireframe cube (a Formula)"),
-    ("insert-coin", "@text?msg=INSERT%20COIN&speed=20&color=ffaa00", 40, 16, "strip",
-     "INSERT COIN scrolling across the panel in amber", "Scrolling text"),
     ("starfield", "formula:Starfield", 40, 32, "strip tiles",
      "Stars flying towards the viewer", "Starfield (a Formula)"),
-    ("clock", "@clock?style=big&date=1&color=66ff99", 0, 8, "strip tiles",
-     "The panel's big clock with the date underneath", "The clock"),
+    ("clock", "formula:Big clock", 0, 16, "strip tiles",
+     "The time in big rainbow digits, a seconds bar along the bottom", "Big clock (a Formula)"),
     ("time-gate", "formula:Time gate", 80, 32, "strip",
      "Star rings rushing out of a time gate", "Time gate (a Formula)"),
     # The home page's panel: a still only (it never repeats, and the page
@@ -84,7 +83,7 @@ ART = [
     ("plasma", "formula:Plasma", 40, 24, "tiles",
      "Three waves making every colour of a plasma", "Plasma (a Formula)"),
 ]
-WORDMARK = "@text?msg=OpenDMD&scroll=0&color=ffaa00"
+WORDMARK = "@boot?len=card"
 # Recordings of something that plays once rather than loops (name: its
 # length, then how much longer its last frame is held, in ms): the start-up
 # show, whose last line, the address, would otherwise be gone in half a second.
@@ -106,7 +105,7 @@ def formula_src(name: str) -> str:
 
 
 def play_args(play: str, tmp: Path) -> list:
-    """The simulator's arguments for a source: --play for a live item, or
+    """The simulator's arguments for a source: --play for a virtual file, or
     --formula (the example's source in a temp .psi file) for formula:NAME[?opts]."""
     if not play.startswith("formula:"):
         return ["--play", play]
@@ -135,7 +134,7 @@ def same(a: Image.Image, b: Image.Image) -> bool:
 
 
 def record(sim: Path, card: Path, play: str, step: int) -> list[Image.Image]:
-    """One loop of a live item, `step` ms a frame: frames until they repeat
+    """One loop of a virtual file or a Formula, `step` ms a frame: frames until they repeat
     from the start (8 in a row, so a blank start is not mistaken for one)."""
     with tempfile.TemporaryDirectory() as tmp:
         png = Path(tmp) / "f.png"
@@ -144,7 +143,7 @@ def record(sim: Path, card: Path, play: str, step: int) -> list[Image.Image]:
         frames: list[Image.Image] = []
         while len(frames) < MAX_FRAMES:
             frames.append(shot(sim, card, play, len(frames) * step, png))
-            # Scrolling text starts and ends on a blank panel: one pass is
+            # Something that starts and ends on a blank panel: one pass is
             # a loop (a pass of an odd number of steps would otherwise take
             # two to repeat exactly).
             if len(frames) > 2 and frames[0].getbbox() is None and frames[-1].getbbox() is None:
@@ -222,7 +221,8 @@ def main() -> None:
 
     # The wordmark: the big font, cropped to the lit pixels plus a pixel.
     with tempfile.TemporaryDirectory() as tmp:
-        im = shot(a.sim, card, WORDMARK, 1000, Path(tmp) / "w.png")
+        # (200 ms in: before the card's first glint, at 1.5 s.)
+        im = shot(a.sim, card, WORDMARK, 200, Path(tmp) / "w.png")
     x0, y0, x1, y1 = im.getbbox()
     im.crop((x0 - 1, y0 - 1, x1 + 1, y1 + 1)).quantize(8, dither=Image.Dither.NONE).save(out / "wordmark.png")
     w, h = Image.open(out / "wordmark.png").size

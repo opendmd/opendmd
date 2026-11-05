@@ -75,10 +75,10 @@ button lands on them.
   changed, as the Library's Edit does: a GIF in Create Art from the GIF
   itself (every frame, never the player's prepared copy), a Formula in the Formulas editor (*Edit in Formulas*: the
   saved or example formula it is, name and comments included, else the
-  panel's one-line text of it). The clock, scrolling text and title cards
+  panel's one-line text of it). The title cards and the start-up show
   are drawn by the panel itself; Now says so, with no button. A ☆ beside the title makes the
   GIF on screen a favourite in the playlist in play (★ when it is; not for
-  live items); each Recently played row has the "…" overrides menu for
+  the panel's own screens); each Recently played row has the "…" overrides menu for
   that playlist.
 - **Library** — the GIFs on the player, and only those (finding new art is
   **Create Art**'s). One row across the top: a search field (titles, normalised
@@ -86,7 +86,7 @@ button lands on them.
   web for the same words in Create Art), the count, **⊟** (close every
   folder), **Select** and **Add GIFs**; under it the platform chips. The
   list is a **tree of folders** (`js/tree.js`): the card's folders under
-  `gifs/` by human name, then *Live*, then the system `_x`
+  `gifs/` by human name, then the system `_x`
   ones, each with its count (the last one seen, remembered by the browser,
   until the folder is listed again); a folder opens into its GIFs (each
   folder is listed once a session, when first opened, and shared with the
@@ -171,7 +171,7 @@ button lands on them.
   in a few seconds), kept in reach at the bottom; a list row's **…** has
   **Play** and **Delete…**. Deleting the active playlist switches the
   player back to All files first. Switching is disabled while status says
-  an index is `building`. Entries are always GIF paths (or live items).
+  an index is `building`. Entries are GIF paths or Formulas.
 - **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
@@ -332,9 +332,9 @@ and a night mode that turns the panel off or dims it; Now shows when either
 is in force and can wake the panel for an hour. The saved playlist and
 brightness come back when a rule ends.
 
-## Colour, glow and live items
+## Colour and glow
 
-**Colour, glow and the live items.** The player can show everything in one
+**Colour and glow.** The player can show everything in one
 colour like a classic dot-matrix display — Settings → Look → *colour*:
 full colour (the default), amber (the plasma-DMD orange), red, green, blue or
 white; each pixel becomes that colour at its own brightness (Rec. 601
@@ -346,15 +346,11 @@ same code (`opendmd_core::look`) in the simulator (`--look`, `--glow`) and in
 every preview in the web app, so transitions, title cards and everything
 else pass through them. Glow is opt-in because it keeps a 12 KB copy of what
 the panel shows while it is lit (none while it is dark or paused), which
-transitions and the cache builder would otherwise have. Library → *Live*
-lists the two things the panel draws itself: a **clock** (the player's own
-time, set over the network; four layouts) and a **scrolling text** (type the
-message); preview them, send them to the panel, or add them to a playlist
-like any GIF — in a playlist they are lines such as `@clock?date=1` or
-`@text?msg=Game%20over` (options: `@clock?style=big|small&seconds=1&date=1&h12=1&color=RRGGBB`,
-`@text?msg=…&speed=<ms per pixel, 20..1000>&font=big|normal|small&color=RRGGBB&scroll=0`).
-Follow RePlayOS can show the clock in the menus instead of its attract
-playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*: The clock).
+transitions and the cache builder would otherwise have.
+
+Follow RePlayOS can show a playlist (a Formula such as the bundled Big clock, `@formula:big-clock`, can be one) in the menus instead of its attract playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*).
+
+There is no Live folder: the clock and the scrolling text (`@clock`, `@text`) are gone, a Formula draws a clock. A playlist line for either is skipped as the playlist is read (an info log line); `POST /api/play` of one is a `415`. The playlist editor drops such lines when it opens a playlist.
 
 The built-in effects (tunnel, rotozoom, starfield, wireframe) are gone from
 the firmware and the core: they are Formulas now, in the site's gallery
@@ -367,11 +363,9 @@ as `@formula:~sent`, held in the player's memory: no length rides on a path
 and the card is never written, so a Formula of any length the editor takes
 shows); a playlist names it by reference, or with no card as a line
 `@formula?psb=…` (see [the HTTP API](api.md)). A retired `@fx:` line in a
-playlist is skipped with a log line. Follow RePlayOS can show the clock or a
-text in the menus instead of its attract playlist, and a playlist of one
-Formula, chosen as the attract playlist, does the same for a Formula
-(`attract` has no Formula form: its limit is 205 bytes, a Formula path is up
-to 2 KB). **Save as GIF…** is in Formulas: see [Formulas](guide/formulas.md).
+playlist is skipped with a log line. A playlist of one
+Formula, chosen as the attract playlist, shows a Formula in RePlayOS's menus
+(`attract` is only `""`; the Settings caption says a playlist can hold Formulas). **Save as GIF…** is in Formulas: see [Formulas](guide/formulas.md).
 
 ## Size budget
 
@@ -395,8 +389,7 @@ player sends those in preference.
 player behind it. When nothing answers `GET /api/status` but a
 `demo/index.json` sits beside the page, the app loads that card instead of
 offering the folder picker: its files are fetched as they are read, writes
-stay in the page, and Now starts playing All files by itself (live items
-included). **Use your own card…** in the header swaps in a card folder.
+stay in the page, and Now starts playing All files by itself. **Use your own card…** in the header swaps in a card folder.
 
 The demo has a player of its own in the page (`js/demo.js`, loaded only
 there): it answers the device's settings API (config, schedule, status) for
@@ -411,7 +404,7 @@ demo can't do them. A new browser session starts from a new player's
 settings.
 
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
-CC0 Kenney Pixel Platformer sprites and a playlist of live items
+CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
 (`tools/demo-card.py`). `make site` builds the whole public site into
 `target/site`: the README as the landing page, these docs as HTML, and the
 app with the demo card under `demo/` (`tools/site.py`). `make site-serve`

@@ -1,11 +1,10 @@
 //! Virtual files: pictures the engine plays like a GIF but that are drawn,
-//! not read — the power-on effect, title cards, the live clock and the
-//! scrolling text.
+//! not read — the power-on effect, title cards, the start-up show and
+//! Formulas.
 //!
 //! A virtual file has a path starting with `@` ([`POWER_ON`],
 //! [`card_path`]`(title, subtitle)` = `@card:<title>|<subtitle>`,
-//! [`CLOCK`]`[?options]` and `@text?msg=<url-encoded>[&options]` — see
-//! [`ClockSpec`] and [`TextSpec`] for the options). The engine
+//! `@boot[?options]` and the Formulas' `@formula…`). The engine
 //! asks [`open`] before its [`Source`](crate::engine::Source): for a virtual
 //! path it gets a few bytes in memory — the magic [`MAGIC`] and the path —
 //! which [`FrameSource`](crate::player::FrameSource) sniffs like any file
@@ -22,25 +21,12 @@
 //! card *is* the file on screen for its dwell, and the compositor's
 //! transition is what joins it to the files either side.
 //!
-//! **The live ones.** `@clock` and `@text` are drawn every frame from their
-//! options (and, for the clock, the local time from [`set_wall_clock`]'s
-//! source: the firmware's SNTP clock, the browser's `Date`, the host's clock
-//! in the simulator — `--:--` until it is set). Both only write the pixels
-//! that change (the dirty map), so the clock costs nothing between changes
-//! of the string it shows: it ticks once a second, on the second, and draws
-//! only when the minute (or the second, with `seconds=1`) moves. A clock
-//! "loop" is one second and a text loop one pass across the panel, so dwell
-//! applies as to any file (a clock under `dwell=60` shows for a minute); a
-//! loop restarts in place ([`SynthSource::rewind`]: no reopen, no
-//! allocation). Their state is a few words and the message's bytes inside
-//! the decoder; nothing is allocated per frame.
-//!
 //! **Formulas.** `@formula?src=…` ([`crate::fx`], [`crate::fx_psi`]) is
-//! drawn every frame the same way: frame `n` of the formula's loop at
+//! drawn every frame: frame `n` of the formula's loop at
 //! `t = n × delay`, the loop's length what dwell counts, rewound in place.
 
 use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-use crate::text::{self, Font};
+use crate::text;
 use std::io::{self, Cursor, Read};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -307,20 +293,16 @@ pub fn compiled_name(psb: &[u8]) -> Option<String> {
     let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_FORMULA_NAME).collect();
     (!name.trim().is_empty()).then_some(name)
 }
-/// The live clock's path (options after `?`: see [`ClockSpec`]).
-pub const CLOCK: &str = "@clock";
-/// The scrolling text's path prefix: `@text?msg=...` (see [`TextSpec`]).
-pub const TEXT: &str = "@text";
-/// A text message is cut to this many characters.
-pub const TEXT_MAX: usize = 200;
-/// The scrolling text's default and fastest step (ms per pixel).
-pub const TEXT_STEP_MS: u64 = 40;
-pub const TEXT_STEP_MIN_MS: u64 = 20;
-const TEXT_STEP_MAX_MS: u64 = 1000;
-/// How long a static text or a clock frame holds when nothing moves.
-const HOLD: Duration = Duration::from_millis(1000);
+/// Is `path` one of the live items there were before Formulas and GIFs
+/// were all there is (`@clock[?…]`, `@text?msg=…`)? It names nothing now: a
+/// playlist line is skipped with a log line ([`crate::manifest::scan`]),
+/// `POST /api/play` answers 415.
+pub fn is_retired_live(path: &str) -> bool {
+    let base = path.split_once('?').map_or(path, |(b, _)| b);
+    base == "@clock" || base == "@text"
+}
 
-/// Local wall-clock time, as the live clock shows it.
+/// Local wall-clock time, as Formulas read it (`hour`, `minute`, …).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct WallTime {
     pub year: u16,
@@ -368,7 +350,7 @@ impl WallTime {
     }
 }
 
-/// Where the live clock reads the local time: `None` while it is not known
+/// Where Formulas read the local time: `None` while it is not known
 /// (the firmware before its first SNTP sync).
 pub type WallClock = fn() -> Option<WallTime>;
 
@@ -377,13 +359,14 @@ pub type WallClock = fn() -> Option<WallTime>;
 /// a lock costs the web module ~0.3 KB.
 static WALL: AtomicUsize = AtomicUsize::new(0);
 
-/// Install the local-time source the live clock reads (the firmware's
+/// Install the local-time source Formulas read (the firmware's
 /// `clock.rs`, the browser's `Date`, the simulator's host clock). Until one
-/// is installed, and whenever it answers `None`, the clock shows `--:--`.
+/// is installed, and whenever it answers `None`, the time is not known.
 pub fn set_wall_clock(clock: Option<WallClock>) {
     WALL.store(clock.map_or(0, |f| f as usize), Ordering::Relaxed);
 }
 
+#[cfg(feature = "psi")]
 pub(crate) fn wall_now() -> Option<WallTime> {
     match WALL.load(Ordering::Relaxed) {
         0 => None,
@@ -395,66 +378,6 @@ pub(crate) fn wall_now() -> Option<WallTime> {
             f()
         }
     }
-}
-
-/// The live clock's options: `@clock?style=big|small&seconds=1&date=1&h12=1&color=RRGGBB`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClockSpec {
-    /// `style=big` (the default): HH:MM in the 5x7 font at 4x (3x with the
-    /// seconds or the date); `style=small`: at 2x.
-    pub big: bool,
-    pub seconds: bool,
-    /// The date under the time (`Mon 28 Sep`).
-    pub date: bool,
-    /// 12-hour clock.
-    pub h12: bool,
-    pub colour: Rgb,
-}
-
-impl Default for ClockSpec {
-    fn default() -> Self {
-        ClockSpec {
-            big: true,
-            seconds: false,
-            date: false,
-            h12: false,
-            colour: text::TITLE_COLOUR,
-        }
-    }
-}
-
-/// The scrolling text's options:
-/// `@text?msg=<url-encoded>&speed=<ms per px>&font=big|normal|small&color=RRGGBB&scroll=0`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TextSpec {
-    /// Folded to the fonts' ASCII ([`text::fold_char`]), at most
-    /// [`TEXT_MAX`] characters.
-    pub msg: Vec<u8>,
-    /// One pixel per `step` (default 40 ms, at least 20).
-    pub step: Duration,
-    /// `font=big` (the default: 5x7 at 2x), `normal` (5x7), `small` (4x6).
-    pub font: Font,
-    pub scale: usize,
-    pub colour: Rgb,
-    /// `scroll=0`: shown still and centred if it fits (it scrolls anyway if
-    /// it does not).
-    pub scroll: bool,
-}
-
-/// The path of a scrolling text showing `msg` with the default options.
-pub fn text_path(msg: &str) -> String {
-    let mut p = format!("{TEXT}?msg=");
-    for b in msg.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
-            p.push(b as char);
-        } else {
-            p.push_str(&format!("%{b:02X}"));
-        }
-        if p.len() > MAX_PATH - 3 {
-            break;
-        }
-    }
-    p
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -489,28 +412,7 @@ pub(crate) fn url_decode(b: &[u8]) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
-/// `RRGGBB` (a `#` in front, `%23` in a URL, is allowed).
-pub(crate) fn parse_colour(s: &[u8]) -> Option<Rgb> {
-    let s = s.strip_prefix(b"%23").or(s.strip_prefix(b"#")).unwrap_or(s);
-    let mut v = 0u32;
-    for &b in s {
-        v = v << 4 | u32::from(hex_val(b)?);
-    }
-    (s.len() == 6).then(|| Rgb::new((v >> 16) as u8, (v >> 8) as u8, v as u8))
-}
-
-/// A small decimal, `None` if it is not one.
-fn parse_u16(s: &[u8]) -> Option<u16> {
-    if s.is_empty() || s.len() > 4 {
-        return None;
-    }
-    s.iter().try_fold(0u16, |n, &b| {
-        b.is_ascii_digit().then(|| n * 10 + u16::from(b - b'0'))
-    })
-}
-
-/// The `key=value` pairs after `?`, as bytes (only the message needs
-/// decoding).
+/// The `key=value` pairs after `?`, as bytes (only text needs decoding).
 fn options(query: &str) -> impl Iterator<Item = (&[u8], &[u8])> {
     query
         .as_bytes()
@@ -519,61 +421,6 @@ fn options(query: &str) -> impl Iterator<Item = (&[u8], &[u8])> {
             Some(i) => (&kv[..i], &kv[i + 1..]),
             None => (kv, &kv[kv.len()..]),
         })
-}
-
-fn parse_clock(query: &str) -> ClockSpec {
-    let mut c = ClockSpec::default();
-    for (k, v) in options(query) {
-        let on = v == b"1";
-        match k {
-            b"style" => c.big = v != b"small",
-            b"seconds" => c.seconds = on,
-            b"date" => c.date = on,
-            b"h12" => c.h12 = on,
-            b"color" => c.colour = parse_colour(v).unwrap_or(c.colour),
-            _ => {}
-        }
-    }
-    c
-}
-
-fn parse_text(query: &str) -> TextSpec {
-    let mut t = TextSpec {
-        msg: Vec::new(),
-        step: Duration::from_millis(TEXT_STEP_MS),
-        font: Font::Normal,
-        scale: 2,
-        colour: text::TITLE_COLOUR,
-        scroll: true,
-    };
-    for (k, v) in options(query) {
-        match k {
-            b"msg" => {
-                t.msg.clear();
-                for c in url_decode(v).trim().chars().take(TEXT_MAX) {
-                    t.msg.push(text::fold_char(c) as u8);
-                }
-            }
-            b"speed" => {
-                if let Some(ms) = parse_u16(v) {
-                    t.step = Duration::from_millis(
-                        u64::from(ms).clamp(TEXT_STEP_MIN_MS, TEXT_STEP_MAX_MS),
-                    );
-                }
-            }
-            b"font" => {
-                (t.font, t.scale) = match v {
-                    b"small" => (Font::Small, 1),
-                    b"normal" => (Font::Normal, 1),
-                    _ => (Font::Normal, 2),
-                }
-            }
-            b"color" => t.colour = parse_colour(v).unwrap_or(t.colour),
-            b"scroll" => t.scroll = v != b"0",
-            _ => {}
-        }
-    }
-    t
 }
 
 /// Is `path` a virtual file?
@@ -603,7 +450,7 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 }
 
 /// What a virtual path shows, for `now_playing.title` and the Library: a
-/// card's title, "Power on", "Clock", a text's message, or a Formula's name
+/// card's title, "Power on", "Startup", or a Formula's name
 /// (its `name "…"` line; else `&name=` on its path, as an older playlist
 /// entry has it; else "Formula"). `None` for anything else.
 pub fn title(path: &str) -> Option<String> {
@@ -655,8 +502,6 @@ pub fn title(path: &str) -> Option<String> {
     match parse(path)? {
         Spec::PowerOn => Some("Power on".to_string()),
         Spec::Card { title, .. } => Some(title),
-        Spec::Clock(_) => Some("Clock".to_string()),
-        Spec::Text(t) => Some(t.msg.iter().map(|&b| b as char).collect()),
         Spec::Fx(f) => Some(f.title().to_string()),
         Spec::Boot(_) => Some("Startup".to_string()),
     }
@@ -683,8 +528,6 @@ pub fn open(path: &str) -> Option<Cursor<Vec<u8>>> {
 enum Spec {
     PowerOn,
     Card { title: String, subtitle: String },
-    Clock(ClockSpec),
-    Text(TextSpec),
     Fx(crate::fx::Fx),
     Boot(BootSpec),
 }
@@ -752,12 +595,6 @@ fn parse(path: &str) -> Option<Spec> {
         return crate::fx::Fx::parse(path).map(Spec::Fx);
     }
     let (base, query) = path.split_once('?').unwrap_or((path, ""));
-    if base == CLOCK {
-        return Some(Spec::Clock(parse_clock(query)));
-    }
-    if base == TEXT {
-        return Some(Spec::Text(parse_text(query)));
-    }
     if base == crate::boot::PATH {
         return Some(Spec::Boot(parse_boot(query)));
     }
@@ -779,11 +616,6 @@ pub struct SynthSource<R: Read> {
     frames: u64,
     /// The power-on effect's ignition times, while it plays.
     table: Option<Vec<u8>>,
-    /// A live file has painted the whole canvas once (it then only
-    /// repaints what it moves); kept across [`rewind`](Self::rewind).
-    painted: bool,
-    /// What the clock shows now (the fields it draws, packed).
-    shows: u64,
     /// An effect's position in its loop: the sum of the frame times it
     /// returned (a formula's governor may hold frames longer).
     elapsed: Duration,
@@ -823,8 +655,6 @@ impl<R: Read> SynthSource<R> {
                     spec,
                     frames: 0,
                     table: None,
-                    painted: false,
-                    shows: u64::MAX,
                     elapsed: Duration::ZERO,
                     name,
                 });
@@ -848,8 +678,6 @@ impl<R: Read> SynthSource<R> {
             spec,
             frames: 0,
             table: None,
-            painted: false,
-            shows: u64::MAX,
             elapsed: Duration::ZERO,
             name: None,
         })
@@ -876,9 +704,7 @@ impl<R: Read> SynthSource<R> {
         Some(cur.retune_from(&path[FORMULA.len()..]).map_err(crate::fx_psi::io_error))
     }
 
-    /// Start again from the first frame without reopening: a loop. The live
-    /// files keep what they know of the canvas (it still shows their last
-    /// frame), so a clock's next second draws only what changed.
+    /// Start again from the first frame without reopening: a loop.
     pub fn rewind(&mut self) {
         self.frames = 0;
         self.elapsed = Duration::ZERO;
@@ -917,22 +743,6 @@ impl<R: Read> SynthSource<R> {
                 text::title_card(canvas, title, subtitle);
                 CARD_DWELL
             }
-            Spec::Clock(c) => {
-                if self.frames >= 1 {
-                    return Ok(None);
-                }
-                let now = wall_now();
-                let shows = clock_key(c, now);
-                if !self.painted || shows != self.shows {
-                    draw_clock(canvas, c, now);
-                    self.painted = true;
-                    self.shows = shows;
-                }
-                // On the next second.
-                now.map_or(HOLD, |t| {
-                    Duration::from_millis((1000 - u64::from(t.millis.min(999))).max(20))
-                })
-            }
             Spec::Fx(f) => {
                 if self.elapsed >= f.loop_time() {
                     return Ok(None);
@@ -966,209 +776,10 @@ impl<R: Read> SynthSource<R> {
                 }
                 delay
             }
-            Spec::Text(t) => {
-                let width = text::text_width(t.font, bytes_str(&t.msg), t.scale) as i32;
-                let still = !t.scroll && width <= WIDTH as i32;
-                let steps = if still {
-                    1
-                } else {
-                    width as u64 + WIDTH as u64 + 1
-                };
-                if self.frames >= steps {
-                    return Ok(None);
-                }
-                let x = if still {
-                    (WIDTH as i32 - width) / 2
-                } else {
-                    WIDTH as i32 - self.frames as i32
-                };
-                let h = (t.font.height() * t.scale) as i32;
-                let y = (HEIGHT as i32 - h) / 2 + i32::from(t.scale == 1);
-                let line = Line {
-                    x,
-                    y,
-                    text: &t.msg,
-                    font: t.font,
-                    scale: t.scale,
-                    colour: t.colour,
-                };
-                // The whole canvas once (it held another picture), then
-                // only the band the text moves in.
-                let rows = if self.painted {
-                    y.max(0) as usize..((y + h) as usize).min(HEIGHT)
-                } else {
-                    0..HEIGHT
-                };
-                paint(canvas, &[line], rows);
-                self.painted = true;
-                if still {
-                    HOLD
-                } else {
-                    t.step
-                }
-            }
         };
         self.frames += 1;
         Ok(Some(delay))
     }
-}
-
-/// The message bytes as the `&str` the text layout helpers take (they are
-/// ASCII, folded by [`text::fold_char`]).
-fn bytes_str(b: &[u8]) -> &str {
-    std::str::from_utf8(b).unwrap_or("")
-}
-
-/// One line of text at a pixel position.
-struct Line<'a> {
-    x: i32,
-    y: i32,
-    text: &'a [u8],
-    font: Font,
-    scale: usize,
-    colour: Rgb,
-}
-
-impl Line<'_> {
-    /// Whether the line lights `(x, y)`: exactly the pixels
-    /// [`text::draw_text_with`] would draw.
-    fn lights(&self, x: i32, y: i32) -> bool {
-        let (dx, dy) = (x - self.x, y - self.y);
-        if dx < 0 || dy < 0 {
-            return false;
-        }
-        let (dx, dy) = (dx as usize / self.scale, dy as usize / self.scale);
-        let adv = self.font.advance();
-        if dy >= self.font.height() {
-            return false;
-        }
-        match self.text.get(dx / adv) {
-            Some(&c) => self.font.rows(c as char)[dy] & (0x80 >> (dx % adv)) != 0,
-            None => false,
-        }
-    }
-}
-
-/// Make `rows` of the canvas exactly `lines` on black, writing (and so
-/// marking) only the pixels that differ.
-fn paint(canvas: &mut Canvas, lines: &[Line], rows: std::ops::Range<usize>) {
-    for y in rows {
-        for x in 0..WIDTH {
-            let c = lines
-                .iter()
-                .find(|l| l.lights(x as i32, y as i32))
-                .map_or(Rgb::BLACK, |l| l.colour);
-            if canvas.get(x, y) != c {
-                canvas.set(x, y, c);
-            }
-        }
-    }
-}
-
-const WEEKDAYS: [&[u8; 3]; 7] = [b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat", b"Sun"];
-const MONTHS: [&[u8; 3]; 12] = [
-    b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec",
-];
-
-/// Everything the clock draws, packed: when it changes, the clock redraws.
-fn clock_key(c: &ClockSpec, t: Option<WallTime>) -> u64 {
-    let Some(t) = t else {
-        return u64::MAX - 1;
-    };
-    let s = if c.seconds { u64::from(t.second) } else { 0 };
-    let d = if c.date {
-        (u64::from(t.weekday) << 16) | (u64::from(t.month) << 8) | u64::from(t.day)
-    } else {
-        0
-    };
-    (d << 24) | (u64::from(t.hour) << 16) | (u64::from(t.minute) << 8) | s
-}
-
-fn push_2(buf: &mut [u8; 16], n: &mut usize, v: u8, pad: u8) {
-    if v >= 10 || pad != 0 {
-        buf[*n] = if v >= 10 { b'0' + v / 10 } else { pad };
-        *n += 1;
-    }
-    buf[*n] = b'0' + v % 10;
-    *n += 1;
-}
-
-/// The clock as it is at `t` (`--:--` without a time): see [`ClockSpec`].
-fn draw_clock(canvas: &mut Canvas, c: &ClockSpec, t: Option<WallTime>) {
-    let (mut time, mut tn) = ([0u8; 16], 0);
-    let (mut date, mut dn) = ([0u8; 16], 0);
-    match t {
-        Some(t) => {
-            let hour = if c.h12 {
-                match t.hour % 12 {
-                    0 => 12,
-                    h => h,
-                }
-            } else {
-                t.hour
-            };
-            push_2(&mut time, &mut tn, hour, if c.h12 { 0 } else { b'0' });
-            time[tn] = b':';
-            tn += 1;
-            push_2(&mut time, &mut tn, t.minute, b'0');
-            if c.seconds {
-                time[tn] = b':';
-                tn += 1;
-                push_2(&mut time, &mut tn, t.second, b'0');
-            }
-            if c.date {
-                let wd = WEEKDAYS[usize::from(t.weekday.clamp(1, 7)) - 1];
-                let mon = MONTHS[usize::from(t.month.clamp(1, 12)) - 1];
-                date[..3].copy_from_slice(wd);
-                date[3] = b' ';
-                dn = 4;
-                push_2(&mut date, &mut dn, t.day, 0);
-                date[dn] = b' ';
-                date[dn + 1..dn + 4].copy_from_slice(mon);
-                dn += 4;
-            }
-        }
-        None => {
-            let s: &[u8] = if c.seconds { b"--:--:--" } else { b"--:--" };
-            time[..s.len()].copy_from_slice(s);
-            tn = s.len();
-        }
-    }
-    let (time, date) = (&time[..tn], &date[..dn]);
-    let dated = c.date && !date.is_empty();
-    let scale = match (c.big, c.seconds || c.date) {
-        (true, false) => 4,
-        (true, true) => 3,
-        (false, _) => 2,
-    };
-    let f = Font::Normal;
-    let tw = text::text_width(f, bytes_str(time), scale) as i32;
-    let dw = text::text_width(f, bytes_str(date), 1) as i32;
-    // Centred on the glyphs' bodies (6 of the font's 7 rows; the 7th is the
-    // descender, blank in digits): the time alone, or the time with the
-    // date (5x7) 3 px under it.
-    let body = (6 * scale) as i32;
-    let block = if dated { body + 3 + 6 } else { body };
-    let ty = (HEIGHT as i32 - block) / 2;
-    let lines = [
-        Line {
-            x: (WIDTH as i32 - tw) / 2,
-            y: ty,
-            text: time,
-            font: f,
-            scale,
-            colour: c.colour,
-        },
-        Line {
-            x: (WIDTH as i32 - dw) / 2,
-            y: ty + body + 3,
-            text: date,
-            font: f,
-            scale: 1,
-            colour: c.colour,
-        },
-    ];
-    paint(canvas, &lines[..if dated { 2 } else { 1 }], 0..HEIGHT);
 }
 
 /// When (ms into the effect) each dot ignites spreads outward from the
@@ -1401,43 +1012,6 @@ mod tests {
         }
     }
 
-    thread_local! {
-        static TEST_TIME: std::cell::Cell<Option<WallTime>> = const { std::cell::Cell::new(None) };
-    }
-
-    fn test_clock() -> Option<WallTime> {
-        TEST_TIME.with(|t| t.get())
-    }
-
-    fn at(h: u8, m: u8, s: u8, ms: u16) {
-        set_wall_clock(Some(test_clock));
-        TEST_TIME.with(|t| {
-            t.set(Some(WallTime {
-                year: 2026,
-                month: 9,
-                day: 28,
-                weekday: 1,
-                hour: h,
-                minute: m,
-                second: s,
-                millis: ms,
-            }))
-        });
-    }
-
-    fn lit(c: &Canvas) -> usize {
-        c.as_slice().iter().filter(|p| **p != Rgb::BLACK).count()
-    }
-
-    /// The canvas as text rows, `#` lit: the reference drawing.
-    fn reference(lines: &[(i32, i32, &str, Font, usize)]) -> Canvas {
-        let mut c = Canvas::new();
-        for (x, y, t, f, s) in lines {
-            text::draw_text_with(&mut c, *x, *y, t, text::TITLE_COLOUR, *f, *s);
-        }
-        c
-    }
-
     #[test]
     fn wall_time_from_unix() {
         // 2026-09-28 13:05:09 UTC, a Monday.
@@ -1462,198 +1036,17 @@ mod tests {
     }
 
     #[test]
-    fn options_parse_and_paths() {
-        assert!(is_virtual(CLOCK));
-        assert_eq!(title(CLOCK).as_deref(), Some("Clock"));
-        assert_eq!(title("@clock?style=small&date=1").as_deref(), Some("Clock"));
-        let p = text_path("Hello, wörld & 100%");
-        assert_eq!(p, "@text?msg=Hello%2C%20w%C3%B6rld%20%26%20100%25");
-        assert_eq!(title(&p).as_deref(), Some("Hello, world & 100%"));
+    fn the_live_items_are_gone() {
+        // `@clock` and `@text` name nothing now: no title, no picture.
+        for p in ["@clock", "@clock?style=small&date=1", "@text?msg=Hi&scroll=0"] {
+            assert!(is_retired_live(p) && is_virtual(p), "{p}");
+            assert_eq!(title(p), None, "{p}");
+            assert!(SynthSource::new(open(p).unwrap()).is_err(), "{p}");
+        }
+        for p in ["@clockx", "@texts", "@card:Clock|", "@boot", "/gifs/@clock.gif"] {
+            assert!(!is_retired_live(p), "{p}");
+        }
         assert_eq!(url_decode(b"a+b%41%zz%4"), "a bA%zz%4");
-        assert_eq!(parse_colour(b"#ff8000"), Some(Rgb::new(255, 128, 0)));
-        assert_eq!(parse_colour(b"%23FF8000"), Some(Rgb::new(255, 128, 0)));
-        assert_eq!(parse_colour(b"fff"), None);
-        assert_eq!(parse_u16(b"40"), Some(40));
-        assert_eq!(parse_u16(b"4x"), None);
-        let Some(Spec::Text(t)) = parse("@text?msg=Hi&speed=5&font=small&color=00ff00&scroll=0")
-        else {
-            panic!()
-        };
-        assert_eq!(t.msg, b"Hi");
-        assert_eq!(t.step, Duration::from_millis(TEXT_STEP_MIN_MS));
-        assert_eq!(
-            (t.font, t.scale, t.colour, t.scroll),
-            (Font::Small, 1, Rgb::new(0, 255, 0), false)
-        );
-        let Some(Spec::Clock(c)) = parse("@clock?style=small&seconds=1&date=1&h12=1") else {
-            panic!()
-        };
-        assert!(!c.big && c.seconds && c.date && c.h12);
-        assert_eq!(parse("@clock"), Some(Spec::Clock(ClockSpec::default())));
-        let long = "x".repeat(400);
-        let Some(Spec::Text(t)) = parse(&format!("@text?msg={long}")) else {
-            panic!()
-        };
-        assert_eq!(t.msg.len(), TEXT_MAX);
-        let e = crate::manifest::Entry::from_path("@text?msg=Game%20over");
-        assert_eq!(
-            (e.title.as_str(), e.platform, e.category),
-            ("Game over", None, None)
-        );
-    }
-
-    #[test]
-    fn clock_draws_the_time_and_redraws_only_on_change() {
-        at(9, 5, 30, 400);
-        let mut src = FrameSource::open(open(CLOCK).unwrap()).unwrap();
-        let mut canvas = Canvas::new();
-        canvas.fill(Rgb::new(9, 9, 9));
-        let d = src.next_frame(&mut canvas).unwrap().unwrap();
-        // On the next second.
-        assert_eq!(d, Duration::from_millis(600));
-        // HH:MM at 4x, centred on the glyph bodies.
-        let want = reference(&[((128 - 96) / 2, 4, "09:05", Font::Normal, 4)]);
-        assert_eq!(canvas, want);
-        // One frame per loop; the loop restarts in place and draws nothing
-        // while the minute is the same.
-        assert!(src.next_frame(&mut canvas).unwrap().is_none());
-        assert!(src.rewind_virtual());
-        canvas.dirty_mut().clear();
-        at(9, 5, 31, 0);
-        assert_eq!(
-            src.next_frame(&mut canvas).unwrap(),
-            Some(Duration::from_millis(1000))
-        );
-        assert!(canvas.dirty().is_clean());
-        // The minute moves: only the changed pixels are written.
-        at(9, 6, 0, 0);
-        assert!(src.next_frame(&mut canvas).unwrap().is_none());
-        src.rewind_virtual();
-        src.next_frame(&mut canvas).unwrap().unwrap();
-        let want2 = reference(&[((128 - 96) / 2, 4, "09:06", Font::Normal, 4)]);
-        assert_eq!(canvas, want2);
-        let changed = want
-            .as_slice()
-            .iter()
-            .zip(want2.as_slice())
-            .filter(|(a, b)| a != b)
-            .count() as u32;
-        assert_eq!(canvas.dirty().count(), changed);
-        assert!(changed > 0 && (changed as usize) < lit(&want2));
-    }
-
-    #[test]
-    fn clock_styles_and_no_time() {
-        at(21, 7, 4, 0);
-        let (f, _) = play_first("@clock?seconds=1&date=1");
-        let want = reference(&[
-            ((128 - 117) / 2, 2, "21:07:04", Font::Normal, 3),
-            ((128 - 49) / 2, 23, "Mon 28 Sep", Font::Normal, 1),
-        ]);
-        assert_eq!(f, want);
-        let (f, _) = play_first("@clock?style=small&h12=1");
-        assert_eq!(
-            f,
-            reference(&[((128 - 19 * 2) / 2, 10, "9:07", Font::Normal, 2)])
-        );
-        // No time: this thread's clock answers None (the same path as no
-        // clock installed). Unsetting the global WALL here raced with the
-        // other clock tests, which install it from their own threads.
-        set_wall_clock(Some(test_clock));
-        TEST_TIME.with(|t| t.set(None));
-        let (f, d) = play_first(CLOCK);
-        assert_eq!(
-            f,
-            reference(&[((128 - 96) / 2, 4, "--:--", Font::Normal, 4)])
-        );
-        assert_eq!(d, Duration::from_millis(1000));
-    }
-
-    fn play_first(path: &str) -> (Canvas, Duration) {
-        let mut src = FrameSource::open(open(path).unwrap()).unwrap();
-        let mut canvas = Canvas::new();
-        let d = src.next_frame(&mut canvas).unwrap().unwrap();
-        (canvas, d)
-    }
-
-    #[test]
-    fn text_scrolls_a_pixel_a_step_and_loops() {
-        let path = "@text?msg=OpenDMD&speed=30";
-        let mut src = FrameSource::open(open(path).unwrap()).unwrap();
-        let mut canvas = Canvas::new();
-        canvas.fill(Rgb::new(50, 0, 0));
-        let w = 68; // 7 characters of 5x7 at 2x
-        let mut frames = 0;
-        while let Some(d) = src.next_frame(&mut canvas).unwrap() {
-            assert_eq!(d, Duration::from_millis(30));
-            let x = 128 - frames;
-            assert_eq!(
-                canvas,
-                reference(&[(x, 9, "OpenDMD", Font::Normal, 2)]),
-                "step {frames}"
-            );
-            if frames > 0 {
-                // Only the band rows are touched after the first frame.
-                assert!(canvas.dirty().row_mask() & !(((1u32 << 14) - 1) << 9) == 0);
-            }
-            canvas.dirty_mut().clear();
-            frames += 1;
-        }
-        assert_eq!(frames, w + 129);
-        // A loop starts over, in place.
-        assert!(src.rewind_virtual());
-        assert!(src.next_frame(&mut canvas).unwrap().is_some());
-        assert!(canvas.dirty().is_clean(), "the first step is off the panel");
-        // Static when asked and it fits.
-        let (f, d) = play_first("@text?msg=Hi&scroll=0&font=normal");
-        assert_eq!(d, HOLD);
-        assert_eq!(f, reference(&[((128 - 9) / 2, 13, "Hi", Font::Normal, 1)]));
-    }
-
-    #[test]
-    fn live_files_in_the_engine_respect_dwell() {
-        use crate::engine::{DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
-        use crate::filter::Filter;
-        use crate::scheduler::{Mode, Scheduler};
-        struct NoFiles;
-        impl Source for NoFiles {
-            fn open(&self, p: &str) -> io::Result<Box<dyn crate::engine::ReadSeek>> {
-                Err(io::Error::new(io::ErrorKind::NotFound, p.to_string()))
-            }
-        }
-        at(10, 0, 0, 0);
-        let m = "@clock\n@text?msg=Hi\n".to_string();
-        let cat = FileCatalog::build(Cursor::new(m.into_bytes()), &Filter::new()).unwrap();
-        let dwell = DwellPolicy {
-            min: Duration::from_secs(3),
-            max: Duration::from_secs(30),
-            min_loops: 1,
-        };
-        let mut e = Engine::new(
-            Box::new(cat),
-            Scheduler::new(2, Mode::Sequential, 0),
-            dwell,
-            Box::new(NoFiles),
-        );
-        let mut canvas = Canvas::new();
-        let mut t = Duration::ZERO;
-        let mut starts = Vec::new();
-        while t < Duration::from_secs(12) {
-            if let TickOutcome::Frame {
-                playing, started, ..
-            } = e.tick(t, &mut canvas).unwrap()
-            {
-                if started {
-                    starts.push((t.as_millis(), playing.path, playing.title));
-                }
-            }
-            t += Duration::from_millis(10);
-        }
-        // The clock holds for its 3 s (three one-second loops), then the text.
-        assert_eq!(starts[0], (0, "@clock".into(), "Clock".into()));
-        assert_eq!(starts[1].1, "@text?msg=Hi");
-        assert_eq!(starts[1].2, "Hi");
-        assert_eq!(starts[1].0, 3000);
     }
 
     #[test]
@@ -1735,6 +1128,7 @@ mod tests {
         assert!((555..=565).contains(&frames), "{frames}");
     }
 
+    #[cfg(feature = "psi")]
     #[test]
     fn effects_keep_their_schedule_when_ticked_late() {
         use crate::engine::{DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
@@ -1748,15 +1142,8 @@ mod tests {
         }
         // Ticked every 3 ms, a 10 ms frame is seen 0-2 ms late: timed from
         // the tick it would come every 12 ms (83 fps); it keeps 100.
-        #[cfg(feature = "psi")]
         let formula = crate::fx_psi::path("loop 2.4\nfps 100\ngray(frac(x + t/2.4))", "");
-        #[cfg(not(feature = "psi"))]
-        let formula = String::new();
-        let mut cases = vec![("@text?msg=Hi&speed=20".to_string(), 286)];
-        if cfg!(feature = "psi") {
-            cases.push((formula, 600));
-        }
-        for (path, want) in cases {
+        for (path, want) in [(formula, 600)] {
             let cat = FileCatalog::build(
                 Cursor::new(format!("{path}\n").into_bytes()),
                 &Filter::new(),
@@ -1782,7 +1169,6 @@ mod tests {
                     frames += 1;
                 }
             }
-            // (A text, not an effect, is still timed from the tick: 21 ms.)
             assert!((want - 5..=want + 5).contains(&frames), "{path}: {frames}");
         }
     }

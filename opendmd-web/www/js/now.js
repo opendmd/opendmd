@@ -18,7 +18,7 @@ const POLL_MS = 500;
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
 const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).join(' · ');
 
-// ★: the GIF on screen a favourite in the playlist playing (not live items).
+// ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
 function favButton() {
   const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav) });
   b.ov = ov;

@@ -77,15 +77,15 @@ layout, recovery and the update flow in detail.
 
 The crates are deliberately not a Cargo workspace.
 
-**Live items.** Paths that begin with `@` are drawn by the core, not read
-from the card (`opendmd-core/src/synth.rs` parses them): `@clock`, `@text`,
-`@boot`, `@card:` and `@formula?psb=…`, a [Psi](psi-for-models.md) Formula
+**Virtual files.** Paths that begin with `@` are drawn by the core, not read
+from the card (`opendmd-core/src/synth.rs` parses them): `@boot`, `@power-on`, `@card:` and `@formula?psb=…`, a [Psi](psi-for-models.md) Formula
 compiled by `opendmd-psi` in the browser (or `psi build`) and run by the
 player on the same code in the firmware, the simulator and the browser; the
 player never compiles. The built-in effects (`@fx:tunnel`
-and the others) are gone: they are Formulas now. Options and limits are in
-the [HTTP API](api.md#live-items); to see a live item without a board,
-`make sim ARGS="--play '@clock?date=1'"`.
+and the others) and the clock and scrolling text (`@clock`, `@text`) are
+gone: they are Formulas now (a clock is one, `@formula:big-clock`). Options
+and limits are in the [HTTP API](api.md#virtual-files); to see one without a
+board, `make sim ARGS="--play '@boot?len=full'"`.
 
 ## Reference
 

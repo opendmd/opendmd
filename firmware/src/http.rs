@@ -447,10 +447,9 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     }
     if let Some(v) = patch.attract.clone() {
         if !crate::nvs_config::valid_attract(&v) {
-            return Err(PatchErr::bad(&format!(
-                "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
-                crate::nvs_config::ATTRACT_MAX - 5
-            )));
+            return Err(PatchErr::bad(
+                "attract must be \"\" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set",
+            ));
         }
         next.attract = v;
     }
@@ -578,7 +577,7 @@ pub struct ConfigPatch {
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
     pub(crate) attract_set: Option<Option<String>>,
-    /// `""`, `"clock"` or `"text:<message>"`.
+    /// Only `""` now (the live items are gone).
     pub(crate) attract: Option<String>,
     pub(crate) look: Option<String>,
     pub(crate) glow: Option<String>,
@@ -1220,8 +1219,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)",
             );
         }
-        // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
-        // this build does not know is a 415 from the engine.
+        // The live items likewise (a clock is a Formula now).
+        if opendmd_core::synth::is_retired_live(&play.path) {
+            return req.error(
+                415,
+                "415 Unsupported Media Type",
+                "the clock and the scrolling text are gone: play a Formula (a clock is one, @formula:big-clock)",
+            );
+        }
+        // A virtual file (`@card:…`, `@boot…`) is drawn, not read; one this
+        // build does not know is a 415 from the engine.
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
             return req.bad_request("\"live\" is only for a formula (@formula?psb=…)");
         }
@@ -1243,7 +1250,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             && (!on_card.starts_with('/')
                 || files::card_path(config::SD_MOUNT, on_card).is_none())
         {
-            return req.bad_request("path must be card-absolute and stay on the card, or a live item (@clock, @text?msg=…)");
+            return req.bad_request("path must be card-absolute and stay on the card, or a Formula (@formula…)");
         }
         send_play(req, &c, play.path, play.live, play.over, None)
     })?;
@@ -2935,17 +2942,13 @@ fn formula_look_json() -> String {
     format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}{jit}{error}}}"#)
 }
 
-/// The end of the status object: `"look","glow","glow_held","formula_look","attract_live",
+/// The end of the status object: `"look","glow","glow_held","formula_look",
 /// "max_brightness","brightness_safe_max","safe_start_until","scan"`
 /// (see the API table), from the settings and the main loop's flags.
 fn looks_json(set: &Settings) -> String {
     use std::sync::atomic::Ordering::Relaxed;
-    let live = crate::state::ATTRACT_LIVE
-        .load(Relaxed)
-        .then(|| crate::nvs_config::attract_path(&set.attract))
-        .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -2954,7 +2957,6 @@ fn looks_json(set: &Settings) -> String {
             0
         },
         formula_look_json(),
-        opt_json(live.as_deref()),
         set.max_brightness,
         crate::config::BRIGHTNESS_SAFE_MAX,
         match crate::state::SAFE_START_UNTIL.load(Relaxed) {

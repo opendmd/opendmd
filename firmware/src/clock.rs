@@ -65,10 +65,9 @@ fn local_tm() -> Option<esp_idf_sys::tm> {
     ok.then_some(tm)
 }
 
-/// The local time for the live clock (`@clock`, `opendmd_core::synth`,
+/// The local time Formulas read (`hour`, `minute`, …: `opendmd_core::synth`,
 /// installed at boot with `synth::set_wall_clock`); `None` before the
-/// first sync, which the clock shows as `--:--`. Called on the main task at
-/// most once a second while a clock plays: `gettimeofday` + `localtime_r`.
+/// first sync. Called on the main task: `gettimeofday` + `localtime_r`.
 pub fn wall_now() -> Option<opendmd_core::synth::WallTime> {
     // SAFETY: `timeval` is plain old data; a null zone is allowed.
     let mut tv: esp_idf_sys::timeval = unsafe { std::mem::zeroed() };

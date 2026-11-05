@@ -10,8 +10,8 @@
   drawn by the simulator's raw canvas (--screenshot-canvas) a frame at a time.
 - gifs/Kenney/: the Kenney "Pixel Platformer" (CC0) animations made by the
   art pipeline prototypes (opendmd-web/experiments/art/process/out/).
-- filelist.txt: the demo's "All files", live items (the clock,
-  scrolling text) between the GIFs; sets/: two more playlists.
+- filelist.txt: the demo's "All files", the sprites and every third
+  Formula; sets/: two more playlists.
 - index.json: every file and its size, which the demo reads instead of a
   directory listing.
 
@@ -57,15 +57,9 @@ KENNEY_GIFS = {
     "b_pan.gif": "OTHER_Pixel_Platformer_Pan_01_kenney.gif",
     "d_scroll.gif": "OTHER_Pixel_Platformer_Scroll_01_kenney.gif",
 }
-# The demo's All files: live items, drawn by the panel, between the GIFs.
-# (No Formula paths: the demo's in-browser preview cannot draw them and skips
-# them; the Formulas are the Demoscene GIFs, recorded here.)
-LIVE = [
-    "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
-    "@clock?style=big&date=1",
-    "@text?msg=Made%20in%20the%20browser&speed=30&color=00ccff",
-    "@clock?style=small&seconds=1",
-]
+# (No Formula paths in the playlists: the demo's in-browser preview cannot
+# draw them and skips them; the Formulas are the Demoscene GIFs, recorded
+# here.)
 
 
 def formula_src(name: str) -> str:
@@ -122,17 +116,11 @@ def main() -> None:
         shutil.copyfile(KENNEY / src, card / f"gifs/Kenney/{name}")
         kenney.append(f"/gifs/Kenney/{name}")
 
-    # Live items, with a GIF after every second one.
-    gifs = kenney + fx[::3]
-    lines = []
-    for i, item in enumerate(LIVE):
-        lines.append(item)
-        if i >= 2 and i % 2 == 0 and gifs:
-            lines.append(gifs.pop(0))
-    lines += gifs
-    (card / "filelist.txt").write_text("\n".join(lines) + "\n")
+    (card / "filelist.txt").write_text("\n".join(kenney + fx[::3]) + "\n")
     (card / "sets/Demoscene.txt").write_text("\n".join(fx) + "\n")
-    (card / "sets/Sprites and Clock.txt").write_text("\n".join(kenney + ["@clock?style=small&seconds=1"]) + "\n")
+    # (Its old name, from when it had the clock too.)
+    (card / "sets/Sprites and Clock.txt").unlink(missing_ok=True)
+    (card / "sets/Sprites.txt").write_text("\n".join(kenney) + "\n")
 
     files = sorted(p for p in card.rglob("*") if p.is_file() and p.name != "index.json")
     index = [{"path": "/" + p.relative_to(card).as_posix(), "size": p.stat().st_size} for p in files]

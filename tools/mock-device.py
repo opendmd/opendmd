@@ -206,32 +206,26 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   both null: not set); a PUT sets both (rounded to 0.01°) or clears both
   with nulls; one without the other, a non-number or out of range (±90,
   ±180) is a 400. Never in status (the firmware's sky inputs follow it).
-- **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
+- **Looks.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
   `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
-  `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
-  control characters) are config fields, validated as the firmware does (a
-  400, nothing saved; a value starting `fx:` is a 400 too, the built-in effects
-  are gone: a Formula as attract is a playlist of one, chosen as `attract_set`)
+  `attract` (only `""` now) are config fields, validated as the firmware does (a
+  400, nothing saved: `"clock"`, `"text:…"` and `"fx:…"` are gone; a Formula
+  as attract is a playlist of it, chosen as `attract_set`)
   and applied live, no reindex. Status ends with `look`,
-  `glow`, `glow_held` (12288 while glow is not `off` and the simulated player
-  is playing, else 0) and `attract_live` (null, or `@clock` / `@text?msg=..`
-  while following RePlayOS in its attract state with `attract`
-  set).
-  `POST /api/play` also takes live items: `@clock[?style=..&seconds=1&date=1&
-  h12=1&color=RRGGBB]` and `@text?msg=..[&speed=ms&font=..&color=..&scroll=0]`
-  and the start-up
+  `glow` and `glow_held` (12288 while glow is not `off` and the simulated player
+  is playing, else 0).
+  `POST /api/play` also takes the start-up
   show `@boot[?len=short|full|card&v=&ip=&ap=&note=]` (10 ms frames over
   1300 / 5600 ms, or the status card's 16384 ms loop; titled "Startup") (plus
-  `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
-  a clock is 1000 ms frames, a text is frames of `speed` ms looping over
-  (text width + 129) frames (one 1000 ms frame for a `scroll=0` text that
-  fits). A playlist line may be one too; `/api/cache` never counts them as
-  needing a copy.
+  `@power-on`, `@card:`); any other `@...` is a 415 (`@clock…` and `@text…`,
+  gone, with the firmware's sentence). They read no file. A playlist line may
+  be one too; `/api/cache` never counts them as needing a copy; an
+  `@clock…` / `@text…` line is skipped as the playlist is read.
   **Retired effects**: any `@fx:..` path (the old native `@fx:tunnel`,
   `@fx:starfield`, ... and the old `@fx:psi`) is a 415 from `POST /api/play`
   ("the built-in effects are gone: Formulas replace them (play one as
   @formula?psb=...)"); a playlist line starting `@fx:` is skipped, with a stderr
-  line each time the playlist is read.
+  line each time the playlist is read (and so is an `@clock…` / `@text…` one).
   **Formulas** (`@formula?psb=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
   `name`, a playlist entry's, is its title): 20 ms
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
@@ -673,7 +667,7 @@ DEFAULT_SETTINGS = {
     "follow_host": "",
     "follow_code": "",          # the NET CONTROL code -- never echoed back
     "attract_set": None,        # None = "the current playlist", else a `set` value
-    "attract": "",              # "" (the playlist), "clock" or "text:<message>"
+    "attract": "",              # only "" (the playlist) now
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
     "look_formula": "",         # the Formula look: "" or a formula's @formula?psb=.. path
@@ -693,11 +687,10 @@ BOOT_SHOWS = ("off", "short", "full")
 # opendmd_core::FormulaKeep: a Formula sent to the panel (POST /api/play)
 # stays its seconds (0: until something else plays; None: one turn).
 FORMULA_KEEP = {"turn": None, "1m": 60, "5m": 300, "hold": 0}
-# The start-up show as a live item (`@boot[?len=short|full|card&..]`,
+# The start-up show as a virtual file (`@boot[?len=short|full|card&..]`,
 # opendmd_core::boot): the show once (1300 / 5600 ms) or one loop of the
 # status card (16384 ms), in 10 ms frames.
 BOOT_MS = {"short": 1300, "full": 5600, "card": 16384}
-ATTRACT_MAX = 205               # "text:" + at most 200 characters
 GLOW_HELD_BYTES = 12288         # the glow's 12 KB copy
 
 # opendmd_core::compositor::Kind names, and the duration range
@@ -1114,7 +1107,9 @@ def compute_matches(ctx: "Context", platform: str | None, game_clean: str) -> in
 VIRTUAL_POWER_ON = "@power-on"
 
 
-ATTRACT_MESSAGE = 'attract must be "" (the playlist), "clock" or "text:<message>" (at most 200 characters, one line)'
+ATTRACT_MESSAGE = ('attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone;'
+                   ' for a Formula (a clock is one), make a playlist of it and choose it as attract_set')
+RETIRED_LIVE_MESSAGE = "the clock and the scrolling text are gone: play a Formula (a clock is one, @formula:big-clock)"
 RETIRED_FX_MESSAGE = "the built-in effects are gone: Formulas replace them (play one as @formula?psb=…)"
 
 
@@ -1158,11 +1153,16 @@ def is_formula_ref(path: str) -> bool:
     return path.startswith("@formula?") or path.startswith("@formula:") or bool(FORMULA_FILE_RE.match(path))
 
 
+def is_retired_live(path: str) -> bool:
+    """synth::is_retired_live: the clock's or the scrolling text's path
+    (`@clock[?..]`, `@text?..`), gone."""
+    return path.partition("?")[0] in ("@clock", "@text")
+
+
 def live_parse(path: str):
-    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@formula?psb=..`)
-    -> ("clock"|"text"|"formula", {param: value}) with the values
-    percent-decoded, or None for anything else (a text needs a non-empty
-    `msg`, a formula a non-empty `src`)."""
+    """A drawn path (`@boot[?..]`, `@formula?psb=..`, `@formula:<name>`)
+    -> ("boot"|"formula", {param: value}) with the values percent-decoded,
+    or None for anything else (a formula needs a header this player takes)."""
     head, _, query = path.partition("?")
     if head == SENT:
         info = psb_info(SENT_PSB[0]) if SENT_PSB[0] is not None else None
@@ -1180,14 +1180,12 @@ def live_parse(path: str):
         return "formula", params
     if head == "@formula" and "psb=" in query:
         pass
-    elif head not in ("@clock", "@text", "@boot"):
+    elif head != "@boot":
         return None
     params: dict[str, str] = {}
     for part in query.split("&") if query else []:
         k, _, v = part.partition("=")
         params[k] = (urllib.parse.unquote_plus if k == "name" else urllib.parse.unquote)(v)
-    if head == "@text" and not params.get("msg"):
-        return None
     if head == "@formula":
         info = psb_info(params.get("psb", ""))
         if info is None:
@@ -1228,17 +1226,13 @@ def psb_info(b64: str) -> tuple[str, int] | None:
 
 
 def is_live(path: str) -> bool:
-    """A path the player draws itself: a live item, `@power-on` or `@card:`."""
+    """A path the player draws itself: a Formula, `@boot`, `@power-on` or `@card:`."""
     return path == VIRTUAL_POWER_ON or path.startswith("@card:") or live_parse(path) is not None
 
 
 def live_delays(kind: str, params: dict[str, str]) -> list[int]:
-    """Frame delays of a live item: a clock is 1000 ms frames; a text is
-    frames of `speed` ms (default 40, 20..1000) over (width + 129) frames,
-    width being len*5-1 px (x2 for the big font) or len*4-1 (small); a
-    `scroll=0` text that fits in 128 px is one 1000 ms frame."""
-    if kind == "clock":
-        return [1000]
+    """Frame delays of a drawn path: the start-up show's 10 ms frames, a
+    Formula's over its loop."""
     if kind == "boot":
         length = params.get("len", "short")
         return [10] * (BOOT_MS.get(length, BOOT_MS["short"]) // 10)
@@ -1251,25 +1245,14 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
             m = re.search(r"(?:^|;|\n)\s*loop\s+([0-9.]+)", params.get("src", ""))
             secs = min(3600.0, max(0.1, float(m.group(1)))) if m else 8.0
         return [delay] * max(1, int(secs * 1000) // delay)
-    msg = params.get("msg", "")
-    font = params.get("font", "big")
-    width = (len(msg) * 4 - 1) if font == "small" else (len(msg) * 5 - 1)
-    if font not in ("small", "normal"):
-        width *= 2
-    if params.get("scroll") == "0" and width <= 128:
-        return [1000]
-    try:
-        speed = int(params.get("speed", "40"))
-    except ValueError:
-        speed = 40
-    speed = max(20, min(1000, speed))
-    return [speed] * (width + 129)
+    return [1000]
 
 
 def virtual_delays(path: str) -> list[int] | None:
     """Frame delays for a virtual "file" (a Follow RePlayOS card): a single
     3000 ms frame for a card (`@card:...`), 35 x 20 ms for the power-on
-    effect, a live item's per live_delays; None for a real path."""
+    effect, a Formula's or the start-up show's per live_delays; None for a
+    real path."""
     if path == VIRTUAL_POWER_ON:
         return [20] * 35
     if path.startswith("@card:"):
@@ -1333,19 +1316,7 @@ def virtual_title(path: str) -> str | None:
                 if n.strip():
                     return n
             return "Formula"
-        if live[0] == "boot":
-            return "Startup"
-        return "Clock" if live[0] == "clock" else live[1]["msg"]
-    return None
-
-
-def attract_live_path(attract: str) -> str | None:
-    """The live item Follow RePlayOS's attract state shows for the config's
-    `attract` value (None for "" = the playlist)."""
-    if attract == "clock":
-        return "@clock"
-    if attract.startswith("text:"):
-        return "@text?msg=" + urllib.parse.quote(attract[5:].encode(), safe="-_.~")
+        return "Startup"
     return None
 
 
@@ -2207,6 +2178,10 @@ class Player:
                     print(f'playlist: skipping "{line[:48]}…": the built-in effects are gone (Formulas replace them)',
                           file=sys.stderr, flush=True)
                     continue
+                if is_retired_live(line):
+                    print(f'playlist: skipping "{line[:48]}…": the clock and scrolling text are gone (a Formula draws a clock)',
+                          file=sys.stderr, flush=True)
+                    continue
                 # A build without Formulas skips a playlist's Formula lines.
                 if not getattr(self.ctx, "formulas", True) and is_formula_ref(line):
                     continue
@@ -2707,7 +2682,7 @@ class Cache:
             n = 0
             missing = []
             for p in playlist:
-                if p.startswith("@"):  # a live item: layout::classify says never
+                if p.startswith("@"):  # drawn (a Formula, a card): layout::classify says never
                     continue
                 if p.lower().startswith("/cache/"):
                     n += 1
@@ -3496,7 +3471,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "glow": ctx.settings["glow"],
                     "glow_held": GLOW_HELD_BYTES if ctx.settings["glow"] != "off" and not player._frozen() else 0,
                     "formula_look": player.formula_look(ctx.settings["look_formula"]),
-                    "attract_live": None,
                     "max_brightness": ctx.settings["max_brightness"],
                     "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
                     "safe_start_until": SAFE_START_SECS
@@ -3508,8 +3482,6 @@ def make_handler(ctx: Context, quiet: bool):
                              "split": 0, "split_ok": 0, "unsplit": 0, "spin_us": 0,
                              "retimed": 0},
                 }
-                if ctx.settings["follow"] and ctx.follow.state == "attract":
-                    obj["attract_live"] = attract_live_path(ctx.settings["attract"])
                 _, _, query = self.path.partition("?")
                 if query_param(query, "recent") == "1":
                     # Recently played, right after `paused` as the firmware puts it.
@@ -3726,14 +3698,7 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "boot_show" and v not in BOOT_SHOWS:
                         self.send_error_json(400, "boot_show must be off, short or full")
                         return
-                    if field == "attract" and v.startswith("fx:"):
-                        self.send_error_json(400, ATTRACT_MESSAGE + "; the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set")
-                        return
-                    if field == "attract" and not (
-                        v in ("", "clock")
-                        or (v.startswith("text:") and v[5:].strip() and len(v.encode()) <= ATTRACT_MAX
-                            and not any(ord(c) < 32 or 0x7F <= ord(c) < 0xA0 for c in v))
-                    ):
+                    if field == "attract" and v != "":
                         self.send_error_json(400, ATTRACT_MESSAGE)
                         return
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
@@ -4195,8 +4160,11 @@ def make_handler(ctx: Context, quiet: bool):
             if p.startswith("@fx:"):
                 self.send_error_json(415, RETIRED_FX_MESSAGE)
                 return
+            if is_retired_live(p):
+                self.send_error_json(415, RETIRED_LIVE_MESSAGE)
+                return
             if p.startswith("@"):
-                # A live item: drawn by the player, no file lookup.
+                # A virtual file: drawn by the player, no file lookup.
                 formula = p.startswith("@formula?") or p.startswith("@formula:")
                 if formula and len(p.encode()) > INLINE_MAX:
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")

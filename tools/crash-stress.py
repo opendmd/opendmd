@@ -14,7 +14,7 @@ Several client threads at once, each with random short delays:
   RePlayOS on or off, with `follow_host` the dead address (no ARP answer:
   the poll's connect times out), the Pi (`--pi`: refused while RePlayOS is
   down, answering when it is up) — interleaved with `POST /api/play` of
-  a small Formula (`@formula?src=..`), `@clock` and a GIF, `GET /api/status`, and now and then a
+  a small Formula (`@formula?src=..`), a title card (`@card:..`) and a GIF, `GET /api/status`, and now and then a
   `POST /api/follow/test`;
 - **download**: `GET` of a large GIF (> 1 MB), read whole, or dropped part
   way (the detached request's close path);
@@ -187,7 +187,7 @@ def control(dev, args, gifs):
     follow = True
     while not STOP.is_set():
         op = random.choices(
-            ["config", "formula", "clock", "gif", "status", "test"],
+            ["config", "formula", "card", "gif", "status", "test"],
             weights=[4, 3, 2, 2, 4, 1],
         )[0]
         try:
@@ -201,9 +201,9 @@ def control(dev, args, gifs):
                 # The crash came 0.2 s after one of these: play right away.
                 if random.random() < 0.6:
                     STOP.wait(random.uniform(0.05, 0.4))
-                    op = random.choice(["formula", "gif", "clock"])
-            if op in ("formula", "clock", "gif"):
-                path = {"formula": FORMULA_PATH, "clock": "@clock"}.get(op) or random.choice(gifs)
+                    op = random.choice(["formula", "gif", "card"])
+            if op in ("formula", "card", "gif"):
+                path = {"formula": FORMULA_PATH, "card": "@card:Stress|test"}.get(op) or random.choice(gifs)
                 st, _, ms, _ = request(dev, "POST", "/api/play", body=json.dumps({"path": path}),
                                        headers={"Content-Type": "application/json"})
                 record("control", "POST /api/play", st, ms, path)
