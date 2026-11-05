@@ -27,6 +27,7 @@ use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
 use crate::stream;
 use crate::wifi::ScannedAp;
 use crate::www;
+use opendmd_core::admit::{self, Ask};
 use opendmd_core::compositor::{self, Kind as TransitionKind};
 use opendmd_core::hostname::Check;
 use opendmd_core::panel_timing::{self, PanelOp, PanelPatch};
@@ -848,6 +849,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     let c = ctx.clone();
     server.route("/api/config", Method::Get, move |req| {
+        // A light read, refused only where a status read is (its ~2 KB of
+        // JSON is built whole).
+        if crate::state::free_heap() < STATUS_MIN_HEAP {
+            STATUS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            req.header("Retry-After", "1")?;
+            return req.error(503, "503 Service Unavailable", admit::BUSY);
+        }
         let mut json = {
             let s = c.settings.lock().unwrap();
             settings_json(&s)
@@ -1092,7 +1100,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 ),
             );
         }
-        let body = req.read_to_vec(crate::nvs_config::SCHEDULE_MAX)?;
+        if !admitted(req, Ask::body(declared as u32))? {
+            return Ok(());
+        }
+        let Some(body) = req.read_to_vec(crate::nvs_config::SCHEDULE_MAX)? else {
+            return refuse_heavy(req, "no block for the body");
+        };
         let parsed = match crate::sched::parse(&body) {
             Ok(p) => p,
             Err(e) => return req.bad_request(&e),
@@ -1298,18 +1311,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             }
         }
         opendmd_core::synth::set_sent(None);
-        // (`try_reserve`: a heap with no block that size refuses; `vec!`
-        // would abort the board.)
+        // At the door: the bytes, the floor, a transfer's swing, and a
+        // block that size (the rig's ring: a 9 KB block refused at 39 KB
+        // free). Then `try_reserve`: `vec!` would abort the board.
+        if !admitted(req, Ask::held(len as u32))? {
+            return Ok(());
+        }
         let mut psb = Vec::new();
-        if crate::state::free_heap() < len as u32 + config::STREAM_START_HEAP
-            || psb.try_reserve_exact(len).is_err()
-        {
-            req.header("Retry-After", "2")?;
-            return req.error(
-                503,
-                "503 Service Unavailable",
-                "the player needs the heap right now; retry shortly",
-            );
+        if psb.try_reserve_exact(len).is_err() {
+            return refuse_heavy(req, "no block for the Formula");
         }
         psb.resize(len, 0);
         let mut got = 0;
@@ -2284,8 +2294,68 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
         )?;
         return Ok(None);
     }
-    req.read_to_vec(MAX_JSON_BODY).map(Some)
+    if !admitted(req, Ask::body(declared as u32))? {
+        return Ok(None);
+    }
+    match req.read_to_vec(MAX_JSON_BODY)? {
+        Some(body) => Ok(Some(body)),
+        None => {
+            refuse_heavy(req, "no block for the body")?;
+            Ok(None)
+        }
+    }
 }
+
+/// Heavy requests refused at the door for the heap (`admitted`,
+/// `net.heavy_refused` in `/api/status`).
+static HEAVY_REFUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The heap as [`opendmd_core::admit`] reads it: free, the largest block,
+/// and whether a transfer is under way on the stream task.
+pub(crate) fn heap_now() -> admit::Heap {
+    admit::Heap {
+        free: crate::state::free_heap(),
+        largest: crate::state::largest_free_block() as u32,
+        transfers: stream::transfers(),
+    }
+}
+
+/// May a request that will take `ask` of the heap start now
+/// (`opendmd_core::admit`)? If not it has been answered `503` with a
+/// `Retry-After` (nothing done; the web app asks again) and logged.
+pub(crate) fn admitted(req: &mut Req, ask: Ask) -> Result<bool> {
+    let heap = heap_now();
+    match admit::admit(ask, heap) {
+        Ok(()) => Ok(true),
+        Err(r) => {
+            log::warn!(
+                "{}: {}, 503 (needs {} B; {} B free, largest block {} B)",
+                req.path(),
+                r.why(),
+                r.need(),
+                heap.free,
+                heap.largest
+            );
+            refuse_heavy(req, "")?;
+            Ok(false)
+        }
+    }
+}
+
+/// The 503 of a request the heap cannot take now (`why`: logged, unless
+/// [`admitted`] did).
+fn refuse_heavy(req: &mut Req, why: &str) -> Result<()> {
+    HEAVY_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !why.is_empty() {
+        log::warn!("{}: {why}, 503", req.path());
+    }
+    req.header("Retry-After", RETRY_AFTER)?;
+    req.error(503, "503 Service Unavailable", admit::BUSY)
+}
+
+/// [`admit::RETRY_AFTER_S`] as the header's text.
+const RETRY_AFTER: &str = "2";
+const _: () = assert!(admit::RETRY_AFTER_S == 2);
 
 /// `PUT /api/files/<rel>`, on the stream task: anywhere on the card, a
 /// manifest or a `.meta` by way of the main task.
@@ -2372,7 +2442,11 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     if up.content_len() > MAX_JSON_BODY as u64 {
         return up.error(413, "413 Payload Too Large", "body over 8 KB");
     }
-    let mut body = Vec::with_capacity(up.content_len() as usize);
+    let mut body = Vec::new();
+    if body.try_reserve_exact(up.content_len() as usize).is_err() {
+        up.header("Retry-After", RETRY_AFTER);
+        return up.error(503, "503 Service Unavailable", admit::BUSY);
+    }
     let mut buf = [0u8; 128];
     loop {
         match up.read(&mut buf) {
@@ -3039,9 +3113,10 @@ impl std::fmt::Write for Piecewise<'_> {
 fn net_json() -> String {
     let n = crate::netstat::json();
     format!(
-        r#"{},"status_refused":{}}}"#,
+        r#"{},"status_refused":{},"heavy_refused":{}}}"#,
         &n[..n.len() - 1],
-        STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+        STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
+        HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
     )
 }
 

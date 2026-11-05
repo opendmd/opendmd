@@ -11,6 +11,7 @@
 #![cfg_attr(target_arch = "xtensa", feature(optimize_attribute))]
 
 pub mod access;
+pub mod admit;
 pub mod auto_prepare;
 pub mod boot;
 pub mod brightness;

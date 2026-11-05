@@ -10,7 +10,7 @@
 // Paths are card-absolute (`/gifs/Consoles/X.gif`). Nothing is cached here;
 // a file's bytes live only as long as the caller holds them.
 
-import { enc, base, store } from './util.js';
+import { enc, base, store, toast } from './util.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -30,24 +30,23 @@ async function check(res) {
 // asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
 // than Retry-After), for about 45 s in all, then the error stands.
 const RETRY_FOR = 45000;
-// Uploads (PUT, and a move): the device receives one at a time and
-// refuses another at once with 503 + Retry-After, then resets the
-// connection under the rest of the body; a browser that was still sending
-// may see only the reset (a TypeError). Neither wrote anything (the device
-// never resets an upload it took: it waits for the browser to close), so
-// both are asked again after Retry-After (jittered, 2-4 s at least), for
-// about 45 s. Not a timeout: that write may have landed.
-export async function sent(fn) {
+// Uploads (PUT, a move): one at a time; another is a 503 + Retry-After,
+// then a reset under the rest of the body (a TypeError if still sending).
+// Neither wrote anything: asked again as above. A timeout may have landed.
+// `busy` (a setting, a play): a 503 + Retry-After only, nothing done.
+export async function sent(fn, busy) {
   const t0 = Date.now();
   for (;;) {
     try { return await fn(); } catch (e) {
       const wait = Math.max((e?.after || 0) * 1000, 2000 + Math.random() * 2000);
-      const refused = e?.status === 503 || e instanceof TypeError;
+      const refused = e?.status === 503 && (!busy || e.after) || !busy && e instanceof TypeError;
       if (!refused || Date.now() - t0 + wait > RETRY_FOR) throw e;
+      if (Date.now() - calm > 15000) { calm = Date.now(); toast('The panel is busy: trying again shortly'); }
       await new Promise((r) => setTimeout(r, wait));
     }
   }
 }
+let calm = 0;
 export async function queued(fn) {
   const t0 = Date.now();
   for (;;) {
@@ -96,14 +95,14 @@ export class DeviceSource {
   config() { return this.json('GET', '/api/config'); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
   // device, which takes seconds; the firmware waits up to 60 s for it.
-  putConfig(patch) { return this.json('PUT', '/api/config', patch); }
+  putConfig(patch) { return sent(() => this.json('PUT', '/api/config', patch), 1); }
   skip(back) { return this.json('POST', '/api/skip' + (back ? '?back=1' : '')); }
   pause() { return this.json('POST', '/api/pause'); }
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }
   wifiScan() { return this.json('GET', '/api/wifi/scan', undefined, 20000); }
   // One file onto the panel now: 404 if it does not open, 415 if not a GIF.
-  play(path) { return this.json('POST', '/api/play', { path }); }
+  play(path) { return sent(() => this.json('POST', '/api/play', { path }), 1); }
   // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
   // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
   stat(path) { return this.json('GET', '/api/exists?path=' + encodeURIComponent(path)); }
@@ -111,7 +110,7 @@ export class DeviceSource {
   // card paths of every prepared copy; and forgetting a GIF's copy.
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
   async cacheList() { return (await queued(() => this.json('GET', '/api/cache/list', undefined, 180000))).paths; }
-  forget(path) { return this.json('POST', '/api/cache/forget', { path }); }
+  forget(path) { return sent(() => this.json('POST', '/api/cache/forget', { path }), 1); }
   // Rename a GIF: its prepared copy, Smooth motion line and failure line
   // follow on the device; playlists and overrides are the caller's.
   // (Received like an upload: refused with a 503 while one is, asked again.)
@@ -119,13 +118,13 @@ export class DeviceSource {
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
   cacheFailed() { return queued(() => this.json('GET', '/api/cache/failed')); }
-  cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', { path, reason }); }
+  cacheFail(path, reason) { return sent(() => this.json('POST', '/api/cache/failed', { path, reason }), 1); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
   overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
   // The schedule (rules + night mode), whole; and suspending it for a while.
   schedule() { return this.json('GET', '/api/schedule'); }
-  putSchedule(s) { return this.json('PUT', '/api/schedule', s); }
-  wake(minutes) { return this.json('POST', '/api/wake', { minutes }); }
+  putSchedule(s) { return sent(() => this.json('PUT', '/api/schedule', s), 1); }
+  wake(minutes) { return sent(() => this.json('POST', '/api/wake', { minutes }), 1); }
 
   async list(dir) {
     const r = await queued(() => this.json('GET', '/api/files?dir=' + encodeURIComponent(dir)));

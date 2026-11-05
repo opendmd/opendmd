@@ -43,6 +43,19 @@ use std::time::Duration;
 
 /// The decoder's read buffer (as `OdmSource`'s).
 pub const READ_BUF: usize = 2048;
+
+/// What an open refused for the heap says (`ErrorKind::OutOfMemory`).
+pub const NO_MEMORY: &str = "no memory to open the GIF just now";
+
+/// `vec![x; n]` taken fallibly: [`NO_MEMORY`] when the heap has no block
+/// that size.
+fn try_filled<T: Clone>(x: T, n: usize) -> io::Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n)
+        .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, NO_MEMORY))?;
+    v.resize(n, x);
+    Ok(v)
+}
 /// GIF's own limit on a code's width.
 pub const MAX_CAP: u8 = 12;
 /// Narrowest useful cap: minimum code size 2 starts at 3 bits.
@@ -311,7 +324,7 @@ fn read_header<R: Read>(
     let flags = h[10];
     let mut global = Vec::new();
     if flags & 0x80 != 0 {
-        global = vec![0u8; 3 << ((flags & 7) + 1)];
+        global = try_filled(0u8, 3 << ((flags & 7) + 1))?;
         read_exact(r, &mut global)?;
     }
     let mut hint = None;
@@ -777,20 +790,27 @@ impl<R: Read> GifSlim<R> {
                 format!("LZW cap {cap} is not in {MIN_CAP}..={MAX_CAP}"),
             ));
         }
+        // Its tables and screen fallibly (8 KB + 4 KB at cap 12, a whole
+        // RGB screen for a GIF not 128x32): a fragmented heap is an open
+        // that fails (the player skips the GIF) rather than an abort.
+        let prefix = try_filled(0u16, 1 << cap)?;
+        let suffix = try_filled(0u8, 1 << cap)?;
+        let row = try_filled(0u8, width)?;
+        let screen = if width == WIDTH && height == HEIGHT {
+            Screen::Direct { cleared: false }
+        } else {
+            Screen::Owned(try_filled(0u8, width * height * 3)?)
+        };
         Ok(GifSlim {
             reader,
             width,
             height,
             cap,
-            prefix: vec![0u16; 1 << cap],
-            suffix: vec![0u8; 1 << cap],
-            row: vec![0u8; width],
+            prefix,
+            suffix,
+            row,
             global,
-            screen: if width == WIDTH && height == HEIGHT {
-                Screen::Direct { cleared: false }
-            } else {
-                Screen::Owned(vec![0u8; width * height * 3])
-            },
+            screen,
             pending: None,
             hint,
             repeat,
