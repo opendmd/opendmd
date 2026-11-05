@@ -694,7 +694,12 @@ curl -s $DMD/api/follow/test --json '{"host":"192.168.1.20","code":"1234"}'
 The player joins the WiFi network in its settings. With none, or after
 failing to join twice, it raises an open network, `OpenDMD-Setup`, as a
 captive portal (unknown paths redirect to `/`), and restarts every 10
-minutes to try again.
+minutes to try again. While it is the setup network, only setting up WiFi
+answers: `/`, `/setup`, the probes, `GET /api/status`, `GET /api/config`,
+`PUT /api/config`
+(`wifi_ssid`, `wifi_pass`, `hostname`, `api_key` only; anything else in
+the body is ignored), `GET /api/wifi/scan` and `POST /api/reboot`. Every other route and
+card file is a `403`; any other page redirects to the setup page.
 
 | method | path | what |
 |---|---|---|

@@ -832,6 +832,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
         (patch.lat, patch.lon) = (hundredths(&body, b"\"lat\""), hundredths(&body, b"\"lon\""));
+        // On the open setup network: the WiFi, the name and the key, and
+        // nothing else (`opendmd_core::access::SETUP_CONFIG_KEYS`).
+        if crate::httpd::setup_mode() {
+            patch = ConfigPatch {
+                wifi_ssid: patch.wifi_ssid.take(),
+                wifi_pass: patch.wifi_pass.take(),
+                hostname: patch.hostname.take(),
+                api_key: patch.api_key.take(),
+                ..Default::default()
+            };
+        }
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
         let hostname_before = next.hostname.clone();
@@ -1868,14 +1879,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- Captive portal ----------------------------------------------------
     // Registered unconditionally; each one is a redirect in AP mode and a plain
     // 404 otherwise, because on a real network these paths belong to nobody.
-    for probe in [
-        "/hotspot-detect.html", // Apple
-        "/generate_204",        // Android
-        "/gen_204",             // Android, older
-        "/ncsi.txt",            // Windows
-        "/connecttest.txt",     // Windows 10+
-        "/canonical.html",      // Firefox
-    ] {
+    for probe in opendmd_core::access::PORTAL_PROBES {
         let c = ctx.clone();
         server.route(probe, Method::Get, move |req| match portal_target(&c) {
             Some(target) => req.redirect(&target),
