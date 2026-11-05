@@ -55,9 +55,12 @@ pub fn div_word(by: &fixed::DivBy, part: u8) -> u32 {
 /// How the kernel divides a lane by a scalar (`div_s`).
 #[derive(Clone, Copy, Debug)]
 enum DivPlan {
+    /// By a constant ±2^j of a dividend never below 0: a shift.
+    Shift { j: u32, neg: bool },
     /// By a constant with a magic number (`fixed::DivBy::magic`: every
-    /// whole number, ±2^j among them, and most fractions).
-    Magic { m: u32, s: u32, neg: bool },
+    /// whole number, ±2^j among them, and most fractions); `nonneg`: of a
+    /// dividend never below 0 (no magnitude, no sign).
+    Magic { m: u32, s: u32, neg: bool, nonneg: bool },
     /// `fixed::DivBy`'s steps, its parts in words (`Div`, or `Const` for a
     /// constant); `big`, `pos` what is known of the divisor.
     General { w: [Word; 5], big: bool, pos: bool },
@@ -68,6 +71,7 @@ impl DivPlan {
     /// counts).
     fn words(&self) -> Vec<Word> {
         match *self {
+            DivPlan::Shift { .. } => Vec::new(),
             DivPlan::Magic { m, .. } => alloc::vec![Word::Const(m as i32)],
             DivPlan::General { w, big, pos } => {
                 let mut v = alloc::vec![w[0], w[0], w[1], w[2]];
@@ -1623,8 +1627,12 @@ impl<'a> Emitter<'a> {
                 pos: op.c & code::DIV_POS != 0,
             };
         };
+        let nonneg = op.c & code::DIV_NONNEG != 0;
+        if let Some((j, neg)) = fixed::DivBy::shift(b).filter(|_| nonneg) {
+            return DivPlan::Shift { j, neg };
+        }
         if let Some((m, s)) = fixed::DivBy::magic(b) {
-            return DivPlan::Magic { m, s, neg: b < 0 };
+            return DivPlan::Magic { m, s, neg: b < 0, nonneg };
         }
         let by = fixed::DivBy::new(b);
         let w = |part| Word::Const(div_word(&by, part) as i32);
@@ -1648,7 +1656,27 @@ impl<'a> Emitter<'a> {
             return Err("a step reads its own register");
         }
         match plan {
-            DivPlan::Magic { m, s, neg } => {
+            DivPlan::Shift { j, neg } => {
+                self.c.srai(d, a, j);
+                if neg {
+                    self.c.neg(d, d);
+                }
+            }
+            DivPlan::Magic { m, s, neg, nonneg: true } => {
+                let w = self.tmp()?;
+                let mr = self.word_in(w, Word::Const(m as i32));
+                let c = &mut self.c;
+                c.muluh(d, a, mr);
+                match s {
+                    0 => {}
+                    1..=15 => c.srli(d, d, s),
+                    _ => c.extui(d, d, s, 32 - s),
+                }
+                if neg {
+                    c.neg(d, d);
+                }
+            }
+            DivPlan::Magic { m, s, neg, .. } => {
                 let sg = self.tmp()?;
                 let w = self.tmp()?;
                 self.c.srai(sg, a, 31);

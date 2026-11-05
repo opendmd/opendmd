@@ -1370,6 +1370,7 @@ fn divisions_by_a_scalar_draw_as_the_vm() {
         "gray(frac((px - 64)/2.5) + frac((px - 64)/0.3) + frac((px - 64)/0.0003) + frac((px - 64)/-0.7))",
         "gray(frac((px - 64)/1.7) + frac((px - 64)/127.3) + frac((px - 64)/255.9) + frac(x/1.0001))",
         "gray((px - 64)/0 + 0.5)",
+        "gray(frac(px/8 + px/-4 + (px + py)/7 + px/-10 + x/0.5 + py*px/2.5))",
         "s = a*4 + 1.5\ngray(frac((px - 64)/s))",
         "s = a - 0.5\ngray(frac((px - 64)*0.01/s) + (px - 64)/s/10000)",
         "s = -a*3 - 1.25\ngray(frac((px - 64)/s))",

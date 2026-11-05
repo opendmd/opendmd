@@ -410,11 +410,11 @@ pub(crate) fn narrow(prog: &mut Prog) -> bool {
         match op.code {
             DIV if !lanes(op.b) => {
                 op.code = DIV_S;
-                op.c = if b.0 > ONE as i64 || b.1 < -(ONE as i64) {
-                    DIV_BIG
-                } else {
-                    0
-                } | if b.0 > 0 { DIV_POS } else { 0 };
+                let one = ONE as i64;
+                op.c = if b.0 > one || b.1 < -one { DIV_BIG } else { 0 }
+                    | if b.0 > 0 { DIV_POS } else { 0 }
+                    | if a.0 >= 0 { DIV_NONNEG } else { 0 }
+                    | if b.0 >= one || b.1 <= -one { 0 } else { DIV_SMALL };
             }
             ADD if add_iv(a, b).fits() => op.code = ADD_W,
             SUB if sub_iv(a, b).fits() => op.code = SUB_W,
