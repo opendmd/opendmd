@@ -55,6 +55,42 @@ pub fn is_card_path(path: &str) -> bool {
         || path.starts_with("/filelist")
 }
 
+/// The `Content-Type` a card file goes out with: an image's own media type
+/// (the web app shows GIFs and thumbnails with `<img>`), `None` for
+/// anything else, which is sent as `application/octet-stream` with
+/// `Content-Disposition: attachment`. Never `text/html`, never SVG: a card
+/// file written by anyone on the LAN must not run as a page on the panel's
+/// origin, where the API key lives.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn card_media_type(path: &str) -> Option<&'static str> {
+    let p = path.as_bytes();
+    let ends = |e: &[u8]| p.len() >= e.len() && p[p.len() - e.len()..].eq_ignore_ascii_case(e);
+    [
+        (&b".gif"[..], "image/gif"),
+        (b".png", "image/png"),
+        (b".jpg", "image/jpeg"),
+        (b".jpeg", "image/jpeg"),
+        (b".webp", "image/webp"),
+    ]
+    .iter()
+    .find(|(e, _)| ends(e))
+    .map(|&(_, t)| t)
+}
+
+/// The web app's `Content-Security-Policy` (the panel's `www::serve`, and
+/// `tools/mock-device.py`, which copies it). Its own scripts and wasm;
+/// inline styles (`h()` sets `style`); pictures and fetches from anywhere
+/// (Create Art's sources, opendmd.dev's gallery, relay and release, a
+/// development build's `?updates=` feed on localhost); never in a frame.
+/// What it is for is script: only the app's own runs.
+pub const APP_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+style-src 'self' 'unsafe-inline'; img-src * data: blob:; media-src 'self' blob:; connect-src *; \
+object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+
+/// The setup page's: one self-contained page, its script and styles inline
+/// (so no script-src to speak of); never in a frame.
+pub const SETUP_CSP: &str = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+
 /// `host[:port]` (a `Host` header) without its port, lowercased, a trailing
 /// dot dropped (`[::1]:8080` is `[::1]`).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
@@ -340,6 +376,30 @@ mod tests {
         assert!(host_allowed("den.local", &renamed));
         assert!(host_allowed("kitchen.local", &renamed));
         assert!(!host_allowed("hall.local", &renamed));
+    }
+
+    #[test]
+    fn card_types() {
+        assert_eq!(card_media_type("/gifs/A/b.GIF"), Some("image/gif"));
+        assert_eq!(card_media_type("/cache/A/0f/b.gif"), Some("image/gif"));
+        assert_eq!(card_media_type("/gifs/x.png"), Some("image/png"));
+        for p in [
+            "/gifs/x.html",
+            "/gifs/x.htm",
+            "/gifs/x.svg",
+            "/gifs/x.js",
+            "/sets/a.txt",
+            "/filelist.txt",
+            "/filelist.hall",
+            "/formulas/a.psi",
+            "/gifs/no-extension",
+            "/gifs/dir.gif/x",
+        ] {
+            assert_eq!(card_media_type(p), None, "{p}");
+        }
+        assert!(is_card_path("/formulas/a.psi"));
+        assert!(!is_card_path("/api/files"));
+        assert!(!is_card_path("/index.html"));
     }
 
     #[test]

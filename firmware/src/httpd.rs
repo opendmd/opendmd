@@ -364,6 +364,10 @@ impl Server {
             cfg.ctrl_port = 32768;
             cfg.max_open_sockets = max_sockets;
             cfg.max_uri_handlers = max_handlers;
+            // Enough for the most any response sets: the web app's five
+            // (Content-Encoding, ETag, Cache-Control, CSP, nosniff), a card
+            // file's four or five (Cache-Control, nosniff, CSP,
+            // Content-Disposition, Retry-After). 8 B of heap a slot.
             cfg.max_resp_headers = 8;
             cfg.backlog_conn = 5;
             cfg.lru_purge_enable = true;
@@ -826,6 +830,25 @@ impl Req {
         self.extra_headers.push_str(": ");
         self.extra_headers.push_str(value);
         self.extra_headers.push_str("\r\n");
+        Ok(())
+    }
+
+    /// The web app's security headers (`opendmd_core::access::APP_CSP`):
+    /// its policy (`frame-ancestors 'none'`: never in a frame), no type
+    /// sniffing.
+    pub fn app_headers(&mut self, csp: &'static str) -> Result<()> {
+        self.header("Content-Security-Policy", csp)?;
+        self.header("X-Content-Type-Options", "nosniff")
+    }
+
+    /// A card file's: no sniffing and a sandbox whatever it holds; not an
+    /// image (`media` false), a download as well.
+    pub fn card_headers(&mut self, media: bool) -> Result<()> {
+        self.header("X-Content-Type-Options", "nosniff")?;
+        self.header("Content-Security-Policy", "sandbox; default-src 'none'")?;
+        if !media {
+            self.header("Content-Disposition", "attachment")?;
+        }
         Ok(())
     }
 

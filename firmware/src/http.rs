@@ -2144,6 +2144,7 @@ pub fn reboot_after_response(why: Reason) -> ! {
 fn send_setup(req: &mut Req) -> Result<()> {
     req.header("Content-Encoding", "gzip")?;
     req.header("Cache-Control", "no-cache")?;
+    req.app_headers(opendmd_core::access::SETUP_CSP)?;
     req.ok("text/html; charset=utf-8", SETUP_HTML_GZ)
 }
 

@@ -310,7 +310,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   required"}` + `WWW-Authenticate: Bearer` (the web app's own files never
   do; setup mode is not modelled); and the JSON routes (`JSON_ROUTES`) with
   a non-empty body whose `Content-Type` is not `application/json` are a 415
-  `{"error":"Content-Type must be application/json"}`.
+  `{"error":"Content-Type must be application/json"}`. The web app's files
+  and `/setup` carry the firmware's `Content-Security-Policy` (`APP_CSP`,
+  `SETUP_CSP`) and `X-Content-Type-Options: nosniff`;
+  a card file goes out as its image type or
+  `application/octet-stream` (never HTML or SVG) with nosniff,
+  `Content-Security-Policy: sandbox; default-src 'none'` and, for a non-image,
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, flash_size, pending, last, log}` (`log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
@@ -853,7 +858,22 @@ def mime_for(rel: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+# opendmd_core::access::APP_CSP and SETUP_CSP, as the firmware sends them.
+APP_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+           "style-src 'self' 'unsafe-inline'; img-src * data: blob:; media-src 'self' blob:; connect-src *; "
+           "object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+SETUP_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+CARD_CSP = "sandbox; default-src 'none'"
 CARD_PREFIXES = ("/gifs/", "/cache/", "/sets/", "/formulas/", "/filelist")
+
+
+def card_media_type(rel: str) -> str | None:
+    """opendmd_core::access::card_media_type: an image's own type, else None
+    (sent as application/octet-stream, as a download)."""
+    name = rel.rsplit("/", 1)[-1]
+    ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+    return {"gif": "image/gif", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp"}.get(ext)
 
 
 def host_name(h: str) -> str:
@@ -3040,7 +3060,11 @@ def make_handler(ctx: Context, quiet: bool):
             if www and not legacy and self.not_modified(actual):
                 return
             self.send_response(200, "OK")
-            self.send_header("Content-Type", mime_for(logical_rel))
+            if www:
+                self.send_header("Content-Type", mime_for(logical_rel))
+                self.app_headers(APP_CSP)
+            else:
+                self.card_headers(logical_rel)
             if gzipped:
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Cache-Control", beta13_cache_for(logical_rel) if legacy
@@ -3054,6 +3078,20 @@ def make_handler(ctx: Context, quiet: bool):
                     shutil.copyfileobj(f, self.wfile)
             self._resp_status = 200
             self._resp_bytes = size
+
+        def app_headers(self, csp: str) -> None:
+            """Req::app_headers: the web app's and the setup page's."""
+            self.send_header("Content-Security-Policy", csp)
+            self.send_header("X-Content-Type-Options", "nosniff")
+
+        def card_headers(self, rel: str) -> None:
+            """files::serve: a card file is never a page (docs/api.md "Security")."""
+            media = card_media_type(rel)
+            self.send_header("Content-Type", media or "application/octet-stream")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CARD_CSP)
+            if media is None:
+                self.send_header("Content-Disposition", "attachment")
 
         def not_modified(self, actual: Path) -> bool:
             """The firmware's `www::not_modified`: a 304 (ETag and
@@ -3188,6 +3226,7 @@ def make_handler(ctx: Context, quiet: bool):
                     .replace("{{ variant_name }}", OTA_BOARDS[ctx.variant]).encode())
             self.send_response(200, "OK")
             self.send_header("Content-Type", "text/html")
+            self.app_headers(SETUP_CSP)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -3244,7 +3283,7 @@ def make_handler(ctx: Context, quiet: bool):
         def stream_paced(self, fpath: Path, rel: str, io: dict) -> None:
             data = fpath.read_bytes()
             self.send_response(200, "OK")
-            self.send_header("Content-Type", mime_for(rel))
+            self.card_headers(rel)
             self.send_header("Cache-Control", cache_for(rel))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()

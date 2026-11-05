@@ -373,6 +373,7 @@ pub fn serve(req: &mut Req, rel: &str) -> Result<Served> {
     let mut tag = [0u8; 10];
     req.header("ETag", etag_text(pack.header().crc32, &mut tag))?;
     req.header("Cache-Control", "no-cache")?;
+    req.app_headers(opendmd_core::access::APP_CSP)?;
     req.begin_sized("200 OK", files::mime_for(&logical), entry.data.len() as u64)?;
     // **Every read of the mapping happens here, on CPU0.** lwip copies a
     // send buffer into its pbufs on the tcpip task (priority 18): before

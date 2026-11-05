@@ -729,8 +729,10 @@ def retried(url: str) -> bool:
 def new_page(browser, size: str, errors: list[str]) -> Page:
     w, h = SIZES[size]
     phone = size == "phone"
+    # bypass_csp: Playwright's wait_for_function evaluates strings, which the
+    # panel's CSP refuses (as it should); csp_checks loads the app without it.
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3 if phone else 1,
-                              is_mobile=phone, has_touch=phone)
+                              is_mobile=phone, has_touch=phone, bypass_csp=True)
     site_art_index(ctx)
     page = ctx.new_page()
     # (A CORS refusal's line names the URL in its text, not its location.)
@@ -3046,7 +3048,7 @@ def origin_checks(browser, base: str) -> None:
     before = get_json(base + "/api/status")["now_playing"]
     victim = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
                   if not f["dir"] and f["name"].endswith(".gif") and f"/gifs/Consoles/{f['name']}" != before["path"])
-    ctx = browser.new_context()
+    ctx = browser.new_context(bypass_csp=True)
     page = ctx.new_page()
     seen: dict[str, int] = {}
     page.on("response", lambda r: r.url.startswith(base + "/api/") and seen.__setitem__(r.url[len(base):], r.status))
@@ -3107,6 +3109,69 @@ def rebinding_and_header_checks(base: str, overlay: Path) -> None:
     codes = [status_of(urllib.request.Request(base + "/api/status", headers={"Host": h}))[0]
              for h in (f"127.0.0.1:{port}", f"localhost:{port}", "opendmd.local", "OpenDMD.local:80", "opendmd-mock.local")]
     check(codes == [200] * 5, f"rebinding: the panel's own names -> 200 {codes}")
+    code, hd = status_of(urllib.request.Request(base + "/index.html"))
+    csp = hd.get("Content-Security-Policy") or ""
+    check(code == 200 and "frame-ancestors 'none'" in csp and "script-src 'self' 'wasm-unsafe-eval'" in csp
+          and hd.get("X-Content-Type-Options") == "nosniff",
+          f"headers: the web app's CSP (frame-ancestors 'none') and nosniff ({csp[:60]}…)")
+    code, hd = status_of(urllib.request.Request(base + "/setup"))
+    check(code == 200 and "frame-ancestors 'none'" in (hd.get("Content-Security-Policy") or ""), "headers: /setup's CSP")
+    gif = card_gifs()[0]
+    code, hd = status_of(urllib.request.Request(base + urllib.parse.quote(gif)))
+    check(code == 200 and hd.get("Content-Type") == "image/gif" and hd.get("X-Content-Type-Options") == "nosniff"
+          and hd.get("Content-Security-Policy", "").startswith("sandbox") and "Content-Disposition" not in hd,
+          f"headers: a GIF is image/gif, nosniff, sandboxed ({hd.get('Content-Type')})")
+    for name in ("evil.html", "evil.svg", "evil.js"):
+        body = b"<script>alert(1)</script>" if not name.endswith(".svg") else b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>"
+        req = urllib.request.Request(base + "/api/files/gifs/" + name, data=body, method="PUT",
+                                     headers={"Content-Type": "application/octet-stream"})
+        urllib.request.urlopen(req, timeout=30).read()
+        code, hd = status_of(urllib.request.Request(base + "/gifs/" + name))
+        check(code == 200 and hd.get("Content-Type") == "application/octet-stream" and hd.get("Content-Disposition") == "attachment"
+              and hd.get("Content-Security-Policy", "").startswith("sandbox") and hd.get("X-Content-Type-Options") == "nosniff",
+              f"headers: /gifs/{name} on the card is a sandboxed download, never a page ({hd.get('Content-Type')})")
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/gifs/" + name, method="DELETE"), timeout=30).read()
+    code, hd = status_of(urllib.request.Request(base + "/filelist.txt"))
+    check(code == 200 and hd.get("Content-Type") == "application/octet-stream" and hd.get("Content-Disposition") == "attachment",
+          f"headers: /filelist.txt is a download ({hd.get('Content-Type')})")
+
+
+def csp_checks(browser, base: str) -> None:
+    """The panel's CSP as the browser enforces it (every other page here
+    bypasses it, for Playwright's string-evaluated waits): each view, the
+    Formulas editor's wasm, Create Art's module and the setup page load
+    with no violation. Polled with evaluate, never wait_for_function."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    seen: list[str] = []
+    page.on("console", lambda m: m.type == "error" and "Content Security Policy" in m.text and seen.append(m.text[:160]))
+
+    def until(js: str, ms: int = 20000) -> bool:
+        for _ in range(ms // 100):
+            if page.evaluate(js):
+                return True
+            page.wait_for_timeout(100)
+        return False
+    try:
+        page.goto(base + "/")
+        ok = until("!!document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')")
+        missed = [] if ok else ["now"]
+        for v, sel in (("library", "#view-library > *"), ("sets", "#view-sets > *"),
+                       ("formulas", "#psi-ex .psi-tile"), ("create", "#studio"), ("settings", "#st-tabs")):
+            page.evaluate(f"location.hash = '#{v}'")
+            if not until(f"!!document.querySelector({json.dumps(sel)})"):
+                missed.append(v)
+        page.goto(base + "/setup")
+        if not until("!!document.querySelector('#savewifi')"):
+            missed.append("setup")
+        page.wait_for_timeout(500)
+        seen += page.evaluate("window.__csp || []")
+        check(not missed and not seen, f"csp: the app's views and /setup load under the panel's CSP "
+              f"{'clean' if not seen else seen[:3]}{f' (did not load: {missed})' if missed else ''}")
+    finally:
+        ctx.close()
 
 
 def key_checks(browser, page: Page, base: str) -> None:
@@ -3789,6 +3854,7 @@ def mock_pass(browser) -> None:
         json_type_checks(base)
         origin_checks(browser, base)
         rebinding_and_header_checks(base, overlay)
+        csp_checks(browser, base)
         firmware_checks(page, base, ota)
         update_checks(page, base, ota)
         key_checks(browser, page, base)
@@ -5136,7 +5202,8 @@ def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
     """At 360 px: no sideways scroll in the gallery, the Details sheet
     (Escape closes it) or the editor; a tap on a number brings the strip,
     whose + changes it."""
-    ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True)
+    ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True,
+                              bypass_csp=True)
     page = ctx.new_page()
     page.on("pageerror", lambda e: errors.append(f"[360] pageerror: {e}"))
     page.goto(base + "/#formulas")
@@ -7686,7 +7753,7 @@ def www_update_pass(browser) -> None:
         # A context of its own, without new_page's route for the art index:
         # Playwright turns the HTTP cache off in a context with routes, and
         # the browser's cache is what this is about.
-        page = browser.new_context(viewport={"width": 1280, "height": 800}).new_page()
+        page = browser.new_context(viewport={"width": 1280, "height": 800}, bypass_csp=True).new_page()
         page.on("console", lambda m: m.type == "error" and errors.append(f"console: {m.text}"))
         page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
         page.add_init_script(WASM_SPY)

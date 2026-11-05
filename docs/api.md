@@ -736,6 +736,14 @@ browser), not someone on the same WiFi: it is plain HTTP.
   `api_key_set`), the API and the card's files need `Authorization: Bearer
   <key>` or `?key=<key>`, else `401`. Not the web app's files or `/setup`,
   nor in setup mode (`OpenDMD-Setup`), where a lost key can be cleared.
+- **Headers.** The web app's files and `/setup` carry a
+  `Content-Security-Policy` (`frame-ancestors 'none'`: never in a frame)
+  and `X-Content-Type-Options: nosniff`. A card
+  file goes out as the image it is (`image/gif`, `png`, `jpeg`, `webp`) or
+  as `application/octet-stream` with `Content-Disposition: attachment`,
+  never as HTML or SVG, always with nosniff and `Content-Security-Policy:
+  sandbox; default-src 'none'`: a file anyone wrote to the card never runs
+  as a page of the panel's.
 
 ```sh
 K='Authorization: Bearer <key>'
