@@ -154,7 +154,7 @@ const setLook = (f, keep) => import('./looks.js').then((L) => L.useSaid(f, keep)
 // demo's, a card folder's) naming the Formula (js/fstore.js `line`): a
 // bundled one by name, one of yours on the panel by its file (the editor
 // saves it first: `keep`), with the values that differ from its defaults;
-// else (local mode, no card) the path Show on panel sends (js/psishow.js),
+// else (local mode, no card) its inline path (js/psishow.js `fpath`),
 // and `&name=` for one without a `name` line, all in the player's 6,144 B.
 async function toList(f, btn, keep) {
   if (!info(f.src).length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }

@@ -1715,6 +1715,24 @@ def post_json(url: str, obj) -> dict:
         return json.load(r)
 
 
+# synth::SENT: the path the editor's Formula plays as, held in memory
+# (POST /api/play/formula, the compiled bytes as the body).
+SENT = "@formula:~sent"
+
+
+def sent_play(r) -> dict:
+    """A Show on panel request (POST /api/play/formula?…): its query
+    (`live`, `over` as booleans, the sliders) and the body's length."""
+    q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(r.url).query))
+    return {**q, "live": q.pop("live", None) == "1", "over": q.pop("over", None) == "1", "size": len(r.post_data_buffer or b"")}
+
+
+def post_bytes(url: str, body: bytes) -> dict:
+    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
 def put_json(url: str, obj) -> dict:
     req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="PUT",
                                  headers={"Content-Type": "application/json"})
@@ -4371,6 +4389,8 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     while time.time() < deadline and get_json(base + "/api/config")["formula_keep"] != "hold":
         time.sleep(0.2)
     check(get_json(base + "/api/config")["formula_keep"] == "hold", "keep: choosing Until I change it saves formula_keep=hold")
+    bodies: list[bytes] = []
+    page.on("request", lambda r: bodies.append(r.post_data_buffer) if "/api/play/formula" in r.url else None)
     clear_toasts(page)
     page.click("#psi-show")
     last_toast(page, "ok")
@@ -4379,8 +4399,8 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     check(path.startswith("@formula") and st.get("kept_s") == 0, f"keep: Show on panel keeps it until changed (kept_s {st.get('kept_s')})")
     # Past the mock's 4 s dwell, and through a live edit.
     time.sleep(5)
-    live = path + "&a=0.25"
-    post_json(base + "/api/play", {"path": live, "live": True})
+    live = SENT + "?a=0.25"
+    post_bytes(base + "/api/play/formula?live=1&a=0.25", bodies[-1])
     time.sleep(1)
     st = get_json(base + "/api/status")["now_playing"]
     check(st["ordinal"] == ordinal and st["path"] == live and st.get("kept_s") == 0,
@@ -4737,15 +4757,18 @@ def clear_toasts(page: Page) -> None:
 
 
 def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
-    """Show on panel: a formula plays on the (mock) panel as `@formula?psb=…`;
-    slider changes follow it there, ~200 ms apart and one at a time, as live
-    edits (the same ordinal); once the playlist moves on a change stops
-    following (409, no toast); an older firmware (415), a formula it refuses
-    (400) and no answer each say so."""
+    """Show on panel: a formula plays on the (mock) panel as `@formula:~sent`,
+    its compiled bytes the body of POST /api/play/formula (never a path:
+    Endless road V2, 22 KB of text, shows and follows its edits); slider
+    changes follow it there, ~200 ms apart and one at a time, as live edits
+    (the same ordinal); once the playlist moves on a change stops following
+    (409, no toast); a short heap (503 + Retry-After) is asked again; an
+    older firmware (415, 404), a formula it refuses (400) and no answer each
+    say so."""
     page = new_page(browser, "laptop", errors)
     expected.append("/api/play")  # the 409, 415, 400 and the refused request below
     plays: list[tuple[float, dict]] = []
-    page.on("request", lambda r: plays.append((time.time(), json.loads(r.post_data))) if r.url.endswith("/api/play") else None)
+    page.on("request", lambda r: plays.append((time.time(), sent_play(r))) if "/api/play/formula" in r.url else None)
     page.goto(base + "/#formulas")
     open_formulas(page)
     page.click("#psi-ex .psi-tile >> nth=0")
@@ -4761,8 +4784,8 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     st = get_json(base + "/api/status")["now_playing"]
-    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?psb=") and st["title"] == name
-          and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
+    check(t == f"On the panel: {name}" and st["path"].startswith(SENT) and st["title"] == name
+          and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1]["live"] is False and plays[-1][1]["size"] > 6,
           f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
     shot(page, "formulas-panel-on", "laptop")
     # In the editor: a slider dragged for ~0.6 s follows it, throttled.
@@ -4778,7 +4801,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     gaps = [b[0] - a[0] for a, b in zip(sent, sent[1:])]
     st = get_json(base + "/api/status")["now_playing"]
     check(2 <= len(sent) <= 6 and all(p.get("live") is True for _, p in sent) and min(gaps, default=1) > 0.15
-          and sent[-1][1]["path"].endswith("&a=1") and st["ordinal"] == ordinal and st["path"] == sent[-1][1]["path"],
+          and sent[-1][1].get("a") == "1" and st["ordinal"] == ordinal and st["path"] == SENT + "?a=1",
           f"formulas panel: 60 slider moves in {time.time() - t0:.1f} s -> {len(sent)} live edits, gaps {[round(g, 2) for g in gaps]}, the last a=1 on the panel (ordinal {st['ordinal']})")
     # The playlist moves on (the mock's 4 s dwell): a change stops following, quietly.
     deadline = time.time() + 10
@@ -4789,11 +4812,52 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
     page.wait_for_function("document.querySelector('#psi-ed-show').textContent == 'Show on panel'", timeout=5000)
     bad = page.eval_on_selector_all("#toasts .toast.bad", "els => els.length")
-    check(len(plays) == n0 + 1 and plays[-1][1].get("live") is True and bad == 0
+    check(len(plays) == n0 + 1 and plays[-1][1]["live"] is True and bad == 0
           and not get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"),
           "formulas panel: after the playlist moved on, a change does not bring it back (409, no error shown)")
+    # A long one: Endless road V2's 22 KB of text, on the panel and followed.
+    v2 = (REPO / "opendmd-web/experiments/road-v2/road-v2.psi").read_text()
+    check(len(v2.encode()) >= 22_000, f"formulas panel: road-v2.psi is {len(v2.encode())} B")
+    page.fill("#psi-src", v2)
+    page.wait_for_timeout(1000)
+    clear_toasts(page)
+    n0 = len(plays)
+    page.click("#psi-ed-show")
+    t = last_toast(page, "ok")
+    st = get_json(base + "/api/status")["now_playing"]
+    big = plays[n0:]
+    check(t == "On the panel: Endless road V2" and st["path"] == SENT and st["title"] == "Endless road V2"
+          and len(big) == 1 and big[0][1]["size"] > 6144,
+          f"formulas panel: a 22 KB Formula shows on the panel ('{t}', {st['path']}, {big[0][1] if big else None})")
+    ordinal = st["ordinal"]
+    page.fill("#psi-src", v2.replace('name "Endless road V2"', 'name "Endless road V2b"'))
+    page.wait_for_timeout(1200)
+    st = get_json(base + "/api/status")["now_playing"]
+    check(len(plays) > n0 + 1 and plays[-1][1]["live"] is True and st["ordinal"] == ordinal and st["title"] == "Endless road V2b"
+          and not page.eval_on_selector_all("#toasts .toast.bad", "els => els.length"),
+          f"formulas panel: its edit follows it there, live (ordinal {st['ordinal']} vs {ordinal}, {st['title']})")
+    recent = get_json(base + "/api/status?recent=1").get("recent") or []
+    check(not any(str(x).startswith(SENT) for x in recent), "formulas panel: a Formula shown from the editor stays out of Recently played")
+    # A short heap on the panel: asked again after Retry-After, then shown.
+    tries = []
+    def short(route, _req):
+        tries.append(time.time())
+        if len(tries) == 1:
+            route.fulfill(status=503, body=json.dumps({"error": "the player needs the heap right now; retry shortly"}),
+                          headers={"content-type": "application/json", "retry-after": "1"})
+        else:
+            route.continue_()
+    page.route("**/api/play/formula*", short)
+    clear_toasts(page)
+    page.click("#psi-ed-show")
+    t = last_toast(page, "ok")
+    page.unroute("**/api/play/formula*")
+    check(t.startswith("On the panel: ") and len(tries) == 2 and tries[1] - tries[0] > 0.9
+          and not page.eval_on_selector_all("#toasts .toast.bad", "els => els.length"),
+          f"formulas panel: a short heap (503 + Retry-After: 1) is asked again a second later, then shown ('{t}', {len(tries)} tries)")
     # What goes wrong, said plainly.
     for status, body, want in ((415, "@formula: not a playable file", "Update OpenDMD to show formulas on the panel"),
+                               (404, "Not Found", "Update OpenDMD to show formulas on the panel"),
                                (400, "unknown name `q`", "The panel can’t show"),
                                (0, "", "Couldn’t reach the panel")):
         def answer(route, _req, status=status, body=body):
@@ -4801,11 +4865,11 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
                 route.abort()
             else:
                 route.fulfill(status=status, body=json.dumps({"error": body}), headers={"content-type": "application/json"})
-        page.route("**/api/play", answer)
+        page.route("**/api/play/formula*", answer)
         clear_toasts(page)
         page.click("#psi-ed-show")
         t = last_toast(page, "bad")
-        page.unroute("**/api/play")
+        page.unroute("**/api/play/formula*")
         check(t.startswith(want) and page.inner_text("#psi-ed-show") == "Show on panel", f"formulas panel: a {status or 'failed request'} says '{t}'")
     shot(page, "formulas-panel", "laptop")
     page.context.close()
@@ -4821,7 +4885,8 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     clears it; Save as GIF over the GIF."""
     page = new_page(browser, "laptop", errors)
     plays: list[dict] = []
-    page.on("request", lambda r: plays.append(json.loads(r.post_data)) if r.url.endswith("/api/play") else None)
+    page.on("request", lambda r: plays.append(sent_play(r) if "/api/play/formula" in r.url else json.loads(r.post_data))
+            if "/api/play" in r.url else None)
     page.goto(base + "/#formulas")
     open_formulas(page)
     page.click("#psi-ex .psi-tile[data-name='Old photo']")
@@ -4846,7 +4911,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     fl = get_json(base + "/api/status")["formula_look"]
-    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?psb=")
+    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1].get("size", 0) > 6
           and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
           f"formulas over: shown over the panel's GIF ('{t}', {fl})")
     clear_toasts(page)
@@ -5302,9 +5367,9 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     safe = safe and app.locator("#psi-gal img").count() == 0 and app.evaluate("window.__pwned") is None
     check(safe, "formulas: markup in a sent Formula's name and text stays text (the wrong shape first, ignored)")
     app.close()
-    app = remix_open(page, base, errors, "gray(x)\n" + "-" * 17000, "N" * 200)
+    app = remix_open(page, base, errors, "gray(x)\n" + "-" * 33000, "N" * 200)
     src_len, name_len = len(app.input_value("#psi-src")), len(app.input_value("#psi-name"))
-    check(src_len == 16384 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
+    check(src_len == 32768 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
     page.context.close()
     # (Both were saved as they arrived: gone again, for the checks after.)
     for e in get_json(base + "/api/files?dir=%2Fformulas")["entries"]:

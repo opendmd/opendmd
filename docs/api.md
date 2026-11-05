@@ -86,7 +86,8 @@ Errors: `400` neither card-absolute nor a live item, or a bad formula;
 GIF, a live item this firmware does not know (`@nonsense`), or a retired
 `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
 Formulas replace them (play one as @formula?psb=…)`); `503` no
-playlist running; `413` body over 8 KB, or an inline formula over 6,144 B;
+playlist running; `413` body over 8 KB, or an inline formula over 6,144 B
+(send a longer one as `POST /api/play/formula`);
 `501` a Formula (any of the three forms, or `"over"`/`"live"`) on a build
 without Formulas (`/api/status` `features` lacks `"formulas"`):
 `{"error":"Formulas aren’t in this firmware build"}`.
@@ -94,6 +95,33 @@ without Formulas (`/api/status` `features` lacks `"formulas"`):
 ```sh
 curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
 curl -s $DMD/api/play --json '{"path":"@clock?seconds=1&date=1"}'
+```
+
+### POST /api/play/formula
+
+Show a Formula now, whatever its length: what the web app's Show on panel
+and its live edits send. The body is the compiled Formula itself
+(`Content-Type: application/octet-stream` exactly, `415` otherwise; the bytes
+pkg-psi's `program(src)` or `psi build` makes, 16,384 B at most, `413`
+over), not a path. Query: `live=1` and `over=1` as `"live"`/`"over"` for
+`/api/play`, and the sliders `a=`, `b=`, `c=`, `fps=` as on an `@formula`
+path.
+
+The player holds it in memory, one at a time, and plays it as
+`@formula:~sent[?a=…]` (that is `now_playing.path`; the title is its
+`name` line, else "Formula"). Each one sent replaces the last (whose memory
+goes before the new body is read), and it is let go once the panel moves on
+to anything else; it is not kept in Recently played, and it can't be the
+`look_formula` (`400`). Nothing touches the card, so it works with none.
+
+Reply and errors as `/api/play` (`409` a live edit after the playlist moved
+on, `400` a formula that does not load, `503` no playlist), and `503` +
+`Retry-After: 2` when the heap has no room for the body just now (retry
+then); `501` on a build without Formulas.
+
+```sh
+psi build my.psi -o my.psb
+curl -s "$DMD/api/play/formula?a=0.4" -H 'Content-Type: application/octet-stream' --data-binary @my.psb
 ```
 
 ### POST /api/pause
@@ -884,7 +912,8 @@ its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 `being checked`), and `render_us_total`/`renders`: the playing
 formula's render µs in all (wrapping) and renders since boot, whose
 differences give a stretch's exact mean (`frame_us` is a running mean of
-the last few frames). The whole inline path is at most 6,144 B;
+the last few frames). The whole inline path is at most 6,144 B (a longer
+Formula is sent as bytes: `POST /api/play/formula`, `@formula:~sent`);
 `name=<url-encoded>` (≤ 60 characters) is its name for display.
 
 **By reference** (what playlists and the look use, so a Formula's length
