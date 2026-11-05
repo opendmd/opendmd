@@ -3747,3 +3747,29 @@ fn colour_errors_say_what_went_wrong() {
         assert!(e.msg.contains(says), "{src}: {}", e.msg);
     }
 }
+
+/// Language review B1: a note where a sum or product can pass the number
+/// range and goes into something that cares; none where it only meets a
+/// clamp, a compare or a colour.
+#[cfg(feature = "syntax")]
+#[test]
+fn saturation_is_noted_where_it_matters() {
+    struct N(Vec<String>);
+    impl crate::syntax::Sink for N {
+        fn note(&mut self, _: (usize, usize), text: &str) {
+            self.0.push(text.into());
+        }
+    }
+    let notes = |src: &str| -> Vec<String> {
+        let mut n = N(Vec::new());
+        let mut p = Program::default();
+        crate::syntax::compile_observed(src, &mut p, &mut n).unwrap();
+        n.0
+    };
+    let has = |src: &str| notes(src).iter().any(|m| m.contains("can pass ±32,768"));
+    assert!(has("j = px\ngray(frac(127.5*j*j/2500/1000))"));
+    assert!(has("loop 3600\nv = t*t\ngray(frac(v))"));
+    assert!(!has("gray(x*30000)"));
+    assert!(!has("gray(px*px*px > 5)"));
+    assert!(!has("gray(frac(px*py*0.1))"));
+}
