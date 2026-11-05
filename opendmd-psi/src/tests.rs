@@ -1343,7 +1343,7 @@ fn colour_and_pick_errors() {
         ),
         (
             "mix(hsv(x, 1, 1), #000, x)",
-            "is a whole colour: it can't be added to others",
+            "is a whole colour: it can't be combined with others",
             1,
             5,
         ),
@@ -3733,4 +3733,17 @@ fn chained_comparisons_are_refused() {
     // Brackets say what is meant, and `and` joins two.
     compile("gray((0 < x) < 0.5)").unwrap();
     compile("gray(0 < x and x < 0.5)").unwrap();
+}
+
+/// Language review B6: the misleading E304 and `under` sentences.
+#[test]
+fn colour_errors_say_what_went_wrong() {
+    for (src, says) in [
+        ("gray(under(px, py))", "`under(x, y)` is a colour, not a number"),
+        ("x > 0.5 ? pal(fire, x) : #000", "can't be combined with others by `+`, `*`, `? :`"),
+        ("mix(#a00, #00b, x) * pal(fire, x)", "can't be combined with others"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
 }

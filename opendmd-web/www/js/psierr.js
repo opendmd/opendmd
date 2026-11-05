@@ -54,7 +54,7 @@ const C = [
   [301, 31, "there are no `frame { }` blocks"],
   [302, 25, "is a colour, not a number"],
   [303, 41, "with layers, every colour goes inside one"],
-  [304, 46, "is a whole colour: it can't be added to others"],
+  [304, 51, "is a whole colour: it can't be combined with others"],
   [305, 41, "is a whole colour: it can't go into a sum"],
   [306, 47, "is a whole colour: it can only be the last line"],
   [307, 32, "takes three numbers, not colours"],

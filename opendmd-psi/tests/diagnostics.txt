@@ -221,7 +221,7 @@ gray(y)
 
 === E304
 #f00 + gray(x)
---- 1:8 `gray(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
+--- 1:8 `gray(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)
 
 === E305
 cycle(fire, x, t) + 1

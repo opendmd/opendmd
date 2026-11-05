@@ -2801,12 +2801,15 @@ impl<'s> Parser<'s> {
         let msg = if self.peek().tok == Tok::LParen {
             if self.env.ch < NO_CH && COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "`{name}(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)"
+                    "`{name}(…)` is a whole colour: it can't be combined with others by `+`, `*`, `? :` or a function (only `#…` and `rgb(r, g, b)` can, as `c ? #f80 : #000`)"
                 )
             } else if COLOURS.iter().any(|e| e.0 == name) {
                 format!(
                     "`{name}(…)` is a whole colour: it can only be the last line (of the formula or a layer)"
                 )
+            } else if name == "under" {
+                // E302 (`under(x, y)` where a number goes).
+                format!("`{name}(x, y)` is a colour, not a number: use it on the last line, as `under(px + 2, py)` or `under(px, py) * 0.5`")
             } else if PRIMITIVES.contains(&name) {
                 format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
             } else if self.lookup_value(name).is_some() {
