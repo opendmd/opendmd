@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn retired_effects_and_other_paths_name_nothing() {
-        for p in ["@fx:tunnel", "@fx:psi?src=gray(x)", "@fx:wire?shape=cube", "@formulax?src=1", "@clock", "/gifs/a.gif"] {
+        for p in ["@fx:tunnel", "@fx:psi?src=gray(x)", "@fx:wire?shape=cube", "@formulax?src=1", "@card:A|", "/gifs/a.gif"] {
             assert!(Fx::parse(p).is_none(), "{p}");
         }
     }

@@ -421,8 +421,7 @@ fn pick_up(settings: &mut Settings, next: &mut Settings, live: Live<'_>) -> Resu
         state::GLOW_HELD.store(live.panel.glow_bytes() > 0, Ordering::Relaxed);
     }
     let entries = engine.as_ref().map_or(0, |e| e.catalog_len());
-    // (Attract's clock or text plays for as long as attract lasts.)
-    if let Some(e) = engine.filter(|_| !state::ATTRACT_LIVE.load(Ordering::Relaxed)) {
+    if let Some(e) = engine {
         if s.dwell_min != old.dwell_min || s.dwell_max != old.dwell_max {
             e.set_dwell(dwell_policy(s));
         }
@@ -629,7 +628,7 @@ fn main() -> Result<()> {
     // The location the built-in inputs' sky is worked out for (the
     // network worker writes the sky once SNTP has set the clock).
     inputs::set_place(settings.location);
-    // The live clock (`@clock`) reads local time from here.
+    // Formulas read local time (`hour`, `minute`, …) from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
@@ -1117,10 +1116,7 @@ fn main() -> Result<()> {
                     let set_next = runner.overlay_set(&next, sched.effective_set(&next));
                     let needs_reindex = next.platforms != settings.platforms
                         || set_next != set_now
-                        || next.shuffle != settings.shuffle
-                        // Attract shows the clock or a text instead now.
-                        || (runner.mode() == follow::Mode::Attract
-                            && next.attract != settings.attract);
+                        || next.shuffle != settings.shuffle;
                     let tz_changed = next.tz != settings.tz || next.tz_name != settings.tz_name;
 
                     // A platform filter that would leave the playlist empty
@@ -1239,10 +1235,7 @@ fn main() -> Result<()> {
                                 repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
                             state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
-                            // (Attract's clock or text plays for as long as
-                            // attract lasts: not the playlist's dwell.)
-                            let live = state::ATTRACT_LIVE.load(Ordering::Relaxed);
-                            if let Some(e) = engine.as_mut().filter(|_| !live) {
+                            if let Some(e) = engine.as_mut() {
                                 e.set_dwell(dwell_policy(&settings));
                                 e.set_transition(settings.transition);
                                 // Night mode with the builder newly allowed:
@@ -1694,7 +1687,6 @@ fn main() -> Result<()> {
             // another playlist: built here, the card being ours now.
             let eff = runner.overlay(sched.effective(&settings));
             let same = runner.context().is_none()
-                && attract_live(&runner, &eff).is_none()
                 && files::same_card_path(&eff.manifest_path(), &manifest)
                 && eff.platforms == platforms;
             let outcome = if same {
@@ -2325,15 +2317,7 @@ fn follow_todo(
     if runner.context().is_none() && !was_context {
         let base = sched.effective(settings);
         let playing = status.lock().unwrap().manifest.clone();
-        // (The live item shown is always the one `attract` names: a
-        // change to it is a config change, which rebuilds.)
-        let live_now = state::ATTRACT_LIVE.load(Ordering::Relaxed);
-        let same = match attract_live(runner, &base) {
-            Some(_) => live_now,
-            None => {
-                !live_now && files::same_card_path(&runner.overlay(base).manifest_path(), &playing)
-            }
-        };
+        let same = files::same_card_path(&runner.overlay(base).manifest_path(), &playing);
         if engine.is_some() && same {
             return;
         }
@@ -2372,15 +2356,6 @@ fn replay(
             }
         }
     }
-    if let Some(live) = attract_live(runner, &base) {
-        match rebuild_live(engine, &live, &base, status, canvas) {
-            Ok(a) => return Ok(a),
-            Err(e) => {
-                log::warn!("follow: attract {live} will not play ({e}); the playlist instead");
-                runner.attract_failed();
-            }
-        }
-    }
     let eff = runner.overlay(base.clone());
     let outcome = rebuild(engine, &eff, force, status, canvas);
     if outcome.is_err() && eff.set != base.set {
@@ -2392,64 +2367,6 @@ fn replay(
         return rebuild(engine, &base, force, status, canvas);
     }
     outcome
-}
-
-/// What Follow RePlayOS's attract mode shows instead of a playlist, if the
-/// `attract` setting names a live item (`clock`, `text:<message>`) and
-/// attract is what the runner is in.
-fn attract_live(runner: &follow::Runner, settings: &Settings) -> Option<String> {
-    (runner.mode() == follow::Mode::Attract && !runner.attract_is_broken())
-        .then(|| nvs_config::attract_path(&settings.attract))
-        .flatten()
-}
-
-/// A playlist of one path, held as the path: the attract mode's live item.
-struct OneEntry(String);
-
-impl Catalog for OneEntry {
-    fn len(&self) -> usize {
-        1
-    }
-
-    fn entry(&mut self, _i: usize) -> std::io::Result<opendmd_core::manifest::Entry> {
-        Ok(opendmd_core::manifest::Entry::from_path(&self.0))
-    }
-}
-
-/// An engine over one virtual file (`@clock`, `@text?msg=…`), played for as
-/// long as attract lasts: a playlist of that one path, no card involved, no
-/// dwell.
-fn rebuild_live(
-    engine: &mut Option<Engine>,
-    path: &str,
-    settings: &Settings,
-    status: &Mutex<Status>,
-    canvas: &mut Canvas,
-) -> Result<Applied, String> {
-    cache_builder::publish(
-        cache_builder::Pace::Stop(cache_builder::Reason::Reindex),
-        settings.auto_prepare,
-    );
-    retire(engine, canvas);
-    let catalog = OneEntry(path.to_string());
-    let mut e = engine_over(Box::new(catalog), &Overrides::default(), settings, 1);
-    e.set_dwell(DwellPolicy {
-        min: Duration::MAX,
-        max: Duration::MAX,
-        min_loops: u32::MAX,
-    });
-    *engine = Some(e);
-    log::info!("follow: attract shows {path}, heap {} B free", free_heap());
-    let mut s = status.lock().unwrap();
-    // `manifest` stays the playlist attract would otherwise play (what the
-    // web app offers new GIFs to); the live item is noted beside it.
-    s.manifest = settings.manifest_path();
-    state::ATTRACT_LIVE.store(true, Ordering::Relaxed);
-    s.entries = 1;
-    s.overrides = 0;
-    s.hidden = 0;
-    s.index_state = "ready";
-    Ok(Applied::unchanged(1))
 }
 
 /// Rebuild the engine over a Follow RePlayOS context index — built (and
@@ -2473,7 +2390,6 @@ fn rebuild_context(
     {
         let mut s = status.lock().unwrap();
         s.manifest = ctx.manifest.clone();
-        state::ATTRACT_LIVE.store(false, Ordering::Relaxed);
         s.index_state = "building";
     }
     let started = Instant::now();
@@ -2740,7 +2656,6 @@ fn apply_schedule(
     let playing = status.lock().unwrap().manifest.clone();
     if engine.is_some()
         && runner.mode() != follow::Mode::Game
-        && attract_live(runner, &eff).is_none()
         && !files::same_card_path(&eff.manifest_path(), &playing)
     {
         log::info!("schedule: playlist {} -> {}", playing, eff.manifest_path());
@@ -3235,7 +3150,6 @@ fn rebuild(
     {
         let mut s = status.lock().unwrap();
         s.manifest = path.clone();
-        state::ATTRACT_LIVE.store(false, Ordering::Relaxed);
         s.index_state = "building";
     }
     let started = Instant::now();

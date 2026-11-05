@@ -284,7 +284,7 @@ letter of a word (`pick(cell, 'H', 'I')`), a colour (section 6). When the
 values vary per pixel it is that chain of compares and selects.
 
 **Digits and text.** `digit` and `glyph` read the panel's own bitmap fonts
-(OpenDMD's `@clock` and title cards; X11 misc-fixed, printable ASCII), and
+(OpenDMD's title cards and start-up show; X11 misc-fixed, printable ASCII), and
 `digit` also a bold set of digits:
 
 | font | cell (col × row) | a digit's pixels | |

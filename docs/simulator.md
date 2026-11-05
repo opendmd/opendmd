@@ -31,7 +31,8 @@ folder or GIF dropped onto the program counts as the argument.
 `opendmd-sim --help` lists every option: filters for a card (`--platforms`,
 `--title`, `--category`), `--shuffle`, `--scale` (pixels per LED, default
 10), `--transition`, `--look` (the panel's tints), `--glow`, and
-`--play '@clock?date=1'` for a single live item, `--formula FILE.psi` (with
+`--play '@card:Title|Subtitle'` or `--play '@boot?len=full'` for a single
+virtual file, `--formula FILE.psi` (with
 `--formula-opts a=0.5&fps=100`) or `--play '@formula?psb=…'` (a compiled
 Formula, `psi build FILE.psi --base64`) for a Formula
 (the `psi` feature is on by default; `opendmd-psi/formulas/` has `plasma.psi`,
@@ -43,8 +44,6 @@ Formula, `psi build FILE.psi --base64`) for a Formula
 | `P` | pause / resume |
 | `L` | LED or flat squares |
 | `Esc` | quit |
-
-![The clock live item](images/sim-clock.png)
 
 The demo and the web demo's card use only OpenDMD's own Formulas and
 [Kenney](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
@@ -58,7 +57,7 @@ pictures on this page were made:
 
 ```bash
 make sim ARGS="--demo --screenshot demo.png --screenshot-at 500"
-make sim ARGS="--play '@clock?style=big&date=1' --screenshot clock.png"
+make sim ARGS="--play '@boot?len=full' --screenshot boot.png"
 ```
 
 ![Kenney sprites, a scene from the demo card](images/sim-sprites.png)
