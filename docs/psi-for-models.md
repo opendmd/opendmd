@@ -1338,9 +1338,9 @@ A whole-day cycle from `hour` and `minute`.
 
 ```psi example=day-sky
 -- follows the clock: dark at night, blue by day, warm near sunrise and sunset
-day = (hour + minute/60)/24; sun = -cos(day)
-light = clamp(sun*1.5 + 0.3, 0, 1)
-warm = clamp(1 - abs(sun)*3, 0, 1) * (1 - y)
+day = (hour + minute/60)/24; high = -cos(day)
+light = clamp(high*1.5 + 0.3, 0, 1)
+warm = clamp(1 - abs(high)*3, 0, 1) * (1 - y)
 rgb(0.02 + light*(0.6 - 0.4*y) + warm*0.9, 0.02 + light*(0.8 - 0.35*y) + warm*0.35, 0.1 + light*(0.9 - 0.1*y))
 ```
 

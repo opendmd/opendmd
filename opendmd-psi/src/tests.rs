@@ -1183,11 +1183,10 @@ fn centred_values_are_what_they_stand_for() {
         "r = x\ncx = y\npy = 0.5\nangle = 1\ncy = 0\npick = 0.25\nrgb(r, cx, py + angle + cy + pick)",
         "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
     );
-    // A function called `pick` is still the function.
-    same(
-        "fn pick(a, b) = a*b\ngray(pick(x, y))",
-        "fn q(a, b) = a*b\ngray(q(x, y))",
-    );
+    // A `fn` takes no built-in function's name (language review A2: a
+    // later built-in can't be shadowed by a function, only by a value).
+    let e = compile("fn pick(a, b) = a*b\ngray(pick(x, y))").unwrap_err();
+    assert!(e.msg.contains("is a built-in function"), "{}", e.msg);
 }
 
 /// `pick(k, …)` against the chain of `?:` it replaces, byte for byte; one
@@ -3493,8 +3492,17 @@ fn built_in_inputs_read_their_defaults_and_live_values() {
     }
     let own = compile("night = 0.5\ngray(night)").unwrap();
     assert_eq!(own.ins.n, 0);
-    // A palette or a group name of the formula's own wins over a group.
-    assert!(compile("palette sun = alt #f80, #fff\npal(sun, sun.alt)").unwrap().ins.n == 0);
+    // A dotted input's group is no name of the formula's (language review
+    // A2): not a value's, a palette's, a table's or a function's.
+    for src in [
+        "sun = 1\ngray(sun.alt)",
+        "palette sun = alt #f80, #fff\npal(sun, 0.5)",
+        "table moon = 1, 2\ngray(moon[0])",
+        "fn replay(a) = a\ngray(replay(x))",
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains("is the built-in inputs' name"), "{src}: {}", e.msg);
+    }
     // `inputs()`: bit 7, and a `since` moves with time (bit 3).
     assert_eq!(p.inputs() & 0x88, 0x80);
     assert_eq!(compile("gray(since(night))").unwrap().inputs() & 0x88, 0x88);
@@ -3516,6 +3524,14 @@ fn since_and_was_are_frame_values() {
     // The same value again is no change.
     w.change(world::id::REPLAY_GAME, q(0.75));
     assert_eq!(w.since[world::id::REPLAY_GAME as usize], q(0.5));
+    // A change's seconds are held at 32,766: 32,767 is "never changed"
+    // (language review A5), however long ago the change was.
+    let k = world::input_byte(world::id::REPLAY_GAME, world::SINCE);
+    assert_eq!(crate::World::default().read(k), world::SINCE_NEVER);
+    w.since[world::id::REPLAY_GAME as usize] = world::SINCE_NEVER - 1;
+    assert_eq!(w.read(k), world::SINCE_HELD);
+    w.since[world::id::REPLAY_GAME as usize] = i32::MAX;
+    assert_eq!(w.read(k), world::SINCE_HELD);
     // One slot each: value, since and was of a key are three reads.
     let p = compile("gray(sun.alt + since(sun.alt) + was(sun.alt))").unwrap();
     assert_eq!(p.ins.n, 3);
@@ -3654,4 +3670,67 @@ fn division_is_the_same_at_every_level() {
         assert_eq!(f[px * 3], want(px as i32), "px {px}");
     }
     assert!(f[127 * 3] > 0);
+}
+
+/// Language review A2: one name rule. A formula's own value wins wherever
+/// the name is read as a value; a call `name(…)` is always the built-in
+/// function (`since`, `was`, `under`, `ink` as `sin`); a `fn` takes no
+/// built-in function's name nor a value's; `since(k)` of a name the formula
+/// set is refused, not read two ways.
+#[test]
+fn one_name_rule() {
+    let mut pic = alloc::vec![0u8; W * H * 3];
+    golden::picture(&mut pic);
+    let draw = |p: &Prog| {
+        let mut out = alloc::vec![0u8; W * H * 3];
+        render_rows::<128>(p, &mut Scratch::new(), &golden::inputs(500), &OWN, Some(&pic), u32::MAX, &mut out);
+        out
+    };
+    let same = |a: &str, b: &str| {
+        let (p, q) = (compile(a).unwrap(), compile(b).unwrap());
+        assert!(p.counts() == q.counts() && draw(&p) == draw(&q), "{a} vs {b}");
+    };
+    same("sin = 0.5\ngray(sin(y) + sin)", "gray(sin(y) + 0.5)");
+    same("since = 1\ngray(since(replay.game) * 0 + since)", "gray(since(replay.game) * 0 + 1)");
+    same("was = 0.25\ngray(was(night) + was)", "gray(was(night) + 0.25)");
+    let (a, b) = (
+        compile("ink = 0.5\ndraw { dot(1, 1, 1) }\ngray(ink(4) + ink)").unwrap(),
+        compile("draw { dot(1, 1, 1) }\ngray(ink(4) + 0.5)").unwrap(),
+    );
+    assert_eq!(a.counts(), b.counts());
+    assert!(a.listing().contains("inkn") && frame_of(&a, &Inputs::default()) == frame_of(&b, &Inputs::default()));
+    same("under = 0.5\nrgb(under(px + 1, py) * under)", "rgb(under(px + 1, py) * 0.5)");
+    for (src, says) in [
+        ("fn sin(a) = a*2\ngray(sin(x))", "is a built-in function"),
+        ("fn since(a) = a\ngray(since(x))", "is a built-in function"),
+        ("fn under(a, b) = a\ngray(under(x, y))", "is a built-in function"),
+        ("fn line(a) = a\ngray(line(x))", "is a built-in function"),
+        ("f = 3\nfn f(a) = a\ngray(f(x))", "is already the name of a value"),
+        ("fn f(a) = a\nf = 3\ngray(f(x))", "is already the name of a function"),
+        ("daylight = 0.5\ngray(since(daylight))", "is this formula's own value here"),
+        ("night = 1\ngray(was(night))", "is this formula's own value here"),
+        ("moon = 1\ngray(moon)", "is the built-in inputs' name"),
+        ("fire = 0.5\ngray(fire)", "is a palette's name"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
+    // The built-ins are still read where the formula has not set the name.
+    same("gray(since(daylight) * 0 + daylight)", "gray(since(daylight) * 0 + daylight)");
+}
+
+/// Language review A4: `a < b < c` is refused, with the `and` to write.
+#[test]
+fn chained_comparisons_are_refused() {
+    for (src, says) in [
+        ("gray(0 < x < 0.5)", "write `0 < x and x < 0.5`"),
+        ("gray(x >= 0.2 <= y)", "write `x >= 0.2 and 0.2 <= y`"),
+        ("v = px + 1 == py == 3\ngray(v)", "write `px + 1 == py and py == 3`"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(says), "{src}: {}", e.msg);
+    }
+    // Brackets say what is meant, and `and` joins two.
+    compile("gray((0 < x) < 0.5)").unwrap();
+    compile("gray(0 < x and x < 0.5)").unwrap();
 }
