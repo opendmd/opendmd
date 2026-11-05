@@ -3174,6 +3174,21 @@ def csp_checks(browser, base: str) -> None:
         ctx.close()
 
 
+def follow_code_checks(base: str) -> None:
+    """The RePlayOS code goes only to the saved address (docs/api.md): a
+    test of another host needs its own code; a new follow_host forgets it."""
+    check(put_status(base, {"follow_host": "127.0.0.1:9", "follow_code": "secret-code"}) == 200
+          and get_json(base + "/api/config")["follow_code_set"] is True, "follow: a host and a code saved")
+    code, reply = post_code(base + "/api/follow/test", {"host": "evil.test:55356"})
+    check(code == 400 and "NET CONTROL code" in (reply or {}).get("error", ""),
+          f"follow: a test of another host without a code -> {code} ({reply})")
+    code, _ = post_code(base + "/api/follow/test", {"host": "127.0.0.1:9"})
+    check(code == 200, f"follow: the saved host without a code -> {code}")
+    check(put_status(base, {"follow_host": "evil.test:55356"}) == 200 and get_json(base + "/api/config")["follow_code_set"] is False,
+          "follow: a new follow_host without a code forgets the saved one")
+    check(put_status(base, {"follow_host": "", "follow_code": ""}) == 200, "follow: cleared again")
+
+
 def key_checks(browser, page: Page, base: str) -> None:
     """The optional API key: Settings -> Advanced -> Security, the 401s, the
     key dialog in a fresh browser, and off again. Last: nothing after it may
@@ -3855,6 +3870,7 @@ def mock_pass(browser) -> None:
         origin_checks(browser, base)
         rebinding_and_header_checks(base, overlay)
         csp_checks(browser, base)
+        follow_code_checks(base)
         firmware_checks(page, base, ota)
         update_checks(page, base, ota)
         key_checks(browser, page, base)

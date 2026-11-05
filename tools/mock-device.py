@@ -316,6 +316,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   a card file goes out as its image type or
   `application/octet-stream` (never HTML or SVG) with nosniff,
   `Content-Security-Policy: sandbox; default-src 'none'` and, for a non-image,
+  `Content-Disposition: attachment`. `POST /api/follow/test` naming another
+  host than the saved one, with no `code`, is a 400 when a code is saved;
+  `PUT /api/config` with a new `follow_host` and no `follow_code` forgets the
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, flash_size, pending, last, log}` (`log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
@@ -3752,6 +3755,11 @@ def make_handler(ctx: Context, quiet: bool):
                 if next_settings["dwell_max"] < next_settings["dwell_min"]:
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
+                # The saved RePlayOS code is for the saved address: a new
+                # address without a code of its own forgets it (http.rs, M1).
+                if "follow_host" in patch and "follow_code" not in patch and \
+                        next_settings["follow_host"].strip().lower() != before["follow_host"].strip().lower():
+                    next_settings["follow_code"] = ""
 
                 # A name another device answers to is refused, nothing
                 # saved (http.rs asks the network worker last, before the
@@ -4008,7 +4016,12 @@ def make_handler(ctx: Context, quiet: bool):
             host_in = req.get("host")
             host = host_in.strip() if isinstance(host_in, str) and host_in.strip() else saved_host
             code_in = req.get("code")
-            code = code_in if isinstance(code_in, str) else saved_code
+            # The saved code goes only to the saved address (http.rs, M1).
+            same = host.strip().lower() == saved_host.strip().lower()
+            if not isinstance(code_in, str) and saved_code and not same:
+                self.send_error_json(400, "a new address needs its NET CONTROL code")
+                return
+            code = code_in if isinstance(code_in, str) else saved_code if same else ""
             if not host:
                 self.send_json(200, {"ok": False, "reachable": False, "error": "no host"})
                 return

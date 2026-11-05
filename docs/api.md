@@ -679,7 +679,10 @@ game runs, the attract playlist (or `attract`) in the menus. Set with
 
 Ask the box for its version and status, saving nothing:
 `{"host"?: string, "code"?: string}` (absent: the saved ones; an empty body
-is fine). Up to ~20 s.
+is fine). Up to ~20 s. The saved code goes only to the saved host: a
+`host` that is another one needs its own `code` (`400` without, when a
+code is saved). Likewise `PUT /api/config` with a new `follow_host` and no
+`follow_code` forgets the saved code.
 
 Reply: `{"ok","reachable","version","status","view","system","game","error"}`;
 `status` is the box's HTTP status (401: wrong code). An early failure has
