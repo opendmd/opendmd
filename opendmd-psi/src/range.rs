@@ -37,6 +37,8 @@ use crate::vm::Inputs;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Iv(pub i64, pub i64);
 
+pub(crate) const FULL_IV: Iv = FULL;
+
 const LO: i64 = i32::MIN as i64;
 const HI: i64 = i32::MAX as i64;
 const FULL: Iv = Iv(LO, HI);
@@ -45,7 +47,7 @@ const SIGNED: Iv = Iv(-(ONE as i64), ONE as i64);
 
 impl Iv {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn point(v: i32) -> Iv {
+    pub(crate) fn point(v: i32) -> Iv {
         Iv(v as i64, v as i64)
     }
 
@@ -56,7 +58,7 @@ impl Iv {
     }
 
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn fits(self) -> bool {
+    pub(crate) fn fits(self) -> bool {
         self.0 >= LO && self.1 <= HI
     }
 
@@ -120,19 +122,19 @@ fn mul_corners(a: Iv, b: Iv) -> Iv {
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn add_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn add_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 + b.0, a.1 + b.1)
 }
 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn sub_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn sub_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 - b.1, a.1 - b.0)
 }
 
 /// `mul`'s exact result (before saturation): the corners' products, each
 /// shifted down (floor, monotonic).
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn mul_iv(a: Iv, b: Iv) -> Iv {
+pub(crate) fn mul_iv(a: Iv, b: Iv) -> Iv {
     let p = mul_corners(a, b);
     Iv(p.0 >> 16, p.1 >> 16)
 }
@@ -140,7 +142,7 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
 #[inline(never)]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32]) -> Iv {
+pub(crate) fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32]) -> Iv {
     use code::*;
     match op.code {
         ADD | ADD_W => add_iv(a, b).sat(),
