@@ -287,10 +287,14 @@ browser doing the fetching: the player itself never goes to the internet.
   for the web apps from before there were two. The page is plain HTTP
   from the player and fetches this over HTTPS; the site sends
   `Access-Control-Allow-Origin: *`, and the request carries no credentials
-  or custom headers, so there is no preflight. The player sends no
-  Content-Security-Policy, so nothing stops the page connecting there.
-  For testing, `?updates=<url>` in the page's address, or localStorage
-  `odmd.updates` (a JSON string), names another `release.json`.
+  or custom headers, so there is no preflight. The player's
+  Content-Security-Policy allows `connect-src *`. For testing, and in a
+  **development build of the web app only** (its version, as `GET /api/www`
+  reports it, is a `git describe` past a tag or `-dirty`), `?updates=<url>`
+  in the page's address, or localStorage `odmd.updates` (a JSON string),
+  names another `release.json`, and the "is out" line names that feed's
+  host. A release's web app reads opendmd.dev's alone: no link can point
+  its updates elsewhere.
 - **What counts as newer.** The firmware: the release's `version` against
   `GET /api/firmware`'s, with `older()` (1.0.0 is newer than 0.3.13). The web
   app: `www_version` against `GET /api/www`'s `version`, `git describe`

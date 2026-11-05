@@ -1,7 +1,9 @@
 // Settings › Device › Firmware: "Check for updates" (imported on the first
 // click; its own size line). Reads the published release, `release.json` on
-// the project site (HTTPS, served with CORS; `?updates=<url>`
-// or localStorage `odmd.updates` points elsewhere, for testing), and compares
+// the project site (HTTPS, served with CORS; in a development build of the
+// web app only, `?updates=<url>` or localStorage `odmd.updates` points
+// elsewhere, for testing: a release build never takes a feed from a link,
+// and a feed that is not opendmd.dev is named in what it says), and compares
 // it with the player: the firmware semver-ish (`older`), the web app by its
 // `git describe` string (a release pack reads `v1.0.0`, a development build
 // `v1.0.0-3-gabc1234-dirty`). Update downloads what is needed into memory
@@ -68,12 +70,16 @@ export async function check(ui) {
   ui.busy(true);
   say('Checking for updates…');
   try {
-    const u = new URL(new URLSearchParams(location.search).get('updates') || store.get('updates', '') || RELEASE, location.href).href;
-    const rel = await get(u, 'The release information');
-    if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);
     // One request at a time to the player.
     const { version: fwv, variant } = await app.src.json('GET', '/api/firmware');
     const wv = (await app.src.json('GET', '/api/www')).version;
+    // Another feed only for a development build (its version says so: the
+    // player's web app, which no link can change).
+    const own = wver(wv)[1] && (new URLSearchParams(location.search).get('updates') || store.get('updates', ''));
+    const u = new URL(own || RELEASE, location.href).href;
+    const from = new URL(u).origin === new URL(RELEASE).origin ? '' : ` (from ${new URL(u).host})`;
+    const rel = await get(u, 'The release information');
+    if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);
     const file = fwFile(rel, variant);
     const v = bare(rel.version), newer = older(fwv, v), fwUp = newer && !!file, ahead = older(v, fwv);
     // The web app: any other version is an update, unless the firmware is
@@ -86,8 +92,8 @@ export async function check(ui) {
     } else if (!fwUp && !wwwUp) {
       say(ahead ? `This player’s firmware (${bare(fwv)}) is newer than the latest release (${v})` : `Up to date (${v}${dev ? ', development build' : ''})`);
     } else {
-      say([fwUp && `Firmware ${v} is out (this player has ${bare(fwv)}).`,
-        wwwUp && `Web app ${nice(rel.www_version)} is out (this one is ${nice(wv) || 'unknown'}).`,
+      say([fwUp && `Firmware ${v} is out${from} (this player has ${bare(fwv)}).`,
+        wwwUp && `Web app ${nice(rel.www_version)} is out${fwUp ? '' : from} (this one is ${nice(wv) || 'unknown'}).`,
         fwUp && 'The panel goes dark for about a minute while it installs.'].filter(Boolean).join(' '));
       row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && { v, file, variant }, wwwUp); } }, 'Update'));
     }

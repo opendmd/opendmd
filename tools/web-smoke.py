@@ -2986,7 +2986,8 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               f"update: firmware ahead of the release -> '{t}' (no web app offered either)")
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
-        check(t.startswith(f"Firmware {UPD_VERSION} is out (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
+        frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named
+        check(t.startswith(f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
         page.click("#fw-upd")
         page.wait_for_function("() => /404/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=20000)
@@ -3015,7 +3016,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               f"update: a refused firmware stops there, the web app untouched -> '{t}'")
         # The real thing: both, then the reload.
         t = check_now(release("release.json"))
-        want = f"Firmware {UPD_VERSION} is out (this player has {fw0}). Web app {UPD_VERSION} is out"
+        want = f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}). Web app {UPD_VERSION} is out"
         check(t.startswith(want) and "The panel goes dark" in t and upd() == 1, f"update: both offered -> '{t}'")
         page.locator("#st-fw").screenshot(path=str(OUT / "settings-update-laptop.png"))
         page.evaluate("""() => { sessionStorage.setItem('upd', '[]');
@@ -3034,10 +3035,24 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         fw, w = get_json(base + "/api/firmware"), get_json(base + "/api/www")
         check(fw["version"] == UPD_VERSION and w["version"] == f"v{UPD_VERSION}" and w["ok"],
               f"update: the mock runs firmware {fw['version']}, web app {w['version']}, and the page reloaded")
+        # Now a release build: `odmd.updates` (still set) and `?updates=` are
+        # ignored, the feed is opendmd.dev's (a stand-in here).
+        rel_asked: list[str] = []
+
+        def official(route):
+            rel_asked.append(route.request.url)
+            route.fulfill(status=200, body=(inst / "release.json").read_text(),
+                          headers={"content-type": "application/json", "access-control-allow-origin": "*"})
+        page.context.route("https://opendmd.dev/install/release.json", official)
+        page.goto(base + "/?updates=" + urllib.parse.quote(f"{site}/install/old.json") + "#settings/device")
         goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
+        n_before = len(asked)
         t = check_now()
-        check(t == f"Up to date ({UPD_VERSION})" and not upd(), f"update: after the update -> '{t}'")
+        check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == ["https://opendmd.dev/install/release.json"]
+              and not any(a.endswith(("/old.json", "/release.json")) for a in asked[n_before:]),
+              f"update: after the update (a release build) only opendmd.dev's feed is read, ?updates= and odmd.updates ignored -> '{t}'")
+        page.context.unroute("https://opendmd.dev/install/release.json")
     finally:
         for e in (site, "/api/firmware", "/api/status"):
             expected.remove(e)
