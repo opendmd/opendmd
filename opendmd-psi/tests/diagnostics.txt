@@ -828,6 +828,25 @@ layer = 1
 gray(x)
 --- 1:1 `layer` is a word of the language; pick another name
 
+=== E215
+fn sin(a) = a*2
+gray(sin(x))
+--- 1:4 `sin(…)` is a built-in function: a `fn` takes a name of its own
+
+=== E216
+sun = 1
+gray(sun)
+--- 1:1 `sun` is the built-in inputs' name (sun.alt); pick another name
+
+=== E217
+daylight = 0.5
+gray(since(daylight))
+--- 2:12 `daylight` is this formula's own value here: `since(…)` reads a built-in input, so give yours another name
+
+=== E218
+gray(0 < x < 0.5)
+--- 1:12 comparisons don't chain: write `0 < x and x < 0.5` (`0 < x < 0.5` would compare `0 < x`, 1 or 0, with 0.5)
+
 === E301
 frame {
 k = t

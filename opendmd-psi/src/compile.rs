@@ -2150,6 +2150,15 @@ const NO_CH: u8 = 3;
 /// Inside `rgb(r, g, b)`'s values (for the error a colour there gets).
 const IN_RGB: u8 = 4;
 
+/// A built-in function's name (a call of it), which a `fn` may not take
+/// (language review A2).
+fn is_builtin_function(name: &str) -> bool {
+    FUNCS.iter().any(|e| e.0 == name)
+        || COLOURS.iter().any(|e| e.0 == name)
+        || PRIMITIVES.contains(&name)
+        || matches!(name, "since" | "was" | "under" | "ink" | "tween")
+}
+
 /// What a name is being set as ([`Parser::new_name`]): a value (set
 /// again, or shadowing one from outside, as often as you like), a loop
 /// counter (may shadow a value), a control, or a part, table, sprite or
@@ -2499,7 +2508,7 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.peek().tok == Tok::LParen && self.text(t) == "pick" => {
                     self.pick(t)?
                 }
-                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && self.lookup_local("under").is_none() && self.func_named("under").is_none() => {
+                Tok::Name if self.env.ch < NO_CH && self.text(t) == "under" && (self.peek().tok == Tok::LParen || self.lookup_local("under").is_none()) => {
                     self.under_atom(t)?
                 }
                 Tok::Name => self.name(t)?,
@@ -2548,7 +2557,11 @@ impl<'s> Parser<'s> {
             self.next();
             #[cfg(feature = "syntax")]
             let rs = self.peek().start;
+            let mid = self.peek().start;
             let rhs = self.expr(rbp)?;
+            if lbp == 5 && infix_bp(self.peek().tok).is_some_and(|b| b.0 == 5) {
+                return Err(self.chained(t.start, op, mid));
+            }
             #[cfg(feature = "syntax")]
             let span = (rs, self.toks[self.pos - 1].get().end);
             #[cfg(feature = "syntax")]
@@ -2567,6 +2580,33 @@ impl<'s> Parser<'s> {
             }
         }
         Ok(lhs)
+    }
+
+    /// E218: `a < b < c` (the cursor on the second comparison): Psi
+    /// refuses to chain comparisons rather than read it as `(a < b) < c`.
+    #[cold]
+    #[inline(never)]
+    fn chained(&mut self, start: usize, op: Token, mid: usize) -> Error {
+        let mid_end = self.toks[self.pos.saturating_sub(1)].get().end;
+        let op2 = self.next();
+        let third = self.peek().start;
+        let end = match self.expr(6) {
+            Ok(_) => self.toks[self.pos.saturating_sub(1)].get().end,
+            Err(_) => op2.end,
+        };
+        let (a, o1, b, o2) = (
+            sub(self.src, start, op.start).trim(),
+            self.text(op),
+            sub(self.src, mid, mid_end).trim(),
+            self.text(op2),
+        );
+        let c = if end > third { sub(self.src, third, end).trim() } else { "…" };
+        // E218.
+        Error::new(
+            op2.start,
+            op2.end,
+            format!("comparisons don't chain: write `{a} {o1} {b} and {b} {o2} {c}` (`{a} {o1} {b} {o2} {c}` would compare `{a} {o1} {b}`, 1 or 0, with {c})"),
+        )
     }
 
     /// Whether names set in `scope` can be seen here: this scope's and its
@@ -2627,7 +2667,7 @@ impl<'s> Parser<'s> {
             if let Some(k) = self.func_named(name) {
                 return self.call_value(t, k);
             }
-            if matches!(name, "since" | "was") && self.lookup_local(name).is_none() {
+            if matches!(name, "since" | "was") {
                 return self.since_was(t, name == "since");
             }
             if name == "rgb" && self.env.ch < NO_CH {
@@ -2712,6 +2752,12 @@ impl<'s> Parser<'s> {
             let name = self.text(n);
             if self.peek().tok == Tok::Dot && crate::world::is_group(name) {
                 Some(self.dotted_key(n)?.0)
+            } else if crate::world::key(name).is_some() && self.lookup_local(name).is_some() {
+                // E217 (the formula's own names win everywhere).
+                return self.err(
+                    n,
+                    format!("`{name}` is this formula's own value here: `{f}(…)` reads a built-in input, so give yours another name"),
+                );
             } else {
                 crate::world::key(name)
             }
@@ -2797,9 +2843,7 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn special(&mut self, t: Token, name: &str) -> Option<Result<Id, Error>> {
         match self.peek().tok {
-            Tok::LParen if name == "ink" && self.lookup_local(name).is_none() => {
-                Some(self.ink_levels(t))
-            }
+            Tok::LParen if name == "ink" => Some(self.ink_levels(t)),
             Tok::Dot => {
                 if let Some(k) = self.palette_named(name) {
                     return Some(self.palette_entry(t, k));
@@ -3316,7 +3360,11 @@ impl<'s> Parser<'s> {
                 Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
-                Tok::Name if self.text(t) == "under" && self.lookup_local("under").is_none() => {
+                Tok::Name
+                    if self.text(t) == "under"
+                        && (self.toks[k + 1].get().tok == Tok::LParen
+                            || self.lookup_local("under").is_none()) =>
+                {
                     return true
                 }
                 Tok::Name
@@ -3489,9 +3537,11 @@ impl<'s> Parser<'s> {
     /// not a name already set here (E203).
     fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
-        // A built-in value or function's name may be the formula's own (it
-        // then reads as the formula's; a call is still the function): only
-        // the keywords are not names.
+        // A built-in value's name, or a built-in function's, may be the
+        // formula's own value (it then reads as the formula's everywhere; a
+        // call `name(…)` is still the function): only the keywords, the
+        // palettes and the dotted inputs' groups are not names (and a `fn`
+        // takes no built-in function's: `fn_def`).
         if KEYWORDS.contains(&name) {
             return self.err(
                 t,
@@ -3502,6 +3552,19 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 format!("`{name}` is a palette's name; pick another name"),
+            );
+        }
+        if crate::world::is_group(name) {
+            let keys: Vec<&str> = crate::world::KEYS
+                .iter()
+                .filter(|k| k.name.split_once('.').is_some_and(|(g, _)| g == name))
+                .map(|k| k.name)
+                .collect();
+            let has = keys.join(", ");
+            // E216.
+            return self.err(
+                t,
+                format!("`{name}` is the built-in inputs' name ({has}); pick another name"),
             );
         }
         let local = self.lookup_local(name);
@@ -5161,7 +5224,14 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name || self.tok(self.pos).tok != Tok::LParen {
             return self.err(kw, "a function is `fn name(a, b) = value`, or `fn name(a, b) { … }` for lines that draw");
         }
-        let name = self.new_name(n, Naming::Value)?;
+        let name = self.new_name(n, Naming::Thing)?;
+        if is_builtin_function(name) {
+            // E215.
+            return self.err(
+                n,
+                format!("`{name}(…)` is a built-in function: a `fn` takes a name of its own"),
+            );
+        }
         self.next();
         let mut params = Vec::new();
         while self.peek().tok != Tok::RParen {

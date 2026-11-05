@@ -48,9 +48,11 @@ pub mod id {
 /// built-ins and room to grow.
 pub const MAX_KEYS: usize = 16;
 
-/// `since` of a key that never changed: 32,767 s (Q16.16's reach, ~9 h);
-/// `since` is held there.
+/// `since` of a key that never changed: 32,767 s (Q16.16's reach, ~9 h).
 pub const SINCE_NEVER: i32 = 32767 << 16;
+/// A real `since` is held at 32,766 s (language review A5), so 32,767
+/// means "never changed" and nothing else, however long a change is past.
+pub const SINCE_HELD: i32 = 32766 << 16;
 
 /// What a read of a key is: its value, `since(KEY)` or `was(KEY)` (the
 /// top two bits of an input's byte in the program, its key the low six).
@@ -232,7 +234,10 @@ impl World {
         let (id, what) = (byte & 63, byte >> 6);
         let i = id as usize % MAX_KEYS;
         let v = match what {
-            SINCE => self.since[i],
+            // (A change's seconds are held at SINCE_HELD; only a key that
+            // never changed reads SINCE_NEVER.)
+            SINCE if self.since[i] == SINCE_NEVER => SINCE_NEVER,
+            SINCE => self.since[i].min(SINCE_HELD),
             WAS => self.was[i],
             _ => self.value[i],
         };

@@ -904,7 +904,7 @@ gray(sin(x))
 
 A value may be set again (`v = v * 2` reads the `v` before it), but functions, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.
 
-Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs.)
+Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or function may set a name from outside: only functions, tables, sprites, palettes and controls keep theirs, and none of them takes a value's name.)
 
 Before:
 
@@ -928,7 +928,7 @@ gray(T[0] * k)
 
 The language's own words (`loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn`) can't be names; any built-in value or function's name can (it is then yours).
 
-Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value or function's name may be yours).
+Pick another name: `loop`, `layer`, `part`, `use`, `draw`, `for`, `table` and `fn` are the language's own words (any built-in value's name may be yours, and a built-in function's as a value; not a palette's or `sun`, `moon` or `replay`).
 
 Before:
 
@@ -1031,6 +1031,30 @@ Use one of the listed blends.
 > `ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels
 
 Write the number of levels, as `ink(16)`, and draw with inks `k/16`.
+
+<h4 id="E215">E215 · a function named as a built-in one</h4>
+
+> `…(…)` is a built-in function: a `fn` takes a name of its own
+
+Name the function something else, as `fn wave(a) = …`. (A value may take a built-in function's name: `sin = 0.5`, and `sin(…)` is still the function.)
+
+<h4 id="E216">E216 · a name that is the dotted inputs' group</h4>
+
+> `…` is the built-in inputs' name (…); pick another name
+
+Pick another name: `sun`, `moon` and `replay` are the start of the built-in inputs `sun.alt`, `moon.phase`, `replay.game` and the rest.
+
+<h4 id="E217">E217 · <code>since(…)</code> or <code>was(…)</code> of the formula's own value</h4>
+
+> `…` is this formula's own value here: `…(…)` reads a built-in input, so give yours another name
+
+Rename your value (`light = …`): the formula's own names win everywhere, so `since(daylight)` would otherwise mean two things on one line.
+
+<h4 id="E218">E218 · a chained comparison</h4>
+
+> comparisons don't chain: write `… and …` (`…` would compare `…`, 1 or 0, with …)
+
+Join two comparisons with `and`: `0 < x and x < 0.5` (a comparison gives 1 or 0, so `0 < x < 0.5` would compare that with 0.5).
 
 ### Placement and levels (E3xx)
 

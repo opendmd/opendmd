@@ -14,7 +14,7 @@ import { h, clear, toast } from './util.js';
 import { control } from './psikit.js';
 
 const SKY = ['daylight', 'sun.alt', 'moon.phase', 'season', 'yearday'];
-const UNSET = -2147483648, NEVER = 32767 * 65536, DAY = 86400000;
+const UNSET = -2147483648, NEVER = 32767 * 65536, HELD = 32766 * 65536, DAY = 86400000; // a change's `since` is held at 32,766 s: 32,767 is never
 const Q = (v) => Math.round(v * 65536);
 const two = (n) => String(n).padStart(2, '0');
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -53,7 +53,7 @@ export function conditions(P, box) {
       for (const k of keys) {
         const i = SKY.indexOf(k.name), o = ov.get(k.name);
         if (s && i >= 0) { if (s[i] !== UNSET) P.worldSet(k.id, s[i], s[i], NEVER); continue; }
-        if (o) P.worldSet(k.id, Q(o.v), Q(o.was), Math.min(NEVER, Math.round((now - o.at) * 65.536)));
+        if (o) P.worldSet(k.id, Q(o.v), Q(o.was), Math.min(HELD, Math.round((now - o.at) * 65.536)));
       }
     },
   };
