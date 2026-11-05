@@ -291,14 +291,16 @@ pub fn still_gate(take: usize) -> bool {
 
 /// May a Formula's JIT kernel be built now (`fx_psi::JitGate`): its build
 /// takes `take` B of small blocks for a moment, and an infallible one the
-/// heap can't give aborts. Room for it and 4 KB besides, and a 4 KB block
-/// (its largest, the lowering's step table, measured 4.3 KB on the host
-/// for Endless road V2): else the Formula stays on the VM and asks again
-/// a second later.
+/// heap can't give aborts. Room for it and 4 KB besides, and a block of
+/// half `take`: its largest are the lowering's step table (4.3 KB for
+/// Endless road V2 on the host) and the code as it grows (4,179 B for V2,
+/// a growth asking up to twice that: the emulator aborted on it, 4 KB
+/// asked of the largest block, 2026-11-05). Else the Formula stays on the
+/// VM and asks again a second later.
 #[cfg(feature = "psi")]
 pub fn jit_gate(take: usize) -> bool {
     let free = free_heap() as usize;
-    let ok = free >= take + 4 * 1024 && largest_free_block() >= 4 * 1024;
+    let ok = free >= take + 4 * 1024 && largest_free_block() >= take / 2;
     if !ok {
         log::info!("formula: JIT kernel not built yet ({take} B): heap {free} B free, largest block {} B", largest_free_block());
     }

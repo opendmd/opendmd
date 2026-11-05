@@ -4268,7 +4268,7 @@ def make_handler(ctx: Context, quiet: bool):
             SENT_PSB[0] = None
             body = self.read_body()
             if not body or len(body) < length:
-                self.send_error_json(400, "the body is the compiled Formula (Content-Length bytes)")
+                self.send_error_json(400, "the body is the compiled Formula")
                 return
             if psb_info(body) is None:
                 self.send_error_json(400, "this is not a Formula compiled for this player")
