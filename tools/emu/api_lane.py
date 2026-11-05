@@ -403,6 +403,11 @@ class Lane:
         self.emu = emu
         try:
             self.boot_checks(emu, api)
+            if os.environ.get("EMU_API_ONLY") == "sent":
+                # (A diagnostic shortcut: Show on panel alone, then stop.)
+                self.files(api)
+                self.sent(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "bursts":
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
@@ -605,6 +610,26 @@ class Lane:
         short = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
         name = lambda b: b[6:6 + b[5]].decode()
         self.expect(len(long) * 4 // 3 > 6144, "sent", f"--long-psb is {len(long)} B: it fits a path")
+        # (Kept until changed: the JIT's waits below outlast a turn of the dwell.)
+        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        jit = lambda s: (s["now_playing"].get("formula") or {}).get("jit") or {}
+        def jit_off(what):
+            # (The status says the last kernel's word until the new
+            # Formula's is made: first it goes, then it comes back.)
+            # (Missed when the new kernel is drawing by the next read: fine.)
+            with contextlib.suppress(LaneFail):
+                self.wait_status(api, lambda s: jit(s).get("on") is not True, 10, f"the JIT off {what}")
+        def jit_on(what):
+            # (None: no kernel within the wait. The kernel's build asks for a
+            # contiguous executable block; a fragmented heap holds it off.)
+            t0 = time.time()
+            try:
+                # (Road V2's kernel, ~4 KB: not the last Formula's, 550 B.)
+                st = self.wait_status(api, lambda s: jit(s).get("on") is True and jit(s).get("bytes", 0) > 2000,
+                                      120, f"the JIT drawing {what}")
+            except LaneFail:
+                return None
+            return time.time() - t0, jit(st)
         api.json("POST", "/api/play", {"path": "/gifs/EmuApi/emu-a.gif"})
         self.wait_status(api, lambda s: s["now_playing"]["path"] == "/gifs/EmuApi/emu-a.gif", 30, "the GIF before")
         _, r = api.json("POST", "/api/play/formula?a=0.5&key=secret", long)
@@ -614,7 +639,9 @@ class Lane:
         np = st["now_playing"]
         self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
         ordinal = np["ordinal"]
+        first = jit_on("the long Formula")
         # Live edits as the editor sends them (~200 ms apart): the other Formula, then back.
+        mark = emu.mark()
         for k in range(10):
             body = short if k % 2 == 0 else long
             api.json("POST", f"/api/play/formula?live=1&a={k / 10}", body)
@@ -623,6 +650,24 @@ class Lane:
         np = st["now_playing"]
         self.expect(np["ordinal"] == ordinal and np["title"] == name(long), "sent",
                     f"after 10 live edits: ordinal {np['ordinal']} (was {ordinal}), title {np['title']!r}")
+        # The JIT comes back after the edits pause, with one kernel made for
+        # the burst, not one per edit (Jit::settling).
+        jit_off("after the live edits")
+        after = jit_on("after the live edits")
+        made = len(emu.find(re.compile(r"formula: kernel of \d+ B at .*to be checked"), mark))
+        self.expect(made <= 2, "sent", f"{made} kernels made for a burst of 10 live edits")
+        # A slot the Formula doesn't declare, sent out of its 0..1 (`a=30`):
+        # held to it, so the kernel is checked and draws (it waited forever).
+        mark = emu.mark()
+        api.json("POST", "/api/play/formula?live=1&a=30", long)
+        jit_off("after a=30")
+        wide = jit_on("after a=30")
+        if first and after:
+            self.expect(wide is not None, "sent", f"after a=30 the JIT never drew (now {jit(api.status())})")
+        else:
+            self.notes.append(f"sent: no kernel on this heap ({jit(api.status())}): the JIT's checks were not made")
+            self.expect(not emu.find(re.compile(r"kernel of \d+ B at .*to be checked"), mark)
+                        or emu.find(re.compile(r"checked against the VM"), mark), "sent", "a kernel made after a=30 was never checked")
         _, rec = api.json("GET", "/api/status?recent=1")
         self.expect(not any("~sent" in str(x) for x in rec.get("recent") or []), "sent", f"in Recently played: {rec.get('recent')}")
         api.call("POST", "/api/play/formula", b"\0" * (16 * 1024 + 1), want=(413,))
@@ -633,8 +678,10 @@ class Lane:
         api.json("POST", "/api/skip")
         self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
         api.call("POST", "/api/play/formula?live=1", long, want=(409,))
+        api.json("PUT", "/api/config", {"formula_keep": "turn"})
         self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
-                f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on")
+                f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on; "
+                f"the JIT on after the show, the edits ({made} kernel made) and a=30: {first}, {after}, {wide}")
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
@@ -1151,7 +1198,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") != "bursts":
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent"):
             lane.card_checks()
             lane.run_b()
     except LaneFail as e:
