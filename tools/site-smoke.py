@@ -1486,7 +1486,9 @@ def reachable(site: Path) -> None:
                 todo.append(nxt)
     moved = {ln.split()[0].lstrip("/") for ln in (site / "_redirects").read_text().splitlines() if ln.strip()}
     pages = {p.relative_to(site).as_posix() for p in site.rglob("*.html")}
-    want = {p for p in pages if not p.startswith("demo/") and p != "404.html" and p not in moved}
+    # /stats is public but unlinked on purpose (the owner's call).
+    unlinked = {"404.html", "stats.html"}
+    want = {p for p in pages if not p.startswith("demo/") and p not in unlinked and p not in moved}
     missing = sorted(want - seen)
     check(not missing and len(want) > 15, f"every page reachable from the home page by its links ({len(want)} pages){': ' + ', '.join(missing[:8]) if missing else ''}")
     bad = []
