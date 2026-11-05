@@ -1030,7 +1030,7 @@ class Lane:
             _, r = api.json("PUT", "/api/firmware", self.a.bundle.read_bytes(), timeout=600)
             took = time.time() - t0
             self.expect(r.get("ok") is True and r.get("rebooting") is True, "ota", f"PUT /api/firmware answered {r}")
-            emu.wait_for(re.compile(r"signature ok; staging it on the card"), 5, mark, "`signature ok`")
+            emu.wait_for(re.compile(r"signature ok( \(key \d+\))?; staging it on the card"), 5, mark, "`signature ok`")
             emu.wait_for(re.compile(r"staged and verified .* restarting into the updater"), 60, mark, "`restarting into the updater`")
             emu.wait_for(re.compile(r"rst:0x"), 60, mark, "the restart into the updater")
             back = time.time()

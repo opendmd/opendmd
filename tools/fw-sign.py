@@ -19,6 +19,14 @@ save-image` writes, starting with the ESP image magic 0xE9):
     sha256    32 B, of the image
     sig       64 B, Ed25519 over magic|version|length|sha256 (the first 76 B)
 
+The image's last 16 bytes are the key trailer (1.0.0-beta.15 on), appended
+by `sign` to the app image before it is hashed and signed: "ODFWKEY1", the
+key id (0: the first release key), 7 zero bytes. A firmware from before
+knows nothing of it: to it the trailer is image bytes (counted in `length`,
+covered by `sha256`), and the updater writes it after the app image, where
+esp_image_verify never reads. A firmware that knows it checks the id
+against the key that verified the header (opendmd_core::ota::key_id_of).
+
 The magic names the flash layout (the variant) the image is built for: a
 4mb bundle keeps the original magic, so the 4 MB players already in use take
 it; an 8mb bundle's magic is one they refuse. The device refuses a bundle
@@ -53,6 +61,12 @@ ESP_IMAGE_MAGIC = 0xE9
 FACTORY_BYTES = {"4mb": 0x240000, "8mb": 0x300000}
 # esp_app_desc_t in an app image: its magic word at 0x20, the version at 0x30.
 APP_DESC_MAGIC = 0xABCD5432
+# The key trailer at the end of a bundle's image (opendmd_core::ota::KEY_TRAILER_*).
+KEY_TRAILER_MAGIC = b"ODFWKEY1"
+KEY_TRAILER_LEN = 16
+# The key ids this tool signs with: 0 is the first release key, the one in
+# firmware/keys/opendmd.pub. A rotated key gets the next id (docs/ota.md).
+KEY_ID = 0
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_KEY = Path.home() / ".config" / "opendmd" / "opendmd.key"
@@ -97,6 +111,18 @@ def check_desc(image: bytes, variant: str) -> None:
     if found is None or not found.endswith(" " + variant) or len(found) <= len(variant) + 1:
         raise ValueError(f"the image inside is not an OpenDMD {variant} build "
                          f"(its app descriptor says '{found if found is not None else 'nothing: no app descriptor'}')")
+
+
+def key_trailer(key_id: int = KEY_ID) -> bytes:
+    return KEY_TRAILER_MAGIC + bytes([key_id]) + b"\0" * 7
+
+
+def key_id_of(image: bytes) -> int | None:
+    """The key id the image's trailer names; None without one (key 0)."""
+    t = image[-KEY_TRAILER_LEN:]
+    if len(t) == KEY_TRAILER_LEN and t[:8] == KEY_TRAILER_MAGIC and t[9:] == b"\0" * 7:
+        return t[8]
+    return None
 
 
 def build_header(version: str, image: bytes, key: SigningKey, variant: str = "4mb") -> bytes:
@@ -164,9 +190,15 @@ def cmd_sign(a: argparse.Namespace) -> None:
         check_desc(image, a.variant)
     except ValueError as e:
         die(f"{a.image}: {e}; refusing to sign it as {a.variant}")
+    if key_id_of(image) is not None:
+        die(f"{a.image} already ends with a key trailer: sign the app image itself")
+    image += key_trailer()
+    if len(image) > FACTORY_BYTES[a.variant]:
+        die(f"{a.image} with its key trailer is {len(image)} B, the {a.variant} factory partition is {FACTORY_BYTES[a.variant]} B")
     header = build_header(a.version, image, load_key(Path(a.key).expanduser()), a.variant)
     Path(a.out).write_bytes(header + image)
-    print(f"{a.out}: {a.variant}, version {a.version!r}, image {len(image)} B, sha256 {hashlib.sha256(image).hexdigest()}")
+    print(f"{a.out}: {a.variant}, version {a.version!r}, key {KEY_ID}, image {len(image)} B "
+          f"(the app and a {KEY_TRAILER_LEN} B key trailer), sha256 {hashlib.sha256(image).hexdigest()}")
 
 
 def check(data: bytes, pub: VerifyKey) -> dict:
@@ -185,6 +217,10 @@ def check(data: bytes, pub: VerifyKey) -> dict:
     except BadSignatureError:
         raise ValueError("bad signature (wrong key, or the header was changed)") from None
     check_desc(image, h["variant"])
+    kid = key_id_of(image)
+    if (kid or 0) != KEY_ID:
+        raise ValueError(f"the image names key {kid}, this tool's public key is key {KEY_ID}")
+    h["key_id"] = kid
     return h
 
 
@@ -194,7 +230,8 @@ def cmd_verify(a: argparse.Namespace) -> None:
         h = check(data, load_pub(Path(a.pub)))
     except ValueError as e:
         die(f"{a.bundle}: {e}")
-    print(f"{a.bundle}: ok, {h['variant']}, version {h['version']!r}, image {h['length']} B")
+    kid = "none (a bundle from before key ids: key 0)" if h["key_id"] is None else h["key_id"]
+    print(f"{a.bundle}: ok, {h['variant']}, version {h['version']!r}, image {h['length']} B, key {kid}")
 
 
 def cmd_inspect(a: argparse.Namespace) -> None:
@@ -211,6 +248,8 @@ def cmd_inspect(a: argparse.Namespace) -> None:
     print(f"length   {h['length']} B (image present: {len(image)} B)")
     print(f"sha256   {h['sha256'].hex()} ({'matches' if hashlib.sha256(image).digest() == h['sha256'] else 'DOES NOT match'})")
     print(f"sig      {h['sig'].hex()}")
+    kid = key_id_of(image)
+    print(f"key id   {'none (key 0)' if kid is None else kid}")
     print(f"image[0] 0x{image[0]:02X}" if image else "image[0] (none)")
 
 
@@ -225,7 +264,7 @@ def fake_image(variant: str) -> bytes:
 
 def cmd_selftest(_a: argparse.Namespace) -> None:
     sk = SigningKey.generate()
-    image = fake_image("4mb")
+    image = fake_image("4mb") + key_trailer()
     bundle = build_header("9.9.9-selftest", image, sk) + image
     check(bundle, sk.verify_key)
     cases = {
@@ -252,6 +291,18 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
         print(f"cut short        -> refused: {e}")
     else:
         die("a cut-short bundle verified")
+    # A bundle from before key ids (no trailer) is key 0's.
+    legacy = fake_image("4mb")
+    if check(build_header("9.9.9-selftest", legacy, sk) + legacy, sk.verify_key)["key_id"] is not None:
+        die("a bundle with no key trailer read a key id")
+    print("no key trailer   -> ok (key 0)")
+    other = fake_image("4mb") + key_trailer(1)
+    try:
+        check(build_header("9.9.9-selftest", other, sk) + other, sk.verify_key)
+    except ValueError as e:
+        print(f"key id 1         -> refused: {e}")
+    else:
+        die("a bundle naming key 1 verified as key 0's")
     image8 = fake_image("8mb")
     bundle8 = build_header("9.9.9-selftest", image8, sk, "8mb") + image8
     if check(bundle8, sk.verify_key)["variant"] != "8mb":

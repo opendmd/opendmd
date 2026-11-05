@@ -33,7 +33,8 @@
 use anyhow::Result;
 use esp_idf_sys as sys;
 use opendmd_core::ota::{
-    check_app_desc, verify_header, Header, ImageHasher, Meta, OtaError, HEADER_LEN,
+    check_app_desc, check_floor, check_key_id, verify_header_any, Header, ImageHasher, KeyTail, Meta,
+    OtaError, HEADER_LEN,
 };
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -47,6 +48,16 @@ use crate::httpd::{json_string, BodyError, Respond, Upload};
 /// The Ed25519 public key bundles must be signed with
 /// (`tools/fw-sign.py keygen`; the private half never enters the repo).
 pub const PUBLIC_KEY: &[u8; 32] = include_bytes!("../keys/opendmd.pub");
+
+/// Every key this firmware trusts, by id (docs/ota.md "Keys"): a bundle's
+/// key trailer and a www pack's trailer name one. A rotated key is added
+/// here with the next id, in a release signed with the old one.
+pub const KEYS: &[(u8, &[u8; 32])] = &[(0, PUBLIC_KEY)];
+
+/// The rollback floor (docs/ota.md): built with `OPENDMD_OTA_FLOOR=<version>`
+/// (`make fw-release FW_OTA_FLOOR=...`), a bundle older than it is refused.
+/// Off by default: any validly signed bundle goes, older ones too.
+const OTA_FLOOR: Option<&str> = option_env!("OPENDMD_OTA_FLOOR");
 
 const BUNDLE: &str = "/sdcard/update/opendmd.bin";
 const BUNDLE_PART: &str = "/sdcard/update/opendmd.bin.part";
@@ -111,7 +122,7 @@ pub fn verify_waiting() -> bool {
 }
 
 /// The network worker's side of `NetCommand::VerifyBundle`.
-pub fn serve_verify(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
+pub fn serve_verify(head: &[u8; HEADER_LEN]) -> Result<(Meta, u8), OtaError> {
     VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
     verify_signature(head)
 }
@@ -123,20 +134,22 @@ pub fn serve_verify(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
 /// among them; measured from the ELF's `entry` sizes), more than the stream
 /// task's 7 KB, and the worker's 11 KB has it (`config::NET_WORKER_STACK`). ~50 ms of CPU0.
 #[inline(never)]
-pub fn verify_signature(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
+pub fn verify_signature(head: &[u8; HEADER_LEN]) -> Result<(Meta, u8), OtaError> {
     let header = Header::parse(head)?;
-    verify_header(&header, PUBLIC_KEY)
+    verify_header_any(&header, KEYS)
 }
 
 /// The header checks that need nothing but the header: shape, the flash
 /// layout, signature (on the network worker), that the image fits, that the
-/// body is exactly header + image. `Err(None)`: the worker did not answer.
+/// body is exactly header + image, the rollback floor if built with one.
+/// The trusted header and the id of the key that verified it. `Err(None)`:
+/// the worker did not answer.
 fn check_header(
     head: &[u8],
     body_len: u64,
     factory_size: u32,
     net: &mpsc::Sender<NetCommand>,
-) -> Result<Meta, Option<OtaError>> {
+) -> Result<(Meta, u8), Option<OtaError>> {
     let mut header = Box::new([0u8; HEADER_LEN]);
     if head.len() < HEADER_LEN {
         return Err(Some(OtaError::Truncated { have: head.len() }));
@@ -150,8 +163,12 @@ fn check_header(
     let sent = net.send(NetCommand::VerifyBundle { header, reply: tx });
     let got = sent.ok().and_then(|()| rx.recv_timeout(VERIFY_WAIT).ok());
     VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
-    let meta = got.ok_or(None)??;
+    let (meta, key_id) = got.ok_or(None)??;
     meta.check_fits(factory_size)?;
+    // A const: with no floor (the default) none of this is in the image.
+    if let Some(floor) = OTA_FLOOR {
+        check_floor(&meta.version, Some(floor))?;
+    }
     let image = body_len.saturating_sub(HEADER_LEN as u64);
     if u64::from(meta.length) != image {
         return Err(Some(OtaError::LengthMismatch {
@@ -159,7 +176,7 @@ fn check_header(
             actual: image,
         }));
     }
-    Ok(meta)
+    Ok((meta, key_id))
 }
 
 /// Refuse the bundle: 422 at once, however much of the body is still to
@@ -239,7 +256,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             Err(e) => return aborted(up, &e),
         }
     }
-    let meta = match check_header(&head[..have], len, factory.size, net) {
+    let (meta, key_id) = match check_header(&head[..have], len, factory.size, net) {
         Ok(m) => m,
         Err(Some(e)) => return refuse(up, &e.to_string()),
         Err(None) => {
@@ -253,7 +270,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         }
     };
     log::info!(
-        "PUT /api/firmware: bundle {} ({} B image), signature ok; staging it on the card",
+        "PUT /api/firmware: bundle {} ({} B image), signature ok (key {key_id}); staging it on the card",
         meta.version,
         meta.length
     );
@@ -287,6 +304,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         }
     };
     let mut hasher = ImageHasher::new();
+    let mut tail = KeyTail::default();
     let outcome: std::result::Result<(), anyhow::Error> = loop {
         let n = match up.read(&mut buf) {
             Ok(0) => break file.flush().map_err(Into::into),
@@ -297,6 +315,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             break Err(e);
         }
         hasher.update(&buf[..n]);
+        tail.update(&buf[..n]);
         if let Err(e) = file.write_all(&buf[..n]) {
             break Err(anyhow::Error::from(e).context("writing to the card"));
         }
@@ -317,6 +336,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
     if let Err(e) = meta
         .check_image(got, first, &hasher.finish())
         .and_then(|()| check_app_desc(&prefix, meta.variant))
+        .and_then(|()| check_key_id(key_id, tail.key_id()))
     {
         let _ = fs::remove_file(BUNDLE_PART);
         return refuse(up, &e.to_string());

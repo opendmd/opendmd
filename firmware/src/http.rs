@@ -110,7 +110,7 @@ pub enum NetCommand {
     /// and the stream task's 7 KB does not.
     VerifyBundle {
         header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
-        reply: mpsc::Sender<Result<opendmd_core::ota::Meta, opendmd_core::ota::OtaError>>,
+        reply: mpsc::Sender<Result<(opendmd_core::ota::Meta, u8), opendmd_core::ota::OtaError>>,
     },
     /// Improv Serial over USB (`improv.rs`): a scan, or WiFi details to
     /// join and save. The worker sends the answer itself.

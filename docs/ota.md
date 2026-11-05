@@ -29,7 +29,12 @@ updater leaves after an update (a mismatch is a warning in the log).
 `make fw-ota` waits for exactly that string.
 
 **Older bundles.** A validly signed bundle is installed whatever its
-version: going back is a feature (a release that misbehaves). The web
+version: going back is a feature (a release that misbehaves). A firmware
+can be built with a **rollback floor** instead, off by default:
+`make fw-release FW_OTA_FLOOR=1.0.0` (`OPENDMD_OTA_FLOOR`, read at compile
+time) refuses any bundle older than that version with a 422 at its header
+("firmware X is older than 1.0.0, the oldest this player installs";
+`opendmd_core::ota::check_floor`, the same order as `older()`). The web
 app's Firmware card reads the chosen file's header and, when its version
 is older than the running one (semver-ish: dot-separated numbers, a
 pre-release before its release; `older()` in `js/firmware.js`), asks
@@ -184,6 +189,45 @@ Header 140 B, then the image. The public key is compiled into the firmware
 the repo (`~/.config/opendmd/opendmd.key`, created by `tools/fw-sign.py
 keygen`). `make fw-release` signs; a bundle that fails to verify is refused
 by the device with a 422 and nothing on the card changes.
+
+**The key trailer** (1.0.0-beta.15 on). `fw-sign.py sign` appends 16
+bytes to the app image before it hashes and signs it:
+
+```
+magic     "ODFWKEY1"                                  8 B
+key id    u8: 0 is the first release key (opendmd.pub)
+reserved  7 zero bytes
+```
+
+They are part of the image as the header counts it (`length`, `sha256`),
+so a firmware from before (beta.14 and earlier) verifies such a bundle
+exactly as it did any: to it they are image bytes. The updater writes
+them into the factory partition after the app image, where
+`esp_image_verify` (which sizes the image from its own segment headers)
+never reads. A firmware that knows the trailer checks the id against the
+key that verified the header (`opendmd_core::ota::check_key_id`); a bundle
+without one, from an earlier release, counts as key 0. The proof that old
+firmware takes the new format: `opendmd_core::ota`'s test
+`a_keyed_bundle_passes_the_beta14_checks` (the verification functions are
+unchanged since beta.14) and `make ota-compat`, which runs the beta.14
+tag's own `opendmd-core` against a bundle and a www pack signed now.
+
+## Keys
+
+The firmware trusts the keys in `ota::KEYS` (id, public key); today only
+key 0. **Rotating** later: make a new key, add it as id 1 to `KEYS` in a
+release signed with key 0 (every player takes it), then sign later
+releases with key 1 (`KEY_ID` in `tools/fw-sign.py`); retire key 0 from
+`KEYS` once no player needs it. A leak of key 0 before that means a USB
+reinstall for every player that never got the release with key 1.
+
+**Local-only signing.** Releases are signed on the owner's machine
+(`make release`, `tools/release.sh`): the private key exists only there,
+in `~/.config/opendmd/opendmd.key`, read by `tools/fw-sign.py` (pinned
+`pynacl==1.5.0`) and never copied into a build directory, a CI runner or
+the repo. CI builds and tests with a throwaway key (`FW_SIGN_KEY`,
+`FW_SIGN_PUB`); its release workflow is not the way releases are made.
+
 
 ## The flow
 
