@@ -59,6 +59,7 @@
 
 use anyhow::Result;
 use esp_idf_sys as sys;
+use opendmd_core::ota::www::{PackHasher, Signed};
 use opendmd_core::www_pack::{Header, Pack, PackError, HEADER_LEN};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
@@ -428,6 +429,96 @@ type Failure = (String, Option<(u16, &'static str)>);
 
 const INTERNAL: Option<(u16, &str)> = Some((500, "500 Internal Server Error"));
 
+/// How a pack's signature is checked (docs/www-pack.md "Signature"): on
+/// the network worker for `PUT /api/www`, against the digest that check
+/// left in RTC memory at boot. The reason in words when it fails; `None`
+/// is "could not ask".
+#[derive(Clone, Copy)]
+enum Verify<'a> {
+    /// [`verify_on_worker`].
+    Worker(&'a crate::chan::Sender<crate::http::NetCommand>),
+    /// [`verify_remembered`].
+    Remembered,
+}
+
+/// Check `signed` with `verify`, as a [`Failure`] (422 for a bad one).
+#[optimize(size)]
+fn check_signature(verify: Verify, signed: Signed) -> std::result::Result<(), Failure> {
+    let r = match verify {
+        Verify::Worker(net) => verify_on_worker(signed, net),
+        Verify::Remembered => verify_remembered(signed),
+    };
+    r.map_err(|e| match e {
+        Some(why) => (why.to_string(), Some((422, "422 Unprocessable Entity"))),
+        None => (
+            "the signature could not be checked just now; retry shortly".into(),
+            Some((503, "503 Service Unavailable")),
+        ),
+    })
+}
+
+/// The signed digest of the last pack whose signature verified this power
+/// cycle (`PUT /api/www`), in RTC memory: a software restart keeps it, a
+/// power cut clears it. The boot task's [`Verify`] for a pack left on the
+/// card by a write that failed ([`restore_from_card`]) takes that pack
+/// alone: the network worker, which has the stack for Ed25519, is not
+/// running yet, and a file on the card is anyone's to write.
+#[link_section = ".rtc_noinit"]
+static mut VERIFIED: [u32; 9] = [0; 9];
+const VERIFIED_MAGIC: u32 = 0x5157_7357;
+
+fn verified_word(i: usize) -> *mut u32 {
+    // SAFETY: an element of the static; only reached through volatile ops.
+    unsafe { (&raw mut VERIFIED).cast::<u32>().add(i) }
+}
+
+/// Remember `signed`'s digest (it verified).
+fn remember(signed: &Signed) {
+    for (i, w) in signed.message[9..].chunks(4).enumerate() {
+        // SAFETY: see [`verified_word`]; the stream and boot tasks never run
+        // an update at once (`UPDATE`).
+        unsafe { verified_word(i + 1).write_volatile(u32::from_le_bytes([w[0], w[1], w[2], w[3]])) };
+    }
+    // SAFETY: as above.
+    unsafe { verified_word(0).write_volatile(VERIFIED_MAGIC) };
+}
+
+/// `PUT /api/www`'s [`Verify`]: the network worker checks, and a pack that
+/// verified is [`remember`]ed.
+#[optimize(size)]
+#[inline(never)]
+fn verify_on_worker(
+    signed: Signed,
+    net: &crate::chan::Sender<crate::http::NetCommand>,
+) -> std::result::Result<(), Option<&'static str>> {
+    crate::ota::verify_www_on_worker(signed, net).map_err(|e| {
+        e.map(|e| match e {
+            opendmd_core::ota::OtaError::UnknownKey(_) => "signed with a key this player does not know",
+            _ => "bad signature: not signed by this firmware's key, or the pack was changed",
+        })
+    })?;
+    remember(&signed);
+    Ok(())
+}
+
+/// [`Verify`] at boot: the digest is the one [`remember`]ed.
+#[optimize(size)]
+#[inline(never)]
+fn verify_remembered(signed: Signed) -> std::result::Result<(), Option<&'static str>> {
+    // SAFETY: see [`verified_word`].
+    let same = unsafe { verified_word(0).read_volatile() } == VERIFIED_MAGIC
+        && signed.message[9..].chunks(4).enumerate().all(|(i, w)| {
+            // SAFETY: as above.
+            let have = unsafe { verified_word(i + 1).read_volatile() };
+            have == u32::from_le_bytes([w[0], w[1], w[2], w[3]])
+        });
+    if same {
+        Ok(())
+    } else {
+        Err(Some("not the pack this panel checked before the restart"))
+    }
+}
+
 /// The staged pack on the card, read by offset. **A read the card fails is
 /// tried again** ([`config::WWW_CARD_READ_TRIES`] in all, a pause between):
 /// a 64 GB card at 40 MHz failed one 4 KB read with a data CRC error in a
@@ -504,8 +595,16 @@ impl Staged {
     }
 
     /// The whole staged pack read back and checked against `header`: its
-    /// size, and the CRC of everything after the header.
-    fn check(&mut self, header: &Header, buf: &mut [u8]) -> std::result::Result<(), Unfit> {
+    /// size, the CRC of everything after the header, and its signature
+    /// (`verify`; the bytes hashed as they are read for the CRC).
+    #[optimize(size)]
+    fn check(
+        &mut self,
+        head: &[u8; HEADER_LEN],
+        header: &Header,
+        buf: &mut [u8],
+        verify: Verify,
+    ) -> std::result::Result<(), Unfit> {
         let len = header.total_len as usize;
         let size = std::fs::metadata(STAGED)
             .map_err(|e| Unfit::Unreadable(format!("{STAGED}: {e}")))?
@@ -513,54 +612,42 @@ impl Staged {
         if size != len as u64 {
             return Err(Unfit::Bad(format!("{size} B staged, the pack is {len} B")));
         }
-        let crc = crc_of(|off, out| self.read_at(off, out), len, buf).map_err(Unfit::Unreadable)?;
+        let mut sig = PackHasher::new(len);
+        sig.update(head);
+        let crc = crc_of(|off, out| self.read_at(off, out), len, buf, &mut sig)
+            .map_err(Unfit::Unreadable)?;
         if crc != header.crc32 {
             return Err(Unfit::Bad(format!(
                 "CRC mismatch: the header says {:08x}, the staged pack is {crc:08x}",
                 header.crc32
             )));
         }
-        Ok(())
+        let signed = sig.finish().map_err(|e| Unfit::Bad(e.to_string()))?;
+        check_signature(verify, signed).map_err(|(why, status)| match status {
+            Some((422, _)) => Unfit::Bad(why),
+            _ => Unfit::Busy(why),
+        })
     }
 }
 
 /// Why a staged pack cannot be written.
 enum Unfit {
-    /// It is not the pack its header describes (the client's fault: 422).
+    /// It is not the pack its header describes, or not signed (the
+    /// client's fault: 422).
     Bad(String),
     /// The card would not read it back (the device's: 500).
     Unreadable(String),
+    /// The signature could not be checked just now (503).
+    Busy(String),
 }
 
-/// Where the body after the header comes from: the connection itself, or
-/// the copy staged on the card.
-enum Body<'a> {
-    Upload(&'a mut Upload),
-    Card(Staged),
-}
-
-impl Body<'_> {
-    /// Up to `buf.len()` bytes of the pack from offset `off` (the next
-    /// bytes, for an upload).
-    fn read(&mut self, off: usize, buf: &mut [u8]) -> std::result::Result<usize, Failure> {
-        match self {
-            Body::Upload(up) => up.read(buf).map_err(|e| {
-                let status = e.downcast_ref::<BodyError>().and_then(|b| b.status);
-                (format!("{e:#}"), status)
-            }),
-            Body::Card(staged) => staged
-                .read_at(off, buf)
-                .map(|()| buf.len())
-                .map_err(|e| (e, INTERNAL)),
-        }
-    }
-}
-
-/// CRC-32 of the `len - HEADER_LEN` bytes after the header, from `read`.
+/// CRC-32 of the `len - HEADER_LEN` bytes after the header, from `read`,
+/// each piece through `sig` too (the signature's hash).
 fn crc_of<E>(
     mut read: impl FnMut(usize, &mut [u8]) -> std::result::Result<(), E>,
     len: usize,
     buf: &mut [u8],
+    sig: &mut PackHasher,
 ) -> std::result::Result<u32, E> {
     let mut crc = opendmd_core::www_pack::Crc32::new();
     let mut off = HEADER_LEN;
@@ -568,6 +655,7 @@ fn crc_of<E>(
         let n = (len - off).min(buf.len());
         read(off, &mut buf[..n])?;
         crc.update(&buf[..n]);
+        sig.update(&buf[..n]);
         off += n;
         std::thread::yield_now();
     }
@@ -580,7 +668,8 @@ fn crc_of<E>(
 /// bytes stay erased (0xFF: "no web app") while the body goes in. Then the
 /// body's CRC is computed again *from flash* and only if it matches the
 /// header's is the header written into those erased bytes: a pack header in
-/// flash always means a whole pack whose CRC verified. A failure at any
+/// flash always means a whole pack whose CRC verified (and whose signature
+/// verified on the card, [`Staged::check`]). A failure at any
 /// point leaves the header erased.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
@@ -589,21 +678,15 @@ fn write_pack(
     head: &[u8; HEADER_LEN],
     header: &Header,
     len: usize,
-    body: &mut Body,
+    body: &mut Staged,
     buf: &mut [u8],
 ) -> std::result::Result<(), Failure> {
     let flash_fail = |what: String| (what, INTERNAL);
     let mut off = HEADER_LEN;
     let mut erased = 0usize;
     while off < len {
-        let want = (len - off).min(buf.len());
-        let n = body.read(off, &mut buf[..want])?;
-        if n == 0 {
-            return Err((
-                format!("the body ended at {off} of {len} B"),
-                Some((408, "408 Request Timeout")),
-            ));
-        }
+        let n = (len - off).min(buf.len());
+        body.read_at(off, &mut buf[..n]).map_err(|e| (e, INTERNAL))?;
         while erased < off + n {
             // SAFETY: a sector-aligned range inside the partition (`len` <=
             // its size, a whole number of sectors).
@@ -701,6 +784,7 @@ fn stage_on_card(
     head: &[u8; HEADER_LEN],
     header: &Header,
     buf: &mut [u8],
+    verify: Verify,
 ) -> std::result::Result<std::result::Result<Staged, String>, Result<()>> {
     let dir = format!("{}/update", config::SD_MOUNT);
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -719,7 +803,7 @@ fn stage_on_card(
     }
     let t = Instant::now();
     let mut staged = Staged::new();
-    match staged.check(header, buf) {
+    match staged.check(head, header, buf, verify) {
         Ok(()) => {
             log::info!(
                 "www: the staged pack checks out (read back in {} ms{})",
@@ -738,6 +822,7 @@ fn stage_on_card(
             let (code, line, why) = match unfit {
                 Unfit::Bad(why) => (422, "422 Unprocessable Entity", why),
                 Unfit::Unreadable(why) => (500, "500 Internal Server Error", why),
+                Unfit::Busy(why) => (503, "503 Service Unavailable", why),
             };
             log::warn!("PUT /api/www: refused, the web app in flash is unchanged: {why}");
             Err(up.error(
@@ -752,28 +837,40 @@ fn stage_on_card(
 /// `PUT /api/www`, on the stream task: write a whole pack into the partition
 /// and serve it.
 ///
-/// **With a card** (`no_card` is `None`: mounted and readable), the pack is
-/// received onto the card first (`/update/www.pack.part`) and read back
-/// whole, its size and CRC checked, while the old pack stays mapped: an
-/// upload cut short, a file that is not a good pack, or a card that will
-/// not read it back (after retries) is answered (408, 422, 500, …) with the
-/// web app in flash untouched. Only then is the old pack unmapped and the
-/// partition rewritten from the card, ~3 s, header last ([`write_pack`]),
-/// each card read retried as in the check. If that still fails, the whole
-/// write is tried once more from the start; if that fails too, the
-/// verified copy stays on the card and the next boot writes it
-/// ([`restore_from_card`]). **Without a card**, the body is written to
-/// flash as it arrives (header last as well), so a failure in the middle
-/// leaves no web app until a good pack is written; so does a card on which
-/// the staging file cannot be created (logged with the reason). The reply's
-/// `staged` says which it was. Either way the header is checked before
-/// anything happens (400).
-pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
+/// The pack is received onto the card first (`/update/www.pack.part`) and
+/// read back whole, its size, CRC and signature checked, while the old pack
+/// stays mapped: an upload cut short, a file that is not a good signed pack,
+/// or a card that will not read it back (after retries) is answered (408,
+/// 422, 500, …) with the web app in flash untouched. Only then is the old
+/// pack unmapped and the partition rewritten from the card, ~3 s, header
+/// last ([`write_pack`]), each card read retried as in the check. If that
+/// still fails, the whole write is tried once more from the start; if that
+/// fails too, the verified copy stays on the card and the next boot writes
+/// it ([`restore_from_card`]). **Without a card** (`no_card`: none, or one
+/// that cannot be read), or one on which the staging file cannot be made,
+/// it is refused (503, 500) and the app in flash stays: the signature is
+/// checked on the staged copy (until 1.0.0-beta.15 the body then went to
+/// flash as it arrived). The header is checked before anything happens
+/// (400; 422 unsigned).
+pub fn receive(
+    up: &mut Upload,
+    no_card: Option<&'static str>,
+    net: &crate::chan::Sender<crate::http::NetCommand>,
+) -> Result<()> {
     let _one = UPDATE.lock().unwrap_or_else(|p| p.into_inner());
     // `staged` describes this attempt from here on: null until it gets as
     // far as choosing.
     STAGED_LAST.store(0, Relaxed);
-    let card_mounted = no_card.is_none();
+    // Staged on the card or not at all: the signature is checked on the
+    // staged copy before flash is touched (docs/www-pack.md "Signature").
+    if no_card.is_some() {
+        up.header("Retry-After", "10");
+        return up.error(
+            503,
+            "503 Service Unavailable",
+            "no card (or one that cannot be read): a web app update is staged on the card, insert one",
+        );
+    }
     let Some(part) = partition() else {
         return up.error(
             500,
@@ -822,6 +919,17 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
             header.total_len
         ));
     }
+    // Only a signed pack, refused here before anything is touched (the
+    // signature itself is checked once the whole pack is in).
+    if !header.signed() {
+        log::warn!("PUT /api/www: refused, pack '{}' is not signed", header.version());
+        return up.error(
+            422,
+            "422 Unprocessable Entity",
+            "not signed: this player takes only a release's web app pack (signed); the web app in flash is unchanged",
+        );
+    }
+    let verify = Verify::Worker(net);
     log::info!(
         "www: receiving pack '{}', {len} B, {} entries",
         header.version(),
@@ -829,32 +937,14 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
     );
 
     let started = Instant::now();
-    let staged = if card_mounted {
-        STAGED_LAST.store(2, Relaxed);
-        match stage_on_card(up, &head, &header, &mut buf) {
-            Ok(f) => f,
-            Err(answered) => return answered,
+    STAGED_LAST.store(2, Relaxed);
+    let mut body = match stage_on_card(up, &head, &header, &mut buf, verify) {
+        Ok(Ok(s)) => s,
+        Ok(Err(why)) => {
+            log::warn!("PUT /api/www: cannot stage on the card ({why}); the web app in flash is unchanged");
+            return up.error(500, "500 Internal Server Error", &format!("cannot write to the card: {why}"));
         }
-    } else {
-        Err(no_card.unwrap_or("no card").to_string())
-    };
-    let staged = match staged {
-        Ok(s) => Some(s),
-        Err(why) => {
-            let line = format!("www: no card staging ({why}): writing to flash from the upload, the old web app is replaced during the transfer");
-            if card_mounted {
-                log::warn!("{line}");
-            } else {
-                log::info!("{line}");
-            }
-            None
-        }
-    };
-    let from_card = staged.is_some();
-    STAGED_LAST.store(if from_card { 2 } else { 1 }, Relaxed);
-    let mut body = match staged {
-        Some(s) => Body::Card(s),
-        None => Body::Upload(&mut *up),
+        Err(answered) => return answered,
     };
 
     let mut map = MAP.lock().unwrap_or_else(|p| p.into_inner());
@@ -866,7 +956,7 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
     });
     let mut written = write_pack(part, &head, &header, len, &mut body, &mut buf);
     drop(body);
-    if from_card {
+    {
         if let Err((why, _)) = &written {
             // The partition is erased by now. The copy on the card checked
             // out a moment ago, so try the whole write once more before
@@ -881,7 +971,7 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
                 &head,
                 &header,
                 len,
-                &mut Body::Card(Staged::new()),
+                &mut Staged::new(),
                 &mut buf,
             );
         }
@@ -892,28 +982,18 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
         log::warn!(
             "PUT /api/www: writing the pack failed after {:.1} s ({}): {why}",
             started.elapsed().as_secs_f32(),
-            if from_card {
-                "from the card; the checked copy stays there and is written at the next boot"
-            } else {
-                "from the upload"
-            }
+            "from the card; the checked copy stays there and is written at the next boot"
         );
-        let error = if from_card {
-            format!(
-                "the last web app update failed while writing it to flash ({why}); the checked pack stays on the card and is written at the next restart, or `make www-push` again"
-            )
-        } else {
-            format!("the last web app update failed ({why}): `make www-push` again")
-        };
+        let error = format!(
+            "the last web app update failed while writing it to flash ({why}); the checked pack stays on the card and is written at the next restart, or `make www-push` again"
+        );
         set_info(broken(error.clone()));
         return match status {
             Some((code, line)) => up.error(code, line, &error),
             None => Ok(()),
         };
     }
-    if from_card {
-        let _ = std::fs::remove_file(STAGED);
-    }
+    let _ = std::fs::remove_file(STAGED);
 
     let written_s = started.elapsed().as_secs_f32();
     let t = Instant::now();
@@ -977,10 +1057,13 @@ pub fn restore_from_card() {
             "www: no web app in flash, and pack '{}' ({len} B) staged on the card by an update that failed: checking it",
             header.version()
         );
-        staged.check(&header, &mut buf)?;
+        if !header.signed() {
+            return Err(Unfit::Bad("not signed".into()));
+        }
+        staged.check(&head, &header, &mut buf, Verify::Remembered)?;
         let mut map = MAP.lock().unwrap_or_else(|p| p.into_inner());
         set_mapping(&mut map, None);
-        write_pack(part, &head, &header, len, &mut Body::Card(staged), &mut buf)
+        write_pack(part, &head, &header, len, &mut staged, &mut buf)
             .map_err(|(why, _)| Unfit::Unreadable(why))?;
         let (mapping, info) = load().map_err(Unfit::Unreadable)?;
         set_mapping(&mut map, Some(mapping));
@@ -1001,7 +1084,7 @@ pub fn restore_from_card() {
             let _ = std::fs::remove_file(STAGED);
             log::warn!("www: the pack staged on the card is not usable ({why}); removed it");
         }
-        Err(Unfit::Unreadable(why)) => {
+        Err(Unfit::Unreadable(why) | Unfit::Busy(why)) => {
             log::warn!(
                 "www: the pack staged on the card could not be written ({why}); it stays for the next boot"
             );

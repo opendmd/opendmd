@@ -297,6 +297,9 @@ fn run(worker: NetWorker) {
             Ok(NetCommand::VerifyBundle { header, reply }) => {
                 let _ = reply.send(crate::ota::serve_verify(&header));
             }
+            Ok(NetCommand::VerifyWww { signed, reply }) => {
+                let _ = reply.send(crate::ota::serve_verify_www(&signed));
+            }
             Ok(NetCommand::NameCheck { name, until, reply }) => {
                 // Not sent if it would end after the handler stopped
                 // waiting (it waited behind a connect or a count).

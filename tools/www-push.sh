@@ -3,8 +3,8 @@
 #
 #   tools/www-push.sh <host> <www.pack>        (normally via `make www-push HOST=...`)
 #
-# PUTs the pack (`make web` builds opendmd-web/www.pack; `make fw-release`
-# copies it to dist/) to /api/www, prints the reply, then reads GET /api/www
+# PUTs the pack (`make web` builds opendmd-web/www.pack, signed here first;
+# `make fw-release` signs a copy into dist/) to /api/www, prints the reply, then reads GET /api/www
 # back and checks the device now serves a verified pack with the version the
 # pack's header carries (bytes 20.. of the header, length at byte 18; see
 # docs/www-pack.md). No reboot: the device remaps the new pack in place.
@@ -13,15 +13,25 @@
 # OPENDMD_API_KEY=<key> when the player has an API key set: a cheap GET
 # /api/www goes first so a missing or wrong key is reported in words (the
 # PUT is refused before its body is read, which curl reports only as
-# "Connection reset by peer"). The reply's `staged` false (no card, or one
-# that could not be written) is a warning: the pack went to flash as it
-# arrived, so a transfer cut short would have left no web app.
+# "Connection reset by peer"). Without a usable card the player answers 503:
+# a pack is staged on the card or not at all (docs/www-pack.md).
 set -euo pipefail
 
 host=${1:?usage: tools/www-push.sh <host> <www.pack>}
 pack=${2:?usage: tools/www-push.sh <host> <www.pack>}
 [ -f "$pack" ] || { echo "no such pack: $pack (run make web first)" >&2; exit 2; }
 [ "$(head -c 4 "$pack")" = "ODWP" ] || { echo "$pack is not a www pack" >&2; exit 2; }
+# A player takes only a signed pack (docs/www-pack.md "Signature"): a local
+# build (`make web`'s, unsigned) is signed here with FW_SIGN_KEY (default
+# ~/.config/opendmd/opendmd.key) into a temporary copy.
+if [ $(( $(od -An -tu1 -j19 -N1 "$pack" | tr -d ' ') & 1 )) -eq 0 ]; then
+    key=${FW_SIGN_KEY:-$HOME/.config/opendmd/opendmd.key}
+    [ -f "$key" ] || { echo "$pack is not signed and there is no key at $key to sign it (FW_SIGN_KEY=...)" >&2; exit 2; }
+    signed=$(mktemp --suffix=.pack)
+    trap 'rm -f "$signed"' EXIT
+    uv run --quiet "$(dirname "$0")/fw-sign.py" sign-www "$pack" --out "$signed" --key "$key"
+    pack=$signed
+fi
 auth=()
 [ -n "${OPENDMD_API_KEY:-}" ] && auth=(-H "Authorization: Bearer $OPENDMD_API_KEY")
 
@@ -53,11 +63,6 @@ body=${reply%$'\n'*}
 t1=$(date +%s.%N)
 awk -v c="$code" -v a="$t0" -v b="$t1" -v r="$body" 'BEGIN { printf "HTTP %s in %.1f s: %s\n", c, b - a, r }'
 [ "$code" = 200 ] || exit 1
-case "$body" in
-    *'"staged":false'*)
-        echo "warning: not staged on the card (no card, or it could not be written; the device log says why):" >&2
-        echo "warning: the pack went to flash as it arrived, so a transfer cut short would have left no web app" >&2 ;;
-esac
 
 info=$(curl -sS --max-time 10 "${auth[@]}" "http://$host/api/www")
 echo "GET /api/www: $info"

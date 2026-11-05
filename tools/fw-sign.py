@@ -8,6 +8,8 @@
     uv run tools/fw-sign.py sign <app.bin> --version <v> [--variant 4mb|8mb] --out <bundle.odfw> [--key K]
     uv run tools/fw-sign.py verify <bundle.odfw> [--pub P]
     uv run tools/fw-sign.py inspect <bundle.odfw>
+    uv run tools/fw-sign.py sign-www <www.pack> --out <signed.pack> [--key K]
+    uv run tools/fw-sign.py verify-www <www.pack> [--pub P]
     uv run tools/fw-sign.py selftest          # sign, verify, tamper each field -> refused
 
 A bundle is a 140-byte header and then the app image (what `espflash
@@ -26,6 +28,15 @@ knows nothing of it: to it the trailer is image bytes (counted in `length`,
 covered by `sha256`), and the updater writes it after the app image, where
 esp_image_verify never reads. A firmware that knows it checks the id
 against the key that verified the header (opendmd_core::ota::key_id_of).
+
+A www pack (docs/www-pack.md) is signed by `sign-www`: header byte 19 gets
+bit 0 (signed), the total length grows by a 72-byte trailer ("ODWS", the
+key id, 3 zero bytes, an Ed25519 signature over "ODWPSIG1" | key id |
+SHA-256 of the pack before the trailer with the CRC field as zeros), and
+the CRC is computed last, over the trailer too (opendmd_core::ota::www).
+Firmware before 1.0.0-beta.15 ignores byte 19 and bytes past the last
+file, so it takes a signed pack as it took any; from beta.15 on, PUT
+/api/www takes only signed packs.
 
 The magic names the flash layout (the variant) the image is built for: a
 4mb bundle keeps the original magic, so the 4 MB players already in use take
@@ -46,6 +57,7 @@ import hashlib
 import os
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 from nacl.exceptions import BadSignatureError
@@ -67,6 +79,11 @@ KEY_TRAILER_LEN = 16
 # The key ids this tool signs with: 0 is the first release key, the one in
 # firmware/keys/opendmd.pub. A rotated key gets the next id (docs/ota.md).
 KEY_ID = 0
+# The www pack's signature (opendmd_core::ota::www, docs/www-pack.md).
+WWW_FLAG_SIGNED = 1
+WWW_TRAILER_MAGIC = b"ODWS"
+WWW_TRAILER_LEN = 72
+WWW_DOMAIN = b"ODWPSIG1"
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_KEY = Path.home() / ".config" / "opendmd" / "opendmd.key"
@@ -253,6 +270,69 @@ def cmd_inspect(a: argparse.Namespace) -> None:
     print(f"image[0] 0x{image[0]:02X}" if image else "image[0] (none)")
 
 
+def www_sign(pack: bytes, key: SigningKey, key_id: int = KEY_ID) -> bytes:
+    """A www pack, signed (a pack already signed is signed again)."""
+    data = bytearray(pack)
+    if len(data) < 64 or data[:4] != b"ODWP" or struct.unpack_from("<H", data, 4)[0] != 1:
+        raise ValueError("not a format 1 www pack")
+    (total,) = struct.unpack_from("<I", data, 8)
+    if total != len(data):
+        raise ValueError(f"the header says {total} B, the file is {len(data)} B")
+    if data[19] & WWW_FLAG_SIGNED:
+        del data[-WWW_TRAILER_LEN:]
+    data[19] |= WWW_FLAG_SIGNED
+    struct.pack_into("<I", data, 8, len(data) + WWW_TRAILER_LEN)
+    data[12:16] = b"\0" * 4
+    msg = WWW_DOMAIN + bytes([key_id]) + hashlib.sha256(bytes(data)).digest()
+    data += WWW_TRAILER_MAGIC + bytes([key_id, 0, 0, 0]) + key.sign(msg).signature
+    struct.pack_into("<I", data, 12, zlib.crc32(bytes(data[64:])))
+    return bytes(data)
+
+
+def www_check(pack: bytes, pub: VerifyKey) -> dict:
+    """As the firmware checks a PUT /api/www: the header, the CRC, the signature."""
+    if len(pack) < 64 or pack[:4] != b"ODWP":
+        raise ValueError("not a www pack")
+    (total, crc) = struct.unpack_from("<II", pack, 8)
+    if total != len(pack):
+        raise ValueError(f"the header says {total} B, the file is {len(pack)} B")
+    if zlib.crc32(pack[64:]) != crc:
+        raise ValueError("CRC mismatch")
+    if not pack[19] & WWW_FLAG_SIGNED or len(pack) < 64 + WWW_TRAILER_LEN:
+        raise ValueError("not signed")
+    t = pack[-WWW_TRAILER_LEN:]
+    if t[:4] != WWW_TRAILER_MAGIC or t[5:8] != b"\0\0\0":
+        raise ValueError("not signed (no signature trailer)")
+    if t[4] != KEY_ID:
+        raise ValueError(f"signed with key {t[4]}, this tool's public key is key {KEY_ID}")
+    body = bytearray(pack[:-WWW_TRAILER_LEN])
+    body[12:16] = b"\0" * 4
+    msg = WWW_DOMAIN + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
+    try:
+        pub.verify(msg, t[8:])
+    except BadSignatureError:
+        raise ValueError("bad signature (wrong key, or the pack was changed)") from None
+    return {"version": pack[20:20 + pack[18]].decode("utf-8", "replace"), "key_id": t[4], "bytes": len(pack)}
+
+
+def cmd_sign_www(a: argparse.Namespace) -> None:
+    pack = Path(a.pack).read_bytes()
+    try:
+        out = www_sign(pack, load_key(Path(a.key).expanduser()))
+    except ValueError as e:
+        die(f"{a.pack}: {e}")
+    Path(a.out).write_bytes(out)
+    print(f"{a.out}: www pack '{out[20:20 + out[18]].decode()}', signed with key {KEY_ID}, {len(out)} B")
+
+
+def cmd_verify_www(a: argparse.Namespace) -> None:
+    try:
+        h = www_check(Path(a.pack).read_bytes(), load_pub(Path(a.pub)))
+    except ValueError as e:
+        die(f"{a.pack}: {e}")
+    print(f"{a.pack}: ok, www pack '{h['version']}', key {h['key_id']}, {h['bytes']} B")
+
+
 def fake_image(variant: str) -> bytes:
     """4 KB that pass for an app image of `variant`: 0xE9 first, an app
     descriptor at 0x20 with "9.9.9-selftest <variant>" at 0x30."""
@@ -324,6 +404,35 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
         print(f"4mb image, 8mb   -> refused: {e}")
     else:
         die("a 4mb image in an 8mb bundle verified")
+    # The www pack: a minimal format 1 pack (no entries), signed, checked,
+    # then each part tampered.
+    pack = bytearray(64)
+    pack[:4] = b"ODWP"
+    struct.pack_into("<HHI", pack, 4, 1, 64, 64)
+    pack[18] = 4
+    pack[20:24] = b"v9.9"
+    struct.pack_into("<I", pack, 12, zlib.crc32(b""))
+    signed = www_sign(bytes(pack), sk)
+    www_check(signed, sk.verify_key)
+    if www_sign(signed, sk) != signed:
+        die("signing a signed pack again changed it")
+    print("www round trip   -> ok")
+    for name, at in {"version": 20, "flag": 19, "trailer": len(signed) - 70, "sig": len(signed) - 1}.items():
+        b = bytearray(signed)
+        b[at] ^= 0x01
+        struct.pack_into("<I", b, 12, zlib.crc32(bytes(b[64:])))  # a CRC that matches: only the signature can tell
+        try:
+            www_check(bytes(b), sk.verify_key)
+        except ValueError as e:
+            print(f"www {name:12} -> refused: {e}")
+        else:
+            die(f"a www pack with its {name} tampered verified")
+    try:
+        www_check(bytes(pack), sk.verify_key)
+    except ValueError as e:
+        print(f"www unsigned     -> refused: {e}")
+    else:
+        die("an unsigned www pack verified")
     print("selftest ok")
 
 
@@ -345,9 +454,17 @@ def main() -> None:
     v.add_argument("--pub", default=str(DEFAULT_PUB))
     i = sub.add_parser("inspect", help="print a bundle's header")
     i.add_argument("bundle")
+    sw = sub.add_parser("sign-www", help="www pack -> signed www pack")
+    sw.add_argument("pack")
+    sw.add_argument("--out", required=True)
+    sw.add_argument("--key", default=str(DEFAULT_KEY))
+    vw = sub.add_parser("verify-www", help="check a www pack as the device does")
+    vw.add_argument("pack")
+    vw.add_argument("--pub", default=str(DEFAULT_PUB))
     sub.add_parser("selftest", help="round trip and tamper checks with a throwaway key")
     a = p.parse_args()
-    {"keygen": cmd_keygen, "sign": cmd_sign, "verify": cmd_verify, "inspect": cmd_inspect, "selftest": cmd_selftest}[a.cmd](a)
+    {"keygen": cmd_keygen, "sign": cmd_sign, "verify": cmd_verify, "inspect": cmd_inspect,
+     "sign-www": cmd_sign_www, "verify-www": cmd_verify_www, "selftest": cmd_selftest}[a.cmd](a)
 
 
 if __name__ == "__main__":

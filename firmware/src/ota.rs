@@ -127,6 +127,41 @@ pub fn serve_verify(head: &[u8; HEADER_LEN]) -> Result<(Meta, u8), OtaError> {
     verify_signature(head)
 }
 
+/// The network worker's side of `NetCommand::VerifyWww`: a web app pack's
+/// signature (`www::receive`), for the same reason as a bundle's.
+/// (Its reply goes on a bundle's kind of channel, `Ok` with an empty
+/// `Meta`: one channel type less in the image.)
+pub fn serve_verify_www(signed: &opendmd_core::ota::www::Signed) -> Result<(Meta, u8), OtaError> {
+    VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
+    opendmd_core::ota::www::verify(signed, KEYS)?;
+    Ok((
+        Meta {
+            variant: "",
+            version: String::new(),
+            length: 0,
+            sha256: [0; 32],
+        },
+        signed.key_id,
+    ))
+}
+
+/// Have the network worker check a www pack's signature (the stream task's
+/// stack cannot: see [`verify_signature`]). `Err(None)`: it did not answer.
+pub fn verify_www_on_worker(
+    signed: opendmd_core::ota::www::Signed,
+    net: &mpsc::Sender<NetCommand>,
+) -> Result<(), Option<OtaError>> {
+    let (tx, rx) = mpsc::channel();
+    VERIFY_WAITING.store(true, std::sync::atomic::Ordering::Relaxed);
+    let sent = net.send(NetCommand::VerifyWww {
+        signed: Box::new(signed),
+        reply: tx,
+    });
+    let got = sent.ok().and_then(|()| rx.recv_timeout(VERIFY_WAIT).ok());
+    VERIFY_WAITING.store(false, std::sync::atomic::Ordering::Relaxed);
+    got.ok_or(None)?.map(|_| ()).map_err(Some)
+}
+
 /// Parse a bundle header and check its signature against [`PUBLIC_KEY`].
 /// **On the network worker** (`NetCommand::VerifyBundle`): Ed25519's
 /// variable-base multiplication keeps ~7-8.5 KB of frames on the stack

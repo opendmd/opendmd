@@ -31,6 +31,8 @@
 //! trailer checks the id against the key that verified the header; a bundle
 //! without one (earlier releases) counts as key 0, the first release key.
 //!
+//! **The web app pack's signature** is [`www`].
+//!
 //! Verify-only: no key generation, no `rand`. The order on the device is
 //! [`Header::parse`] on the first 140 B of the body, [`Header::check_variant`]
 //! against its own layout, [`verify_header`] (the signature), then the image
@@ -152,6 +154,10 @@ pub enum OtaError {
         version: String,
         floor: String,
     },
+    /// A web app pack without a signature (or with a damaged trailer).
+    Unsigned,
+    /// Signed with a key this firmware does not know.
+    UnknownKey(u8),
 }
 
 impl fmt::Display for OtaError {
@@ -200,6 +206,12 @@ impl fmt::Display for OtaError {
                 f,
                 "firmware {version} is older than {floor}, the oldest this player installs"
             ),
+            OtaError::Unsigned => f.write_str(
+                "not signed: this player takes only a release's web app pack (signed)",
+            ),
+            OtaError::UnknownKey(id) => {
+                write!(f, "signed with key {id}, which this player does not know")
+            }
         }
     }
 }
@@ -471,6 +483,7 @@ impl ImageHasher {
         &self.prefix
     }
 
+    #[inline(never)]
     pub fn finish(self) -> [u8; 32] {
         self.sha.finalize().into()
     }
@@ -631,6 +644,148 @@ pub fn check_floor(version: &str, floor: Option<&str>) -> Result<(), OtaError> {
             floor: f.to_string(),
         }),
         _ => Ok(()),
+    }
+}
+
+/// The web app pack's signature (1.0.0-beta.15 on): `www_pack`'s header
+/// flag [`crate::www_pack::FLAG_SIGNED`] and a 72-byte trailer at the end of
+/// the pack, inside its total length and its CRC:
+///
+/// ```text
+/// offset  size  field
+///      0     4  "ODWS"
+///      4     1  key id (0: the first release key, as for firmware bundles)
+///      5     3  zero
+///      8    64  Ed25519 signature over "ODWPSIG1" | key id | SHA-256 of the
+///               pack's bytes before the trailer, the header's CRC field
+///               (bytes 12..16) taken as zeros
+/// ```
+///
+/// The CRC is computed last, over the trailer too, so the CRC still covers
+/// everything after the header and the signature covers everything but the
+/// CRC. `tools/fw-sign.py sign-www` signs; the firmware verifies with the
+/// same keys as bundles before a `PUT /api/www` touches flash.
+pub mod www {
+    use super::{ImageHasher, OtaError, PUBLIC_KEY_LEN};
+    use crate::www_pack::SIG_TRAILER_LEN;
+    use ed25519_dalek::{Signature, VerifyingKey};
+
+    /// The trailer's magic.
+    pub const TRAILER_MAGIC: [u8; 4] = *b"ODWS";
+    /// The signed message's first 8 bytes (nothing else is signed with them).
+    pub const DOMAIN: [u8; 8] = *b"ODWPSIG1";
+    /// The signed message: the domain, the key id, the digest.
+    pub const MESSAGE_LEN: usize = 8 + 1 + 32;
+
+    /// What a pack's signature check needs, once the whole pack has gone
+    /// through a [`PackHasher`].
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Signed {
+        pub key_id: u8,
+        pub message: [u8; MESSAGE_LEN],
+        pub sig: [u8; 64],
+    }
+
+    /// A signed pack fed in order from its first byte, in pieces of any
+    /// size: the SHA-256 of what the signature covers, and the trailer.
+    /// ~250 B of state.
+    #[derive(Clone)]
+    pub struct PackHasher {
+        // (An image's hasher, for its SHA-256: one copy of the hash's
+        // finishing code in the firmware.)
+        sha: ImageHasher,
+        total: usize,
+        at: usize,
+        trailer: [u8; SIG_TRAILER_LEN],
+    }
+
+    impl PackHasher {
+        /// For a pack of `total` bytes (its header's total length).
+        pub fn new(total: usize) -> PackHasher {
+            PackHasher {
+                sha: ImageHasher::new(),
+                total,
+                at: 0,
+                trailer: [0; SIG_TRAILER_LEN],
+            }
+        }
+
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
+        pub fn update(&mut self, mut data: &[u8]) {
+            let body = self.total.saturating_sub(SIG_TRAILER_LEN);
+            while !data.is_empty() && self.at < self.total {
+                let at = self.at;
+                let n = if at < 12 {
+                    (12 - at).min(data.len())
+                } else if at < 16 {
+                    (16 - at).min(data.len())
+                } else if at < body {
+                    (body - at).min(data.len())
+                } else {
+                    (self.total - at).min(data.len())
+                };
+                let (piece, rest) = data.split_at(n);
+                if (12..16).contains(&at) {
+                    self.sha.update(&[0u8; 4][..n]);
+                } else if at < body {
+                    self.sha.update(piece);
+                } else {
+                    let t = at - body;
+                    self.trailer[t..t + n].copy_from_slice(piece);
+                }
+                self.at += n;
+                data = rest;
+            }
+        }
+
+        /// The message and signature, once all `total` bytes are in.
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
+        pub fn finish(self) -> Result<Signed, OtaError> {
+            if self.at != self.total || self.total < SIG_TRAILER_LEN {
+                return Err(OtaError::Unsigned);
+            }
+            let t = &self.trailer;
+            if t[..4] != TRAILER_MAGIC || t[5..8] != [0, 0, 0] {
+                return Err(OtaError::Unsigned);
+            }
+            let key_id = t[4];
+            let mut message = [0u8; MESSAGE_LEN];
+            message[..8].copy_from_slice(&DOMAIN);
+            message[8] = key_id;
+            message[9..].copy_from_slice(&self.sha.finish());
+            let mut sig = [0u8; 64];
+            sig.copy_from_slice(&t[8..]);
+            Ok(Signed {
+                key_id,
+                message,
+                sig,
+            })
+        }
+    }
+
+    /// Check a pack's signature against the key its trailer names, among
+    /// the `(id, key)` this firmware trusts. Strict verification.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    pub fn verify(signed: &Signed, keys: &[(u8, &[u8; PUBLIC_KEY_LEN])]) -> Result<(), OtaError> {
+        let Some(&(_, key)) = keys.iter().find(|(id, _)| *id == signed.key_id) else {
+            return Err(OtaError::UnknownKey(signed.key_id));
+        };
+        let key = VerifyingKey::from_bytes(key).map_err(|_| OtaError::BadKey)?;
+        key.verify_strict(&signed.message, &Signature::from_bytes(&signed.sig))
+            .map_err(|_| OtaError::BadSignature)
+    }
+
+    /// The whole check on a pack in memory (the tests, `opendmd-pack`).
+    pub fn verify_bytes(pack: &[u8], keys: &[(u8, &[u8; PUBLIC_KEY_LEN])]) -> Result<u8, OtaError> {
+        let header = crate::www_pack::Header::parse(pack).map_err(|_| OtaError::BadMagic)?;
+        if !header.signed() || header.total_len as usize != pack.len() {
+            return Err(OtaError::Unsigned);
+        }
+        let mut h = PackHasher::new(pack.len());
+        h.update(pack);
+        let s = h.finish()?;
+        verify(&s, keys)?;
+        Ok(s.key_id)
     }
 }
 
@@ -1134,4 +1289,121 @@ mod tests {
         );
     }
 
+    /// `tools/fw-sign.py sign-www` with the KAT seed over the empty pack
+    /// `www_pack::build("v9.9", [])`.
+    const KAT_WWW: &str = "4f44575001004000880000009db293160000040176392e390000000000000000000000000000000000\
+        00000000000000000000000000000000000000000000004f4457530000000072dcc9f23ebed4ebe6f51898489334602e\
+        594749afce0bec9e5018fff10c7a1eaaa6c21245746539a0633fde1c9ce6cb6a0a59d3e6bb9b302af77898a7aa060b";
+
+    /// What `sign-www` does, here, for packs the tests make up.
+    fn sign_www(pack: &[u8], seed: [u8; 32], key_id: u8) -> Vec<u8> {
+        use crate::www_pack::{FLAG_SIGNED, SIG_TRAILER_LEN};
+        use ed25519_dalek::Signer;
+        let mut d = pack.to_vec();
+        d[19] |= FLAG_SIGNED;
+        let total = (d.len() + SIG_TRAILER_LEN) as u32;
+        d[8..12].copy_from_slice(&total.to_le_bytes());
+        d[12..16].fill(0);
+        let mut msg = www::DOMAIN.to_vec();
+        msg.push(key_id);
+        msg.extend_from_slice(&sha256(&d));
+        let sig = ed25519_dalek::SigningKey::from_bytes(&seed).sign(&msg);
+        d.extend_from_slice(&www::TRAILER_MAGIC);
+        d.extend_from_slice(&[key_id, 0, 0, 0]);
+        d.extend_from_slice(&sig.to_bytes());
+        let crc = crate::www_pack::crc32(&d[crate::www_pack::HEADER_LEN..]);
+        d[12..16].copy_from_slice(&crc.to_le_bytes());
+        d
+    }
+
+    fn kat_seed() -> [u8; 32] {
+        std::array::from_fn(|i| i as u8)
+    }
+
+    #[test]
+    fn the_www_vector_verifies_and_matches() {
+        let kat = unhex(KAT_WWW);
+        assert_eq!(www::verify_bytes(&kat, &[(0, &kat_pub())]), Ok(0));
+        let empty = crate::www_pack::build("v9.9", vec![]).unwrap();
+        assert_eq!(sign_www(&empty, kat_seed(), 0), kat);
+    }
+
+    fn a_pack() -> Vec<u8> {
+        use crate::www_pack::{build, PackFile};
+        build(
+            "v1.0.0-beta.15",
+            vec![
+                PackFile {
+                    path: "index.html".into(),
+                    data: b"<!doctype html>hello".to_vec(),
+                    gzip: false,
+                },
+                PackFile {
+                    path: "js/app.js".into(),
+                    data: vec![7; 1001],
+                    gzip: true,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_signed_pack_is_a_pack_to_older_firmware() {
+        use crate::www_pack::{Header as WHeader, Pack};
+        let signed = sign_www(&a_pack(), kat_seed(), 0);
+        // What 1.0.0-beta.14's `www::receive` and `load` check: the header
+        // (byte 19 was reserved and never read), the total length, the
+        // CRC, every entry.
+        let h = WHeader::parse(&signed).unwrap();
+        assert_eq!(h.total_len as usize, signed.len());
+        assert_eq!(h.version(), "v1.0.0-beta.15");
+        let pack = Pack::parse(&signed).unwrap();
+        pack.verify().unwrap();
+        assert_eq!(pack.get("index.html").unwrap().data, b"<!doctype html>hello");
+        assert_eq!(pack.get("js/app.js").unwrap().data.len(), 1001);
+        assert!(pack.get("js/app.js").unwrap().gzip);
+        assert!(h.signed());
+        assert!(!WHeader::parse(&a_pack()).unwrap().signed());
+    }
+
+    #[test]
+    fn www_signatures() {
+        let keys = [(0u8, &kat_pub())];
+        let signed = sign_www(&a_pack(), kat_seed(), 0);
+        assert_eq!(www::verify_bytes(&signed, &keys), Ok(0));
+        // In pieces of every size, as an upload or a card read delivers it.
+        for n in [1, 3, 12, 13, 64, 71, 72, 1000] {
+            let mut h = www::PackHasher::new(signed.len());
+            for p in signed.chunks(n) {
+                h.update(p);
+            }
+            www::verify(&h.finish().unwrap(), &keys).unwrap();
+        }
+        // Signing again changes nothing (the trailer and flag replaced).
+        // Unsigned: refused.
+        assert_eq!(www::verify_bytes(&a_pack(), &keys), Err(OtaError::Unsigned));
+        // A changed byte anywhere but the CRC field, with the CRC made to
+        // match: only the signature can tell.
+        for at in [4, 18, 19, 20, 64, 100, signed.len() - 80, signed.len() - 70, signed.len() - 1] {
+            let mut b = signed.clone();
+            b[at] ^= 1;
+            let crc = crate::www_pack::crc32(&b[64..]);
+            b[12..16].copy_from_slice(&crc.to_le_bytes());
+            assert!(www::verify_bytes(&b, &keys).is_err(), "byte {at}");
+        }
+        // The CRC field is not signed (it covers the signature).
+        let mut b = signed.clone();
+        b[12] ^= 1;
+        assert_eq!(www::verify_bytes(&b, &keys), Ok(0));
+        // Another key; a key id this firmware does not know.
+        let other = sign_www(&a_pack(), [5; 32], 0);
+        assert_eq!(www::verify_bytes(&other, &keys), Err(OtaError::BadSignature));
+        let id1 = sign_www(&a_pack(), kat_seed(), 1);
+        assert_eq!(www::verify_bytes(&id1, &keys), Err(OtaError::UnknownKey(1)));
+        // Cut short.
+        let mut h = www::PackHasher::new(signed.len());
+        h.update(&signed[..signed.len() - 1]);
+        assert_eq!(h.finish().unwrap_err(), OtaError::Unsigned);
+    }
 }
