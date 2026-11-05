@@ -4263,7 +4263,7 @@ IMPORT_SEND = """([u, b64, fields, size]) => {
         e.source.postMessage({ type: 'opendmd-import', gif: buf, ...fields }, '*', [buf]);
         window.__sent = buf.byteLength;  // 0 once transferred
     });
-    window.open(u, '_blank');
+    window.__kid = window.open(u, '_blank');
 }"""
 
 
@@ -4344,9 +4344,22 @@ def import_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     other.context.route("http://elsewhere.test/**", lambda r: r.fulfill(status=200, headers={"content-type": "text/html"}, body="<!doctype html><p>elsewhere"))
     other.goto("http://elsewhere.test/")
     app = import_open(other, base, errors, gif, fields)
+    # It is never told the app is ready (READY goes to the allowed origins
+    # only, not '*': the review's L8), so it sends blindly, every 200 ms.
+    other.evaluate("""([b64, fields]) => {
+        window.__blind = 0;
+        const t = setInterval(() => {
+            const buf = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+            window.__kid.postMessage({ type: 'opendmd-import', gif: buf, ...fields }, '*', [buf]);
+            window.__blind++;
+        }, 200);
+        setTimeout(() => clearInterval(t), 4000);
+    }""", [base64.b64encode(gif).decode(), fields])
     app.wait_for_selector("#view-library.on", timeout=20000)
     app.wait_for_timeout(3000)
-    check(app.locator("#dl").count() == 0 and other.evaluate("window.__sent") == 0, "import: a GIF sent from another site is ignored")
+    sent, blind = other.evaluate("window.__sent"), other.evaluate("window.__blind")
+    check(app.locator("#dl").count() == 0 and sent is None and blind > 5,
+          f"import: an opener on another site is not told the app is ready, and the GIFs it sends anyway are ignored (ready: {sent is not None}, sent {blind})")
     other.context.close()
     # No opener: said.
     page = new_page(browser, "laptop", errors)
