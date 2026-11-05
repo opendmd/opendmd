@@ -43,6 +43,7 @@ Exit 2: no lists.
 """
 import argparse
 import datetime
+import json
 import re
 import sys
 import urllib.request
@@ -224,6 +225,20 @@ def main():
         reqs.append((SITE + p, SITE + "/", t, "site page/asset"))
         if p.endswith((".json", ".psi", ".txt")):
             reqs.append((SITE + p, PANEL_HOSTS[0] + "/", "xmlhttprequest", "site file, third-party from the panel's app"))
+
+    # The counted requests (site/worker/src/counts.ts) as they are made, query
+    # strings included: the web app's update check (update.js, from the panel's
+    # page and from the demo) and the installer's firmware download (ESP Web
+    # Tools' fetch, from /install/), and the page that shows the counts.
+    rel_ver = json.loads(Path(a.site, "install/release.json").read_text())["version"] if Path(a.site, "install/release.json").is_file() else "1.0.0-beta.14"
+    for host in PANEL_HOSTS + [SITE + "/demo"]:
+        for lay in ("4mb", "8mb"):
+            reqs.append((f"{SITE}/install/release.json?v={rel_ver}&layout={lay}", host + "/", "xmlhttprequest", "counted: the update check"))
+    for lay in ("4mb", "8mb"):
+        for part in ("app", "full"):
+            reqs.append((f"{SITE}/install/firmware/opendmd-{rel_ver}-{lay}-{part}.bin", SITE + "/install/", "xmlhttprequest", "counted: an install"))
+    for p in ("/stats", "/stats/"):
+        reqs.append((SITE + p, SITE + "/", "document", "the usage page"))
 
     if a.list_urls:
         for r in reqs:
