@@ -107,7 +107,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate release
 
@@ -924,6 +924,14 @@ fw-sign:
 fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
 	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
+
+# The older firmware takes what is signed now: an older release's own
+# opendmd-core (OTA_COMPAT_TAG, a detached worktree under target/) checks a
+# bundle and a www pack signed now (tools/ota-compat.sh; throwaway-key ones,
+# or OTA_COMPAT_FILES="<bundle> <pub> <www>"). OTA_COMPAT_OK.
+OTA_COMPAT_TAG ?= v1.0.0-beta.14
+ota-compat:
+	tools/ota-compat.sh $(OTA_COMPAT_TAG) $(OTA_COMPAT_FILES)
 
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
