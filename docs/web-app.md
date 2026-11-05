@@ -361,8 +361,12 @@ the firmware and the core: they are Formulas now, in the site's gallery
 (`opendmd-web/formulas/*.psi`, one file each; the web app bundles ten of
 them, the ones marked `-- bundle`, as `www/formulas.json`, written by
 `make web`), where they can be read and changed. A Formula plays, sends to the panel and goes in a playlist like any
-GIF (**Show on panel**, **Add to playlist…**), as a line
-`@formula?psb=…` (the compiled Formula; see [the HTTP API](api.md)). A retired `@fx:` line in a
+GIF (**Show on panel**, **Add to playlist…**). Show on panel and its live
+edits send the compiled Formula as bytes (`POST /api/play/formula`, played
+as `@formula:~sent`, held in the player's memory: no length rides on a path
+and the card is never written, so a Formula of any length the editor takes
+shows); a playlist names it by reference, or with no card as a line
+`@formula?psb=…` (see [the HTTP API](api.md)). A retired `@fx:` line in a
 playlist is skipped with a log line. Follow RePlayOS can show the clock or a
 text in the menus instead of its attract playlist, and a playlist of one
 Formula, chosen as the attract playlist, does the same for a Formula

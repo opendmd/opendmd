@@ -74,6 +74,10 @@ pub fn check(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Ok(());
     }
+    // (Held only while it is on the panel: a setting would outlive it.)
+    if opendmd_core::synth::is_sent(path) {
+        return Err("save the Formula first".into());
+    }
     #[cfg(feature = "psi")]
     {
         build(path).map(drop).map_err(|e| e.msg)

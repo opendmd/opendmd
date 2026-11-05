@@ -184,6 +184,36 @@ pub fn bundled(name: &str) -> Option<&'static [u8]> {
         .map(|(_, s)| *s)
 }
 
+/// The Formula the editor sent to the panel (`POST /api/play/formula`):
+/// played as `@formula:~sent[?a=&b=&c=&fps=]`, its compiled bytes held in
+/// memory ([`set_sent`]), so a Formula's length never rides on its path.
+/// One at a time: each one sent replaces the last, and it is let go once
+/// the panel moves on to anything else. Not kept in Recently played.
+pub const SENT_NAME: &str = "~sent";
+pub const SENT: &str = "@formula:~sent";
+type Held = std::sync::Mutex<Option<std::sync::Arc<Vec<u8>>>>;
+static SENT_PSB: Held = std::sync::Mutex::new(None);
+
+/// Hold `psb` as the sent Formula (`None`: let the last one go).
+pub fn set_sent(psb: Option<Vec<u8>>) {
+    let old = std::mem::replace(
+        &mut *SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()),
+        psb.map(std::sync::Arc::new),
+    );
+    drop(old);
+}
+
+/// The sent Formula's compiled bytes, while it is held.
+pub fn sent() -> Option<std::sync::Arc<Vec<u8>>> {
+    SENT_PSB.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Is `path` the sent Formula's ([`SENT`], maybe with options)?
+pub fn is_sent(path: &str) -> bool {
+    path.strip_prefix(SENT)
+        .is_some_and(|r| r.is_empty() || r.starts_with('?'))
+}
+
 /// The names of the bundled Formulas, in the order installed.
 pub fn bundled_names() -> impl Iterator<Item = &'static str> {
     BUNDLED.get().into_iter().flat_map(|l| l.iter().map(|(n, _)| *n))
@@ -580,6 +610,13 @@ pub fn title(path: &str) -> Option<String> {
     // From the compiled Formula's header, without loading it, and in builds
     // without Psi (the web app's Recently played). The player ignores `name`.
     match formula_ref(path) {
+        Some(FormulaRef::Bundled { name, .. }) if name == SENT_NAME => {
+            return Some(
+                sent()
+                    .and_then(|b| compiled_name(&b))
+                    .unwrap_or_else(|| "Formula".into()),
+            );
+        }
         Some(FormulaRef::Bundled { name, .. }) => {
             return Some(bundled(name).and_then(compiled_name).unwrap_or_else(|| stem_title(name)));
         }

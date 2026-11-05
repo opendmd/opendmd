@@ -518,6 +518,10 @@ pub enum Command {
         /// Draw the formula over the file on screen instead of playing it
         /// (`formula_look::Looks::show_over`; `""` takes it off).
         over: bool,
+        /// The editor's Formula, compiled (`POST /api/play/formula`):
+        /// held as the sent one (`synth::set_sent`) before `path`
+        /// (`@formula:~sent?…`) plays.
+        psb: Option<Vec<u8>>,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
     /// Previous: play the entry of Recently played one older than the one on

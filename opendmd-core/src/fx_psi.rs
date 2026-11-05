@@ -777,13 +777,24 @@ pub fn path(src: &str, opts: &str) -> String {
 /// path, so the formula's declared default: `psi::Meta::values`).
 struct Query<'a> {
     psb: std::borrow::Cow<'a, [u8]>,
+    /// The sent Formula's bytes ([`crate::synth::SENT`]), in place of `psb`.
+    held: Option<std::sync::Arc<Vec<u8>>>,
     delay_ms: Option<u8>,
     sliders: [Option<i32>; 3],
+}
+
+impl Query<'_> {
+    fn bytes(&self) -> &[u8] {
+        self.held.as_deref().map_or(&self.psb, |v| v)
+    }
 }
 
 /// The sentence for `@formula:<name>` when no bundled Formula has that name
 /// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
 pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
+/// The sentence for [`crate::synth::SENT`] once its Formula was let go
+/// (`NotFound` too).
+pub const SENT_GONE: &str = "that Formula is no longer on the panel: show it again";
 
 /// What follows `@formula` on a path: `?psb=…&…` (or the query alone,
 /// `psb=…`), or `:<name>?<opts>` for a bundled Formula (any `psb=` there is
@@ -793,14 +804,20 @@ fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
         return Ok(query(rest.trim_start_matches('?')));
     };
     let (name, opts) = named.split_once('?').unwrap_or((named, ""));
+    let err = |msg: &str| psi::Error {
+        start: 0,
+        end: 0,
+        msg: msg.to_string(),
+    };
+    if name == crate::synth::SENT_NAME {
+        let mut q = query(opts);
+        q.held = Some(crate::synth::sent().ok_or_else(|| err(SENT_GONE))?);
+        return Ok(q);
+    }
     let psb = crate::synth::valid_formula_name(name)
         .then(|| crate::synth::bundled(name))
         .flatten()
-        .ok_or_else(|| psi::Error {
-            start: 0,
-            end: 0,
-            msg: NO_SUCH_FORMULA.to_string(),
-        })?;
+        .ok_or_else(|| err(NO_SUCH_FORMULA))?;
     let mut q = query(opts);
     q.psb = std::borrow::Cow::Borrowed(psb);
     Ok(q)
@@ -832,6 +849,7 @@ pub fn read_psb<R: std::io::Read>(r: R) -> std::io::Result<Vec<u8>> {
 fn query(query: &str) -> Query<'static> {
     let mut q = Query {
         psb: std::borrow::Cow::Borrowed(&[]),
+        held: None,
         delay_ms: None,
         sliders: [None; 3],
     };
@@ -869,7 +887,7 @@ fn query(query: &str) -> Query<'static> {
 /// asked (ms: the path's `fps=`, else the formula's `fps N`, else 20).
 fn compile(q: &Query) -> Result<(ProgBox, u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
-    let prog = load_boxed(&q.psb, psi::psb::Which::Play)?;
+    let prog = load_boxed(q.bytes(), psi::psb::Which::Play)?;
     if let Some((c, t0)) = t0 {
         set_stat(2, c().wrapping_sub(t0));
     }
@@ -954,7 +972,7 @@ fn canvas_for(
 /// compiler's sentence (the firmware's `/api/play` makes it a 400; an
 /// unknown `@` path is `InvalidData`, a 415).
 pub fn io_error(e: psi::Error) -> std::io::Error {
-    let kind = if e.msg == NO_SUCH_FORMULA {
+    let kind = if e.msg == NO_SUCH_FORMULA || e.msg == SENT_GONE {
         std::io::ErrorKind::NotFound
     } else {
         std::io::ErrorKind::InvalidInput
@@ -1821,7 +1839,7 @@ impl FormulaLook {
     fn compile(q: &Query) -> Result<(ProgBox, u32), psi::Error> {
         // Its look program: its own `look screen 40` line composed in by
         // the compiler (else the program as it plays).
-        let prog = load_boxed(&q.psb, psi::psb::Which::Look)?;
+        let prog = load_boxed(q.bytes(), psi::psb::Which::Look)?;
         if !prog.over() {
             return Err(psi::Error {
                 start: 0,
@@ -3248,6 +3266,40 @@ mod tests {
                 .unwrap()
                 .ms(),
             10
+        );
+    }
+
+    #[test]
+    fn a_sent_formula_plays_whatever_its_length() {
+        // Endless road V2 (22 KB of text): its compiled form is past any
+        // path, so it is held in memory and named `@formula:~sent`.
+        const V2: &str = include_str!("../../opendmd-web/experiments/road-v2/road-v2.psi");
+        let psb = psi::build(V2).unwrap();
+        assert!(path_of(&psb, "").len() > crate::synth::MAX_FORMULA_PATH);
+        crate::synth::set_sent(Some(psb.clone()));
+        let rest = &crate::synth::SENT[crate::synth::FORMULA.len()..];
+        let q = resolve(&format!("{rest}?a=0.5&fps=25")).unwrap();
+        assert_eq!(q.bytes(), &psb[..]);
+        assert_eq!((q.sliders[0], q.delay_ms), (Some(1 << 15), Some(40)));
+        let mut fx = PsiFx::from_query(rest).unwrap();
+        // A live edit: in place, from the bytes held now.
+        crate::synth::set_sent(Some(psi::build("gray(px / 128)").unwrap()));
+        fx.retune_from(rest).unwrap();
+        assert!(crate::synth::title(crate::synth::SENT).is_some());
+        assert!(
+            crate::synth::is_sent("@formula:~sent?a=1")
+                && !crate::synth::is_sent("@formula:~sentx")
+        );
+        // Let go once the panel moves on: a 404 that says so.
+        crate::synth::set_sent(None);
+        let e = io_error(PsiFx::from_query(rest).err().unwrap());
+        assert_eq!(
+            (e.kind(), e.to_string()),
+            (std::io::ErrorKind::NotFound, SENT_GONE.to_string())
+        );
+        assert_eq!(
+            crate::synth::title(crate::synth::SENT).as_deref(),
+            Some("Formula")
         );
     }
 
