@@ -109,7 +109,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
-	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate release
+	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release
 
 # No request URL the web app or the site makes may match EasyPrivacy or EasyList
 # (uBlock Origin / Brave blocked /api/stat?). Fetches the lists once a day into
@@ -391,6 +391,8 @@ site-serve: site
 #                      checks the Worker's routes, short links, _headers, _redirects and the CSP in Chromium
 #   site-d1-migrate    cf d1 migrations apply: site/worker/migrations/ to the opendmd-site D1
 #                      (remote; site-deploy-built runs it before every deploy)
+#   site-stats         the usage counts (/stats) in the terminal: SELECTs only, through
+#                      cf d1 query on the opendmd-site D1 (remote, read-only; tools/site-stats.py)
 #   site-dev-smoke     site-worker-test, then site-smoke against the same cf dev
 #   site-deploy-check  cf deploy --dry-run: builds and checks, uploads nothing
 #   site-deploy        make site, then site-d1-migrate and cf deploy: uploads a new version of the
@@ -420,6 +422,9 @@ site-dev: site-worker-deps
 site-d1-migrate: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
 	$(CF) d1 migrations apply $(SITE_D1) </dev/null
+
+site-stats: site-worker-deps
+	uv run tools/site-stats.py
 
 site-worker-test: site-worker-deps gallery-tool
 	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))

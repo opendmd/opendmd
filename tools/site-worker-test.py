@@ -56,6 +56,18 @@ runs against the same server (--base).
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
   and /f/ with a gallery Formula;
+- the usage counts (src/counts.ts, locally, in cf dev's D1 file): the
+  counts table's columns are day, kind, version, variant and n only (no
+  address, agent, cookie, referrer or device id; no other table), the
+  installer's app.bin and full.bin and release.json?v=&layout= each add one
+  to the right (day, kind, version, variant), answered byte for byte as the
+  files are, with their headers; a Range from past byte 0, a HEAD, the
+  bootloader, the manifest and a missing image count nothing; junk versions
+  and layouts go to other, none sent to unknown, and a day's 41st version
+  to other; /stats with nothing counted and with a sample half-year, in
+  Chromium at phone and desktop widths, light and dark (no sideways
+  scroll; screenshots in target/site-worker-test/stats-*.png), noindex,
+  5 minutes' caching, no script; /stats/ 301s, a POST 405s;
 - the gallery store (S6): locally, against a fixture of the public repo
   served here (git's info/refs and a tarball, as GitHub serves them; cf dev
   pointed at it with SITE_TEST_GALLERY_SOURCE) and a wiped local store:
@@ -168,7 +180,7 @@ def start_dev(site: Path, port: int, gallery_source: str, relay_upstream: str = 
     for db in (WORKER / ".wrangler/state/v3/d1").rglob("*.sqlite"):
         with sqlite3.connect(db) as c:
             if c.execute("select 1 from sqlite_master where name = 'gallery'").fetchone():
-                c.executescript("delete from gallery; delete from gallery_refused; delete from meta;")
+                c.executescript("delete from gallery; delete from gallery_refused; delete from meta; delete from counts;")
                 # The relay's host denylist (src/relay.ts, meta 'relay_deny'), as the owner would set it.
                 c.execute("insert into meta (key, value) values ('relay_deny', ?)", (RELAY_DENY,))
                 wiped += 1
@@ -394,11 +406,176 @@ def headers(base: str, site: Path) -> None:
     check(not bad, f"_headers: CSP, CORS, caching and the rest on {len(want)} paths{': ' + '; '.join(bad) if bad else ''}")
 
 
+def local_d1() -> Path:
+    """cf dev's local D1 file (the one with the gallery and counts tables)."""
+    found = [db for db in (WORKER / ".wrangler/state/v3/d1").rglob("*.sqlite")
+             if sqlite3.connect(db).execute("select 1 from sqlite_master where name = 'counts'").fetchone()]
+    if len(found) != 1:
+        raise SystemExit(f"{len(found)} local D1 databases with a counts table: expected 1")
+    return found[0]
+
+
+def counts_rows(db: Path) -> dict:
+    with sqlite3.connect(db) as c:
+        return {(d, k, v, l): n for d, k, v, l, n in c.execute("select day, kind, version, variant, n from counts")}
+
+
+def counts_wait(db: Path, want: dict, timeout: float = 8) -> dict:
+    """The table once it holds `want` (the counts are written after the answer, in waitUntil)."""
+    end = time.time() + timeout
+    while True:
+        got = counts_rows(db)
+        if got == want or time.time() > end:
+            return got
+        time.sleep(0.1)
+
+
+def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
+    import datetime
+    db = local_d1()
+    today = datetime.datetime.now(datetime.UTC).date().isoformat()
+    ver = json.loads((site / "install/release.json").read_text())["version"]
+    # Nothing identifying stored: the schema itself.
+    with sqlite3.connect(db) as c:
+        cols = [r[1] for r in c.execute("pragma table_info(counts)")]
+        pk = [r[1] for r in sorted(c.execute("pragma table_info(counts)"), key=lambda r: r[5]) if r[5]]
+        tables = sorted(r[0] for r in c.execute("select name from sqlite_master where type = 'table'")
+                        if not r[0].startswith(("_cf", "sqlite")))
+    check(cols == ["day", "kind", "version", "variant", "n"] and pk == ["day", "kind", "version", "variant"],
+          f"counts: the table holds (day, kind, version, variant) -> n and nothing else {cols} {pk}")
+    check(not [c for c in cols if re.search(r"ip|addr|agent|ua$|cookie|refer|device|id$|host|country|city|time", c, re.I)],
+          "counts: no column for an address, user agent, cookie, referrer, device id, place or time of day")
+    check(tables == ["counts", "d1_migrations", "gallery", "gallery_refused", "meta"],
+          f"counts: no other table holds requests {tables}")
+    check(counts_rows(db) == {}, "counts: none at the start (wiped)")
+
+    # /stats with nothing counted.
+    st, h, body = get(base, "/stats")
+    t = body.decode()
+    check(st == 200 and t.count("<!-- stats:numbers -->") == 1 and "No installs counted" in t and "No update checks counted" in t
+          and 'content="noindex"' in t and h.get("X-Robots-Tag") == "noindex" and h.get("Cache-Control") == "public, max-age=300"
+          and len(csp_of(h)) == 1 and "<script" not in t.split("<main", 1)[1] and "can't be read" not in t,
+          f"/stats with nothing counted: 200, the empty charts, noindex, 5 minutes, one CSP, no script ({st}, {h.get('Cache-Control')})")
+    check(all(w not in re.sub(r"<[^>]+>", " ", t.split("<main", 1)[1]).lower() for w in ("cache", "copy", "bucket")),
+          "/stats: no 'cache', 'copy' or 'bucket' in its words")
+    st, h, _ = get(base, "/stats/")
+    check(st == 301 and urllib.parse.urlsplit(h.get("Location", "")).path == "/stats", f"/stats/: 301 to /stats ({st} {h.get('Location')})")
+    st, h, _ = get(base, "/stats", "POST", data=b"")
+    check(st == 405 and h.get("Allow") == "GET, HEAD", f"/stats: POST 405 ({st})")
+    check(counts_rows(db) == {}, "counts: looking at /stats counts nothing")
+
+    # The update check, as update.js asks it, and the files exactly as built.
+    want: dict = {}
+    rel_bytes = (site / "install/release.json").read_bytes()
+    plain = get(base, "/install/release.json", "HEAD")  # (a HEAD counts nothing)
+    st, h, body = get(base, f"/install/release.json?v={ver}&layout=4mb")
+    want[(today, "check", ver, "4mb")] = 1
+    got = counts_wait(db, want)
+    same = lambda a, b: {k.lower(): v for k, v in a.items() if k.lower() not in ("date", "content-length")} == {k.lower(): v for k, v in b.items() if k.lower() not in ("date", "content-length")}  # noqa: E731
+    # (the same as a HEAD, which the Worker doesn't count, gets; a HEAD has no Content-Length)
+    check(st == 200 and body == rel_bytes and same(h, plain[1]) and h.get("Content-Length") == str(len(rel_bytes)) and h.get("Access-Control-Allow-Origin") == "*"
+          and h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and not h.get("Set-Cookie"),
+          f"release.json?v=&layout=: the file byte for byte, its headers as the assets send them ({st}"
+          f"{'' if same(h, plain[1]) else f'; {sorted(set(h.items()) ^ set(plain[1].items()))}'})")
+    check(got == want, f"release.json?v={ver}&layout=4mb: one check for ({ver}, 4mb) {got}")
+    for q, key in ((f"?v=v{ver.upper()}&layout=8MB", (ver, "8mb")),  # (v and case dropped)
+                   ("", ("unknown", "unknown")),  # a web app from before ?v=
+                   ("?v=%3Cscript%3E&layout=16mb", ("other", "other")),
+                   ("?v=" + "9" * 300 + "&layout=4mb", ("other", "4mb")),
+                   ("?v=1.0.0-beta.1+build&layout=", ("other", "unknown")),
+                   ("?v=1.2&layout=8mb%00", ("other", "other"))):
+        st, _, body = get(base, "/install/release.json" + q)
+        want[(today, "check", *key)] = want.get((today, "check", *key), 0) + 1
+        got = counts_wait(db, want)
+        check(st == 200 and body == rel_bytes and got == want, f"release.json{q[:40]}: counted as {key} ({st})")
+
+    # Installs: the release's app image (what ESP Web Tools fetches once per
+    # install) and the merged image; the other parts and pieces not.
+    for part in ("app", "full"):
+        name = f"opendmd-{ver}-4mb-{part}.bin"
+        st, h, body = get(base, f"/install/firmware/{name}")
+        want[(today, "install", ver, "4mb")] = want.get((today, "install", ver, "4mb"), 0) + 1
+        got = counts_wait(db, want)
+        check(st == 200 and body == (dist / name).read_bytes() and h.get("Cache-Control") == "public, max-age=31536000, immutable"
+              and h.get("Access-Control-Allow-Origin") == "*" and len(csp_of(h)) == 1 and not h.get("Set-Cookie"),
+              f"{name}: the file byte for byte ({len(body)} B), immutable, CORS *")
+        check(got == want, f"{name}: one install for ({ver}, 4mb)")
+    before = dict(want)
+    for path, hd, method in ((f"/install/firmware/opendmd-{ver}-4mb-app.bin", {"Range": "bytes=65536-"}, "GET"),
+                             (f"/install/firmware/opendmd-{ver}-4mb-app.bin", {}, "HEAD"),
+                             ("/install/firmware/bootloader-4mb.bin", {}, "GET"),
+                             ("/install/firmware/manifest-4mb.json", {}, "GET"),
+                             (f"/install/firmware/opendmd-{ver}-4mb.odfw", {}, "GET"),
+                             ("/install/firmware/opendmd-9.9.9-4mb-app.bin", {}, "GET"),
+                             ("/install/", {}, "GET")):
+        get(base, path, method, hd)
+    time.sleep(1.5)
+    got = counts_rows(db)
+    check(got == before, f"counts: a Range past byte 0, a HEAD, the other parts, a missing image, the page: nothing counted {set(got) - set(before)}")
+    # A day takes at most 40 versions of a kind; the rest are 'other'.
+    for i in range(45):
+        get(base, f"/install/release.json?v=0.0.{i}&layout=4mb")
+    end = time.time() + 10
+    while time.time() < end and sum(n for (d, k, v, l), n in counts_rows(db).items() if k == "check") < sum(n for (d, k, v, l), n in want.items() if k == "check") + 45:
+        time.sleep(0.2)
+    got = counts_rows(db)
+    versions = {v for (d, k, v, l) in got if k == "check"}
+    check(len(versions) <= 41 and "other" in versions and sum(n for (d, k, v, l), n in got.items() if k == "check") == sum(n for (d, k, v, l), n in want.items() if k == "check") + 45,
+          f"counts: a day's checks keep at most 40 versions, the rest other, none lost ({len(versions)} versions)")
+
+    # /stats with data: a sample half-year (written straight into the file).
+    import random
+    rnd = random.Random(7)
+    now = datetime.datetime.now(datetime.UTC).date()
+    with sqlite3.connect(db) as c:
+        c.execute("delete from counts")
+        for d in range(0, 182):
+            day = (now - datetime.timedelta(days=d)).isoformat()
+            grow = max(0.0, 1 - d / 160)
+            for vv, share in (("1.0.0-beta.14", 1 if d < 3 else 0), ("1.0.0-beta.13", 1 if d < 20 else 0), ("1.0.0-beta.12", 1 if 10 < d < 60 else 0),
+                              ("1.0.0-beta.10", 1 if 40 < d < 120 else 0), ("1.0.0-beta.6", 1 if d > 100 else 0)):
+                if share and rnd.random() < 0.3 + grow:
+                    c.execute("insert into counts values (?, 'install', ?, ?, ?)", (day, vv, "4mb", rnd.randint(1, 4)))
+                    if rnd.random() < 0.3:
+                        c.execute("insert into counts values (?, 'install', ?, ?, ?)", (day, vv, "8mb", rnd.randint(1, 2)))
+            if d < 30:
+                for vv, l, n in (("1.0.0-beta.13", "4mb", rnd.randint(2, 9)), ("1.0.0-beta.13", "8mb", rnd.randint(0, 3)),
+                                 ("1.0.0-beta.12", "4mb", rnd.randint(0, 4)), ("1.0.0-beta.10", "4mb", rnd.randint(0, 2)),
+                                 ("unknown", "unknown", rnd.randint(0, 2))):
+                    if n:
+                        c.execute("insert into counts values (?, 'check', ?, ?, ?)", (day, vv, l, n))
+        totals = dict(c.execute("select kind, sum(n) from counts group by kind").fetchall())
+    st, h, body = get(base, "/stats")
+    t = body.decode()
+    nums = re.findall(r'class="us-num">([0-9,]+)<', t)
+    check(st == 200 and nums and int(nums[0].replace(",", "")) == totals["install"] and t.count('<li title="Week of') == 26
+          and "1.0.0-beta.13" in t and "8 MB build" in t and "Not sent" in t,
+          f"/stats with a sample half-year: {nums} (installs {totals['install']}), 26 weeks, versions by board")
+    from playwright.sync_api import sync_playwright
+    shots.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        for scheme in ("light", "dark"):
+            for name, vw in (("phone", 390), ("desktop", 1280)):
+                ctx = browser.new_context(viewport={"width": vw, "height": 900}, color_scheme=scheme, device_scale_factor=2 if vw < 500 else 1)
+                page = ctx.new_page()
+                csp: list[str] = []
+                page.on("console", lambda m: m.type == "error" and csp.append(m.text[:120]))
+                page.goto(base + "/stats", wait_until="load")
+                wide = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+                page.screenshot(path=str(shots / f"stats-{name}-{scheme}.png"), full_page=True)
+                check(wide <= 0 and not csp, f"/stats in Chromium, {name} ({vw} px), {scheme}: no sideways scroll ({wide}), no console error {csp[:2]}")
+                ctx.close()
+        browser.close()
+    with sqlite3.connect(db) as c:
+        c.execute("delete from counts")
+
+
 def csp_in_browser(base: str) -> None:
     from playwright.sync_api import sync_playwright
     paths = ["/", "/guide/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/", "/dev/api", "/dev/psi/",
              "/no/such/page", "/demo/",
-             "/f/#gallery=fire", "/create/"]
+             "/f/#gallery=fire", "/create/", "/stats"]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         for path in paths:
@@ -1497,6 +1674,9 @@ def main() -> int:
         api(base)
         formula(base)
         live = urllib.parse.urlsplit(base).hostname not in ("127.0.0.1", "localhost")
+        if proc:
+            print("the usage counts (/stats, src/counts.ts)")
+            counts_local(base, a.site, a.dist, a.shots)
         print(f"the gallery store ({'live: the public repo' if live else 'local: a fixture repo'})")
         if repo:
             gallery_local(base, a.site, a.gallery_tool, repo)

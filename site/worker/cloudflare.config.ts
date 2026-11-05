@@ -41,7 +41,18 @@ export default defineConfig({
       notFoundHandling: "404-page",
       // /formulas/*: the gallery page and its files from the store (S6);
       // the Worker hands everything else under it to the assets.
-      runWorkerFirst: ["/api/*", "/formulas/*"],
+      // /stats and the counted paths (src/counts.ts): the update check's
+      // release.json and the release's install images, counted and then
+      // answered by the assets unchanged. The rest of /install/ skips the Worker.
+      runWorkerFirst: [
+        "/api/*",
+        "/formulas/*",
+        "/stats",
+        "/stats/",
+        "/install/release.json",
+        "/install/firmware/opendmd-*-app.bin",
+        "/install/firmware/opendmd-*-full.bin",
+      ],
     },
     env: {
       ASSETS: { type: "assets" },
@@ -63,7 +74,12 @@ export default defineConfig({
     triggers: [triggers.scheduled({ schedule: "*/5 * * * *" })],
     workersDev: false,
     previewUrls: false,
-    observability: { enabled: true },
+    // Workers Logs: what the code logs (console.log: a failed sync, a
+    // refused relay, a count that couldn't be written), but no invocation
+    // logs, the per-request records with the visitor's address and
+    // location (2026-11-05, the usage counts: installs and update checks
+    // now run the Worker, and nothing per request is to be kept for them).
+    observability: { enabled: true, logs: { invocationLogs: false } },
     // Custom domains (S3, 2026-10-28): Cloudflare writes the proxied DNS
     // records and the certificate. www → apex is the Worker's for /api/* and
     // /formulas/*; for the rest, a zone redirect rule (www.opendmd.dev/* →

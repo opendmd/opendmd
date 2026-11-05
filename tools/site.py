@@ -76,6 +76,11 @@
                page's footer) and the third-party notices from licenses/
                (tools/notices.py), the same files the release and the
                player carry
+- /stats       the public usage page (STATS below; stats.html, served at
+               /stats): what is counted and what is not, written here; the
+               numbers between <!-- stats:numbers --> markers, written in by
+               the Worker from its daily totals (site/worker/src/counts.ts).
+               Not linked from the menus, noindex
 - /404.html    the page for an address with nothing there (Cloudflare's
                not_found_handling serves it)
 - _headers, _redirects, .assetsignore
@@ -303,6 +308,37 @@ def art_index_v1(d) -> bool:
 ART_INDEX_FORMATS = {
     1: (ROOT / "opendmd-web/art-index", art_index_v1),
 }
+# The usage page (site/worker/src/counts.ts writes its numbers in, between
+# the markers; as built they say they can't be read, which is what shows
+# when the Worker can't read them).
+STATS_PAGE = "stats.html"
+STATS_NUMBERS = ('<!-- stats:numbers --><p class="us-empty">The numbers can\'t be read just now. '
+                 'Try again in a few minutes.</p><!-- stats:numbers-end -->')
+STATS = """# Is anyone using OpenDMD?
+
+A rough count of installs and update checks, kept so the project can tell
+whether anyone is using it. It counts requests, not people.
+
+<!-- site:stats-numbers -->
+
+## What's counted
+
+- **An install**: each time the [installer](/install/) downloads the firmware
+  for a board. A reinstall counts again, and so does trying again after a
+  failed install. A reinstall from the same browser may not reach the site at
+  all (the browser already has the file), and then it isn't counted.
+- **An update check**: each time a panel's web app checks for updates
+  (Settings › Check for updates), with the panel's firmware version and board.
+  Panels themselves never contact this site, so a panel that never checks for
+  updates isn't seen.
+
+## What isn't
+
+No IP addresses, cookies or device IDs, no browser details and nothing about
+the page you came from. The site keeps one total per day for each kind,
+version and board, and nothing about any single request. Anyone can make
+these requests, so the numbers can be pushed up: treat them as a rough guide.
+"""
 LICENCES = """# Licences
 
 OpenDMD is open source: [MIT](../LICENSE-MIT.txt) or [Apache 2.0](../LICENSE-APACHE.txt), at your option.
@@ -969,6 +1005,15 @@ def main() -> None:
     body = markdown.Markdown(extensions=["sane_lists"]).convert(LICENCES)
     (out / LICENCES_PAGE).parent.mkdir(parents=True, exist_ok=True)
     (out / LICENCES_PAGE).write_text(render(LICENCES_PAGE, "Licences · OpenDMD", body, art["wordmark"]), encoding="utf-8")
+    # The usage page: not in the menus, not for search engines (the Worker
+    # writes its numbers in at /stats).
+    body = markdown.Markdown(extensions=["sane_lists"]).convert(STATS)
+    body = re.sub(r"(?:<p>)?<!-- site:stats-numbers -->(?:</p>)?", lambda _: '<div class="stats">' + STATS_NUMBERS + "</div>", body)
+    if STATS_NUMBERS not in body:
+        raise SystemExit("the usage page lost its numbers' markers")
+    (out / STATS_PAGE).write_text(render(STATS_PAGE, "Usage · OpenDMD", body, art["wordmark"],
+                                         description="How many OpenDMD installs and update checks the site counts.",
+                                         head='\n<meta name="robots" content="noindex">', kind="doc stats-page"), encoding="utf-8")
     # Pictures only the GitHub copy of a doc shows (the README's hero) stay off the site.
     assets = {a for a in assets if any(posixpath.basename(a) in b for b in bodies)}
     for target in sorted(assets):
