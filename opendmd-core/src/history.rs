@@ -47,7 +47,13 @@ impl Default for History {
 /// RePlayOS's power-on effect and title cards (`@power-on`, `@card:…`) are
 /// not things a user plays, and a path must be card-absolute or a live item.
 fn compact(path: &str) -> Option<&str> {
-    if path.contains('\n') || path == "@power-on" || path.starts_with("@card:") {
+    // (The editor's sent Formula is held only while it plays: not one to
+    // play again from here.)
+    if path.contains('\n')
+        || path == "@power-on"
+        || path.starts_with("@card:")
+        || crate::synth::is_sent(path)
+    {
         return None;
     }
     let s = match path
@@ -227,6 +233,7 @@ mod tests {
         h.started("relative.gif");
         h.started("/gifs/a\nb.gif");
         h.started(&format!("@text?msg={}", "x".repeat(MAX_ENTRY)));
+        h.started("@formula:~sent?a=0.5");
         assert!(h.is_empty());
         assert_eq!(
             h.buf.capacity(),

@@ -81,6 +81,28 @@ fn play_reply<T>(req: &mut Req, r: Result<Result<(), PlayError>, T>, ok: &str) -
     }
 }
 
+/// `/api/play` and `/api/play/formula`: hand the play to the main task and
+/// answer as it replies.
+fn send_play(req: &mut Req, c: &Ctx, path: String, live: bool, over: bool, psb: Option<Vec<u8>>) -> Result<()> {
+    let ok = format!(
+        r#"{{"ok":true,"path":{}{}}}"#,
+        json_string(&path),
+        if over { r#","over":true"# } else { "" }
+    );
+    let (tx, rx) = mpsc::channel();
+    let cmd = Command::PlayNow {
+        path,
+        live,
+        over,
+        psb,
+        reply: tx,
+    };
+    if c.cmd.send(cmd).is_err() {
+        return req.error(503, "503 Service Unavailable", "player not running");
+    }
+    play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), &ok)
+}
+
 /// Wire format for `POST /api/panel/test`: `{"setting":"clk_phase"}` or
 /// `{"stop":true}`.
 #[derive(serde::Deserialize)]
@@ -1223,24 +1245,77 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.bad_request("path must be card-absolute and stay on the card, or a live item (@clock, @text?msg=…)");
         }
-        let (tx, rx) = mpsc::channel();
-        if c.cmd
-            .send(Command::PlayNow {
-                path: play.path.clone(),
-                live: play.live,
-                over: play.over,
-                reply: tx,
-            })
-            .is_err()
-        {
-            return req.error(503, "503 Service Unavailable", "player not running");
+        send_play(req, &c, play.path, play.live, play.over, None)
+    })?;
+
+    // The editor's Formula, compiled, as the body (Show on panel and its
+    // live edits): held in memory and played as `@formula:~sent?…`, so its
+    // length never rides on a path. `?live=1`, `?over=1` and the sliders
+    // (`a b c fps`) as for `/api/play`. The last one sent is let go first,
+    // so two are never held at once.
+    let c = ctx.clone();
+    server.route("/api/play/formula", Method::Post, move |req| {
+        if !crate::state::FORMULAS {
+            return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
         }
-        let ok = format!(
-            r#"{{"ok":true,"path":{}{}}}"#,
-            json_string(&play.path),
-            if play.over { r#","over":true"# } else { "" }
-        );
-        play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), &ok)
+        if req.request_header(c"Content-Type").as_deref() != Some("application/octet-stream") {
+            return req.error(
+                415,
+                "415 Unsupported Media Type",
+                "Content-Type must be application/octet-stream",
+            );
+        }
+        let len = req.content_len();
+        if len > opendmd_core::synth::MAX_FORMULA_FILE {
+            return req.error(
+                413,
+                "413 Payload Too Large",
+                "this formula is too long for the panel (16,384 B compiled at most)",
+            );
+        }
+        let q = req.query();
+        let flag = |k| query_param(q, k).as_deref() == Some("1");
+        let (live, over) = (flag("live"), flag("over"));
+        let mut path = String::from(opendmd_core::synth::SENT);
+        // The sliders, numbers only (never `key=`).
+        let mut sep = '?';
+        for k in ["a", "b", "c", "fps"] {
+            if let Some(v) = query_param(q, k).filter(|v| {
+                v.len() <= 12 && v.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
+            }) {
+                path.push(sep);
+                path.push_str(k);
+                path.push('=');
+                path.push_str(&v);
+                sep = '&';
+            }
+        }
+        opendmd_core::synth::set_sent(None);
+        // (`try_reserve`: a heap with no block that size refuses; `vec!`
+        // would abort the board.)
+        let mut psb = Vec::new();
+        if crate::state::free_heap() < len as u32 + config::STREAM_START_HEAP
+            || psb.try_reserve_exact(len).is_err()
+        {
+            req.header("Retry-After", "2")?;
+            return req.error(
+                503,
+                "503 Service Unavailable",
+                "the player needs the heap right now; retry shortly",
+            );
+        }
+        psb.resize(len, 0);
+        let mut got = 0;
+        while got < len {
+            match req.read(&mut psb[got..])? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        if len == 0 || got < len {
+            return req.bad_request("the body is the compiled Formula (Content-Length bytes)");
+        }
+        send_play(req, &c, path, live, over, Some(psb))
     })?;
 
     // The panel-timing test (`opendmd_core::panel_test`): the firmware's
