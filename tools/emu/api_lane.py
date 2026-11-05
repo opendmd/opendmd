@@ -13,6 +13,10 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
+  sent        (--long-psb) Show on panel of a long Formula (Endless road V2, past any path):
+              POST /api/play/formula, played as `@formula:~sent` by its name line, live
+              edits ~200 ms apart in place (the same start), off Recently played; 413 past
+              16 KB, 415 not octet-stream, 409 a live edit once the panel moved on
   www         PUT /api/www with the web app's pack; GET / and a wasm at its ?v= address:
               no-cache, the pack's CRC as ETag, 304 for If-None-Match naming it, 200 for another
   bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
@@ -406,6 +410,8 @@ class Lane:
             self.basics(api)
             self.files(api)
             self.play(emu, api)
+            if getattr(self.a, "long_psb", None):
+                self.sent(emu, api)
             self.www(api)
             if self.a.connections > 1:
                 self.bursts(emu, api)
@@ -591,6 +597,44 @@ class Lane:
         self.expect(r.get("paused") is False, "pause", f"resume answered {r}")
         self.wait_status(api, lambda s: s.get("paused") is False, 30, "playing again")
         self.ok("play", f"an uploaded GIF (from the original), a Formula by psb (frame {fms.get('frame_ms')} ms, jit {fms.get('jit')}), a Formula saved to the card (.psi and .psb, read back) by its path; a missing file 404, a relative path 400; skip; pause and resume")
+
+    def sent(self, emu, api):
+        """Show on panel as the web app sends it: the compiled bytes as the body."""
+        long = self.a.long_psb.read_bytes()
+        b64 = self.a.psb.read_text().strip()
+        short = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        name = lambda b: b[6:6 + b[5]].decode()
+        self.expect(len(long) * 4 // 3 > 6144, "sent", f"--long-psb is {len(long)} B: it fits a path")
+        api.json("POST", "/api/play", {"path": "/gifs/EmuApi/emu-a.gif"})
+        self.wait_status(api, lambda s: s["now_playing"]["path"] == "/gifs/EmuApi/emu-a.gif", 30, "the GIF before")
+        _, r = api.json("POST", "/api/play/formula?a=0.5&key=secret", long)
+        self.expect(r.get("path") == "@formula:~sent?a=0.5", "sent", f"answered {r} (the sliders kept, never the key)")
+        st = self.wait_status(api, lambda s: s["now_playing"]["path"].startswith("@formula:~sent")
+                              and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the long Formula playing")
+        np = st["now_playing"]
+        self.expect(np["title"] == name(long), "sent", f"title {np['title']!r}, wanted {name(long)!r}")
+        ordinal = np["ordinal"]
+        # Live edits as the editor sends them (~200 ms apart): the other Formula, then back.
+        for k in range(10):
+            body = short if k % 2 == 0 else long
+            api.json("POST", f"/api/play/formula?live=1&a={k / 10}", body)
+            time.sleep(0.2)
+        st = self.wait_status(api, lambda s: s["now_playing"]["path"] == "@formula:~sent?a=0.9", 30, "the last live edit")
+        np = st["now_playing"]
+        self.expect(np["ordinal"] == ordinal and np["title"] == name(long), "sent",
+                    f"after 10 live edits: ordinal {np['ordinal']} (was {ordinal}), title {np['title']!r}")
+        _, rec = api.json("GET", "/api/status?recent=1")
+        self.expect(not any("~sent" in str(x) for x in rec.get("recent") or []), "sent", f"in Recently played: {rec.get('recent')}")
+        api.call("POST", "/api/play/formula", b"\0" * (16 * 1024 + 1), want=(413,))
+        api.call("POST", "/api/play/formula", {"path": "x"}, want=(415,))
+        api.call("POST", "/api/play/formula", b"not a formula", want=(400,))
+        # The Formula refused, the one on the panel plays on.
+        self.expect(api.status()["now_playing"]["ordinal"] == ordinal, "sent", "a refused one moved the panel on")
+        api.json("POST", "/api/skip")
+        self.wait_status(api, lambda s: s["now_playing"]["ordinal"] != ordinal, 60, "a skip off the sent Formula")
+        api.call("POST", "/api/play/formula?live=1", long, want=(409,))
+        self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
+                f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on")
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()

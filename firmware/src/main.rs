@@ -920,8 +920,12 @@ fn main() -> Result<()> {
                     path,
                     live,
                     over,
+                    psb,
                     reply,
                 } => {
+                    if psb.is_some() {
+                        opendmd_core::synth::set_sent(psb);
+                    }
                     let outcome = if over {
                         // Drawn over the file on screen, not played: its
                         // ordinal ends it (`Looks::started`); drawn at once.
@@ -983,6 +987,11 @@ fn main() -> Result<()> {
                         }
                         r
                     };
+                    // Refused: nothing plays what was sent (what was on
+                    // the panel had its own load).
+                    if outcome.is_err() {
+                        opendmd_core::synth::set_sent(None);
+                    }
                     let what = if over { "over the GIF" } else { "play now" };
                     match &outcome {
                         Ok(()) if over => log::debug!("{what}: {}", short(&path)),
@@ -1916,8 +1925,12 @@ fn main() -> Result<()> {
                 if is_new {
                     // The glow's copy may fit now if it did not before.
                     panel.glow_retry();
-                    // The editor's formula goes once the playlist moves on.
+                    // The editor's formula goes once the playlist moves on,
+                    // and the one it sent with it.
                     looks.started(playing.ordinal, eng.display_mut(&mut canvas));
+                    if !opendmd_core::synth::is_sent(&playing.path) {
+                        opendmd_core::synth::set_sent(None);
+                    }
                 }
                 // The formula look over it (its time is the frame's
                 // `decode`, with the decoding the governor counts it with).

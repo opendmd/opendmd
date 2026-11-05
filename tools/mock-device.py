@@ -1138,6 +1138,11 @@ BUNDLED_FORMULAS = _bundled()
 # A user's Formula on the card: `<path>.psi[?a=&b=&c=&fps=]` (synth::formula_file).
 FORMULA_FILE_RE = re.compile(r"^/.*[^/]\.psi(\?.*)?$", re.I)
 INLINE_MAX = 6144     # synth::MAX_FORMULA_PATH
+FORMULA_FILE_MAX = 16384  # synth::MAX_FORMULA_FILE: POST /api/play/formula's body
+# synth::SENT: the Formula POST /api/play/formula holds in memory (one;
+# let go when the panel moves on), as compiled bytes.
+SENT = "@formula:~sent"
+SENT_PSB: list[bytes | None] = [None]
 LOOK_INLINE_MAX = 2048  # synth::MAX_LOOK_PATH
 NO_SUCH_FORMULA = "there is no bundled Formula by that name"
 
@@ -1159,6 +1164,13 @@ def live_parse(path: str):
     percent-decoded, or None for anything else (a text needs a non-empty
     `msg`, a formula a non-empty `src`)."""
     head, _, query = path.partition("?")
+    if head == SENT:
+        info = psb_info(SENT_PSB[0]) if SENT_PSB[0] is not None else None
+        if info is None:
+            return None
+        params = {k: urllib.parse.unquote(v) for k, _, v in (kv.partition("=") for kv in query.split("&") if kv)}
+        params["name_"], params["loop_ms"] = info
+        return "formula", params
     if head.startswith("@formula:"):
         src = BUNDLED_FORMULAS.get(head[len("@formula:"):])
         if src is None:
@@ -1202,7 +1214,7 @@ def psb_info(b64: str) -> tuple[str, int] | None:
     this player takes (another ABI included)."""
     import base64
     try:
-        b = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        b = b64 if isinstance(b64, bytes) else base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
     except (ValueError, TypeError):
         return None
     if len(b) < 6 or b[:3] != b"PSB" or b[3] != PSI_ABI:
@@ -1310,7 +1322,7 @@ def virtual_title(path: str) -> str | None:
         return path[len("@card:"):].split("|", 1)[0]
     live = live_parse(path)
     if live is not None:
-        if live[0] == "formula" and path.startswith("@formula:"):
+        if live[0] == "formula" and path.startswith("@formula:") and "src" in live[1]:
             n = "".join(c for c in declared_name(live[1]["src"]) or "" if c.isprintable())[:60]
             return n if n.strip() else stem_title(path[len("@formula:"):].partition("?")[0])
         if live[0] == "formula":
@@ -2298,6 +2310,7 @@ class Player:
 
     def advance(self):
         self.played = None
+        SENT_PSB[0] = None  # main.rs: the sent Formula goes once the panel moves on
         if not self.playlist:
             self.pos = -1
             self.last_advance = time.monotonic()
@@ -2425,7 +2438,7 @@ def recent_stored(path: str) -> str | None:
     """opendmd_core::history's stored form of a path (/gifs/X.gif -> X), or
     None if it is not recorded (Follow's power-on and cards, a relative path,
     an entry over 200 B)."""
-    if not path or "\n" in path or path == "@power-on" or path.startswith("@card:"):
+    if not path or "\n" in path or path == "@power-on" or path.startswith("@card:") or path.partition("?")[0] == SENT:
         return None
     s = path
     if path.startswith("/gifs/") and path.endswith(".gif") and len(path) > 10 and path[6] not in "/@":
@@ -3197,6 +3210,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/card/full-speed"), {"POST": self.h_card_full_speed}),
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
+                (m_exact("/api/play/formula"), {"POST": self.h_play_formula}),
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
                 (m_exact("/api/exists"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
@@ -4227,6 +4241,59 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(415, f"{p}: not a GIF file")
                     return
                 ctx.player.play_now(p)
+            self.send_json(200, {"ok": True, "path": p})
+
+        def h_play_formula(self, path):
+            """http.rs /api/play/formula: the compiled Formula as the body,
+            held as the sent one and played as `@formula:~sent?…`."""
+            if not ctx.formulas:
+                self.read_body()
+                self.send_error_json(501, NO_FORMULAS)
+                return
+            if self.headers.get("Content-Type") != "application/octet-stream":
+                self.read_body()
+                self.send_error_json(415, "Content-Type must be application/octet-stream")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > FORMULA_FILE_MAX:
+                self.rfile.read(length)
+                self.send_error_json(413, "this formula is too long for the panel (16,384 B compiled at most)")
+                return
+            _, _, query = self.path.partition("?")
+            q = urllib.parse.parse_qs(query)
+            live, over = q.get("live") == ["1"], q.get("over") == ["1"]
+            opts = "&".join(f"{k}={q[k][0]}" for k in ("a", "b", "c", "fps")
+                            if k in q and len(q[k][0]) <= 12 and re.fullmatch(r"[0-9.-]*", q[k][0]))
+            p = SENT + ("?" + opts if opts else "")
+            SENT_PSB[0] = None
+            body = self.read_body()
+            if not body or len(body) < length:
+                self.send_error_json(400, "the body is the compiled Formula (Content-Length bytes)")
+                return
+            if psb_info(body) is None:
+                self.send_error_json(400, "this is not a Formula compiled for this player")
+                return
+            with ctx.lock:
+                if not ctx.player.playlist:
+                    self.send_error_json(503, "no playlist is running")
+                    return
+                if over:
+                    if live and not ctx.player.over_on():
+                        self.send_error_json(409, "no formula is on the panel now")
+                        return
+                    SENT_PSB[0] = body
+                    ctx.player.over = (p, ctx.player.ordinal)
+                    self.send_json(200, {"ok": True, "path": p, "over": True})
+                    return
+                if (ctx.player.current() or "").startswith("@formula"):
+                    SENT_PSB[0] = body
+                    ctx.player.retune(p)
+                elif live:
+                    self.send_error_json(409, "no formula is on the panel now")
+                    return
+                else:
+                    SENT_PSB[0] = body
+                    ctx.player.play_now(p)
             self.send_json(200, {"ok": True, "path": p})
 
         def formula_file_title(self, p: str) -> str:

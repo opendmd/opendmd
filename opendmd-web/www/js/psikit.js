@@ -5,7 +5,8 @@
 // formula is in a sentence, the code's highlighting and the sample
 // picture. No imports; the DOM only in `picker` and `control`.
 
-export const MAX_SRC = 16384, MAX_NAME = 60;
+// (MAX_SRC: the compiler's own limit, opendmd_psi::MAX_SOURCE.)
+export const MAX_SRC = 32768, MAX_NAME = 60;
 
 // Where a Formula comes from in a link: by name, never its text (a link
 // anyone can craft must not put code in front of someone). The site's

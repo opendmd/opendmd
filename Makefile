@@ -1081,10 +1081,14 @@ emu-leak: emu-build emu-card
 EMU_API_BUNDLE ?= $(EMU_DIR)/leak/dist/opendmd-$(FW_VERSION)-4mb.odfw
 EMU_API_FORMULA ?= $(PSI)/formulas/plasma.psi
 EMU_API_PSB = $(EMU_DIR)/api/formula.psb.b64
+# A long Formula (22 KB of text, past any path): Show on panel's bytes.
+EMU_API_LONG ?= $(WEB)/experiments/road-v2/road-v2.psi
+EMU_API_LONG_PSB = $(EMU_DIR)/api/long.psb
 emu-api-psb:
 	@mkdir -p $(EMU_DIR)/api
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
 	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LONG)) -o $(EMU_API_LONG_PSB)
 # The pack it pushes is this build's, signed (PUT /api/www takes no other).
 EMU_API_WWW = $(EMU_DIR)/api/www.pack
 emu-api: emu-build emu-card emu-api-psb
@@ -1092,7 +1096,7 @@ emu-api: emu-build emu-card emu-api-psb
 	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
-	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
+	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
 # The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (the spare, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin
