@@ -401,7 +401,7 @@ impl Server {
     where
         F: Fn(&mut Req) -> Result<()> + Send + Sync + 'static,
     {
-        self.route(uri, method, move |req| {
+        self.route(uri, method, #[optimize(size)] move |req| {
             if req.content_len() > 0 {
                 let ct = req.request_header(c"Content-Type").unwrap_or_default();
                 if !opendmd_core::access::is_json(&ct) {
