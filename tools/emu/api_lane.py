@@ -1355,10 +1355,21 @@ class Lane:
         self.expect(b"older flash layout v2" in why and b"has layout v3" in why, "firmware", f"a table v2 bundle: {why[:200]!r}")
         sig = bytearray(b)
         sig[100] ^= 0x01  # in the Ed25519 signature (bytes 76..140)
+        mark = self.emu.mark()
         api.call("PUT", "/api/firmware", sig, want=(422,), timeout=300)
+        # Refused at the header: the panel never said "Updating".
+        self.expect(not self.emu.find(re.compile(r"update screen: updating"), mark), "ota panel",
+                    "a bundle refused at its header put the update message up")
         img = bytearray(b)
         img[140 + 4096] ^= 0x01  # in the app image: its SHA-256 no longer matches
+        mark = self.emu.mark()
         api.call("PUT", "/api/firmware", img, want=(422,), timeout=300)
+        # Refused after its upload: the message was up while it came in, and
+        # went with the refusal; the playlist plays on (a GIF starts after).
+        up, _ = self.emu.wait_for(re.compile(r"update screen: updating"), 30, mark, "the update message going up")
+        down, _ = self.emu.wait_for(re.compile(r"update screen: off .*playback resumes"), 30, up, "the update message coming down")
+        self.emu.wait_for(re.compile(r"opendmd_firmware: \[\d+\] /"), 120, down, "a GIF after the refused update")
+        self.ok("ota panel", "the message up while the bad-image bundle came in, down at its 422, a GIF after; none for the one refused at its header")
         _, info2 = api.json("GET", "/api/firmware")
         self.expect(info2.get("pending") is None, "firmware", f"a refused bundle left something pending: {info2}")
         self.ok("ota refusals", f"GET /api/firmware {info.get('version')} (layout v3); a bundle for table v2 422 at the header ('{why[:60].decode(errors='replace')}…'), one with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
@@ -1451,6 +1462,7 @@ class Lane:
         self.emu = emu
         try:
             st = api.wait_up(240)
+            ran = st.get("version")
             _, cfg = api.json("GET", "/api/config")
             self.expect(cfg.get("dwell_max") == self.dwell_set, "boot B", f"dwell_max {cfg.get('dwell_max')} after the power cycle, saved {self.dwell_set}")
             for p, data in self.expected.items():
@@ -1467,6 +1479,10 @@ class Lane:
             self.expect(r.get("ok") is True and r.get("rebooting") is True, "ota", f"PUT /api/firmware answered {r}")
             emu.wait_for(re.compile(r"signature ok( \(key \d+\))?; staging it on the card"), 5, mark, "`signature ok`")
             emu.wait_for(re.compile(r"staged and verified .* restarting into the updater"), 60, mark, "`restarting into the updater`")
+            # The panel said so all the way: up while it came in, "Installing"
+            # once staged, never taken down before the restart.
+            emu.wait_for(re.compile(r"update screen: updating"), 5, mark, "the update message")
+            emu.wait_for(re.compile(r"update screen: installing"), 5, mark, "the installing message")
             emu.wait_for(re.compile(r"rst:0x"), 60, mark, "the restart into the updater")
             back = time.time()
             end = back + 300
@@ -1488,6 +1504,12 @@ class Lane:
             self.expect(any("image verified" in l for l in ulog), "ota", f"the updater's log: {ulog}")
             st = api.status()
             self.expect(emu.resets == 3, "ota", f"{emu.resets} resets, wanted 3 (power-on, updater, firmware)")
+            self.expect(not emu.find(re.compile(r"update screen: off"), mark), "ota", "the update message came down before the restart")
+            # The first boot after it: "Updated to" only for another version
+            # than the one that ran (the lane's own bundle is the same build).
+            said = emu.find(re.compile(r"boot show: \w+, says 'Updated to' this boot"), mark)
+            self.expect(bool(said) == (ran != want), "ota",
+                        f"'Updated to' on the boot after the update: {bool(said)}, the versions {ran} -> {want}")
             self.ok("ota", f"PUT {self.a.bundle.stat().st_size} B in {took:.0f} s wall: signature ok, staged, verified; the updater ({len(ulog)} log lines, '{ulog[-2] if len(ulog) > 1 else ''}') installed it; back as {info['version']} ({st.get('reset_reason')}) in {time.time() - back:.0f} s wall")
         finally:
             emu.kill()

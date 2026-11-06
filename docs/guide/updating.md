@@ -10,9 +10,14 @@ details, playlists and GIFs stay as they are whichever way you update.
    **Check for updates**.
 2. If there's a new version, the app says what's new and shows an
    **Update** button. Press it.
-3. Keep the page open and the SD card in. The panel goes dark for about a
-   minute while the firmware installs, then the web app updates and the
-   page reloads by itself.
+3. Keep the page open and the SD card in. While the update comes in the
+   panel says **Updating** and the version, with **Don't unplug**
+   underneath; then **Installing**, and it goes dark for about a minute
+   while the firmware installs. When the player starts again the panel
+   says **Updated to** the new version for a few seconds before your GIFs
+   carry on, then the web app updates and the page reloads by itself. If
+   the update doesn't go through, the message goes and your GIFs carry on
+   as before.
 
 The phone or computer you're using needs to be online: the app downloads
 the update from this site before handing it to the player. If anything
@@ -58,7 +63,9 @@ If the player won't start or you can't reach the web app, the
    instead: **leave Erase device unticked.** Ticking it wipes your WiFi
    details and settings.)
 
-The board restarts with the new version and rejoins your WiFi.
+The panel stays dark while the installer writes. The board restarts with
+the new version, says **Updated to** it on the panel, and rejoins your
+WiFi.
 
 ## From a file
 

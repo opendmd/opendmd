@@ -38,7 +38,8 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    device**: **tick it.** This clears the board completely before
    installing.
 4. **Wait for it to finish.** It takes about a minute, and the board
-   restarts by itself.
+   restarts by itself. The panel stays dark while the installer writes
+   over USB, and lights up when the board restarts.
 5. **Connect it to your WiFi.** When it says **Installation complete**,
    click **Next**. The installer lists the WiFi networks the board can
    see: pick yours, type its password and click **Connect**. Once the

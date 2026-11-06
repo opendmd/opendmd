@@ -611,6 +611,13 @@ fn main() -> Result<()> {
     }
     let mut settings = nvs_config.load();
     heapmap::cp("settings loaded (nvs)");
+    // The first boot of a new version: the show says "Updated to v…"
+    // (`show::Screen`). A record in NVS, so a USB install that keeps NVS
+    // counts too; a fresh install has none and says nothing.
+    let updated_from = nvs_config.note_booted(state::firmware_version());
+    if let Some(v) = &updated_from {
+        log::info!("first boot of {} (the last boot ran {v})", state::firmware_version());
+    }
     // `formula_arena` (dev): a Formula's memory set aside now, before the
     // network takes any (`arena.rs`).
     #[cfg(feature = "psi")]
@@ -830,7 +837,8 @@ fn main() -> Result<()> {
     let mut card_dead = false;
     // The start-up show, then the status card while there is no card (or
     // nothing to play from it); see `Screen`.
-    let mut screen = Screen::new(settings.boot_show);
+    let mut screen = Screen::new(settings.boot_show, updated_from.is_some());
+    drop(updated_from);
     // A handover waiting for the show's minimum.
     let mut pending: Option<Box<boot::Handover>> = None;
     // With the card but no engine: when the playlist was last tried.
@@ -841,6 +849,11 @@ fn main() -> Result<()> {
     // What the panel showed when the test started (a paused file's frame,
     // the status card), put back after it; `None` if the 12 KB was not there.
     let mut ptest_saved: Option<Canvas> = None;
+    // A firmware update's message (`show::Updating`): the stage on the
+    // panel (`show::NO_UPDATE`: none), and a paused file's frame to put
+    // back if the update fails (`None` if the 12 KB was not there: black).
+    let mut update_shown = show::NO_UPDATE;
+    let mut update_saved: Option<Canvas> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -1545,7 +1558,11 @@ fn main() -> Result<()> {
 
         // Follow RePlayOS's sequence: the next step once the engine has
         // finished the one on screen (it holds the last frame meanwhile).
-        if runner.in_sequence() && !sched.off() && ptest.is_none() {
+        // A firmware update's stage (one relaxed load); not over night
+        // mode's dark panel.
+        let update = if sched.off() { show::NO_UPDATE } else { show::update_stage() };
+        let updating = update != show::NO_UPDATE || update_shown != show::NO_UPDATE;
+        if runner.in_sequence() && !sched.off() && ptest.is_none() && !updating {
             if let Some(e) = engine.as_mut() {
                 let todo = runner.advance(e, epoch.elapsed());
                 follow_todo(
@@ -1563,7 +1580,7 @@ fn main() -> Result<()> {
 
         // The schedule: at most once a second look at the clock, and act only
         // when the local minute (or the schedule, zone or a wake) changed.
-        if let Some(next) = sched.poll() {
+        if let Some(next) = sched.poll().filter(|_| !updating) {
             // A change (night mode's dark panel, a rule's playlist or
             // brightness) ends the panel test first, then applies.
             end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a schedule change");
@@ -1583,6 +1600,33 @@ fn main() -> Result<()> {
         // Only after every reply above has been sent.
         if let Some(why) = reboot_pending() {
             reboot_to_apply(why);
+        }
+
+        // A firmware update coming in: its still message instead of
+        // anything else, until it fails (playback resumes) or the restart.
+        if updating {
+            if update != show::NO_UPDATE && update_shown == show::NO_UPDATE {
+                end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a firmware update");
+            }
+            update_screen(
+                update,
+                &mut update_shown,
+                &mut update_saved,
+                engine.as_mut(),
+                &mut panel,
+                &mut canvas,
+                &mut looks,
+                &settings,
+            );
+            if update_shown != show::NO_UPDATE {
+                fresh = true;
+                if let Ok(mut s) = status.try_lock() {
+                    s.uptime_secs = epoch.elapsed().as_secs();
+                    s.heap_free = free_heap();
+                }
+                thread::sleep(config::OFF_SLEEP);
+                continue;
+            }
         }
 
         // A clock change lost the card's SPI device (`cardspeed`): no
@@ -3481,6 +3525,57 @@ fn snapshot(canvas: &Canvas) -> Option<Canvas> {
     px.try_reserve_exact(opendmd_core::canvas::PIXELS).ok()?;
     px.extend_from_slice(canvas.as_slice());
     Some(Canvas::from_parts(px, Default::default()))
+}
+
+/// A firmware update's message on the panel (`show::Updating`), from the
+/// main loop while one is coming in or has just ended. Going up: the file
+/// on screen is let go (its decoder's heap back for the upload; a paused
+/// one's frame kept to put back), the formula look's buffers too, and the
+/// message goes out untinted and unglowed, once per stage (the panel holds
+/// a still picture). Coming down (the update failed or was cancelled): the
+/// look back, the paused frame or black, and the next file plays from it.
+#[allow(clippy::too_many_arguments)]
+fn update_screen(
+    stage: u8,
+    shown: &mut u8,
+    saved: &mut Option<Canvas>,
+    engine: Option<&mut Engine>,
+    panel: &mut Panel,
+    canvas: &mut Canvas,
+    looks: &mut formula_look::Looks,
+    settings: &Settings,
+) {
+    if stage == *shown {
+        return;
+    }
+    if *shown == show::NO_UPDATE {
+        if let Some(e) = engine {
+            let paused = e.is_paused();
+            e.drop_current(canvas);
+            if paused {
+                *saved = snapshot(canvas);
+            }
+        }
+        looks.release(canvas);
+        panel.set_display(Look::Colour, GlowLevel::Off);
+    }
+    if stage == show::NO_UPDATE {
+        panel.set_display(settings.look, settings.glow);
+        match saved.take() {
+            Some(pic) => {
+                canvas.as_mut_slice().copy_from_slice(pic.as_slice());
+                canvas.dirty_mut().mark_all();
+            }
+            None => canvas.clear(),
+        }
+        looks.redraw();
+        log::info!("update screen: off (the update did not go through); playback resumes");
+    } else {
+        show::draw_update(canvas, stage);
+        log::info!("update screen: {}", if stage == show::INSTALLING { "installing" } else { "updating" });
+    }
+    panel.blit(canvas);
+    *shown = stage;
 }
 
 /// End the panel-timing test, if one runs: the timing that ran before it

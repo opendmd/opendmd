@@ -532,13 +532,19 @@ enum Spec {
     Boot(BootSpec),
 }
 
-/// `@boot[?len=short|full|card&v=&ip=&ap=&note=]`: the start-up show once
-/// (`len`, default short), or one loop of the status card, with its text
-/// from the options ([`crate::boot`]).
+/// `@boot[?len=short|full|card|updating|installing&v=&ip=&ap=&note=&up=1]`:
+/// the start-up show once (`len`, default short; `up=1`: the first boot of
+/// a new version, "Updated to v…"), one loop of the status card, or two
+/// seconds of a firmware update's still message, with its text from the
+/// options ([`crate::boot`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootSpec {
     /// The status card instead of the show.
     card: bool,
+    /// A firmware update's message instead ([`crate::boot::update_notice`]).
+    notice: Option<crate::boot::UpdateStage>,
+    /// The first boot of a new version ([`crate::boot::Info::updated`]).
+    updated: bool,
     len: crate::boot::ShowLength,
     version: String,
     ip: String,
@@ -550,6 +556,8 @@ fn parse_boot(query: &str) -> BootSpec {
     use crate::boot::ShowLength;
     let mut b = BootSpec {
         card: false,
+        notice: None,
+        updated: false,
         len: ShowLength::Short,
         version: String::new(),
         ip: String::new(),
@@ -568,6 +576,11 @@ fn parse_boot(query: &str) -> BootSpec {
         };
         match k {
             b"len" => {
+                b.notice = match v {
+                    b"updating" => Some(crate::boot::UpdateStage::Receiving),
+                    b"installing" => Some(crate::boot::UpdateStage::Installing),
+                    _ => None,
+                };
                 (b.card, b.len) = (
                     v == b"card",
                     if v == b"full" {
@@ -581,6 +594,7 @@ fn parse_boot(query: &str) -> BootSpec {
             b"ip" => b.ip = text(),
             b"ap" => b.ap = text(),
             b"note" => b.note = text(),
+            b"up" => b.updated = v == b"1",
             _ => {}
         }
     }
@@ -755,8 +769,12 @@ impl<R: Read> SynthSource<R> {
                 let delay = crate::boot::frame_delay();
                 let ms = delay.as_millis() as u32;
                 let t = self.frames as u32 * ms;
-                let length = if b.card {
+                let length = if b.notice.is_some() {
+                    NOTICE_MS
+                } else if b.card {
                     crate::boot::CARD_LOOP_MS
+                } else if b.updated {
+                    b.len.min_ms_updated()
                 } else {
                     b.len.min_ms()
                 };
@@ -768,8 +786,11 @@ impl<R: Read> SynthSource<R> {
                     ip: &b.ip,
                     ap: &b.ap,
                     note: &b.note,
+                    updated: b.updated,
                 };
-                if b.card {
+                if let Some(stage) = b.notice {
+                    crate::boot::update_notice(canvas, stage, &b.version);
+                } else if b.card {
                     crate::boot::card(canvas, t, &info, None);
                 } else {
                     crate::boot::show(canvas, b.len, t, &info);
@@ -781,6 +802,9 @@ impl<R: Read> SynthSource<R> {
         Ok(Some(delay))
     }
 }
+
+/// How long `@boot?len=updating|installing` plays its still message.
+const NOTICE_MS: u32 = 2_000;
 
 /// When (ms into the effect) each dot ignites spreads outward from the
 /// centre over this long...
