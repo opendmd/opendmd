@@ -76,16 +76,16 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without
   changing the file.
-- **Formulas:** a few lines of maths that draw the panel's pixels. Ten come with the panel (two
-  clocks, Matrix, a starfield, and six looks to draw over any GIF: scanlines, an old TV, a vignette,
-  sepia, glitter, a corner clock); the online [gallery](https://opendmd.dev/formulas/) has the
+- **Formulas:** a few lines of maths that draw the panel's pixels. Ten come with the panel (a big
+  clock, Matrix, a starfield, an endless synthwave road, a time gate, and five looks to draw over
+  any GIF: scanlines, an old TV, a vignette, an old photo, glitter); the online [gallery](https://opendmd.dev/formulas/) has the
   rest (plasma, fire, rain, a tunnel, Mode 7 rotozoom, a wireframe cube, …) and the ones people share.
   Remix one, drag a number and watch, submit it to the gallery, or save it as a GIF.
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
 - **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
   panel off or dims it.
-- **Smooth playback:** the player prepares a lighter copy of each GIF in the background, so GIFs
-  start quickly and play smoothly.
+- **Smooth playback:** the player gets each GIF ready in the background, so GIFs start
+  quickly and play smoothly.
 
 ## Screenshots
 

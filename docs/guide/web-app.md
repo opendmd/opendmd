@@ -30,8 +30,7 @@ time.
 Like what's on? Tap **☆** next to the title to make it a favourite in the
 playlist that's playing (it turns to **★**; tap again to undo). The
 message that pops up names the playlist. The **…** on a Recently played
-GIF has the rest: play less often, hide, play longer. Clocks, text and
-Formulas have no ☆.
+GIF has the rest: play less often, hide, play longer. Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -81,22 +80,14 @@ and **Add to playlist** puts them all in the playlist you're editing.
 phone. For each one, give it a title, a platform, a category (or a new one)
 and, if you like, an author. The app suggests a title from the file name and
 shows the name the GIF will get on the card. Afterwards it offers to add the
-new GIFs to the playlist that's playing. Each GIF also gets a lighter copy
-for smooth playback, made as it uploads; you don't need to do anything.
+new GIFs to the playlist that's playing. Each GIF is also made ready for
+smooth playback as it uploads; you don't need to do anything.
 
 **Smooth motion.** Some GIFs scroll or move in jumpy steps of a few pixels.
 When the app spots one, a **Smooth motion** switch appears under its
 preview. Turn it on and the panel fills in the in-between steps so it glides
 instead. Your GIF file isn't changed, and you can switch it off again any
 time.
-
-Follow RePlayOS shows a playlist in its menus (**Settings → Schedule →
-Follow RePlayOS → attract playlist**). To show a Formula there, make a
-playlist of it and choose that playlist; the bundled **Big clock** Formula is
-a clock, and it follows the time zone in **Settings → Schedule → Time**.
-
-The classic demo-scene animations (a tunnel, Mode 7 rotozoom, a starfield,
-a spinning cube) are [Formulas](formulas.md) now, in their own view.
 
 ## Playlists
 
@@ -187,12 +178,16 @@ Settings has four tabs, and everything saves as you change it (a green
     for that game; in the menus it plays a playlist of your choice. Turn on
     NET CONTROL on the box, then enter its address and code here and press
     **Test**.
+    The **attract playlist** is what the menus show. To show a Formula
+    there, make a playlist of it and choose that playlist; the bundled
+    **Big clock** Formula is a clock, and it follows the time zone under
+    **Time**.
 - **Device:**
   - **Status**: the playlist and how many GIFs it has, the card, how long
     the player has been running, its memory, and late frames (frames the
     panel showed late enough to see). **Reload playlist** reads the card
     again if you changed it in a computer; **Reboot** restarts the player.
-  - **Playback cache** shows how many GIFs are ready to play at their
+  - **Ready to play** shows how many GIFs are ready to play at their
     smoothest. The player gets them ready by itself while the panel is
     dark at night (**Night mode** under **Schedule**) or the player is
     paused; **Also while playing** lets it do a little more while it

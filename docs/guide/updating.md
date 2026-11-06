@@ -39,15 +39,14 @@ release once it is newer.
 The [installer](install.md) offers the latest release, and the latest
 beta too when there is one newer than it.
 
-## Once before 1.0: an update over USB
+## Coming from a beta before 1.0.0-beta.16
 
-One update before OpenDMD 1.0 changes how the board's memory is laid out,
-to give the firmware more room. That one can't go over WiFi: **Check for
-updates** says so and points to the installer, and a firmware file for the
-new layout is refused before anything is written. Use the
-[installer](install.md) for it, as below: **Update OpenDMD** (or **Install**
-with **Erase device** unticked) keeps your WiFi details and settings.
-After that, updates go over WiFi again.
+Betas before 1.0.0-beta.16 used an older layout of the board's memory. A
+player on one of them can't take 1.0 over WiFi: **Check for updates** says
+so and points to the installer, and a firmware file for the new layout is
+refused before anything is written. Use the [installer](install.md) once
+(**Update OpenDMD** keeps your WiFi and settings); after that updates go
+over WiFi again.
 
 ## With the installer
 
@@ -58,10 +57,8 @@ If the player won't start or you can't reach the web app, the
    display's board into your computer by USB.
 2. Click **Install** and pick the board's port. The installer shows the
    version the board runs.
-3. Click **Update OpenDMD**. (A board on an older version that the
-   installer doesn't recognise gets **Install** and the erase question
-   instead: **leave Erase device unticked.** Ticking it wipes your WiFi
-   details and settings.)
+3. Click **Update OpenDMD**. **Erase device** stays unticked for an
+   update: ticking it wipes your WiFi details and settings.
 
 The panel stays dark while the installer writes. The board restarts with
 the new version, says **Updated to** it on the panel, and rejoins your

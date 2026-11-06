@@ -67,10 +67,11 @@ everything back. After trying a different driver chip, switch the display
 off and on before judging the result. If nothing helps, the panel itself
 may be faulty.
 
-## Settings says "Card running at reduced speed" or shows card errors
+## Settings shows card errors
 
-The card is wearing out. The player keeps going as best it can, but replace
-the card soon and copy your GIFs over.
+Settings says "Card errors: N, retrying". The card is wearing out. The
+player keeps going as best it can, but replace the card soon and put your
+GIFs on the new one.
 
 ## The web app won't load, or looks broken
 
