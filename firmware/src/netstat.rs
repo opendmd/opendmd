@@ -10,9 +10,11 @@
 //!   what lwIP held just after (the walk posted at the low).
 //! - **lwIP** (`components/hub75_shim/netstat.c`, walked on its own thread
 //!   once a second by the network worker): pcbs, TIME_WAIT pcbs, received
-//!   frames held (each one of the WiFi driver's six receive buffers), bytes
-//!   queued to send (kept until the client's ACK), and the most
-//!   retransmissions of one segment; now and the most over the window.
+//!   frames held (each one of the WiFi driver's eight receive buffers), bytes
+//!   queued to send (kept until the client's ACK), the most
+//!   retransmissions of one segment, and the connections waiting for
+//!   `accept` (`backlog`: at the listen backlog, 6, a SYN is dropped); now
+//!   and the most over the window.
 //! - **Dead connections aborted at close** ([`close_dead`]).
 
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -22,6 +24,7 @@ extern "C" {
     fn opendmd_close_dead(fd: i32);
     static opendmd_netstat: [i32; 6];
     static opendmd_netstat_aborted: i32;
+    static opendmd_netstat_backlog: i32;
 }
 
 /// Where a heap sample was taken.
@@ -65,8 +68,14 @@ const LOW0: Low = Low {
 /// Since boot, this window, the last window.
 static LOWS: [Low; 3] = [LOW0, LOW0, LOW0];
 static WINDOW: AtomicU32 = AtomicU32::new(0);
-/// lwIP's most over this window and the last: rx frames, tx bytes, rtx.
-static MAX: [[AtomicU32; 3]; 2] = [[const { AtomicU32::new(0) }; 3], [const { AtomicU32::new(0) }; 3]];
+/// lwIP's most over this window and the last: rx frames, tx bytes, rtx,
+/// connections waiting for accept.
+static MAX: [[AtomicU32; 4]; 2] = [[const { AtomicU32::new(0) }; 4], [const { AtomicU32::new(0) }; 4]];
+
+fn backlog() -> u32 {
+    // SAFETY: a C int written by the walk on the tcpip thread.
+    unsafe { std::ptr::read_volatile(&opendmd_netstat_backlog) }.max(0) as u32
+}
 
 fn uptime_s() -> u32 {
     // SAFETY: a plain clock read.
@@ -159,7 +168,7 @@ pub fn tick() {
     roll(uptime_s());
     settle();
     let c = counts();
-    for (k, v) in [c[2], c[3], c[4]].into_iter().enumerate() {
+    for (k, v) in [c[2], c[3], c[4], backlog()].into_iter().enumerate() {
         MAX[0][k].fetch_max(v, Relaxed);
     }
     // SAFETY: posts a count to lwIP's thread; no arguments.
@@ -197,14 +206,15 @@ pub fn json() -> String {
     let c = counts();
     let max = |w: usize| {
         format!(
-            r#"{{"rx_frames":{},"tx_bytes":{},"rtx":{}}}"#,
+            r#"{{"rx_frames":{},"tx_bytes":{},"rtx":{},"backlog":{}}}"#,
             MAX[w][0].load(Relaxed),
             MAX[w][1].load(Relaxed),
-            MAX[w][2].load(Relaxed)
+            MAX[w][2].load(Relaxed),
+            MAX[w][3].load(Relaxed)
         )
     };
     format!(
-        r#"{{"heap_low":{},"heap_low_recent":[{},{}],"window_s":{WINDOW_S},"lwip":{{"pcbs":{},"time_wait":{},"rx_frames":{},"tx_bytes":{},"rtx":{}}},"lwip_max":[{},{}],"aborted_at_close":{}}}"#,
+        r#"{{"heap_low":{},"heap_low_recent":[{},{}],"window_s":{WINDOW_S},"lwip":{{"pcbs":{},"time_wait":{},"rx_frames":{},"tx_bytes":{},"rtx":{},"backlog":{}}},"lwip_max":[{},{}],"aborted_at_close":{}}}"#,
         low_json(&LOWS[0]),
         low_json(&LOWS[1]),
         low_json(&LOWS[2]),
@@ -213,6 +223,7 @@ pub fn json() -> String {
         c[2],
         c[3],
         c[4],
+        backlog(),
         max(0),
         max(1),
         // SAFETY: a C int.

@@ -874,6 +874,11 @@ fn main() -> Result<()> {
                     }
                 }
                 Command::Release { screen, reply } => {
+                    // Withdrawn by its handler (not taken within
+                    // `http::TAKE_WAIT`, answered 503): not done at all.
+                    if !reply.claim() {
+                        continue;
+                    }
                     if let Some(e) = engine.as_mut() {
                         ahead::release(e);
                         if screen {
@@ -883,6 +888,9 @@ fn main() -> Result<()> {
                     let _ = reply.send(());
                 }
                 Command::TogglePause(reply) => {
+                    if !reply.claim() {
+                        continue;
+                    }
                     let now = epoch.elapsed();
                     let paused = match engine.as_mut() {
                         Some(e) => {
@@ -925,6 +933,9 @@ fn main() -> Result<()> {
                     psb,
                     reply,
                 } => {
+                    if !reply.claim() {
+                        continue;
+                    }
                     if psb.is_some() {
                         opendmd_core::synth::set_sent(psb);
                     }
@@ -1003,6 +1014,9 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
                 Command::Back(reply) => {
+                    if !reply.claim() {
+                        continue;
+                    }
                     // The history lives in the status (one copy); its start
                     // is recognised when published below.
                     let target = status.lock().unwrap().recent.back();
@@ -1477,6 +1491,9 @@ fn main() -> Result<()> {
                     );
                 }
                 Command::PanelTest { setting, reply } => {
+                    if !reply.claim() {
+                        continue;
+                    }
                     let refused = setting.and_then(|s| panel_test::refusal(s, &tuner, sched.off()));
                     let outcome = match (setting, refused) {
                         (Some(_), Some(why)) => Err(why.to_string()),

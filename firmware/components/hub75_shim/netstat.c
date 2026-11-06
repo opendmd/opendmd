@@ -20,6 +20,10 @@
 // of one segment (nrtx) among the pcbs, walks done
 volatile int opendmd_netstat[6];
 volatile int opendmd_netstat_aborted;
+// Connections waiting for accept() at the walk (the most over the listening
+// pcbs' accepts_pending: handshaking, or established and not taken yet);
+// lwIP drops a SYN once that reaches the listen backlog (net-stall).
+volatile int opendmd_netstat_backlog;
 
 static int seg_pbufs(struct tcp_seg *s) {
     int n = 0;
@@ -34,9 +38,17 @@ static int seg_bytes(struct tcp_seg *s) {
 
 static void walk(void *arg) {
     (void)arg;
-    int pcbs = 0, tw = 0, rx = 0, tx = 0, rtx = 0;
+    int pcbs = 0, tw = 0, rx = 0, tx = 0, rtx = 0, backlog = 0;
     for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
         pcbs++;
+#if TCP_LISTEN_BACKLOG
+        // Established, not accepted yet: no socket, so its frames are in
+        // its netconn's mailbox, which the socket walk below cannot see.
+        if ((p->flags & TF_BACKLOGPEND) && p->state != SYN_RCVD && p->callback_arg) {
+            struct netconn *c = (struct netconn *)p->callback_arg;
+            if (sys_mbox_valid(&c->recvmbox)) rx += uxQueueMessagesWaiting(c->recvmbox->os_mbox);
+        }
+#endif
         if (p->refused_data) rx += pbuf_clen(p->refused_data);
 #if TCP_QUEUE_OOSEQ
         rx += seg_pbufs(p->ooseq);
@@ -45,6 +57,10 @@ static void walk(void *arg) {
         if (p->nrtx > rtx) rtx = p->nrtx;
     }
     for (struct tcp_pcb *p = tcp_tw_pcbs; p; p = p->next) tw++;
+#if TCP_LISTEN_BACKLOG
+    for (struct tcp_pcb_listen *l = tcp_listen_pcbs.listen_pcbs; l; l = l->next)
+        if (l->accepts_pending > backlog) backlog = l->accepts_pending;
+#endif
     for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
         struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
         if (!s || !s->conn) continue;
@@ -56,6 +72,7 @@ static void walk(void *arg) {
     opendmd_netstat[2] = rx;
     opendmd_netstat[3] = tx;
     opendmd_netstat[4] = rtx;
+    opendmd_netstat_backlog = backlog;
     opendmd_netstat[5]++;
 }
 
