@@ -454,10 +454,10 @@ site-stats: site-worker-deps
 	uv run tools/site-stats.py
 
 site-worker-test: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))
+	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE))
 
 site-dev-smoke: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
+	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
 
 site-deploy-check: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
