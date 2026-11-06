@@ -259,10 +259,11 @@ else
 fi
 
 # The channel: the newest final release other than this one (tags here and on GitHub).
+# 0.x finals (v0.3.0) predate the channels and have no GitHub release: not counted.
 FINAL=
 while read -r t; do
   v=${t#v}; valid_version "$v" || continue
-  [[ $v == *-* ]] || [ "$v" = "$VERSION" ] && continue
+  [[ $v == *-* ]] || [ "$v" = "$VERSION" ] || [[ $v == 0.* ]] && continue
   if [ -z "$FINAL" ] || [ "$(semver_cmp "$v" "$FINAL")" = 1 ]; then FINAL=$v; fi
 done < <(git tag -l 'v*'; awk '{ sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' <<<"$REMOTE_TAGS")
 if [ "$KIND" = prerelease ] && [ -n "$FINAL" ]; then

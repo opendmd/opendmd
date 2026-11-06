@@ -116,7 +116,8 @@ jobs:
           [ "$NEWEST" = "$VERSION" ] || { echo "::error::$VERSION is not newer than every v* tag (newest: $NEWEST)"; exit 1; }
           # The channel: a beta after a final release updates beta.json only
           # (release.json stays on the newest final, FINAL); anything else both.
-          FINAL="$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$VERSION" | sort -V | tail -1 || true)"
+          # 0.x finals (v0.3.0) predate the channels: not counted.
+          FINAL="$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^0\.' | grep -vx "$VERSION" | sort -V | tail -1 || true)"
           if [[ "$VERSION" == *-* && -n "$FINAL" ]]; then
             echo "channel=beta" >> "$GITHUB_OUTPUT"; echo "final=$FINAL" >> "$GITHUB_OUTPUT"
             echo "Channel: beta (after the final $FINAL): beta.json names $VERSION, release.json stays on $FINAL"
