@@ -3296,7 +3296,9 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                 ..Default::default()
             };
         }
-        let mut next = c.settings.lock().unwrap().clone();
+        // On the heap, not this task's stack (it and its copy below are
+        // ~0.5 KB each, and the httpd stack is tight: `config::HTTP_STACK`).
+        let mut next = Box::new(c.settings.lock().unwrap().clone());
         // WiFi details are read once, when the network starts: saved now,
         // in effect after a reboot. (Asked before the patch is applied, so
         // no copy of the old details is kept on this task's stack.)
@@ -3372,7 +3374,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         if c.cmd
             .send(Command::ApplyConfig {
-                settings: Box::new(next),
+                settings: next,
                 panel: panel_op,
                 reply: tx,
             })
@@ -3408,7 +3410,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                     shared.panel_sync,
                     shared.panel_split
                 );
-                *c.settings.lock().unwrap() = shared;
+                *c.settings.lock().unwrap() = *shared;
                 // In effect at once: the sky's inputs for the new location
                 // (or zone), here on CPU0 (the zone is already set).
                 if sky_changed {
