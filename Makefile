@@ -380,7 +380,13 @@ GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
 # name is from its GitHub Pages days, it serves nothing now).
 GALLERY_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
-# does not build one (fw-release needs the xtensa toolchain).
+# does not build one (fw-release needs the xtensa toolchain). DIST is the
+# release install/release.json and the Install button name (the newest
+# final; before the first final, the newest beta); BETA_DIST=<a dist> a
+# beta newer than it (a beta after a final: tools/release.sh fetches the
+# final's files for DIST), which install/beta.json then names. Without it
+# beta.json is release.json (docs/deploying.md "Betas").
+BETA_DIST ?=
 gallery-tool:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked
 
@@ -388,14 +394,15 @@ site: web sim-build gallery-tool
 	@test -f $(DIST)/manifest-4mb.json -a -f $(DIST)/manifest-8mb.json || { echo "no $(DIST)/manifest-{4mb,8mb}.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
-	uv run tools/site.py $(SITE) --www $(WEB_DIST) --card target/demo-card --art target/site-art --dist $(DIST) \
+	@test -z "$(BETA_DIST)" || test -f $(BETA_DIST)/manifest-4mb.json -a -f $(BETA_DIST)/manifest-8mb.json || { echo "no $(BETA_DIST)/manifest-{4mb,8mb}.json (BETA_DIST)"; exit 2; }
+	uv run tools/site.py $(SITE) --www $(WEB_DIST) --card target/demo-card --art target/site-art --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) \
 		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
 		--api-freeze $(API_FREEZE)
 
 # The site's pages in Chromium (the formula page, the gallery, the API pages and
 # the install page), after make site.
 site-smoke:
-	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art $(if $(SITE_BASE),--base $(SITE_BASE))
+	uv run tools/site-smoke.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) --art target/site-art $(if $(SITE_BASE),--base $(SITE_BASE))
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
@@ -447,10 +454,10 @@ site-stats: site-worker-deps
 	uv run tools/site-stats.py
 
 site-worker-test: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))
+	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE))
 
 site-dev-smoke: site-worker-deps gallery-tool
-	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
+	uv run tools/site-worker-test.py $(SITE) --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
 
 site-deploy-check: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }

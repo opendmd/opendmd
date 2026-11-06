@@ -345,6 +345,17 @@ browser doing the fetching: the player itself never goes to the internet.
   names another `release.json`, and the "is out" line names that feed's
   host. A release's web app reads opendmd.dev's alone: no link can point
   its updates elsewhere.
+- **Betas.** The site also publishes `install/beta.json`, the same shape:
+  the newest release of all, beta or final, where `release.json` names
+  the newest final release (before the first final, both name the newest
+  beta). A beta newer than the final release has its files under
+  `install/firmware/beta/`, which `beta.json`'s paths name. With the
+  player's `beta_updates` setting on (Settings → Device → Firmware → **Get
+  beta updates**, off by default; `GET/PUT /api/config`, kept in NVS and
+  the card's `/opendmd.json`), the page reads `beta.json` instead, asked
+  the same way (`?v=&layout=`). Turning it off installs nothing: a player
+  on a beta is up to date until a final release newer than it comes out
+  (`older()`: 1.0.0-beta.16 < 1.0.0 < 1.0.1-beta.1 < 1.0.1).
 - **What counts as newer.** The firmware: the release's `version` against
   `GET /api/firmware`'s, with `older()` (1.0.0 is newer than 0.3.13). The web
   app: `www_version` against `GET /api/www`'s `version`, `git describe`

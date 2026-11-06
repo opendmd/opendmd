@@ -18,6 +18,22 @@ The phone or computer you're using needs to be online: the app downloads
 the update from this site before handing it to the player. If anything
 goes wrong it tells you what, and nothing is left half-installed.
 
+## Beta updates
+
+Before each release there are **betas**: early versions of it, so you can
+try what's new sooner. They may have problems. To get them, switch on
+**Get beta updates** under **Settings → Device → Firmware**; **Check for
+updates** then offers the newest beta as well as the releases. The switch
+is kept on the player, so every phone or computer you use sees the same
+choice.
+
+You can switch it off at any time. That doesn't take the player back to
+an older version: it keeps the beta it has, and gets the next regular
+release once it is newer.
+
+The [installer](install.md) offers the latest release, and the latest
+beta too when there is one newer than it.
+
 ## Once before 1.0: an update over USB
 
 One update before OpenDMD 1.0 changes how the board's memory is laid out,

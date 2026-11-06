@@ -18,7 +18,14 @@
                dist/manifest-4mb.json names, the merged image, the signed
                update bundles (every layout's: release.json points at them),
                plus install/release.json (what the web app's update check
-               reads)
+               reads: the newest final release) and install/beta.json (the
+               same shape: the newest release, beta or final, what a player
+               with Get beta updates on reads). `--dist` is the release
+               release.json and the Install button name; `--beta-dist`, a
+               beta newer than it (after a final release), puts that beta's
+               installer and update files under install/firmware/beta/,
+               beta.json naming them, and a second, smaller button on the
+               install page; without it beta.json is release.json
 - /guide/      the user guide (docs/guide/), with its own index
                (site/pages/guide.md) and a side menu
 - /dev/        the developer pages: an overview and a few clean references
@@ -272,6 +279,21 @@ INSTALL_ONE = """<div class="board" id="board-{v}">
 INSTALL_BUTTON = ('<div class="install"><div class="boards">'
                   + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in ((v, BOARDS[v]) for v in INSTALL_BOARDS))
                   + '</div><p class="ver">OpenDMD {version}.</p></div>')
+# A beta newer than the final release (`--beta-dist`): its installer and
+# update files under install/firmware/beta/ (its own manifest, bootloader,
+# table and updater: a beta may change any of them), and a smaller button
+# below the release's, for the DevKit only.
+BETA_DIR = "firmware/beta"
+INSTALL_BETA = """<details class="beta-install" id="beta-install">
+<summary>Or install the beta, OpenDMD {version}</summary>
+<p>Betas are early versions of the next release: new things sooner, and they may have problems. To get the next
+betas over WiFi as well, switch on Get beta updates in the web app's Settings, Firmware.</p>
+<esp-web-install-button id="install-beta-4mb" manifest="{dir}/manifest-4mb.json">
+<button slot="activate" id="install-activate-beta-4mb">Install the beta</button>
+<span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge, Opera or Firefox on a computer.</span>
+<span slot="not-allowed">This page has to be opened over https.</span>
+</esp-web-install-button>
+</details>"""
 # Other files published as they are: repo path -> published path.
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
@@ -328,8 +350,8 @@ whether anyone is using it. It counts requests, not people.
   failed install. A reinstall from the same browser may not reach the site at
   all (the browser already has the file), and then it isn't counted.
 - **An update check**: each time a panel's web app checks for updates
-  (Settings › Check for updates), with the panel's firmware version and board.
-  Panels themselves never contact this site, so a panel that never checks for
+  (Settings › Check for updates), with the panel's firmware version and board,
+  whether it gets beta updates or not. Panels themselves never contact this site, so a panel that never checks for
   updates isn't seen.
 
 ## What isn't
@@ -465,7 +487,8 @@ def headers_file() -> str:
     # opendmd-<version>-…: named by the release (a published tag is never
     # rebuilt). The manifests, bootloader, table, otadata and updater keep
     # their names from release to release: the default.
-    rules.append(("/install/firmware/opendmd-*", ["! Cache-Control", f"Cache-Control: {CACHE_IMMUTABLE}"]))
+    for d in ("/install/firmware/", f"/install/{BETA_DIR}/"):
+        rules.append((d + "opendmd-*", ["! Cache-Control", f"Cache-Control: {CACHE_IMMUTABLE}"]))
     # One block per path: a second block for the same path replaces the first.
     merged: dict[str, list[str]] = {}
     for path, hs in rules:
@@ -719,16 +742,8 @@ def bundle_layout(path: Path, variant: str) -> int:
     return got[1]
 
 
-def release(dist: Path, out: Path) -> dict:
-    """The current release in dist/ (fw-release keeps older versions there
-    too), both flash layouts: the parts the offered layouts' manifests name, the merged
-    images and the signed bundles of that version only, under
-    install/firmware/; and install/release.json for the web app's update
-    check: `firmware` (the 4mb bundle: what web apps from before the 8 MB
-    layout read) and `variants`, each layout's bundle and the version of
-    the partition table it is for (`layout`, from its magic: a player on
-    another table needs a USB install, which the web app says). (Only INSTALL_BOARDS
-    get a manifest, parts and image on the site; all get their bundle.)"""
+def manifests(dist: Path) -> tuple[dict, str]:
+    """dist/'s manifests, every layout's, and the one version they share."""
     ms = {}
     for v in BOARDS:
         manifest = dist / f"manifest-{v}.json"
@@ -737,8 +752,23 @@ def release(dist: Path, out: Path) -> dict:
         ms[v] = json.loads(manifest.read_text())
     ver = ms["4mb"]["version"]
     if any(m["version"] != ver for m in ms.values()):
-        raise SystemExit(f"the manifests are for different versions: {[m['version'] for m in ms.values()]}")
-    fw = out / "install/firmware"
+        raise SystemExit(f"{dist}: the manifests are for different versions: {[m['version'] for m in ms.values()]}")
+    return ms, ver
+
+
+def publish(dist: Path, install: Path, sub: str) -> dict:
+    """One release in dist/ (fw-release keeps older versions there too),
+    both flash layouts, into install/<sub>/: the parts the offered layouts'
+    manifests name, the merged images and the signed bundles of that
+    version only; returns its release.json (paths relative to install/):
+    `firmware` (the 4mb bundle: what web apps from before the 8 MB layout
+    read) and `variants`, each layout's bundle and the version of the
+    partition table it is for (`layout`, from its magic: a player on
+    another table needs a USB install, which the web app says). (Only
+    INSTALL_BOARDS get a manifest, parts and image on the site; all get
+    their bundle.)"""
+    ms, ver = manifests(dist)
+    fw = install / sub
     fw.mkdir(parents=True)
     # Only the layouts the install page offers get their manifest, parts and
     # merged image on the site; every layout's signed bundle is published,
@@ -753,29 +783,54 @@ def release(dist: Path, out: Path) -> dict:
         if not (dist / name).is_file():
             raise SystemExit(f"no {dist / name}: run make fw-release")
         shutil.copyfile(dist / name, fw / name)
-    # The name installers before the 8 MB layout fetched: an installer tab
-    # left open across a release still finds a manifest (the DevKit's; its
-    # parts are named relative to it, so they are the ones published here).
-    shutil.copyfile(dist / "manifest-4mb.json", fw / "manifest.json")
     # The www pack's version: the header's string (docs/www-pack.md), the
     # one GET /api/www reports.
     pack = (fw / f"opendmd-{ver}-www.pack").read_bytes()[:64]
     if pack[:4] != b"ODWP":
         raise SystemExit(f"opendmd-{ver}-www.pack is not a www pack")
     www_version = pack[20:20 + pack[18]].decode()
-    info = {"version": ver, "firmware": f"firmware/opendmd-{ver}-4mb.odfw",
-            "variants": {v: {"firmware": f"firmware/opendmd-{ver}-{v}.odfw",
+    return {"version": ver, "firmware": f"{sub}/opendmd-{ver}-4mb.odfw",
+            "variants": {v: {"firmware": f"{sub}/opendmd-{ver}-{v}.odfw",
                              "layout": bundle_layout(fw / f"opendmd-{ver}-{v}.odfw", v)} for v in ms},
-            "www": f"firmware/opendmd-{ver}-www.pack", "www_version": www_version}
-    (out / "install/release.json").write_text(json.dumps(info, indent=2) + "\n")
-    return info
+            "www": f"{sub}/opendmd-{ver}-www.pack", "www_version": www_version}
+
+
+def release(dist: Path, out: Path, beta_dist: Path | None = None) -> tuple[dict, dict | None]:
+    """install/: the release `dist` holds (the newest final, or the newest
+    beta before there is a final) under install/firmware/, named by
+    install/release.json and the Install button; and install/beta.json, the
+    feed of players with Get beta updates on (update.js): the beta in
+    `beta_dist` (newer than `dist`'s release, under install/firmware/beta/),
+    else the same as release.json. Returns release.json's and the beta's
+    (None without one)."""
+    install = out / "install"
+    info = publish(dist, install, "firmware")
+    # The name installers before the 8 MB layout fetched: an installer tab
+    # left open across a release still finds a manifest (the DevKit's; its
+    # parts are named relative to it, so they are the ones published here).
+    shutil.copyfile(dist / "manifest-4mb.json", install / "firmware/manifest.json")
+    text = json.dumps(info, indent=2) + "\n"
+    (install / "release.json").write_text(text)
+    beta = None
+    if beta_dist is not None:
+        _, bver = manifests(beta_dist)
+        if semver_key(bver) <= semver_key(info["version"]):
+            raise SystemExit(f"--beta-dist is {bver}, not newer than --dist's {info['version']}: "
+                             "beta.json names the newest release (without --beta-dist it is release.json)")
+        beta = publish(beta_dist, install, BETA_DIR)
+        text = json.dumps(beta, indent=2) + "\n"
+    (install / "beta.json").write_text(text)
+    return info, beta
 
 
 def markers(page: str, text: str, rel_info: dict) -> str:
     """Site-only pieces, written in the docs as HTML comments (invisible on
     GitHub): the install button, the update bundle's download link."""
     ver = html.escape(rel_info["version"])
-    text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.replace("{version}", ver))
+    button = INSTALL_BUTTON.replace("{version}", ver)
+    if rel_info.get("beta"):
+        button += INSTALL_BETA.format(version=html.escape(rel_info["beta"]), dir=BETA_DIR)
+    text = text.replace("<!-- site:install-button -->", button)
     links = []
     for v in INSTALL_BOARDS:
         board = BOARDS[v][0]
@@ -921,7 +976,7 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
     tree is the release's tag, clean (`git describe --match 'v*'` is exactly
     v<version>, the test gallery-repo-publish.sh makes); a site built from main
     between releases freezes nothing. Returns the versions, newest first."""
-    ver = info["version"]
+    ver = info.get("beta") or info["version"]  # this tree's release: a beta after a final is the newest
     frozen = api_archive(archive)
     if frozen:
         (out / API_DIR).mkdir(parents=True, exist_ok=True)
@@ -959,7 +1014,11 @@ def main() -> None:
     ap.add_argument("--www", type=Path)
     ap.add_argument("--card", type=Path)
     ap.add_argument("--art", type=Path, required=True, help="the artwork from tools/site-art.py")
-    ap.add_argument("--dist", type=Path, required=True, help="the release from make fw-release")
+    ap.add_argument("--dist", type=Path, required=True,
+                    help="the release from make fw-release: release.json's and the installer's (the newest final, "
+                         "or the newest beta before any final)")
+    ap.add_argument("--beta-dist", type=Path,
+                    help="a beta newer than --dist's release (after a final): beta.json's, a second install button")
     ap.add_argument("--gallery-tool", type=Path, help="opendmd-gallery, built (make gallery-tool)")
     ap.add_argument("--gallery", type=Path, help="the public gallery repo's gallery/ (contributions), if fetched")
     ap.add_argument("--api-archive", type=Path, help="the public gallery repo's dev/api/ (earlier releases' API pages), if fetched")
@@ -979,7 +1038,7 @@ def main() -> None:
             shutil.rmtree(out)
         out.mkdir(parents=True)
     if a.api_only:
-        m = json.loads((a.dist / "manifest-4mb.json").read_text())
+        m = json.loads(((a.beta_dist or a.dist) / "manifest-4mb.json").read_text())
         info = {"version": m["version"], "firmware": f"firmware/opendmd-{m['version']}-4mb.odfw"}
         art = json.loads((a.art / "art.json").read_text())
         assets: set[str] = set()
@@ -1002,7 +1061,9 @@ def main() -> None:
     shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
     for name in ROOT_SCRIPTS:
         shutil.copyfile(ROOT / "opendmd-web/share/ref" / name, out / name)
-    info = release(a.dist, out)
+    info, beta = release(a.dist, out, a.beta_dist)
+    if beta:
+        info = {**info, "beta": beta["version"]}
     write_art_index(out)
     (out / "art/strip").mkdir(parents=True)
     for i in art["items"]:

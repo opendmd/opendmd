@@ -44,8 +44,12 @@ version=${GALLERY_REPO_DESCRIBE:-$(git describe --always --dirty --tags --match 
 case $version in *-dirty) [ "${GALLERY_REPO_ALLOW_DIRTY:-}" = 1 ] || { echo "refusing: the working tree is dirty ($version); commit first" >&2; exit 1; };; esac
 # The repo is public: name the release the site carries, not a development
 # describe ("OpenDMD v1.0.0", or "OpenDMD v1.0.0, docs of 2026-10-21" when
-# the docs moved on since the tag).
-release=v$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$site/install/release.json")
+# the docs moved on since the tag). The newest release the site carries:
+# install/beta.json's (a beta after a final release; else the same as
+# release.json's), release.json's on a site from before beta.json.
+feed=$site/install/beta.json
+[ -f "$feed" ] || feed=$site/install/release.json
+release=v$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$feed")
 label=$release
 [ "$version" = "$release" ] || label="$release, docs of $(date -u +%F)"
 # A release's site carries its own API page (tools/site.py freezes it when

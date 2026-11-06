@@ -8,8 +8,11 @@
 //            and the rest, which are not counted), and the merged
 //            opendmd-<version>-<variant>-full.bin (an install by hand)
 //   check    GET /install/release.json (Settings › Check for updates in a
-//            panel's web app), ?v=<the panel's firmware version>&layout=<4mb|8mb>
-//            (update.js; a web app from before sends neither: unknown)
+//            panel's web app), or /install/beta.json (the same, with Get
+//            beta updates on), ?v=<the panel's firmware version>&layout=<4mb|8mb>
+//            (update.js; a web app from before sends neither: unknown). Both
+//            feeds count as one kind: a check is a check
+//   (an install of the beta, from install/firmware/beta/, is an install too)
 //
 // Counted only on opendmd.dev (relay.home), for a GET whose answer is the
 // file (200, or 304: the browser had it and asked again) and not a later
@@ -33,7 +36,9 @@ export interface CountsEnv {
 }
 
 export const RELEASE_JSON = "/install/release.json";
-const IMAGE = /^\/install\/firmware\/opendmd-(.+)-(4mb|8mb)-(?:app|full)\.bin$/;
+export const BETA_JSON = "/install/beta.json";
+const FEEDS = new Set([RELEASE_JSON, BETA_JSON]);
+const IMAGE = /^\/install\/firmware\/(?:beta\/)?opendmd-(.+)-(4mb|8mb)-(?:app|full)\.bin$/;
 const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9a-z]{1,16}(?:\.[0-9a-z]{1,16}){0,3})?$/;
 const VARIANTS = new Set(["4mb", "8mb"]);
 const MAX_VERSIONS = 40;
@@ -56,7 +61,7 @@ export function variant(v: string | null): string {
 /** What a request counts as, if anything (before its answer is known). */
 function what(request: Request, url: URL): { kind: string; version: string; variant: string } | null {
   if (request.method !== "GET") return null;
-  if (url.pathname === RELEASE_JSON) {
+  if (FEEDS.has(url.pathname)) {
     return { kind: "check", version: version(url.searchParams.get("v")), variant: variant(url.searchParams.get("layout")) };
   }
   const m = IMAGE.exec(url.pathname);
@@ -85,7 +90,7 @@ async function bump(db: D1Database, kind: string, ver: string, vari: string, now
 
 /** Is this one of the counted paths (cloudflare.config.ts runWorkerFirst)? */
 export function counted(pathname: string): boolean {
-  return pathname === RELEASE_JSON || IMAGE.test(pathname);
+  return FEEDS.has(pathname) || IMAGE.test(pathname);
 }
 
 /** The asset, as the asset layer answers it; then the count, if it is one. */

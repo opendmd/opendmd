@@ -24,7 +24,7 @@ runs against the same server (--base).
   /x); an address with nothing there gets the 404 page with a 404;
 - _redirects: every line a 301 to where it says, which answers 200;
 - _headers: one CSP on every response, the right one per path; nosniff;
-  no COOP/COEP; CORS * on install/, art-index/, formulas/src/; release.json for 60 s,
+  no COOP/COEP; CORS * on install/, art-index/, formulas/src/; release.json and beta.json for 60 s,
   the version-named release files immutable, the web app's files and the
   pages and scripts on them (demo/, f/, create/, dev/psi/, psiled.js, …)
   no-cache, the rest 600 s;
@@ -59,7 +59,9 @@ runs against the same server (--base).
 - the usage counts (src/counts.ts, locally, in cf dev's D1 file): the
   counts table's columns are day, kind, version, variant and n only (no
   address, agent, cookie, referrer or device id; no other table), the
-  installer's app.bin and full.bin and release.json?v=&layout= each add one
+  installer's app.bin and full.bin, release.json?v=&layout= and beta.json?v=&layout=
+  (one kind, check; and a beta's app.bin under install/firmware/beta/ when
+  the site has one) each add one
   to the right (day, kind, version, variant), answered byte for byte as the
   files are, with their headers; a Range from past byte 0, a HEAD, the
   bootloader, the manifest and a missing image count nothing; junk versions
@@ -356,6 +358,7 @@ def headers(base: str, site: Path) -> None:
         "/formulas/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, ("public, max-age=60", "public, max-age=600")),
         "/install/": ("script-src 'self'; object-src", "jsdelivr", "*", "public, max-age=600"),
         "/install/release.json": (None, None, "*", "public, max-age=60"),
+        "/install/beta.json": (None, None, "*", "public, max-age=60"),
         f"/install/firmware/opendmd-{ver}-4mb.odfw": (None, None, "*", "public, max-age=31536000, immutable"),
         f"/install/firmware/opendmd-{ver}-www.pack": (None, None, "*", "public, max-age=31536000, immutable"),
         "/install/firmware/manifest-4mb.json": (None, None, "*", "public, max-age=600"),
@@ -488,6 +491,26 @@ def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
         want[(today, "check", *key)] = want.get((today, "check", *key), 0) + 1
         got = counts_wait(db, want)
         check(st == 200 and body == rel_bytes and got == want, f"release.json{q[:40]}: counted as {key} ({st})")
+    # beta.json, the feed with Get beta updates on: the same treatment, a check too.
+    beta_bytes = (site / "install/beta.json").read_bytes()
+    plain = get(base, "/install/beta.json", "HEAD")
+    st, h, body = get(base, f"/install/beta.json?v={ver}&layout=8mb")
+    want[(today, "check", ver, "8mb")] = want.get((today, "check", ver, "8mb"), 0) + 1
+    got = counts_wait(db, want)
+    check(st == 200 and body == beta_bytes and same(h, plain[1]) and h.get("Access-Control-Allow-Origin") == "*"
+          and h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and not h.get("Set-Cookie") and got == want,
+          f"beta.json?v=&layout=: the file byte for byte, its headers as the assets send them, one check for ({ver}, 8mb) ({st}) {got}")
+    # A beta newer than the release (install/firmware/beta/): its installs count, by its version.
+    bdir = site / "install/firmware/beta"
+    if bdir.is_dir():
+        bver = json.loads(beta_bytes)["version"]
+        name = f"opendmd-{bver}-4mb-app.bin"
+        st, h, body = get(base, f"/install/firmware/beta/{name}")
+        want[(today, "install", bver, "4mb")] = want.get((today, "install", bver, "4mb"), 0) + 1
+        got = counts_wait(db, want)
+        check(st == 200 and body == (bdir / name).read_bytes() and h.get("Cache-Control") == "public, max-age=31536000, immutable"
+              and h.get("Access-Control-Allow-Origin") == "*" and got == want,
+              f"firmware/beta/{name}: the file byte for byte, immutable, one install for ({bver}, 4mb)")
 
     # Installs: the release's app image (what ESP Web Tools fetches once per
     # install) and the merged image; the other parts and pieces not.
@@ -1646,7 +1669,8 @@ def main() -> int:
     ap.add_argument("--base", help="test this server instead of starting cf dev")
     ap.add_argument("--port", type=int, default=0, help="cf dev's port (default: a free one)")
     ap.add_argument("--smoke", action="store_true", help="then run tools/site-smoke.py --base against it")
-    ap.add_argument("--dist", type=Path, default=ROOT / "dist")
+    ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (release.json's)")
+    ap.add_argument("--beta-dist", type=Path, help="the beta make site published beside it (BETA_DIST), for --smoke")
     ap.add_argument("--shots", type=Path, default=ROOT / "target/site-worker-test",
                     help="where the live panels' screenshots go")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art")
@@ -1701,7 +1725,8 @@ def main() -> int:
         if a.smoke:
             print(f"site-smoke --base {base}")
             smoke = subprocess.run(["uv", "run", str(ROOT / "tools/site-smoke.py"), str(a.site), "--base", base,
-                                    "--dist", str(a.dist), "--art", str(a.art)], cwd=ROOT).returncode
+                                    "--dist", str(a.dist), *(["--beta-dist", str(a.beta_dist)] if a.beta_dist else []),
+                                    "--art", str(a.art)], cwd=ROOT).returncode
     finally:
         if proc:
             stop(proc)

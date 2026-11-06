@@ -196,7 +196,7 @@ def site_paths(site_dir):
             if f.is_file():
                 rel = f.relative_to(ROOT / sub).as_posix()
                 paths.add("/" + (rel[:-3] + "/" if rel.endswith(".md") else rel))
-    paths |= {"/guide/", "/install/", "/create/", "/demo/", "/dev/api/", "/formulas/", "/install/release.json", "/art-index/v1/NES.json"}
+    paths |= {"/guide/", "/install/", "/create/", "/demo/", "/dev/api/", "/formulas/", "/install/release.json", "/install/beta.json", "/art-index/v1/NES.json"}
     return sorted(paths), "site sources (no built site; run make site for the full file list)"
 
 
@@ -233,10 +233,12 @@ def main():
     rel_ver = json.loads(Path(a.site, "install/release.json").read_text())["version"] if Path(a.site, "install/release.json").is_file() else "1.0.0-beta.14"
     for host in PANEL_HOSTS + [SITE + "/demo"]:
         for lay in ("4mb", "8mb"):
-            reqs.append((f"{SITE}/install/release.json?v={rel_ver}&layout={lay}", host + "/", "xmlhttprequest", "counted: the update check"))
+            for feed in ("release.json", "beta.json"):  # beta.json: Get beta updates on
+                reqs.append((f"{SITE}/install/{feed}?v={rel_ver}&layout={lay}", host + "/", "xmlhttprequest", "counted: the update check"))
     for lay in ("4mb", "8mb"):
         for part in ("app", "full"):
-            reqs.append((f"{SITE}/install/firmware/opendmd-{rel_ver}-{lay}-{part}.bin", SITE + "/install/", "xmlhttprequest", "counted: an install"))
+            for d in ("firmware", "firmware/beta"):  # firmware/beta/: a beta's installer, after a final release
+                reqs.append((f"{SITE}/install/{d}/opendmd-{rel_ver}-{lay}-{part}.bin", SITE + "/install/", "xmlhttprequest", "counted: an install"))
     for p in ("/stats", "/stats/"):
         reqs.append((SITE + p, SITE + "/", "document", "the usage page"))
 

@@ -52,6 +52,7 @@ const GROUPS: &[&[&str]] = &[
     &["formula_jit"],
     &["formula_arena"],
     &["formula_keep"],
+    &["beta_updates"],
 ];
 
 /// The part of `full` that group `g` names (everything else absent).
@@ -84,6 +85,7 @@ fn group_patch(full: &ConfigPatch, g: &[&str]) -> ConfigPatch {
             "formula_jit" => p.formula_jit = full.formula_jit,
             "formula_arena" => p.formula_arena = full.formula_arena,
             "formula_keep" => p.formula_keep = full.formula_keep.clone(),
+            "beta_updates" => p.beta_updates = full.beta_updates,
             _ => {}
         }
     }
@@ -98,7 +100,7 @@ fn has_any(p: &ConfigPatch) -> bool {
         || p.follow.is_some() || p.follow_host.is_some() || p.attract_set.is_some() || p.attract.is_some()
         || p.look.is_some() || p.glow.is_some() || p.look_formula.is_some() || p.boot_show.is_some()
         || p.panel_sync.is_some() || p.panel_split.is_some() || p.formula_jit.is_some()
-        || p.formula_arena.is_some() || p.formula_keep.is_some()
+        || p.formula_arena.is_some() || p.formula_keep.is_some() || p.beta_updates.is_some()
 }
 
 /// One save or load at a time; taken only by CPU0 tasks.
@@ -130,7 +132,8 @@ pub fn to_json(s: &Settings) -> String {
             r#""platforms":{},"set":{},"tz":{},"tz_name":{},"schedule":{},"transition":"{}","#,
             r#""transition_ms":{},"auto_prepare":"{}","follow":{},"follow_host":{},"attract_set":{},"#,
             r#""attract":{},"look":"{}","glow":"{}","look_formula":{},"boot_show":"{}","#,
-            r#""panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}"}}"#
+            r#""panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","#,
+            r#""beta_updates":{}}}"#
         ),
         s.max_brightness,
         s.brightness,
@@ -158,6 +161,7 @@ pub fn to_json(s: &Settings) -> String {
         s.formula_jit,
         s.formula_arena,
         s.formula_keep.name(),
+        s.beta_updates,
     )
 }
 

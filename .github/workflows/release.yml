@@ -15,8 +15,15 @@ name: Release
 #                          (opendmd/opendmd.github.io) updated: its gallery
 #                          check and this release's frozen API page
 #   tag v1.2.3-beta.1   -> GitHub pre-release (any tag with a "-" suffix),
-#                          and the same (until 1.0.0, betas are what the
-#                          site offers; see CLAUDE.md "CI and releases")
+#                          and the same. The site's two feeds
+#                          (docs/deploying.md "Betas"): install/release.json
+#                          names the newest final release, install/beta.json
+#                          the newest of all. A final, or a beta before any
+#                          final exists, is both (and the installer); a beta
+#                          after a final is beta.json only: the site is built
+#                          with the final's files from its GitHub release as
+#                          DIST and this beta's as BETA_DIST, so release.json
+#                          and the Install button stay on the final
 #   manual dispatch     -> dry_run (the default): everything is built, signed
 #                          with a throwaway key made in the job (so the bundle
 #                          verifies against that key's public half, not the
@@ -105,6 +112,20 @@ jobs:
           VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' firmware/Cargo.toml | head -1)"
           test -n "$VERSION" || { echo "::error::cannot read the version from firmware/Cargo.toml"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Newer than every other v* tag, as release.sh insists: a final below
+          # a live beta would otherwise put beta.json back on the final.
+          NEWEST="$( (git tag -l 'v*' | sed 's/^v//' | grep -vx "$VERSION"; echo "$VERSION") | sed 's/-/~/' | sort -V | tail -1 | sed 's/~/-/')"
+          [ "$NEWEST" = "$VERSION" ] || { echo "::error::$VERSION is not newer than every v* tag (newest: $NEWEST)"; exit 1; }
+          # The channel: a beta after a final release updates beta.json only
+          # (release.json stays on the newest final, FINAL); anything else both.
+          FINAL="$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$VERSION" | sort -V | tail -1 || true)"
+          if [[ "$VERSION" == *-* && -n "$FINAL" ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"; echo "final=$FINAL" >> "$GITHUB_OUTPUT"
+            echo "Channel: beta (after the final $FINAL): beta.json names $VERSION, release.json stays on $FINAL"
+          else
+            echo "channel=both" >> "$GITHUB_OUTPUT"; echo "final=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Channel: both: release.json and beta.json name $VERSION"
+          fi
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$DRY_INPUT" != false ]]; then
             echo "kind=dry" >> "$GITHUB_OUTPUT"
             echo "Dry run of $VERSION at $(git describe --always --tags)"
@@ -273,43 +294,88 @@ jobs:
           echo "$(find "$dir/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files"
           echo "$(find "$dir/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
 
+      # A beta after a final release: the final's files, for release.json and
+      # the installer, from its GitHub release (checked against its SHA256SUMS),
+      # outside the tree.
+      - name: The final release's files (a beta after a final)
+        if: steps.plan.outputs.channel == 'beta'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL: ${{ steps.plan.outputs.final }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/final-dist"
+          mkdir -p "$d"
+          gh release download "v$FINAL" -R "$GITHUB_REPOSITORY" -D "$d"
+          (cd "$d" && sha256sum -c SHA256SUMS)
+          for v in 4mb 8mb; do
+            test "$(jq -r .version "$d/manifest-$v.json")" = "$FINAL" || { echo "::error::v$FINAL's manifest-$v.json is not $FINAL"; exit 1; }
+          done
+
       # A tag's site freezes its API page (dev/api/v<version>.html) outright:
       # not by `git describe`, which another tag on the commit could change.
       - name: The public site (make site)
         env:
           KIND: ${{ steps.plan.outputs.kind }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
         run: |
           set -euo pipefail
           freeze=auto
           [[ "$KIND" == dry ]] || freeze=yes
-          make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=$freeze
+          dists=()
+          [[ "$CHANNEL" != beta ]] || dists=(DIST="$RUNNER_TEMP/final-dist" BETA_DIST=dist)
+          make site "${dists[@]}" GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=$freeze
 
       # What the web app's Check for updates reads: the 4mb bundle as
       # `firmware` (web apps from before the 8 MB layout), each layout's in
-      # `variants`, every file there; and the old manifest name kept. The install page
-      # offers the 4mb board only.
-      - name: Check the site's release.json and installer
+      # `variants`, every file there, in release.json and beta.json (the
+      # same, or for a beta after a final, the beta's under firmware/beta/);
+      # and the old manifest name kept. The install page offers the 4mb
+      # board only (and a beta newer than the release below it).
+      - name: Check the site's release.json, beta.json and installer
         env:
           VERSION: ${{ steps.plan.outputs.version }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          FINAL: ${{ steps.plan.outputs.final }}
         run: |
           set -euo pipefail
           inst=target/site/install
-          cat "$inst/release.json"
-          test "$(jq -r .version "$inst/release.json")" = "$VERSION" || { echo "::error::release.json's version is not $VERSION"; exit 1; }
-          test "$(jq -r .firmware "$inst/release.json")" = "firmware/opendmd-$VERSION-4mb.odfw" || { echo "::error::release.json's firmware is not the 4mb bundle"; exit 1; }
-          for v in 4mb 8mb; do
-            f="$(jq -r ".variants[\"$v\"].firmware" "$inst/release.json")"
-            test "$f" = "firmware/opendmd-$VERSION-$v.odfw" || { echo "::error::release.json's variants.$v.firmware is '$f'"; exit 1; }
-            cmp "$inst/$f" "dist/opendmd-$VERSION-$v.odfw" || { echo "::error::$inst/$f is not dist's"; exit 1; }
-          done
+          fail() { echo "::error::$*"; exit 1; }
+          feed() {  # FILE VER DIR SRC
+            local file=$1 ver=$2 dir=$3 src=$4 f v
+            cat "$inst/$file"
+            test "$(jq -r .version "$inst/$file")" = "$ver" || fail "$file's version is not $ver"
+            test "$(jq -r .firmware "$inst/$file")" = "$dir/opendmd-$ver-4mb.odfw" || fail "$file's firmware is not the 4mb bundle"
+            for v in 4mb 8mb; do
+              f="$(jq -r ".variants[\"$v\"].firmware" "$inst/$file")"
+              test "$f" = "$dir/opendmd-$ver-$v.odfw" || fail "$file's variants.$v.firmware is '$f'"
+              cmp "$inst/$f" "$src/opendmd-$ver-$v.odfw" || fail "$inst/$f is not $src's"
+            done
+            f="$(jq -r .www "$inst/$file")"
+            test "$f" = "$dir/opendmd-$ver-www.pack" && cmp "$inst/$f" "$src/opendmd-$ver-www.pack" || fail "$file's www is not $src's pack"
+          }
+          if [[ "$CHANNEL" == beta ]]; then
+            src="$RUNNER_TEMP/final-dist"
+            feed release.json "$FINAL" firmware "$src"
+            feed beta.json "$VERSION" firmware/beta dist
+            grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || fail "the install page has no beta button"
+            cmp "$inst/firmware/beta/manifest-4mb.json" dist/manifest-4mb.json || fail "install/firmware/beta/manifest-4mb.json is not this beta's"
+            test ! -e "$inst/firmware/beta/manifest-8mb.json" || fail "install/firmware/beta has the hidden 8mb manifest"
+          else
+            src=dist
+            feed release.json "$VERSION" firmware dist
+            cmp "$inst/beta.json" "$inst/release.json" || fail "beta.json is not release.json (no beta is newer than $VERSION)"
+            test ! -e "$inst/firmware/beta" || fail "the site has a beta installer, with no beta newer than $VERSION"
+          fi
           # The install page offers the DevKit only (tools/site.py INSTALL_BOARDS): the
           # 8mb button and manifest are hidden for now, while its
           # bundle stays published for release.json's variants.
-          grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || { echo "::error::the install page has no 4mb button"; exit 1; }
-          ! grep -q 'manifest-8mb' "$inst/index.html" || { echo "::error::the install page offers the hidden 8mb board"; exit 1; }
-          test -f "$inst/firmware/manifest-4mb.json" || { echo "::error::install/firmware/manifest-4mb.json is missing"; exit 1; }
-          test ! -e "$inst/firmware/manifest-8mb.json" || { echo "::error::install/firmware has the hidden 8mb manifest"; exit 1; }
-          cmp "$inst/firmware/manifest.json" dist/manifest-4mb.json || { echo "::error::install/firmware/manifest.json is not the 4mb manifest"; exit 1; }
+          grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || fail "the install page has no 4mb button"
+          ! grep -q 'manifest-8mb' "$inst/index.html" || fail "the install page offers the hidden 8mb board"
+          test -f "$inst/firmware/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is missing"
+          test ! -e "$inst/firmware/manifest-8mb.json" || fail "install/firmware has the hidden 8mb manifest"
+          cmp "$inst/firmware/manifest-4mb.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is not the release's"
+          cmp "$inst/firmware/manifest.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest.json is not the 4mb manifest"
 
       - name: The tree is clean after the build
         run: |

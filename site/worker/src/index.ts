@@ -20,9 +20,10 @@
 // Anonymous usage counts (src/counts.ts, migrations/0006_counts.sql): daily
 // totals only, nothing about who asked.
 //
-//   /install/release.json?v=&layout=   the web app's update check: the
+//   /install/release.json?v=&layout=   the web app's update check (and
+//                   /install/beta.json, with Get beta updates on): the
 //                   asset unchanged, a "check" counted after (waitUntil)
-//   /install/firmware/opendmd-<v>-<variant>-{app,full}.bin   an install:
+//   /install/firmware/[beta/]opendmd-<v>-<variant>-{app,full}.bin   an install:
 //                   the asset unchanged, an "install" counted after
 //   /stats          the public page of those counts (stats.html as built,
 //                   the numbers written in; not linked, noindex)
