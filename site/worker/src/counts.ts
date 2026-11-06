@@ -9,7 +9,7 @@
 //            opendmd-<version>-<variant>-full.bin (an install by hand)
 //   check    GET /install/release.json (Settings › Check for updates in a
 //            panel's web app), or /install/beta.json (the same, with Get
-//            beta updates on), ?v=<the panel's firmware version>&layout=<4mb|8mb>
+//            beta updates on), ?v=<the panel's firmware version>&layout=<4mb>
 //            (update.js; a web app from before sends neither: unknown). Both
 //            feeds count as one kind: a check is a check
 //   (an install of the beta, from install/firmware/beta/, is an install too)
@@ -23,7 +23,7 @@
 // nothing about who asks is kept).
 //
 // What is stored is the day, the kind, the version (a version-like string,
-// else 'other'), the variant (4mb, 8mb, else 'other') and a count. No
+// else 'other'), the variant (4mb, else 'other') and a count. No
 // address, user agent, cookie, referrer or device id; nothing per request.
 // A day takes at most MAX_VERSIONS versions of a kind; later ones count as
 // 'other', so the table stays bounded whatever is sent.
@@ -38,9 +38,9 @@ export interface CountsEnv {
 export const RELEASE_JSON = "/install/release.json";
 export const BETA_JSON = "/install/beta.json";
 const FEEDS = new Set([RELEASE_JSON, BETA_JSON]);
-const IMAGE = /^\/install\/firmware\/(?:beta\/)?opendmd-(.+)-(4mb|8mb)-(?:app|full)\.bin$/;
+const IMAGE = /^\/install\/firmware\/(?:beta\/)?opendmd-(.+)-(4mb)-(?:app|full)\.bin$/;
 const VERSION = /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9a-z]{1,16}(?:\.[0-9a-z]{1,16}){0,3})?$/;
-const VARIANTS = new Set(["4mb", "8mb"]);
+const VARIANTS = new Set(["4mb"]);
 const MAX_VERSIONS = 40;
 
 /** A version as stored: version-like (a leading v dropped, lower case), or
@@ -116,7 +116,7 @@ const num = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAY_MS = 86400000;
 const WEEKS = 26;
-const LAYOUTS: [string, string][] = [["4mb", "DevKit V1 (4 MB)"], ["8mb", "8 MB build"], ["unknown", "Not sent"], ["other", "Other"]];
+const LAYOUTS: [string, string][] = [["4mb", "DevKit V1 (4 MB)"], ["unknown", "Not sent"], ["other", "Other"]];
 
 /** Semver-ish order, newest first; unknown and other last. */
 function newestFirst(a: string, b: string): number {

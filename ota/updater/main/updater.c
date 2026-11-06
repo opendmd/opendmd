@@ -2,7 +2,7 @@
  * The OpenDMD updater (docs/ota.md, steps 3 and 4).
  *
  * Lives in the `ota_0` partition (384 KB: 0x2A0000 in the 4 MB table v3,
- * 0x260000 in v2, 0x320000 in the 8 MB one; the same build serves all,
+ * 0x260000 in v2; the same build serves both,
  * since it finds every partition by type at run time). The firmware boots it
  * once, after it has received a firmware bundle over the LAN, verified its
  * Ed25519 signature, written it to the card as /update/opendmd.bin and
@@ -13,7 +13,7 @@
  *   2. mounts the card on SPI3 (SCK 18, MISO 19, MOSI 23, CS 5) at 20 MHz;
  *   3. reads the 140-byte bundle header, checks the magic and that it names
  *      this board's flash layout (the variant: the flash size the installed
- *      bootloader set, 4 MB -> "4mb", 8 MB -> "8mb"; and the table: the
+ *      bootloader set, 4 MB -> "4mb"; and the table: the
  *      factory partition's size, 2,560 KB -> 4mb v3), that the image fits
  *      the factory partition, that the file holds exactly the image, and
  *      hashes the whole image off the card *before* erasing anything
@@ -93,8 +93,9 @@ static const uint8_t HUB75_LOW[] = {25, 26, 27, 14, 12, 13, 33, 32, 22, 17, 4, 1
 /* The bundle's magic names the flash layout: the variant and the version of
  * its partition table (opendmd_core::ota::LAYOUTS), with the size of that
  * table's factory partition. "ODFW1" + NULs is the DevKit's table v2 (every
- * 4mb bundle up to 1.0.0-beta.15), "ODFW18mb" the 8 MB build's, and
- * "ODFW34mb" the DevKit's table v3. An updater from before a table knows
+ * 4mb bundle up to 1.0.0-beta.15) and "ODFW34mb" the DevKit's table v3;
+ * any other magic (such as "ODFW18mb", the 8mb layout of 1.0.0-beta.16 and
+ * earlier) is refused before anything is erased. An updater from before a table knows
  * nothing of its magic and refuses the bundle (beta.15's: "bad magic" for
  * ODFW34mb). */
 typedef struct {
@@ -105,7 +106,6 @@ typedef struct {
 } layout_t;
 static const layout_t LAYOUTS[] = {
     {{'O', 'D', 'F', 'W', '3', '4', 'm', 'b'}, "4mb", 3, 0x280000},
-    {{'O', 'D', 'F', 'W', '1', '8', 'm', 'b'}, "8mb", 2, 0x300000},
     {{'O', 'D', 'F', 'W', '1', 0, 0, 0}, "4mb", 2, 0x240000},
 };
 #define N_LAYOUTS (sizeof LAYOUTS / sizeof LAYOUTS[0])
@@ -393,13 +393,12 @@ static bool hash_file(FILE *f, uint32_t len, uint8_t out[32], uint8_t *first)
 }
 
 /* This board's flash layout: the flash size the installed bootloader's
- * header gave (IDF keeps it in the default chip's `size`; the 8 MB table
- * only ever runs with the 8mb bootloader, which checks the table against
- * it). NULL for any other size. */
+ * header gave (IDF keeps it in the default chip's `size`). NULL for any
+ * other size. */
 static const char *board_variant(void)
 {
     uint32_t size = esp_flash_default_chip != NULL ? esp_flash_default_chip->size : 0;
-    return size == 4u << 20 ? "4mb" : size == 8u << 20 ? "8mb" : NULL;
+    return size == 4u << 20 ? "4mb" : NULL;
 }
 
 /* This board's layout: its variant, and the table that is on it, told by

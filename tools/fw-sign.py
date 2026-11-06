@@ -5,7 +5,7 @@
 """Sign, verify and inspect OpenDMD firmware bundles (docs/ota.md).
 
     uv run tools/fw-sign.py keygen [--key K] [--pub P]
-    uv run tools/fw-sign.py sign <app.bin> --version <v> [--variant 4mb|8mb] [--layout N] --out <bundle.odfw> [--key K]
+    uv run tools/fw-sign.py sign <app.bin> --version <v> [--variant 4mb] [--layout N] --out <bundle.odfw> [--key K]
     uv run tools/fw-sign.py verify <bundle.odfw> [--pub P]
     uv run tools/fw-sign.py inspect <bundle.odfw>
     uv run tools/fw-sign.py sign-www <www.pack> --out <signed.pack> [--key K]
@@ -15,8 +15,8 @@
 A bundle is a 140-byte header and then the app image (what `espflash
 save-image` writes, starting with the ESP image magic 0xE9):
 
-    magic     the flash layout: "ODFW34mb" (4mb, table v3), "ODFW18mb"   8 B
-              (8mb, table v2); "ODFW1\\0\\0\\0" was 4mb's table v2
+    magic     the flash layout: "ODFW34mb" (4mb, table v3);           8 B
+              "ODFW1\\0\\0\\0" was 4mb's table v2
     version   32 B, UTF-8, NUL-padded
     length    u32 LE, image bytes
     sha256    32 B, of the image
@@ -70,14 +70,14 @@ from nacl.signing import SigningKey, VerifyKey
 
 # The partition tables a bundle can name (opendmd_core::ota::LAYOUTS):
 # (variant, table version) -> (magic, the factory partition's bytes,
-# firmware/partitions.csv / partitions-8mb.csv). CURRENT: the table this tree
-# builds for each variant.
+# firmware/partitions.csv). CURRENT: the table this tree builds for each
+# variant. Any other "ODFW" magic (such as "ODFW18mb", the 8mb layout of
+# 1.0.0-beta.16 and earlier) is a bundle for a layout this tree does not build.
 LAYOUTS = {
     ("4mb", 3): (b"ODFW34mb", 0x280000),
-    ("8mb", 2): (b"ODFW18mb", 0x300000),
     ("4mb", 2): (b"ODFW1\0\0\0", 0x240000),
 }
-CURRENT = {"4mb": 3, "8mb": 2}
+CURRENT = {"4mb": 3}
 VARIANTS = sorted(CURRENT)
 VERSION_LEN = 32
 SIGNED_LEN = 8 + VERSION_LEN + 4 + 32  # 76
@@ -185,6 +185,9 @@ def parse_header(data: bytes) -> dict:
         raise ValueError(f"truncated: {len(data)} B, the header alone is {HEADER_LEN} B")
     layout = next((k for k, (m, _) in LAYOUTS.items() if data[:8] == m), None)
     if layout is None:
+        if data[:4] == b"ODFW":
+            raise ValueError("this update is for another flash layout than this player's: use the DevKit (4 MB) "
+                             "update file (opendmd.dev/install has the latest)")
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
     variant, table = layout
     raw_v = data[8 : 8 + VERSION_LEN]
@@ -414,35 +417,31 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
         print(f"key id 1         -> refused: {e}")
     else:
         die("a bundle naming key 1 verified as key 0's")
-    image8 = fake_image("8mb")
-    bundle8 = build_header("9.9.9-selftest", image8, sk, "8mb") + image8
-    if check(bundle8, sk.verify_key)["variant"] != "8mb":
-        die("an 8mb bundle did not read back as 8mb")
-    print("8mb round trip   -> ok")
     if (h := check(bundle, sk.verify_key))["table"] != CURRENT["4mb"] or bundle[:8] != b"ODFW34mb":
         die(f"a 4mb bundle is not for the current table: {h['table']}, {bundle[:8]!r}")
     old = build_header("9.9.9-selftest", image, sk, "4mb", 2) + image
     if (h := check(old, sk.verify_key))["table"] != 2 or old[:8] != b"ODFW1\0\0\0":
         die("a 4mb v2 bundle did not read back as v2")
     print("4mb v3, and v2   -> ok")
-    # The layout is signed: an 8mb bundle relabelled 4mb (or the reverse, or
-    # a v3 bundle relabelled v2) fails.
-    m4, m8, m42 = LAYOUTS[("4mb", 3)][0], LAYOUTS[("8mb", 2)][0], LAYOUTS[("4mb", 2)][0]
-    for name, b in (("8mb as 4mb", m4 + bundle8[8:]), ("4mb as 8mb", m8 + bundle[8:]), ("4mb v3 as v2", m42 + bundle[8:])):
+    # The layout is signed: a v3 bundle relabelled v2 fails; one relabelled
+    # with another layout's magic (the old 8mb one) is refused at the magic.
+    m42 = LAYOUTS[("4mb", 2)][0]
+    for name, b in (("4mb v3 as v2", m42 + bundle[8:]), ("4mb as ODFW18mb", b"ODFW18mb" + bundle[8:])):
         try:
             check(b, sk.verify_key)
         except ValueError as e:
             print(f"{name:16} -> refused: {e}")
         else:
             die(f"a bundle relabelled {name} verified")
-    # A 4mb image signed as 8mb: the descriptor gives it away.
-    mixed = build_header("9.9.9-selftest", image, sk, "8mb") + image
+    # Another build's image (its descriptor names another layout) in a 4mb bundle.
+    image8 = fake_image("8mb")
+    mixed = build_header("9.9.9-selftest", image8, sk) + image8
     try:
         check(mixed, sk.verify_key)
     except ValueError as e:
-        print(f"4mb image, 8mb   -> refused: {e}")
+        print(f"8mb image, 4mb   -> refused: {e}")
     else:
-        die("a 4mb image in an 8mb bundle verified")
+        die("an 8mb image in a 4mb bundle verified")
     # The www pack: a minimal format 1 pack (no entries), signed, checked,
     # then each part tampered.
     pack = bytearray(64)

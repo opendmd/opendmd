@@ -12,11 +12,10 @@
                Formula gallery; the panel plays a bundled Formula live,
                home.js); the README stays GitHub's front page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
-               Tools' button for the DevKit; the 8 MB build's (8 MB) is
-               hidden for now, see INSTALL_BOARDS) and, under
+               Tools' button for the DevKit) and, under
                install/firmware/, the release in dist/: the parts
                dist/manifest-4mb.json names, the merged image, the signed
-               update bundles (every layout's: release.json points at them),
+               update bundle (release.json points at it),
                plus install/release.json (what the web app's update check
                reads: the newest final release) and install/beta.json (the
                same shape: the newest release, beta or final, what a player
@@ -254,19 +253,16 @@ GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="m
 # flashes boards over Web Serial (the security review's M6).
 INSTALL_HEAD = '<script type="module" src="esp-web-tools/install-button.js"></script>'
 INSTALL_VENDOR = ROOT / "flasher/esp-web-tools"
-# Every flash layout (the firmware's `variant`): the board, the words on its
+# The flash layout (the firmware's `variant`): the board, the words on its
 # button, and what it says about the board.
 BOARDS = {
     "4mb": ("ESP32 DevKit V1", "Install",
             "The ESP32 DevKit V1: the small board with a USB socket that plugs into the DMDoS board. Most displays have this one."),
-    "8mb": ("8 MB build", "Install the 8 MB build",
-            "For an 8 MB board in development. Its firmware has more room."),
 }
 # The layouts the install page offers (a button, a manifest and its parts on
-# the site). The 8 MB build's "8mb" is built and released but hidden here
-# for now: add "8mb" back to bring its button back (CLAUDE.md,
-# "Bringing the 8 MB option back"; flasher/index.html has the same switch).
-INSTALL_BOARDS = ("4mb",)
+# the site). A dist/ from 1.0.0-beta.16 or earlier also holds 8mb files: they
+# are left out.
+INSTALL_BOARDS = tuple(BOARDS)
 INSTALL_ONE = """<div class="board" id="board-{v}">
 <h3>{board}</h3>
 <p>{about}</p>
@@ -730,7 +726,7 @@ def decorate(body: str) -> str:
 
 # A firmware bundle's magic -> its flash layout: the variant and its
 # partition table's version (opendmd_core::ota::LAYOUTS, tools/fw-sign.py).
-BUNDLE_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW18mb": ("8mb", 2), b"ODFW1\0\0\0": ("4mb", 2)}
+BUNDLE_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
 
 
 def bundle_layout(path: Path, variant: str) -> int:
@@ -743,7 +739,7 @@ def bundle_layout(path: Path, variant: str) -> int:
 
 
 def manifests(dist: Path) -> tuple[dict, str]:
-    """dist/'s manifests, every layout's, and the one version they share."""
+    """dist/'s manifests, every layout this tree builds, and the one version they share."""
     ms = {}
     for v in BOARDS:
         manifest = dist / f"manifest-{v}.json"
@@ -757,23 +753,16 @@ def manifests(dist: Path) -> tuple[dict, str]:
 
 
 def publish(dist: Path, install: Path, sub: str) -> dict:
-    """One release in dist/ (fw-release keeps older versions there too),
-    both flash layouts, into install/<sub>/: the parts the offered layouts'
-    manifests name, the merged images and the signed bundles of that
-    version only; returns its release.json (paths relative to install/):
-    `firmware` (the 4mb bundle: what web apps from before the 8 MB layout
-    read) and `variants`, each layout's bundle and the version of the
-    partition table it is for (`layout`, from its magic: a player on
-    another table needs a USB install, which the web app says). (Only
-    INSTALL_BOARDS get a manifest, parts and image on the site; all get
-    their bundle.)"""
+    """One release in dist/ (fw-release keeps older versions there too)
+    into install/<sub>/: the parts the manifest names, the merged image and
+    the signed bundle of that version only; returns its release.json (paths
+    relative to install/): `firmware` (the 4mb bundle) and `variants`, the
+    bundle per layout and the version of the partition table it is for
+    (`layout`, from its magic: a player on another table needs a USB
+    install, which the web app says)."""
     ms, ver = manifests(dist)
     fw = install / sub
     fw.mkdir(parents=True)
-    # Only the layouts the install page offers get their manifest, parts and
-    # merged image on the site; every layout's signed bundle is published,
-    # because release.json's `variants` point at them (the web app's update
-    # check). The 8mb files otherwise stay in the GitHub release.
     shown = [v for v in ms if v in INSTALL_BOARDS]
     names = [f"manifest-{v}.json" for v in shown]
     names += sorted({p["path"] for v in shown for b in ms[v]["builds"] for p in b["parts"]})
@@ -805,7 +794,7 @@ def release(dist: Path, out: Path, beta_dist: Path | None = None) -> tuple[dict,
     (None without one)."""
     install = out / "install"
     info = publish(dist, install, "firmware")
-    # The name installers before the 8 MB layout fetched: an installer tab
+    # The name installers before the per-layout names fetched: an installer tab
     # left open across a release still finds a manifest (the DevKit's; its
     # parts are named relative to it, so they are the ones published here).
     shutil.copyfile(dist / "manifest-4mb.json", install / "firmware/manifest.json")
@@ -839,7 +828,7 @@ def markers(page: str, text: str, rel_info: dict) -> str:
             links.append(f'<li><a href="{rel(page, "install/" + f)}" download>{board}</a>: '
                          f'<code>{html.escape(posixpath.basename(f))}</code></li>')
     return text.replace("<!-- site:firmware-bundle -->",
-                        f"<p>The firmware update file for OpenDMD {ver}, one per board:</p><ul>{''.join(links)}</ul>")
+                        f"<p>The firmware update file for OpenDMD {ver}:</p><ul>{''.join(links)}</ul>")
 
 
 def semver_key(v: str) -> tuple:

@@ -481,12 +481,12 @@ def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
           f"release.json?v=&layout=: the file byte for byte, its headers as the assets send them ({st}"
           f"{'' if same(h, plain[1]) else f'; {sorted(set(h.items()) ^ set(plain[1].items()))}'})")
     check(got == want, f"release.json?v={ver}&layout=4mb: one check for ({ver}, 4mb) {got}")
-    for q, key in ((f"?v=v{ver.upper()}&layout=8MB", (ver, "8mb")),  # (v and case dropped)
+    for q, key in ((f"?v=v{ver.upper()}&layout=4MB", (ver, "4mb")),  # (v and case dropped)
                    ("", ("unknown", "unknown")),  # a web app from before ?v=
                    ("?v=%3Cscript%3E&layout=16mb", ("other", "other")),
                    ("?v=" + "9" * 300 + "&layout=4mb", ("other", "4mb")),
                    ("?v=1.0.0-beta.1+build&layout=", ("other", "unknown")),
-                   ("?v=1.2&layout=8mb%00", ("other", "other"))):
+                   ("?v=1.2&layout=8mb", ("other", "other"))):
         st, _, body = get(base, "/install/release.json" + q)
         want[(today, "check", *key)] = want.get((today, "check", *key), 0) + 1
         got = counts_wait(db, want)
@@ -494,12 +494,12 @@ def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
     # beta.json, the feed with Get beta updates on: the same treatment, a check too.
     beta_bytes = (site / "install/beta.json").read_bytes()
     plain = get(base, "/install/beta.json", "HEAD")
-    st, h, body = get(base, f"/install/beta.json?v={ver}&layout=8mb")
-    want[(today, "check", ver, "8mb")] = want.get((today, "check", ver, "8mb"), 0) + 1
+    st, h, body = get(base, f"/install/beta.json?v={ver}&layout=4mb")
+    want[(today, "check", ver, "4mb")] = want.get((today, "check", ver, "4mb"), 0) + 1
     got = counts_wait(db, want)
     check(st == 200 and body == beta_bytes and same(h, plain[1]) and h.get("Access-Control-Allow-Origin") == "*"
           and h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and not h.get("Set-Cookie") and got == want,
-          f"beta.json?v=&layout=: the file byte for byte, its headers as the assets send them, one check for ({ver}, 8mb) ({st}) {got}")
+          f"beta.json?v=&layout=: the file byte for byte, its headers as the assets send them, one check for ({ver}, 4mb) ({st}) {got}")
     # A beta newer than the release (install/firmware/beta/): its installs count, by its version.
     bdir = site / "install/firmware/beta"
     if bdir.is_dir():
@@ -560,9 +560,9 @@ def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
                 if share and rnd.random() < 0.3 + grow:
                     c.execute("insert into counts values (?, 'install', ?, ?, ?)", (day, vv, "4mb", rnd.randint(1, 4)))
                     if rnd.random() < 0.3:
-                        c.execute("insert into counts values (?, 'install', ?, ?, ?)", (day, vv, "8mb", rnd.randint(1, 2)))
+                        c.execute("insert into counts values (?, 'install', ?, ?, ?)", (day, vv, "other", rnd.randint(1, 2)))
             if d < 30:
-                for vv, l, n in (("1.0.0-beta.13", "4mb", rnd.randint(2, 9)), ("1.0.0-beta.13", "8mb", rnd.randint(0, 3)),
+                for vv, l, n in (("1.0.0-beta.13", "4mb", rnd.randint(2, 9)), ("1.0.0-beta.13", "other", rnd.randint(0, 3)),
                                  ("1.0.0-beta.12", "4mb", rnd.randint(0, 4)), ("1.0.0-beta.10", "4mb", rnd.randint(0, 2)),
                                  ("unknown", "unknown", rnd.randint(0, 2))):
                     if n:
@@ -572,7 +572,7 @@ def counts_local(base: str, site: Path, dist: Path, shots: Path) -> None:
     t = body.decode()
     nums = re.findall(r'class="us-num">([0-9,]+)<', t)
     check(st == 200 and nums and int(nums[0].replace(",", "")) == totals["install"] and t.count('<li title="Week of') == 26
-          and "1.0.0-beta.13" in t and "8 MB build" in t and "Not sent" in t,
+          and "1.0.0-beta.13" in t and "Other" in t and "Not sent" in t,
           f"/stats with a sample half-year: {nums} (installs {totals['install']}), 26 weeks, versions by board")
     from playwright.sync_api import sync_playwright
     shots.mkdir(parents=True, exist_ok=True)

@@ -1935,12 +1935,11 @@ def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
     beta_info = json.loads((site / "install/beta.json").read_text())
     ver = json.loads((dist / "manifest-4mb.json").read_text())["version"]
     # One board: the DevKit's button (and, with a beta newer than the release,
-    # the beta's below it). An 8 MB board in development (8mb) is hidden for now, but its
-    # update bundle stays published for release.json's variants (the web app's update check).
+    # the beta's below it); nothing for another layout.
     buttons = 2 if beta_dist else 1
     check(install.count("<esp-web-install-button") == buttons and 'manifest="firmware/manifest-4mb.json"' in install
-          and "8mb" not in install and "8 MB build" not in install and "Not sure which" not in install,
-          f"install: {buttons} Install button(s), the DevKit's, and nothing about the hidden 8 MB board")
+          and "8mb" not in install and "8 MB" not in install and "Not sure which" not in install,
+          f"install: {buttons} Install button(s), the DevKit's, and nothing for another layout")
     check(rel_info["version"] == ver and filecmp.cmp(fw / "manifest-4mb.json", dist / "manifest-4mb.json", shallow=False)
           and f"OpenDMD {ver}." in install,
           f"install: release.json and the Install button are --dist's release ({rel_info['version']}, {ver})")
@@ -1961,15 +1960,15 @@ def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
         check(filecmp.cmp(bdir / "manifest-4mb.json", beta_dist / "manifest-4mb.json", shallow=False)
               and all((bdir / pt["path"]).is_file() for b in json.loads((bdir / "manifest-4mb.json").read_text())["builds"] for pt in b["parts"])
               and 'manifest="firmware/beta/manifest-4mb.json"' in install and f"install the beta, OpenDMD {bver}" in install
-              and not (bdir / "manifest-8mb.json").exists(),
+              and not any("8mb" in p.name for p in bdir.iterdir()),
               "install: the beta's own button, its manifest and parts under firmware/beta/ (the 4mb only)")
-    check((fw / "manifest-4mb.json").is_file() and (fw / "manifest.json").is_file() and not (fw / "manifest-8mb.json").exists(),
-          "install: the 4mb manifest is published, the 8mb one is not")
-    check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and "8mb" in rel_info["variants"],
-          "install: every release.json variant's bundle (8mb too) is published")
+    check((fw / "manifest-4mb.json").is_file() and (fw / "manifest.json").is_file() and not any("8mb" in p.name for p in fw.iterdir()),
+          "install: the 4mb manifest is published, no 8mb file (a dist from 1.0.0-beta.16 has them)")
+    check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and set(rel_info["variants"]) == {"4mb"},
+          "install: release.json's one variant (4mb) and its bundle are published")
     # Each variant names the partition table its bundle is for (the web app
     # tells a player on another table to reinstall over USB): the bundle's magic.
-    magics = {("4mb", 3): b"ODFW34mb", ("8mb", 2): b"ODFW18mb", ("4mb", 2): b"ODFW1\0\0\0"}
+    magics = {("4mb", 3): b"ODFW34mb", ("4mb", 2): b"ODFW1\0\0\0"}
     lay = {k: (v.get("layout"), (site / "install" / v["firmware"]).read_bytes()[:8]) for k, v in rel_info["variants"].items()}
     check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] == 3,
           f"install: release.json's layouts are the bundles' ({ {k: l for k, (l, _) in lay.items()} })")

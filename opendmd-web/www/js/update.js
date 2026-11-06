@@ -14,7 +14,7 @@
 // the old web app's. The firmware is the release's file for the player's
 // flash layout (`variants.<variant>.firmware`; a release.json from before
 // there were two names only `firmware`, the 4mb one; another `layout`: USB). The official feed is
-// asked as release.json (or beta.json)?v=<firmware version>&layout=<4mb|8mb>, which the
+// asked as release.json (or beta.json)?v=<firmware version>&layout=<4mb>, which the
 // site counts (site/worker/src/counts.ts); a feed of your own is asked as given.
 
 import { app } from './state.js';

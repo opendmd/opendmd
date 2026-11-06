@@ -333,9 +333,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
   and verifies it as the firmware does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
-  140 B + the layout's factory partition (2,621,440 B, 3,145,728 B for 8mb),
-  422 `{"error":"<reason>"}` for any failure, a bundle for the other flash
-  layout or another partition table (a 4mb v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
+  140 B + the layout's factory partition (2,621,440 B),
+  422 `{"error":"<reason>"}` for any failure, a bundle for another flash
+  layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
   among them (nothing changes). Success: `{"ok":true,"version",
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
@@ -474,12 +474,12 @@ WWW_PARTITION_SIZE = 1_048_576         # the www partition (partitions.csv, tabl
 # factory partition the image must fit. A bundle's magic -> (variant, the
 # partition table version) (opendmd_core::ota::LAYOUTS); the mock runs each
 # variant's current table (OTA_CURRENT).
-OTA_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW18mb": ("8mb", 2), b"ODFW1\0\0\0": ("4mb", 2)}
-OTA_CURRENT = {"4mb": 3, "8mb": 2}
+OTA_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
+OTA_CURRENT = {"4mb": 3}
 OTA_HEADER_LEN = 140
 OTA_SIGNED_LEN = 76
-OTA_FACTORY_BYTES = {"4mb": 0x280000, "8mb": 0x300000}   # partitions.csv (v3), partitions-8mb.csv
-OTA_BOARDS = {"4mb": "DevKit (4 MB)", "8mb": "8 MB build"}  # opendmd_core::ota::variant_name
+OTA_FACTORY_BYTES = {"4mb": 0x280000}   # partitions.csv (v3)
+OTA_BOARDS = {"4mb": "DevKit (4 MB)"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).
 RESTART_NOTES = {"api_reboot": "restarted on request",
@@ -1692,6 +1692,9 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if len(data) < OTA_HEADER_LEN:
         raise ValueError(f"truncated: {len(data)} B, the bundle header is {OTA_HEADER_LEN} B")
     if data[:8] not in OTA_LAYOUTS:
+        if data[:4] == b"ODFW":  # opendmd_core::ota::OtaError::OtherLayout
+            raise ValueError("this update is for another flash layout than this player's: use the DevKit (4 MB) "
+                             "update file (opendmd.dev/install has the latest)")
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
     bundle, table = OTA_LAYOUTS[data[:8]]
     v = data[8:40].rstrip(b"\0")
@@ -5307,7 +5310,7 @@ def main():
         ctx.formulas = not args.no_formulas
         if args.no_formulas:
             ctx.player.rebuild_playlist()
-        ctx.flash_size = args.flash_size or (8 << 20 if args.variant == "8mb" else 4 << 20)
+        ctx.flash_size = args.flash_size or 4 << 20
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:
             from nacl.signing import VerifyKey

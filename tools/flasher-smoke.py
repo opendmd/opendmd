@@ -7,17 +7,14 @@
     uv run tools/flasher-smoke.py            # needs dist/ from `make fw-release`
 
 Lays the site out the way `make flasher` does (target/flasher-smoke/:
-index.html, firmware/ with dist/'s two manifests, one per flash layout, and
-the files they name), serves it on a free localhost port, and checks: ESP
+index.html, firmware/ with dist/'s manifest and the files it names), serves it on a free localhost port, and checks: ESP
 Web Tools loads from jsDelivr (the pinned version) and defines
-`<esp-web-install-button>`; the one Install button (the DevKit's; the
-8 MB build's 8 MB option is hidden for now, and the page
-must not offer it) renders (headless Chromium has `navigator.serial`, so the
-"unsupported" slot must not be what shows); each manifest (both layouts', checked in dist/) parses, carries
-its name ("OpenDMD", "OpenDMD 8 MB": the firmware's Improv answer), names
-six parts at its layout's offsets (4mb: 0x1000/0x8000/0xF000/0x20000/
-0x2A0000/0x300000, table v3; 8mb: the pack and the updater first, at 0x380000 and
-0x320000, then 0x1000/0x8000/0xF000/0x20000; docs/ota.md), each one is
+`<esp-web-install-button>`; the one Install button (the DevKit's, and
+nothing for another layout) renders (headless Chromium has `navigator.serial`, so the
+"unsupported" slot must not be what shows); the manifest (checked in dist/) parses, carries
+its name ("OpenDMD": the firmware's Improv answer), names
+six parts at the layout's offsets (0x1000/0x8000/0xF000/0x20000/
+0x2A0000/0x300000, table v3; docs/ota.md), each one is
 served, and the page lists the DevKit's; no part runs into the next and each set
 ends inside its flash; the footer links the third-party notices, which are
 served; no console or page errors.
@@ -54,19 +51,17 @@ def check(ok: bool, what: str) -> None:
 # written, and the flash size.
 LAYOUTS = {
     "4mb": ("OpenDMD", [0x1000, 0x8000, 0xF000, 0x20000, 0x2A0000, 0x300000], 4 << 20),
-    "8mb": ("OpenDMD 8 MB", [0x380000, 0x320000, 0x1000, 0x8000, 0xF000, 0x20000], 8 << 20),
 }
 
 
-# The layouts the page offers (the install button, the parts table). The 8mb
-# manifest is still checked above, but the page hides that board.
-SHOWN = ("4mb",)
+# The layouts the page offers (the install button, the parts table).
+SHOWN = tuple(LAYOUTS)
 
 
 def main() -> int:
     manifests = {v: DIST / f"manifest-{v}.json" for v in LAYOUTS}
     if not all(p.exists() for p in manifests.values()):
-        print("no dist/manifest-4mb.json and manifest-8mb.json: run make fw-release first")
+        print("no dist/manifest-4mb.json: run make fw-release first")
         return 2
     ms = {v: json.loads(p.read_text()) for v, p in manifests.items()}
     shutil.rmtree(SITE, ignore_errors=True)
@@ -141,10 +136,9 @@ def main() -> int:
         check(page.inner_text("#board-4mb h2") == "ESP32 DevKit V1" and page.locator(".board").count() == 1
               and page.locator("esp-web-install-button").count() == 1,
               "one choice, named for the DevKit")
-        # The page source keeps the 8mb blocks in HTML comments, so look at what renders.
         shown = page.inner_text("main") + page.evaluate("[...document.querySelectorAll('[manifest],[id]')].map(e => e.id + (e.getAttribute('manifest') || '')).join(' ')")
-        check("8mb" not in shown and "8 MB build" not in shown and "Not sure which" not in shown,
-              "the page does not offer the hidden 8 MB board")
+        check("8mb" not in shown and "8 MB" not in shown and "Not sure which" not in shown,
+              "the page offers no 8 MB build")
         hrefs = page.eval_on_selector_all("footer a", "as => as.map(a => a.getAttribute('href'))")
         for name in NOTICES:
             r = page.request.get(f"{base}/firmware/{name}")

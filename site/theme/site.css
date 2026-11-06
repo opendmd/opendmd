@@ -289,8 +289,8 @@ main.cheat td{padding:3px 8px}
 
 /* /stats: the usage page (site/worker/src/counts.ts writes its numbers in). Bars, no script:
    each mark's title is its tooltip, and a screen reader reads the hidden line beside it. */
-.stats{--us-i:#c77800;--us-4:#0a7ea3;--us-8:#c92a62;--us-o:#8d9098;margin:22px 0 30px}
-@media (prefers-color-scheme:dark){.stats{--us-i:#f7a531;--us-4:#1a9fcc;--us-8:#ee4a84;--us-o:#6b6e76}}
+.stats{--us-i:#c77800;--us-4:#0a7ea3;--us-o:#8d9098;margin:22px 0 30px}
+@media (prefers-color-scheme:dark){.stats{--us-i:#f7a531;--us-4:#1a9fcc;--us-o:#6b6e76}}
 .us-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .us-empty{color:var(--mut);font-size:15px;margin:8px 0}
 .us-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0 0 18px}
@@ -318,7 +318,7 @@ main.cheat td{padding:3px 8px}
 .us-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 10px;padding:0;list-style:none;font-size:14px;color:var(--mut)}
 .us-legend li{display:flex;align-items:center;gap:6px}
 .us-key{display:inline-block;width:12px;height:12px;border-radius:3px}
-.us-l-4mb{background:var(--us-4)}.us-l-8mb{background:var(--us-8)}.us-l-unknown,.us-l-other{background:var(--us-o)}
+.us-l-4mb{background:var(--us-4)}.us-l-unknown,.us-l-other{background:var(--us-o)}
 .us-versions{margin:0;padding:0;list-style:none}
 .us-versions li{display:grid;grid-template-columns:minmax(0,8.5em) minmax(0,1fr) auto;align-items:center;gap:10px;padding:5px 0;font-size:15px}
 .us-v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

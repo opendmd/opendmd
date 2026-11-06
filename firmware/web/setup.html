@@ -157,7 +157,7 @@ async function loadStatus() {
     $('apnote').hidden = !ap;
     const np = s.now_playing || {};
     const rows = [
-      ['Version', s.version + ', ' + ({ '4mb': 'DevKit (4 MB)', '8mb': '8 MB build' }[s.variant] || s.variant)],
+      ['Version', s.version + ', ' + ({ '4mb': 'DevKit (4 MB)' }[s.variant] || s.variant)],
       ['WiFi', s.wifi + (s.ip ? ' — ' + s.ip : '')],
       ['Address', (s.mdns || s.hostname) + '.local'],
       ['Uptime', s.uptime_secs + ' s'],
