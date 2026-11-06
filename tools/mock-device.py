@@ -4654,7 +4654,8 @@ def make_handler(ctx: Context, quiet: bool):
                 # The log's end as the firmware reports it (at most 1 KB,
                 # whole lines): what the firmware and the updater appended.
                 lines = [f"firmware {old}: staged {version} ({n} B), restarting into the updater",
-                         "updater +0.4 s: OpenDMD updater started (panel off)",
+                         "updater +0.4 s: OpenDMD updater 1 started",
+                         "updater +0.5 s: panel up in 60 ms: default timing (NVS read), brightness 96, 120 Hz",
                          f"updater +{took - 1:.1f} s: written in {took - 2:.1f} s; verifying the image",
                          f"updater +{took:.1f} s: renamed the bundle to /update/done-{version}.bin",
                          ctx.fw_last]

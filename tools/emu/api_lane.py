@@ -1502,6 +1502,14 @@ class Lane:
                         f"the firmware did not come back from the updater with {want}: {info}")
             ulog = [l for l in (info.get("log") or "").splitlines() if l.startswith("updater")]
             self.expect(any("image verified" in l for l in ulog), "ota", f"the updater's log: {ulog}")
+            # The updater's picture (docs/ota.md "The updater's panel"): the
+            # driver comes up after the firmware's restart (I2S TX is not
+            # modelled, so its refresh is not judged here), and is blanked
+            # before the restart into the firmware.
+            panel = emu.find(re.compile(r"updater: (panel up in \d+ ms: .*|panel skipped: .*)"), mark)
+            self.expect(len(panel) == 1 and panel[0][1].group(1).startswith("panel up"), "ota",
+                        f"the updater's panel: {[m.group(1) for _, m in panel]}")
+            refresh = emu.find(re.compile(r"updater: (panel refresh: .*)"), mark)
             st = api.status()
             self.expect(emu.resets == 3, "ota", f"{emu.resets} resets, wanted 3 (power-on, updater, firmware)")
             self.expect(not emu.find(re.compile(r"update screen: off"), mark), "ota", "the update message came down before the restart")
@@ -1511,6 +1519,7 @@ class Lane:
             self.expect(bool(said) == (ran != want), "ota",
                         f"'Updated to' on the boot after the update: {bool(said)}, the versions {ran} -> {want}")
             self.ok("ota", f"PUT {self.a.bundle.stat().st_size} B in {took:.0f} s wall: signature ok, staged, verified; the updater ({len(ulog)} log lines, '{ulog[-2] if len(ulog) > 1 else ''}') installed it; back as {info['version']} ({st.get('reset_reason')}) in {time.time() - back:.0f} s wall")
+            self.ok("ota panel up", f"the updater's '{panel[0][1].group(1)}'; '{refresh[0][1].group(1) if refresh else 'no refresh line'}'")
         finally:
             emu.kill()
 

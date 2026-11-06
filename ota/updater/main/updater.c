@@ -10,6 +10,12 @@
  *
  *   1. blanks the panel (OE high, every other HUB75 line low) as early as
  *      the app can: the same CORE-stage hook as the firmware's hub75_shim;
+ *      then, after a restart or a power-on (never after a panic, a watchdog
+ *      or a brownout: see panel_up), puts a still picture on it, the
+ *      firmware's "Installing / Don't unplug" (picture.h, made at build
+ *      time), with the firmware's panel timing from NVS (panel.cpp), and
+ *      leaves it to the I2S DMA. A panel that does not come up is dark, as
+ *      before, and nothing else changes;
  *   2. mounts the card on SPI3 (SCK 18, MISO 19, MOSI 23, CS 5) at 20 MHz;
  *   3. reads the 140-byte bundle header, checks the magic and that it names
  *      this board's flash layout (the variant: the flash size the installed
@@ -65,6 +71,9 @@
 #include "freertos/task.h"
 #include "hal/gpio_ll.h"
 #include "mbedtls/sha256.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "panel.h"
 #include "sdmmc_cmd.h"
 #include "soc/gpio_sig_map.h"
 #include "soc/soc_caps.h"
@@ -123,6 +132,13 @@ static const layout_t LAYOUTS[] = {
 #define MOUNT_TRIES 3
 #define BLINK_SLOW_MS 500
 #define BLINK_FAST_MS 100
+/* The dots task's tick (the refresh watch looks every tick), and the
+ * picture's dots: one lit at a time, DOT_TICKS ticks each. */
+#define TICK_MS 100
+#define DOT_TICKS 4
+/* The panel's brightness: the firmware's start-up level (config::BRIGHTNESS),
+ * never above the saved brightness or max_brightness (NVS, below). */
+#define PANEL_BRIGHTNESS 96
 
 /* --- The panel, blanked before anything else ------------------------------ */
 
@@ -215,6 +231,93 @@ static void note(const char *fmt, ...)
     if (f != NULL) {
         fputs(stamped, f);
         fclose(f);
+    }
+}
+
+/* --- The panel ------------------------------------------------------------------ */
+
+/* The dots step while an attempt runs; none while waiting to retry. */
+static volatile bool s_dots;
+
+static void dots_task(void *arg)
+{
+    (void)arg;
+    for (unsigned n = 0;; n++) {
+        panel_watch_tick();
+        panel_dot(s_dots ? (int)(n / DOT_TICKS % 1024) : -1);
+        vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+    }
+}
+
+/* The firmware's settings for the panel (firmware/src/nvs_config.rs:
+ * namespace "opendmd", "panel" in PanelTiming::to_nvs form, "brightness"
+ * and "max_bright" u8), read only. Anything missing or damaged: the
+ * defaults, as the firmware's boot takes them. Returns what it found, for
+ * the log. NVS is never erased or written here (nvs_flash_init only does
+ * the same recovery the firmware's boot would). */
+static const char *panel_settings(panel_timing_t *t, char *saved, size_t saved_len)
+{
+    panel_timing_default(t, PANEL_BRIGHTNESS);
+    saved[0] = 0;
+    esp_err_t err = nvs_flash_init();
+    if (err != ESP_OK) {
+        return esp_err_to_name(err);
+    }
+    nvs_handle_t h;
+    const char *what = "NVS read";
+    if (nvs_open("opendmd", NVS_READONLY, &h) == ESP_OK) {
+        size_t n = saved_len;
+        if (nvs_get_str(h, "panel", saved, &n) != ESP_OK) {
+            saved[0] = 0;
+        } else if (!panel_timing_parse(saved, t)) {
+            what = "NVS read, its panel timing damaged: the defaults";
+        }
+        uint8_t v;
+        if (nvs_get_u8(h, "brightness", &v) == ESP_OK && v < t->brightness) {
+            t->brightness = v;
+        }
+        if (nvs_get_u8(h, "max_bright", &v) == ESP_OK && v < t->brightness) {
+            t->brightness = v;
+        }
+        nvs_close(h);
+    } else {
+        what = "no settings in NVS";
+    }
+    nvs_flash_deinit();
+    return what;
+}
+
+/*
+ * The picture, once, before the first attempt. Only after a restart (the
+ * firmware's, into this updater) or a power-on / EN reset (an interrupted
+ * install resuming): after a panic, a watchdog or a brownout the panel stays
+ * dark, so nothing the panel could do (a crash in its driver, the current
+ * it draws) can keep an install from finishing: the boot after is today's
+ * dark updater. Its time is in the log ("panel up in N ms"); the copy has
+ * not started.
+ */
+static void panel_up(void)
+{
+    esp_reset_reason_t why = esp_reset_reason();
+    if (why != ESP_RST_SW && why != ESP_RST_POWERON && why != ESP_RST_EXT) {
+        note("panel skipped: the last reset was not a restart or a power-on (reason %d), so it stays dark",
+             (int)why);
+        return;
+    }
+    int64_t t0 = esp_timer_get_time();
+    panel_timing_t t;
+    char saved[48];
+    const char *from = panel_settings(&t, saved, sizeof saved);
+    char said[48];
+    if (!panel_start(&t, said, sizeof said)) {
+        note("panel skipped: %s; it stays dark", said);
+        return;
+    }
+    note("panel up in %d ms: %s (%s), brightness %u, %s", (int)((esp_timer_get_time() - t0) / 1000),
+         saved[0] ? saved : "default timing", from, (unsigned)t.brightness, said);
+    s_dots = true;
+    if (xTaskCreatePinnedToCore(dots_task, "dots", 2048, NULL, 1, NULL, 1) != pdPASS) {
+        note("no task for the dots: the picture stays still");
     }
 }
 
@@ -326,6 +429,10 @@ static void boot_factory(void)
     note("restarting into the firmware");
     unmount();
     s_blink_ms = 0;
+    s_dots = false;
+    /* Dark for the restart (the shutdown handler does it again): the I2S
+     * DMA would go on through the reset otherwise. */
+    panel_blank();
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
 }
@@ -542,6 +649,7 @@ static outcome_t attempt(void)
         return R_UNTOUCHED;
     }
     s_blink_ms = BLINK_SLOW_MS;
+    panel_watch_mark(1);
     t0 = esp_timer_get_time();
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
@@ -577,6 +685,7 @@ static outcome_t attempt(void)
         }
         vTaskDelay(1);
     }
+    panel_watch_mark(2);
     fclose(f);
     if (result == R_DONE) {
         mbedtls_sha256_finish(&sha, got);
@@ -590,6 +699,10 @@ static outcome_t attempt(void)
         return R_WRITTEN_BAD;
     }
     note("written in %.1f s; verifying the image", (esp_timer_get_time() - t0) / 1e6);
+    char watch[200];
+    if (panel_watch_report(watch, sizeof watch)) {
+        note("%s", watch);
+    }
 
     esp_partition_pos_t pos = {.offset = part->address, .size = part->size};
     esp_image_metadata_t meta;
@@ -629,10 +742,12 @@ void app_main(void)
     xTaskCreate(led_task, "led", 2048, NULL, 2, NULL);
 
     const esp_app_desc_t *me = esp_app_get_description();
-    note("OpenDMD %s started (panel off)", me->version);
+    note("OpenDMD %s started", me->version);
+    panel_up();
 
     for (int n = 1;; n++) {
         s_blink_ms = 0;
+        s_dots = true;
         outcome_t r = attempt();
         if (r == R_DONE) {
             boot_factory();
@@ -642,6 +757,7 @@ void app_main(void)
             boot_factory();
         }
         s_blink_ms = BLINK_FAST_MS;
+        s_dots = false;
         note("attempt %d failed (%s); the firmware partition does not verify: retrying in %d s",
              n, r == R_WRITTEN_BAD ? "partly written" : "nothing written", RETRY_MS / 1000);
         unmount();

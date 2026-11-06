@@ -22,6 +22,10 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # its libraries are linked (ESP_WIFI_ENABLED has no prompt in v5.3).
 CONFIG_BT_ENABLED=n
 
+# The HUB75 driver (the picture while it installs, main/panel.cpp): built
+# -DNO_GFX, as in the firmware (its default `y` wants Arduino and GFX).
+CONFIG_ESP32_HUB75_USE_GFX=n
+
 # FATFS with long names, as the firmware (the card is the same card).
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255

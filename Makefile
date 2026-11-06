@@ -133,7 +133,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release
 
@@ -147,6 +147,11 @@ blocklist-check:
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota
+	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
+	@mkdir -p target
+	$${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iota/updater/main -o target/updater-panel-timing-test \
+	  ota/updater/test/panel_timing_test.c ota/updater/main/panel_timing.c
+	target/updater-panel-timing-test ota/updater/test/panel_timing_vectors.txt
 	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
 	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
@@ -1028,6 +1033,7 @@ UPDATER_ENV := IDF_PATH=$(UPDATER_IDF) IDF_PYTHON_ENV_PATH=$(UPDATER_PYENV) \
 	ESP_ROM_ELF_DIR=$(ESPRESSIF)/tools/esp-rom-elfs/20240305/ \
 	PATH=$(UPDATER_PYENV)/bin:$(XTENSA_TOOLCHAIN)/bin:$(ESPRESSIF)/tools/cmake/3.24.0/bin:$(ESPRESSIF)/tools/ninja/1.11.1:$(UPDATER_IDF)/tools:$$PATH
 updater:
+	@test -f firmware/components/ESP32-HUB75-MatrixPanel-I2S-DMA/CMakeLists.txt || { echo "the HUB75 driver is missing: git submodule update --init"; exit 2; }
 	@mkdir -p $(UPDATER_BUILD)
 	@# idf.py only reads sdkconfig.defaults into a new sdkconfig.
 	@if [ ota/updater/sdkconfig.defaults -nt $(UPDATER_BUILD)/sdkconfig ]; then rm -f $(UPDATER_BUILD)/sdkconfig; fi
@@ -1036,6 +1042,12 @@ updater:
 	@size=$$(stat -c %s $(UPDATER_BIN)); \
 	 echo "$(UPDATER_BIN): $$size B of the $(UPDATER_SLOT) B ota_0 slot, $$(( $(UPDATER_SLOT) - size )) B spare (need $(UPDATER_SPARE))"; \
 	 test $$(( size + $(UPDATER_SPARE) )) -le $(UPDATER_SLOT) || { echo "the updater does not fit ota_0 with $(UPDATER_SPARE) B spare"; exit 1; }
+
+# The updater's picture (ota/updater/main/picture.h, committed): the
+# firmware's "Installing / Don't unplug" with no dot lit, packed by
+# opendmd-core (src/updater_picture.rs); `make test` fails when it is stale.
+updater-picture:
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo run -q --example updater_picture $(CURDIR)/ota/updater/main/picture.h
 
 # A firmware update over WiFi (docs/ota.md): PUT the signed bundle to
 # /api/firmware, then wait for the device to come back running it.

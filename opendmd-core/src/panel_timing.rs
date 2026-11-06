@@ -493,6 +493,25 @@ pub const NO_TRIAL: &str = "no panel trial is running (it may have ended)";
 
 #[cfg(test)]
 mod tests {
+    /// The vectors the updater's own parser (`ota/updater/main/panel_timing.c`,
+    /// which reads this setting from NVS to drive the panel while it
+    /// installs) is held to as well, by `make test`.
+    #[test]
+    fn the_updaters_vectors_parse_the_same() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../ota/updater/test/panel_timing_vectors.txt");
+        let text = std::fs::read_to_string(path).expect("the updater's vectors");
+        let mut n = 0;
+        for line in text.lines().filter(|l| !l.starts_with('#')) {
+            let Some((input, want)) = line.rsplit_once('|') else {
+                continue;
+            };
+            let got = PanelTiming::from_nvs(input).map(|t| t.to_nvs());
+            assert_eq!(got.as_deref().unwrap_or("-"), want, "{input:?}");
+            n += 1;
+        }
+        assert!(n > 20, "{n} vectors");
+    }
+
     use super::*;
 
     const S: fn(u64) -> Duration = Duration::from_secs;
