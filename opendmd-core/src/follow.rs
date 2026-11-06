@@ -59,6 +59,7 @@ pub const MAX_WEIGHT: u32 = 255;
 /// related entries: `clamp(n_matches - 1, 4, 32)`, so a small match set can
 /// cycle (the global window is 32, which would let one strong GIF play at
 /// most once every 33 draws).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn context_window(n_matches: usize) -> usize {
     n_matches.saturating_sub(1).clamp(4, 32)
 }
@@ -80,6 +81,7 @@ impl Match {
     /// [`weigh_context`] knows the counts and replaces it with the weight.
     /// (Never seen outside the pass; positive so that an index written
     /// without the second step still plays every entry.)
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn mark(self) -> Override {
         Override {
             weight: Some(match self {
@@ -90,6 +92,7 @@ impl Match {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn of_mark(ov: &Override) -> Option<Match> {
         match ov.weight {
             Some(STRONG_MARK) => Some(Match::Strong),
@@ -101,6 +104,7 @@ impl Match {
 
 /// Which class a [`title_score`] puts an entry in (`None`: the rest of the
 /// platform, weight 1).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn classify(score: f32) -> Option<Match> {
     if score >= STRONG {
         Some(Match::Strong)
@@ -143,6 +147,7 @@ pub struct ContextWeights {
 const E_ONE: u64 = 256;
 
 impl ContextWeights {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn for_counts(total: u32, n_strong: u32, n_related: u32) -> Self {
         let window = context_window((n_strong + n_related) as usize) as u32;
         let mut w = ContextWeights {
@@ -199,6 +204,7 @@ impl ContextWeights {
         w
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn weight(&self, m: Match) -> u32 {
         match m {
             Match::Strong => self.strong,
@@ -208,6 +214,7 @@ impl ContextWeights {
 
     /// The expected share of draws of `(strong, related, rest)`, in parts
     /// per million, with these weights and the window (see the type's doc).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn shares_ppm(&self) -> [u32; 3] {
         let n_rest = self.total.saturating_sub(self.n_strong + self.n_related);
         // The scheduler never lets the window exclude every entry.
@@ -246,6 +253,7 @@ impl ContextWeights {
     }
 
     /// [`Self::shares_ppm`] as fractions.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn shares(&self) -> (f32, f32, f32) {
         let [s, r, o] = self.shares_ppm();
         (s as f32 / 1e6, r as f32 / 1e6, o as f32 / 1e6)
@@ -255,6 +263,7 @@ impl ContextWeights {
 /// The second half of a context index's pass (the `finish` of
 /// [`crate::index::write_index_resolving_then`]): count the [`Match::mark`]s
 /// among `count` entries and replace each with its class's weight.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn weigh_context(count: u32, resolved: &mut Overrides) -> ContextWeights {
     let (mut s, mut r) = (0u32, 0u32);
     for (_, ov) in resolved.iter() {
@@ -297,6 +306,7 @@ pub const SYSTEMS: &[(&str, &str)] = &[
 
 /// The platform tag for a RePlayOS system id, or `None` if the pack has no
 /// platform for it (the panel then follows with the console's name only).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn platform_for_system(system: &str) -> Option<&'static str> {
     let system = system.trim();
     if system
@@ -312,6 +322,7 @@ pub fn platform_for_system(system: &str) -> Option<&'static str> {
 }
 
 /// What a title card calls a platform.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn console_name(platform: &str) -> &'static str {
     match platform {
         "MD" => "Mega Drive",
@@ -365,6 +376,7 @@ pub fn console_name(platform: &str) -> &'static str {
 
 /// The console name for a system id RePlayOS reported, falling back to the
 /// id itself (`sega_32x` -> `sega 32x`) for systems without a platform.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn console_name_for_system(system: &str) -> String {
     match platform_for_system(system).map(console_name) {
         Some(n) if !n.is_empty() => n.to_string(),
@@ -376,6 +388,7 @@ pub fn console_name_for_system(system: &str) -> String {
 /// dropped, No-Intro's trailing article moved to the front (`Legend of
 /// Zelda, The - A Link…` -> `The Legend of Zelda - A Link…`), whitespace
 /// collapsed.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clean_game_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut depth = 0u32;
@@ -407,6 +420,7 @@ pub fn clean_game_name(name: &str) -> String {
 const STOPWORDS: &[&str] = &["the", "a", "an", "and", "of"];
 
 /// Roman numerals and number words, as digits.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn numeral(word: &str) -> Option<&'static str> {
     Some(match word {
         "one" => "1",
@@ -428,6 +442,7 @@ fn numeral(word: &str) -> Option<&'static str> {
 /// boundaries (`Sonic3` -> `sonic 3`, `StreetsOfRage` -> `streets of
 /// rage`), lowercased, accents folded, numerals as digits (`II`, `two` ->
 /// `2`; leading zeros dropped), stopwords dropped, duplicates removed.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn tokens(title: &str) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -488,12 +503,14 @@ pub fn tokens(title: &str) -> Vec<String> {
     out
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn flush(cur: &mut String, words: &mut Vec<String>) {
     if !cur.is_empty() {
         words.push(std::mem::take(cur));
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn is_number(t: &str) -> bool {
     t.bytes().all(|b| b.is_ascii_digit())
 }
@@ -510,11 +527,13 @@ fn is_number(t: &str) -> bool {
 /// "Sonic3" against "Sonic the Hedgehog 3 (USA)" is 0.8 (strong), "Sonic
 /// The Hedgehog" 0.56 (related), "Sonic The Hedgehog 2" 0.33 (neither);
 /// "Super Mario Kart" against "Super Mario World" 0.5 (related).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn title_score(entry_title: &str, game_name: &str) -> f32 {
     score_tokens(&tokens(entry_title), &tokens(game_name))
 }
 
 /// [`title_score`] on tokens already computed (the game's once per build).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn score_tokens(entry: &[String], game: &[String]) -> f32 {
     if entry.is_empty() || game.is_empty() {
         return 0.0;
@@ -542,6 +561,7 @@ pub fn score_tokens(entry: &[String], game: &[String]) -> f32 {
 
 /// Is this entry a logo? (`MD_LOGO_Sega31`: the `LOGO` flag, or `logo` in
 /// the title.)
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn is_logo(entry: &Entry) -> bool {
     entry.has_flag("LOGO") || entry.title.to_ascii_lowercase().contains("logo")
 }
@@ -572,6 +592,7 @@ const CONSOLE_WORDS: &[&str] = &[
 /// is the console's rather than another game's (a console maker's name in
 /// it, or no words at all: `MD_LOGO_Sega31`, `N64_LOGO_01`), else none —
 /// the sequence then shows a card with the console's name.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn choose_logo<'a>(candidates: &'a [(String, String)], game_name: &str) -> Option<&'a str> {
     let game = tokens(game_name);
     if let Some((_, path)) = candidates
@@ -594,6 +615,7 @@ pub fn choose_logo<'a>(candidates: &'a [(String, String)], game_name: &str) -> O
 /// fingerprint: the platform and the game's tokens (FNV-1a 64, with a
 /// version, so a change to the scoring rebuilds every cached index). Never
 /// 0 ([`crate::overrides::NO_META`]).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn context_fingerprint(platform: &str, game_name: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |b: &[u8]| {
@@ -627,6 +649,7 @@ pub struct Observed {
 impl Observed {
     /// A game is loaded: `game_play`, or paused / an in-game overlay
     /// (`game_options`, `achievements`, `leaderboards`) over a game file.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn loaded(&self) -> bool {
         if self.halted {
             return false;
@@ -686,17 +709,20 @@ impl StatusScan {
     pub const MAX_FIELD: usize = 256;
     const MAX_KEY: usize = 16;
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new() -> Self {
         StatusScan::default()
     }
 
     /// The next piece of the reply, any size.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn feed(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.byte(b);
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn byte(&mut self, b: u8) {
         if self.closed {
             return;
@@ -746,6 +772,7 @@ impl StatusScan {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn string_byte(&mut self, b: u8) {
         match self.escape {
             0 => match b {
@@ -791,6 +818,7 @@ impl StatusScan {
     }
 
     /// Keep string bytes if they are a top-level key or a wanted value.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn keep(&mut self, bytes: &[u8]) {
         if self.reading_key {
             if self.key.len() + bytes.len() <= Self::MAX_KEY {
@@ -811,6 +839,7 @@ impl StatusScan {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn end_string(&mut self) {
         if self.reading_key {
             self.reading_key = false;
@@ -840,6 +869,7 @@ impl StatusScan {
     }
 
     /// A bare top-level value (`true`, `false`, a number, `null`) ended.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn end_bare(&mut self) {
         if let Some(first) = self.bare.take() {
             match self.field {
@@ -851,6 +881,7 @@ impl StatusScan {
     }
 
     /// The fields, if the reply was one complete JSON object.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn finish(self) -> Result<Observed, &'static str> {
         match (self.seen_object, self.closed && self.depth == 0) {
             (true, true) => Ok(self.out),
@@ -872,6 +903,7 @@ pub struct Game {
 }
 
 impl Game {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn from(o: &Observed) -> Game {
         Game {
             system: o.system.clone(),
@@ -881,6 +913,7 @@ impl Game {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn same(&self, o: &Observed) -> bool {
         self.system == o.system
             && if self.file.is_empty() && o.game_file.is_empty() {
@@ -902,6 +935,7 @@ pub enum State {
 
 /// The name status reports: `Game` is `starting` while the firmware's
 /// sequence (power-on, logo, title card) runs.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn state_name(state: State, sequence_running: bool) -> &'static str {
     match state {
         State::Off => "off",
@@ -943,6 +977,7 @@ pub struct Follow {
 }
 
 impl Default for Follow {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         Follow {
             state: State::Off,
@@ -955,30 +990,36 @@ impl Default for Follow {
 }
 
 impl Follow {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn state(&self) -> State {
         self.state
     }
 
     /// The game being followed (`Game` and `Cooldown`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn game(&self) -> Option<&Game> {
         self.game.as_ref()
     }
 
     /// When the current state was entered.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn since(&self) -> Duration {
         self.since
     }
 
     /// Failed polls in a row.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn failures(&self) -> u32 {
         self.failures
     }
 
     /// How long until the next poll should go out.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn poll_interval(&self) -> Duration {
         match self.state {
             State::Unreachable => BACKOFF,
@@ -986,6 +1027,7 @@ impl Follow {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn enter(&mut self, state: State, now: Duration) {
         if self.state != state {
             self.state = state;
@@ -995,6 +1037,7 @@ impl Follow {
 
     /// Following turned on (`true`) or off. Turning it on changes nothing on
     /// the panel until the Pi answers; turning it off returns to normal.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn set_enabled(&mut self, on: bool, now: Duration) -> Option<Action> {
         match (on, self.state) {
             (true, State::Off) => {
@@ -1014,6 +1057,7 @@ impl Follow {
 
     /// A poll came back (`Some`) or failed (`None`: unreachable, timed out,
     /// refused, 401 — the firmware says which).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn observe(&mut self, now: Duration, poll: Option<&Observed>) -> Option<Action> {
         if self.state == State::Off {
             return None;
@@ -1066,6 +1110,7 @@ impl Follow {
     }
 
     /// Time passed: the grace period may be over.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn tick(&mut self, now: Duration) -> Option<Action> {
         if self.state == State::Cooldown && now.saturating_sub(self.left_at) >= GRACE {
             self.game = None;
