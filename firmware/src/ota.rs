@@ -6,8 +6,10 @@
 //! every upload) writes the signed bundle to `/update/opendmd.bin.part`,
 //! hashing the image as it goes and keeping the 140-byte header in memory,
 //! then checks it (`opendmd_core::ota`: the header, that it is for this
-//! image's flash layout ([`crate::state::FLASH_VARIANT`]: a 4mb player
-//! refuses an 8mb bundle and the reverse), that the image fits the factory
+//! image's flash layout ([`crate::state::FLASH_VARIANT`] and its table,
+//! [`crate::state::flash_layout`]: a 4mb player refuses an 8mb bundle and
+//! the reverse, a table v3 player a v2 bundle; a v2 player, beta.15 and
+//! earlier, does not know the v3 magic at all), that the image fits the factory
 //! partition, the ESP image magic 0xE9, the SHA-256, the Ed25519 signature
 //! against [`PUBLIC_KEY`], and that the image's app descriptor is a build
 //! for the same layout). The layout and the signature are checked as soon
@@ -191,8 +193,8 @@ fn check_header(
     }
     header.copy_from_slice(&head[..HEADER_LEN]);
     // The cheap checks first, here: no round trip for a file that is not a
-    // bundle at all, or one for the other flash layout.
-    Header::parse(&header[..])?.check_variant(crate::state::FLASH_VARIANT)?;
+    // bundle at all, or one for another flash layout or partition table.
+    Header::parse(&header[..])?.check_layout(crate::state::FLASH_VARIANT, crate::state::flash_layout())?;
     let (tx, rx) = mpsc::channel();
     VERIFY_WAITING.store(true, std::sync::atomic::Ordering::Relaxed);
     let sent = net.send(NetCommand::VerifyBundle { header, reply: tx });
@@ -257,7 +259,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(
             500,
             "500 Internal Server Error",
-            "this flash has no updater partition (layout v1): install a v2 release over USB once (docs/deploying.md)",
+            "this flash has no updater partition (layout v1): install a current release over USB once (opendmd.dev/install)",
         );
     };
     let len = up.content_len();
@@ -467,7 +469,7 @@ fn flash_size() -> u32 {
     })
 }
 
-/// `GET /api/firmware`: `{"version","build","variant","flash_size","pending","last","log"}`.
+/// `GET /api/firmware`: `{"version","build","variant","layout","flash_size","pending","last","log"}`.
 /// Reads two small files on the card when it is mounted (at most
 /// [`LOG_TAIL`] bytes of the log).
 pub fn info_json(card_mounted: bool) -> String {
@@ -480,10 +482,11 @@ pub fn info_json(card_mounted: bool) -> String {
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
     let (mhz, mode) = flash_clock();
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"features":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
+        r#"{{"version":{},"build":{},"variant":{},"layout":{},"features":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
         json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
+        crate::state::flash_layout(),
         crate::state::features_json(),
         flash_size(),
         opt(pending),

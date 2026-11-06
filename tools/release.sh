@@ -324,6 +324,7 @@ else
     pass "manifest-$v.json version $manifest"
     uv run --quiet tools/fw-sign.py inspect "$DIST/opendmd-$VERSION-$v.odfw" | tee "$REL/inspect-$v.txt"
     grep -qx "variant  $v" "$REL/inspect-$v.txt" || die "opendmd-$VERSION-$v.odfw is not a $v bundle"
+    grep -qx "layout   v[0-9]* (current)" "$REL/inspect-$v.txt" || die "opendmd-$VERSION-$v.odfw is not for this tree's $v partition table"
     uv run --quiet tools/fw-sign.py verify "$DIST/opendmd-$VERSION-$v.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
       die "opendmd-$VERSION-$v.odfw does not verify against firmware/keys/opendmd.pub"
     pass "opendmd-$VERSION-$v.odfw: a $v bundle, verifies against the committed firmware/keys/opendmd.pub"
@@ -334,7 +335,7 @@ else
     [ "$(stat -c %s "$full")" -eq "$want" ] || die "$full is $(stat -c %s "$full") B, want $want (the $v flash)"
     pass "opendmd-$VERSION-$v-full.bin: $want B"
     # The factory partition each layout's app goes in (firmware/partitions*.csv).
-    factory=$(case $v in 4mb) echo 2359296;; 8mb) echo 3145728;; esac)
+    factory=$(case $v in 4mb) echo 2621440;; 8mb) echo 3145728;; esac)
     size=$(stat -c %s "$app"); spare=$(( factory - size ))
     [ "$spare" -ge 65536 ] || die "$v app is $size B: $spare B spare of the $factory B factory partition, need 65536"
     pass "$v app $size B of $factory B factory: $spare B spare (>= 65536)"
@@ -363,7 +364,8 @@ else
     "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` | \`opendmd-$V-8mb.odfw\` |" \
     "| whole flash at offset 0 | \`opendmd-$V-4mb-full.bin\` | \`opendmd-$V-8mb-full.bin\` |" \
     "| ESP Web Tools manifest | \`manifest-4mb.json\` | \`manifest-8mb.json\` |" '' \
-    'A player refuses an update file for the other board. The web app pack, the updater and otadata are the same for both.')"
+    'A player refuses an update file for the other board. The web app pack, the updater and otadata are the same for both.' '' \
+    'The DevKit build is for flash layout v3 (a bigger firmware partition; docs/deploying.md): a DevKit on layout v2 (1.0.0-beta.15 or earlier) refuses its update file and needs one USB install from https://opendmd.dev/install/ (Update OpenDMD, or Install with Erase unticked, keeps the WiFi and settings). An 8 MB board in development'"'"'s layout did not change.')"
   printf '%s\n\nSHA-256:\n\n```\n%s\n```\n' "$WHICH" "$(cat "$ASSETS/SHA256SUMS")" > "$REL/notes.md"
   pass "$(( ${#files[@]} + 1 )) assets (with SHA256SUMS) in $ASSETS; notes in $REL/notes.md"
 
@@ -403,7 +405,9 @@ else
     f="$(jq -r ".variants[\"$v\"].firmware" "$inst/release.json")"
     [ "$f" = "firmware/opendmd-$VERSION-$v.odfw" ] || die "release.json's variants.$v.firmware is '$f'"
     cmp "$inst/$f" "$DIST/opendmd-$VERSION-$v.odfw" || die "$inst/$f is not dist's"
-    pass "release.json variants.$v.firmware is dist's bundle"
+    l="$(jq -r ".variants[\"$v\"].layout" "$inst/release.json")"
+    grep -qx "layout   v$l (current)" "$REL/inspect-$v.txt" || die "release.json's variants.$v.layout is '$l', not the bundle's table"
+    pass "release.json variants.$v.firmware is dist's bundle, layout v$l"
   done
   grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || die "the install page has no 4mb button"
   ! grep -q 'manifest-8mb' "$inst/index.html" || die "the install page offers the hidden 8mb board"

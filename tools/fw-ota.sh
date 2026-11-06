@@ -5,9 +5,10 @@
 #
 # PUTs the signed bundle (`make fw-release` writes dist/opendmd-<v>-<variant>.odfw)
 # to /api/firmware and prints the reply. A bundle for another flash layout
-# than the device's (its magic, bytes 5..8: NULs for 4mb, "8mb"; the
-# device's `variant` in GET /api/firmware) is refused here, before anything
-# is sent; the device would refuse it too. The device stages it on its card,
+# than the device's (its magic: "ODFW34mb" 4mb table v3, "ODFW1" + NULs 4mb
+# table v2, "ODFW18mb"; the device's `variant` and `layout` in GET
+# /api/firmware, no `layout` meaning v2) is refused here, before anything is
+# sent; the device would refuse it too. The device stages it on its card,
 # checks the signature, restarts into the updater, which installs it and
 # restarts into the new firmware (~45 s from the end of the upload to
 # playback, the panel dark). This script then polls GET /api/firmware until
@@ -25,12 +26,13 @@ set -euo pipefail
 host=${1:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
 bundle=${2:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
 [ -f "$bundle" ] || { echo "no such bundle: $bundle (run make fw-release first)" >&2; exit 2; }
-[ "$(head -c 5 "$bundle")" = "ODFW1" ] || { echo "$bundle is not a firmware bundle" >&2; exit 2; }
-# The bundle's flash layout, from the last three bytes of its magic.
-case "$(dd if="$bundle" bs=1 skip=5 count=3 status=none | od -An -tx1 | tr -d ' \n')" in
-    000000) bundle_variant=4mb ;;
-    386d62) bundle_variant=8mb ;;
-    *) echo "$bundle is a firmware bundle for a flash layout this script does not know" >&2; exit 2 ;;
+# The bundle's flash layout and partition table, from its magic.
+case "$(head -c 8 "$bundle" | od -An -tx1 | tr -d ' \n')" in
+    4f44465733346d62) bundle_variant=4mb bundle_layout=3 ;;
+    4f44465731000000) bundle_variant=4mb bundle_layout=2 ;;
+    4f44465731386d62) bundle_variant=8mb bundle_layout=2 ;;
+    4f444657*) echo "$bundle is a firmware bundle for a flash layout this script does not know" >&2; exit 2 ;;
+    *) echo "$bundle is not a firmware bundle" >&2; exit 2 ;;
 esac
 board() { case "$1" in 4mb) echo "DevKit (4 MB)" ;; 8mb) echo "8 MB build" ;; *) echo "$1" ;; esac; }
 auth=()
@@ -61,6 +63,15 @@ if [ "$bundle_variant" != "$device_variant" ]; then
     echo "Use its bundle instead: make fw-ota HOST=$host VARIANT=$device_variant (dist/opendmd-<version>-$device_variant.odfw)" >&2
     exit 2
 fi
+# The partition table: firmware from before `layout` (1.0.0-beta.15) is v2.
+device_layout=$(printf '%s' "$before" | sed -n 's/.*"layout":\([0-9]*\).*/\1/p')
+device_layout=${device_layout:-2}
+if [ "$bundle_layout" != "$device_layout" ]; then
+    echo "$bundle is for flash layout v$bundle_layout of the $(board "$bundle_variant"), but http://$host has layout" >&2
+    echo "v$device_layout: an update over WiFi cannot change the partition table. Install it once over USB" >&2
+    echo "(make fw-release-flash PORT=..., or the installer at https://opendmd.dev/install/; docs/deploying.md)" >&2
+    exit 2
+fi
 # The bundle path defaults to dist/opendmd-<Cargo.toml version>.odfw, which
 # after a `make fw-release FW_VERSION=…` can be an old bundle; the device
 # installs an older one without asking (docs/ota.md), so ask here.
@@ -71,7 +82,7 @@ if [ -n "$have" ] && [ "${OPENDMD_ALLOW_OLDER:-}" != 1 ] \
     echo "or OPENDMD_ALLOW_OLDER=1 to install it anyway" >&2
     exit 2
 fi
-echo "pushing $bundle ($size B, version '$want', $bundle_variant) to http://$host/api/firmware"
+echo "pushing $bundle ($size B, version '$want', $bundle_variant layout v$bundle_layout) to http://$host/api/firmware"
 
 t0=$(date +%s.%N)
 reply=$(curl -sS --max-time 300 -w '\n%{http_code}' -X PUT "${auth[@]}" \

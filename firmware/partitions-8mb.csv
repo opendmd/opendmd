@@ -1,5 +1,5 @@
-# OpenDMD partition table for 8 MB flash (variant "8mb": an 8 MB board
-# in development). The same scheme as the 4 MB layout v2
+# OpenDMD partition table v2, 8 MB flash (variant "8mb": an 8 MB board
+# in development). The same scheme as the 4 MB table
 # (partitions.csv, docs/ota.md): the firmware in factory, the updater in
 # ota_0, the web app's pack in www; only the sizes grow, and a spare data
 # partition claims the rest. Built with CONFIG_ESPTOOLPY_FLASHSIZE_8MB (the
@@ -19,8 +19,10 @@
 #   never acts on an app's own (CONFIG_SPI_FLASH_SIZE_OVERRIDE is off), and
 #   nothing that starts it (esp_ota_set_boot_partition, esp_image_verify)
 #   checks it.
-# - www: 2,048 KB. The pack is ~1 MB and is built to fit the 4 MB table's
-#   1,280 KB (one pack for both); the extra is room for later. The pack is
+# - www: 2,048 KB. The pack is ~0.6 MB and is built to fit the 4 MB table's
+#   1,024 KB (one pack for both); the extra is room for later. The 8 MB
+#   table did not change when the 4 MB one went to v3: its bundles keep
+#   their magic (ODFW18mb, table v2). The pack is
 #   memory-mapped into the 4 MB data window it shares with the app's
 #   rodata (~0.36 MB), so 2 MB keeps that window well under half full.
 # - spare: 2,560 KB, data/undefined, unused today. Declared now so a later
