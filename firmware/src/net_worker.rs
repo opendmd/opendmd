@@ -39,7 +39,7 @@ use crate::http::NetCommand;
 use crate::improv::Job;
 use crate::nvs_config::Settings;
 use crate::state::{Command, Status};
-use crate::wifi::{WifiManager, WifiState};
+use crate::wifi::{Eap, WifiManager, WifiState};
 
 /// Everything the worker needs to take ownership of.
 pub struct NetWorker {
@@ -48,6 +48,8 @@ pub struct NetWorker {
     pub nvs: EspNvsPartition<NvsDefault>,
     pub ssid: String,
     pub password: String,
+    /// A work or school network's login (802.1X), if one is saved.
+    pub eap: Option<Eap>,
     pub hostname: String,
     pub status: Arc<Mutex<Status>>,
     pub rx: mpsc::Receiver<NetCommand>,
@@ -192,6 +194,10 @@ fn save_wifi(
     let mut next = settings.lock().map_err(|_| "settings poisoned")?.clone();
     next.wifi_ssid = ssid.to_string();
     next.wifi_pass = password.to_string();
+    // The installer's details are a name and a password: no work or school
+    // login (Improv has no field for one).
+    next.wifi_eap_user.clear();
+    next.wifi_eap_identity.clear();
     let (tx, rx) = mpsc::channel();
     cmd.send(Command::ApplyConfig {
         settings: Box::new(next),
@@ -208,6 +214,8 @@ fn save_wifi(
             if let Ok(mut s) = settings.lock() {
                 s.wifi_ssid = ssid.to_string();
                 s.wifi_pass = password.to_string();
+                s.wifi_eap_user.clear();
+                s.wifi_eap_identity.clear();
             }
             Ok(())
         }
@@ -226,6 +234,7 @@ struct Net {
     /// The credentials in use: replaced by WiFi details joined over USB.
     ssid: String,
     password: String,
+    eap: Option<Eap>,
     hostname: String,
     status: Arc<Mutex<Status>>,
     save_settings: Arc<Mutex<Settings>>,
@@ -255,6 +264,7 @@ fn run(worker: NetWorker) {
         nvs,
         ssid,
         password,
+        eap,
         hostname,
         status,
         rx,
@@ -263,7 +273,7 @@ fn run(worker: NetWorker) {
     } = worker;
     let (save_settings, save_cmd) = (settings.clone(), cmd.clone());
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
-    let Some(mut net) = start(modem, sysloop, nvs, ssid, password, hostname, status, save_settings, save_cmd) else {
+    let Some(mut net) = start(modem, sysloop, nvs, ssid, password, eap, hostname, status, save_settings, save_cmd) else {
         return;
     };
 
@@ -414,6 +424,7 @@ fn start(
     nvs: EspNvsPartition<NvsDefault>,
     ssid: String,
     password: String,
+    eap: Option<Eap>,
     hostname: String,
     status: Arc<Mutex<Status>>,
     save_settings: Arc<Mutex<Settings>>,
@@ -445,7 +456,7 @@ fn start(
         info!("[net] no saved credentials; starting the setup AP");
     } else {
         while failures < config::STA_MAX_FAILURES {
-            match wifi.connect_sta(&ssid, &password, None) {
+            match wifi.connect_sta(&ssid, &password, eap.as_ref(), None) {
                 Ok(true) => break,
                 // Gave way to the installer (`improv::pending`): its job
                 // first, then the loop below carries on from here.
@@ -531,6 +542,7 @@ fn start(
         wifi,
         ssid,
         password,
+        eap,
         hostname,
         status,
         save_settings,
@@ -564,7 +576,7 @@ impl Net {
             let deadline = at + config::IMPROV_ANSWER_WITHIN;
             info!("[net] improv: joining '{new_ssid}'");
             let joined = matches!(
-                self.wifi.connect_sta(&new_ssid, &new_password, Some(deadline)),
+                self.wifi.connect_sta(&new_ssid, &new_password, None, Some(deadline)),
                 Ok(true)
             );
             let saved = joined
@@ -582,6 +594,7 @@ impl Net {
                 // gone, so this is the network to stay on until reboot.
                 self.ssid = new_ssid;
                 self.password = new_password;
+                self.eap = None;
                 self.ap_started_at = None;
                 self.boot_failures = None;
                 self._dns = None;
@@ -644,7 +657,7 @@ impl Net {
         if (lost || never) && !crate::improv::pending() && !form_open {
             warn!("[net] WiFi dropped; reconnecting");
             publish(&self.status, WifiState::Disconnected, None);
-            match self.wifi.connect_sta(&self.ssid, &self.password, None) {
+            match self.wifi.connect_sta(&self.ssid, &self.password, self.eap.as_ref(), None) {
                 Ok(true) => {
                     let ip = self.wifi.ip_address();
                     info!("[net] reconnected, IP {}", ip.clone().unwrap_or_default());

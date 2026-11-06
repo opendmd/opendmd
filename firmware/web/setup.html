@@ -30,11 +30,11 @@ p.hint{margin:0 0 10px;color:var(--dim);font-size:14px}
 .nets{display:grid;gap:6px;margin-bottom:6px}
 .nets button{margin:0;display:flex;justify-content:space-between;text-align:left;background:#161a21;color:var(--fg);border:1px solid var(--line);font-weight:400}
 .nets button.on{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
-.nets button:disabled{opacity:.45;cursor:not-allowed}
 .nets small{color:var(--dim)}
 button.link{width:auto;margin:0;padding:0;background:none;color:var(--accent);font-weight:400;text-decoration:underline}
 a{color:var(--accent)}
 details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
+label.chk{display:flex;gap:8px;align-items:center;color:var(--fg);font-size:14px;margin-top:12px}label.chk input{width:auto}
 </style>
 </head>
 <body>
@@ -48,6 +48,15 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <div id="nets" class="nets"><div class="msg">Looking for networks&hellip;</div></div>
 <label for="ssid">Network name</label>
 <input id="ssid" autocomplete="off" autocapitalize="off" spellcheck="false">
+<label class="chk"><input id="ent" type="checkbox"> Work or school login (a username as well: eduroam, WPA-Enterprise)</label>
+<div id="entbox" hidden>
+<label for="euser">Username</label>
+<input id="euser" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false">
+<label for="eid">Outer identity (if your network gives one, often anonymous@&hellip;)</label>
+<input id="eid" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="the username">
+<label for="ettls">Inner method (TTLS only)</label>
+<select id="ettls"><option value="mschapv2">MSCHAPv2 (most networks)</option><option value="pap">PAP</option><option value="mschap">MSCHAP</option><option value="chap">CHAP</option></select>
+</div>
 <label for="pass">Password</label>
 <input id="pass" type="password" autocomplete="off">
 <label for="host">Display name</label>
@@ -177,6 +186,8 @@ async function loadConfig() {
     $('platforms').value = c.platforms; $('set').value = c.set;
     $('shuffle').value = String(c.shuffle);
     if (c.wifi_pass_set) $('pass').placeholder = 'saved; leave blank to keep it';
+    $('euser').value = c.wifi_eap_user || ''; $('eid').value = c.wifi_eap_identity || ''; $('ettls').value = c.wifi_eap_ttls || 'mschapv2';
+    entOn(!!c.wifi_eap_user);
     if (c.hostname) { $('host').value = c.hostname; $('host').oninput(); }
     if (c.api_key_set) $('key').placeholder = 'a key is set; leave blank to keep it';
   } catch (e) { /* the setup page is useful even if this fails */ }
@@ -191,6 +202,11 @@ async function put(path, body) {
 
 $('refresh').onclick = loadStatus;
 
+// A work or school network (802.1X): a username as well; the password is the
+// same field. Unticked, Connect clears a saved username.
+const entOn = v => { $('ent').checked = v; $('entbox').hidden = !v; };
+$('ent').onchange = () => { entOn($('ent').checked); if ($('ent').checked) $('euser').focus(); };
+
 // Nearby networks as buttons; tapping one fills in its name. Names are
 // set as text, never as HTML: they come from anyone in range.
 async function scan() {
@@ -203,18 +219,14 @@ async function scan() {
       name.textContent = a.ssid;
       info.textContent = (a.secure ? '🔒 ' : '') + (a.rssi > -60 ? '▂▄▆█' : a.rssi > -70 ? '▂▄▆' : a.rssi > -80 ? '▂▄' : '▂');
       b.append(name, info);
-      // "Enterprise" networks (a username as well as a password) cannot be
-      // joined: the firmware has no 802.1X support.
-      if (/-Ent$/.test(a.auth)) {
-        b.disabled = true;
-        b.title = 'Needs a work or school login: not supported';
-        info.textContent = 'not supported';
-        return b;
-      }
+      // "Enterprise" networks (802.1X) ask for a username as well.
+      const ent = /-Ent$/.test(a.auth);
+      if (ent) info.textContent = 'work or school login ' + info.textContent;
       b.onclick = () => {
         $('ssid').value = a.ssid;
         for (const o of box.children) o.classList.toggle('on', o === b);
-        $('pass').focus();
+        entOn(ent);
+        $(ent ? 'euser' : 'pass').focus();
       };
       return b;
     }));
@@ -230,6 +242,9 @@ $('savewifi').onclick = async () => {
   if (!hostOk(host)) return say('wifimsg', 'The display name can only use a-z, 0-9 and hyphens (up to 32, no hyphen at the start or end).', 'err');
   const body = { wifi_ssid: ssid, hostname: host };
   if ($('pass').value) body.wifi_pass = $('pass').value;
+  const user = $('ent').checked ? $('euser').value.trim() : '';
+  if ($('ent').checked && !user) return say('wifimsg', 'Type your username for this network, or untick the work or school login.', 'err');
+  Object.assign(body, { wifi_eap_user: user, wifi_eap_identity: user ? $('eid').value.trim() : '', wifi_eap_ttls: $('ettls').value });
   const k = $('key').value.trim();
   if (k && !keyOk(k)) return say('wifimsg', 'The key needs 8 to 64 letters, numbers or . _ ~ - (no spaces).', 'err');
   if (k) body.api_key = k;
@@ -238,7 +253,7 @@ $('savewifi').onclick = async () => {
     await put('/api/config', body);
     if (k) { key = k; try { localStorage.setItem('odmd.apiKey', JSON.stringify(k)); } catch (e) { /* private mode */ } }
     say('wifimsg', 'Saved. The display is restarting to join “' + ssid + '”.\n\nRejoin your usual WiFi, then open http://' + host + '.local/ to start using it. ' +
-        'If the setup network comes back instead, the name or password was wrong: join it again and retry.', 'ok');
+        'If the setup network comes back instead, the name, ' + (user ? 'username ' : '') + 'or password was wrong: join it again and retry.', 'ok');
     await fetch('/api/reboot', { method: 'POST', headers: auth() });
   } catch (e) {
     // 409: another device already answers to <name>.local (not on the

@@ -20,6 +20,13 @@
 //!   `esp_netif_get_handle_from_ifkey`.
 //! - **The setup AP runs as AP+STA**, so the setup page's Scan works: an
 //!   AP-only radio can't scan.
+//! - **A work or school network (802.1X, WPA-Enterprise)** is a saved
+//!   username ([`Eap`]): ESP-IDF's EAP client gets the username, the outer
+//!   identity and the password, and answers PEAP or TTLS, whichever the
+//!   network asks for (`CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT`, its TLS the
+//!   supplicant's own: docs/notes/firmware.md "WPA-Enterprise"). The
+//!   server's certificate is not checked (no CA certificate is kept), and
+//!   there is no EAP-TLS (no client certificate).
 //!
 //! Everything in here runs on the network worker thread (CPU0). The display
 //! loop never calls into this module.
@@ -35,6 +42,28 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config;
+use crate::nvs_config::Settings;
+use opendmd_core::wifi_login::{self, Phase2};
+
+/// A work or school network's login (802.1X): the password is the WiFi
+/// password. From the saved settings ([`Eap::of`]); never logged.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Eap {
+    pub user: String,
+    pub identity: String,
+    pub ttls: Phase2,
+}
+
+impl Eap {
+    /// The saved login, `None` without a username.
+    pub fn of(s: &Settings) -> Option<Eap> {
+        (!s.wifi_eap_user.is_empty()).then(|| Eap {
+            user: s.wifi_eap_user.clone(),
+            identity: s.wifi_eap_identity.clone(),
+            ttls: s.wifi_eap_ttls,
+        })
+    }
+}
 
 /// One rung of the connect ladder: auth method, optional channel and BSSID
 /// pins, and how many attempts to spend on it.
@@ -110,6 +139,8 @@ impl WifiState {
 pub struct WifiManager {
     wifi: BlockingWifi<EspWifi<'static>>,
     state: WifiState,
+    /// The EAP client is on (`esp_wifi_sta_enterprise_enable`).
+    eap_on: bool,
 }
 
 /// The station's DHCP client name (`esp_netif_set_hostname`). Before the
@@ -160,6 +191,7 @@ impl WifiManager {
         Ok(WifiManager {
             wifi,
             state: WifiState::Disconnected,
+            eap_on: false,
         })
     }
 
@@ -209,7 +241,9 @@ impl WifiManager {
             if ssid.is_empty() {
                 continue; // hidden
             }
-            let (label, secure) = auth_label(ap.auth_method.unwrap_or(AuthMethod::None));
+            // A mode esp-idf-svc 0.51 has no name for (WPA3-Enterprise,
+            // WPA2/WPA3-Enterprise, OWE, ...) is not an open network.
+            let (label, secure) = ap.auth_method.map_or(("Other", true), auth_label);
             let candidate = ScannedAp {
                 ssid,
                 rssi: ap.signal_strength,
@@ -227,6 +261,51 @@ impl WifiManager {
         // stack (the network worker's; ties in RSSI may come in any order).
         best.sort_unstable_by_key(|ap| std::cmp::Reverse(ap.rssi));
         Ok(best)
+    }
+
+    /// The EAP client set up for `eap` (with `password`), or off with
+    /// `None`. `false`: it refused the login (logged; the connect is not
+    /// tried).
+    #[optimize(size)]
+    #[inline(never)]
+    fn set_eap(&mut self, eap: Option<&Eap>, password: &str) -> bool {
+        let Some(eap) = eap else {
+            if self.eap_on {
+                // SAFETY: argument-free driver calls on an initialised
+                // driver (the clears free the EAP client's own copies).
+                unsafe {
+                    esp_idf_sys::esp_wifi_sta_enterprise_disable();
+                    esp_idf_sys::esp_eap_client_clear_identity();
+                    esp_idf_sys::esp_eap_client_clear_username();
+                    esp_idf_sys::esp_eap_client_clear_password();
+                }
+                self.eap_on = false;
+            }
+            return true;
+        };
+        let outer = wifi_login::outer(&eap.identity, &eap.user);
+        // SAFETY: each setter copies its bytes (pointer and length of a
+        // live &str) before it returns; the rest are argument-only calls.
+        let errs = unsafe {
+            [
+                esp_idf_sys::esp_eap_client_set_identity(outer.as_ptr(), outer.len() as i32),
+                esp_idf_sys::esp_eap_client_set_username(eap.user.as_ptr(), eap.user.len() as i32),
+                if password.is_empty() {
+                    esp_idf_sys::esp_eap_client_clear_password();
+                    esp_idf_sys::ESP_OK
+                } else {
+                    esp_idf_sys::esp_eap_client_set_password(password.as_ptr(), password.len() as i32)
+                },
+                esp_idf_sys::esp_eap_client_set_ttls_phase2_method(eap.ttls.esp_type()),
+                esp_idf_sys::esp_wifi_sta_enterprise_enable(),
+            ]
+        };
+        if let Some(e) = errs.iter().find(|&&e| e != esp_idf_sys::ESP_OK) {
+            warn!("[wifi] the work or school login was refused by the EAP client: error {e}");
+            return false;
+        }
+        self.eap_on = true;
+        true
     }
 
     /// Advertise PMF capability. esp-idf-svc 0.51 hardcodes it off.
@@ -347,11 +426,19 @@ impl WifiManager {
         &mut self,
         ssid: &str,
         password: &str,
+        eap: Option<&Eap>,
         deadline: Option<Instant>,
     ) -> anyhow::Result<bool> {
         if ssid.is_empty() {
             return Ok(false);
         }
+        // 802.1X: the password goes to the EAP client, not the driver's
+        // PSK (and may be longer than its 64 bytes).
+        if !self.set_eap(eap, password) {
+            self.state = WifiState::Disconnected;
+            return Ok(false);
+        }
+        let password = if eap.is_some() { "" } else { password };
         if deadline.is_none() && crate::improv::pending() {
             self.state = WifiState::Disconnected;
             return Ok(false);
@@ -362,7 +449,9 @@ impl WifiManager {
         if self.wifi.is_connected().unwrap_or(false) {
             let _ = self.wifi.disconnect();
         }
-        let fallback_auth = if password.is_empty() {
+        let fallback_auth = if eap.is_some() {
+            AuthMethod::WPA2Enterprise
+        } else if password.is_empty() {
             AuthMethod::None
         } else {
             AuthMethod::WPA2Personal
@@ -402,10 +491,14 @@ impl WifiManager {
             self.state = WifiState::Disconnected;
             return Ok(false);
         };
+        // (A mode esp-idf-svc has no name for, WPA3-Enterprise among them,
+        // is `None`: the driver then takes whatever the network offers.)
         let detected = ap.auth_method.unwrap_or(AuthMethod::None);
         info!(
-            "'{ssid}' found: rssi={} ch={} auth={detected:?}",
-            ap.signal_strength, ap.channel
+            "'{ssid}' found: rssi={} ch={} auth={detected:?}{}",
+            ap.signal_strength,
+            ap.channel,
+            if eap.is_some() { ", joining with a work or school login (802.1X)" } else { "" }
         );
 
         // Stage 1: pin BSSID and channel, use the detected auth method.

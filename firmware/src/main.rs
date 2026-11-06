@@ -811,6 +811,7 @@ fn main() -> Result<()> {
             nvs: nvs_partition.clone(),
             ssid: settings.wifi_ssid.clone(),
             password: settings.wifi_pass.clone(),
+            eap: wifi::Eap::of(&settings),
             hostname: settings.hostname.clone(),
             status: status.clone(),
             rx: net_rx,

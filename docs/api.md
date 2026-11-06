@@ -117,7 +117,9 @@ The player holds it in memory, one at a time, and plays it as
 `name` line, else "Formula"). Each one sent replaces the last (whose memory
 goes before the new body is read), and it is let go once the panel moves on
 to anything else; it is not kept in Recently played, and it can't be the
-`look_formula` (`400`). Nothing touches the card, so it works with none.
+`look_formula` (`400`). Once let go, `@formula:~sent` is a `404` (`that
+Formula is no longer on the panel: show it again`). Nothing touches the
+card, so it works with none.
 
 Reply and errors as `/api/play` (`409` a live edit after the playlist moved
 on, `400` a formula that does not load, `503` no playlist), and `503` +
@@ -329,6 +331,9 @@ The saved settings (never the WiFi password or the RePlayOS code).
 |---|---|---|
 | `wifi_ssid` | string | network to join |
 | `wifi_pass_set` | bool | a password is saved (write it as `wifi_pass`) |
+| `wifi_eap_user` | string, `""` | a work or school network's username (802.1X, WPA-Enterprise: see "Network"); `""`: none (WPA2/WPA3 Personal or open) |
+| `wifi_eap_identity` | string, `""` | its outer (anonymous) identity, if the network gives one (`anonymous@example.edu`); `""`: the username |
+| `wifi_eap_ttls` | `mschapv2` | TTLS's inner method: `mschapv2`, `pap`, `mschap` or `chap` (PEAP's is always MSCHAPv2) |
 | `brightness` | 0..=`max_brightness`, 96 | panel brightness |
 | `max_brightness` | 16..=255, 144 | the ceiling `brightness` may not pass |
 | `dwell_min`, `dwell_max` | seconds, 3 and 30 | how long a file stays up (at least 1; `dwell_max` ≥ `dwell_min`) |
@@ -378,6 +383,10 @@ The location goes as a pair: `{"lat":51.51,"lon":-0.13}` sets it (rounded
 to 0.01°; `lat` −90..90, `lon` −180..180, else `400`),
 `{"lat":null,"lon":null}` clears it, and one without the other is a `400`
 (`lat and lon go together`).
+
+A work or school login goes with the WiFi: `wifi_eap_user` and
+`wifi_eap_identity` are at most 128 bytes each, one line (else `400`), and
+with a username `wifi_pass` (its password) is at most 128 bytes.
 
 Panel timing is tried: a `panel` object (any of its fields) runs for 60 s,
 then reverts unless `"panel_confirm":true` keeps it (`false` undoes it; with
@@ -441,8 +450,11 @@ curl -s $DMD/api/panel/test --json '{"setting":"clk_phase"}'
 
 The networks in range (2.4 GHz, named, the strongest of each name), a
 couple of seconds' scan: `[{"ssid","rssi","channel","auth","secure"}]`,
-`rssi` in dBm. Empty in setup (access-point) mode: a scan would drop the
-browser that asked. `504` if it takes over 12 s.
+`rssi` in dBm. `auth` is `Open`, `WEP`, `WPA`, `WPA2`, `WPA/WPA2`,
+`WPA2-Ent` (a work or school network: 802.1X), `WPA3`, `WPA2/WPA3`,
+`WAPI`, or `Other` for a mode without a name here (WPA3-Enterprise among
+them). Empty in setup (access-point) mode: a scan would drop the browser
+that asked. `504` if it takes over 12 s.
 
 ```sh
 curl -s $DMD/api/wifi/scan
@@ -764,8 +776,9 @@ captive portal (unknown paths redirect to `/`), and restarts every 10
 minutes to try again. While it is the setup network, only setting up WiFi
 answers: `/`, `/setup`, the probes, `GET /api/status`, `GET /api/config`,
 `PUT /api/config`
-(`wifi_ssid`, `wifi_pass`, `hostname`, `api_key` only; anything else in
-the body is ignored), `GET /api/wifi/scan` and `POST /api/reboot`. Every other route and
+(`wifi_ssid`, `wifi_pass`, `wifi_eap_user`, `wifi_eap_identity`,
+`wifi_eap_ttls`, `hostname`, `api_key` only; anything else in the body is
+ignored), `GET /api/wifi/scan` and `POST /api/reboot`. Every other route and
 card file is a `403`; any other page redirects to the setup page.
 
 | method | path | what |
@@ -779,6 +792,23 @@ player joins at once, no reboot). Over HTTP, set the network with `PUT /api/conf
 
 ```sh
 curl -s -X PUT $DMD/api/config --json '{"wifi_ssid":"MyNet","wifi_pass":"secret"}'
+curl -s -X POST $DMD/api/reboot
+```
+
+A work or school network (WPA2-Enterprise, 802.1X: eduroam, a company's
+WiFi) needs a username as well, `wifi_eap_user`, with its password as
+`wifi_pass`; `""` as the username goes back to a network with a password
+alone. The player answers PEAP or TTLS, whichever the network asks for
+(PEAP with MSCHAPv2 inside, TTLS with `wifi_eap_ttls`, MSCHAPv2 unless
+the network says otherwise). What it does not do: EAP-TLS (a client
+certificate), checking the network's server certificate (none is kept:
+a fake access point with the same name could take the login, so use a
+password for this device alone where the network offers one), and WiFi
+details over USB (Improv sends a name and a password only: a save over
+USB clears the username).
+
+```sh
+curl -s -X PUT $DMD/api/config --json '{"wifi_ssid":"eduroam","wifi_eap_user":"ab12@example.edu","wifi_eap_identity":"anonymous@example.edu","wifi_pass":"secret"}'
 curl -s -X POST $DMD/api/reboot
 ```
 
@@ -851,7 +881,9 @@ is erased: not a pack, an unknown format, or a length not the body's is a
 `400` at once, an unsigned pack a `422` at once, and the app in flash stays.
 With a card, the pack is staged there and read back (size, CRC, the
 signature; failed reads retried): a `408` (cut short), `422` (bad CRC or
-signature) or `500` (unreadable) leaves the old app. Then it is
+signature, or a key this player does not know), `500` (unreadable) or
+`503` (the signature could not be checked just now: retry) leaves the old
+app. Then it is
 written to flash (~7 s for 800 KB) and served at once, no reboot. If that
 write fails (`500`), pages are `503` and the next restart writes the pack
 from the card, or push again. Without a usable card it is a `503` (a

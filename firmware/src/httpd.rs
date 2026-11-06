@@ -292,7 +292,7 @@ fn gate(req: &mut Req) -> Option<bool> {
                 let _ = req.redirect(&portal());
                 return Some(false);
             }
-            log::warn!("{path}: 421, Host {host}");
+            log::warn!("{} {path}: 421, Host {host} is not this panel", req.method_name());
             return refuse(req, close, 421, "421 Misdirected Request", access::MISDIRECTED);
         }
     }
@@ -304,6 +304,7 @@ fn gate(req: &mut Req) -> Option<bool> {
                 return Some(false);
             }
             Setup::Refuse => {
+                log::info!("{} {path}: 403, not on the setup network", req.method_name());
                 return refuse(
                     req,
                     close,

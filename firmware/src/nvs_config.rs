@@ -29,6 +29,7 @@ use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
 use opendmd_core::panel_timing::PanelTiming;
 use opendmd_core::sky::Place;
+use opendmd_core::wifi_login::Phase2;
 
 use crate::config;
 
@@ -36,6 +37,13 @@ const NAMESPACE: &str = "opendmd";
 
 const KEY_WIFI_SSID: &str = "wifi_ssid";
 const KEY_WIFI_PASS: &str = "wifi_pass";
+/// A work or school network's login (`opendmd_core::wifi_login`): the
+/// username (`""`: none, WPA2/WPA3 Personal or open), the outer identity
+/// (`""`: the username) and TTLS's inner method. The password is
+/// `wifi_pass`.
+const KEY_WIFI_EAP_USER: &str = "wifi_eap_user";
+const KEY_WIFI_EAP_ID: &str = "wifi_eap_id";
+const KEY_WIFI_EAP_TTLS: &str = "wifi_eap_ttls";
 const KEY_BRIGHTNESS: &str = "brightness";
 const KEY_MAX_BRIGHTNESS: &str = "max_bright";
 const KEY_DWELL_MIN: &str = "dwell_min";
@@ -115,6 +123,14 @@ const BUILD_PASS: Option<&str> = option_env!("OPENDMD_WIFI_PASS");
 pub struct Settings {
     pub wifi_ssid: String,
     pub wifi_pass: String,
+    /// With a username the network is joined with 802.1X (WPA-Enterprise:
+    /// PEAP or TTLS), `wifi_pass` its password; `""`: none. Returned by the
+    /// API like the SSID (the password never is).
+    pub wifi_eap_user: String,
+    /// The outer (anonymous) identity; `""`: the username.
+    pub wifi_eap_identity: String,
+    /// TTLS's inner method (PEAP's is always MSCHAPv2).
+    pub wifi_eap_ttls: Phase2,
     pub brightness: u8,
     /// Ceiling for `brightness` (16..=255), default
     /// [`config::BRIGHTNESS_SAFE_MAX`]. `brightness <= max_brightness` always.
@@ -215,6 +231,9 @@ impl Default for Settings {
         Settings {
             wifi_ssid: String::new(),
             wifi_pass: String::new(),
+            wifi_eap_user: String::new(),
+            wifi_eap_identity: String::new(),
+            wifi_eap_ttls: Phase2::default(),
             brightness: config::BRIGHTNESS,
             max_brightness: config::BRIGHTNESS_SAFE_MAX,
             dwell_min: config::DWELL_MIN_SECS,
@@ -332,6 +351,12 @@ impl Config {
         Settings {
             wifi_ssid: self.get_string(KEY_WIFI_SSID).unwrap_or(d.wifi_ssid),
             wifi_pass: self.get_string(KEY_WIFI_PASS).unwrap_or(d.wifi_pass),
+            wifi_eap_user: self.get_string(KEY_WIFI_EAP_USER).unwrap_or(d.wifi_eap_user),
+            wifi_eap_identity: self.get_string(KEY_WIFI_EAP_ID).unwrap_or(d.wifi_eap_identity),
+            wifi_eap_ttls: self
+                .get_string(KEY_WIFI_EAP_TTLS)
+                .and_then(|v| Phase2::parse(&v))
+                .unwrap_or(d.wifi_eap_ttls),
             brightness,
             max_brightness,
             dwell_min: self
@@ -462,6 +487,9 @@ impl Config {
     pub fn save(&mut self, s: &Settings) -> anyhow::Result<()> {
         self.nvs.set_str(KEY_WIFI_SSID, &s.wifi_ssid)?;
         self.nvs.set_str(KEY_WIFI_PASS, &s.wifi_pass)?;
+        self.nvs.set_str(KEY_WIFI_EAP_USER, &s.wifi_eap_user)?;
+        self.nvs.set_str(KEY_WIFI_EAP_ID, &s.wifi_eap_identity)?;
+        self.nvs.set_str(KEY_WIFI_EAP_TTLS, s.wifi_eap_ttls.as_str())?;
         self.nvs.set_u8(KEY_BRIGHTNESS, s.brightness)?;
         self.nvs.set_u8(KEY_MAX_BRIGHTNESS, s.max_brightness)?;
         self.nvs.set_str(KEY_DWELL_MIN, &s.dwell_min.to_string())?;

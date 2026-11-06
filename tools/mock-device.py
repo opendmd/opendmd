@@ -440,6 +440,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import urllib.parse
 import zlib
 from pathlib import Path
@@ -653,6 +654,12 @@ class PanelTuner:
 DEFAULT_SETTINGS = {
     "wifi_ssid": "MockNet",
     "wifi_pass": "secret",
+    # A work or school network's login (802.1X, opendmd_core::wifi_login):
+    # the username ("" = none), the outer identity ("" = the username) and
+    # TTLS's inner method; the password is wifi_pass.
+    "wifi_eap_user": "",
+    "wifi_eap_identity": "",
+    "wifi_eap_ttls": "mschapv2",
     "brightness": 96,
     "max_brightness": BRIGHTNESS_SAFE_MAX,
     "dwell_min": 3,
@@ -705,6 +712,9 @@ TRANSITION_MS = (20, 2000)
 FIELD_TYPES = {
     "wifi_ssid": "str",
     "wifi_pass": "str",
+    "wifi_eap_user": "str",
+    "wifi_eap_identity": "str",
+    "wifi_eap_ttls": "str",
     "brightness": "u8",
     "max_brightness": "u32",
     "dwell_min": "u64",
@@ -769,7 +779,12 @@ WIFI_SCAN_RESULTS = [
     {"ssid": "CoffeeShop", "rssi": -70, "channel": 11, "auth": "open", "secure": False},
     {"ssid": "IoT_Backhaul", "rssi": -55, "channel": 1, "auth": "WPA3", "secure": True},
     {"ssid": "ApartmentB", "rssi": -82, "channel": 44, "auth": "WPA2", "secure": True},
+    {"ssid": "CampusNet", "rssi": -66, "channel": 1, "auth": "WPA2-Ent", "secure": True},
 ]
+# opendmd_core::wifi_login
+EAP_MAX_NAME = 128
+EAP_MAX_PASS = 128
+EAP_TTLS = ("mschapv2", "mschap", "pap", "chap")
 
 
 # --------------------------------------------------------------------------
@@ -1144,6 +1159,7 @@ SENT = "@formula:~sent"
 SENT_PSB: list[bytes | None] = [None]
 LOOK_INLINE_MAX = 2048  # synth::MAX_LOOK_PATH
 NO_SUCH_FORMULA = "there is no bundled Formula by that name"
+SENT_GONE = "that Formula is no longer on the panel: show it again"  # fx_psi::SENT_GONE
 
 
 def stem_title(stem: str) -> str:
@@ -3544,6 +3560,9 @@ def make_handler(ctx: Context, quiet: bool):
                 obj = {
                     "wifi_ssid": s["wifi_ssid"],
                     "wifi_pass_set": bool(s["wifi_pass"]),
+                    "wifi_eap_user": s["wifi_eap_user"],
+                    "wifi_eap_identity": s["wifi_eap_identity"],
+                    "wifi_eap_ttls": s["wifi_eap_ttls"],
                     "brightness": s["brightness"],
                     "max_brightness": s["max_brightness"],
                     "dwell_min": s["dwell_min"],
@@ -3662,6 +3681,18 @@ def make_handler(ctx: Context, quiet: bool):
                             400, f"invalid JSON: field '{field}' must be a {kind}"
                         )
                         return
+                    if field in ("wifi_eap_user", "wifi_eap_identity"):
+                        v = v.strip()
+                        if len(v.encode()) > EAP_MAX_NAME:
+                            self.send_error_json(400, f"{field} is at most {EAP_MAX_NAME} bytes")
+                            return
+                        if any(unicodedata.category(c) == "Cc" for c in v):
+                            self.send_error_json(400, f"{field} must be one line, without control characters")
+                            return
+                    if field == "wifi_eap_ttls":
+                        if v not in EAP_TTLS:
+                            self.send_error_json(400, "wifi_eap_ttls must be mschapv2, mschap, pap or chap")
+                            return
                     if field == "set" and (any(c in v for c in "/\\\0") or ".." in v):
                         self.send_error_json(400, "set must be a single path segment")
                         return
@@ -3772,6 +3803,9 @@ def make_handler(ctx: Context, quiet: bool):
                         return
                     next_settings["attract_set"] = av
 
+                if next_settings["wifi_eap_user"] and len(next_settings["wifi_pass"].encode()) > EAP_MAX_PASS:
+                    self.send_error_json(400, "with wifi_eap_user, wifi_pass is at most 128 bytes")
+                    return
                 if next_settings["dwell_max"] < next_settings["dwell_min"]:
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
@@ -3794,10 +3828,8 @@ def make_handler(ctx: Context, quiet: bool):
 
                 # WiFi takes effect after a reboot; a new hostname at once
                 # (status `hostname`/`mdns` read the saved one).
-                reboot_required = (
-                    next_settings["wifi_ssid"] != before["wifi_ssid"]
-                    or next_settings["wifi_pass"] != before["wifi_pass"]
-                )
+                reboot_required = any(next_settings[k] != before[k] for k in (
+                    "wifi_ssid", "wifi_pass", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls"))
                 needs_reindex = (
                     next_settings["platforms"] != before["platforms"]
                     or next_settings["set"] != before["set"]
@@ -4154,7 +4186,7 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")
                     return
                 if p.startswith("@formula:") and live_parse(p) is None:
-                    self.send_error_json(404, NO_SUCH_FORMULA)
+                    self.send_error_json(404, SENT_GONE if p.partition("?")[0] == SENT else NO_SUCH_FORMULA)
                     return
                 with ctx.lock:
                     if not p:
@@ -4182,7 +4214,7 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")
                     return
                 if p.startswith("@formula:") and live_parse(p) is None:
-                    self.send_error_json(404, NO_SUCH_FORMULA)
+                    self.send_error_json(404, SENT_GONE if p.partition("?")[0] == SENT else NO_SUCH_FORMULA)
                     return
                 if not is_live(p):
                     self.send_error_json(415, f"{p[:96]}: not a playable file")
@@ -4248,7 +4280,7 @@ def make_handler(ctx: Context, quiet: bool):
             SENT_PSB[0] = None
             body = self.read_body()
             if not body or len(body) < length:
-                self.send_error_json(400, "the body is the compiled Formula")
+                self.send_error_json(400, "the body is the compiled Formula (Content-Length bytes)")
                 return
             if psb_info(body) is None:
                 self.send_error_json(400, "this is not a Formula compiled for this player")

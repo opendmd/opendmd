@@ -56,6 +56,7 @@ pub mod settings_file;
 pub mod sky;
 pub mod synth;
 pub mod text;
+pub mod wifi_login;
 pub mod www_pack;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
