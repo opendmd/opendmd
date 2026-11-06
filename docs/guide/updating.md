@@ -18,6 +18,16 @@ The phone or computer you're using needs to be online: the app downloads
 the update from this site before handing it to the player. If anything
 goes wrong it tells you what, and nothing is left half-installed.
 
+## Once before 1.0: an update over USB
+
+One update before OpenDMD 1.0 changes how the board's memory is laid out,
+to give the firmware more room. That one can't go over WiFi: **Check for
+updates** says so and points to the installer, and a firmware file for the
+new layout is refused before anything is written. Use the
+[installer](install.md) for it, as below: **Update OpenDMD** (or **Install**
+with **Erase device** unticked) keeps your WiFi details and settings.
+After that, updates go over WiFi again.
+
 ## With the installer
 
 If the player won't start or you can't reach the web app, the

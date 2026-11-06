@@ -256,7 +256,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   header), `bytes` the size of `www.pack` beside `--www` (0 if none),
   `entries` the files the pack would hold. `/api/status` carries the same
   object as `www`, and `www_version`. `PUT /api/www` wants a
-  `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
+  `Content-Length` (411), at most 1,048,576 B (413) and the `ODWP` magic
   (400), a header whose total length is not the body's (400); it replies
   as `GET` does and changes nothing served, but from then on reports the
   pushed header's version (bytes 20.., length at 18) as `version` and
@@ -316,14 +316,15 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   saved code. `PUT /api/www` takes only a signed pack (header byte 19 bit 0,
   the 72-byte trailer, against `--ota-pub`): 422 otherwise.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
-  build, variant, flash_size, pending, last, log}` (`log`: the card's
+  build, variant, layout, flash_size, pending, last, log}` (`layout`: the
+  variant's partition table version, 3 for 4mb; `log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
   `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
   and verifies it as the firmware does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
-  140 B + the layout's factory partition (2,359,296 B, 3,145,728 B for 8mb),
+  140 B + the layout's factory partition (2,621,440 B, 3,145,728 B for 8mb),
   422 `{"error":"<reason>"}` for any failure, a bundle for the other flash
-  layout and an image whose app descriptor is not `"<version> <variant>"`
+  layout or another partition table (a 4mb v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
   among them (nothing changes). Success: `{"ok":true,"version",
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
@@ -455,13 +456,16 @@ CACHE_DIR = "cache"                    # the prepared copies (opendmd_core::layo
 LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
-WWW_PARTITION_SIZE = 1_310_720         # the www partition (partitions.csv)
+WWW_PARTITION_SIZE = 1_048_576         # the www partition (partitions.csv, table v3)
 # Firmware update (docs/ota.md, tools/fw-sign.py): the bundle header and the
-# v2 factory partition the image must fit.
-OTA_MAGICS = {"4mb": b"ODFW1\0\0\0", "8mb": b"ODFW18mb"}  # opendmd_core::ota, per flash layout
+# factory partition the image must fit. A bundle's magic -> (variant, the
+# partition table version) (opendmd_core::ota::LAYOUTS); the mock runs each
+# variant's current table (OTA_CURRENT).
+OTA_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW18mb": ("8mb", 2), b"ODFW1\0\0\0": ("4mb", 2)}
+OTA_CURRENT = {"4mb": 3, "8mb": 2}
 OTA_HEADER_LEN = 140
 OTA_SIGNED_LEN = 76
-OTA_FACTORY_BYTES = {"4mb": 0x240000, "8mb": 0x300000}   # partitions.csv, partitions-8mb.csv
+OTA_FACTORY_BYTES = {"4mb": 0x280000, "8mb": 0x300000}   # partitions.csv (v3), partitions-8mb.csv
 OTA_BOARDS = {"4mb": "DevKit (4 MB)", "8mb": "8 MB build"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).
@@ -1657,9 +1661,9 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     from nacl.exceptions import BadSignatureError
     if len(data) < OTA_HEADER_LEN:
         raise ValueError(f"truncated: {len(data)} B, the bundle header is {OTA_HEADER_LEN} B")
-    bundle = next((k for k, m in OTA_MAGICS.items() if data[:8] == m), None)
-    if bundle is None:
+    if data[:8] not in OTA_LAYOUTS:
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
+    bundle, table = OTA_LAYOUTS[data[:8]]
     v = data[8:40].rstrip(b"\0")
     try:
         version = v.decode()
@@ -1670,6 +1674,13 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if bundle != variant:
         raise ValueError(f"this update is for the {OTA_BOARDS[bundle]} and this player runs the {OTA_BOARDS[variant]} "
                          f"firmware: use the {OTA_BOARDS[variant]} update file")
+    have = OTA_CURRENT[variant]
+    if table > have:
+        raise ValueError(f"this update needs flash layout v{table} and this {OTA_BOARDS[variant]} has layout v{have}: "
+                         "reinstall it once over USB from opendmd.dev/install (an update over WiFi cannot change the layout)")
+    if table < have:
+        raise ValueError(f"this update is for the older flash layout v{table} and this {OTA_BOARDS[variant]} has layout "
+                         f"v{have}: use a release made for layout v{have} (opendmd.dev/install has the latest)")
     if pub is None:
         raise ValueError("the firmware's public key is invalid")
     try:
@@ -3424,6 +3435,7 @@ def make_handler(ctx: Context, quiet: bool):
                 obj = {
                     "version": ctx.version,
                     "variant": ctx.variant,
+                    "layout": OTA_CURRENT[ctx.variant],
                     "features": features(ctx),
                     "psi_abi": PSI_ABI if ctx.formulas else None,
                     "uptime_secs": int(time.monotonic() - player.boot_time),
@@ -4473,7 +4485,7 @@ def make_handler(ctx: Context, quiet: bool):
             with ctx.lock:
                 card = ctx.sd_state == "ok"  # the firmware reads both off the card
                 self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} {ctx.variant}", "variant": ctx.variant,
-                                     "features": features(ctx), "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
+                                     "layout": OTA_CURRENT[ctx.variant], "features": features(ctx), "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
                                      "log": ctx.fw_log if card else None})
 
         def h_firmware_put(self, path):
@@ -5092,7 +5104,7 @@ def parse_args():
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")
     ap.add_argument("--name-query", type=float, default=1.2,
                     help="seconds a name check listens when no one answers (the firmware's 1.2)")
-    ap.add_argument("--variant", choices=sorted(OTA_MAGICS), default="4mb",
+    ap.add_argument("--variant", choices=sorted(OTA_CURRENT), default="4mb",
                     help="the flash layout the mock's firmware is built for (GET /api/firmware, /api/status)")
     ap.add_argument("--no-formulas", action="store_true",
                     help="a firmware build without Formulas (features [], psi_abi null: /api/play of one a 501, "

@@ -1,9 +1,9 @@
 /*
  * The OpenDMD updater (docs/ota.md, steps 3 and 4).
  *
- * Lives in the `ota_0` partition (384 KB: 0x260000 in the 4 MB table,
- * 0x320000 in the 8 MB one; the same build serves both, since it finds
- * every partition by type at run time). The firmware boots it
+ * Lives in the `ota_0` partition (384 KB: 0x2A0000 in the 4 MB table v3,
+ * 0x260000 in v2, 0x320000 in the 8 MB one; the same build serves all,
+ * since it finds every partition by type at run time). The firmware boots it
  * once, after it has received a firmware bundle over the LAN, verified its
  * Ed25519 signature, written it to the card as /update/opendmd.bin and
  * pointed otadata at ota_0. This program then:
@@ -13,7 +13,8 @@
  *   2. mounts the card on SPI3 (SCK 18, MISO 19, MOSI 23, CS 5) at 20 MHz;
  *   3. reads the 140-byte bundle header, checks the magic and that it names
  *      this board's flash layout (the variant: the flash size the installed
- *      bootloader set, 4 MB -> "4mb", 8 MB -> "8mb"), that the image fits
+ *      bootloader set, 4 MB -> "4mb", 8 MB -> "8mb"; and the table: the
+ *      factory partition's size, 2,560 KB -> 4mb v3), that the image fits
  *      the factory partition, that the file holds exactly the image, and
  *      hashes the whole image off the card *before* erasing anything
  *      (SHA-256, mbedtls), with the ESP image magic 0xE9 at its start and
@@ -89,12 +90,25 @@ static const uint8_t HUB75_LOW[] = {25, 26, 27, 14, 12, 13, 33, 32, 22, 17, 4, 1
 #define UPDATE_DIR MOUNT "/update"
 #define BUNDLE_PATH UPDATE_DIR "/opendmd.bin"
 #define LOG_PATH UPDATE_DIR "/log.txt"
-/* "ODFW1" + the flash layout: NULs for 4mb (every bundle before 8mb),
- * "8mb". An updater from before the 8 MB layout knows only the first, so it
- * refuses an 8mb bundle too. */
-static const uint8_t MAGIC_4MB[8] = {'O', 'D', 'F', 'W', '1', 0, 0, 0};
-static const uint8_t MAGIC_8MB[8] = {'O', 'D', 'F', 'W', '1', '8', 'm', 'b'};
-/* A third layout would be a new bundle format (ODFW2), not a third tag. */
+/* The bundle's magic names the flash layout: the variant and the version of
+ * its partition table (opendmd_core::ota::LAYOUTS), with the size of that
+ * table's factory partition. "ODFW1" + NULs is the DevKit's table v2 (every
+ * 4mb bundle up to 1.0.0-beta.15), "ODFW18mb" the 8 MB build's, and
+ * "ODFW34mb" the DevKit's table v3. An updater from before a table knows
+ * nothing of its magic and refuses the bundle (beta.15's: "bad magic" for
+ * ODFW34mb). */
+typedef struct {
+    uint8_t magic[8];
+    const char *variant;
+    unsigned table;
+    uint32_t factory;
+} layout_t;
+static const layout_t LAYOUTS[] = {
+    {{'O', 'D', 'F', 'W', '3', '4', 'm', 'b'}, "4mb", 3, 0x280000},
+    {{'O', 'D', 'F', 'W', '1', '8', 'm', 'b'}, "8mb", 2, 0x300000},
+    {{'O', 'D', 'F', 'W', '1', 0, 0, 0}, "4mb", 2, 0x240000},
+};
+#define N_LAYOUTS (sizeof LAYOUTS / sizeof LAYOUTS[0])
 #define VERSION_LEN 32
 /* The image's app descriptor: its magic word at 0x20, the version at 0x30. */
 #define APP_DESC_OFFSET 0x20
@@ -388,6 +402,20 @@ static const char *board_variant(void)
     return size == 4u << 20 ? "4mb" : size == 8u << 20 ? "8mb" : NULL;
 }
 
+/* This board's layout: its variant, and the table that is on it, told by
+ * the size of its factory partition (each table's is different). NULL if
+ * the two name no table this updater knows. */
+static const layout_t *board_layout(const esp_partition_t *factory_part)
+{
+    const char *variant = board_variant();
+    for (size_t i = 0; variant != NULL && i < N_LAYOUTS; i++) {
+        if (strcmp(LAYOUTS[i].variant, variant) == 0 && LAYOUTS[i].factory == factory_part->size) {
+            return &LAYOUTS[i];
+        }
+    }
+    return NULL;
+}
+
 /* The image's app descriptor (s_prefix) is an OpenDMD build for `variant`:
  * its magic word, and a version "<version> <variant>". */
 static bool desc_is(const char *variant, char found[33])
@@ -435,19 +463,31 @@ static outcome_t attempt(void)
         fclose(f);
         return R_UNTOUCHED;
     }
-    const char *variant = memcmp(head, MAGIC_4MB, 8) == 0   ? "4mb"
-                          : memcmp(head, MAGIC_8MB, 8) == 0 ? "8mb"
-                                                            : NULL;
-    if (variant == NULL) {
+    const layout_t *bundle = NULL;
+    for (size_t i = 0; i < N_LAYOUTS && bundle == NULL; i++) {
+        if (memcmp(head, LAYOUTS[i].magic, 8) == 0) {
+            bundle = &LAYOUTS[i];
+        }
+    }
+    if (bundle == NULL) {
         note("not a firmware bundle (bad magic)");
         fclose(f);
         return R_UNTOUCHED;
     }
-    const char *board = board_variant();
-    if (board == NULL || strcmp(board, variant) != 0) {
-        note("the bundle is for the %s flash layout, this board has the %s one (%u KB): not installed",
-             variant, board != NULL ? board : "unknown",
-             (unsigned)(esp_flash_default_chip != NULL ? esp_flash_default_chip->size / 1024 : 0));
+    const char *variant = bundle->variant;
+    const layout_t *board = board_layout(part);
+    if (board != bundle) {
+        char has[48];
+        if (board != NULL) {
+            snprintf(has, sizeof has, "the %s v%u one", board->variant, board->table);
+        } else {
+            snprintf(has, sizeof has, "a table this updater does not know");
+        }
+        note("the bundle is for the %s flash layout v%u, this board has %s (%u KB flash, %u KB factory): "
+             "not installed (a change of layout is a USB install)",
+             variant, bundle->table, has,
+             (unsigned)(esp_flash_default_chip != NULL ? esp_flash_default_chip->size / 1024 : 0),
+             (unsigned)(part->size / 1024));
         fclose(f);
         return R_UNTOUCHED;
     }
@@ -468,7 +508,7 @@ static outcome_t attempt(void)
         fclose(f);
         return R_UNTOUCHED;
     }
-    note("bundle %s (%s), image %u B: checking it on the card", version, variant, (unsigned)len);
+    note("bundle %s (%s v%u), image %u B: checking it on the card", version, variant, bundle->table, (unsigned)len);
 
     /* Pass 1: the file, before the factory partition is touched. */
     uint8_t got[32];

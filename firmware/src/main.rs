@@ -508,9 +508,10 @@ fn main() -> Result<()> {
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
     log::info!(
-        "OpenDMD firmware v{} ({}, features {}, app desc '{}') — 128x32 HUB75 GIF player",
+        "OpenDMD firmware v{} ({} layout v{}, features {}, app desc '{}') — 128x32 HUB75 GIF player",
         state::firmware_version(),
         state::FLASH_VARIANT,
+        state::flash_layout(),
         state::features_json(),
         state::running_version()
     );

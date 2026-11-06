@@ -29,8 +29,8 @@ FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # with this sdkconfig rather than espflash's bundled one.
 FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
-# The flash layouts, one firmware image each (docs/ota.md): `4mb`, layout v2
-# for the ESP32 DevKit V1 (firmware/partitions.csv), and `8mb` for the
+# The flash layouts, one firmware image each (docs/ota.md): `4mb`, table v3
+# for the ESP32 DevKit V1 (firmware/partitions.csv), and `8mb` (table v2) for the
 # 8 MB board in development (firmware/partitions-8mb.csv). Both:
 # otadata, the firmware in factory, the updater in ota_0, the web app's www
 # pack; the 8 MB one bigger. VARIANT=4mb|8mb picks one for the targets that
@@ -46,13 +46,13 @@ FW_PARTITIONS_4mb := $(FW)/partitions.csv
 FW_PARTITIONS_8mb := $(FW)/partitions-8mb.csv
 FW_FLASH_BYTES_4mb := 4194304
 FW_FLASH_BYTES_8mb := 8388608
-FW_APP_BYTES_4mb := 2359296
+FW_APP_BYTES_4mb := 2621440
 FW_APP_BYTES_8mb := 3145728
-UPDATER_OFFSET_4mb := 0x260000
+UPDATER_OFFSET_4mb := 0x2A0000
 UPDATER_OFFSET_8mb := 0x320000
-WWW_OFFSET_4mb := 0x2C0000
+WWW_OFFSET_4mb := 0x300000
 WWW_OFFSET_8mb := 0x380000
-WWW_BYTES_4mb := 1310720
+WWW_BYTES_4mb := 1048576
 WWW_BYTES_8mb := 2097152
 # What ESP Web Tools' manifest calls the firmware: it must equal the Improv
 # answer's name (firmware/src/improv.rs FIRMWARE_NAME), per layout.
@@ -122,6 +122,8 @@ blocklist-check:
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota
+	@echo "==> Testing tools/fw-sign.py (the bundle signer: layouts, tampering, www packs)"
+	uv run --quiet tools/fw-sign.py selftest
 	@echo "==> Testing $(CORE) as a firmware without Formulas builds it (player: a playlist's Formula lines skipped)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features player,ota --lib a_player_without_formulas
 	@echo "==> Testing $(RENDER)"
@@ -738,7 +740,7 @@ fw-clean:
 #   opendmd-<ver>-<var>-full.bin   all six parts merged into one image the size
 #                                  of the flash (offset 0)
 #   opendmd-<ver>-<var>.odfw       the signed bundle for PUT /api/firmware (fw-sign);
-#                                  its magic names the layout
+#                                  its magic names the layout and its table version
 #   manifest-<var>.json            ESP Web Tools: the six parts and offsets; `name`
 #                                  (FW_MANIFEST_NAME_<var>) and `version` are what the
 #                                  firmware's Improv Serial answer says
@@ -750,11 +752,11 @@ fw-clean:
 #
 # and once, the same for both:
 #
-#   updater.bin                    the updater (ota/updater), at ota_0 (0x260000 / 0x320000);
+#   updater.bin                    the updater (ota/updater), at ota_0 (0x2A0000 / 0x320000);
 #                                  its image header says 4 MB in both: harmless, IDF
 #                                  sizes the chip from the bootloader's header
 #   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
-#   opendmd-<ver>-www.pack         the web app, at www (0x2C0000 / 0x380000); built to
+#   opendmd-<ver>-www.pack         the web app, at www (0x300000 / 0x380000); built to
 #                                  fit the smaller www partition
 #   THIRD-PARTY-LICENSES-firmware.txt, THIRD-PARTY-LICENSES-web.txt
 #                                  the third-party notices (licenses/, `make notices`),
@@ -800,7 +802,7 @@ FW_MANIFEST := $(DIST)/manifest-$(FW_VARIANT).json
 # rustflags).
 FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(HOME)/.cargo=/cargo --remap-path-prefix=$(HOME)/.rustup=/rustup
 # The app image must leave at least this much of the layout's factory
-# partition free (each layout against its own: 2,359,296 B or 3,145,728 B).
+# partition free (each layout against its own: 2,621,440 B or 3,145,728 B).
 FW_APP_SPARE := 65536
 
 # Both layouts (or VARIANT=), each through fw-release-variant, after one
@@ -952,11 +954,17 @@ fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
 	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
-# The older firmware takes what is signed now: an older release's own
-# opendmd-core (OTA_COMPAT_TAG, a detached worktree under target/) checks a
-# bundle and a www pack signed now (tools/ota-compat.sh; throwaway-key ones,
-# or OTA_COMPAT_FILES="<bundle> <pub> <www>"). OTA_COMPAT_OK.
-OTA_COMPAT_TAG ?= v1.0.0-beta.14
+# Updates across releases and flash layouts (tools/ota-compat.sh): an older
+# release's own opendmd-core (OTA_COMPAT_TAG, the last DevKit table v2 one,
+# a detached worktree under target/) must refuse a 4mb bundle signed now
+# (table v3) and take a v2 one and the www pack; this tree's must take the
+# v3 bundle and refuse the v2 one. Throwaway-key files, or
+# OTA_COMPAT_FILES="<v3 bundle> <pub> <www>". OTA_COMPAT_OK.
+OTA_COMPAT_TAG ?= v1.0.0-beta.15
+# DIST's 4mb release bundle and pack too, when it has them (signed with the
+# release key: checked against FW_SIGN_PUB).
+OTA_COMPAT_DIST_BUNDLE = $(DIST)/opendmd-$(FW_VERSION)-4mb.odfw
+OTA_COMPAT_FILES ?= $(if $(wildcard $(OTA_COMPAT_DIST_BUNDLE)),$(OTA_COMPAT_DIST_BUNDLE) $(FW_SIGN_PUB) $(FW_WWW_IMAGE))
 ota-compat:
 	tools/ota-compat.sh $(OTA_COMPAT_TAG) $(OTA_COMPAT_FILES)
 
