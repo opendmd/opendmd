@@ -97,8 +97,7 @@ written and change it.
   brighter. A **Size** slider.
 
 Starfield, Wireframe cube, Tunnel and the Rotozoom floor ask for 100 frames
-a second (`fps 100`). The older `@fx:tunnel` and the other built-in effect
-paths are gone: a playlist line that has one is skipped. A bundled Formula
+a second (`fps 100`). A bundled Formula
 is played or put in a playlist by its name (`@formula:endless-road`), one
 of yours by its place on the panel (see the [API](../api.md#post-apiplay)).
 
@@ -145,7 +144,7 @@ last version that worked, dimmed.
   gallery, thumbnails and Save as GIF show the defaults.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
-- **Save** keeps the formula in this browser, under its name.
+- **Save** keeps it on your panel, under its name (in the demo, in this browser).
 
 ## A plasma in two minutes
 
@@ -843,8 +842,9 @@ start where its `control` lines say. GitHub opens
 with the file ready and makes the pull request for you (you need a free
 GitHub account). A check says if anything needs fixing, a maintainer looks
 at it, and once it's merged it appears in the gallery within a few
-minutes. The gallery takes formulas that are light enough for the panel
-(at most 10 ms a frame as the editor estimates it) and at most 4 KB.
+minutes. The gallery takes a formula that is at most 10 ms a frame as the
+editor estimates it, at most 4,500 bytes once compiled for the panel, in a
+file up to 36 KB. Comments cost nothing.
 The details are in the gallery's
 [README](https://github.com/opendmd/opendmd.github.io/tree/main/gallery).
 
@@ -859,6 +859,6 @@ like any other GIF and goes in playlists. A formula with a long loop, or one tha
 clock, keeps only those few seconds, as they look when you save; one that
 goes on without repeating (`loop forever`), its first 10 seconds.
 
-Formulas you save are kept in this browser. Another browser, or a cleared
-browser, won't have them: share a link to yourself to move one.
+Formulas are kept on your panel, so every browser that opens it sees them;
+in the online demo they stay in that browser.
 

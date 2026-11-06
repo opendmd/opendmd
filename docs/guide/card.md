@@ -95,6 +95,5 @@ pause the player for a while. **Settings** shows how far it has got, and
 ## If a card starts failing
 
 Cards wear out. If the player keeps hitting read errors it slows the card
-down to keep going, and **Settings** says "Card running at reduced speed
-after errors", or shows a count of card errors. Either message means it's
-time for a new card.
+down to keep going, and **Settings** shows "Card errors: N, retrying".
+That means it's time for a new card.

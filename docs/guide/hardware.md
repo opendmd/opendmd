@@ -13,9 +13,9 @@ a working DMDoS display? Then you have everything:
 
 <!-- site:cards -->
 
-### 1 · ESP32 DevKit V1 (USB-C)
+### 1 · ESP32 DevKit V1 (USB-C or micro-USB)
 
-The brain of the display: a common ESP32 development board with a USB-C
+The brain of the display: a common ESP32 development board with a USB-C or micro-USB
 socket. It runs the firmware, drives the panels and serves the web app over
 WiFi. OpenDMD installs onto it straight from your browser.
 

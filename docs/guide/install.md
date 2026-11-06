@@ -48,7 +48,10 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    WPA2 or WPA3. A work or school network that asks for a username too
    (eduroam, WPA2-Enterprise) can't be set from the installer: skip this
    step, join the open **OpenDMD-Setup** network the board raises, and tick
-   **Work or school login** on its setup page.)
+   **Work or school login** on its setup page. The display doesn't check the network's server
+   certificate, so a fake network with the same name could capture that
+   login: use a password made for this display alone if your network
+   offers one.)
 
     No GIFs on your card yet? Format it FAT32 and copy your DMDoS card, or
     the DMDoS GIF pack, onto it as it is: see [The SD card](card.md).
@@ -80,14 +83,11 @@ recognises it and shows its name and the version it runs. From there:
   for help.
 - **Erase User Data** reinstalls from scratch and forgets every setting.
 
-Boards on older OpenDMD versions don't introduce themselves yet, so the
-installer just offers **Install** and asks about erasing: **leave Erase
-unticked** and your WiFi and settings stay.
-
 ## WiFi without the installer
 
 If you skipped the WiFi step, or the installer couldn't reach the board
-afterwards, the player makes its own network for you to join instead:
+afterwards, the player makes its own network for you to join instead.
+While it waits, the panel says **Join WiFi  OpenDMD-Setup**.
 
 <!-- site:steps -->
 
