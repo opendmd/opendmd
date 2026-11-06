@@ -192,7 +192,7 @@ button lands on them.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
     (the playlist and its count, the card, uptime, free memory and its
     floor, late frames, refresh rate, GIFs started) with **Reload playlist**
-    (`POST /api/reindex`) and **Reboot**; the **Playback cache** card ("9,826
+    (`POST /api/reindex`) and **Reboot**; the **Ready to play** card ("9,826
     of 10,133 files prepared", from `GET /api/cache`) with **Prepare
     remaining files**, which works out what the playlist in play is missing
     (`GET /api/cache/list`) and encodes and uploads it in the background, one
@@ -372,7 +372,7 @@ Formula, chosen as the attract playlist, shows a Formula in RePlayOS's menus
 
 **Size budget**, checked by `make web` (`tools/web-size.py`) on the gzipped
 sizes, which are what crosses the WiFi: the wasm module plus its generated JS
-glue at most 116 KB, the hand-written JS and CSS at most 56 KB; the Studio's
+glue at most 116 KB, the hand-written JS and CSS at most 60 KB; the Studio's
 own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
 opens; the Add GIFs / Edit details dialogs at most 8 KB, loaded when first
 used; the Library's folder tree with the thumbnails (`js/tree.js`,

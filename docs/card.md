@@ -33,7 +33,7 @@ the same decoder and ~54 KB through the `gif` crate — headroom the ESP32
 spends on WiFi and serving — and it reads ~40% fewer bytes off the card:
 across the stock card the copies are 0.61x the size of the GIFs (960 MB for
 1,575 MB). Any viewer, the browser included, plays them. All but 38 of
-11,039 files decode to exactly the frames the GIF player shows; those 38
+11,047 files decode to exactly the frames the GIF player shows; those 38
 have more than 255 colours and are quantised (play the original for any that
 look wrong). The format is [`docs/cache-format.md`](cache-format.md).
 
@@ -54,7 +54,7 @@ crate. To prepare a card copy:
 make pack ARGS="convert /path/to/card --verify"
 
 # onto a running player instead: the files (or use the web app's
-# Settings -> Playback cache, which prepares them in the browser)
+# Settings -> Ready to play, which prepares them in the browser)
 uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
 ```
 
@@ -67,7 +67,7 @@ colours, 5 that only the `gif` crate decodes and 8 GIFs that will not decode
 are left for the browser, which has the quantiser and the memory).
 `auto_prepare` in `PUT /api/config` is `"idle"` (the default: only then),
 `"always"` (also slowly while a prepared file plays) or `"off"`; Settings →
-Playback cache shows it as one sentence ("Preparing files automatically
+Ready to play shows it as one sentence ("Preparing files automatically
 when the panel is idle · 4,210 of 10,133 · about 3 nights left") with the
 option "also while playing (slower)". A stock card goes at
 ~1.3-1.4 s per file at full speed (0.7-0.75 files a second), so a card with none prepared needs about 4 hours

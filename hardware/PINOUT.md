@@ -27,8 +27,8 @@ Sanity check: this is the library's ESP32 default map with only A/B/C moved
 
 VSPI defaults: SCK=18, MISO=19, MOSI=23, CS=5 — VSPI's IO_MUX pins, so the
 firmware drives them from SPI3 (= VSPI; SPI2 is HSPI and would route them
-through the GPIO matrix, which caps reads at 26.7 MHz), at 40 MHz
-(config.rs `SD_SPEED_KHZ`). Module also has 3V3 and GND
+through the GPIO matrix, which caps reads at 26.7 MHz), at 20 MHz by default
+(40 MHz only with `card_speed` fast; config.rs `SD_SPEED_KHZ` is the 40 MHz clock). Module also has 3V3 and GND
 (3V3 is the last hole on the back-side row; shorting it to GND resets the board).
 The card answers only with this assignment of the four pins; every other
 permutation is silent.

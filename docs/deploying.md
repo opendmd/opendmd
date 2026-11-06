@@ -67,14 +67,17 @@ that is how the original 128 GB DMDoS card failed — so a new card is worth a
 contiguous read scan before it goes into the cabinet.
 
 If a card starts failing in service, the player notices (three card read
-errors within a minute), restarts itself, and from then on runs **that
-card** at 20 MHz instead of 40; the Settings page says "Card running at
-reduced speed after errors". The slow clock is remembered by the card's
-serial number, so it survives power cuts and only goes away when a
-different card is inserted. After three such restarts within 15 minutes it
-stops restarting, stays on the network without the card and tries it again
-every minute ("Card errors: N, retrying"). Either message means: replace
-the card (and scan the old one before trusting it again).
+errors within a minute) and restarts itself. After three such restarts
+within 15 minutes it stops restarting, stays on the network without the
+card and tries it again every minute; Settings says "Card errors: N,
+retrying". That means: replace the card (and scan the old one before
+trusting it again).
+
+The card runs at 20 MHz by default. With the opt-in `fast` card speed it
+runs at 40 MHz and drops to 20 MHz after its first error; that slow clock is
+remembered by the card's serial number, so it survives power cuts and only
+goes away when a different card is inserted (Settings says "This card had
+errors at Fast, so it runs at Safe now").
 
 ### The DMDoS pack
 
@@ -115,7 +118,7 @@ the binary directly (`opendmd-pack convert --verify <card>`). That is the
 whole step: no manifest to write. A GIF with no copy simply plays as a GIF.
 Files added later from the web app (Library → **Add GIFs**, **Create Art**) are
 prepared by the browser as they are uploaded, the player prepares the rest
-itself at night, and **Settings → Device → Playback cache** shows how many of the
+itself at night, and **Settings → Device → Ready to play** shows how many of the
 playlist's files are prepared and can prepare the rest in the background.
 
 **Smooth motion (optional).** To switch it on for every GIF where it
@@ -224,7 +227,7 @@ After the move, `GET /api/firmware` says `"layout":3` and the boot banner
 8 MB build's 8 MB table did not change: its update files keep working.
 
 The web app is not on the card. `make web` packs it (every file gzipped as
-`make web` always did) into `opendmd-web/www.pack` — ~0.8 MB — and the
+`make web` always did) into `opendmd-web/www.pack` — ~0.5 MB — and the
 firmware maps that partition at boot, checks its CRC and serves the app
 straight out of flash: the UI and the setup page work with no card in the
 slot. A `www/` directory left on a card by an older firmware is ignored and
@@ -281,9 +284,9 @@ until it goes public), a release is made on the dev box by
 is available again; the script does the same steps.
 
 ```bash
-make release VERSION=1.0.0-beta.12                       # dry run: builds and checks everything, publishes nothing
-make release VERSION=1.0.0-beta.12 PUBLISH=1             # the same, then publishes
-make release VERSION=1.0.0-beta.12 PUBLISH=1 RESUME=1    # after a publish that stopped part way
+make release VERSION=1.0.0                       # dry run: builds and checks everything, publishes nothing
+make release VERSION=1.0.0 PUBLISH=1             # the same, then publishes
+make release VERSION=1.0.0 PUBLISH=1 RESUME=1    # after a publish that stopped part way
 ```
 
 **A dry run** (the default):
@@ -530,7 +533,7 @@ the flasher's. On the bench, `make fw-flash` does the same with the bench
 build (`dev-credentials`).
 
 Put the card in and power up. The boot banner reads
-`OpenDMD firmware v0.3.0 (4mb layout v3, features […], app desc '0.3.0 4mb')`, then `www: pack
+`OpenDMD firmware v1.0.0 (4mb layout v3, features […], app desc '1.0.0 4mb')`, then `www: pack
 '<version>' verified, 37 entries, … B, … CRC pass N ms`, and on first boot
 the player builds the default manifest's index on the card
 (`filelist.txt.idx`; ~6 s for the full card) before it starts playing.
@@ -570,7 +573,8 @@ it (its header and layout, that it fits, the ESP image magic, the SHA-256,
 the Ed25519 signature against the key compiled into the running firmware
 and the image's app descriptor; anything wrong is a 422 and nothing changes), restarts into the updater,
 which copies it into `factory` and restarts into the new firmware: ~45 s
-from the end of the upload to playback, with the panel dark. `GET
+from the end of the upload to playback. The panel says "Updating … Don't
+unplug", then "Installing", then goes dark while the updater installs. `GET
 /api/firmware` then reports the new version; `/update/log.txt` on the card
 has every step, and its end is `log` in `GET /api/firmware` (the Firmware
 card's "Update log"). A bundle signed with another key is refused with a
@@ -610,7 +614,7 @@ its header, is a 400 and the app in flash is untouched); with a card in, it
 receives the pack onto the card and checks its CRC there before touching
 flash (a cut-short or damaged upload then leaves the old app working), then
 writes the partition, header last, and verifies the CRC before serving it. While
-it writes (~7 s for today's 782 KB; it is received like any upload, so the
+it writes (a few seconds for today's ~0.5 MB; it is received like any upload, so the
 same 120 s limit applies; the panel keeps playing, about one late frame per
 push) the API answers as usual, a browser that already
 has the app open keeps working, and a page load waits for the write and then
