@@ -11,6 +11,7 @@ PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
 PSICLI := opendmd-psi-cli
 GAL    := opendmd-gallery
+WEBMIN := opendmd-webmin
 FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
@@ -104,7 +105,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -143,6 +144,8 @@ test:
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(GAL) (the formula gallery's checker)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(WEBMIN) (make web's minifier)"
+	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo test
 	tools/gallery-repo-publish-test.sh
 	uv run tools/gallery-check-test.py
 	uv run tools/gallery-pages-test.py
@@ -254,8 +257,21 @@ check-wasm:
 # pkg-psi/) that js/wasm.js puts on every wasm module's address, so a
 # browser never runs an earlier build's module (docs/notes/web-app.md
 # "Module addresses").
+#
+# What ships is not www/ itself but $(WEB_DIST) (gitignored): a copy of it
+# with every script and stylesheet minified one file at a time, no bundling
+# (tools/web-minify.py running opendmd-webmin: oxc for JS, lightningcss for
+# CSS, pinned in its Cargo.lock), so the sources keep their comments. The
+# .gz files, the pack, the size lines, the mock (web-mock, web-smoke) and
+# the site's /demo/ all read $(WEB_DIST). WEB_MINIFY=0 stages the files as
+# they are, for a debugger (the size lines are then printed, not enforced):
+# docs/notes/web-app.md "Minified build".
 WEB_WWW := $(WEB)/www
-web:
+WEB_DIST := $(WEB)/www-dist
+WEB_MINIFY ?= 1
+webmin:
+	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked --quiet
+web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
@@ -270,12 +286,14 @@ web:
 	uv run tools/api-doc-check.py
 	rm -f $(WEB_WWW)/api.html $(WEB_WWW)/api.html.gz
 	{ cat $(NOTICES_FW_TXT); printf '\n\n'; cat $(NOTICES_WEB_TXT); } > $(WEB_WWW)/licenses.txt
+	@# Earlier builds wrote the .gz copies beside the sources: none belong there now.
 	find $(WEB_WWW) -name '*.gz' -delete
-	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
+	uv run tools/web-minify.py $(WEB_WWW) $(WEB_DIST) $(if $(filter 0,$(WEB_MINIFY)),--no-minify)
+	find $(WEB_DIST) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
-		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --share $(WEB)/share
+		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
+	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -313,7 +331,7 @@ notices-check-web:
 # Static server for the page; uv, never bare python. Then open
 # http://localhost:8080 — the file/directory picker does the rest.
 web-serve:
-	uv run python -m http.server 8080 -d $(WEB)/www
+	uv run python -m http.server 8080 -d $(WEB_DIST)
 
 # A fake device (JSON API + card files + the built app) for working on the UI
 # without the rig: make web-mock ROOT=~/scratch/dmdos-card, then open
@@ -368,7 +386,7 @@ site: web sim-build gallery-tool
 	@test -f $(DIST)/manifest-4mb.json -a -f $(DIST)/manifest-8mb.json || { echo "no $(DIST)/manifest-{4mb,8mb}.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
-	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
+	uv run tools/site.py $(SITE) --www $(WEB_DIST) --card target/demo-card --art target/site-art --dist $(DIST) \
 		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
 		--api-freeze $(API_FREEZE)
 
@@ -478,6 +496,7 @@ fmt:
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
@@ -507,6 +526,8 @@ clippy:
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --features bare,bump -- -D warnings
 	@echo "==> Clippy $(GAL)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	@echo "==> Clippy $(WEBMIN)"
+	cd $(WEBMIN) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(PSICLI)"
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 
@@ -520,8 +541,9 @@ clean:
 	cd $(PSI) && cargo clean
 	cd $(PSIWEB) && cargo clean
 	cd $(GAL) && cargo clean
+	cd $(WEBMIN) && cargo clean
 	cd $(PSICLI) && cargo clean
-	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WWW_PACK) ./target
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB_DIST) $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

@@ -903,7 +903,7 @@ def panel_end_to_end(browser, base: str, errors: list[str]) -> None:
     app takes it from opendmd.dev and saves it under Your formulas, and it
     is still there, and on the card, after a reload."""
     card = ROOT / "target/demo-card"
-    www = ROOT / "opendmd-web/www"
+    www = ROOT / "opendmd-web/www-dist"
     if not (card / "filelist.txt").is_file() or not (www / "pkg").is_dir():
         check(False, "panel end to end: needs make site (target/demo-card) and make web")
         return

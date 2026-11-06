@@ -4,7 +4,17 @@
 # ///
 """Print the web app's size, raw and gzipped, and enforce the budget.
 
-    uv run tools/web-size.py opendmd-web/www [--pack opendmd-web/www.pack --pack-limit 1310720]
+    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 1310720] [--unminified]
+
+It measures what ships: `make web`'s output directory (tools/web-minify.py:
+the sources with every script and stylesheet, wasm-pack's glue included,
+minified by esbuild, then gzipped), never the commented sources in
+opendmd-web/www. Every line was re-based on that output on 2026-11-05
+(branch web-minify) with its ceiling kept: the main JS + CSS line went from
+61,413 to 39,549 B gz of its 60 KB, and the rule is unchanged — the next
+feature pays for itself (docs/research/size-budget.md "Minified build").
+`--unminified` (`make web WEB_MINIFY=0`, a debugging build) prints the
+same table but enforces no line: the ceilings are for minified files.
 
 Budget (gzipped bytes — what actually crosses the WiFi, since the firmware
 serves `<file>.gz` in preference): the wasm module plus its wasm-bindgen JS
@@ -481,10 +491,12 @@ def q_ref(p: Path, share: Path) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="?", default="opendmd-web/www")
+    ap.add_argument("root", nargs="?", default="opendmd-web/www-dist")
     ap.add_argument("--pack", help="the www pack built from it")
     ap.add_argument("--pack-limit", type=int, default=1_310_720, help="the www partition, bytes")
     ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
+    ap.add_argument("--unminified", action="store_true",
+                    help="a WEB_MINIFY=0 build: print the lines, enforce none")
     args = ap.parse_args()
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
@@ -668,6 +680,10 @@ def main() -> int:
     if args.pack:
         n = Path(args.pack).stat().st_size
         print(f"pack: {n:,} B of {args.pack_limit // 1024:,} KB ({n * 100 / args.pack_limit:.1f}%)")
+    if args.unminified:
+        print("unminified build (WEB_MINIFY=0): the budget lines are for minified files and are not enforced"
+              + ("" if ok else " (some are over)"))
+        return 0
     return 0 if ok else 1
 
 
