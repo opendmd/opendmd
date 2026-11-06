@@ -109,11 +109,13 @@ impl Reason {
         Reason::Crash,
     ];
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn from_u8(v: u8) -> Option<Reason> {
         Self::ALL.into_iter().find(|r| *r as u8 == v)
     }
 
     /// The API's word (`/api/status` `restarts[].reason`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn name(self) -> &'static str {
         match self {
             Reason::ApiReboot => "api_reboot",
@@ -138,6 +140,7 @@ impl Reason {
     }
 
     /// In plain words (`/api/status` `reset_note`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn note(self) -> &'static str {
         match self {
             Reason::ApiReboot => "restarted on request",
@@ -183,6 +186,7 @@ pub enum Reset {
 }
 
 impl Reset {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn from_u8(v: u8) -> Reset {
         use Reset::*;
         [
@@ -195,6 +199,7 @@ impl Reset {
     }
 
     /// `/api/status`'s word (`reset_reason`, `restarts[].reset`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn name(self) -> &'static str {
         match self {
             Reset::Pending => "pending",
@@ -212,6 +217,7 @@ impl Reset {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_crash(self) -> bool {
         matches!(
             self,
@@ -244,6 +250,7 @@ pub struct Figures {
 
 impl Entry {
     /// A pending entry (seq is set by [`push`]).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(reason: Reason, figures: Option<Figures>) -> Entry {
         Entry {
             seq: 0,
@@ -256,12 +263,14 @@ impl Entry {
     }
 
     /// Where it happened (a panic's `file:line message`), or `""`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn text(&self) -> &str {
         core::str::from_utf8(&self.text[..self.len as usize]).unwrap_or("")
     }
 
     /// Set the text from formatting arguments, cut at [`TEXT`] bytes (on a
     /// character). No allocation.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn set_text(&mut self, args: fmt::Arguments) {
         let mut w = Text {
             buf: &mut self.text,
@@ -274,6 +283,7 @@ impl Entry {
 
     /// A panic's text: the file's last component, the line, then at most
     /// [`MSG_MAX`] bytes of the message (on one line).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn set_panic(&mut self, file: &str, line: u32, msg: &str) {
         let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
         let mut w = Text {
@@ -298,6 +308,7 @@ impl Entry {
 
     /// The reset note for status: the reason in plain words, `None` for a
     /// power-on.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn note(&self) -> Option<&'static str> {
         (self.reason != Reason::PowerOn).then(|| self.reason.note())
     }
@@ -311,6 +322,7 @@ struct Text<'a> {
 }
 
 impl fmt::Write for Text<'_> {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         let left = self.room.saturating_sub(self.len);
         let mut n = s.len().min(left);
@@ -330,6 +342,7 @@ impl fmt::Write for Text<'_> {
 const FNV_SEED: u32 = 0x811c_9dc5;
 
 /// FNV-1a, one word's bytes further.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn fnv(mut h: u32, w: u32) -> u32 {
     for b in w.to_le_bytes() {
         h ^= b as u32;
@@ -338,11 +351,13 @@ fn fnv(mut h: u32, w: u32) -> u32 {
     h
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn checksum(words: &[u32]) -> u32 {
     words.iter().fold(FNV_SEED, |h, w| fnv(h, *w))
 }
 
 /// An entry as a slot.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode(e: &Entry) -> Slot {
     let mut s = [0u32; WORDS];
     let f = e.figures.unwrap_or_default();
@@ -362,16 +377,19 @@ pub fn encode(e: &Entry) -> Slot {
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn checksum_of(s: &Slot) -> u32 {
     combine(checksum(&s[1..6]), checksum(&s[7..]))
 }
 
 /// The slot's checksum from its header's (words 1-5) and its text's.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn combine(header: u32, text: u32) -> u32 {
     header ^ text.rotate_left(7)
 }
 
 /// A slot as an entry: `None` if it is empty, garbage or another layout's.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn decode(s: &Slot) -> Option<Entry> {
     if s[0] != MAGIC || s[6] != checksum_of(s) {
         return None;
@@ -409,14 +427,17 @@ pub trait Store {
 }
 
 impl Store for [Slot; SLOTS] {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn get(&self, slot: usize, word: usize) -> u32 {
         self[slot][word]
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn put(&mut self, slot: usize, word: usize, v: u32) {
         self[slot][word] = v;
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn read(store: &dyn Store, i: usize) -> Slot {
     let mut s = [0; WORDS];
     for (k, w) in s.iter_mut().enumerate() {
@@ -425,6 +446,7 @@ fn read(store: &dyn Store, i: usize) -> Slot {
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn write(store: &mut dyn Store, i: usize, s: &Slot) {
     for (k, w) in s.iter().enumerate() {
         store.put(i, k, *w);
@@ -432,11 +454,13 @@ fn write(store: &mut dyn Store, i: usize, s: &Slot) {
 }
 
 /// `a` is newer than `b` (sequence numbers wrap at 2^32).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn newer(a: u32, b: u32) -> bool {
     (a.wrapping_sub(b) as i32) > 0
 }
 
 /// The newest valid entry.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn newest(store: &dyn Store) -> Option<Entry> {
     (0..SLOTS)
         .filter_map(|i| decode(&read(store, i)))
@@ -448,6 +472,7 @@ pub fn newest(store: &dyn Store) -> Option<Entry> {
 
 /// Write `e` as the newest entry (its `seq` is the newest's + 1) over the
 /// oldest. Returns the entry as written. No allocation.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn push(store: &mut dyn Store, mut e: Entry) -> Entry {
     e.seq = newest(store).map_or(1, |n| n.seq.wrapping_add(1));
     write(store, e.seq as usize % SLOTS, &encode(&e));
@@ -458,6 +483,7 @@ pub fn push(store: &mut dyn Store, mut e: Entry) -> Entry {
 /// seq words (an unchecked slot can only push the seq further on), builds
 /// the words one at a time — no slot on the stack, no `core::fmt` — from
 /// `parts` concatenated (cut at [`TEXT`]; bytes past ASCII become `?`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[&[u8]]) {
     let mut seq = None;
     for i in 0..SLOTS {
@@ -507,6 +533,7 @@ pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[
 /// Every valid entry, newest first: decoded one at a time as it is
 /// iterated (the order is a few bytes), so a caller on a small stack (the
 /// HTTP server's) never holds all eight.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn newest_first(store: &dyn Store) -> NewestFirst<'_> {
     let mut seqs = [(0u32, 0u8); SLOTS];
     let mut n = 0;
@@ -545,6 +572,7 @@ pub struct NewestFirst<'a> {
 
 impl Iterator for NewestFirst<'_> {
     type Item = Entry;
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn next(&mut self) -> Option<Entry> {
         while self.at < self.n {
             let i = self.order[self.at as usize] as usize;
@@ -559,6 +587,7 @@ impl Iterator for NewestFirst<'_> {
 }
 
 /// Empty every slot.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn clear(store: &mut dyn Store) {
     for i in 0..SLOTS {
         write(store, i, &[0; WORDS]);
@@ -567,12 +596,14 @@ pub fn clear(store: &mut dyn Store) {
 
 /// The last heartbeat's figures, kept in RTC memory for a restart that
 /// records nothing (a crash, a watchdog).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode_alive(f: &Figures) -> [u32; 5] {
     let mut s = [ALIVE_MAGIC, f.uptime_ms, f.heap_free, f.largest, 0];
     s[4] = checksum(&s[..4]);
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn decode_alive(s: &[u32; 5]) -> Option<Figures> {
     (s[0] == ALIVE_MAGIC && s[4] == checksum(&s[..4])).then_some(Figures {
         uptime_ms: s[1],
@@ -591,6 +622,7 @@ pub struct AllocFail {
     pub at: Figures,
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode_alloc(a: &AllocFail) -> [u32; 6] {
     let mut s = [
         ALLOC_MAGIC,
@@ -604,6 +636,7 @@ pub fn encode_alloc(a: &AllocFail) -> [u32; 6] {
     s
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn decode_alloc(s: &[u32; 6]) -> Option<AllocFail> {
     (s[0] == ALLOC_MAGIC && s[5] == checksum(&s[..5])).then_some(AllocFail {
         size: s[1],
@@ -624,6 +657,7 @@ const ALLOC_RECENT_MS: u32 = 35_000;
 /// from the reset alone (`alive`: the previous run's last heartbeat;
 /// `alloc`: its last failed allocation). A power-on clears the ring first.
 /// Returns this boot's entry (already in the ring).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn boot(
     store: &mut dyn Store,
     reset: Reset,
@@ -668,6 +702,7 @@ pub fn boot(
 /// Rewrite this boot's entry as a firmware update (`ota::after_boot` found
 /// the updater's mark) when it recorded nothing: the restart out of the
 /// updater, after an update from a firmware that kept no ring.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn mark_update(store: &mut dyn Store) -> bool {
     match newest(store) {
         Some(mut e) if e.reason == Reason::Unrecorded && e.reset == Reset::Software => {
@@ -686,6 +721,7 @@ pub fn mark_update(store: &mut dyn Store) -> bool {
 /// watchdog: an interrupt or task watchdog reset says nothing about which
 /// code was running (the FAT index's build counts only these against
 /// itself, `fatidx::boot`).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn crash_in(e: &Entry, files: &[&str], task: &str) -> bool {
     match e.reason {
         Reason::Panic => {
