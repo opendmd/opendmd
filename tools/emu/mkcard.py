@@ -6,11 +6,11 @@
 (prepared copies and all) copied into a FAT32 image with mtools. No mount, no sudo.
 
     uv run tools/emu/mkcard.py [--out IMG] [--root DIR] [--size-mb 256] [--force]
-    uv run tools/emu/mkcard.py --rig    # the owner's rig's scale: $EMU_DIR/card/rig.img
+    uv run tools/emu/mkcard.py --rig    # a test panel's scale: $EMU_DIR/card/rig.img
 
 --rig: the synthetic card plus ~10,000 more GIFs over 30 more folders (three of 1,200,
 five of 600, the rest ~150) and a prepared copy of each in its bucket
-(`cache/<folder>/<xx>/`, ~4,500 buckets): what the FAT index's build walks on the rig
+(`cache/<folder>/<xx>/`, ~4,500 buckets): what the FAT index's build walks on a test panel
 (31 GB, ~10,100 GIFs, ~10,100 copies). Tiny valid GIFs, hard-linked in the tree. A
 1 GB image of 4 KB clusters.
 

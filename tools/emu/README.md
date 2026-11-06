@@ -2,15 +2,15 @@
 
 Boots OpenDMD's real classic-ESP32 4mb full flash image in
 [esp32sim](https://github.com/mikroverk/esp32sim) (MIT; our fork: https://github.com/opendmd/esp32sim, branch `opendmd`) with an SD card.
-Correctness only, never timing; agents may run it freely.
+Correctness only, never timing; safe to run any time: it never touches a device.
 
 ```
 make emu-build     # fetch esp32sim at the pinned commit of our fork (the SD-SPI board is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
 make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
-make emu-paint-probe  # paint-probe image (4mb, the spare's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to the spare by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
-make emu-rig       # smoke image + the rig-scale card (mkcard.py --rig): the FAT index build finishes, heap floor reported -> EMU_RIG_OK
-make emu-rig-tight # the same with the spare's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK
+make emu-paint-probe  # paint-probe image (4mb, a test board's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to a test board by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
+make emu-rig       # smoke image + the full-scale card (mkcard.py --rig): the FAT index build finishes, heap floor reported -> EMU_RIG_OK
+make emu-rig-tight # the same with a test board's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK
 make emu-leak      # an emu-census image plays 70 GIFs (on to 150 while the halves differ): the heap's blocks and bytes stay flat after 10 -> EMU_LEAK_OK
 make emu-api       # the emu-census image on WiFi, its HTTP API driven from the host over two boots -> EMU_API_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
@@ -61,14 +61,14 @@ Boot A (`--no-reboot`, so the reboot at its end stops the emulator and the card 
   --base64`, `EMU_API_FORMULA`, default plasma), the same saved to the card (`.psi` + `.psb`) by its path;
   a missing file 404, a relative path 400; skip; pause and resume;
 - `PUT /api/www` with `$(WWW_PACK)`; `GET /` serves it;
-- bursts (the spare's wedge recipe, `wedge.sh`): rounds of 2, 2, 2, 5, 5, 5 uploads of 300 KB at once
+- bursts (a test board's wedge recipe, `wedge.sh`): rounds of 2, 2, 2, 5, 5, 5 uploads of 300 KB at once
   (`curl -T`) beside a status read every second: each answered 200, or 503 + `Retry-After` and 200 when
   asked again (as the web app does), never a 408 or no answer; the network answering after every round;
   and 25 s after, `netdiag: sum` (below) shows no received frame held;
   and the least free heap of each round (the `emu-census` image's low watch: a task reading the free
   heap every ms, `lowwatch:` every 5 s with the Rust bytes, what the httpd and stream tasks were
   doing and lwIP's received frames and unacknowledged bytes at the low) never under
-  `BURST_HEAP_MIN` (32 KB here, ~26 KB above the spare; see BURST_HEAP in `api_lane.py`);
+  `BURST_HEAP_MIN` (32 KB here, ~26 KB above that test board; see BURST_HEAP in `api_lane.py`);
 - three load rounds of 30 s, display-stress's five loads each on its own connection at once by default
   (`--connections 5`): a 64 KB upload read back and deleted, status reads, settings saves, a save into
   `/gifs/Consoles` and its delete, a listing; each followed by 60 s quiet (about eight census lines): the
@@ -114,7 +114,7 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
 - **EMPTY_FOLDER** (fixed in net-wedge): deleting an emptied `/gifs` folder never reached
   `fatidx::dir_changed()` (FatFs's unlink removes an empty directory, so the `is_dir` branch was
   dead). The DELETE route tells a directory apart before removing anything now.
-- **BURST_HEAP** (net-wedge2): the spare's heap reached 8 KB under five uploads at once and the
+- **BURST_HEAP** (net-wedge2): a test board's heap reached 8 KB under five uploads at once and the
   WiFi driver, which takes its frame buffers from it, stopped delivering (refusals 10.5 s late,
   status reads timing out). The low watch put every low of the bursts in a status read during an
   upload: the whole answer and all its parts at once (~5 KB of strings), its ~3.7 KB of segments
@@ -122,7 +122,7 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
   now, refused under 10 KB free, and a client that gave up has its reply aborted at close.
 - **STALLED_BODY** (net-stall, 2026-11-05): a JSON body read on the httpd task that stopped part
   way held the task, and every other client, for 3 x 10 s of receive timeouts and 10 s more of
-  httpd's purge (the spare: live edits timing out at 20 s beside simultaneous uploads, status
+  httpd's purge (a test board: live edits timing out at 20 s beside simultaneous uploads, status
   polls' SYNs dropped while nothing was accepted). One 2 s timeout ends it now: a 503 +
   `Retry-After`, the connection dropped, `net.body_stalled`. The lane sends such a body and a
   status read beside it. (Connect times are not seen here: the emulator's NAT completes the
@@ -136,5 +136,5 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air
 time), panel output (I2S TX is not modelled), radio conditions (a lossy or slow link, roaming, the AP
 going away), mDNS and SNTP (nothing answers in the namespace), Follow RePlayOS, the captive portal / AP
-mode setup flow, a browser's own concurrency (the lane's clients are sequential per connection), the rig-scale card under the API (`EMU_ARGS="--card $EMU_DIR/card/rig.img"` boots it,
+mode setup flow, a browser's own concurrency (the lane's clients are sequential per connection), the full-scale card under the API (`EMU_ARGS="--card $EMU_DIR/card/rig.img"` boots it,
 not part of the gates).

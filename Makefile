@@ -1100,7 +1100,7 @@ api-load:
 
 # The emulator lane (tools/emu/README.md): esp32sim at a pinned commit under
 # EMU_DIR, a rootless FAT32 card, a boot of the real full flash image.
-# Correctness only, never timing. Agents may run it freely.
+# Correctness only, never timing. Safe to run any time: it never touches a device.
 EMU_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-emu-sim,$(CURDIR)/target/emu-sim)
 # The updater's idf.py build is tied to one checkout: one build dir per checkout (a hash of its path).
 EMU_UPDATER ?= $(EMU_DIR)/updater-$(shell printf '%s' '$(CURDIR)' | md5sum | cut -c1-8)
@@ -1111,7 +1111,7 @@ emu-build:
 emu-card:
 	uv run --quiet tools/emu/mkcard.py
 
-# The rig's scale (~11,000 GIFs in 41 folders, ~11,000 copies in ~4,900 buckets):
+# A test panel's scale (~11,000 GIFs in 41 folders, ~11,000 copies in ~4,900 buckets):
 # the FAT index's build must finish with its heap floor reported, the panel
 # playing. Boots the smoke image (or FW_IMAGE). EMU_RIG_OK.
 emu-rig-card:
@@ -1138,7 +1138,7 @@ emu-leak: emu-build emu-card
 # 127.0.0.1, inside a private network namespace (nothing reaches a real
 # network); the HTTP API driven from the host over two boots: uploads,
 # listings, moves, deletes, settings, play, skip/pause, a www pack, bursts of
-# simultaneous uploads (the spare's wedge recipe), five-connection load
+# simultaneous uploads (a test board's wedge recipe), five-connection load
 # rounds with the heap census flat, a recursive /cache delete during the FAT
 # index build, OTA refusals, the card checked after (fatcheck, the settings
 # file, the bytes), then the signed bundle through the updater. EMU_API_OK.
@@ -1162,8 +1162,8 @@ emu-api: emu-build emu-card emu-api-psb
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
 	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
-# The same with the spare's heap: an `emu-ballast` image keeps ~45 KB free
-# while playing (the spare, 2026-11-03). EMU_RIG_OK.
+# The same with a test board's heap: an `emu-ballast` image keeps ~45 KB free
+# while playing (a test board, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-rigtight:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
@@ -1213,8 +1213,8 @@ emu-probe: emu-build emu-card
 	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 # The paint probe (firmware/src/paint_probe.rs, the paint-probe feature: the paint steps,
 # the overlay, `under(x, y)`, the Formulas that use them, each beside the cost
-# model's estimate) in the spare's 4mb layout: its .odfw in $(EMU_DIR)/paint/dist
-# goes to the spare by OTA; `make emu-paint-probe` boots it in the emulator
+# model's estimate) in a test board's 4mb layout: its .odfw in $(EMU_DIR)/paint/dist
+# goes to a test board by OTA; `make emu-paint-probe` boots it in the emulator
 # (its paint line: each case's kernel frames against the VM's; correctness only).
 # (Its version says what it is: $(FW_VERSION)-paint-<commit>, -paint80- for a
 # FW_FLASH_FREQ=80 build, the devices' clock; the descriptor holds 31

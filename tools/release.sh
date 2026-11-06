@@ -57,7 +57,7 @@
 # release's build goes in $RELEASE_DIR/v<version>. FW_SIGN_KEY,
 # FW_RELEASE_TARGET_DIR: as for make fw-release. UPDATER_BUILD (default: one
 # per checkout under $SCRATCH, else target/updater). RELEASE_TRAILERS: the
-# release commit's trailer lines.
+# release commit's trailer lines, newline-separated (default: none).
 set -euo pipefail
 export LC_ALL=C
 
@@ -66,8 +66,7 @@ GH_URL=https://github.com/$GH_REPO.git
 GALLERY_URL=https://github.com/opendmd/opendmd.github.io.git
 SITE_URL=https://opendmd.dev
 UA='opendmd-site-test/1 (+https://opendmd.dev)'
-TRAILERS=${RELEASE_TRAILERS:-"Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01Mda6ajNgpTAMU1uxVDfDKQ"}
+TRAILERS=${RELEASE_TRAILERS:-}
 
 usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -314,7 +313,7 @@ else
   done
   git add -- "${TOMLS[@]}" $(for f in "${TOMLS[@]}"; do [ -f "${f%.toml}.lock" ] && echo "${f%.toml}.lock"; done)
   git diff --cached --stat
-  git commit -q -m "Release $VERSION" -m "$TRAILERS"
+  if [ -n "$TRAILERS" ]; then git commit -q -m "Release $VERSION" -m "$TRAILERS"; else git commit -q -m "Release $VERSION"; fi
   RELEASE_COMMIT=$(git rev-parse HEAD)
   git tag -a "$TAG" -m "OpenDMD $VERSION" "$RELEASE_COMMIT"
   CREATED_TAG=1
