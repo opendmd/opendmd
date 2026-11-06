@@ -14,14 +14,14 @@ five of 600, the rest ~150) and a prepared copy of each in its bucket
 (31 GB, ~10,100 GIFs, ~10,100 copies). Tiny valid GIFs, hard-linked in the tree. A
 1 GB image of 4 KB clusters.
 
-Default out: $EMU_DIR/card/sd.img (EMU_DIR defaults to ~/scratch/opendmd-emu-sim).
+Default out: $EMU_DIR/card/sd.img (EMU_DIR: as the Makefile sets it, else $SCRATCH/opendmd-emu-sim, else target/emu-sim).
 Cached: rebuilt only when missing or --force. Needs mtools (mformat, mcopy).
 """
 import argparse, os, shutil, subprocess, sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
+EMU_DIR = Path(os.environ.get("EMU_DIR") or (Path(os.environ["SCRATCH"]) / "opendmd-emu-sim" if os.environ.get("SCRATCH") else Path(__file__).resolve().parents[2] / "target" / "emu-sim"))
 
 
 def need_mtools():

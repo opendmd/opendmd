@@ -47,7 +47,7 @@ Correctness only: emulated cycles are not trustworthy, never read timings from t
 import argparse, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
-EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
+EMU_DIR = Path(os.environ.get("EMU_DIR") or (Path(os.environ["SCRATCH"]) / "opendmd-emu-sim" if os.environ.get("SCRATCH") else Path(__file__).resolve().parents[2] / "target" / "emu-sim"))
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 BOOT_SHA = re.compile(r"ELF file SHA256:\s+([0-9a-f]+)")
 APP_DESC_MAGIC = (0xABCD5432).to_bytes(4, "little")

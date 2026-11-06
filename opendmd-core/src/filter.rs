@@ -270,7 +270,7 @@ mod tests {
     fn fixture() -> Vec<Entry> {
         parse_manifest(
             "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif\n\
-             /gifs/Consoles/MD_Sonic3_RattenJager.gif\n\
+             /gifs/Consoles/MD_Sonic3_spritefox11.gif\n\
              /gifs/Consoles/NES_Unknow_01_Invert.gif\n\
              /gifs/Arcade/ARCADE_Pac-Man_01.gif\n\
              /gifs/XMAS/XMAS_Tree_02.gif",
@@ -295,7 +295,7 @@ mod tests {
             paths(&e, &idx),
             vec![
                 "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
-                "/gifs/Consoles/MD_Sonic3_RattenJager.gif"
+                "/gifs/Consoles/MD_Sonic3_spritefox11.gif"
             ]
         );
     }

@@ -12,7 +12,7 @@
 //! ```text
 //! /gifs/Consoles/SNES_Plok_08.gif\tw=3
 //! /gifs/Arcade/ARCADE_Pac-Man_01.gif\tnever
-//! /gifs/Consoles/MD_Sonic3_RattenJager.gif\tdwell=45\tloops=3
+//! /gifs/Consoles/MD_Sonic3_spritefox11.gif\tdwell=45\tloops=3
 //! /gifs/Other/X.gif\tdwell=2x
 //! ```
 //!
@@ -570,7 +570,7 @@ mod tests {
 
     const CANONICAL: &str = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
                              /gifs/Arcade/ARCADE_Pac-Man_01.gif\tnever\n\
-                             /gifs/NEW 2021/MD_Sonic3_RattenJager.gif\tdwell=45\tloops=3\n\
+                             /gifs/NEW 2021/MD_Sonic3_spritefox11.gif\tdwell=45\tloops=3\n\
                              /gifs/Other/X.gif\tw=0.5\tdwell=2x\n\
                              /gifs/Other/Y.gif\tdwell=1.5x\n";
 
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0].ov.weight, Some(3.0));
         assert!(lines[1].ov.never);
-        assert_eq!(lines[2].path, "/gifs/NEW 2021/MD_Sonic3_RattenJager.gif");
+        assert_eq!(lines[2].path, "/gifs/NEW 2021/MD_Sonic3_spritefox11.gif");
         assert_eq!(lines[2].ov.dwell, Some(Dwell::Secs(45)));
         assert_eq!(lines[2].ov.loops, Some(3));
         assert_eq!(lines[3].ov.dwell, Some(Dwell::Times(2.0)));

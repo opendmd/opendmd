@@ -25,7 +25,7 @@ pub fn fnv1a32(bytes: &[u8]) -> u32 {
 
 /// The bucket directory for a prepared copy: the low byte of [`fnv1a32`]
 /// over its **file name** (UTF-8 bytes, extension included, no directories
-/// — e.g. `MD_Sonic3_RattenJager.gif`), as two lowercase hex digits.
+/// — e.g. `MD_Sonic3_spritefox11.gif`), as two lowercase hex digits.
 pub fn bucket(name: &str) -> String {
     format!("{:02x}", fnv1a32(name.as_bytes()) & 0xff)
 }
@@ -43,7 +43,7 @@ fn is_gif_name(name: &str) -> bool {
 }
 
 /// Map a GIF's path relative to `gifs/` (`/`-separated, e.g.
-/// `Consoles/MD_Sonic3_RattenJager.gif`) to its prepared copy's path
+/// `Consoles/MD_Sonic3_spritefox11.gif`) to its prepared copy's path
 /// relative to the card root, no leading slash:
 /// `cache/<Category>/<xx>/<name>.gif`. `None` if the name does not end in
 /// `.gif`.
@@ -209,8 +209,8 @@ mod tests {
 
     #[test]
     fn a_plays_as_is_line_counts_as_its_copy() {
-        let gif = "/gifs/Consoles/MD_Sonic3_RattenJager.gif";
-        let (bucket, key) = (0x38, prepared_key(&cache_path(gif).unwrap()));
+        let gif = "/gifs/Consoles/MD_Sonic3_spritefox11.gif";
+        let (bucket, key) = (0x8f, prepared_key(&cache_path(gif).unwrap()));
         let want = Some((bucket, key));
         assert_eq!(
             plays_original_line(&format!("{gif}\tmore than 256 colours: plays as it is")),
@@ -249,8 +249,8 @@ mod tests {
         assert_eq!(fnv1a32(b"a"), 0xe40c_292c);
         assert_eq!(fnv1a32(b"foobar"), 0xbf9c_f968);
         // The worked example in docs/cache-format.md.
-        assert_eq!(fnv1a32(b"MD_Sonic3_RattenJager.gif"), 0x5290_3b38);
-        assert_eq!(bucket("MD_Sonic3_RattenJager.gif"), "38");
+        assert_eq!(fnv1a32(b"MD_Sonic3_spritefox11.gif"), 0x0edd_ec8f);
+        assert_eq!(bucket("MD_Sonic3_spritefox11.gif"), "8f");
         assert_eq!(fnv1a32(b"SNES_Plok_08.gif"), 0x10b6_d368);
         assert_eq!(bucket("SNES_Plok_08.gif"), "68");
         assert_eq!(bucket("Exolon2.gif"), "c8");
@@ -261,8 +261,8 @@ mod tests {
     #[test]
     fn cache_paths() {
         assert_eq!(
-            cache_rel("Consoles/MD_Sonic3_RattenJager.gif").unwrap(),
-            "cache/Consoles/38/MD_Sonic3_RattenJager.gif"
+            cache_rel("Consoles/MD_Sonic3_spritefox11.gif").unwrap(),
+            "cache/Consoles/8f/MD_Sonic3_spritefox11.gif"
         );
         // Category kept verbatim, stray dots kept, the name as it is.
         assert_eq!(
@@ -286,8 +286,8 @@ mod tests {
             "/cache/Spectrum_Slide/c8/Exolon2.gif"
         );
         assert_eq!(
-            cache_path("/gifs/Consoles/MD_Sonic3_RattenJager.gif").unwrap(),
-            "/cache/Consoles/38/MD_Sonic3_RattenJager.gif"
+            cache_path("/gifs/Consoles/MD_Sonic3_spritefox11.gif").unwrap(),
+            "/cache/Consoles/8f/MD_Sonic3_spritefox11.gif"
         );
         assert_eq!(cache_path("/cache/Consoles/38/X.gif"), None);
         assert_eq!(cache_path("/gifs/Consoles/X.png"), None);
@@ -297,20 +297,20 @@ mod tests {
     #[test]
     fn classify_and_count_prepared() {
         use crate::filter::Filter;
-        let a = "/gifs/Consoles/MD_Sonic3_RattenJager.gif";
+        let a = "/gifs/Consoles/MD_Sonic3_spritefox11.gif";
         let b = "/gifs/NEW 2021/SNES_Plok_08.gif";
         let Prepared::Candidate { bucket, key } = classify(a) else {
             panic!("a GIF under gifs/ is a candidate")
         };
-        assert_eq!(bucket, 0x38);
+        assert_eq!(bucket, 0x8f);
         assert_eq!(
             key,
-            prepared_key("/cache/Consoles/38/MD_Sonic3_RattenJager.gif")
+            prepared_key("/cache/Consoles/8f/MD_Sonic3_spritefox11.gif")
         );
         // Case never matters: FAT hands back whatever case is on the card.
         assert_eq!(
             key,
-            prepared_key("/CACHE/consoles/38/md_sonic3_rattenjager.GIF")
+            prepared_key("/CACHE/consoles/8f/md_sonic3_spritefox11.GIF")
         );
         assert_eq!(classify("/cache/Consoles/38/X.gif"), Prepared::Direct);
         assert_eq!(classify("/sets/x.txt"), Prepared::Never);
@@ -330,7 +330,7 @@ mod tests {
             }
         );
         // The bucket slice excludes a's bucket: only the direct entry counts.
-        let c = count_prepared(manifest.as_bytes(), &all, (0, 0x37), &keys, true).unwrap();
+        let c = count_prepared(manifest.as_bytes(), &all, (0, 0x8e), &keys, true).unwrap();
         assert_eq!(
             c,
             CacheCount {
@@ -338,7 +338,7 @@ mod tests {
                 prepared: 1
             }
         );
-        let c = count_prepared(manifest.as_bytes(), &all, (0x38, 0x38), &keys, false).unwrap();
+        let c = count_prepared(manifest.as_bytes(), &all, (0x8f, 0x8f), &keys, false).unwrap();
         assert_eq!(
             c,
             CacheCount {

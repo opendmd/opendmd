@@ -21,7 +21,7 @@ Files:
 
 - `build-emulator.sh`: clone/fetch https://github.com/opendmd/esp32sim, check out `ESP32SIM_COMMIT`
   (pinned in the script, a7ccd1b on the fork's `opendmd` branch), build. Stamp = repo + commit.
-  Refuses a dir outside `~/scratch`.
+  With `SCRATCH` set (e.g. in `local.mk`), refuses a dir outside it.
 - The fork: our emulator changes live on its `opendmd` branch (upstream 9fdeb32, merged 2026-11-03, plus the
   SD-SPI board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
   The board: a byte-stream SD-over-SPI card on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) as
@@ -36,7 +36,7 @@ Files:
   --rom esp32_rev300_rom.elf --flash-image ... --console uart0 --net none`, logs the console, judges it.
   Fails at once on a panic, `Guru Meditation`, stack overflow, `abort()` or a second reset.
 
-`EMU_DIR` (default `~/scratch/opendmd-emu-sim`) holds `src/`, `card/`, `logs/`, and the image builds
+`EMU_DIR` (default `target/emu-sim`, or `$SCRATCH/opendmd-emu-sim` when `SCRATCH` is set) holds `src/`, `card/`, `logs/`, and the image builds
 (`smoke/`, `probe/`). The emulator runs about 0.55 emulated seconds per wall second; the probe is ~5 min wall.
 
 ## The API lane (`make emu-api`)

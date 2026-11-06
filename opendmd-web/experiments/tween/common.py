@@ -5,6 +5,7 @@ Frames are compared as colour codes (r<<16 | g<<8 | b, int32), which is
 equality on the indexed image without caring which palette slot a colour
 sits in. Everything is 128x32: other sizes are centre-cropped (or padded
 with black), as playback does."""
+import os
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -13,6 +14,8 @@ from scipy import ndimage
 W, H = 128, 32
 R = 8  # shift search radius, px
 HERE = Path(__file__).resolve().parent
+# The card copy's gifs/: DMD_CARD_ROOT, else the repo's (gitignored) card/.
+CARD_GIFS = Path(os.environ.get("DMD_CARD_ROOT") or HERE.parents[2] / "card") / "gifs"
 LED_DIR = HERE.parent / "art" / "process"
 
 # Offsets ordered by magnitude, so argmax on ties picks the smallest shift.

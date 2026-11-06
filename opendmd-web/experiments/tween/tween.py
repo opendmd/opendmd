@@ -18,11 +18,11 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import (HERE, load_gif, codes, decode, classify, n_inbetweens,  # noqa: E402
+from common import (HERE, CARD_GIFS, load_gif, codes, decode, classify, n_inbetweens,  # noqa: E402
                     split_delay, inbetween, region_mask, tweenable)
 from measure import hold_limit  # noqa: E402
 
-ROOT = Path("~/scratch/dmdos-card/gifs")
+ROOT = CARD_GIFS
 OUT = HERE / "out"
 
 

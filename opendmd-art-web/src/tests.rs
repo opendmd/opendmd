@@ -603,13 +603,13 @@ fn build_name_in_the_browser_is_the_cores() {
     use wasm_bindgen::JsValue;
     for path in [
         "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
-        "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+        "/gifs/Consoles/MD_Sonic3_spritefox11.gif",
         "/gifs/Consoles/SNES_Asterix01.gif",
         "/gifs/NEW 2021/NINTENDO_DS_Mario_Kart_DS_01..gif",
         "/gifs/Consoles/NES_Unknow_01_Invert.gif",
         "/gifs/Halloween/HALLOWEEN_ARCADE_GoldenAxe16.gif",
         "/gifs/Consoles/MD_LOGO_Sega31.gif",
-        "/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif",
+        "/gifs/Consoles/PSP_Parasite_Eve_01__pixelkid42.gif",
         "/gifs/Spectrum_Slide/Exolon2.gif",
         "/gifs/Computers/PC_Leilanis Island_42.gif",
         "/gifs/Consoles/GAMEGEAR_Columns_01_bd.azerty.p.gif",

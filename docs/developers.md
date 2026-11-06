@@ -32,6 +32,13 @@ make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 ```
 
+Settings for your own machine go in a `local.mk` beside the Makefile
+(gitignored), which the Makefile reads first: for example
+`CARD_ROOT = /path/to/card`, the card copy that `make sim`, `make web-mock`
+and `make web-smoke` use (default: `card/` in the repo), or
+`export SCRATCH = /path/outside/the/tree`, where the updater, emulator and
+release builds go instead of `target/`.
+
 ## Releases and updates
 
 ```sh

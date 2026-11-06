@@ -198,9 +198,9 @@ is never touched.
   FNV-1a: `h = 0x811c9dc5`; for each byte `h = (h ^ byte) * 0x01000193 mod
   2^32`. So 256 buckets per category.
 
-Worked example: `gifs/Consoles/MD_Sonic3_RattenJager.gif` -> file name
-`MD_Sonic3_RattenJager.gif` -> FNV-1a `0x52903b38` -> bucket `38` ->
-`cache/Consoles/38/MD_Sonic3_RattenJager.gif`. (`SNES_Plok_08.gif` hashes to
+Worked example: `gifs/Consoles/MD_Sonic3_spritefox11.gif` -> file name
+`MD_Sonic3_spritefox11.gif` -> FNV-1a `0x0eddec8f` -> bucket `8f` ->
+`cache/Consoles/8f/MD_Sonic3_spritefox11.gif`. (`SNES_Plok_08.gif` hashes to
 `0x10b6d368`, bucket `68`.) The one implementation is
 `opendmd-core/src/layout.rs` (`fnv1a32`, `bucket`, `cache_rel`,
 `cache_path`), shared by `opendmd-pack`, the web app (`bucketFor`,

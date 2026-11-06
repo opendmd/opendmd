@@ -89,8 +89,8 @@ variants another experiment is writing beside them. It took 25 min on 15
 processes.
 
 - **Decoded:** 11,040. Seven files fail in Pillow ("broken data stream" or
-  "truncated"): `Arcade/ARCADE_Bagman_01_RattenJager`,
-  `Computers/C64_Pharaohs_Return_09`, `Consoles/MD_Kid_Chameleon_02_raph`,
+  "truncated"): `Arcade/ARCADE_Bagman_01_spritefox11`,
+  `Computers/C64_Pharaohs_Return_09`, `Consoles/MD_Kid_Chameleon_02_remy`,
   `NEW 2021/13`, `Other/OTHER_SCROLL_SG1000_Console`,
   `Pinball_Short/PINBALL_SHORT_ACDC_Serum27` and
   `Pinball_Short/PINBALL_SHORT_Big_Bang_Bar_Serum09`. The brief says 8; the
@@ -167,11 +167,11 @@ many of those pairs the tweener can actually use.
 
 | file | frames | translation pairs | Σ delay (ms) | tweenable |
 |---|---:|---:|---:|---:|
-| `Consoles/MD_Demons_Of_Asteborg_01_sephirot68` | 4,489 | 2,414 | 89,610 | 4 |
-| `Arcade/ARCADE_NEOGEO_KOF_96_02_sephirot68` | 1,841 | 1,771 | 88,820 | 0 |
-| `Arcade/ARCADE_NEOGEO_KOF_96_03_sephirot68` | 969 | 965 | 48,250 | 0 |
+| `Consoles/MD_Demons_Of_Asteborg_01_pixelkid42` | 4,489 | 2,414 | 89,610 | 4 |
+| `Arcade/ARCADE_NEOGEO_KOF_96_02_pixelkid42` | 1,841 | 1,771 | 88,820 | 0 |
+| `Arcade/ARCADE_NEOGEO_KOF_96_03_pixelkid42` | 969 | 965 | 48,250 | 0 |
 | `Arcade/ARCADE_NEOGEO_SCROLL_Super Dodge Ball01` | 1,214 | 1,146 | 45,030 | 5 |
-| `Consoles/SATURN_Dragon_Ball_Z_legends_04_sephirot68` | 1,419 | 1,412 | 42,360 | 0 |
+| `Consoles/SATURN_Dragon_Ball_Z_legends_04_pixelkid42` | 1,419 | 1,412 | 42,360 | 0 |
 | `Arcade/ARCADE_NEOGEO_SCROLL_Super Dodge Ball02` | 1,001 | 933 | 40,350 | 5 |
 | `Test_Suite/32p_Test_Suite_By_RpiTeaM_V1` | 1,854 | 1,785 | 37,940 | 6 |
 | `Test_Suite/32p_Test_Suite_V1_RpiTeam` | 1,854 | 1,785 | 37,940 | 6 |
@@ -180,7 +180,7 @@ many of those pairs the tweener can actually use.
 | `Arcade/ARCADE_MoonPatrol_01_Wolfsoft` | 3,453 | 1,132 | 33,960 | 0 |
 | `Arcade/ARCADE_SCROLL_Mystic_Warriors_01` | 1,017 | 992 | 32,300 | 0 |
 | `Arcade/ARCADE_SCROLL_Mystic_Warriors_02` | 1,013 | 989 | 32,180 | 0 |
-| `XMAS/XMAS_ARCADE_BoogieWings02_RattenJager` | 1,770 | 1,146 | 32,020 | 1 |
+| `XMAS/XMAS_ARCADE_BoogieWings02_spritefox11` | 1,770 | 1,146 | 32,020 | 1 |
 | `Pinball_Story/PINBALL_STORY_LethalWeapon` | 1,407 | 561 | 31,780 | 126 |
 | `Arcade/ARCADE_NEOGEO_SCROLL_Real_Bout_Fatal_Fury02` | 832 | 825 | 31,340 | 0 |
 | `Consoles/PS1_SCROLL_Metal_Slug_X_23` | 637 | 625 | 31,250 | 0 |
@@ -255,11 +255,11 @@ Delays are shown as ms × count, the three commonest.
 | candidate | `Other/OTHER_SCROLL_StarWars02` | 280 | 557 | 50x279, 1500x1 | 30x277, 20x277, 50x2 | 50% | 277/0 | 2px x277 |
 | candidate | `Consoles/NES_AboboLeft` | 75 | 152 | 180x75 | 90x146, 60x6 | 51% | 75/0 | 2px x73, 3px x2 |
 | candidate | `Consoles/NES_AboboRight` | 75 | 152 | 180x75 | 90x146, 60x6 | 51% | 75/0 | 2px x73, 3px x2 |
-| candidate | `Arcade/ARCADE_SFII_RattenJager` | 209 | 670 | 100x178, 60x24, 500x5 | 20x445, 30x150, 100x44 | 69% | 105/29 | 4px x75, 5px x59 |
-| candidate | `Consoles/MD_Chase_HQ_II_01_Clivefrog` | 908 | 1175 | 50x815, 20x40, 30x36 | 50x548, 20x307, 30x303 | 23% | 265/2 | 2–8 px |
-| candidate | `Consoles/MD_Ghostbusters_13_sephirot68` | 380 | 698 | 40x380 | 20x636, 40x62 | 46% | 318/0 | 2px x318 |
+| candidate | `Arcade/ARCADE_SFII_spritefox11` | 209 | 670 | 100x178, 60x24, 500x5 | 20x445, 30x150, 100x44 | 69% | 105/29 | 4px x75, 5px x59 |
+| candidate | `Consoles/MD_Chase_HQ_II_01_Brickmoth` | 908 | 1175 | 50x815, 20x40, 30x36 | 50x548, 20x307, 30x303 | 23% | 265/2 | 2–8 px |
+| candidate | `Consoles/MD_Ghostbusters_13_pixelkid42` | 380 | 698 | 40x380 | 20x636, 40x62 | 46% | 318/0 | 2px x318 |
 | candidate | `Other/OTHER_NINTENDO_MetroidScrollSamus` | 114 | 222 | 100x112, 1500x1, 1000x1 | 50x216, 100x4, 1500x1 | 49% | 108/0 | 2px x108 |
-| candidate | `Consoles/SNES_MarioKart12_RattenJager` | 346 | 684 | 60x258, 50x64, 70x15 | 20x488, 60x110, 50x41 | 49% | 179/0 | 3–7 px |
+| candidate | `Consoles/SNES_MarioKart12_spritefox11` | 346 | 684 | 60x258, 50x64, 70x15 | 20x488, 60x110, 50x41 | 49% | 179/0 | 3–7 px |
 | control | `Computers/PC_Leilanis Island_22` | 112 | 112 | 20x110 | = | 0% | 0/0 | |
 | control | `Pinball_Short/PINBALL_SHORT_Elvis-Grease_Serum_23` | 35 | 35 | 90x22, 120x9 | = | 0% | 0/0 | |
 | control | `Arcade/ARCADE_NEOGEO_Metal_Slug_X_03` | 36 | 56 | 100x36 | 100x30, 20x19, 30x6 | 36% | 6/0 | 3–7 px |
@@ -366,7 +366,7 @@ Measured with `bench_rife.py` in directory mode, start-up subtracted.
 
 ### Palette breakage and accuracy
 
-Numbers are from `compare.py`; per-file rows are in `out/compare.md`.
+Numbers are from `compare.py`; per-file rows are in `out/compare.md` (regenerated locally and not committed: its rows name the pack's files).
 Medians are over files.
 
 | | native | 4x |
@@ -433,13 +433,13 @@ tweening, cropped to 48 px around the motion.
 
 The ones worth opening first:
 
-- **`Consoles__MD_Chase_HQ_II_01_Clivefrog.png`**: the fast marquee.
+- **`Consoles__MD_Chase_HQ_II_01_Brickmoth.png`**: the fast marquee.
   - The shift tween is clean.
   - Persistence smears.
   - RIFE native is soft.
 - **`Other__OTHER_SCROLL_Xmen01.png`**: a 2 px scroll at 50 ms. The shift
   tween is exact.
-- **`Arcade__ARCADE_SFII_RattenJager.png`**: a regional move behind a static
+- **`Arcade__ARCADE_SFII_spritefox11.png`**: a regional move behind a static
   logo.
 - **`Pinball_Short__PINBALL_SHORT_Elvis-Grease_Serum_23.png`** (control):
   - The shift tween leaves the flash alone.

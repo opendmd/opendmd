@@ -11,10 +11,10 @@ absent (CI): nothing third-party, every GIF drawn here.
 The layout is the real card's (gifs/<Category>/, filelist.txt, .hall, .xmas,
 an obsolete filelist.odm.txt, logos/boot.gif, cache/), and the names are the
 ones web-smoke looks for: Mario titles among the SNES rows of Consoles,
-SNES_Mega_Man_X_08_sephirot68, SNES_Super_Metroid_01..04, a small
+SNES_Mega_Man_X_08_pixelkid42, SNES_Super_Metroid_01..04, a small
 SNES_Asterix01, MD_ and SNES_ lines for the playlist builder, Other's
 OTHER_DBZ01 (nothing to smooth) and OTHER_SCROLL_Xmen01 (a 4 px a frame
-scroll, a Smooth motion candidate), MD_Demons_Of_Asteborg_01_sephirot68,
+scroll, a Smooth motion candidate), MD_Demons_Of_Asteborg_01_pixelkid42,
 and enough Consoles rows for the Library list to scroll. Every GIF is
 128x32 with a few frames at varied delays, so previews light up and the
 mock's clock has real frame delays to run through.
@@ -64,7 +64,7 @@ HALLOWEEN = ["HALLOWEEN_MEGADRIVE_McDonald_Treasure_Land", "HALLOWEEN_ARCADE_Gol
              "HALLOWEEN_ARCADE_SCROLL_Darkstalkers_3_01", "HALLOWEEN_MD_Splatterhouse_2",
              "HALLOWEEN_SNES_Zombies_Ate_My_Neighbors_01", "HALLOWEEN_OTHER_Pumpkin_01",
              "HALLOWEEN_OTHER_Pumpkin_02", "HALLOWEEN_NES_Castlevania_II"]
-XMAS = ["XMAS_OTHER_SCROLL_UglySweatMario01", "XMAS_AMIGA_MEGADEMOS_Merry_Cmas", "XMAS_OTHER_SantaVsGift_RattenJager",
+XMAS = ["XMAS_OTHER_SCROLL_UglySweatMario01", "XMAS_AMIGA_MEGADEMOS_Merry_Cmas", "XMAS_OTHER_SantaVsGift_spritefox11",
         "XMAS_SNES_Christmas_Tree_01", "XMAS_MD_Snow_01", "XMAS_OTHER_Snowman_01"]
 
 
@@ -181,13 +181,13 @@ def build(out: Path) -> None:
             for v in range(1, VARIANTS + 1):
                 add("Consoles", f"{plat}_{t}_{v:02d}", "scroll" if "SCROLL" in t else "blink")
     for i in range(1, 9):
-        add("Consoles", f"SNES_Mega_Man_X_{i:02d}" + ("_sephirot68" if i >= 5 else ""))
+        add("Consoles", f"SNES_Mega_Man_X_{i:02d}" + ("_pixelkid42" if i >= 5 else ""))
     for i in range(1, 5):
         add("Consoles", f"SNES_Super_Metroid_{i:02d}")
     add("Consoles", "SNES_Asterix01", "small")
     add("Consoles", "SNES_Asterix02")
     add("Consoles", "SNES_SCROLL_Mega_Man_X", "scroll")
-    add("Consoles", "MD_Demons_Of_Asteborg_01_sephirot68", "scroll", 120)
+    add("Consoles", "MD_Demons_Of_Asteborg_01_pixelkid42", "scroll", 120)
     for i in range(1, OTHER + 1):
         add("Other", f"OTHER_{i:03d}")
     add("Other", "OTHER_DBZ01", "blink", 12)

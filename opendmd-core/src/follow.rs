@@ -1479,7 +1479,7 @@ mod tests {
             "/gifs/Other/OTHER_SEGA_SonicLogo.gif"
         )));
         assert!(!is_logo(&Entry::from_path(
-            "/gifs/Consoles/MD_Sonic3_RattenJager.gif"
+            "/gifs/Consoles/MD_Sonic3_spritefox11.gif"
         )));
         let logos = |v: &[&str]| -> Vec<(String, String)> {
             v.iter()
@@ -1489,10 +1489,10 @@ mod tests {
                 })
                 .collect()
         };
-        let snes = logos(&["/gifs/Consoles/SNES_LOGO_SuperMarioWorld_RattenJager.gif"]);
+        let snes = logos(&["/gifs/Consoles/SNES_LOGO_SuperMarioWorld_spritefox11.gif"]);
         assert_eq!(
             choose_logo(&snes, "Super Mario World (USA)"),
-            Some("/gifs/Consoles/SNES_LOGO_SuperMarioWorld_RattenJager.gif")
+            Some("/gifs/Consoles/SNES_LOGO_SuperMarioWorld_spritefox11.gif")
         );
         assert_eq!(choose_logo(&snes, "Donkey Kong Country (USA)"), None);
         let md = logos(&[

@@ -240,8 +240,8 @@ pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
         include_str!("../../opendmd-web/formulas/plasma.psi"),
         2657,
     ),
-    // psi-p0 on the spare (paint80-713cd, 2026-11-04,
-    // ~/scratch/opendmd-psi-p0-paint-probe-spare1.txt): the effect path
+    // psi-p0 on the spare (paint80-713cd, 2026-11-04, a paint probe
+    // capture, not committed): the effect path
     // with the JIT on, as the other rows (the tween's VM frame is 757: the
     // player keeps the faster).
     (
@@ -373,7 +373,7 @@ pub const PAINT_FORMULAS: &[(&str, &str, u32, u32)] = &[
 ];
 
 /// P0b-4 and the guards a row on the spare (paint80-01e06, 2026-11-04,
-/// `~/scratch/opendmd-psi-p0b4-paint-probe-spare1.txt`, the paint
+/// a paint probe capture (not committed), the paint
 /// probe's `cmp` lines): direct frames from `start` ms (seed
 /// `golden::SEED`), µs, VM and kernel, each against its frame's own
 /// estimate. `fused`: compiled with the fused compares. The sources are

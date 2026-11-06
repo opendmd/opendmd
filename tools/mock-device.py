@@ -5,7 +5,7 @@
 """A fake OpenDMD ESP32 device, for testing the browser management UI without
 hardware.
 
-    uv run tools/mock-device.py --root ~/scratch/dmdos-card [--overlay DIR] \
+    uv run tools/mock-device.py --root <card copy> [--overlay DIR] \
         [--www opendmd-web/www-dist] [--host 127.0.0.1] [--port 8080] [--dwell SECS] \
         [--strict] [--quiet] [--ota-pub firmware/keys/opendmd.pub]
 

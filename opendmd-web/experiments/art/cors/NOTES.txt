@@ -21,7 +21,7 @@ cache-busting query param so its response can be matched exactly).
 
 How to run
 ----------
-    cd ~/projects/opendmd/opendmd-web/experiments/art/cors
+    cd opendmd-web/experiments/art/cors    # from the repo root
     uv run cors_probe.py
 
 Requires nothing pre-installed beyond `uv` and the already-installed

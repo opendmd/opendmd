@@ -93,7 +93,7 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test as test;
 
     const MANIFEST: &str = "\u{feff}/gifs/Consoles/SNES_Plok_08.gif\r\n\
-        /gifs/Consoles/MD_Sonic3_RattenJager.gif\n\
+        /gifs/Consoles/MD_Sonic3_spritefox11.gif\n\
         \n\
         /gifs/Arcade/ARCADE_Pac-Man_01.gif\n\
         /gifs/NEW 2021/SNES_Donkey_Kong_Country_04.gif\n\
@@ -109,7 +109,7 @@ mod tests {
             filter_paths(MANIFEST, &spec),
             [
                 "/gifs/Consoles/SNES_Plok_08.gif",
-                "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+                "/gifs/Consoles/MD_Sonic3_spritefox11.gif",
                 "/gifs/NEW 2021/SNES_Donkey_Kong_Country_04.gif",
             ]
         );

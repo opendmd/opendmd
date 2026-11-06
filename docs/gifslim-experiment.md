@@ -208,13 +208,13 @@ Worst 10 for **cap9d** (the recommended variant), copy / original:
 | Arcade/ARCADE_LastMission.gif | 90,088 | 218,381 | 122,591 | 102 | 1.361 | 0.561 |
 | Arcade/ARCADE_Galaxian.gif | 94,505 | 198,046 | 123,889 | 198 | 1.311 | 0.626 |
 | XMAS/XMAS_ATARI_ST_MEGADEMOS_01.gif | 174,687 | 300,756 | 224,938 | 280 | 1.288 | 0.748 |
-| Other/OTHER_NeoArcadia02_RattenJager.gif | 206,668 | 398,480 | 262,085 | 156 | 1.268 | 0.658 |
+| Other/OTHER_NeoArcadia02_spritefox11.gif | 206,668 | 398,480 | 262,085 | 156 | 1.268 | 0.658 |
 | Arcade/ARCADE_Raiden.gif | 106,427 | 228,296 | 134,014 | 68 | 1.259 | 0.587 |
 | Arcade/ARCADE_StarWars.gif | 172,915 | 311,639 | 216,873 | 394 | 1.254 | 0.696 |
 | Arcade/ARCADE_Beast_Busters_01.gif | 175,221 | 334,967 | 218,747 | 108 | 1.248 | 0.653 |
-| Consoles/SNES_Rock_N_Roll_Racing_05_sephirot68.gif | 1,598,197 | 2,840,957 | 1,993,639 | 993 | 1.247 | 0.702 |
+| Consoles/SNES_Rock_N_Roll_Racing_05_pixelkid42.gif | 1,598,197 | 2,840,957 | 1,993,639 | 993 | 1.247 | 0.702 |
 | NEW 2021/CarrierAirWing004.gif | 337,880 | 551,330 | 420,164 | 203 | 1.244 | 0.762 |
-| Consoles/GBC_NascarRacers_RattenJager.gif | 363,704 | 779,782 | 452,122 | 418 | 1.243 | 0.580 |
+| Consoles/GBC_NascarRacers_spritefox11.gif | 363,704 | 779,782 | 452,122 | 418 | 1.243 | 0.580 |
 
 (For cap10d the worst is 1.19x the original, `ARCADE_LastMission` again.)
 
