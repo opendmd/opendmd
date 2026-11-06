@@ -18,13 +18,30 @@
 //! every 250 ms, and the log lines are formatted into the log ring. A show
 //! frame is ~4-6 ms (the tunnel, the stars and the name) plus a full blit.
 //!
+//! **After an update** (`Screen::new`'s `updated`: the first boot of a
+//! version other than the one NVS says booted last, `nvs_config::Config::note_booted`)
+//! the show's status line says "Updated to v<version>" for
+//! `opendmd_core::boot::UPDATED_MS` (3 s) instead of the version, and the
+//! show's minimum grows to match (3.9 s short, 6.85 s full; `off` plays the
+//! short show for that boot). Every other boot is as before.
+//!
+//! **While a firmware update comes in** ([`Updating`], held by
+//! `ota::receive` from the moment the bundle's header and signature are
+//! accepted): the main loop shows a still message instead of anything else
+//! ("Updating / to v… / Don't unplug", then "Installing / Dark while it
+//! installs / Don't unplug" once it is staged, for the second before the
+//! restart into the updater, whose copy runs with the panel dark). The
+//! guard's drop (a refused, cut-short or failed upload) takes it down and
+//! playback resumes. One relaxed atomic load per loop iteration otherwise.
+//!
 //! **The log.** One line per beat of the show (`boot show: warp at 0 ms`,
 //! `name`, `jump`, `status line`, `name settled`, `hold`), the card's
 //! readiness, the status card's text whenever it changes, and the
 //! handover — so a capture shows what the panel showed.
 
-use opendmd_core::boot::{self, Info, ShowLength, CAP_MS};
+use opendmd_core::boot::{self, Info, ShowLength, UpdateStage, CAP_MS};
 use opendmd_core::canvas::Canvas;
+use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -84,6 +101,7 @@ impl Text {
             ip: std::str::from_utf8(&self.ip[..usize::from(self.ip_len)]).unwrap_or(""),
             ap: if self.ap { config::AP_SSID } else { "" },
             note: self.note,
+            updated: false,
         }
     }
 
@@ -126,8 +144,77 @@ fn ms(d: Duration) -> u32 {
     d.as_millis().min(u128::from(u32::MAX)) as u32
 }
 
+// --- A firmware update's message ---------------------------------------------
+
+/// [`update_stage`]'s values.
+pub const NO_UPDATE: u8 = 0;
+const RECEIVING: u8 = 1;
+pub const INSTALLING: u8 = 2;
+static STAGE: AtomicU8 = AtomicU8::new(NO_UPDATE);
+/// The version being installed (the bundle's, at most 32 bytes as its
+/// header holds it): written before [`STAGE`] goes up, read by the main
+/// loop when it draws.
+static TO: Mutex<([u8; 32], u8)> = Mutex::new(([0; 32], 0));
+
+/// What the panel should show for a firmware update: [`NO_UPDATE`], or a
+/// stage to draw with [`draw_update`]. A relaxed load: the main loop's one
+/// cost of this while no update runs.
+#[inline(always)]
+pub fn update_stage() -> u8 {
+    STAGE.load(Relaxed)
+}
+
+/// Draw the message for `stage` (from [`update_stage`], not [`NO_UPDATE`]).
+pub fn draw_update(canvas: &mut Canvas, stage: u8) {
+    let to = TO.lock().unwrap_or_else(|p| p.into_inner());
+    let v = std::str::from_utf8(&to.0[..usize::from(to.1)]).unwrap_or("");
+    let stage = if stage == INSTALLING {
+        UpdateStage::Installing
+    } else {
+        UpdateStage::Receiving
+    };
+    boot::update_notice(canvas, stage, v);
+}
+
+/// A firmware update is being received: the panel says so while this
+/// lives. Dropped (any early return: refused, cut short, a card error), the
+/// message goes and playback resumes; on success the restart comes first.
+pub struct Updating(());
+
+impl Updating {
+    pub fn begin(version: &str) -> Updating {
+        {
+            let mut to = TO.lock().unwrap_or_else(|p| p.into_inner());
+            let n = version.len().min(32);
+            to.0[..n].copy_from_slice(&version.as_bytes()[..n]);
+            to.1 = n as u8;
+        }
+        STAGE.store(RECEIVING, Relaxed);
+        crate::wake::kick();
+        Updating(())
+    }
+
+    /// Staged and the updater chosen: the restart is next.
+    pub fn installing(&self) {
+        STAGE.store(INSTALLING, Relaxed);
+        crate::wake::kick();
+    }
+}
+
+impl Drop for Updating {
+    fn drop(&mut self) {
+        STAGE.store(NO_UPDATE, Relaxed);
+        crate::wake::kick();
+    }
+}
+
+// --- The start-up show and the status card --------------------------------------
+
 pub struct Screen {
     len: ShowLength,
+    /// The first boot of a new version (its minimum is longer, and its
+    /// status line says so).
+    updated: bool,
     started: Instant,
     scene: Scene,
     /// The boot task found no card (for now).
@@ -148,14 +235,25 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn new(len: ShowLength) -> Screen {
-        log::info!(
-            "boot show: {} ({} ms at least; the status card after {CAP_MS} ms if the card is not ready)",
-            len.name(),
+    pub fn new(len: ShowLength, updated: bool) -> Screen {
+        let len = if updated { len.for_update() } else { len };
+        let min = if updated {
+            len.min_ms_updated()
+        } else {
             len.min_ms()
+        };
+        log::info!(
+            "boot show: {}{} ({min} ms at least; the status card after {CAP_MS} ms if the card is not ready)",
+            len.name(),
+            if updated {
+                ", says 'Updated to' this boot"
+            } else {
+                ""
+            },
         );
         Screen {
             len,
+            updated,
             started: Instant::now(),
             scene: Scene::Show,
             no_card: false,
@@ -172,6 +270,15 @@ impl Screen {
 
     fn t(&self) -> u32 {
         ms(self.started.elapsed())
+    }
+
+    /// The show's minimum this boot.
+    fn min(&self) -> u32 {
+        if self.updated {
+            self.len.min_ms_updated()
+        } else {
+            self.len.min_ms()
+        }
     }
 
     /// The boot task has no card (yet).
@@ -192,7 +299,7 @@ impl Screen {
     /// Whether a handover may happen now: the show has run its minimum.
     pub fn may_end(&self) -> bool {
         match self.scene {
-            Scene::Show => self.len == ShowLength::Off || self.t() >= self.len.min_ms(),
+            Scene::Show => self.len == ShowLength::Off || self.t() >= self.min(),
             _ => true,
         }
     }
@@ -286,7 +393,7 @@ impl Screen {
                 }
             }
             Scene::Show => {
-                if t >= CAP_MS || (self.no_card && t >= self.len.min_ms()) || self.over {
+                if t >= CAP_MS || (self.no_card && t >= self.min()) || self.over {
                     self.show_card(Some((self.len, t)), t);
                 }
             }
@@ -296,7 +403,10 @@ impl Screen {
             self.text = Text::read(status, problem, self.ready_at.is_some() && !self.over);
             self.text_at = Some(begun);
         }
-        let info = self.text.info();
+        let info = Info {
+            updated: self.updated,
+            ..self.text.info()
+        };
         match self.scene {
             Scene::Show if self.len == ShowLength::Off => {
                 // Dark: only waiting for the boot task, so look often.

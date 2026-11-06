@@ -974,8 +974,14 @@ Another key's bundle, or one for the other layout, is refused once the
 140-byte header is in; the key the image's key trailer names must be the
 one that signed it. Any validly signed bundle is accepted, older ones too,
 unless the firmware was built with a rollback floor (`docs/ota.md`). Then
-`{"ok":true,"version":"…","rebooting":true}`; the panel is dark ~45 s from
-the end of the upload to playback while it installs.
+`{"ok":true,"version":"…","rebooting":true}`. From the accepted header the
+panel shows a still message instead of what plays ("Updating", the
+version, "Don't unplug"; "Installing" once the bundle is staged); a
+refused or cut-short upload takes it down and playback resumes. The panel
+is dark ~45 s from the restart to playback while the updater installs, and
+the new firmware's first boot says "Updated to v<version>" in the start-up
+show's status line for 3 s (the show runs 3.9 s, or 6.85 s full; with
+`boot_show` `off`, the short show for that boot).
 
 ```sh
 curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
@@ -1041,9 +1047,11 @@ with one log line each time the playlist is read (`playlist: skipping
 "<line cut to 48 chars>…": the built-in effects are gone (Formulas replace
 them)`); the rest of the playlist plays.
 
-**`@boot`** — the start-up show. `len=short|full|card` (`card`: the status
-card), and for it `v=<version>`, `ip=<address>`, `ap=<network>`,
-`note=<text>` (≤ 32 characters each).
+**`@boot`** — the start-up show. `len=short|full|card|updating|installing`
+(`card`: the status card; `updating`, `installing`: a firmware update's
+still message, 2 s), and for it `v=<version>`, `ip=<address>`,
+`ap=<network>`, `note=<text>` (≤ 32 characters each), `up=1` (the first
+boot of a new version: "Updated to v<version>").
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"@boot?len=full"}'

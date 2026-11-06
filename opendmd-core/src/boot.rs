@@ -83,7 +83,30 @@ impl ShowLength {
             len => beats(len).min,
         }
     }
+
+    /// The shortest the show runs on the first boot of a new version, when
+    /// its status line says "Updated to v…" ([`Info::updated`]) for
+    /// [`UPDATED_MS`]: 3.9 s short, 6.85 s full. `Off` plays the short show
+    /// for that boot (see [`ShowLength::for_update`]).
+    pub fn min_ms_updated(self) -> u32 {
+        let b = beats(self);
+        b.min.max(b.status + UPDATED_MS)
+    }
+
+    /// The show for the first boot of a new version: `Off` plays the short
+    /// one (the panel says it updated, then stays dark again from the next
+    /// boot on).
+    pub fn for_update(self) -> ShowLength {
+        match self {
+            ShowLength::Off => ShowLength::Short,
+            len => len,
+        }
+    }
 }
+
+/// How long the show's status line says "Updated to v…" on the first boot
+/// of a new version, from the moment it comes up.
+pub const UPDATED_MS: u32 = 3_000;
 
 /// How long the show may wait for the card before the status card takes
 /// over (ms since the show began).
@@ -173,6 +196,10 @@ pub struct Info<'a> {
     pub ip: &'a str,
     pub ap: &'a str,
     pub note: &'a str,
+    /// The first boot of a new version: the status line says "Updated to
+    /// v<version>" ([`updated_line`]) for [`UPDATED_MS`] instead of the
+    /// version, then what matters.
+    pub updated: bool,
 }
 
 /// A line of text in two parts drawn one after the other, so nothing is
@@ -187,6 +214,16 @@ impl<'a> Info<'a> {
             NONE
         } else {
             ["v", self.version]
+        }
+    }
+
+    /// The status line's first words: the version, or on the first boot of
+    /// a new one, that it updated.
+    fn first_line(&self) -> Parts<'a> {
+        if self.updated && !self.version.is_empty() {
+            updated_line(self.version)
+        } else {
+            self.version_line()
         }
     }
 
@@ -359,10 +396,11 @@ fn line(canvas: &mut Canvas, y: i32, p: &Parts, colour: Rgb) {
 
 /// The show's status line at `t`, and its light (/ 256): the version,
 /// fading in over 300 ms, then 1.2 s later what matters (a 150 ms dip out
-/// and back in, if that is different).
+/// and back in, if that is different). On the first boot of a new version,
+/// "Updated to v…" instead of the version, for [`UPDATED_MS`].
 fn status<'a>(b: &Beats, t: u32, info: &Info<'a>) -> (Parts<'a>, u32) {
-    let swap = b.status + 1_200;
-    let (version, then) = (info.version_line(), info.show_line());
+    let swap = b.status + if info.updated { UPDATED_MS } else { 1_200 };
+    let (version, then) = (info.first_line(), info.show_line());
     let text = if t < swap { version } else { then };
     let mut k = ramp(t, b.status, b.status + 300);
     if version != then {
@@ -440,6 +478,73 @@ pub fn card(canvas: &mut Canvas, t: u32, info: &Info, from_show: Option<(ShowLen
     canvas.dirty_mut().mark_all();
 }
 
+/// "Updated to v1.0.0-beta.17": the whole version when it fits the small
+/// font's 32 characters, else the part after its first `-`
+/// ("Updated to beta.16-us-1a2b3c"), else just "Updated". Slices of
+/// `version`, nothing joined.
+pub fn updated_line(version: &str) -> Parts<'_> {
+    fitted("Updated to v", "Updated to ", "Updated", version)
+}
+
+/// `[lead, version]` if that fits one line of the small font, else `[short,
+/// version's tail after its first '-']`, else `[bare, ""]`.
+fn fitted<'a>(lead: &'a str, short: &'a str, bare: &'a str, version: &'a str) -> Parts<'a> {
+    const MAX: usize = WIDTH / Font::Small.advance();
+    let fits = |a: &str, b: &str| a.chars().count() + b.chars().count() <= MAX;
+    let tail = version.split_once('-').map_or("", |(_, t)| t);
+    if fits(lead, version) {
+        [lead, version]
+    } else if !tail.is_empty() && fits(short, tail) {
+        [short, tail]
+    } else {
+        [bare, ""]
+    }
+}
+
+/// What a firmware update has reached, for [`update_notice`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateStage {
+    /// The bundle is being received and checked.
+    Receiving,
+    /// Checked and staged: the restart into the installer is next, and the
+    /// panel stays dark until the new firmware starts.
+    Installing,
+}
+
+/// The panel while a firmware update is received and installed: a still
+/// picture, drawn once per stage. The stage in the big font (amber, top row
+/// 2, as on the status card), then two lines of the small font (rows 18
+/// and 25): "to v<version>" (or, installing, that the panel goes dark
+/// meanwhile) and "Don't unplug" in warm white. Every pixel is written and
+/// marked.
+pub fn update_notice(canvas: &mut Canvas, stage: UpdateStage, version: &str) {
+    canvas.clear();
+    let (title, first) = match stage {
+        UpdateStage::Receiving => (
+            "Updating",
+            if version.is_empty() {
+                NONE
+            } else {
+                fitted("to v", "to ", "", version)
+            },
+        ),
+        UpdateStage::Installing => ("Installing", ["Dark while it installs", ""]),
+    };
+    let w = text::text_width(Font::Normal, title, 2) as i32;
+    text::draw_text_with(
+        canvas,
+        (WIDTH as i32 - w) / 2,
+        CARD_Y,
+        title,
+        AMBER,
+        Font::Normal,
+        2,
+    );
+    line(canvas, CARD_LINE_Y[0], &first, LINE);
+    line(canvas, CARD_LINE_Y[1], &["Don't unplug", ""], PROBLEM);
+    canvas.dirty_mut().mark_all();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +555,7 @@ mod tests {
         ip: "192.168.1.69",
         ap: "",
         note: "",
+        updated: false,
     };
 
     fn lit(c: &Canvas) -> usize {
@@ -713,5 +819,123 @@ mod tests {
         assert!((18..24).any(|y| (0..WIDTH).any(|x| c.get(x, y) == PROBLEM)));
         assert!((25..31).any(|y| (0..WIDTH).any(|x| c.get(x, y) == LINE)));
         assert_eq!(band(&c, CARD_Y), band(&wordmark(CARD_Y), CARD_Y));
+    }
+
+    #[test]
+    fn an_updated_boot_says_so_for_three_seconds() {
+        assert_eq!(
+            updated_line("1.0.0-beta.17"),
+            ["Updated to v", "1.0.0-beta.17"]
+        );
+        // A development build's long version: the part after its first '-'.
+        assert_eq!(
+            updated_line("1.0.0-beta.16-us-1a2b3c"),
+            ["Updated to ", "beta.16-us-1a2b3c"]
+        );
+        assert_eq!(
+            updated_line("1.0.0-a-very-long-pre-release-name"),
+            ["Updated", ""]
+        );
+        assert_eq!(updated_line("1.0.0"), ["Updated to v", "1.0.0"]);
+        for v in [
+            "1.0.0-beta.17",
+            "1.0.0-beta.16-us-1a2b3c",
+            "10.20.30-rc.123+abc",
+        ] {
+            assert!(parts_width(&updated_line(v)) <= WIDTH as i32, "{v}");
+        }
+        assert_eq!(ShowLength::Short.min_ms_updated(), 900 + UPDATED_MS);
+        assert_eq!(ShowLength::Full.min_ms_updated(), 3_850 + UPDATED_MS);
+        assert_eq!(ShowLength::Off.for_update(), ShowLength::Short);
+        assert_eq!(ShowLength::Full.for_update(), ShowLength::Full);
+        let b = beats(ShowLength::Short);
+        let up = Info {
+            version: "1.0.0-beta.17",
+            updated: true,
+            ..INFO
+        };
+        assert_eq!(status(b, b.status - 10, &up).1, 0);
+        // Up from the status beat, and still there where an ordinary boot
+        // has long moved on to the address, until UPDATED_MS.
+        for t in [
+            b.status + 400,
+            b.status + 1_500,
+            b.status + UPDATED_MS - 200,
+        ] {
+            assert_eq!(
+                status(b, t, &up),
+                (["Updated to v", "1.0.0-beta.17"], 256),
+                "{t}"
+            );
+        }
+        assert_eq!(
+            status(b, b.status + UPDATED_MS + 400, &up).0,
+            ["192.168.1.69", ""]
+        );
+        // The virtual file plays it for its longer minimum.
+        use crate::synth::{self, SynthSource};
+        let mut src = SynthSource::new(synth::open("@boot?v=1.0.0-beta.17&up=1").unwrap()).unwrap();
+        let mut c = Canvas::new();
+        let mut n = 0;
+        while src.next_frame(&mut c).unwrap().is_some() {
+            n += 1;
+        }
+        assert_eq!(n, ShowLength::Short.min_ms_updated() / 10);
+        let mut want = Canvas::new();
+        show(
+            &mut want,
+            ShowLength::Short,
+            (n - 1) * 10,
+            &Info { ip: "", ..up },
+        );
+        assert_eq!(c, want);
+    }
+
+    #[test]
+    fn the_update_message_fits_and_is_still() {
+        for (stage, v) in [
+            (UpdateStage::Receiving, "1.0.0-beta.17"),
+            (UpdateStage::Receiving, "1.0.0-beta.16-us-1a2b3c"),
+            (UpdateStage::Receiving, ""),
+            (UpdateStage::Installing, "1.0.0-beta.17"),
+        ] {
+            let mut a = Canvas::new();
+            update_notice(&mut a, stage, v);
+            let mut b = Canvas::new();
+            b.fill(Rgb::new(9, 9, 9));
+            update_notice(&mut b, stage, v);
+            assert_eq!(a, b, "{stage:?} {v}: not the same over another picture");
+            // Nothing in the outermost columns: every line fits.
+            for y in 0..HEIGHT {
+                assert_eq!(a.get(0, y), Rgb::BLACK, "{stage:?} {v} row {y}");
+                assert_eq!(a.get(WIDTH - 1, y), Rgb::BLACK, "{stage:?} {v} row {y}");
+            }
+            // The title in amber, "Don't unplug" in warm white at the bottom.
+            assert!((CARD_Y as usize..CARD_Y as usize + 14)
+                .any(|y| (0..WIDTH).any(|x| a.get(x, y) == AMBER)));
+            assert!((25..31).any(|y| (0..WIDTH).any(|x| a.get(x, y) == PROBLEM)));
+            let middle = (18..24).any(|y| (0..WIDTH).any(|x| a.get(x, y) == LINE));
+            assert_eq!(
+                middle,
+                !v.is_empty() || stage == UpdateStage::Installing,
+                "{stage:?} {v}"
+            );
+        }
+        for t in ["Updating", "Installing"] {
+            assert!(text::text_width(Font::Normal, t, 2) < WIDTH, "{t}");
+        }
+        assert_eq!(
+            fitted("to v", "to ", "", "1.0.0-beta.17"),
+            ["to v", "1.0.0-beta.17"]
+        );
+        // The virtual file draws the same picture.
+        use crate::synth::{self, SynthSource};
+        let mut src =
+            SynthSource::new(synth::open("@boot?len=installing&v=1.0.0-beta.17").unwrap()).unwrap();
+        let mut c = Canvas::new();
+        assert!(src.next_frame(&mut c).unwrap().is_some());
+        let mut want = Canvas::new();
+        update_notice(&mut want, UpdateStage::Installing, "1.0.0-beta.17");
+        assert_eq!(c, want);
     }
 }

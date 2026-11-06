@@ -97,6 +97,9 @@ const KEY_PANEL_TRY: &str = "panel_try";
 /// Internal, not a setting: the CID serial of the card that failed at full
 /// speed and mounts at the fallback clock (`sdhealth`). Absent = none.
 const KEY_SD_SLOW: &str = "sd_slow";
+/// The firmware version that booted last (`Config::note_booted`): not a
+/// setting, never in `/api/config`.
+const KEY_BOOTED: &str = "booted_ver";
 /// What NVS holds in `attract_set` for "the current playlist" (a `*` can
 /// never be a set's name: FAT refuses it in a file name).
 const CURRENT_PLAYLIST: &str = "*";
@@ -636,6 +639,22 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    /// The first boot of `version` after another one: `Some(previous)`, and
+    /// `version` is recorded as the one that booted. `None` on every other
+    /// boot (the same version: one small read, no write) and on the first
+    /// boot with nothing recorded (a fresh install, or firmware from before
+    /// this record, which is written then).
+    pub fn note_booted(&mut self, version: &str) -> Option<String> {
+        let before = self.get_string(KEY_BOOTED);
+        if before.as_deref() == Some(version) {
+            return None;
+        }
+        if let Err(e) = self.nvs.set_str(KEY_BOOTED, version) {
+            warn!("NVS set '{KEY_BOOTED}': {e}");
+        }
+        before
     }
 
     /// The saved panel timing and the trial staged for the next boot, as

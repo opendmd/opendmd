@@ -285,13 +285,18 @@ The web app pack is signed with the same key and key ids
    The device streams
    the body to `/update/opendmd.bin` on the card, hashing as it goes (the
    night window's heap rules apply: one transfer at a time, 4 KB buffers).
+   Once the header's layout and signature check out the panel shows a still
+   message instead of what plays ("Updating", "to v<version>", "Don't
+   unplug"); the file on screen is let go. Any failure takes the message
+   down and playback resumes.
 2. **Verify on the device**: header magic, the bundle's layout is the
    player's, image fits the factory partition, ESP image magic `0xE9` at
    offset 0, SHA-256 matches, Ed25519 signature valid, the image's app
    descriptor is `"<version> <variant>"` for that layout. Any failure: delete the file, 422 with a reason, nothing else
    changes. Success: write `/update/pending.txt` (version), set the boot
    partition to `ota_0` (`esp_ota_set_boot_partition`), reply
-   `{"ok":true,"version":…,"rebooting":true}`, blank the panel, restart.
+   `{"ok":true,"version":…,"rebooting":true}` (the panel says "Installing",
+   "Dark while it installs"), blank the panel, restart.
 3. **Updater** (`ota/updater`, C): blanks the panel first (same early blank
    as `hub75_shim`), mounts the card on SPI3 (18/19/23/5), opens
    `/update/opendmd.bin`, checks the bundle's layout against the board's
@@ -309,7 +314,10 @@ The web app pack is signed with the same key and key ids
    file; if the file itself is bad, the device needs the USB flasher. The
    firmware never sets `ota_0` as boot without a verified file on the card,
    so this path needs a card fault mid-write.
-5. **After boot**: the firmware sees `/update/done-*.bin`, logs the version
+5. **After boot**: the start-up show says "Updated to v<version>" for 3 s
+   (the first boot of a version other than the one NVS says booted last,
+   so after a USB install that keeps NVS too). The firmware sees
+   `/update/done-*.bin`, logs the version
    change in the log ring, deletes the file, and the web app's Firmware card
    shows the new version. `GET /api/firmware` reports `{version, build,
    variant, flash_size, pending, last, log}`: `log` is the end of `/update/log.txt`

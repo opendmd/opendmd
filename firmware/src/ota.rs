@@ -28,6 +28,12 @@
 //! deleted too, since a firmware never boots between the reply and the
 //! updater otherwise.
 //!
+//! The panel: from the accepted header to the restart it shows a still
+//! message ([`crate::show::Updating`]: "Updating", then "Installing" once
+//! staged), the file on screen let go; any failure takes it down and
+//! playback resumes. The updater's copy runs with the panel dark (it has no
+//! panel driver), and the new firmware's first boot says "Updated to v…".
+//!
 //! Heap: one [`config::IO_CHUNK`] buffer and one open file, the GIF upload
 //! path's; the SHA-256 state is ~100 B, the header 140 B, on the stream
 //! task's stack. No buffer holds the image.
@@ -320,6 +326,9 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             "the player needs the heap right now; retry shortly",
         );
     };
+    // From here the panel says an update is coming in, until this returns
+    // (refused, cut short, a card error: playback resumes) or the restart.
+    let panel = crate::show::Updating::begin(&meta.version);
     let staged = (|| -> std::io::Result<fs::File> {
         fs::create_dir_all(format!("{}/update", config::SD_MOUNT))?;
         // A previous staging that never ran is superseded.
@@ -402,6 +411,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             ),
         );
     }
+    panel.installing();
     log::info!(
         "PUT /api/firmware: {} staged and verified in {:.1} s; restarting into the updater",
         meta.version,
@@ -411,10 +421,15 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         "staged {} ({} B), restarting into the updater",
         meta.version, meta.length
     ));
-    up.json(&format!(
+    // Restart even if the reply cannot be sent (the client gone): otadata
+    // already points at the updater, and staying up would leave the panel's
+    // message to come down over an update the next restart installs anyway.
+    if let Err(e) = up.json(&format!(
         r#"{{"ok":true,"version":{},"rebooting":true}}"#,
         json_string(&meta.version)
-    ))?;
+    )) {
+        log::warn!("PUT /api/firmware: the reply did not go out ({e:#}); restarting into the updater anyway");
+    }
     crate::http::reboot_after_response(opendmd_core::restarts::Reason::Ota)
 }
 
