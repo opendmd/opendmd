@@ -84,7 +84,7 @@ GCC runtime libraries (libstdc++, libgcc): GPL-3.0-or-later WITH GCC-exception-3
   Runtime Library Exception lets a program compiled with GCC include these
   libraries under terms of its choice: no source or licence obligations
   follow; it is reproduced for information.
-  In: firmware.
+  In: firmware, updater.
 
 ESP-IDF mDNS component (espressif/mdns) 1.2.5: Apache-2.0 [1]
   https://components.espressif.com/components/espressif/mdns
@@ -92,13 +92,13 @@ ESP-IDF mDNS component (espressif/mdns) 1.2.5: Apache-2.0 [1]
 
 ESP32-HUB75-MatrixPanel-DMA 3.0.14: MIT [14]
   https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA
-  In: firmware.
+  In: firmware, updater.
 
 LovyanGFX (the HUB75 driver's I2S DMA code): BSD-2-Clause [15]
   https://github.com/lovyan03/LovyanGFX
   The text from LovyanGFX's license.txt at d941fbf (the section for LovyanGFX
   itself).
-  In: firmware.
+  In: firmware, updater.
 
 Silkscreen (the setup page's heading font, a subset): OFL-1.1 [16]
   https://github.com/google/fonts/tree/main/ofl/silkscreen
