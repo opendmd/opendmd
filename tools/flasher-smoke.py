@@ -16,7 +16,7 @@ must not offer it) renders (headless Chromium has `navigator.serial`, so the
 "unsupported" slot must not be what shows); each manifest (both layouts', checked in dist/) parses, carries
 its name ("OpenDMD", "OpenDMD 8 MB": the firmware's Improv answer), names
 six parts at its layout's offsets (4mb: 0x1000/0x8000/0xF000/0x20000/
-0x260000/0x2C0000; 8mb: the pack and the updater first, at 0x380000 and
+0x2A0000/0x300000, table v3; 8mb: the pack and the updater first, at 0x380000 and
 0x320000, then 0x1000/0x8000/0xF000/0x20000; docs/ota.md), each one is
 served, and the page lists the DevKit's; no part runs into the next and each set
 ends inside its flash; the footer links the third-party notices, which are
@@ -53,7 +53,7 @@ def check(ok: bool, what: str) -> None:
 # Per flash layout: the manifest's name, its parts' offsets in the order
 # written, and the flash size.
 LAYOUTS = {
-    "4mb": ("OpenDMD", [0x1000, 0x8000, 0xF000, 0x20000, 0x260000, 0x2C0000], 4 << 20),
+    "4mb": ("OpenDMD", [0x1000, 0x8000, 0xF000, 0x20000, 0x2A0000, 0x300000], 4 << 20),
     "8mb": ("OpenDMD 8 MB", [0x380000, 0x320000, 0x1000, 0x8000, 0xF000, 0x20000], 8 << 20),
 }
 

@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! offset  size  field
-//!      0     8  magic: "ODFW1" + the flash layout ("\0\0\0" 4mb, "8mb")
+//!      0     8  magic: the flash layout and its table version (below)
 //!      8    32  version, UTF-8, NUL-padded (at least one byte, no NUL inside)
 //!     40     4  length of the image, u32 LE
 //!     44    32  SHA-256 of the image
@@ -14,12 +14,19 @@
 //!    140        the app image (ESP image magic 0xE9 first)
 //! ```
 //!
-//! The magic's last three bytes name the flash layout the image is built
-//! for (its `variant`): NULs for `4mb` (every bundle from before there was
-//! a second layout, so 4 MB players already in use take 4mb bundles as they
-//! are), `8mb` for an 8 MB board in development. The signature covers
-//! them, and a firmware or updater that knows only the old magic refuses an
-//! 8mb bundle as not a bundle at all.
+//! **The magic names the flash layout** the image is built for: its
+//! `variant` (`4mb`, `8mb`) and the version of that variant's partition
+//! table ([`LAYOUTS`]). `"ODFW1"` + three NULs is the DevKit's table v2
+//! (every 4mb bundle up to 1.0.0-beta.15), `"ODFW18mb"` the OpenDMD
+//! board's (v2, unchanged), `"ODFW34mb"` the DevKit's table v3 (a bigger
+//! `factory`, `firmware/partitions.csv`). The signature covers it. A player
+//! installs a bundle only for its own variant *and* table
+//! ([`Header::check_layout`]): an update over WiFi never changes the table,
+//! so a bundle built for another one needs a USB install. A firmware or
+//! updater from before a layout knows nothing of its magic and refuses it
+//! as not a bundle at all (1.0.0-beta.15 and earlier: "bad magic" for
+//! `ODFW34mb`), which is what keeps a v3 image out of a v2 board's smaller
+//! `factory`.
 //!
 //! **The key id** (1.0.0-beta.15 on): the image's last 16 bytes are a key
 //! trailer, `"ODFWKEY1"`, the id of the key that signed it, 7 zero bytes
@@ -43,35 +50,78 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-/// `ODFW1` and three NULs: a 4mb bundle (and every bundle before 8mb).
+/// `ODFW1` and three NULs: a 4mb bundle for the DevKit's table v2 (every
+/// 4mb bundle up to 1.0.0-beta.15). Refused by a v3 player.
 pub const MAGIC: [u8; 8] = *b"ODFW1\0\0\0";
-/// An 8mb bundle: `ODFW1` and the variant. Three bytes name a layout only
-/// while the names fit; a third layout (16 MB, another chip) should get a
-/// new format, `ODFW2`, with a proper variant field, rather than squeeze in
-/// here.
+/// An 8mb bundle: `ODFW1` and the variant (the 8 MB build's table v2).
 pub const MAGIC_8MB: [u8; 8] = *b"ODFW18mb";
+/// A 4mb bundle for the DevKit's table v3: `ODFW`, the table version, the
+/// variant. A later table gets the next digit (`ODFW44mb`, `ODFW38mb`).
+pub const MAGIC_4MB_V3: [u8; 8] = *b"ODFW34mb";
 /// The flash layouts, as the firmware names them (`/api/status`
 /// `variant`, the app descriptor's `"<version> <variant>"`).
 pub const VARIANTS: [&str; 2] = ["4mb", "8mb"];
 
-/// The magic of a bundle for `variant`.
-pub fn magic_for(variant: &str) -> Option<[u8; 8]> {
-    match variant {
-        "4mb" => Some(MAGIC),
-        "8mb" => Some(MAGIC_8MB),
-        _ => None,
-    }
+/// One partition table a bundle can be built for: the variant, the
+/// table's version (`firmware/partitions*.csv`'s header line), the bundle
+/// magic that names it, and its `factory` partition's size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub variant: &'static str,
+    pub table: u8,
+    pub magic: [u8; 8],
+    pub factory: u32,
 }
 
-/// The variant a magic names, if it is one.
+/// Every table a bundle may name, the current one of each variant first
+/// (what this tree builds: [`layout_of`]); the older ones after, so their
+/// bundles are recognised and refused in words.
+pub const LAYOUTS: [Layout; 3] = [
+    Layout {
+        variant: "4mb",
+        table: 3,
+        magic: MAGIC_4MB_V3,
+        factory: 0x28_0000,
+    },
+    Layout {
+        variant: "8mb",
+        table: 2,
+        magic: MAGIC_8MB,
+        factory: 0x30_0000,
+    },
+    Layout {
+        variant: "4mb",
+        table: 2,
+        magic: MAGIC,
+        factory: 0x24_0000,
+    },
+];
+
+/// The table this tree builds for `variant` (`/api/status` `layout`).
+pub fn layout_of(variant: &str) -> Option<&'static Layout> {
+    LAYOUTS.iter().find(|l| l.variant == variant)
+}
+
+/// The table `variant` at version `table`, if there is one.
+pub fn layout(variant: &str, table: u8) -> Option<&'static Layout> {
+    LAYOUTS
+        .iter()
+        .find(|l| l.variant == variant && l.table == table)
+}
+
+/// The magic of a bundle for `variant`'s current table.
+pub fn magic_for(variant: &str) -> Option<[u8; 8]> {
+    layout_of(variant).map(|l| l.magic)
+}
+
+/// The table a magic names, if it is one.
+pub fn layout_of_magic(magic: &[u8]) -> Option<&'static Layout> {
+    LAYOUTS.iter().find(|l| l.magic[..] == *magic)
+}
+
+/// The variant a magic names, if it is one (any table).
 pub fn variant_of_magic(magic: &[u8]) -> Option<&'static str> {
-    if magic == MAGIC {
-        Some("4mb")
-    } else if magic == MAGIC_8MB {
-        Some("8mb")
-    } else {
-        None
-    }
+    layout_of_magic(magic).map(|l| l.variant)
 }
 
 /// What a person calls the board a variant is for (the web app, the
@@ -137,6 +187,13 @@ pub enum OtaError {
         bundle: &'static str,
         device: String,
     },
+    /// The bundle is for this player's variant but another partition
+    /// table (an update over WiFi never changes the table).
+    WrongLayout {
+        variant: &'static str,
+        bundle: u8,
+        device: u8,
+    },
     /// The image's app descriptor is not an OpenDMD build for the
     /// bundle's layout (`"<version> <variant>"`).
     WrongBuild {
@@ -194,6 +251,28 @@ impl fmt::Display for OtaError {
                 variant_name(device),
                 variant_name(device)
             ),
+            OtaError::WrongLayout {
+                variant,
+                bundle,
+                device,
+            } if bundle > device => write!(
+                f,
+                "this update needs flash layout v{bundle} and this {} has layout v{device}: \
+                 reinstall it once over USB from opendmd.dev/install (an update over WiFi \
+                 cannot change the layout)",
+                variant_name(variant)
+            ),
+            OtaError::WrongLayout {
+                variant,
+                bundle,
+                device,
+            } => write!(
+                f,
+                "this update is for the older flash layout v{bundle} and this {} has layout \
+                 v{device}: use a release made for layout v{device} (opendmd.dev/install has \
+                 the latest)",
+                variant_name(variant)
+            ),
             OtaError::WrongBuild { variant, found } => write!(
                 f,
                 "the image inside is not an OpenDMD {variant} build (its app descriptor says '{found}')"
@@ -222,6 +301,7 @@ impl std::error::Error for OtaError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
     variant: &'static str,
+    table: u8,
     version: [u8; VERSION_LEN],
     pub length: u32,
     pub sha256: [u8; 32],
@@ -229,9 +309,10 @@ pub struct Header {
 }
 
 impl Header {
-    /// A header for a `variant` image of `version`, `length` bytes with
-    /// digest `sha256`, signature to be filled in (the tests sign with the
-    /// Python tool's vector; the device never signs).
+    /// A header for a `variant` image of `version` (for the variant's
+    /// current table), `length` bytes with digest `sha256`, signature to be
+    /// filled in (the tests sign with the Python tool's vector; the device
+    /// never signs).
     pub fn new(
         variant: &str,
         version: &str,
@@ -239,7 +320,17 @@ impl Header {
         sha256: [u8; 32],
         sig: [u8; 64],
     ) -> Option<Header> {
-        let variant = variant_of_magic(&magic_for(variant)?)?;
+        Header::for_table(layout_of(variant)?, version, length, sha256, sig)
+    }
+
+    /// [`Header::new`] for a given table.
+    pub fn for_table(
+        layout: &'static Layout,
+        version: &str,
+        length: u32,
+        sha256: [u8; 32],
+        sig: [u8; 64],
+    ) -> Option<Header> {
         let v = version.as_bytes();
         if v.is_empty() || v.len() > VERSION_LEN || v.contains(&0) {
             return None;
@@ -247,7 +338,8 @@ impl Header {
         let mut field = [0u8; VERSION_LEN];
         field[..v.len()].copy_from_slice(v);
         Some(Header {
-            variant,
+            variant: layout.variant,
+            table: layout.table,
             version: field,
             length,
             sha256,
@@ -262,7 +354,7 @@ impl Header {
         if bytes.len() < HEADER_LEN {
             return Err(OtaError::Truncated { have: bytes.len() });
         }
-        let variant = variant_of_magic(&bytes[..8]).ok_or(OtaError::BadMagic)?;
+        let layout = layout_of_magic(&bytes[..8]).ok_or(OtaError::BadMagic)?;
         let mut version = [0u8; VERSION_LEN];
         version.copy_from_slice(&bytes[8..8 + VERSION_LEN]);
         let used = version.iter().position(|&b| b == 0).unwrap_or(VERSION_LEN);
@@ -278,7 +370,8 @@ impl Header {
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&bytes[76..HEADER_LEN]);
         Ok(Header {
-            variant,
+            variant: layout.variant,
+            table: layout.table,
             version,
             length,
             sha256,
@@ -286,21 +379,41 @@ impl Header {
         })
     }
 
-    /// The flash layout the bundle is for (`"4mb"`, `"8mb"`).
+    /// The flash layout's variant the bundle is for (`"4mb"`, `"8mb"`).
     pub fn variant(&self) -> &'static str {
         self.variant
     }
 
-    /// The bundle is for `device`'s layout (the player's `FLASH_VARIANT`).
-    /// Needs no trust: a refusal, before the signature is checked.
-    pub fn check_variant(&self, device: &str) -> Result<(), OtaError> {
+    /// The version of the variant's partition table the bundle is for.
+    pub fn table(&self) -> u8 {
+        self.table
+    }
+
+    /// The bundle is for `device`'s variant and its table `table` (the
+    /// player's `FLASH_VARIANT` and the table it runs). Needs no trust: a
+    /// refusal, before the signature is checked. The variant first, then
+    /// the table.
+    pub fn check_layout(&self, device: &str, table: u8) -> Result<(), OtaError> {
         if self.variant != device {
             return Err(OtaError::WrongVariant {
                 bundle: self.variant,
                 device: device.to_string(),
             });
         }
+        if self.table != table {
+            return Err(OtaError::WrongLayout {
+                variant: self.variant,
+                bundle: self.table,
+                device: table,
+            });
+        }
         Ok(())
+    }
+
+    /// [`Header::check_layout`] against `device`'s current table (what this
+    /// tree builds for it): the check a player of this tree makes.
+    pub fn check_variant(&self, device: &str) -> Result<(), OtaError> {
+        self.check_layout(device, layout_of(device).map_or(0, |l| l.table))
     }
 
     /// The version string (`"0.4.0"`).
@@ -316,7 +429,7 @@ impl Header {
     /// The bytes the signature covers: magic, version, length, digest.
     pub fn signed_bytes(&self) -> [u8; SIGNED_LEN] {
         let mut out = [0u8; SIGNED_LEN];
-        out[..8].copy_from_slice(&magic_for(self.variant).unwrap_or(MAGIC));
+        out[..8].copy_from_slice(&layout(self.variant, self.table).map_or(MAGIC, |l| l.magic));
         out[8..40].copy_from_slice(&self.version);
         out[40..44].copy_from_slice(&self.length.to_le_bytes());
         out[44..76].copy_from_slice(&self.sha256);
@@ -820,6 +933,13 @@ mod tests {
         09c0a77487878d20e1ff27c43424aa29215a9064d3e9b9a5797614360f5793eff7f2d2d0e37dd5f71de9241f79b6\
         f3c9f1bf410b";
 
+    /// The same seed, version and image, signed for the DevKit's table v3
+    /// (`build_header(..., "4mb", 3)`): magic `ODFW34mb`.
+    const KAT_HEADER_V3: &str = "4f44465733346d62302e342e302d746573740000000000000000000000000000000000000000\
+        000040000000ac4a16884561961261469a1a0d7dd650eb0beb0e7dd9ade9d85d0af56bcdb061aada858cfabd9932\
+        376f2b24d7382d4f08799c67f4e31eb4c756d689720e0521f298ed3e75cec3c69ed431039b4cff6ff9fe463197e4\
+        74f35b7abc746731e208";
+
     /// The same seed, version and image, signed as an 8mb bundle
     /// (`build_header(..., "8mb")` in `tools/fw-sign.py`): magic `ODFW18mb`.
     const KAT_HEADER_8MB: &str = "4f44465731386d62302e342e302d746573740000000000000000000000000000000000000000\
@@ -874,8 +994,8 @@ mod tests {
         let bytes = kat_header();
         let header = Header::parse(&bytes).unwrap();
         assert_eq!(header.to_bytes().to_vec(), bytes);
-        let made = Header::new(
-            "4mb",
+        let made = Header::for_table(
+            layout("4mb", 2).unwrap(),
             "0.4.0-test",
             header.length,
             header.sha256,
@@ -883,6 +1003,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(made, header);
+        // `new` is for the variant's current table: v3 for 4mb.
+        let bytes3 = unhex(KAT_HEADER_V3);
+        let h3 = Header::parse(&bytes3).unwrap();
+        assert_eq!(h3.to_bytes().to_vec(), bytes3);
+        assert_eq!(
+            Header::new("4mb", "0.4.0-test", h3.length, h3.sha256, h3.sig).unwrap(),
+            h3
+        );
         assert!(Header::new("4mb", "", 0, [0; 32], [0; 64]).is_none());
         assert!(Header::new("4mb", &"x".repeat(33), 0, [0; 32], [0; 64]).is_none());
         assert!(Header::new("4mb", &"x".repeat(32), 0, [0; 32], [0; 64]).is_some());
@@ -1027,22 +1155,130 @@ mod tests {
 
     #[test]
     fn variants_and_their_magics() {
-        assert_eq!(magic_for("4mb"), Some(MAGIC));
+        assert_eq!(magic_for("4mb"), Some(*b"ODFW34mb"));
         assert_eq!(magic_for("8mb"), Some(*b"ODFW18mb"));
         assert_eq!(magic_for("16mb"), None);
         for v in VARIANTS {
             assert_eq!(variant_of_magic(&magic_for(v).unwrap()), Some(v));
         }
+        assert_eq!(variant_of_magic(&MAGIC), Some("4mb"));
+        assert_eq!(layout_of_magic(&MAGIC).map(|l| l.table), Some(2));
+        assert_eq!(layout_of("4mb").map(|l| l.table), Some(3));
+        assert_eq!(layout_of("8mb").map(|l| l.table), Some(2));
         assert_eq!(variant_of_magic(b"ODFW116m"), None);
+        // Every magic is a different table; and the v3 one does not even
+        // start like the ones before it ("ODFW1": what 1.0.0-beta.15's web
+        // app, firmware and updater compare whole, and tools/fw-ota.sh
+        // compared the first 5 bytes of), so nothing from before takes it.
+        for (i, a) in LAYOUTS.iter().enumerate() {
+            for b in &LAYOUTS[i + 1..] {
+                assert_ne!(a.magic, b.magic);
+                assert_ne!((a.variant, a.table), (b.variant, b.table));
+            }
+        }
+        assert_ne!(&MAGIC_4MB_V3[..5], b"ODFW1");
         assert_eq!(variant_name("4mb"), "DevKit (4 MB)");
         assert_eq!(variant_name("8mb"), "8 MB build");
+    }
+
+    #[test]
+    fn the_layout_is_the_variant_and_its_table() {
+        // A v3 bundle on a v3 player: taken. The same bundle on a v2 player
+        // (a firmware that knew both, checking against its own table): a
+        // USB reinstall, in words.
+        let h3 = Header::parse(&unhex(KAT_HEADER_V3)).unwrap();
+        assert_eq!((h3.variant(), h3.table()), ("4mb", 3));
+        h3.check_variant("4mb").unwrap();
+        h3.check_layout("4mb", 3).unwrap();
+        let e = h3.check_layout("4mb", 2).unwrap_err();
+        assert_eq!(
+            e,
+            OtaError::WrongLayout {
+                variant: "4mb",
+                bundle: 3,
+                device: 2
+            }
+        );
+        assert_eq!(
+            e.to_string(),
+            "this update needs flash layout v3 and this DevKit (4 MB) has layout v2: reinstall it \
+             once over USB from opendmd.dev/install (an update over WiFi cannot change the layout)"
+        );
+        // A v2 bundle (every DevKit release up to 1.0.0-beta.15) on a v3
+        // player: refused before the signature, in words.
+        let h2 = Header::parse(&kat_header()).unwrap();
+        assert_eq!((h2.variant(), h2.table()), ("4mb", 2));
+        let e = h2.check_variant("4mb").unwrap_err();
+        assert_eq!(
+            e,
+            OtaError::WrongLayout {
+                variant: "4mb",
+                bundle: 2,
+                device: 3
+            }
+        );
+        assert_eq!(
+            e.to_string(),
+            "this update is for the older flash layout v2 and this DevKit (4 MB) has layout v3: \
+             use a release made for layout v3 (opendmd.dev/install has the latest)"
+        );
+        // The variant is checked first.
+        assert!(matches!(
+            h3.check_variant("8mb"),
+            Err(OtaError::WrongVariant { bundle: "4mb", .. })
+        ));
+        // It verifies as any bundle does (the layout check is the refusal).
+        let meta = verify_header(&h3, &kat_pub()).unwrap();
+        meta.check_fits(layout_of("4mb").unwrap().factory).unwrap();
+    }
+
+    /// `firmware/partitions.csv` and `partitions-8mb.csv` are the tables
+    /// [`LAYOUTS`] says this tree builds: the version in the header comment,
+    /// `factory`'s size, NVS where every table has it (a USB install that
+    /// changes the table keeps the settings), apps on 64 KB boundaries,
+    /// nothing overlapping, the last partition inside the flash.
+    #[test]
+    fn the_partition_tables_are_the_layouts() {
+        let tables = [
+            ("4mb", include_str!("../../firmware/partitions.csv"), 4u32 << 20),
+            ("8mb", include_str!("../../firmware/partitions-8mb.csv"), 8 << 20),
+        ];
+        for (variant, csv, flash) in tables {
+            let l = layout_of(variant).unwrap();
+            let first = csv.lines().next().unwrap();
+            assert!(
+                first.starts_with(&format!("# OpenDMD partition table v{},", l.table)),
+                "{variant}: {first}"
+            );
+            let num = |s: &str| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).unwrap();
+            let rows: Vec<Vec<&str>> = csv
+                .lines()
+                .filter(|r| !r.trim_start().starts_with('#') && !r.trim().is_empty())
+                .map(|r| r.split(',').map(str::trim).collect())
+                .collect();
+            let mut end = 0x9000;
+            for r in &rows {
+                let (name, kind, off, size) = (r[0], r[1], num(r[3]), num(r[4]));
+                assert!(off >= end, "{variant}: {name} at {off:#x} overlaps (the previous ends at {end:#x})");
+                if kind == "app" {
+                    assert_eq!(off % 0x1_0000, 0, "{variant}: {name} at {off:#x}: apps start on 64 KB");
+                }
+                assert_eq!(off % 0x1000, 0, "{variant}: {name}");
+                end = off + size;
+            }
+            assert!(end <= flash, "{variant}: the table ends at {end:#x}, past the flash");
+            let find = |n: &str| rows.iter().find(|r| r[0] == n).unwrap();
+            assert_eq!(num(find("factory")[4]), l.factory, "{variant}: factory");
+            assert_eq!((num(find("nvs")[3]), num(find("nvs")[4])), (0x9000, 0x6000), "{variant}: nvs");
+            assert_eq!(num(find("otadata")[3]), 0xF000, "{variant}: otadata");
+        }
     }
 
     #[test]
     fn the_4mb_vector_is_4mb() {
         let h = Header::parse(&kat_header()).unwrap();
         assert_eq!(h.variant(), "4mb");
-        h.check_variant("4mb").unwrap();
+        h.check_layout("4mb", 2).unwrap();
         let e = h.check_variant("8mb").unwrap_err();
         assert_eq!(
             e,
@@ -1089,6 +1325,16 @@ mod tests {
         assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
         let mut b = kat_header();
         b[..8].copy_from_slice(&MAGIC_8MB);
+        let h = Header::parse(&b).unwrap();
+        assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
+        // A v3 bundle relabelled v2, and the reverse.
+        let mut b = unhex(KAT_HEADER_V3);
+        b[..8].copy_from_slice(&MAGIC);
+        let h = Header::parse(&b).unwrap();
+        assert_eq!(h.table(), 2);
+        assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
+        let mut b = kat_header();
+        b[..8].copy_from_slice(&MAGIC_4MB_V3);
         let h = Header::parse(&b).unwrap();
         assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
         // A layout nobody knows is not a bundle.
@@ -1180,7 +1426,8 @@ mod tests {
     /// (`firmware/src/ota.rs` there): it must take a keyed one.
     fn beta14_accepts(header: &[u8], image: &[u8], key: &[u8; 32]) -> Result<Meta, OtaError> {
         let h = Header::parse(header)?;
-        h.check_variant("4mb")?;
+        // Its variant check: the 4mb magic it knew, table v2.
+        h.check_layout("4mb", 2)?;
         let meta = verify_header(&h, key)?;
         meta.check_fits(0x240000)?;
         if u64::from(meta.length) != image.len() as u64 {

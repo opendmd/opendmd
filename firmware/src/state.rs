@@ -23,6 +23,15 @@ use std::time::Duration;
 /// (`/api/status` `variant`, the boot banner).
 pub const FLASH_VARIANT: &str = env!("OPENDMD_FLASH_VARIANT");
 
+/// The version of [`FLASH_VARIANT`]'s partition table this build is for
+/// (`firmware/partitions*.csv`'s header; `opendmd_core::ota::LAYOUTS`):
+/// `/api/status` and `GET /api/firmware` `layout`, the boot banner. A
+/// bundle over WiFi must be for this table (`ota.rs`): only a USB install
+/// changes it.
+pub fn flash_layout() -> u8 {
+    opendmd_core::ota::layout_of(FLASH_VARIANT).map_or(0, |l| l.table)
+}
+
 /// The optional components this build has (`/api/status` and
 /// `GET /api/firmware` `features`, the boot banner): the Cargo features
 /// a build may leave out (`FW_DISABLE`, docs/notes/firmware-build.md

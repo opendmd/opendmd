@@ -6,9 +6,10 @@ use opendmd_core::www_pack::{self, Pack, PackFile};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The `www` partition in `firmware/partitions.csv`: 0x140000 (the smaller of
-/// the two layouts; the 8 MB table's is 0x200000, and one pack fits both).
-pub const PARTITION_BYTES: usize = 0x14_0000;
+/// The `www` partition in `firmware/partitions.csv`: 0x100000 (table v3; the
+/// smaller of the two layouts: the 8 MB table's is 0x200000, and one pack
+/// fits both).
+pub const PARTITION_BYTES: usize = 0x10_0000;
 
 /// Every regular file under `dir` (dotfiles and directories skipped), as
 /// `(pack path, file)`, sorted.

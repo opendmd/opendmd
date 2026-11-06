@@ -12,16 +12,16 @@
 // app (PUT /api/www, docs/www-pack.md), then the page reloads: its code is
 // the old web app's. The firmware is the release's file for the player's
 // flash layout (`variants.<variant>.firmware`; a release.json from before
-// there were two names only `firmware`, the 4mb one). The official feed is
+// there were two names only `firmware`, the 4mb one; another `layout`: USB). The official feed is
 // asked as release.json?v=<firmware version>&layout=<4mb|8mb>, which the
 // site counts (site/worker/src/counts.ts); a feed of your own is asked as given.
 
 import { app } from './state.js';
 import { h, store, SITE } from './util.js';
-import { older, fwHead, fwVariant, board, sendFw, put, restart } from './firmware.js';
+import { older, fwHead, fwVariant, fwLayout, playerLayout, layoutWhy, board, sendFw, put, restart } from './firmware.js';
 
 export const RELEASE = SITE + 'install/release.json';
-const WWW_MAX = 1310720; // the smaller www partition (4mb): one pack fits both layouts
+const WWW_MAX = 1048576; // the smaller www partition (4mb, table v3): one pack fits both layouts
 const td = new TextDecoder();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bare = (v) => String(v).replace(/^v/i, '');
@@ -73,7 +73,8 @@ export async function check(ui) {
   say('Checking for updates…');
   try {
     // One request at a time to the player.
-    const { version: fwv, variant } = await app.src.json('GET', '/api/firmware');
+    const fwInfo = await app.src.json('GET', '/api/firmware');
+    const { version: fwv, variant } = fwInfo, layout = playerLayout(fwInfo);
     const wv = (await app.src.json('GET', '/api/www')).version;
     // Another feed only for a development build (its version says so: the
     // player's web app, which no link can change).
@@ -84,8 +85,11 @@ export async function check(ui) {
     const from = new URL(u).origin === new URL(RELEASE).origin ? '' : ` (from ${new URL(u).host})`;
     const rel = await get(u, 'The release information');
     if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);
-    const file = fwFile(rel, variant);
-    const v = bare(rel.version), newer = older(fwv, v), fwUp = newer && !!file, ahead = older(v, fwv);
+    const file = fwFile(rel, variant), relLayout = rel?.variants?.[variant]?.layout;
+    const v = bare(rel.version), newer = older(fwv, v), ahead = older(v, fwv);
+    const why = newer && Number.isInteger(relLayout) && layoutWhy(relLayout, layout);
+    if (why) throw new Error(`Firmware ${v} is out. ${why}`);
+    const fwUp = newer && !!file;
     // The web app: any other version is an update, unless the firmware is
     // ahead of the release, or this is a development build of the release or
     // later (then the release would be a step back).
@@ -99,7 +103,7 @@ export async function check(ui) {
       say([fwUp && `Firmware ${v} is out${from} (this player has ${bare(fwv)}).`,
         wwwUp && `Web app ${nice(rel.www_version)} is out${fwUp ? '' : from} (this one is ${nice(wv) || 'unknown'}).`,
         fwUp && 'The panel goes dark for about a minute while it installs.'].filter(Boolean).join(' '));
-      row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && { v, file, variant }, wwwUp); } }, 'Update'));
+      row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && { v, file, variant, layout }, wwwUp); } }, 'Update'));
     }
   } catch (e) { say(e.message, 1); }
   ui.busy(false);
@@ -118,6 +122,8 @@ async function update(ui, rel, u, fw, www) {
     const head = async (b, n) => new Uint8Array(await b.slice(0, n).arrayBuffer());
     const fh = fb && await head(fb, 140);
     if (fb && (fwHead(fh) !== fw.v || (fw.variant && fwVariant(fh) !== fw.variant))) throw new Error('The firmware download is not the release it should be. Nothing was installed');
+    const why = fb && fw.variant && layoutWhy(fwLayout(fh)[1], fw.layout);
+    if (why) throw new Error(`${why}. Nothing was installed`);
     if (wb) {
       const b = await head(wb, 64);
       if (wb.size < 64 || wb.size > WWW_MAX || td.decode(b.subarray(0, 4)) !== 'ODWP' || new DataView(b.buffer).getUint32(8, true) !== wb.size

@@ -1924,6 +1924,12 @@ def install_links(site: Path) -> None:
           "install: the 4mb manifest is published, the 8mb one is not")
     check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and "8mb" in rel_info["variants"],
           "install: every release.json variant's bundle (8mb too) is published")
+    # Each variant names the partition table its bundle is for (the web app
+    # tells a player on another table to reinstall over USB): the bundle's magic.
+    magics = {("4mb", 3): b"ODFW34mb", ("8mb", 2): b"ODFW18mb", ("4mb", 2): b"ODFW1\0\0\0"}
+    lay = {k: (v.get("layout"), (site / "install" / v["firmware"]).read_bytes()[:8]) for k, v in rel_info["variants"].items()}
+    check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] == 3,
+          f"install: release.json's layouts are the bundles' ({ {k: l for k, (l, _) in lay.items()} })")
 
 
 def main() -> int:
