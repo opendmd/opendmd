@@ -32,8 +32,9 @@
 //! The panel: from the accepted header to the restart it shows a still
 //! message ([`crate::show::Updating`]: "Updating", then "Installing" once
 //! staged), the file on screen let go; any failure takes it down and
-//! playback resumes. The updater's copy runs with the panel dark (it has no
-//! panel driver), and the new firmware's first boot says "Updated to v…".
+//! playback resumes. The updater puts the same "Installing" picture back up
+//! for its copy (`docs/ota.md`, "The updater's panel"), and the new
+//! firmware's first boot says "Updated to v…".
 //!
 //! Heap: one [`config::IO_CHUNK`] buffer and one open file, the GIF upload
 //! path's; the SHA-256 state is ~100 B, the header 140 B, on the stream
