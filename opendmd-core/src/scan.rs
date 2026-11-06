@@ -287,7 +287,7 @@ pub const BEAM_LATE_ROOM_US: u32 = 1_500;
 /// [`BEAM_LATE_ROOM_US`] (the early side is waited out, which costs a
 /// frame nothing but CPU it has to spare). A half each, beam-c's
 /// Starfield (rows ~2 ms: a window ~1.7 ms wide, a draw stage before it
-/// that varies) was late 0.17-0.26 % of frames on the spare; simulated
+/// that varies) was late 0.17-0.26 % of frames on a test board; simulated
 /// (`late_side_takes_three_quarters`), 3/4 takes its late starts from
 /// 0.3 % to under 0.06 %. (`LATE_SHARE`: the tests' knob, eighths.)
 fn late_share(room: i64) -> i64 {
@@ -413,7 +413,7 @@ pub fn beam_delay_us(frames: u32, cycle_us: u32, err: i32) -> u32 {
 /// The frames a raced Formula's frame grid holds each picture for: the
 /// most refreshes (1, 2, 4 …) of `cycle_us` that still fit the frame time
 /// it asked for (`grid_us`; its `fps`): 100 fps → every refresh (125 Hz on
-/// the rig), 50 → every 2nd (62.6 Hz), 25 → every 4th (31.3 Hz).
+/// a test panel), 50 → every 2nd (62.6 Hz), 25 → every 4th (31.3 Hz).
 pub fn beam_frames(grid_us: u32, cycle_us: u32) -> u32 {
     let mut n = 1;
     while cycle_us > 0 && 2 * n * cycle_us <= grid_us && n < 64 {
@@ -620,7 +620,7 @@ mod tests {
         pub(super) static LATE_SHARE: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
     }
 
-    /// Starfield-like (beam-c on the spare): a 1.5 ms draw stage ±0.6 ms,
+    /// Starfield-like (beam-c on a test board): a 1.5 ms draw stage ±0.6 ms,
     /// 16 pairs of 50 µs + their writes, a 2.5 ms spike one frame in 40.
     /// Three quarters of the window on the late side: a fifth of the late
     /// frames half of it had (waits instead, harmless); without the spikes

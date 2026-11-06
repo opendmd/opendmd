@@ -63,9 +63,9 @@ pub const BRIGHTNESS: u8 = 96;
 
 /// The default for the `max_brightness` setting, and the ceiling during
 /// [`SAFE_START`]: the highest brightness taken as safe on the reference
-/// rig's power supply. The panels and the ESP32 share one 5 V supply.
+/// test panel's power supply. The panels and the ESP32 share one 5 V supply.
 ///
-/// Measured 2026-09-29 on the rig (DMDPower supply, both panels, the
+/// Measured 2026-09-29 on a test panel (DMDPower supply, both panels, the
 /// all-white GIF as a one-GIF playlist: the worst case), each trial either
 /// 60 s under `make api-load` (3 workers, WiFi transmitting) or a reboot
 /// into white at that level watched to 90 s uptime:
@@ -115,7 +115,7 @@ pub const SD_MAX_FILES: usize = 10;
 /// 26.7 MHz. 40 MHz is the top: the next divider is 80 MHz itself, over the
 /// card's 50 MHz high-speed limit.
 ///
-/// Stepped on the rig (2026-09-28, the carrier's long unshielded wiring,
+/// Stepped on a test panel (2026-09-28, the carrier's long unshielded wiring,
 /// `filelist.txt` playing, Dissolve on; each step: 3 min idle, 90
 /// back-to-back `GET /filelist.txt` in three runs of 30 (the `0x107`
 /// repro), `api-load WORKERS=3` 120 s, 10 `gifs/Consoles` GETs, 10 min idle,
@@ -206,7 +206,7 @@ pub const SD_CLOCK_HEAP: usize = 2048;
 /// "When the card will not mount".
 pub const SD_UNREADABLE: &str = "card not readable: it needs FAT32; format it from the web app";
 /// The format's work buffer: `f_mkfs` writes the FAT in pieces of this
-/// size. Measured on the spare's 64 GB card: 63.6 s with 4 KB, 62.6 s with
+/// size. Measured on a test board's 64 GB card: 63.6 s with 4 KB, 62.6 s with
 /// 16 KB — the card's write time, not the pieces, sets the pace.
 pub const SD_FORMAT_BUF: usize = 4096;
 /// How long a planned restart (`crate::restart`) waits for the log ring to
@@ -261,7 +261,7 @@ pub const TRANSITION: opendmd_core::compositor::Transition =
 /// A transition only starts if the heap keeps at least this much free once
 /// it has taken its 24 KB *and* the new GIF's decoder has taken its first
 /// frame's ~34 KB (the transition begins before that frame is decoded);
-/// otherwise the file cuts in. Measured on the rig (probe build, skipping
+/// otherwise the file cuts in. Measured on a test panel (probe build, skipping
 /// every 3 s): with a GIF playing the lowest free heap during a transition
 /// was ~16 KB, one GIF (`NEW 2021/2a.gif`) left 4.9 KB, and during a
 /// web-smoke run (files served, the cache counted) the LZW allocation of a
@@ -302,7 +302,7 @@ pub const AHEAD_ORIGINAL_BYTES: usize = 11 * 1024;
 /// for the glow's copy ([`GLOW_YIELD_HEAP`]).
 pub const AHEAD_YIELD_HEAP: usize = 20 * 1024;
 /// A step ahead runs between frames only if the next frame is at least this
-/// far off: the step's worst case on the card (rig and spare, probe builds)
+/// far off: the step's worst case on the card (both test boards, probe builds)
 /// plus a margin. The pick (an index read and a manifest line), the copy's
 /// open (the bucket lookup, the open and its magic) and the header (a 2 KB
 /// read and the tables).
@@ -422,13 +422,13 @@ pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 /// here. The deepest path is the firmware signature check
 /// (`ota::verify_signature`, ~6.5 KB of curve25519-dalek frames) on top of
 /// the worker loop's own frame. Measured (heap-map build in the emulator,
-/// rig-scale card, 2026-11-03): 11,032 B used of 12 KB while the loop's
+/// full-size card, 2026-11-03): 11,032 B used of 12 KB while the loop's
 /// frame was 2,768 B (the cache count, the FAT index tick and Follow
 /// inlined into it) — 1,256 B to spare. With those kept out of the loop
 /// (`#[inline(never)]`: its frame is 1,184 B) and the scan's and Follow's
 /// stable sorts (a 4 KB scratch on the stack each) made unstable: 9,448 B
 /// at most over two signature checks, two scans, Follow polling and its
-/// test, a cache count, `/api/wifi/scan` and two rig-scale FAT index
+/// test, a cache count, `/api/wifi/scan` and two full-size FAT index
 /// builds. 11 KB leaves 1,816 B over that.
 pub const NET_WORKER_STACK: usize = 11 * 1024;
 /// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
@@ -459,7 +459,7 @@ pub const HTTP_STACK: usize = 6 * 1024 + 512;
 /// The stack a formula is compiled on (`psi_stack.rs`): Psi's compiler
 /// recurses to `psi::MAX_DEPTH` levels, ~430 B each on the ESP32. At the
 /// old cap of 24 its worst used 11,808 B inside a thread (`psi-probe` on
-/// the spare, 2026-10-26; 9,664 B on 2026-10-25, before the text
+/// a test board, 2026-10-26; 9,664 B on 2026-10-25, before the text
 /// built-ins), more than this stack less its ~800 B of entry frames and
 /// interrupts: a deep enough formula could restart the player. With the
 /// cap at 18, ~9.2 KB (opendmd-psi's `tests/stack.rs` holds the host's
@@ -474,7 +474,7 @@ pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// Formula is refused ("not enough memory for this Formula right now") and
 /// the player goes on. The compiler's big lists grow fallibly besides, so
 /// a misjudged estimate is a refusal too, not an abort (Endless road
-/// aborted the spare at 39 s on 2026-10-29: 9,648 B free, no 4 KB block).
+/// aborted a test board at 39 s on 2026-10-29: 9,648 B free, no 4 KB block).
 #[cfg(feature = "psi-probe")]
 pub const PSI_COMPILE_RESERVE: usize = 6 * 1024;
 /// The largest free block a compile needs: its stack (12 KB) and the
@@ -490,10 +490,10 @@ pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// of 4.5 KB after card-syncs and a trickle abort, whose warn line is the
 /// deepest path), so 6 KB, for ~2 KB spare — until the listings moved here
 /// (2026-10-26): `/api/cache/list`'s bucket walk left **784 B** of 6 KB
-/// (`stream_stack` in `/api/status`, the spare, its populated 11k-copy card,
+/// (`stream_stack` in `/api/status`, a test board, its populated 11k-copy card,
 /// 3 runs; a `gifs/Consoles` listing and `/api/cache/failed` went no
 /// deeper), so 7 KB, for ~1.8 KB spare. Checked again in the emulator
-/// (2026-11-03, rig-scale card: `/api/cache/list`, uploads, a www push,
+/// (2026-11-03, full-size card: `/api/cache/list`, uploads, a www push,
 /// two firmware PUTs): 5,412 B used, 1,756 B left; 6.5 KB would leave
 /// under the 1.5 KB a cut must keep, so it stays.
 pub const STREAM_STACK: usize = 7 * 1024;
@@ -689,7 +689,7 @@ pub const BUILDER_PRIORITY: u8 = 1;
 /// stock card by the host's count (`encodeprobe --heap`: mean 43,181 B, max
 /// 43,648): gifslim at cap 12 as the source decoder (~15 KB), a canvas (12
 /// KB), the previous frame's indices (4 KB), changed bits, the colour table,
-/// the LZW dictionary at cap 9 and the write buffer. The rig agrees: ~66 KB
+/// the LZW dictionary at cap 9 and the write buffer. A test panel agrees: ~66 KB
 /// free with the task up and idle, 20.3-22.9 KB while encoding.
 pub const BUILDER_ENCODER_PEAK: u32 = 43_648;
 /// The same for the card's wider strays (132x32, 135x32): 56,483 B.
@@ -705,7 +705,7 @@ pub const BUILDER_PEAK_MARGIN: u32 = 20 * 1024;
 /// playlist) with this much heap free, the task already running: the
 /// encoder's peak plus [`BUILDER_PEAK_MARGIN`] (64,128 B, 62.6 KB). The
 /// task itself is only started with its stack + 1 KB more than this free
-/// (74,880 B). At night on the rig the builder saw ~66 KB free between
+/// (74,880 B). At night on a test panel the builder saw ~66 KB free between
 /// files with the task up (~78 KB before it started), so both still pass —
 /// with ~2 KB to spare per file: anything that takes 2 KB more for good
 /// stops the night run (`paused: low memory`). Nothing animates at this
@@ -717,7 +717,7 @@ pub const BUILDER_MIN_HEAP_FULL: u32 = BUILDER_ENCODER_PEAK + BUILDER_PEAK_MARGI
 /// player's frames and transitions go on beside it (65,664 B; the task
 /// starts at 76,416 B). A prepared file on screen leaves ~74-79 KB free, so
 /// the drip starts only now and then; with an original on screen (56-79 KB
-/// on the spare with `filelist.txt`, builder-a) the pace stops it anyway
+/// on a test board with `filelist.txt`, builder-a) the pace stops it anyway
 /// (`gif on screen`): when the threshold let it start there, the floor went
 /// to 19.9 KB.
 pub const BUILDER_MIN_HEAP: u32 = BUILDER_MIN_HEAP_FULL + 1536;

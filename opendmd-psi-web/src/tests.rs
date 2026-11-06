@@ -234,7 +234,7 @@ fn built_in_inputs() {
 fn the_examples_are_light_enough_for_the_panel() {
     let all = crate::examples();
     assert!(all.len() >= 33, "{} examples", all.len());
-    // The ten the web app (and so the panel) ships: the owner's (formula-apps
+    // The ten the web app (and so the panel) ships (the formula-apps plan's
     // §3.1, then Endless road and Time gate in for Clock and Corner clock):
     // five overlays, Big clock, four screensavers. The rest are the site
     // gallery's.
@@ -289,7 +289,7 @@ fn the_examples_are_light_enough_for_the_panel() {
             })
             .count();
         // The showcase, Big clock, reads as a commented step a line
-        // (owner, 2026-10-26: legible over short); the rest stay short.
+        // (legible over short); the rest stay short.
         // So do the built-in effects' Formulas (Tunnel, Rotozoom): a native
         // effect's knobs, written out.
         // Time gate is a showcase too: the per-row tables are a line a

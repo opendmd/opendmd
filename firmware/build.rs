@@ -46,7 +46,7 @@ fn main() {
     println!("cargo:rustc-env=OPENDMD_FW_VERSION={version}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FW_VERSION");
 
-    // Dev convenience for the test rig, `dev-credentials` feature only:
+    // Dev convenience for a bench board, `dev-credentials` feature only:
     // `firmware/.env` (gitignored, see `.env.example`) is exported by the
     // Makefile's bench targets, and these become `option_env!` values that seed
     // NVS on a device that has no credentials of its own. Without the feature

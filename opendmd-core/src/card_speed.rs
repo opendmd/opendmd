@@ -4,7 +4,7 @@
 //! **20 MHz is the default for every card; 40 MHz is opt-in.** The SD
 //! specification only promises SPI mode up to the default speed (25 MHz);
 //! 40 MHz works on most cards but not all, and on a marginal card it can
-//! fail *silently*: the spare's 64 GB card (2026-10-25) served 2 of ~25
+//! fail *silently*: a test board's 64 GB card (2026-10-25) served 2 of ~25
 //! downloads at 40 MHz with the right length, a passing CRC and wrong
 //! bytes, besides the errors it did report. At 20 MHz the card still reads
 //! several times faster than playback (a prepared copy is tens of KB a

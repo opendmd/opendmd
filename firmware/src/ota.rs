@@ -112,17 +112,17 @@ fn log_line(line: &str) {
 
 /// How long the upload waits for the network worker to check a signature
 /// (it may be testing Follow RePlayOS, or in a FAT index slice: seconds at
-/// most; a cache count, which was tens of seconds on the rig, stops for it,
+/// most; a cache count, which was tens of seconds on a test panel, stops for it,
 /// see [`verify_waiting`]).
 const VERIFY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A signature check is queued for the network worker. Its long jobs (the
-/// cache count: a bucket walk and manifest passes, ~29 s on the rig's card)
+/// cache count: a bucket walk and manifest passes, ~29 s on a test panel's card)
 /// look at this and give way: they stop, queue themselves again behind the
 /// check and start over once it is done. The check itself is ~50 ms. Before
 /// this, a firmware update sent while the web app's Settings had just asked
 /// for a count waited behind it and got a 503 ("the signature could not be
-/// checked just now") until a retry (the rig, 2026-11-03).
+/// checked just now") until a retry (a test panel, 2026-11-03).
 static VERIFY_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// See [`VERIFY_WAITING`].

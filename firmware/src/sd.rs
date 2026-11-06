@@ -43,7 +43,7 @@ type Card = SdCardDriver<Host>;
 /// (`sdspi_host_remove_device`, `sdspi_host_deinit`, `spi_bus_free`, in the
 /// drivers' drops). A card left mid-transfer by a reset (a crash, a flash, a
 /// reboot while the cache builder was writing) can answer CMD0 with a
-/// timeout for a while — seen on the rig: `ESP_ERR_TIMEOUT` twice, then a
+/// timeout for a while — seen on a test panel: `ESP_ERR_TIMEOUT` twice, then a
 /// mount 10 s later — and a retry must not inherit a bus in whatever state
 /// the failed attempt left it. Attempts after the first also give each
 /// command longer ([`config::SD_RETRY_CMD_TIMEOUT_MS`]).
@@ -318,7 +318,7 @@ pub fn probe() -> io::Result<()> {
 /// only ever holds 0 or the magic and shrink it to a one-byte flag
 /// (GlobalOpt): then any non-zero garbage byte "matches". It did, with
 /// `codegen-units = 1`: after an update from a build whose log ring sat
-/// there, a boot failed ~180 mounts (9 min without the card) on the spare.
+/// there, a boot failed ~180 mounts (9 min without the card) on a test board.
 #[link_section = ".rtc_noinit"]
 static mut SIM_FAIL: [u32; 2] = [0; 2];
 const SIM_MAGIC: u32 = 0x5d_fa_11_ed;

@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-# Pinned to the same versions as ~/projects/stripe-dashboard, which is the
-# owner's proven esp-idf std Rust setup on this exact chip.
+# Pinned to versions already proven together in an esp-idf std Rust project
+# on this exact chip.
 esp-idf-hal = "0.45"
 esp-idf-svc = { version = "0.51", features = ["experimental"] }
 esp-idf-sys = "0.36"
@@ -31,7 +31,7 @@ sram1-iram = ["opendmd-core/sram1-iram"]
 # The emulator's no-card lane (`make emu-nocard`, src/nocard_test.rs): a
 # settings change with no card, kept across a restart. Never in a release.
 nocard-test = []
-# The emulator's rig lane with the spare's heap (`make emu-rig-tight`):
+# The emulator's rig lane with a test board's heap (`make emu-rig-tight`):
 # heap taken and kept at boot until ~45 KB is free while playing (the
 # spare, 2026-11-03: 42-48 KB). Never in a release.
 emu-ballast = []
@@ -53,7 +53,7 @@ emu-census = []
 # - `jit`: the narrow JIT for Formulas (needs `formulas`).
 default = ["formulas", "jit"]
 formulas = ["psi"]
-# Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed
+# Bench WiFi credentials from `firmware/.env`, compiled in as an NVS seed
 # (see `nvs_config.rs`). On for `make fw-build`/`fw-flash`/`fw-clippy`, OFF for
 # `make fw-release`: without it the `option_env!` reads do not exist in the
 # crate, so a release image cannot carry a credential.
@@ -92,7 +92,7 @@ jit = ["formulas", "opendmd-core/psi-jit"]
 bench = []
 # The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
-# lines). `make fw-release FW_RELEASE_FEATURES=psi-probe` for the rig: alone,
+# lines). `make fw-release FW_RELEASE_FEATURES=psi-probe` for a test panel: alone,
 # not with `probe`, whose frame-timing histograms are ~12.5 KB of .bss (the
 # start heap lang-probe-a lacked, 2026-10-28).
 psi-probe = ["psi", "opendmd-core/psi-stats", "opendmd-core/psi-compiler"]

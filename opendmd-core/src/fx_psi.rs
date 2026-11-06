@@ -230,7 +230,7 @@ pub const MAX_EST_US: u32 = 40_000;
 /// at once (the running mean over budget, or one frame longer than its
 /// own slot); speeds up after [`Governor::CALM`] frames under 31/32 of the
 /// faster step's budget. (Renders run ~3% slower while a transition or
-/// heavy traffic shares the flash cache: on the spare a 7.7 ms formula
+/// heavy traffic shares the flash cache: on a test board a 7.7 ms formula
 /// read 7.98 ms through a dissolve; a ¾ margin left one that crossed 8 ms
 /// once at 25 fps for good.)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -274,7 +274,7 @@ impl Governor {
     /// and the every-2nd-refresh hold they bring) always starts again: it
     /// was the old program's against the scan. Kept, a hold one heavy
     /// Formula earned held every Formula played over it to half its frame
-    /// rate for ~4,096 frames (on the spare after Endless road: Scanlines
+    /// rate for ~4,096 frames (on a test board after Endless road: Scanlines
     /// at 1.6 ms a frame on 32 ms frames).
     pub fn retune(&mut self, start: Governor) {
         if start.level > self.level {
@@ -432,7 +432,7 @@ impl Governor {
     /// of its frame's budget, %. Under it, a late frame is a stall from
     /// outside the formula: the loop's work before the tick, the wake, a
     /// flash write on CPU0 (which stops the flash cache on both cores),
-    /// the web app's polls. The spare (psi-perf, 2026-11-02): Starfield at
+    /// the web app's polls. A test board (psi-perf, 2026-11-02): Starfield at
     /// ~3,300 µs of a 6,468 µs budget had 1-2 late frames in ~200 while
     /// being measured over HTTP, ~1 in 1,000 in all (7 in 6,269 raced
     /// frames since boot), and was held to 50 fps for a minute or not by
@@ -1300,7 +1300,7 @@ impl PsiFx {
         // (Not a `rate` formula: on the refresh grid its held slow rows are
         // due 0, 1 or 2 bands a frame before its rows start, which moved
         // the start by milliseconds — Storm front raced went from 20 to
-        // 32 ms frames with 213 misses a minute on the spare, beam-rate-fix.)
+        // 32 ms frames with 213 misses a minute on a test board, beam-rate-fix.)
         self.racing = self.drawn > 0
             && self.prog.rate().is_none()
             && clock().is_some()
@@ -1618,7 +1618,7 @@ fn old() -> bool {
 }
 
 /// A frame whose changes marked this many pixels for the blit (half the
-/// panel) did not pay for its compare: consolea-b on the spare, per frame
+/// panel) did not pay for its compare: consolea-b on a test board, per frame
 /// (render + blit), Endless road −0.65 ms at ~570 px pushed, Starfield,
 /// Glitter, Rotozoom floor −0.47..−0.51 ms at 290-400, Big clock +0.18 ms
 /// at ~2,550 (the compare ~0.18 ms and the marking ~0.1, against ~0.23 µs
@@ -1700,7 +1700,7 @@ pub fn mark_pair(dirty: &mut crate::canvas::DirtyMap, p: usize, a: u32, b: u32) 
 /// GIF changes (a governor can only slow its own animation), next to the
 /// GIF's decoding (p90 ~4 ms) and the blit. 8 ms until any-look
 /// (2026-10-26), on an estimate that read full-panel looks ~1.5× low; with
-/// the estimate calibrated on the device, 12 ms: on the spare, looks of
+/// the estimate calibrated on the device, 12 ms: on a test board, looks of
 /// 8.6 and 12.3 ms measured left the GIFs at 0 steady misses (the animated
 /// one at 25 fps: over 8 ms its governor holds 40 ms frames).
 pub const LOOK_MAX_EST_US: u32 = 12_000;
@@ -2546,7 +2546,7 @@ mod jit {
             // (Its slow rows are already brought up to date: `render`.)
             let under = self.held.as_deref().filter(|_| rate).map(|h| h.picture());
             // (False when the inputs were out of range and the VM drew it:
-            // a trial frame counted as the VM's — Fable's review.)
+            // a trial frame counted as the VM's.)
             if let Some(sink) = beam {
                 // (Racing the beam: never a `rate` formula's frame.)
                 return k.render_beam(
@@ -2840,7 +2840,7 @@ mod tests {
     /// A formula well under its budget keeps every refresh through late
     /// frames that come from outside it (a stall: a flash write on CPU0,
     /// the loop's work before the tick), however they bunch; one near its
-    /// budget is still held by two in a window. The spare's numbers:
+    /// budget is still held by two in a window. A test board's numbers:
     /// Starfield ~3,300 µs of a 6,468 µs budget; a formula at 5,500.
     #[test]
     fn only_a_formula_near_its_budget_is_held_for_late_frames() {
@@ -2848,7 +2848,7 @@ mod tests {
         let mut light = Governor::new(3_300, 10);
         for k in 0..20 * Governor::LATE_WINDOW as u32 {
             // Two late in a row every 300 frames: 0.7 %, seven times the
-            // spare's rate under its measurement's HTTP.
+            // test board's rate under its measurement's HTTP.
             assert!(!light.note_late(k % 300 < 2, BUDGET), "frame {k}");
         }
         assert_eq!(light.beam_frames(1), 1, "light: every refresh");
@@ -3020,7 +3020,7 @@ mod tests {
     /// Starfield (100 fps) plays every refresh whether it opens fresh or is
     /// played over Glitter or Old photo (a retune), even when its first
     /// raced frames run late from cold caches. (They counted: two of them
-    /// held it to every 2nd refresh for a minute — the spare after a reboot
+    /// held it to every 2nd refresh for a minute — a test board after a reboot
     /// and over Glitter, not over Old photo.)
     /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`: the
     /// hooks are the process's.)
@@ -3066,7 +3066,7 @@ mod tests {
     /// A `rate` formula with the beam's hooks armed is not raced: its
     /// frames go up whole through the blit on its own grid (Storm front's
     /// 20 ms), as without the hooks. (Raced, beam-on held it to 16 or 32
-    /// ms frames on the refresh grid and its starts slipped: the spare's
+    /// ms frames on the refresh grid and its starts slipped: a test board's
     /// 213 misses a minute.)
     /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`, with
     /// its clock and hooks: they are the process's, so one test.)
@@ -3428,7 +3428,7 @@ mod tests {
         assert_eq!((g.avg_us(), g.delay_ms(20)), (7_000, 20));
         g.edited();
         assert!(g.observe(25_000, 20), "a whole slot counts even then");
-        // The spare's Matrix: 7.7 ms, pushed over 8 ms through a transition,
+        // A test board's Matrix: 7.7 ms, pushed over 8 ms through a transition,
         // back at 50 fps once it settles.
         let mut g = Governor::new(7_700, 20);
         for _ in 0..40 {

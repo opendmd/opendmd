@@ -70,7 +70,7 @@ const SEND_TIMEOUT_S: u16 = 5;
 /// side" in `sdkconfig.defaults`), which is what starves the body being
 /// waited for in the first place. It was 10 s, retried three times in a row
 /// for a body, then 10 s more for httpd's purge: one live edit stalled under
-/// simultaneous uploads held every client for up to 40 s (the spare: six of
+/// simultaneous uploads held every client for up to 40 s (a test board: six of
 /// 190 `POST /api/play/formula` timed out at 20 s; net-stall, 2026-11-05).
 /// The bodies read here are ≤ 16 KB and arrive in milliseconds on a working
 /// link; one that stops for this long is answered `503` + `Retry-After` and

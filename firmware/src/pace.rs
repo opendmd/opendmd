@@ -1,4 +1,4 @@
-//! Adaptive upload pacing (the owner's rule: non-display work must never
+//! Adaptive upload pacing (the rule: non-display work must never
 //! cost the display a frame; a slowdown inside its headroom is fine). While
 //! a Formula plays close to its frame budget — the governor's mean render
 //! over 60 % of the frame time it holds the Formula to, until it falls

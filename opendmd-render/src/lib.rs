@@ -8,7 +8,7 @@
 //! # Where the numbers come from
 //!
 //! The panel is two chained P4 HUB75 modules (128x32, 4 mm pitch,
-//! SMD2121-class RGB LEDs). The owner photographed it close up —
+//! SMD2121-class RGB LEDs). It was photographed close up —
 //! `hardware/IMG_0495.jpeg`, 3928x2799 — and measured, in units of the LED
 //! pitch:
 //!
@@ -188,7 +188,7 @@ pub struct LedRenderer {
 impl LedRenderer {
     /// `scale` is window pixels per LED; `gamma` decodes canvas bytes to
     /// linear light (2.2 is the usual sRGB-ish approximation) and `gain`
-    /// scales the result so the owner can match the panel's real brightness.
+    /// scales the result to match the panel's real brightness.
     /// `bloom` is the halo strength (see [`BLOOM_STRENGTH`] for the default).
     pub fn new(scale: usize, gamma: f32, gain: f32, bloom_strength: f32) -> Self {
         assert!(scale > 0, "scale must be positive");

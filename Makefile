@@ -82,7 +82,7 @@ ESPUP_ENV := $$HOME/.espup-env.sh
 FW_DIAG = $(findstring diag-heap,$(FW_FEATURES))
 FW_SDKCONFIG = $(CURDIR)/$(FW)/sdkconfig.defaults;$(CURDIR)/$(FW)/target/sdkconfig.partitions$(if $(FW_DIAG),;$(CURDIR)/$(FW)/sdkconfig.diag)
 
-# Optional bench-rig credentials. `firmware/.env` is gitignored (template in
+# Optional bench WiFi credentials. `firmware/.env` is gitignored (template in
 # firmware/.env.example); when it exists, OPENDMD_WIFI_SSID/PASS are exported
 # into the build and seed NVS on a device that has none. Never committed, never
 # logged. `set -a` exports every assignment the file makes.
@@ -337,7 +337,7 @@ web-serve:
 	uv run python -m http.server 8080 -d $(WEB_DIST)
 
 # A fake device (JSON API + card files + the built app) for working on the UI
-# without the rig: make web-mock ROOT=<card copy>, then open
+# without a device: make web-mock ROOT=<card copy>, then open
 # http://localhost:8080. OVERLAY=dir keeps the card copy untouched (writes go
 # there); PROXY=http://<device> serves the local build against a real device.
 ROOT ?= $(CARD_ROOT)
@@ -481,7 +481,7 @@ site-deploy-built: site-worker-deps
 # The public gallery repo's own files (tools/gallery-repo-publish.sh): the
 # gallery check and its vendored checker, the READMEs, and dev/api/ (this
 # release's frozen API page, from $(SITE), added to the archive). release.yml
-# runs it for a tag; by hand only with the owner.
+# runs it for a tag; by hand only by the maintainer.
 gallery-repo-publish: site
 	tools/gallery-repo-publish.sh $(SITE) $(GALLERY_REPO)
 
@@ -616,11 +616,10 @@ FW_FLASH_FREQ ?= 80
 # (bootloader.ld), below the region, and its load-address check takes SRAM1's
 # IRAM alias as IRAM (SOC_IRAM_HIGH 0x400AA000): the bootloader OpenDMD's
 # installs write (v5.3, the same code with or without the option) boots it,
-# so it can go by OTA; a pre-5.1 bootloader would refuse the image
-# (psi-rebuild-worklog.md, 2026-11-02, SRAM1 as IRAM).
+# so it can go by OTA; a pre-5.1 bootloader would refuse the image.
 FW_SRAM1_IRAM ?= 0
 # lwIP copies each received frame out of the WiFi driver's buffer
-# (FW_L2_COPY=1: CONFIG_LWIP_L2_TO_L3_COPY, off by default; a spare-test
+# (FW_L2_COPY=1: CONFIG_LWIP_L2_TO_L3_COPY, off by default; a test
 # switch, net-stall): the driver's eight receive buffers are then free again
 # at once, and what lwIP holds is heap of the frames' size instead, bounded
 # only by the windows (5760 B a connection with data unread). See "The
@@ -630,7 +629,7 @@ FW_L2_COPY ?= 0
 # task table (uxTaskGetSystemState).
 # psi-probe builds only: the main task's stack 2 KB over the release's 16 KB
 # (sdkconfig.defaults). The probe's checks run on the main task on top of
-# the frame loop's own depth, and left 268 B of the 16 KB (c4b8e10); a
+# the frame loop's own depth, and left 268 B of the 16 KB; a
 # release build never runs them. (From the heap: the probe's heap figures
 # are 2 KB under a release build's.)
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
@@ -793,8 +792,8 @@ FW_RELEASE_SDKCONFIG_STAMP := $(FW_RELEASE_VTARGET)/sdkconfig.release.stamp
 FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
 # Measurement builds only, never a public release: the release set built
 # with these cargo features (e.g. FW_RELEASE_FEATURES=probe,psi-probe
-# DIST=/somewhere/else), signed like any other so it can go to the rig over
-# the LAN. Empty (the release feature set: none) by default.
+# DIST=/somewhere/else), signed like any other so it can go to a test panel
+# over the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
 FW_COMMA := ,
 FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram) $(if $(FW_DISABLE),$(FW_ENABLED))))

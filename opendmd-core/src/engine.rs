@@ -191,8 +191,8 @@ fn note_fallback(playing: &mut Playing) {
 /// transition's gate already allowed for a gifslim file (nothing). So the
 /// transition is finished first (the old picture stays up until the
 /// crate's frame lands: a cut, for the few files this concerns) and the
-/// fallback then asks the same gate for the crate's bytes. Found on the
-/// rig: `NES_Excitebike_02` (Previous disposal at frame 0) falling back
+/// fallback then asks the same gate for the crate's bytes. Found on a
+/// test panel: `NES_Excitebike_02` (Previous disposal at frame 0) falling back
 /// under a Dissolve took the heap to 1,124 B.
 fn decode_frame(
     playing: &mut Playing,
@@ -503,11 +503,11 @@ pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
 /// when it was due. The firmware's sleep comes in whole 1 ms scheduler ticks
 /// counted from wherever in the current one it began, so the wake for a
 /// frame lands a few µs before it about once in 40 frames (the probe's
-/// `early wakes`: 383 in 15,775 frames on the spare, 1-62 µs early). Judged
+/// `early wakes`: 383 in 15,775 frames on a test board, 1-62 µs early). Judged
 /// not due, that wake cost the frame the loop's 5 ms idle sleep, uncounted,
 /// or, with a transition running, ran the step the frame was meant to carry
 /// on its own and put the frame behind its work: counted as late, 0-1 ms
-/// (the rig's "transition" and "blit" misses; 54 of 55 misses on the spare
+/// (a test panel's "transition" and "blit" misses; 54 of 55 misses on a test board
 /// with skips every 2.5 s, none after).
 pub const WAKE_SLACK: Duration = Duration::from_millis(1);
 
@@ -1506,7 +1506,7 @@ impl Engine {
                     // A file's next frame is timed from this tick. A live
                     // effect (10 ms frames) keeps its own schedule when the
                     // tick came within half a frame of it: timed from the
-                    // tick, the sleep's rounding (~0.9 ms a frame on the rig)
+                    // tick, the sleep's rounding (~0.9 ms a frame on a test panel)
                     // played 100 fps effects at 0.91x.
                     // A tick inside `WAKE_SLACK` before the frame times
                     // the next one from when this one was due.

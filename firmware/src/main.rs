@@ -1775,7 +1775,7 @@ fn main() -> Result<()> {
                 // ours, so through FatFs (`fatidx::open_catalog_file`):
                 // every next-file lookup would wait for the volume lock,
                 // which a save holds for up to a second on a slow card
-                // (the spare, 2026-11-03: a 949 ms catalog lookup at a
+                // (a test board, 2026-11-03: a 949 ms catalog lookup at a
                 // switch). Opened again now, read raw (the `.idx` it built
                 // or checked is reused: a few ms).
                 // Only a playlist with its `.idx` on the card (loaded or
@@ -2011,7 +2011,7 @@ fn main() -> Result<()> {
                 // Not while a transition runs: the look's own frames ride
                 // on its steps then, and the step's compositing counted as
                 // decoding held the look at half its rate for a few
-                // seconds after most dissolves (the rig: 20% of the time
+                // seconds after most dissolves (a test panel: 20% of the time
                 // at 40 ms frames, against 7% when they were drawn between
                 // the steps, timed alone).
                 let look_start = uclock::now_us();
@@ -2839,7 +2839,7 @@ fn retune(_: Option<&mut Engine>, _: &str, _: Duration, _: Option<overrides::Ove
 
 /// Before a Formula sent with `/api/play` compiles: a transition still
 /// running holds its 24 KB through the compile, which a heavy Formula
-/// can't share (the rig, 664d0ed: Neon city sent within 400 ms of a skip,
+/// can't share (a test panel: Neon city sent within 400 ms of a skip,
 /// 48 KB free against the 59.6 KB its check asks). It ends now, the file
 /// underneath on display (`canvas`, its dirty map what the panel is owed);
 /// the Formula gets a transition of its own at its first frame.

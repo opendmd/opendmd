@@ -706,7 +706,7 @@ impl<R: Read + io::Seek> FrameSource<R> {
 /// the reasons a file falls back, the 12 KB RGB snapshot that disposal
 /// keeps. What a fallback asks its [`Gate`](crate::compositor::Gate) for,
 /// after gifslim's tables are gone. (42 KB, without the snapshot, let
-/// `NES_Excitebike_02` take the rig's heap to 1,124 B on 2026-09-24.)
+/// `NES_Excitebike_02` take a test panel's heap to 1,124 B on 2026-09-24.)
 pub const GIF_CRATE_BYTES: usize = 54 * 1024;
 
 /// Whether a [`FrameSource::try_frame`] error is gifslim giving the file up

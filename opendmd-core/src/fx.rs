@@ -33,7 +33,7 @@ static FLOOR_MS: AtomicU8 = AtomicU8::new(0);
 /// previews and the simulator set 20 while the phosphor glow is on
 /// (`look::GlowLevel` not `Off`) and 0 otherwise: the glow's blit (~5 ms
 /// with a full-screen effect under it) plus a 100 fps effect's render does
-/// not fit a 10 ms frame (rig: +717 misses in 120 s, every one under 5 ms
+/// not fit a 10 ms frame (test panel: +717 misses in 120 s, every one under 5 ms
 /// late), while at 50 fps it costs none. The effect's loop keeps its
 /// length (a change mid-loop moves it once to the matching phase).
 pub fn set_frame_floor(ms: u8) {

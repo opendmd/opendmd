@@ -6,7 +6,7 @@
 //! back over WiFi) whatever a step does.
 //!
 //! **Crash-safe** (2026-10-26, after a probe build that never came up on
-//! the rig: it ran before WiFi, so nothing could reach it): every line is
+//! a test panel: it ran before WiFi, so nothing could reach it): every line is
 //! appended to [`REPORT_NAME`] on the card as it is said, the first line
 //! written before any measurement; a report there without its `done` line
 //! is a probe that did not finish (a panic, an overflow, out of memory),
@@ -1704,7 +1704,7 @@ const ROAD_OPEN_NEED: usize = 18 * 1024;
 /// A formula sent over a formula, as `/api/play` sends it (`Engine::retune`
 /// through the real engine and `SdSource`, the compiled Formula loaded):
 /// Time gate on screen, the heap made short so that Endless road fits only
-/// once Time gate is let go (the owner's panel, 558416c: refused until a
+/// once Time gate is let go (seen on a test panel: refused until a
 /// GIF or a lighter formula had played). Then a heap short even without
 /// Time gate, when that can be made: refused, nothing on screen, the
 /// playlist's GIF next. First, Time gate and a GIF in turn, the heap after
@@ -1858,15 +1858,15 @@ fn swap(root: &str, canvas: &mut Canvas) {
     );
 }
 
-/// A card Formula sent over a card Formula, as the rig did it (owner,
-/// build 664d0ed): Neon city playing from `/formulas/neon-city.psi`, the
+/// A card Formula sent over a card Formula, as seen on a test panel: Neon
+/// city playing from `/formulas/neon-city.psi`, the
 /// file written anew (`PUT /api/files/…`), then `POST /api/play` of the
 /// same path; the same within 200 ms of a skip (what the `PUT` did until
 /// swap-mem2: the GIF's transition held its 24 KB through the compile,
 /// refused at 48 KB free); and Wormhole run and Neon city over each other. Each play goes the way the
 /// main loop sends it (`Engine::retune`, else `play_now_with`), with the
-/// heap made like the rig's (free with a GIF on screen as the owner saw
-/// it). `make emu-probe` requires the summary line.
+/// heap made like the test panel's (free with a GIF on screen, as measured
+/// there). `make emu-probe` requires the summary line.
 #[inline(never)]
 fn swap_card(root: &str, canvas: &mut Canvas) {
     use opendmd_core::{DwellPolicy, Engine, FileCatalog, Filter, Mode, Scheduler};
@@ -1874,7 +1874,7 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     const WORM: &str = "/formulas/wormhole-run.psi";
     const NEON_SRC: &str = include_str!("../../opendmd-web/formulas/neon-city.psi");
     const WORM_SRC: &str = include_str!("../../opendmd-web/formulas/wormhole-run.psi");
-    // The owner's panel with a GIF on screen (build 664d0ed).
+    // A test panel with a GIF on screen.
     const RIG_FREE_WITH_GIF: u32 = 95_060;
     // A card Formula is its `.psi` and the compiled `.psb` beside it (the
     // player plays the `.psb`; the web app writes both, as here).
@@ -1930,8 +1930,8 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     };
     let on = |e: &Engine, p: &str| e.now_playing().is_some_and(|n| n.path == p);
     let blk = crate::state::largest_free_block;
-    // The rig's heap: a GIF on screen, then ballast in 4 KB pieces down to
-    // what the owner saw.
+    // The test panel's heap: a GIF on screen, then ballast in 4 KB pieces down
+    // to what it had free.
     let now = run(&mut e, canvas, 0);
     let _ = e.play_now(&gif, now);
     run(&mut e, canvas, 800);
@@ -1945,7 +1945,7 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
         v.resize(4096 - 16, 1u8);
         ballast.push(v);
     }
-    say!(info, "psi-probe: card formula over card formula: a GIF on screen, {} B free (largest {} B; the rig {RIG_FREE_WITH_GIF})", heap(), blk());
+    say!(info, "psi-probe: card formula over card formula: a GIF on screen, {} B free (largest {} B; a test panel {RIG_FREE_WITH_GIF})", heap(), blk());
     let mut rows: Vec<String> = Vec::new();
     let mut step = |e: &mut Engine, canvas: &mut Canvas, what: &str, path: &str, skip_first: bool| {
         let now = run(e, canvas, 0);
@@ -2382,7 +2382,7 @@ pub fn run(root: &str) {
     swap(root, &mut canvas);
     // A card Formula over a card Formula: Neon city's check asks 59.6 KB
     // with nothing else on screen, so without the probe's 12 KB frame
-    // buffer (the rig has 95 KB free with a GIF on screen; here 73 KB with
+    // buffer (a test panel has 95 KB free with a GIF on screen; here 73 KB with
     // that buffer held). Taken again after, in the same place as a rule.
     drop(out);
     swap_card(root, &mut canvas);
@@ -2484,7 +2484,7 @@ pub fn run(root: &str) {
         start.elapsed().as_millis()
     );
     // (No `play::start` here: the play lines are timing on the panel, started
-    // by the `*_ONLY` modes -- `ROAD_ONLY`, `JIT2_ONLY` -- for the rig.)
+    // by the `*_ONLY` modes -- `ROAD_ONLY`, `JIT2_ONLY` -- for a test panel.)
     *REPORT.lock().unwrap() = None;
     let _ = root;
 }

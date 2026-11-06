@@ -12,7 +12,7 @@
 //! checks before saving) runs here, on a FreeRTOS task with
 //! [`config::PSI_COMPILE_STACK`] (12 KB) of stack taken from the heap for
 //! the compile only: the worst case leaves 1,820 B of it never touched on
-//! the rig (the thread's entry frames, ~0.8 KB with interrupt frames, come
+//! a test panel (the thread's entry frames, ~0.8 KB with interrupt frames, come
 //! on top of the compiler's 9,664 B). The caller waits (a compile is 0.1–10 ms; `psi-probe`
 //! reports the worst cases' times and the thread's real headroom).
 //!

@@ -798,7 +798,7 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
         // 4. Not while the `/api/cache` count runs (on the network worker,
         //    which this very loop asks for at its first file). The count
         //    sizes its key slice (up to 12 KB) to the heap free when it
-        //    starts, so an encoder starting beside it took the rig's heap to
+        //    starts, so an encoder starting beside it took a test panel's heap to
         //    5,284 B (largest block 3 KB: the night floors of ~6 KB); and
         //    reading the manifest flat out at the worker's priority it holds
         //    the FAT lock so much that this task's reads waited out FATFS's
@@ -989,7 +989,7 @@ fn next_candidate(w: &mut Walk) -> Result<Option<(u64, u64, String, String)>, St
             Ok(n) => n as u64,
             Err(e) => {
                 // Not the end of the playlist: a card read that failed (seen
-                // on the rig: ETIMEDOUT). Taking it for the end finished the
+                // on a test panel: ETIMEDOUT). Taking it for the end finished the
                 // pass as "done" with thousands of files left; instead the
                 // line is read again after a back-off.
                 log::warn!(

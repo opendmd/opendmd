@@ -158,7 +158,7 @@ impl Sync {
 /// delay, when that is shorter) changes nothing but the rate: request-latency
 /// noise is well under it with the fastest-sample offset, and a shift this
 /// small is below one 60 Hz refresh, so correcting it could only add jitter.
-/// A whole frame's delay was tried first: on the rig it let the error run up
+/// A whole frame's delay was tried first: on a test panel it let the error run up
 /// to a frame before correcting (median 58 ms against 27 ms without it).
 pub const DEADBAND_MS: f64 = 20.0;
 

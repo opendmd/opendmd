@@ -17,7 +17,7 @@ use std::io;
 /// its name (heap-map census, 2026-11-03: 62-66 new blocks for 20 short
 /// tasks). Tasks started again and again (the read-ahead once a GIF, the
 /// cache builder, the settings saver, the card-speed probe) filled the heap
-/// with small blocks: the spare's floor went 37.5 -> 13.2 KB in ~4 min of
+/// with small blocks: a test board's floor went 37.5 -> 13.2 KB in ~4 min of
 /// the emulator. A FreeRTOS task that deletes itself has none of that: its
 /// control block and stack are freed by the idle task. (What runs in it
 /// must not ask for `std::thread::current()` or park: none of these tasks

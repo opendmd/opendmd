@@ -68,7 +68,7 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
 # full segment and a partial one per 2 KB read), which left the rest of the
 # network one buffer or none. A new connection's SYN, a status request, the
 # ACKs of a reply in flight, and a refused upload's first frames all met a
-# driver dropping everything (the spare under simultaneous uploads: 13 of
+# driver dropping everything (a test board under simultaneous uploads: 13 of
 # 214 status polls took 1 or 2 s to connect, one reply stalled 10 s, two
 # uploads starved into a reset; net-stall, 2026-11-05). Eight leaves two or
 # more besides; the two extra cost up to ~3.3 KB of heap, only while held.
@@ -108,7 +108,7 @@ CONFIG_LWIP_IPV6=n
 # buffers (then), so the ACK of their FIN could never come in; each FIN
 # retransmission doubled the RTO, and with it the expiry, which the time
 # since the last frame never caught up with: nothing received again (the
-# spare's wedge: no HTTP, ping or ARP, for good). With a factor of 1 it
+# test board's wedge: no HTTP, ping or ARP, for good). With a factor of 1 it
 # always does: between two retransmissions the silence grows past the RTO
 # (tcp_slowtmr backs the RTO off first, then compares), so any held
 # segments go within about one RTO, socket or not (1.5 s at the first), and
@@ -123,7 +123,7 @@ CONFIG_LWIP_IPV6=n
 #
 # The windows: 5760 (four MSS) both ways, what every build so far really
 # had. The 1440 asked for here before is under Kconfig's minimum (2440), so
-# the build silently took the default (the spare's boot log: `tcp rx win:
+# the build silently took the default (a test board's boot log: `tcp rx win:
 # 5760`), and all the throughput and heap figures in these notes were
 # measured at 5760. A 2880 receive window was tried with the fix: uploads
 # went ~3.5x slower in the emulator (300 KB in 52 s against 15 s) and the
@@ -137,7 +137,7 @@ CONFIG_LWIP_TCP_OOSEQ_TIMEOUT=1
 # 1500 ms. A connection's segments sent before any RTT sample (its reply,
 # every time: a status read or a 503 is one exchange) go again after 1, 3
 # and 7 s here, against 1.5, 4.5 and 10.5 s (lwIP doubles from the start
-# value). The spare under five 300 KB uploads at once (net-wedge2): every
+# value). A test board under five 300 KB uploads at once (net-wedge2): every
 # refusal and the winning upload's reply came 10.5-11 s late, the third send
 # of the reply, and a status read gave up at 5 s, while the heap stood at 8
 # KB and the WiFi driver, which allocates its frame buffers from it, could
@@ -213,7 +213,7 @@ CONFIG_FREERTOS_TIMER_TASK_AFFINITY_CPU0=y
 # The display's wake (src/wake.rs) is an esp_timer dispatched from its ISR,
 # not from the esp_timer task: the task runs on CPU0 at priority 22, behind
 # the Wi-Fi task and anything else busy there, and a busy CPU0 woke the
-# display late (the spare under /api/status polls: 484 late starts in 4,956
+# display late (a test board under /api/status polls: 484 late starts in 4,956
 # raced frames, 2026-11-02). The ISR gives the display's semaphore.
 CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD=y
 
@@ -236,7 +236,7 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 # 921600 baud (IDF default 115200). With the log ring (src/logring.rs) the
 # baud no longer costs the display anything; this is the wire's speed only,
 # and every serial tool must match it (tools/serial-capture.py, fw-monitor).
-# Byte-clean on the rig: 0 malformed lines in 60 min of play (CLAUDE.md,
+# Byte-clean on a test panel: 0 malformed lines in 60 min of play (CLAUDE.md,
 # "Gotchas").
 # The baud is only settable on a "custom" UART console: UART0 on GPIO1/3,
 # the same port and pins as the default one.
@@ -258,7 +258,7 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
 # above the flash's 2.7 V minimum, so a sag that would corrupt flash reads
 # trips the detector first and ends in a clean `brownout` reset, which safe
 # start (main.rs `SafeStart`) then recovers from. Still ~0.45 V below the
-# 3.3 V rail, and checked on the rig for spurious resets (normal play at
+# 3.3 V rail, and checked on a test panel for spurious resets (normal play at
 # brightness 40, reboots). On this IDF the ESP32's detector works through
 # its interrupt (ESP_SYSTEM_BROWNOUT_INTR, selected by ESP32_REV_MIN_0 and
 # SPI_FLASH_BROWNOUT_RESET): the ISR stalls the other core, resets the flash

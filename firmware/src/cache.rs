@@ -266,7 +266,7 @@ pub fn run_count() {
         // while a count is pending (it waits for `counting`), but one it
         // began before this was asked for is still being encoded: the key
         // slice would be sized to the ~20 KB free beside the encoder (256
-        // keys: 37 manifest passes, 115 s on the rig instead of 4 passes,
+        // keys: 37 manifest passes, 115 s on a test panel instead of 4 passes,
         // 29 s), and the encoder's reads would compete with the count's.
         // It is seconds (a file is 0.2-6 s at full speed); bounded all the
         // same.
@@ -446,7 +446,7 @@ fn walk_bucket(
 /// Not with `ErrorKind::Interrupted`: `BufRead::read_line` *retries*
 /// Interrupted reads, so a superseded pass used to spin on CPU0 forever —
 /// allocating an error per turn, starving the idle task (task watchdog) and,
-/// with it, the httpd and WiFi (found on the rig when a config change landed
+/// with it, the httpd and WiFi (found on a test panel when a config change landed
 /// mid-count).
 ///
 /// Also where the manifest pass is paced: a sleep every
