@@ -223,17 +223,6 @@ fn short_of_memory(_: &str) -> bool {
 
 /// `/api/play`'s and Previous's answer to a [`PlayError`], or to no answer
 /// yet: `503` if the main task did not take it, `202` if it is under way.
-/// A Formula refused for want of heap (its program or its canvas), not for
-/// what it says.
-#[cfg(feature = "psi")]
-fn short_of_memory(e: &str) -> bool {
-    e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS
-}
-#[cfg(not(feature = "psi"))]
-fn short_of_memory(_: &str) -> bool {
-    false
-}
-
 #[optimize(size)]
 fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &str) -> Result<()> {
     match r {
