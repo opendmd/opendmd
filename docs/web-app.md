@@ -50,7 +50,8 @@ button lands on them.
 
 - **Now** — what the panel is playing: the title, then its platform,
   category and flags, then where it is in the playlist ("14 of 10,162"),
-  each on a line of its own; polled every 500 ms while the view is up. The
+  each on a line of its own; pushed by the panel while the view is up
+  (`GET /api/events`; firmware without it is polled every 500 ms). The
   remote control is **Skip** (first, the primary), **Pause**, **Previous**
   and **Replay**, a grid of four on a phone, and a brightness slider. A
   **panel-look preview** of the same file plays alongside, kept in step with

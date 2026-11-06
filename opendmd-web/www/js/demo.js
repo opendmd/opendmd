@@ -356,12 +356,13 @@ export async function simulate(src) {
   count().then((n) => { entries = n; }, () => {});
   const mo = new MutationObserver(() => lines(document.getElementById('view-settings')));
   mo.observe(document.getElementById('view-settings'), { childList: true, subtree: true });
-  const tick = setInterval(apply, 20000);
+  // The schedule's clock moves on: applied again every 20 s (the app's scheduler).
+  app.watch('demo', 20000, async () => apply());
   // "Use your own card…": the folder is local mode, with no player; this one stops.
   on('source', (s) => {
     if (s === src || !live) return;
     live = false;
-    clearInterval(tick);
+    app.unwatch('demo');
     mo.disconnect();
     sim?.preview.p.setOver(undefined);
     sim = null;

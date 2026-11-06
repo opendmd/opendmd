@@ -69,6 +69,7 @@ export const auth = (hd) => { const k = store.get('apiKey'); return k ? { ...hd,
 export async function dfetch(url, init = {}, ms = 90000) {
   for (;;) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+    init.signal?.addEventListener('abort', () => ctl.abort());
     let r;
     try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } finally { clearTimeout(t); }
     if (r.status !== 401 || !await askKey()) return r;
@@ -100,6 +101,23 @@ export class DeviceSource {
   status(recent) { return this.json('GET', '/api/status' + (recent ? '?recent=1' : ''), undefined, 8000); }
   // The Now poll's slim read: the clock and what is on screen (~300 B).
   now() { return this.json('GET', '/api/status?now=1', undefined, 8000); }
+  // GET /api/events: what Now shows, pushed on change and every 3 s
+  // (Server-Sent Events, read with fetch: the API key goes as a header).
+  // `on(ev, at)` per event, `at` when it came (performance.now()); settles
+  // when the stream ends: a refusal is an HttpError (404: firmware without
+  // it; 503 + Retry-After: two listen already), `signal` aborts it.
+  async events(on, signal) {
+    const rd = (await check(await dfetch('/api/events', { signal }, 10000))).body.pipeThrough(new TextDecoderStream()).getReader();
+    for (let buf = '', i; ;) {
+      const { value, done } = await rd.read();
+      if (done) return;
+      const at = performance.now();
+      for (buf += value; (i = buf.indexOf('\n\n')) >= 0; buf = buf.slice(i + 2)) {
+        const d = buf.slice(0, i).split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5)).join('\n');
+        if (d) on(JSON.parse(d), at);
+      }
+    }
+  }
   config() { return sent(() => this.json('GET', '/api/config'), 1); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
   // device, which takes seconds: a long request (202 + X-Job, above), up to
