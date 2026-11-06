@@ -421,7 +421,7 @@ site: web sim-build gallery-tool
 	uv run tools/site-art.py target/site-art
 	@test -z "$(BETA_DIST)" || test -f $(BETA_DIST)/manifest-4mb.json || { echo "no $(BETA_DIST)/manifest-4mb.json (BETA_DIST)"; exit 2; }
 	uv run tools/site.py $(SITE) --www $(WEB_DIST) --card target/demo-card --art target/site-art --dist $(DIST) $(if $(BETA_DIST),--beta-dist $(BETA_DIST)) \
-		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
+		--gallery-tool $(GALLERY_TOOL) $(if $(filter 0,$(WEB_MINIFY)),,--webmin $(WEBMIN)/target/release/opendmd-webmin) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
 		--api-freeze $(API_FREEZE)
 
 # The site's pages in Chromium (the formula page, the gallery, the API pages and
