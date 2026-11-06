@@ -947,13 +947,17 @@ staged on the card (one is needed), checked and installed (`docs/ota.md`);
 
 ### GET /api/firmware
 
-`{"version","build","variant","layout","features","flash_size","flash","pending","last","log"}` (`features`, `layout` as in `/api/status`): the
+`{"version","build","variant","layout","features","flash_size","flash","updater","pending","last","log"}` (`features`, `layout` as in `/api/status`): the
 running version (a bundle's, and `/api/status`'s; `build` its image
 descriptor, `"<version> <variant>"`), the flash layout it is built for
 (`variant`: `4mb`) and the flash chip's real size in bytes
 (`flash_size`; a board with more flash reports its own size), the clock and
 read mode the flash runs at (`flash`: `{"mhz": 40|80, "mode": "dio"|…}`,
-read back from the chip), a staged
+read back from the chip), the updater in flash (`updater`:
+`{"version": "updater 2", "panel": true}`, its app descriptor's version, or
+`null` if it cannot be read; `panel`: it shows "Installing" on the panel
+while it installs, which only an updater from a USB install of 1.0.0 or
+later does, since an update over WiFi never replaces the updater), a staged
 update not yet installed (or null), the last
 line of the card's `/update/log.txt` and its last ≤ 1 KB of whole lines
 (`log`, the firmware's and the updater's; both null without a card or log).
@@ -984,7 +988,10 @@ version, "Don't unplug"; "Installing" once the bundle is staged), and
 cut-short upload takes it down and playback resumes (a paused file's
 frame, and its name, come back). The panel
 keeps "Installing" while the updater installs (~45 s from the restart to
-playback, dark only for a moment at each restart), and the new firmware's first boot says "Updated to v<version>" in the start-up
+playback, dark only for a moment at each restart) when the updater lights
+it (`updater.panel` in `GET /api/firmware`); with an older updater the
+Installing screen says "Dark while it installs" and the panel is dark until
+playback. The new firmware's first boot says "Updated to v<version>" in the start-up
 show's status line for 3 s (the show runs 3.9 s, or 6.85 s full; with
 `boot_show` `off`, the short show for that boot).
 

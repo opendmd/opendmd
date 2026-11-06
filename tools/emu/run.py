@@ -145,6 +145,7 @@ def main():
     ap.add_argument("--built-after", type=float, help="refuse an image file older than this (epoch s)")
     ap.add_argument("--www-pack", type=Path, help="api: the pack PUT to /api/www")
     ap.add_argument("--bundle", type=Path, help="api: the signed bundle PUT to /api/firmware")
+    ap.add_argument("--old-updater", type=Path, help="api: an updater from before the panel (a release's): boot C installs the bundle through it")
     ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
     ap.add_argument("--long-psb", type=Path, help="api: a long Formula compiled (`psi build -o`), past any path: shown with POST /api/play/formula")
     ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=5,

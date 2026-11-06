@@ -509,13 +509,41 @@ pub enum UpdateStage {
     /// Checked and staged: the restart into the updater is next, which
     /// shows the same picture while it installs ([`installing`]).
     Installing,
+    /// The same, for a board whose updater predates the panel
+    /// ([`updater_lights_panel`] false): it says the panel goes dark.
+    InstallingDark,
+}
+
+/// The first updater that shows a picture while it installs: its app
+/// descriptor's version is `"updater <n>"` (`ota/updater/sdkconfig.defaults`
+/// `CONFIG_APP_PROJECT_VER`), and this is the lowest such `<n>`.
+pub const UPDATER_PANEL_VERSION: u32 = 2;
+
+/// The updater's number from its app descriptor's version (`"updater 2"` ->
+/// 2); `None` for anything else.
+pub fn updater_number(version: &str) -> Option<u32> {
+    let n = version.trim().strip_prefix("updater ")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok()
+}
+
+/// Whether the updater whose app descriptor says `version` lights the panel
+/// while it installs. An unreadable or unknown version is taken as not:
+/// the firmware's screen then says the panel goes dark.
+pub fn updater_lights_panel(version: Option<&str>) -> bool {
+    version
+        .and_then(updater_number)
+        .is_some_and(|n| n >= UPDATER_PANEL_VERSION)
 }
 
 /// The panel while a firmware update is received and installed: a still
 /// picture, drawn once per stage. The stage in the big font (amber, top row
 /// 2, as on the status card), then two lines of the small font (rows 18
 /// and 25): "to v<version>" in amber (installing: [`INSTALL_DOTS`], all
-/// three lit) and "Don't unplug" in warm white. Every pixel is written and
+/// three lit; installing with an updater that leaves the panel dark: "Dark
+/// while it installs") and "Don't unplug" in warm white. Every pixel is written and
 /// marked.
 pub fn update_notice(canvas: &mut Canvas, stage: UpdateStage, version: &str) {
     match stage {
@@ -529,6 +557,7 @@ pub fn update_notice(canvas: &mut Canvas, stage: UpdateStage, version: &str) {
             },
         ),
         UpdateStage::Installing => installing(canvas, [true; INSTALL_DOTS.len()]),
+        UpdateStage::InstallingDark => notice(canvas, "Installing", ["Dark while it installs", ""]),
     }
 }
 
@@ -927,12 +956,45 @@ mod tests {
     }
 
     #[test]
+    fn which_updaters_light_the_panel() {
+        assert_eq!(updater_number("updater 1"), Some(1));
+        assert_eq!(updater_number("updater 12"), Some(12));
+        for bad in ["", "updater", "updater ", "updater x", "updater -1", "1", "Updater 2", "updater 2a"] {
+            assert_eq!(updater_number(bad), None, "{bad:?}");
+        }
+        assert!(!updater_lights_panel(None));
+        assert!(!updater_lights_panel(Some("updater 1")));
+        assert!(!updater_lights_panel(Some("garbage")));
+        assert!(updater_lights_panel(Some("updater 2")));
+        assert!(updater_lights_panel(Some("updater 3")));
+        // The updater this tree builds is one that does.
+        let defaults = include_str!("../../ota/updater/sdkconfig.defaults");
+        let ver = defaults
+            .lines()
+            .find_map(|l| l.strip_prefix("CONFIG_APP_PROJECT_VER="))
+            .map(|v| v.trim_matches('"'))
+            .expect("the updater's version");
+        assert!(updater_lights_panel(Some(ver)), "{ver}");
+        // The two Installing screens differ only in the middle line.
+        let (mut lit, mut dark) = (Canvas::new(), Canvas::new());
+        update_notice(&mut lit, UpdateStage::Installing, "");
+        update_notice(&mut dark, UpdateStage::InstallingDark, "");
+        for y in (0..18).chain(24..HEIGHT) {
+            for x in 0..WIDTH {
+                assert_eq!(lit.get(x, y), dark.get(x, y), "{x},{y}");
+            }
+        }
+        assert_ne!(lit, dark);
+    }
+
+    #[test]
     fn the_update_message_fits_and_is_still() {
         for (stage, v) in [
             (UpdateStage::Receiving, "1.0.0-beta.17"),
             (UpdateStage::Receiving, "1.0.0-beta.16-us-1a2b3c"),
             (UpdateStage::Receiving, ""),
             (UpdateStage::Installing, "1.0.0-beta.17"),
+            (UpdateStage::InstallingDark, "1.0.0-beta.17"),
         ] {
             let mut a = Canvas::new();
             update_notice(&mut a, stage, v);
@@ -952,7 +1014,7 @@ mod tests {
             let middle = (18..24).any(|y| (0..WIDTH).any(|x| a.get(x, y) == LINE));
             assert_eq!(
                 middle,
-                !v.is_empty() || stage == UpdateStage::Installing,
+                !v.is_empty() || stage != UpdateStage::Receiving,
                 "{stage:?} {v}"
             );
         }

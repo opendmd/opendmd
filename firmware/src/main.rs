@@ -3588,7 +3588,14 @@ fn update_screen(
         log::info!("update screen: off (the update did not go through); playback resumes");
     } else {
         show::draw_update(canvas, stage);
-        log::info!("update screen: {}", if stage == show::INSTALLING { "installing" } else { "updating" });
+        log::info!(
+            "update screen: {}",
+            match stage {
+                show::INSTALLING => "installing",
+                show::INSTALLING_DARK => "installing (dark updater)",
+                _ => "updating",
+            }
+        );
     }
     panel.blit(canvas);
     *shown = stage;

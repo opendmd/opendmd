@@ -303,6 +303,14 @@ fn fresh_card() {
 #[optimize(size)] // (CPU0, boot: no frame runs it)
 #[inline(never)]
 fn run(task: BootTask) {
+    // The updater in ota_0, read once here (a flash read, ~0.3 KB of stack)
+    // so neither the httpd task (GET /api/firmware) nor the stream task
+    // (PUT, the Installing screen) has to on its tight stack.
+    log::info!(
+        "updater in ota_0: {} (lights the panel while it installs: {})",
+        crate::ota::updater_version().unwrap_or("unreadable"),
+        crate::ota::updater_lights_panel()
+    );
     let BootTask {
         mut bus,
         health,

@@ -133,7 +133,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release
 
@@ -1168,12 +1168,25 @@ emu-api-psb:
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LONG)) -o $(EMU_API_LONG_PSB)
 # The pack it pushes is this build's, signed (PUT /api/www takes no other).
 EMU_API_WWW = $(EMU_DIR)/api/www.pack
-emu-api: emu-build emu-card emu-api-psb
+# Boot C's updater: one from before the panel (OLD_UPDATER_TAG's ota/updater,
+# "updater 1", on the same table v3), built once from `git archive` into
+# $(EMU_DIR)/old-updater, never the release's.
+OLD_UPDATER_TAG ?= v1.0.0-beta.16
+EMU_OLD_UPDATER = $(EMU_DIR)/old-updater/$(OLD_UPDATER_TAG)/build/opendmd-updater.bin
+emu-old-updater:
+	@if [ ! -f $(EMU_OLD_UPDATER) ]; then \
+	  d=$(EMU_DIR)/old-updater/$(OLD_UPDATER_TAG); rm -rf $$d && mkdir -p $$d/src && \
+	  git archive $(OLD_UPDATER_TAG) ota/updater firmware/partitions.csv | tar -x -C $$d/src && \
+	  cd $$d/src/ota/updater && env $(UPDATER_ENV) python $(UPDATER_IDF)/tools/idf.py \
+	    -B $$d/build -DSDKCONFIG=$$d/sdkconfig build > $$d/build.log 2>&1 || { tail -20 $$d/build.log; exit 1; }; \
+	fi
+	@echo "old updater ($(OLD_UPDATER_TAG)): $(EMU_OLD_UPDATER)"
+emu-api: emu-build emu-card emu-api-psb emu-old-updater
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
-	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --formula $(EMU_API_FORMULA) $(EMU_ARGS)
+	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --formula $(EMU_API_FORMULA) --old-updater $(EMU_OLD_UPDATER) $(EMU_ARGS)
 # The same with a test board's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (a test board, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin

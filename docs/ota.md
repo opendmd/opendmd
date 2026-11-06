@@ -251,7 +251,8 @@ The web app pack is signed with the same key and key ids
    changes. Success: write `/update/pending.txt` (version), set the boot
    partition to `ota_0` (`esp_ota_set_boot_partition`), reply
    `{"ok":true,"version":…,"rebooting":true}` (the panel says "Installing"
-   over three dots, "Don't unplug"), blank the panel, restart.
+   over three dots, "Don't unplug"; "Installing", "Dark while it installs"
+   if the updater in flash predates its picture), blank the panel, restart.
 3. **Updater** (`ota/updater`, C): blanks the panel first (same early blank
    as `hub75_shim`), puts the same picture back up (see "The updater's
    panel" below), mounts the card on SPI3 (18/19/23/5), opens
@@ -276,7 +277,7 @@ The web app pack is signed with the same key and key ids
    `/update/done-*.bin`, logs the version
    change in the log ring, deletes the file, and the web app's Firmware card
    shows the new version. `GET /api/firmware` reports `{version, build,
-   variant, layout, features, flash_size, flash{mhz,mode}, pending, last, log}`: `log` is the end of `/update/log.txt`
+   variant, layout, features, flash_size, flash{mhz,mode}, updater{version,panel}, pending, last, log}`: `log` is the end of `/update/log.txt`
    (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
    updater's account can be read without taking the card out.
 
@@ -291,7 +292,8 @@ it installs, so the panel does not look dead (`ota/updater/main/panel.cpp`):
   the updater has no font code; `make updater-picture` writes it again and
   `make test` fails when the committed copy is stale. The firmware's own
   "Installing" screen is the same picture with its three dots lit, so the
-  panel looks the same before and after the restart into the updater.
+  panel looks the same before and after the restart into the updater
+  (when the updater has the picture: see "Which boards show it" below).
 - **The driver is the firmware's**: mrcodetastic's
   ESP32-HUB75-MatrixPanel-I2S-DMA (the submodule under
   `firmware/components/`), single-buffered, with the firmware's pin map and
@@ -325,11 +327,24 @@ it installs, so the panel does not look dead (`ota/updater/main/panel.cpp`):
   milliseconds of refreshes the write pass, and its longest flash
   operation, lacked. A board with no panel counts the same.
 
-The updater in `ota_0` is written only by a USB install (an update over
-WiFi replaces the firmware, never the updater), so a board shows the
-picture once a USB install has given it an updater that has it; until then
-its updater installs with the panel dark. A USB install itself does not run
-the updater: the panel stays dark while the installer writes.
+**Which boards show it.** The updater in `ota_0` is written only by a USB
+install (the installer's manifest writes `updater.bin`; an update over WiFi
+replaces the firmware, never the updater). So the lit install needs the
+updater from a USB install of 1.0.0 or later; a board updated only over
+WiFi since an older USB install stays dark during the install until its
+next USB install. The firmware tells them apart before it says anything:
+it reads the `ota_0` image's app descriptor once
+(`esp_ota_get_partition_description`, a flash read; `ota::updater_version`)
+and takes `"updater <n>"` with `n` ≥ 2 as one that lights the panel
+(`opendmd_core::boot::updater_lights_panel`; the updater's version is
+`CONFIG_APP_PROJECT_VER` in `ota/updater/sdkconfig.defaults`, and a core
+test checks the one this tree builds passes). An older or unreadable one
+gets the old screen, "Installing / Dark while it installs / Don't unplug".
+`GET /api/firmware` reports it as `updater: {version, panel}`. The
+emulator's API lane installs through both: this tree's updater (boot B)
+and `OLD_UPDATER_TAG`'s, v1.0.0-beta.16 by default (boot C, `make
+emu-old-updater`). A USB install itself does not run the updater: the panel
+stays dark while the installer writes.
 
 ## Check for updates
 
