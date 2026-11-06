@@ -176,7 +176,7 @@ exactly the fields it was built from:
   `Pinball Wizard` are fine). A platform given in another case is written
   as listed (`snes` → `SNES_…`).
 - An author is one token of `A-Za-z0-9.-`, three or more long, not a keyword
-  and not all digits; it is written starting lower-case (`Ross` → `ross`)
+  and not all digits; it is written starting lower-case (`Alex` → `alex`)
   unless it is a known handle (`RattenJager`), because that is how the parser
   recognises one.
 - A title word that the parser would take for a tag is refused rather than
@@ -186,7 +186,7 @@ exactly the fields it was built from:
 | Fields | Name |
 |---|---|
 | Super Metroid · SNES · Consoles · 1 | `/gifs/Consoles/SNES_Super_Metroid_01.gif` |
-| Streets of Rage 2 · MD · Consoles · 3 · ross | `/gifs/Consoles/MD_Streets_of_Rage_2_03_ross.gif` |
+| Streets of Rage 2 · MD · Consoles · 3 · alex | `/gifs/Consoles/MD_Streets_of_Rage_2_03_alex.gif` |
 | Sunset · no platform · Mine | `/gifs/Mine/Sunset.gif` |
 | Toy Story · SNES | refused (reads back as "Toy") |
 

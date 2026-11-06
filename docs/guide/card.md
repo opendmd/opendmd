@@ -45,7 +45,7 @@ The web app reads each GIF's platform, title and author from its file name:
 | File name | Platform | Title | Author |
 | --- | --- | --- | --- |
 | `SNES_Super_Metroid_01.gif` | SNES | Super Metroid | |
-| `MD_Streets_of_Rage_2_03_ross.gif` | MD | Streets of Rage 2 | ross |
+| `MD_Streets_of_Rage_2_03_alex.gif` | MD | Streets of Rage 2 | alex |
 | `ARCADE_GoldenAxe16.gif` | ARCADE | GoldenAxe | |
 | `Sunset.gif` | none | Sunset | |
 
