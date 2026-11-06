@@ -686,7 +686,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opendmd-core"
-version = "1.0.0-beta.16"
+version = "1.0.0-beta.17"
 dependencies = [
  "gif",
  "log",
@@ -695,18 +695,18 @@ dependencies = [
 
 [[package]]
 name = "opendmd-psi"
-version = "1.0.0-beta.16"
+version = "1.0.0-beta.17"
 
 [[package]]
 name = "opendmd-render"
-version = "1.0.0-beta.16"
+version = "1.0.0-beta.17"
 dependencies = [
  "opendmd-core",
 ]
 
 [[package]]
 name = "opendmd-sim"
-version = "1.0.0-beta.16"
+version = "1.0.0-beta.17"
 dependencies = [
  "anyhow",
  "clap",
