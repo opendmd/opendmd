@@ -779,7 +779,7 @@ fn name_char(c: char) -> bool {
 /// An author as the grammar reads one back: a known handle (any case) as
 /// it is, else
 /// one `A-Za-z0-9.-` token of three or more with its first letter
-/// lowercased (`Ross` -> `ross`); not a keyword flag, not all digits.
+/// lowercased (`Alex` -> `alex`); not a keyword flag, not all digits.
 #[cfg(feature = "names")]
 fn author_handle(a: &str) -> Option<String> {
     if KNOWN_AUTHORS.iter().any(|k| k.eq_ignore_ascii_case(a)) {
@@ -919,9 +919,9 @@ mod tests {
         for p in PLATFORMS.iter().copied().chain(multi) {
             // The builder takes the argument in any case, writes it as listed.
             for given in [p.to_string(), p.to_ascii_lowercase()] {
-                let path = build_name("Super Game", Some(&given), "C", Some(3), Some("ross"))
+                let path = build_name("Super Game", Some(&given), "C", Some(3), Some("alex"))
                     .unwrap_or_else(|e| panic!("{p}: {e:?}"));
-                assert_eq!(path, format!("/gifs/C/{p}_Super_Game_03_ross.gif"));
+                assert_eq!(path, format!("/gifs/C/{p}_Super_Game_03_alex.gif"));
                 let e = Entry::from_path(&path);
                 assert_eq!(e.platform.as_deref(), Some(p), "{path}");
                 assert_eq!(e.title, "Super Game", "{path}");
@@ -1006,10 +1006,10 @@ mod tests {
                 Some("MD"),
                 "Consoles",
                 Some(3),
-                Some("ross")
+                Some("alex")
             )
             .as_deref(),
-            Ok("/gifs/Consoles/MD_Streets_of_Rage_2_03_ross.gif")
+            Ok("/gifs/Consoles/MD_Streets_of_Rage_2_03_alex.gif")
         );
         // Whitespace collapses; an author is written the way it reads back.
         assert_eq!(
@@ -1018,10 +1018,10 @@ mod tests {
                 Some("ARCADE"),
                 "Arcade",
                 Some(12),
-                Some("Ross")
+                Some("Alex")
             )
             .as_deref(),
-            Ok("/gifs/Arcade/ARCADE_Sunset_Riders_12_ross.gif")
+            Ok("/gifs/Arcade/ARCADE_Sunset_Riders_12_alex.gif")
         );
         assert_eq!(
             b(
@@ -1056,7 +1056,7 @@ mod tests {
             Err(NameError::NeedsPlatform)
         );
         assert_eq!(
-            b("Sunset", None, "Mine", None, Some("ross")),
+            b("Sunset", None, "Mine", None, Some("alex")),
             Err(NameError::NeedsPlatform)
         );
 
