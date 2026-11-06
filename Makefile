@@ -611,6 +611,13 @@ FW_FLASH_FREQ ?= 80
 # so it can go by OTA; a pre-5.1 bootloader would refuse the image
 # (psi-rebuild-worklog.md, 2026-11-02, SRAM1 as IRAM).
 FW_SRAM1_IRAM ?= 0
+# lwIP copies each received frame out of the WiFi driver's buffer
+# (FW_L2_COPY=1: CONFIG_LWIP_L2_TO_L3_COPY, off by default; a spare-test
+# switch, net-stall): the driver's eight receive buffers are then free again
+# at once, and what lwIP holds is heap of the frames' size instead, bounded
+# only by the windows (5760 B a connection with data unread). See "The
+# receive side" in firmware/sdkconfig.defaults.
+FW_L2_COPY ?= 0
 # heapmap builds only (src/heapmap.rs): FreeRTOS's trace facility, for the
 # task table (uxTaskGetSystemState).
 # psi-probe builds only: the main task's stack 2 KB over the release's 16 KB
@@ -622,6 +629,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
+	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
 	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \

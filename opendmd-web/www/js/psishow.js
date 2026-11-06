@@ -14,7 +14,8 @@ import { path, program, vals } from './psikit.js';
 // The device's `fx_psi::path` (psikit `path`): Add to playlist's inline
 // line, with no card.
 export const fpath = (f, ctl) => path(f, ctl);
-// A short heap on the panel (503 + Retry-After): asked again, 5 times.
+// The panel busy (503 + Retry-After: the player had not taken it, or a
+// short heap): asked again, 5 times.
 const TRIES = 5;
 
 let shown = null, next = null, busy = false, last = 0, btns = [], isOver = () => false, ctlOf = () => null, ov = false;
@@ -69,7 +70,7 @@ async function pump() {
     // A change after the playlist moved on: it just stops following.
     const why = e.message?.replace(/^400: /, '');
     if (s != 409) toast(s == 415 || s == 404 || s == 405 ? 'Update OpenDMD to show formulas on the panel' : s == 400 ? `The panel can’t ${o ? 'draw' : 'show'} “${name}”${o ? ' over its GIF' : ''}: ${why}`
-      : s == 413 ? 'This formula is too long to show on the panel' : s == 503 && e.after ? 'The panel is short of memory just now: try again in a moment' : s == 503 ? `The panel has nothing playing to ${o ? 'draw over' : 'interrupt'}` : s ? 'Show on panel: ' + e.message : 'Couldn’t reach the panel', 'bad');
+      : s == 413 ? 'This formula is too long to show on the panel' : s == 503 && e.after ? 'The panel is busy just now: try again in a moment' : s == 503 ? `The panel has nothing playing to ${o ? 'draw over' : 'interrupt'}` : s ? 'Show on panel: ' + e.message : 'Couldn’t reach the panel', 'bad');
   }
   busy = false;
   mark();
