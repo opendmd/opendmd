@@ -405,7 +405,7 @@ mod tests {
     const MANIFEST: &str = "\u{feff}/gifs/Consoles/SNES_Plok_08.gif\r\n\
                             \r\n\
                             /gifs/Arcade/ARCADE_Pac-Man_01.gif   \r\n\
-                            /gifs/Consoles/MD_Sonic3_RattenJager.gif\n\
+                            /gifs/Consoles/MD_Sonic3_spritefox11.gif\n\
                             /gifs/Consoles/SNES_Donkey_Kong_Country_05.gif\n\
                             /gifs/XMAS/XMAS_Tree_02.gif\n";
 
@@ -424,7 +424,7 @@ mod tests {
         for filter in [
             Filter::new(),
             Filter::new().platforms(["SNES", "MD"]),
-            Filter::new().exclude_flag("RattenJager"),
+            Filter::new().exclude_flag("spritefox11"),
             Filter::new().platforms(Vec::<String>::new()),
         ] {
             let (header, bytes) = build(&filter);
@@ -529,7 +529,7 @@ mod tests {
     }
 
     const META: &str = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
-                        /gifs/consoles/md_sonic3_rattenjager.gif\tnever\n\
+                        /gifs/consoles/md_sonic3_spritefox11.gif\tnever\n\
                         /gifs/XMAS/XMAS_Tree_02.gif\tdwell=45\tloops=2\n\
                         /gifs/Nowhere/NES_Gone_01.gif\tnever\n";
 

@@ -356,7 +356,7 @@ fn the_flat_renderer_blits_the_raw_canvas() {
 
 #[test]
 fn bucket_for_is_the_pack_rule() {
-    assert_eq!(bucket_for("MD_Sonic3_RattenJager.gif"), "38");
+    assert_eq!(bucket_for("MD_Sonic3_spritefox11.gif"), "8f");
     assert_eq!(bucket_for("SNES_Plok_08.gif"), "68");
     assert_eq!(
         cache_path_for("/gifs/Spectrum_Slide/Exolon2.gif").as_deref(),
@@ -410,7 +410,7 @@ mod js {
 
     #[test]
     fn filter_manifest_takes_json() {
-        let text = "/gifs/Consoles/SNES_Plok_08.gif\n/gifs/Consoles/MD_Sonic3_RattenJager.gif\n/gifs/Arcade/ARCADE_Pac-Man_01.gif\n";
+        let text = "/gifs/Consoles/SNES_Plok_08.gif\n/gifs/Consoles/MD_Sonic3_spritefox11.gif\n/gifs/Arcade/ARCADE_Pac-Man_01.gif\n";
         let got = filter_manifest(text, r#"{"platforms":["MD","SNES"]}"#).unwrap();
         assert_eq!(got.length(), 2);
         let got = filter_manifest(text, r#"{"platforms":"arcade","title":"pac man"}"#).unwrap();

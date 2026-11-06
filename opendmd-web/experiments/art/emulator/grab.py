@@ -16,7 +16,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 HERE = Path(__file__).resolve().parent
-SCRATCH = "/tmp/scratch"
+# Where the vendored emulator files were fetched to (a scratch dir outside the repo).
+SCRATCH = os.environ.get("SCRATCH_DIR", "/tmp/scratch")
 EJS_DATA = Path(os.environ.get("EJS_DATA", f"{SCRATCH}/vendor/ejs-data"))
 BINJGB = Path(os.environ.get("BINJGB_DIR", f"{SCRATCH}/vendor/binjgb"))
 

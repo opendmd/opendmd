@@ -11,7 +11,7 @@ Needs `make web` first (the Makefile's web-smoke target does it) and, once,
 `uv run --with playwright playwright install chromium`.
 
 Mock pass: starts tools/mock-device.py over the card copy (DMD_CARD_ROOT,
-default ~/scratch/dmdos-card) with a fresh overlay under
+default card/ in the repo; `make web-smoke` passes CARD_ROOT) with a fresh overlay under
 target/web-smoke/overlay, so the card copy is never written. Then drives
 every view like a person would:
 
@@ -355,7 +355,7 @@ from playwright.sync_api import sync_playwright, Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 REPO = Path(__file__).resolve().parents[1]
-CARD = Path(os.environ.get("DMD_CARD_ROOT", "~/scratch/dmdos-card"))
+CARD = Path(os.environ.get("DMD_CARD_ROOT") or REPO / "card")
 
 
 def card_gifs() -> list[str]:

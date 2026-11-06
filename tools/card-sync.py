@@ -9,7 +9,7 @@ copy of the card — how prepared copies (`opendmd-pack convert`'s `cache/…`
 files) get onto a card without taking it out (`make card-sync HOST= FROM=
 PATHS=`):
 
-    uv run tools/card-sync.py <host> --from ~/scratch/dmdos-card --paths copies.txt
+    uv run tools/card-sync.py <host> --from <card copy> --paths copies.txt
 
 Or every file under a local directory, to a card prefix you name:
 

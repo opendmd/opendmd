@@ -51,7 +51,7 @@
 //! Author handles cannot be told from title words in general (`StarWars01`,
 //! `SuperMario` and `RattenJager` are all trailing CamelCase), so a generic
 //! CamelCase rule mangles titles. Instead a token is an author if it starts
-//! with a lowercase letter (`sephirot68`, `clivefrog`, `zzoomm`) or is in the
+//! with a lowercase letter (`pixelkid42`, `brickmoth`, `pixxel`) or is in the
 //! small [`KNOWN_AUTHORS`] list, and only when consuming it leaves a non-empty
 //! title. Flags are stored verbatim; all flag comparisons are ASCII
 //! case-insensitive.
@@ -842,7 +842,7 @@ mod tests {
         assert_eq!(got, flags, "flags of {name}");
     }
 
-    /// Real names from the card (`~/scratch/dmdos-card/filelist.txt`),
+    /// Names from the stock card's `filelist.txt` (author handles made up),
     /// picked for their variety: glued and standalone numbers, authors
     /// known and lowercase, keyword flags leading and trailing, seasons,
     /// multi-token platforms, no platform, a space inside a token, a
@@ -861,17 +861,17 @@ mod tests {
         "/gifs/Consoles/PICO-8_Downstream_Dream_02.gif",
         "/gifs/Consoles/MD_LOGO_Sega31.gif",
         "/gifs/Consoles/NES_The_Ren_n_Stimpy_Show.gif",
-        "/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif",
+        "/gifs/Consoles/PSP_Parasite_Eve_01__pixelkid42.gif",
         "/gifs/Consoles/Nes_Gradius.gif",
         "/gifs/Spectrum_Slide/Exolon2.gif",
         "/gifs/Pinball_Short/PINBALL_SHORT_STTNG30.gif",
-        "/gifs/The_80s_90s/The_80s_90s_MacGyver_02_sephirot68.gif",
+        "/gifs/The_80s_90s/The_80s_90s_MacGyver_02_pixelkid42.gif",
         "/gifs/Consoles/GBA_CT_Special_Forces_3_Bioterror_09.gif",
         "/gifs/Other/OTHER_NINTENDO_SuperMarioBads03.gif",
         "/gifs/Pinball_Short/PINBALL_SHORT_JurassicPark_NEW_02.gif",
         "/gifs/Arcade/ARCADE_Green_Beret_02_RattenJager.gif",
         "/gifs/Consoles/NES_King_Kong_2_01.gif",
-        "/gifs/Consoles/MD_RoiLion06_raph.gif",
+        "/gifs/Consoles/MD_RoiLion06_remy.gif",
         "/gifs/Consoles/SNES_MegaManHelmet02Title.gif",
         "/gifs/Arcade/ARCADE_SunsetRiders11Intro02.gif",
         "/gifs/Consoles/SNES_The_Great_Battle_IV.gif",
@@ -883,9 +883,9 @@ mod tests {
         "/gifs/Computers/PC_Leilanis Island_42.gif",
         "/gifs/Consoles/NGPC_CardFightersClashII05_RattenJager.gif",
         "/gifs/Arcade/ARCADE_LOGO_NEOGEO_Snk01.gif",
-        "/gifs/Consoles/MD_Chase_HQ_II_01_Clivefrog.gif",
+        "/gifs/Consoles/MD_Chase_HQ_II_01_Brickmoth.gif",
         "/gifs/Other/OTHER_SCROLL_Xmen01.gif",
-        "/gifs/Consoles/MD_Demons_Of_Asteborg_01_sephirot68.gif",
+        "/gifs/Consoles/MD_Demons_Of_Asteborg_01_pixelkid42.gif",
         "/gifs/Consoles/SNES_Street_Fighter_II_Turbo_03.gif",
         "/gifs/Arcade/ARCADE_Pac-Man_01.gif",
         "/gifs/Consoles/VIRTUAL_BOY_Mario_Clash_01.gif",
@@ -948,7 +948,7 @@ mod tests {
             "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
             "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
             "/gifs/Consoles/PICO-8_Downstream_Dream_02.gif",
-            "/gifs/Consoles/SNES_Mega_Man_X_08_sephirot68.gif",
+            "/gifs/Consoles/SNES_Mega_Man_X_08_pixelkid42.gif",
             "/gifs/Arcade/ARCADE_NEOGEO_Metal_Slug_X_02_INVERT.gif",
             "/gifs/Spectrum_Slide/Exolon2.gif",
             "/gifs/NEW 2021/NES_King_Kong_2_01.gif",
@@ -979,8 +979,8 @@ mod tests {
                 "/gifs/H/HALLOWEEN_ARCADE_GoldenAxe_16.gif",
             ),
             (
-                "/gifs/C/PSP_Parasite_Eve_01__sephirot68.gif",
-                "/gifs/C/PSP_Parasite_Eve_01_sephirot68.gif",
+                "/gifs/C/PSP_Parasite_Eve_01__pixelkid42.gif",
+                "/gifs/C/PSP_Parasite_Eve_01_pixelkid42.gif",
             ),
         ] {
             assert_eq!(
@@ -1326,18 +1326,18 @@ mod tests {
     #[test]
     fn unknown_prefixes() {
         // A listed platform the original spec list missed.
-        let e = p("/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif");
+        let e = p("/gifs/Consoles/PSP_Parasite_Eve_01__pixelkid42.gif");
         assert_eq!(e.platform.as_deref(), Some("PSP"));
         assert_eq!(e.title, "Parasite Eve");
         assert_eq!(e.variant, Some(1));
-        assert_eq!(e.flags, vec!["sephirot68"]);
+        assert_eq!(e.flags, vec!["pixelkid42"]);
 
         // An unlisted all-caps first word is part of the title, which keeps
         // every word (no number or author without a platform).
         for (path, title) in [
             (
-                "/gifs/The_80s_90s/THE_80s_90s_SCROLL_Judge_Dredd_01_sephirot68.gif",
-                "THE 80s 90s SCROLL Judge Dredd 01 sephirot68",
+                "/gifs/The_80s_90s/THE_80s_90s_SCROLL_Judge_Dredd_01_pixelkid42.gif",
+                "THE 80s 90s SCROLL Judge Dredd 01 pixelkid42",
             ),
             (
                 "/gifs/Happy_Birthday/HDB_Happy_Birday_03.gif",

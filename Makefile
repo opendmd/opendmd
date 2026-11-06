@@ -90,8 +90,18 @@ FW_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-# Card root for `make sim` without ARGS.
-CARD_ROOT ?= ~/scratch/dmdos-card
+# This machine's own settings (gitignored, optional): a local.mk beside this
+# file is read first, so it can set anything below that is assigned with ?=.
+# SCRATCH, when set (e.g. `export SCRATCH = /data/scratch`), moves the big
+# build outputs that otherwise go under target/ (the updater's idf.py build,
+# the emulator, tools/release.sh's builds) to a directory outside the tree;
+# CARD_ROOT is a copy of a card. Command-line settings still win.
+-include local.mk
+SCRATCH ?=
+
+# Card root (a copy of a card) for `make sim` without ARGS, `make test-card`,
+# `make web-mock` and `make web-smoke`.
+CARD_ROOT ?= $(CURDIR)/card
 ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
@@ -187,7 +197,7 @@ psi:
 CARGO_ABOUT ?= cargo-about
 CARGO_ABOUT_VERSION := 0.9.2
 
-# Prepare a card (every GIF's copy under cache/): make pack ARGS="convert ~/scratch/dmdos-card --verify".
+# Prepare a card (every GIF's copy under cache/): make pack ARGS="convert <card copy> --verify".
 # See docs/cache-format.md.
 pack:
 	@test -n "$(PACK_ARGS)" || { echo "usage: make pack ARGS=\"convert <card-root> [--jobs N] [--verify] [--force]\""; exit 2; }
@@ -327,7 +337,7 @@ web-serve:
 	uv run python -m http.server 8080 -d $(WEB_DIST)
 
 # A fake device (JSON API + card files + the built app) for working on the UI
-# without the rig: make web-mock ROOT=~/scratch/dmdos-card, then open
+# without the rig: make web-mock ROOT=<card copy>, then open
 # http://localhost:8080. OVERLAY=dir keeps the card copy untouched (writes go
 # there); PROXY=http://<device> serves the local build against a real device.
 ROOT ?= $(CARD_ROOT)
@@ -337,9 +347,9 @@ web-mock: web
 		$(if $(PROXY),--proxy $(PROXY),--root $(ROOT) $(if $(OVERLAY),--overlay $(OVERLAY)))
 
 # Headless Chromium drive of the app against the mock (and, with DEVICE=,
-# a read-mostly pass against a real device): DMD_CARD_ROOT=... make web-smoke
+# a read-mostly pass against a real device), over the card copy CARD_ROOT
 web-smoke: web
-	uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
+	DMD_CARD_ROOT=$(CARD_ROOT) uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
 
 # The README's and the site's screenshots (docs/images/): the web app in
 # headless Chromium against the mock over the demo card (only the panel's
@@ -976,7 +986,7 @@ UPDATER_IDF := $(ESPRESSIF)/esp-idf/v5.3
 # embuild names the venv after the Python that made it (py3.13 here, py3.12
 # on the Ubuntu CI runner).
 UPDATER_PYENV := $(firstword $(wildcard $(ESPRESSIF)/python_env/idf5.3_py3*_env) $(ESPRESSIF)/python_env/idf5.3_py3.13_env)
-UPDATER_BUILD ?= ~/scratch/opendmd-target/updater
+UPDATER_BUILD ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/updater,$(CURDIR)/target/updater)
 UPDATER_BIN := $(UPDATER_BUILD)/build/opendmd-updater.bin
 UPDATER_SLOT := 393216
 UPDATER_SPARE := 32768
@@ -1057,12 +1067,12 @@ api-load:
 	uv run tools/api-load.py $(HOST) $(SECONDS_) --workers $(WORKERS) $(if $(PATHS),--paths $(PATHS))
 
 # The emulator lane (tools/emu/README.md): esp32sim at a pinned commit under
-# ~/scratch, a rootless FAT32 card, a boot of the real full flash image.
+# EMU_DIR, a rootless FAT32 card, a boot of the real full flash image.
 # Correctness only, never timing. Agents may run it freely.
-EMU_DIR ?= ~/scratch/opendmd-emu-sim
+EMU_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-emu-sim,$(CURDIR)/target/emu-sim)
 # The updater's idf.py build is tied to one checkout: one build dir per checkout (a hash of its path).
 EMU_UPDATER ?= $(EMU_DIR)/updater-$(shell printf '%s' '$(CURDIR)' | md5sum | cut -c1-8)
-export EMU_DIR
+export EMU_DIR SCRATCH
 emu-build:
 	tools/emu/build-emulator.sh
 

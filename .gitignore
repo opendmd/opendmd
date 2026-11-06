@@ -62,7 +62,13 @@ opendmd-web/experiments/art/studio/out/commons_saturn_logo.png
 opendmd-web/experiments/art/studio/out/paste_snes_logo.png
 opendmd-web/experiments/art/studio/out/studio_page.png
 
-# Lists of the DMDoS pack's files (derived from third-party content): generated, never committed
-opendmd-web/experiments/tween/out/candidates.json
-opendmd-web/experiments/tween/out/summary.json
-opendmd-web/experiments/tween/out/files.jsonl
+# The tweening experiment's outputs: contact sheets, tables and lists of the
+# DMDoS pack's files (derived from third-party content): generated, never committed
+opendmd-web/experiments/tween/out/
+# The CORS probe's raw capture (a local output: the hosts one browser run met)
+opendmd-web/experiments/art/cors/cors_results.json
+
+# This machine's own settings: local.mk (read by the Makefile: SCRATCH,
+# CARD_ROOT, ...) and CLAUDE.local.md (notes Claude Code reads beside CLAUDE.md)
+/local.mk
+CLAUDE.local.md

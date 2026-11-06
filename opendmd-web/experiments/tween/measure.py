@@ -6,7 +6,7 @@
 player's rules) and a motion class per consecutive frame pair, including the
 loop-wrap pair (last -> first). Parallel over files.
 
-    uv run measure.py [~/scratch/dmdos-card/gifs] [--jobs 14] [--limit N]
+    uv run measure.py [<card copy>/gifs] [--jobs 14] [--limit N]
 
 Writes out/files.jsonl (one summary per file) and out/summary.json, and
 prints the tables used in docs/tweening-experiment.md."""
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import HERE, load_gif, codes, classify, n_inbetweens, tweenable  # noqa: E402
+from common import HERE, CARD_GIFS, load_gif, codes, classify, n_inbetweens, tweenable  # noqa: E402
 
 CLASSES = ["static", "translation", "regional", "cut", "other"]
 # Other experiments write variants beside the pack's GIFs (<name>.cap12.gif,
@@ -81,7 +81,7 @@ def analyse(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="?", default="~/scratch/dmdos-card/gifs")
+    ap.add_argument("root", nargs="?", default=CARD_GIFS)
     ap.add_argument("--jobs", type=int, default=14)
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
@@ -99,10 +99,10 @@ def main():
             if i % 500 == 0:
                 print(f"{i}/{len(files)} {time.time() - t0:.0f}s", file=sys.stderr)
     print(f"{len(files)} files in {time.time() - t0:.0f}s", file=sys.stderr)
-    summarise(res)
+    summarise(res, a.root)
 
 
-def summarise(res):
+def summarise(res, root=CARD_GIFS):
     ok = [r for r in res if "error" not in r]
     bad = [r for r in res if "error" in r]
     S = dict(files=len(res), decoded=len(ok), errors=[(r["path"], r["error"]) for r in bad])
@@ -115,7 +115,7 @@ def summarise(res):
         S[key] = sum(r[key] for r in ok)
     S["files_with_tweenable"] = sum(1 for r in ok if r["tween_pairs"])
     S["files_tweenable_10pct"] = sum(1 for r in ok if r["tween_pairs"] >= 0.1 * r["frames"])
-    rel = lambda p: str(Path(p).relative_to("~/scratch/dmdos-card/gifs"))  # noqa: E731
+    rel = lambda p: str(Path(p).relative_to(root))  # noqa: E731
     top_lit = sorted(ok, key=lambda r: -r["trans_ms"])[:20]
     S["top_literal"] = [dict(file=rel(r["path"]), frames=r["frames"], trans_pairs=r["trans_pairs"],
                              trans_ms=r["trans_ms"], tween_pairs=r["tween_pairs"]) for r in top_lit]

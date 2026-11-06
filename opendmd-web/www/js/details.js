@@ -37,7 +37,7 @@ const WHY = {
   'title-char': 'A title can’t have _ " * / : < > ? \\ | or accented letters',
   platform: 'That is not a platform name',
   category: 'A category name can’t have / " * : < > ? \\ | or accented letters',
-  author: 'An author is one word of letters and digits, 3 or more, like “sephirot68”',
+  author: 'An author is one word of letters and digits, 3 or more, like “pixelkid42”',
   'needs-platform': 'An author needs a platform',
   'too-long': 'That name is too long: shorten the title',
 };

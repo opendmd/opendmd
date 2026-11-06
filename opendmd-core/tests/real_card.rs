@@ -4,7 +4,7 @@
 //! pack on disk:
 //!
 //! ```sh
-//! DMD_CARD_ROOT=~/scratch/dmdos-card cargo test -- --ignored --nocapture
+//! DMD_CARD_ROOT=<card copy> cargo test -- --ignored --nocapture
 //! ```
 
 use opendmd_core::canvas::Canvas;

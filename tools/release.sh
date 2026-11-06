@@ -52,10 +52,11 @@
 # object, an asset with another digest) stops it: nothing is ever moved,
 # deleted or overwritten.
 #
-# Environment: RELEASE_DIR (default ~/scratch/opendmd-release, else
-# target/release): this release's build goes in $RELEASE_DIR/v<version>.
-# FW_SIGN_KEY, FW_RELEASE_TARGET_DIR: as for make fw-release. UPDATER_BUILD
-# (default: one per checkout under ~/scratch). RELEASE_TRAILERS: the
+# Environment: RELEASE_DIR (default $SCRATCH/opendmd-release when SCRATCH
+# is set, as the Makefile's local.mk can do, else target/release): this
+# release's build goes in $RELEASE_DIR/v<version>. FW_SIGN_KEY,
+# FW_RELEASE_TARGET_DIR: as for make fw-release. UPDATER_BUILD (default: one
+# per checkout under $SCRATCH, else target/updater). RELEASE_TRAILERS: the
 # release commit's trailer lines.
 set -euo pipefail
 export LC_ALL=C
@@ -139,7 +140,7 @@ cd "$ROOT"
 TAG=v$VERSION
 KIND=release; [[ $VERSION == *-* ]] && KIND=prerelease
 if [ -z "${RELEASE_DIR:-}" ]; then
-  if [ -d ~/scratch ] && [ -w ~/scratch ]; then RELEASE_DIR=~/scratch/opendmd-release; else RELEASE_DIR=$ROOT/target/release; fi
+  if [ -n "${SCRATCH:-}" ]; then RELEASE_DIR=$SCRATCH/opendmd-release; else RELEASE_DIR=$ROOT/target/release; fi
 fi
 REL=$RELEASE_DIR/$TAG
 DIST=$REL/dist
@@ -147,8 +148,8 @@ SITE=$REL/site
 ASSETS=$REL/assets
 export FW_SIGN_KEY=${FW_SIGN_KEY:-$HOME/.config/opendmd/opendmd.key}
 # idf.py's build dir names its source dir: one per checkout.
-if [ -d ~/scratch ]; then
-  export UPDATER_BUILD=${UPDATER_BUILD:-~/scratch/opendmd-updater-$(printf '%s' "$ROOT" | md5sum | cut -c1-8)}
+if [ -n "${SCRATCH:-}" ]; then
+  export UPDATER_BUILD=${UPDATER_BUILD:-$SCRATCH/opendmd-updater-$(printf '%s' "$ROOT" | md5sum | cut -c1-8)}
 else
   export UPDATER_BUILD=${UPDATER_BUILD:-$ROOT/target/updater}
 fi

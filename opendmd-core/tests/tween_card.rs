@@ -6,7 +6,7 @@
 //! experiment's outputs, which are not in the repo:
 //!
 //! ```sh
-//! DMD_CARD_ROOT=~/scratch/dmdos-card cargo test --release --features tween \
+//! DMD_CARD_ROOT=<card copy> cargo test --release --features tween \
 //!     --test tween_card -- --ignored --nocapture
 //! ```
 //!

@@ -90,7 +90,7 @@ real ~10k-file card. Tokens are split on `_`:
 | Filename | Platform | Title | Variant | Flags |
 |---|---|---|---|---|
 | `SNES_Donkey_Kong_Country_05.gif` | SNES | Donkey Kong Country | 5 | |
-| `MD_Sonic3_RattenJager.gif` | MD | Sonic3 | | RattenJager |
+| `MD_Sonic3_spritefox11.gif` | MD | Sonic3 | | spritefox11 |
 | `SNES_Asterix01.gif` | SNES | Asterix | 1 | |
 | `NINTENDO_DS_Mario_Kart_DS_01..gif` | NDS | Mario Kart DS | 1 | |
 | `NES_Unknow_01_Invert.gif` | NES | Unknow | 1 | Invert |
@@ -120,7 +120,7 @@ Rules, in order:
 
 Author handles can't be told from title words in general (`StarWars01`,
 `SuperMario` and `RattenJager` are all trailing CamelCase), so a token counts as
-an author only if it starts with a lowercase letter (`sephirot68`, `clivefrog`)
+an author only if it starts with a lowercase letter (`pixelkid42`, `brickmoth`)
 or is in a small known list, and only when dropping it leaves a non-empty
 title. Flags are stored verbatim; every flag comparison is case-insensitive.
 `normalize_title` (lowercase, alphanumerics only) is the hook for fuzzy

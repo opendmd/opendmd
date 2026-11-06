@@ -3465,7 +3465,7 @@ mod tests {
     const MANIFEST: &str = "/gifs/Consoles/SNES_Plok_08.gif\n\
                             \n\
                             /gifs/Arcade/ARCADE_Pac-Man_01.gif\r\n\
-                            /gifs/Consoles/MD_Sonic3_RattenJager.gif\n";
+                            /gifs/Consoles/MD_Sonic3_spritefox11.gif\n";
 
     #[test]
     fn file_catalog_indexes_and_reads_back() {

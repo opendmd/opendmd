@@ -295,8 +295,9 @@ make release VERSION=1.0.0 PUBLISH=1 RESUME=1    # after a publish that stopped 
    move) and tagged `v<version>` locally.
 3. Build: `make fw-release`, signed with
    `~/.config/opendmd/opendmd.key`, into
-   `~/scratch/opendmd-release/v<version>/dist` (`RELEASE_DIR=` moves
-   it); then the version in the images, manifests, bundles and www pack,
+   `target/release/v<version>/dist` (`RELEASE_DIR=` moves it; with
+   `SCRATCH` set, e.g. in a gitignored `local.mk`, it is
+   `$SCRATCH/opendmd-release`); then the version in the images, manifests, bundles and www pack,
    and at least 64 KB of factory spare.
 4. Assets: the GitHub release's files, `SHA256SUMS` and the release notes.
 5. Site: `make site` with the public gallery repo's contributions and
