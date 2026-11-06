@@ -1,6 +1,6 @@
 // Thumbnails for list rows (the Library's folders, the playlist editor):
 // a GIF's first frame, 64×16 CSS px, and a short clip on hover or focus.
-// Light on the device by design (docs/research/library-playlists.md):
+// Light on the device by design (opendmd-notes docs/research/library-playlists.md):
 //  - only rows that are rendered ask, and a row gone before its turn is
 //    skipped; at most two requests in flight; none while a list is flung;
 //  - the prepared copy first (`cachePathFor`), the GIF on a 404, read as a

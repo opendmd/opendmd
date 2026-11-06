@@ -248,7 +248,7 @@ check-wasm:
 # Settings -> Device -> About links it. www/js/build.js (gitignored) is
 # the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/ and
 # pkg-psi/) that js/wasm.js puts on every wasm module's address, so a
-# browser never runs an earlier build's module (docs/notes/web-app.md
+# browser never runs an earlier build's module (opendmd-notes docs/notes/web-app.md
 # "Module addresses").
 #
 # What ships is not www/ itself but $(WEB_DIST) (gitignored): a copy of it
@@ -258,7 +258,7 @@ check-wasm:
 # .gz files, the pack, the size lines, the mock (web-mock, web-smoke) and
 # the site's /demo/ all read $(WEB_DIST). WEB_MINIFY=0 stages the files as
 # they are, for a debugger (the size lines are then printed, not enforced):
-# docs/notes/web-app.md "Minified build".
+# opendmd-notes docs/notes/web-app.md "Minified build".
 WEB_WWW := $(WEB)/www
 WEB_DIST := $(WEB)/www-dist
 WEB_MINIFY ?= 1
@@ -398,7 +398,7 @@ site-smoke:
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
 
-# The site on Cloudflare (docs/research/site-cloudflare.md): the opendmd-site
+# The site on Cloudflare (opendmd-notes docs/research/site-cloudflare.md): the opendmd-site
 # Worker in site/worker/ (cf's cloudflare.config.ts + wrangler.config.ts; cf
 # and wrangler pinned in its package.json/package-lock.json, installed by
 # site-worker-deps) serves $(SITE) as static assets plus /f/* and /api/*.
@@ -559,7 +559,7 @@ comma := ,
 FW_CARGO_FEATURES = $(FW_NO_DEFAULT)--features $(FW_DEV_FEATURES)
 
 # The components a build can leave out (firmware/Cargo.toml's default
-# features; docs/notes/firmware-build.md "Feature flags"): all on unless
+# features; opendmd-notes docs/notes/firmware-build.md "Feature flags"): all on unless
 # FW_DISABLE names them, e.g. `make fw-release FW_DISABLE=formulas`
 # (`formulas` off takes `jit` with it). Such a build is
 # `--no-default-features --features <the rest>`, in every firmware target
@@ -590,7 +590,7 @@ endif
 # `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
 # The flash clock (FW_FLASH_FREQ=80|40, MHz, 80 by default; DIO
 # either way; FW_FLASH_FREQ=40 for a board whose flash cannot run at 80 MHz,
-# docs/notes/flash-clock.md). The app sets
+# opendmd-notes docs/notes/flash-clock.md). The app sets
 # SPI0's clock itself at start-up from its own image header
 # (esp_system/port/cpu_start.c: bootloader_flash_clock_config(&app header),
 # ESP32 without PSRAM), so 80 reaches a board by OTA with its bootloader

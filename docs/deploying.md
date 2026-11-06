@@ -267,8 +267,9 @@ the app sets SPI0's clock from it at start-up; the updater and the
 bootloader stay at 40). `FW_FLASH_FREQ=40 make fw-release` builds for a board
 whose flash cannot run at 80 MHz (a board that crash-loops right after an
 80 MHz install or update); the target checks the app header's clock
-against it. Which boards need it, and how a board recovers:
-`docs/notes/flash-clock.md`.
+against it. A board that boot-loops after an 80 MHz install or update
+recovers with one USB install of a 40 MHz build (`docs/ota.md`, "If a
+board can't run its flash at 80 MHz").
 
 ### Releasing (local)
 

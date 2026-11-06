@@ -3,7 +3,7 @@
 //! firmware hands it a `std::net::TcpStream`, the tests a scripted one.
 //!
 //! It exists so the firmware links no `esp_http_client` (and with it no
-//! esp-tls and no TLS client; `docs/research/size-budget.md` 1.5). What it
+//! esp-tls and no TLS client; `opendmd-notes docs/research/size-budget.md` 1.5). What it
 //! does: writes the request (`Connection: close`), reads the status line
 //! and the headers a line at a time (only `Content-Length` and
 //! `Transfer-Encoding: chunked` are kept), then hands the body to a

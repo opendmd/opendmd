@@ -21,7 +21,7 @@ CONFIG_FATFS_MAX_LFN=255
 # window are FF_MAX_SS bytes. The default 4096 is for FAT on flash, which this
 # firmware does not have; with it each FIL is 4,136 B and the VFS preallocates
 # SD_MAX_FILES of them at mount. 512 (the SD card's sector) frees ~30 KB of
-# heap (docs/research/fat-index.md).
+# heap (opendmd-notes docs/research/fat-index.md).
 CONFIG_WL_SECTOR_SIZE_512=y
 
 # --- lwip on CPU0 --------------------------------------------------------
@@ -155,7 +155,7 @@ CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
 # HTTPS: the one outbound request, Follow RePlayOS's poll, is plain HTTP on
 # the LAN over a std TcpStream (opendmd_core::http_client, not
 # esp_http_client), update checks are the browser's, and the device serves
-# no HTTPS (docs/research/https-serving.md). So esp_http_client is built
+# no HTTPS (opendmd-notes docs/research/https-serving.md). So esp_http_client is built
 # without its HTTPS path and esp-tls is never linked. 802.1X/EAP
 # (enterprise) WiFi is on (restore-cuts, 2026-11-06): PEAP and TTLS run
 # their TLS through mbedtls's TLS client (ESP_WIFI_MBEDTLS_TLS_CLIENT, the
@@ -164,7 +164,7 @@ CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
 # the parts EAP never uses off (renegotiation, ALPN, session tickets, DTLS,
 # CRL/CSR parsing, PKCS#7, static-ECDH key exchanges). Only the curves
 # WPA3-SAE/OWE need stay (P-256, P-384, P-521; a RADIUS server's ECDHE uses
-# them too). Measured in docs/research/size-budget.md 1.5 and 1.6; any
+# them too). Measured in opendmd-notes docs/research/size-budget.md 1.5 and 1.6; any
 # future on-device HTTPS has to undo the HTTPS line and link esp-tls.
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n
 CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=y

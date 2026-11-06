@@ -6,8 +6,8 @@ loop forever
 fps 50
 
 -- `psi check` refuses this file: 416 steps (the cap is 256) and 169 values
--- (128). That is its finding; see docs/research/endless-road-v2.md §3, §9.
--- A ROUGH SKETCH for docs/research/endless-road-v2.md: every environment
+-- (128). That is its finding; see opendmd-notes docs/research/endless-road-v2.md §3, §9.
+-- A ROUGH SKETCH for opendmd-notes docs/research/endless-road-v2.md: every environment
 -- and every transition in one program, drawn crudely, to see where four
 -- environments land against the step and value caps and the frame
 -- estimate. Not art. See the design doc for what each part should be.

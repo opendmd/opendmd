@@ -1,4 +1,4 @@
-//! The input table (`docs/research/psi-inputs.md` §2.1): the panel's own
+//! The input table (`opendmd-notes docs/research/psi-inputs.md` §2.1): the panel's own
 //! values that Formulas read as built-in inputs (`daylight`, `night`,
 //! `replay.game` …), each with its previous value, when it last changed and
 //! where it came from. The firmware's sources write it (the sky once a

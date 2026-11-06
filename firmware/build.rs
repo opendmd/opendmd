@@ -155,7 +155,7 @@ gray(frac(F0[px % 251]*0.1 + F1[py]*0.1 + F2[(px + py) % 251]*0.1 + F3[px % 200]
 /// draws, `under` looks with 0-12 `UAT` steps, `formula` every Formula in
 /// opendmd-web/formulas/ that paints or reads the picture elsewhere, the
 /// three the paint rewrite is for, and the device cases in
-/// docs/research/psi-rebuild-device/. As Rust: `&[(group, name, px, psb)]`.
+/// opendmd-psi/tests/device/. As Rust: `&[(group, name, px, psb)]`.
 fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String {
     const STEPS: &[(&str, &str, u32)] = &[
         ("base", "pset(-9, -9, #f00)", 0),
@@ -206,7 +206,7 @@ fn paint_cases(dir: &std::path::Path, strip: &dyn Fn(&str) -> String) -> String 
     ] {
         cases.push(("under", name.into(), 0, src.into()));
     }
-    let devcases = std::fs::canonicalize("../docs/research/psi-rebuild-device").expect("psi-rebuild-device");
+    let devcases = std::fs::canonicalize("../opendmd-psi/tests/device").expect("opendmd-psi/tests/device");
     println!("cargo:rerun-if-changed={}", devcases.display());
     let mut paths: Vec<PathBuf> = Vec::new();
     for d in [dir, devcases.as_path()] {

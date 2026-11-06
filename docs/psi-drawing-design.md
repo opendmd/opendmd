@@ -761,8 +761,7 @@ native effect is removed (§7.6).
    §11 cost table (the draw formula), §12 idioms ("Particles", "A
    wireframe"), two worked examples with goldens; `docs/guide/formulas.md`
    "Drawing"; `docs/api.md` unchanged (the path is the same `@fx:psi`).
-8. **Firmware size:** measured before/after with `make fw-build` and
-   recorded in `docs/research/size-budget.md`; expected +5-7 KB against
+8. **Firmware size:** measured before/after with `make fw-build`; expected +5-7 KB against
    the 4 MB layout's ~271 KB spare (floor 64 KB) — no squeeze needed, and
    §7.4's removal pays it back twice over.
 

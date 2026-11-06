@@ -11,7 +11,7 @@ fps 50
 -- the wet road, a raised highway with barriers and the city going on
 -- below it, a dashed centre line, gantries crossing the road, lit roof
 -- edges, lamp posts. Flat, long bends. Fits today's limits on its own;
--- in V2 it is one `scene` of four (docs/research/endless-road-v2.md).
+-- in V2 it is one `scene` of four (opendmd-notes docs/research/endless-road-v2.md).
 
 palette c = black #000, asphalt #0e0a16, asphaltStripe #140f20, wetLit #3a2a58,
   lane #8090b0, barrier #445, barrierStripe #667, below #04020a, belowWin #3a1a50,

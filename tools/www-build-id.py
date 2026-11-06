@@ -12,7 +12,7 @@ builds of a dirty tree share a `git describe`, never this. js/wasm.js puts
 it on every module's address (`?v=<id>`): wasm-pack's file names carry no
 hash, and a browser that kept an earlier build's module (beta.13 served
 them with `max-age=3600`) must never run it with this build's scripts
-(docs/notes/web-app.md "Module addresses"). `make web` runs this; the file
+(opendmd-notes docs/notes/web-app.md "Module addresses"). `make web` runs this; the file
 is gitignored, served `no-cache` like every script.
 """
 import hashlib

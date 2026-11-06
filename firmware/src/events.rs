@@ -1,5 +1,5 @@
 //! `GET /api/events`: what the Now view follows, pushed as Server-Sent
-//! Events on ESP-IDF's `esp_http_server` (docs/research/http-stack.md §4-5;
+//! Events on ESP-IDF's `esp_http_server` (opendmd-notes docs/research/http-stack.md §4-5;
 //! docs/api.md).
 //!
 //! The route answers with a hand-written `text/event-stream` head and

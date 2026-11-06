@@ -1,6 +1,6 @@
 //! `opendmd-webmin SRC OUT FILE...`: minify each of the web app's scripts and
 //! stylesheets on its own, `SRC/FILE` to `OUT/FILE` (make web, through
-//! tools/web-minify.py; docs/notes/web-app.md "Minified build").
+//! tools/web-minify.py; opendmd-notes docs/notes/web-app.md "Minified build").
 //!
 //! No bundling: every file stays a file at its own path, its import
 //! specifiers as written, so the module graph is the one the sources have.

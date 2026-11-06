@@ -5,7 +5,7 @@ about "The hooded runner up close: scarf flying, sprout bobbing, leaping boulder
 loop forever
 fps 50
 
--- The close-up side-scroller (docs/research/side-scroller.md, section 7):
+-- The close-up side-scroller (opendmd-notes docs/research/side-scroller.md, section 7):
 -- the runner is the star, 25 px tall, built from five sprite parts read
 -- per pixel (head, torso, legs running, legs in the air, the sprout) so
 -- the frames combine (3 heads x 5 torsos x 7 legs) within the 256-number

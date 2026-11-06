@@ -1,5 +1,5 @@
 # Rotozoom floor's narrowed pixel stage, by hand, as a JIT would lay it out
-# (the listing of 2026-10-29; see docs/research/psi-jit-esp32.md, phase 0):
+# (the listing of 2026-10-29; see opendmd-notes docs/research/psi-jit-esp32.md, phase 0):
 #   L1 = mul_w(s34, L0); L3 = add_w(L1, s36)
 #   L1 = mul_w(s35, L0); L4 = add_w(L1, L2); L1 = add_w(L4, s15)
 #   L4 = floor(L3); L3 = floor(L1); L1 = add_w(L4, L3); L4 = mask(L1, 2 - 2^-16)

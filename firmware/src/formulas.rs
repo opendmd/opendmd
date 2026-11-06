@@ -1,4 +1,4 @@
-//! The Formulas the firmware plays by reference (docs/notes/formulas.md
+//! The Formulas the firmware plays by reference (opendmd-notes docs/notes/formulas.md
 //! "Formulas by reference"), always compiled (`opendmd_psi::psb`): the
 //! player never compiles.
 //!

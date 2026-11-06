@@ -117,7 +117,7 @@ const fn sin_f(x: f64) -> f64 {
 /// `sin(2π i / 256)` in Q14 (±16384): the sine Psi is lent.
 /// In DRAM on the ESP32 (512 B), with the palettes: Formulas read them per
 /// pixel, and read through the flash cache their time moved with the
-/// build's layout (docs/research/psi-speed.md).
+/// build's layout (opendmd-notes docs/research/psi-speed.md).
 #[cfg_attr(target_os = "espidf", link_section = ".dram1.psi")]
 pub static SIN: [i16; 256] = {
     let mut t = [0i16; 256];
