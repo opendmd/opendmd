@@ -407,7 +407,8 @@ _www_snap: Path | None = None
 
 def www_snapshot() -> Path:
     """The web app as it was when the run began, copied once: the mock serves
-    this, not opendmd-web/www. `make web` and `make site` rewrite that
+    this, not opendmd-web/www-dist (make web's output: the sources with their
+    scripts minified, tools/web-minify.py). `make web` and `make site` rewrite that
     directory (delete the .gz files, replace pkg/), and a page that loads
     its modules in that moment gets a 404 and never draws: a build running
     beside the smoke made a bare wait time out. (A reload would not do:
@@ -416,7 +417,7 @@ def www_snapshot() -> Path:
     if _www_snap is None:
         OUT.mkdir(parents=True, exist_ok=True)
         _www_snap = Path(tempfile.mkdtemp(prefix="www-snap-", dir=OUT)) / "www"
-        shutil.copytree(REPO / "opendmd-web" / "www", _www_snap)
+        shutil.copytree(REPO / "opendmd-web" / "www-dist", _www_snap)
         if (REPO / "opendmd-web" / "www.pack").is_file():  # beside it, where the mock looks (www_info)
             shutil.copy2(REPO / "opendmd-web" / "www.pack", _www_snap.parent / "www.pack")
         atexit.register(shutil.rmtree, _www_snap.parent, True)
@@ -5321,14 +5322,21 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     # trap throws) restarts it, and the editor carries on.
     page.context.close()
     page = new_page(browser, "laptop", errors)
+    trap_patched: list[int] = []
+
     def trap_glue(route):
         r = route.fetch()
-        body = r.text().replace("export function compile(src) {",
-                                "export function compile(src) { if (globalThis.__psiTrap) { globalThis.__psiTrap = 0; throw new WebAssembly.RuntimeError('unreachable (smoke)'); }", 1)
+        # The glue as make web ships it: minified (tools/web-minify.py), so
+        # the parameter's name is the minifier's; matched either way.
+        body, n = re.subn(r"export function compile\((\w+)\)\s*\{",
+                          lambda m: m.group(0) + " if (globalThis.__psiTrap) { globalThis.__psiTrap = 0; throw new WebAssembly.RuntimeError('unreachable (smoke)'); }",
+                          r.text(), count=1)
+        trap_patched.append(n)
         route.fulfill(response=r, body=body)
     page.route("**/pkg-psi/opendmd_psi_web.js*", trap_glue)
     page.goto(base + "/#formulas")
     formula_editor(page, "gray(x*0.5)")
+    check(trap_patched and all(trap_patched), f"formulas: the trap is put into pkg-psi's compile() ({trap_patched})")
     page.evaluate("globalThis.__psiTrap = 1")
     page.fill("#psi-src", "gray(x*0.75)")
     page.wait_for_selector("#toasts .toast:has-text('Formulas restarted')", timeout=10000)
@@ -7614,7 +7622,7 @@ def device_flash_ui(browser, device: str, errors: list[str]) -> None:
           f"device web app: GET /api/www {w}")
     check(st0.get("www", {}).get("version") == w.get("version") and st0.get("www_version") == w.get("version"),
           f"device web app: /api/status www_version {st0.get('www_version')}")
-    files = pack_files(REPO / "opendmd-web" / "www")
+    files = pack_files(REPO / "opendmd-web" / "www-dist")
     if w.get("version") == local:
         check(w.get("entries") == len(files), f"device web app: {w.get('entries')} entries, the local build has {len(files)}")
         t0, same, total = time.time(), 0, 0

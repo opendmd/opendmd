@@ -4,7 +4,7 @@
 # ///
 """Build the public site (https://opendmd.dev/) as static files.
 
-    uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card \
+    uv run tools/site.py OUT_DIR --www opendmd-web/www-dist --card target/demo-card \
         --art target/site-art --dist dist
 
 - /            the home page (site/pages/home.html: what OpenDMD is, the
