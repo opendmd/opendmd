@@ -24,6 +24,12 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               16 KB, 415 not octet-stream, 409 a live edit once the panel moved on
   www         PUT /api/www with the web app's pack; GET / and a wasm at its ?v= address:
               no-cache, the pack's CRC as ETag, 304 for If-None-Match naming it, 200 for another
+  events      GET /api/events (events.rs): two listeners get events (the heap with 0, 1 and 2),
+              a third is a 503 + Retry-After; a keep-alive at least every 3 s of device time, a
+              skip arrives as an event; both listeners keep getting events through rounds of
+              2 and 5 simultaneous 300 KB uploads, status reads beside them answered; a
+              listener that stops reading never holds the device up; closed listeners leave
+              the list (net.events.listeners back to 0)
   bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
               5, 5 uploads of 300 KB at once beside status reads; each 200, or 503 + Retry-After
               and 200 when asked again; never a 408; the network answering; nothing held after;
@@ -423,6 +429,10 @@ class Lane:
                 self.files(api)
                 self.sent(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "events":
+                # (A diagnostic shortcut: the event stream alone, then stop.)
+                self.events(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "bursts":
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
@@ -440,6 +450,7 @@ class Lane:
             if getattr(self.a, "long_psb", None):
                 self.sent(emu, api)
             self.www(api)
+            self.events(emu, api)
             if self.a.connections > 1:
                 self.bursts(emu, api)
             self.load_rounds(emu, api)
@@ -833,6 +844,192 @@ class Lane:
                 f"no-cache, ETag {tag}, 304 for it (/ and the wasm at ?v=), 200 for another")
 
     # -- simultaneous uploads (the spare's wedge recipe) -------------------------
+
+    def events(self, emu, api):
+        """`GET /api/events` (firmware events.rs): the Now view's state pushed on change and every
+        3 s. Device times (`t_ms`) are emulated; wall times are not the device's."""
+        mark = emu.mark()
+        api.json("POST", "/api/play", {"path": self.card_gif})
+        emu.wait_for(re.compile(re.escape(f"] {self.card_gif} <- ")), 60, mark, f"`{self.card_gif} <- `")
+        time.sleep(5)
+
+        def heap_now():
+            vals = []
+            for _ in range(5):
+                vals.append(api.status()["heap"]["free"])
+                time.sleep(0.5)
+            return sorted(vals)[2]
+
+        def listeners():
+            return ((api.status().get("net") or {}).get("events") or {}).get("listeners")
+
+        class Listener:
+            def __init__(self, read=True):
+                self.events, self.closed, self.bad = [], False, 0
+                self.s = socket.create_connection(("127.0.0.1", PORT), timeout=30)
+                if not read:
+                    self.s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+                self.s.sendall(b"GET /api/events HTTP/1.1\r\nHost: opendmd\r\nAccept: text/event-stream\r\n\r\n")
+                self.head = b""
+                while b"\r\n\r\n" not in self.head:
+                    d = self.s.recv(1024)
+                    if not d:
+                        break
+                    self.head += d
+                self.code = int(self.head.split(b" ", 2)[1]) if self.head.startswith(b"HTTP/") else 0
+                self.buf = self.head.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in self.head else b""
+                if self.code == 200 and read:
+                    threading.Thread(target=self.loop, daemon=True).start()
+
+            def loop(self):
+                try:
+                    while True:
+                        d = self.s.recv(8192)
+                        if not d:
+                            break
+                        self.buf += d
+                        while b"\n\n" in self.buf:
+                            ev, self.buf = self.buf.split(b"\n\n", 1)
+                            if not ev.startswith(b"data: "):
+                                continue
+                            try:
+                                j = json.loads(ev[6:])
+                                self.events.append((time.time(), j["t_ms"], j["now_playing"]["ordinal"], len(ev) + 2, j))
+                            except (ValueError, KeyError):
+                                self.bad += 1
+                except OSError:
+                    pass
+                self.closed = True
+
+            def close(self):
+                with contextlib.suppress(OSError):
+                    self.s.close()
+
+        def gaps(evs):
+            return sorted(y[1] - x[1] for x, y in zip(evs, evs[1:]))
+
+        h0 = heap_now()
+        self.expect(listeners() == 0, "events", f"net.events.listeners {listeners()} before any listener")
+        a = Listener()
+        self.expect(a.code == 200 and b"text/event-stream" in a.head, "events", f"GET /api/events answered {a.head[:200]!r}")
+        end = time.time() + 20
+        while not a.events and time.time() < end:
+            time.sleep(0.2)
+        self.expect(a.events, "events", "no first event in 20 s wall")
+        first = a.events[0][4]
+        for k in ("t_ms", "now_playing", "paused", "entries", "manifest", "index_state", "brightness", "sd", "mode", "schedule", "context"):
+            self.expect(k in first, "events", f"the event has no `{k}`: {sorted(first)}")
+        self.expect(first["now_playing"]["path"] == self.card_gif, "events", f"the event's path {first['now_playing']['path']}, playing {self.card_gif}")
+        time.sleep(6)
+        h1 = heap_now()
+        b = Listener()
+        self.expect(b.code == 200, "events", f"a second listener answered {b.code}")
+        time.sleep(6)
+        h2 = heap_now()
+        c = Listener()
+        self.expect(c.code == 503 and re.search(rb"(?im)^retry-after:", c.head), "events", f"a third listener answered {c.head[:120]!r}, wanted 503 + Retry-After")
+        c.close()
+        self.expect(listeners() == 2, "events", f"net.events.listeners {listeners()} with two listening")
+        # Idle (the GIF looping, nothing changing): a keep-alive at least every 3 s.
+        n0 = len(a.events)
+        time.sleep(20)
+        idle = a.events[n0:]
+        ig = gaps(idle)
+        self.expect(len(idle) >= 3 and ig and ig[-1] <= 4000, "events idle",
+                    f"{len(idle)} events in 20 s wall while idle, device gaps {ig}: a keep-alive every 3 s wanted")
+        self.expect(a.bad == 0 and b.bad == 0, "events", f"{a.bad + b.bad} events that were not the JSON wanted")
+        ev_len = max(e[3] for e in a.events)
+        # A skip: an event with the next file, without waiting for the keep-alive.
+        st = api.status()
+        ordinal, t_skip = st["now_playing"]["ordinal"], st["t_ms"]
+        api.json("POST", "/api/skip")
+        end = time.time() + 30
+        hit = None
+        while hit is None and time.time() < end:
+            hit = next((e for e in a.events if e[2] != ordinal and e[1] >= t_skip), None)
+            time.sleep(0.1)
+        self.expect(hit is not None, "events", f"no event with the next file within 30 s wall of a skip (ordinal {ordinal})")
+        self.ok("events", f"heap free (median of 5 status reads) {h0} B with 0 listeners, {h1} with 1, {h2} with 2 "
+                f"(per listener {h0 - h1}, {h1 - h2} B); a third 503 + Retry-After; idle: {len(idle)} events in 20 s wall, "
+                f"device gaps max {ig[-1]} ms; events up to {ev_len} B; a skip's event {hit[1] - t_skip} ms of device time after the status read before it")
+        self.notes.append(f"events heap: 0/1/2 listeners {h0}/{h1}/{h2} B free, events up to {ev_len} B")
+
+        # Rounds of simultaneous 300 KB uploads, both listeners and a status read beside them.
+        work = self.logs / f"events-{self.stamp}"
+        work.mkdir(parents=True, exist_ok=True)
+        src = work / "blob.bin"
+        src.write_bytes(blob(78, 300 * 1024))
+        n_a0, n_b0 = len(a.events), len(b.events)
+        codes: dict[int, int] = {}
+        lock = threading.Lock()
+        polls: list[float] = []
+        for rnd, n in enumerate((2, 5), 1):
+            def one(i):
+                url = f"http://127.0.0.1:{PORT}/api/files/gifs/_events/r{rnd}u{i}.bin"
+                t0 = time.time()
+                while True:
+                    r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-D", str(work / f"h{i}"), "-w", "%{http_code}", "-m", "120",
+                                        "-T", str(src), url], capture_output=True, text=True)
+                    code = int(r.stdout.strip() or 0)
+                    with lock:
+                        codes[code] = codes.get(code, 0) + 1
+                    head = (work / f"h{i}").read_text(errors="replace") if (work / f"h{i}").exists() else ""
+                    if code == 503 and re.search(r"(?im)^retry-after:", head) and time.time() - t0 < 300:
+                        time.sleep(2)
+                        continue
+                    return
+            ts = [threading.Thread(target=one, args=(i,), daemon=True) for i in range(1, n + 1)]
+            for t in ts:
+                t.start()
+            while any(t.is_alive() for t in ts):
+                emu.check()
+                t_s = time.time()
+                code, _, _ = api.raw("GET", "/api/status", timeout=20)
+                polls.append(time.time() - t_s)
+                self.expect(code in (200, 503), "events burst", f"a status read beside the uploads answered {code}")
+                time.sleep(1)
+            for t in ts:
+                t.join(300)
+        self.expect(codes.get(200, 0) == 7 and set(codes) <= {200, 503}, "events burst", f"the uploads answered {codes}: 7 x 200 wanted in the end")
+        self.expect(not a.closed and not b.closed, "events burst", "a listener was closed during the uploads")
+        burst_a, burst_b = a.events[n_a0:], b.events[n_b0:]
+        bg = gaps(burst_a)
+        self.expect(len(burst_a) >= 3 and len(burst_b) >= 3 and bg and bg[-1] <= 6000, "events burst",
+                    f"{len(burst_a)}/{len(burst_b)} events to the listeners during the uploads, device gaps {bg[-12:]}")
+        self.expect(max(polls) < 10, "events burst", f"a status read beside the uploads took {max(polls):.1f} s wall")
+        self.ok("events burst", f"uploads {dict(sorted(codes.items()))}; {len(burst_a)} and {len(burst_b)} events to the two listeners, "
+                f"device gaps p50 {bg[len(bg) // 2]} ms max {bg[-1]} ms; {len(polls)} status reads beside, wall max {max(polls):.2f} s (not a timing check)")
+        for rnd, n in enumerate((2, 5), 1):
+            for i in range(1, n + 1):
+                api.call("DELETE", "/api/files" + q(f"/gifs/_events/r{rnd}u{i}.bin"), want=(200, 404))
+        api.call("DELETE", "/api/files" + q("/gifs/_events"), want=(200, 404))
+        shutil.rmtree(work, ignore_errors=True)
+
+        # Closed listeners leave the list (close_fn), and a place is free again.
+        a.close()
+        b.close()
+        end = time.time() + 30
+        while listeners() != 0 and time.time() < end:
+            time.sleep(0.5)
+        self.expect(listeners() == 0, "events", f"net.events.listeners {listeners()} 30 s wall after both closed")
+        # A listener that never reads: the device never waits for it (the emulator's NAT takes
+        # every byte into host buffers, so the 5 s drop itself is a device check).
+        stall = Listener(read=False)
+        self.expect(stall.code == 200, "events stall", f"answered {stall.code}")
+        t_s, worst = time.time(), 0.0
+        while time.time() - t_s < 20:
+            t1 = time.time()
+            api.status()
+            worst = max(worst, time.time() - t1)
+            time.sleep(1)
+        stall.close()
+        end = time.time() + 30
+        while listeners() != 0 and time.time() < end:
+            time.sleep(0.5)
+        ev = (api.status().get("net") or {}).get("events")
+        self.expect(ev and ev["listeners"] == 0, "events stall", f"net.events {ev} after the listener that never read closed")
+        self.ok("events stall", f"a listener that never reads: status reads beside it max {worst:.2f} s wall over 20 s; "
+                f"closed, it left the list (net.events {ev})")
 
     def bursts(self, emu, api):
         """The spare's wedge recipe (wedge.sh) in the emulator: rounds of 2, 2, 2, 5, 5, 5 uploads of
@@ -1312,7 +1509,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events"):
             lane.card_checks()
             lane.run_b()
     except LaneFail as e:

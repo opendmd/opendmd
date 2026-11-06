@@ -247,7 +247,7 @@ export async function mount(el) {
   const panel = h('div');
   const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
   el.append(h('h1.ptitle', 'Settings'), banner, tabs, panel);
-  let open = '', poll = 0, visible = true, dev;
+  let open = '', visible = true, dev;
   function go(k) {
     if (!BUILD[k]) k = 'play';
     for (const b of tabs.children) { b.classList.toggle('on', b.dataset.tab === k); b.ariaSelected = b.dataset.tab === k; }
@@ -258,19 +258,17 @@ export async function mount(el) {
     if (k === 'device') dev?.show();
     tick();
   }
-  // Device's status, every 5 s while it is open.
+  // Device's status, every 5 s while it is open (the app's scheduler).
   function tick() {
-    clearTimeout(poll);
-    if (visible && open === 'device') poll = setTimeout(() => app.refreshStatus().catch(() => {}).finally(tick), 5000);
+    if (visible && open === 'device') app.watch('device', 5000); else app.unwatch('device');
   }
 
-  // A playlist change while the player is still reading one would queue behind it.
-  let recheck = 0;
+  // A playlist change while the player is still reading one would queue
+  // behind it: the status every 2 s until it is done.
   on('status', (s) => {
     f.set.disabled = s.index_state === 'building';
     f.set.title = f.set.disabled ? 'the player is still reading the playlist' : '';
-    clearTimeout(recheck);
-    if (f.set.disabled) recheck = setTimeout(() => app.refreshStatus().catch(() => {}), 2000);
+    if (f.set.disabled) app.watch('reindex', 2000); else app.unwatch('reindex');
   });
 
   // The fields `keys`, read now (a config event may redraw them before the
@@ -299,6 +297,6 @@ export async function mount(el) {
   return {
     show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); if (open === 'device') dev?.show(); sched.load(); tick(); },
     sub: go,
-    hide() { visible = false; clearTimeout(poll); if (open === 'device') dev?.hide(); },
+    hide() { visible = false; tick(); if (open === 'device') dev?.hide(); },
   };
 }

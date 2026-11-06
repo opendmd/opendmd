@@ -537,6 +537,86 @@ def sync_state(page: Page) -> dict:
     return page.evaluate("() => ({...document.querySelector('#now-drift').dataset})")
 
 
+def status_reads(page: Page, seconds: float) -> int:
+    """GET /api/status requests the page makes in `seconds`."""
+    n = [0]
+
+    def seen(r):
+        if urllib.parse.urlparse(r.url).path == "/api/status":
+            n[0] += 1
+    page.on("request", seen)
+    page.wait_for_timeout(int(seconds * 1000))
+    page.remove_listener("request", seen)
+    return n[0]
+
+
+def events_checks(page: Page, base: str) -> None:
+    """Now on the stream (GET /api/events, mock-device.py's as the
+    firmware's): live, with status reads only for what the events lack;
+    in step through it; back to polling, still in step, when the stream is
+    refused (503), goes quiet or the firmware has none (404); live again when
+    it is back (`/mock/events`)."""
+    live = lambda: page.evaluate("() => document.querySelector('#now-drift').dataset.live === 'true'")  # noqa: E731
+    conn = lambda: page.get_attribute("#now-conn", "title")  # noqa: E731
+    page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'true'", timeout=10000)
+    ev = get_json(base + "/mock/events")
+    n = status_reads(page, 6)
+    check(live() and conn() == "Live" and ev["listeners"] >= 1,
+          f"now: the stream is live ({ev}), {n} status reads in 6 s (polling: ~12)")
+    check(n <= 4, f"now: with the stream, status reads only at a new file ({n} in 6 s, dwell 4 s)")
+    st = wait_sync(page, int(sync_state(page)["k"]) + 2)
+    check(st.get("live") == "true" and abs(float(st.get("drift", 1e9))) < 60,
+          f"now: in step on the stream's events (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms)")
+    # A skip: the stream brings the new file (no status read asked for it).
+    path = sync_state(page).get("path")
+    post_json(base + "/api/skip", {})
+    st = wait_sync(page, 2, not_path=path)
+    now_path = get_json(base + "/api/status")["now_playing"]["path"]
+    check(st.get("path") == now_path and abs(float(st.get("drift", 1e9))) < 60,
+          f"now: a skip arrives on the stream and re-syncs (drift {st.get('drift')} ms, {st.get('path')})")
+    # Quiet (open, nothing sent): back to polling after 10 s, live again once it talks.
+    get_json(base + "/mock/events?mode=quiet")
+    page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'false'", timeout=16000)
+    n = status_reads(page, 3)
+    check(n >= 4 and conn() == "Live (polling)", f"now: a quiet stream -> polling ({n} status reads in 3 s, '{conn()}')")
+    get_json(base + "/mock/events?mode=on")
+    page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'true'", timeout=20000)
+    check(True, "now: the stream talks again -> live")
+    # Refused (two listen already): polling, in step; the stream again later (30 s).
+    get_json(base + "/mock/events?mode=full&drop=1")
+    page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'false'", timeout=8000)
+    k = int(sync_state(page).get("k", 0))
+    st = wait_sync(page, k + 3)
+    n = status_reads(page, 3)
+    check(n >= 4 and abs(float(st.get("drift", 1e9))) < 60,
+          f"now: stream refused (503) -> polling ({n} status reads in 3 s), in step (drift {st.get('drift')} ms)")
+    get_json(base + "/mock/events?mode=on")
+    page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'true'", timeout=45000)
+    check(True, "now: the stream is tried again after a refusal -> live")
+    # Firmware without the route (404): polling for good, still in step.
+    expected.append("/api/events")
+    try:
+        get_json(base + "/mock/events?mode=off&drop=1")
+        page.wait_for_function("document.querySelector('#now-drift').dataset.live === 'false'", timeout=8000)
+        page.wait_for_timeout(5000)  # (the retry after a live stream ends: 3 s, then the 404)
+        opened = get_json(base + "/mock/events")["opened"]
+        k = int(sync_state(page).get("k", 0))
+        st = wait_sync(page, k + 3)
+        n = status_reads(page, 3)
+        check(n >= 4 and abs(float(st.get("drift", 1e9))) < 60,
+              f"now: no stream (404, older firmware) -> polling ({n} status reads in 3 s), in step (drift {st.get('drift')} ms)")
+        get_json(base + "/mock/events?mode=on")
+        page.wait_for_timeout(4000)
+        check(get_json(base + "/mock/events")["opened"] == opened and not live(),
+              "now: after a 404 the stream is not asked for again (this page)")
+    finally:
+        get_json(base + "/mock/events?mode=on")
+        expected.remove("/api/events")
+    # Back on the stream for what follows: the page as a person would load it.
+    page.reload()
+    page.wait_for_function("document.querySelector('#now-drift')?.dataset.live === 'true'", timeout=15000)
+
+
 def wait_sync(page: Page, k: int, not_path: str | None = None, timeout_s: float = 15) -> dict:
     """Until the preview has synced `k` times to one file (not `not_path`)."""
     deadline = time.time() + timeout_s
@@ -725,8 +805,9 @@ def unexpected(url: str) -> bool:
 
 def retried(url: str) -> bool:
     """A 503 here is the stream queue being full, and the web app asks again
-    (thumbs.js for GIFs, source.js `queued` for listings and card reads)."""
-    return any(p in url for p in ("/gifs/", "/api/files", "/api/cache/list", "/api/cache/failed"))
+    (thumbs.js for GIFs, source.js `queued` for listings and card reads), or
+    a third page listening to /api/events (Now polls, and tries it again)."""
+    return any(p in url for p in ("/gifs/", "/api/files", "/api/cache/list", "/api/cache/failed", "/api/events"))
 
 
 def new_page(browser, size: str, errors: list[str], banner: bool = False) -> Page:
@@ -3460,6 +3541,7 @@ def mock_pass(browser) -> None:
         drifts, rtts = drift_stats(page, 8)
         print("  " + summarise("mock drift over 8 s", drifts, rtts))
         check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+        events_checks(page, base)
         transition_checks(page, base)
         look_checks(page, base, True)
         boot_checks(page, base, True)

@@ -131,6 +131,7 @@ export const app = {
   async refreshStatus(recent) {
     if (!this.src?.config) return null;
     const was = this.cardKey, seq = ++this.stAsked;
+    fullAt = performance.now();
     const st = await this.src.status(recent);
     // Replies can land out of order (the Now poll, a return to the tab and a
     // view's own refresh are each a request): one asked before the latest
@@ -195,7 +196,42 @@ export const app = {
   },
 
   go(view) { location.hash = '#' + view; },
+
+  // The one status scheduler. A view asks for the status every `ms` while it
+  // is up (`watch`; again to change the rate) and lets go (`unwatch`). One
+  // timer runs, for whichever is due first, so the fastest asked sets the
+  // pace; one read is in flight at a time; none while the page is hidden.
+  // Without `read` a watcher wants the full status, and any full read
+  // (`refreshStatus`, whoever asked) counts for it; with one (Now: its
+  // slim reads and clock samples) the read is its own. `ms` Infinity: only
+  // when `soon` asks (in `wait` ms).
+  watch(key, ms, read) { const w = watchers.get(key); watchers.set(key, { at: -1e9, ...w, ms, read }); pace(); },
+  unwatch(key) { watchers.delete(key); pace(); },
+  soon(key, wait = 0) { const w = watchers.get(key); if (w) { w.soon = performance.now() + wait; pace(); } },
 };
 
-// Back to this tab (a card may have been swapped meanwhile): one status.
-document.addEventListener('visibilitychange', () => { if (!document.hidden && app.device) app.refreshStatus().catch(() => {}); });
+const watchers = new Map();
+let fullAt = -1e9, paceT = 0, reading = false;
+const dueAt = (w) => Math.min(w.soon ?? Infinity, (w.read ? w.at : fullAt) + w.ms);
+function pace() {
+  clearTimeout(paceT);
+  if (reading || document.hidden) return;
+  const t = performance.now();
+  let next = null, at = Infinity;
+  for (const w of watchers.values()) {
+    if (!w.read && w.soon <= fullAt) w.soon = null; // (a full read since did it)
+    if (dueAt(w) < at) [next, at] = [w, dueAt(w)];
+  }
+  if (at > t) { if (at < Infinity) paceT = setTimeout(pace, at - t); return; }
+  reading = true;
+  next.at = t;
+  next.soon = null;
+  (next.read || (() => app.refreshStatus()))().catch(() => {}).finally(() => { reading = false; pace(); });
+}
+
+// Back to this tab (a card may have been swapped meanwhile): one full
+// status first, then the watchers' reads as they fall due.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && app.device) watchers.set('back', { at: -1e9, ms: Infinity, soon: performance.now() });
+  pace();
+});

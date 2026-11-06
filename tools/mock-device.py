@@ -127,6 +127,17 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   them, `&kbps=N` sends card files in 2 KB pieces at that rate (as the
   firmware's `IO_CHUNK` streaming), so a reader that hangs up early is
   measured as a device would see it. web-smoke's thumbnail checks use it.
+- **`GET /api/events`** pushes the Now view's state as the firmware does
+  (`events.rs`): a `text/event-stream` with `retry: 3000`, one `data:` event
+  (the firmware's fields: the clock, `now_playing`, `paused`, the playlist,
+  `brightness`, the card's state, night mode and the schedule, Follow
+  RePlayOS) whenever it changes (the clock and position aside) and every
+  3 s, looked at every 250 ms; at most 2 listeners, a third a 503 +
+  `Retry-After: 5`. **`GET /mock/events?mode=on|off|full|quiet[&drop=1]`**
+  (mock only): `off` answers 404 as firmware without the route, `full` 503
+  as if two listened, `quiet` keeps the streams open with nothing sent (a
+  dead one); `drop=1` ends the open streams; no `mode`: `{mode,
+  listeners, opened}`. web-smoke's Now checks use it.
 - **`GET /mock/card?id=<16 hex>`** (mock only): a power cycle with another
   card in — `sd.card_id` becomes `id`, uptime starts again; the files stay
   `--root`'s (same paths, as a card copied twice would be). `sd.card_id`
@@ -434,6 +445,7 @@ import math
 import os
 import random
 import re
+import select
 import socket
 import shutil
 import sys
@@ -2425,6 +2437,8 @@ class Player:
 
     def reset_boot(self):
         self.boot_time = time.monotonic()
+        # (A restart ends every connection: the event streams too.)
+        self.ctx.events_gen += 1
         self.recent, self.recent_at, self.recent_pending = [], 0, -1
         self.ordinal = 0
         self.gifs_started = 0
@@ -2831,6 +2845,12 @@ class Context:
         self.cache = Cache(self)
         self.schedule = Schedule(self)
         self.formulas = True  # --no-formulas: a firmware build without them
+        # GET /api/events: on | off (404) | full (503) | quiet (sends nothing);
+        # `events_gen` moves on to end the open streams (/mock/events?drop=1).
+        self.events_mode = "on"
+        self.events_listeners = 0
+        self.events_opened = 0
+        self.events_gen = 0
         self.player = Player(self)
         self.follow = Follow(self)
         # The card's health (firmware `sdhealth.rs`): the clock it runs at,
@@ -3201,6 +3221,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/"), {"GET": self.h_root}),
                 (m_exact("/setup"), {"GET": self.h_setup}),
                 (m_exact("/api/status"), {"GET": self.h_status}),
+                (m_exact("/api/events"), {"GET": self.h_events}),
                 (m_exact("/api/skip"), {"POST": self.h_skip}),
                 (m_exact("/api/pause"), {"POST": self.h_pause}),
                 (m_exact("/api/config"), {"GET": self.h_config_get, "PUT": self.h_config_put}),
@@ -3239,6 +3260,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
+                (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
@@ -3439,6 +3461,10 @@ def make_handler(ctx: Context, quiet: bool):
         # -- JSON API handlers -----------------------------------------------
 
         def h_status(self, path):
+            _, _, query = self.path.partition("?")
+            self.send_json(200, self.status_obj(query))
+
+        def status_obj(self, query: str) -> dict:
             with ctx.lock:
                 player = ctx.player
                 ctx.schedule.evaluate()
@@ -3510,7 +3536,6 @@ def make_handler(ctx: Context, quiet: bool):
                              "split": 0, "split_ok": 0, "unsplit": 0, "spin_us": 0,
                              "retimed": 0},
                 }
-                _, _, query = self.path.partition("?")
                 if query_param(query, "recent") == "1":
                     # Recently played, right after `paused` as the firmware puts it.
                     items = list(obj.items())
@@ -3521,6 +3546,78 @@ def make_handler(ctx: Context, quiet: bool):
                     # task never hands an unreadable card over).
                     obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0)
                     obj.update(entries=0, index_state="unavailable")
+            return obj
+
+        # GET /api/events (firmware events.rs): the event's fields, from the
+        # status as the firmware builds them from its snapshot.
+        EVENT_KEYS = ("t_ms", "now_playing", "paused", "entries", "manifest", "index_state")
+        EVENT_TAIL = ("mode", "mode_until", "wake_until", "schedule")
+
+        def event_obj(self) -> dict:
+            st = self.status_obj("")
+            ev = {k: st[k] for k in self.EVENT_KEYS}
+            ev["brightness"] = ctx.settings["brightness"]
+            ev["sd"] = {k: st["sd"].get(k) for k in ("mounted", "readable", "attempts", "error", "formatting")}
+            ev.update({k: st[k] for k in self.EVENT_TAIL})
+            ev["context"] = {**st["context"], "since": None}
+            return ev
+
+        def h_events(self, path):
+            with ctx.lock:
+                mode = ctx.events_mode
+                full = mode == "full" or ctx.events_listeners >= 2
+                if mode != "off" and not full:
+                    ctx.events_listeners += 1
+                    ctx.events_opened += 1
+                gen = ctx.events_gen
+            if mode == "off":
+                self.send_error_json(404, "not found")
+                return
+            if full:
+                self.send_error_json(503, "too many event listeners", {"Retry-After": "5"})
+                return
+            self.close_connection = True
+            self._resp_status = 200
+            try:
+                self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
+                                 b"X-Content-Type-Options: nosniff\r\n\r\nretry: 3000\n\n")
+                self.wfile.flush()
+                last, quiet = None, 0
+                while ctx.events_gen == gen:
+                    # (The client gone: its end readable with nothing to read.)
+                    r, _, _ = select.select([self.connection], [], [], 0)
+                    if r and not self.connection.recv(1, socket.MSG_PEEK):
+                        return
+                    if ctx.events_mode != "quiet":
+                        ev = self.event_obj()
+                        np = ev["now_playing"]
+                        key = json.dumps({**ev, "t_ms": 0, "now_playing": {**np, "elapsed_ms": 0, "frame": np["frame"] > 0}})
+                        quiet += 1
+                        if key != last or quiet >= 12:
+                            data = b"data: " + json.dumps(ev, separators=(",", ":")).encode() + b"\n\n"
+                            self.wfile.write(data)
+                            self.wfile.flush()
+                            self._resp_bytes += len(data)
+                            last, quiet = key, 0
+                    time.sleep(0.25)
+            except OSError:
+                pass
+            finally:
+                with ctx.lock:
+                    ctx.events_listeners -= 1
+
+        def h_mock_events(self, path):
+            _, _, query = self.path.partition("?")
+            mode = query_param(query, "mode")
+            with ctx.lock:
+                if mode:
+                    if mode not in ("on", "off", "full", "quiet"):
+                        self.send_error_json(400, "mode: on, off, full or quiet")
+                        return
+                    ctx.events_mode = mode
+                if query_param(query, "drop") == "1":
+                    ctx.events_gen += 1
+                obj = {"mode": ctx.events_mode, "listeners": ctx.events_listeners, "opened": ctx.events_opened}
             self.send_json(200, obj)
 
         def h_skip(self, path):
@@ -5076,6 +5173,22 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
             try:
                 conn.request(method, self.path, body=body, headers=headers)
                 resp = conn.getresponse()
+                if (resp.getheader("Content-Type") or "").startswith("text/event-stream"):
+                    # GET /api/events: passed on as it comes, until either end closes.
+                    self.send_response(resp.status, resp.reason or "")
+                    self.send_header("Content-Type", resp.getheader("Content-Type"))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.close_connection = True
+                    self._resp_status = resp.status
+                    try:
+                        while piece := resp.read1(2048):
+                            self.wfile.write(piece)
+                            self.wfile.flush()
+                    except OSError:
+                        pass
+                    return
                 sized = resp.getheader("Content-Length")
                 # A sized answer (a card file) goes on as it comes, so a
                 # browser that stops reading (a thumbnail's cut) closes the

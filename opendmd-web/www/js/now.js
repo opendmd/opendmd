@@ -1,6 +1,9 @@
-// Now: what the panel is doing. On a device, /api/status polled while this
-// view is up (every POLL_MS; the slim `?now=1` between full reads, and less
-// often while a file goes to or from the card), the remote control (skip,
+// Now: what the panel is doing. On a device, what is on screen pushed while
+// this view is up (GET /api/events, with a full status read at the start,
+// on each new file for Recently played and when the playlist or card
+// changes), or /api/status polled through the app's scheduler where there
+// is no stream (every POLL_MS; the slim `?now=1` between full reads, and
+// less often while a file goes to or from the card), the remote control (skip,
 // pause, brightness; sending a GIF to the panel is the Library's) and a
 // panel-look preview of the file on screen, fetched once per change and
 // kept in step with the panel by clock (elapsed_ms at the device's t_ms,
@@ -21,6 +24,10 @@ import { h, clear, on, store, debounce, toast, label, niceName, flagName, bright
 // says a file is going to or from the card: the device serves one request
 // at a time, and an upload holds its receive buffers.
 const POLL_MS = 500, FULL_MS = 5000, SLOW_MS = 1500;
+// The stream: an event at least every 3 s, so none for QUIET_MS is a dead
+// one; after a failure it is tried again in RETRY_MS (polling meanwhile),
+// after a live one ends in AGAIN_MS.
+const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
 
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
 const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).join(' · ');
@@ -136,9 +143,9 @@ function mountDevice(el) {
 
   const preview = new PanelPreview(canvas, { wrap: el, onError: (m) => { cap.textContent = 'Preview: ' + m; } });
   let shownPath = '';
-  let timer = 0;
   let failures = 0;
-  let clocks = [];   // [{rtt, off}]: off = device ms - local ms
+  let clocks = [];   // polled: [{rtt, off, hi, t}]: off = device ms - local ms, at most `hi`
+  let pushed = [];   // from the stream: [{off, t}]: off at least this (less the trip)
   let last = null;   // the last status sample: {path, elapsed, t, frame, rate} (device clock)
   let base = null;   // this file's first sample, for the rate its position runs at
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
@@ -151,12 +158,14 @@ function mountDevice(el) {
   bright.input.addEventListener('input', () => sendBright(+bright.input.value));
   on('config', (c) => { bright.ceil(c.max_brightness); if (document.activeElement !== bright.input) bright.set(c.brightness); });
 
+  // (The stream brings a change by itself.)
+  const soonPoll = (ms) => live || app.soon('now', ms);
   async function skip() {
-    try { await app.src.skip(); setTimeout(poll, 400); } catch (e) { toast(e.message, 'bad'); }
+    try { await app.src.skip(); soonPoll(400); } catch (e) { toast(e.message, 'bad'); }
   }
 
   // Previous: back through Recently played, on the device.
-  const soon = () => { recentOrd = Math.min(recentOrd, -1); setTimeout(poll, 400); };
+  const soon = () => { recentOrd = Math.min(recentOrd, -1); app.soon('now', 400); };
   async function back() {
     try { await app.src.skip(true); soon(); } catch (e) { toast(e.message, 'bad'); }
   }
@@ -174,19 +183,22 @@ function mountDevice(el) {
     shownPath = path;
     cap.textContent = 'Loading…';
     try {
-      if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = ''; sync(); poll(); }
+      if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = ''; sync(); soonPoll(); }
     } catch (e) { cap.textContent = 'Preview: ' + e.message; }
   }
 
-  // One status sample, requested at local t0 and answered at t1.
+  // One status sample, requested at local t0 and answered at t1; an event
+  // (t0 null) came at t1, its trip unknown: the device's lead is at least
+  // t_ms - t1.
   function clock(s, t0, t1) {
     if (typeof s.t_ms !== 'number') { last = null; return; }
-    const off = s.t_ms - (t0 + t1) / 2;
     // A reboot restarts the device clock: forget the old samples. (Not an
     // offset jump: one reply stuck behind a file transfer has a big one.)
-    if (clocks.length && s.t_ms + 5000 < clocks.at(-1).t) clocks = [];
-    clocks.push({ rtt: t1 - t0, off, t: s.t_ms });
-    if (clocks.length > 8) clocks.shift();
+    const t = [...clocks, ...pushed].reduce((a, c) => Math.max(a, c.t), -Infinity);
+    if (s.t_ms + 5000 < t) clocks = pushed = [];
+    const all = t0 == null ? pushed : clocks;
+    all.push(t0 == null ? { off: s.t_ms - t1, t: s.t_ms } : { rtt: t1 - t0, off: s.t_ms - (t0 + t1) / 2, hi: s.t_ms - t0, t: s.t_ms });
+    if (all.length > 8) all.shift();
     const np = s.now_playing;
     // The panel's position runs a little slower than its clock (10 ms
     // sleep ticks); measure how much from its own reports, over >= 2 s.
@@ -197,17 +209,30 @@ function mountDevice(el) {
     last = { path: np.path, elapsed: np.elapsed_ms, t: s.t_ms, frame: np.frame, rate };
   }
 
+  // The device's lead on this clock: the polled sample with the shortest
+  // round trip; with events too, the middle of what both allow (an event's
+  // lead at least, a read's at most), the read's when they disagree.
+  function offset() {
+    const best = clocks.reduce((a, b) => (b.rtt < a.rtt ? b : a), clocks[0]);
+    if (!pushed.length) return best?.off;
+    const lo = Math.max(...pushed.map((p) => p.off)), hi = Math.min(...clocks.map((c) => c.hi));
+    return !best ? lo : lo <= hi ? (lo + hi) / 2 : best.off;
+  }
+
   // Put the preview in step with the last sample, if it is of this file.
   function sync() {
     if (!last || !last.frame || preview.path !== last.path) return;
-    const best = clocks.reduce((a, b) => (b.rtt < a.rtt ? b : a));
-    const d = preview.syncTo(last.elapsed, last.t - best.off, last.rate);
+    const off = offset();
+    if (off == null) return;
+    const best = clocks.reduce((a, b) => (b.rtt < a.rtt ? b : a), clocks[0]);
+    const d = preview.syncTo(last.elapsed, last.t - off, last.rate);
     if (Number.isNaN(d)) return;
     // data-*: for tools/web-smoke.py (k = syncs of this file so far).
     const ds = drift.dataset;
     ds.k = ds.path === last.path ? +ds.k + 1 : 1;
-    Object.assign(ds, { path: last.path, drift: d.toFixed(1), rtt: best.rtt.toFixed(1), rate: last.rate.toFixed(4), paused: preview.paused });
-    drift.textContent = `Drift ${Math.round(d)} ms · RTT ${Math.round(best.rtt)} ms`;
+    const rtt = best ? best.rtt : NaN;
+    Object.assign(ds, { path: last.path, drift: d.toFixed(1), rtt: rtt.toFixed(1), rate: last.rate.toFixed(4), paused: preview.paused, live });
+    drift.textContent = `Drift ${Math.round(d)} ms` + (best ? ` · RTT ${Math.round(rtt)} ms` : '');
   }
 
   function render(s) {
@@ -236,7 +261,7 @@ function mountDevice(el) {
     againBtn.disabled = !np.path;
     fb.set(np.path, s.manifest && app.activePath);
     ed.set(np.path, title.textContent);
-    const b = bannerFor(s, () => setTimeout(poll, 300));
+    const b = bannerFor(s, () => soonPoll(300));
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
     if (b) clear(banner, b);
@@ -246,38 +271,115 @@ function mountDevice(el) {
     follow_(np.path);
   }
 
-  // A failed poll leaves the preview playing on its last sync. One at a
-  // time: the device has one httpd task, and a reply queued behind the
-  // preview's file fetch must not have others piling up behind it.
-  let busy = false, lastAt = -1e9, lastFull = -1e9;
+  const good = () => {
+    if (failures && preview.path) cap.textContent = '';
+    failures = 0;
+    conn.className = 'dot ok';
+    conn.title = live ? 'Live' : 'Live (polling)';
+  };
+  // A failed poll leaves the preview playing on its last sync. Run by the
+  // app's scheduler (js/state.js), one at a time: the device has one httpd
+  // task, and a reply queued behind the preview's file fetch must not have
+  // others piling up behind it.
+  let lastFull = -1e9, lastEv = null;
   async function poll() {
-    if (document.hidden || busy) return;
     const t0 = performance.now();
-    if (app.status?.transfer && t0 - lastAt < SLOW_MS - 50) return;
-    busy = true;
-    lastAt = t0;
     try {
       // Recently played changes only when a file starts: asked for then.
       const ask = recentOrd > -2 && app.status?.now_playing?.ordinal !== recentOrd;
-      const full = ask || t0 - lastFull >= FULL_MS;
+      // (With the stream, a read is only ever for what it does not carry.)
+      const full = live || ask || t0 - lastFull >= FULL_MS;
       const s = full || !app.src.now ? await app.refreshStatus(ask) : Object.assign(app.status, await app.src.now());
       if (full) lastFull = t0;
       clock(s, t0, performance.now());
+      // An event that came while this was asked is newer.
+      if (lastEv?.t_ms > s.t_ms) merge(s, lastEv);
       render(s);
       if (ask) {
         recentOrd = s.recent ? s.now_playing.ordinal : -2;
         if (s.recent) { prevBtn.hidden = false; rc.set(s.recent, s.recent_at); }
       }
       sync();
-      if (failures && preview.path) cap.textContent = '';
-      failures = 0;
-      conn.className = 'dot ok';
-      conn.title = 'Live';
+      good();
     } catch (e) {
       conn.className = 'dot bad';
       conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
       if (preview.path) cap.textContent = 'Panel not reachable';
-    } finally { busy = false; }
+    } finally {
+      // Polling (no stream): less often while a file goes to or from the card.
+      if (!live && shown) app.watch('now', app.status?.transfer ? SLOW_MS : POLL_MS, poll);
+    }
+  }
+
+  // An event onto the status: the card's part merged (it carries only some
+  // of it), the rest as it is.
+  function merge(s, ev) {
+    for (const k in ev) s[k] = k == 'sd' ? { ...s.sd, ...ev.sd } : ev[k];
+  }
+
+  // The stream (GET /api/events): while it is live the view shows its
+  // events and reads the status only for what they do not carry; a refusal,
+  // an error or QUIET_MS without an event goes back to polling, and it is
+  // tried again later; firmware without it (404) just polls.
+  let shown = false, live = false, stream = null, noStream = false, quietT = 0, againT = 0;
+  function listen() {
+    clearTimeout(againT);
+    if (stream || noStream || !shown || document.hidden || !app.src.events) return;
+    const ac = stream = new AbortController();
+    const quiet = () => { clearTimeout(quietT); quietT = setTimeout(() => ac.abort(), QUIET_MS); };
+    quiet();
+    app.src.events((ev, at) => {
+      if (stream !== ac || !app.status) return;
+      quiet();
+      if (!live) {
+        // (Re)connected: one full read, then only what the events lack.
+        live = true;
+        app.watch('now', Infinity, poll);
+        app.soon('now');
+      }
+      onEvent(ev, at);
+    }, ac.signal).then(() => end(ac), (e) => end(ac, e));
+  }
+  function end(ac, e) {
+    if (stream !== ac) return;
+    clearTimeout(quietT);
+    stream = lastEv = null;
+    if (e?.status == 404) noStream = true;
+    const ms = live ? AGAIN_MS : Math.max(RETRY_MS, (e?.after || 0) * 1000);
+    live = false;
+    if (shown) {
+      app.watch('now', POLL_MS, poll);
+      againT = setTimeout(listen, ms);
+    }
+  }
+  function unlisten() {
+    clearTimeout(quietT);
+    clearTimeout(againT);
+    const ac = stream;
+    stream = lastEv = null;
+    live = false;
+    ac?.abort();
+  }
+  // Hidden: no stream (and the scheduler reads nothing); back: polling until it is live again.
+  const onVis = () => { if (document.hidden) unlisten(); else { app.watch('now', POLL_MS, poll); listen(); } };
+
+  function onEvent(ev, at) {
+    const s = app.status, was = s.now_playing?.ordinal;
+    // The playlist or the card changed: the full status (the other views'
+    // too, and a card swap's checks).
+    const big = ['entries', 'manifest', 'index_state'].some((k) => ev[k] !== s[k])
+      || ['mounted', 'readable', 'formatting'].some((k) => ev.sd?.[k] !== s.sd?.[k]);
+    lastEv = ev;
+    merge(s, ev);
+    if (app.config && ev.brightness != null && ev.brightness !== app.config.brightness) {
+      app.config.brightness = ev.brightness;
+      if (document.activeElement !== bright.input) bright.set(ev.brightness);
+    }
+    clock(ev, null, at);
+    render(s);
+    sync();
+    good();
+    if (big || ev.now_playing.ordinal !== was && recentOrd > -2) app.soon('now');
   }
 
   render(app.status);
@@ -286,9 +388,19 @@ function mountDevice(el) {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
       if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Look)'; }
-      poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS);
+      shown = true;
+      // A status read at the start (polling until the stream is live).
+      app.watch('now', POLL_MS, poll);
+      app.soon('now');
+      document.addEventListener('visibilitychange', onVis);
+      listen();
     },
-    hide() { clearInterval(timer); },
+    hide() {
+      shown = false;
+      document.removeEventListener('visibilitychange', onVis);
+      unlisten();
+      app.unwatch('now');
+    },
   };
 }
 
