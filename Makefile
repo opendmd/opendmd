@@ -37,15 +37,39 @@ FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 FW_VARIANTS := 4mb
 VARIANT ?=
 FW_VARIANT := $(or $(VARIANT),4mb)
-ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
+# EMULATOR ONLY, never released: `emu8mb` (firmware/partitions-emu.csv), the
+# psi-probe image's layout for esp32sim, an 8 MB flash with a 3 MB factory
+# (the probe outgrew the 4mb one). Not in FW_VARIANTS, so fw-release never
+# builds it; only the emu-image targets' fw-release-variant (and the
+# updater and notices-check it runs) take it, into $(EMU_DIR), never dist/;
+# it gets no signed bundle (fw-sign.py does not know it) and no manifest.
+FW_EMU_VARIANT := emu8mb
+ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
+ifneq ($(or $(filter-out fw-release-variant updater notices-check,$(MAKECMDGOALS)),$(if $(MAKECMDGOALS),,default)),)
+$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: make emu-probe builds it)
+endif
+ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
+$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/)
+endif
+else ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
 $(error VARIANT=$(VARIANT): the flash layouts are $(FW_VARIANTS))
 endif
 FW_PARTITIONS_4mb := $(FW)/partitions.csv
+FW_PARTITIONS_emu8mb := $(FW)/partitions-emu.csv
+# The flash size espflash, the sdkconfig and the image headers say.
+FW_FLASH_SIZE_4mb := 4mb
+FW_FLASH_SIZE_emu8mb := 8mb
+FW_FLASH_SIZE := $(FW_FLASH_SIZE_$(FW_VARIANT))
 FW_FLASH_BYTES_4mb := 4194304
+FW_FLASH_BYTES_emu8mb := 8388608
 FW_APP_BYTES_4mb := 2621440
+FW_APP_BYTES_emu8mb := 3145728
 UPDATER_OFFSET_4mb := 0x2A0000
+UPDATER_OFFSET_emu8mb := 0x320000
 WWW_OFFSET_4mb := 0x300000
+WWW_OFFSET_emu8mb := 0x380000
 WWW_BYTES_4mb := 1048576
+WWW_BYTES_emu8mb := 1048576
 # What ESP Web Tools' manifest calls the firmware: it must equal the Improv
 # answer's name (firmware/src/improv.rs FIRMWARE_NAME).
 FW_MANIFEST_NAME_4mb := OpenDMD
@@ -634,6 +658,7 @@ FW_L2_COPY ?= 0
 # are 2 KB under a release build's.)
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
+	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	$(if $(filter 1,$(FW_SRAM1_IRAM)),echo 'CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM=y';) \
 	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
 	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
@@ -649,7 +674,7 @@ FW_BENCH_FRAGMENT = $(FW_FRAGMENT) > $(FW)/target/sdkconfig.partitions
 # old values over it.
 FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 	  [ -f "$$cfg" ] || continue; \
-	  grep -qx 'CONFIG_ESPTOOLPY_FLASHSIZE="$(shell echo $(FW_VARIANT) | tr a-z A-Z)"' "$$cfg" \
+	  grep -qx 'CONFIG_ESPTOOLPY_FLASHSIZE="$(shell echo $(FW_FLASH_SIZE) | tr a-z A-Z)"' "$$cfg" \
 	  && grep -qx 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"' "$$cfg" \
 	  && grep -qx 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"' "$$cfg" \
 	  || { echo "==> $$cfg is not this build's ($(FW_VARIANT), $(FW_VERSION), $(FW_PARTITIONS)): removing it"; rm -f "$$cfg"; }; \
@@ -842,7 +867,7 @@ fw-release-variant:
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size.
 	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \
-	 want=$$(echo $(FW_VARIANT) | tr a-z A-Z); \
+	 want=$$(echo $(FW_FLASH_SIZE) | tr a-z A-Z); \
 	 grep -q "^CONFIG_ESPTOOLPY_FLASHSIZE=\"$$want\"" "$$cfg" || { echo "$$cfg: CONFIG_ESPTOOLPY_FLASHSIZE is not \"$$want\""; exit 1; }; \
 	 echo "sdkconfig: flash size $$want ($$cfg)"
 	@# The updater after the firmware: on a fresh machine (CI) it is the
@@ -854,7 +879,7 @@ fw-release-variant:
 	@# (a build with components off links a subset of the default build's
 	@# crates: the default build's check covers it).
 	$(if $(FW_DISABLE),@echo "notices: not checked with FW_DISABLE=$(FW_DISABLE) (a subset of the default build's crates)",$(MAKE) --no-print-directory notices-check)
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
@@ -866,7 +891,11 @@ fw-release-variant:
 	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
 	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
 	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
+ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
+	@echo "$(FW_VARIANT) is emulator-only: no signed bundle"
+else
 	$(MAKE) --no-print-directory fw-sign
+endif
 	@# The www pack, signed with the same key (docs/www-pack.md "Signature"):
 	@# from 1.0.0-beta.15 on a player takes only a signed one over PUT /api/www.
 	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY)
@@ -879,7 +908,7 @@ fw-release-variant:
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(FW_DIST_TABLE) $(FW_PARTITIONS)'
 	@# The flash size in the image headers (byte 3's high nibble: 2 = 4 MB):
 	@# the bootloader's is what the board runs with.
-	@want=$$(case $(FW_VARIANT) in 4mb) echo 2;; esac); \
+	@want=$$(case $(FW_FLASH_SIZE) in 4mb) echo 2;; 8mb) echo 3;; esac); \
 	 for f in $(FW_DIST_BOOTLOADER) $(FW_APP_IMAGE); do \
 	   got=$$(dd if=$$f bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
 	   test $$(( got >> 4 )) -eq $$want || { echo "$$f: flash size code $$(( got >> 4 )) in its header, want $$want ($(FW_VARIANT))"; exit 1; }; \
@@ -893,12 +922,15 @@ fw-release-variant:
 	@# The merged image: espflash lays out bootloader, table and app padded to
 	@# the flash size with 0xFF (so otadata is erased: the bootloader boots
 	@# factory); the updater and the pack go in at their offsets on top.
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
 	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(OTADATA_OFFSET) / 4096 )) count=2 status=none | tr -d '\377' | wc -c)" = 0 || { echo "otadata is not erased in $(FW_FULL_IMAGE)"; exit 1; }
 	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq $(FW_FLASH_BYTES) || { echo "$(FW_FULL_IMAGE) is not $(FW_FLASH_BYTES) B"; exit 1; }
+ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
+	@echo "==> $(FW_VARIANT) (emulator-only) done: no manifest"
+else
 	@# The parts in the order ESP Web Tools writes them.
 	@boot='        { "path": "bootloader-$(FW_VARIANT).bin", "offset": 4096 }'; \
 	 table='        { "path": "partition-table-$(FW_VARIANT).bin", "offset": 32768 }'; \
@@ -924,6 +956,7 @@ fw-release-variant:
 	@uv run --quiet python -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert len(m["builds"][0]["parts"]) == 6' $(FW_MANIFEST) \
 	  || { echo "$(FW_MANIFEST) is not the manifest it should be"; exit 1; }
 	@echo "==> $(FW_VARIANT) done: $(FW_MANIFEST)"
+endif
 
 # The signed bundle for a LAN update (docs/ota.md): the release app image
 # behind a 140-byte header signed with the private key, which never enters
@@ -1164,10 +1197,12 @@ emu-nocard: emu-build
 	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
-# The DevKit's 4mb layout, with EMU_PROBE_SPARE (8 KB) as the factory spare
-# rule. FW_IMAGE=... skips the build.
-EMU_PROBE_VARIANT ?= 4mb
-EMU_PROBE_SPARE ?= 8192
+# The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe
+# outgrew the 4mb factory partition (2,664,032 B of 2,621,440, 2026-11-06).
+# EMU_PROBE_SPARE (64 KB, as for a release) of its 3 MB factory.
+# FW_IMAGE=... skips the build.
+EMU_PROBE_VARIANT ?= $(FW_EMU_VARIANT)
+EMU_PROBE_SPARE ?= 65536
 EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-$(EMU_PROBE_VARIANT)-full.bin
 emu-image-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web

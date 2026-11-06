@@ -7,7 +7,7 @@ Correctness only, never timing; agents may run it freely.
 ```
 make emu-build     # fetch esp32sim at the pinned commit of our fork (the SD-SPI board is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
-make emu-probe     # psi-probe image (the 4mb layout, 8 KB factory spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
+make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
 make emu-paint-probe  # paint-probe image (4mb, the spare's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to the spare by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
 make emu-rig       # smoke image + the rig-scale card (mkcard.py --rig): the FAT index build finishes, heap floor reported -> EMU_RIG_OK
 make emu-rig-tight # the same with the spare's playing heap (an emu-ballast image, ~46 KB free) -> EMU_RIG_OK

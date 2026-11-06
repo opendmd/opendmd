@@ -1,0 +1,21 @@
+# EMULATOR ONLY, NEVER RELEASED: variant "emu8mb", the psi-probe image's
+# layout for esp32sim (`make emu-probe`, tools/emu/). No board runs it and
+# nothing ships it: the Makefile builds this variant only under the emu-image
+# targets (any other goal refuses it), into $(EMU_DIR) and never dist/,
+# with no signed bundle (.odfw) and no installer manifest. No ODFW magic
+# names it (opendmd-core's LAYOUTS has none: a release player refuses such a
+# bundle as another layout's, 422), and tools/fw-sign.py, release.sh,
+# release.yml and site.py do not know it.
+# The 4mb v3 table (partitions.csv) with a bigger factory on an 8 MB flash:
+# the psi-probe build outgrew 2,560 KB (2,664,032 B, 2026-11-06). Same roles,
+# same nvs/otadata/phy_init; factory 3,072 KB (the ESP32 maps at most ~3.19 MB
+# of code, so more would be no use); ota_0 (the updater) 384 KB and www
+# 1,024 KB as in v3, moved up behind it; the rest of the 8 MB unused.
+# 0x20000 + 0x300000 = 0x320000; + 0x60000 = 0x380000; + 0x100000 = 0x480000.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000,
+otadata,   data, ota,      0xF000,   0x2000,
+phy_init,  data, phy,      0x11000,  0x1000,
+factory,   app,  factory,  0x20000,  0x300000,
+ota_0,     app,  ota_0,    0x320000, 0x60000,
+www,       data, esphttpd, 0x380000, 0x100000,
