@@ -435,6 +435,11 @@ impl Server {
         })
     }
 
+    /// The raw handle (`events` queues its pushes on it).
+    pub fn handle(&self) -> sys::httpd_handle_t {
+        self.handle
+    }
+
     /// [`Server::route`] for a handler that reads a JSON body: a non-empty
     /// body must come as `Content-Type: application/json`, else 415 (see
     /// `opendmd_core::access`).
@@ -1142,6 +1147,22 @@ impl Req {
         Ok(send())
     }
 
+    /// Send `head` (a whole response head, and any start of a body) as it
+    /// is, and leave the connection open with nothing more to come from this
+    /// request: a body that never ends (`text/event-stream`, `events.rs`),
+    /// written later straight to the socket on the httpd task. The fd.
+    pub fn hold_open(&mut self, head: &[u8]) -> Result<i32> {
+        let raw = self.raw;
+        // SAFETY: a live request on the httpd task; httpd_send writes raw bytes.
+        let n = unsafe { sys::httpd_send(raw, head.as_ptr() as *const _, head.len()) };
+        if n != head.len() as i32 {
+            bail!("hold_open: head send returned {n}");
+        }
+        self.responded = true;
+        // SAFETY: as above.
+        Ok(unsafe { sys::httpd_req_to_sockfd(raw) })
+    }
+
     /// Hand this request to another task and return, so the httpd task can
     /// serve other clients while the response is produced there
     /// (`httpd_req_async_handler_begin`). The handler must send nothing more
@@ -1618,6 +1639,7 @@ static DETACHED: Mutex<Vec<Arc<Session>>> = Mutex::new(Vec::new());
 /// every client socket it closes, before the fd or the session slot are
 /// released.
 unsafe extern "C" fn close_session(_hd: sys::httpd_handle_t, fd: i32) {
+    crate::events::closed(fd);
     // A socket taken over by an upload: httpd is done with it, but it is
     // closed here only if the upload is done with it too.
     let taken = {
