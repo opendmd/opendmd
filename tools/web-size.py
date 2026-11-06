@@ -192,18 +192,18 @@ DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 # The 40 KB and 20 KB below are Psi stage A's numbers (layers, drawing over
-# a GIF; branch psi-layers, 2026-10-24), approved by the owner the same day.
-# 43 KB for parts (2026-10-25): approved by the owner 2026-10-25. Built at
+# a GIF; branch psi-layers, 2026-10-24).
+# 43 KB for parts (2026-10-25). Built at
 # opt-level "z" since then (42.6 KB; "s" was 44.2): the browser preview's
 # frame is ~0.07 ms mean, 0.14 ms worst under node (0.06 / 0.10 at "s").
 # 44 KB for the text built-ins (2026-10-26, branch psi-glyph: `digit`,
 # `glyph`, `bit`, 'A' character codes): the panel's two fonts (1,235 B, ~570
-# B gz) and their steps, +1.5 KB gz; a small raise the owner pre-approved.
+# B gz) and their steps, +1.5 KB gz; a small raise.
 # 45 KB for any Formula as a look (2026-10-26, branch any-look): `look()`,
 # the look's text composed in the module from the compiled formula
 # (opendmd_psi::look: one implementation, tested with golden frames, not a
-# second copy in JS), +1.4 KB gz; a small raise under the owner's standing
-# OK for budget lines while the firmware stays comfortable.
+# second copy in JS), +1.4 KB gz; a small raise, with the firmware still
+# comfortable.
 # 52 KB for the draw stage (2026-10-27, branch psi-draw, docs/psi-drawing-design.md
 # phase 1: `draw { }`, `for`, `table`, `line`, `dot`, `ink`): 45,589 ->
 # 51,892 B gz, +6.3 KB (the design guessed +3-4): the parser's new
@@ -211,9 +211,8 @@ FONT = {"fonts/silkscreen.woff2"}
 # section, the draw-stage interpreter and its integer rasteriser, the cost
 # model's draw part; +2 KB raw of zero `.data` (two Programs in the module's
 # static state, each 1 KB of tables bigger) that gzips to almost nothing.
-# Loaded only when Formulas opens; raised under the owner's standing OK for
-# budget lines while the firmware stays comfortable (it does: see
-# opendmd-notes docs/research/size-budget.md).
+# Loaded only when Formulas opens; raised with the firmware still
+# comfortable (see opendmd-notes docs/research/size-budget.md).
 # 58 KB for Psi phase 2 (2026-10-27, branch psi-p2, docs/psi-drawing-design.md
 # "As built (phase 2)"): the still cache (the compiler choosing position-only
 # values and laying out their run, the VM keeping and copying them, the
@@ -221,35 +220,33 @@ FONT = {"fonts/silkscreen.woff2"}
 # the estimate with the cache: +5.4 KB gz of the module's wasm (49.2 -> 54.6
 # KB measured alone; a ~3 KB stable sort and two monomorphised loops were
 # taken out to get there). What lets Tunnel and Rotozoom be Formulas at
-# 50 fps; raised under the owner's standing OK for budget lines.
+# 50 fps.
 # 62 KB for psi-speed (2026-10-27, opendmd-notes docs/research/psi-speed.md): the ranges
 # pass (`range`: every value's interval, the narrowed steps chosen at
 # compile time, so the editor's estimate is the panel's) and the
 # palette-scale reuse: +2.8 KB gz (59.1 -> 61.9 KB measured with today's
 # toolchain; the narrowed steps' own loops are left out of wasm, which runs
 # their checked forms: the same bytes). What takes Tunnel towards 100 fps on
-# the panel; raised under the owner's standing OK for budget lines.
+# the panel.
 # 67 KB for `loop forever` (2026-10-27, branch psi-lang, opendmd-notes docs/research/
 # endless-road.md §5.1): Formulas that go on without repeating — the
 # compiler's rewriting of a value that grows without end into once-a-frame
 # wide steps and the exact ways back (`Dag::wide_op`, ~6 KB of wasm before
 # wasm-opt), the wide steps themselves, the wide noise and its lane loop,
-# `seed`: +4.6 KB gz (61.9 -> ~66.5 KB with its glue). Raised under the
-# owner's OK to move the psi wasm line (this branch's brief).
+# `seed`: +4.6 KB gz (61.9 -> ~66.5 KB with its glue).
 # 71 KB for sprites (2026-10-28, branch psi-lang, endless-road.md §5.2):
 # `sprite NAME { … }` blocks — the lexer's raw rows, the key and rows parsed
 # and packed (bytes, not `str`'s Unicode trims), their nine error sentences,
 # the sprite step's lane loop: +3.6 KB gz (~67.9 -> ~71.5 KB with its glue).
-# Raised under the brief's OK.
 # 73 KB for slot reuse (2026-10-28, branch psi-lang, endless-road.md §5.3):
 # the compiler lays steps out on virtual slots and gives each a scalar slot
 # by a linear scan of live intervals (`assign_slots`, ~3.5 KB of wasm):
 # +1.7 KB gz (~71.5 -> ~73.2 KB). Instead of 256 slots, which would have
-# grown every formula's memory on the device. Raised under the brief's OK.
+# grown every formula's memory on the device.
 # 74 KB for palettes of a formula's own (2026-10-28, branch psi-lang,
 # endless-road.md §5.4): `palette NAME = #…, …`, its spread over 32
 # entries, its sentences and the unpacking in the colour step: +1.5 KB gz
-# (~73.2 -> ~74.7 KB). Raised under the brief's OK.
+# (~73.2 -> ~74.7 KB).
 # 76 KB for psi-speed2 (2026-10-28, opendmd-notes docs/research/psi-speed2.md): the
 # compiler's fused runs (`fuse.rs`: a checker's floors, add and mask, a
 # multiply-add, a palette colour of a choice or a pick, a colour of the
@@ -258,40 +255,36 @@ FONT = {"fonts/silkscreen.woff2"}
 # (`Program::vector_loop`), both in the download only so the editor's
 # estimate stays the panel's — the browser runs neither (the steps and a
 # turn at a time draw the same bytes): +2.2 KB gz (~74.9 -> ~77.2 KB).
-# Raised under the brief's OK (it may move a budget with a reason).
 # 82 KB for formula-apps F1 (2026-10-28, branch formula-f1,
 # opendmd-notes docs/research/formula-apps.md): the declarations (`psi 1`, `name`,
 # `about`, `control`, `look`: the header reader, text in quotes, their
 # fifteen sentences), `Meta` and the declared-look composition, and the
 # `controls()` export (the JSON the page builds its sliders and buttons
 # from, so the browser never parses a declaration itself): ~77.2 ->
-# 83,063 B gz (+3.9 KB; formula-apps.md §4 guessed 1-1.5). Raised under the
-# brief's OK (it may move the psi wasm line with a reason).
+# 83,063 B gz (+3.9 KB; formula-apps.md §4 guessed 1-1.5).
 # 83 KB after merging main's psi-speed3 follow-ups into formula-f1 (the
 # review's fixes: one finishing pass, codes, E969's character check):
-# 83,842 B gz, 126 B under 82 KB; raised for room, same OK.
+# 83,842 B gz, 126 B under 82 KB; raised for room.
 # 84 KB for formula-apps F2 (2026-10-28, branch formula-f2): the Formula
 # settings sheet's text edits (`declare`: a declaration line set, put in
 # among the others or taken out; `look` now that edit of the `look` line)
 # and `asLook` (the look the panel draws for a formula's own line, for
 # Settings' and the sheet's checks and the demo): 83,842 -> 85,225 B gz
 # (+1.4 KB; the edit is bytes and `get` only — a str slice's panic alone
-# was +5 KB of core::fmt). Raised under the brief's OK (budgets may move
-# with written reasons).
+# was +5 KB of core::fmt).
 # 85 KB for compile-oom (2026-10-29): the compiler's lists made smaller and
 # let go before the layout (the token list counted then kept, the nodes
 # and slots reserved once, the new_slot/locals pushes through `try_push`),
 # so Endless road's compile fits the ESP32's heap: ~85.6 -> 86,560 B gz
 # (+0.9 KB, with the fallible growth and packed tokens left out of the
-# wasm build). Raised under the budget authority (written reasons).
+# wasm build).
 # 85 KB for the JIT's estimate (2026-10-29, branch jit-2, opendmd-notes docs/research/
 # psi-jit-esp32.md "Phase 2 as built"): `Program::esp32_us_jit` and
 # `_jit_still` so the editor's label knows what the panel's JIT draws (its
 # cost table `jit_value_ns`, the kernel's first step, a fused colour's
 # cost, folded into the estimate's one loop; `info()[13]`): +478 B gz on
 # main's 85,622 (86,100). The browser never runs the JIT: the cost table
-# only. Raised under the budget authority (CLAUDE: Claude may adjust web
-# size budgets itself).
+# only.
 # 87 KB with both merged (compile-oom +0.9 KB, the JIT estimate +0.5 KB on 85.6).
 # 91 KB for console-lessons Phase B (2026-10-29, branch console-b,
 # opendmd-notes docs/research/console-lessons.md §7): `cycle(P, v, s)` (its parse, the
@@ -299,37 +292,34 @@ FONT = {"fonts/silkscreen.woff2"}
 # own values in the compiler, the band plan and the from-nothing frame in
 # `rate.rs`, the VM's parts), their eleven sentences and the estimate's
 # rows: the wasm 83,008 -> 86,639 B gz (+3.6 KB), the line ~87.3 -> ~90.9
-# KB. Raised under the budget authority (CLAUDE: Claude may adjust web size
-# budgets itself).
+# KB.
 # 96 KB for the Psi ergonomics first batch (2026-10-30, branch psi-ergo-1,
 # opendmd-notes docs/research/psi-ergonomics.md §5): the errors that name a formula's own
 # value (P1), `ink(n)` (P3), rebinding (P2), named palette entries (P6)
 # and the reworded sentences (P8): the wasm 92,107 B gz on main, the line
-# ~90 -> 91 KB at P1 (93,199 B). Raised under the budget authority.
-PSI_WASM_GZ_BUDGET = 137 * 1024  # 135 until psi-settle (2026-11-04: the language review's A list in the compiler — the one name rule's checks and E215-E218's sentences, the chained-comparison error, the saturation note's DAG intervals (B1), E304's and under()'s sentences (B6) — and the verifier's sprite-pixel check (M3): 136,764 -> 139,123 B gz; raised under the standing OK for budget lines); 125 until psi-round3 (2026-11-04: Psi ABI 3's built-in inputs, since/was and the 1,024-number store in the compiler, +6.0 KB gz to 133,887 B, and the editor's exports for them — worldReset/worldSet/worldChange/world, sky() with opendmd-core's sky.rs included as it is, builtins() — +2.9 KB gz to 136,764 B; raised under the standing OK for budget lines); 110 until psi-p0 (2026-11-04: 512 steps, 241 values, palette tweens with their store, scenes and their guards, the counts in E402/E404: the compiler, the verifier the demo links and the estimate, +12.7 KB gz over main's 111.8; raised under the standing OK for budget lines); 106 until the display-isolation merge (2026-11-03: the demo's Formula look is loaded from the compiled Formula the app sends, `asLookPsb` — the player's psb loader and verifier now linked into the wasm: +4.1 KB gz, 111,183 B; raised under the standing OK for budget lines); 104 until psi-perf (2026-11-02: the paint primitives costed by the pixels they examine, their boxes from constant values, so the editor's estimate stays the panel's: +0.7 KB gz, 107,018 B; raised under the standing OK for budget lines); 96 until psi-rebuild (2026-10-31: the scene stage — paint, if, print — and `under(x, y)`, +6.5 KB gz; the player lost ~100 KB of compiler for it; the owner's OK 2026-10-31); 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# ~90 -> 91 KB at P1 (93,199 B).
+PSI_WASM_GZ_BUDGET = 137 * 1024  # 135 until psi-settle (2026-11-04: the language review's A list in the compiler — the one name rule's checks and E215-E218's sentences, the chained-comparison error, the saturation note's DAG intervals (B1), E304's and under()'s sentences (B6) — and the verifier's sprite-pixel check (M3): 136,764 -> 139,123 B gz); 125 until psi-round3 (2026-11-04: Psi ABI 3's built-in inputs, since/was and the 1,024-number store in the compiler, +6.0 KB gz to 133,887 B, and the editor's exports for them — worldReset/worldSet/worldChange/world, sky() with opendmd-core's sky.rs included as it is, builtins() — +2.9 KB gz to 136,764 B); 110 until psi-p0 (2026-11-04: 512 steps, 241 values, palette tweens with their store, scenes and their guards, the counts in E402/E404: the compiler, the verifier the demo links and the estimate, +12.7 KB gz over main's 111.8); 106 until the display-isolation merge (2026-11-03: the demo's Formula look is loaded from the compiled Formula the app sends, `asLookPsb` — the player's psb loader and verifier now linked into the wasm: +4.1 KB gz, 111,183 B); 104 until psi-perf (2026-11-02: the paint primitives costed by the pixels they examine, their boxes from constant values, so the editor's estimate stays the panel's: +0.7 KB gz, 107,018 B); 96 until psi-rebuild (2026-10-31: the scene stage — paint, if, print — and `under(x, y)`, +6.5 KB gz; the player lost ~100 KB of compiler for it); 91 until psi-ergo-1; 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
-# examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
+# examples). 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
 # colours and the values about the middle, the editor's colour swatches;
 # +192 B gz, the rewritten examples 292 B shorter but only 22 B gz): a small
-# raise, approved (the owner lets budget lines move with the firmware still comfortable).
+# raise, with the firmware still comfortable.
 # 24 KB for the draw stage (2026-10-27, branch psi-draw): the cheat sheet's
 # Drawing section, the highlighter's words, "Draws N lines and dots a frame",
 # and two drawing examples (Starfield, now drawn, and Wireframe cube):
-# 22,076 -> ~23.1 KB gz; raised under the same standing OK.
+# 22,076 -> ~23.1 KB gz.
 # 25 KB for pickers and Add to playlist (2026-10-27, branch psi-p2-web): a
 # slider with choices (`-- a: shape = cube, ball`) as a row of buttons, in
 # js/psikit.js (shared with the site's /f/ page), and Add to playlist on every
 # formula (what lets the Library's Effects tab go): 23,614 -> ~24.8 KB gz.
-# Raised under the same standing OK.
 # 27 KB for Psi phase 2 (2026-10-27, branch psi-p2): two more examples
 # (Tunnel, Rotozoom: the built-in effects' looks, ~1 KB gz of formulas.json),
 # the estimate with the still cache in the ratings, the cheat sheet's
-# `pal(fire, v) * k`: 24,811 -> ~26.0 KB gz. Same standing OK.
+# `pal(fire, v) * k`: 24,811 -> ~26.0 KB gz.
 # 28 KB for `loop forever` (2026-10-27, branch psi-lang): its cheat-sheet
 # row, the highlighter's `forever`, "Goes on without repeating", Save as
 # GIF's first 10 s: 27,612 -> ~27.8 KB gz with Endless road rewritten for it.
-# Raised under the brief's OK.
 # 30 KB for the Time gate example (2026-10-28, branch ct-gate): one more
 # example in formulas.json (the CT time gate, 19 lines of code and a dozen
 # of comments): 28,435 -> 29,419 B gz. Time gate example; the Formulas split
@@ -348,7 +338,7 @@ PSI_WASM_GZ_BUDGET = 137 * 1024  # 135 until psi-settle (2026-11-04: the languag
 # to the compiler by psi-web's node test), the editor's name as the `name`
 # line and its Settings button, tiles with `about` and a look badge:
 # 30,985 -> 32,488 B gz (the sheet itself is its own line, js/fsheet.js).
-# Under the brief's OK; F3 (most examples out of formulas.json) gives
+# F3 (most examples out of formulas.json) gives
 # ~2.5 KB back and should lower it again.
 # 27 KB for formula-apps F3 (2026-10-28, branch formula-f3): the split.
 # formulas.json is written by make web from the ten `-- bundle` files in
@@ -357,7 +347,7 @@ PSI_WASM_GZ_BUDGET = 137 * 1024  # 135 until psi-settle (2026-11-04: the languag
 # gz -> 4,685 / 2,094; the view's two example cards became one Bundled card
 # and a More Formulas link: 32,488 -> 26,584 B gz. Lowered back so the room
 # isn't spent by accident (1 KB of headroom, not the old 32).
-# 30 KB for the revised bundle (owner, 2026-10-28): Endless road and Time
+# 30 KB for the revised bundle (2026-10-28): Endless road and Time
 # gate in, Clock and Corner clock out; the two are the largest examples
 # (26,584 -> 28,806 B gz, all of it formulas.json).
 # 32 KB since formula-refs (2026-10-29): Endless road readable again (names,
@@ -414,8 +404,7 @@ SHARE_USES = ("pkg/", "pkg-psi/", "js/wasm.js", "js/web.js", "js/build.js", "js/
 # create-art: ~2.7 KB for C1, ~3.8 KB with Send to my panel). It is the web app's Studio on the demo's files (js/studio.js,
 # js/find.js, the main wasm, pkg-art, ...), counted in their own lines and
 # printed as the page's first-visit total for information.
-# 8 KB since byo-gif (2026-11-04, raised under the standing OK for budget
-# lines): the relay's refusals in plain words, ?url=, a page's address, the
+# 8 KB since byo-gif (2026-11-04): the relay's refusals in plain words, ?url=, a page's address, the
 # search links and the bookmarklet under Your own, the pick-up of a shared
 # file, and the share target's manifest and service worker (sw.js, fetched
 # when the page registers it): 7,457 B gz. The app icons (PNG, fetched only when
