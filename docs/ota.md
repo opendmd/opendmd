@@ -223,7 +223,7 @@ releases with key 1 (`KEY_ID` in `tools/fw-sign.py`); retire key 0 from
 `KEYS` once no player needs it. A leak of key 0 before that means a USB
 reinstall for every player that never got the release with key 1.
 
-**Local-only signing.** Releases are signed on the owner's machine
+**Local-only signing.** Releases are signed on the maintainer's machine
 (`make release`, `tools/release.sh`): the private key exists only there,
 in `~/.config/opendmd/opendmd.key`, read by `tools/fw-sign.py` (pinned
 `pynacl==1.5.0`) and never copied into a build directory, a CI runner or

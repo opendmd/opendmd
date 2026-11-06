@@ -16,8 +16,8 @@ as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.
 
-**The brief.** The owner wants panel art for the consoles and games they own
-(Mega Drive, SNES, Game Boy, Saturn, 3DS). The pack is thin on GB (14 files),
+**The brief.** Panel art for the consoles and games a user owns (at the
+start: Mega Drive, SNES, Game Boy, Saturn, 3DS). The pack is thin on GB (14 files),
 Saturn (34) and has nothing for 3DS. The art is for personal use at home. The
 runtime is the web app: pull art from the web, process it in the browser,
 save it to the panel. The output is a GIF filed by the tag grammar
@@ -213,7 +213,7 @@ palette work, so they are a nice-to-have behind a key field.
   has no CORS anywhere.
 - **ScreenScraper** needs a developer id/password from its forum plus the
   user's own account. Its API sends ACAO `*`, so it works from the page once
-  the owner has credentials. It is what RetroPie/Batocera scrapers use:
+  the user has credentials. It is what RetroPie/Batocera scrapers use:
   screenshots, wheels (logos) and marquees. Its per-day quotas are
   community-reported and not verified here.
 - **RAWG** has a free key and allows commercial use up to 100k MAU. The API
@@ -237,11 +237,11 @@ packs on GitHub work directly.
 | Drag-and-drop of a file from the desktop / Finder | yes | verified path in the prototype (`dataTransfer.files`) |
 | Drag an `<img>` from another tab | Chromium: gives a File **and** a URL; Firefox: URL only (Mozilla bugs 1437126, 1812611) | not verified with a real cross-tab drag (a synthetic drop only proves the handler). The page falls back to fetching `text/uri-list`, which needs CORS. |
 | Paste (`paste` event, `clipboardData.files`) | **yes**, no secure context needed | copy an image in any tab, paste into the Studio. Handler verified with a synthetic `ClipboardEvent` in `studio/drive.py`. |
-| `navigator.clipboard.read()` | **no**: secure context only (https or localhost) | fine on the Mac at `localhost:8080`, not on the device |
+| `navigator.clipboard.read()` | **no**: secure context only (https or localhost) | fine on a computer at `localhost:8080`, not on the device |
 | Web Share Target (PWA manifest) | **no**: needs https, an installed PWA and a service worker. iOS Safari does not support receiving shares at all. | closed for the device as served |
 
-**A local helper.** The owner already runs `tools/mock-device.py --proxy` on
-his Mac. A `GET /fetch?url=…` route there could make any host readable,
+**A local helper.** `tools/mock-device.py --proxy` already runs on a
+developer's machine. A `GET /fetch?url=…` route there could make any host readable,
 using an allowlist of hosts and a size cap. It could also hold API secrets,
 which cover IGDB's Twitch secret and the SteamGridDB, TheGamesDB and
 ScreenScraper keys. It is the right place for anything keyed, but it is a
@@ -629,7 +629,7 @@ smoke-test coverage in `tools/web-smoke.py`):
 | Look + palette + GIF encode | spread-pick, key-to-black, lift, speed; encoder in wasm (`gif` crate) | 1 d |
 | Save | grammar name, `parsePath` round trip, next-free `NN`, Add GIFs reuse | 0.5 d |
 | Walk cycles (segmentation + grid fallback) | later | 1.5 d |
-| Keyed sources + Settings "Art sources" | Giphy/ScreenScraper direct; IGDB/SteamGridDB via the Mac helper | 2 d + helper 1 d |
+| Keyed sources + Settings "Art sources" | Giphy/ScreenScraper direct; IGDB/SteamGridDB via the local helper | 2 d + helper 1 d |
 | Emulator import | binjgb GB/GBC (vendored, 102 KB) with frame strip + range pick: 2 d; optional CDN cores for MD/SNES: +2 d | 2–4 d |
 
 **Where the code goes.** The pixel work (native detect, window scoring, mode
@@ -648,7 +648,7 @@ no web-sys, tested natively like `player.rs`. The alternative doesn't fit:
 
 ## 5. Rights and etiquette
 
-The owner's stated scope is personal use at home, for games they own.
+The scope is personal use at home, for games the user owns.
 Per source:
 
 | source | key | terms that matter here |
@@ -669,7 +669,7 @@ Per source:
 
 This means the app needs a Settings → "Art sources" card with one key field
 per keyed service. Keys that are client secrets (IGDB, TheGamesDB) belong
-only in the Mac helper's environment, never on the card. Automated fetching
+only in the local helper's environment, never on the card. Automated fetching
 should be user-initiated, one request at a time, with listings cached. No
 source here invites bulk scraping.
 
@@ -704,20 +704,20 @@ emulator.
    - no "odm" or "CORS" text appears in the view
 
 This covers MD, SNES and GB title screens and in-game snaps at native
-resolution, which are the owner's gaps. Saturn and 3DS thumbnails are not
+resolution, which were the pack's gaps. Saturn and 3DS thumbnails are not
 native pixels (Saturn is rescaled to 512 wide; 3DS snaps are 400x480
 stacked screens), so they will mostly use Fit plus the Logos folder. Follow-ups, in order of value:
 
 - RePlayOS prefill (once "Follow RePlayOS" lands)
 - walk cycles
-- the keyed sources through the Mac helper
+- the keyed sources through the local helper
 - the emulator import
 
 ### Addendum: pixilart.com (probed 2026-09-23)
 
-The owner noticed the gallery API (`/api/w/gallery/<page>/<id>/popular?...`)
-answers with `access-control-allow-origin: *` in his browser. From anything
-that is not his browser it does not answer at all: curl, Playwright's
+The gallery API (`/api/w/gallery/<page>/<id>/popular?...`) answers with
+`access-control-allow-origin: *` in a browser that has visited the site.
+From anything else it does not answer at all: curl, Playwright's
 request context and a headless page all get **HTTP 403 with
 `cf-mitigated: challenge`** (a Cloudflare managed challenge, "Just a
 moment…"), no CORS header on the 403, so `fetch()` fails. The clearance is a
@@ -730,17 +730,17 @@ OpenDMD page's console:
 fetch('https://www.pixilart.com/api/w/gallery/10/33478920/popular').then(r => r.status).catch(e => e.message)
 ```
 
-Result: the owner got **200** from the app's origin — but only because their
-browser had already passed the challenge on pixilart.com. A first-time user
-would have to visit pixilart in the same browser first, and the clearance
-expires. **Decision (owner, 2026-09-23): filed as potential, not included** —
-no source that needs extra hoops. Pixilart works today as a paste /
+Result: **200** from the app's origin — but only because that browser had
+already passed the challenge on pixilart.com. A first-time user would have
+to visit pixilart in the same browser first, and the clearance expires.
+**Decision: filed as potential, not included** — no source that needs
+extra hoops. Pixilart works today as a paste /
 drag-and-drop source, which is how it should appear in the Studio.
 
 ## 6. Animated GIFs in the Studio (2026-09-30)
 
-The owner's ask: "uploading a GIF in make art just shows a still frame. I
-want to be able to edit the gif." What landed (`opendmd-art-web/src/anim.rs`,
+The problem: uploading a GIF in Make art showed a still frame, and an
+animated GIF should be editable. What landed (`opendmd-art-web/src/anim.rs`,
 `pipeline.rs`'s `stage_frame` / `Overlay` / `sequence`, `www/js/studio.js`):
 
 - **Import.** Any GIF with two or more image descriptors (`gifFrames`: a
