@@ -6,7 +6,7 @@
 hardware.
 
     uv run tools/mock-device.py --root ~/scratch/dmdos-card [--overlay DIR] \
-        [--www opendmd-web/www] [--host 127.0.0.1] [--port 8080] [--dwell SECS] \
+        [--www opendmd-web/www-dist] [--host 127.0.0.1] [--port 8080] [--dwell SECS] \
         [--strict] [--quiet] [--ota-pub firmware/keys/opendmd.pub]
 
     uv run tools/mock-device.py --proxy http://192.168.1.69 [--www ...] [--port 8080]
@@ -17,7 +17,7 @@ Two modes.
 `firmware/src/http.rs`, the card file server in `firmware/src/files.rs`, and a
 simulated now-playing loop, all served on top of a local copy of an SD card
 (`--root`, an extracted card: `gifs/`, `cache/` (prepared copies),
-`filelist.txt`, `filelist.hall`/`.xmas`, `sets/`). `--www` (default `<repo>/opendmd-web/www`) is
+`filelist.txt`, `filelist.hall`/`.xmas`, `sets/`). `--www` (default `<repo>/opendmd-web/www-dist`, `make web`'s output) is
 what a browser hitting `/` gets.
 
 **Proxy mode** (`--proxy URL`) does the opposite: it serves `--www` locally
@@ -5073,7 +5073,7 @@ def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", help="an extracted card copy (gifs/, cache/, filelist.txt, ...)")
     ap.add_argument("--overlay", help="copy-on-write write layer in front of --root")
-    ap.add_argument("--www", help="the web app to serve (default: <repo>/opendmd-web/www)")
+    ap.add_argument("--www", help="the web app to serve (default: <repo>/opendmd-web/www-dist, make web's minified output)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--dwell", type=float, default=5.0, help="seconds per now-playing item")
@@ -5110,7 +5110,7 @@ def main():
     if args.www:
         www_root = Path(args.www).resolve()
     else:
-        www_root = (Path(__file__).resolve().parent.parent / "opendmd-web" / "www")
+        www_root = (Path(__file__).resolve().parent.parent / "opendmd-web" / "www-dist")
     if not www_root.is_dir():
         print(f"mock-device: warning: --www {www_root} is not a directory", file=sys.stderr)
 

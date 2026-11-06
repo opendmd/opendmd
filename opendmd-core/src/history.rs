@@ -38,6 +38,7 @@ pub struct History {
 }
 
 impl Default for History {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         Self::new()
     }
@@ -46,6 +47,7 @@ impl Default for History {
 /// The stored form of `path`, or `None` if it is not recorded: Follow
 /// RePlayOS's power-on effect and title cards (`@power-on`, `@card:…`) are
 /// not things a user plays, and a path must be card-absolute or a virtual file.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn compact(path: &str) -> Option<&str> {
     // (The editor's sent Formula is held only while it plays: not one to
     // play again from here.)
@@ -68,6 +70,7 @@ fn compact(path: &str) -> Option<&str> {
 }
 
 /// The path a stored entry stands for.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn expand(s: &str) -> String {
     if s.starts_with(['/', '@']) {
         s.to_string()
@@ -86,32 +89,38 @@ impl History {
     }
 
     /// Stored entries, newest first.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn stored(&self) -> impl Iterator<Item = &str> {
         self.buf.lines().rev()
     }
 
     /// How many entries there are.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn len(&self) -> usize {
         self.buf.bytes().filter(|&b| b == b'\n').count()
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
 
     /// The entry on screen after [`back`](Self::back)s, counted back from the
     /// newest (0 = the newest).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn cursor(&self) -> usize {
         self.cursor as usize
     }
 
     /// The paths, newest first.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn paths(&self) -> impl Iterator<Item = String> + '_ {
         self.stored().map(expand)
     }
 
     /// The byte range of the `i`th entry back from the newest, its newline
     /// included.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn range(&self, i: usize) -> Option<std::ops::Range<usize>> {
         let mut end = self.buf.len();
         for (k, line) in self.stored().enumerate() {
@@ -125,6 +134,7 @@ impl History {
     }
 
     /// Take the `i`th entry out and put it at the front (the newest).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn bring_forward(&mut self, i: usize) {
         if i == 0 {
             return;
@@ -138,6 +148,7 @@ impl History {
     }
 
     /// The panel started showing `path`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn started(&mut self, path: &str) {
         let Some(s) = compact(path) else {
             return;
@@ -170,6 +181,7 @@ impl History {
     /// a previous `back` already asked for and that has not started yet),
     /// remembered so its start moves the cursor rather than being recorded.
     /// `None` at the oldest.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn back(&mut self) -> Option<String> {
         let from = if self.pending != NONE {
             self.pending
@@ -183,6 +195,7 @@ impl History {
     }
 
     /// The file [`back`](Self::back) named did not open: nothing moves.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn back_failed(&mut self) {
         self.pending = NONE;
     }

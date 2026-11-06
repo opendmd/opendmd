@@ -439,7 +439,6 @@ pub fn meta_manifest(path: &str) -> Option<String> {
 /// the player's reads get the FAT lock in between. `NotFound` if `dir` is
 /// not there.
 pub fn remove_tree(dir: &str, budget: std::time::Duration) -> std::io::Result<(u32, bool)> {
-    #[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
     fn go(
         dir: &str,
         until: std::time::Instant,
