@@ -1155,10 +1155,12 @@ impl Req {
         let raw = self.raw;
         // SAFETY: a live request on the httpd task; httpd_send writes raw bytes.
         let n = unsafe { sys::httpd_send(raw, head.as_ptr() as *const _, head.len()) };
+        // Responded either way: after part of a head, an error reply on the
+        // same socket would be garbage, so the connection is dropped instead.
+        self.responded = true;
         if n != head.len() as i32 {
             bail!("hold_open: head send returned {n}");
         }
-        self.responded = true;
         // SAFETY: as above.
         Ok(unsafe { sys::httpd_req_to_sockfd(raw) })
     }
@@ -1786,6 +1788,19 @@ pub fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// The length [`json_string`] makes of `s`, quotes included, without
+/// building it.
+pub fn json_string_len(s: &str) -> usize {
+    2 + s
+        .bytes()
+        .map(|b| match b {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' => 2,
+            b if b < 0x20 => 6,
+            _ => 1,
+        })
+        .sum::<usize>()
 }
 
 /// Pull one `key=value` out of a query string, percent-decoded.
