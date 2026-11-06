@@ -58,13 +58,25 @@ use crate::config;
 /// failure ends the response (see [`Req::chunk`]), so this is also the longest
 /// a stalled client can hold whichever task is sending to it.
 const SEND_TIMEOUT_S: u16 = 5;
-/// `SO_RCVTIMEO`, in seconds. Generous, because a browser uploading a 2 MB
-/// firmware image over a weak link can stall between chunks.
-const RECV_TIMEOUT_S: u16 = 10;
-/// Consecutive receive timeouts [`Req::read`] sits through before it gives up
-/// on an upload: 3 x 10 s of silence. It used to retry forever, which let one
-/// vanished uploader hold the httpd task, and every other client, for good.
-const RECV_TIMEOUTS: usize = 3;
+/// `SO_RCVTIMEO` on every client socket (httpd's `recv_wait_timeout`), in
+/// seconds: the longest the httpd task waits for a client's next bytes — the
+/// rest of a request's headers, a JSON body ([`Req::read`]), or the unread
+/// rest of a body httpd purges after a refusal. **One wait, never retried.**
+///
+/// While the httpd task waits nothing else is served: no `accept`, so lwIP's
+/// listen backlog (5) fills and further SYNs are dropped (a client's connect
+/// takes 1 s, 3 s: its SYN retransmissions); no refusal of a new upload, whose
+/// unread frames keep the WiFi driver's receive buffers (see "The receive
+/// side" in `sdkconfig.defaults`), which is what starves the body being
+/// waited for in the first place. It was 10 s, retried three times in a row
+/// for a body, then 10 s more for httpd's purge: one live edit stalled under
+/// simultaneous uploads held every client for up to 40 s (the spare: six of
+/// 190 `POST /api/play/formula` timed out at 20 s; net-stall, 2026-11-05).
+/// The bodies read here are ≤ 16 KB and arrive in milliseconds on a working
+/// link; one that stops for this long is answered `503` + `Retry-After` and
+/// its connection dropped ([`BodyStalled`]), and the web app asks again.
+/// Uploads are not read here ([`Upload`] sets its own timeouts).
+const RECV_TIMEOUT_S: u16 = 2;
 
 /// The error a send failure turns into, once it has been logged. The
 /// connection is dropped; nothing more can be said to that client.
@@ -78,6 +90,28 @@ impl std::fmt::Display for SendFailed {
 }
 
 impl std::error::Error for SendFailed {}
+
+/// A body read on the httpd task ([`Req::read`]) that went [`RECV_TIMEOUT_S`]
+/// without a byte: answered `503` + `Retry-After` by the wrapper, which then
+/// drops the connection (no purge of the rest on the httpd task), and
+/// counted ([`bodies_stalled`], `net.body_stalled` in `/api/status`).
+#[derive(Debug)]
+pub struct BodyStalled;
+
+impl std::fmt::Display for BodyStalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the body stopped for {RECV_TIMEOUT_S} s")
+    }
+}
+
+impl std::error::Error for BodyStalled {}
+
+static BODIES_STALLED: AtomicU32 = AtomicU32::new(0);
+
+/// Bodies given up on by the httpd task since boot ([`BodyStalled`]).
+pub fn bodies_stalled() -> u32 {
+    BODIES_STALLED.load(Ordering::Relaxed)
+}
 
 /// An upload given up on part way (a receive timeout, the total-time cap,
 /// the client gone, a card write that failed), already logged by
@@ -368,7 +402,13 @@ impl Server {
             // file's four or five (Cache-Control, nosniff, CSP,
             // Content-Disposition, Retry-After). 8 B of heap a slot.
             cfg.max_resp_headers = 8;
-            cfg.backlog_conn = 5;
+            // lwIP drops a SYN once this many connections wait for
+            // `accept` (handshaking, or established and not yet taken): the
+            // client's connect then takes 1 s (its first SYN retransmission).
+            // Five uploads at once and a status poll are six; more than the
+            // accept mailbox holds would be reset instead (lwIP aborts an
+            // established connection it cannot post), so exactly that.
+            cfg.backlog_conn = sys::CONFIG_LWIP_TCP_ACCEPTMBOX_SIZE as u16;
             cfg.lru_purge_enable = true;
             // Applied per client socket by httpd_accept_conn (httpd_main.c:
             // setsockopt SO_RCVTIMEO / SO_SNDTIMEO from these two fields).
@@ -520,6 +560,19 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
                 // Half a response has already gone out; the only honest thing
                 // left is to drop the connection, which is what ESP_FAIL makes
                 // httpd do.
+                sys::ESP_FAIL
+            } else if e.is::<BodyStalled>() {
+                // Busy, not broken: asked again by the web app (`sent`). Then
+                // the connection goes at once (ESP_FAIL): httpd's purge of the
+                // rest would wait on this task for a body that has stopped.
+                BODIES_STALLED.fetch_add(1, Ordering::Relaxed);
+                let _ = req.header("Retry-After", "2");
+                let _ = req.header("Connection", "close");
+                let _ = req.error(
+                    503,
+                    "503 Service Unavailable",
+                    "the request's body stopped arriving; retry shortly",
+                );
                 sys::ESP_FAIL
             } else {
                 let _ = req.send_status(
@@ -751,31 +804,22 @@ impl Req {
     }
 
     /// Read up to `buf.len()` body bytes. `Ok(0)` means the body is complete.
-    /// A socket timeout is retried up to [`RECV_TIMEOUTS`] times in a row,
-    /// which is what makes a slow uploader work without letting a vanished
-    /// one hold the httpd task forever. Only the ≤ 8 KB JSON bodies are read
-    /// this way; uploads are [`Upload`]s, read on the stream task.
+    /// Only the small bodies (JSON ≤ 8 KB, a compiled Formula ≤ 16 KB) are
+    /// read this way, on the httpd task; uploads are [`Upload`]s, read on
+    /// the stream task. A socket timeout ([`RECV_TIMEOUT_S`]) is not
+    /// retried: it is a [`BodyStalled`], which the wrapper answers `503` +
+    /// `Retry-After` before it drops the connection.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mut timeouts = 0;
-        loop {
-            // SAFETY: `buf` is a live mutable slice; httpd writes at most
-            // `buf.len()` bytes into it.
-            let n = unsafe { sys::httpd_req_recv(self.raw, buf.as_mut_ptr() as *mut _, buf.len()) };
-            if n >= 0 {
-                return Ok(n as usize);
-            }
-            if n == sys::HTTPD_SOCK_ERR_TIMEOUT {
-                timeouts += 1;
-                if timeouts < RECV_TIMEOUTS {
-                    continue;
-                }
-                bail!(
-                    "client sent nothing for {} s",
-                    RECV_TIMEOUTS * RECV_TIMEOUT_S as usize
-                );
-            }
-            bail!("socket read error {n}");
+        // SAFETY: `buf` is a live mutable slice; httpd writes at most
+        // `buf.len()` bytes into it.
+        let n = unsafe { sys::httpd_req_recv(self.raw, buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n >= 0 {
+            return Ok(n as usize);
         }
+        if n == sys::HTTPD_SOCK_ERR_TIMEOUT {
+            return Err(BodyStalled.into());
+        }
+        bail!("socket read error {n}");
     }
 
     /// Read the whole body, refusing anything over `limit`; `Ok(None)`

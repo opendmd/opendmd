@@ -50,6 +50,8 @@ struct State<T> {
     queue: VecDeque<T>,
     senders: usize,
     receiver: bool,
+    /// A sender said it is doing the work ([`Sender::claim`]).
+    claimed: bool,
 }
 
 struct Shared<T> {
@@ -80,6 +82,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
             queue: VecDeque::new(),
             senders: 1,
             receiver: true,
+            claimed: false,
         }),
         ready: Condvar::new(),
     });
@@ -102,6 +105,67 @@ impl<T> Sender<T> {
         drop(state);
         self.shared.ready.notify_one();
         Ok(())
+    }
+}
+
+impl<T> Sender<T> {
+    /// Say the work this channel will answer is being done now: `false` if
+    /// the receiver has withdrawn it already ([`Receiver::answer_within`]),
+    /// and then the work must not be done at all. Atomic with the
+    /// withdrawal: exactly one of the two wins.
+    #[inline(never)]
+    pub fn claim(&self) -> bool {
+        let mut state = self.shared.lock();
+        if !state.receiver {
+            return false;
+        }
+        state.claimed = true;
+        true
+    }
+}
+
+/// What [`Receiver::answer_within`] came back with.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Handoff<T> {
+    /// The answer.
+    Answered(T),
+    /// Claimed and under way, not answered in time: it will be done.
+    Taken,
+    /// Not claimed in time (or never can be: every sender gone), and now
+    /// withdrawn: it will not be done.
+    Withdrawn,
+}
+
+impl<T> Receiver<T> {
+    /// A request handed to another task that may be busy: wait at most
+    /// `take` for the answer; if none came, withdraw the request unless it
+    /// has been claimed ([`Sender::claim`]: a later `claim` then fails, so
+    /// nothing is done), and if it has, wait at most `answer` more. For a
+    /// caller that must not be held long by a task that is slow to look at
+    /// its queue (the httpd task waiting on the main loop). Built on
+    /// `recv_timeout`, so it adds little code per message type.
+    pub fn answer_within(&self, take: Duration, answer: Duration) -> Handoff<T> {
+        if let Ok(t) = self.recv_timeout(take) {
+            return Handoff::Answered(t);
+        }
+        if self.withdraw() {
+            return Handoff::Withdrawn;
+        }
+        match self.recv_timeout(answer) {
+            Ok(t) => Handoff::Answered(t),
+            Err(_) => Handoff::Taken,
+        }
+    }
+
+    /// Withdraw the request unless a sender has claimed it: `true` if
+    /// withdrawn.
+    fn withdraw(&self) -> bool {
+        let mut state = self.shared.lock();
+        if state.claimed {
+            return false;
+        }
+        state.receiver = false;
+        true
     }
 }
 
@@ -211,6 +275,41 @@ mod tests {
         });
         rx.recv_timeout(Duration::from_secs(10))
             .expect("operation hung")
+    }
+
+    #[test]
+    fn answer_within_withdraws_unclaimed_work() {
+        let (tx, rx) = channel::<u8>();
+        assert_eq!(rx.answer_within(Duration::from_millis(30), Duration::from_secs(5)), Handoff::Withdrawn);
+        // The worker comes round late: refused, and nothing is to be done.
+        assert!(!tx.claim());
+        assert!(tx.send(1).is_err());
+    }
+
+    #[test]
+    fn answer_within_answered_or_taken() {
+        let (tx, rx) = channel::<u8>();
+        tx.send(3).unwrap();
+        assert_eq!(rx.answer_within(Duration::ZERO, Duration::ZERO), Handoff::Answered(3));
+        // Claimed while waiting, answered in the second wait.
+        let (tx, rx) = channel::<u8>();
+        let h = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            assert!(tx.claim());
+            thread::sleep(Duration::from_millis(20));
+            tx.send(4).unwrap();
+        });
+        assert_eq!(bounded(move || rx.answer_within(Duration::from_secs(5), Duration::from_secs(5))), Handoff::Answered(4));
+        h.join().unwrap();
+        // Claimed, slow to answer: taken, and the late answer still goes.
+        let (tx, rx) = channel::<u8>();
+        assert!(tx.claim());
+        assert_eq!(rx.answer_within(Duration::from_millis(20), Duration::from_millis(20)), Handoff::Taken);
+        assert!(tx.send(5).is_ok());
+        // Every sender gone unclaimed: withdrawn at once.
+        let (tx, rx) = channel::<u8>();
+        drop(tx);
+        assert_eq!(bounded(move || rx.answer_within(Duration::from_secs(5), Duration::from_secs(5))), Handoff::Withdrawn);
     }
 
     #[test]

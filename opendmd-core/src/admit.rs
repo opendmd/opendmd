@@ -7,7 +7,7 @@
 //! run at once is already bounded by construction. What a count cannot see
 //! is the heap they share with the player: a GIF opening, a Formula's
 //! still cache or JIT kernel, the WiFi driver's receive buffers (taken
-//! from the same heap as frames arrive, up to ~10 KB with six of them
+//! from the same heap as frames arrive, up to ~13.6 KB with eight of them
 //! held). Two numbers decide: the free heap, and the **largest free
 //! block** — a heap with 39 KB free can still have no 9 KB block (the
 //! rig's restart ring: `last failed alloc: 9069 B at 1381 s, 39148 B
@@ -30,7 +30,7 @@ pub const FLOOR: u32 = 13 * 1024;
 
 /// What a transfer under way on the stream task may still take on top of
 /// what the free heap shows now: its receive frames come and go with the
-/// traffic (up to six WiFi buffers of ~1.7 KB, some already held when
+/// traffic (up to eight WiFi buffers of ~1.7 KB, some already held when
 /// the door reads the heap), its chunk buffer and file handle are already
 /// counted.
 pub const TRANSFER_SWING: u32 = 4 * 1024;

@@ -9,6 +9,11 @@ collides with another run.
 
 Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the card out):
   basics      GET /api/status and /api/config; PUT a setting, read back; a bad PUT is a 400
+  long        GET /api/wifi/scan past 0.3 s: a 202 + X-Job, status reads answered meanwhile, a
+              second long request a 503, the answer from /api/job, 404 after (LONG_REQUEST)
+  stalled     a PUT /api/config whose body stops part way: a 503 + Retry-After after one receive
+              timeout, the connection dropped, net.body_stalled counted, nothing saved, and a
+              status read sent meanwhile answered (STALLED_BODY)
   files       uploads (PUT /api/files/..., ?new=1 and its 409, a replace), read back byte for
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
@@ -40,7 +45,7 @@ the firmware is back with the bundle's version.
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
 """
-import base64, contextlib, hashlib, json, os, random, re, shutil, signal, struct, subprocess, sys, threading, time, zlib
+import base64, contextlib, hashlib, json, os, random, re, shutil, signal, socket, struct, subprocess, sys, threading, time, zlib
 import http.client, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -274,7 +279,17 @@ class Api:
         self.lock = threading.Lock()
         self.stats = {"requests": 0, "busy_retries": 0}
 
-    def raw(self, method, path, body=None, timeout=60.0, extra=None):
+    def raw(self, method, path, body=None, timeout=60.0, extra=None, follow=True):
+        """One request; a long one's `202` + `X-Job` is followed through `GET /api/job` to its
+        answer, as the web app does (`follow=False`: the 202 itself)."""
+        code, headers, got = self._raw(method, path, body, timeout, extra)
+        end = time.time() + 120
+        while follow and code == 202 and headers.get("X-Job") and time.time() < end:
+            time.sleep(0.5)
+            code, headers, got = self._raw("GET", f"/api/job?id={headers['X-Job']}", None, timeout, None)
+        return code, headers, got
+
+    def _raw(self, method, path, body=None, timeout=60.0, extra=None):
         data, headers = None, {}
         if isinstance(body, (bytes, bytearray)):
             data, headers = bytes(body), {"Content-Type": "application/octet-stream"}
@@ -412,7 +427,14 @@ class Lane:
                 # (A diagnostic shortcut: the bursts alone, then stop.)
                 self.bursts(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "stalled":
+                # (A diagnostic shortcut: the stalled body alone, then stop.)
+                self.dwell_set = int(api.json("GET", "/api/config")[1]["dwell_max"])
+                self.stalled_body(api)
+                return
             self.basics(api)
+            self.stalled_body(api)
+            self.long_request(api)
             self.files(api)
             self.play(emu, api)
             if getattr(self.a, "long_psb", None):
@@ -473,7 +495,78 @@ class Lane:
         api.json("PUT", "/api/config", {"lat": -33.8688, "lon": 151.2093})
         _, c = api.json("GET", "/api/config")
         self.expect((c.get("lat"), c.get("lon")) == (-33.87, 151.21), "location", f"read back {c.get('lat')}, {c.get('lon')}")
+        code, _, slim = api.raw("GET", "/api/status?now=1")
+        sj = json.loads(slim) if code == 200 else {}
+        self.expect(code == 200 and len(slim) < 600 and {"t_ms", "now_playing", "paused", "transfer"} <= set(sj) and "heap" not in sj,
+                    "status", f"the slim status (?now=1): HTTP {code}, {len(slim)} B, keys {sorted(sj)}")
+        self.expect("transfer" in st, "status", "no `transfer` in /api/status")
         self.ok("status, config", f"GET both; PUT dwell_max {self.dwell0} -> {self.dwell_set} read back; a bad value 400, nothing changed; lat/lon set, rounded, refused alone or off the globe, cleared, set again")
+
+    def stalled_body(self, api):
+        """STALLED_BODY (net-stall): a JSON body that stops part way. The httpd task reads it, and
+        serves no one else meanwhile: it waited 3 x 10 s for the rest, then 10 s more purging it,
+        so under simultaneous uploads (their frames holding the WiFi driver's receive buffers) one
+        live edit's stalled body held every client, status polls and the refusals that would
+        have freed those buffers included. Now one receive timeout (2 s) ends it: a 503 with
+        Retry-After (the web app asks again), the connection dropped, `net.body_stalled`
+        counted; and a status read sent meanwhile is answered, after that wait, not 30-40 s
+        later. (The wait itself is not checked: emulated time is not wall time.)"""
+        before = ((api.status() or {}).get("net") or {}).get("body_stalled")
+        self.expect(before is not None, "stalled body", "no net.body_stalled in /api/status")
+        body = json.dumps({"dwell_max": self.dwell_set}).encode()
+        head = (f"PUT /api/config HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {len(body) + 64}\r\n\r\n").encode()
+        with socket.create_connection(("127.0.0.1", PORT), timeout=30) as s:
+            s.sendall(head + body[:6])
+            time.sleep(0.5)
+            t0 = time.time()
+            code, _, _ = api.raw("GET", "/api/status", timeout=20)
+            status_s = time.time() - t0
+            self.expect(code == 200, "stalled body", f"a status read beside a stalled body: HTTP {code}")
+            got = b""
+            try:
+                while chunk := s.recv(4096):
+                    got += chunk
+            except (ConnectionResetError, TimeoutError, socket.timeout):
+                pass
+        line = got.split(b"\r\n", 1)[0]
+        self.expect(b" 503 " in line + b" ", "stalled body", f"the stalled PUT was answered {line[:80]!r} (want 503), {len(got)} B")
+        self.expect(re.search(rb"(?im)^retry-after:\s*\d", got), "stalled body", f"its 503 has no Retry-After: {got[:300]!r}")
+        net = (api.status() or {}).get("net") or {}
+        self.expect((net.get("body_stalled") or 0) > before, "stalled body", f"net.body_stalled {before} -> {net.get('body_stalled')}")
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("dwell_max") == self.dwell_set, "stalled body", f"the stalled PUT changed dwell_max to {cfg.get('dwell_max')}")
+        self.ok("stalled body", f"a PUT whose body stopped: {line.decode(errors='replace')} with Retry-After, dropped, net.body_stalled {before} -> {net.get('body_stalled')}; a status read beside it answered in {status_s:.1f} s wall")
+
+    def long_request(self, api):
+        """LONG_REQUEST (net-stall): a request the httpd task used to wait out for another task
+        (here the WiFi scan, up to 12 s on the network worker; a rebuild was up to 60 s) holds
+        no one else up: it is a 202 + X-Job once it takes over 0.3 s, status reads answer
+        while it is pending, a second long request meanwhile is a 503 + Retry-After, and
+        GET /api/job gives its own answer."""
+        code, headers, body = api.raw("GET", "/api/wifi/scan", timeout=20, follow=False)
+        if code == 200:
+            self.ok("long request", "the scan answered within 0.3 s: no pending state to check")
+            return
+        job = headers.get("X-Job")
+        self.expect(code == 202 and job and json.loads(body).get("pending") is True, "long request", f"GET /api/wifi/scan: HTTP {code}, X-Job {job}, {body[:120]!r}")
+        reads, second, end = 0, None, time.time() + 60
+        while time.time() < end:
+            c, _, _ = api.raw("GET", "/api/status", timeout=10)
+            self.expect(c == 200, "long request", f"a status read while the scan was pending: HTTP {c}")
+            reads += 1
+            if second is None:
+                c2, h2, _ = api.raw("POST", "/api/reindex", timeout=10, follow=False)
+                second = (c2, h2.get("Retry-After"))
+            code, headers, body = api.raw("GET", f"/api/job?id={job}", timeout=10, follow=False)
+            if code != 202:
+                break
+            time.sleep(0.3)
+        self.expect(code == 200 and isinstance(json.loads(body), (list, dict)), "long request", f"GET /api/job?id={job}: HTTP {code}, {body[:120]!r}")
+        self.expect(second[0] in (503, 200) and (second[0] == 200 or second[1]), "long request", f"a reindex while the scan was pending: {second}")
+        code, _, _ = api.raw("GET", f"/api/job?id={job}", timeout=10, follow=False)
+        self.expect(code == 404, "long request", f"the job asked again after its answer: HTTP {code}, wanted 404")
+        self.ok("long request", f"the scan: 202 (job {job}), {reads} status reads answered meanwhile, a reindex beside it {second[0]}, then its answer from /api/job (200), 404 after")
 
     def files(self, api):
         g = self.gifs
@@ -1210,7 +1303,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled"):
             lane.card_checks()
             lane.run_b()
     except LaneFail as e:
