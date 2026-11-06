@@ -355,7 +355,7 @@ What each kind of release does to them (`tools/release.sh` and
 
 | release | `release.json` | `beta.json` | Install button at /install/ |
 |---|---|---|---|
-| a beta, before any final exists | this beta | this beta (the same file) | this beta |
+| a beta, before any final exists (0.x finals such as v0.3.0 predate the channels and do not count) | this beta | this beta (the same file) | this beta |
 | a final `X.Y.Z` | this release | this release (the same file) | this release |
 | a beta after a final | stays on the last final | this beta | the last final, and a second "Or install the beta" button |
 
