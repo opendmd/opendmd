@@ -4,7 +4,7 @@
 # ///
 """Print the web app's size, raw and gzipped, and enforce the budget.
 
-    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 1310720] [--unminified]
+    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 1048576] [--unminified]
 
 It measures what ships: `make web`'s output directory (tools/web-minify.py:
 the sources with every script and stylesheet, wasm-pack's glue included,
@@ -136,7 +136,7 @@ when over budget.
 
 With `--pack`, one more line: the www pack `make web` built from this
 directory (what the device keeps in its `www` flash partition, served from
-flash), its size against the partition — "pack: N B of 1,280 KB". The
+flash), its size against the partition — "pack: N B of 1,024 KB". The
 budgets above are about load time over WiFi, not flash; the partition limit
 is enforced by the packer itself (`opendmd-pack www --max-bytes`).
 """
@@ -493,7 +493,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("root", nargs="?", default="opendmd-web/www-dist")
     ap.add_argument("--pack", help="the www pack built from it")
-    ap.add_argument("--pack-limit", type=int, default=1_310_720, help="the www partition, bytes")
+    ap.add_argument("--pack-limit", type=int, default=1_048_576, help="the www partition, bytes (firmware/partitions.csv)")
     ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
     ap.add_argument("--unminified", action="store_true",
                     help="a WEB_MINIFY=0 build: print the lines, enforce none")

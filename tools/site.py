@@ -705,13 +705,29 @@ def decorate(body: str) -> str:
     return re.sub(r"<!-- site:cards -->(.*?)<!-- site:cards-end -->", cards, body, flags=re.S)
 
 
+# A firmware bundle's magic -> its flash layout: the variant and its
+# partition table's version (opendmd_core::ota::LAYOUTS, tools/fw-sign.py).
+BUNDLE_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW18mb": ("8mb", 2), b"ODFW1\0\0\0": ("4mb", 2)}
+
+
+def bundle_layout(path: Path, variant: str) -> int:
+    """The partition table version `path` (a `variant` bundle) is for, from its magic."""
+    with open(path, "rb") as f:
+        got = BUNDLE_LAYOUTS.get(f.read(8))
+    if got is None or got[0] != variant:
+        raise SystemExit(f"{path} is not a {variant} firmware bundle (its magic names {got})")
+    return got[1]
+
+
 def release(dist: Path, out: Path) -> dict:
     """The current release in dist/ (fw-release keeps older versions there
     too), both flash layouts: the parts the offered layouts' manifests name, the merged
     images and the signed bundles of that version only, under
     install/firmware/; and install/release.json for the web app's update
     check: `firmware` (the 4mb bundle: what web apps from before the 8 MB
-    layout read) and `variants`, each layout's bundle. (Only INSTALL_BOARDS
+    layout read) and `variants`, each layout's bundle and the version of
+    the partition table it is for (`layout`, from its magic: a player on
+    another table needs a USB install, which the web app says). (Only INSTALL_BOARDS
     get a manifest, parts and image on the site; all get their bundle.)"""
     ms = {}
     for v in BOARDS:
@@ -748,7 +764,8 @@ def release(dist: Path, out: Path) -> dict:
         raise SystemExit(f"opendmd-{ver}-www.pack is not a www pack")
     www_version = pack[20:20 + pack[18]].decode()
     info = {"version": ver, "firmware": f"firmware/opendmd-{ver}-4mb.odfw",
-            "variants": {v: {"firmware": f"firmware/opendmd-{ver}-{v}.odfw"} for v in ms},
+            "variants": {v: {"firmware": f"firmware/opendmd-{ver}-{v}.odfw",
+                             "layout": bundle_layout(fw / f"opendmd-{ver}-{v}.odfw", v)} for v in ms},
             "www": f"firmware/opendmd-{ver}-www.pack", "www_version": www_version}
     (out / "install/release.json").write_text(json.dumps(info, indent=2) + "\n")
     return info

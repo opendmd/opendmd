@@ -2696,9 +2696,10 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     let t = s.epoch.elapsed();
     let _ = write!(
         out,
-        r#"{{"version":{},"variant":{},"features":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
+        r#"{{"version":{},"variant":{},"layout":{},"features":{},"psi_abi":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
+        crate::state::flash_layout(),
         crate::state::features_json(),
         psi_abi(),
         s.uptime_secs,

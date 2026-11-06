@@ -2,7 +2,7 @@
 
 The web app (`opendmd-web/www` after `make web`) ships to the device as one
 file, a **www pack**, written into the `www` flash partition
-(data/`esphttpd`: 0x2C0000, 1,280 KB in `firmware/partitions.csv`; 0x380000,
+(data/`esphttpd`: 0x300000, 1,024 KB in `firmware/partitions.csv`, table v3; 0x380000,
 2,048 KB in the 8 MB `partitions-8mb.csv`; one pack for both, built to fit
 the smaller). At boot the
 firmware memory-maps it and serves every file from the mapping, through the
@@ -99,8 +99,8 @@ for the pictures anyway. Until 2026-10-26 it was `art/*.json` in the pack,
 The firmware sends a gzip entry with `Content-Encoding: gzip`, without
 looking at `Accept-Encoding` (every browser accepts it), and a `Content-Length` of the stored bytes.
 
-The packer prints `pack: N B of 1,280 KB (P%)` and refuses a pack larger
-than `--max-bytes` (default and `make web`'s: 1,310,720, the partition),
+The packer prints `pack: N B of 1,024 KB (P%)` and refuses a pack larger
+than `--max-bytes` (default and `make web`'s: 1,048,576, the partition; 1,310,720 on table v2),
 writing nothing. It then reads the file back through the reader and checks
 it. `opendmd-pack www-info <pack>` prints the header and every entry and
 verifies the CRC. `tools/web-size.py` prints the same `pack:` line under
@@ -134,7 +134,7 @@ everything but the CRC; the entries never point into the trailer.
 as reserved and never looks at it, nor at bytes past the last file: it
 checks the header, the length against the body, the entries and the CRC,
 all of which a signed pack passes. So a beta.14 panel updating to beta.15
-takes the beta.15 pack whichever goes first (`make ota-compat` runs
+takes the beta.15 pack whichever goes first (`make ota-compat` ran
 beta.14's own reader on one). **From beta.15 on, `PUT /api/www` takes only
 signed packs**: an unsigned one is a `422` at its header, before anything is
 touched, and one whose signature does not verify a `422` too. A pack written

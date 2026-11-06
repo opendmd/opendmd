@@ -34,7 +34,7 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               the heap census (`emu-census`) of the last quiet spell against the first's
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
-  ota         GET /api/firmware; bundles with a bad signature and a bad image: 422
+  ota         GET /api/firmware (layout v3); bundles for table v2, with a bad signature, a bad image: 422
   end         every file read back again; POST /api/reboot (boot A ends, the card written)
 Then the card boot A wrote: fatcheck (no cross-links or lost clusters), the settings file
 (/opendmd.json) holds the last setting saved, the files byte for byte, nothing left behind.
@@ -1129,8 +1129,17 @@ class Lane:
 
     def ota_refusals(self, api):
         _, info = api.json("GET", "/api/firmware")
-        self.expect(info.get("variant") == "4mb", "firmware", f"GET /api/firmware: {info}")
+        self.expect(info.get("variant") == "4mb" and info.get("layout") == 3, "firmware", f"GET /api/firmware: {info}")
+        st = api.status()
+        self.expect(st.get("layout") == 3, "firmware", f"/api/status layout: {st.get('layout')}")
         b = bytearray(self.a.bundle.read_bytes())
+        self.expect(b[:8] == b"ODFW34mb", "firmware", f"the bundle is not for the 4mb table v3: {bytes(b[:8])!r}")
+        # The same bundle labelled for the DevKit's table v2 (what 1.0.0-beta.15
+        # and earlier signed): refused at the header, before the signature, in words.
+        v2 = bytearray(b)
+        v2[:8] = b"ODFW1\0\0\0"
+        _, why = api.call("PUT", "/api/firmware", v2, want=(422,), timeout=300)
+        self.expect(b"older flash layout v2" in why and b"has layout v3" in why, "firmware", f"a table v2 bundle: {why[:200]!r}")
         sig = bytearray(b)
         sig[100] ^= 0x01  # in the Ed25519 signature (bytes 76..140)
         api.call("PUT", "/api/firmware", sig, want=(422,), timeout=300)
@@ -1139,7 +1148,7 @@ class Lane:
         api.call("PUT", "/api/firmware", img, want=(422,), timeout=300)
         _, info2 = api.json("GET", "/api/firmware")
         self.expect(info2.get("pending") is None, "firmware", f"a refused bundle left something pending: {info2}")
-        self.ok("ota refusals", f"GET /api/firmware {info.get('version')}; a bundle with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
+        self.ok("ota refusals", f"GET /api/firmware {info.get('version')} (layout v3); a bundle for table v2 422 at the header ('{why[:60].decode(errors='replace')}…'), one with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
 
     def final_a(self, emu, api):
         for p, data in self.expected.items():
