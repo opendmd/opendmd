@@ -381,6 +381,12 @@ A site built from one dist alone would point `beta.json` back at the
 final, which is harmless (beta players see nothing newer) but hides the
 beta until the next deploy.
 
+A release must be newer than every `v*` tag (release.sh and release.yml
+both refuse otherwise). So once a beta of the next version is out (say
+`1.1.0-beta.1`), a hotfix final below it (`1.0.1`) can't be released:
+ship the fix as the next beta, or as `1.1.0`. Allowing it would need a
+final that leaves `beta.json` on the newer beta.
+
 The Worker counts `beta.json?v=&layout=` as an update check like
 `release.json` (one kind, `check`, on /stats), and a beta's install
 images under `install/firmware/beta/` as installs of that version.
