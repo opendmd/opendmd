@@ -127,6 +127,10 @@ What it found (2026-11-03), see the comments in `api_lane.py`:
   `Retry-After`, the connection dropped, `net.body_stalled`. The lane sends such a body and a
   status read beside it. (Connect times are not seen here: the emulator's NAT completes the
   host's handshake itself, so a SYN the firmware drops never shows.)
+- **LONG_REQUEST** (net-stall): the requests answered by another task (a rebuild up to 60 s, the
+  WiFi scan 12 s, the RePlayOS test 20 s) were waited out on the httpd task, with every other
+  client held. Past 0.3 s they are a 202 + `X-Job` now, answered through `GET /api/job`; the lane
+  checks status reads answering while the scan is pending, and a second long request refused.
 - The httpd task's stack: 736-1024 B of 6656 B unused under the lane.
 
 Not covered: timing (emulated cycles are not trustworthy; the virtual AP delivers frames with no air

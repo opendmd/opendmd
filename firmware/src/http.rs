@@ -38,10 +38,152 @@ use opendmd_core::restarts::Reason;
 /// flash (so the captive portal still configures WiFi).
 const SETUP_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup.html.gz"));
 
-/// How long a handler waits for the main task to answer. The display loop
-/// drains its channel every frame, so this only ever expires if the player is
-/// wedged — in which case saying so beats hanging the browser.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a handler waits for the main task to *take* a request
+/// ([`mpsc::Sender::claim`]) before it withdraws it and answers `503` +
+/// `Retry-After` (nothing done; the web app asks again). The httpd task
+/// serves no one while it waits, and lwIP drops SYNs once its backlog of
+/// six is full: a frame held up on the card behind an upload's writes held
+/// live edits for 10 s and the polls beside them got no connection at all
+/// (the spare, net-stall run c). The loop takes commands every frame.
+const TAKE_WAIT: Duration = Duration::from_millis(800);
+/// A play, Previous or a pause, once taken: how long its outcome (a 404,
+/// a 409 for a live edit that found no formula, …) is waited for before
+/// the answer is `202` + `"pending":true` (`/api/status` shows the result).
+const PLAY_ANSWER: Duration = Duration::from_millis(700);
+
+/// [`mpsc::Receiver::answer_within`] as a `Result`, for the handlers that
+/// wait on the main task.
+enum Unanswered {
+    /// Not taken in [`TAKE_WAIT`], withdrawn: answer [`player_busy`].
+    NotTaken,
+    /// Taken, not answered in time: under way.
+    Late,
+}
+
+fn from_main<T>(rx: &mpsc::Receiver<T>, answer: Duration) -> Result<T, Unanswered> {
+    match rx.answer_within(TAKE_WAIT, answer) {
+        mpsc::Handoff::Answered(t) => Ok(t),
+        mpsc::Handoff::Taken => Err(Unanswered::Late),
+        mpsc::Handoff::Withdrawn => Err(Unanswered::NotTaken),
+    }
+}
+
+/// The `503` of a request the main task did not take in [`TAKE_WAIT`].
+#[optimize(size)]
+fn player_busy(req: &mut Req) -> Result<()> {
+    PLAYER_BUSY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    log::warn!("{}: the player did not take it in {} ms, 503", req.path(), TAKE_WAIT.as_millis());
+    req.header("Retry-After", "1")?;
+    req.error(503, "503 Service Unavailable", "the player is busy; retry shortly")
+}
+
+/// Requests answered [`player_busy`] (`net.player_busy` in `/api/status`).
+static PLAYER_BUSY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+// --- Long requests: answered when polled ----------------------------------
+//
+// A request whose answer comes from another task and can take seconds (a
+// playlist rebuild, a WiFi scan, a RePlayOS test) is not waited for on the
+// httpd task, which serves no one meanwhile (no `accept`: lwIP drops SYNs
+// once its backlog of six is full). Answered at once if it is done within
+// `JOB_QUICK`; else `202` `{"pending":true,"job":N}` and the client asks
+// `GET /api/job?id=N` until it gets the request's own answer (the web app
+// does this for every request: source.js `req`). One at a time: a second
+// while one is pending is a `503` + `Retry-After`.
+
+/// The answer, when there is one: `poll(req, expired)` sends it on `req`
+/// (the request itself, or the `/api/job` poll) and returns `Some`; `None`
+/// while it is not there yet and `expired` is false.
+type JobPoll = Box<dyn FnMut(&mut Req, bool) -> Option<Result<()>> + Send>;
+
+struct Job {
+    id: u32,
+    /// Past this, the answer is a 504 (the task never answered).
+    until: Instant,
+    /// Asked about last: a client that stops asking lets the slot go.
+    asked: Instant,
+    poll: JobPoll,
+}
+
+static JOB: Mutex<Option<Job>> = Mutex::new(None);
+static JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// How long a long request is waited for on the httpd task before it is a 202.
+const JOB_QUICK: Duration = Duration::from_millis(300);
+/// A pending request nobody has asked about for this long is given up.
+const JOB_ABANDONED: Duration = Duration::from_secs(5);
+
+#[optimize(size)]
+fn long_job(req: &mut Req, limit: Duration, mut poll: JobPoll) -> Result<()> {
+    {
+        let mut slot = JOB.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(j) = slot.as_ref() {
+            if Instant::now() < j.until && j.asked.elapsed() < JOB_ABANDONED {
+                req.header("Retry-After", "2")?;
+                return req.error(503, "503 Service Unavailable", "busy with another long request; retry shortly");
+            }
+            *slot = None;
+        }
+    }
+    let t0 = Instant::now();
+    loop {
+        if let Some(r) = poll(req, false) {
+            return r;
+        }
+        if t0.elapsed() >= JOB_QUICK {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let id = JOB_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1);
+    *JOB.lock().unwrap_or_else(|p| p.into_inner()) = Some(Job {
+        id,
+        until: t0 + limit,
+        asked: Instant::now(),
+        poll,
+    });
+    pending(req, id)
+}
+
+#[optimize(size)]
+fn pending(req: &mut Req, id: u32) -> Result<()> {
+    req.header("Retry-After", "1")?;
+    req.header("X-Job", &id.to_string())?;
+    let body = format!(r#"{{"pending":true,"job":{id}}}"#);
+    req.send_status(202, "202 Accepted", "application/json", body.as_bytes())
+}
+
+/// `GET /api/job?id=N`: the long request's answer, or `202` again.
+#[optimize(size)]
+fn job_poll(req: &mut Req) -> Result<()> {
+    let id: u32 = query_param(req.query(), "id").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut slot = JOB.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(j) = slot.as_mut().filter(|j| j.id == id) else {
+        drop(slot);
+        return req.not_found("no such request pending (answered already, or given up)");
+    };
+    j.asked = Instant::now();
+    let expired = Instant::now() >= j.until;
+    match (j.poll)(req, expired) {
+        Some(r) => {
+            *slot = None;
+            r
+        }
+        None => {
+            drop(slot);
+            pending(req, id)
+        }
+    }
+}
+
+/// A job's answer from `rx`: `Ok` when it is there, `Err` once the task is
+/// gone or the job `expired`; `None` meanwhile.
+fn job_answer<T>(rx: &mpsc::Receiver<T>, expired: bool) -> Option<Result<T, ()>> {
+    match rx.try_recv() {
+        Ok(t) => Some(Ok(t)),
+        Err(mpsc::TryRecvError::Empty) if !expired => None,
+        Err(_) => Some(Err(())),
+    }
+}
 /// How long a handler waits for a command that may rebuild the playlist index:
 /// a full pass over the stock card's 450 KB manifest plus writing the 40 KB
 /// `.idx` takes several seconds over SPI, longer while files are being served.
@@ -67,8 +209,10 @@ struct PlayRequest {
     over: bool,
 }
 
-/// `/api/play`'s and Previous's answer to a [`PlayError`] (or a timeout).
-fn play_reply<T>(req: &mut Req, r: Result<Result<(), PlayError>, T>, ok: &str) -> Result<()> {
+/// `/api/play`'s and Previous's answer to a [`PlayError`], or to no answer
+/// yet: `503` if the main task did not take it, `202` if it is under way.
+#[optimize(size)]
+fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &str) -> Result<()> {
     match r {
         Ok(Ok(())) => req.json(ok),
         Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
@@ -78,7 +222,8 @@ fn play_reply<T>(req: &mut Req, r: Result<Result<(), PlayError>, T>, ok: &str) -
         Ok(Err(PlayError::NoPlaylist)) => {
             req.error(503, "503 Service Unavailable", "no playlist is running")
         }
-        Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        Err(Unanswered::NotTaken) => player_busy(req),
+        Err(Unanswered::Late) => req.send_status(202, "202 Accepted", "application/json", br#"{"ok":true,"pending":true}"#),
     }
 }
 
@@ -101,7 +246,8 @@ fn send_play(req: &mut Req, c: &Ctx, path: String, live: bool, over: bool, psb: 
     if c.cmd.send(cmd).is_err() {
         return req.error(503, "503 Service Unavailable", "player not running");
     }
-    play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), &ok)
+    crate::wake::kick();
+    play_reply(req, from_main(&rx, PLAY_ANSWER), &ok)
 }
 
 /// Wire format for `POST /api/panel/test`: `{"setting":"clk_phase"}` or
@@ -176,6 +322,7 @@ fn name_check(c: &Ctx, name: &str) -> Check {
     }
     rx.recv_timeout(config::NAME_CHECK_WAIT).unwrap_or(Check::Unknown)
 }
+
 
 /// Wire format for `POST /api/follow/test`.
 #[derive(serde::Deserialize, Default)]
@@ -260,6 +407,7 @@ fn hundredths(body: &[u8], key: &[u8]) -> Option<Option<i32>> {
 }
 
 /// `panel`: absent, `null` (the defaults) or an object.
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn double_option_panel<'de, D>(d: D) -> Result<Option<Option<PanelWire>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -330,6 +478,7 @@ impl PatchErr {
 /// settings file on the card, `settings_card`, read through the same
 /// checks): the first value refused is the error, and `next` is then
 /// partly changed (the caller drops it).
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), PatchErr> {
     if let Some(v) = patch.wifi_ssid.clone() {
         next.wifi_ssid = v;
@@ -680,7 +829,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     });
 
     let c = ctx.clone();
-    server.route("/", Method::Get, move |req| {
+    server.route("/", Method::Get, #[optimize(size)] move |req| {
         // In AP mode it's the setup page, so the captive portal (and any
         // address typed while joined to the setup network) lands on getting
         // onto WiFi. The web app is still at /index.html there.
@@ -703,7 +852,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // --- JSON API ----------------------------------------------------------
     let c = ctx.clone();
-    server.route("/api/status", Method::Get, move |req| {
+    server.route("/api/status", Method::Get, #[optimize(size)] move |req| {
         // `diag-heap` only: `?diag_chan=N&impl=std|ours` makes N channels
         // here first (see `diag::channel_torture`).
         #[cfg(feature = "diag-heap")]
@@ -719,6 +868,18 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
             return req.json(&crate::membank::take_read_max());
+        }
+        // The slim read (`status_json`'s `now`): taken fallibly, never kept.
+        if query_param(req.query(), "now").as_deref() == Some("1") {
+            let snap = status_snapshot(&c.status);
+            let mut json = String::new();
+            if json.try_reserve_exact(768).is_err() {
+                req.header("Retry-After", "1")?;
+                return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+            }
+            status_json(&snap, &|| String::new(), false, true, &mut json);
+            drop(snap);
+            return req.json(&json);
         }
         // The heap map (a `heapmap` build only): the whole of it, fresh,
         // in parts of a few KB each (`heapmap::part`).
@@ -794,7 +955,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 req.header("Retry-After", "1")?;
                 return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
             }
-            status_json(&snap, &looks, recent, &mut json);
+            status_json(&snap, &looks, recent, false, &mut json);
             drop(snap);
             STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
             STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
@@ -813,7 +974,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
         };
         out.req.begin_chunked("200 OK", "application/json")?;
-        status_json(&snap, &looks, recent, &mut out);
+        status_json(&snap, &looks, recent, false, &mut out);
         drop(snap);
         let len = out.finish()?;
         STATUS_LEN.store(len as u32, std::sync::atomic::Ordering::Relaxed);
@@ -821,8 +982,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         req.finish()
     })?;
 
+    server.route("/api/job", Method::Get, job_poll)?;
+
     let c = ctx.clone();
-    server.route("/api/skip", Method::Post, move |req| {
+    server.route("/api/skip", Method::Post, #[optimize(size)] move |req| {
         // `?back=1`: Previous, one step back through Recently played.
         if query_param(req.query(), "back").as_deref() != Some("1") {
             let _ = c.cmd.send(Command::Skip);
@@ -832,23 +995,26 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd.send(Command::Back(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), r#"{"ok":true}"#)
+        crate::wake::kick();
+        play_reply(req, from_main(&rx, PLAY_ANSWER), r#"{"ok":true}"#)
     })?;
 
     let c = ctx.clone();
-    server.route("/api/pause", Method::Post, move |req| {
+    server.route("/api/pause", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::TogglePause(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
+        crate::wake::kick();
+        match from_main(&rx, PLAY_ANSWER) {
             Ok(paused) => req.json(&format!(r#"{{"ok":true,"paused":{paused}}}"#)),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            Err(Unanswered::NotTaken) => player_busy(req),
+            Err(Unanswered::Late) => req.send_status(202, "202 Accepted", "application/json", br#"{"ok":true,"pending":true}"#),
         }
     })?;
 
     let c = ctx.clone();
-    server.route("/api/config", Method::Get, move |req| {
+    server.route("/api/config", Method::Get, #[optimize(size)] move |req| {
         // A light read, refused only where a status read is (its ~2 KB of
         // JSON is built whole).
         if crate::state::free_heap() < STATUS_MIN_HEAP {
@@ -868,195 +1034,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route_json("/api/config", Method::Put, move |req| {
-        let Some(body) = json_body(req)? else {
-            return Ok(());
-        };
-        let mut patch: ConfigPatch = match serde_json::from_slice(&body) {
-            Ok(p) => p,
-            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
-        };
-        (patch.lat, patch.lon) = (hundredths(&body, b"\"lat\""), hundredths(&body, b"\"lon\""));
-        // On the open setup network: the WiFi, the name and the key, and
-        // nothing else (`opendmd_core::access::SETUP_CONFIG_KEYS`).
-        if crate::httpd::setup_mode() {
-            patch = ConfigPatch {
-                wifi_ssid: patch.wifi_ssid.take(),
-                wifi_pass: patch.wifi_pass.take(),
-                hostname: patch.hostname.take(),
-                api_key: patch.api_key.take(),
-                ..Default::default()
-            };
-        }
-        let mut next = c.settings.lock().unwrap().clone();
-        let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
-        let hostname_before = next.hostname.clone();
-        let sky_before = (next.location, next.tz.clone());
-        if let Some(p) = patch.pace_on_pct {
-            crate::pace::set_on_pct(p);
-        }
-        if let Err(e) = apply_patch(&mut next, &patch) {
-            return match e.code {
-                413 => req.error(413, "413 Payload Too Large", &e.msg),
-                _ => req.bad_request(&e.msg),
-            };
-        }
-        let panel_op = match (patch.panel, patch.panel_confirm) {
-            (None, None) => None,
-            (None, Some(true)) => Some(PanelOp::Confirm),
-            (None, Some(false)) => Some(PanelOp::Revert),
-            (Some(None), _) => Some(PanelOp::Save(None)),
-            (Some(Some(_)), Some(false)) => {
-                return req.bad_request("panel_confirm false undoes a trial: send it without panel");
-            }
-            (Some(Some(w)), confirm) => {
-                let p = match PanelPatch::new(
-                    w.clk_phase,
-                    w.latch_blanking,
-                    w.driver.as_deref(),
-                    w.i2s_speed,
-                    w.min_refresh,
-                ) {
-                    Ok(p) => p,
-                    Err(e) => return req.bad_request(&e),
-                };
-                Some(if confirm == Some(true) {
-                    PanelOp::Save(Some(p))
-                } else {
-                    PanelOp::Try(p)
-                })
-            }
-        };
-        // WiFi details are read once, when the network starts: saved now,
-        // in effect after a reboot. A new name is applied live once saved
-        // (`NetCommand::Rename`).
-        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
-        let renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
-        // A name another device already answers to is refused: mDNS would
-        // hand it to this display and push the other to `<name>-2`. Asked
-        // last, once everything else is known good; "could not ask" (no
-        // mDNS, a busy worker) lets the save go ahead.
-        if let Some(name) = &renamed {
-            if let Check::Taken(by) = name_check(&c, name) {
-                info!("hostname {name} refused: {name}.local answers from {by}");
-                let body = format!(
-                    r#"{{"error":{},"name":{},"by":{}}}"#,
-                    json_string(&opendmd_core::hostname::taken_message(name, &by)),
-                    json_string(name),
-                    json_string(&by)
-                );
-                return req.respond_json("409 Conflict", &body);
-            }
-        }
-        let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
-        let card_speed = next.card_speed;
-        // The sky's inputs depend on the location and the zone.
-        let sky_changed = (next.location, next.tz.clone()) != sky_before;
-        let location = next.location;
-        // The shared copy and the log line are this handler's (CPU0), once
-        // the main task has applied it: the display core neither clones
-        // the settings nor formats a line for a PUT.
-        let shared = next.clone();
-
-        let (tx, rx) = mpsc::channel();
-        if c.cmd
-            .send(Command::ApplyConfig {
-                settings: Box::new(next),
-                panel: panel_op,
-                reply: tx,
-            })
-            .is_err()
-        {
-            return req.error(503, "503 Service Unavailable", "player not running");
-        }
-        let answer = rx.recv_timeout(REINDEX_TIMEOUT);
-        // The settings the main task replaced (or refused), freed here on
-        // CPU0 rather than on the display core.
-        crate::state::drop_spent();
-        match answer {
-            Ok(Ok(applied)) => {
-                info!(
-                    "config applied: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
-                    shared.brightness,
-                    shared.look.name(),
-                    shared.glow.name(),
-                    shared.dwell_min,
-                    shared.dwell_max,
-                    shared.shuffle,
-                    shared.platforms,
-                    shared.set,
-                    shared.transition,
-                    shared.attract,
-                    shared.panel_sync,
-                    shared.panel_split
-                );
-                *c.settings.lock().unwrap() = shared;
-                // In effect at once: the sky's inputs for the new location
-                // (or zone), here on CPU0 (the zone is already set).
-                if sky_changed {
-                    crate::inputs::set_place(location);
-                }
-                // Durable at once on the card (CPU0; `settings_card`).
-                crate::settings_card::save_shared(&c.settings);
-                if let Some(name) = renamed {
-                    // Queued, not waited for: the worker may be mid-connect.
-                    if c.net.send(NetCommand::Rename(name)).is_err() {
-                        log::warn!("hostname saved, but the network worker is gone: in effect after a reboot");
-                    }
-                }
-                if let Some(k) = &patch.api_key {
-                    crate::httpd::set_api_key(k);
-                    info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
-                }
-                // Saved: now the clock (here, on CPU0, under the card's
-                // I/O lock), and when it took effect; `restart`: it could
-                // not be changed in place, so the device restarts (after
-                // the reply) and the saved setting applies at that boot.
-                let speed_applied = patch.card_speed.map(|_| crate::cardspeed::set_mode(card_speed));
-                let speed = match speed_applied {
-                    Some(a) => format!(r#","card_speed_applied":"{}""#, a.name()),
-                    None => String::new(),
-                };
-                let (panel, restart) = {
-                    let st = c.status.lock().unwrap();
-                    (panel_json(&st), st.panel.restart_needed())
-                };
-                // A restart this request's panel change waits for (not one
-                // pending from before: the WiFi banner keys off this).
-                let reboot_required = reboot_required || (panel_op.is_some() && restart);
-                req.json(&format!(
-                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required},{panel}{speed}}}"#,
-                    applied_json(&applied)
-                ))?;
-                if speed_applied == Some(crate::cardspeed::Applied::Restart) {
-                    reboot_after_response(Reason::CardClock);
-                }
-                Ok(())
-            }
-            Ok(Err(e)) if e == panel_timing::NO_TRIAL => req.error(409, "409 Conflict", &e),
-            // Checked by the main task before anything was saved: the
-            // configuration and the running playlist are as they were.
-            Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
-            // Likewise refused, the previous playlist rebuilt: nothing saved.
-            Ok(Err(e)) if e.starts_with(crate::state::FILTER_EMPTY) => req.bad_request(&e),
-            // The formula look does not compile or is too heavy: nothing saved.
-            Ok(Err(e)) if e.starts_with(crate::state::LOOK_FORMULA_BAD) => req.bad_request(&e),
-            Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
-    })?;
+    server.route_json("/api/config", Method::Put, move |req| put_config(req, &c))?;
 
     let c = ctx.clone();
-    server.route("/api/reindex", Method::Post, move |req| {
+    server.route("/api/reindex", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::Reindex(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(Ok(applied)) => req.json(&format!(r#"{{"ok":true,{}}}"#, applied_json(&applied))),
-            Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
+        crate::wake::kick();
+        long_job(req, REINDEX_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+            Some(match job_answer(&rx, expired)? {
+                Ok(Ok(applied)) => req.json(&format!(r#"{{"ok":true,{}}}"#, applied_json(&applied))),
+                Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            })
+        }))
     })?;
 
     // A playlist's overrides, parsed: `?set=` takes the config's `set`
@@ -1078,7 +1071,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // it whole, validated here (times, days, rule playlists that open)
     // before the main task saves it to NVS and evaluates it.
     let c = ctx.clone();
-    server.route("/api/schedule", Method::Get, move |req| {
+    server.route("/api/schedule", Method::Get, #[optimize(size)] move |req| {
         let json = c.settings.lock().unwrap().schedule.clone();
         req.json(if json.trim().is_empty() {
             crate::sched::EMPTY_JSON
@@ -1088,69 +1081,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route_json("/api/schedule", Method::Put, move |req| {
-        let declared = req.content_len();
-        if declared > crate::nvs_config::SCHEDULE_MAX {
-            return req.error(
-                413,
-                "413 Payload Too Large",
-                &format!(
-                    "schedule is {declared} B, the limit is {} B",
-                    crate::nvs_config::SCHEDULE_MAX
-                ),
-            );
-        }
-        if !admitted(req, Ask::body(declared as u32))? {
-            return Ok(());
-        }
-        let Some(body) = req.read_to_vec(crate::nvs_config::SCHEDULE_MAX)? else {
-            return refuse_heavy(req, "no block for the body");
-        };
-        let parsed = match crate::sched::parse(&body) {
-            Ok(p) => p,
-            Err(e) => return req.bad_request(&e),
-        };
-        // Parsed as JSON, so it is UTF-8.
-        let json = String::from_utf8(body).unwrap_or_default();
-        let missing = crate::sched::missing_sets(&parsed);
-        if !missing.is_empty() {
-            return req.not_found(&format!("set not found: {}", missing.join(", ")));
-        }
-        let json = if parsed.is_empty() {
-            String::new()
-        } else {
-            json
-        };
-        let (rules, night) = (parsed.rules.len(), parsed.night.is_some());
-        let shared = json.clone();
-        let (tx, rx) = mpsc::channel();
-        if c.cmd
-            .send(Command::SetSchedule {
-                json,
-                parsed: Box::new(parsed),
-                reply: tx,
-            })
-            .is_err()
-        {
-            return req.error(503, "503 Service Unavailable", "player not running");
-        }
-        // Applying may switch the playlist (a rule in force now).
-        match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(Ok(_)) => {
-                // (The shared copy and the line are this handler's, on CPU0.)
-                c.settings.lock().unwrap().schedule = shared;
-                crate::settings_card::save_shared(&c.settings);
-                info!("schedule saved: {rules} rule(s){}", if night { " + night mode" } else { "" });
-                req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
-            }
-            Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
-    })?;
+    server.route_json("/api/schedule", Method::Put, move |req| put_schedule(req, &c))?;
 
     // Suspend the schedule: `{"minutes": 60}` (0 resumes it now).
     let c = ctx.clone();
-    server.route_json("/api/wake", Method::Post, move |req| {
+    server.route_json("/api/wake", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1171,23 +1106,26 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(_) => {
-                let until = c.status.lock().unwrap().wake_until.clone();
-                req.json(&format!(
-                    r#"{{"ok":true,"minutes":{},"wake_until":{}}}"#,
-                    wake.minutes,
-                    opt_json(until.as_deref())
-                ))
-            }
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
+        crate::wake::kick();
+        let (c, minutes) = (c.clone(), wake.minutes);
+        long_job(req, REINDEX_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+            Some(match job_answer(&rx, expired)? {
+                Ok(_) => {
+                    let until = c.status.lock().unwrap().wake_until.clone();
+                    req.json(&format!(
+                        r#"{{"ok":true,"minutes":{minutes},"wake_until":{}}}"#,
+                        opt_json(until.as_deref())
+                    ))
+                }
+                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            })
+        }))
     })?;
 
     // Play one file now (a Library preview sent to the panel), then carry on
     // with the schedule. `{"path": "/gifs/…"}`, card-absolute.
     let c = ctx.clone();
-    server.route_json("/api/play", Method::Post, move |req| {
+    server.route_json("/api/play", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1274,72 +1212,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // (`a b c fps`) as for `/api/play`. The last one sent is let go first,
     // so two are never held at once.
     let c = ctx.clone();
-    server.route("/api/play/formula", Method::Post, move |req| {
-        if !crate::state::FORMULAS {
-            return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
-        }
-        if req.request_header(c"Content-Type").as_deref() != Some("application/octet-stream") {
-            return req.error(
-                415,
-                "415 Unsupported Media Type",
-                "Content-Type must be application/octet-stream",
-            );
-        }
-        let len = req.content_len();
-        if len > opendmd_core::synth::MAX_FORMULA_FILE {
-            return req.error(
-                413,
-                "413 Payload Too Large",
-                "this formula is too long for the panel (16,384 B compiled at most)",
-            );
-        }
-        let q = req.query();
-        let flag = |k| query_param(q, k).as_deref() == Some("1");
-        let (live, over) = (flag("live"), flag("over"));
-        let mut path = String::from(opendmd_core::synth::SENT);
-        // The sliders, numbers only (never `key=`).
-        let mut sep = '?';
-        for k in ["a", "b", "c", "fps"] {
-            if let Some(v) = query_param(q, k).filter(|v| {
-                v.len() <= 12 && v.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
-            }) {
-                path.push(sep);
-                path.push_str(k);
-                path.push('=');
-                path.push_str(&v);
-                sep = '&';
-            }
-        }
-        opendmd_core::synth::set_sent(None);
-        // At the door: the bytes, the floor, a transfer's swing, and a
-        // block that size (the rig's ring: a 9 KB block refused at 39 KB
-        // free). Then `try_reserve`: `vec!` would abort the board.
-        if !admitted(req, Ask::held(len as u32))? {
-            return Ok(());
-        }
-        let mut psb = Vec::new();
-        if psb.try_reserve_exact(len).is_err() {
-            return refuse_heavy(req, "no block for the Formula");
-        }
-        psb.resize(len, 0);
-        let mut got = 0;
-        while got < len {
-            match req.read(&mut psb[got..])? {
-                0 => break,
-                n => got += n,
-            }
-        }
-        if len == 0 || got < len {
-            return req.bad_request("the body is the compiled Formula");
-        }
-        send_play(req, &c, path, live, over, Some(psb))
-    })?;
+    server.route("/api/play/formula", Method::Post, move |req| post_formula(req, &c))?;
 
     // The panel-timing test (`opendmd_core::panel_test`): the firmware's
     // patterns with one live setting flipped between A and B, ended by
     // `stop`, by any settings change or after two minutes; nothing saved.
     let c = ctx.clone();
-    server.route_json("/api/panel/test", Method::Post, move |req| {
+    server.route_json("/api/panel/test", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1360,7 +1239,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd.send(Command::PanelTest { setting, reply: tx }).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
+        crate::wake::kick();
+        // A pattern on the panel, at once once taken: a play's waits.
+        match from_main(&rx, PLAY_ANSWER) {
+            Err(Unanswered::NotTaken) => player_busy(req),
             Ok(Ok(_)) => match setting {
                 None => req.json(r#"{"ok":true}"#),
                 Some(s) => {
@@ -1426,7 +1308,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // first request, or one after the card changed, answers "counting" with
     // the last count (or null) and the browser polls.
     let c = ctx.clone();
-    server.route("/api/cache", Method::Get, move |req| {
+    server.route("/api/cache", Method::Get, #[optimize(size)] move |req| {
         let snap = crate::cache::snapshot();
         let total = c.status.lock().unwrap().entries;
         req.json(&format!(
@@ -1484,7 +1366,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Remove the prepared copy of a GIF (it was replaced, or is going), if
     // there is one. `{"path": "/gifs/…"}`.
     let c = ctx.clone();
-    server.route_json("/api/cache/forget", Method::Post, move |req| {
+    server.route_json("/api/cache/forget", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1544,7 +1426,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
     // `{"name","valid","taken","by"}`: `taken` null when it could not ask.
     let c = ctx.clone();
-    server.route("/api/name-check", Method::Get, move |req| {
+    server.route("/api/name-check", Method::Get, #[optimize(size)] move |req| {
         let Some(raw) = query_param(req.query(), "name") else {
             return req.bad_request("name= required");
         };
@@ -1567,21 +1449,23 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/wifi/scan", Method::Get, move |req| {
+    server.route("/api/wifi/scan", Method::Get, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.net.send(NetCommand::Scan(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "network worker not running");
         }
-        match rx.recv_timeout(SCAN_TIMEOUT) {
-            Ok(aps) => req.json(&scan_json(&aps)),
-            Err(_) => req.error(504, "504 Gateway Timeout", "scan timed out"),
-        }
+        long_job(req, SCAN_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+            Some(match job_answer(&rx, expired)? {
+                Ok(aps) => req.json(&scan_json(&aps)),
+                Err(_) => req.error(504, "504 Gateway Timeout", "scan timed out"),
+            })
+        }))
     })?;
 
     // Follow RePlayOS's "Test" button: the network worker asks the box (it
     // owns the HTTP client); nothing is saved.
     let c = ctx.clone();
-    server.route_json("/api/follow/test", Method::Post, move |req| {
+    server.route_json("/api/follow/test", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1611,10 +1495,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.net.send(cmd).is_err() {
             return req.error(503, "503 Service Unavailable", "network worker not running");
         }
-        match rx.recv_timeout(FOLLOW_TEST_TIMEOUT) {
-            Ok(json) => req.json(&json),
-            Err(_) => req.error(504, "504 Gateway Timeout", "the test did not finish"),
-        }
+        long_job(req, FOLLOW_TEST_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+            Some(match job_answer(&rx, expired)? {
+                Ok(json) => req.json(&json),
+                Err(_) => req.error(504, "504 Gateway Timeout", "the test did not finish"),
+            })
+        }))
     })?;
 
     // The web app in flash: what is there, and a new pack (`www.rs`). The
@@ -1622,7 +1508,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // also where every web app file is sent from: the two never overlap.
     server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
     let c = ctx.clone();
-    server.route("/api/www", Method::Put, move |req| {
+    server.route("/api/www", Method::Put, #[optimize(size)] move |req| {
         // Why staging on the card is not possible, if it is not: the log
         // and the reply say so in words (no card, or one that cannot be read).
         let card = {
@@ -1636,12 +1522,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
     // bundle received onto the card on the stream task, then the updater.
     let c = ctx.clone();
-    server.route("/api/firmware", Method::Get, move |req| {
+    server.route("/api/firmware", Method::Get, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         req.json(&crate::ota::info_json(mounted))
     })?;
     let c = ctx.clone();
-    server.route("/api/firmware", Method::Put, move |req| {
+    server.route("/api/firmware", Method::Put, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
         stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
@@ -1653,7 +1539,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // a card, does it (`boot::request_format`); `sd.formatting` says when
     // it is over, and `sd.readable` how it went.
     let c = ctx.clone();
-    server.route_json("/api/card/format", Method::Post, move |req| {
+    server.route_json("/api/card/format", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1714,7 +1600,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     #[cfg(feature = "bench")]
     let c_cut = ctx.clone();
-    server.route("/api/reboot", Method::Post, move |req| {
+    server.route("/api/reboot", Method::Post, #[optimize(size)] move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check
         // what a crash leaves: the panic message and IDF's backtrace on the
@@ -1771,7 +1657,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // engine's own file handle can be dropped before the file underneath it
     // is replaced.
     let c = ctx.clone();
-    server.route("/api/manifest", Method::Put, move |req| {
+    server.route("/api/manifest", Method::Put, #[optimize(size)] move |req| {
         let c = c.clone();
         stream::receive(req, move |up| {
             install_manifest(up, &c, config::MANIFEST_PATH.to_string())
@@ -1779,7 +1665,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/sets/*", Method::Put, move |req| {
+    server.route("/api/sets/*", Method::Put, #[optimize(size)] move |req| {
         let name = req.path().trim_start_matches("/api/sets/");
         let name = crate::httpd::percent_decode(name);
         let c = c.clone();
@@ -1798,7 +1684,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/files/*", Method::Put, move |req| {
+    server.route("/api/files/*", Method::Put, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let c = c.clone();
         // `?new=1`: only if there is no such file (409 otherwise): a name
@@ -1812,7 +1698,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // card writes: two FAT directory scans per rename, up to ~0.5 s each in
     // gifs/Consoles, must not hold the API.
     let c = ctx.clone();
-    server.route_json("/api/files/move", Method::Post, move |req| {
+    server.route_json("/api/files/move", Method::Post, #[optimize(size)] move |req| {
         let c = c.clone();
         stream::receive(req, move |up| move_file(up, &c))
     })?;
@@ -1820,7 +1706,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- Delete ---------------------------------------------------------------
 
     let c = ctx.clone();
-    server.route("/api/files/*", Method::Delete, move |req| {
+    server.route("/api/files/*", Method::Delete, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let Some(path) = files::card_path_for_write(config::SD_MOUNT, &rel) else {
             return req.bad_request(files::BAD_WRITE_PATH);
@@ -1982,7 +1868,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // for `/app.js` and `/pkg/opendmd_web_bg.wasm`, not `/www/...`. Serving
     // the pack from here is what makes both spellings work.
     let c = ctx.clone();
-    server.route("/*", Method::Get, move |req| {
+    server.route("/*", Method::Get, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path());
         // Decided here, where the context is: what to say if the pack has no
         // such file (in AP mode, the portal).
@@ -2090,6 +1976,7 @@ struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
 ///
 /// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
 /// folder: the intent and the wait are for the whole folder then.
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
     let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
     let alias = !opendmd_core::fatread::is_canonical(card);
@@ -2140,8 +2027,9 @@ fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
 /// `Command::Release`: the main loop lets go of the copy opened ahead and,
 /// with `screen`, of the file on screen (the picture stays; the next tick
 /// opens the next file, and nothing an intent covers opens at all), woken
-/// from its frame's sleep for it. False if it did not answer in
-/// [`REPLY_TIMEOUT`].
+/// from its frame's sleep for it. False if it did not take it within
+/// [`TAKE_WAIT`] or answer a second after.
+#[optimize(size)]
 fn release_player(ctx: &Ctx, screen: bool) -> bool {
     let (tx, rx) = mpsc::channel();
     if ctx.cmd.send(Command::Release { screen, reply: tx }).is_err() {
@@ -2149,7 +2037,9 @@ fn release_player(ctx: &Ctx, screen: bool) -> bool {
         return true;
     }
     crate::wake::kick();
-    let answered = rx.recv_timeout(REPLY_TIMEOUT).is_ok();
+    // Once taken it is a few handles closed: a second is plenty, and the
+    // httpd task waits no longer (net-stall).
+    let answered = from_main(&rx, Duration::from_secs(1)).is_ok();
     if !answered {
         log::warn!("the player did not answer a release");
     }
@@ -2751,7 +2641,10 @@ fn applied_json(a: &Applied) -> String {
 /// with the panel, correcting for its own request latency the NTP way.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
-fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut dyn std::fmt::Write) {
+/// The status; with `now` only its head and `now_playing` (`?now=1`, the
+/// Now page's poll between full reads: ~0.5 KB, one segment, against the
+/// full answer's ~3.7 KB, three held in lwIP until the client's ACK).
+fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, now: bool, out: &mut dyn std::fmt::Write) {
     // In parts (net-wedge2): each `write!`'s arguments are made, written
     // and dropped before the next part's, so the strings the parts are
     // made of never all exist at once.
@@ -2772,7 +2665,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     );
     let _ = write!(
         out,
-        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"#,
+        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"transfer":{},"#,
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),
@@ -2781,7 +2674,12 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         formula_json(&s.path),
         kept_json(s),
         s.paused,
+        stream::transfers() > 0 || stream::uploads() > 0,
     );
+    if now {
+        let _ = out.write_str(r#""now":true}"#);
+        return;
+    }
     // `?recent=1`: Recently played, newest first, and which is on screen.
     if recent {
         let _ = out.write_str(r#""recent":["#);
@@ -3114,11 +3012,12 @@ impl std::fmt::Write for Piecewise<'_> {
 fn net_json() -> String {
     let n = crate::netstat::json();
     format!(
-        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{}}}"#,
+        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{},"player_busy":{}}}"#,
         &n[..n.len() - 1],
         STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
         HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
-        crate::httpd::bodies_stalled()
+        crate::httpd::bodies_stalled(),
+        PLAYER_BUSY.load(std::sync::atomic::Ordering::Relaxed)
     )
 }
 
@@ -3129,6 +3028,7 @@ const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
 /// handler the copy (~1.5 KB) sat on the httpd task's stack under the whole
 /// of `status_json` (728 B of 6.5 KB left in the emulator).
 #[inline(never)]
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
     let s = status.lock().unwrap();
     let held = std::time::Instant::now();
@@ -3293,3 +3193,327 @@ fn scan_json(aps: &[ScannedAp]) -> String {
         .collect();
     format!("[{}]", items.join(","))
 }
+
+/// A route's body out of `start` (net-stall's flash: a function can be
+/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+#[optimize(size)]
+fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let mut patch: ConfigPatch = match serde_json::from_slice(&body) {
+            Ok(p) => p,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        (patch.lat, patch.lon) = (hundredths(&body, b"\"lat\""), hundredths(&body, b"\"lon\""));
+        // On the open setup network: the WiFi, the name and the key, and
+        // nothing else (`opendmd_core::access::SETUP_CONFIG_KEYS`).
+        if crate::httpd::setup_mode() {
+            patch = ConfigPatch {
+                wifi_ssid: patch.wifi_ssid.take(),
+                wifi_pass: patch.wifi_pass.take(),
+                hostname: patch.hostname.take(),
+                api_key: patch.api_key.take(),
+                ..Default::default()
+            };
+        }
+        let mut next = c.settings.lock().unwrap().clone();
+        let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
+        let hostname_before = next.hostname.clone();
+        let sky_before = (next.location, next.tz.clone());
+        if let Some(p) = patch.pace_on_pct {
+            crate::pace::set_on_pct(p);
+        }
+        if let Err(e) = apply_patch(&mut next, &patch) {
+            return match e.code {
+                413 => req.error(413, "413 Payload Too Large", &e.msg),
+                _ => req.bad_request(&e.msg),
+            };
+        }
+        let panel_op = match (patch.panel, patch.panel_confirm) {
+            (None, None) => None,
+            (None, Some(true)) => Some(PanelOp::Confirm),
+            (None, Some(false)) => Some(PanelOp::Revert),
+            (Some(None), _) => Some(PanelOp::Save(None)),
+            (Some(Some(_)), Some(false)) => {
+                return req.bad_request("panel_confirm false undoes a trial: send it without panel");
+            }
+            (Some(Some(w)), confirm) => {
+                let p = match PanelPatch::new(
+                    w.clk_phase,
+                    w.latch_blanking,
+                    w.driver.as_deref(),
+                    w.i2s_speed,
+                    w.min_refresh,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => return req.bad_request(&e),
+                };
+                Some(if confirm == Some(true) {
+                    PanelOp::Save(Some(p))
+                } else {
+                    PanelOp::Try(p)
+                })
+            }
+        };
+        // WiFi details are read once, when the network starts: saved now,
+        // in effect after a reboot. A new name is applied live once saved
+        // (`NetCommand::Rename`).
+        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
+        let mut renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
+        // A name another device already answers to is refused: mDNS would
+        // hand it to this display and push the other to `<name>-2`. Asked
+        // last, once everything else is known good; "could not ask" (no
+        // mDNS, a busy worker) lets the save go ahead.
+        if let Some(name) = &renamed {
+            if let Check::Taken(by) = name_check(c, name) {
+                info!("hostname {name} refused: {name}.local answers from {by}");
+                let body = format!(
+                    r#"{{"error":{},"name":{},"by":{}}}"#,
+                    json_string(&opendmd_core::hostname::taken_message(name, &by)),
+                    json_string(name),
+                    json_string(&by)
+                );
+                return req.respond_json("409 Conflict", &body);
+            }
+        }
+        let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
+        let card_speed = next.card_speed;
+        // The sky's inputs depend on the location and the zone.
+        let sky_changed = (next.location, next.tz.clone()) != sky_before;
+        let location = next.location;
+        // The shared copy and the log line are this handler's (CPU0), once
+        // the main task has applied it: the display core neither clones
+        // the settings nor formats a line for a PUT.
+        let shared = next.clone();
+        let panel_asked = panel_op.is_some();
+        let api_key = patch.api_key.take();
+        let speed_asked = patch.card_speed.is_some();
+
+        let (tx, rx) = mpsc::channel();
+        if c.cmd
+            .send(Command::ApplyConfig {
+                settings: Box::new(next),
+                panel: panel_op,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        crate::wake::kick();
+        let c = c.clone();
+        let mut shared = Some(shared);
+        long_job(req, REINDEX_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+        let answer = job_answer(&rx, expired)?;
+        // The settings the main task replaced (or refused), freed here on
+        // CPU0 rather than on the display core.
+        crate::state::drop_spent();
+        Some(match answer {
+            Ok(Ok(applied)) => (|| {
+                let Some(shared) = shared.take() else {
+                    return req.error(500, "500 Internal Server Error", "answered twice");
+                };
+                info!(
+                    "config applied: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
+                    shared.brightness,
+                    shared.look.name(),
+                    shared.glow.name(),
+                    shared.dwell_min,
+                    shared.dwell_max,
+                    shared.shuffle,
+                    shared.platforms,
+                    shared.set,
+                    shared.transition,
+                    shared.attract,
+                    shared.panel_sync,
+                    shared.panel_split
+                );
+                *c.settings.lock().unwrap() = shared;
+                // In effect at once: the sky's inputs for the new location
+                // (or zone), here on CPU0 (the zone is already set).
+                if sky_changed {
+                    crate::inputs::set_place(location);
+                }
+                // Durable at once on the card (CPU0; `settings_card`).
+                crate::settings_card::save_shared(&c.settings);
+                if let Some(name) = renamed.take() {
+                    // Queued, not waited for: the worker may be mid-connect.
+                    if c.net.send(NetCommand::Rename(name)).is_err() {
+                        log::warn!("hostname saved, but the network worker is gone: in effect after a reboot");
+                    }
+                }
+                if let Some(k) = &api_key {
+                    crate::httpd::set_api_key(k);
+                    info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
+                }
+                // Saved: now the clock (here, on CPU0, under the card's
+                // I/O lock), and when it took effect; `restart`: it could
+                // not be changed in place, so the device restarts (after
+                // the reply) and the saved setting applies at that boot.
+                let speed_applied = speed_asked.then(|| crate::cardspeed::set_mode(card_speed));
+                let speed = match speed_applied {
+                    Some(a) => format!(r#","card_speed_applied":"{}""#, a.name()),
+                    None => String::new(),
+                };
+                let (panel, restart) = {
+                    let st = c.status.lock().unwrap();
+                    (panel_json(&st), st.panel.restart_needed())
+                };
+                // A restart this request's panel change waits for (not one
+                // pending from before: the WiFi banner keys off this).
+                let reboot_required = reboot_required || (panel_asked && restart);
+                req.json(&format!(
+                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required},{panel}{speed}}}"#,
+                    applied_json(&applied)
+                ))?;
+                if speed_applied == Some(crate::cardspeed::Applied::Restart) {
+                    reboot_after_response(Reason::CardClock);
+                }
+                Ok(())
+            })(),
+            Ok(Err(e)) if e == panel_timing::NO_TRIAL => req.error(409, "409 Conflict", &e),
+            // Checked by the main task before anything was saved: the
+            // configuration and the running playlist are as they were.
+            Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
+            // Likewise refused, the previous playlist rebuilt: nothing saved.
+            Ok(Err(e)) if e.starts_with(crate::state::FILTER_EMPTY) => req.bad_request(&e),
+            // The formula look does not compile or is too heavy: nothing saved.
+            Ok(Err(e)) if e.starts_with(crate::state::LOOK_FORMULA_BAD) => req.bad_request(&e),
+            Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        })
+        }))
+    }
+
+/// A route's body out of `start` (net-stall's flash: a function can be
+/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+#[optimize(size)]
+fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
+        let declared = req.content_len();
+        if declared > crate::nvs_config::SCHEDULE_MAX {
+            return req.error(
+                413,
+                "413 Payload Too Large",
+                &format!(
+                    "schedule is {declared} B, the limit is {} B",
+                    crate::nvs_config::SCHEDULE_MAX
+                ),
+            );
+        }
+        if !admitted(req, Ask::body(declared as u32))? {
+            return Ok(());
+        }
+        let Some(body) = req.read_to_vec(crate::nvs_config::SCHEDULE_MAX)? else {
+            return refuse_heavy(req, "no block for the body");
+        };
+        let parsed = match crate::sched::parse(&body) {
+            Ok(p) => p,
+            Err(e) => return req.bad_request(&e),
+        };
+        // Parsed as JSON, so it is UTF-8.
+        let json = String::from_utf8(body).unwrap_or_default();
+        let missing = crate::sched::missing_sets(&parsed);
+        if !missing.is_empty() {
+            return req.not_found(&format!("set not found: {}", missing.join(", ")));
+        }
+        let json = if parsed.is_empty() {
+            String::new()
+        } else {
+            json
+        };
+        let (rules, night) = (parsed.rules.len(), parsed.night.is_some());
+        let shared = json.clone();
+        let (tx, rx) = mpsc::channel();
+        if c.cmd
+            .send(Command::SetSchedule {
+                json,
+                parsed: Box::new(parsed),
+                reply: tx,
+            })
+            .is_err()
+        {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        // Applying may switch the playlist (a rule in force now).
+        crate::wake::kick();
+        let c = c.clone();
+        let mut shared = Some(shared);
+        long_job(req, REINDEX_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
+            Some(match job_answer(&rx, expired)? {
+                Ok(Ok(_)) => {
+                    // (The shared copy and the line are this handler's, on CPU0.)
+                    c.settings.lock().unwrap().schedule = shared.take().unwrap_or_default();
+                    crate::settings_card::save_shared(&c.settings);
+                    info!("schedule saved: {rules} rule(s){}", if night { " + night mode" } else { "" });
+                    req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
+                }
+                Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            })
+        }))
+    }
+
+/// A route's body out of `start` (net-stall's flash: a function can be
+/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+#[optimize(size)]
+fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
+        if !crate::state::FORMULAS {
+            return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
+        }
+        if req.request_header(c"Content-Type").as_deref() != Some("application/octet-stream") {
+            return req.error(
+                415,
+                "415 Unsupported Media Type",
+                "Content-Type must be application/octet-stream",
+            );
+        }
+        let len = req.content_len();
+        if len > opendmd_core::synth::MAX_FORMULA_FILE {
+            return req.error(
+                413,
+                "413 Payload Too Large",
+                "this formula is too long for the panel (16,384 B compiled at most)",
+            );
+        }
+        let q = req.query();
+        let flag = |k| query_param(q, k).as_deref() == Some("1");
+        let (live, over) = (flag("live"), flag("over"));
+        let mut path = String::from(opendmd_core::synth::SENT);
+        // The sliders, numbers only (never `key=`).
+        let mut sep = '?';
+        for k in ["a", "b", "c", "fps"] {
+            if let Some(v) = query_param(q, k).filter(|v| {
+                v.len() <= 12 && v.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
+            }) {
+                path.push(sep);
+                path.push_str(k);
+                path.push('=');
+                path.push_str(&v);
+                sep = '&';
+            }
+        }
+        opendmd_core::synth::set_sent(None);
+        // At the door: the bytes, the floor, a transfer's swing, and a
+        // block that size (the rig's ring: a 9 KB block refused at 39 KB
+        // free). Then `try_reserve`: `vec!` would abort the board.
+        if !admitted(req, Ask::held(len as u32))? {
+            return Ok(());
+        }
+        let mut psb = Vec::new();
+        if psb.try_reserve_exact(len).is_err() {
+            return refuse_heavy(req, "no block for the Formula");
+        }
+        psb.resize(len, 0);
+        let mut got = 0;
+        while got < len {
+            match req.read(&mut psb[got..])? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        if len == 0 || got < len {
+            return req.bad_request("the body is the compiled Formula");
+        }
+        send_play(req, c, path, live, over, Some(psb))
+    }

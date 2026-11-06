@@ -201,6 +201,7 @@ fn store() -> DirStore {
 
 /// Save `s` to the card (a CPU0 task, the card mounted). With `stop`, the
 /// save stops after that step (the bench's power-cut test).
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn save_locked(s: &Settings, stop: Option<Step>) {
     let _g = STORE.lock().unwrap_or_else(|p| p.into_inner());
     match settings_file::save(&mut store(), &to_json(s), stop) {
@@ -216,6 +217,7 @@ fn save_locked(s: &Settings, stop: Option<Step>) {
 /// settings in force with the card's values over them (or the file written
 /// from them, the first time). The shared copy is updated; the result, when
 /// it differs from what the main task has, goes in the handover.
+#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 pub fn adopt_at_mount(shared: &Arc<Mutex<Settings>>) -> (Settings, Option<Box<Settings>>) {
     let base = shared.lock().unwrap().clone();
     let loaded = {
