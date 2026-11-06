@@ -218,6 +218,16 @@ fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &
         Ok(Ok(())) => req.json(ok),
         Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
         Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
+        // Short of heap for the program or its canvas just now (a live edit
+        // to a Formula of another size, a kernel being made): it may fit in
+        // a moment, so a 503 + Retry-After the web app asks again on, not a
+        // 400 for a Formula that is wrong.
+        Ok(Err(PlayError::BadFormula(e)))
+            if e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS =>
+        {
+            req.header("Retry-After", "1")?;
+            req.error(503, "503 Service Unavailable", &e)
+        }
         Ok(Err(PlayError::BadFormula(e))) => req.bad_request(&e),
         Ok(Err(PlayError::MovedOn)) => req.error(409, "409 Conflict", "no formula is on the panel now"),
         Ok(Err(PlayError::NoPlaylist)) => {
