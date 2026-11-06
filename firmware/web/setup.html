@@ -56,6 +56,7 @@ label.chk{display:flex;gap:8px;align-items:center;color:var(--fg);font-size:14px
 <input id="eid" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="the username">
 <label for="ettls">Inner method (TTLS only)</label>
 <select id="ettls"><option value="mschapv2">MSCHAPv2 (most networks)</option><option value="pap">PAP</option><option value="mschap">MSCHAP</option><option value="chap">CHAP</option></select>
+<p class="hint" id="entwarn" style="margin:8px 0 0;font-size:13px">PEAP or TTLS. The display does not check the network's server certificate: it accepts any server, so a fake network with the same name could take this login. Use a password for this display alone if your network offers one.</p>
 </div>
 <label for="pass">Password</label>
 <input id="pass" type="password" autocomplete="off">
@@ -244,7 +245,7 @@ $('savewifi').onclick = async () => {
   if ($('pass').value) body.wifi_pass = $('pass').value;
   const user = $('ent').checked ? $('euser').value.trim() : '';
   if ($('ent').checked && !user) return say('wifimsg', 'Type your username for this network, or untick the work or school login.', 'err');
-  Object.assign(body, { wifi_eap_user: user, wifi_eap_identity: user ? $('eid').value.trim() : '', wifi_eap_ttls: $('ettls').value });
+  Object.assign(body, { wifi_eap_user: user, wifi_eap_identity: user ? $('eid').value.trim() : '' }, user && { wifi_eap_ttls: $('ettls').value });
   const k = $('key').value.trim();
   if (k && !keyOk(k)) return say('wifimsg', 'The key needs 8 to 64 letters, numbers or . _ ~ - (no spaces).', 'err');
   if (k) body.api_key = k;

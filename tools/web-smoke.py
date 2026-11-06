@@ -7112,6 +7112,7 @@ def enterprise_checks(page: Page, base: str) -> None:
     chip.click()
     check(page.is_checked("#st-eap-on") and page.is_visible("#st-eap") and page.input_value("#st-ssid") == "CampusNet",
           "settings: picking it fills the name and shows the username fields")
+    check("accepts any server" in page.inner_text("#st-eap-warn"), "settings: the login says the server certificate is not checked")
     page.fill("#st-eap-user", "ab12@example.edu")
     page.fill("#st-eap-id", "anonymous@example.edu")
     page.select_option("#st-eap-ttls", "pap")
@@ -7130,7 +7131,12 @@ def enterprise_checks(page: Page, base: str) -> None:
     check(c["wifi_eap_identity"] == "", "settings: Save network unticked clears the username and the identity")
     put_json(base + "/api/config", {k: cfg0[k] for k in ("wifi_ssid", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls")}
              | {"wifi_pass": "secret"})  # the mock's DEFAULT_SETTINGS
-    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+    check(get_json(base + "/api/config")["wifi_ssid"] == cfg0["wifi_ssid"], "settings: the WiFi settings put back")
+    # A fresh page: the form (and its reboot prompt) as the saved settings
+    # have them again, for the checks after this one.
+    page.reload()
+    goto_view(page, "settings/device")
+    page.wait_for_selector("#st-facts dt")
 
 
 def hostname_checks(page: Page, base: str) -> None:
@@ -7333,7 +7339,7 @@ def names_checks(page: Page, base: str) -> None:
     check(sp.inner_text("#hosturl") == "http://rig-two.local/", "setup: the address follows the name as typed")
     sp.click("#savewifi")
     sp.wait_for_function("document.querySelector('#wifimsg').textContent.startsWith('Saved')", timeout=5000)
-    personal = {"wifi_eap_user": "", "wifi_eap_identity": "", "wifi_eap_ttls": "mschapv2"}
+    personal = {"wifi_eap_user": "", "wifi_eap_identity": ""}
     check(sent == [{"wifi_ssid": "SmokeNet", "hostname": "rig-two"} | personal] and "http://rig-two.local/" in sp.inner_text("#wifimsg"),
           f"setup: Connect saves the name with the WiFi (no work or school login) and says where to go next ({sent})")
     shot(sp, "setup-name", "laptop")
@@ -7345,6 +7351,7 @@ def names_checks(page: Page, base: str) -> None:
     check(sp.is_visible("#entbox") and sp.is_checked("#ent") and sp.input_value("#ssid") == "CampusNet"
           and "work or school login" in sp.inner_text("#nets button:has-text('CampusNet')"),
           "setup: picking a WPA2-Ent network ticks the work or school login and shows its fields")
+    check("accepts any server" in sp.inner_text("#entwarn"), "setup: the login says the server certificate is not checked")
     sent.clear()
     sp.click("#savewifi")
     check(not sent and "username" in sp.inner_text("#wifimsg"), "setup: Connect with the login ticked but no username is refused, nothing sent")

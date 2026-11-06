@@ -36,7 +36,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const entBox = h('div.form.f2', { id: 'st-eap', hidden: !c.wifi_eap_user },
     h('label.stack', 'Username', f.wifi_eap_user),
     h('label.stack', 'Outer identity (if your network gives one, often anonymous@…)', f.wifi_eap_identity),
-    h('label.stack', 'Inner method (TTLS only)', f.wifi_eap_ttls));
+    h('label.stack', 'Inner method (TTLS only)', f.wifi_eap_ttls),
+    h('p.cap', { id: 'st-eap-warn' }, 'PEAP or TTLS. The display does not check the network’s server certificate: it accepts any server, so a fake network with the same name could take this login. Use a password for this display alone if your network offers one.'));
   const entOn = (v) => { ent.checked = v; entBox.hidden = !v; if (!v) f.wifi_eap_user.value = f.wifi_eap_identity.value = ''; };
   const ent = h('input', { type: 'checkbox', id: 'st-eap-on', checked: !!c.wifi_eap_user, onchange: () => { entOn(ent.checked); if (ent.checked) f.wifi_eap_user.focus(); } });
   // A name another display already answers to: said under the field when
@@ -132,7 +133,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       taken,
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', 'wifi_eap_ttls', 'hostname'], netRun) }, 'Save network')), moved),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', ...ent.checked ? ['wifi_eap_ttls'] : [], 'hostname'], netRun) }, 'Save network')), moved),
     ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
