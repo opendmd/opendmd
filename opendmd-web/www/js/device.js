@@ -23,9 +23,22 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   Object.assign(f, {
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
     wifi_pass: h('input', { type: 'password', id: 'st-pass', placeholder: c.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved', autocomplete: 'new-password' }),
+    // A work or school network (802.1X): a username as well (the password is
+    // the WiFi password); the outer identity and TTLS's inner method are rarely needed.
+    wifi_eap_user: h('input', { type: 'text', id: 'st-eap-user', value: c.wifi_eap_user || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, maxLength: 128 }),
+    wifi_eap_identity: h('input', { type: 'text', id: 'st-eap-id', value: c.wifi_eap_identity || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, maxLength: 128, placeholder: 'the username' }),
+    wifi_eap_ttls: h('select', { id: 'st-eap-ttls' }, [['mschapv2', 'MSCHAPv2 (most networks)'], ['pap', 'PAP'], ['mschap', 'MSCHAP'], ['chap', 'CHAP']].map(([v, l]) => h('option', { value: v }, l))),
     hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname, maxLength: 32, oninput: (e) => { const t = e.target, i = t.selectionStart; t.value = t.value.toLowerCase(); t.setSelectionRange(i, i); }, pattern: '[a-z0-9]([a-z0-9\\-]*[a-z0-9])?' }),
   });
+  f.wifi_eap_ttls.value = c.wifi_eap_ttls || 'mschapv2';
   const nets = h('div.chips', { id: 'st-nets' });
+  // The login's fields show with the box ticked; unticked, the save clears the username.
+  const entBox = h('div.form.f2', { id: 'st-eap', hidden: !c.wifi_eap_user },
+    h('label.stack', 'Username', f.wifi_eap_user),
+    h('label.stack', 'Outer identity (if your network gives one, often anonymous@…)', f.wifi_eap_identity),
+    h('label.stack', 'Inner method (TTLS only)', f.wifi_eap_ttls));
+  const entOn = (v) => { ent.checked = v; entBox.hidden = !v; if (!v) f.wifi_eap_user.value = f.wifi_eap_identity.value = ''; };
+  const ent = h('input', { type: 'checkbox', id: 'st-eap-on', checked: !!c.wifi_eap_user, onchange: () => { entOn(ent.checked); if (ent.checked) f.wifi_eap_user.focus(); } });
   // A name another display already answers to: said under the field when
   // it is left and before a save (GET /api/name-check; `taken` null —
   // couldn't check — says nothing), and the device's 409 if it slips by.
@@ -115,10 +128,11 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
         h('label.stack', 'Display name', f.hostname)),
+      h('label', { style: 'margin-top:8px' }, ent, 'Work or school login (a username as well: WPA-Enterprise, eduroam)'), entBox,
       taken,
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'hostname'], netRun) }, 'Save network')), moved),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', 'wifi_eap_ttls', 'hostname'], netRun) }, 'Save network')), moved),
     ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
@@ -186,12 +200,11 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     clear(nets, h('span.muted', 'Scanning…'));
     try {
       const aps = await app.src.wifiScan();
-      // "Enterprise" networks (a username as well as a password): no 802.1X in the firmware.
-      const ent = (ap) => /-Ent$/.test(ap.auth);
-      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', ent(ap)
-        ? { disabled: true, title: 'Needs a work or school login: not supported' }
-        : { onclick: () => { f.wifi_ssid.value = ap.ssid; f.wifi_pass.focus(); } },
-      ap.ssid || '(hidden)', h('small', ent(ap) ? 'not supported' : `${ap.rssi} dBm${ap.secure ? ' · secure' : ' · open'}`))));
+      // "Enterprise" networks (802.1X) ask for a username as well: picking one ticks the login box.
+      const isEnt = (ap) => /-Ent$/.test(ap.auth);
+      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', {
+        onclick: () => { f.wifi_ssid.value = ap.ssid; if (isEnt(ap) !== ent.checked) entOn(isEnt(ap)); (isEnt(ap) ? f.wifi_eap_user : f.wifi_pass).focus(); },
+      }, ap.ssid || '(hidden)', h('small', `${ap.rssi} dBm${isEnt(ap) ? ' · work or school login' : ap.secure ? ' · secure' : ' · open'}`))));
     } catch (e) { clear(nets, h('span.bad', e.message)); }
   }
 

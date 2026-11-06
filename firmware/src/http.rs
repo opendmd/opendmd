@@ -32,6 +32,7 @@ use opendmd_core::compositor::{self, Kind as TransitionKind};
 use opendmd_core::hostname::Check;
 use opendmd_core::panel_timing::{self, PanelOp, PanelPatch};
 use opendmd_core::restarts::Reason;
+use opendmd_core::wifi_login;
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served at
 /// `/setup` always, and at `/` in AP mode when there is no good web app in
@@ -499,6 +500,25 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     if let Some(v) = patch.wifi_pass.clone() {
         next.wifi_pass = v;
     }
+    // A work or school network's login (802.1X): the username, the outer
+    // identity, TTLS's inner method; the password is `wifi_pass`.
+    if let Some(v) = &patch.wifi_eap_user {
+        let v = v.trim();
+        wifi_login::check_name("wifi_eap_user", v).map_err(|e| PatchErr::bad(&e))?;
+        next.wifi_eap_user = v.to_string();
+    }
+    if let Some(v) = &patch.wifi_eap_identity {
+        let v = v.trim();
+        wifi_login::check_name("wifi_eap_identity", v).map_err(|e| PatchErr::bad(&e))?;
+        next.wifi_eap_identity = v.to_string();
+    }
+    if let Some(v) = &patch.wifi_eap_ttls {
+        next.wifi_eap_ttls = wifi_login::Phase2::parse(v)
+            .ok_or_else(|| PatchErr::bad("wifi_eap_ttls must be mschapv2, mschap, pap or chap"))?;
+    }
+    if !next.wifi_eap_user.is_empty() && next.wifi_pass.len() > wifi_login::MAX_PASS {
+        return Err(PatchErr::bad("with wifi_eap_user, wifi_pass is at most 128 bytes"));
+    }
     match opendmd_core::brightness::resolve(
         next.brightness,
         next.max_brightness,
@@ -719,6 +739,12 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
 pub struct ConfigPatch {
     pub(crate) wifi_ssid: Option<String>,
     pub(crate) wifi_pass: Option<String>,
+    /// A work or school network's username (802.1X); `""`: none.
+    pub(crate) wifi_eap_user: Option<String>,
+    /// Its outer (anonymous) identity; `""`: the username.
+    pub(crate) wifi_eap_identity: Option<String>,
+    /// TTLS's inner method: `mschapv2`, `mschap`, `pap` or `chap`.
+    pub(crate) wifi_eap_ttls: Option<String>,
     pub(crate) brightness: Option<u8>,
     /// Read wider than `u8` so an out-of-range value gets the range message.
     pub(crate) max_brightness: Option<u32>,
@@ -3149,13 +3175,15 @@ fn panel_json(st: &Status) -> String {
 }
 
 /// The saved configuration. The WiFi password and the RePlayOS code are never
-/// returned — only whether one is set.
+/// returned — only whether one is set. A work or school network's username
+/// and outer identity are, like the SSID.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
 fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
-            r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"max_brightness":{},"#,
+            r#"{{"wifi_ssid":{},"wifi_pass_set":{},"wifi_eap_user":{},"wifi_eap_identity":{},"wifi_eap_ttls":"{}","#,
+            r#""brightness":{},"max_brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
@@ -3165,6 +3193,9 @@ fn settings_json(s: &Settings) -> String {
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
+        json_string(&s.wifi_eap_user),
+        json_string(&s.wifi_eap_identity),
+        s.wifi_eap_ttls.as_str(),
         s.brightness,
         s.max_brightness,
         s.dwell_min,
@@ -3241,13 +3272,19 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             patch = ConfigPatch {
                 wifi_ssid: patch.wifi_ssid.take(),
                 wifi_pass: patch.wifi_pass.take(),
+                wifi_eap_user: patch.wifi_eap_user.take(),
+                wifi_eap_identity: patch.wifi_eap_identity.take(),
+                wifi_eap_ttls: patch.wifi_eap_ttls.take(),
                 hostname: patch.hostname.take(),
                 api_key: patch.api_key.take(),
                 ..Default::default()
             };
         }
         let mut next = c.settings.lock().unwrap().clone();
-        let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
+        let wifi_of = |s: &Settings| {
+            (s.wifi_ssid.clone(), s.wifi_pass.clone(), s.wifi_eap_user.clone(), s.wifi_eap_identity.clone(), s.wifi_eap_ttls)
+        };
+        let wifi_before = wifi_of(&next);
         let hostname_before = next.hostname.clone();
         let sky_before = (next.location, next.tz.clone());
         if let Some(p) = patch.pace_on_pct {
@@ -3288,7 +3325,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         // WiFi details are read once, when the network starts: saved now,
         // in effect after a reboot. A new name is applied live once saved
         // (`NetCommand::Rename`).
-        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
+        let reboot_required = wifi_of(&next) != wifi_before;
         let mut renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
         // A name another device already answers to is refused: mDNS would
         // hand it to this display and push the other to `<name>-2`. Asked
@@ -3542,7 +3579,7 @@ fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             }
         }
         if len == 0 || got < len {
-            return req.bad_request("the body is the compiled Formula");
+            return req.bad_request("the body is the compiled Formula (Content-Length bytes)");
         }
         send_play(req, c, path, live, over, Some(psb))
     }

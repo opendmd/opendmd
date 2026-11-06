@@ -186,9 +186,17 @@ pub fn setup_route(method: &str, path: &str) -> Setup {
 }
 
 /// The settings `PUT /api/config` may change on the setup network: the
-/// WiFi, the display's name and the API key (set, or `""` to clear a lost
-/// one).
-pub const SETUP_CONFIG_KEYS: [&str; 4] = ["wifi_ssid", "wifi_pass", "hostname", "api_key"];
+/// WiFi (a work or school network's login included: `wifi_login`), the
+/// display's name and the API key (set, or `""` to clear a lost one).
+pub const SETUP_CONFIG_KEYS: [&str; 7] = [
+    "wifi_ssid",
+    "wifi_pass",
+    "wifi_eap_user",
+    "wifi_eap_identity",
+    "wifi_eap_ttls",
+    "hostname",
+    "api_key",
+];
 
 fn host_part(s: &str) -> String {
     let s = s.trim().to_ascii_lowercase();

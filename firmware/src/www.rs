@@ -475,8 +475,12 @@ fn verify_on_worker(
     signed: Signed,
     net: &crate::chan::Sender<crate::http::NetCommand>,
 ) -> std::result::Result<(), Option<&'static str>> {
-    crate::ota::verify_www_on_worker(signed, net)
-        .map_err(|e| e.map(|_| "bad signature: not signed by this firmware's key, or the pack was changed"))?;
+    crate::ota::verify_www_on_worker(signed, net).map_err(|e| {
+        e.map(|e| match e {
+            opendmd_core::ota::OtaError::UnknownKey(_) => "signed with a key this player does not know",
+            _ => "bad signature: not signed by this firmware's key, or the pack was changed",
+        })
+    })?;
     remember(&signed);
     Ok(())
 }
@@ -609,7 +613,7 @@ impl Staged {
         };
         r.map_err(|e| match e {
             Some(why) => Unfit::Bad(why.into()),
-            None => Unfit::Unreadable("the signature could not be checked just now; retry shortly".into()),
+            None => Unfit::Busy("the signature could not be checked just now; retry shortly".into()),
         })
     }
 }
@@ -621,6 +625,8 @@ enum Unfit {
     Bad(String),
     /// The card would not read it back (the device's: 500).
     Unreadable(String),
+    /// The signature could not be checked just now (503).
+    Busy(String),
 }
 
 /// CRC-32 of the `len - HEADER_LEN` bytes after the header, from `read`,
@@ -804,6 +810,7 @@ fn stage_on_card(
             let (code, line, why) = match unfit {
                 Unfit::Bad(why) => (422, "422 Unprocessable Entity", why),
                 Unfit::Unreadable(why) => (500, "500 Internal Server Error", why),
+                Unfit::Busy(why) => (503, "503 Service Unavailable", why),
             };
             log::warn!("PUT /api/www: refused, the web app in flash is unchanged: {why}");
             Err(up.error(
@@ -903,6 +910,7 @@ pub fn receive(
     // Only a signed pack, refused here before anything is touched (the
     // signature itself is checked once the whole pack is in).
     if !header.signed() {
+        log::warn!("PUT /api/www: refused, pack '{}' is not signed", header.version());
         return up.error(
             422,
             "422 Unprocessable Entity",
@@ -1064,7 +1072,7 @@ pub fn restore_from_card() {
             let _ = std::fs::remove_file(STAGED);
             log::warn!("www: the pack staged on the card is not usable ({why}); removed it");
         }
-        Err(Unfit::Unreadable(why)) => {
+        Err(Unfit::Unreadable(why) | Unfit::Busy(why)) => {
             log::warn!(
                 "www: the pack staged on the card could not be written ({why}); it stays for the next boot"
             );

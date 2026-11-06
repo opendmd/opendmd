@@ -64,7 +64,8 @@ imported when first opened), <= 2 KB, and so does Settings' Device tab
 (`js/device.js`: the status, the playback cache, network and the live
 rename, reload and reboot, About; imported when the tab is first open),
 <= 7.5 KB (7 KB until enterprise WiFi networks were greyed out in its scan
-list, 2026-10-26), and so does the
+list, 2026-10-26; the work or school login that replaced that, 2026-11-06,
+fits it), and so does the
 headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
@@ -186,7 +187,7 @@ PANEL_TEST = {"js/paneltest.js"}
 # the panel has none; the security review's H3, 2026-11-05): <= 1 KB.
 KEYNAG_GZ_BUDGET = 1024
 KEYNAG = {"js/keynag.js"}
-DEVICE_GZ_BUDGET = 7 * 1024 + 512  # +512 2026-10-26: enterprise networks shown as not joinable
+DEVICE_GZ_BUDGET = 7 * 1024 + 512  # +512 2026-10-26: enterprise networks shown as not joinable (now joinable: the login fields)
 DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}

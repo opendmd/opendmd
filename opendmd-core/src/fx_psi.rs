@@ -792,6 +792,9 @@ impl Query<'_> {
 /// The sentence for `@formula:<name>` when no bundled Formula has that name
 /// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
 pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
+/// The sentence for [`crate::synth::SENT`] once its Formula was let go
+/// (`NotFound` too).
+pub const SENT_GONE: &str = "that Formula is no longer on the panel: show it again";
 
 /// What follows `@formula` on a path: `?psb=…&…` (or the query alone,
 /// `psb=…`), or `:<name>?<opts>` for a bundled Formula (any `psb=` there is
@@ -808,7 +811,7 @@ fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
     };
     if name == crate::synth::SENT_NAME {
         let mut q = query(opts);
-        q.held = Some(crate::synth::sent().ok_or_else(|| err(NO_SUCH_FORMULA))?);
+        q.held = Some(crate::synth::sent().ok_or_else(|| err(SENT_GONE))?);
         return Ok(q);
     }
     let psb = crate::synth::valid_formula_name(name)
@@ -969,7 +972,7 @@ fn canvas_for(
 /// compiler's sentence (the firmware's `/api/play` makes it a 400; an
 /// unknown `@` path is `InvalidData`, a 415).
 pub fn io_error(e: psi::Error) -> std::io::Error {
-    let kind = if e.msg == NO_SUCH_FORMULA {
+    let kind = if e.msg == NO_SUCH_FORMULA || e.msg == SENT_GONE {
         std::io::ErrorKind::NotFound
     } else {
         std::io::ErrorKind::InvalidInput
@@ -2449,6 +2452,38 @@ mod jit {
             }
         }
 
+        /// The program's listing (`Program::listing_line`) after a
+        /// mismatch, for the bug report: a few lines to a log record (the
+        /// firmware's log ring keeps a record whole up to 1,536 B, and
+        /// holds 4 KB), with a pause after each for the console to drain
+        /// it, so none is dropped. No listing of the whole on the heap: one
+        /// record's lines at a time, taken fallibly (none: no listing).
+        /// A mismatch is rare and the VM has the frames meanwhile.
+        #[optimize(size)]
+        #[inline(never)]
+        fn log_listing(prog: &psi::Prog) {
+            const RECORD: usize = 1024;
+            let mut buf = String::new();
+            if buf.try_reserve(RECORD + 128).is_err() {
+                log::error!("formula: no memory for the listing");
+                return;
+            }
+            let n = prog.len();
+            for k in 0..n {
+                let line = prog.listing_line(k);
+                if buf.try_reserve(line.len()).is_err() {
+                    log::error!("formula: no memory for the rest of the listing");
+                    return;
+                }
+                buf.push_str(&line);
+                if buf.len() >= RECORD || k + 1 == n {
+                    log::error!("{}", buf.trim_end());
+                    buf.clear();
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+
         /// After a VM frame (`frame_bytes`, with `ink` and `under` as it had
         /// them; a look's rows not drawn are what it would draw now: the
         /// same inputs over the same rows of the picture): a kernel not yet
@@ -2477,13 +2512,11 @@ mod jit {
                 }
                 Ok(false) => {} // a checked frame: next time
                 Err((row, x)) => {
-                    // (No listing here: it and the float formatting it
-                    // pulls in were ~6 KB of the app; `psi check
-                    // --listing` on the host gives it for the formula.)
                     log::error!(
-                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM ({} steps)",
+                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM; its {} steps:",
                         prog.steps()
                     );
+                    Self::log_listing(prog);
                     self.kernel = None;
                     self.why = Some(DIFFERS);
                     set_jit_status(which, false, DIFFERS, 0);
@@ -3314,7 +3347,7 @@ mod tests {
         let e = io_error(PsiFx::from_query(rest).err().unwrap());
         assert_eq!(
             (e.kind(), e.to_string()),
-            (std::io::ErrorKind::NotFound, NO_SUCH_FORMULA.to_string())
+            (std::io::ErrorKind::NotFound, SENT_GONE.to_string())
         );
         assert_eq!(
             crate::synth::title(crate::synth::SENT).as_deref(),

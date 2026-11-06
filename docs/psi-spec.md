@@ -1210,7 +1210,7 @@ Use `#…` or `rgb(…)` in the sum, or give the function its own line.
 
 <h4 id="E305">E305 · a colour that can't be summed</h4>
 
-> `…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k`
+> `…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
 
 Scale it on its own line, or use `#…` or `rgb(…)` colours in the sum.
 
@@ -1420,7 +1420,7 @@ Name the table.
 
 <h4 id="E712">E712 · the wrong values for <code>line</code> or <code>dot</code></h4>
 
-> `line` takes x0, y0, x1, y1 (pixels from the top left) and 1 or 2 inks: … given (`dot`: x, y and an ink)
+> `line` takes x0, y0, x1, y1 (pixels from the top left) and, if you like, the ink at each end (0 to 1): … given (`dot`: x, y and, if you like, its ink)
 
 Give `line` four values and `dot` two.
 
@@ -1608,7 +1608,7 @@ Keep one `fps` line.
 
 <h4 id="E901">E901 · a value that grows without end</h4>
 
-> `t` grows without end in `loop forever`, and this can't take it: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min or max
+> `t` grows without end in `loop forever`, and this can't take it: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min, max or smoothstep
 
 In a `loop forever` formula `t` grows without end, and most arithmetic on it would lose its precision or overflow. Wrap it first: `frac`, `%`, `sin` and `noise` keep it in range.
 
@@ -1642,13 +1642,13 @@ Add `loop forever`, or leave `seed` out.
 
 <h4 id="E904">E904 · too many growing values</h4>
 
-> too many values that grow without end (more than …): share one, as frac(u\*k) of one `u`
+> this formula has too many values that grow without end (more than …): share one, as frac(u\*k) of one `u`
 
 Use fewer values that grow without end.
 
 <h4 id="E905">E905 · a colour fed a growing value</h4>
 
-> a colour can't take a value that grows without end and changes across the panel: use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))
+> a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))
 
 A colour has to be worked out from values that stay in range; `t` in a `loop forever` formula does not.
 
@@ -1678,7 +1678,7 @@ Use frac(t\*k)\*128, t % n or min(t, k) as the place.
 
 <h4 id="E907">E907 · a growing value with a per-pixel part</h4>
 
-> a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t\*k) + x or sin(t\*k + x)
+> a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t\*k) + x or sin(t\*k + x)
 
 Add the pixel's part inside frac, a wave or noise: frac(t\*k) + x, sin(t\*k + x).
 
@@ -1702,7 +1702,7 @@ Start the sprite with a `key` line.
 
 <h4 id="E913">E913 · a bad key entry</h4>
 
-> a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma
+> a key entry is a character (not ; { } , - / or a space) and its number, as `R 1` or `. -0.5`, separated by commas
 
 Write each entry as a character, a space and its number, with commas between.
 
@@ -1726,7 +1726,7 @@ Use 1 to 32 rows.
 
 <h4 id="E917">E917 · a sprite without <code>[u, v]</code></h4>
 
-> `…` is a sprite: read its pixels, `…[u, v]`
+> `…` is a sprite: read its pixels, `…[u, v]` (column, row from its top left)
 
 Read the sprite at a column and a row, `NAME[u, v]`.
 
@@ -1756,7 +1756,7 @@ Move the palette out of the layer.
 
 <h4 id="E922">E922 · a palette of the wrong size</h4>
 
-> a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
+> a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)
 
 Write 1 to 32 colours, each as #f80.
 
@@ -1819,7 +1819,7 @@ Write your own palette.
 
 <h4 id="E933">E933 · too many palettes with <code>cycle</code></h4>
 
-> a formula holds … palettes that `pal` and `cycle` read: its own (… here) and one more for each turn `cycle` gives (… here)
+> a formula has room for … palettes that `pal` and `cycle` read: its own (… here) and each palette `cycle` turns by another value (… here)
 
 Read fewer palettes with `pal` and `cycle` (tweens may read more), or turn fewer by different values.
 
@@ -1897,7 +1897,7 @@ Add a layer above, or leave `rate` out.
 
 <h4 id="E948">E948 · a bottom <code>rate</code> layer that does not cover</h4>
 
-> the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage
+> the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)
 
 Leave the blend and the coverage off the bottom `rate` layer.
 

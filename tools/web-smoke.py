@@ -3860,6 +3860,7 @@ def mock_pass(browser) -> None:
         page.click("#st-scan")
         page.wait_for_selector("#st-nets .chip", timeout=15000)
         check(True, "settings: WiFi scan listed networks")
+        enterprise_checks(page, base)
         hostname_checks(page, base)
         names_checks(page, base)
         platform_checks(page, base)
@@ -7090,6 +7091,48 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def enterprise_checks(page: Page, base: str) -> None:
+    """A work or school network (802.1X, `opendmd_core::wifi_login`): the
+    API's checks; in Settings → Device a WPA2-Ent network in the scan is
+    joinable and ticks the login box; Save network sends the username, the
+    outer identity and the inner method with the password, and GET
+    /api/config returns them but never the password; unticked, the save
+    clears the username. The settings are put back after."""
+    cfg0 = get_json(base + "/api/config")
+    for bad, why in (({"wifi_eap_user": "u" * 129}, "a 129-byte username"),
+                     ({"wifi_eap_identity": "a\nb"}, "a two-line identity"),
+                     ({"wifi_eap_ttls": "eap"}, "an unknown inner method"),
+                     ({"wifi_eap_user": "u", "wifi_pass": "p" * 129}, "a 129-byte password with a username")):
+        check(put_status(base, bad) == 400, f"config: {why} is refused (400)")
+    check(get_json(base + "/api/config")["wifi_eap_user"] == cfg0["wifi_eap_user"], "config: a refused login saves nothing")
+    page.wait_for_selector("#st-nets .chip:has-text('CampusNet')", timeout=5000)
+    chip = page.query_selector("#st-nets .chip:has-text('CampusNet')")
+    check(not chip.is_disabled() and "work or school login" in chip.inner_text() and page.is_hidden("#st-eap"),
+          f"settings: a WPA2-Ent network is joinable and says it needs a login ({chip.inner_text()!r})")
+    chip.click()
+    check(page.is_checked("#st-eap-on") and page.is_visible("#st-eap") and page.input_value("#st-ssid") == "CampusNet",
+          "settings: picking it fills the name and shows the username fields")
+    page.fill("#st-eap-user", "ab12@example.edu")
+    page.fill("#st-eap-id", "anonymous@example.edu")
+    page.select_option("#st-eap-ttls", "pap")
+    page.fill("#st-pass", "hunter22")
+    page.click("#st-save-net")
+    c = wait_config(base, lambda c: c["wifi_eap_user"] == "ab12@example.edu")
+    check(c["wifi_ssid"] == "CampusNet" and c["wifi_eap_identity"] == "anonymous@example.edu" and c["wifi_eap_ttls"] == "pap"
+          and c["wifi_pass_set"] is True and "wifi_pass" not in c and "hunter22" not in json.dumps(c),
+          f"settings: Save network sends the login; /api/config has it, never the password ({ {k: v for k, v in c.items() if k.startswith('wifi')} })")
+    page.wait_for_selector("#st-reboot", state="visible", timeout=5000)
+    check(page.input_value("#st-pass") == "", "settings: the password field empties after the save, the reboot prompt shows")
+    page.uncheck("#st-eap-on")
+    check(page.is_hidden("#st-eap"), "settings: unticked, the login fields hide")
+    page.click("#st-save-net")
+    c = wait_config(base, lambda c: c["wifi_eap_user"] == "")
+    check(c["wifi_eap_identity"] == "", "settings: Save network unticked clears the username and the identity")
+    put_json(base + "/api/config", {k: cfg0[k] for k in ("wifi_ssid", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls")}
+             | {"wifi_pass": "secret"})  # the mock's DEFAULT_SETTINGS
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+
+
 def hostname_checks(page: Page, base: str) -> None:
     """A new hostname is live at once: the reply asks for no reboot (a WiFi
     change still does), and Save network says where the display is now —
@@ -7290,9 +7333,33 @@ def names_checks(page: Page, base: str) -> None:
     check(sp.inner_text("#hosturl") == "http://rig-two.local/", "setup: the address follows the name as typed")
     sp.click("#savewifi")
     sp.wait_for_function("document.querySelector('#wifimsg').textContent.startsWith('Saved')", timeout=5000)
-    check(sent == [{"wifi_ssid": "SmokeNet", "hostname": "rig-two"}] and "http://rig-two.local/" in sp.inner_text("#wifimsg"),
-          f"setup: Connect saves the name with the WiFi and says where to go next ({sent})")
+    personal = {"wifi_eap_user": "", "wifi_eap_identity": "", "wifi_eap_ttls": "mschapv2"}
+    check(sent == [{"wifi_ssid": "SmokeNet", "hostname": "rig-two"} | personal] and "http://rig-two.local/" in sp.inner_text("#wifimsg"),
+          f"setup: Connect saves the name with the WiFi (no work or school login) and says where to go next ({sent})")
     shot(sp, "setup-name", "laptop")
+    # A work or school network (802.1X): picking it shows the login fields;
+    # Connect without a username is refused, with one it sends the login.
+    sp.wait_for_selector("#nets button:has-text('CampusNet')", timeout=10000)
+    check(sp.is_hidden("#entbox"), "setup: the login fields are hidden for a network with a password alone")
+    sp.click("#nets button:has-text('CampusNet')")
+    check(sp.is_visible("#entbox") and sp.is_checked("#ent") and sp.input_value("#ssid") == "CampusNet"
+          and "work or school login" in sp.inner_text("#nets button:has-text('CampusNet')"),
+          "setup: picking a WPA2-Ent network ticks the work or school login and shows its fields")
+    sent.clear()
+    sp.click("#savewifi")
+    check(not sent and "username" in sp.inner_text("#wifimsg"), "setup: Connect with the login ticked but no username is refused, nothing sent")
+    sp.fill("#euser", "ab12@example.edu")
+    sp.fill("#eid", "anonymous@example.edu")
+    sp.select_option("#ettls", "pap")
+    sp.fill("#pass", "hunter22")
+    sp.click("#savewifi")
+    sp.wait_for_function("document.querySelector('#wifimsg').textContent.startsWith('Saved')", timeout=5000)
+    check(sent == [{"wifi_ssid": "CampusNet", "hostname": "rig-two", "wifi_pass": "hunter22", "wifi_eap_user": "ab12@example.edu",
+                    "wifi_eap_identity": "anonymous@example.edu", "wifi_eap_ttls": "pap"}],
+          f"setup: Connect sends the work or school login with the password ({sent})")
+    shot(sp, "setup-enterprise", "laptop")
+    sp.click("#nets button:has-text('MockNet')")
+    check(sp.is_hidden("#entbox") and not sp.is_checked("#ent"), "setup: picking a password-only network unticks the login")
     # A name another device answers to: the mock's real 409, nothing saved.
     sp.unroute("**/api/config")
     cfg = get_json(base + "/api/config")
