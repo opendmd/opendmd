@@ -506,21 +506,21 @@ fn fitted<'a>(lead: &'a str, short: &'a str, bare: &'a str, version: &'a str) ->
 pub enum UpdateStage {
     /// The bundle is being received and checked.
     Receiving,
-    /// Checked and staged: the restart into the installer is next, and the
-    /// panel stays dark until the new firmware starts.
+    /// Checked and staged: the restart into the updater is next, which
+    /// shows the same picture while it installs ([`installing`]).
     Installing,
 }
 
 /// The panel while a firmware update is received and installed: a still
 /// picture, drawn once per stage. The stage in the big font (amber, top row
 /// 2, as on the status card), then two lines of the small font (rows 18
-/// and 25): "to v<version>" (or, installing, that the panel goes dark
-/// meanwhile) and "Don't unplug" in warm white. Every pixel is written and
+/// and 25): "to v<version>" in amber (installing: [`INSTALL_DOTS`], all
+/// three lit) and "Don't unplug" in warm white. Every pixel is written and
 /// marked.
 pub fn update_notice(canvas: &mut Canvas, stage: UpdateStage, version: &str) {
-    canvas.clear();
-    let (title, first) = match stage {
-        UpdateStage::Receiving => (
+    match stage {
+        UpdateStage::Receiving => notice(
+            canvas,
             "Updating",
             if version.is_empty() {
                 NONE
@@ -528,8 +528,43 @@ pub fn update_notice(canvas: &mut Canvas, stage: UpdateStage, version: &str) {
                 fitted("to v", "to ", "", version)
             },
         ),
-        UpdateStage::Installing => ("Installing", ["Dark while it installs", ""]),
-    };
+        UpdateStage::Installing => installing(canvas, [true; INSTALL_DOTS.len()]),
+    }
+}
+
+/// Installing's middle line: three dots, each a 2x2 block at its top-left
+/// corner, 4 columns apart and centred, in the middle line's amber. The
+/// firmware's own screen lights all three; the updater, which shows
+/// [`installing`] with none lit (`ota/updater/main/picture.h`, made by
+/// `crate::updater_picture`), lights one at a time, left to right.
+pub const INSTALL_DOTS: [(usize, usize); 3] = [(59, 20), (63, 20), (67, 20)];
+/// A dot's side, pixels.
+pub const INSTALL_DOT: usize = 2;
+/// The dots' colour: the middle line's.
+pub const INSTALL_DOT_COLOUR: Rgb = LINE;
+
+/// "Installing" over the middle line's dots (`lit`) over "Don't unplug":
+/// the picture the panel holds from the bundle being staged until the new
+/// firmware starts, first drawn by the firmware, then by the updater from
+/// its build-time copy while it copies the image into flash.
+pub fn installing(canvas: &mut Canvas, lit: [bool; INSTALL_DOTS.len()]) {
+    notice(canvas, "Installing", NONE);
+    for (&(x0, y0), on) in INSTALL_DOTS.iter().zip(lit) {
+        if on {
+            for y in y0..y0 + INSTALL_DOT {
+                for x in x0..x0 + INSTALL_DOT {
+                    canvas.set(x, y, INSTALL_DOT_COLOUR);
+                }
+            }
+        }
+    }
+    canvas.dirty_mut().mark_all();
+}
+
+/// [`update_notice`]'s layout: `title` big and centred, `first` on the
+/// middle line, "Don't unplug" under it.
+fn notice(canvas: &mut Canvas, title: &str, first: Parts) {
+    canvas.clear();
     let w = text::text_width(Font::Normal, title, 2) as i32;
     text::draw_text_with(
         canvas,
