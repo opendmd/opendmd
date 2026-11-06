@@ -680,7 +680,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     });
 
     let c = ctx.clone();
-    server.route("/", Method::Get, move |req| {
+    server.route("/", Method::Get, #[optimize(size)] move |req| {
         // In AP mode it's the setup page, so the captive portal (and any
         // address typed while joined to the setup network) lands on getting
         // onto WiFi. The web app is still at /index.html there.
@@ -691,7 +691,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| match www::serve(req, "index.html")? {
+        stream::hand_off(req, #[optimize(size)] move |req| match www::serve(req, "index.html")? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => {
                 www::unavailable(req, "the web app in flash has no index.html")
@@ -703,7 +703,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // --- JSON API ----------------------------------------------------------
     let c = ctx.clone();
-    server.route("/api/status", Method::Get, move |req| {
+    server.route("/api/status", Method::Get, #[optimize(size)] move |req| {
         // `diag-heap` only: `?diag_chan=N&impl=std|ours` makes N channels
         // here first (see `diag::channel_torture`).
         #[cfg(feature = "diag-heap")]
@@ -822,7 +822,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/skip", Method::Post, move |req| {
+    server.route("/api/skip", Method::Post, #[optimize(size)] move |req| {
         // `?back=1`: Previous, one step back through Recently played.
         if query_param(req.query(), "back").as_deref() != Some("1") {
             let _ = c.cmd.send(Command::Skip);
@@ -836,7 +836,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/pause", Method::Post, move |req| {
+    server.route("/api/pause", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::TogglePause(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
@@ -848,7 +848,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/config", Method::Get, move |req| {
+    server.route("/api/config", Method::Get, #[optimize(size)] move |req| {
         // A light read, refused only where a status read is (its ~2 KB of
         // JSON is built whole).
         if crate::state::free_heap() < STATUS_MIN_HEAP {
@@ -868,7 +868,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route_json("/api/config", Method::Put, move |req| {
+    server.route_json("/api/config", Method::Put, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1047,7 +1047,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/reindex", Method::Post, move |req| {
+    server.route("/api/reindex", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::Reindex(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
@@ -1061,7 +1061,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // A playlist's overrides, parsed: `?set=` takes the config's `set`
     // values (`""` = all files). Streamed a line at a time from its `.meta`.
-    server.route("/api/overrides", Method::Get, |req| {
+    server.route("/api/overrides", Method::Get, #[optimize(size)] |req| {
         if !files::affordable(req)? {
             return Ok(());
         }
@@ -1078,7 +1078,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // it whole, validated here (times, days, rule playlists that open)
     // before the main task saves it to NVS and evaluates it.
     let c = ctx.clone();
-    server.route("/api/schedule", Method::Get, move |req| {
+    server.route("/api/schedule", Method::Get, #[optimize(size)] move |req| {
         let json = c.settings.lock().unwrap().schedule.clone();
         req.json(if json.trim().is_empty() {
             crate::sched::EMPTY_JSON
@@ -1088,7 +1088,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route_json("/api/schedule", Method::Put, move |req| {
+    server.route_json("/api/schedule", Method::Put, #[optimize(size)] move |req| {
         let declared = req.content_len();
         if declared > crate::nvs_config::SCHEDULE_MAX {
             return req.error(
@@ -1150,7 +1150,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // Suspend the schedule: `{"minutes": 60}` (0 resumes it now).
     let c = ctx.clone();
-    server.route_json("/api/wake", Method::Post, move |req| {
+    server.route_json("/api/wake", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1187,7 +1187,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Play one file now (a Library preview sent to the panel), then carry on
     // with the schedule. `{"path": "/gifs/…"}`, card-absolute.
     let c = ctx.clone();
-    server.route_json("/api/play", Method::Post, move |req| {
+    server.route_json("/api/play", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1274,7 +1274,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // (`a b c fps`) as for `/api/play`. The last one sent is let go first,
     // so two are never held at once.
     let c = ctx.clone();
-    server.route("/api/play/formula", Method::Post, move |req| {
+    server.route("/api/play/formula", Method::Post, #[optimize(size)] move |req| {
         if !crate::state::FORMULAS {
             return req.error(501, "501 Not Implemented", crate::state::NO_FORMULAS);
         }
@@ -1339,7 +1339,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // patterns with one live setting flipped between A and B, ended by
     // `stop`, by any settings change or after two minutes; nothing saved.
     let c = ctx.clone();
-    server.route_json("/api/panel/test", Method::Post, move |req| {
+    server.route_json("/api/panel/test", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1386,7 +1386,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // player's next open waits behind it — but still far cheaper than listing
     // the parent. `size` is null for a directory. (Not `/api/stat`: EasyPrivacy
     // blocks that path in uBlock Origin and Brave; `make blocklist-check`.)
-    server.route("/api/exists", Method::Get, |req| {
+    server.route("/api/exists", Method::Get, #[optimize(size)] |req| {
         let Some(card) = query_param(req.query(), "path") else {
             return req.bad_request("path= required");
         };
@@ -1426,7 +1426,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // first request, or one after the card changed, answers "counting" with
     // the last count (or null) and the browser polls.
     let c = ctx.clone();
-    server.route("/api/cache", Method::Get, move |req| {
+    server.route("/api/cache", Method::Get, #[optimize(size)] move |req| {
         let snap = crate::cache::snapshot();
         let total = c.status.lock().unwrap().entries;
         req.json(&format!(
@@ -1445,14 +1445,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // the httpd task (and `/api/status`) for the seconds it takes
     // (`listing`: no wait for a place, a 503 + Retry-After: 1 the web app
     // retries; the task holds `cache_builder::busy()` for every job).
-    server.route("/api/cache/list", Method::Get, |req| listing(req, crate::cache::stream_list))?;
+    server.route("/api/cache/list", Method::Get, #[optimize(size)] |req| listing(req, crate::cache::stream_list))?;
 
     // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
-    server.route("/api/cache/failed", Method::Get, |req| listing(req, crate::cache_builder::stream_failed))?;
+    server.route("/api/cache/failed", Method::Get, #[optimize(size)] |req| listing(req, crate::cache_builder::stream_failed))?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
-    server.route_json("/api/cache/failed", Method::Post, |req| {
+    server.route_json("/api/cache/failed", Method::Post, #[optimize(size)] |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1474,7 +1474,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
         }
     })?;
-    server.route("/api/cache/failed", Method::Delete, |req| {
+    server.route("/api/cache/failed", Method::Delete, #[optimize(size)] |req| {
         match crate::cache_builder::clear_failed() {
             Ok(existed) => req.json(&format!(r#"{{"ok":true,"cleared":{existed}}}"#)),
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
@@ -1484,7 +1484,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Remove the prepared copy of a GIF (it was replaced, or is going), if
     // there is one. `{"path": "/gifs/…"}`.
     let c = ctx.clone();
-    server.route_json("/api/cache/forget", Method::Post, move |req| {
+    server.route_json("/api/cache/forget", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1522,7 +1522,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // the httpd task it held `/api/status` that long (measured on the spare,
     // 2026-10-26). So it goes out from the stream task, queued like a file
     // (a full queue for 2 s: 503 + Retry-After: 1, retried by the web app).
-    server.route("/api/files", Method::Get, |req| {
+    server.route("/api/files", Method::Get, #[optimize(size)] |req| {
         let dir = query_param(req.query(), "dir").unwrap_or_else(|| "/".to_string());
         let Some(fs_dir) = files::card_path(config::SD_MOUNT, &dir) else {
             return req.bad_request("path escapes the card");
@@ -1535,16 +1535,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // file cannot be trusted.
         if query_param(req.query(), "names").as_deref() == Some("1") && !sizes {
             if let Some(names) = crate::fatidx::names(&dir) {
-                return listing(req, move |req| stream_names(req, &dir, names));
+                return listing(req, #[optimize(size)] move |req| stream_names(req, &dir, names));
             }
         }
-        listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
+        listing(req, #[optimize(size)] move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
     // `{"name","valid","taken","by"}`: `taken` null when it could not ask.
     let c = ctx.clone();
-    server.route("/api/name-check", Method::Get, move |req| {
+    server.route("/api/name-check", Method::Get, #[optimize(size)] move |req| {
         let Some(raw) = query_param(req.query(), "name") else {
             return req.bad_request("name= required");
         };
@@ -1567,7 +1567,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/wifi/scan", Method::Get, move |req| {
+    server.route("/api/wifi/scan", Method::Get, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.net.send(NetCommand::Scan(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "network worker not running");
@@ -1581,7 +1581,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Follow RePlayOS's "Test" button: the network worker asks the box (it
     // owns the HTTP client); nothing is saved.
     let c = ctx.clone();
-    server.route_json("/api/follow/test", Method::Post, move |req| {
+    server.route_json("/api/follow/test", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1620,9 +1620,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // The web app in flash: what is there, and a new pack (`www.rs`). The
     // body is received on the stream task like every other upload, which is
     // also where every web app file is sent from: the two never overlap.
-    server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
+    server.route("/api/www", Method::Get, #[optimize(size)] |req| req.json(&www::info_json()))?;
     let c = ctx.clone();
-    server.route("/api/www", Method::Put, move |req| {
+    server.route("/api/www", Method::Put, #[optimize(size)] move |req| {
         // Why staging on the card is not possible, if it is not: the log
         // and the reply say so in words (no card, or one that cannot be read).
         let card = {
@@ -1630,21 +1630,21 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
         };
         let net = c.net.clone();
-        stream::receive(req, move |up| www::receive(up, card, &net))
+        stream::receive(req, #[optimize(size)] move |up| www::receive(up, card, &net))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
     // bundle received onto the card on the stream task, then the updater.
     let c = ctx.clone();
-    server.route("/api/firmware", Method::Get, move |req| {
+    server.route("/api/firmware", Method::Get, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         req.json(&crate::ota::info_json(mounted))
     })?;
     let c = ctx.clone();
-    server.route("/api/firmware", Method::Put, move |req| {
+    server.route("/api/firmware", Method::Put, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
-        stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
+        stream::receive(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
     })?;
 
     // Format the card FAT32 — only one that is mounted but cannot be read
@@ -1653,7 +1653,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // a card, does it (`boot::request_format`); `sd.formatting` says when
     // it is over, and `sd.readable` how it went.
     let c = ctx.clone();
-    server.route_json("/api/card/format", Method::Post, move |req| {
+    server.route_json("/api/card/format", Method::Post, #[optimize(size)] move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1686,7 +1686,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // changed. `?test_errors=N` (test hook): the next N card transfers at
     // full speed fail on purpose, so the in-place slow-down can be watched
     // on a good card.
-    server.route("/api/card/full-speed", Method::Post, |req| {
+    server.route("/api/card/full-speed", Method::Post, #[optimize(size)] |req| {
         // `?test_errors=N`: `bench` builds only (ignored in a release).
         #[cfg(feature = "bench")]
         let test = query_param(req.query(), "test_errors")
@@ -1714,7 +1714,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     #[cfg(feature = "bench")]
     let c_cut = ctx.clone();
-    server.route("/api/reboot", Method::Post, move |req| {
+    server.route("/api/reboot", Method::Post, #[optimize(size)] move |req| {
         // Test hook, `bench` builds only (a release has no such code):
         // `?panic=1` panics on purpose, on this (the httpd) task, to check
         // what a crash leaves: the panic message and IDF's backtrace on the
@@ -1771,19 +1771,19 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // engine's own file handle can be dropped before the file underneath it
     // is replaced.
     let c = ctx.clone();
-    server.route("/api/manifest", Method::Put, move |req| {
+    server.route("/api/manifest", Method::Put, #[optimize(size)] move |req| {
         let c = c.clone();
-        stream::receive(req, move |up| {
+        stream::receive(req, #[optimize(size)] move |up| {
             install_manifest(up, &c, config::MANIFEST_PATH.to_string())
         })
     })?;
 
     let c = ctx.clone();
-    server.route("/api/sets/*", Method::Put, move |req| {
+    server.route("/api/sets/*", Method::Put, #[optimize(size)] move |req| {
         let name = req.path().trim_start_matches("/api/sets/");
         let name = crate::httpd::percent_decode(name);
         let c = c.clone();
-        stream::receive(req, move |up| {
+        stream::receive(req, #[optimize(size)] move |up| {
             if name.is_empty() || name.contains('/') || name.contains("..") {
                 return up.bad_request("set name must be a single path segment");
             }
@@ -1798,13 +1798,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/files/*", Method::Put, move |req| {
+    server.route("/api/files/*", Method::Put, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let c = c.clone();
         // `?new=1`: only if there is no such file (409 otherwise): a name
         // picked from a names list that has gone stale never replaces a GIF.
         let create_new = query_param(req.query(), "new").as_deref() == Some("1");
-        stream::receive(req, move |up| put_file(up, &c, &rel, create_new))
+        stream::receive(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -1812,15 +1812,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // card writes: two FAT directory scans per rename, up to ~0.5 s each in
     // gifs/Consoles, must not hold the API.
     let c = ctx.clone();
-    server.route_json("/api/files/move", Method::Post, move |req| {
+    server.route_json("/api/files/move", Method::Post, #[optimize(size)] move |req| {
         let c = c.clone();
-        stream::receive(req, move |up| move_file(up, &c))
+        stream::receive(req, #[optimize(size)] move |up| move_file(up, &c))
     })?;
 
     // --- Delete ---------------------------------------------------------------
 
     let c = ctx.clone();
-    server.route("/api/files/*", Method::Delete, move |req| {
+    server.route("/api/files/*", Method::Delete, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let Some(path) = files::card_path_for_write(config::SD_MOUNT, &rel) else {
             return req.bad_request(files::BAD_WRITE_PATH);
@@ -1919,7 +1919,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // (and an obsolete one, if it is still there) — served as
     // text. Without this they
     // fell through to the `/*` www catch-all and 404ed.
-    server.route("/filelist*", Method::Get, |req| {
+    server.route("/filelist*", Method::Get, #[optimize(size)] |req| {
         let rel = crate::httpd::percent_decode(req.path());
         let name = rel.trim_start_matches('/');
         if name.contains('/') {
@@ -1934,31 +1934,31 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // GIFs and their copies: a full stream queue is a 503 at once (the web
     // app's thumbnails back off, its other reads retry: `queued`), so they
     // never hold the httpd task; a playlist waits for a place as a module does.
-    server.route("/gifs/*", Method::Get, |req| {
+    server.route("/gifs/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
-    server.route("/sets/*", Method::Get, |req| {
+    server.route("/sets/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The user's Formulas (`/formulas/<stem>.psi`: the web app lists and
     // reads them, and writes them through `PUT /api/files/formulas/…`).
-    server.route("/formulas/*", Method::Get, |req| {
+    server.route("/formulas/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
     // (the device's own builder, `opendmd-pack convert`, or the web app).
-    server.route("/cache/*", Method::Get, |req| {
+    server.route("/cache/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
 
     // The web app under `/www/` too (both spellings, as when it was on the
     // card).
-    server.route("/www/*", Method::Get, |req| {
+    server.route("/www/*", Method::Get, #[optimize(size)] |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/www/"));
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| match www::serve(req, &rel)? {
+        stream::hand_off(req, #[optimize(size)] move |req| match www::serve(req, &rel)? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => req.not_found(&format!("/www/{rel}")),
             www::Served::Unavailable(why) => www::unavailable(req, &why),
@@ -1970,7 +1970,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // 404 otherwise, because on a real network these paths belong to nobody.
     for probe in opendmd_core::access::PORTAL_PROBES {
         let c = ctx.clone();
-        server.route(probe, Method::Get, move |req| match portal_target(&c) {
+        server.route(probe, Method::Get, #[optimize(size)] move |req| match portal_target(&c) {
             Some(target) => req.redirect(&target),
             None => req.not_found("not a captive portal"),
         })?;
@@ -1982,7 +1982,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // for `/app.js` and `/pkg/opendmd_web_bg.wasm`, not `/www/...`. Serving
     // the pack from here is what makes both spellings work.
     let c = ctx.clone();
-    server.route("/*", Method::Get, move |req| {
+    server.route("/*", Method::Get, #[optimize(size)] move |req| {
         let rel = crate::httpd::percent_decode(req.path());
         // Decided here, where the context is: what to say if the pack has no
         // such file (in AP mode, the portal).
@@ -1991,7 +1991,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| {
+        stream::hand_off(req, #[optimize(size)] move |req| {
             match www::serve(req, rel.trim_start_matches('/'))? {
                 www::Served::Sent => Ok(()),
                 _ if target.is_some() => req.redirect(target.as_deref().unwrap_or("/")),
@@ -2056,7 +2056,7 @@ fn listing<F>(req: &mut Req, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
 {
-    stream::hand_off_within(req, Duration::ZERO, move |req| {
+    stream::hand_off_within(req, Duration::ZERO, #[optimize(size)] move |req| {
         if !files::affordable(req)? {
             return Ok(());
         }
@@ -2249,7 +2249,7 @@ fn serve_under(req: &mut Req, root: &str, wait: Duration) -> Result<()> {
 /// Send the card file at `path` from the streaming task, or a 404 naming
 /// `rel` if there is none.
 fn stream_file(req: &mut Req, path: String, rel: String, wait: Duration) -> Result<()> {
-    stream::hand_off_within(req, wait, move |req| {
+    stream::hand_off_within(req, wait, #[optimize(size)] move |req| {
         if files::serve(req, &path)? {
             Ok(())
         } else {

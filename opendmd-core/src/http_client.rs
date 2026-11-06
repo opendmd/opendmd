@@ -40,6 +40,7 @@ pub enum Error {
 }
 
 impl From<io::Error> for Error {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn from(e: io::Error) -> Self {
         match e.kind() {
             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Error::Timeout,
@@ -53,6 +54,7 @@ impl From<io::Error> for Error {
 }
 
 impl std::fmt::Display for Error {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Timeout => f.write_str("timed out"),
@@ -67,7 +69,9 @@ impl std::fmt::Display for Error {
 /// The request bytes: `GET <path> HTTP/1.1` with `Host`, `Connection:
 /// close` and `headers`. CR, LF and other control characters are dropped
 /// from every value, so a saved code cannot add a header of its own.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn request(host: &str, path: &str, headers: &[(&str, &str)]) -> String {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn clean(s: &str) -> impl Iterator<Item = char> + '_ {
         s.chars().filter(|c| !c.is_control())
     }
@@ -125,12 +129,14 @@ pub struct ResponseReader {
 }
 
 impl Default for ResponseReader {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         ResponseReader::new()
     }
 }
 
 impl ResponseReader {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new() -> Self {
         ResponseReader {
             state: State::Status,
@@ -144,22 +150,26 @@ impl ResponseReader {
     }
 
     /// The status, once the status line has been read.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn status(&self) -> Option<u16> {
         (self.state != State::Status).then_some(self.status)
     }
 
     /// The status line and every header have been read.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn head_done(&self) -> bool {
         !matches!(self.state, State::Status | State::Headers)
     }
 
     /// The body is complete by its framing (nothing more to read).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_complete(&self) -> bool {
         self.state == State::Done
     }
 
     /// The next bytes of the reply; the body's bytes go to `body`. Bytes
     /// after the end of the reply are ignored.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn feed(&mut self, mut input: &[u8], body: &mut dyn FnMut(&[u8])) -> Result<(), Error> {
         while !input.is_empty() {
             match self.state {
@@ -224,6 +234,7 @@ impl ResponseReader {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn end_line(&mut self, line: &[u8]) -> Result<(), Error> {
         match self.state {
             State::Status => {
@@ -278,6 +289,7 @@ impl ResponseReader {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn header(&mut self, line: &[u8]) -> Result<(), Error> {
         let Some(colon) = line.iter().position(|&b| b == b':') else {
             // Not a header (an obsolete folded line, or noise): ignored.
@@ -314,6 +326,7 @@ impl ResponseReader {
 
     /// The connection closed: the status if the reply was whole (by its
     /// framing, or a read-to-close body), else why not.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn finish(&self) -> Result<u16, Error> {
         match self.state {
             State::Done | State::ToClose => Ok(self.status),
@@ -323,10 +336,12 @@ impl ResponseReader {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn trim_cr(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn trim(s: &[u8]) -> &[u8] {
     let start = s
         .iter()
@@ -339,6 +354,7 @@ fn trim(s: &[u8]) -> &[u8] {
     &s[start..end]
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn parse_hex(s: &[u8]) -> Option<u64> {
     if s.is_empty() || s.len() > 15 {
         return None;
@@ -350,6 +366,7 @@ fn parse_hex(s: &[u8]) -> Option<u64> {
 }
 
 /// `HTTP/1.x NNN reason`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn parse_status_line(line: &[u8]) -> Result<u16, Error> {
     let rest = line
         .strip_prefix(b"HTTP/1.")
@@ -387,6 +404,7 @@ impl Get<'_> {
     /// The most bytes read in all: headers and trailers at their caps,
     /// the body, and room for chunk framing as dense as one 8-byte chunk
     /// line per 8 bytes of data.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn max_total(&self) -> usize {
         2 * MAX_HEAD + 2 * self.max_body
     }
@@ -395,6 +413,7 @@ impl Get<'_> {
 /// `host` as a name and a port: `name` alone (the port is `None`) or
 /// `name:port` with a port of 1-65535 in digits. `None` when it is neither
 /// (an empty name, or a port that is not a number).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn split_host_port(host: &str) -> Option<(&str, Option<u16>)> {
     let (name, port) = match host.rsplit_once(':') {
         None => (host, None),
@@ -414,6 +433,7 @@ pub fn split_host_port(host: &str) -> Option<(&str, Option<u16>)> {
 /// body, or `max_body` bytes have been handed over (the rest is not read).
 /// `after_io` runs after the write and after every read (the firmware
 /// samples its heap there).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn get<S: Read + Write>(
     stream: &mut S,
     req: &Get,
