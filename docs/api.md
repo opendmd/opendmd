@@ -123,8 +123,9 @@ card, so it works with none.
 
 Reply and errors as `/api/play` (`409` a live edit after the playlist moved
 on, `400` a formula that does not load, `503` no playlist), and `503` +
-`Retry-After: 2` when the heap has no room for the body just now (retry
-then); `501` on a build without Formulas.
+`Retry-After: 2` when the heap has no room for the body just now, or
+`Retry-After: 1` when the player has none for the program or its canvas
+(retry then); `501` on a build without Formulas.
 
 ```sh
 psi build my.psi -o my.psb
