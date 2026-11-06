@@ -79,6 +79,8 @@ const KEY_PANEL_SYNC: &str = "panel_sync";
 const KEY_PANEL_SPLIT: &str = "panel_split";
 const KEY_FORMULA_JIT: &str = "formula_jit";
 const KEY_FORMULA_ARENA: &str = "formula_arena";
+/// The web app's update check reads the beta feed (`beta.json`), 0/1.
+const KEY_BETA_UPDATES: &str = "beta_updates";
 /// How long a Formula sent to the panel stays (`FormulaKeep::name`).
 const KEY_FORMULA_KEEP: &str = "formula_keep";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
@@ -201,6 +203,11 @@ pub struct Settings {
     /// A dev setting (`arena.rs`): a Formula's memory from a block set
     /// aside at boot, in force from the next boot. Off by default.
     pub formula_arena: bool,
+    /// "Get beta updates": the web app's update check reads the site's
+    /// `install/beta.json` (the newest release, beta or final) instead of
+    /// `release.json` (the newest final). Off by default; the firmware
+    /// itself only keeps it.
+    pub beta_updates: bool,
     /// How long a Formula sent to the panel (`/api/play`) stays on it: one
     /// turn (the default), a minute, five, or until something else plays.
     pub formula_keep: FormulaKeep,
@@ -260,6 +267,7 @@ impl Default for Settings {
             panel_split: true,
             formula_jit: true,
             formula_arena: false,
+            beta_updates: false,
             formula_keep: FormulaKeep::Turn,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
@@ -467,6 +475,13 @@ impl Config {
                 .flatten()
                 .map(|v| v != 0)
                 .unwrap_or(d.formula_arena),
+            beta_updates: self
+                .nvs
+                .get_u8(KEY_BETA_UPDATES)
+                .ok()
+                .flatten()
+                .map(|v| v != 0)
+                .unwrap_or(d.beta_updates),
             formula_keep: self
                 .get_string(KEY_FORMULA_KEEP)
                 .and_then(|s| FormulaKeep::from_name(&s))
@@ -525,6 +540,7 @@ impl Config {
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;
         self.nvs.set_u8(KEY_FORMULA_ARENA, u8::from(s.formula_arena))?;
+        self.nvs.set_u8(KEY_BETA_UPDATES, u8::from(s.beta_updates))?;
         self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;

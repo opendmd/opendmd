@@ -1,8 +1,9 @@
 // Settings › Device › Firmware: "Check for updates" (imported on the first
 // click; its own size line). Reads the published release, `release.json` on
-// the project site (HTTPS, served with CORS; in a development build of the
-// web app only, `?updates=<url>` or localStorage `odmd.updates` points
-// elsewhere, for testing: a release build never takes a feed from a link,
+// the project site (the newest final release; `beta.json`, the newest beta
+// or final, when the player's `beta_updates` is on: Get beta updates;
+// HTTPS, served with CORS; in a development build of the web app only,
+// `?updates=<url>` or localStorage `odmd.updates` points elsewhere, for testing: a release build never takes a feed from a link,
 // and a feed that is not opendmd.dev is named in what it says), and compares
 // it with the player: the firmware semver-ish (`older`), the web app by its
 // `git describe` string (a release pack reads `v1.0.0`, a development build
@@ -13,14 +14,14 @@
 // the old web app's. The firmware is the release's file for the player's
 // flash layout (`variants.<variant>.firmware`; a release.json from before
 // there were two names only `firmware`, the 4mb one; another `layout`: USB). The official feed is
-// asked as release.json?v=<firmware version>&layout=<4mb|8mb>, which the
+// asked as release.json (or beta.json)?v=<firmware version>&layout=<4mb|8mb>, which the
 // site counts (site/worker/src/counts.ts); a feed of your own is asked as given.
 
 import { app } from './state.js';
 import { h, store, SITE } from './util.js';
 import { older, fwHead, fwVariant, fwLayout, playerLayout, layoutWhy, board, sendFw, put, restart } from './firmware.js';
 
-export const RELEASE = SITE + 'install/release.json';
+export const RELEASE = SITE + 'install/release.json', BETA = SITE + 'install/beta.json';
 const WWW_MAX = 1048576; // the smaller www partition (4mb, table v3): one pack fits both layouts
 const td = new TextDecoder();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -81,7 +82,9 @@ export async function check(ui) {
     const own = wver(wv)[1] && (new URLSearchParams(location.search).get('updates') || store.get('updates', ''));
     // The release feed is told the firmware version and flash layout, nothing
     // else: the site counts update checks by them, a total a day (/stats).
-    const u = new URL(own || `${RELEASE}?v=${encodeURIComponent(bare(fwv ?? ''))}&layout=${encodeURIComponent(variant ?? '')}`, location.href).href;
+    // "Get beta updates" on: the beta feed, the newest release beta or final.
+    const feed = app.config?.beta_updates ? BETA : RELEASE;
+    const u = new URL(own || `${feed}?v=${encodeURIComponent(bare(fwv ?? ''))}&layout=${encodeURIComponent(variant ?? '')}`, location.href).href;
     const from = new URL(u).origin === new URL(RELEASE).origin ? '' : ` (from ${new URL(u).host})`;
     const rel = await get(u, 'The release information');
     if (typeof rel?.version !== 'string' || typeof rel.firmware !== 'string') throw new Error(`The release information on ${new URL(u).host} is not readable`);

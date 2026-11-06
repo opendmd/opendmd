@@ -703,6 +703,9 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     if let Some(v) = patch.formula_arena {
         next.formula_arena = v;
     }
+    if let Some(v) = patch.beta_updates {
+        next.beta_updates = v;
+    }
     if let Some(v) = &patch.formula_keep {
         match opendmd_core::FormulaKeep::from_name(v) {
             Some(k) => next.formula_keep = k,
@@ -809,6 +812,8 @@ pub struct ConfigPatch {
     /// The Formulas' JIT (the kill switch); applied at the next frame.
     pub(crate) formula_jit: Option<bool>,
     pub(crate) formula_arena: Option<bool>,
+    /// "Get beta updates" (the web app's update feed); kept, nothing else.
+    pub(crate) beta_updates: Option<bool>,
     /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
     /// `hold` (until something else plays).
     pub(crate) formula_keep: Option<String>,
@@ -3215,6 +3220,7 @@ fn settings_json(s: &Settings) -> String {
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
             r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
+            r#""beta_updates":{},"#,
             r#""lat":{},"lon":{}}}"#
         ),
         json_string(&s.wifi_ssid),
@@ -3251,6 +3257,7 @@ fn settings_json(s: &Settings) -> String {
         s.formula_keep.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
+        s.beta_updates,
         s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lat_c)),
         s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lon_c)),
     )

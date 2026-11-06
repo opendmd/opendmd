@@ -1153,6 +1153,14 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.click("#st-save-net")
     wait_js(page, "document.querySelector('#st-net .tick').textContent.includes('demo')", timeout=10000)
     check(True, f"demo settings: a new name is taken, a WiFi network refused ('{page.inner_text('#st-net .tick')}')")
+    # Get beta updates: a device setting the demo keeps (its config knows
+    # the field, so the save is not an "unknown field").
+    page.check("#fw-beta")
+    saved("#fw-beta")
+    beta_on = page.evaluate("import('./js/state.js').then(m => m.app.config.beta_updates)")
+    page.uncheck("#fw-beta")
+    wait_js(page, "import('./js/state.js').then(m => m.app.config.beta_updates === false)", timeout=10000)
+    check(beta_on is True and "Couldn" not in page.inner_text("#st-fw"), f"demo settings: Get beta updates saved on, then off ({beta_on})")
     page.check("#sec-key")
     page.wait_for_selector("#sec-key-val", timeout=10000)
     check(len(page.input_value("#sec-key-val")) == 24, "demo settings: Require a key shows one")
