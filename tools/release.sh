@@ -432,7 +432,9 @@ else
         die "v$FINAL's opendmd-$FINAL-$v.odfw does not verify against firmware/keys/opendmd.pub"
       uv run --quiet tools/fw-sign.py inspect "$FINAL_DIST/opendmd-$FINAL-$v.odfw" > "$REL/inspect-final-$v.txt"
     done
-    pass "v$FINAL's assets from its GitHub release (SHA256SUMS, manifests, bundles verify) in $FINAL_DIST"
+    uv run --quiet tools/fw-sign.py verify-www "$FINAL_DIST/opendmd-$FINAL-www.pack" --pub firmware/keys/opendmd.pub >/dev/null ||
+      die "v$FINAL's opendmd-$FINAL-www.pack does not verify against firmware/keys/opendmd.pub"
+    pass "v$FINAL's assets from its GitHub release (SHA256SUMS, manifests, bundles and www pack verify) in $FINAL_DIST"
     SITE_DISTS=(DIST="$FINAL_DIST" BETA_DIST="$DIST")
   else
     SITE_DISTS=(DIST="$DIST")
