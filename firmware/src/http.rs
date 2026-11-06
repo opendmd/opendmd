@@ -493,6 +493,7 @@ impl PatchErr {
 /// settings file on the card, `settings_card`, read through the same
 /// checks): the first value refused is the error, and `next` is then
 /// partly changed (the caller drops it).
+#[inline(never)] // (its frame off `put_config`'s: the httpd task's stack is tight)
 pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), PatchErr> {
     if let Some(v) = patch.wifi_ssid.clone() {
         next.wifi_ssid = v;
@@ -731,6 +732,21 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         return Err(PatchErr::bad("dwell_max must be >= dwell_min"));
     }
     Ok(())
+}
+
+/// Would `patch` change the WiFi details in `s` (what joining a network
+/// reads: a reboot puts them in effect)? As [`apply_patch`] would store
+/// them (the login's names trimmed, the method parsed).
+#[inline(never)]
+fn wifi_changes(s: &Settings, patch: &ConfigPatch) -> bool {
+    let differs = |new: &Option<String>, old: &str, trim: bool| {
+        new.as_deref().is_some_and(|v| (if trim { v.trim() } else { v }) != old)
+    };
+    differs(&patch.wifi_ssid, &s.wifi_ssid, false)
+        || differs(&patch.wifi_pass, &s.wifi_pass, false)
+        || differs(&patch.wifi_eap_user, &s.wifi_eap_user, true)
+        || differs(&patch.wifi_eap_identity, &s.wifi_eap_identity, true)
+        || patch.wifi_eap_ttls.as_deref().is_some_and(|v| v != s.wifi_eap_ttls.as_str())
 }
 
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
@@ -3281,10 +3297,10 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             };
         }
         let mut next = c.settings.lock().unwrap().clone();
-        let wifi_of = |s: &Settings| {
-            (s.wifi_ssid.clone(), s.wifi_pass.clone(), s.wifi_eap_user.clone(), s.wifi_eap_identity.clone(), s.wifi_eap_ttls)
-        };
-        let wifi_before = wifi_of(&next);
+        // WiFi details are read once, when the network starts: saved now,
+        // in effect after a reboot. (Asked before the patch is applied, so
+        // no copy of the old details is kept on this task's stack.)
+        let reboot_required = wifi_changes(&next, &patch);
         let hostname_before = next.hostname.clone();
         let sky_before = (next.location, next.tz.clone());
         if let Some(p) = patch.pace_on_pct {
@@ -3322,10 +3338,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                 })
             }
         };
-        // WiFi details are read once, when the network starts: saved now,
-        // in effect after a reboot. A new name is applied live once saved
-        // (`NetCommand::Rename`).
-        let reboot_required = wifi_of(&next) != wifi_before;
+        // A new name is applied live once saved (`NetCommand::Rename`).
         let mut renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
         // A name another device already answers to is refused: mDNS would
         // hand it to this display and push the other to `<name>-2`. Asked

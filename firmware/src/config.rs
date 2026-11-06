@@ -449,8 +449,13 @@ pub const BOOT_STACK: usize = 10 * 1024;
 /// parsing a config or schedule body: 4.1 KB used (invalid `PUT
 /// /api/config` and `/api/schedule` bodies, which are parsed whole and then
 /// refused); OTA's 3.2 KB went with OTA. 6.5 KB leaves ~2.4 KB over that, and gives
-/// the stream task's extra 1.5 KB back.
-pub const HTTP_STACK: usize = 6 * 1024 + 512;
+/// the stream task's extra 1.5 KB back. 7 KB since restore-cuts
+/// (2026-11-06): by then `emu-api` left 184-344 B unused on main (the
+/// deepest a `PUT /api/config`'s "config applied" line), and the work or
+/// school login's three settings (in `ConfigPatch` and `Settings`, each
+/// held twice in `put_config`'s frame) took ~160 B more: 24 B were left,
+/// and one run overflowed beside uploads. 512 B of heap for the margin back.
+pub const HTTP_STACK: usize = 7 * 1024;
 
 /// (psi-probe builds only: the player never compiles, the probe does.)
 /// The stack a formula is compiled on (`psi_stack.rs`): Psi's compiler

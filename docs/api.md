@@ -800,10 +800,12 @@ WiFi) needs a username as well, `wifi_eap_user`, with its password as
 `wifi_pass`; `""` as the username goes back to a network with a password
 alone. The player answers PEAP or TTLS, whichever the network asks for
 (PEAP with MSCHAPv2 inside, TTLS with `wifi_eap_ttls`, MSCHAPv2 unless
-the network says otherwise). What it does not do: EAP-TLS (a client
-certificate), checking the network's server certificate (none is kept:
-a fake access point with the same name could take the login, so use a
-password for this device alone where the network offers one), and WiFi
+the network says otherwise). **The RADIUS server's certificate is not
+checked: the player accepts any server** (no CA certificate is kept, so
+the TLS runs without verification). A fake access point with the same name
+could take the login (and the MSCHAPv2 exchange can be attacked offline),
+so use a password for this device alone where the network offers one.
+Also not done: EAP-TLS (a client certificate) and WiFi
 details over USB (Improv sends a name and a password only: a save over
 USB clears the username).
 
