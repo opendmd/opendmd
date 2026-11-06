@@ -306,7 +306,7 @@ with the card, in `/opendmd.json` at its root: brightness and its
 ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
 the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
 host, attract, look, glow, `look_formula`, `boot_show`, `panel_sync`,
-`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`. A change is
+`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`, `beta_updates`. A change is
 on the card the moment it is saved, whatever plays. The device keeps the
 rest itself, never on the card: the WiFi details and name, the
 location (`lat`, `lon`), the API key and the RePlayOS code (secrets), the
@@ -361,6 +361,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `formula_arena` | `false` | a dev setting, in force from the next boot: a Formula's memory (its program and VM scratch, ink and paint planes, ~19 KB) from one block set aside at boot before the network starts, so it lands in the same SRAM pool every time (`display.buffers`; the A/B for the upload residual). Costs that block for the whole boot |
 | `formula_keep` | `turn` | how long a Formula sent with `/api/play` stays on the panel: `turn` (one turn of the dwell, as any file), `1m`, `5m` or `hold` (until something else plays: another `/api/play`, `/api/skip` or Previous, a playlist change). Formulas in a playlist are not affected. From the next one sent |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
+| `beta_updates` | `false` | "Get beta updates" (Settings › Firmware): the web app's Check for updates reads `https://opendmd.dev/install/beta.json` (the newest release, beta or final) instead of `install/release.json` (the newest final release). The device only keeps the choice, so every browser sees the same one; turning it off installs nothing older (a player on a beta stays on it until a final release newer than it comes out) |
 | `lat`, `lon` | numbers or null, null | where the panel is, in degrees (north and east positive, two decimals: 0.01° is about 1 km), for the built-in inputs Formulas read: `daylight`, `sun.alt` and `season` need it (`moon.phase` and `yearday` need only the clock); both null when none is set |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |

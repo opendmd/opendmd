@@ -210,7 +210,9 @@ every view like a person would:
             422), install nothing and leave both versions alone; then
             firmware 10.0.0 + web app v10.0.0: each step shown, the mock
             restarts, PUT /api/www takes the pack, the page reloads, and a
-            new check says "Up to date (10.0.0)"
+            new check says "Up to date (10.0.0)"; Get beta updates is off by
+            default; on (saved as the player's beta_updates) the check reads
+            opendmd.dev's beta.json?v=&layout=, off again release.json
   Security  the JSON routes without Content-Type application/json are 415
             (any case, parameters allowed; raw uploads take any type); a
             page from another origin (127.0.0.1:<another port>)
@@ -2683,7 +2685,15 @@ OLDER_CASES = [("0.3.0", "0.3.1", True), ("0.3.1", "0.3.0", False), ("0.3.0", "0
                ("0.10.0", "0.9.9", False), ("0.9.9", "0.10.0", True), ("1.0", "1.0.0", False),
                ("1.0.0-rc.1", "1.0.0", True), ("1.0.0", "1.0.0-rc.1", False), ("1.0.0-rc.2", "1.0.0-rc.10", True),
                ("v0.4.0", "0.3.9", False), ("0.0.1", "9.9.9-smoke", True), ("9.9.9-smoke", "0.3.3", False),
-               ("0.3.13", "1.0.0", True), ("1.0.0", "0.3.13", False)]
+               ("0.3.13", "1.0.0", True), ("1.0.0", "0.3.13", False),
+               # The beta channel's order: 1.0.0-beta.N < 1.0.0 < 1.0.1-beta.1 < 1.0.1.
+               ("1.0.0-beta.9", "1.0.0-beta.16", True), ("1.0.0-beta.16", "1.0.0-beta.9", False),
+               ("1.0.0-beta.16", "1.0.0", True), ("1.0.0", "1.0.0-beta.16", False),
+               ("1.0.0", "1.0.1-beta.1", True), ("1.0.1-beta.1", "1.0.0", False),
+               ("1.0.1-beta.1", "1.0.1", True), ("1.0.1", "1.0.1-beta.1", False),
+               ("1.0.0-beta.16", "1.0.0-rc.1", True), ("1.0.0-beta", "1.0.0-beta.1", True),
+               ("1.0.0-1", "1.0.0-alpha", True), ("1.0.0-alpha", "1.0.0-1", False),
+               ("1.0.0-beta.2", "1.0.0-beta.2", False)]
 
 
 def fake_app(path: Path, variant: str) -> None:
@@ -3106,11 +3116,44 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         check(t == f"Up to date ({UPD_VERSION})" and not upd() and rel_asked == [feed]
               and not any(a.split("?")[0].endswith(("/old.json", "/release.json")) for a in asked[n_before:]),
               f"update: after the update (a release build) only opendmd.dev's feed is read, as {feed}, ?updates= and odmd.updates ignored -> '{t}' {rel_asked}")
+        # Get beta updates (a device setting, off by default): on, the check
+        # reads beta.json (told the same); off again, release.json.
+        beta_asked: list[str] = []
+
+        def official_beta(route):
+            beta_asked.append(route.request.url)
+            route.fulfill(status=200, body=(inst / "release.json").read_text(),
+                          headers={"content-type": "application/json", "access-control-allow-origin": "*"})
+        is_beta = lambda u: u.split("?")[0] == "https://opendmd.dev/install/beta.json"  # noqa: E731
+        page.context.route(is_beta, official_beta)
+        check(get_json(base + "/api/config").get("beta_updates") is False and not page.is_checked("#fw-beta")
+              and "regular release" in page.inner_text("#fw-beta-box"),
+              "update: Get beta updates is off by default, with its line")
+        page.check("#fw-beta")
+        deadline = time.time() + 10
+        while get_json(base + "/api/config").get("beta_updates") is not True and time.time() < deadline:
+            time.sleep(0.2)
+        rel_asked.clear()
+        t = check_now()
+        bfeed = feed.replace("/release.json?", "/beta.json?")
+        check(get_json(base + "/api/config")["beta_updates"] is True and t == f"Up to date ({UPD_VERSION})"
+              and beta_asked == [bfeed] and not rel_asked,
+              f"update: Get beta updates on (saved on the player) -> beta.json asked, as {bfeed} ('{t}' {beta_asked} {rel_asked})")
+        page.uncheck("#fw-beta")
+        deadline = time.time() + 10
+        while get_json(base + "/api/config").get("beta_updates") is not False and time.time() < deadline:
+            time.sleep(0.2)
+        beta_asked.clear()
+        t = check_now()
+        check(get_json(base + "/api/config")["beta_updates"] is False and rel_asked == [feed] and not beta_asked,
+              f"update: Get beta updates off again -> release.json asked ('{t}' {rel_asked} {beta_asked})")
+        page.context.unroute(is_beta)
         page.context.unroute(is_feed)
     finally:
         for e in (site, "/api/firmware", "/api/status"):
             expected.remove(e)
         page.evaluate("localStorage.removeItem('odmd.updates')")
+        put_json(base + "/api/config", {"beta_updates": False})
         put_www(base, built)  # the mock's web app version back to this build's
         srv.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)

@@ -1546,6 +1546,15 @@ mod tests {
             ("1.0.0-alpha", "1.0.0-beta"),
             ("1.0.0-beta", "1.0.0-beta.1"),
             ("1.0.0-1", "1.0.0-alpha"),
+            // The beta channel's order (docs/deploying.md "Betas"):
+            // 1.0.0-beta.N < 1.0.0 < 1.0.1-beta.1 < 1.0.1.
+            ("1.0.0-beta.16", "1.0.0"),
+            ("1.0.0", "1.0.1-beta.1"),
+            ("1.0.1-beta.1", "1.0.1-beta.2"),
+            ("1.0.1-beta.1", "1.0.1"),
+            ("1.0.0-beta.16", "1.0.1-beta.1"),
+            ("1.0.0-beta.16", "1.0.0-rc.1"),
+            ("1.0.9", "1.1.0-beta.1"),
         ] {
             assert!(version_older(a, b), "{a} < {b}");
             assert!(!version_older(b, a), "not {b} < {a}");
