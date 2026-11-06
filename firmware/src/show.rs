@@ -28,9 +28,10 @@
 //! **While a firmware update comes in** ([`Updating`], held by
 //! `ota::receive` from the moment the bundle's header and signature are
 //! accepted): the main loop shows a still message instead of anything else
-//! ("Updating / to v… / Don't unplug", then "Installing / Dark while it
-//! installs / Don't unplug" once it is staged, for the second before the
-//! restart into the updater, whose copy runs with the panel dark). The
+//! ("Updating / to v… / Don't unplug", then "Installing / … / Don't
+//! unplug" once it is staged, for the second before the restart into the
+//! updater, which shows the same picture while it copies: its build-time
+//! copy, `opendmd_core::updater_picture`, a dot stepping under it). The
 //! guard's drop (a refused, cut-short or failed upload) takes it down and
 //! playback resumes. One relaxed atomic load per loop iteration otherwise.
 //!

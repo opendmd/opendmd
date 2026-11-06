@@ -569,7 +569,7 @@ the Ed25519 signature against the key compiled into the running firmware
 and the image's app descriptor; anything wrong is a 422 and nothing changes), restarts into the updater,
 which copies it into `factory` and restarts into the new firmware: ~45 s
 from the end of the upload to playback. The panel says "Updating … Don't
-unplug", then "Installing", then goes dark while the updater installs. `GET
+unplug", then "Installing", which stays up while the updater installs. `GET
 /api/firmware` then reports the new version; `/update/log.txt` on the card
 has every step, and its end is `log` in `GET /api/firmware` (the Firmware
 card's "Update log"). A bundle signed with another key is refused with a

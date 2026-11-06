@@ -250,10 +250,11 @@ The web app pack is signed with the same key and key ids
    descriptor is `"<version> <variant>"` for that layout. Any failure: delete the file, 422 with a reason, nothing else
    changes. Success: write `/update/pending.txt` (version), set the boot
    partition to `ota_0` (`esp_ota_set_boot_partition`), reply
-   `{"ok":true,"version":…,"rebooting":true}` (the panel says "Installing",
-   "Dark while it installs"), blank the panel, restart.
+   `{"ok":true,"version":…,"rebooting":true}` (the panel says "Installing"
+   over three dots, "Don't unplug"), blank the panel, restart.
 3. **Updater** (`ota/updater`, C): blanks the panel first (same early blank
-   as `hub75_shim`), mounts the card on SPI3 (18/19/23/5), opens
+   as `hub75_shim`), puts the same picture back up (see "The updater's
+   panel" below), mounts the card on SPI3 (18/19/23/5), opens
    `/update/opendmd.bin`, checks the bundle's layout against the board's
    and the image's app descriptor, re-verifies the SHA-256 (the signature was
    checked by the firmware; the updater has no Ed25519 to keep it small),
@@ -278,6 +279,57 @@ The web app pack is signed with the same key and key ids
    variant, layout, features, flash_size, flash{mhz,mode}, pending, last, log}`: `log` is the end of `/update/log.txt`
    (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
    updater's account can be read without taking the card out.
+
+## The updater's panel
+
+The updater shows the firmware's "Installing / Don't unplug" picture while
+it installs, so the panel does not look dead (`ota/updater/main/panel.cpp`):
+
+- **The picture is made at build time.** `opendmd_core::updater_picture`
+  packs `boot::installing` with no dot lit into
+  `ota/updater/main/picture.h` (two bits a pixel, four colours, 1 KB), so
+  the updater has no font code; `make updater-picture` writes it again and
+  `make test` fails when the committed copy is stale. The firmware's own
+  "Installing" screen is the same picture with its three dots lit, so the
+  panel looks the same before and after the restart into the updater.
+- **The driver is the firmware's**: mrcodetastic's
+  ESP32-HUB75-MatrixPanel-I2S-DMA (the submodule under
+  `firmware/components/`), single-buffered, with the firmware's pin map and
+  the panel timing it saved (NVS `opendmd` / `panel`, read only; anything
+  missing or damaged is the defaults, as the firmware's boot takes them;
+  the parser is checked against the same vectors as `PanelTiming::from_nvs`,
+  `ota/updater/test/`). The brightness is the firmware's start-up level,
+  96, never above the saved `brightness` or `max_brightness`.
+- **The DMA keeps it lit.** The picture is drawn into the driver's buffer
+  once; the I2S DMA then loops over it through a closed ring of
+  descriptors with no interrupt and no CPU work. Its buffers and
+  descriptors are in internal DMA-capable RAM, which a flash erase or write
+  (the cache off, the other CPU parked) does not touch, so the refresh goes
+  on through them. A task on CPU1 lights one of the three dots at a time
+  (0.4 s each; none while the updater waits to retry); it never runs during
+  a flash operation and the copy never waits on it.
+- **It cannot stop an install.** The picture goes up once, before the
+  first attempt, and only after a restart or a power-on:
+  after a panic, a watchdog or a brownout reset the updater stays dark, so
+  a panel that crashed it, or drew too much from the supply, leaves the
+  next boot exactly as an updater without a panel. A driver that does not
+  start (no memory, a refused config) puts OE back high and the install
+  goes on dark. The panel is blanked (OE high, the DMA stopped) before the
+  restart into the new firmware.
+- **The log** says `panel up in N ms: <timing> (...), brightness B, R Hz`
+  or `panel skipped: <why>; it stays dark`, and after the write pass a
+  `panel refresh:` line: a pulse counter counts the D row-address line's
+  rising edges at its pad (one a refresh, in hardware, whatever the CPUs
+  are doing), so it compares the refresh rate while the image is written
+  with the rate while it was only being checked, and says how many
+  milliseconds of refreshes the write pass, and its longest flash
+  operation, lacked. A board with no panel counts the same.
+
+The updater in `ota_0` is written only by a USB install (an update over
+WiFi replaces the firmware, never the updater), so a board shows the
+picture once a USB install has given it an updater that has it; until then
+its updater installs with the panel dark. A USB install itself does not run
+the updater: the panel stays dark while the installer writes.
 
 ## Check for updates
 

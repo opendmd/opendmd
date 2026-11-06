@@ -12,8 +12,10 @@ details, playlists and GIFs stay as they are whichever way you update.
    **Update** button. Press it.
 3. Keep the page open and the SD card in. While the update comes in the
    panel says **Updating** and the version, with **Don't unplug**
-   underneath; then **Installing**, and it goes dark for about a minute
-   while the firmware installs. When the player starts again the panel
+   underneath; then **Installing**, which stays on the panel, a dot
+   stepping across under it, for about a minute while the firmware
+   installs (it goes dark for a moment each time the board restarts).
+   When the player starts again the panel
    says **Updated to** the new version for a few seconds before your GIFs
    carry on, then the web app updates and the page reloads by itself. If
    the update doesn't go through, the message goes and your GIFs carry on
