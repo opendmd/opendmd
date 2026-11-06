@@ -38,7 +38,7 @@ function zone() {
 
 // What GET /api/config gives a fresh player, and the state kept with it.
 const fresh = () => ({
-  c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
+  c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, wifi_eap_user: '', wifi_eap_identity: '', wifi_eap_ttls: 'mschapv2', brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
     hostname: 'opendmd', ...zone(), transition: 'dissolve', transition_ms: 400, auto_prepare: 'idle', card_speed: 'safe', follow: false, follow_host: '',
     follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', panel_sync: true, panel_split: true, formula_keep: 'turn', api_key_set: false },
   sched: { rules: [], night: null },
@@ -149,7 +149,7 @@ function status(recent) {
 function putConfig(patch) {
   const c = { ...S.c }, b = patch.brightness, mx = patch.max_brightness;
   for (const [k, v] of Object.entries(patch)) {
-    if (k == 'wifi_ssid' || k == 'wifi_pass') throw cant('join a WiFi network: on a player, this saves it for the next restart');
+    if (k == 'wifi_ssid' || k == 'wifi_pass' || /^wifi_eap_/.test(k) && v !== c[k]) throw cant('join a WiFi network: on a player, this saves it for the next restart');
     if (k == 'hostname') {
       const n = String(v).trim().toLowerCase();
       if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n)) bad('hostname must be 1-32 lowercase letters, digits and hyphens, not starting or ending with a hyphen');
