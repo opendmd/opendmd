@@ -302,9 +302,10 @@ make release VERSION=1.0.0-beta.12 PUBLISH=1 RESUME=1    # after a publish that 
    and at least 64 KB of factory spare per layout.
 4. Assets: the GitHub release's files, `SHA256SUMS` and the release notes.
 5. Site: `make site` with the public gallery repo's contributions and
-   earlier API pages, this release's API page frozen; the `release.json`
-   and installer checks, `make site-smoke`, `make site-deploy-check`
-   (uploads nothing), and the tree still clean.
+   earlier API pages, this release's API page frozen; the `release.json`,
+   `beta.json` and installer checks (which files each feed names depends
+   on the channel: "Betas" below), `make site-smoke`, `make
+   site-deploy-check` (uploads nothing), and the tree still clean.
 
 It then goes back to main and deletes the local tag: nothing has left the
 machine.
@@ -318,7 +319,8 @@ machine.
    marked latest otherwise) and its assets;
 4. the public gallery repo updated (`tools/gallery-repo-publish.sh`);
 5. the site deployed to opendmd.dev (`make site-deploy-built`, cf's login),
-   then checked live.
+   then checked live: `install/beta.json` says this version and
+   `install/release.json` the release it should (below).
 
 Each step prints its outcome, and the first failure stops it with what was
 and wasn't published. A failure before the first push undoes the local
@@ -326,6 +328,68 @@ commit and tag. After that, rerun with `RESUME=1`: it reuses the build and
 skips whatever is already done (the pushes, the release, each asset with
 the same digest, a live site already at this version). A published tag is
 never moved, and nothing on GitHub is overwritten.
+
+### Betas: the two update feeds
+
+Releases are `X.Y.Z` (final) or `X.Y.Z-beta.N` (a beta of the next
+`X.Y.Z`). Versions are ordered as semver orders them: `1.0.0-beta.16` <
+`1.0.0` < `1.0.1-beta.1` < `1.0.1` (the firmware's
+`opendmd_core::ota::version_older`, the web app's `older()`, `site.py`'s
+`semver_key` and `release.sh`'s `semver_cmp` agree, and are tested on
+that order).
+
+The site publishes two feeds of the same shape (`docs/ota.md` "Check for
+updates"):
+
+- **`install/release.json`**: the newest **final** release. Players read
+  it by default. Before the first final release exists it names the
+  newest beta (as it always has), so players keep getting updates.
+- **`install/beta.json`**: the newest release of all, beta or final.
+  Players with **Get beta updates** on (Settings → Device → Firmware; the
+  device setting `beta_updates`, off by default) read it instead. A beta
+  player therefore gets the next betas and also a final release once it
+  is newer than its beta. Switching it off downgrades nothing: the player
+  stays on its beta until a newer final comes out.
+
+What each kind of release does to them (`tools/release.sh` and
+`release.yml` work it out from the tags, here and on GitHub):
+
+| release | `release.json` | `beta.json` | Install button at /install/ |
+|---|---|---|---|
+| a beta, before any final exists | this beta | this beta (the same file) | this beta |
+| a final `X.Y.Z` | this release | this release (the same file) | this release |
+| a beta after a final | stays on the last final | this beta | the last final, and a second "Or install the beta" button |
+
+For a beta after a final, the site is built with the last final's files
+as `DIST` (downloaded from its GitHub release and checked against its
+`SHA256SUMS`: the final stays installable and its update files stay
+reachable) and this beta's own build as `BETA_DIST`: `make site
+DIST=<final's files> BETA_DIST=<the beta's dist>`. The beta's update
+bundles, installer manifest and parts go under `install/firmware/beta/`
+(its own bootloader, partition table and updater: a beta may change any of
+them), the final's stay under `install/firmware/`. Without `BETA_DIST`
+`beta.json` is a copy of `release.json` and there is no beta folder. The
+docs on the site are the tree's (the beta's) either way, and the frozen
+API page is the beta's (`dev/api/v<beta>.html`), so a beta's Settings →
+About link has its page.
+
+To redeploy the docs between releases while a beta is newer than the
+final, give the Site workflow both tags (`release` the final, `beta` the
+beta), or locally `make site DIST=<final's files> BETA_DIST=<beta's files>`
+(each a GitHub release's assets: `gh release download v<version> -D dir`).
+A site built from one dist alone would point `beta.json` back at the
+final, which is harmless (beta players see nothing newer) but hides the
+beta until the next deploy.
+
+A release must be newer than every `v*` tag (release.sh and release.yml
+both refuse otherwise). So once a beta of the next version is out (say
+`1.1.0-beta.1`), a hotfix final below it (`1.0.1`) can't be released:
+ship the fix as the next beta, or as `1.1.0`. Allowing it would need a
+final that leaves `beta.json` on the newer beta.
+
+The Worker counts `beta.json?v=&layout=` as an update check like
+`release.json` (one kind, `check`, on /stats), and a beta's install
+images under `install/firmware/beta/` as installs of that version.
 
 ### Installing from a browser (the flasher)
 
@@ -393,7 +457,8 @@ There is no other host.
   it with `make site-deploy-built` once the `CLOUDFLARE_API_TOKEN` secret
   exists; until then the step skips and the site is deployed from the dev
   box. The **Site** workflow (manual) redeploys the docs between releases
-  with an existing release's files.
+  with an existing release's files (and a beta's, when one is newer than
+  the final: "Betas" above).
 - **From the dev box**, with the owner: `make fw-release` (or a release's
   files in `dist/`), then `make site-deploy` (refuses a dirty tree), or
   `make site` and `make site-deploy-built`. `make site-deploy-check` is a

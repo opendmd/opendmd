@@ -686,6 +686,7 @@ DEFAULT_SETTINGS = {
     "transition_ms": 400,
     "auto_prepare": "idle",     # opendmd_core::auto_prepare: idle (default) / always / off
     "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
+    "beta_updates": False,      # "Get beta updates": the web app's update check reads beta.json
     "follow": False,            # Follow RePlayOS
     "follow_host": "",
     "follow_code": "",          # the NET CONTROL code -- never echoed back
@@ -741,6 +742,7 @@ FIELD_TYPES = {
     "transition_ms": "u64",
     "auto_prepare": "str",
     "card_speed": "str",
+    "beta_updates": "bool",
     "follow": "bool",
     "follow_host": "str",
     "follow_code": "str",
@@ -3674,6 +3676,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "transition_ms": s["transition_ms"],
                     "auto_prepare": s["auto_prepare"],
                     "card_speed": s["card_speed"],
+                    "beta_updates": s["beta_updates"],
                     "follow": s["follow"],
                     "follow_host": s["follow_host"],
                     "follow_code_set": bool(s["follow_code"]),

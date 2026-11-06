@@ -29,21 +29,30 @@ export const askKey = () => new Promise((res) => {
 
 // Whether version `a` is older than `b`, semver-ish: the dot-separated
 // numbers compared as numbers (a leading v ignored, a missing part is 0),
-// and a pre-release (`-rc.1`) before its release. The device accepts any
-// validly signed bundle, older ones included (a way back); this only decides
-// whether the page asks twice.
+// and a pre-release (`-beta.3`) before its release, its dot-separated parts
+// compared as numbers where both are, a number before a word, words by
+// their characters (opendmd_core::ota::version_older, the same rule):
+// 1.0.0-beta.9 < 1.0.0-beta.16 < 1.0.0 < 1.0.1-beta.1 < 1.0.1. The device
+// accepts any validly signed bundle, older ones included (a way back); this
+// only decides whether the page asks twice, and what an update is.
 export function older(a, b) {
   const parse = (s) => {
     const [core, pre] = String(s).trim().replace(/^v/i, '').split('+')[0].split(/-(.*)/s);
-    return [core.split('.').map((x) => parseInt(x, 10) || 0), pre || null];
+    return [core.split('.').map((x) => parseInt(x, 10) || 0), pre == null ? null : pre.split('.')];
   };
-  const [an, ap] = parse(a), [bn, bp] = parse(b);
+  const [an, ap] = parse(a), [bn, bp] = parse(b), num = (x) => /^\d+$/.test(x);
   for (let i = 0; i < Math.max(an.length, bn.length); i++) {
     const d = (an[i] || 0) - (bn[i] || 0);
     if (d) return d < 0;
   }
-  if (ap === bp || ap === null) return false;
-  return bp === null || ap.localeCompare(bp, undefined, { numeric: true }) < 0;
+  if (!ap) return false;
+  if (!bp) return true;
+  for (let i = 0; ; i++) {
+    const x = ap[i], y = bp[i];
+    if (x == null || y == null) return x == null && y != null;
+    if (x === y) continue;
+    return num(x) && num(y) ? +x < +y : num(x) || (!num(y) && x < y);
+  }
 }
 
 // A PUT as an XMLHttpRequest, for its upload progress: resolves to the
@@ -153,7 +162,20 @@ export function fwCards(fw, sec) {
     busy(false);
     barBox.hidden = true;
   }
-  fw.append(h('h3', 'Firmware'), facts, log, barBox, msg, ui.row = h('div.row', { style: 'margin-top:12px' }, chk, btn, file));
+  // "Get beta updates": a device setting (`beta_updates`), so every browser
+  // sees the same choice; update.js reads beta.json with it on.
+  const fwh = h('h3', 'Firmware'), save = saver(fwh);
+  const beta = h('input.sw', { type: 'checkbox', id: 'fw-beta' });
+  const betaBox = h('div', { id: 'fw-beta-box', hidden: true }, h('label', { style: 'margin-top:12px' }, beta, 'Get beta updates'),
+    h('p.cap', 'Betas are early versions of the next release: new things sooner, and they may have problems. You can switch this off at any time. That doesn’t take the player back to an older version: it keeps its beta until the next regular release comes out.'));
+  const bsync = (c) => { betaBox.hidden = !c || !('beta_updates' in c); beta.checked = !!c?.beta_updates; };
+  beta.onchange = () => save(async () => {
+    try { await app.src.putConfig({ beta_updates: beta.checked }); } catch (e) { bsync(app.config); throw e; }
+    await app.refreshConfig();
+  });
+  on('config', bsync);
+  bsync(app.config);
+  fw.append(fwh, facts, log, barBox, msg, ui.row = h('div.row', { style: 'margin-top:12px' }, chk, btn, file), betaBox);
   fw.hidden = false;
   load();
 
