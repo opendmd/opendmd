@@ -15,6 +15,9 @@ details, playlists and GIFs stay as they are whichever way you update.
    underneath; then **Installing**, which stays on the panel, a dot
    stepping across under it, for about a minute while the firmware
    installs (it goes dark for a moment each time the board restarts).
+   If the panel says **Dark while it installs** instead, the board's
+   installer is from before 1.0.0: the panel goes dark for that minute,
+   and lights up like this after the board's next install over USB.
    When the player starts again the panel
    says **Updated to** the new version for a few seconds before your GIFs
    carry on, then the web app updates and the page reloads by itself. If

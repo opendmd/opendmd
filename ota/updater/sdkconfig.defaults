@@ -49,7 +49,10 @@ CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
 CONFIG_SPI_FLASH_YIELD_DURING_ERASE=y
 
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="updater 1"
+# 2: the first with the picture on the panel (main/panel.cpp). The firmware
+# reads this from ota_0 (opendmd_core::boot::UPDATER_PANEL_VERSION) to say
+# on its Installing screen whether the panel will go dark.
+CONFIG_APP_PROJECT_VER="updater 2"
 
 # app_main does the copy: FATFS, printf and the SHA context want more than
 # the 3.5 KB default (the 4 KB copy buffer is static, not on the stack).

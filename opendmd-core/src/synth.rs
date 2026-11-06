@@ -579,6 +579,7 @@ fn parse_boot(query: &str) -> BootSpec {
                 b.notice = match v {
                     b"updating" => Some(crate::boot::UpdateStage::Receiving),
                     b"installing" => Some(crate::boot::UpdateStage::Installing),
+                    b"installing-dark" => Some(crate::boot::UpdateStage::InstallingDark),
                     _ => None,
                 };
                 (b.card, b.len) = (

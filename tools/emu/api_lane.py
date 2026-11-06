@@ -141,6 +141,30 @@ def nvs_partition(image: bytes) -> tuple[int, int]:
     raise LaneFail("no nvs partition in the image's partition table")
 
 
+def app_partition(image: bytes, subtype: int) -> tuple[int, int]:
+    """An app partition's offset and size from the image's table at 0x8000 (0x10: ota_0)."""
+    for off in range(0x8000, 0x8000 + 0xC00, 32):
+        e = image[off:off + 32]
+        if e[:2] != b"\xaa\x50":
+            break
+        typ, sub, start, size = struct.unpack_from("<BBII", e, 2)
+        if typ == 0 and sub == subtype:
+            return start, size
+    raise LaneFail(f"no app partition 0x{subtype:02x} in the image's partition table")
+
+
+def with_updater(image: Path, updater: Path, out: Path) -> Path:
+    """A copy of `image` with `updater` in its ota_0 (the rest of the slot erased)."""
+    data = bytearray(image.read_bytes())
+    start, size = app_partition(bytes(data), 0x10)
+    up = updater.read_bytes()
+    if len(up) > size:
+        raise LaneFail(f"{updater} ({len(up)} B) does not fit ota_0 ({size} B)")
+    data[start:start + size] = up + b"\xff" * (size - len(up))
+    out.write_bytes(data)
+    return out
+
+
 def nvs_gen_python() -> Path:
     found = sorted(Path.home().glob(".espressif/python_env/idf5.3_py3*_env/bin/python"))
     if not found:
@@ -401,14 +425,15 @@ class Lane:
         if not cond:
             raise LaneFail(f"{name}: {detail}")
 
-    def boot(self, label, card: Path, no_reboot: bool, card_out: Path | None):
+    def boot(self, label, card: Path, no_reboot: bool, card_out: Path | None, image: Path | None = None):
+        image = image or self.a.seeded
         env = {**os.environ, "ESP32SIM_SD_IMG": str(card)}
         env.pop("ESP32SIM_SD_OUT", None)
         if card_out:
             card_out.unlink(missing_ok=True)
             env["ESP32SIM_SD_OUT"] = str(card_out)
         cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(self.rom),
-               "--flash-image", str(self.a.seeded), "--flash-mb", str(max(4, self.a.seeded.stat().st_size >> 20)),
+               "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
                "--max-seconds", str(self.a.seconds or 7200), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
         if no_reboot:
@@ -1458,7 +1483,20 @@ class Lane:
     # -- boot B: the card again, the real firmware update ----------------------------
 
     def run_b(self):
-        emu, api = self.boot("B", self.card_out, False, None)
+        self.ota_boot("B", self.a.seeded, lit=True)
+
+    def run_c(self):
+        """Boot C: the same update with an updater from before the panel in ota_0
+        (`--old-updater`, a release's): /api/firmware says so, the firmware's
+        Installing screen says the panel goes dark, and that updater installs it."""
+        image = with_updater(self.a.seeded, self.a.old_updater, self.logs / f"api-{self.stamp}-old-updater.bin")
+        try:
+            self.ota_boot("C", image, lit=False)
+        finally:
+            image.unlink(missing_ok=True)
+
+    def ota_boot(self, label, image: Path, lit: bool):
+        emu, api = self.boot(label, self.card_out, False, None, image)
         self.emu = emu
         try:
             st = api.wait_up(240)
@@ -1468,7 +1506,15 @@ class Lane:
             for p, data in self.expected.items():
                 code, back = api.call("GET", q(p), want=(200, 404))
                 self.expect(code == 200 and back == data, "boot B", f"GET {p}: HTTP {code}, {'same' if back == data else 'different'} bytes")
-            self.ok("boot B", f"from boot A's card: dwell_max {self.dwell_set} kept, {len(self.expected)} files the same")
+            self.ok(f"boot {label}", f"from boot A's card: dwell_max {self.dwell_set} kept, {len(self.expected)} files the same")
+            # Which updater ota_0 holds, and whether it lights the panel.
+            _, fw = api.json("GET", "/api/firmware")
+            upd = fw.get("updater") or {}
+            self.expect(upd.get("panel") is lit and (upd.get("version") or "").startswith("updater "), "ota",
+                        f"GET /api/firmware updater {upd}, wanted panel {lit}")
+            said = emu.find(re.compile(r"updater in ota_0: (updater \d+) \(lights the panel while it installs: (true|false)\)"))
+            self.expect(said and said[-1][1].group(1) == upd.get("version") and said[-1][1].group(2) == str(lit).lower(), "ota",
+                        f"the boot's `updater in ota_0` line: {[m.group(0) for _, m in said]}")
             want = self.a.bundle.read_bytes()[8:40].rstrip(b"\0").decode()
             mark = emu.mark()
             with emu.cond:
@@ -1482,7 +1528,8 @@ class Lane:
             # The panel said so all the way: up while it came in, "Installing"
             # once staged, never taken down before the restart.
             emu.wait_for(re.compile(r"update screen: updating"), 5, mark, "the update message")
-            emu.wait_for(re.compile(r"update screen: installing"), 5, mark, "the installing message")
+            screen = r"update screen: installing(?! \(dark)" if lit else r"update screen: installing \(dark updater\)"
+            emu.wait_for(re.compile(screen), 5, mark, "the installing message" + ("" if lit else ", dark updater's"))
             emu.wait_for(re.compile(r"rst:0x"), 60, mark, "the restart into the updater")
             back = time.time()
             end = back + 300
@@ -1507,8 +1554,12 @@ class Lane:
             # modelled, so its refresh is not judged here), and is blanked
             # before the restart into the firmware.
             panel = emu.find(re.compile(r"updater: (panel up in \d+ ms: .*|panel skipped: .*)"), mark)
-            self.expect(len(panel) == 1 and panel[0][1].group(1).startswith("panel up"), "ota",
-                        f"the updater's panel: {[m.group(1) for _, m in panel]}")
+            if lit:
+                self.expect(len(panel) == 1 and panel[0][1].group(1).startswith("panel up"), "ota",
+                            f"the updater's panel: {[m.group(1) for _, m in panel]}")
+            else:
+                self.expect(not panel and emu.find(re.compile(r"updater: OpenDMD updater 1 started"), mark), "ota",
+                            f"not the old updater's run: {[m.group(1) for _, m in panel]}")
             refresh = emu.find(re.compile(r"updater: (panel refresh: .*)"), mark)
             st = api.status()
             self.expect(emu.resets == 3, "ota", f"{emu.resets} resets, wanted 3 (power-on, updater, firmware)")
@@ -1518,8 +1569,11 @@ class Lane:
             said = emu.find(re.compile(r"boot show: \w+, says 'Updated to' this boot"), mark)
             self.expect(bool(said) == (ran != want), "ota",
                         f"'Updated to' on the boot after the update: {bool(said)}, the versions {ran} -> {want}")
-            self.ok("ota", f"PUT {self.a.bundle.stat().st_size} B in {took:.0f} s wall: signature ok, staged, verified; the updater ({len(ulog)} log lines, '{ulog[-2] if len(ulog) > 1 else ''}') installed it; back as {info['version']} ({st.get('reset_reason')}) in {time.time() - back:.0f} s wall")
-            self.ok("ota panel up", f"the updater's '{panel[0][1].group(1)}'; '{refresh[0][1].group(1) if refresh else 'no refresh line'}'")
+            self.ok("ota" if lit else "ota old updater", f"{upd.get('version')} in ota_0, panel {upd.get('panel')}: PUT {self.a.bundle.stat().st_size} B in {took:.0f} s wall: signature ok, staged, verified; the updater ({len(ulog)} log lines, '{ulog[-2] if len(ulog) > 1 else ''}') installed it; back as {info['version']} ({st.get('reset_reason')}) in {time.time() - back:.0f} s wall")
+            if lit:
+                self.ok("ota panel up", f"the updater's '{panel[0][1].group(1)}'; '{refresh[0][1].group(1) if refresh else 'no refresh line'}'")
+            else:
+                self.ok("ota dark updater", "the Installing screen said 'Dark while it installs'; the old updater ran with no panel")
         finally:
             emu.kill()
 
@@ -1559,6 +1613,8 @@ def run(a, sim, rom, fail_rx) -> int:
         if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events"):
             lane.card_checks()
             lane.run_b()
+            if getattr(a, "old_updater", None):
+                lane.run_c()
     except LaneFail as e:
         if network_wedged(lane):
             e = LaneFail(f"{e} -- the network wedged: no TCP answer while the player plays on (RX_BUFFERS in api_lane.py)")

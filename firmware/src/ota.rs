@@ -99,6 +99,32 @@ fn updater() -> Option<&'static sys::esp_partition_t> {
     app_partition(sys::esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_APP_OTA_0)
 }
 
+/// The app descriptor's version of the updater in `ota_0` (`"updater 2"`),
+/// read once (a flash read, nothing written); `None` without one, or if its
+/// descriptor cannot be read.
+pub fn updater_version() -> Option<&'static str> {
+    static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let p = updater()?;
+        // SAFETY: a plain C struct, filled by IDF from the partition's image.
+        let mut d: sys::esp_app_desc_t = unsafe { core::mem::zeroed() };
+        // SAFETY: a partition entry from the table and a struct we own.
+        if unsafe { sys::esp_ota_get_partition_description(p, &mut d) } != sys::ESP_OK {
+            return None;
+        }
+        let bytes: Vec<u8> = d.version.iter().map(|c| c.to_ne_bytes()[0]).take_while(|&b| b != 0).collect();
+        String::from_utf8(bytes).ok()
+    })
+    .as_deref()
+}
+
+/// Whether the updater in `ota_0` shows a picture while it installs
+/// (`opendmd_core::boot::updater_lights_panel`): only an updater a USB
+/// install wrote, from 1.0.0 on, does; a WiFi update never replaces it.
+pub fn updater_lights_panel() -> bool {
+    opendmd_core::boot::updater_lights_panel(updater_version())
+}
+
 /// Append one line to `/update/log.txt` (best effort).
 fn log_line(line: &str) {
     let r = fs::OpenOptions::new()
@@ -413,7 +439,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             ),
         );
     }
-    panel.installing();
+    panel.installing(updater_lights_panel());
     log::info!(
         "PUT /api/firmware: {} staged and verified in {:.1} s; restarting into the updater",
         meta.version,
@@ -486,7 +512,7 @@ fn flash_size() -> u32 {
     })
 }
 
-/// `GET /api/firmware`: `{"version","build","variant","layout","flash_size","pending","last","log"}`.
+/// `GET /api/firmware`: `{"version","build","variant","layout","flash_size","updater","pending","last","log"}`.
 /// Reads two small files on the card when it is mounted (at most
 /// [`LOG_TAIL`] bytes of the log).
 pub fn info_json(card_mounted: bool) -> String {
@@ -499,13 +525,15 @@ pub fn info_json(card_mounted: bool) -> String {
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
     let (mhz, mode) = flash_clock();
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"layout":{},"features":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"pending":{},"last":{},"log":{}}}"#,
+        r#"{{"version":{},"build":{},"variant":{},"layout":{},"features":{},"flash_size":{},"flash":{{"mhz":{mhz},"mode":"{mode}"}},"updater":{{"version":{},"panel":{}}},"pending":{},"last":{},"log":{}}}"#,
         json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
         crate::state::flash_layout(),
         crate::state::features_json(),
         flash_size(),
+        updater_version().map_or_else(|| "null".into(), json_string),
+        updater_lights_panel(),
         opt(pending),
         opt(last),
         opt(log),

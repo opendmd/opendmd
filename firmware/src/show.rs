@@ -31,7 +31,9 @@
 //! ("Updating / to v… / Don't unplug", then "Installing / … / Don't
 //! unplug" once it is staged, for the second before the restart into the
 //! updater, which shows the same picture while it copies: its build-time
-//! copy, `opendmd_core::updater_picture`, a dot stepping under it). The
+//! copy, `opendmd_core::updater_picture`, a dot stepping under it; with an
+//! updater from before that, `crate::ota::updater_lights_panel` false, the
+//! middle line says "Dark while it installs" instead). The
 //! guard's drop (a refused, cut-short or failed upload) takes it down and
 //! playback resumes. One relaxed atomic load per loop iteration otherwise.
 //!
@@ -151,6 +153,9 @@ fn ms(d: Duration) -> u32 {
 pub const NO_UPDATE: u8 = 0;
 const RECEIVING: u8 = 1;
 pub const INSTALLING: u8 = 2;
+/// Installing, with an updater in `ota_0` that leaves the panel dark
+/// (`crate::ota::updater_lights_panel` false): the screen says so.
+pub const INSTALLING_DARK: u8 = 3;
 static STAGE: AtomicU8 = AtomicU8::new(NO_UPDATE);
 /// The version being installed (the bundle's, at most 32 bytes as its
 /// header holds it): written before [`STAGE`] goes up, read by the main
@@ -169,10 +174,10 @@ pub fn update_stage() -> u8 {
 pub fn draw_update(canvas: &mut Canvas, stage: u8) {
     let to = TO.lock().unwrap_or_else(|p| p.into_inner());
     let v = std::str::from_utf8(&to.0[..usize::from(to.1)]).unwrap_or("");
-    let stage = if stage == INSTALLING {
-        UpdateStage::Installing
-    } else {
-        UpdateStage::Receiving
+    let stage = match stage {
+        INSTALLING => UpdateStage::Installing,
+        INSTALLING_DARK => UpdateStage::InstallingDark,
+        _ => UpdateStage::Receiving,
     };
     boot::update_notice(canvas, stage, v);
 }
@@ -195,9 +200,11 @@ impl Updating {
         Updating(())
     }
 
-    /// Staged and the updater chosen: the restart is next.
-    pub fn installing(&self) {
-        STAGE.store(INSTALLING, Relaxed);
+    /// Staged and the updater chosen: the restart is next. `lit`: the
+    /// updater shows the same picture while it installs; else the screen
+    /// says the panel goes dark.
+    pub fn installing(&self, lit: bool) {
+        STAGE.store(if lit { INSTALLING } else { INSTALLING_DARK }, Relaxed);
         crate::wake::kick();
     }
 }

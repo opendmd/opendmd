@@ -4620,7 +4620,7 @@ def make_handler(ctx: Context, quiet: bool):
             with ctx.lock:
                 card = ctx.sd_state == "ok"  # the firmware reads both off the card
                 self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} {ctx.variant}", "variant": ctx.variant,
-                                     "layout": OTA_CURRENT[ctx.variant], "features": features(ctx), "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
+                                     "layout": OTA_CURRENT[ctx.variant], "features": features(ctx), "flash_size": ctx.flash_size, "updater": {"version": "updater 2", "panel": True}, "pending": None, "last": ctx.fw_last if card else None,
                                      "log": ctx.fw_log if card else None})
 
         def h_firmware_put(self, path):
