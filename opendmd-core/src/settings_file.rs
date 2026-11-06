@@ -25,6 +25,7 @@ pub const NEW: &str = "opendmd.json.new";
 pub const BAK: &str = "opendmd.json.bak";
 
 /// CRC-32 (IEEE, as zlib's), bitwise: a few hundred bytes a save.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn crc32(bytes: &[u8]) -> u32 {
     let mut c = !0u32;
     for &b in bytes {
@@ -39,6 +40,7 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 /// The file's text for the JSON object `body` (`{...}`, as its writer
 /// serialised it): `body` with `"crc"` appended as its last member, and a
 /// line end.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn seal(body: &str) -> String {
     let body = body.trim();
     let crc = crc32(body.as_bytes());
@@ -58,6 +60,7 @@ pub enum Seal {
 }
 
 /// Whether `text` carries a matching seal.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn check(text: &str) -> Seal {
     let t = text.trim_end();
     // `…,"crc":"xxxxxxxx"}` or `{"crc":"xxxxxxxx"}`.
@@ -98,6 +101,7 @@ pub enum Choice {
 
 /// Choose among the three files' texts (`None`: not there or unreadable).
 /// `parses` says whether a text is a settings object the firmware reads.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn choose(name: Option<&str>, new: Option<&str>, bak: Option<&str>, parses: impl Fn(&str) -> bool) -> Choice {
     if name.is_some_and(&parses) {
         return Choice::Name;
@@ -136,6 +140,7 @@ pub enum Step {
 /// Save the sealed `body` (see the module docs), stopping after `stop` if
 /// given (the power-cut hook: what is on the card then is what a cut there
 /// leaves).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn save(store: &mut dyn Store, body: &str, stop: Option<Step>) -> std::io::Result<()> {
     store.write_synced(NEW, &seal(body))?;
     if stop == Some(Step::WroteNew) {
@@ -157,6 +162,7 @@ pub fn save(store: &mut dyn Store, body: &str, stop: Option<Step>) -> std::io::R
 
 /// Load: the chosen file's text, after putting the card back in order (a
 /// `.new` that won is renamed into place; a stale `.new` is removed).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn load(store: &mut dyn Store, parses: impl Fn(&str) -> bool) -> Option<String> {
     let name = store.read(NAME);
     let new = store.read(NEW);
@@ -187,24 +193,29 @@ pub fn load(store: &mut dyn Store, parses: impl Fn(&str) -> bool) -> Option<Stri
 pub struct DirStore(pub std::path::PathBuf);
 
 impl Store for DirStore {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn read(&mut self, name: &str) -> Option<String> {
         std::fs::read_to_string(self.0.join(name)).ok()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn write_synced(&mut self, name: &str, text: &str) -> std::io::Result<()> {
         use std::io::Write;
         let mut f = std::fs::File::create(self.0.join(name))?;
         f.write_all(text.as_bytes())?;
         f.sync_all()
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn rename(&mut self, from: &str, to: &str) -> std::io::Result<()> {
         std::fs::rename(self.0.join(from), self.0.join(to))
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn remove(&mut self, name: &str) -> std::io::Result<()> {
         match std::fs::remove_file(self.0.join(name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         }
     }
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn exists(&mut self, name: &str) -> bool {
         self.0.join(name).exists()
     }

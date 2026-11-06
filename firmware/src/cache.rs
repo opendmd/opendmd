@@ -211,6 +211,7 @@ pub fn tick() {
 /// already current (a queued duplicate).
 // Not inlined into the network worker's loop: its frame would be under
 // the firmware signature check (`ota::verify_signature`, ~6.5 KB deep).
+#[optimize(size)] // (CPU0: no frame runs it)
 #[inline(never)]
 pub fn run_count() {
     loop {

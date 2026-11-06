@@ -300,6 +300,8 @@ fn fresh_card() {
     }
 }
 
+#[optimize(size)] // (CPU0, boot: no frame runs it)
+#[inline(never)]
 fn run(task: BootTask) {
     let BootTask {
         mut bus,
