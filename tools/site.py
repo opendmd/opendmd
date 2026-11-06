@@ -655,8 +655,8 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
 def tiles(art: dict) -> str:
     figs = "".join(f'<figure>{led("", i, lazy=True)}<figcaption>{html.escape(i["caption"])}</figcaption></figure>'
                    for i in art["items"] if "tiles" in i["where"])
-    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from OpenDMD: its own Formulas, the clock '
-            f'and scrolling text, and the CC0 Kenney Pixel Platformer sprites. Your own GIFs play the same way, '
+    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from OpenDMD: its own Formulas '
+            f'and the CC0 Kenney Pixel Platformer sprites. Your own GIFs play the same way, '
             f'and Create Art makes new ones.</p>')
 
 
