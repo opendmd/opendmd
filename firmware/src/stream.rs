@@ -15,7 +15,8 @@
 //! **One stream at a time, [`QUEUE_DEPTH`] waiting.** Serving two files at
 //! once would not be faster (one SPI bus, one radio) and would double the
 //! lwip buffers in flight on a heap with ~50 KB to spare. A request that finds
-//! the queue full waits on the httpd task up to [`QUEUE_WAIT`] for a place,
+//! the queue full waits on the httpd task up to [`QUEUE_WAIT`] (none while
+//! an upload is in hand) for a place,
 //! then gets `503` + `Retry-After: 1`. Waiting rather than refusing at once is
 //! for the web app's page load: `index.html` pulls in a stylesheet, a script
 //! and a dozen ES modules at once, a browser does not retry a module that got
@@ -38,7 +39,7 @@
 //!
 //! **One upload at a time, none waiting** ([`MAX_UPLOADS`]). A waiting
 //! upload's client has sent its window already, and each of those frames
-//! stays in one of the WiFi driver's six receive buffers until its turn
+//! stays in one of the WiFi driver's receive buffers (eight) until its turn
 //! comes (see "The receive side" in `sdkconfig.defaults`). The window caps
 //! the bytes, not the frames: in the emulator a waiting upload held five
 //! buffers for 2.6 KB of small segments, and the one being received starved
@@ -107,8 +108,12 @@ const _: () = assert!(admit::FLOOR == config::STREAM_START_HEAP);
 /// Requests waiting behind the one being streamed.
 pub const QUEUE_DEPTH: usize = 2;
 /// How long a request that finds the queue full waits (on the httpd task)
-/// for a place before it is answered 503.
-pub const QUEUE_WAIT: Duration = Duration::from_secs(2);
+/// for a place before it is answered 503. Every millisecond of it is the
+/// httpd task's, so no `accept` meanwhile (lwIP drops SYNs past its backlog
+/// of six): 2 s until net-stall, 1 s now, and none at all while an upload
+/// is in hand, which holds the task for seconds anyway, so the wait could
+/// only end in the 503.
+pub const QUEUE_WAIT: Duration = Duration::from_secs(1);
 /// Uploads in this task's hands at once, queued or being received (see the
 /// module docs): one, and only when the task is idle ([`BUSY`]).
 pub const MAX_UPLOADS: u32 = 1;
@@ -287,7 +292,7 @@ where
 /// the 503. The web app's own files (and the playlists) wait [`QUEUE_WAIT`]
 /// (a browser does not retry a module); the listings and the card's GIFs
 /// and copies (`/gifs/`, `/cache/`) wait `Duration::ZERO`: the web app
-/// retries those, and each 2 s wait would be 2 s of the httpd task — and
+/// retries those, and each wait would be time of the httpd task — and
 /// `/api/status` — spent waiting for the stream task (five folders opened
 /// at once with thumbnails held status 1.1-2.0 s on the spare, listing-c).
 pub fn hand_off_within<F>(req: &mut Req, wait: Duration, work: F) -> Result<()>
@@ -319,6 +324,7 @@ fn hand_off_boxed(req: &mut Req, wait: Duration, work: Work) -> Result<()> {
             "busy with an upload; retry shortly",
         );
     }
+    let wait = if UPLOADS.load(Ordering::Acquire) > 0 { Duration::ZERO } else { wait };
     let deadline = Instant::now() + wait;
     // Wait for a place *before* detaching, so no more than 1 + QUEUE_DEPTH
     // sockets are ever marked in use.

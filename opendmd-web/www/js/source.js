@@ -33,7 +33,8 @@ const RETRY_FOR = 45000;
 // Uploads (PUT, a move): one at a time; another is a 503 + Retry-After,
 // then a reset under the rest of the body (a TypeError if still sending).
 // Neither wrote anything: asked again as above. A timeout may have landed.
-// `busy` (a setting, a play): a 503 + Retry-After only, nothing done.
+// `busy` (a setting, a play, a pause): a 503 + Retry-After only, nothing
+// done (the player had not taken it, or the heap was short).
 export async function sent(fn, busy) {
   const t0 = Date.now();
   for (;;) {
@@ -82,7 +83,12 @@ export class DeviceSource {
   async req(method, url, body, timeout) {
     const j = body?.constructor === Object;
     try {
-      return await check(await dfetch(url, { method, body: j ? JSON.stringify(body) : body, headers: j ? { 'Content-Type': 'application/json' } : {} }, timeout));
+      let r = await dfetch(url, { method, body: j ? JSON.stringify(body) : body, headers: j ? { 'Content-Type': 'application/json' } : {} }, timeout);
+      // A long request (a playlist rebuild, a WiFi scan, a RePlayOS test):
+      // past 0.3 s the device answers 202 with X-Job, and GET /api/job?id=
+      // gives the request's own answer once there is one (202 until then).
+      for (let id; r.status == 202 && (id = r.headers.get('X-Job'));) r = await new Promise((f) => setTimeout(f, 700)).then(() => dfetch('/api/job?id=' + id, {}, timeout));
+      return await check(r);
     } catch (e) {
       if (e.name === 'AbortError') throw new HttpError(0, `${method} ${url}: timed out`);
       throw e;
@@ -92,12 +98,15 @@ export class DeviceSource {
 
   // `recent`: with the Recently played list (`recent`, `recent_at`).
   status(recent) { return this.json('GET', '/api/status' + (recent ? '?recent=1' : ''), undefined, 8000); }
+  // The Now poll's slim read: the clock and what is on screen (~300 B).
+  now() { return this.json('GET', '/api/status?now=1', undefined, 8000); }
   config() { return sent(() => this.json('GET', '/api/config'), 1); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
-  // device, which takes seconds; the firmware waits up to 60 s for it.
+  // device, which takes seconds: a long request (202 + X-Job, above), up to
+  // 60 s.
   putConfig(patch) { return sent(() => this.json('PUT', '/api/config', patch), 1); }
-  skip(back) { return this.json('POST', '/api/skip' + (back ? '?back=1' : '')); }
-  pause() { return this.json('POST', '/api/pause'); }
+  skip(back) { return sent(() => this.json('POST', '/api/skip' + (back ? '?back=1' : '')), 1); }
+  pause() { return sent(() => this.json('POST', '/api/pause'), 1); }
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }
   wifiScan() { return this.json('GET', '/api/wifi/scan', undefined, 20000); }
