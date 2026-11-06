@@ -1669,7 +1669,8 @@ def main() -> int:
     ap.add_argument("--base", help="test this server instead of starting cf dev")
     ap.add_argument("--port", type=int, default=0, help="cf dev's port (default: a free one)")
     ap.add_argument("--smoke", action="store_true", help="then run tools/site-smoke.py --base against it")
-    ap.add_argument("--dist", type=Path, default=ROOT / "dist")
+    ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (release.json's)")
+    ap.add_argument("--beta-dist", type=Path, help="the beta make site published beside it (BETA_DIST), for --smoke")
     ap.add_argument("--shots", type=Path, default=ROOT / "target/site-worker-test",
                     help="where the live panels' screenshots go")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art")
@@ -1724,7 +1725,8 @@ def main() -> int:
         if a.smoke:
             print(f"site-smoke --base {base}")
             smoke = subprocess.run(["uv", "run", str(ROOT / "tools/site-smoke.py"), str(a.site), "--base", base,
-                                    "--dist", str(a.dist), "--art", str(a.art)], cwd=ROOT).returncode
+                                    "--dist", str(a.dist), *(["--beta-dist", str(a.beta_dist)] if a.beta_dist else []),
+                                    "--art", str(a.art)], cwd=ROOT).returncode
     finally:
         if proc:
             stop(proc)
