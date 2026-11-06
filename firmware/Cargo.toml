@@ -145,6 +145,52 @@ lto = "off"            # ESP-IDF does not tolerate LTO well
 # fw-release, CI and release.yml.
 codegen-units = 1
 
+# Size, not speed, for dependencies no frame runs (docs/research/size-budget.md
+# "fw-size"): request-body JSON (serde, serde_json; zmij is the float printer
+# behind serde_json's error text, and at "s" it drops its 16.8 KB table), the
+# update signature check (Ed25519 and SHA-2, one bundle per update), and
+# esp-idf-svc/embedded-svc (WiFi, NVS, mDNS, event loop wrappers: CPU0 and
+# start-up). -39.6 KB of the 4mb image together (2,290,480 -> 2,250,848 B).
+# Measured and left at 2: std/alloc/core (+50 KB: their inline code is
+# less inlinable from callers), esp-idf-hal, log and the small utility
+# crates (anyhow, heapless, itoa, memchr, chrono: +1-8 KB). Generic code
+# (serde's deserializers for our types) is compiled in the crate that
+# uses it, at its level. The display's crates stay at 2: opendmd-core,
+# opendmd-psi, gif/weezl/color_quant, the firmware itself (their cold
+# code takes `#[optimize(size)]` per function instead).
+[profile.release.package.serde]
+opt-level = "s"
+[profile.release.package.serde_core]
+opt-level = "s"
+[profile.release.package.serde_json]
+opt-level = "s"
+[profile.release.package.zmij]
+opt-level = "s"
+[profile.release.package.curve25519-dalek]
+opt-level = "s"
+[profile.release.package.ed25519-dalek]
+opt-level = "s"
+[profile.release.package.ed25519]
+opt-level = "s"
+[profile.release.package.sha2]
+opt-level = "s"
+[profile.release.package.digest]
+opt-level = "s"
+[profile.release.package.block-buffer]
+opt-level = "s"
+[profile.release.package.crypto-common]
+opt-level = "s"
+[profile.release.package.hybrid-array]
+opt-level = "s"
+[profile.release.package.signature]
+opt-level = "s"
+[profile.release.package.subtle]
+opt-level = "s"
+[profile.release.package.esp-idf-svc]
+opt-level = "s"
+[profile.release.package.embedded-svc]
+opt-level = "s"
+
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
 gif = { path = "../third_party/gif" }

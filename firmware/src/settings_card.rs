@@ -216,6 +216,8 @@ fn save_locked(s: &Settings, stop: Option<Step>) {
 /// settings in force with the card's values over them (or the file written
 /// from them, the first time). The shared copy is updated; the result, when
 /// it differs from what the main task has, goes in the handover.
+#[optimize(size)] // (CPU0, boot: no frame runs it)
+#[inline(never)]
 pub fn adopt_at_mount(shared: &Arc<Mutex<Settings>>) -> (Settings, Option<Box<Settings>>) {
     let base = shared.lock().unwrap().clone();
     let loaded = {

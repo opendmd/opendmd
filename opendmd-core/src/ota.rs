@@ -55,6 +55,7 @@ pub const MAGIC_8MB: [u8; 8] = *b"ODFW18mb";
 pub const VARIANTS: [&str; 2] = ["4mb", "8mb"];
 
 /// The magic of a bundle for `variant`.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn magic_for(variant: &str) -> Option<[u8; 8]> {
     match variant {
         "4mb" => Some(MAGIC),
@@ -64,6 +65,7 @@ pub fn magic_for(variant: &str) -> Option<[u8; 8]> {
 }
 
 /// The variant a magic names, if it is one.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn variant_of_magic(magic: &[u8]) -> Option<&'static str> {
     if magic == MAGIC {
         Some("4mb")
@@ -76,6 +78,7 @@ pub fn variant_of_magic(magic: &[u8]) -> Option<&'static str> {
 
 /// What a person calls the board a variant is for (the web app, the
 /// installer and the refusals use the same words).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn variant_name(variant: &str) -> &str {
     match variant {
         "4mb" => "DevKit (4 MB)",
@@ -161,6 +164,7 @@ pub enum OtaError {
 }
 
 impl fmt::Display for OtaError {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OtaError::Truncated { have } => {
@@ -232,6 +236,7 @@ impl Header {
     /// A header for a `variant` image of `version`, `length` bytes with
     /// digest `sha256`, signature to be filled in (the tests sign with the
     /// Python tool's vector; the device never signs).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new(
         variant: &str,
         version: &str,
@@ -258,6 +263,7 @@ impl Header {
     /// Parse the first [`HEADER_LEN`] bytes of `bytes`. Checks the magic
     /// (one of the known variants) and the version field's shape; trusts
     /// nothing else.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn parse(bytes: &[u8]) -> Result<Header, OtaError> {
         if bytes.len() < HEADER_LEN {
             return Err(OtaError::Truncated { have: bytes.len() });
@@ -287,12 +293,14 @@ impl Header {
     }
 
     /// The flash layout the bundle is for (`"4mb"`, `"8mb"`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn variant(&self) -> &'static str {
         self.variant
     }
 
     /// The bundle is for `device`'s layout (the player's `FLASH_VARIANT`).
     /// Needs no trust: a refusal, before the signature is checked.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check_variant(&self, device: &str) -> Result<(), OtaError> {
         if self.variant != device {
             return Err(OtaError::WrongVariant {
@@ -304,6 +312,7 @@ impl Header {
     }
 
     /// The version string (`"0.4.0"`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn version(&self) -> &str {
         let used = self
             .version
@@ -314,6 +323,7 @@ impl Header {
     }
 
     /// The bytes the signature covers: magic, version, length, digest.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn signed_bytes(&self) -> [u8; SIGNED_LEN] {
         let mut out = [0u8; SIGNED_LEN];
         out[..8].copy_from_slice(&magic_for(self.variant).unwrap_or(MAGIC));
@@ -324,6 +334,7 @@ impl Header {
     }
 
     /// The header as it is on the wire.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn to_bytes(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         out[..SIGNED_LEN].copy_from_slice(&self.signed_bytes());
@@ -343,6 +354,7 @@ pub struct Meta {
 
 impl Meta {
     /// The image fits a partition of `partition` bytes.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check_fits(&self, partition: u32) -> Result<(), OtaError> {
         if self.length > partition {
             return Err(OtaError::TooLarge {
@@ -355,6 +367,7 @@ impl Meta {
 
     /// The image that arrived (`actual` bytes, first byte `first`, digest
     /// `digest`) is the one the header describes.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn check_image(&self, actual: u64, first: u8, digest: &[u8; 32]) -> Result<(), OtaError> {
         if u64::from(self.length) != actual {
             return Err(OtaError::LengthMismatch {
@@ -378,6 +391,7 @@ impl Meta {
 /// magic names the layout; this checks the image inside agrees, so a 4mb
 /// image signed as 8mb (or the reverse) by mistake is refused too. Call it
 /// after [`Meta::check_image`], when the bytes are known to be the signed ones.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn check_app_desc(prefix: &[u8], variant: &str) -> Result<(), OtaError> {
     let found = app_desc_version(prefix);
     let ok = found
@@ -396,6 +410,7 @@ pub fn check_app_desc(prefix: &[u8], variant: &str) -> Result<(), OtaError> {
 
 /// The app descriptor's version string, from an image's first
 /// [`APP_PREFIX_LEN`] bytes; `None` without the descriptor's magic word.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn app_desc_version(prefix: &[u8]) -> Option<String> {
     let at = APP_DESC_OFFSET;
     let magic = prefix.get(at..at + 4)?;
@@ -410,6 +425,7 @@ pub fn app_desc_version(prefix: &[u8]) -> Option<String> {
 /// Check `header`'s signature against `public_key` (the firmware's
 /// `keys/opendmd.pub`). Strict verification: no malleable signatures, no
 /// small-order keys.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn verify_header(header: &Header, public_key: &[u8; PUBLIC_KEY_LEN]) -> Result<Meta, OtaError> {
     let key = VerifyingKey::from_bytes(public_key).map_err(|_| OtaError::BadKey)?;
     let sig = Signature::from_bytes(&header.sig);
@@ -435,6 +451,7 @@ pub struct ImageHasher {
 }
 
 impl Default for ImageHasher {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn default() -> Self {
         ImageHasher {
             sha: Sha256::default(),
@@ -446,10 +463,12 @@ impl Default for ImageHasher {
 }
 
 impl ImageHasher {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn update(&mut self, data: &[u8]) {
         if self.first.is_none() {
             self.first = data.first().copied();
@@ -464,32 +483,38 @@ impl ImageHasher {
     }
 
     /// Bytes hashed so far.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn len(&self) -> u64 {
         self.len
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// The first byte hashed (0 if none).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn first(&self) -> u8 {
         self.first.unwrap_or(0)
     }
 
     /// The image's first [`APP_PREFIX_LEN`] bytes (zeros past the end of a
     /// shorter one): for [`check_app_desc`].
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn prefix(&self) -> &[u8; APP_PREFIX_LEN] {
         &self.prefix
     }
 
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn finish(self) -> [u8; 32] {
         self.sha.finalize().into()
     }
 }
 
 /// SHA-256 of `data` in one go.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
@@ -501,6 +526,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 /// its header, and the updater names `done-<version>.bin` after. `None`
 /// for a descriptor in any other form (IDF's default, `git describe`), so
 /// the caller falls back to the crate's version.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn version_from_app_desc<'a>(desc: &'a str, variant: &str) -> Option<&'a str> {
     let v = desc.strip_suffix(variant)?.strip_suffix(' ')?;
     (!v.is_empty() && v.len() <= VERSION_LEN && !v.contains(char::is_whitespace)).then_some(v)
@@ -539,6 +565,7 @@ impl KeyTail {
     }
 
     /// The key id the trailer names, `None` without one.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn key_id(&self) -> Option<u8> {
         let t = &self.buf;
         (self.len == KEY_TRAILER_LEN && t[..8] == KEY_TRAILER_MAGIC && t[9..] == [0; 7]).then_some(t[8])
@@ -582,6 +609,7 @@ pub fn verify_header_any(header: &Header, keys: &[(u8, &[u8; PUBLIC_KEY_LEN])]) 
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn version_older(a: &str, b: &str) -> bool {
     use std::cmp::Ordering;
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn split(s: &str) -> (&str, Option<&str>) {
         let s = s.trim();
         let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
@@ -632,6 +660,7 @@ pub fn version_older(a: &str, b: &str) -> bool {
 /// The rollback floor, if the firmware was built with one
 /// (`OPENDMD_OTA_FLOOR`, off by default): a bundle older than `floor` is
 /// refused.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn check_floor(version: &str, floor: Option<&str>) -> Result<(), OtaError> {
     match floor {
         Some(f) if !f.is_empty() && version_older(version, f) => Err(OtaError::BelowFloor {
@@ -696,6 +725,7 @@ pub mod www {
 
     impl PackHasher {
         /// For a pack of `total` bytes (its header's total length).
+        #[cfg_attr(target_arch = "xtensa", optimize(size))]
         pub fn new(total: usize) -> PackHasher {
             PackHasher {
                 sha: ImageHasher::new(),
@@ -771,6 +801,7 @@ pub mod www {
     }
 
     /// The whole check on a pack in memory (the tests, `opendmd-pack`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn verify_bytes(pack: &[u8], keys: &[(u8, &[u8; PUBLIC_KEY_LEN])]) -> Result<u8, OtaError> {
         let header = crate::www_pack::Header::parse(pack).map_err(|_| OtaError::BadMagic)?;
         if !header.signed() || header.total_len as usize != pack.len() {
