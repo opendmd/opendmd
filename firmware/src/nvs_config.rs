@@ -194,7 +194,7 @@ pub struct Settings {
     pub boot_show: ShowLength,
     /// Refresh-synchronised blits (`panel.rs`, `opendmd_core::scan`): wait
     /// for a scan position from which a frame shows no seam. On by
-    /// default since the rig eye test (2026-10-26).
+    /// default since an eye test on a test panel.
     pub panel_sync: bool,
     /// With `panel_sync`: each frame's bottom half (rows 16-31) a refresh
     /// after its top half, so the time each row is lit rises smoothly down

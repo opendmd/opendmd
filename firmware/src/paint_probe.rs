@@ -4,7 +4,7 @@
 //! two points, measured on the device. No compiler in the image (the
 //! psi-probe's does not fit the 4mb layout beside its own rows): build.rs
 //! compiles every case (`paint_cases`). `make emu-image-paint` builds it
-//! for the spare's 4mb layout; `make emu-paint-probe` boots it in the
+//! for a test board's 4mb layout; `make emu-paint-probe` boots it in the
 //! emulator (correctness only: its timings mean nothing).
 //!
 //! Run once a boot on the main task (CPU1, as the psi-probe), when the boot

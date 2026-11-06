@@ -17,7 +17,7 @@ Per scenario it reports, from Chrome's own network events (CDP):
   - the bytes the thumbnails used (js/thumbs.js `stats.bytes`) and what
     each cut-off read brought the browser (`per_cut`; whole reads, such as
     a Details preview's file, are left out: counting them made "tail per
-    cut" 9,488 B on the spare). What the device sent after a cut never reaches the browser (the
+    cut" 9,488 B on a test board). What the device sent after a cut never reaches the browser (the
     proxy stops reading when the browser hangs up, as the browser would):
     read it in the device's log, the "client went away" lines' byte counts;
   - new TCP connections (distinct connection ids; a cut read closes one);

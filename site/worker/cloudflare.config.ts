@@ -13,7 +13,7 @@
 //
 //   make site-dev            cf dev on http://localhost:8787 (SITE_DEV_PORT), serving target/site
 //   make site-deploy-check   cf deploy --dry-run: builds and checks, uploads nothing
-//   make site-deploy         make site, then cf deploy (the owner's OAuth login, or CLOUDFLARE_API_TOKEN)
+//   make site-deploy         make site, then cf deploy (the maintainer's OAuth login, or CLOUDFLARE_API_TOKEN)
 //
 // What a deploy does with this file as it is: creates or updates the Worker
 // script "opendmd-site" with its assets, on opendmd.dev and www.opendmd.dev

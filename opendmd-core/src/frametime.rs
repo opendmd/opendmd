@@ -46,11 +46,11 @@ const LATE_EDGES: [u64; 6] = [5, 20, 50, 100, 250, 500];
 
 /// A late frame counts in the headline (`steady`, `switch`) from this many
 /// ms late. Under it nothing shows: the panel's own refresh is 10 ms, and on
-/// the rig every steady-play miss but the rare slow card read was 0-1 ms.
+/// a test panel every steady-play miss but the rare slow card read was 0-1 ms.
 pub const HEADLINE_MS: u64 = 5;
 
 /// How long after a new file's first frame went up a miss still counts as
-/// the switch's. On the rig (21.5 min, 161 files, Dissolve 400) every miss
+/// the switch's. On a test panel (21.5 min, 161 files, Dissolve 400) every miss
 /// came within ~360 ms of the first frame and none in steady play; the
 /// default transition runs 383-485 ms. 500 ms covers it without a
 /// transition too (a cut, or one the heap gate refused).

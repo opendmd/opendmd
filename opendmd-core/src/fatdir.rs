@@ -472,7 +472,7 @@ pub struct NextDir {
 /// `/cache/<category>/<bucket>` (categories starting with `.` are not the
 /// cache's). Read raw; what it keeps is two places and two sectors, whatever
 /// the card holds (a card's cache has up to 256 buckets a category: kept as
-/// a list they were the rig's 64 KB allocation that failed, 2026-11-03).
+/// a list they were a test panel's 64 KB allocation that failed, 2026-11-03).
 /// Directories with a name that is not ASCII are left out (their files
 /// open by path).
 pub struct Cursor {

@@ -46,7 +46,7 @@ and `now_playing.formula` (frame µs, frame ms) over two phases of
    `--upload-kb` KB written to the card and deleted, over and over
    (`/opendmd-stress.bin`).
 
-The owner's rule: work on CPU0 must not reach the display: no late frames
+The rule: work on CPU0 must not reach the display: no late frames
 or missed refreshes. Pass when the stress phase's late frames per 1,000
 raced frames are within the idle phase's + 0.5, its deadline misses within
 idle's + 2 per 40 s, and its frame ms (the governor's step) the same. The
@@ -369,7 +369,7 @@ def one_run(dev, a, path, names, dwell_max, stop, saved):
     stress = phase(s2, s3, a.seconds, extra)
     li, ls = idle["late_per_1000"] or 0, stress["late_per_1000"] or 0
     us_i, us_s = idle["frame_us"] or 0, stress["frame_us"] or 0
-    # The owner's test (2026-11-02): no late frames or missed refreshes
+    # The test: no late frames or missed refreshes
     # caused by non-display work. Late raced frames within idle + 0.5 per
     # 1,000, deadline misses no more than idle's, and no governor step-down
     # (the frame time it holds the Formula to unchanged). A slowdown that

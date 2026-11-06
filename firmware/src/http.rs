@@ -45,7 +45,7 @@ const SETUP_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup.htm
 /// serves no one while it waits, and lwIP drops SYNs once its backlog of
 /// six is full: a frame held up on the card behind an upload's writes held
 /// live edits for 10 s and the polls beside them got no connection at all
-/// (the spare, net-stall run c). The loop takes commands every frame.
+/// (a test board, net-stall run c). The loop takes commands every frame.
 const TAKE_WAIT: Duration = Duration::from_millis(800);
 /// A play, Previous or a pause, once taken: how long its outcome (a 404,
 /// a 409 for a live edit that found no formula, …) is waited for before
@@ -1013,7 +1013,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // net-wedge2: below this the answer is a 503 at once. Its ~3.7 KB of
         // segments stay in lwIP until the client's ACK, and the radio copies
         // each frame into a buffer of its own; the WiFi driver allocates its
-        // receive and transmit buffers from the same heap, and on the spare
+        // receive and transmit buffers from the same heap, and on a test board
         // a heap taken to 8 KB under five uploads at once left device-sent
         // frames undelivered for seconds (every refusal 10.5 s late: the
         // third send of a first segment, lwIP's 1.5 + 3 + 6 s).
@@ -1498,7 +1498,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // A directory listing reads the directory under the FAT lock, ~0.5 s
     // for gifs/Consoles at 40 MHz and 2.3 s on a 20 MHz card, streamed: on
-    // the httpd task it held `/api/status` that long (measured on the spare,
+    // the httpd task it held `/api/status` that long (measured on a test board,
     // 2026-10-26). So it goes out from the stream task, queued like a file
     // (a full queue for 2 s: 503 + Retry-After: 1, retried by the web app).
     server.route("/api/files", Method::Get, #[optimize(size)] |req| {
@@ -3682,7 +3682,7 @@ fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         }
         opendmd_core::synth::set_sent(None);
         // At the door: the bytes, the floor, a transfer's swing, and a
-        // block that size (the rig's ring: a 9 KB block refused at 39 KB
+        // block that size (a test panel's ring: a 9 KB block refused at 39 KB
         // free). Then `try_reserve`: `vec!` would abort the board.
         if !admitted(req, Ask::held(len as u32))? {
             return Ok(());

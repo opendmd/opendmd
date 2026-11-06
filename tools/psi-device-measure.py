@@ -1,7 +1,7 @@
 # /// script
 # dependencies = []
 # ///
-"""Play each Formula on the spare and record its now_playing.formula timing."""
+"""Play each Formula on a device and record its now_playing.formula timing."""
 import json, sys, time, urllib.request, pathlib
 HOST = sys.argv[1]; OUT = sys.argv[2]; PATHS = sys.argv[3:]
 def req(method, path, body=None):

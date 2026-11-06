@@ -1501,7 +1501,7 @@ def reachable(site: Path) -> None:
                 todo.append(nxt)
     moved = {ln.split()[0].lstrip("/") for ln in (site / "_redirects").read_text().splitlines() if ln.strip()}
     pages = {p.relative_to(site).as_posix() for p in site.rglob("*.html")}
-    # /stats is public but unlinked on purpose (the owner's call).
+    # /stats is public but unlinked on purpose.
     unlinked = {"404.html", "stats.html"}
     want = {p for p in pages if not p.startswith("demo/") and p not in unlinked and p not in moved}
     missing = sorted(want - seen)

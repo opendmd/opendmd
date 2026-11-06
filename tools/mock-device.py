@@ -498,7 +498,7 @@ JSON_ROUTES = {
 FORMAT_SECS = 3.0                      # POST /api/card/format's simulated format
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
 
-# firmware config::BRIGHTNESS_SAFE_MAX (128: measured on the rig, see there);
+# firmware config::BRIGHTNESS_SAFE_MAX (128: measured on a test panel, see there);
 # the ceiling's range is opendmd-core brightness::MIN_MAX..=255.
 BRIGHTNESS_SAFE_MAX = 144
 # firmware config::SAFE_START: /api/status `safe_start_until` is this (uptime
@@ -2346,7 +2346,7 @@ class Player:
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
         self.started(self.current())
-        # The real rig: ~1 file start in 10 has its first frame a few ms
+        # A real panel: ~1 file start in 10 has its first frame a few ms
         # late (the open); steady play almost never misses, and then by 1 ms.
         if random.random() < 0.1:
             self.record_miss("open", random.randint(0, 7), steady=False)

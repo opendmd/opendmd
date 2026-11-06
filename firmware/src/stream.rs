@@ -43,7 +43,7 @@
 //! comes (see "The receive side" in `sdkconfig.defaults`). The window caps
 //! the bytes, not the frames: in the emulator a waiting upload held five
 //! buffers for 2.6 KB of small segments, and the one being received starved
-//! on the one left (a 408 after 5 s of nothing, as on the spare under two
+//! on the one left (a 408 after 5 s of nothing, as on a test board under two
 //! uploads at once). So a second upload is refused at once with a `503` and
 //! `Retry-After` (never waited for on the httpd task either, where its frames
 //! would be held as well), and the web app asks again; a refused upload
@@ -68,7 +68,7 @@
 //! `/api/cache/list`, `/api/cache/failed`): each reads card directories or
 //! files under the FAT lock for as long as it streams — `gifs/Consoles` took
 //! 2.3 s on a 20 MHz card — and on the httpd task that held `/api/status`
-//! (and every other API call) for the whole time (the spare, 2026-10-26).
+//! (and every other API call) for the whole time (a test board, 2026-10-26).
 //! Here a listing takes ~0.3 s longer (the same spare, its marginal 64 GB
 //! card at 20 MHz: `gifs/Consoles` 2.6-2.7 s against 2.2-2.3 s on the httpd
 //! task, this task being below httpd), and `/api/status` stayed under 80 ms
@@ -216,7 +216,7 @@ enum Job {
 /// (priority 2), on the same core, and a FreeRTOS yield only goes to tasks of
 /// equal or higher priority — so when the receiver was preempted in that
 /// window, httpd spun forever, starved IDLE0 (task watchdog every 5 s) and
-/// took WiFi down with it. Found on the rig under a page-load burst. A mutex
+/// took WiFi down with it. Found on a test panel under a page-load burst. A mutex
 /// blocks instead of spinning, and FreeRTOS mutexes inherit priority.
 struct Queue {
     jobs: Mutex<VecDeque<Job>>,
@@ -294,7 +294,7 @@ where
 /// and copies (`/gifs/`, `/cache/`) wait `Duration::ZERO`: the web app
 /// retries those, and each wait would be time of the httpd task — and
 /// `/api/status` — spent waiting for the stream task (five folders opened
-/// at once with thumbnails held status 1.1-2.0 s on the spare, listing-c).
+/// at once with thumbnails held status 1.1-2.0 s on a test board, listing-c).
 pub fn hand_off_within<F>(req: &mut Req, wait: Duration, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,

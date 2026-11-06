@@ -1039,7 +1039,7 @@ def details_do(page: Page, item: str) -> None:
 # their weight, file format ('.meta') or raw field syntax ('w=').
 LEAK = re.compile(r"odm|bucket|weight|\.meta|w=|never", re.I)
 
-# Names of playlists the user made are their content, not UI copy (the rig's
+# Names of playlists the user made are their content, not UI copy (a test panel's
 # card has bench sets called "odm" and "odmb"); filled in by device_pass.
 user_names: set[str] = set()
 
@@ -6314,7 +6314,7 @@ GC_HITS = [  # GifCities' JSON (gifcities.archive.org/api/v1/gifsearch): three s
 # blob.gifcities.org (SeaweedFS) answers with a CORS header only when the
 # request carries Origin. A plain <img> sends none, so if the tiles were
 # plain images Chromium's cache would hand the later fetch() of the bytes a
-# no-CORS entry and it would fail (seen on the rig, 2026-10-01); the tiles
+# no-CORS entry and it would fail (seen on a test panel, 2026-10-01); the tiles
 # load with crossOrigin so the cache entry serves both.
 def gc_blob_headers(request):
     h = {"content-type": "image/gif", "cache-control": "max-age=3600"}
@@ -6387,7 +6387,7 @@ def find_checks(page: Page) -> None:
     dims = page.eval_on_selector_all("#find-grid .find-hit small", "els => els.map(e => e.textContent)")
     check(dims == ["64×64", "88×31", "50×120"], f"find: 3 of 3, best match first, sizes shown ({dims})")
     page.wait_for_function("[...document.querySelectorAll('#find-grid img')].every(i => i.complete && i.naturalWidth === 88)", timeout=10000)
-    # Routed answers never enter Chromium's cache, so the rig's failure (a
+    # Routed answers never enter Chromium's cache, so a test panel's failure (a
     # plain <img> entry served to fetch()) cannot be reproduced here: check
     # its cause instead — every tile asked with Origin (crossOrigin set).
     check(len(origins) >= 3 and all(origins), f"find: the tiles load with CORS (Origin sent on {sum(1 for o in origins if o)} of {len(origins)})")

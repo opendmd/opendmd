@@ -595,7 +595,7 @@ const _: () = assert!(sys::CONFIG_FATFS_FS_LOCK == 0);
 /// the volume lock twice (its `f_sync` and its own check) to mark it closed;
 /// so it is freed without: the player's close of the outgoing GIF at a
 /// switch (in the tick) waited there behind a card write holding the lock,
-/// hundreds of ms during saves (the rig's "transition" misses). A FIL
+/// hundreds of ms during saves (a test panel's "transition" misses). A FIL
 /// opened for writing (none today) still goes through `f_close`.
 ///
 /// # Safety
@@ -1309,7 +1309,7 @@ pub fn tick() {
                 *g = None;
                 DIRTY.store(true, Relaxed);
                 // A build cut short by a restart or a crash left its files
-                // (~255 KB on the rig): no job is under way after a mount.
+                // (~255 KB on a test panel): no job is under way after a mount.
                 drop(g);
                 for f in [TMP, NEW, NAMES_NEW] {
                     let _ = fs::remove_file(f);
@@ -1395,7 +1395,7 @@ pub fn tick() {
 
 /// The emulator's spare-sized heap (feature `emu-ballast`): once, 12 s
 /// after boot (playing), heap taken in 2 KB blocks and kept until ~45 KB is
-/// free, as on the spare while it plays.
+/// free, as on a test board while it plays.
 #[cfg(feature = "emu-ballast")]
 fn ballast() {
     static DONE: AtomicBool = AtomicBool::new(false);

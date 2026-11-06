@@ -522,7 +522,7 @@ pub struct Compositor {
 /// be taken: its own ([`BUFFER_BYTES`]) plus what the new file's decoder
 /// still has to allocate for its first frame ([`GIF_FIRST_FRAME_BYTES`] for
 /// a GIF — the transition starts *before* that frame is decoded, so a gate
-/// that ignored it would let the LZW allocation fail: found on the rig, an
+/// that ignored it would let the LZW allocation fail: found on a test panel, an
 /// abort in `weezl::Decoder::new`). False and the file cuts in instead. The
 /// firmware's keeps a heap reserve; a plain `fn` so the core stays free of
 /// platform types.

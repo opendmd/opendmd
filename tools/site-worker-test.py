@@ -183,7 +183,7 @@ def start_dev(site: Path, port: int, gallery_source: str, relay_upstream: str = 
         with sqlite3.connect(db) as c:
             if c.execute("select 1 from sqlite_master where name = 'gallery'").fetchone():
                 c.executescript("delete from gallery; delete from gallery_refused; delete from meta; delete from counts;")
-                # The relay's host denylist (src/relay.ts, meta 'relay_deny'), as the owner would set it.
+                # The relay's host denylist (src/relay.ts, meta 'relay_deny'), as the maintainer would set it.
                 c.execute("insert into meta (key, value) values ('relay_deny', ?)", (RELAY_DENY,))
                 wiped += 1
     if wiped != 1:

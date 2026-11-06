@@ -171,7 +171,7 @@ ESP_SYSTEM_INIT_FN(hub75_early_blank, CORE, BIT(0), 2) {
  * descriptor the DMA is on, and hub75_scan_pos reports that descriptor's
  * start, so a reading is coarse: it lags by up to one descriptor's time —
  * ~102 us inside a pair's first descriptor (2,048 B, every colour plane;
- * on the rig's measured clock), ~13 us inside the others — and with burst
+ * on a test panel's measured clock), ~13 us inside the others — and with burst
  * prefetch it may already show the next descriptor, leading by as much.
  * The pacer absorbs this in its per-pair write allowance (300 us, 450 us
  * tinted, against ~74 us measured for a full pair), not in its 30 us

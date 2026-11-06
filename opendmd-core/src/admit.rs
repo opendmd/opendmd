@@ -10,7 +10,7 @@
 //! from the same heap as frames arrive, up to ~13.6 KB with eight of them
 //! held). Two numbers decide: the free heap, and the **largest free
 //! block** — a heap with 39 KB free can still have no 9 KB block (the
-//! rig's restart ring: `last failed alloc: 9069 B at 1381 s, 39148 B
+//! test panel's restart ring: `last failed alloc: 9069 B at 1381 s, 39148 B
 //! free`), and an allocation Rust cannot take aborts the board.
 //!
 //! A request names the biggest single block it will take ([`Ask::block`])

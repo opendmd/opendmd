@@ -415,7 +415,7 @@ fn transfer_locked(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
 /// After a failed transfer, under [`IO`]: `STOP_TRANSMISSION` (CMD12),
 /// then a status read (CMD13), results ignored. The driver returns from a
 /// multi-block read at the first bad block's CRC without stopping the
-/// card, which keeps sending data and answers nothing else: on the spare's
+/// card, which keeps sending data and answers nothing else: on a test board's
 /// 64 GB card the retry at the safe clock and the transfers after it
 /// failed that way (three errors in a row, a card-failure restart) until
 /// this was added. A card that is not mid-transfer refuses CMD12.
@@ -427,7 +427,7 @@ fn transfer_locked(write: bool, op: &mut dyn FnMut() -> bool) -> DRESULT {
 /// mid-write fails that retry and what follows until the card-failure
 /// trip restarts the device (the old path). Sending the token ourselves
 /// (a raw frame through `sdspi_host_start_command`) was written and not
-/// kept: 60 uploads at 40 MHz on the spare's card never failed a write,
+/// kept: 60 uploads at 40 MHz on a test board's card never failed a write,
 /// so it could not be shown to work.
 fn stop_locked() {
     let card = CARD.load(Relaxed);

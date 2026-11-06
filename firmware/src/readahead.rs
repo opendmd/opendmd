@@ -2,7 +2,7 @@
 //! reading raw (`fatidx`), kept ahead of its position by a task on CPU0 and
 //! served to its reads from memory (`opendmd_core::readahead::Ring`).
 //!
-//! The marginal card in the spare (iso14) had stretches where a read took
+//! The marginal card in a test board (iso14) had stretches where a read took
 //! ten times its time (~11 ms a block, ~20 ms at worst) and others where a
 //! read queued ~45 ms behind a write's busy time. The display core read the
 //! card in its frame for both; with this it reads memory, and the filling
@@ -22,12 +22,12 @@
 //!   the network worker wakes it ([`tick`]). Until 2026-11-03 it was a task
 //!   started for each file, which ended after it: every start and end cost
 //!   a std thread's ~190 B that never came back (`task::spawn_core0`), the
-//!   spare's heap filling with small blocks GIF by GIF. Its ring (8 KB) and
+//!   test board's heap filling with small blocks GIF by GIF. Its ring (8 KB) and
 //!   block (2 KB) are taken when a file is followed and the heap has room,
 //!   and given back at a switch (before the next decoder and the
 //!   transition) and after 5 s without a read (a Formula plays from
 //!   memory). A ring kept for good would cost the heap 10 KB at all times:
-//!   on the spare (38-45 KB free while playing) that is the transition
+//!   on a test board (38-45 KB free while playing) that is the transition
 //!   gate's margin.
 
 use opendmd_core::fatread::{Extents, RawFile};

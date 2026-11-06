@@ -51,7 +51,7 @@ pub const TAKE_HEAP: usize = 48 * 1024;
 /// saved formula that does not build (an `@fx:` value from before no-fx,
 /// or one a later build refuses) is 0: nothing is drawn, so nothing holds
 /// the heap or keeps a Formula from its still cache (consolea-a: such a
-/// value on the spare cost Time gate its cache, 5.1 → 14.4 ms); its
+/// value on a test board cost Time gate its cache, 5.1 → 14.4 ms); its
 /// reason is [`ERROR`].
 pub static SOURCE: AtomicU8 = AtomicU8::new(0);
 
@@ -115,7 +115,7 @@ mod with_psi {
     /// A refused take is asked again no sooner than this.
     const RETRY: Duration = Duration::from_secs(1);
     /// After a yield to low heap, the buffers are taken again only once
-    /// the heap has stayed at `TAKE_HEAP` for this long (the spare, 3
+    /// the heap has stayed at `TAKE_HEAP` for this long (a test board, 3
     /// downloads at once: free swings above 48 KB between requests, and a
     /// 1 s retry took and gave back the buffers in a loop).
     const CALM: Duration = Duration::from_secs(10);

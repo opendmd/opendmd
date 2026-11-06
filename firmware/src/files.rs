@@ -302,7 +302,7 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
 /// directory flag comes free from `readdir`'s `d_type`, but a size means
 /// `stat`, and FAT's `f_stat` re-walks the directory from its first entry every
 /// time: listing that same directory with sizes is quadratic and took **108 s**
-/// on the rig, against well under a second without. Worse, it is 3,781
+/// on a test panel, against well under a second without. Worse, it is 3,781
 /// directory scans over the same SPI bus the player is reading GIFs through —
 /// measured, it starved the display loop into an out-of-memory abort. Without
 /// sizes, `"size"` is `null`.

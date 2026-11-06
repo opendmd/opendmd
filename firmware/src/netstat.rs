@@ -1,5 +1,5 @@
 //! `/api/status` `net` (net-wedge2): the network side's heap floor and
-//! lwIP's state, for measuring the spare under simultaneous uploads.
+//! lwIP's state, for measuring a test board under simultaneous uploads.
 //!
 //! - **The heap as the network side meets it** ([`sample`]): the display
 //!   loop's `heap.floor` is read on CPU1 between frames, and `idf_min` says

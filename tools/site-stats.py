@@ -5,7 +5,7 @@
 /stats shows, read from the opendmd-site D1 (the counts table,
 site/worker/migrations/0006_counts.sql).
 
-    uv run tools/site-stats.py                  production, through cf d1 query (the owner's login)
+    uv run tools/site-stats.py                  production, through cf d1 query (the maintainer's login)
     uv run tools/site-stats.py --sqlite FILE    a local D1's SQLite file (cf dev's, under
                                                 site/worker/.wrangler/state), opened read-only
 

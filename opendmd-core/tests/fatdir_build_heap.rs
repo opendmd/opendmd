@@ -2,7 +2,7 @@
 //! test says so and passes without them) shaped like a card: `/gifs/<folder>`
 //! and the copies' buckets `/cache/<category>/<xx>/`. The build
 //! (`fatdir::Cursor`, `walk`, `gather`, `tmp_dirs`, as the device runs it) must allocate nothing,
-//! however many folders and buckets the card has: on the rig (~10,000 GIFs,
+//! however many folders and buckets the card has: on a test panel (~10,000 GIFs,
 //! ~5,000 buckets) a list of the buckets was a 64 KB allocation that failed
 //! and aborted the board. Every file with a long name gets its record; the
 //! folders' names are the ones FatFs lists (long, or 8.3 with NT case).
