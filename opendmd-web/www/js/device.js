@@ -106,7 +106,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   // "idle"): one sentence, and whether it may also do so, a little, while
   // playing ("always": only while a prepared file plays).
   const autoLine = h('span', { id: 'pc-auto' });
-  const pcH = h('h3', 'Playback cache'), pcRun = saver(pcH);
+  const pcH = h('h3', 'Ready to play'), pcRun = saver(pcH);
   const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: () => pcRun(async () => {
     await app.src.putConfig({ auto_prepare: always.checked ? 'always' : 'idle' }); await app.refreshConfig(); loadCache();
   }) });

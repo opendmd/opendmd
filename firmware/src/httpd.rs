@@ -267,7 +267,7 @@ fn gate(req: &mut Req) -> Option<bool> {
     // Where the setup network sends a page it does not serve.
     let portal = || {
         let ip = NAMES.lock().unwrap_or_else(|p| p.into_inner())[2].clone();
-        format!("http://{}/", if ip.is_empty() { "192.168.4.1" } else { &ip })
+        format!("http://{}/", if ip.is_empty() { "192.168.71.1" } else { &ip })
     };
     // A `Host` too long to read is refused like a foreign one; none at all
     // (an HTTP/1.0 script) is not a browser, so not a rebinding.

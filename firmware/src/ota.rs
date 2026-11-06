@@ -63,7 +63,7 @@ pub const PUBLIC_KEY: &[u8; 32] = include_bytes!("../keys/opendmd.pub");
 pub const KEYS: &[(u8, &[u8; 32])] = &[(0, PUBLIC_KEY)];
 
 /// The rollback floor (docs/ota.md): built with `OPENDMD_OTA_FLOOR=<version>`
-/// (`make fw-release FW_OTA_FLOOR=...`), a bundle older than it is refused.
+/// (in the environment of the firmware build; no Makefile variable sets it), a bundle older than it is refused.
 /// Off by default: any validly signed bundle goes, older ones too.
 const OTA_FLOOR: Option<&str> = option_env!("OPENDMD_OTA_FLOOR");
 
