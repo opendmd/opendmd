@@ -24,8 +24,18 @@
 # 4. Assets: release.yml's list, SHA256SUMS, and the release notes.
 # 5. Site: make site with the public gallery repo's gallery/ and dev/api/
 #    (a fresh sparse clone) and this release's API page frozen; release.yml's
-#    release.json and installer checks; site-smoke; site-deploy-check (cf
-#    deploy --dry-run, uploads nothing); the tree clean after it all.
+#    release.json, beta.json and installer checks; site-smoke;
+#    site-deploy-check (cf deploy --dry-run, uploads nothing); the tree clean
+#    after it all.
+#
+# The channels (docs/deploying.md "Betas"): install/release.json names the
+# newest final release, install/beta.json the newest release of all (what
+# players with Get beta updates on read). A final X.Y.Z, or a beta before
+# any final exists, updates both (and the installer). A beta after a final
+# updates beta.json only: the site is built with the last final's files
+# from its GitHub release (DIST, checked against its SHA256SUMS: read only)
+# and this beta's (BETA_DIST), so release.json and the Install button stay
+# on the final and the beta gets install/firmware/beta/ and its own button.
 # 6. Publish (--publish only): main fast-forwarded to the release commit;
 #    the commit and the tag pushed to GitHub (https, gh's credentials) and to
 #    origin (the local mirror); the GitHub release (pre-release for a "-"
@@ -247,6 +257,23 @@ else
   pass "$VERSION is newer than the latest release, ${latest:-none}"
 fi
 
+# The channel: the newest final release other than this one (tags here and on GitHub).
+FINAL=
+while read -r t; do
+  v=${t#v}; valid_version "$v" || continue
+  [[ $v == *-* ]] || [ "$v" = "$VERSION" ] && continue
+  if [ -z "$FINAL" ] || [ "$(semver_cmp "$v" "$FINAL")" = 1 ]; then FINAL=$v; fi
+done < <(git tag -l 'v*'; awk '{ sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $2); print $2 }' <<<"$REMOTE_TAGS")
+if [ "$KIND" = prerelease ] && [ -n "$FINAL" ]; then
+  [ "$(semver_cmp "$VERSION" "$FINAL")" = 1 ] || die "$VERSION is not newer than the final release $FINAL"
+  CHANNEL=beta REL_VERSION=$FINAL
+  gh release view "v$FINAL" -R "$GH_REPO" >/dev/null 2>&1 || die "the final release v$FINAL has no GitHub release to take its files from"
+  pass "channel: beta (a beta after the final $FINAL): beta.json names $VERSION; release.json and the installer stay on $FINAL"
+else
+  CHANNEL=both REL_VERSION=$VERSION
+  pass "channel: both ($( [ "$KIND" = release ] && echo 'a final release' || echo 'a beta before any final release')): release.json and beta.json name $VERSION"
+fi
+
 [ -f "$FW_SIGN_KEY" ] || die "no signing key at $FW_SIGN_KEY"
 [ "$(stat -c %s "$FW_SIGN_KEY")" -eq 32 ] || die "$FW_SIGN_KEY is not a 32-byte key"
 [ $(( 8#$(stat -c %a "$FW_SIGN_KEY") & 8#077 )) -eq 0 ] || die "$FW_SIGN_KEY is readable by others (mode $(stat -c %a "$FW_SIGN_KEY")): chmod 600 it"
@@ -299,7 +326,8 @@ STAMP=$REL/built
 built_ok() {
   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$RELEASE_COMMIT" ] && [ -f "$ASSETS/SHA256SUMS" ] &&
     (cd "$ASSETS" && sha256sum --quiet -c SHA256SUMS) &&
-    [ "$(jq -r .version "$SITE/install/release.json" 2>/dev/null)" = "$VERSION" ]
+    [ "$(jq -r .version "$SITE/install/beta.json" 2>/dev/null)" = "$VERSION" ] &&
+    [ "$(jq -r .version "$SITE/install/release.json" 2>/dev/null)" = "$REL_VERSION" ]
 }
 
 if [ "$RESUME" = 1 ] && built_ok; then
@@ -358,7 +386,7 @@ else
   (cd "$ASSETS" && sha256sum -- * | tee SHA256SUMS)
   V=$VERSION
   WHICH="$(printf '%s\n' \
-    'Two builds, one per board (the browser installer at https://opendmd.dev/install/ offers the DevKit; the 8 MB build is for a board in development):' '' \
+    "Two builds, one per board (the browser installer at https://opendmd.dev/install/ offers the DevKit$( [ "$CHANNEL" = beta ] && echo ", this beta under \"Or install the beta\"" ); the 8 MB build is for a board in development):" '' \
     '| file | DevKit (4 MB): ESP32 DevKit V1 | 8 MB build: for a board in development |' \
     '|---|---|---|' \
     "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` | \`opendmd-$V-8mb.odfw\` |" \
@@ -391,37 +419,79 @@ else
   git -C "$g" checkout -q
   mkdir -p "$g/gallery" "$g/dev/api"
   pass "public gallery repo: $(find "$g/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files, $(find "$g/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
+  # The release.json side: this build, or (a beta after a final) the final's
+  # files from its GitHub release, downloaded here (read only) and checked.
+  if [ "$CHANNEL" = beta ]; then
+    FINAL_DIST=$REL/final-dist
+    rm -rf "$FINAL_DIST"; mkdir -p "$FINAL_DIST"
+    gh release download "v$FINAL" -R "$GH_REPO" -D "$FINAL_DIST" || die "cannot download v$FINAL's assets"
+    (cd "$FINAL_DIST" && sha256sum --quiet -c SHA256SUMS) || die "v$FINAL's assets do not match its SHA256SUMS"
+    for v in 4mb 8mb; do
+      [ "$(jq -r .version "$FINAL_DIST/manifest-$v.json")" = "$FINAL" ] || die "v$FINAL's manifest-$v.json is not $FINAL"
+      uv run --quiet tools/fw-sign.py verify "$FINAL_DIST/opendmd-$FINAL-$v.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
+        die "v$FINAL's opendmd-$FINAL-$v.odfw does not verify against firmware/keys/opendmd.pub"
+      uv run --quiet tools/fw-sign.py inspect "$FINAL_DIST/opendmd-$FINAL-$v.odfw" > "$REL/inspect-final-$v.txt"
+    done
+    pass "v$FINAL's assets from its GitHub release (SHA256SUMS, manifests, bundles verify) in $FINAL_DIST"
+    SITE_DISTS=(DIST="$FINAL_DIST" BETA_DIST="$DIST")
+  else
+    SITE_DISTS=(DIST="$DIST")
+  fi
   rm -rf "$SITE"
-  make site "${MK[@]}" SITE="$SITE" GALLERY="$g/gallery" API_ARCHIVE="$g/dev/api" API_FREEZE=yes
-  pass "make site"
+  make site "${SITE_DISTS[@]}" SITE="$SITE" GALLERY="$g/gallery" API_ARCHIVE="$g/dev/api" API_FREEZE=yes
+  pass "make site (${SITE_DISTS[*]})"
 
-  step "5b. Check the site's release.json and installer"
+  step "5b. Check the site's release.json, beta.json and installer"
   inst=$SITE/install
-  cat "$inst/release.json"
-  [ "$(jq -r .version "$inst/release.json")" = "$VERSION" ] || die "release.json's version is not $VERSION"
-  [ "$(jq -r .firmware "$inst/release.json")" = "firmware/opendmd-$VERSION-4mb.odfw" ] || die "release.json's firmware is not the 4mb bundle"
-  pass "release.json: version $VERSION, firmware the 4mb bundle"
-  for v in 4mb 8mb; do
-    f="$(jq -r ".variants[\"$v\"].firmware" "$inst/release.json")"
-    [ "$f" = "firmware/opendmd-$VERSION-$v.odfw" ] || die "release.json's variants.$v.firmware is '$f'"
-    cmp "$inst/$f" "$DIST/opendmd-$VERSION-$v.odfw" || die "$inst/$f is not dist's"
-    l="$(jq -r ".variants[\"$v\"].layout" "$inst/release.json")"
-    grep -qx "layout   v$l (current)" "$REL/inspect-$v.txt" || die "release.json's variants.$v.layout is '$l', not the bundle's table"
-    pass "release.json variants.$v.firmware is dist's bundle, layout v$l"
-  done
+  # check_feed FILE VER DIR SRC INSPECT: install/FILE names VER's bundles and
+  # www pack under install/DIR/, byte for byte SRC's (a dist), each layout
+  # the one its bundle is for (INSPECT: fw-sign.py inspect's output, per layout).
+  check_feed() {
+    local file=$1 ver=$2 dir=$3 src=$4 insp=$5 f l v
+    cat "$inst/$file"
+    [ "$(jq -r .version "$inst/$file")" = "$ver" ] || die "$file's version is not $ver"
+    [ "$(jq -r .firmware "$inst/$file")" = "$dir/opendmd-$ver-4mb.odfw" ] || die "$file's firmware is not the 4mb bundle"
+    for v in 4mb 8mb; do
+      f="$(jq -r ".variants[\"$v\"].firmware" "$inst/$file")"
+      [ "$f" = "$dir/opendmd-$ver-$v.odfw" ] || die "$file's variants.$v.firmware is '$f'"
+      cmp "$inst/$f" "$src/opendmd-$ver-$v.odfw" || die "$inst/$f is not $src's"
+      l="$(jq -r ".variants[\"$v\"].layout" "$inst/$file")"
+      grep -Eq "^layout   v$l( |\$)" "$insp-$v.txt" || die "$file's variants.$v.layout is '$l', not the bundle's table"
+    done
+    f="$(jq -r .www "$inst/$file")"
+    [ "$f" = "$dir/opendmd-$ver-www.pack" ] && cmp "$inst/$f" "$src/opendmd-$ver-www.pack" || die "$file's www is '$f', not $src's pack"
+    pass "$file: version $ver, every layout's bundle and the www pack under install/$dir/ ($src's)"
+  }
+  if [ "$CHANNEL" = beta ]; then
+    check_feed release.json "$FINAL" firmware "$FINAL_DIST" "$REL/inspect-final"
+    check_feed beta.json "$VERSION" firmware/beta "$DIST" "$REL/inspect"
+    INSTALL_SRC=$FINAL_DIST
+    grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || die "the install page has no beta button"
+    cmp "$inst/firmware/beta/manifest-4mb.json" "$DIST/manifest-4mb.json" || die "install/firmware/beta/manifest-4mb.json is not this beta's"
+    [ ! -e "$inst/firmware/beta/manifest-8mb.json" ] || die "install/firmware/beta has the hidden 8mb manifest"
+    pass "install page: the beta's own button, its 4mb manifest under firmware/beta/"
+  else
+    check_feed release.json "$VERSION" firmware "$DIST" "$REL/inspect"
+    cmp "$inst/beta.json" "$inst/release.json" || die "beta.json is not release.json (no beta is newer than $VERSION)"
+    [ ! -e "$inst/firmware/beta" ] && ! grep -q 'beta-install' "$inst/index.html" || die "the site has a beta installer, with no beta newer than $VERSION"
+    pass "beta.json is release.json; no beta installer"
+    INSTALL_SRC=$DIST
+  fi
   grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || die "the install page has no 4mb button"
+  grep -q "OpenDMD $REL_VERSION\." "$inst/index.html" || die "the install page does not name $REL_VERSION"
   ! grep -q 'manifest-8mb' "$inst/index.html" || die "the install page offers the hidden 8mb board"
   [ -f "$inst/firmware/manifest-4mb.json" ] || die "install/firmware/manifest-4mb.json is missing"
   [ ! -e "$inst/firmware/manifest-8mb.json" ] || die "install/firmware has the hidden 8mb manifest"
-  cmp "$inst/firmware/manifest.json" "$DIST/manifest-4mb.json" || die "install/firmware/manifest.json is not the 4mb manifest"
-  pass "install page: the 4mb button only, its manifest published, the 8mb one not"
+  cmp "$inst/firmware/manifest-4mb.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest-4mb.json is not $REL_VERSION's"
+  cmp "$inst/firmware/manifest.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest.json is not the 4mb manifest"
+  pass "install page: $REL_VERSION's 4mb button only, its manifest published, the 8mb one not"
   [ -f "$SITE/dev/api/$TAG.html" ] || die "the site has no frozen dev/api/$TAG.html"
   grep -q "OpenDMD $VERSION" "$SITE/dev/api/$TAG.html" || die "dev/api/$TAG.html does not name $VERSION"
   grep -q "api/$TAG.html" "$SITE/dev/api.html" || die "dev/api.html does not link $TAG.html"
   pass "this release's API page frozen: dev/api/$TAG.html, linked from dev/api.html"
 
   step "5c. site-smoke"
-  make site-smoke "${MK[@]}" SITE="$SITE"
+  make site-smoke "${SITE_DISTS[@]}" SITE="$SITE"
   pass "make site-smoke"
 
   step "5d. site-deploy-check (cf deploy --dry-run: uploads nothing)"
@@ -530,14 +600,17 @@ echo "$out"
 case $out in *"no changes"*) skip "the gallery repo already has $TAG's files" ;; *) published "gallery repo updated: $out" ;; esac
 
 step "6f. The site on Cloudflare (opendmd.dev)"
-live_version() { curl -fsS -A "$UA" "$SITE_URL/install/release.json?release-sh=$(date +%s%N)" 2>/dev/null | jq -r .version 2>/dev/null || true; }
-if [ "$(live_version)" = "$VERSION" ]; then
-  skip "$SITE_URL/install/release.json already says $VERSION"
+# (beta.json names this release whatever the channel; release.json this
+# one, or for a beta after a final, the final still.)
+live_version() { curl -fsS -A "$UA" "$SITE_URL/install/$1?release-sh=$(date +%s%N)" 2>/dev/null | jq -r .version 2>/dev/null || true; }
+live_ok() { [ "$(live_version beta.json)" = "$VERSION" ] && [ "$(live_version release.json)" = "$REL_VERSION" ]; }
+if live_ok; then
+  skip "$SITE_URL/install/beta.json already says $VERSION, release.json $REL_VERSION"
 else
   make site-deploy-built SITE="$SITE" || die "make site-deploy-built failed"
-  for _ in $(seq 36); do [ "$(live_version)" = "$VERSION" ] && break; sleep 5; done
-  [ "$(live_version)" = "$VERSION" ] || die "deployed, but $SITE_URL/install/release.json still says '$(live_version)' after 3 minutes"
-  published "site deployed: $SITE_URL/install/release.json says $VERSION"
+  for _ in $(seq 36); do live_ok && break; sleep 5; done
+  live_ok || die "deployed, but $SITE_URL/install/beta.json says '$(live_version beta.json)' and release.json '$(live_version release.json)' after 3 minutes (want $VERSION and $REL_VERSION)"
+  published "site deployed: $SITE_URL/install/beta.json says $VERSION, release.json $REL_VERSION"
 fi
 
 step "Published $TAG"
