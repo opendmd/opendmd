@@ -41,14 +41,15 @@ static void walk(void *arg) {
     int pcbs = 0, tw = 0, rx = 0, tx = 0, rtx = 0, backlog = 0;
     for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
         pcbs++;
-#if TCP_LISTEN_BACKLOG
-        // Established, not accepted yet: no socket, so its frames are in
-        // its netconn's mailbox, which the socket walk below cannot see.
-        if ((p->flags & TF_BACKLOGPEND) && p->state != SYN_RCVD && p->callback_arg) {
+        // Frames waiting in the pcb's netconn mailbox, accepted or not. Only
+        // through the pcb: this thread clears callback_arg when a netconn
+        // lets go of it, and the netconn is freed only after that, so it is
+        // alive here. A socket's own fields (its conn, its half-read pbuf)
+        // belong to the task using it and can be freed under this walk.
+        if (p->state != SYN_RCVD && p->callback_arg) {
             struct netconn *c = (struct netconn *)p->callback_arg;
             if (sys_mbox_valid(&c->recvmbox)) rx += uxQueueMessagesWaiting(c->recvmbox->os_mbox);
         }
-#endif
         if (p->refused_data) rx += pbuf_clen(p->refused_data);
 #if TCP_QUEUE_OOSEQ
         rx += seg_pbufs(p->ooseq);
@@ -61,12 +62,6 @@ static void walk(void *arg) {
     for (struct tcp_pcb_listen *l = tcp_listen_pcbs.listen_pcbs; l; l = l->next)
         if (l->accepts_pending > backlog) backlog = l->accepts_pending;
 #endif
-    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
-        struct lwip_sock *s = lwip_socket_dbg_get_socket(fd);
-        if (!s || !s->conn) continue;
-        if (s->lastdata.pbuf) rx += pbuf_clen(s->lastdata.pbuf);
-        if (sys_mbox_valid(&s->conn->recvmbox)) rx += uxQueueMessagesWaiting(s->conn->recvmbox->os_mbox);
-    }
     opendmd_netstat[0] = pcbs;
     opendmd_netstat[1] = tw;
     opendmd_netstat[2] = rx;
