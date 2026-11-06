@@ -919,7 +919,13 @@ class Lane:
         first = a.events[0][4]
         for k in ("t_ms", "now_playing", "paused", "entries", "manifest", "index_state", "brightness", "sd", "mode", "schedule", "context"):
             self.expect(k in first, "events", f"the event has no `{k}`: {sorted(first)}")
-        self.expect(first["now_playing"]["path"] == self.card_gif, "events", f"the event's path {first['now_playing']['path']}, playing {self.card_gif}")
+        # What the panel plays, as the status says (it may move on meanwhile: one of the next events then).
+        st = api.status()
+        end = time.time() + 15
+        while not any(e[4]["now_playing"]["path"] == st["now_playing"]["path"] for e in a.events) and time.time() < end:
+            time.sleep(0.2)
+        self.expect(any(e[4]["now_playing"]["path"] == st["now_playing"]["path"] for e in a.events), "events",
+                    f"no event names what the status says plays ({st['now_playing']['path']}): {[e[4]['now_playing']['path'] for e in a.events]}")
         time.sleep(6)
         h1 = heap_now()
         b = Listener()
@@ -939,6 +945,16 @@ class Lane:
                     f"{len(idle)} events in 20 s wall while idle, device gaps {ig}: a keep-alive every 3 s wanted")
         self.expect(a.bad == 0 and b.bad == 0, "events", f"{a.bad + b.bad} events that were not the JSON wanted")
         ev_len = max(e[3] for e in a.events)
+
+        def stable(j):
+            np = {k: v for k, v in j["now_playing"].items() if k not in ("elapsed_ms", "frame", "formula")}
+            return {**j, "t_ms": 0, "now_playing": np}
+        changed: dict[str, int] = {}
+        for x, y in zip(idle, idle[1:]):
+            sx, sy = stable(x[4]), stable(y[4])
+            for k in sorted(set(sx) | set(sy)):
+                if sx.get(k) != sy.get(k):
+                    changed[k] = changed.get(k, 0) + 1
         # A skip: an event with the next file, without waiting for the keep-alive.
         st = api.status()
         ordinal, t_skip = st["now_playing"]["ordinal"], st["t_ms"]
@@ -951,7 +967,7 @@ class Lane:
         self.expect(hit is not None, "events", f"no event with the next file within 30 s wall of a skip (ordinal {ordinal})")
         self.ok("events", f"heap free (median of 5 status reads) {h0} B with 0 listeners, {h1} with 1, {h2} with 2 "
                 f"(per listener {h0 - h1}, {h1 - h2} B); a third 503 + Retry-After; idle: {len(idle)} events in 20 s wall, "
-                f"device gaps max {ig[-1]} ms; events up to {ev_len} B; a skip's event {hit[1] - t_skip} ms of device time after the status read before it")
+                f"device gaps max {ig[-1]} ms (changes between them: {changed or 'none, keep-alives'}); events up to {ev_len} B; a skip's event {hit[1] - t_skip} ms of device time after the status read before it")
         self.notes.append(f"events heap: 0/1/2 listeners {h0}/{h1}/{h2} B free, events up to {ev_len} B")
 
         # Rounds of simultaneous 300 KB uploads, both listeners and a status read beside them.
