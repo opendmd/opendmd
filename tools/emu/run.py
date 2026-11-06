@@ -25,11 +25,11 @@ probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0, raw c
        Formula (Neon city, Wormhole run) that is not played; prints EMU_PROBE_OK
        and the correctness lines. A paint-probe image (`make emu-image-paint`) needs only its own
        `paint: N cases, 0 differ`.
-rig:   (with the rig-scale card, `mkcard.py --rig`) wait for the FAT index's build to finish
+rig:   (with the full-scale card, `mkcard.py --rig`) wait for the FAT index's build to finish
        (`fat index: built N records ...`, its heap floor and stack), with the panel playing: N > 0,
        stale false, no transition cut during it, no `fat index:` warning; prints EMU_RIG_OK, the
        build line and the lowest heartbeat heap floor. With an `emu-ballast` image (make
-       emu-rig-tight) the heap is the spare's (~45 KB free while playing).
+       emu-rig-tight) the heap is a test board's (~45 KB free while playing).
 leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: after 10 GIFs to warm
        up and 60 more (8 samples at least), the least blocks in use and bytes allocated of the
        second half of the samples against the first half's must not have grown past 24 blocks /

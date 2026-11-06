@@ -30,7 +30,7 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               2 and 5 simultaneous 300 KB uploads, status reads beside them answered; a
               listener that stops reading never holds the device up; closed listeners leave
               the list (net.events.listeners back to 0)
-  bursts      (--connections 2 or 5, the default 5) the spare's wedge recipe: rounds of 2, 2, 2, 5,
+  bursts      (--connections 2 or 5, the default 5) a test board's wedge recipe: rounds of 2, 2, 2, 5,
               5, 5 uploads of 300 KB at once beside status reads; each 200, or 503 + Retry-After
               and 200 when asked again; never a 408; the network answering; nothing held after;
               the least free heap of each round (the census image's low watch) over BURST_HEAP_MIN
@@ -65,7 +65,7 @@ BURST_ROUNDS = [2, 2, 2, 5, 5, 5]
 ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # RX_BUFFERS (found by this lane, 2026-11-03; fixed in net-wedge): two uploads at once got the
 # one being received a 408 (`no data for 5 s`), and a few rounds wedged the network for good (no
-# TCP, ping or ARP answered; the spare showed it too). The netdiag walk (`netdiag:` lines,
+# TCP, ping or ARP answered; a test board showed it too). The netdiag walk (`netdiag:` lines,
 # emu-census builds) showed why: every frame lwIP holds stays in one of the WiFi driver's six
 # dynamic receive buffers. The upload being received held four out-of-order segments after a lost
 # one and the waiting upload's unread data the other two, so its retransmission had no buffer;
@@ -83,7 +83,7 @@ ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # emptied folder went through `std::fs::remove_file`, which FatFs's f_unlink does for an empty
 # directory too, so the branch that calls `fatidx::dir_changed()` was never taken. The firmware
 # now tells a directory apart first; `final_a` checks the index is stale at once after.
-# BURST_HEAP (net-wedge2): the spare's heap went to 8 KB (ESP-IDF's minimum) under five 300 KB
+# BURST_HEAP (net-wedge2): a test board's heap went to 8 KB (ESP-IDF's minimum) under five 300 KB
 # uploads at once beside a status read a second, and with it the WiFi driver, which allocates its
 # frame buffers from the heap, stopped delivering: refusals 10.5 s late, status reads timing out.
 # The emu-census image's low watch (a task reading the free heap every ms, `lowwatch:` every 5 s
@@ -94,9 +94,9 @@ ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # gave up has its unacknowledged reply aborted, not retransmitted to nobody (netstat.rs).
 # Two bounds, per round:
 # - BURST_HEAP_MIN, the least free heap: 20 KB. The census image plays at 53-58 KB at its quiet
-#   lows (~26 KB above the spare); the bursts' lows were 29.7-45 KB, the player's share moving them
+#   lows (~26 KB above that test board); the bursts' lows were 29.7-45 KB, the player's share moving them
 #   by up to ~15 KB (a dissolve's buffers at a switch, the read-ahead ring), so this alone is a
-#   coarse check: under 20 KB here the spare would be at nothing.
+#   coarse check: under 20 KB here a test board would be at nothing.
 # - BURST_NET_MAX, what the C side (lwIP, the WiFi driver, FatFs: everything but the Rust
 #   allocator, which the player's GIFs dominate) holds at the low above its quiet level in the same
 #   rounds: 22 KB. By construction one upload and one status read can hold ~20 KB there (six
@@ -843,7 +843,7 @@ class Lane:
                 f"PUT {len(pack)} B: {info.get('version')}, {info.get('entries')} entries, ok; GET / serves it with its CSP; "
                 f"no-cache, ETag {tag}, 304 for it (/ and the wasm at ?v=), 200 for another")
 
-    # -- simultaneous uploads (the spare's wedge recipe) -------------------------
+    # -- simultaneous uploads (a test board's wedge recipe) -------------------------
 
     def events(self, emu, api):
         """`GET /api/events` (firmware events.rs): the Now view's state pushed on change and every
