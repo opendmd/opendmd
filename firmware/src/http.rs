@@ -210,6 +210,17 @@ struct PlayRequest {
     over: bool,
 }
 
+/// A Formula refused for want of heap for its program or canvas (only a
+/// build with Formulas has either).
+#[cfg(feature = "psi")]
+fn short_of_memory(e: &str) -> bool {
+    e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS
+}
+#[cfg(not(feature = "psi"))]
+fn short_of_memory(_: &str) -> bool {
+    false
+}
+
 /// `/api/play`'s and Previous's answer to a [`PlayError`], or to no answer
 /// yet: `503` if the main task did not take it, `202` if it is under way.
 #[optimize(size)]
@@ -222,9 +233,7 @@ fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &
         // to a Formula of another size, a kernel being made): it may fit in
         // a moment, so a 503 + Retry-After the web app asks again on, not a
         // 400 for a Formula that is wrong.
-        Ok(Err(PlayError::BadFormula(e)))
-            if e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS =>
-        {
+        Ok(Err(PlayError::BadFormula(e))) if short_of_memory(&e) => {
             req.header("Retry-After", "1")?;
             req.error(503, "503 Service Unavailable", &e)
         }
