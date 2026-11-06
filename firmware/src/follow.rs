@@ -87,8 +87,9 @@ static SHARED: Mutex<Shared> = Mutex::new(Shared {
     step: None,
 });
 
-/// `/api/status`'s `context` object.
-pub fn status_json() -> String {
+/// `/api/status`'s `context` object (`since` null without `since`: the
+/// events, where a ticking count would be a change every second).
+pub fn status_json(since: bool) -> String {
     let s = SHARED.lock().unwrap();
     let opt = |v: Option<&str>| v.map_or_else(|| "null".to_string(), json_string);
     format!(
@@ -105,6 +106,7 @@ pub fn status_json() -> String {
         s.matches
             .map_or_else(|| "null".to_string(), |n| n.to_string()),
         s.since
+            .filter(|_| since)
             .map_or_else(|| "null".to_string(), |t| t.elapsed().as_secs().to_string()),
         opt(s.step),
         opt(s.error.as_deref()),

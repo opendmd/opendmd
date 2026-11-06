@@ -50,6 +50,7 @@ mod clock;
 mod config;
 mod diag;
 mod dns_server;
+mod events;
 mod fatidx;
 mod task;
 mod uclock;

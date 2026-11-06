@@ -212,6 +212,17 @@ struct PlayRequest {
 
 /// `/api/play`'s and Previous's answer to a [`PlayError`], or to no answer
 /// yet: `503` if the main task did not take it, `202` if it is under way.
+/// A Formula refused for want of heap (its program or its canvas), not for
+/// what it says.
+#[cfg(feature = "psi")]
+fn short_of_memory(e: &str) -> bool {
+    e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS
+}
+#[cfg(not(feature = "psi"))]
+fn short_of_memory(_: &str) -> bool {
+    false
+}
+
 #[optimize(size)]
 fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &str) -> Result<()> {
     match r {
@@ -222,9 +233,7 @@ fn play_reply(req: &mut Req, r: Result<Result<(), PlayError>, Unanswered>, ok: &
         // to a Formula of another size, a kernel being made): it may fit in
         // a moment, so a 503 + Retry-After the web app asks again on, not a
         // 400 for a Formula that is wrong.
-        Ok(Err(PlayError::BadFormula(e)))
-            if e == opendmd_core::psi::NO_MEMORY || e == opendmd_core::fx_psi::NO_CANVAS =>
-        {
+        Ok(Err(PlayError::BadFormula(e))) if short_of_memory(&e) => {
             req.header("Retry-After", "1")?;
             req.error(503, "503 Service Unavailable", &e)
         }
@@ -1048,6 +1057,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     server.route("/api/job", Method::Get, job_poll)?;
+
+    // What the Now view follows, pushed on change (events.rs): the event
+    // built from a status snapshot like the slim read, none under the
+    // status's low-heap mark.
+    server.route("/api/events", Method::Get, crate::events::open)?;
+    let c = ctx.clone();
+    crate::events::start(server.handle(), move || {
+        if crate::state::free_heap() < STATUS_MIN_HEAP {
+            return None;
+        }
+        let brightness = c.settings.lock().unwrap().brightness;
+        let snap = status_snapshot(&c.status);
+        let mut ev = crate::events::Event::new(EVENT_ROOM + snap.path.len() + snap.title.len() + snap.manifest.len())?;
+        event_json(&snap, brightness, &mut ev);
+        Some(ev)
+    });
 
     let c = ctx.clone();
     server.route("/api/skip", Method::Post, #[optimize(size)] move |req| {
@@ -2735,6 +2760,67 @@ fn now_json(s: &Status, out: &mut String) {
     out.push('}');
 }
 
+/// An event's room besides its three strings (path, title, playlist): the
+/// rest is ~450 B, a Formula's stats and a RePlayOS game included.
+const EVENT_ROOM: usize = 768;
+
+/// `GET /api/events`' event: what the Now view shows, ~0.4 KB. The clock,
+/// the position and a Formula's stats go in without counting as a change
+/// (a new frame 1 does count: the view syncs only once one is up).
+#[optimize(size)] // (CPU0: no frame runs it)
+#[inline(never)]
+fn event_json(s: &Status, brightness: u8, ev: &mut crate::events::Event) {
+    use std::fmt::Write as _;
+    let t = s.epoch.elapsed();
+    let _ = ev.write_str(r#"{"t_ms":"#);
+    ev.volatile(|e| {
+        let _ = write!(e, "{}", t.as_millis());
+    });
+    let _ = write!(
+        ev,
+        r#","now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":"#,
+        s.ordinal,
+        json_string(&s.path),
+        json_string(&s.title),
+    );
+    let formula = formula_json(&s.path);
+    ev.volatile(|e| {
+        let _ = write!(e, r#"{},"frame":{}{}"#, s.position_at(t).as_millis(), s.frame, formula);
+    });
+    ev.mark(if s.frame == 0 { "0" } else if formula.is_empty() { "1" } else { "2" });
+    drop(formula);
+    let _ = write!(
+        ev,
+        r#"{}}},"paused":{},"entries":{},"manifest":{},"index_state":{},"brightness":{},"#,
+        kept_json(s),
+        s.paused,
+        s.entries,
+        json_string(&s.manifest),
+        json_string(s.index_state),
+        brightness,
+    );
+    let _ = write!(
+        ev,
+        r#""sd":{{"mounted":{},"readable":{},"attempts":{},"error":{},"formatting":{}}},"#,
+        s.sd_mounted,
+        s.sd_usable(),
+        s.sd_attempts,
+        opt_json(s.sd_error.as_deref()),
+        s.sd_formatting,
+    );
+    let _ = write!(
+        ev,
+        r#""mode":{},"mode_until":{},"wake_until":{},"schedule":{{"rule":{},"set":{},"until":{}}},"context":{}}}"#,
+        json_string(s.mode),
+        opt_json(s.mode_until.as_deref()),
+        opt_json(s.wake_until.as_deref()),
+        s.rule.map_or_else(|| "null".to_string(), |r| r.to_string()),
+        opt_json(s.rule_set.as_deref()),
+        opt_json(s.rule_until.as_deref()),
+        crate::follow::status_json(false),
+    );
+}
+
 /// `t_ms` is the device's clock (ms since the main loop's epoch) at the
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
@@ -2866,7 +2952,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         opt_json(s.rule_until.as_deref()),
         crate::cache_builder::status_json(s.entries, crate::cache::peek()),
     );
-    let _ = write!(out, r#""context":{},"#, crate::follow::status_json());
+    let _ = write!(out, r#""context":{},"#, crate::follow::status_json(true));
     let _ = write!(out, "{}}}", looks());
 }
 
@@ -3090,16 +3176,17 @@ impl std::fmt::Write for Piecewise<'_> {
 
 /// `"net":{...}`: the network side's heap and lwIP's state (`netstat`), the
 /// status reads refused for the heap, and the bodies the httpd task gave up
-/// waiting for (`httpd::BodyStalled`).
+/// waiting for (`httpd::BodyStalled`), and the event listeners (`events`).
 fn net_json() -> String {
     let n = crate::netstat::json();
     format!(
-        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{},"player_busy":{}}}"#,
+        r#"{},"status_refused":{},"heavy_refused":{},"body_stalled":{},"player_busy":{},{}}}"#,
         &n[..n.len() - 1],
         STATUS_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
         HEAVY_REFUSED.load(std::sync::atomic::Ordering::Relaxed),
         crate::httpd::bodies_stalled(),
-        PLAYER_BUSY.load(std::sync::atomic::Ordering::Relaxed)
+        PLAYER_BUSY.load(std::sync::atomic::Ordering::Relaxed),
+        crate::events::status_json(),
     )
 }
 
