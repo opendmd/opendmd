@@ -1,4 +1,4 @@
--- The gallery store (docs/research/site-cloudflare.md "S6 as built"): the
+-- The gallery store (opendmd-notes docs/research/site-cloudflare.md "S6 as built"): the
 -- formula gallery's entries, so /formulas/, /formulas/src/<stem>.psi and
 -- /api/gallery are served from here (src/gallery.ts).
 --

@@ -1,0 +1,11 @@
+-- The bus test (display-isolation, 2026-11-02): a Formula whose frame on
+-- the VM is all IRAM-resident code — no draw stage, no table or helper
+-- steps, only the lane loops the VM keeps in IRAM (`fast1`/`fast2`, the
+-- grey colour) — so CPU0's traffic on the flash bus should not slow it.
+-- Played with the JIT off (`display-stress.py --jit off`: the JIT's driver
+-- runs from flash). If it holds steady under polls and uploads while
+-- Starfield (a flash-resident draw stage) does not, the bus is confirmed.
+name "IRAM light"
+fps 100
+v = frac(x*3 + y*2 + t)
+gray(v)

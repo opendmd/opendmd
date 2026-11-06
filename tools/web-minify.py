@@ -10,7 +10,7 @@ hand-written script and stylesheet minified.
 `make web` runs this after wasm-pack and the generated files (js/build.js,
 formulas.json, version.txt, licenses.txt), then gzips, packs and measures
 the output, never the sources: the hand-written files keep their comments
-(docs/notes/web-app.md "Minified build"). Everything the pack, the mock,
+(opendmd-notes docs/notes/web-app.md "Minified build"). Everything the pack, the mock,
 web-smoke and the site's /demo/ (which /f/ and /create/ mount) read comes
 from OUT.
 

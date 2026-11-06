@@ -27,7 +27,7 @@ alongside the late frames.
 `--path` plays any path instead of a bundled Formula, e.g. the bus test
 (a frame of IRAM-resident VM code), with the JIT off for the run:
 
-    P="@formula?psb=$(psi build --base64 docs/research/display-iso/iram-light.psi)"
+    P="@formula?psb=$(psi build --base64 tools/fixtures/iram-light.psi)"
     uv run tools/display-stress.py HOST --path "$P" --jit off --loads uploads
 
 Plays a bundled Formula with `/api/play` (`formula_keep` set to `hold` for

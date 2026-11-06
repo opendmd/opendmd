@@ -3,7 +3,7 @@
 // of the three folders). wasm-pack's file names carry no hash, so without
 // it a browser that kept a module from an earlier build would run it with
 // this build's scripts: an old compiler making Formulas the player refuses
-// (docs/notes/web-app.md "Module addresses"). Every import of a module and
+// (opendmd-notes docs/notes/web-app.md "Module addresses"). Every import of a module and
 // every fetch of its wasm goes through here; js/web.js is the main one's.
 import { V } from './build.js';
 

@@ -72,7 +72,7 @@ A copy is the GIF's frames exactly, or there is none. A GIF with more than
 256 distinct colours on its composited frames (38 on the stock card) could
 only get a quantised copy (`NeuQuant` made them until 2026-10-23: worst
 channel error 151), while the player plays the original exactly through
-gifslim at cap 12 (~27 KB of heap; `docs/research/cache-value.md`). So all
+gifslim at cap 12 (~27 KB of heap). So all
 three encoders refuse it (`gifslim::TooManyColours`, nothing written) and it
 **plays as it is**:
 

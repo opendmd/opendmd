@@ -1987,7 +1987,7 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
 
 /// The probe, when the card at `root` is the main task's (see the module
 /// docs).
-// --- The JIT spike (docs/research/psi-jit-esp32.md, phase 0) ---------------
+// --- The JIT spike (opendmd-notes docs/research/psi-jit-esp32.md, phase 0) ---------------
 //
 // Three hand-assembled kernels (`src/jitspike/*.s`; `assemble.sh` makes the
 // bytes), copied into executable heap and called: does `MALLOC_CAP_EXEC`
@@ -2489,7 +2489,7 @@ pub fn run(root: &str) {
     let _ = root;
 }
 
-/// The JIT's rows (docs/research/psi-jit-esp32.md, "Phase 2 as built"):
+/// The JIT's rows (opendmd-notes docs/research/psi-jit-esp32.md, "Phase 2 as built"):
 /// the goldens through kernels (also in the full probe, for the emulator
 /// lane), then one source at a time, each made, run and dropped before the
 /// next: the examples as effects JIT against VM with their frame splits,

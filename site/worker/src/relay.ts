@@ -1,4 +1,4 @@
-// Create Art's relay (docs/research/tenor.md §5, "Bringing your own GIFs"):
+// Create Art's relay (opendmd-notes docs/research/tenor.md §5, "Bringing your own GIFs"):
 //
 //   POST /api/fetch   the address as the body (text/plain, at most 2 KB)
 //
@@ -24,7 +24,7 @@
 //     random one kept in D1 (meta 'relay_key', made on first use); else 403
 //     (why "token": the page asks for a new one and tries once more). This
 //     stops a bare curl, not a determined script: the token is one same-
-//     origin-looking POST away (docs/research/tenor.md §5, "Caller");
+//     origin-looking POST away (opendmd-notes docs/research/tenor.md §5, "Caller");
 //   - the rate: the RELAY_LIMIT binding (cloudflare.config.ts), keyed on
 //     CF-Connecting-IP's network (an IPv6 /64, not the address: one host has
 //     2^64 of them); 429 with Retry-After (why "rate");
@@ -34,7 +34,7 @@
 //     (why "busy"), as is a D1 that can't be asked (fail closed);
 //   - the host denylist: D1 meta 'relay_deny', host names separated by
 //     spaces, commas or lines, each refusing itself and its subdomains;
-//     changed without a deploy (docs/research/tenor.md §5); 400 (why "address");
+//     changed without a deploy (opendmd-notes docs/research/tenor.md §5); 400 (why "address");
 //   - the address, at every hop: https only, port 443, no user or password,
 //     no IP literal in any form the URL parser knows (decimal, hex, IPv6),
 //     no localhost, single-label, .local/.internal/.lan/.home.arpa/... name,

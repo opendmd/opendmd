@@ -24,7 +24,7 @@
 //!   username ([`Eap`]): ESP-IDF's EAP client gets the username, the outer
 //!   identity and the password, and answers PEAP or TTLS, whichever the
 //!   network asks for (`CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT`, its TLS the
-//!   supplicant's own: docs/notes/firmware.md "WPA-Enterprise"). The
+//!   supplicant's own: opendmd-notes docs/notes/firmware.md "WPA-Enterprise"). The
 //!   server's certificate is not checked (no CA certificate is kept), and
 //!   there is no EAP-TLS (no client certificate).
 //!

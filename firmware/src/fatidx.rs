@@ -1,6 +1,6 @@
 //! The FAT index: GIFs opened without a directory scan (CLAUDE.md "The FAT
 //! index"; `opendmd_core::fatdir` has the on-card format and the entry
-//! checks, `docs/research/fat-index.md` the measurements).
+//! checks, `opendmd-notes docs/research/fat-index.md` the measurements).
 //!
 //! `/cache/.fatidx` records where each `/gifs/<dir>/<name>` file's 8.3
 //! directory entry is. [`open`] reads that one sector under FatFs's volume

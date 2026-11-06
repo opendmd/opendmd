@@ -1,7 +1,7 @@
 //! The sky over the panel: the sun's height, the moon's phase, the season
 //! and the day of the year, from the clock and an approximate location, for
 //! Formulas' built-in inputs (`daylight`, `sun.alt`, `moon.phase`, `season`,
-//! `yearday`: `docs/research/psi-inputs.md` §3.1).
+//! `yearday`: `opendmd-notes docs/research/psi-inputs.md` §3.1).
 //!
 //! **Integer arithmetic only**, so the panel (the ESP32's FPU) and the
 //! browser (wasm) get the same numbers bit for bit: angles are turns in

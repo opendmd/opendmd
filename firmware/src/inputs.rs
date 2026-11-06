@@ -1,5 +1,5 @@
 //! The input table's sources (`opendmd_core::inputs`, the built-in inputs
-//! Formulas read: docs/research/psi-inputs.md §2.1, §3.1, §3.2): who
+//! Formulas read: opendmd-notes docs/research/psi-inputs.md §2.1, §3.1, §3.2): who
 //! writes which key, from where. The table is static in the core; the
 //! playing Formula reads it once a frame (`fx_psi::fill_world`).
 //!

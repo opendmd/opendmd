@@ -1,4 +1,4 @@
-// The opendmd-site Worker (docs/research/site-cloudflare.md, phases S1-S2):
+// The opendmd-site Worker (opendmd-notes docs/research/site-cloudflare.md, phases S1-S2):
 // `make site`'s output (target/site) as static assets, and this Worker only
 // for /api/* and /formulas/* (`runWorkerFirst`); every other request is answered by
 // the asset layer without running it. target/site carries _headers (CORS,

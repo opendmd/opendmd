@@ -34,7 +34,7 @@ pub fn flash_layout() -> u8 {
 
 /// The optional components this build has (`/api/status` and
 /// `GET /api/firmware` `features`, the boot banner): the Cargo features
-/// a build may leave out (`FW_DISABLE`, docs/notes/firmware-build.md
+/// a build may leave out (`FW_DISABLE`, opendmd-notes docs/notes/firmware-build.md
 /// "Feature flags"). The web app hides what is missing.
 pub const FEATURES: &[&str] = &[
     #[cfg(feature = "psi")] // (`formulas`, or a probe's `psi`)

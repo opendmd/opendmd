@@ -32,7 +32,7 @@ wasm-bindgen-test = "0.3"
 
 [profile.release]
 # "z" since parts (2026-10-25): 1.6 KB gz smaller than "s"; the preview's
-# frames ~25 % slower, still ~0.1 ms (docs/research/psi-combine.md).
+# frames ~25 % slower, still ~0.1 ms (opendmd-notes docs/research/psi-combine.md).
 opt-level = "z"
 lto = true
 codegen-units = 1

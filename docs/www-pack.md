@@ -68,7 +68,7 @@ offset  size  field
   digits>"`, and a request whose `If-None-Match` names it gets `304 Not
   Modified` (`www::not_modified`): any change to the pack changes every
   file's ETag. The web app asks for its wasm modules at `?v=<build id>`
-  addresses besides (docs/notes/web-app.md "Module addresses").
+  addresses besides (`tools/www-build-id.py`).
 
 ## What goes in
 

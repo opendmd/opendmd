@@ -1,4 +1,4 @@
-// Video in (docs/research/tenor.md §6 A): an MP4 or a WebM, from a file, a
+// Video in (opendmd-notes docs/research/tenor.md §6 A): an MP4 or a WebM, from a file, a
 // link or the relay, as frames for the Studio's timeline. Site-only and
 // loaded only when a video arrives (create.js: the Studio's `o.video`).
 //

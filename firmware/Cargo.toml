@@ -39,7 +39,7 @@ emu-ballast = []
 # bytes in use logged every 20 s (`census:`), checked flat across 40+ GIFs.
 # Never in a release.
 emu-census = []
-# The components a build can leave out (docs/notes/firmware-build.md
+# The components a build can leave out (opendmd-notes docs/notes/firmware-build.md
 # "Feature flags"): all on by default, releases included; the Makefile's
 # FW_DISABLE=<name>[,<name>] builds without (`/api/status` and
 # `/api/firmware` `features` list what a build has).
@@ -80,7 +80,7 @@ heapmap = []
 # Psi formulas, the code's name for `formulas` (opendmd-core's `psi`; the
 # probes below depend on it): enable `formulas`, not this.
 psi = ["opendmd-core/psi"]
-# The narrow JIT (docs/research/psi-jit-esp32.md, phase 1): a Formula's
+# The narrow JIT (opendmd-notes docs/research/psi-jit-esp32.md, phase 1): a Formula's
 # pixel stage as Xtensa code in executable heap, checked against the VM at
 # its first frame; `formula_jit` in /api/config turns it off. In every
 # build; `--no-default-features --features psi` builds without.
@@ -145,7 +145,7 @@ lto = "off"            # ESP-IDF does not tolerate LTO well
 # fw-release, CI and release.yml.
 codegen-units = 1
 
-# Size, not speed, for dependencies no frame runs (docs/research/size-budget.md
+# Size, not speed, for dependencies no frame runs (opendmd-notes docs/research/size-budget.md
 # "fw-size"): request-body JSON (serde, serde_json; zmij is the float printer
 # behind serde_json's error text, and at "s" it drops its 16.8 KB table), the
 # update signature check (Ed25519 and SHA-2, one bundle per update), and

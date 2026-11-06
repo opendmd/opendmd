@@ -117,8 +117,7 @@ button lands on them.
   **Thumbnails** (`js/thumbs.js`; on by default, Settings → Device →
   *Thumbnails in the Library and playlists*, per browser): the first frame,
   64×16 CSS px, and on hover or keyboard focus (350 ms) a short clip of the
-  first frames. Light on the device by design
-  ([`research/library-playlists.md`](research/library-playlists.md)): only
+  first frames. Light on the device by design: only
   rows in view ask, at most two requests in flight, none while a list is
   flung; the prepared copy first (`cachePathFor`), the GIF on a 404, read as
   a stream and **cut off once the first image is in** (~1 KB of a copy that

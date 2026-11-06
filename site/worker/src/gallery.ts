@@ -1,4 +1,4 @@
-// The gallery store (S6, docs/research/site-cloudflare.md "S6 as built"):
+// The gallery store (S6, opendmd-notes docs/research/site-cloudflare.md "S6 as built"):
 // the formula gallery in D1 (migrations/0002_gallery.sql), kept by the
 // Worker itself.
 //

@@ -134,8 +134,7 @@ flash or wiring cannot do 80 MHz would boot-loop after an update (the
 updater cannot notice, there is no rollback and no earlier image, and the
 updater is no longer reachable), and only a USB install of a 40 MHz build
 (`FW_FLASH_FREQ=40 make fw-release`) recovers it; BOOT only lets the
-installer connect. Details, the clocks of each stage and the proposals to
-make it safer: [`notes/flash-clock.md`](notes/flash-clock.md).
+installer connect.
 
 ## Why not two app slots
 

@@ -1,6 +1,6 @@
 //! FAT32 directory entries read raw: the device's side index of where each
 //! GIF's directory entry sits (`firmware/src/fatidx.rs`, CLAUDE.md "The FAT
-//! index", `docs/research/fat-index.md`).
+//! index", `opendmd-notes docs/research/fat-index.md`).
 //!
 //! A FAT open is a linear scan of the directory (~0.55 ms per 512 B sector
 //! over SPI: hundreds of ms in a folder of thousands). The index records,

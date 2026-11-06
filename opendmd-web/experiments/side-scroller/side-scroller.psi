@@ -5,7 +5,7 @@ about "A little hooded runner crossing hills that never end, clearing every gap"
 loop forever
 fps 50
 
--- Side-scroller (docs/research/side-scroller.md). Psi keeps nothing between
+-- Side-scroller (opendmd-notes docs/research/side-scroller.md). Psi keeps nothing between
 -- frames, so this is an auto-runner: the world is cut into cycles of 72 px,
 -- each cycle's level, jump and obstacle come from hashes of its number, and
 -- the ground is built to fit the jump, so every jump clears what is there.

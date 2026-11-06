@@ -4,7 +4,7 @@
 // is put aside in the browser for the page to pick up (?shared=1), a link
 // becomes ?url=. Every other request is left to the browser as if there
 // were no worker: nothing of the site or the web app is ever stored or
-// answered here (docs/notes/web-app.md "Module addresses").
+// answered here (opendmd-notes docs/notes/web-app.md "Module addresses").
 const SHARE = new URL('share', self.registration.scope).pathname;
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));

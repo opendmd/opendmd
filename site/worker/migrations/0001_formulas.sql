@@ -1,4 +1,4 @@
--- Short links (docs/research/site-cloudflare.md §5, "S5 as built"): one row
+-- Short links (opendmd-notes docs/research/site-cloudflare.md §5, "S5 as built"): one row
 -- per shared Formula, never edited (a changed Formula is a new row).
 -- Applied with `cf d1 migrations apply` (remote: make site-d1-migrate; local
 -- dev and tests apply it themselves).

@@ -1401,7 +1401,7 @@ pub struct RecodeStats {
 /// The recoder met a 257th distinct colour: an exact copy is impossible, so
 /// **there is no copy** and the player plays the GIF itself (gifslim at cap
 /// 12 plays it exactly; a quantised copy would only make it worse —
-/// `docs/research/cache-value.md`). Every caller — the device's builder,
+/// `opendmd-notes docs/research/cache-value.md`). Every caller — the device's builder,
 /// `opendmd-pack`, the browser — records it with [`ORIGINAL_REASON`] and
 /// counts it as done. Carried inside an `io::Error` of kind `InvalidData`;
 /// test with [`is_too_many_colours`]. Nothing has been written when it is

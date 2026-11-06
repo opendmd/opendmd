@@ -9,11 +9,11 @@ fps 50
 -- posts; the car a box; one pick), so it compiles on a scratch build of
 -- the compiler with a 512-step cap (287 steps: the real one refuses it):
 -- 128 values, 50 pixel steps, ~10.0 ms VM / ~5.7 ms JIT. The sheet in
--- docs/research/endless-road-v2/cycle-sketch.png is its frames, and the
+-- opendmd-notes docs/research/endless-road-v2/cycle-sketch.png is its frames, and the
 -- two transition close-ups beside it. The road eases straight and flat
 -- for the tunnel's mouth and exit (owner's note), and every row reads the
 -- road's bend at its depth, the sky rows mirrored about the horizon.
--- A ROUGH SKETCH for docs/research/endless-road-v2.md: every environment
+-- A ROUGH SKETCH for opendmd-notes docs/research/endless-road-v2.md: every environment
 -- and every transition in one program, drawn crudely, to see where four
 -- environments land against the step and value caps and the frame
 -- estimate. Not art. See the design doc for what each part should be.

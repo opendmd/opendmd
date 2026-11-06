@@ -12,7 +12,7 @@ minified by esbuild, then gzipped), never the commented sources in
 opendmd-web/www. Every line was re-based on that output on 2026-11-05
 (branch web-minify) with its ceiling kept: the main JS + CSS line went from
 61,413 to 39,549 B gz of its 60 KB, and the rule is unchanged — the next
-feature pays for itself (docs/research/size-budget.md "Minified build").
+feature pays for itself (opendmd-notes docs/research/size-budget.md "Minified build").
 `--unminified` (`make web WEB_MINIFY=0`, a debugging build) prints the
 same table but enforces no line: the ceilings are for minified files.
 
@@ -213,7 +213,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # static state, each 1 KB of tables bigger) that gzips to almost nothing.
 # Loaded only when Formulas opens; raised under the owner's standing OK for
 # budget lines while the firmware stays comfortable (it does: see
-# docs/research/size-budget.md).
+# opendmd-notes docs/research/size-budget.md).
 # 58 KB for Psi phase 2 (2026-10-27, branch psi-p2, docs/psi-drawing-design.md
 # "As built (phase 2)"): the still cache (the compiler choosing position-only
 # values and laying out their run, the VM keeping and copying them, the
@@ -222,14 +222,14 @@ FONT = {"fonts/silkscreen.woff2"}
 # KB measured alone; a ~3 KB stable sort and two monomorphised loops were
 # taken out to get there). What lets Tunnel and Rotozoom be Formulas at
 # 50 fps; raised under the owner's standing OK for budget lines.
-# 62 KB for psi-speed (2026-10-27, docs/research/psi-speed.md): the ranges
+# 62 KB for psi-speed (2026-10-27, opendmd-notes docs/research/psi-speed.md): the ranges
 # pass (`range`: every value's interval, the narrowed steps chosen at
 # compile time, so the editor's estimate is the panel's) and the
 # palette-scale reuse: +2.8 KB gz (59.1 -> 61.9 KB measured with today's
 # toolchain; the narrowed steps' own loops are left out of wasm, which runs
 # their checked forms: the same bytes). What takes Tunnel towards 100 fps on
 # the panel; raised under the owner's standing OK for budget lines.
-# 67 KB for `loop forever` (2026-10-27, branch psi-lang, docs/research/
+# 67 KB for `loop forever` (2026-10-27, branch psi-lang, opendmd-notes docs/research/
 # endless-road.md §5.1): Formulas that go on without repeating — the
 # compiler's rewriting of a value that grows without end into once-a-frame
 # wide steps and the exact ways back (`Dag::wide_op`, ~6 KB of wasm before
@@ -250,7 +250,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # endless-road.md §5.4): `palette NAME = #…, …`, its spread over 32
 # entries, its sentences and the unpacking in the colour step: +1.5 KB gz
 # (~73.2 -> ~74.7 KB). Raised under the brief's OK.
-# 76 KB for psi-speed2 (2026-10-28, docs/research/psi-speed2.md): the
+# 76 KB for psi-speed2 (2026-10-28, opendmd-notes docs/research/psi-speed2.md): the
 # compiler's fused runs (`fuse.rs`: a checker's floors, add and mask, a
 # multiply-add, a palette colour of a choice or a pick, a colour of the
 # canvas alone, each a
@@ -260,7 +260,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # turn at a time draw the same bytes): +2.2 KB gz (~74.9 -> ~77.2 KB).
 # Raised under the brief's OK (it may move a budget with a reason).
 # 82 KB for formula-apps F1 (2026-10-28, branch formula-f1,
-# docs/research/formula-apps.md): the declarations (`psi 1`, `name`,
+# opendmd-notes docs/research/formula-apps.md): the declarations (`psi 1`, `name`,
 # `about`, `control`, `look`: the header reader, text in quotes, their
 # fifteen sentences), `Meta` and the declared-look composition, and the
 # `controls()` export (the JSON the page builds its sliders and buttons
@@ -284,7 +284,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # so Endless road's compile fits the ESP32's heap: ~85.6 -> 86,560 B gz
 # (+0.9 KB, with the fallible growth and packed tokens left out of the
 # wasm build). Raised under the budget authority (written reasons).
-# 85 KB for the JIT's estimate (2026-10-29, branch jit-2, docs/research/
+# 85 KB for the JIT's estimate (2026-10-29, branch jit-2, opendmd-notes docs/research/
 # psi-jit-esp32.md "Phase 2 as built"): `Program::esp32_us_jit` and
 # `_jit_still` so the editor's label knows what the panel's JIT draws (its
 # cost table `jit_value_ns`, the kernel's first step, a fused colour's
@@ -294,7 +294,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # size budgets itself).
 # 87 KB with both merged (compile-oom +0.9 KB, the JIT estimate +0.5 KB on 85.6).
 # 91 KB for console-lessons Phase B (2026-10-29, branch console-b,
-# docs/research/console-lessons.md §7): `cycle(P, v, s)` (its parse, the
+# opendmd-notes docs/research/console-lessons.md §7): `cycle(P, v, s)` (its parse, the
 # turn step, the palette slots) and `layer rate N { }` (the slow layers'
 # own values in the compiler, the band plan and the from-nothing frame in
 # `rate.rs`, the VM's parts), their eleven sentences and the estimate's
@@ -302,7 +302,7 @@ FONT = {"fonts/silkscreen.woff2"}
 # KB. Raised under the budget authority (CLAUDE: Claude may adjust web size
 # budgets itself).
 # 96 KB for the Psi ergonomics first batch (2026-10-30, branch psi-ergo-1,
-# docs/research/psi-ergonomics.md §5): the errors that name a formula's own
+# opendmd-notes docs/research/psi-ergonomics.md §5): the errors that name a formula's own
 # value (P1), `ink(n)` (P3), rebinding (P2), named palette entries (P6)
 # and the reworded sentences (P8): the wasm 92,107 B gz on main, the line
 # ~90 -> 91 KB at P1 (93,199 B). Raised under the budget authority.
@@ -333,7 +333,7 @@ PSI_WASM_GZ_BUDGET = 137 * 1024  # 135 until psi-settle (2026-11-04: the languag
 # 30 KB for the Time gate example (2026-10-28, branch ct-gate): one more
 # example in formulas.json (the CT time gate, 19 lines of code and a dozen
 # of comments): 28,435 -> 29,419 B gz. Time gate example; the Formulas split
-# (docs/research/formula-apps.md, pending) will move most examples out of
+# (opendmd-notes docs/research/formula-apps.md, pending) will move most examples out of
 # the firmware bundle.
 # 31 KB for formula-apps F1 (2026-10-28, branch formula-f1): psikit.js
 # builds every control from pkg-psi's controls() (control, fit, num) and

@@ -1,7 +1,7 @@
 name: Site
 
 # Rebuilds the public site and deploys it to Cloudflare (the opendmd-site
-# Worker, site/worker/; docs/research/site-cloudflare.md) without a
+# Worker, site/worker/; opendmd-notes docs/research/site-cloudflare.md) without a
 # release: the docs and pages as they are on the branch or tag picked in
 # "Use workflow from", and the installer and update files of an existing
 # release, downloaded from its GitHub release (the same signed files the

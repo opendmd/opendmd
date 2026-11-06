@@ -21,7 +21,7 @@
 // link) comes back as the pictures and videos it names, best first, and
 // the first that loads is used.
 //
-// Bringing a GIF from elsewhere (docs/research/tenor.md §7-8): under Your
+// Bringing a GIF from elsewhere (opendmd-notes docs/research/tenor.md §7-8): under Your
 // own, links that open other sites' own search in a new tab with "pixel
 // art" and the visitor's words, and a bookmarklet that opens the page it
 // is pressed on here (?url=). Installed on Android, the page is a share

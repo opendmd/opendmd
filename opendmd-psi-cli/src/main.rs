@@ -1,4 +1,4 @@
-//! `psi`: Psi Formulas from the command line (docs/research/psi-tooling-plan.md,
+//! `psi`: Psi Formulas from the command line (opendmd-notes docs/research/psi-tooling-plan.md,
 //! Phase 1; the language reference is docs/psi-spec.md, on the site at
 //! /dev/psi/).
 //!
