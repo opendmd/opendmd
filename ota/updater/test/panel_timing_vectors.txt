@@ -1,0 +1,30 @@
+# The panel timing's NVS form (opendmd_core::panel_timing::PanelTiming::to_nvs)
+# and what parsing it gives: `input|expected`, the expected value in to_nvs
+# form, or `-` for "malformed or out of range: the defaults". Held to by
+# opendmd-core (from_nvs) and the updater's parser (main/panel_timing.c,
+# `make test`). The input is everything before the last `|`, spaces included.
+1,1,shiftreg,8,60|1,1,shiftreg,8,60
+0,1,shiftreg,8,60|0,1,shiftreg,8,60
+1,4,fm6126a,20,240|1,4,fm6126a,20,240
+0,2,fm6124,16,30|0,2,fm6124,16,30
+1,3,icn2038s,8,120|1,3,icn2038s,8,120
+1,1,mbi5124,8,60|1,1,mbi5124,8,60
+0,1,dp3246,16,90|0,1,dp3246,16,90
+  1,1,shiftreg,8,60  |1,1,shiftreg,8,60
+1,1, FM6126A ,8,60|1,1,fm6126a,8,60
+1,1,ShiftReg,8,60|1,1,shiftreg,8,60
+|-
+x|-
+2,1,shiftreg,8,60|-
+1,0,shiftreg,8,60|-
+1,5,shiftreg,8,60|-
+1,1,shiftreg,10,60|-
+1,1,shiftreg,8,29|-
+1,1,shiftreg,8,241|-
+1,1,shiftreg,8,60,1|-
+1,1,shiftreg,8|-
+1,1,nosuchchip,8,60|-
+1, 1,shiftreg,8,60|-
+1,1,shiftreg,8,|-
+,1,shiftreg,8,60|-
+1,1,shiftreg,8,6000|-
