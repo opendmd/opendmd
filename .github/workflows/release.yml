@@ -1,10 +1,9 @@
 name: Release
 
-# Builds the release with `make fw-release`, for both flash layouts (4mb, the
-# ESP32 DevKit V1; 8mb, an 8 MB board in development): per layout the firmware, its
-# bootloader and partition table, the merged image, the ESP Web Tools
-# manifest and the signed .odfw bundle; once, the updater and the web app's
-# pack. Then the public site with `make site` (its installer offers both). (The desktop
+# Builds the release with `make fw-release`, for the flash layout (4mb, the
+# ESP32 DevKit V1): the firmware, its bootloader and partition table, the
+# merged image, the ESP Web Tools manifest and the signed .odfw bundle, the
+# updater and the web app's pack. Then the public site with `make site`. (The desktop
 # simulator is not released: developers build it from source, everyone else
 # uses the web demo.) What gets published depends on the trigger:
 #
@@ -34,8 +33,7 @@ name: Release
 #
 # Every run uploads dist/ and the site as artifacts. The tag must equal the
 # version in firmware/Cargo.toml with a leading "v" (v1.0.0 <-> 1.0.0), which
-# is also what fw-release writes into the app descriptor ("1.0.0 4mb",
-# "1.0.0 8mb").
+# is also what fw-release writes into the app descriptor ("1.0.0 4mb").
 # A release drafted by hand for the tag keeps its notes; only the assets are
 # uploaded to it.
 #
@@ -154,7 +152,7 @@ jobs:
       - uses: ./.github/actions/esp-toolchain
         id: esp
         with:
-          fw-variants: 4mb 8mb
+          fw-variants: 4mb
 
       - name: Cache the updater's build
         uses: actions/cache@v6
@@ -199,7 +197,7 @@ jobs:
           espressif-hit: ${{ steps.esp.outputs.espressif-hit }}
           fw-target-key: ${{ steps.esp.outputs.fw-target-key }}
           fw-target-hit: ${{ steps.esp.outputs.fw-target-hit }}
-          fw-variants: 4mb 8mb
+          fw-variants: 4mb
 
       - name: Remove the signing key
         if: always()
@@ -211,7 +209,7 @@ jobs:
           KIND: ${{ steps.plan.outputs.kind }}
         run: |
           set -euo pipefail
-          for v in 4mb 8mb; do
+          for v in 4mb; do
             app="dist/opendmd-$VERSION-$v-app.bin"
             desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
             echo "$v app descriptor: '$desc'"
@@ -243,7 +241,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/assets"
           files=("opendmd-$VERSION-www.pack" ota_data_initial.bin updater.bin THIRD-PARTY-LICENSES-firmware.txt THIRD-PARTY-LICENSES-web.txt)
-          for v in 4mb 8mb; do
+          for v in 4mb; do
             files+=("opendmd-$VERSION-$v-app.bin" "opendmd-$VERSION-$v-full.bin" "opendmd-$VERSION-$v.odfw"
                     "bootloader-$v.bin" "partition-table-$v.bin" "manifest-$v.json")
           done
@@ -308,7 +306,7 @@ jobs:
           mkdir -p "$d"
           gh release download "v$FINAL" -R "$GITHUB_REPOSITORY" -D "$d"
           (cd "$d" && sha256sum -c SHA256SUMS)
-          for v in 4mb 8mb; do
+          for v in 4mb; do
             test "$(jq -r .version "$d/manifest-$v.json")" = "$FINAL" || { echo "::error::v$FINAL's manifest-$v.json is not $FINAL"; exit 1; }
           done
 
@@ -327,11 +325,10 @@ jobs:
           make site "${dists[@]}" GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=$freeze
 
       # What the web app's Check for updates reads: the 4mb bundle as
-      # `firmware` (web apps from before the 8 MB layout), each layout's in
-      # `variants`, every file there, in release.json and beta.json (the
-      # same, or for a beta after a final, the beta's under firmware/beta/);
-      # and the old manifest name kept. The install page offers the 4mb
-      # board only (and a beta newer than the release below it).
+      # `firmware` and in `variants`, every file there, in release.json and
+      # beta.json (the same, or for a beta after a final, the beta's under
+      # firmware/beta/); and the old manifest name kept. The install page
+      # offers the DevKit (and a beta newer than the release below it).
       - name: Check the site's release.json, beta.json and installer
         env:
           VERSION: ${{ steps.plan.outputs.version }}
@@ -346,7 +343,7 @@ jobs:
             cat "$inst/$file"
             test "$(jq -r .version "$inst/$file")" = "$ver" || fail "$file's version is not $ver"
             test "$(jq -r .firmware "$inst/$file")" = "$dir/opendmd-$ver-4mb.odfw" || fail "$file's firmware is not the 4mb bundle"
-            for v in 4mb 8mb; do
+            for v in 4mb; do
               f="$(jq -r ".variants[\"$v\"].firmware" "$inst/$file")"
               test "$f" = "$dir/opendmd-$ver-$v.odfw" || fail "$file's variants.$v.firmware is '$f'"
               cmp "$inst/$f" "$src/opendmd-$ver-$v.odfw" || fail "$inst/$f is not $src's"
@@ -360,20 +357,18 @@ jobs:
             feed beta.json "$VERSION" firmware/beta dist
             grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || fail "the install page has no beta button"
             cmp "$inst/firmware/beta/manifest-4mb.json" dist/manifest-4mb.json || fail "install/firmware/beta/manifest-4mb.json is not this beta's"
-            test ! -e "$inst/firmware/beta/manifest-8mb.json" || fail "install/firmware/beta has the hidden 8mb manifest"
           else
             src=dist
             feed release.json "$VERSION" firmware dist
             cmp "$inst/beta.json" "$inst/release.json" || fail "beta.json is not release.json (no beta is newer than $VERSION)"
             test ! -e "$inst/firmware/beta" || fail "the site has a beta installer, with no beta newer than $VERSION"
           fi
-          # The install page offers the DevKit only (tools/site.py INSTALL_BOARDS): the
-          # 8mb button and manifest are hidden for now, while its
-          # bundle stays published for release.json's variants.
+          # The install page offers the DevKit, and nothing for another layout.
           grep -q 'manifest="firmware/manifest-4mb.json"' "$inst/index.html" || fail "the install page has no 4mb button"
-          ! grep -q 'manifest-8mb' "$inst/index.html" || fail "the install page offers the hidden 8mb board"
+          ! grep -q '8mb' "$inst/index.html" || fail "the install page names an 8mb build"
           test -f "$inst/firmware/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is missing"
-          test ! -e "$inst/firmware/manifest-8mb.json" || fail "install/firmware has the hidden 8mb manifest"
+          ! ls "$inst/firmware" | grep -q 8mb || fail "install/firmware has 8mb files"
+          ! jq -e '.variants | has("8mb")' "$inst/release.json" >/dev/null || fail "release.json names an 8mb variant"
           cmp "$inst/firmware/manifest-4mb.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is not the release's"
           cmp "$inst/firmware/manifest.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest.json is not the 4mb manifest"
 
@@ -399,13 +394,12 @@ jobs:
           cd "$RUNNER_TEMP/assets"
           V="${TAG#v}"
           WHICH="$(printf '%s\n' \
-            'Two builds, one per board (the browser installer at https://opendmd.dev/install/ offers the DevKit; the 8 MB build is for a board in development):' '' \
-            '| file | DevKit (4 MB): ESP32 DevKit V1 | 8 MB build: for a board in development |' \
-            '|---|---|---|' \
-            "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` | \`opendmd-$V-8mb.odfw\` |" \
-            "| whole flash at offset 0 | \`opendmd-$V-4mb-full.bin\` | \`opendmd-$V-8mb-full.bin\` |" \
-            "| ESP Web Tools manifest | \`manifest-4mb.json\` | \`manifest-8mb.json\` |" '' \
-            'A player refuses an update file for the other board. The web app pack, the updater and otadata are the same for both.')"
+            'For the ESP32 DevKit V1 (4 MB); the browser installer is at https://opendmd.dev/install/.' '' \
+            '| file | DevKit (4 MB) |' \
+            '|---|---|' \
+            "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` |" \
+            "| whole flash at offset 0 | \`opendmd-$V-4mb-full.bin\` |" \
+            "| ESP Web Tools manifest | \`manifest-4mb.json\` |")"
           NOTES="$(printf '%s\n\nSHA-256:\n\n```\n%s\n```\n' "$WHICH" "$(cat SHA256SUMS)")"
           # A release drafted by hand for this tag keeps its notes; only the assets are uploaded.
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

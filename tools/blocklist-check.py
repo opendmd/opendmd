@@ -232,10 +232,10 @@ def main():
     # Tools' fetch, from /install/), and the page that shows the counts.
     rel_ver = json.loads(Path(a.site, "install/release.json").read_text())["version"] if Path(a.site, "install/release.json").is_file() else "1.0.0-beta.14"
     for host in PANEL_HOSTS + [SITE + "/demo"]:
-        for lay in ("4mb", "8mb"):
+        for lay in ("4mb",):
             for feed in ("release.json", "beta.json"):  # beta.json: Get beta updates on
                 reqs.append((f"{SITE}/install/{feed}?v={rel_ver}&layout={lay}", host + "/", "xmlhttprequest", "counted: the update check"))
-    for lay in ("4mb", "8mb"):
+    for lay in ("4mb",):
         for part in ("app", "full"):
             for d in ("firmware", "firmware/beta"):  # firmware/beta/: a beta's installer, after a final release
                 reqs.append((f"{SITE}/install/{d}/opendmd-{rel_ver}-{lay}-{part}.bin", SITE + "/install/", "xmlhttprequest", "counted: an install"))

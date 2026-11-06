@@ -7,8 +7,9 @@
 //! hashing the image as it goes and keeping the 140-byte header in memory,
 //! then checks it (`opendmd_core::ota`: the header, that it is for this
 //! image's flash layout ([`crate::state::FLASH_VARIANT`] and its table,
-//! [`crate::state::flash_layout`]: a 4mb player refuses an 8mb bundle and
-//! the reverse, a table v3 player a v2 bundle; a v2 player, beta.15 and
+//! [`crate::state::flash_layout`]: a bundle for another layout, such as an
+//! 8mb one from 1.0.0-beta.16 or earlier, is refused at its magic, a table
+//! v3 player refuses a v2 bundle; a v2 player, beta.15 and
 //! earlier, does not know the v3 magic at all), that the image fits the factory
 //! partition, the ESP image magic 0xE9, the SHA-256, the Ed25519 signature
 //! against [`PUBLIC_KEY`], and that the image's app descriptor is a build

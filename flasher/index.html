@@ -66,20 +66,6 @@
           <span id="version-4mb" class="mono" style="color: var(--muted)"></span>
         </div>
       </div>
-      <!-- 8MB-HIDDEN (see CLAUDE.md, "Bringing the 8 MB option back"): the 8 MB build's button, hidden for now. Uncomment, and add '8mb' to INSTALL_BOARDS in the script below.
-      <div class="board" id="board-8mb">
-        <h2>8 MB build</h2>
-        <p>For an 8 MB board in development. Its firmware has more room.</p>
-        <div class="install">
-          <esp-web-install-button id="install-8mb" manifest="firmware/manifest-8mb.json">
-            <button slot="activate" id="install-activate-8mb">Install the 8 MB build</button>
-            <span slot="unsupported">This browser cannot talk to a USB serial port. Use Chrome, Edge, Opera or Firefox 151+ on a desktop.</span>
-            <span slot="not-allowed">This page must be opened over https or from localhost.</span>
-          </esp-web-install-button>
-          <span id="version-8mb" class="mono" style="color: var(--muted)"></span>
-        </div>
-      </div>
-      -->
     </div>
     <p class="note">A board that already runs OpenDMD is recognised: the installer shows its version and offers <b>Update</b>
       (settings kept), <b>Change Wi-Fi</b>, <b>Visit device</b> and its logs. On a first install it asks whether to
@@ -123,14 +109,6 @@
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts-4mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
   </table>
-  <!-- 8MB-HIDDEN
-  <p>8 MB build, <a href="firmware/manifest-8mb.json">its manifest</a> (the parts that reach past 4 MB
-    first):</p>
-  <table>
-    <thead><tr><th>part</th><th>offset</th></tr></thead>
-    <tbody id="parts-8mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
-  </table>
-  -->
   <p>The six parts: the bootloader, the partition table, <code>otadata</code> erased (so the board boots the
     firmware), the firmware, the small updater that installs later firmware updates sent over WiFi, and the web app. The same six merged into one image the size of the flash,
     <code>opendmd-&lt;version&gt;-4mb-full.bin</code>, sits beside them for tools that flash
@@ -150,8 +128,7 @@
 </footer>
 <script type="module">
   const hex = (n) => '0x' + n.toString(16).toUpperCase();
-  // The boards offered. An 8 MB board in development ('8mb') is hidden for now: see the
-  // 8MB-HIDDEN blocks above and CLAUDE.md.
+  // The boards offered.
   const INSTALL_BOARDS = ['4mb'];
   for (const v of INSTALL_BOARDS) {
     const tb = document.getElementById(`parts-${v}`);

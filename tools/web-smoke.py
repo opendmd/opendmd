@@ -186,10 +186,11 @@ every view like a person would:
   Firmware  a throwaway key pair (tools/fw-sign.py keygen; the mock started
             with --ota-pub) and a fake image (0xE9 + random bytes, a 4mb app
             descriptor) signed as 9.9.9-smoke, plus a copy with one image byte
-            flipped, and an 8mb one. Settings -> Device -> Firmware shows GET
+            flipped, and one with the 8mb layout's magic (ODFW18mb, as
+            1.0.0-beta.16 and earlier made). Settings -> Device -> Firmware shows GET
             /api/firmware's version and the board ("DevKit (4 MB)"); a file
             that is not a bundle is refused in the page, and so is the 8mb
-            bundle, in words (the mock refuses its PUT too); the tampered bundle
+            one, in words (the mock refuses its PUT too: 422); the tampered bundle
             is refused by the mock (422, the reason shown, the version
             unchanged); the good one shows its progress, "Restarting…", then
             "Updated to 9.9.9-smoke" once /api/status reports it after the
@@ -205,7 +206,7 @@ every view like a person would:
             versions; `?updates=` naming the running versions -> "Up to
             date"; a 404, no CORS header, not JSON, firmware ahead of the
             release -> a message and no Update button; a release naming a
-            missing file, one whose 4mb entry (`variants`) is the 8mb bundle
+            missing file, one whose 4mb entry (`variants`) is an 8mb bundle
             (refused in the page), and one whose firmware is tampered (the mock's
             422), install nothing and leave both versions alone; then
             firmware 10.0.0 + web app v10.0.0: each step shown, the mock
@@ -2818,15 +2819,15 @@ def signed_www(pack: bytes) -> bytes:
 def ota_bundles(tmp: Path) -> dict[str, Path]:
     """A throwaway key pair, a fake app image signed as OTA_VERSION, a copy
     of the bundle with one image byte flipped (tools/fw-sign.py), a file
-    that is not a bundle at all, and bundles for the other flash layout
-    (8mb: the mock is a 4mb player)."""
+    that is not a bundle at all, and bundles for another flash layout (the
+    8mb magic of 1.0.0-beta.16 and earlier: the mock is a 4mb player, and
+    this tree signs no 8mb bundle, so a 4mb one gets that magic)."""
     sign = ["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py")]
     key, pub = www_key()
     shutil.copy(key, tmp / "k")
     os.chmod(tmp / "k", 0o600)
     shutil.copy(pub, tmp / "p")
     fake_app(tmp / "app.bin", "4mb")
-    fake_app(tmp / "app8.bin", "8mb")
     good = tmp / "opendmd-9.9.9-smoke.odfw"
     subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--out", str(good), "--key", str(tmp / "k")],
                    check=True, stdout=subprocess.DEVNULL)
@@ -2847,11 +2848,9 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     newer_bad = tmp / "newer-tampered.odfw"
     newer_bad.write_bytes(bytes(b))
     board8 = tmp / "opendmd-9.9.9-smoke-8mb.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app8.bin"), "--version", OTA_VERSION, "--variant", "8mb", "--out", str(board8),
-                    "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
+    board8.write_bytes(b"ODFW18mb" + good.read_bytes()[8:])
     newer8 = tmp / f"opendmd-{UPD_VERSION}-8mb.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app8.bin"), "--version", UPD_VERSION, "--variant", "8mb", "--out", str(newer8),
-                    "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
+    newer8.write_bytes(b"ODFW18mb" + newer.read_bytes()[8:])
     # For the DevKit's partition table v2 (what 1.0.0-beta.15 and earlier
     # were): the mock, on table v3, must refuse them.
     v2 = tmp / "opendmd-9.9.9-smoke-v2.odfw"
@@ -2912,7 +2911,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     check(page.is_hidden("#fw-log") == (fw["log"] is None), "firmware: 'Update log' only when there is one")
     v0 = fw["version"]
     facts = page.inner_text("#fw-facts")
-    check(v0 in facts and fw["build"] in facts and "DevKit (4 MB)" in facts and "This board has 8 MB" not in facts,
+    check(v0 in facts and fw["build"] in facts and "DevKit (4 MB)" in facts and "8 MB" not in facts,
           f"firmware: the card shows {v0} and the board ({facts!r})")
     check(page.is_visible("#fw-go") and page.get_attribute("#fw-file", "accept") == ".odfw",
           "firmware: Update from file… (.odfw)")
@@ -2922,12 +2921,13 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     page.set_input_files("#fw-file", str(ota["junk"]))
     t = fw_message(page, "not an OpenDMD firmware file")
     check(not asked, f"firmware: a file that is not a bundle is refused in the page ('{t}')")
-    # A bundle for the other flash layout: refused in the page, in words,
-    # nothing sent; and the mock (as the firmware) refuses it too.
+    # A bundle for another flash layout (the old 8mb magic): refused in the
+    # page, in words, nothing sent; and the mock (as the firmware) refuses
+    # it too, at the header: a 422 before anything is written.
     page.set_input_files("#fw-file", str(ota["board8"]))
-    t = fw_message(page, "^This file is for an 8 MB board in development")
-    check(not asked and t == "This file is for the 8 MB build, and this player runs the DevKit (4 MB) firmware."
-          " Use the DevKit (4 MB) update file", f"firmware: an 8mb bundle is refused in the page ('{t}')")
+    t = fw_message(page, "^This file is for another flash layout")
+    check(not asked and t == "This file is for another flash layout than this player's. Use the DevKit (4 MB) update file",
+          f"firmware: an 8mb bundle is refused in the page ('{t}')")
     req = urllib.request.Request(base + "/api/firmware", data=ota["board8"].read_bytes(), method="PUT",
                                  headers={"Content-Type": "application/octet-stream"})
     try:
@@ -2935,7 +2935,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         code, why = 200, ""
     except urllib.error.HTTPError as e:
         code, why = e.code, json.loads(e.read() or b"{}").get("error", "")
-    check(code == 422 and why.startswith("this update is for the 8 MB build and this player runs the DevKit (4 MB)")
+    check(code == 422 and why.startswith("this update is for another flash layout than this player's: use the DevKit (4 MB)")
           and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of an 8mb bundle -> {code} '{why}'")
     # A bundle for the DevKit's older partition table (v2, 1.0.0-beta.15 and
     # earlier): refused in the page and by the mock (the firmware), in words.
@@ -3058,12 +3058,11 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     w0 = get_json(base + "/api/www")["version"]
 
     def release(name: str, **kw) -> str:
-        # As tools/site.py writes it: `firmware` (the 4mb bundle, for web
-        # apps before 8mb) and `variants`, each layout's file and table.
+        # As tools/site.py writes it: `firmware` (the 4mb bundle) and
+        # `variants`, the layout's file and table.
         fw4 = kw.get("firmware", f"firmware/opendmd-{UPD_VERSION}.odfw")
         obj = {"version": UPD_VERSION, "firmware": fw4,
-               "variants": {"4mb": {"firmware": fw4, "layout": 3},
-                            "8mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-8mb.odfw", "layout": 2}},
+               "variants": {"4mb": {"firmware": fw4, "layout": 3}},
                "www": f"firmware/opendmd-{UPD_VERSION}-www.pack", "www_version": f"v{UPD_VERSION}", **kw}
         (inst / name).write_text(json.dumps(obj))
         return f"{site}/install/{name}"

@@ -1,6 +1,5 @@
 # OpenDMD partition table v3, 4 MB flash (docs/ota.md): the firmware, a small
-# updater, and the web app. Variant "4mb" (the ESP32 DevKit V1); the 8 MB
-# 8 MB build's is partitions-8mb.csv, the same scheme with bigger sizes.
+# updater, and the web app. Variant "4mb" (the ESP32 DevKit V1).
 # The table's version is in every 4mb firmware bundle's magic (ODFW34mb;
 # v2's was ODFW1 + NULs): a player installs a bundle over WiFi only for its
 # own table, so moving a board from v2 to v3 takes one USB install.

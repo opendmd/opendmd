@@ -23,7 +23,7 @@ curl -s $DMD/api/status
   error. `make blocklist-check` (`tools/blocklist-check.py`) tests every route
   against EasyPrivacy and EasyList; a new route must pass it.
 - **Size limits.** JSON bodies ≤ 8 KB (`413` over), the schedule ≤ 2 KB,
-  a web app pack ≤ the `www` partition (1,048,576 B on the DevKit, 2,097,152 B on an 8 MB board in development). Uploads are streamed, any size, but no data
+  a web app pack ≤ the `www` partition (1,048,576 B). Uploads are streamed, any size, but no data
   for 5 s, or 120 s in all, is a `408`. A body needs a `Content-Length`.
 - **One thing at a time.** One server task, at most 7 open connections
   (`HTTP_MAX_SOCKETS`). Transfers and the listings (`/api/files`,
@@ -232,8 +232,8 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 
 | field | meaning |
 |---|---|
-| `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit; `"8mb"`, an 8 MB board in development) |
-| `layout` | the version of the variant's partition table the firmware is built for: `3` for 4mb, `2` for 8mb. An update over WiFi must be for the same one (`PUT /api/firmware`); firmware before it (1.0.0-beta.15 and earlier) has no field and table v2 |
+| `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit) |
+| `layout` | the version of the variant's partition table the firmware is built for: `3` for 4mb. An update over WiFi must be for the same one (`PUT /api/firmware`); firmware before it (1.0.0-beta.15 and earlier) has no field and table v2 |
 | `features` | the optional components this build has: `["formulas","jit"]` in a release; a build can leave them out (`"formulas"` missing: `/api/play` of a Formula is a `501`, a `look_formula` a `400`, a playlist's Formula lines are skipped) |
 | `psi_abi` | the compiled Formulas this player plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
@@ -950,8 +950,8 @@ staged on the card (one is needed), checked and installed (`docs/ota.md`);
 `{"version","build","variant","layout","features","flash_size","flash","pending","last","log"}` (`features`, `layout` as in `/api/status`): the
 running version (a bundle's, and `/api/status`'s; `build` its image
 descriptor, `"<version> <variant>"`), the flash layout it is built for
-(`variant`: `4mb` or `8mb`) and the flash chip's real size in bytes
-(`flash_size`; a 4mb build on an 8 MB board reports 8388608), the clock and
+(`variant`: `4mb`) and the flash chip's real size in bytes
+(`flash_size`; a board with more flash reports its own size), the clock and
 read mode the flash runs at (`flash`: `{"mhz": 40|80, "mode": "dio"|…}`,
 read back from the chip), a staged
 update not yet installed (or null), the last
@@ -968,10 +968,12 @@ The bundle as the body (`411` no length, `413` too big). Header, the flash
 layout (the bundle's must be the player's `variant` and partition table,
 `layout`: a bundle for a newer table says to reinstall over USB from
 opendmd.dev/install; one for an older table says to use a release made for
-the player's layout), size, SHA-256,
+the player's layout; any other `ODFW` magic, such as an 8mb bundle from
+1.0.0-beta.16 or earlier, is for another flash layout and refused in
+words), size, SHA-256,
 Ed25519 signature and the image's app descriptor are checked: a failure is
 a `422` with the reason, nothing staged; cut short `408`; no card `503`.
-Another key's bundle, or one for the other layout, is refused once the
+Another key's bundle, or one for another layout, is refused once the
 140-byte header is in; the key the image's key trailer names must be the
 one that signed it. Any validly signed bundle is accepted, older ones too,
 unless the firmware was built with a rollback floor (`docs/ota.md`). Then

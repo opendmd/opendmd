@@ -2,9 +2,8 @@
 
 The web app (`opendmd-web/www` after `make web`) ships to the device as one
 file, a **www pack**, written into the `www` flash partition
-(data/`esphttpd`: 0x300000, 1,024 KB in `firmware/partitions.csv`, table v3; 0x380000,
-2,048 KB in the 8 MB `partitions-8mb.csv`; one pack for both, built to fit
-the smaller). At boot the
+(data/`esphttpd`: 0x300000, 1,024 KB in `firmware/partitions.csv`, table v3).
+At boot the
 firmware memory-maps it and serves every file from the mapping, through the
 flash cache: no card, no heap per file, no filesystem.
 

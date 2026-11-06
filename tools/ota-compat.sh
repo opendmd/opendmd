@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Firmware updates across releases and flash layouts (docs/ota.md "Two flash
-# layouts", "The key trailer"; docs/www-pack.md "Signature"). An older
+# Firmware updates across releases and flash layouts (docs/ota.md "The flash
+# layout", "The key trailer"; docs/www-pack.md "Signature"). An older
 # release's own opendmd-core, checked out at its tag, and this tree's run
 # tools/fixtures/ota-compat.rs (a 4mb player's checks, in the firmware's
 # order) against files signed now:

@@ -54,21 +54,9 @@ use crate::logring;
 use crate::wifi::ScannedAp;
 
 /// What the device-info answer calls the firmware. ESP Web Tools compares
-/// it with the manifest's `name` (the Makefile's `fw-release`, one manifest
-/// per flash layout) to offer Update rather than Install: they must stay
-/// the same. The 4mb name is the one every earlier release answered; the
-/// 8mb image answers its own, so the installer's 8 MB choice never offers
-/// "Update" to a 4 MB board running OpenDMD (nor the reverse): it offers
-/// Install, with the erase question, under the other name.
-pub const FIRMWARE_NAME: &str = firmware_name(crate::state::FLASH_VARIANT);
-
-/// [`FIRMWARE_NAME`] for a flash layout.
-const fn firmware_name(variant: &str) -> &'static str {
-    match variant.as_bytes() {
-        b"8mb" => "OpenDMD 8 MB",
-        _ => "OpenDMD",
-    }
-}
+/// it with the manifest's `name` (the Makefile's `fw-release`) to offer Update rather than Install: they must stay
+/// the same. It is the name every release has answered.
+pub const FIRMWARE_NAME: &str = "OpenDMD";
 const CHIP: &str = "ESP32";
 /// The rate ESP Web Tools opens the port at.
 const IMPROV_BAUD: u32 = 115_200;

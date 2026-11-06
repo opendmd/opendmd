@@ -31,8 +31,7 @@ fn main() {
     let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
     let variant_name = match variant.as_str() {
         "4mb" => "DevKit (4 MB)",
-        "8mb" => "8 MB build",
-        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb and 8mb"),
+        v => panic!("OPENDMD_FLASH_VARIANT={v}: the one layout is 4mb"),
     };
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
