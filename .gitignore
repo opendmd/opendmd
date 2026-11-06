@@ -30,6 +30,8 @@ opendmd-web/www/licenses.txt
 # Written by make web from opendmd-web/formulas/*.psi (the -- bundle ones: tools/formulas-json.py).
 opendmd-web/www/formulas.json
 opendmd-web/www.pack
+# make web's output (tools/web-minify.py): www/ with its scripts and stylesheets minified, and the .gz copies
+opendmd-web/www-dist/
 
 # Release images (make fw-release)
 dist/
