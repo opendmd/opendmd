@@ -497,7 +497,7 @@ class Lane:
         self.expect((c.get("lat"), c.get("lon")) == (-33.87, 151.21), "location", f"read back {c.get('lat')}, {c.get('lon')}")
         code, _, slim = api.raw("GET", "/api/status?now=1")
         sj = json.loads(slim) if code == 200 else {}
-        self.expect(code == 200 and len(slim) < 900 and {"t_ms", "now_playing", "paused", "transfer"} <= set(sj) and "heap" not in sj,
+        self.expect(code == 200 and len(slim) < 600 and {"t_ms", "now_playing", "paused", "transfer"} <= set(sj) and "heap" not in sj,
                     "status", f"the slim status (?now=1): HTTP {code}, {len(slim)} B, keys {sorted(sj)}")
         self.expect("transfer" in st, "status", "no `transfer` in /api/status")
         self.ok("status, config", f"GET both; PUT dwell_max {self.dwell0} -> {self.dwell_set} read back; a bad value 400, nothing changed; lat/lon set, rounded, refused alone or off the globe, cleared, set again")

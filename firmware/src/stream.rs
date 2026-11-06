@@ -367,7 +367,6 @@ where
 }
 
 /// [`receive`]'s body, once: not monomorphised for every upload route.
-#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn receive_boxed(req: &mut Req, work: UploadWork) -> Result<()> {
     let mut up = req.take_over()?;
     // At the door, for the heap (`opendmd_core::admit`: the start

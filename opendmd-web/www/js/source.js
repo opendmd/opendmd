@@ -23,12 +23,18 @@ async function check(res) {
   throw Object.assign(new HttpError(res.status, `${res.status}: ${msg}`), { after: +res.headers.get('Retry-After') || 0 });
 }
 
-// The retry layer for a busy device (thumbs.js has its own): a 503, or a
-// dropped request, asked again after 2-4 s (jittered; never sooner than
-// Retry-After) for about 45 s. Uploads: a 503 + Retry-After or a reset
-// under the body (a TypeError); `busy` (a setting, a play): a 503 +
-// Retry-After only. Neither did anything.
+// The device's stream task sends listings, GIFs and copies one at a
+// time: a full queue is a 503 at once (Retry-After: 1). This is the one
+// retry layer for them (thumbs.js has its own back-off, cancelling as it
+// goes): a 503, or a request the busy device dropped, is
+// asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
+// than Retry-After), for about 45 s in all, then the error stands.
 const RETRY_FOR = 45000;
+// Uploads (PUT, a move): one at a time; another is a 503 + Retry-After,
+// then a reset under the rest of the body (a TypeError if still sending).
+// Neither wrote anything: asked again as above. A timeout may have landed.
+// `busy` (a setting, a play, a pause): a 503 + Retry-After only, nothing
+// done (the player had not taken it, or the heap was short).
 export async function sent(fn, busy) {
   const t0 = Date.now();
   for (;;) {
@@ -78,7 +84,9 @@ export class DeviceSource {
     const j = body?.constructor === Object;
     try {
       let r = await dfetch(url, { method, body: j ? JSON.stringify(body) : body, headers: j ? { 'Content-Type': 'application/json' } : {} }, timeout);
-      // A long one (a rebuild, a scan): 202 + X-Job, asked after until answered.
+      // A long request (a playlist rebuild, a WiFi scan, a RePlayOS test):
+      // past 0.3 s the device answers 202 with X-Job, and GET /api/job?id=
+      // gives the request's own answer once there is one (202 until then).
       for (let id; r.status == 202 && (id = r.headers.get('X-Job'));) r = await new Promise((f) => setTimeout(f, 700)).then(() => dfetch('/api/job?id=' + id, {}, timeout));
       return await check(r);
     } catch (e) {
@@ -90,10 +98,12 @@ export class DeviceSource {
 
   // `recent`: with the Recently played list (`recent`, `recent_at`).
   status(recent) { return this.json('GET', '/api/status' + (recent ? '?recent=1' : ''), undefined, 8000); }
+  // The Now poll's slim read: the clock and what is on screen (~300 B).
   now() { return this.json('GET', '/api/status?now=1', undefined, 8000); }
   config() { return sent(() => this.json('GET', '/api/config'), 1); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
-  // device, which takes seconds; the firmware waits up to 60 s for it.
+  // device, which takes seconds: a long request (202 + X-Job, above), up to
+  // 60 s.
   putConfig(patch) { return sent(() => this.json('PUT', '/api/config', patch), 1); }
   skip(back) { return sent(() => this.json('POST', '/api/skip' + (back ? '?back=1' : '')), 1); }
   pause() { return sent(() => this.json('POST', '/api/pause'), 1); }

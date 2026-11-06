@@ -1,6 +1,12 @@
-// Now: what the panel is doing. On a device, its status polled (POLL_MS),
-// the remote control and a preview in step with the panel by clock
-// (CLAUDE.md, "The Now preview is in step"). Locally, a simulator.
+// Now: what the panel is doing. On a device, /api/status polled while this
+// view is up (every POLL_MS; the slim `?now=1` between full reads, and less
+// often while a file goes to or from the card), the remote control (skip,
+// pause, brightness; sending a GIF to the panel is the Library's) and a
+// panel-look preview of the file on screen, fetched once per change and
+// kept in step with the panel by clock (elapsed_ms at the device's t_ms,
+// offset estimated NTP-style; CLAUDE.md, "The Now preview is in step"). In
+// local mode, a simulator over the picked folder that plays one file at a
+// time with the firmware's dwell.
 
 import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
@@ -9,7 +15,11 @@ import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
 import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider, drawn } from './util.js';
 
-// Full status every 5 s, ?now=1 between; 1.5 s apart in a transfer.
+// The full status every FULL_MS (the card, the schedule, the filter…) and
+// whenever Recently played is wanted; the slim one (`?now=1`, one segment:
+// the clock and what is on screen) between. Every SLOW_MS while `transfer`
+// says a file is going to or from the card: the device serves one request
+// at a time, and an upload holds its receive buffers.
 const POLL_MS = 500, FULL_MS = 5000, SLOW_MS = 1500;
 
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
@@ -236,8 +246,9 @@ function mountDevice(el) {
     follow_(np.path);
   }
 
-  // One poll at a time (one httpd task); a failed one leaves the preview on
-  // its last sync.
+  // A failed poll leaves the preview playing on its last sync. One at a
+  // time: the device has one httpd task, and a reply queued behind the
+  // preview's file fetch must not have others piling up behind it.
   let busy = false, lastAt = -1e9, lastFull = -1e9;
   async function poll() {
     if (document.hidden || busy) return;

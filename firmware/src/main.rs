@@ -39,9 +39,6 @@
 // Size, not speed, for code no frame runs (`#[optimize(size)]`: the
 // network worker, the HTTP status, boot, config; console-c).
 #![feature(optimize_attribute)]
-// … and for the HTTP routes' closures, which are most of `http.rs`'s code
-// (`#[optimize(size)] move |req| …`; net-stall's flash).
-#![feature(stmt_expr_attributes)]
 mod ahead;
 mod arena;
 mod boot;

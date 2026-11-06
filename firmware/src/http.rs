@@ -310,17 +310,32 @@ pub enum NetCommand {
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
 fn name_check(c: &Ctx, name: &str) -> Check {
-    let until = Instant::now() + config::NAME_CHECK_WAIT;
+    match name_check_sent(c, name) {
+        Some(rx) => rx.recv_timeout(config::NAME_CHECK_WAIT).unwrap_or(Check::Unknown),
+        None => Check::Unknown,
+    }
+}
+
+/// [`name_check`]'s question, asked: the answer comes on the channel by
+/// [`config::NAME_CHECK_WAIT`] (the worker gives up then itself).
+fn name_check_sent(c: &Ctx, name: &str) -> Option<mpsc::Receiver<Check>> {
     let (tx, rx) = mpsc::channel();
     let cmd = NetCommand::NameCheck {
         name: name.to_string(),
-        until,
+        until: Instant::now() + config::NAME_CHECK_WAIT,
         reply: tx,
     };
-    if c.net.send(cmd).is_err() {
-        return Check::Unknown;
-    }
-    rx.recv_timeout(config::NAME_CHECK_WAIT).unwrap_or(Check::Unknown)
+    c.net.send(cmd).ok().map(|()| rx)
+}
+
+#[optimize(size)]
+fn name_json(req: &mut Req, name: &str, valid: bool, check: Check) -> Result<()> {
+    req.json(&format!(
+        r#"{{"name":{},"valid":{valid},"taken":{},"by":{}}}"#,
+        json_string(name),
+        check.taken_json(),
+        check.by().map_or_else(|| "null".to_string(), json_string)
+    ))
 }
 
 
@@ -407,7 +422,6 @@ fn hundredths(body: &[u8], key: &[u8]) -> Option<Option<i32>> {
 }
 
 /// `panel`: absent, `null` (the defaults) or an object.
-#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn double_option_panel<'de, D>(d: D) -> Result<Option<Option<PanelWire>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -478,7 +492,6 @@ impl PatchErr {
 /// settings file on the card, `settings_card`, read through the same
 /// checks): the first value refused is the error, and `next` is then
 /// partly changed (the caller drops it).
-#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), PatchErr> {
     if let Some(v) = patch.wifi_ssid.clone() {
         next.wifi_ssid = v;
@@ -840,7 +853,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| match www::serve(req, "index.html")? {
+        stream::hand_off(req, #[optimize(size)] move |req| match www::serve(req, "index.html")? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => {
                 www::unavailable(req, "the web app in flash has no index.html")
@@ -869,15 +882,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if query_param(req.query(), "take_read_max").as_deref() == Some("1") {
             return req.json(&crate::membank::take_read_max());
         }
-        // The slim read (`status_json`'s `now`): taken fallibly, never kept.
+        // The slim read (`now_json`): taken fallibly, never kept.
         if query_param(req.query(), "now").as_deref() == Some("1") {
             let snap = status_snapshot(&c.status);
             let mut json = String::new();
-            if json.try_reserve_exact(768).is_err() {
+            if json.try_reserve_exact(512).is_err() {
                 req.header("Retry-After", "1")?;
                 return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
             }
-            status_json(&snap, &|| String::new(), false, true, &mut json);
+            now_json(&snap, &mut json);
             drop(snap);
             return req.json(&json);
         }
@@ -955,7 +968,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 req.header("Retry-After", "1")?;
                 return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
             }
-            status_json(&snap, &looks, recent, false, &mut json);
+            status_json(&snap, &looks, recent, &mut json);
             drop(snap);
             STATUS_LEN.store(json.len() as u32, std::sync::atomic::Ordering::Relaxed);
             STATUS_BUILD_US.store(t0.elapsed().as_micros() as u32, std::sync::atomic::Ordering::Relaxed);
@@ -974,7 +987,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
         };
         out.req.begin_chunked("200 OK", "application/json")?;
-        status_json(&snap, &looks, recent, false, &mut out);
+        status_json(&snap, &looks, recent, &mut out);
         drop(snap);
         let len = out.finish()?;
         STATUS_LEN.store(len as u32, std::sync::atomic::Ordering::Relaxed);
@@ -1054,7 +1067,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // A playlist's overrides, parsed: `?set=` takes the config's `set`
     // values (`""` = all files). Streamed a line at a time from its `.meta`.
-    server.route("/api/overrides", Method::Get, |req| {
+    server.route("/api/overrides", Method::Get, #[optimize(size)] |req| {
         if !files::affordable(req)? {
             return Ok(());
         }
@@ -1268,7 +1281,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // player's next open waits behind it — but still far cheaper than listing
     // the parent. `size` is null for a directory. (Not `/api/stat`: EasyPrivacy
     // blocks that path in uBlock Origin and Brave; `make blocklist-check`.)
-    server.route("/api/exists", Method::Get, |req| {
+    server.route("/api/exists", Method::Get, #[optimize(size)] |req| {
         let Some(card) = query_param(req.query(), "path") else {
             return req.bad_request("path= required");
         };
@@ -1327,14 +1340,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // the httpd task (and `/api/status`) for the seconds it takes
     // (`listing`: no wait for a place, a 503 + Retry-After: 1 the web app
     // retries; the task holds `cache_builder::busy()` for every job).
-    server.route("/api/cache/list", Method::Get, |req| listing(req, crate::cache::stream_list))?;
+    server.route("/api/cache/list", Method::Get, #[optimize(size)] |req| listing(req, crate::cache::stream_list))?;
 
     // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
-    server.route("/api/cache/failed", Method::Get, |req| listing(req, crate::cache_builder::stream_failed))?;
+    server.route("/api/cache/failed", Method::Get, #[optimize(size)] |req| listing(req, crate::cache_builder::stream_failed))?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
-    server.route_json("/api/cache/failed", Method::Post, |req| {
+    server.route_json("/api/cache/failed", Method::Post, #[optimize(size)] |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -1356,7 +1369,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
         }
     })?;
-    server.route("/api/cache/failed", Method::Delete, |req| {
+    server.route("/api/cache/failed", Method::Delete, #[optimize(size)] |req| {
         match crate::cache_builder::clear_failed() {
             Ok(existed) => req.json(&format!(r#"{{"ok":true,"cleared":{existed}}}"#)),
             Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
@@ -1404,7 +1417,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // the httpd task it held `/api/status` that long (measured on the spare,
     // 2026-10-26). So it goes out from the stream task, queued like a file
     // (a full queue for 2 s: 503 + Retry-After: 1, retried by the web app).
-    server.route("/api/files", Method::Get, |req| {
+    server.route("/api/files", Method::Get, #[optimize(size)] |req| {
         let dir = query_param(req.query(), "dir").unwrap_or_else(|| "/".to_string());
         let Some(fs_dir) = files::card_path(config::SD_MOUNT, &dir) else {
             return req.bad_request("path escapes the card");
@@ -1417,10 +1430,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // file cannot be trusted.
         if query_param(req.query(), "names").as_deref() == Some("1") && !sizes {
             if let Some(names) = crate::fatidx::names(&dir) {
-                return listing(req, move |req| stream_names(req, &dir, names));
+                return listing(req, #[optimize(size)] move |req| stream_names(req, &dir, names));
             }
         }
-        listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
+        listing(req, #[optimize(size)] move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
@@ -1437,15 +1450,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         } else if name == c.settings.lock().unwrap().hostname {
             // Its own name: whoever else answers to it, this display has it.
             Check::Free
+        } else if let Some(rx) = name_check_sent(&c, &name) {
+            // The probe takes up to NAME_CHECK_WAIT: a long request.
+            return long_job(req, config::NAME_CHECK_WAIT + Duration::from_secs(1), Box::new(#[optimize(size)] move |req, expired| {
+                let check = job_answer(&rx, expired)?.unwrap_or(Check::Unknown);
+                Some(name_json(req, &name, valid, check))
+            }));
         } else {
-            name_check(&c, &name)
+            Check::Unknown
         };
-        req.json(&format!(
-            r#"{{"name":{},"valid":{valid},"taken":{},"by":{}}}"#,
-            json_string(&name),
-            check.taken_json(),
-            check.by().map_or_else(|| "null".to_string(), json_string)
-        ))
+        name_json(req, &name, valid, check)
     })?;
 
     let c = ctx.clone();
@@ -1506,7 +1520,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // The web app in flash: what is there, and a new pack (`www.rs`). The
     // body is received on the stream task like every other upload, which is
     // also where every web app file is sent from: the two never overlap.
-    server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
+    server.route("/api/www", Method::Get, #[optimize(size)] |req| req.json(&www::info_json()))?;
     let c = ctx.clone();
     server.route("/api/www", Method::Put, #[optimize(size)] move |req| {
         // Why staging on the card is not possible, if it is not: the log
@@ -1516,7 +1530,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
         };
         let net = c.net.clone();
-        stream::receive(req, move |up| www::receive(up, card, &net))
+        stream::receive(req, #[optimize(size)] move |up| www::receive(up, card, &net))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
@@ -1530,7 +1544,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/firmware", Method::Put, #[optimize(size)] move |req| {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
-        stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
+        stream::receive(req, #[optimize(size)] move |up| crate::ota::receive(up, mounted, &net))
     })?;
 
     // Format the card FAT32 — only one that is mounted but cannot be read
@@ -1572,7 +1586,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // changed. `?test_errors=N` (test hook): the next N card transfers at
     // full speed fail on purpose, so the in-place slow-down can be watched
     // on a good card.
-    server.route("/api/card/full-speed", Method::Post, |req| {
+    server.route("/api/card/full-speed", Method::Post, #[optimize(size)] |req| {
         // `?test_errors=N`: `bench` builds only (ignored in a release).
         #[cfg(feature = "bench")]
         let test = query_param(req.query(), "test_errors")
@@ -1659,7 +1673,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let c = ctx.clone();
     server.route("/api/manifest", Method::Put, #[optimize(size)] move |req| {
         let c = c.clone();
-        stream::receive(req, move |up| {
+        stream::receive(req, #[optimize(size)] move |up| {
             install_manifest(up, &c, config::MANIFEST_PATH.to_string())
         })
     })?;
@@ -1669,7 +1683,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let name = req.path().trim_start_matches("/api/sets/");
         let name = crate::httpd::percent_decode(name);
         let c = c.clone();
-        stream::receive(req, move |up| {
+        stream::receive(req, #[optimize(size)] move |up| {
             if name.is_empty() || name.contains('/') || name.contains("..") {
                 return up.bad_request("set name must be a single path segment");
             }
@@ -1690,7 +1704,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // `?new=1`: only if there is no such file (409 otherwise): a name
         // picked from a names list that has gone stale never replaces a GIF.
         let create_new = query_param(req.query(), "new").as_deref() == Some("1");
-        stream::receive(req, move |up| put_file(up, &c, &rel, create_new))
+        stream::receive(req, #[optimize(size)] move |up| put_file(up, &c, &rel, create_new))
     })?;
 
     // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
@@ -1700,7 +1714,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let c = ctx.clone();
     server.route_json("/api/files/move", Method::Post, #[optimize(size)] move |req| {
         let c = c.clone();
-        stream::receive(req, move |up| move_file(up, &c))
+        stream::receive(req, #[optimize(size)] move |up| move_file(up, &c))
     })?;
 
     // --- Delete ---------------------------------------------------------------
@@ -1805,7 +1819,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // (and an obsolete one, if it is still there) — served as
     // text. Without this they
     // fell through to the `/*` www catch-all and 404ed.
-    server.route("/filelist*", Method::Get, |req| {
+    server.route("/filelist*", Method::Get, #[optimize(size)] |req| {
         let rel = crate::httpd::percent_decode(req.path());
         let name = rel.trim_start_matches('/');
         if name.contains('/') {
@@ -1820,31 +1834,31 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // GIFs and their copies: a full stream queue is a 503 at once (the web
     // app's thumbnails back off, its other reads retry: `queued`), so they
     // never hold the httpd task; a playlist waits for a place as a module does.
-    server.route("/gifs/*", Method::Get, |req| {
+    server.route("/gifs/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
-    server.route("/sets/*", Method::Get, |req| {
+    server.route("/sets/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The user's Formulas (`/formulas/<stem>.psi`: the web app lists and
     // reads them, and writes them through `PUT /api/files/formulas/…`).
-    server.route("/formulas/*", Method::Get, |req| {
+    server.route("/formulas/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
     // (the device's own builder, `opendmd-pack convert`, or the web app).
-    server.route("/cache/*", Method::Get, |req| {
+    server.route("/cache/*", Method::Get, #[optimize(size)] |req| {
         serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
 
     // The web app under `/www/` too (both spellings, as when it was on the
     // card).
-    server.route("/www/*", Method::Get, |req| {
+    server.route("/www/*", Method::Get, #[optimize(size)] |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/www/"));
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| match www::serve(req, &rel)? {
+        stream::hand_off(req, #[optimize(size)] move |req| match www::serve(req, &rel)? {
             www::Served::Sent => Ok(()),
             www::Served::NotFound => req.not_found(&format!("/www/{rel}")),
             www::Served::Unavailable(why) => www::unavailable(req, &why),
@@ -1856,7 +1870,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // 404 otherwise, because on a real network these paths belong to nobody.
     for probe in opendmd_core::access::PORTAL_PROBES {
         let c = ctx.clone();
-        server.route(probe, Method::Get, move |req| match portal_target(&c) {
+        server.route(probe, Method::Get, #[optimize(size)] move |req| match portal_target(&c) {
             Some(target) => req.redirect(&target),
             None => req.not_found("not a captive portal"),
         })?;
@@ -1877,7 +1891,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if www::not_modified(req)? {
             return Ok(());
         }
-        stream::hand_off(req, move |req| {
+        stream::hand_off(req, #[optimize(size)] move |req| {
             match www::serve(req, rel.trim_start_matches('/'))? {
                 www::Served::Sent => Ok(()),
                 _ if target.is_some() => req.redirect(target.as_deref().unwrap_or("/")),
@@ -1942,7 +1956,7 @@ fn listing<F>(req: &mut Req, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
 {
-    stream::hand_off_within(req, Duration::ZERO, move |req| {
+    stream::hand_off_within(req, Duration::ZERO, #[optimize(size)] move |req| {
         if !files::affordable(req)? {
             return Ok(());
         }
@@ -1976,7 +1990,6 @@ struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
 ///
 /// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
 /// folder: the intent and the wait are for the whole folder then.
-#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
     let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
     let alias = !opendmd_core::fatread::is_canonical(card);
@@ -2139,7 +2152,7 @@ fn serve_under(req: &mut Req, root: &str, wait: Duration) -> Result<()> {
 /// Send the card file at `path` from the streaming task, or a 404 naming
 /// `rel` if there is none.
 fn stream_file(req: &mut Req, path: String, rel: String, wait: Duration) -> Result<()> {
-    stream::hand_off_within(req, wait, move |req| {
+    stream::hand_off_within(req, wait, #[optimize(size)] move |req| {
         if files::serve(req, &path)? {
             Ok(())
         } else {
@@ -2635,16 +2648,48 @@ fn applied_json(a: &Applied) -> String {
     )
 }
 
+/// `"now_playing":{…},"paused":…,"transfer":…,`: what the Now page follows,
+/// in the full status and the slim one alike. `transfer`: a file is going
+/// to or from the card on the stream task, or an upload is in hand (the
+/// page polls less often then).
+#[optimize(size)] // (CPU0: no frame runs it)
+#[inline(never)]
+fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::Write) {
+    let _ = write!(
+        out,
+        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"transfer":{},"#,
+        s.ordinal,
+        json_string(&s.path),
+        json_string(&s.title),
+        s.position_at(t).as_millis(),
+        s.frame,
+        formula_json(&s.path),
+        kept_json(s),
+        s.paused,
+        stream::transfers() > 0 || stream::uploads() > 0,
+    );
+}
+
+/// `GET /api/status?now=1`: the Now page's poll between full reads, ~300 B
+/// (one segment) against the full answer's ~3.7 KB (three, held in lwIP
+/// until the client's ACK): the clock and what is on screen.
+#[optimize(size)] // (CPU0: no frame runs it)
+fn now_json(s: &Status, out: &mut String) {
+    use std::fmt::Write as _;
+    let t = s.epoch.elapsed();
+    let _ = write!(out, r#"{{"uptime_secs":{},"t_ms":{},"#, s.uptime_secs, t.as_millis());
+    now_playing_json(s, t, out);
+    out.pop(); // the trailing comma
+    out.push('}');
+}
+
 /// `t_ms` is the device's clock (ms since the main loop's epoch) at the
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
 /// with the panel, correcting for its own request latency the NTP way.
 #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
 #[inline(never)]
-/// The status; with `now` only its head and `now_playing` (`?now=1`, the
-/// Now page's poll between full reads: ~0.5 KB, one segment, against the
-/// full answer's ~3.7 KB, three held in lwIP until the client's ACK).
-fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, now: bool, out: &mut dyn std::fmt::Write) {
+fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut dyn std::fmt::Write) {
     // In parts (net-wedge2): each `write!`'s arguments are made, written
     // and dropped before the next part's, so the strings the parts are
     // made of never all exist at once.
@@ -2663,23 +2708,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, now: bool, 
         json_string(&s.hostname),
         json_string(&s.mdns),
     );
-    let _ = write!(
-        out,
-        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"transfer":{},"#,
-        s.ordinal,
-        json_string(&s.path),
-        json_string(&s.title),
-        s.position_at(t).as_millis(),
-        s.frame,
-        formula_json(&s.path),
-        kept_json(s),
-        s.paused,
-        stream::transfers() > 0 || stream::uploads() > 0,
-    );
-    if now {
-        let _ = out.write_str(r#""now":true}"#);
-        return;
-    }
+    now_playing_json(s, t, out);
     // `?recent=1`: Recently played, newest first, and which is on screen.
     if recent {
         let _ = out.write_str(r#""recent":["#);
@@ -3028,7 +3057,6 @@ const STATUS_CACHE: std::time::Duration = std::time::Duration::from_millis(100);
 /// handler the copy (~1.5 KB) sat on the httpd task's stack under the whole
 /// of `status_json` (728 B of 6.5 KB left in the emulator).
 #[inline(never)]
-#[optimize(size)] // (CPU0, not on a frame's path: net-stall's flash)
 fn status_snapshot(status: &std::sync::Mutex<Status>) -> Box<Status> {
     let s = status.lock().unwrap();
     let held = std::time::Instant::now();
@@ -3194,8 +3222,8 @@ fn scan_json(aps: &[ScannedAp]) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// A route's body out of `start` (net-stall's flash: a function can be
-/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+/// A route's body out of `start`, for size like the routes' closures (CPU0,
+/// not on a frame's path).
 #[optimize(size)]
 fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         let Some(body) = json_body(req)? else {
@@ -3386,8 +3414,8 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         }))
     }
 
-/// A route's body out of `start` (net-stall's flash: a function can be
-/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+/// A route's body out of `start`, for size like the routes' closures (CPU0,
+/// not on a frame's path).
 #[optimize(size)]
 fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         let declared = req.content_len();
@@ -3454,8 +3482,8 @@ fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         }))
     }
 
-/// A route's body out of `start` (net-stall's flash: a function can be
-/// optimised for size, a closure cannot; CPU0, not on a frame's path).
+/// A route's body out of `start`, for size like the routes' closures (CPU0,
+/// not on a frame's path).
 #[optimize(size)]
 fn post_formula(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         if !crate::state::FORMULAS {

@@ -143,8 +143,8 @@ it is under way, and `/api/status` shows the result.
 ### GET /api/job
 
 The answer to a long request. `PUT /api/config`, `/api/schedule`,
-`POST /api/wake`, `/api/reindex`, `/api/follow/test` and
-`GET /api/wifi/scan` are answered at once if they are done within 0.3 s;
+`POST /api/wake`, `/api/reindex`, `/api/follow/test`, `GET /api/wifi/scan`
+and `/api/name-check` are answered at once if they are done within 0.3 s;
 otherwise `202` `{"pending":true,"job":N}` with `X-Job: N` and
 `Retry-After: 1`, and `GET /api/job?id=N` gives the request's own answer
 once it is there (`202` again until then; `404` for no such job: answered
@@ -187,8 +187,8 @@ curl -s -X POST "$DMD/api/skip?back=1"
 ### GET /api/status
 
 A cheap snapshot; counts since boot. `?now=1` is the slim one the web
-app's Now page polls between full reads (~0.5 KB, one segment): the fields
-up to `mdns`, then `now_playing`, `paused`, `transfer` and `"now":true`.
+app's Now page polls between full reads (~300 B, one segment): `uptime_secs`,
+`t_ms`, `now_playing`, `paused` and `transfer` only.
 
 Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client polling faster than every 100 ms gets the last answer again, sized. With under 10 KB of heap free it is a `503` with `Retry-After: 1` (`net.status_refused`).
 
