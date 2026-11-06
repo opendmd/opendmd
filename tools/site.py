@@ -127,6 +127,24 @@ import gallery_page  # tools/gallery_page.py, beside this file
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# opendmd-webmin (make webmin), set by --webmin: the scripts and stylesheets
+# copied from opendmd-web/share/ are minified in the output the way `make web`
+# minifies the app's (tools/web-minify.py); the sources stay as written.
+WEBMIN: Path | None = None
+
+
+def minify_in_place(root: Path, files: list[Path]) -> None:
+    """Minify the .js/.css `files` (under `root`) where they stand, one file at a time."""
+    rel = sorted(f.relative_to(root).as_posix() for f in files if f.suffix in (".js", ".css"))
+    if WEBMIN and rel:
+        subprocess.run([str(WEBMIN), str(root), str(root), *rel], check=True)
+
+
+def share_copy(src: Path, dst: Path) -> None:
+    """A file of opendmd-web/share/ copied to `dst`, minified if it is a script or stylesheet."""
+    shutil.copyfile(src, dst)
+    minify_in_place(dst.parent, [dst])
+
 # Source (repo path) -> published path, in the order of the docs menu.
 PAGES = {
     "site/pages/home.html": "index.html",
@@ -902,7 +920,7 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
             shutil.copyfile(p, page_dir / "src" / p.name)
     body = gallery_page.build(page_dir, page_dir / "src", contrib, tool, gallery_page.load_added(examples))
     for js in ("ftiles.js", "ftsort.js"):
-        shutil.copyfile(ROOT / "opendmd-web/share/ref" / js, page_dir / js)
+        share_copy(ROOT / "opendmd-web/share/ref" / js, page_dir / js)
     (out / GALLERY_PAGE).write_text(render(
         GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery", head="\n" + GALLERY_HEAD,
         description="Formulas for the OpenDMD LED display: change one here, then open it on your panel."), encoding="utf-8")
@@ -920,6 +938,7 @@ APP_PAGES = {F_PAGE: ("f.css", "fpage"), CREATE_PAGE: ("create.css", "cpage")}
 def app_page(out: Path, page: str, wm: dict) -> None:
     css, cls = APP_PAGES[page]
     shutil.copytree(ROOT / "opendmd-web/share" / posixpath.dirname(page), out / posixpath.dirname(page))
+    minify_in_place(out, [f for f in (out / posixpath.dirname(page)).rglob("*") if f.is_file()])
     dest = out / page
     text = dest.read_text(encoding="utf-8")
     subs = [
@@ -1013,12 +1032,15 @@ def main() -> None:
     ap.add_argument("--api-archive", type=Path, help="the public gallery repo's dev/api/ (earlier releases' API pages), if fetched")
     ap.add_argument("--api-freeze", choices=("auto", "yes", "no"), default="auto",
                     help="freeze this release's API page as dev/api/v<version>.html (auto: when built from its tag)")
+    ap.add_argument("--webmin", type=Path, help="opendmd-webmin, built (make webmin): minify the share/ scripts and stylesheets in OUT")
     ap.add_argument("--api-only", action="store_true",
                     help="write only dev/api.html and dev/api/, into OUT as it is (tools/site-smoke.py's publish-like check)")
     a = ap.parse_args()
     if not a.api_only and not (a.www and a.card and a.gallery_tool):
         ap.error("--www, --card and --gallery-tool are required (unless --api-only)")
     out: Path = a.out
+    global WEBMIN
+    WEBMIN = a.webmin.resolve() if a.webmin else None
     if a.api_only:  # into a site already built, or a new folder: only dev/api.html and dev/api/ are replaced
         shutil.rmtree(out / API_DIR, ignore_errors=True)
         out.mkdir(parents=True, exist_ok=True)
@@ -1044,12 +1066,12 @@ def main() -> None:
     for page in APP_PAGES:
         app_page(out, page, art["wordmark"])
     # Their way to a panel (the address, the hand-off), shared.
-    shutil.copyfile(ROOT / "opendmd-web/share/panel.js", out / "panel.js")
+    share_copy(ROOT / "opendmd-web/share/panel.js", out / "panel.js")
     # The Psi reference's script (the page itself is a doc, written below).
     (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
+    share_copy(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
     for name in ROOT_SCRIPTS:
-        shutil.copyfile(ROOT / "opendmd-web/share/ref" / name, out / name)
+        share_copy(ROOT / "opendmd-web/share/ref" / name, out / name)
     info, beta = release(a.dist, out, a.beta_dist)
     if beta:
         info = {**info, "beta": beta["version"]}
