@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::files;
-use crate::httpd::{json_string, query_param, Method, Req, Respond, Server, Upload};
+use crate::httpd::{json_string, json_string_len, query_param, Method, Req, Respond, Server, Upload};
 use crate::nvs_config::Settings;
 use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
 use crate::stream;
@@ -1074,7 +1074,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let brightness = c.settings.lock().unwrap().brightness;
         let snap = status_snapshot(&c.status);
-        let mut ev = crate::events::Event::new(EVENT_ROOM + snap.path.len() + snap.title.len() + snap.manifest.len())?;
+        // Sized on the strings as escaped: a title of quotes doubles.
+        let strings = json_string_len(&snap.path) + json_string_len(&snap.title) + json_string_len(&snap.manifest);
+        let mut ev = crate::events::Event::new(EVENT_ROOM + strings)?;
         event_json(&snap, brightness, &mut ev);
         Some(ev)
     });

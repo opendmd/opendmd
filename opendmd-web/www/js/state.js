@@ -129,9 +129,11 @@ export const app = {
 
   // (A device, or the demo's player: js/demo.js.)
   async refreshStatus(recent) {
+    // (Counted as a read even with no player: a watcher waiting on it must
+    // not be due again at once.)
+    fullAt = performance.now();
     if (!this.src?.config) return null;
     const was = this.cardKey, seq = ++this.stAsked;
-    fullAt = performance.now();
     const st = await this.src.status(recent);
     // Replies can land out of order (the Now poll, a return to the tab and a
     // view's own refresh are each a request): one asked before the latest

@@ -68,6 +68,8 @@ const askKey = async () => { const k = await (asking ??= import('./firmware.js')
 export const auth = (hd) => { const k = store.get('apiKey'); return k ? { ...hd, Authorization: 'Bearer ' + k } : hd; };
 export async function dfetch(url, init = {}, ms = 90000) {
   for (;;) {
+    // (A caller that gave up while the key was asked for: no retry.)
+    init.signal?.throwIfAborted();
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
     init.signal?.addEventListener('abort', () => ctl.abort());
     let r;

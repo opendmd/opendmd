@@ -65,6 +65,11 @@ static STATE: Mutex<State> = Mutex::new(State { listeners: Vec::new(), hash: 0, 
 static LISTENERS: AtomicU32 = AtomicU32::new(0);
 static HANDLE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static QUEUED: AtomicBool = AtomicBool::new(false);
+/// Ticks a queued push has waited (see [`queue`]).
+static WAITED: AtomicU32 = AtomicU32::new(0);
+/// A push still not run after this many ticks (10 s, longer than any
+/// handler holds the httpd task) is taken as lost and queued again.
+const LOST_TICKS: u32 = 40;
 type Source = Box<dyn Fn() -> Option<Event> + Send + Sync>;
 static SOURCE: OnceLock<Source> = OnceLock::new();
 /// Listeners closed for not reading (`net.events.dropped`).
@@ -151,9 +156,17 @@ pub fn start(handle: sys::httpd_handle_t, source: impl Fn() -> Option<Event> + S
 
 /// Queue a push on the httpd task if anyone listens and none is queued.
 fn queue() {
-    if LISTENERS.load(Relaxed) == 0 || QUEUED.swap(true, Relaxed) {
+    if LISTENERS.load(Relaxed) == 0 {
         return;
     }
+    // httpd_queue_work is a datagram to httpd's control socket, dropped
+    // without an error when that socket's mailbox is full: a push that
+    // never runs would leave QUEUED set for good. Queued again after
+    // LOST_TICKS (a second push is harmless).
+    if QUEUED.swap(true, Relaxed) && WAITED.fetch_add(1, Relaxed) < LOST_TICKS {
+        return;
+    }
+    WAITED.store(0, Relaxed);
     // SAFETY: the handle is the running server's; the work fn is ours.
     if unsafe { sys::httpd_queue_work(HANDLE.load(Relaxed), Some(push), std::ptr::null_mut()) } != sys::ESP_OK {
         QUEUED.store(false, Relaxed);
@@ -240,6 +253,7 @@ fn keep(l: &mut Listener, tail: &[u8]) -> bool {
 /// The push, on the httpd task (`httpd_queue_work`).
 unsafe extern "C" fn push(_: *mut c_void) {
     QUEUED.store(false, Relaxed);
+    WAITED.store(0, Relaxed);
     let handle = HANDLE.load(Relaxed);
     let mut close = [-1i32; MAX_LISTENERS];
     let mut st = STATE.lock().unwrap_or_else(|p| p.into_inner());
