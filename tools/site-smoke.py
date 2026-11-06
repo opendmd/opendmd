@@ -80,7 +80,13 @@ build URL serves. There the art index must also carry
   release's frozen page, kept byte for byte; a stray file and a link, left
   out) and this release frozen: both exist and are listed newest first,
   the frozen page says which release it describes and links the latest;
-  with `--api-freeze auto` off a tag, nothing new is frozen;
+  with `--api-freeze auto` off a tag, nothing new is frozen (the release
+  frozen is `--beta-dist`'s when one is given: the tree's own);
+- the install page: the DevKit's button for `--dist`'s release, which
+  install/release.json names; install/beta.json the same shape: with
+  `--beta-dist`, that beta's (files, manifest and parts under
+  install/firmware/beta/) and a second button for it, else release.json
+  byte for byte and no beta button;
 - /dev/psi/ (the Psi language reference): in the menu, its generated
   tables, grammar and error index (every code an anchor, the common ones
   with a before and an after, E407/E408 internal), under its own CSP (the
@@ -92,7 +98,8 @@ build URL serves. There the art index must also carry
 - the demo's Settings, against its player in the page (js/demo.js): every
   tab; brightness, the colour, the Formula look, each GIF's stay, the
   playlist, night mode and a rule shown on its panel and in Now's banner;
-  panel timing tried and kept, a new name, a key; firmware, WiFi and
+  panel timing tried and kept, Get beta updates on and off, a new name, a
+  key; firmware, WiFi and
   restarting shown with a line saying the demo can't; kept across a reload,
   not into a new session; every tab at laptop and phone sizes (in --shots,
   else target/site-smoke/).
@@ -1677,13 +1684,14 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     print(f"  shots in {shots}")
 
 
-def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> None:
+def api_pages(browser, site: Path, dist: Path, beta_dist: Path | None, art: Path, errors: list[str]) -> None:
     page_html = site / "dev/api.html"
     check(page_html.is_file() and "HTTP API" in page_html.read_text(), "api: dev/api.html is in the site")
     carried = sorted(p.name for p in (site / "dev/api").glob("v*.html"))
     text = page_html.read_text() if page_html.is_file() else ""
     check(all(f'href="api/{n}"' in text for n in carried), f"api: dev/api.html links every frozen copy the site carries {carried}")
-    ver = json.loads((dist / "manifest-4mb.json").read_text())["version"]
+    # The frozen page is this tree's release: the beta, when one is newer than the release.
+    ver = json.loads(((beta_dist or dist) / "manifest-4mb.json").read_text())["version"]
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         arch = tmp / "archive"
@@ -1699,6 +1707,7 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
 
         def build(freeze: str) -> str:
             r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "tools/site.py"), str(out), "--api-only", "--dist", str(dist),
+                                *(["--beta-dist", str(beta_dist)] if beta_dist else []),
                                 "--art", str(art), "--api-archive", str(arch), "--api-freeze", freeze],
                                cwd=ROOT, capture_output=True, text=True)
             check(r.returncode == 0, f"api: site.py --api-only --api-freeze {freeze} ({r.stderr.strip()[-200:]})")
@@ -1919,15 +1928,41 @@ def psi_error_links(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
-def install_links(site: Path) -> None:
+def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
     install = (site / "install/index.html").read_text()
-    # One board: the DevKit's button. An 8 MB board in development (8mb) is hidden for now, but its
-    # update bundle stays published for release.json's variants (the web app's update check).
-    check(install.count("<esp-web-install-button") == 1 and 'manifest="firmware/manifest-4mb.json"' in install
-          and "8mb" not in install and "8 MB build" not in install and "Not sure which" not in install,
-          "install: one Install button, the DevKit's, and nothing about the hidden 8 MB board")
     fw = site / "install/firmware"
     rel_info = json.loads((site / "install/release.json").read_text())
+    beta_info = json.loads((site / "install/beta.json").read_text())
+    ver = json.loads((dist / "manifest-4mb.json").read_text())["version"]
+    # One board: the DevKit's button (and, with a beta newer than the release,
+    # the beta's below it). An 8 MB board in development (8mb) is hidden for now, but its
+    # update bundle stays published for release.json's variants (the web app's update check).
+    buttons = 2 if beta_dist else 1
+    check(install.count("<esp-web-install-button") == buttons and 'manifest="firmware/manifest-4mb.json"' in install
+          and "8mb" not in install and "8 MB build" not in install and "Not sure which" not in install,
+          f"install: {buttons} Install button(s), the DevKit's, and nothing about the hidden 8 MB board")
+    check(rel_info["version"] == ver and filecmp.cmp(fw / "manifest-4mb.json", dist / "manifest-4mb.json", shallow=False)
+          and f"OpenDMD {ver}." in install,
+          f"install: release.json and the Install button are --dist's release ({rel_info['version']}, {ver})")
+    # beta.json: the same shape, the newest release. Without a beta newer than
+    # the release it is release.json byte for byte, and there is no beta folder.
+    bdir = site / "install/firmware/beta"
+    if beta_dist is None:
+        check((site / "install/beta.json").read_bytes() == (site / "install/release.json").read_bytes()
+              and not bdir.exists() and "beta-install" not in install,
+              "install: beta.json is release.json (no beta newer than the release), no beta button")
+    else:
+        bver = json.loads((beta_dist / "manifest-4mb.json").read_text())["version"]
+        files = [beta_info["firmware"], beta_info["www"], *(v["firmware"] for v in beta_info["variants"].values())]
+        check(beta_info["version"] == bver and set(beta_info) == set(rel_info) and set(beta_info["variants"]) == set(rel_info["variants"])
+              and all(f.startswith("firmware/beta/") and (site / "install" / f).is_file() for f in files)
+              and filecmp.cmp(bdir / f"opendmd-{bver}-4mb.odfw", beta_dist / f"opendmd-{bver}-4mb.odfw", shallow=False),
+              f"install: beta.json names --beta-dist's {bver}, its files under firmware/beta/ ({beta_info['version']})")
+        check(filecmp.cmp(bdir / "manifest-4mb.json", beta_dist / "manifest-4mb.json", shallow=False)
+              and all((bdir / pt["path"]).is_file() for b in json.loads((bdir / "manifest-4mb.json").read_text())["builds"] for pt in b["parts"])
+              and 'manifest="firmware/beta/manifest-4mb.json"' in install and f"install the beta, OpenDMD {bver}" in install
+              and not (bdir / "manifest-8mb.json").exists(),
+              "install: the beta's own button, its manifest and parts under firmware/beta/ (the 4mb only)")
     check((fw / "manifest-4mb.json").is_file() and (fw / "manifest.json").is_file() and not (fw / "manifest-8mb.json").exists(),
           "install: the 4mb manifest is published, the 8mb one is not")
     check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and "8mb" in rel_info["variants"],
@@ -1946,6 +1981,7 @@ def main() -> int:
     ap.add_argument("--shots", type=Path)
     ap.add_argument("--gallery-tool", type=Path, default=ROOT / "opendmd-gallery/target/release/opendmd-gallery")
     ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (its manifest's version)")
+    ap.add_argument("--beta-dist", type=Path, help="the beta make site published beside it (BETA_DIST), if any")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
     ap.add_argument("--base", help="fetch the site from here (e.g. cf dev's http://127.0.0.1:8787) instead of serving SITE")
     a = ap.parse_args()
@@ -1984,13 +2020,13 @@ def main() -> int:
         print("Open on my panel, the site to the panel's app (saved, kept over a reload)")
         panel_end_to_end(browser, base, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
-        api_pages(browser, a.site, a.dist, a.art, errors)
+        api_pages(browser, a.site, a.dist, a.beta_dist, a.art, errors)
         print("the Psi language reference (dev/psi/)")
         psi_reference(browser, base, a.site, errors, a.shots)
         print("error codes linked to the reference (/f/, the demo)")
         psi_error_links(browser, base, errors)
         print("install page")
-        install_links(a.site)
+        install_links(a.site, a.dist, a.beta_dist)
         if a.shots:
             screenshots(browser, base, errors, a.shots)
         browser.close()

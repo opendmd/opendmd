@@ -16,9 +16,14 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "The release whose installer and update files the site offers (a v* tag with a GitHub release)"
+        description: "The release install/release.json and the installer name: the newest final (before any final, the newest beta)"
         type: string
         required: true
+      beta:
+        description: "A beta newer than it (after a final), for install/beta.json; empty: beta.json is release.json"
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: site-cloudflare
@@ -61,6 +66,20 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS)
           test "$(jq -r .version dist/manifest-4mb.json)" = "${TAG#v}" || { echo "::error::dist/manifest-4mb.json is not ${TAG#v}"; exit 1; }
 
+      - name: The beta's files (beta-dist/, if one is named)
+        if: inputs.beta != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.beta }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]] || { echo "::error::'$TAG' is not a v* beta tag"; exit 1; }
+          d="$RUNNER_TEMP/beta-dist"
+          mkdir -p "$d"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$d"
+          (cd "$d" && sha256sum -c SHA256SUMS)
+          test "$(jq -r .version "$d/manifest-4mb.json")" = "${TAG#v}" || { echo "::error::the beta's manifest-4mb.json is not ${TAG#v}"; exit 1; }
+
       # The demo card's Kenney (CC0) animations: made from the sprites committed
       # in art/process/kenney-pixel-platformer (offline; the GIFs are ignored).
       - name: The art demos' GIFs
@@ -86,7 +105,9 @@ jobs:
           mkdir -p "$dir/gallery" "$dir/dev/api"
 
       - name: The public site (make site)
-        run: make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=auto
+        env:
+          BETA: ${{ inputs.beta }}
+        run: make site ${BETA:+BETA_DIST="$RUNNER_TEMP/beta-dist"} GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=auto
 
       - name: The tree is clean after the build
         run: |

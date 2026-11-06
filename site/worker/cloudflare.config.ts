@@ -42,16 +42,20 @@ export default defineConfig({
       // /formulas/*: the gallery page and its files from the store (S6);
       // the Worker hands everything else under it to the assets.
       // /stats and the counted paths (src/counts.ts): the update check's
-      // release.json and the release's install images, counted and then
-      // answered by the assets unchanged. The rest of /install/ skips the Worker.
+      // release.json and beta.json and the release's (and a beta's) install
+      // images, counted and then answered by the assets unchanged. The rest
+      // of /install/ skips the Worker.
       runWorkerFirst: [
         "/api/*",
         "/formulas/*",
         "/stats",
         "/stats/",
         "/install/release.json",
+        "/install/beta.json",
         "/install/firmware/opendmd-*-app.bin",
         "/install/firmware/opendmd-*-full.bin",
+        "/install/firmware/beta/opendmd-*-app.bin",
+        "/install/firmware/beta/opendmd-*-full.bin",
       ],
     },
     env: {
