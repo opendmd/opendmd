@@ -854,6 +854,9 @@ fn main() -> Result<()> {
     // back if the update fails (`None` if the 12 KB was not there: black).
     let mut update_shown = show::NO_UPDATE;
     let mut update_saved: Option<Canvas> = None;
+    // What status named while the message is up (nothing plays then): put
+    // back with the paused frame, if one is.
+    let mut update_named: Option<(String, String)> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -1608,6 +1611,8 @@ fn main() -> Result<()> {
             if update != show::NO_UPDATE && update_shown == show::NO_UPDATE {
                 end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a firmware update");
             }
+            let was_shown = update_shown;
+            let had_saved = update_saved.is_some();
             update_screen(
                 update,
                 &mut update_shown,
@@ -1618,6 +1623,17 @@ fn main() -> Result<()> {
                 &mut looks,
                 &settings,
             );
+            if was_shown == show::NO_UPDATE && update_shown != show::NO_UPDATE {
+                let mut s = status.lock().unwrap();
+                update_named = Some((std::mem::take(&mut s.path), std::mem::take(&mut s.title)));
+            } else if was_shown != show::NO_UPDATE && update_shown == show::NO_UPDATE {
+                if let (true, Some((path, title))) = (had_saved, update_named.take()) {
+                    let mut s = status.lock().unwrap();
+                    s.path = path;
+                    s.title = title;
+                }
+                update_named = None;
+            }
             if update_shown != show::NO_UPDATE {
                 fresh = true;
                 if let Ok(mut s) = status.try_lock() {
