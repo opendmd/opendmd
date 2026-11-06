@@ -183,8 +183,8 @@ access.
     `reading the staged pack from the card at byte N failed 4 times: …;
     the web app in flash is unchanged`) leaves **the web app in flash
     exactly as it was**, still served. Only a staged pack that read back
-    good is written to flash, from the card (~3 s for 800 KB, most of it
-    the erase pauses).
+    good is written to flash, from the card (a few seconds for ~0.5 MB, most
+    of it the erase pauses).
   - **Card reads are retried.** A card can fail one read with a data CRC
     error and read the rest fine, so every
     read of the staged file, in the check and in the copy, is tried up to
@@ -207,7 +207,7 @@ access.
     flash holds a good pack is stale and deleted; one that is not a good
     pack is deleted; one the card will not read stays for the next boot.
     A new push replaces it either way. The boot task does this before it
-    starts the network, so WiFi comes up that much later (~9 s for 877 KB).
+    starts the network, so WiFi comes up that much later (a few seconds for the ~0.5 MB pack).
   - **Without a card** (none, or one that cannot be read) the update is
     a 503, and one where `/update/www.pack.part` cannot be created a 500:
     the pack is staged on the card or not at all, since its signature is
@@ -232,7 +232,7 @@ access.
 
   The reply is `GET /api/www`'s object; a pack that does not verify after
   writing is a 422, one cut short a 408 (or nothing, if the client went
-  away), a copy from the card that failed twice a 500. 782 KB takes ~7 s over WiFi plus the flash write.
+  away), a copy from the card that failed twice a 500. The ~0.5 MB pack takes a few seconds over WiFi plus the flash write.
 - **`GET /api/www`**: `{"version","bytes","entries","ok","error","staged"}`;
   the same object is `www` in `/api/status`, and `PUT /api/www`'s reply.
   `staged`: whether this boot's last update attempt was staged on the

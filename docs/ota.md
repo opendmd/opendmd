@@ -31,8 +31,8 @@ updater leaves after an update (a mismatch is a warning in the log).
 **Older bundles.** A validly signed bundle is installed whatever its
 version: going back is a feature (a release that misbehaves). A firmware
 can be built with a **rollback floor** instead, off by default:
-`make fw-release FW_OTA_FLOOR=1.0.0` (`OPENDMD_OTA_FLOOR`, read at compile
-time) refuses any bundle older than that version with a 422 at its header
+`OPENDMD_OTA_FLOOR=1.0.0` in the environment of the firmware build (read at
+compile time; no Makefile variable sets it) refuses any bundle older than that version with a 422 at its header
 ("firmware X is older than 1.0.0, the oldest this player installs";
 `opendmd_core::ota::check_floor`, the same order as `older()`). The web
 app's Firmware card reads the chosen file's header and, when its version
@@ -41,7 +41,7 @@ pre-release before its release; `older()` in `js/firmware.js`), asks
 "This is older than the firmware on the panel (X). Install it anyway?"
 first. `make fw-ota` does not ask.
 
-**Timing**, on a 64 GB card at 20 MHz: the 2.09 MB bundle uploads in ~10-16 s; the updater
+**Timing**, on a 64 GB card at 20 MHz: the 2.3 MB bundle uploads in ~10-16 s; the updater
 takes ~19 s (SHA-256 on the card 2.9 s, the write 13.7 s, the image check
 1.4 s); `GET /api/firmware` answers with the new version ~33 s after the
 upload ends, playback ~45 s. A bundle signed with another key is refused
@@ -223,7 +223,7 @@ spare     0x580000 0x280000    data, unused (2.5 MB)
 ```
 magic     the layout: "ODFW34mb" (4mb, table v3)       8 B
           or "ODFW18mb" (8mb, table v2); "ODFW1\0\0\0" was 4mb's table v2
-version   32 B, NUL-padded (e.g. "0.4.0")
+version   32 B, NUL-padded (e.g. "1.0.0")
 length    u32 LE, image bytes
 sha256    32 B, of the image
 sig       64 B, Ed25519 over (magic|version|length|sha256)
@@ -320,7 +320,7 @@ The web app pack is signed with the same key and key ids
    `/update/done-*.bin`, logs the version
    change in the log ring, deletes the file, and the web app's Firmware card
    shows the new version. `GET /api/firmware` reports `{version, build,
-   variant, flash_size, pending, last, log}`: `log` is the end of `/update/log.txt`
+   variant, layout, features, flash_size, flash{mhz,mode}, pending, last, log}`: `log` is the end of `/update/log.txt`
    (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
    updater's account can be read without taking the card out.
 

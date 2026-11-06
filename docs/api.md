@@ -923,7 +923,7 @@ signature; failed reads retried): a `408` (cut short), `422` (bad CRC or
 signature, or a key this player does not know), `500` (unreadable) or
 `503` (the signature could not be checked just now: retry) leaves the old
 app. Then it is
-written to flash (~7 s for 800 KB) and served at once, no reboot. If that
+written to flash (a few seconds for ~0.5 MB) and served at once, no reboot. If that
 write fails (`500`), pages are `503` and the next restart writes the pack
 from the card, or push again. Without a usable card it is a `503` (a
 pack is staged on the card, as a firmware update is), and the app in
@@ -966,8 +966,9 @@ curl -s $DMD/api/firmware
 
 The bundle as the body (`411` no length, `413` too big). Header, the flash
 layout (the bundle's must be the player's `variant` and partition table,
-`layout`: a bundle for another table is a USB install, said in the reason with
-opendmd.dev/install), size, SHA-256,
+`layout`: a bundle for a newer table says to reinstall over USB from
+opendmd.dev/install; one for an older table says to use a release made for
+the player's layout), size, SHA-256,
 Ed25519 signature and the image's app descriptor are checked: a failure is
 a `422` with the reason, nothing staged; cut short `408`; no card `503`.
 Another key's bundle, or one for the other layout, is refused once the
@@ -986,7 +987,7 @@ show's status line for 3 s (the show runs 3.9 s, or 6.85 s full; with
 `boot_show` `off`, the short show for that boot).
 
 ```sh
-curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
+curl -s -X PUT --data-binary @dist/opendmd-1.0.0-4mb.odfw $DMD/api/firmware
 ```
 
 ## Virtual files

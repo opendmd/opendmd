@@ -57,8 +57,8 @@ your WiFi over USB (Improv Serial), or the player starts its
 bundles: the player checks the signature before installing, and a small
 updater program copies the new firmware into place from the SD card.
 
-The repository's [deploying notes](deploying.md),
-[firmware notes](firmware.md) and [OTA notes](ota.md) cover the flash
+The repository's deploying notes (`docs/deploying.md`),
+firmware notes (`docs/firmware.md`) and OTA notes (`docs/ota.md`) cover the flash
 layout, recovery and the update flow in detail.
 
 ## The crates
@@ -78,13 +78,11 @@ layout, recovery and the update flow in detail.
 The crates are deliberately not a Cargo workspace.
 
 **Virtual files.** Paths that begin with `@` are drawn by the core, not read
-from the card (`opendmd-core/src/synth.rs` parses them): `@boot`, `@power-on`, `@card:` and `@formula?psb=…`, a [Psi](psi-for-models.md) Formula
+from the card (`opendmd-core/src/synth.rs` parses them): `@boot`, `@power-on`, `@card:` and `@formula?psb=…`, a Psi Formula (`docs/psi-for-models.md`)
 compiled by `opendmd-psi` in the browser (or `psi build`) and run by the
 player on the same code in the firmware, the simulator and the browser; the
-player never compiles. The built-in effects (`@fx:tunnel`
-and the others) and the clock and scrolling text (`@clock`, `@text`) are
-gone: they are Formulas now (a clock is one, `@formula:big-clock`). Options
-and limits are in the [HTTP API](api.md#virtual-files); to see one without a
+player never compiles. Formulas draw everything, including the clock.
+Options and limits are in the [HTTP API](api.md#virtual-files); to see one without a
 board, `make sim ARGS="--play '@boot?len=full'"`.
 
 ## Reference
