@@ -1,5 +1,5 @@
 OpenDMD "native art" experiment: run an emulator core in the browser on a ROM the
-owner opens locally, and grab title/attract frames as ImageData.
+user opens locally, and grab title/attract frames as ImageData.
 
 FILES
   ejs.html      EmulatorJS 4.2.3 page. The ROM comes from <input type=file> and is handed to
@@ -19,7 +19,7 @@ FILES
   out/          sample PNG grabs (native resolution) plus *_report.json with the measurements.
 
 NOTHING THIRD-PARTY IS IN THE REPO. Put the emulator files and ROMs somewhere else, e.g.:
-  EJS_DATA   (default: <scratchpad>/vendor/ejs-data) = EmulatorJS "data/" directory:
+  EJS_DATA   (default: $SCRATCH_DIR/vendor/ejs-data, SCRATCH_DIR /tmp/scratch) = EmulatorJS "data/" directory:
      npm tarballs https://registry.npmjs.org/@emulatorjs/emulatorjs/-/emulatorjs-4.2.3.tgz
                   (package/data -> ejs-data/)
                   https://registry.npmjs.org/@emulatorjs/core-{gambatte,mgba,genesis_plus_gx}/-/core-<name>-4.2.3.tgz
@@ -27,7 +27,7 @@ NOTHING THIRD-PARTY IS IN THE REPO. Put the emulator files and ROMs somewhere el
      plus emulator.min.js and emulator.min.css from https://cdn.emulatorjs.org/stable/data/
      (the npm package ships only the unminified src/; the loader falls back to it if the min files are missing).
      You can also get everything in the release 7z: https://github.com/EmulatorJS/EmulatorJS/releases (4.2.3.7z, 290 MiB, all cores).
-  BINJGB_DIR (default: <scratchpad>/vendor/binjgb) = binjgb.js + binjgb.wasm from
+  BINJGB_DIR (default: $SCRATCH_DIR/vendor/binjgb) = binjgb.js + binjgb.wasm from
      https://github.com/binji/binjgb/tree/main/docs
 
 TEST ROMS (legally redistributable homebrew; download, do NOT commit):

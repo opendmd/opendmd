@@ -11,7 +11,7 @@ fps 50
 -- 128 values, 50 pixel steps, ~10.0 ms VM / ~5.7 ms JIT. The sheet in
 -- opendmd-notes docs/research/endless-road-v2/cycle-sketch.png is its frames, and the
 -- two transition close-ups beside it. The road eases straight and flat
--- for the tunnel's mouth and exit (owner's note), and every row reads the
+-- for the tunnel's mouth and exit, and every row reads the
 -- road's bend at its depth, the sky rows mirrored about the horizon.
 -- A ROUGH SKETCH for opendmd-notes docs/research/endless-road-v2.md: every environment
 -- and every transition in one program, drawn crudely, to see where four

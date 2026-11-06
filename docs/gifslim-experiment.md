@@ -8,8 +8,8 @@
 > browser and the device share are in [`cache-format.md`](cache-format.md).
 > What follows is the experiment as it was run, kept as the record.
 
-An experiment, measured on the host only (no rig), against the card copy
-`~/scratch/dmdos-card` (11,047 GIFs, 1,575 MB; ODM copies 1,484 MB). The
+An experiment, measured on the host only (no device), against a card copy
+(11,047 GIFs, 1,575 MB; ODM copies 1,484 MB). The
 code is in `opendmd-core/src/gifslim.rs` (decoder, capped LZW encoder,
 recoder), `opendmd-pack/src/recode.rs` (`recode`, `gifscan`) and the examples
 `heapprobe --slim`, `gifbench` and `recodeexp`. Nothing here is on a playback
@@ -360,8 +360,8 @@ Why also cap 12 for originals: identical output on 99.9% of the pack at
 exactly where the heap is short today (`gif on screen` pauses the builder).
 
 What would keep ODM instead: if 1.7 KB of heap or ~1.6 ms a frame turn out
-to matter more on the rig than card space and a standard format. Neither
-has been measured on the device; the first rig session should.
+to matter more on the device than card space and a standard format. Neither
+has been measured on the device; the first device test should.
 
 ## If adopted: what changes
 

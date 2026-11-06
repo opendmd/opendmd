@@ -61,7 +61,7 @@ display's own settings): copying the pack never overwrites it, and a
 card moved to another display brings them (docs/api.md, Settings). A card of any size works; 32 GB is only the Windows
 formatter's limit for FAT32.
 
-The rig's card is a 32 GB card that was full-surface scanned with zero errors
+The card in the long-running test panel is a 32 GB card that was full-surface scanned with zero errors
 and no slow regions. A card that stalls on a bad sector hangs the player —
 that is how the original 128 GB DMDoS card failed — so a new card is worth a
 contiguous read scan before it goes into the cabinet.
@@ -458,7 +458,7 @@ There is no other host.
   box. The **Site** workflow (manual) redeploys the docs between releases
   with an existing release's files (and a beta's, when one is newer than
   the final: "Betas" above).
-- **From the dev box**, with the owner: `make fw-release` (or a release's
+- **From the maintainer's machine**: `make fw-release` (or a release's
   files in `dist/`), then `make site-deploy` (refuses a dirty tree), or
   `make site` and `make site-deploy-built`. `make site-deploy-check` is a
   dry run. Build with `API_ARCHIVE=` (a checkout of the public gallery

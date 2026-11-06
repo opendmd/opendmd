@@ -1638,7 +1638,7 @@ The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
 as tall as wide) and a place round the walls (`atan2`), a checker turning
 and travelling, the palette cycling, lit by depth in eight steps with a
 light going round. `near` and `round` depend on the pixel alone, so they
-are the still cache's: ~4.6 ms a frame with it (`fps 100`; the spare
+are the still cache's: ~4.6 ms a frame with it (`fps 100`; a test board
 measured 4.0 ms as an effect, p90 4.1), ~14.4 without (a look, or the panel
 short of memory: then the panel holds it at a slower rate). The twist is a number in the source, not a slider, so
 that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
@@ -1783,9 +1783,9 @@ pal(city, k/4)
 ## 17. In the product (not built)
 
 This reference and `psi check` are tooling only: nothing in OpenDMD calls a
-model. If the owner wants it later, the natural place is the Formulas
+model. If it is wanted later, the natural place is the Formulas
 editor: a "Describe an effect…" box whose text, with this document as the
 system prompt, asks a model for a formula; the editor compiles the answer
 locally (errors and cost come from the same compiler), shows it in the
 preview, and could loop a few times on compile errors before showing
-anything. The decision (provider, keys, cost, privacy) is the owner's.
+anything. The decision (provider, keys, cost, privacy) is still open.

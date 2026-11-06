@@ -1,16 +1,16 @@
-# Psi drawing: a frame-time drawing stage, so Formulas replace the built-in effects (design, 2026-10-26)
+# Psi drawing: a frame-time drawing stage, so Formulas replace the built-in effects (design)
 
-Design only; nothing here is built. Labels: [M] measured in the repo or on
-the device, [D] an estimate (the basis is given each time).
+The design as written before it was built; the "As built" notes below say
+where the build differs. Labels: [M] measured in the repo or on the device,
+[D] an estimate (the basis is given each time).
 
 The brief, in two parts. First: extend Psi so the panel's four built-in
-effects — Tunnel, Rotozoom, Starfield and Wireframe (`opendmd-core/src/fx.rs`)
-— can be written as Formulas. Second (the owner, later the same day): the
+effects — Tunnel, Rotozoom, Starfield and Wireframe (then in
+`opendmd-core/src/fx.rs`) — can be written as Formulas. Second: the
 built-ins should go. Users should see **Formulas**, not a separate
-"effects" idea. Nothing is released and there are no users besides us, so
-no compatibility is owed: once the Formula versions pass the owner's eye
-test, the native code, the `@fx:<name>` paths and the Effects UI are
-deleted.
+"effects" idea. Nothing was released yet, so no compatibility was owed:
+once the Formula versions pass an eye test on a panel, the native code, the
+`@fx:<name>` paths and the Effects UI are deleted.
 
 ## 0. Summary
 
@@ -40,7 +40,7 @@ deleted.
   Heap: +4 KB per open formula that draws (PsiBox 10 → 14 KB; the look's
   buffers 21 → 25 KB).
 - **Removal (§7):** no compatibility layer — nothing is released. The four
-  natives are deleted one by one as their Formulas pass the owner's eye
+  natives are deleted one by one as their Formulas pass the eye
   test (order: Wireframe, Starfield, Rotozoom, Tunnel), and `@fx:<name>`
   goes from the API, the playlist parsing, the web app and the docs. A
   stale playlist entry is skipped with a log line (the engine does that
@@ -49,7 +49,7 @@ deleted.
   stay native (§7.5); the natives' knobs become each example's lines and
   sliders — no new parameter mechanism, a slider "picker" comment at most.
 
-**As built (phase 1, branch `psi-draw`, 2026-10-27).** Where the build
+**As built (phase 1).** Where the build
 differs from this design: (1) the canvas is passed to the VM
 (`render_rows_ink(…, Some(&mut ink), …)`) and is its own 4 KB allocation,
 not a bigger `PsiBox`/`Scratch` (the web module's bump allocator can't hold
@@ -61,15 +61,15 @@ count the VM caps at run time; (4) the 16,384 frame cap counts line steps
 walked, not pixels lit, and a line wholly off one side costs nothing; (5)
 the draw stage runs on full renders only (a look's partial redraws reuse
 the last canvas); (6) E7xx are sentences only (`Error.code` waits for the
-tooling plan's P0); (7) the cost constants were measured on the spare: a
+tooling plan's P0); (7) the cost constants were measured on a test panel: a
 step run 420 ns, a dot 400, a line 1,100 + 320 a pixel (§3.7's 300 /
 400 / 1,500 + 200); (8) firmware +15 KB and pkg-psi +6.3 KB gz, against
 §3.8's +5-7 KB and +3-4 KB. The sketches below use `x`, `y`, `h` and `i`
 as names, which are built-ins: the shipped examples rename them.
 
-**As built (phase 2, branch `psi-p2`, 2026-10-27; everything for
-replacing the natives, the removal itself left for after the owner's eye
-test).** Where it differs from §3.6, §4 and §7.3:
+**As built (phase 2: everything for replacing the natives, the removal
+itself left for after the eye test).** Where it differs from §3.6, §4 and
+§7.3:
 
 1. **The still cache** is as §3.6 (a lane of 4,096 i32 per value, up to
    two, chosen greedily by ns saved, each ≥ 400 ns a pixel; identical bytes
@@ -102,17 +102,17 @@ test).** Where it differs from §3.6, §4 and §7.3:
    than the baked table), a picker `-- a: wobble = gentle, strong, off`,
    6.0 ms (50 fps); the floor is its own example, **Rotozoom floor** (4.3 ms,
    `fps 100`): one formula with a `view = flat, floor` picker measured 10.6 ms
-   on the spare (the picker made every column part per row). No bevel.
+   on a test panel (the picker made every column part per row). No bevel.
 5. **Starfield** rewritten for fewer steps a star (6.0 → 5.0 ms, 100 fps
    by the estimate), the same picture (0.06 % of pixels differ by a
    rounding).
 6. **Pickers** (§7.3) are built (web only) and **Add to playlist** for
    Formulas (playlist lines up to 2 KB, `&name=` on the path for the
-   name): the branch `psi-p2-web`, merged.
+   name).
 
-**As built (removal, branch `no-fx`, 2026-10-28).** The removal of §7 was done
-in one cut, not by the staged gates of §7.6: the owner decided, and nothing
-was formally released, so there is no compatibility layer. The four natives
+**As built (removal).** The removal of §7 was done in one cut, not by the
+staged gates of §7.6: nothing was formally released, so there is no
+compatibility layer. The four natives
 (`@fx:tunnel`, `rotozoom`, `starfield`, `wire`) are gone from the core, the
 firmware, the web app, the tools and the docs; they live only as Formulas.
 **`@fx:psi` was renamed `@formula`** (`@formula?src=…[&a=&b=&c=][&fps=][&name=]`,
@@ -121,20 +121,19 @@ log line in a playlist, `415` from `POST /api/play`. **`attract` has no
 Formula form** (§7.3's recommendation taken): `fx:` is a `400`, a stored one
 reads as `""` with a log line at boot, and a playlist of one Formula chosen as
 `attract_set` does the same. The psi probe never compared a Formula against
-the natives on the device, so there was no probe code to remove. Flash, IRAM
-and DRAM figures: see CLAUDE.md.
+the natives on the device, so there was no probe code to remove.
 
 ## 1. Options compared
 
-The cost figures use the device's measured per-step costs (`psi-probe`,
-2026-10-26, `/tmp/…/psi-probe3-report.txt`, and `Program::esp32_us`): a
+The cost figures use the device's measured per-step costs (`psi-probe` and
+`Program::esp32_us`): a
 per-pixel step is 50-110 ns for arithmetic, 529 `atan2`, 539 `sqrt`, 642
 `len`, 685 `/` or `1/v`, 855 `noise`; 45 ns of loop a pixel; a colour 120;
 ×1.15 for the real paths; 4,096 pixels. A per-row step is counted at ~0.3 µs
 (the estimate's `row × 10 µs` over 32 rows); a scalar step run once a
 frame is the same `eval` and I use **300 ns** for one [D] (the per-frame
 `compile`/`eval` path is the same code as the per-row one). The natives'
-own line drawing on the rig [M]: starfield 1.35 ms for 192 streaks drawn
+own line drawing on the device [M]: starfield 1.35 ms for 192 streaks drawn
 twice (erase + draw: ~384 `line` calls of 3-10 px with the hash,
 projection and palette each), the wire morph 2.25 ms for 144 edges drawn
 twice (288 lines of 8-25 px with projection) — **~3.5-8 µs a line
@@ -193,8 +192,8 @@ looks over a GIF, `loop`/`t` all work unchanged.
   break, and bit-identity becomes path-dependent. Rejected for the language;
   the glow does trails already.
 - **A native "shape library"** (`@fx:wire` kept, parameterised harder).
-  The owner's direction is the opposite; and every knob added natively is a
-  knob the Formula language can't offer.
+  The direction is the opposite (one concept, Formulas); and every knob
+  added natively is a knob the Formula language can't offer.
 - **Running the drawing stage per row** (scanline rasteriser in the VM):
   elegant for filled shapes but every primitive is visited 32 times; a
   rasteriser into a canvas is simpler and cheaper.
@@ -464,7 +463,7 @@ and the editor's light/medium/heavy need no change. `psi-probe` gains:
 `step tab`, `step ink`, `draw loop step` (an empty 1,024-turn loop with one
 add: the 300 ns), `draw line 12`, `draw line 100`, `draw dot` — and the
 constants above are replaced by what it measures, as the layer costs were
-on 2026-10-26 (`tests/measured.rs`, `tests/estimate.rs` hold the model
+(`tests/measured.rs`, `tests/estimate.rs` hold the model
 within ±15 %).
 
 ### 3.8 Compiler
@@ -537,7 +536,7 @@ Per pixel (`cx` 2, `len` 642, `1/d` 685, `atan2` 529, ~22 cheap ops ≈
 
 **What differs:** the native is 3.45 ms at 100 fps [M]; this is 25 fps
 today, 50 with phase 2 — on a 4.8 s loop the motion is still smooth, but it
-is the owner's eye that decides (§7.6). The textures: the native's checker
+is an eye test on the panel that decides (§7.6). The textures: the native's checker
 has a one-step bevel, its rings are 1/16-texel bands, its noise is a baked
 64 × 32 table; the Formula's checker is flat, its rings are `len` rings,
 and `texture=noise` becomes `noise(u*8, v*4, 0)` (+855 ns) — the same
@@ -727,12 +726,12 @@ with a `shape=` option (§7.3).
 | Wire tesseract | phase 1 | ~2.9 | 1.05 | 100 | ~90 | 14 KB |
 | Wire torus, morph | phase 1 / phase 2 (`buf`) | ~6.5 / 3.4 | 2.25-2.75 | 50 / 100 | ~110 | 14 / 15 KB |
 
-Every figure here is to be replaced by `psi-probe` on the spare before any
+Every figure here is to be replaced by `psi-probe` on a device before any
 native effect is removed (§7.6).
 
 ## 5. Phased plan
 
-### Phase 1 — the smallest shippable slice (~4 agent-days: Opus codes, Sonnet runs the probes and goldens, Fable reviews)
+### Phase 1 — the smallest shippable slice
 
 1. **Language and compiler:** `draw { }`, `for k < N { }` (two deep),
    `table`, `NAME[k]`, `line`, `dot`, `ink`; the E7xx errors; levels
@@ -765,26 +764,25 @@ native effect is removed (§7.6).
    the 4 MB layout's ~271 KB spare (floor 64 KB) — no squeeze needed, and
    §7.4's removal pays it back twice over.
 
-**Device probe steps** (Sonnet, read-only on the rig: the spare first, per
-the rig rule): `psi-probe` build on the spare; the new golden frames
+**Device probe steps** (on a test panel): a `psi-probe` build; the new golden frames
 bit-identical; the new step costs; Starfield and Wireframe cube as effects
 for 120 s each at 100 fps (misses, `frame_us`, heap before/after); as looks
 over the demo card for 5 min with Dissolve 400 (transitions cut, misses);
 a live-edit burst that toggles `draw` on and off (the re-boxing path).
 
-### Phase 2 (~4 days)
+### Phase 2
 
 `buf`, `disc`, `ink2`, the still cache with its heap gate, `pal()` in
 colour expressions, `seg`; Tunnel and Rotozoom examples; Wireframe morph,
 torus, tesseract, icosahedron, octahedron examples; the eye tests and the
-removal (§7.6). Measured on the spare and the rig.
+removal (§7.6). Measured on test panels.
 
 ### Phase 3 (if wanted)
 
 `ink(x', y')`, filled triangles, a `for` over a table's length, the
 tooling plan's hover/cost-per-line for draw loops ("× 192").
 
-## 6. Risks and open questions for the owner
+## 6. Risks and open questions (at design time)
 
 1. **Speed of the per-pixel pair.** Formula Tunnel and Rotozoom run at
    25 fps now (two layers) and ~50 with phase 2's still cache; the natives
@@ -812,7 +810,7 @@ tooling plan's hover/cost-per-line for draw loops ("× 192").
    examples live within three?
 9. **The Formula path's name:** keep `@fx:psi?src=` or rename it to
    `@formula?src=` when `fx` means nothing else (cosmetic; touches every
-   saved look and share link we have, which is nothing yet).
+   saved look and share link, of which there were none yet).
 7. **Risk — the estimate.** Loop-step and line costs are [D] until the
    probe runs; if a scalar step is 500 ns rather than 300 the starfield is
    ~5 ms, the morph without `buf` ~9. The thresholds and governor absorb
@@ -822,9 +820,9 @@ tooling plan's hover/cost-per-line for draw loops ("× 192").
 
 ## 7. Removing the built-in effects
 
-The owner's direction: one concept, **Formulas**, and no backwards
-compatibility — nothing is released and the only users are the two devices
-here. So: no alias table, no `@fx:<name>` rewriting, no query options kept
+The direction: one concept, **Formulas**, and no backwards
+compatibility — nothing was released and the only users were test
+devices. So: no alias table, no `@fx:<name>` rewriting, no query options kept
 alive. Each native effect is **deleted** once its Formula passes the eye
 test, and `@fx:` goes from the API, the playlist parsing, the web app and
 the docs. `@fx:psi?src=…` (the Formula path) stays as it is — renaming it
@@ -845,23 +843,22 @@ the docs. `@fx:psi?src=…` (the Formula path) stays as it is — renaming it
 | docs | `docs/guide/effects.md`, `images/effects.png`, `docs/web-app.md` "live items and effects", `docs/writing-effects.md`, CLAUDE.md "Live effects" | `effects.md` folds into `formulas.md` ("The built-in Formulas"); `writing-effects.md` becomes a note that effects are Formulas now (its Rust guidance applies to `@clock`/`@text` only); CLAUDE.md's section is kept as history with a line at its top |
 | tests | `fx.rs`'s `loops_are_whole_and_seamless`, `sparse_effects_mark_exactly_what_they_leave`, `lit_pixels_are_plausible`, `fx_cost`; `engine.rs`'s `@fx:starfield?fps=100` at 2793; synth's `title("@fx:tunnel…")` | deleted or moved to the Formula examples (`loops_are_whole_and_seamless` becomes "each built-in Formula's frame at `loop` equals frame 0", a golden); the engine test uses a Formula path |
 
-### 7.2 What breaks on our two devices and saved playlists, and what to do
+### 7.2 What breaks on existing devices and saved playlists, and what to do
 
 - **Playlist entries** (`filelist.txt` lines, the Library's playlists) that
   name `@fx:tunnel` etc. After the removal `synth::parse` returns `None`
   for them, the open fails, and the engine does what it does for any entry
   that fails to open: **skips it and moves on** (`engine.rs`, `Failed`: "that
   entry is skipped, as a failed open at the switch would be"), with the
-  existing warning line. Nothing hangs; the playlist plays its GIFs. Our
-  two cards: `grep '@fx:' filelist.txt` before the update, replace the
+  existing warning line. Nothing hangs; the playlist plays its GIFs. On a
+  test card: `grep '@fx:' filelist.txt` before the update, replace the
   lines with the Formula paths (or drop them) — a one-off, by hand.
 - **NVS `attract` = `fx:…`** (Follow's menu item). `nvs_config::attract`'s
   reader (`attract_path`, line ~259) would hand the engine a path that no
   longer parses: treat a stored `fx:` value as `""` (the playlist) with one
   log line at boot (`attract: "fx:starfield…" is no longer a live item;
   showing the playlist`), and `valid_attract` refuses new ones with a 400.
-  Neither device has one set as far as the memory notes say; check
-  `/api/config` on both before updating.
+  Check `/api/config` on a device before updating.
 - **The web app's open tab** on an older build talking to a newer device,
   or the reverse, for the minutes around the update: the Effects tab's
   Send to panel gets a `415` and a toast ("a live item this firmware does
@@ -873,7 +870,7 @@ the docs. `@fx:psi?src=…` (the Formula path) stays as it is — renaming it
   paths.
 
 So the only breakage is a log line per stale playlist entry and a stale
-`attract` value made harmless; both are a `grep` away on our devices.
+`attract` value made harmless; both are a `grep` away.
 
 ### 7.3 What the web app shows, and the knobs
 
@@ -912,8 +909,7 @@ So the only breakage is a log line per stale playlist entry and a stale
 
 ### 7.4 Flash saved against what the drawing stage costs
 
-In a release ELF (`~/scratch/opendmd-cand-fw/…/opendmd-firmware`,
-`xtensa-esp32-elf-nm -S`) [M]:
+In a release ELF (`xtensa-esp32-elf-nm -S` on `opendmd-firmware`) [M]:
 
 | | bytes |
 |---|---|
@@ -954,23 +950,21 @@ is the comparison tool.
 | step | ships | gate to delete the native |
 |---|---|---|
 | 1 | Phase 1 (`draw`, `for`, `table`, `line`, `dot`, `ink`); Starfield and Wireframe cube/octahedron/icosahedron/tesseract as examples; pickers; Add to playlist | — |
-| 2 | Phase 2 `buf` → torus and morph | **Wireframe, Starfield:** the owner's eye test on the rig side by side (the native from the Effects tab, the Formula from Formulas, the same options) at the default and two variants each; 0 steady misses at the Formula's governed rate for 10 min; the probe's `frame_us` within §4.5 ±25 % |
+| 2 | Phase 2 `buf` → torus and morph | **Wireframe, Starfield:** an eye test on a test panel side by side (the native from the Effects tab, the Formula from Formulas, the same options) at the default and two variants each; 0 steady misses at the Formula's governed rate for 10 min; the probe's `frame_us` within §4.5 ±25 % |
 | 3 | Rotozoom example (one and two layers); `pal()` × value in colour expressions | **Rotozoom:** the same, accepting 25 fps for two layers unless the still cache ships first |
-| 4 | the still cache; Tunnel example | **Tunnel:** the same; the owner decides whether 50 fps against 100 passes |
-| 5 | §7.1's deletions, the devices' playlists cleaned (§7.2), the flash measured in `size-budget.md`; a release note: "The built-in effects are Formulas now: open any of them in Formulas to see how it is written and change it. `@fx:tunnel` and the others are gone." | — |
+| 4 | the still cache; Tunnel example | **Tunnel:** the same; the eye test decides whether 50 fps against 100 passes |
+| 5 | §7.1's deletions, the devices' playlists cleaned (§7.2), the flash measured; a release note: "The built-in effects are Formulas now: open any of them in Formulas to see how it is written and change it. `@fx:tunnel` and the others are gone." | — |
 
-**As built (2026-10-28, branch `no-fx`):** step 5 was done in one cut with all
-of §7.1: `@fx:psi` is now `@formula`, `attract` has no Formula form, the
-probe had nothing to remove; flash, IRAM and DRAM figures: see CLAUDE.md. The
-staged gates above were not used.
+**As built:** step 5 was done in one cut with all of §7.1: `@fx:psi` is now
+`@formula`, `attract` has no Formula form, the probe had nothing to remove.
+The staged gates above were not used.
 
-"Close enough" is the owner's eye on the panel, not a pixel diff (the
-hashes and textures differ by design: §4). The comparison fixture — the
-same options both ways, screenshots from the simulator for the record
-(`--screenshot-at` at four phases of the loop), the rig for the eye — is a
-day of Sonnet's time and the only honest test. If one effect never passes,
-its native stays as the one exception; the design loses nothing. Whether
-to rename the Formula path from `@fx:psi?src=` to `@formula?src=` once
-`fx` means nothing else is the owner's call (one string in `synth`, the
-web app, the API doc and every saved look: cosmetic, do it in step 5 or
-never).
+"Close enough" is an eye on the panel, not a pixel diff (the hashes and
+textures differ by design: §4). The comparison fixture — the same options
+both ways, screenshots from the simulator for the record (`--screenshot-at`
+at four phases of the loop), a test panel for the eye — is the only honest
+test. If one effect never passes, its native stays as the one exception;
+the design loses nothing. Renaming the Formula path from `@fx:psi?src=` to
+`@formula?src=` once `fx` means nothing else is cosmetic (one string in
+`synth`, the web app, the API doc and every saved look): do it in step 5
+or never.
