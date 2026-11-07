@@ -188,14 +188,15 @@ function loop(now) {
   for (const v of views) {
     if (!v.f || v.canvas.offsetParent === null) continue;
     on = true;
-    // (A formula that never repeats, loop 0: its time since the preview began.)
-    const g = v.d || D, n = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)), k = Math.floor((now - v.t0) / g), i = k % n;
+    // (A formula that never repeats, loop 0: its time since the preview began.
+    // `hold`: paused there, ms; the editor's time row.)
+    const g = v.d || D, n = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)), e = v.hold ?? now - v.t0, k = Math.floor(e / g), i = k % n;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : i;
     if (key === v.i && !v.dirty && !v.f.w?.on) continue;
     v.i = key; v.dirty = false;
-    const rgb = draw(v.f, i * g, false, now - v.t0);
-    if (rgb) { v.pv.p.showRgb(rgb); v.canvas.dataset.frames = -~v.canvas.dataset.frames; }
+    const rgb = draw(v.f, i * g, false, e);
+    if (rgb) { v.pv.p.showRgb(rgb); v.canvas.dataset.frames = -~v.canvas.dataset.frames; v.tick?.(); }
   }
   // Nothing on screen: stop (kick() starts it again).
   raf = on ? requestAnimationFrame(loop) : 0;
@@ -230,6 +231,10 @@ const stored = () => { const d = store.get('psi.draft', null); return typeof d?.
 // A draft with changes not saved: its text or name differs from where it started.
 const sig = (f) => f.src + '\n\0' + (f.name || '');
 const dirty = (d) => d?.base != null && sig(d) !== d.base;
+// Earlier versions (js/fhist.js), by a key per Formula: yours by its id, one
+// from the gallery by its name, a new one its own; the site's page's its own.
+const hist = (fn) => import('./fhist.js').then(fn, () => {});
+const hkey = (f) => (PAGE ? PAGE.key : f.id != null ? 'm' + f.id : (f.hk ??= 'n' + Date.now().toString(36)));
 
 // A Formula as `{name, src, a, b, c}` ready for the editor: its values held
 // to its controls, its `name` line its name.
@@ -323,13 +328,14 @@ async function remixed() {
   let f;
   try { f = ex ? { name: ex.name, src: ex.src } : r.gallery ? await fetchFormula(ROOT(), r.gallery) : await sent(); } catch (e) { toast(`Couldn’t open that Formula: ${e.message || e}`, 'bad'); return; }
   f = { ...f, ...r.f };
+  if (r.gallery) { f.hk = 'g' + r.gallery; hist((m) => m.keep(f.hk, f, 'g')); }
   if (r.gallery && !ex) {
     await psi();
     f.name = ctlOf(f)?.name || f.name;
     f.unsaved = true;
     toast(`“${f.name || 'This formula'}” is open. Save keeps it under Your formulas`, 'ok');
   } else if (!ex) {
-    try { f = await arrived(f); } catch (e) { toast(`“${f.name || 'This formula'}” isn’t saved: ${e.message || e}`, 'bad'); f.unsaved = true; }
+    try { f = await arrived(f); hist((m) => m.keep(hkey(f), f, 'r')); } catch (e) { toast(`“${f.name || 'This formula'}” isn’t saved: ${e.message || e}`, 'bad'); f.unsaved = true; }
   }
   app.psiOpen = f;
   app.go('formulas/edit');
@@ -584,7 +590,15 @@ function editor() {
   const nudge = (k) => h('button.sm', { 'aria-label': k > 0 ? 'More' : 'Less', onpointerdown: (e) => e.preventDefault(), onclick: () => bump(k) }, k > 0 ? '+' : '−');
   const strip = h('div.psi-strip', { id: 'psi-scrub', hidden: true }, nudge(-1), pad, nudge(1));
   const help = h('button.sm', { id: 'psi-help', 'aria-haspopup': 'dialog', onclick: (e) => cheat(e.currentTarget) }, 'Cheat sheet');
-  const canvas = h('canvas.panel', { id: 'psi-ed-panel' });
+  const vers = h('button.sm', { id: 'psi-vers-btn', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hist((m) => m.menu(b, { key: hkey(B.draft), cur: ta.value, back, site: !!PAGE })); } }, 'Earlier versions…');
+  const canvas = h('canvas.panel', { id: 'psi-ed-panel', tabIndex: 0, 'aria-label': 'Preview (, and . step a frame)' });
+  // The preview's time: paused (pv.hold, ms), a frame back or on, or dragged
+  // through: the loop, or the first 10 s of one that goes on.
+  const tr = h('input', { type: 'range', id: 'psi-t', min: 0, max: 0, value: 0, 'aria-label': 'Time', oninput: () => seek(+tr.value * grain()) });
+  const tnow = h('span.mono', { id: 'psi-t-now' });
+  const pz = h('button.sm', { id: 'psi-pause', onclick: () => seek(pv.hold == null ? elapsed() : null) });
+  const stp = (k) => h('button.sm', { id: k < 0 ? 'psi-t-back' : 'psi-t-on', 'aria-label': k < 0 ? 'A frame back' : 'A frame on', title: k < 0 ? 'A frame back (,)' : 'A frame on (.)', onclick: () => step(k) }, k < 0 ? '‹' : '›');
+  const trow = h('div.psi-time', pz, stp(-1), tr, stp(1), tnow);
   const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true },
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
@@ -616,10 +630,11 @@ function editor() {
     onpointerdown: open, onclick: open, oninput: picked, onchange: () => { picked(); done(); }, onblur: away });
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
-  const top = h('div.psi-top', canvas, cap, under);
+  const top = h('div.psi-top', canvas, trow, cap, under);
+  top.addEventListener('keydown', (e) => { if ((e.key === ',' || e.key === '.') && e.target !== tr && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); step(e.key === '.' ? 1 : -1); } });
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
-      h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another'))),
+      h('div.row.acts', help, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
@@ -629,6 +644,40 @@ function editor() {
 
   // The draft kept in this browser (the web app's; the site's page tells its own of each change).
   const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
+  const grain = () => pv.d || D, len = () => (pv.loopMs === 0 ? FOREVER : pv.loopMs || 8000), elapsed = () => pv.hold ?? performance.now() - pv.t0;
+  // Held at `ms`, or (null) playing on from where it was held.
+  function seek(ms) {
+    if (ms == null) { pv.t0 = performance.now() - pv.hold; pv.hold = null; } else pv.hold = Math.max(0, ms);
+    pv.dirty = true;
+    kick();
+    tick();
+  }
+  function step(k) {
+    const g = grain(), n = Math.max(1, Math.floor(len() / g));
+    let i = Math.floor(elapsed() / g) + k;
+    if (pv.loopMs !== 0) i = (i % n + n) % n;
+    seek(Math.max(0, i) * g);
+  }
+  function tick() {
+    const g = grain(), n = Math.max(1, Math.floor(len() / g)), k = Math.floor(elapsed() / g), i = pv.loopMs === 0 ? k : k % n, held = pv.hold != null;
+    tr.max = n - 1;
+    tr.value = Math.min(i, n - 1);
+    tnow.textContent = `t = ${(i * g / 1000).toFixed(2)} s`;
+    pz.textContent = held ? '▶' : '❚❚';
+    pz.setAttribute('aria-label', held ? 'Play' : 'Pause');
+    top.classList.toggle('held', held);
+  }
+  // Back to an earlier version (js/fhist.js; the site's page's draft): only
+  // the lines that differ, as typed, so undo takes it away again.
+  function back(v) {
+    for (const k of 'abc') if (typeof v[k] == 'number') B.draft[k] = v[k];
+    const s = ta.value, [a, e] = span(s, v.src);
+    ta.focus({ preventScroll: true });
+    if (a < s.length - e || a < v.src.length - e) put({ s: a, e: s.length - e }, v.src.slice(a, v.src.length - e));
+    if (v.name && !ctlOf({ src: v.src })?.name) { B.draft.name = name.value = v.name; }
+    paint();
+    compile();
+  }
   // Numbers (a unary minus included), comments and the error, drawn under the (transparent) text.
   function paint() {
     const s = ta.value, m = marks(s, bad);
@@ -875,13 +924,17 @@ function editor() {
   // The text replaced by `t` (only the part that changed, so the caret
   // and scroll stay), then compiled at once.
   function edit(t) {
-    const s = ta.value;
-    let a = 0, e = 0;
-    while (a < s.length && a < t.length && s[a] === t[a]) a++;
-    while (e < s.length - a && e < t.length - a && s[s.length - 1 - e] === t[t.length - 1 - e]) e++;
+    const s = ta.value, [a, e] = span(s, t);
     ta.setRangeText(t.slice(a, t.length - e), a, s.length - e, 'preserve');
     paint();
     compile();
+  }
+  // How much of `s` and `t` is the same at the start and at the end.
+  function span(s, t) {
+    let a = 0, e = 0;
+    while (a < s.length && a < t.length && s[a] === t[a]) a++;
+    while (e < s.length - a && e < t.length - a && s[s.length - 1 - e] === t[t.length - 1 - e]) e++;
+    return [a, e];
   }
   // The `name` line set to `v` (taken out when empty).
   function named(v) {
@@ -907,11 +960,12 @@ function editor() {
     name.value = f.name;
     // The name is its `name` line.
     if (!ctlOf(f)?.name) named(f.name);
-    const src = ta.value;
+    const src = ta.value, k0 = hkey(f);
     let r;
     const done = said(async () => {
       const rec = await S.put({ id: f.id, file: f.file, name: f.name, src, a: f.a, b: f.b, c: f.c });
       f.id = rec.id;
+      hist((m) => { m.move(k0, hkey(f)); m.keep(hkey(f), { ...f, src }, 's'); });
       if (rec.file) f.file = rec.file;
       f.src = src;
       f.base = sig({ src, name: f.name });
@@ -936,8 +990,10 @@ function editor() {
       good = null;
       W?.reset();
       paint();
-      pv ??= view(canvas);
+      if (!pv) { pv = view(canvas); pv.tick = tick; }
+      pv.hold = null;
       compile();
+      tick();
       scrubbable();
       if (matchMedia('(pointer:fine)').matches) ta.focus({ preventScroll: true });
     },
@@ -948,12 +1004,14 @@ function editor() {
     now(paste) { if (paste && !ready()) return null; const src = ta.value, ok = good === src; return { name: B.draft.name, src, a: B.draft.a, b: B.draft.b, c: B.draft.c, ok, info: ok ? info(src) : [], ctl: ok ? ctlOf({ src }) : null }; },
     // Its settings sheet (Settings › Look's Change…).
     settings: () => settings(setBtn),
+    back,
   };
 }
 
 // The site's Formula page (/f/): the editor alone, on the demo's files,
 // with `f` in it. `o`: {acts (its buttons), note (the line under them),
-// changed() (on every edit)}. Returns {P, now(paste)} (pkg-psi; the text now).
+// key (its Earlier versions'), changed() (on every edit)}. Returns {P,
+// now(paste), back(v)} (pkg-psi; the text now; a draft or version put back).
 export async function editorPage(el, f, o) {
   PAGE = o;
   await psi();
@@ -963,7 +1021,7 @@ export async function editorPage(el, f, o) {
   el.append(B.ed.el);
   el.classList.add('psied');
   B.ed.open(B.draft = opened(f));
-  return { P, now: (paste) => B.ed.now(paste) };
+  return { P, now: (paste) => B.ed.now(paste), back: B.ed.back };
 }
 
 // Into the editor from the gallery (the way back is the browser's); a
@@ -989,6 +1047,7 @@ function edit() {
     f.base ??= sig(f);
     // Yours as saved (the site's, saved as it arrived): Save keeps to its file.
     if (ext?.id != null) { f.id = ext.id; if (ext.file) f.file = ext.file; }
+    if (ext?.hk) f.hk = ext.hk;
     // Not saved (it doesn't work yet): a draft not saved yet, kept over a reload.
     if (ext?.unsaved) f.base = '';
     B.pushed = !!pe;

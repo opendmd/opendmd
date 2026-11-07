@@ -148,9 +148,19 @@ last version that worked, dimmed.
   as the panel would, so `since` and `was` play out as they will there.
   **Back to the defaults** undoes it all. It is only the preview: the
   gallery, thumbnails and Save as GIF show the defaults.
+- **Pause and step:** the row under the preview holds it still (❚❚, ▶ to
+  play on), steps it a frame back or on (‹ ›, or , and . with the preview
+  selected) and drags through the loop (the first 10 seconds of one that
+  goes on), with `t` beside it. Edit while it is held and the new text is
+  drawn at the same moment. Thumbnails, Save as GIF and Show on panel play
+  as usual.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps it on your panel, under its name (in the demo, in this browser).
+- **Earlier versions…** lists the last ten of this formula kept in this
+  browser: each save, and the formula as it arrived from the gallery or the
+  site. Tap one to see what going back would change (− lines go, + lines
+  come back), then **Go back to this**; Ctrl+Z (⌘Z) takes it away again.
 
 ## A plasma in two minutes
 
@@ -838,7 +848,9 @@ formula says of itself: its name, its line about it, its controls and
 whether it can be a look. **Open on my panel** opens it in your panel's
 editor (see [Open on my panel](#open-on-my-panel)); **Open** opens it in
 the editor on the site, live: change it and watch, with its sliders, its
-errors and the cheat sheet.
+errors and the cheat sheet. Your changes there are kept in this browser:
+come back to the formula and **Continue where you left off** puts them back,
+and its **Earlier versions…** has it as it came and as it went to your panel.
 
 To add yours, press **Submit to the gallery…** in the editor: give
 it a name and a line about it (they become the formula's own `name` and
