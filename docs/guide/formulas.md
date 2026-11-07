@@ -124,8 +124,8 @@ takes you there; when the message suggests a fix (`did you mean t?`),
   bar under it in that colour. Click or tap in one and a swatch appears at
   the end of its line: it opens your browser's colour picker, and the
   colour you pick takes its place. On a computer, Ctrl+Z (⌘Z) puts the old
-  one back; with the keyboard, put the cursor in the colour and press Esc, then Tab,
-  to reach the swatch.
+  one back; with the keyboard, put the cursor in the colour and press Esc,
+  then Tab, to reach the swatch.
 - **Controls:** a line at the top like `control speed 0..4 = 1 "Speed"`
   gives the formula a slider: `speed` is a value you use in it, from 0 to 4,
   starting at 1, labelled "Speed" (the range is 0 to 1 when you leave it

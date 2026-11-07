@@ -177,7 +177,8 @@ let PS = null;
 // at the first error); the demo's reference is its own site's.
 const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, ROOT()), () => null);
 // The errors whose sentence carries a fix (by code, js/psierr.js): which `…` in it is the fix, for Fix it.
-// (E218's is the text the `…` after it quotes.)
+// (E218's is the text the `…` after it quotes; E201/E202 only as "did you
+// mean": a habit from another language, `lerp`, names a whole call.)
 const FIX = { 5: 1, 201: 1, 202: 1, 205: 1, 206: 1, 207: 1, 218: 0 };
 // Use as the look: a player's, or the demo's (js/demo.js).
 const LOOK = () => app.device || !!app.demo;
@@ -676,7 +677,7 @@ function editor() {
       const shown = err.textContent;
       if (!miss) errRef(msg).then((r) => {
         if (!r || err.textContent !== shown) return;
-        const c = +r.code.slice(1), q = msg.split('`'), x = q[2 * FIX[c] + 1], o = c == 218 && q[3], k = o ? ta.value.lastIndexOf(o, at[1]) : 0, to = o ? [k, k + o.length] : at;
+        const c = +r.code.slice(1), q = msg.split('`'), x = (c != 201 && c != 202 || /did you mean/.test(msg)) && q[2 * FIX[c] + 1], o = c == 218 && q[3], k = o ? ta.value.lastIndexOf(o, at[1]) : 0, to = o ? [k, k + o.length] : at;
         if (x && k >= 0) err.append(' ', h('button.sm', { id: 'psi-fix', title: `Write ${x.replace('…', '')}`, onclick: () => { if (ta.value === was) fix(to, x, c); } }, 'Fix it'));
         err.append(' ', h('a.ecode', { href: r.href, target: '_blank', rel: 'noopener', title: 'What this error means' }, r.code));
       });
@@ -769,11 +770,14 @@ function editor() {
   document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); HN?.update(); if (/^\s*use\s/m.test(ta.value)) build(); } });
   ta.addEventListener('keydown', (e) => {
     hint();
+    // (Esc arms leaving by Tab, the list's Esc too.)
+    const was = esc;
+    esc = e.key === 'Escape';
     if (HN?.key(e)) return;
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && at(ta.selectionStart)) {
       e.preventDefault();
       bump((e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1), at(ta.selectionStart));
-    } else keys(e);
+    } else keys(e, was);
   });
   // Typing code: Enter keeps the line's indent (after `{`, a line further in
   // and the `}` under it), `}` on an indent steps back, Tab and Shift+Tab
@@ -781,10 +785,10 @@ function editor() {
   // Ctrl/Cmd+S saves, Ctrl/Cmd+Enter shows it on the panel. As typed
   // (insertText), so undo has them.
   let esc = false;
-  function keys(e) {
-    const s = ta.value, a = ta.selectionStart, z = ta.selectionEnd, l0 = s.lastIndexOf('\n', a - 1) + 1, ind = /^[ \t]*/.exec(s.slice(l0, a))[0], k = e.key, was = esc, mod = e.ctrlKey || e.metaKey;
-    esc = k === 'Escape';
+  function keys(e, was) {
+    const s = ta.value, a = ta.selectionStart, z = ta.selectionEnd, l0 = s.lastIndexOf('\n', a - 1) + 1, ind = /^[ \t]*/.exec(s.slice(l0, a))[0], k = e.key, mod = e.ctrlKey || e.metaKey;
     const ins = (t, from = a, to = z) => { e.preventDefault(); ta.setSelectionRange(from, to); document.execCommand('insertText', false, t); };
+    // (The site's page saves nothing: Ctrl+S there is the browser's.)
     if (mod && k.toLowerCase() === 's' && !PAGE) { e.preventDefault(); save().catch(() => {}); } else if (mod && k === 'Enter') { const b = el.querySelector('#psi-ed-show'); if (b) { e.preventDefault(); b.click(); } } else if (mod || e.altKey || e.isComposing) return;
     else if (k === 'Enter' && !e.shiftKey) {
       const end = s.indexOf('\n', z), rest = s.slice(z, end < 0 ? s.length : end), shut = /^\s*\}/.test(rest);
