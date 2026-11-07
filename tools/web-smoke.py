@@ -5423,11 +5423,18 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     page.goto("about:blank")
     page.goto(base + "/#gallery=starfield")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    page.wait_for_timeout(500)
     star = next(e for e in bundled() if e["name"] == "Starfield")
+    # The editor takes its source a moment after it shows (longer on a slow machine).
+    try:
+        page.wait_for_function("src => document.querySelector('#psi-src').value === src", arg=star["src"], timeout=10000)
+    except PlaywrightTimeoutError:
+        pass  # the check below says what it holds
+    page.wait_for_timeout(500)
     after = saved()
-    check(page.input_value("#psi-src") == star["src"] and not asked and after == before,
-          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, new {sorted(set(after) - set(before))}, gone {sorted(set(before) - set(after))})")
+    got = page.input_value("#psi-src")
+    check(got == star["src"] and not asked and after == before,
+          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, new {sorted(set(after) - set(before))}, gone {sorted(set(before) - set(after))}"
+          f"{'' if got == star['src'] else ', the editor holds ' + repr(got[:60])})")
     # A name the gallery doesn't have (its 404 expected).
     expected.append("/formulas/src/no-such-formula")
     page.goto("about:blank")
