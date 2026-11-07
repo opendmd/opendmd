@@ -406,12 +406,13 @@ settings.
 The Formula editor on the site (the demo's and `/f/`) has two aids the
 player's copy leaves out (`js/fcost.js`, imported only there, and its wasm
 module `pkg-psi-lang/`, opendmd-psi-web's `lang` build; neither is in the
-www pack). Once a Formula is past light, **What costs most**: a bar in the
-gutter beside each line for its share of the panel's work, and the
-compiler's notes on the cost, each with a **Line N** button. **Tidy up**
-lays the text out as `psi fmt` does, as one edit the browser's undo takes
-back. The module is the whole compiler (~120 KB gzipped), so it loads only
-when a Formula is heavy or Tidy up is pressed.
+www pack). **What costs most**: a bar in the gutter beside each line for
+its share of the panel's work, and the compiler's notes on the cost, each
+with a **Line N** button; shown by itself once a Formula is past light, and
+for any other on its button (a light one says so). **Tidy up** lays the
+text out as `psi fmt` does, as one edit the browser's undo takes back. The
+module is the whole compiler (~121 KB gzipped), so it loads only for a
+heavy Formula or one of the two buttons.
 
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
