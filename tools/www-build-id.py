@@ -6,7 +6,7 @@
     uv run tools/www-build-id.py opendmd-web/www
 
 The id is the first 16 hex digits of a SHA-256 over every file wasm-pack
-wrote (pkg/, pkg-art/, pkg-psi/: their paths and bytes, `.gz` and dotfiles
+wrote (pkg/, pkg-art/, pkg-psi/, the site's pkg-psi-lang/: their paths and bytes, `.gz` and dotfiles
 aside), so it changes exactly when a wasm module or its glue does — two
 builds of a dirty tree share a `git describe`, never this. js/wasm.js puts
 it on every module's address (`?v=<id>`): wasm-pack's file names carry no
@@ -19,7 +19,7 @@ import hashlib
 import sys
 from pathlib import Path
 
-DIRS = ("pkg", "pkg-art", "pkg-psi")
+DIRS = ("pkg", "pkg-art", "pkg-psi", "pkg-psi-lang")
 
 
 def build_id(www: Path) -> str:

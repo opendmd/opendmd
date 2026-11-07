@@ -26,6 +26,10 @@ wasm-bindgen = { version = "0.2", default-features = false }
 bare = []
 # In wasm: the bump allocator (src/bump.rs) instead of std's.
 bump = []
+# The site's language service (src/lang.rs, `make web`'s pkg-psi-lang/, never
+# packed): observe() and format() only, the compiler's `syntax` hook on; the
+# exports above are left out of that build.
+lang = ["opendmd-psi/syntax"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

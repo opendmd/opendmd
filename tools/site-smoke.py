@@ -1995,6 +1995,45 @@ def psi_error_links(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
+    """The site editor's What costs most and Tidy up (js/fcost.js, its wasm
+    pkg-psi-lang): a heavy Formula gets a bar in the gutter beside its
+    costly lines and the compiler's notes with Line buttons that move the
+    caret; Tidy up lays the text out as `psi fmt` does and one undo takes it
+    back; a light one stays quiet; the demo's editor has Tidy up too."""
+    src = 'name "Heavy"\nloop 4\na = noise(x*8, y*8, t)\nb = noise(x*4 + a,  y*4, t/2)\nc = sqrt(x*x + y*y) + atan2(y - 0.5, x - 0.5)\ngray(frac(a + b + c))'
+    page = new_page(browser, "laptop", errors)
+    open_text(page, base, src, "Heavy")
+    page.wait_for_selector(".psi-gut .fc-bar", timeout=20000)
+    bars, notes = page.locator(".psi-gut .fc-bar").count(), page.inner_text("#psi-notes")
+    check(bars >= 3 and "What costs most" in notes and "Line 4" in notes and "it reads t, which changes" in notes,
+          f"/f/: a heavy Formula's lines have cost bars ({bars}) and its notes are said ({notes[:80]!r}…)")
+    check(not re.search(r"cache|copy|bucket", notes, re.I), "/f/: the notes say no cache, copy or bucket")
+    print(f"  (observe() in the page: {page.get_attribute('#psi-notes', 'data-ms')} ms)")
+    page.locator("#psi-notes button", has_text="Line 4").first.click()
+    check(page.evaluate("document.activeElement.id === 'psi-src' && document.querySelector('#psi-src').selectionStart") == src.index("b = "),
+          "/f/: a note's Line button puts the caret on its line")
+    shots.mkdir(parents=True, exist_ok=True)
+    page.locator("#psi-ed").screenshot(path=str(shots / "f-cost.png"))
+    page.click("#psi-tidy")
+    wait_js(page, "!document.querySelector('#psi-src').value.includes('a,  y')", timeout=20000)
+    check(page.input_value("#psi-src") == src.replace("a,  y", "a, y") + "\n", "/f/: Tidy up lays the text out")
+    page.keyboard.press("Control+z")
+    check(page.input_value("#psi-src") == src, "/f/: one undo takes Tidy up back")
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    open_text(page, base, 'name "Light"\ngray(x)', "Light")
+    page.wait_for_selector("#psi-tidy:not([hidden])", timeout=20000)
+    page.wait_for_timeout(800)
+    check(page.locator(".psi-gut .fc-bar").count() == 0 and not page.is_visible("#psi-notes"), "/f/: a light Formula: no bars, no notes")
+    page.goto(f"{base}/demo/#formulas")
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
+    page.click("#psi-new")
+    page.wait_for_selector("#psi-ed #psi-tidy:not([hidden])", timeout=10000)
+    check(True, "demo: the editor has Tidy up")
+    page.context.close()
+
+
 def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
     install = (site / "install/index.html").read_text()
     fw = site / "install/firmware"
@@ -2092,6 +2131,8 @@ def main() -> int:
         psi_reference(browser, base, a.site, errors, a.shots)
         print("error codes linked to the reference (/f/, the demo)")
         psi_error_links(browser, base, errors)
+        print("What costs most and Tidy up (/f/, the demo)")
+        f_cost(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         print("install page")
         install_links(a.site, a.dist, a.beta_dist)
         if a.shots:

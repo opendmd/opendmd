@@ -549,6 +549,9 @@ function editor() {
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
   let pv = null, toks = [], bad = null, num = null, good = null;
+  // The site's What costs most and Tidy up (js/fcost.js, never on the panel): the last compile, told.
+  let fc = null, fcs = [null];
+  if (PAGE || app.demo) import('./fcost.js').then((m) => { fc = m.cost({ ta, gut, code: el.querySelector('.psi-code'), help, put }); fc.seen(...fcs); }, () => {});
   // What the preview plays: the last text that compiled, with the sliders as they are.
   const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; }, get w() { return cond.hidden ? null : W?.w; } };
 
@@ -601,6 +604,7 @@ function editor() {
     hl.innerHTML = m.html + '\n';
     const n = s.split('\n').length, el = bad && s.slice(0, bad[0]).split('\n').length;
     gut.innerHTML = Array.from({ length: n }, (_, k) => (k + 1 === el ? `<b>${k + 1}</b>` : k + 1)).join('\n');
+    fc?.paint(n);
     ta.style.height = `calc(${Math.max(8, n + 1) * 1.5}em + 18px)`;
   }
   const build = debounce(() => compile(), 150);
@@ -664,7 +668,11 @@ function editor() {
       if (bi) import('./fconds.js').then((m) => { (W ??= m.conditions(P, cond)).keys(bi, i[5] & 16); });
       play(pv, live, i);
       PS?.follow(live);
+      fcs = [f.src, est(i)];
+      fc?.seen(...fcs);
     } else {
+      fcs = [null];
+      fc?.seen(null);
       bad = miss ? [miss.s, miss.e] : T(() => P.errorAt(), [0, 0]);
       top.classList.toggle('stale', good != null);
       const line = ta.value.slice(0, bad[0]).split('\n').length, at = bad, was = ta.value;

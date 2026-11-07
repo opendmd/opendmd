@@ -82,8 +82,10 @@ pub fn collect(dir: &Path, skip: &[&Path]) -> Result<Vec<PackFile>> {
     Ok(files)
 }
 
-/// The web demo's player: published with the site's demo, never packed.
-pub const DEMO_ONLY: &str = "js/demo.js";
+/// The site's own files, published with its demo, never packed: the web
+/// demo's player, the editor's What costs most and Tidy up, and their wasm
+/// module (a folder: everything under it).
+pub const SITE_ONLY: &[&str] = &["js/demo.js", "js/fcost.js", "pkg-psi-lang/"];
 
 pub fn pack(
     dir: &Path,
@@ -103,12 +105,21 @@ pub fn pack(
             .to_string(),
         (None, None) => bail!("--version or --version-file is required"),
     };
-    // The version file is the header's, and the web demo's player (js/demo.js)
-    // is only ever loaded from the site: neither goes on the device.
-    let demo = dir.join(DEMO_ONLY);
-    let mut skip = vec![demo.as_path()];
+    // The version file is the header's, and the site's own files
+    // (SITE_ONLY) are only ever loaded from the site: none goes on the device.
+    let site: Vec<PathBuf> = SITE_ONLY
+        .iter()
+        .filter(|p| !p.ends_with('/'))
+        .map(|p| dir.join(p))
+        .collect();
+    let mut skip: Vec<&Path> = site.iter().map(|p| p.as_path()).collect();
     skip.extend(version_file.as_deref());
-    let files = collect(dir, &skip)?;
+    let mut files = collect(dir, &skip)?;
+    files.retain(|f| {
+        !SITE_ONLY
+            .iter()
+            .any(|d| d.ends_with('/') && f.path.starts_with(d))
+    });
     if !files.iter().any(|f| f.path == "index.html") {
         bail!("{} has no index.html: run `make web` first", dir.display());
     }
@@ -194,6 +205,11 @@ mod tests {
         // The web demo's player, and a lone .gz of it: the site's only.
         fs::write(dir.join("js/demo.js"), "demo").unwrap();
         fs::write(dir.join("js/demo.js.gz"), "gz demo").unwrap();
+        // The editor's site-only module and its wasm.
+        fs::write(dir.join("js/fcost.js"), "fcost").unwrap();
+        fs::create_dir_all(dir.join("pkg-psi-lang")).unwrap();
+        fs::write(dir.join("pkg-psi-lang/l.wasm"), "lang").unwrap();
+        fs::write(dir.join("pkg-psi-lang/l.wasm.gz"), "gz lang").unwrap();
         fs::write(dir.join("version.txt"), "v9-test\n").unwrap();
         fs::write(dir.join(".hidden"), "no").unwrap();
         let out = dir.join("out.pack");
