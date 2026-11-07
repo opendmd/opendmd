@@ -88,7 +88,7 @@ palmInk = neon*road.pink
 roadInk = neon ? road.nightRoad : road.road
 kerbInk = neon ? road.neon : road.yellow
 vergeInk = neon ? road.nightVerge : road.verge
-beamShift = neon*(road.nightRoad - road.road)
+beamShift = neon * (road.nightRoad - road.road)
 
 draw {
   -- What is drawn carries a tag, ink k/16 (read back as ink(16)): 3 the
@@ -100,7 +100,7 @@ draw {
     for j < 7 {
       hillHalf = peakHalf[k] - j*1.9
       hillX = skyMid - peakMid[k]
-      line(hillX - hillHalf, 12 - j, hillX + hillHalf, 12 - j, (hillHalf >= 0)*6/16)
+      line(hillX - hillHalf, 12 - j, hillX + hillHalf, 12 - j, (hillHalf >= 0) * 6 / 16)
     }
   }
 
@@ -117,7 +117,7 @@ draw {
 
   -- The stars, by night
   for k < 16 {
-    dot(frac(k*.7549)*128, 10.5 + frac(k*.5698)*-11, (frac(k*.382) < night*1.4 - .4)*4/16)
+    dot(frac(k*.7549)*128, 10.5 + frac(k*.5698)*-11, (frac(k*.382) < night*1.4 - .4) * 4 / 16)
   }
 
   -- Palms: three places, one every 14 stripes, now and then a palm there:
@@ -155,7 +155,7 @@ draw {
 below = (31 - py) < 19
 depth = below * .1125 / (19.5 - (31 - py))
 rowDriven = driven + depth
-halfWidth = below*(50.7 - 2.6*((31 - py) - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2)))
+halfWidth = below * (50.7 - 2.6*((31 - py) - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2)))
 stripe = (frac(39/max(halfWidth, 1.3) - t*-10 + rush) < .5) * -road.step
 offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*2000))
 

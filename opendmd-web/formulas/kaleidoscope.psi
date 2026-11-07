@@ -8,4 +8,4 @@ fn plasma(x, y) {
   hsv(wave/6 + t/8, 0.9, 1)
 }
 -- folded twice: the same quarter in every corner, mirrored
-plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)
+plasma(abs(x - 0.5) * 2, abs(y - 0.5) * 2)

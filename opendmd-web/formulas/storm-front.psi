@@ -5,7 +5,7 @@ about "Heavy clouds rolling over, drawn a band at a time, under rain that falls 
 loop forever
 -- the clouds: slow, so redrawn every 4th frame, a quarter of the rows each time
 layer rate 4 {
-  cl = noise(x*3 - t*0.15, (1 - y)*2, 0)*0.7 + noise(x*7 - t*0.3, (1 - y)*5, 0)*0.3
+  cl = noise(x*3 - t*0.15, (1 - y) * 2, 0)*0.7 + noise(x*7 - t*0.3, (1 - y) * 5, 0)*0.3
   pal(ice, cl*0.8 + (1 - y)*0.3) * (0.35 + cl*0.5)
 }
 -- the rain: thin streaks, falling every frame

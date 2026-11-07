@@ -4,7 +4,7 @@ name "CRT"
 about "TV colour bars with scanlines and a rolling band"
 loop 4
 bar = floor(x*7)
-lines = 0.4 + 0.6*((31 - py)%2)
+lines = 0.4 + 0.6*((31 - py) % 2)
 roll = 0.7 + 0.4*max(0, tri((1 - y)/2 + t/4))
 glow = lines * roll * (1 - (x - 0.5)*(x - 0.5)*1.5 - ((1 - y) - 0.5)*((1 - y) - 0.5)*1.2)
 rgb(step(bar%4, 1.5)*glow, step(bar, 3.5)*glow, step(bar%2, 0.5)*glow)
