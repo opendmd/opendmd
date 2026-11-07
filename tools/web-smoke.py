@@ -2893,7 +2893,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     goto_view(page, "settings/device")
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
-    check(sorted(fw) == ["build", "features", "flash_size", "last", "layout", "log", "pending", "variant", "version"] and fw["features"] == ["formulas", "jit"] and fw["pending"] is None
+    check(sorted(fw) == ["build", "features", "flash_size", "last", "layout", "log", "pending", "updater", "variant", "version"] and fw["features"] == ["formulas", "jit"] and fw["pending"] is None
           and fw["variant"] == "4mb" and fw["layout"] == 3 and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
     st0 = get_json(base + "/api/status")
     check(st0.get("layout") == 3, f"firmware: /api/status layout {st0.get('layout')}")
