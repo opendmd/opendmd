@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# A GitHub release's notes (release.yml, and tools/release.sh PUBLISH=local):
+#
+#   tools/release-notes.sh VERSION CHANNEL SHA256SUMS > notes.md
+#
+# CHANNEL: both, or beta (a beta after a final: docs/deploying.md "Betas").
+# GitHub's generated notes (the changes since the last release) follow them.
+set -euo pipefail
+v=$1 channel=$2 sums=$3
+where='https://opendmd.dev/install/'
+[ "$channel" != beta ] || where="$where (this beta under \"Or install the beta\")"
+cat <<EOF
+For the ESP32 DevKit V1 (4 MB); the browser installer is at $where.
+
+| file | DevKit (4 MB) |
+|---|---|
+| update over WiFi (Update from file…) | \`opendmd-$v-4mb.odfw\` |
+| whole flash at offset 0 | \`opendmd-$v-4mb-full.bin\` |
+| ESP Web Tools manifest | \`manifest-4mb.json\` |
+
+The DevKit build is for flash layout v3 (a bigger firmware partition; docs/deploying.md): a DevKit on layout v2 (1.0.0-beta.15 or earlier) refuses its update file and needs one USB install from https://opendmd.dev/install/ (Update OpenDMD, or Install with Erase unticked, keeps the WiFi and settings).
+
+SHA-256:
+
+\`\`\`
+$(cat "$sums")
+\`\`\`
+EOF
