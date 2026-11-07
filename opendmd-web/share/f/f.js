@@ -20,7 +20,7 @@
 // panel comes marked `&panel=1`: with the address known it goes straight on.
 //
 // Never lost: the text as changed is kept in this browser per Formula (its
-// gallery name, or `open`), offered back on return (Continue where you left
+// gallery name, or an #open one's by its text), offered back on return (Continue where you left
 // off), and Earlier versions… has it as it came, as it went to the panel
 // and as it was left (js/fhist.js).
 
@@ -72,9 +72,11 @@ async function load() {
 }
 
 async function start() {
-  const H = await import('../demo/js/fhist.js'), key = ref?.gallery ? 'g' + ref.gallery : 'open', d = H.draft(key);
+  const H = await import('../demo/js/fhist.js');
   let got = await load();
-  // #open again (its text is read once): what it started from, the draft offered.
+  // An #open one is its text's own (`o<hash>`), the last one opened kept
+  // for a reload (its text is read once): the draft's start, the draft offered.
+  const key = ref?.gallery ? 'g' + ref.gallery : got ? H.opened('o' + H.hash(got.src)) : H.opened(), d = key && H.draft(key);
   if (!got && opening && d?.base) got = { name: d.name, src: d.base };
   if (!got || !got.src.trim()) {
     $('f-none').hidden = false;
@@ -97,7 +99,7 @@ async function start() {
   let subForm = null;
   // The draft as it was: kept, and offered while the page is as it loaded.
   H.keep(key, got, ref?.gallery ? 'g' : 'o');
-  const old = d && d.src !== orig && (ref?.gallery || d.base === orig) ? d : null;
+  const old = d && d.src !== orig ? d : null;
   if (d && d.src !== orig) H.keep(key, d, 'd');
   if (old) $('f-ed').before(H.offer(old, () => ed.back(old)));
   let asked = !!old;

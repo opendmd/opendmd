@@ -658,8 +658,11 @@ function editor() {
     if (pv.loopMs !== 0) i = (i % n + n) % n;
     seek(Math.max(0, i) * g);
   }
+  let shown = '';
   function tick() {
     const g = grain(), n = Math.max(1, Math.floor(len() / g)), k = Math.floor(elapsed() / g), i = pv.loopMs === 0 ? k : k % n, held = pv.hold != null;
+    // (Only what changed: it runs every frame.)
+    if (shown === (shown = `${n} ${i} ${g} ${held}`)) return;
     tr.max = n - 1;
     tr.value = Math.min(i, n - 1);
     tnow.textContent = `t = ${(i * g / 1000).toFixed(2)} s`;
@@ -668,15 +671,17 @@ function editor() {
     top.classList.toggle('held', held);
   }
   // Back to an earlier version (js/fhist.js; the site's page's draft): only
-  // the lines that differ, as typed, so undo takes it away again.
+  // the lines that differ, as typed, so undo takes it away again (true when it can).
   function back(v) {
     for (const k of 'abc') if (typeof v[k] == 'number') B.draft[k] = v[k];
     const s = ta.value, [a, e] = span(s, v.src);
     ta.focus({ preventScroll: true });
+    const typed = document.activeElement === ta;
     if (a < s.length - e || a < v.src.length - e) put({ s: a, e: s.length - e }, v.src.slice(a, v.src.length - e));
     if (v.name && !ctlOf({ src: v.src })?.name) { B.draft.name = name.value = v.name; }
     paint();
     compile();
+    return typed;
   }
   // Numbers (a unary minus included), comments and the error, drawn under the (transparent) text.
   function paint() {

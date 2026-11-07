@@ -335,6 +335,14 @@ def f_drafts(browser, base: str, errors: list[str], shots: Path | None) -> None:
     page.click("#f-cont-go")
     page.wait_for_timeout(400)
     check(shown == src and page.input_value("#psi-src") == src + "\n-- more", "/f/#open: a reload still has it, and the changes back")
+    # Another #open Formula is its own: no offer, none of the first one's versions.
+    other = "loop 2\ngray(y)"
+    open_text(page, base, other, "Other")
+    page.click("#psi-vers-btn")
+    page.wait_for_selector("#psi-vers", timeout=10000)
+    rows = page.eval_on_selector_all("#psi-vers button.mi", "els => els.map(e => e.textContent)")
+    check(page.locator("#f-cont").count() == 0 and len(rows) == 1 and "As it was opened" in rows[0],
+          f"/f/#open: another formula has its own draft and versions ({rows})")
     page.context.close()
 
 
