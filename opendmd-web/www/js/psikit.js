@@ -166,7 +166,7 @@ export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms
 // comments `.c`, colours `.k` with `--k` their colour, for a swatch, the
 // block words and the draw stage's `.w`; the
 // error `bad` = [start, end] `.e`; everything else escaped text) and where
-// its numbers are.
+// its numbers (`toks`) and colours (`cols`) are.
 // (`line`, `dot` and `ink` only in a formula with a draw block: before it
 // they were names a formula could set, and may still be; `fps` only before a
 // number, as `fps 100`; `forever` only after `loop`; `rate` only after `layer`. A sprite block's rows
@@ -176,7 +176,7 @@ const WORDS = /^(loop|layer|part|draw|for|table|fn|line|dot|pset|rect|rectfill|c
 // psi-builtins end
 export function marks(s, bad) {
   const draws = /^\s*draw\s*\{/m.test(s.replace(/(--|\/\/).*/g, ''));
-  const toks = [], cls = new Array(s.length).fill(''), pic = [];
+  const toks = [], cols = [], cls = new Array(s.length).fill(''), pic = [];
   for (const b of s.matchAll(/^([ \t]*sprite[ \t]+\w+[ \t]*\{[^\n]*\n)([\s\S]*?)^[ \t]*\}/gm)) {
     let at = b.index + b[1].length;
     for (const line of b[2].split('\n')) {
@@ -196,6 +196,7 @@ export function marks(s, bad) {
       if (s[a - 1] === '-' && /[-(,=*/+?:<>!%;\n]|^$/.test(s.slice(0, a - 1).trimEnd().slice(-1))) a--;
       toks.push({ s: a, e: m.index + m[0].length });
     }
+    if (m[0][0] == '#') cols.push({ s: a, e: a + m[0].length });
     if (k) cls.fill(k, a, m.index + m[0].length);
   }
   for (const [a, e] of pic) cls.fill('p', a, e);
@@ -209,7 +210,7 @@ export function marks(s, bad) {
     i = j;
   }
   if (bad && bad[0] >= s.length) html += '<span class="e"> </span>';
-  return { html, toks };
+  return { html, toks, cols };
 }
 
 // The sample picture a Formula that draws over a GIF (info()[5] & 32) is

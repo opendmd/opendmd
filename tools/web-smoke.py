@@ -4242,6 +4242,58 @@ def psi_error_links(page: Page) -> None:
     check(len(cases) >= 150 and not bad, f"formulas: psierr.js codes all {len(cases)} golden messages as the compiler's index does ({bad})")
 
 
+def psi_colour_checks(page: Page) -> None:
+    """Colours in the code: every one's swatch shows on the editor's dark
+    background, black and near-black too (a bar in the colour, ringed); the
+    caret in one shows the picker's swatch under it, seeded with it; a
+    colour picked rewrites it live and on change (#rgb kept short when it
+    fits), one undo puts it back; the caret off it hides it."""
+    src = "palette p = #000, #05020c, #220a36, #808080, #fff\npal(p, x)"
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(400)
+    sw = page.eval_on_selector_all(".psi-hl .k", """els => els.map(e => { const s = getComputedStyle(e, '::after'), r = e.getBoundingClientRect();
+        return [e.textContent, s.backgroundColor, s.boxShadow, parseFloat(s.height), Math.round(r.width)]; })""")
+    # The ring is the muted text colour (#8b939c), whatever the colour.
+    ok = len(sw) == 5 and all("139, 147, 156" in k[2] and k[3] >= 3 for k in sw) and sw[0][1] == "rgb(0, 0, 0)" and sw[1][1] == "rgb(5, 2, 12)"
+    check(ok, f"formulas: every colour has a ringed swatch, dark ones too ({sw})")
+    # The highlighting stays on the text's grid: #05020c is 7 characters wide.
+    cw = page.evaluate("() => { const s = document.createElement('span'); s.textContent = '0'.repeat(20); document.querySelector('.psi-hl').append(s); const w = s.getBoundingClientRect().width / 20; s.remove(); return w; }")
+    check(abs(sw[1][4] - 7 * cw) <= 1, f"formulas: a colour's highlight is as wide as its text ({sw[1][4]} px, {7 * cw:.1f})")
+    shot(page, "formulas-colours", "laptop")
+    page.focus("#psi-src")
+    at = src.index("#220a36") + 3
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(200)
+    kp = page.locator("#psi-kp")
+    check(kp.is_visible() and kp.input_value() == "#220a36", f"formulas: the caret in a colour shows its picker ({kp.is_visible()}, {kp.input_value()})")
+    shot(page, "formulas-colour-picker", "laptop")
+    page.keyboard.press("Tab")
+    check(page.evaluate("document.activeElement.id") == "psi-kp" and kp.is_visible(), "formulas: Tab from a colour reaches its picker")
+    # (The browser's own picker can't be driven headless: its events instead.)
+    page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new Event('click'));
+        k.value = '#ff8000'; k.dispatchEvent(new Event('input')); }""")
+    page.wait_for_timeout(300)
+    live = page.input_value("#psi-src")
+    page.evaluate("() => { const k = document.querySelector('#psi-kp'); k.value = '#40c0ff'; k.dispatchEvent(new Event('input')); k.dispatchEvent(new Event('change')); }")
+    page.wait_for_timeout(400)
+    got = page.input_value("#psi-src")
+    check(live == src.replace("#220a36", "#ff8000") and got == src.replace("#220a36", "#40c0ff") and page.get_attribute("#psi-ed", "data-err") is None,
+          f"formulas: a colour picked goes in its place, live and on change ({got!r})")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == src, f"formulas: one undo puts the colour back ({page.input_value('#psi-src')!r})")
+    at = src.index("#fff") + 1
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(200)
+    page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new Event('click'));
+        k.value = '#00ff00'; k.dispatchEvent(new Event('change')); }""")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == src.replace("#fff", "#0f0"), f"formulas: a short colour stays short when it can ({page.input_value('#psi-src')!r})")
+    page.evaluate("document.querySelector('#psi-src').setSelectionRange(2, 2)")
+    page.wait_for_timeout(200)
+    check(kp.is_hidden(), "formulas: the caret off a colour hides its picker")
+
+
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
     """Library → Formulas: the module loads only then; the examples render;
     a plain error with its line; a number scrubbed changes the text, the
@@ -4328,6 +4380,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.keyboard.press("Alt+ArrowUp")
     page.wait_for_timeout(200)
     check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
+    psi_colour_checks(page)
     # A choice: `control name = word, word, …` is a row of buttons (a radio
     # group); the value is the choice's number, and the arrows move it.
     page.fill("#psi-src", "control level = off, half, full\ngray(level/2)")
