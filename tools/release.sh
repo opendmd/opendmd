@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# A release made on this machine: what .github/workflows/release.yml does on
-# a v* tag, for while GitHub Actions is unavailable (release.yml stays, for
-# when it is again; CLAUDE.md "CI and releases", docs/deploying.md).
+# A release: built and checked on this machine, published by CI
+# (.github/workflows/release.yml on the tag this pushes; docs/deploying.md
+# "Releasing").
 #
-#   tools/release.sh VERSION                     dry run: plan, bump, build, check, site; publishes nothing
-#   tools/release.sh VERSION --publish           the same, then publishes
-#   tools/release.sh VERSION --publish --resume  after a publish that failed part way: skips what is done
-#   (make release VERSION=1.0.0-beta.12 [PUBLISH=1] [RESUME=1])
+#   tools/release.sh VERSION                         dry run: plan, bump, build, check, site; publishes nothing
+#   tools/release.sh VERSION --publish               the same, then pushes main and the tag; CI publishes; waits and checks
+#   tools/release.sh VERSION --publish --resume      after a push: waits for CI's run again and checks what it published
+#   tools/release.sh VERSION --publish-local         fallback while CI is down: publishes everything from here
+#   tools/release.sh VERSION --publish-local --resume   after a local publish that stopped part way
+#   (make release VERSION=1.0.1 [PUBLISH=1|PUBLISH=local] [RESUME=1])
 #
 # 1. Plan: the version is semver (the site's grammar, tools/site.py
 #    API_FROZEN: no "-" inside the pre-release part), newer than every v*
 #    tag here and on GitHub; the tag exists nowhere; the tree is clean, on
-#    main, and GitHub's and origin's main are in it; gh may push to both
-#    GitHub repos; the signing key is there (only its size is read).
+#    main, and GitHub's and origin's main are in it; gh may push; the signing
+#    key is there (only its size is read). --publish: the repository has the
+#    secrets release.yml needs (their names only). --publish-local: no
+#    release.yml run exists for the tag and no GitHub release either.
 # 2. Bump: every opendmd crate's Cargo.toml and the opendmd-* entries of
 #    every Cargo.lock, committed as "Release <version>" on a detached HEAD
-#    (main does not move until publishing), and the annotated tag v<version>.
+#    (main does not move until publishing), and the annotated tag v<version>,
+#    whose message says who publishes it: "Publisher: ci", or "Publisher:
+#    local" (--publish-local; release.yml then skips the tag).
 # 3. Build: make fw-release (the 4mb layout, signed with FW_SIGN_KEY, default
 #    ~/.config/opendmd/opendmd.key) into a dist/ of this release's own, then
 #    release.yml's checks: the version in the images, manifests, bundles and
 #    the www pack; no $HOME in the images; the full images' sizes; 64 KB of
-#    factory spare per layout.
+#    factory spare per layout; the bundle and pack verify against
+#    firmware/keys/opendmd.pub.
 # 4. Assets: release.yml's list, SHA256SUMS, and the release notes.
 # 5. Site: make site with the public gallery repo's gallery/ and dev/api/
 #    (a fresh sparse clone) and this release's API page frozen; release.yml's
@@ -36,21 +43,38 @@
 # from its GitHub release (DIST, checked against its SHA256SUMS: read only)
 # and this beta's (BETA_DIST), so release.json and the Install button stay
 # on the final and the beta gets install/firmware/beta/ and its own button.
-# 6. Publish (--publish only): main fast-forwarded to the release commit;
-#    the commit and the tag pushed to GitHub (https, gh's credentials) and to
-#    origin (the local mirror); the GitHub release (pre-release for a "-"
-#    version, latest otherwise) and its assets; the public gallery repo
+#
+# 6. --publish: main fast-forwarded to the release commit; the commit and
+#    the tag pushed to GitHub (https, gh's credentials) and to origin (the
+#    local mirror). The tag starts release.yml, which builds the release
+#    again, signs it with the OTA_SIGNING_KEY secret (the same key) and
+#    publishes it: the GitHub release and its assets, the public gallery
+#    repo, the site. This waits for that run (gh run watch), then checks
+#    what it published: the release (not a draft, a pre-release for a "-"
+#    version), its assets (this build's names; CI's bytes, as builds are not
+#    byte-reproducible: SHA256SUMS, and the bundle and pack verify against
+#    opendmd.pub), and opendmd.dev live (tools/site-live-check.sh: the feeds
+#    name the right versions and serve the release's own bytes). The build
+#    here is the check that the tag is releasable; CI's is what ships.
+# 6. --publish-local (CI down): the same pushes (the tag says "Publisher:
+#    local", so a release.yml run, should one start, does nothing); the
+#    GitHub release and its assets from this build (tools/release-publish.sh:
+#    a draft until every asset is up); the public gallery repo
 #    (tools/gallery-repo-publish.sh over https); the site on Cloudflare (make
-#    site-deploy-built, cf's OAuth login), checked live.
+#    site-deploy-built, cf's OAuth login), checked live the same way.
 #
 # A dry run, or a publish that fails before anything is pushed, leaves the
 # checkout as it found it: back on main, the local tag deleted. Once a push
-# has happened the release commit and tag stay, and a rerun with --publish
-# --resume picks up: it reuses this release's build (rebuilding only if it is
-# missing), and skips a push, the release, an asset or the deploy already
-# done. Something on GitHub that differs from this build (a tag on another
-# object, an asset with another digest) stops it: nothing is ever moved,
-# deleted or overwritten.
+# has happened the release commit and tag stay, and a rerun with --resume
+# picks up: it skips a push already done; with --publish it watches or
+# checks CI's run (a failed run is rerun on GitHub, which is safe:
+# release.yml); with --publish-local it reuses this release's build
+# (rebuilding only if it is missing) and skips the release, an asset or the
+# deploy already done. Something on GitHub that differs (a tag on another
+# object, a published asset with another digest) stops it: nothing is ever
+# moved, deleted or overwritten. --publish-local --resume may also take over
+# a "Publisher: ci" tag CI never ran (no run, no release): a late CI run
+# then finds the release published and takes its assets as they are.
 #
 # Environment: RELEASE_DIR (default $SCRATCH/opendmd-release when SCRATCH
 # is set, as the Makefile's local.mk can do, else target/release): this
@@ -65,15 +89,16 @@ GH_REPO=opendmd/opendmd
 GH_URL=https://github.com/$GH_REPO.git
 GALLERY_URL=https://github.com/opendmd/opendmd.github.io.git
 SITE_URL=https://opendmd.dev
-UA='opendmd-site-test/1 (+https://opendmd.dev)'
 TRAILERS=${RELEASE_TRAILERS:-}
 
-usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
-VERSION= PUBLISH=0 RESUME=0 ANY_BRANCH=0
+# PUBLISH: 0 (a dry run), 1 (--publish: CI publishes), 1 with LOCAL=1 (--publish-local).
+VERSION= PUBLISH=0 LOCAL=0 RESUME=0 ANY_BRANCH=0
 for a in "$@"; do
   case $a in
     --publish) PUBLISH=1 ;;
+    --publish-local) PUBLISH=1 LOCAL=1 ;;
     --resume) RESUME=1 ;;
     # Tests of this script only (a dry run from a branch); never with --publish.
     --any-branch) ANY_BRANCH=1 ;;
@@ -83,6 +108,9 @@ for a in "$@"; do
   esac
 done
 [ -n "$VERSION" ] || usage
+MODE=dry; [ "$PUBLISH" = 0 ] || MODE=ci; [ "$LOCAL" = 0 ] || MODE=local
+# What the annotated tag says (release.yml skips a "Publisher: local" tag).
+PUBLISHER=ci; [ "$LOCAL" = 0 ] || PUBLISHER=local
 
 # ---- output ---------------------------------------------------------------
 
@@ -158,6 +186,7 @@ MK=(DIST="$DIST" UPDATER_BUILD="$UPDATER_BUILD" FW_SIGN_KEY="$FW_SIGN_KEY")
 START_REF=$(git symbolic-ref -q --short HEAD || true)   # the branch this run started on
 START=$(git rev-parse HEAD)
 RELEASE_COMMIT=        # the commit the tag names
+TAG_PUBLISHER=         # the tag's "Publisher:" (ci or local), once there is a tag
 CREATED_TAG=0          # this run made the local tag (and the detached commit)
 
 on_exit() {
@@ -186,7 +215,7 @@ on_exit() {
       fi
       if [ "$PUBLISHING" = 1 ]; then
         echo "Not published: \"$CUR\" and every step after it."
-        echo "Fix the cause and rerun: tools/release.sh $VERSION --publish --resume"
+        echo "Fix the cause and rerun: tools/release.sh $VERSION $( [ "$MODE" = local ] && echo --publish-local || echo --publish ) --resume"
       fi
     fi
   fi
@@ -196,22 +225,31 @@ trap on_exit EXIT
 
 mkdir -p "$REL"
 exec > >(tee -a "$REL/release.log") 2>&1
-echo "release.sh $TAG ($KIND) $( [ "$PUBLISH" = 1 ] && echo publish || echo 'dry run' )$( [ "$RESUME" = 1 ] && echo ', resume' ) at $(date -u +%FT%TZ)"
+echo "release.sh $TAG ($KIND) $(case $MODE in dry) echo 'dry run' ;; ci) echo 'publish (CI publishes)' ;; local) echo 'publish from this machine (PUBLISH=local)' ;; esac)$( [ "$RESUME" = 1 ] && echo ', resume' ) at $(date -u +%FT%TZ)"
 echo "checkout $ROOT, build in $REL"
 
 # ---- 1. plan --------------------------------------------------------------
 
 step "1. Plan"
-[ "$RESUME" = 0 ] || [ "$PUBLISH" = 1 ] || die "--resume goes with --publish"
+[ "$RESUME" = 0 ] || [ "$PUBLISH" = 1 ] || die "--resume goes with --publish or --publish-local"
 [ "$ANY_BRANCH" = 0 ] || [ "$PUBLISH" = 0 ] || die "--any-branch is for dry runs only"
 valid_version "$VERSION" || die "'$VERSION' is not a version this project releases: X.Y.Z or X.Y.Z-pre.N (letters, digits and dots after the '-')"
 pass "version $VERSION ($KIND, tag $TAG)"
 for t in git gh jq uv make rsync curl sha256sum; do command -v $t >/dev/null || die "$t is not installed"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
-for r in "$GH_REPO" opendmd/opendmd.github.io; do
+PUSH_REPOS=("$GH_REPO"); [ "$MODE" != local ] || PUSH_REPOS+=(opendmd/opendmd.github.io)
+for r in "${PUSH_REPOS[@]}"; do
   [ "$(gh api "repos/$r" --jq .permissions.push 2>/dev/null)" = true ] || die "gh's account cannot push to $r"
 done
-pass "gh logged in, may push to $GH_REPO and opendmd/opendmd.github.io"
+pass "gh logged in, may push to ${PUSH_REPOS[*]}"
+if [ "$MODE" = ci ]; then
+  # release.yml refuses a real release without them (before building); find out now, before the push.
+  secrets=$(gh secret list -R "$GH_REPO" --json name --jq '.[].name') || die "cannot list $GH_REPO's secrets (gh needs admin on it)"
+  for n in OTA_SIGNING_KEY SITE_DEPLOY_KEY CLOUDFLARE_API_TOKEN; do
+    grep -qx "$n" <<<"$secrets" || die "$GH_REPO has no $n secret, which release.yml needs to publish (docs/deploying.md \"Releasing\"); or PUBLISH=local while CI cannot"
+  done
+  pass "$GH_REPO has the secrets release.yml publishes with (OTA_SIGNING_KEY, SITE_DEPLOY_KEY, CLOUDFLARE_API_TOKEN; names only)"
+fi
 
 [ -z "$(git status --porcelain)" ] || { git status --short; die "the working tree is not clean"; }
 pass "the tree is clean"
@@ -226,6 +264,11 @@ ghgit fetch -q "$GH_URL" +refs/heads/main:refs/remotes/github/main || die "canno
 git fetch -q origin main || die "cannot fetch main from origin"
 REMOTE_TAGS=$(ghgit ls-remote --tags "$GH_URL" 'refs/tags/v*') || die "cannot list $GH_URL's tags"
 remote_tag_obj() { awk -v r="refs/tags/$1" '$2 == r { print $1 }' <<<"$REMOTE_TAGS"; }
+# The local tag's "Publisher:" line: local, or ci (also a tag from before the line).
+tag_publisher() { git cat-file -p "refs/tags/$TAG" | sed '1,/^$/d' | grep -qx 'Publisher: local' && echo local || echo ci; }
+# release.yml's runs for the tag (a tag push or a dispatch from it), newest first: id, status, conclusion.
+ci_runs() { gh run list -R "$GH_REPO" --workflow release.yml --branch "$TAG" --limit 20 --json databaseId,status,conclusion,createdAt \
+  --jq 'sort_by(.createdAt) | reverse | .[] | [.databaseId, .status, .conclusion] | @tsv'; }
 
 LOCAL_OLD=$(sed -n 's/^version *= *"\(.*\)"/\1/p' firmware/Cargo.toml | head -1)
 if [ "$RESUME" = 1 ]; then
@@ -236,6 +279,10 @@ if [ "$RESUME" = 1 ]; then
   [ "$START" = "$RELEASE_COMMIT" ] || die "--resume: HEAD ($START) is not $TAG's commit ($RELEASE_COMMIT)"
   [ "$(git rev-parse main)" = "$RELEASE_COMMIT" ] || die "--resume: main is not $TAG's commit"
   [ "$LOCAL_OLD" = "$VERSION" ] || die "--resume: firmware/Cargo.toml says $LOCAL_OLD, not $VERSION"
+  TAG_PUBLISHER=$(tag_publisher)
+  if [ "$MODE" = ci ] && [ "$TAG_PUBLISHER" = local ]; then
+    die "--resume: $TAG says \"Publisher: local\": CI does not publish it; resume with --publish-local"
+  fi
   obj=$(remote_tag_obj "$TAG")
   [ -z "$obj" ] || [ "$obj" = "$(git rev-parse "refs/tags/$TAG")" ] ||
     die "GitHub's $TAG is $obj, not the local tag $(git rev-parse "refs/tags/$TAG"): not touching it"
@@ -273,6 +320,20 @@ if [ "$KIND" = prerelease ] && [ -n "$FINAL" ]; then
 else
   CHANNEL=both REL_VERSION=$VERSION
   pass "channel: both ($( [ "$KIND" = release ] && echo 'a final release' || echo 'a beta before any final release')): release.json and beta.json name $VERSION"
+fi
+
+if [ "$MODE" = local ]; then
+  # The fallback never races CI: no run of release.yml for the tag, and no
+  # release (unless resuming a publish this fallback started itself).
+  runs=$(ci_runs) || die "cannot list release.yml's runs for $TAG"
+  [ -z "$runs" ] || die "release.yml has run for $TAG (run $(head -1 <<<"$runs" | cut -f1): $(head -1 <<<"$runs" | cut -f2,3 | tr '\t' ' ')): CI publishes this tag, not PUBLISH=local (rerun it on GitHub: it is safe)"
+  if gh release view "$TAG" -R "$GH_REPO" >/dev/null 2>&1; then
+    [ "$RESUME" = 1 ] && [ "$TAG_PUBLISHER" = local ] ||
+      die "the GitHub release $TAG already exists: PUBLISH=local only makes a release (or, with RESUME=1, finishes one it started)"
+    pass "no release.yml run for $TAG; its GitHub release exists, made by an earlier PUBLISH=local (resuming)"
+  else
+    pass "no release.yml run and no GitHub release for $TAG"
+  fi
 fi
 
 [ -f "$FW_SIGN_KEY" ] || die "no signing key at $FW_SIGN_KEY"
@@ -315,10 +376,11 @@ else
   git diff --cached --stat
   if [ -n "$TRAILERS" ]; then git commit -q -m "Release $VERSION" -m "$TRAILERS"; else git commit -q -m "Release $VERSION"; fi
   RELEASE_COMMIT=$(git rev-parse HEAD)
-  git tag -a "$TAG" -m "OpenDMD $VERSION" "$RELEASE_COMMIT"
+  git tag -a "$TAG" -m "OpenDMD $VERSION" -m "Publisher: $PUBLISHER" "$RELEASE_COMMIT"
   CREATED_TAG=1
   [ -z "$(git status --porcelain)" ] || die "the tree is not clean after the bump"
-  pass "committed \"Release $VERSION\" ($(git rev-parse --short HEAD), detached; main unchanged) and tagged $TAG locally"
+  TAG_PUBLISHER=$PUBLISHER
+  pass "committed \"Release $VERSION\" ($(git rev-parse --short HEAD), detached; main unchanged) and tagged $TAG locally (Publisher: $PUBLISHER)"
 fi
 
 # ---- 3-5. build, assets, site ---------------------------------------------
@@ -331,7 +393,10 @@ built_ok() {
     [ "$(jq -r .version "$SITE/install/release.json" 2>/dev/null)" = "$REL_VERSION" ]
 }
 
-if [ "$RESUME" = 1 ] && built_ok; then
+if [ "$RESUME" = 1 ] && [ "$MODE" = ci ]; then
+  step "3-5. Build, assets, site"
+  skip "resuming after the push: CI builds what ships; this checkout's build was the check before the tag went out"
+elif [ "$RESUME" = 1 ] && built_ok; then
   step "3-5. Build, assets, site"
   skip "this release's build in $REL is complete (assets match SHA256SUMS, the site is $VERSION's)"
 else
@@ -385,16 +450,7 @@ else
   done
   for f in "${files[@]}"; do cp "$DIST/$f" "$ASSETS/"; done
   (cd "$ASSETS" && sha256sum -- * | tee SHA256SUMS)
-  V=$VERSION
-  WHICH="$(printf '%s\n' \
-    "For the ESP32 DevKit V1 (4 MB); the browser installer is at https://opendmd.dev/install/$( [ "$CHANNEL" = beta ] && echo " (this beta under \"Or install the beta\")" )." '' \
-    '| file | DevKit (4 MB) |' \
-    '|---|---|' \
-    "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` |" \
-    "| whole flash at offset 0 | \`opendmd-$V-4mb-full.bin\` |" \
-    "| ESP Web Tools manifest | \`manifest-4mb.json\` |" '' \
-    'The DevKit build is for flash layout v3 (a bigger firmware partition; docs/deploying.md): a DevKit on layout v2 (1.0.0-beta.15 or earlier) refuses its update file and needs one USB install from https://opendmd.dev/install/ (Update OpenDMD, or Install with Erase unticked, keeps the WiFi and settings).')"
-  printf '%s\n\nSHA-256:\n\n```\n%s\n```\n' "$WHICH" "$(cat "$ASSETS/SHA256SUMS")" > "$REL/notes.md"
+  tools/release-notes.sh "$VERSION" "$CHANNEL" "$ASSETS/SHA256SUMS" > "$REL/notes.md"
   pass "$(( ${#files[@]} + 1 )) assets (with SHA256SUMS) in $ASSETS; notes in $REL/notes.md"
 
   step "5. The public site"
@@ -511,7 +567,7 @@ if [ "$PUBLISH" = 0 ]; then
   pass "every build and check step passed for $TAG; nothing was pushed or published"
   info "assets: $ASSETS"
   info "site:   $SITE"
-  info "to publish: tools/release.sh $VERSION --publish (rebuilds from a fresh release commit)"
+  info "to publish: tools/release.sh $VERSION --publish (make release VERSION=$VERSION PUBLISH=1): rebuilds from a fresh release commit, pushes the tag, CI publishes"
   exit 0
 fi
 
@@ -555,63 +611,97 @@ push_to() {
   published "pushed to $name: ${refs[*]}"
 }
 
-step "6b. Push to GitHub"
+step "6b. Push to GitHub$( [ "$TAG_PUBLISHER" = ci ] && echo ' (the tag starts release.yml)')"
 push_to github "$GH_URL" ghgit
 step "6c. Push to origin (the local mirror)"
 push_to origin origin git
 
-step "6d. GitHub release $TAG on $GH_REPO"
-if gh release view "$TAG" -R "$GH_REPO" >/dev/null 2>&1; then
-  skip "the release exists (its notes kept; only missing assets are uploaded)"
-else
-  flags=(--verify-tag --title "OpenDMD $VERSION" --generate-notes --notes-file "$REL/notes.md")
-  if [ "$KIND" = prerelease ]; then flags+=(--prerelease --latest=false); else flags+=(--latest); fi
-  gh release create "$TAG" -R "$GH_REPO" "${flags[@]}" >/dev/null || die "gh release create failed"
-  published "GitHub release $TAG created ($KIND$( [ "$KIND" = release ] && echo ', latest'))"
-fi
-remote_assets=$(gh release view "$TAG" -R "$GH_REPO" --json assets --jq '.assets[] | [.name, .state, (.digest // "")] | @tsv') ||
-  die "cannot read the release's assets"
-uploaded=0
-for f in "$ASSETS"/*; do
-  n=${f##*/}
-  line=$(awk -F'\t' -v n="$n" '$1 == n' <<<"$remote_assets")
-  if [ -z "$line" ]; then
-    gh release upload "$TAG" -R "$GH_REPO" "$f" >/dev/null || die "uploading $n failed"
-    uploaded=$((uploaded + 1)); info "uploaded $n"
-    continue
+if [ "$MODE" = ci ]; then
+  # ---- 6d-6f (--publish): release.yml publishes; wait for it, then check.
+  step "6d. CI: release.yml's run for $TAG"
+  run=
+  for _ in $(seq 60); do
+    run=$(ci_runs | head -1) || true
+    [ -z "$run" ] || break
+    sleep 5
+  done
+  [ -n "$run" ] || die "no release.yml run for $TAG after 5 minutes: see https://github.com/$GH_REPO/actions/workflows/release.yml (CI down? then PUBLISH=local RESUME=1 takes over, as long as no run starts)"
+  id=$(cut -f1 <<<"$run")
+  url="https://github.com/$GH_REPO/actions/runs/$id"
+  info "$url"
+  if [ "$(cut -f2 <<<"$run")" != completed ]; then
+    info "waiting for it (a cold firmware build takes 30 minutes or more; interrupting this is safe: RESUME=1 waits again)"
+    gh run watch "$id" -R "$GH_REPO" --interval 30 --exit-status >/dev/null || true
+    run=$(ci_runs | awk -F'\t' -v id="$id" '$1 == id')
   fi
-  state=$(cut -f2 <<<"$line") digest=$(cut -f3 <<<"$line")
-  [ "$state" = uploaded ] || die "the release's $n is in state '$state' (a broken upload): delete it on GitHub, then --resume"
-  want="sha256:$(sha256sum "$f" | cut -d' ' -f1)"
-  if [ -z "$digest" ]; then
-    digest="sha256:$(gh release download "$TAG" -R "$GH_REPO" -p "$n" -O - | sha256sum | cut -d' ' -f1)"
+  [ "$(cut -f2 <<<"$run")" = completed ] || die "run $id is $(cut -f2 <<<"$run")"
+  [ "$(cut -f3 <<<"$run")" = success ] ||
+    die "release.yml's run for $TAG ended '$(cut -f3 <<<"$run")': $url. Fix the cause, rerun it (gh run rerun $id -R $GH_REPO --failed: safe, a rerun never replaces a published asset), then RESUME=1 to check"
+  published "release.yml published $TAG ($url)"
+
+  step "6e. Check the GitHub release CI made"
+  json=$(gh release view "$TAG" -R "$GH_REPO" --json isDraft,isPrerelease,assets) || die "no GitHub release $TAG"
+  [ "$(jq -r .isDraft <<<"$json")" = false ] || die "$TAG is still a draft"
+  want_pre=false; [ "$KIND" = prerelease ] && want_pre=true
+  [ "$(jq -r .isPrerelease <<<"$json")" = "$want_pre" ] || die "$TAG's isPrerelease is not $want_pre"
+  have=$(jq -r '.assets[] | select(.state == "uploaded") | .name' <<<"$json" | sort)
+  want=$( [ ! -d "$ASSETS" ] || find "$ASSETS" -maxdepth 1 -type f -printf '%f\n' | sort)
+  if [ -n "$want" ]; then
+    [ "$have" = "$want" ] || die "$TAG's assets are not this build's set: $(diff <(echo "$want") <(echo "$have") | grep '^[<>]' | tr '\n' ' ')"
   fi
-  [ "$digest" = "$want" ] || die "the release's $n ($digest) is not this build's ($want): not overwriting it"
-done
-n_assets=$(find "$ASSETS" -maxdepth 1 -type f | wc -l)
-if [ "$uploaded" -gt 0 ]; then published "$uploaded of $n_assets assets uploaded to $TAG (the rest were there, same digest)"
-else skip "all $n_assets assets are on the release with this build's digests"; fi
+  pub=$REL/published
+  rm -rf "$pub"; mkdir -p "$pub"
+  gh release download "$TAG" -R "$GH_REPO" -D "$pub" -p SHA256SUMS -p "opendmd-$VERSION-4mb.odfw" -p "opendmd-$VERSION-www.pack" -p manifest-4mb.json ||
+    die "cannot download $TAG's assets"
+  (cd "$pub" && sha256sum --quiet -c --ignore-missing SHA256SUMS) || die "$TAG's assets do not match its SHA256SUMS"
+  [ "$(jq -r .version "$pub/manifest-4mb.json")" = "$VERSION" ] || die "$TAG's manifest-4mb.json is not $VERSION"
+  uv run --quiet tools/fw-sign.py verify "$pub/opendmd-$VERSION-4mb.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
+    die "$TAG's opendmd-$VERSION-4mb.odfw does not verify against firmware/keys/opendmd.pub"
+  uv run --quiet tools/fw-sign.py verify-www "$pub/opendmd-$VERSION-www.pack" --pub firmware/keys/opendmd.pub >/dev/null ||
+    die "$TAG's www pack does not verify against firmware/keys/opendmd.pub"
+  pass "$TAG: published ($KIND), $(wc -l <<<"$have") assets, SHA256SUMS holds; the bundle and the www pack verify against firmware/keys/opendmd.pub"
 
-step "6e. The public gallery repo (opendmd/opendmd.github.io)"
-rm -rf "$REL/gallery-repo"
-out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' \
-  GALLERY_REPO_DESCRIBE="$TAG" GALLERY_REPO_WORK="$REL/gallery-repo" \
-  tools/gallery-repo-publish.sh "$SITE" "$GALLERY_URL") || { echo "$out"; die "tools/gallery-repo-publish.sh failed"; }
-echo "$out"
-case $out in *"no changes"*) skip "the gallery repo already has $TAG's files" ;; *) published "gallery repo updated: $out" ;; esac
-
-step "6f. The site on Cloudflare (opendmd.dev)"
-# (beta.json names this release whatever the channel; release.json this
-# one, or for a beta after a final, the final still.)
-live_version() { curl -fsS -A "$UA" "$SITE_URL/install/$1?release-sh=$(date +%s%N)" 2>/dev/null | jq -r .version 2>/dev/null || true; }
-live_ok() { [ "$(live_version beta.json)" = "$VERSION" ] && [ "$(live_version release.json)" = "$REL_VERSION" ]; }
-if live_ok; then
-  skip "$SITE_URL/install/beta.json already says $VERSION, release.json $REL_VERSION"
+  step "6f. opendmd.dev serves it (tools/site-live-check.sh)"
+  if [ "$CHANNEL" = beta ]; then
+    gh release download "v$FINAL" -R "$GH_REPO" -p SHA256SUMS -O "$pub/SHA256SUMS-final" --clobber || die "cannot download v$FINAL's SHA256SUMS"
+    SITE_LIVE_WAIT=30 tools/site-live-check.sh "$VERSION" "$FINAL" "$pub/SHA256SUMS-final" "$pub/SHA256SUMS" || die "opendmd.dev does not serve $TAG as it should"
+  else
+    SITE_LIVE_WAIT=30 tools/site-live-check.sh "$VERSION" "$VERSION" "$pub/SHA256SUMS" || die "opendmd.dev does not serve $TAG as it should"
+  fi
+  pass "opendmd.dev: beta.json $VERSION, release.json $REL_VERSION, the release's own bytes"
 else
-  make site-deploy-built SITE="$SITE" || die "make site-deploy-built failed"
-  for _ in $(seq 36); do live_ok && break; sleep 5; done
-  live_ok || die "deployed, but $SITE_URL/install/beta.json says '$(live_version beta.json)' and release.json '$(live_version release.json)' after 3 minutes (want $VERSION and $REL_VERSION)"
-  published "site deployed: $SITE_URL/install/beta.json says $VERSION, release.json $REL_VERSION"
+  # ---- 6d-6f (--publish-local): everything from here.
+  step "6d. GitHub release $TAG on $GH_REPO (tools/release-publish.sh)"
+  out=$(GH_REPO=$GH_REPO tools/release-publish.sh "$TAG" "$ASSETS" "$REL/notes.md") || { echo "$out"; die "tools/release-publish.sh failed"; }
+  echo "$out"
+  what=$(sed -n 's/^published: //p' <<<"$out" | tail -1)
+  if [ "$what" = nothing ]; then skip "the release and every asset were already there"; else published "GitHub release: $what"; fi
+
+  step "6e. The public gallery repo (opendmd/opendmd.github.io)"
+  rm -rf "$REL/gallery-repo"
+  out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' \
+    GALLERY_REPO_DESCRIBE="$TAG" GALLERY_REPO_WORK="$REL/gallery-repo" \
+    tools/gallery-repo-publish.sh "$SITE" "$GALLERY_URL") || { echo "$out"; die "tools/gallery-repo-publish.sh failed"; }
+  echo "$out"
+  case $out in *"no changes"*) skip "the gallery repo already has $TAG's files" ;; *) published "gallery repo updated: $out" ;; esac
+
+  step "6f. The site on Cloudflare (opendmd.dev)"
+  # (beta.json names this release whatever the channel; release.json this
+  # one, or for a beta after a final, the final still.)
+  live() {
+    if [ "$CHANNEL" = beta ]; then
+      tools/site-live-check.sh "$VERSION" "$FINAL" "$REL/final-dist/SHA256SUMS" "$ASSETS/SHA256SUMS"
+    else
+      tools/site-live-check.sh "$VERSION" "$VERSION" "$ASSETS/SHA256SUMS"
+    fi
+  }
+  if SITE_LIVE_WAIT=0 live >/dev/null 2>&1; then
+    skip "$SITE_URL already serves $TAG (beta.json $VERSION, release.json $REL_VERSION, this build's bytes)"
+  else
+    make site-deploy-built SITE="$SITE" || die "make site-deploy-built failed"
+    live || die "deployed, but $SITE_URL does not serve $TAG as it should"
+    published "site deployed: $SITE_URL/install/beta.json says $VERSION, release.json $REL_VERSION"
+  fi
 fi
 
 step "Published $TAG"

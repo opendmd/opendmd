@@ -1,24 +1,30 @@
 name: Release
 
-# Builds the release with `make fw-release`, for the flash layout (4mb, the
-# ESP32 DevKit V1): the firmware, its bootloader and partition table, the
-# merged image, the ESP Web Tools manifest and the signed .odfw bundle, the
-# updater and the web app's pack. Then the public site with `make site`. (The desktop
-# simulator is not released: developers build it from source, everyone else
-# uses the web demo.) What gets published depends on the trigger:
+# The one publisher of a release (docs/deploying.md "Releasing"). The dev box
+# builds and checks the release and pushes its tag (`make release
+# VERSION=... PUBLISH=1`, tools/release.sh); this workflow, on that tag:
 #
-#   tag v1.2.3          -> GitHub release on opendmd/opendmd (marked latest),
-#                          the site deployed to https://opendmd.dev/ (once
-#                          the CLOUDFLARE_API_TOKEN secret exists, below),
-#                          and the public gallery repo
-#                          (opendmd/opendmd.github.io) updated: its gallery
-#                          check and this release's frozen API page
-#   tag v1.2.3-beta.1   -> GitHub pre-release (any tag with a "-" suffix),
-#                          and the same. The site's two feeds
-#                          (docs/deploying.md "Betas"): install/release.json
-#                          names the newest final release, install/beta.json
-#                          the newest of all. A final, or a beta before any
-#                          final exists, is both (and the installer); a beta
+#   1. builds it with `make fw-release` for the flash layout (4mb, the ESP32
+#      DevKit V1): the firmware, its bootloader and partition table, the
+#      merged image, the ESP Web Tools manifest and the .odfw bundle signed
+#      with OTA_SIGNING_KEY, the updater and the web app's pack; checks the
+#      version in each, and that the bundle and the pack verify against the
+#      committed firmware/keys/opendmd.pub;
+#   2. builds the public site (`make site`) and checks its install/release.json,
+#      install/beta.json and installer;
+#   3. publishes the GitHub release (tools/release-publish.sh: a draft until
+#      every asset is up, then a pre-release for a "-" version, else marked
+#      latest);
+#   4. updates the public gallery repo (opendmd/opendmd.github.io: its gallery
+#      check and this release's frozen API page) with SITE_DEPLOY_KEY;
+#   5. deploys the site to https://opendmd.dev/ (`make site-deploy-built`,
+#      CLOUDFLARE_API_TOKEN), then checks it live (tools/site-live-check.sh):
+#      release.json and beta.json name the versions they should and serve the
+#      releases' own bytes.
+#
+#   tag v1.2.3          -> a final: release.json and beta.json name it
+#   tag v1.2.3-beta.1   -> a beta. The site's two feeds (docs/deploying.md
+#                          "Betas"): a beta before any final is both; a beta
 #                          after a final is beta.json only: the site is built
 #                          with the final's files from its GitHub release as
 #                          DIST and this beta's as BETA_DIST, so release.json
@@ -29,33 +35,30 @@ name: Release
 #                          committed firmware/keys/opendmd.pub), and dist/ and
 #                          target/site are uploaded as build artifacts;
 #                          nothing is published. Untick dry_run and pick a v*
-#                          tag in "Use workflow from" to redo a tag's release.
+#                          tag in "Use workflow from" to rerun a tag's release.
 #
-# Every run uploads dist/ and the site as artifacts. The tag must equal the
-# version in firmware/Cargo.toml with a leading "v" (v1.0.0 <-> 1.0.0), which
-# is also what fw-release writes into the app descriptor ("1.0.0 4mb").
-# A release drafted by hand for the tag keeps its notes; only the assets are
-# uploaded to it.
+# A rerun is safe ("Re-run all jobs", or the dispatch above): once a tag's
+# GitHub release is published its assets ARE the release, so a rerun builds
+# no firmware, downloads them (checked against their SHA256SUMS and
+# opendmd.pub) and goes on from there; a draft left by a run that stopped is
+# completed; the gallery repo is only committed to when something changed;
+# the deploy is the same site again. Nothing published is ever replaced.
 #
-# Required repository secrets (Settings > Secrets and variables > Actions),
-# for a real release only; a dry run needs none:
+# Refused or skipped:
+# - the tag must equal firmware/Cargo.toml's version with a leading "v", and
+#   be newer than every other v* tag (an older tag's release is never redone;
+#   before the gallery repo and the deploy the tags are fetched again, and a
+#   newer tag pushed meanwhile skips both: its own run publishes them);
+# - a tag that tools/release.sh published itself (PUBLISH=local, while CI was
+#   down: its annotated tag says "Publisher: local") is skipped whole;
+# - a real release with a secret below missing fails before it builds.
+#
+# Repository secrets (Settings > Secrets and variables > Actions), for a real
+# release; a dry run needs none:
 #   OTA_SIGNING_KEY   base64 of the raw 32-byte Ed25519 seed that signs the
-#                     .odfw bundles (tools/fw-sign.py; the key whose public
-#                     half is firmware/keys/opendmd.pub):
+#                     .odfw bundles and the www pack (tools/fw-sign.py; the key
+#                     whose public half is firmware/keys/opendmd.pub):
 #                       base64 -w0 ~/.config/opendmd/opendmd.key | gh secret set OTA_SIGNING_KEY -R opendmd/opendmd
-# Optional until CI deploys the site, the site on Cloudflare (docs/deploying.md
-# "The project site"; until it is set the deploy step skips, and the site is
-# deployed from the dev box with `make site-deploy`):
-#   CLOUDFLARE_API_TOKEN  an API token scoped to the account's Workers
-#                     Scripts: Edit and Account Settings: Read (D1 and R2 Edit
-#                     come with short links), made in the dashboard (My
-#                     Profile > API Tokens), then
-#                       gh secret set CLOUDFLARE_API_TOKEN -R opendmd/opendmd
-#                     With it, a release also runs `make site-deploy-built`
-#                     (cf deploy of the opendmd-site Worker, the same
-#                     target/site), and a dry run `make site-deploy-check`.
-#                     The repository variable CLOUDFLARE_ACCOUNT_ID names
-#                     the account if the token can see more than one.
 #   SITE_DEPLOY_KEY   an SSH private key whose public half is a deploy key
 #                     with write access on the public gallery repo,
 #                     opendmd/opendmd.github.io (tools/gallery-repo-publish.sh):
@@ -63,6 +66,25 @@ name: Release
 #                       gh repo deploy-key add site_deploy.pub -R opendmd/opendmd.github.io --allow-write -t 'opendmd release'
 #                       gh secret set SITE_DEPLOY_KEY -R opendmd/opendmd < site_deploy
 #                       rm site_deploy site_deploy.pub
+#   CLOUDFLARE_API_TOKEN  deploys the opendmd-site Worker (site.yml uses it
+#                     too). Made by the owner in the Cloudflare dashboard: My
+#                     Profile > API Tokens > Create Token > the "Edit
+#                     Cloudflare Workers" template, then
+#                       Permissions: the template's (Account: Workers Scripts
+#                         Edit, Account Settings Read, ...; User: User Details
+#                         Read, Memberships Read; Zone: Workers Routes Edit),
+#                         plus Account: D1 Edit (make site-d1-migrate runs
+#                         before every deploy) and Zone: DNS Edit (the
+#                         Worker's custom domains opendmd.dev, www.opendmd.dev);
+#                       Account Resources: Include, the one account;
+#                       Zone Resources: Include, Specific zone, opendmd.dev;
+#                       no client IP filter (GitHub's runners).
+#                     Then, typed by the owner (gh prompts for it, so it goes
+#                     through no file, agent or shell history):
+#                       gh secret set CLOUDFLARE_API_TOKEN -R opendmd/opendmd
+#                     The repository variable CLOUDFLARE_ACCOUNT_ID (not a
+#                     secret) names the account, so wrangler never has to pick:
+#                       gh variable set CLOUDFLARE_ACCOUNT_ID -R opendmd/opendmd --body <account id>
 # The release itself is made with the workflow's own GITHUB_TOKEN.
 
 on:
@@ -84,34 +106,40 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # "true" once the CLOUDFLARE_API_TOKEN secret exists (only the yes/no, not the token).
-  HAVE_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
 
 jobs:
-  release:
-    # Not ubuntu-latest (Ubuntu 26): IDF v5.3's esp-clang 16 needs
-    # libxml2.so.2, which 26.04 no longer has.
+  plan:
     runs-on: ubuntu-24.04
-    env:
-      # The updater's idf.py build dir (the Makefile's default is on the dev box).
-      UPDATER_BUILD: ${{ github.workspace }}/target/updater
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      kind: ${{ steps.plan.outputs.kind }}
+      tag: ${{ steps.plan.outputs.tag }}
+      channel: ${{ steps.plan.outputs.channel }}
+      final: ${{ steps.plan.outputs.final }}
+      adopt: ${{ steps.plan.outputs.adopt }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # the web app's version is `git describe --tags`
-          submodules: recursive
+          fetch-depth: 0
 
       - name: Work out what to publish
         id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
           DRY_INPUT: ${{ inputs.dry_run }}
+          # Only whether each secret is set, never its value.
+          HAVE_OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY != '' }}
+          HAVE_SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY != '' }}
+          HAVE_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' firmware/Cargo.toml | head -1)"
           test -n "$VERSION" || { echo "::error::cannot read the version from firmware/Cargo.toml"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Newer than every other v* tag, as release.sh insists: a final below
-          # a live beta would otherwise put beta.json back on the final.
+          # a live beta would otherwise put beta.json back on the final, and an
+          # old tag's rerun would put the site back on it.
           NEWEST="$( (git tag -l 'v*' | sed 's/^v//' | grep -vx "$VERSION"; echo "$VERSION") | sed 's/-/~/' | sort -V | tail -1 | sed 's/~/-/')"
           [ "$NEWEST" = "$VERSION" ] || { echo "::error::$VERSION is not newer than every v* tag (newest: $NEWEST)"; exit 1; }
           # The channel: a beta after a final release updates beta.json only
@@ -126,7 +154,7 @@ jobs:
             echo "Channel: both: release.json and beta.json name $VERSION"
           fi
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$DRY_INPUT" != false ]]; then
-            echo "kind=dry" >> "$GITHUB_OUTPUT"
+            echo "kind=dry" >> "$GITHUB_OUTPUT"; echo "adopt=false" >> "$GITHUB_OUTPUT"
             echo "Dry run of $VERSION at $(git describe --always --tags)"
             exit 0
           fi
@@ -140,39 +168,83 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # The tag as pushed (an annotated tag; checkout may have written its own ref).
+          git fetch -q --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag (tools/release.sh makes one)"; exit 1; }
+          if git cat-file -p "refs/tags/$TAG" | sed '1,/^$/d' | grep -qx 'Publisher: local'; then
+            echo "kind=local" >> "$GITHUB_OUTPUT"; echo "adopt=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG says 'Publisher: local': tools/release.sh PUBLISH=local publishes it from the dev box; nothing to do here"
+            exit 0
+          fi
           if [[ "$TAG" == *-* ]]; then echo "kind=prerelease" >> "$GITHUB_OUTPUT"
           else echo "kind=release" >> "$GITHUB_OUTPUT"; fi
+          # Published already (a rerun): its assets are the release.
+          draft="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          if [ "$draft" = false ]; then
+            echo "adopt=true" >> "$GITHUB_OUTPUT"
+            echo "The release $TAG is published: this run takes its assets as the build (no firmware build)"
+          else
+            echo "adopt=false" >> "$GITHUB_OUTPUT"
+            [ "$draft" = none ] || echo "A draft release $TAG exists: this run completes it"
+          fi
+          missing=()
+          [ "$draft" = false ] || [ "$HAVE_OTA_SIGNING_KEY" = true ] || missing+=(OTA_SIGNING_KEY)
+          [ "$HAVE_SITE_DEPLOY_KEY" = true ] || missing+=(SITE_DEPLOY_KEY)
+          [ "$HAVE_CLOUDFLARE_TOKEN" = true ] || missing+=(CLOUDFLARE_API_TOKEN)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the secrets ${missing[*]} are not set (see the header of release.yml); nothing was published. Set them, then re-run this workflow"
+            exit 1
+          fi
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.kind != 'local'
+    # Not ubuntu-latest (Ubuntu 26): IDF v5.3's esp-clang 16 needs
+    # libxml2.so.2, which 26.04 no longer has.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      # The updater's idf.py build dir (the Makefile's default is on the dev box).
+      UPDATER_BUILD: ${{ github.workspace }}/target/updater
+      VERSION: ${{ needs.plan.outputs.version }}
+      KIND: ${{ needs.plan.outputs.kind }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      FINAL: ${{ needs.plan.outputs.final }}
+      ADOPT: ${{ needs.plan.outputs.adopt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the web app's version is `git describe --tags`
+          submodules: recursive
 
       - uses: ./.github/actions/web-tools
         with:
           cache-key: firmware
 
+      # ---- the firmware: built and signed, or (a rerun) the published release's
+
       # fw-release checks the third-party notices against the build.
       - uses: ./.github/actions/cargo-about
+        if: env.ADOPT != 'true'
 
       - uses: ./.github/actions/esp-toolchain
+        if: env.ADOPT != 'true'
         id: esp
         with:
           fw-variants: 4mb
 
       - name: Cache the updater's build
+        if: env.ADOPT != 'true'
         uses: actions/cache@v6
         with:
           path: target/updater
           key: updater-${{ steps.esp.outputs.image }}-${{ hashFiles('ota/updater/**', 'firmware/.cargo/config.toml') }}
           restore-keys: updater-${{ steps.esp.outputs.image }}-
 
-      # The demo card's recordings (the simulator's effects, a frame at a
-      # time) are kept between runs unless the simulator or the script changed.
-      - name: Cache the site's demo card
-        uses: actions/cache@v6
-        with:
-          path: target/demo-card
-          key: demo-card-${{ hashFiles('tools/demo-card.py', 'opendmd-sim/src/**', 'opendmd-render/src/**', 'opendmd-core/src/**', 'opendmd-web/experiments/art/process/out/**') }}
-
       - name: Signing key
+        if: env.ADOPT != 'true'
         env:
-          KIND: ${{ steps.plan.outputs.kind }}
           OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
         run: |
           set -euo pipefail
@@ -189,10 +261,11 @@ jobs:
           echo "FW_SIGN_KEY=$RUNNER_TEMP/sign/opendmd.key" >> "$GITHUB_ENV"
 
       - name: Release build (make fw-release)
+        if: env.ADOPT != 'true'
         run: make fw-release
 
       - uses: ./.github/actions/esp-cache-save
-        if: always()
+        if: always() && env.ADOPT != 'true'
         with:
           espressif-key: ${{ steps.esp.outputs.espressif-key }}
           espressif-hit: ${{ steps.esp.outputs.espressif-hit }}
@@ -204,12 +277,22 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/sign/opendmd.key"
 
-      - name: Check the version in the images, the manifests and the www pack
+      - name: The published release's assets (a rerun)
+        if: env.ADOPT == 'true'
         env:
-          VERSION: ${{ steps.plan.outputs.version }}
-          KIND: ${{ steps.plan.outputs.kind }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      # ---- checks, on whichever dist/ this is
+
+      - name: Check the version in the images, the manifests, the bundle and the www pack
+        run: |
+          set -euo pipefail
+          pub="${FW_SIGN_PUB:-firmware/keys/opendmd.pub}"
           for v in 4mb; do
             app="dist/opendmd-$VERSION-$v-app.bin"
             desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
@@ -219,11 +302,16 @@ jobs:
             test "$manifest" = "$VERSION" || { echo "::error::dist/manifest-$v.json says $manifest, want $VERSION"; exit 1; }
             uv run --quiet tools/fw-sign.py inspect "dist/opendmd-$VERSION-$v.odfw" | tee "$RUNNER_TEMP/inspect-$v.txt"
             grep -qx "variant  $v" "$RUNNER_TEMP/inspect-$v.txt" || { echo "::error::dist/opendmd-$VERSION-$v.odfw is not a $v bundle"; exit 1; }
+            grep -qx "layout   v[0-9]* (current)" "$RUNNER_TEMP/inspect-$v.txt" || { echo "::error::dist/opendmd-$VERSION-$v.odfw is not for this tree's $v partition table"; exit 1; }
+            uv run --quiet tools/fw-sign.py verify "dist/opendmd-$VERSION-$v.odfw" --pub "$pub" || { echo "::error::dist/opendmd-$VERSION-$v.odfw does not verify against $pub"; exit 1; }
             ! strings "$app" dist/updater.bin "dist/bootloader-$v.bin" | grep -n "$HOME" || { echo "::error::the release names $HOME"; exit 1; }
             full="dist/opendmd-$VERSION-$v-full.bin"
             want=$(( ${v%mb} * 1024 * 1024 ))
             test "$(stat -c %s "$full")" -eq "$want" || { echo "::error::$full is $(stat -c %s "$full") B, want $want (the $v flash)"; exit 1; }
             echo "$full: $want B"
+            # The factory partition the app goes in (firmware/partitions.csv).
+            factory=2621440 size="$(stat -c %s "$app")"
+            test $(( factory - size )) -ge 65536 || { echo "::error::$app is $size B: less than 64 KB of the $factory B factory partition spare"; exit 1; }
           done
           # The web app pack's version (its header, docs/www-pack.md): what
           # the player reports as www_version. Settings -> About links this
@@ -234,12 +322,13 @@ jobs:
           if [[ "$KIND" != dry ]]; then
             test "$wv" = "v$VERSION" || { echo "::error::$pack's version is '$wv', want 'v$VERSION' (a dirty tree or another tag?)"; exit 1; }
           fi
+          uv run --quiet tools/fw-sign.py verify-www "$pack" --pub "$pub" >/dev/null || { echo "::error::$pack does not verify against $pub"; exit 1; }
+          echo "signed: the bundle and the www pack verify against $pub"
 
       - name: Collect this version's assets
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
+          export LC_ALL=C
           mkdir -p "$RUNNER_TEMP/assets"
           files=("opendmd-$VERSION-www.pack" ota_data_initial.bin updater.bin THIRD-PARTY-LICENSES-firmware.txt THIRD-PARTY-LICENSES-web.txt)
           for v in 4mb; do
@@ -250,13 +339,30 @@ jobs:
             cp "dist/$f" "$RUNNER_TEMP/assets/"
           done
           cd "$RUNNER_TEMP/assets"
-          sha256sum * | tee SHA256SUMS
+          if [[ "$ADOPT" == true ]]; then
+            # The published release's own SHA256SUMS, and nothing else on it.
+            cp "$GITHUB_WORKSPACE/dist/SHA256SUMS" .
+            sha256sum -c SHA256SUMS
+            test "$(find . -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -type f -printf '%f\n' | sort)" || { echo "::error::$TAG's assets are not the expected set"; exit 1; }
+          else
+            sha256sum -- * | tee SHA256SUMS
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: opendmd-${{ steps.plan.outputs.version }}-dist
+          name: opendmd-${{ env.VERSION }}-dist
           path: ${{ runner.temp }}/assets
           if-no-files-found: error
+
+      # ---- the site
+
+      # The demo card's recordings (the simulator's effects, a frame at a
+      # time) are kept between runs unless the simulator or the script changed.
+      - name: Cache the site's demo card
+        uses: actions/cache@v6
+        with:
+          path: target/demo-card
+          key: demo-card-${{ hashFiles('tools/demo-card.py', 'opendmd-sim/src/**', 'opendmd-render/src/**', 'opendmd-core/src/**', 'opendmd-web/experiments/art/process/out/**') }}
 
       # The demo card's Kenney (CC0) animations: made from the sprites committed
       # in art/process/kenney-pixel-platformer (offline; the GIFs are ignored).
@@ -278,7 +384,7 @@ jobs:
       # And the earlier releases' API pages (dev/api/v<version>.html), which
       # the site links from dev/api.html and carries as they are
       # (gallery-repo-publish.sh never removes or replaces them); this
-      # release's own is frozen by make site only when the tree is its tag.
+      # release's own is frozen by make site (API_FREEZE=yes for a tag).
       # Not shallow: the gallery dates each contribution by its first commit
       # (gallery_page.py `git_added`); blob-less, so only commits and trees
       # come, and the sparse checkout's few files.
@@ -294,13 +400,12 @@ jobs:
           echo "$(find "$dir/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
 
       # A beta after a final release: the final's files, for release.json and
-      # the installer, from its GitHub release (checked against its SHA256SUMS),
-      # outside the tree.
+      # the installer, from its GitHub release (checked against its SHA256SUMS
+      # and opendmd.pub), outside the tree.
       - name: The final release's files (a beta after a final)
-        if: steps.plan.outputs.channel == 'beta'
+        if: env.CHANNEL == 'beta'
         env:
           GH_TOKEN: ${{ github.token }}
-          FINAL: ${{ steps.plan.outputs.final }}
         run: |
           set -euo pipefail
           d="$RUNNER_TEMP/final-dist"
@@ -309,14 +414,13 @@ jobs:
           (cd "$d" && sha256sum -c SHA256SUMS)
           for v in 4mb; do
             test "$(jq -r .version "$d/manifest-$v.json")" = "$FINAL" || { echo "::error::v$FINAL's manifest-$v.json is not $FINAL"; exit 1; }
+            uv run --quiet tools/fw-sign.py verify "$d/opendmd-$FINAL-$v.odfw" --pub firmware/keys/opendmd.pub
           done
+          uv run --quiet tools/fw-sign.py verify-www "$d/opendmd-$FINAL-www.pack" --pub firmware/keys/opendmd.pub >/dev/null
 
       # A tag's site freezes its API page (dev/api/v<version>.html) outright:
       # not by `git describe`, which another tag on the commit could change.
       - name: The public site (make site)
-        env:
-          KIND: ${{ steps.plan.outputs.kind }}
-          CHANNEL: ${{ steps.plan.outputs.channel }}
         run: |
           set -euo pipefail
           freeze=auto
@@ -331,10 +435,6 @@ jobs:
       # firmware/beta/); and the old manifest name kept. The install page
       # offers the DevKit (and a beta newer than the release below it).
       - name: Check the site's release.json, beta.json and installer
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
-          CHANNEL: ${{ steps.plan.outputs.channel }}
-          FINAL: ${{ steps.plan.outputs.final }}
         run: |
           set -euo pipefail
           inst=target/site/install
@@ -372,6 +472,10 @@ jobs:
           ! jq -e '.variants | has("8mb")' "$inst/release.json" >/dev/null || fail "release.json names an 8mb variant"
           cmp "$inst/firmware/manifest-4mb.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is not the release's"
           cmp "$inst/firmware/manifest.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest.json is not the 4mb manifest"
+          if [[ "$KIND" != dry ]]; then
+            test -f "target/site/dev/api/$TAG.html" || fail "the site has no frozen dev/api/$TAG.html"
+            grep -q "api/$TAG.html" target/site/dev/api.html || fail "dev/api.html does not link $TAG.html"
+          fi
 
       - name: The tree is clean after the build
         run: |
@@ -380,47 +484,49 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: opendmd-${{ steps.plan.outputs.version }}-site
+          name: opendmd-${{ env.VERSION }}-site
           path: target/site
           if-no-files-found: error
 
-      - name: Publish GitHub release
-        if: steps.plan.outputs.kind == 'release' || steps.plan.outputs.kind == 'prerelease'
+      # ---- publish (a real release only)
+
+      - name: Publish the GitHub release
+        if: env.KIND == 'release' || env.KIND == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.plan.outputs.tag }}
-          KIND: ${{ steps.plan.outputs.kind }}
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/assets"
-          V="${TAG#v}"
-          WHICH="$(printf '%s\n' \
-            'For the ESP32 DevKit V1 (4 MB); the browser installer is at https://opendmd.dev/install/.' '' \
-            '| file | DevKit (4 MB) |' \
-            '|---|---|' \
-            "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` |" \
-            "| whole flash at offset 0 | \`opendmd-$V-4mb-full.bin\` |" \
-            "| ESP Web Tools manifest | \`manifest-4mb.json\` |")"
-          NOTES="$(printf '%s\n\nSHA-256:\n\n```\n%s\n```\n' "$WHICH" "$(cat SHA256SUMS)")"
-          # A release drafted by hand for this tag keeps its notes; only the assets are uploaded.
-          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "OpenDMD ${TAG#v}" \
-              --generate-notes --notes "$NOTES" $([[ "$KIND" == prerelease ]] && echo --prerelease)
+          tools/release-notes.sh "$VERSION" "$CHANNEL" "$RUNNER_TEMP/assets/SHA256SUMS" > "$RUNNER_TEMP/notes.md"
+          GH_REPO="$GITHUB_REPOSITORY" tools/release-publish.sh "$TAG" "$RUNNER_TEMP/assets" "$RUNNER_TEMP/notes.md"
+
+      # A newer tag pushed while this ran publishes the gallery repo and the
+      # site itself: this run must not put them back on an older release.
+      - name: Still the newest release
+        id: newest
+        if: env.KIND == 'release' || env.KIND == 'prerelease'
+        run: |
+          set -euo pipefail
+          git fetch -q --tags --force origin
+          NEWEST="$( (git tag -l 'v*' | sed 's/^v//' | grep -vx "$VERSION"; echo "$VERSION") | sed 's/-/~/' | sort -V | tail -1 | sed 's/~/-/')"
+          if [ "$NEWEST" = "$VERSION" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::v$NEWEST was tagged while this ran: its run updates the gallery repo and deploys the site, not this one"
           fi
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber *
 
       # The public gallery repo (opendmd/opendmd.github.io; it serves
       # nothing): its gallery check and vendored checker, its READMEs, and
       # this release's frozen API page added to dev/api/, the archive the
-      # next site build fetches above. The site itself is deployed below.
+      # next site build fetches above. Commits only when something changed.
       - name: Update the public gallery repo
-        if: steps.plan.outputs.kind != 'dry'
+        if: steps.newest.outputs.newest == 'true'
         env:
           SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
           # The tag this run releases (checked against Cargo.toml by the
           # plan; the tree checked clean after the build): the script
           # labels and archives by it, not by git describe.
-          GALLERY_REPO_DESCRIBE: ${{ steps.plan.outputs.tag }}
+          GALLERY_REPO_DESCRIBE: ${{ env.TAG }}
         run: |
           set -euo pipefail
           test -n "$SITE_DEPLOY_KEY" || { echo "::error::the SITE_DEPLOY_KEY secret is not set (see the header of release.yml)"; exit 1; }
@@ -440,19 +546,31 @@ jobs:
         run: rm -f "$RUNNER_TEMP/site_deploy"
 
       # The site on Cloudflare: the opendmd-site Worker (site/worker/) with
-      # target/site as its assets. Skipped until the CLOUDFLARE_API_TOKEN
-      # secret exists (see the header). cf and wrangler come pinned from
-      # site/worker/package-lock.json (npm ci).
-      - name: The site on Cloudflare (cf deploy)
-        if: env.HAVE_CLOUDFLARE_TOKEN == 'true'
+      # target/site as its assets (cf and wrangler pinned in
+      # site/worker/package-lock.json, npm ci). Then checked live: the feeds
+      # name the right versions and serve the releases' own bytes.
+      - name: The site on Cloudflare (cf deploy), checked live
+        if: steps.newest.outputs.newest == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          KIND: ${{ steps.plan.outputs.kind }}
         run: |
           set -euo pipefail
-          if [[ "$KIND" == dry ]]; then
-            make site-deploy-check
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::the CLOUDFLARE_API_TOKEN secret is not set (see the header of release.yml)"; exit 1; }
+          make site-deploy-built
+          if [[ "$CHANNEL" == beta ]]; then
+            tools/site-live-check.sh "$VERSION" "$FINAL" "$RUNNER_TEMP/final-dist/SHA256SUMS" "$RUNNER_TEMP/assets/SHA256SUMS"
           else
-            make site-deploy-built
+            tools/site-live-check.sh "$VERSION" "$VERSION" "$RUNNER_TEMP/assets/SHA256SUMS"
           fi
+
+      - name: Check the Cloudflare deploy (a dry run, cf deploy --dry-run)
+        if: env.KIND == 'dry'
+        env:
+          HAVE_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [[ "$HAVE_CLOUDFLARE_TOKEN" != true ]]; then echo "no CLOUDFLARE_API_TOKEN: skipped"; exit 0; fi
+          make site-deploy-check

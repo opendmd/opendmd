@@ -522,16 +522,18 @@ site-deploy-built: site-worker-deps
 gallery-repo-publish: site
 	tools/gallery-repo-publish.sh $(SITE) $(GALLERY_REPO)
 
-# A release from this machine (tools/release.sh: release.yml's steps while
-# Actions is unavailable). make release VERSION=1.0.0-beta.12 is a dry run:
-# plan, bump (a detached commit + local tag, undone after), build both
-# layouts signed with the real key, every check, the assets and the site;
-# nothing pushed. PUBLISH=1 then publishes (main, GitHub and origin pushes,
-# the GitHub release, the gallery repo, the Cloudflare deploy); RESUME=1
-# with it continues a publish that stopped part way.
+# A release (tools/release.sh; docs/deploying.md "Releasing"). make release
+# VERSION=1.0.1 is a dry run: plan, bump (a detached commit + local tag,
+# undone after), build signed with the real key, every check, the assets and
+# the site; nothing pushed. PUBLISH=1 then pushes main and the tag, and
+# .github/workflows/release.yml publishes (the GitHub release, the gallery
+# repo, the Cloudflare deploy); it waits for that run and checks the result.
+# PUBLISH=local is the fallback while CI is down: it publishes everything
+# from here (and refuses once CI has run for the tag). RESUME=1 with either
+# continues one that stopped part way.
 release:
-	@test -n "$(VERSION)" || { echo "make release VERSION=X.Y.Z[-beta.N] [PUBLISH=1 [RESUME=1]]"; exit 2; }
-	tools/release.sh $(VERSION) $(if $(PUBLISH),--publish) $(if $(RESUME),--resume)
+	@test -n "$(VERSION)" || { echo "make release VERSION=X.Y.Z[-beta.N] [PUBLISH=1|PUBLISH=local [RESUME=1]]"; exit 2; }
+	tools/release.sh $(VERSION) $(if $(filter local,$(PUBLISH)),--publish-local,$(if $(PUBLISH),--publish)) $(if $(RESUME),--resume)
 
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt

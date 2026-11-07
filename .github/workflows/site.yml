@@ -1,36 +1,83 @@
 name: Site
 
-# Rebuilds the public site and deploys it to Cloudflare (the opendmd-site
-# Worker, site/worker/; opendmd-notes docs/research/site-cloudflare.md) without a
-# release: the docs and pages as they are on the branch or tag picked in
-# "Use workflow from", and the installer and update files of an existing
-# release, downloaded from its GitHub release (the same signed files the
-# release published, checked against its SHA256SUMS). A release tag deploys
-# by itself (release.yml); this is for the docs between releases.
+# Deploys the public site to Cloudflare (the opendmd-site Worker,
+# site/worker/) between releases: the docs, pages and demo as they are on
+# main, with the installer and update files of the latest PUBLISHED releases,
+# downloaded from their GitHub releases (the signed files the release
+# published, checked against their SHA256SUMS and firmware/keys/opendmd.pub).
+# A release deploys the site itself (release.yml); this keeps the docs
+# current in between. It never writes to the public gallery repo.
 #
-# Manual only, and it fails at once until the CLOUDFLARE_API_TOKEN secret
-# exists (how to make it: the header of release.yml). It never writes to
-# the public gallery repo.
+#   push to main touching what the site is built from (the paths below)
+#                -> deploy, unless the commit is a release commit (tagged v*:
+#                   its release.yml run deploys it)
+#   manual       -> the same from the branch or tag picked in "Use workflow
+#                   from"; `release`/`beta` name other releases (a rollback of
+#                   the installer and feeds to an earlier release)
+#
+# The firmware is never newer than the latest release: install/release.json,
+# install/beta.json and the Install button are built only from published
+# GitHub releases (tools/site-releases.sh: the newest final, and a newer beta
+# for beta.json; a tag whose release is still being made does not count).
+# While a release.yml run is queued or running, this waits for it (it may
+# publish a newer release), then works out the releases; just before
+# deploying it asks again, and if a release run has started or the releases
+# changed meanwhile it deploys nothing (that run deploys the site). After the
+# deploy, tools/site-live-check.sh checks the feeds live, byte for byte.
+#
+# Needs the CLOUDFLARE_API_TOKEN secret (how to make it: the header of
+# release.yml); without it every run fails at the first step, saying so.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/**"
+      - "site/**"
+      - "flasher/**"
+      - "licenses/**"
+      - "Makefile"
+      - "opendmd-web/**"
+      - "opendmd-art-web/**"
+      - "opendmd-psi/**"
+      - "opendmd-psi-web/**"
+      - "opendmd-core/**"
+      - "opendmd-render/**"
+      - "opendmd-sim/**"
+      - "opendmd-gallery/**"
+      - "opendmd-webmin/**"
+      - "third_party/**"
+      - "tools/site*.py"
+      - "tools/site-*.sh"
+      - "tools/demo-card.py"
+      - "tools/gallery_page.py"
+      - "tools/web-minify.py"
+      - "tools/web-size.py"
+      - "tools/formulas-json.py"
+      - "tools/www-build-id.py"
+      - ".github/workflows/site.yml"
   workflow_dispatch:
     inputs:
       release:
-        description: "The release install/release.json and the installer name: the newest final (before any final, the newest beta)"
+        description: "Override: the release release.json and the installer name (e.g. v1.0.0); empty: the newest published final"
         type: string
-        required: true
+        required: false
+        default: ""
       beta:
-        description: "A beta newer than it (after a final), for install/beta.json; empty: beta.json is release.json"
+        description: "Override, with release: a beta newer than it for beta.json; empty: beta.json is release.json"
         type: string
         required: false
         default: ""
 
+# One deploy at a time; a newer push supersedes a waiting or running one.
 concurrency:
   group: site-cloudflare
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read # gh run list: is a release run under way?
 
 env:
   CARGO_TERM_COLOR: always
@@ -38,51 +85,94 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: The Cloudflare token is set
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          HAVE_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         run: |
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::the CLOUDFLARE_API_TOKEN secret is not set (see the header of release.yml)"; exit 1; }
+          [ "$HAVE_CLOUDFLARE_TOKEN" = true ] || { echo "::error::the CLOUDFLARE_API_TOKEN secret is not set (see the header of release.yml)"; exit 1; }
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the web app's version is `git describe --tags`
 
+      - name: A release commit?
+        id: skip
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == push ]] && t="$(git describe --exact-match --tags --match 'v*' HEAD 2>/dev/null)"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_SHA is the release commit of $t: its release.yml run deploys the site"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A release run may publish a newer release: wait for it (and then take
+      # whatever it published).
+      - name: Wait for a release run under way
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          for i in $(seq 360); do
+            n="$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length')"
+            [ "$n" -gt 0 ] || { echo "no release run under way"; exit 0; }
+            [ "$i" -gt 1 ] || echo "a release run is under way: waiting for it"
+            sleep 30
+          done
+          echo "::error::a release run has been under way for 3 hours"; exit 1
+
+      - name: Which releases (tools/site-releases.sh)
+        if: steps.skip.outputs.skip != 'true'
+        id: rel
+        env:
+          IN_RELEASE: ${{ inputs.release }}
+          IN_BETA: ${{ inputs.beta }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$IN_RELEASE" ]]; then
+            [[ "$IN_RELEASE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::'$IN_RELEASE' is not a v* release tag"; exit 1; }
+            [[ -z "$IN_BETA" || "$IN_BETA" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]] || { echo "::error::'$IN_BETA' is not a v* beta tag"; exit 1; }
+            printf 'release=%s\nbeta=%s\n' "$IN_RELEASE" "$IN_BETA" | tee -a "$GITHUB_OUTPUT"
+            echo "override=true" >> "$GITHUB_OUTPUT"
+          else
+            [[ -z "$IN_BETA" ]] || { echo "::error::beta needs release"; exit 1; }
+            tools/site-releases.sh "$GITHUB_REPOSITORY" | tee -a "$GITHUB_OUTPUT"
+            echo "override=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: ./.github/actions/web-tools
+        if: steps.skip.outputs.skip != 'true'
         with:
           cache-key: site
 
-      - name: The release's files (dist/)
+      # Each a published release's assets, checked; the beta's outside the tree.
+      - name: The releases' files (dist/, and the beta's)
+        if: steps.skip.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release }}
+          REL: ${{ steps.rel.outputs.release }}
+          BETA: ${{ steps.rel.outputs.beta }}
         run: |
           set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::'$TAG' is not a v* release tag"; exit 1; }
-          mkdir -p dist
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist
-          (cd dist && sha256sum -c SHA256SUMS)
-          test "$(jq -r .version dist/manifest-4mb.json)" = "${TAG#v}" || { echo "::error::dist/manifest-4mb.json is not ${TAG#v}"; exit 1; }
-
-      - name: The beta's files (beta-dist/, if one is named)
-        if: inputs.beta != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.beta }}
-        run: |
-          set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]] || { echo "::error::'$TAG' is not a v* beta tag"; exit 1; }
-          d="$RUNNER_TEMP/beta-dist"
-          mkdir -p "$d"
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$d"
-          (cd "$d" && sha256sum -c SHA256SUMS)
-          test "$(jq -r .version "$d/manifest-4mb.json")" = "${TAG#v}" || { echo "::error::the beta's manifest-4mb.json is not ${TAG#v}"; exit 1; }
+          fetch() {  # TAG DIR
+            local tag=$1 d=$2 v=${1#v}
+            mkdir -p "$d"
+            [ "$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false ] || { echo "::error::$tag is not a published release"; exit 1; }
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -D "$d"
+            (cd "$d" && sha256sum -c SHA256SUMS)
+            test "$(jq -r .version "$d/manifest-4mb.json")" = "$v" || { echo "::error::$tag's manifest-4mb.json is not $v"; exit 1; }
+            uv run --quiet tools/fw-sign.py verify "$d/opendmd-$v-4mb.odfw" --pub firmware/keys/opendmd.pub
+            uv run --quiet tools/fw-sign.py verify-www "$d/opendmd-$v-www.pack" --pub firmware/keys/opendmd.pub >/dev/null
+          }
+          fetch "$REL" dist
+          [ -z "$BETA" ] || fetch "$BETA" "$RUNNER_TEMP/beta-dist"
 
       # The demo card's Kenney (CC0) animations: made from the sprites committed
       # in art/process/kenney-pixel-platformer (offline; the GIFs are ignored).
       - name: The art demos' GIFs
+        if: steps.skip.outputs.skip != 'true'
         working-directory: opendmd-web/experiments/art/process
         env:
           ART_TMP: ${{ runner.temp }}/art
@@ -96,6 +186,7 @@ jobs:
       # As in release.yml: the gallery's contributions and the earlier API
       # pages, read-only from the public gallery repo.
       - name: Fetch the formula gallery and the earlier API pages
+        if: steps.skip.outputs.skip != 'true'
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/site-gallery"
@@ -105,17 +196,71 @@ jobs:
           mkdir -p "$dir/gallery" "$dir/dev/api"
 
       - name: The public site (make site)
+        if: steps.skip.outputs.skip != 'true'
         env:
-          BETA: ${{ inputs.beta }}
+          BETA: ${{ steps.rel.outputs.beta }}
         run: make site ${BETA:+BETA_DIST="$RUNNER_TEMP/beta-dist"} GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=auto
 
+      - name: The site names those releases' files, and no others
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          REL: ${{ steps.rel.outputs.release }}
+          BETA: ${{ steps.rel.outputs.beta }}
+        run: |
+          set -euo pipefail
+          inst=target/site/install
+          r=${REL#v} b=${BETA#v}
+          test "$(jq -r .version "$inst/release.json")" = "$r" || { echo "::error::release.json is not $r"; exit 1; }
+          test "$(jq -r .version "$inst/beta.json")" = "${b:-$r}" || { echo "::error::beta.json is not ${b:-$r}"; exit 1; }
+          cmp "$inst/firmware/opendmd-$r-4mb.odfw" "dist/opendmd-$r-4mb.odfw"
+          cmp "$inst/firmware/manifest-4mb.json" dist/manifest-4mb.json
+          [ -z "$b" ] || cmp "$inst/firmware/beta/opendmd-$b-4mb.odfw" "$RUNNER_TEMP/beta-dist/opendmd-$b-4mb.odfw"
+          [ -n "$b" ] || test ! -e "$inst/firmware/beta"
+          echo "release.json $r, beta.json ${b:-$r}: the published releases' own files"
+
       - name: The tree is clean after the build
+        if: steps.skip.outputs.skip != 'true'
         run: |
           git status --porcelain
           test -z "$(git status --porcelain)"
 
-      - name: Deploy to Cloudflare (cf deploy)
+      # The build took a while: if a release run started meanwhile, or the
+      # releases are not those any more, deploy nothing (the release run
+      # deploys the site, or the next push does).
+      - name: Still the releases to serve
+        if: steps.skip.outputs.skip != 'true'
+        id: still
+        env:
+          REL: ${{ steps.rel.outputs.release }}
+          BETA: ${{ steps.rel.outputs.beta }}
+          OVERRIDE: ${{ steps.rel.outputs.override }}
+        run: |
+          set -euo pipefail
+          n="$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length')"
+          if [ "$n" -gt 0 ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::a release run started while this built: it deploys the site; this run deploys nothing"
+            exit 0
+          fi
+          if [ "$OVERRIDE" != true ] && [ "$(tools/site-releases.sh "$GITHUB_REPOSITORY")" != "$(printf 'release=%s\nbeta=%s' "$REL" "$BETA")" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::the published releases changed while this built: this run deploys nothing"
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloudflare (cf deploy), checked live
+        if: steps.still.outputs.deploy == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: make site-deploy-built
+          REL: ${{ steps.rel.outputs.release }}
+          BETA: ${{ steps.rel.outputs.beta }}
+        run: |
+          set -euo pipefail
+          make site-deploy-built
+          if [ -n "$BETA" ]; then
+            tools/site-live-check.sh "${BETA#v}" "${REL#v}" dist/SHA256SUMS "$RUNNER_TEMP/beta-dist/SHA256SUMS"
+          else
+            tools/site-live-check.sh "${REL#v}" "${REL#v}" dist/SHA256SUMS
+          fi
