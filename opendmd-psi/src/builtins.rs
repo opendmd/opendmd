@@ -2,7 +2,7 @@
 //! compiler reads these tables; the web app's highlighter and the editor's
 //! cheat sheet are generated from them (the `docs` feature adds the cheat
 //! sheet's rows), and `tests/builtins.rs` checks that the generated blocks
-//! in `opendmd-web/www/js/psikit.js` and `js/formulas.js` are what these
+//! in `opendmd-web/www/js/psikit.js` and `js/fhint.js` (with the completions) are what these
 //! tables give (`PSI_BLESS=1` rewrites them) — opendmd-notes docs/research/psi-tooling-plan.md §3.
 //!
 //! Not part of the crate's API (`#[doc(hidden)]`): the types are the
@@ -224,7 +224,7 @@ pub const VERSION: usize = 1;
 /// `key` line, `rate N` after `layer` (and its blend).
 pub const CONTEXT_WORDS: [&str; 6] = ["fps", "forever", "sprite", "palette", "key", "rate"];
 
-/// The editor's cheat sheet (`js/formulas.js` `VARS FUNCS DRAW COLS
+/// The editor's cheat sheet (`js/fhint.js` `VARS FUNCS DRAW COLS
 /// DECLS`, generated from these): what to write, what it does, and what a
 /// tap inserts when that is not the first column.
 #[cfg(feature = "docs")]

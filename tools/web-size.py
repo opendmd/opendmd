@@ -103,6 +103,9 @@ line nor the Formulas line carries it.
 The API reference is not packed (until 2026-10-23 it was `api.html`, its
 own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
+The Formulas editor's names at the caret and its cheat sheet
+(`js/fhint.js`, imported at the editor's first key) have a line of their
+own, <= 7 KB.
 The Formulas editor's error codes (`js/psierr.js`, imported at a formula's
 first error) have a line of their own, <= 4 KB, and so does the site's Psi
 language reference script (`--share`'s `ref/psiref.js` with the drawing it
@@ -454,6 +457,17 @@ PSIERR = {"js/psierr.js"}
 # as it starts: a line of its own, <= 3 KB, not the Formulas line.
 FHIST_GZ_BUDGET = 3 * 1024
 FHIST = {"js/fhist.js"}
+# The editor's names at the caret (`js/fhint.js`: completion of the
+# built-in and the formula's own names, a call's values with the one being
+# typed in bold, and the cheat sheet, whose rows moved here from
+# js/formulas.js; generated from opendmd-psi/tests/builtins.rs; imported at
+# the editor's first key or the Cheat sheet's first click): a line of its
+# own (2026-11-07, branch editor-hint), apart from the Formulas line, which
+# every visit to the view loads and which the cheat sheet's rows left
+# (23,297 B gz after, from 25,959). Measured 6,598 B gz: ~3.4 KB the
+# cheat sheet's rows, the rest the names and the list.
+FHINT_GZ_BUDGET = 7 * 1024
+FHINT = {"js/fhint.js"}
 # The site's Psi language reference script (`--share`'s ref/psiref.js,
 # copied to dev/psi/: the live examples, highlighting, search and the cheat
 # sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
@@ -572,6 +586,8 @@ def main() -> int:
             kind = "psierr"
         elif rel in FHIST:
             kind = "fhist"
+        elif rel in FHINT:
+            kind = "fhint"
         elif rel in IMPORT:
             kind = "import"
         else:
@@ -666,7 +682,7 @@ def main() -> int:
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
-                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET),
+                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")
