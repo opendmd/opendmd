@@ -901,6 +901,8 @@ function editor() {
     scrubbable();
   };
   ta.addEventListener('pointerup', end);
+  // (A number in the selection, as an undo leaves it: dragged, it is the number's drag, not the text's.)
+  ta.addEventListener('dragstart', (e) => { if (drag) e.preventDefault(); });
   ta.addEventListener('pointercancel', end);
   pad.addEventListener('pointerdown', (e) => { if (num) { e.preventDefault(); dragFrom(num, e); } });
   pad.addEventListener('pointermove', dragMove);
