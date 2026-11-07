@@ -383,10 +383,12 @@ web-mock: web
 		$(if $(PROXY),--proxy $(PROXY),--root $(ROOT) $(if $(OVERLAY),--overlay $(OVERLAY)))
 
 # Headless Chromium drive of the app against the mock (and, with DEVICE=,
-# a read-mostly pass against a real device), over the card copy CARD_ROOT
-# (or DMD_CARD_ROOT from the environment, as CI and tools/ci-card.py set it)
+# a read-mostly pass against a real device), over the card copy CARD_ROOT.
+# CARD_ROOT on make's command line wins; else DMD_CARD_ROOT from the
+# environment (tools/ci-card.py's usage line), else CARD_ROOT's default.
+WEB_SMOKE_CARD = $(if $(filter command line,$(origin CARD_ROOT)),$(CARD_ROOT),$(or $(DMD_CARD_ROOT),$(CARD_ROOT)))
 web-smoke: web
-	DMD_CARD_ROOT="$${DMD_CARD_ROOT:-$(CARD_ROOT)}" uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
+	DMD_CARD_ROOT="$(WEB_SMOKE_CARD)" uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
 
 # The README's and the site's screenshots (docs/images/): the web app in
 # headless Chromium against the mock over the demo card (only the panel's

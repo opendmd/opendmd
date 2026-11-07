@@ -344,10 +344,18 @@ pack and site checks, then publishes: the GitHub release through
 `tools/release-publish.sh` (created as a draft, every asset uploaded, then
 published: a pre-release for a `-` version, else marked latest), the public
 gallery repo (`SITE_DEPLOY_KEY`), and the site (`make site-deploy-built`,
-`CLOUDFLARE_API_TOKEN`), checked live. A run that fails part way is rerun
-on GitHub ("Re-run failed jobs", or `gh run rerun <id> --failed`): once the
-release is published its assets are the release, so a rerun builds no
-firmware and takes them as they are; a draft left behind is completed;
+`CLOUDFLARE_API_TOKEN`), checked live (after waiting for `/api/health` to
+report the tag, so it reads the new deploy). One release runs at a time,
+whatever its tag. The release notes end with `Tag object: <id>` (the
+annotated tag the release was built from) and `Publisher: ci` or
+`Publisher: local`. A run that fails part way is rerun on GitHub as a
+whole ("Re-run all jobs", or `gh run rerun <id>`; not "Re-run failed
+jobs", which keeps the first attempt's plan): once the release is
+published its assets are the release, so a rerun builds no firmware and
+takes them as they are, provided they were built from the same tag object
+(a moved or re-pushed tag is refused); a release whose notes say
+`Publisher: local` is never adopted or completed by CI; a final is marked
+latest only while it is the newest final; a draft left behind is completed;
 same-digest assets are skipped and a published asset is never replaced;
 the gallery repo is committed to only when something changed; the deploy is
 the same site again. If a newer tag appears while a run is going, that run

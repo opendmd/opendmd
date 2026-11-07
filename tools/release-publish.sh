@@ -19,6 +19,17 @@
 #   so a rerun finds them all the same).
 # A release drafted by hand for the tag keeps its notes.
 #
+# PUBLISHER (ci, default, or local): who publishes. A release whose notes
+# name the other publisher ("Publisher: local" or "Publisher: ci", the
+# lines tools/release-notes.sh ends them with) is never touched: CI never
+# completes or adds to a draft the dev box started, nor the other way round.
+# GUARD_CI_RUNS=1 (tools/release.sh PUBLISH=local): just before creating the
+# release and just before publishing the draft, release.yml must have no
+# run for the tag; one that started meanwhile stops this (it publishes).
+# RELEASE_LATEST: true or false, whether a final is marked latest (default:
+# a final is, a pre-release is not); release.yml passes false for a final
+# that is no longer the newest.
+#
 # Prints PASS/SKIP lines; the last line is "published: <what changed>" or
 # "published: nothing" (tools/release.sh records it).
 set -euo pipefail
@@ -31,22 +42,41 @@ fail() { echo "FAIL  $*" >&2; exit 1; }
 (cd "$assets" && sha256sum --quiet -c SHA256SUMS) || fail "$assets does not match its SHA256SUMS"
 [ -f "$notes" ] || fail "no notes file $notes"
 prerelease=false; [[ $version == *-* ]] && prerelease=true
+publisher=${PUBLISHER:-ci}
+case $publisher in ci) other=local ;; local) other=ci ;; *) fail "PUBLISHER is '$publisher', not ci or local" ;; esac
+latest=${RELEASE_LATEST:-}
+[ -n "$latest" ] || { [ "$prerelease" = true ] && latest=false || latest=true; }
+[ "$prerelease" = false ] || latest=false
 changed=()
 
-# gh release view finds a draft by its tag too.
-if state=$(gh release view "$tag" -R "$repo" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv' 2>/dev/null); then
+guard() {  # no release.yml run for the tag (GUARD_CI_RUNS=1)
+  [ "${GUARD_CI_RUNS:-}" = 1 ] || return 0
+  local runs
+  runs=$(gh run list -R "$repo" --workflow release.yml --branch "$tag" --limit 5 --json databaseId --jq '.[].databaseId') ||
+    fail "cannot list release.yml's runs for $tag"
+  [ -z "$runs" ] || fail "release.yml has started for $tag (run $(head -1 <<<"$runs")) while this ran: CI publishes it; stopping before $1"
+}
+
+# gh release view finds a draft by its tag too. Anything but "not found" is a failure.
+if state=$(gh release view "$tag" -R "$repo" --json isDraft,isPrerelease,body --jq '[.isDraft, .isPrerelease, (.body | test("(^|\\n)Publisher: '"$other"'"))] | @tsv' 2>"$notes.err"); then
   draft=$(cut -f1 <<<"$state")
+  [ "$(cut -f3 <<<"$state")" = false ] ||
+    fail "the release $tag says \"Publisher: $other\": it is the other publisher's to finish, not this one's"
   [ "$(cut -f2 <<<"$state")" = "$prerelease" ] ||
     fail "the release $tag has isPrerelease=$(cut -f2 <<<"$state"), want $prerelease: fix it by hand on GitHub"
   echo "SKIP  the release $tag exists ($([ "$draft" = true ] && echo draft || echo published)); its notes are kept"
-else
+elif grep -qi 'release not found' "$notes.err"; then
+  guard "creating the release"
   flags=(--draft --verify-tag --title "OpenDMD $version" --notes-file "$notes" --generate-notes)
   [ "$prerelease" = false ] || flags+=(--prerelease)
   gh release create "$tag" -R "$repo" "${flags[@]}" >/dev/null || fail "gh release create $tag failed"
   draft=true
   changed+=("draft release $tag created")
   echo "PASS  draft release $tag created"
+else
+  fail "cannot read the release $tag: $(cat "$notes.err")"
 fi
+rm -f "$notes.err"
 
 remote=$(gh release view "$tag" -R "$repo" --json assets --jq '.assets[] | [.name, .state, (.digest // "")] | @tsv') ||
   fail "cannot read $tag's assets"
@@ -81,10 +111,13 @@ else
 fi
 
 if [ "$draft" = true ]; then
-  if [ "$prerelease" = true ]; then latest=--latest=false; else latest=--latest; fi
-  gh release edit "$tag" -R "$repo" --draft=false "$latest" >/dev/null || fail "publishing the draft $tag failed"
+  guard "publishing the draft"
+  gh release edit "$tag" -R "$repo" --draft=false "--latest=$latest" >/dev/null || fail "publishing the draft $tag failed"
   changed+=("release $tag published")
-  echo "PASS  release $tag published ($([ "$prerelease" = true ] && echo pre-release || echo 'final, marked latest'))"
+  how='final, marked latest'
+  [ "$latest" = true ] || how='final, not marked latest: a newer final exists'
+  [ "$prerelease" = false ] || how=pre-release
+  echo "PASS  release $tag published ($how)"
 fi
 
 # What anyone now downloads: every asset, uploaded, with this build's digest.

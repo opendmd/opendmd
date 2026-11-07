@@ -23,7 +23,7 @@ runs:
         rustup toolchain install stable --profile minimal -c clippy -t wasm32-unknown-unknown
         rustc +stable --version
 
-    - uses: Swatinem/rust-cache@v2
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       with:
         shared-key: ${{ inputs.cache-key }}
         workspaces: |
@@ -36,7 +36,7 @@ runs:
 
     - name: Cache wasm-pack and its downloads
       id: wasm-pack
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.cargo/bin/wasm-pack
@@ -58,13 +58,13 @@ runs:
         install -m 755 "$RUNNER_TEMP/wp/wasm-pack-v$v-x86_64-unknown-linux-musl/wasm-pack" ~/.cargo/bin/wasm-pack
         wasm-pack --version
 
-    - uses: astral-sh/setup-uv@v10.3.0
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       with:
         enable-cache: true
         cache-dependency-glob: "tools/*.py"
 
     # node, explicitly: make card-test (in make test) needs 20.12+ for
     # DecompressionStream('deflate-raw').
-    - uses: actions/setup-node@v7
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: 22

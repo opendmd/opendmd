@@ -70,10 +70,11 @@ on:
         required: false
         default: ""
 
-# One deploy at a time; a newer push supersedes a waiting or running one.
+# One deploy at a time. A run is never cancelled once started (it may be
+# in the middle of cf deploy); a newer push replaces one still waiting.
 concurrency:
   group: site-cloudflare
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -95,7 +96,7 @@ jobs:
         run: |
           [ "$HAVE_CLOUDFLARE_TOKEN" = true ] || { echo "::error::the CLOUDFLARE_API_TOKEN secret is not set (see the header of release.yml)"; exit 1; }
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the web app's version is `git describe --tags`
 
@@ -259,6 +260,9 @@ jobs:
         run: |
           set -euo pipefail
           make site-deploy-built
+          # Wait for this deploy (its version on /api/health), not the one before.
+          SITE_LIVE_VERSION="$(git describe --always --dirty --tags --match 'v*')"
+          export SITE_LIVE_VERSION
           if [ -n "$BETA" ]; then
             tools/site-live-check.sh "${BETA#v}" "${REL#v}" dist/SHA256SUMS "$RUNNER_TEMP/beta-dist/SHA256SUMS"
           else

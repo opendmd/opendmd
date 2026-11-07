@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # A GitHub release's notes (release.yml, and tools/release.sh PUBLISH=local):
 #
-#   tools/release-notes.sh VERSION CHANNEL SHA256SUMS > notes.md
+#   tools/release-notes.sh VERSION CHANNEL SHA256SUMS TAG_OBJECT PUBLISHER > notes.md
 #
 # CHANNEL: both, or beta (a beta after a final: docs/deploying.md "Betas").
-# GitHub's generated notes (the changes since the last release) follow them.
+# TAG_OBJECT: the annotated tag's object id the release was built from;
+# PUBLISHER: ci or local. Both end the notes as lines of their own
+# ("Tag object: <sha>", "Publisher: <who>"): release.yml takes a published
+# release's assets as its build only when its tag object is still the tag's
+# (never for a moved or re-pushed tag), and never adopts or completes a
+# release whose notes say "Publisher: local" (tools/release-publish.sh
+# refuses a release made by the other publisher). GitHub's generated notes
+# (the changes since the last release) follow them.
 set -euo pipefail
-v=$1 channel=$2 sums=$3
+v=$1 channel=$2 sums=$3 tagobj=$4 publisher=$5
+[[ $tagobj =~ ^[0-9a-f]{40}$ ]] || { echo "release-notes.sh: '$tagobj' is not a tag object id" >&2; exit 2; }
+case $publisher in ci|local) ;; *) echo "release-notes.sh: publisher '$publisher' is not ci or local" >&2; exit 2 ;; esac
 where='https://opendmd.dev/install/'
 [ "$channel" != beta ] || where="$where (this beta under \"Or install the beta\")"
 cat <<EOF
@@ -25,4 +34,7 @@ SHA-256:
 \`\`\`
 $(cat "$sums")
 \`\`\`
+
+Tag object: $tagobj
+Publisher: $publisher
 EOF

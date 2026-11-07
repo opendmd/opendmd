@@ -9,8 +9,12 @@
 # names must be served. With SUMS_* (a release's SHA256SUMS), each of those
 # files must also be byte for byte the release's asset.
 #
-# It waits up to SITE_LIVE_WAIT seconds (default 180) for the deploy to show,
-# polling a file the Worker does not count (the feed's bundle), then reads
+# It waits up to SITE_LIVE_WAIT seconds (default 180) for the deploy to show:
+# with SITE_LIVE_VERSION (the deployed tree's `git describe`, which the
+# Makefile gives the Worker as SITE_VERSION), until /api/health says that
+# version, so a check right after a deploy reads the new one, not the one
+# before; and in any case until a file the Worker does not count (the
+# feed's bundle) is served. Then it reads
 # each feed once: a GET of release.json or beta.json counts as an update
 # check on /stats (site/worker/src/counts.ts), so it is not polled.
 # Used by release.yml, site.yml and tools/release.sh (PUBLISH=local).
@@ -28,6 +32,13 @@ get() { curl -fsS -A "$ua" "$base/$1?live-check=$(date +%s%N)"; }
 dir=firmware; [ "$beta" = "$rel" ] || dir=firmware/beta
 probe="install/$dir/opendmd-$beta-4mb.odfw"
 deadline=$(( $(date +%s) + wait ))
+if [ -n "${SITE_LIVE_VERSION:-}" ]; then
+  until [ "$(curl -fsS -A "$ua" "$base/api/health?live-check=$(date +%s%N)" 2>/dev/null | jq -r .version 2>/dev/null)" = "$SITE_LIVE_VERSION" ]; do
+    [ "$(date +%s)" -lt "$deadline" ] || fail "$base/api/health does not say version $SITE_LIVE_VERSION after ${wait}s (the deploy is not live)"
+    sleep 5
+  done
+  echo "PASS  $base/api/health: version $SITE_LIVE_VERSION (this deploy)"
+fi
 until curl -fsS -o /dev/null -I -A "$ua" "$base/$probe?live-check=$(date +%s%N)" 2>/dev/null; do
   [ "$(date +%s)" -lt "$deadline" ] || fail "$base/$probe is not served after ${wait}s"
   sleep 5

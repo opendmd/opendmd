@@ -317,7 +317,8 @@ done < <(git tag -l 'v*'; awk '{ sub("refs/tags/", "", $2); sub(/\^\{\}$/, "", $
 if [ "$KIND" = prerelease ] && [ -n "$FINAL" ]; then
   [ "$(semver_cmp "$VERSION" "$FINAL")" = 1 ] || die "$VERSION is not newer than the final release $FINAL"
   CHANNEL=beta REL_VERSION=$FINAL
-  gh release view "v$FINAL" -R "$GH_REPO" >/dev/null 2>&1 || die "the final release v$FINAL has no GitHub release to take its files from"
+  st=$(GH_REPO=$GH_REPO tools/release-tags.sh state "v$FINAL") || die "cannot read the final release v$FINAL"
+  [ "${st%% *}" = published ] || die "the final release v$FINAL is '$st', not a published GitHub release to take its files from"
   pass "channel: beta (a beta after the final $FINAL): beta.json names $VERSION; release.json and the installer stay on $FINAL"
 else
   CHANNEL=both REL_VERSION=$VERSION
@@ -329,10 +330,12 @@ if [ "$MODE" = local ]; then
   # release (unless resuming a publish this fallback started itself).
   runs=$(ci_runs) || die "cannot list release.yml's runs for $TAG"
   [ -z "$runs" ] || die "release.yml has run for $TAG (run $(head -1 <<<"$runs" | cut -f1): $(head -1 <<<"$runs" | cut -f2,3 | tr '\t' ' ')): CI publishes this tag, not PUBLISH=local (rerun it on GitHub: it is safe)"
-  if gh release view "$TAG" -R "$GH_REPO" >/dev/null 2>&1; then
-    [ "$RESUME" = 1 ] && [ "$TAG_PUBLISHER" = local ] ||
-      die "the GitHub release $TAG already exists: PUBLISH=local only makes a release (or, with RESUME=1, finishes one it started)"
-    pass "no release.yml run for $TAG; its GitHub release exists, made by an earlier PUBLISH=local (resuming)"
+  rstate=$(GH_REPO=$GH_REPO tools/release-tags.sh state "$TAG") || die "cannot read the GitHub release $TAG"
+  if [ "$rstate" != none ]; then
+    # Only one this fallback started: its notes say "Publisher: local".
+    [ "$RESUME" = 1 ] && [[ $rstate == *local ]] ||
+      die "the GitHub release $TAG already exists ($rstate): PUBLISH=local only makes a release (or, with RESUME=1, finishes one it started)"
+    pass "no release.yml run for $TAG; its GitHub release ($rstate) was made by an earlier PUBLISH=local (resuming)"
   else
     pass "no release.yml run and no GitHub release for $TAG"
   fi
@@ -452,7 +455,7 @@ else
   done
   for f in "${files[@]}"; do cp "$DIST/$f" "$ASSETS/"; done
   (cd "$ASSETS" && sha256sum -- * | tee SHA256SUMS)
-  tools/release-notes.sh "$VERSION" "$CHANNEL" "$ASSETS/SHA256SUMS" > "$REL/notes.md"
+  tools/release-notes.sh "$VERSION" "$CHANNEL" "$ASSETS/SHA256SUMS" "$(git rev-parse "refs/tags/$TAG")" "$PUBLISHER" > "$REL/notes.md"
   pass "$(( ${#files[@]} + 1 )) assets (with SHA256SUMS) in $ASSETS; notes in $REL/notes.md"
 
   step "5. The public site"
@@ -638,7 +641,7 @@ if [ "$MODE" = ci ]; then
   fi
   [ "$(cut -f2 <<<"$run")" = completed ] || die "run $id is $(cut -f2 <<<"$run")"
   [ "$(cut -f3 <<<"$run")" = success ] ||
-    die "release.yml's run for $TAG ended '$(cut -f3 <<<"$run")': $url. Fix the cause, rerun it (gh run rerun $id -R $GH_REPO --failed: safe, a rerun never replaces a published asset), then RESUME=1 to check"
+    die "release.yml's run for $TAG ended '$(cut -f3 <<<"$run")': $url. Fix the cause, rerun the whole run (gh run rerun $id -R $GH_REPO, not --failed, which keeps the first attempt's plan; safe: a rerun never replaces a published asset), then RESUME=1 to check"
   published "release.yml published $TAG ($url)"
 
   step "6e. Check the GitHub release CI made"
@@ -674,7 +677,9 @@ if [ "$MODE" = ci ]; then
 else
   # ---- 6d-6f (--publish-local): everything from here.
   step "6d. GitHub release $TAG on $GH_REPO (tools/release-publish.sh)"
-  out=$(GH_REPO=$GH_REPO tools/release-publish.sh "$TAG" "$ASSETS" "$REL/notes.md") || { echo "$out"; die "tools/release-publish.sh failed"; }
+  # GUARD_CI_RUNS: a release.yml run that starts meanwhile (a takeover of a
+  # tag CI was slow to pick up) stops this before the release is made or published.
+  out=$(GH_REPO=$GH_REPO PUBLISHER=local GUARD_CI_RUNS=1 tools/release-publish.sh "$TAG" "$ASSETS" "$REL/notes.md") || { echo "$out"; die "tools/release-publish.sh failed"; }
   echo "$out"
   what=$(sed -n 's/^published: //p' <<<"$out" | tail -1)
   if [ "$what" = nothing ]; then skip "the release and every asset were already there"; else published "GitHub release: $what"; fi
@@ -701,7 +706,7 @@ else
     skip "$SITE_URL already serves $TAG (beta.json $VERSION, release.json $REL_VERSION, this build's bytes)"
   else
     make site-deploy-built SITE="$SITE" || die "make site-deploy-built failed"
-    live || die "deployed, but $SITE_URL does not serve $TAG as it should"
+    SITE_LIVE_VERSION=$(git describe --always --dirty --tags --match 'v*') live || die "deployed, but $SITE_URL does not serve $TAG as it should"
     published "site deployed: $SITE_URL/install/beta.json says $VERSION, release.json $REL_VERSION"
   fi
 fi
