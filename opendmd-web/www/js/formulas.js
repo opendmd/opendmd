@@ -73,6 +73,8 @@ function draw(f, ms, still, gms = ms) {
   }, null);
 }
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
+// A scratch formula's top row, RGB (js/fsprite.js's palette strip: the panel's own colours), then what was held compiled again.
+const row = (src) => T(() => { const was = held; held = null; const r = P.compile(src) ? (P.frame(0, 10, 9, 30, Q(), Q(), Q()), new Uint8Array(P.mem.buffer, P.pixels(), 384).slice()) : null; take(was); return r; }, null);
 // What it declares (pkg-psi controls(): its name, about, look, controls).
 const ctlOf = (f) => T(() => controls(P, f.src), null);
 // Its name and line about it: its own lines, else the record's.
@@ -757,6 +759,7 @@ function editor() {
   // The colour swatch: beside the colour the caret is in, or hidden; left
   // as it is while the picker is open.
   function swatch() {
+    blocks();
     const f = document.activeElement, p = ta.selectionStart;
     if (pend) return;
     if (f !== ta) { if (f !== kp) kp.hidden = true; return; }
@@ -769,6 +772,12 @@ function editor() {
     // Past the line's end (held inside the box), so it covers no text there is room for.
     kp.style.left = `${Math.max(0, Math.min(ta.clientLeft + parseFloat(s.paddingLeft) + (col + 1) * measure() - ta.scrollLeft, ta.clientWidth - kp.offsetWidth))}px`;
     kp.style.top = `${ta.clientTop + parseFloat(s.paddingTop) + (row + 0.5) * lh - kp.offsetHeight / 2}px`;
+  }
+  // Sprites' pictures and palettes (js/fsprite.js, imported for a formula with one): a button at the one the caret is in.
+  let SP = null;
+  function blocks() {
+    if (SP) return SP.caret?.();
+    if (/^[ \t]*(sprite[ \t]+\w+[ \t]*\{|palette[ \t]+\w+[ \t]*=)/m.test(ta.value)) SP = import('./fsprite.js').then((m) => { SP = m.blocks({ ta, put, measure, row }); SP.caret(); }, () => { SP = null; });
   }
   ta.addEventListener('blur', away);
   // Back in the text: the pick so far goes in as one undo step.

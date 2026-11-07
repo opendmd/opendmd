@@ -126,6 +126,17 @@ takes you there; when the message suggests a fix (`did you mean t?`),
   colour you pick takes its place. On a computer, Ctrl+Z (⌘Z) puts the old
   one back; with the keyboard, put the cursor in the colour and press Esc,
   then Tab, to reach the swatch.
+- **Paint a sprite:** with the cursor in a `sprite` block, **Edit the
+  picture** appears at its first line. It opens the picture as a grid in
+  its key's colours: pick a character from the key (the checked one is
+  see-through), then tap or drag to paint. Add or take away rows and
+  columns, or add a colour to the key. Each stroke is written into the
+  formula's rows, and Ctrl+Z (or the editor's Undo) takes it back.
+- **Edit a palette:** with the cursor in a `palette` line (even one over
+  several lines), **Edit the palette** shows its colours as the panel reads
+  them, left to right, with one handle per colour: tap one to change it,
+  drag it to move it, give it a name, take it away with ×, or add one with
+  + Colour.
 - **Controls:** a line at the top like `control speed 0..4 = 1 "Speed"`
   gives the formula a slider: `speed` is a value you use in it, from 0 to 4,
   starting at 1, labelled "Speed" (the range is 0 to 1 when you leave it

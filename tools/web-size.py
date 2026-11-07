@@ -479,6 +479,14 @@ FHINT = {"js/fhint.js"}
 FCOST_GZ_BUDGET = 3 * 1024
 FCOST = {"js/fcost.js"}
 PSI_LANG_GZ_BUDGET = 124 * 1024
+# The Formula editor's picture and palette editors (js/fsprite.js, branch
+# editor-sprite, 2026-11-07: a sprite's grid to paint from its key, a
+# palette's strip as the panel reads it with a handle per colour; imported
+# by js/formulas.js only for a formula with a sprite block or a palette
+# line): a line of its own, <= 6 KB (5,661 B gz at first, its styles
+# with it), as it never loads with the Formulas line.
+FSPRITE_GZ_BUDGET = 6 * 1024
+FSPRITE = {"js/fsprite.js"}
 # The site's Psi language reference script (`--share`'s ref/psiref.js,
 # copied to dev/psi/: the live examples, highlighting, search and the cheat
 # sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
@@ -603,6 +611,8 @@ def main() -> int:
             kind = "fhist"
         elif rel in FHINT:
             kind = "fhint"
+        elif rel in FSPRITE:
+            kind = "fsprite"
         elif rel in IMPORT:
             kind = "import"
         else:
@@ -698,7 +708,7 @@ def main() -> int:
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
-                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET),
+                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

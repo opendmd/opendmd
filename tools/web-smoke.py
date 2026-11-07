@@ -3950,6 +3950,7 @@ def mock_pass(browser) -> None:
         studio_anim_checks(page, base, overlay)
         studio_smooth_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
+        psi_sprite_phone(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
@@ -4462,6 +4463,196 @@ def psi_typing_checks(page: Page) -> None:
           f"formulas: Tab and Shift+Tab move lines two spaces ({ind!r}, {out!r}, {two!r}); Esc then Tab leaves the code (to {left!r})")
 
 
+HEART = "sprite heart {\n  key . 0, R #e24\n  .R.R.\n  RRRRR\n  .RRR.\n  ..R..\n}\ndraw { spr(heart, 60, 12) }"
+
+
+def caret_at(page: Page, at: int) -> None:
+    page.focus("#psi-src")
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(300)
+
+
+def pic_cell(page: Page, u: int, v: int) -> tuple[float, float]:
+    """Where cell (u, v) of the open picture is on the page."""
+    b = page.locator("#psi-pic").bounding_box()
+    w, n = page.evaluate("() => { const c = document.querySelector('#psi-pic'); return [parseFloat(c.style.width), c.getAttribute('aria-label')]; }")
+    cols = int(re.search(r"(\d+) by", n).group(1))
+    cs = w / cols
+    return b["x"] + cs * (u + 0.5), b["y"] + cs * (v + 0.5)
+
+
+def psi_sprite_checks(page: Page) -> None:
+    """A sprite's picture editor and a palette's strip (js/fsprite.js): the
+    caret in a sprite shows Edit the picture; a cell painted rewrites its row
+    (the preview compiles it) and one undo restores it; a drag is one undo
+    too; rows, columns and a key colour go in as text. The caret in a
+    palette shows Edit the palette, whose strip is the panel's pal() (the
+    same module, another instance, compiling the formula's own lines) and
+    leaves the editor's formula playing; dragging a colour reorders the line
+    (one undo), a name goes in; Neon city's palette over six lines keeps
+    its lines."""
+    page.fill("#psi-src", HEART)
+    page.wait_for_timeout(400)
+    caret_at(page, HEART.index(".R.R.") + 2)
+    blk = page.locator("#psi-blk")
+    check(blk.is_visible() and blk.inner_text() == "Edit the picture", "sprites: the caret in a sprite shows Edit the picture")
+    caret_at(page, len(HEART) - 3)
+    check(blk.is_hidden(), "sprites: the caret out of the block hides it")
+    caret_at(page, HEART.index("key") + 1)
+    shot(page, "formulas-sprite-button", "laptop")
+    blk.click()
+    page.wait_for_selector("#psi-pic-ed", timeout=5000)
+    keys = page.eval_on_selector_all("#psi-pic-ed .psi-keys button", "els => els.map(e => [e.dataset.ch, e.getAttribute('aria-pressed')])")
+    check(keys == [[".", "false"], ["R", "true"]] and page.inner_text("#psi-pic-size") == "5 × 4",
+          f"sprites: the picture's key to paint with (its colour picked first) and its size ({keys}, {page.inner_text('#psi-pic-size')})")
+    before = canvas_sum(page, "#psi-ed-panel")
+    x, y = pic_cell(page, 0, 0)
+    page.mouse.click(x, y)
+    page.wait_for_timeout(400)
+    got = page.input_value("#psi-src")
+    check(got == HEART.replace(".R.R.", "RR.R.") and page.get_attribute("#psi-ed", "data-err") is None and canvas_sum(page, "#psi-ed-panel") != before,
+          f"sprites: a cell painted rewrites its row and the preview ({got!r})")
+    shot(page, "formulas-sprite-editor", "laptop")
+    page.focus("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == HEART, f"sprites: one undo puts the row back ({page.input_value('#psi-src')!r})")
+    # A drag across a row with the see-through character: one undo for the stroke.
+    caret_at(page, HEART.index("key") + 1)
+    blk.click()
+    page.wait_for_selector("#psi-pic-ed", timeout=5000)
+    page.click("#psi-pic-ed .psi-keys button[data-ch='.']")
+    x0, y0 = pic_cell(page, 0, 1)
+    x1, _ = pic_cell(page, 4, 1)
+    page.mouse.move(x0, y0)
+    page.mouse.down()
+    page.mouse.move(x1, y0, steps=10)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    dragged = page.input_value("#psi-src")
+    page.click("#psi-blk-undo")
+    page.wait_for_timeout(300)
+    check(dragged == HEART.replace("RRRRR", ".....") and page.input_value("#psi-src") == HEART and page.locator("#psi-pic-ed").is_visible(),
+          f"sprites: a drag paints a row, the editor's Undo takes the stroke back at once ({dragged!r})")
+    page.click("#psi-pic-c\\+")
+    page.click("#psi-pic-r\\+")
+    page.wait_for_timeout(300)
+    grown = page.input_value("#psi-src")
+    page.evaluate("() => { const k = document.querySelector('#psi-pic-add'); k.value = '#00ff00'; k.dispatchEvent(new Event('change')); }")
+    page.wait_for_timeout(400)
+    keyed = page.input_value("#psi-src")
+    want = "sprite heart {\n  key . 0, R #e24\n  .R.R..\n  RRRRR.\n  .RRR..\n  ..R...\n  ......\n}"
+    check(grown.startswith(want) and keyed.startswith(want.replace("#e24", "#e24, A #00ff00")) and page.inner_text("#psi-pic-size") == "6 × 5"
+          and page.get_attribute("#psi-pic-ed .psi-keys button[data-ch='A']", "aria-pressed") == "true" and page.get_attribute("#psi-ed", "data-err") is None,
+          f"sprites: a column, a row (see-through) and a key colour go in as text ({keyed!r})")
+    page.keyboard.press("Escape")
+
+    # A palette: its strip is the panel's pal(); the editor's formula plays on.
+    src = "palette p = #000, #f80, #fff\npal(p, 1 - x)"
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(500)
+    before = canvas_sum(page, "#psi-ed-panel")
+    caret_at(page, 3)
+    check(blk.is_visible() and blk.inner_text() == "Edit the palette", f"palettes: the caret in a palette shows Edit the palette ({blk.inner_text()})")
+    blk.click()
+    page.wait_for_selector("#psi-pal-ed", timeout=5000)
+    page.wait_for_timeout(300)
+    check(canvas_sum(page, "#psi-ed-panel") == before, "palettes: the editor's formula plays on after the strip is read")
+    psi_strip_matches(page, "palette p = #000, #f80, #fff", "p", "palettes: the strip")
+    chips = page.locator("#psi-pal-list .psi-pe input[type=color]")
+    a, c = chips.nth(0).bounding_box(), chips.nth(2).bounding_box()
+    page.mouse.move(a["x"] + a["width"] / 2, a["y"] + a["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(c["x"] + c["width"] / 2, c["y"] + c["height"] / 2, steps=10)
+    page.mouse.up()
+    page.wait_for_timeout(400)
+    moved = page.input_value("#psi-src")
+    check(moved == "palette p = #f80, #fff, #000\npal(p, 1 - x)", f"palettes: a colour dragged to the end reorders the line ({moved!r})")
+    psi_strip_matches(page, "palette p = #f80, #fff, #000", "p", "palettes: the strip, reordered,")
+    shot(page, "formulas-palette-editor", "laptop")
+    page.focus("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == src, f"palettes: one undo puts the order back ({page.input_value('#psi-src')!r})")
+    page.keyboard.press("Escape")
+
+    # Neon city: a palette of 28 named and bare colours over six lines.
+    neon = unheader((REPO / "opendmd-web/formulas/neon-city.psi").read_text(encoding="utf-8"))
+    lines = neon.split("\n")
+    first = next(i for i, l in enumerate(lines) if l.startswith("palette city"))
+    pal = "\n".join(lines[first:first + 6])
+    page.fill("#psi-src", neon)
+    page.wait_for_timeout(600)
+    caret_at(page, neon.index("farTower"))
+    blk.click()
+    page.wait_for_selector("#psi-pal-ed", timeout=5000)
+    page.wait_for_timeout(300)
+    n = page.locator("#psi-pal-list .psi-pe").count()
+    check(n == 28, f"palettes: Neon city's palette over six lines has its 28 colours ({n})")
+    psi_strip_matches(page, pal, "city", "palettes: Neon city's strip")
+    shot(page, "formulas-palette-neon", "laptop")
+    lab = page.locator("#psi-pal-list .psi-pe input[type=text]").nth(1)
+    lab.fill("night")
+    lab.press("Enter")
+    page.wait_for_timeout(500)
+    got = page.input_value("#psi-src")
+    check(got == neon.replace("black #000, #05020c,", "black #000, night #05020c,") and page.get_attribute("#psi-ed", "data-err") is None,
+          f"palettes: a colour named goes in, the lines kept ({got[got.index('palette'):got.index('palette') + 80]!r})")
+    page.keyboard.press("Escape")
+
+
+def unheader(t: str) -> str:
+    l = t.split("\n")
+    while l and re.match(r"^-- (author|licen[cs]e|bundle)", l[0]):
+        l.pop(0)
+    return "\n".join(l)
+
+
+def psi_strip_matches(page: Page, pal: str, name: str, what: str) -> None:
+    """The open palette strip's 128 colours are those Psi itself draws for
+    `pal(name, x)` under the palette's own lines (another instance of the
+    module, so not the editor's)."""
+    got = page.evaluate("""async ([pal, name]) => {
+        const m = await import('./pkg-psi/opendmd_psi_web.js?strip'), w = await m.default();
+        if (!m.compile(pal + '\\npal(' + name + ', x)')) return 'no: ' + m.error();
+        m.frame(0, 10, 9, 30, -2147483648, -2147483648, -2147483648);
+        const ref = Array.from(new Uint8Array(w.memory.buffer, m.pixels(), 384));
+        const d = document.querySelector('#psi-pal-strip').getContext('2d').getImageData(0, 0, 128, 1).data, s = [];
+        for (let i = 0; i < 128; i++) s.push(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+        return s.join() === ref.join() ? 'same' : s.slice(0, 12).join() + ' / ' + ref.slice(0, 12).join();
+    }""", [pal, name])
+    check(got == "same", f"{what} is the panel's pal() ({got})")
+
+
+def psi_sprite_phone(browser, base: str, errors: list[str]) -> None:
+    """On a phone: fsprite.js loads only for a formula with a sprite or a
+    palette; a tap in a sprite shows Edit the picture, the picture's cells
+    are 22 px (no pinching), a tap paints and its undo is there."""
+    page = new_page(browser, "phone", errors)
+    loaded: list[str] = []
+    page.on("request", lambda r: "fsprite.js" in r.url and loaded.append(r.url))
+    page.goto(base + "/#formulas")
+    formula_editor(page, "gray(x)")
+    caret_at(page, 2)
+    check(not loaded and page.locator("#psi-blk").count() == 0, f"sprites: a formula without a sprite or a palette doesn't load fsprite.js ({loaded})")
+    page.fill("#psi-src", HEART)
+    page.wait_for_timeout(400)
+    caret_at(page, HEART.index(".R.R.") + 1)
+    page.locator("#psi-blk").tap()
+    page.wait_for_selector("#psi-pic-ed.sheet", timeout=5000)
+    w = page.evaluate("parseFloat(document.querySelector('#psi-pic').style.width)")
+    x, y = pic_cell(page, 4, 3)
+    page.touchscreen.tap(x, y)
+    page.wait_for_timeout(400)
+    got = page.input_value("#psi-src")
+    shot(page, "formulas-sprite-editor", "phone")
+    page.locator("#psi-blk-undo").tap()
+    page.wait_for_timeout(300)
+    check(w / 5 >= 20 and got == HEART.replace("..R..\n}", "..R.R\n}") and page.input_value("#psi-src") == HEART
+          and len(loaded) == 1, f"sprites (phone): fsprite.js loaded, cells of {w / 5:.0f} px, a tap paints ({got[-40:]!r}), Undo takes it back")
+    page.context.close()
+
+
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
     """Library → Formulas: the module loads only then; the examples render;
     a plain error with its line; a number scrubbed changes the text, the
@@ -4551,6 +4742,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(200)
     check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
     psi_colour_checks(page)
+    psi_sprite_checks(page)
     # A choice: `control name = word, word, …` is a row of buttons (a radio
     # group); the value is the choice's number, and the arrows move it.
     page.fill("#psi-src", "control level = off, half, full\ngray(level/2)")
