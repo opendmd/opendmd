@@ -1413,8 +1413,22 @@ STORED = """async (paths) => {
     return out; }"""
 
 
+# Every row in view, the folders' too: a screenful is 10 or more of them
+# (folder rows above an open folder take a screen's top on a short card).
+ROWS_IN_VIEW = IN_VIEW.replace(".vrow:not([hidden])", ".vrow:not([hidden]), #lib-list .vdir:not([hidden])")
+
+
 def drawn(page: Page, timeout: int = 30000) -> list[str]:
-    page.wait_for_function(f"{IN_VIEW}.length >= 10 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=timeout)
+    """Wait for a screenful of the Library (10 rows or more in view, GIF
+    rows and folder rows) with every GIF row in it drawn; returns the GIF
+    rows' paths."""
+    try:
+        page.wait_for_function(f"{ROWS_IN_VIEW}.length >= 10 && {IN_VIEW}.length >= 1 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=timeout)
+    except PlaywrightTimeoutError:
+        # Say what the screen held: too few rows in view, or which are not drawn.
+        rows, gifs, undone = page.evaluate(f"[{ROWS_IN_VIEW}.length, {IN_VIEW}.length, {IN_VIEW}.filter(r => !r.querySelector('canvas.th[data-done]')).map(r => r.dataset.path)]")
+        shot(page, "drawn-timeout", "laptop")
+        raise RuntimeError(f"thumbnails not drawn in {timeout} ms: {rows} rows in view (want >= 10), {gifs} of them GIFs, {len(undone)} not drawn {undone[:5]}") from None
     return page.evaluate(f"{IN_VIEW}.map(r => r.dataset.path)")
 
 
@@ -4941,8 +4955,12 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     opener.context.close()
     page.click("#psi-back")
     page.wait_for_selector("#psi-mine .psi-tile", timeout=5000)
-    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)") == ["Smoke brightness"]
-          and page.evaluate("location.hash") == "#formulas", "formulas: back to the gallery, saved under Your formulas")
+    # Beside the card's own Formulas (none on the stock card; tools/ci-card.py's "CI test").
+    on_card = {m.group(1) for p in (CARD / "formulas").glob("*.psi")
+               for m in [re.search(r'^name "([^"]*)"', p.read_text(errors="replace"), re.M)] if m}
+    mine = page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)")
+    check([n for n in mine if n not in on_card] == ["Smoke brightness"]
+          and page.evaluate("location.hash") == "#formulas", f"formulas: back to the gallery, saved under Your formulas ({mine})")
     # Save as GIF: one loop (4 s at 20 ms) into Create Art.
     page.click("#psi-ex .psi-tile >> nth=0")
     formula_editor(page, "loop 4\npal(fire, saw(x - t/4)*0.5 + 0.5)")
@@ -7159,11 +7177,25 @@ def lib_row(page: Page, path: str) -> None:
     goto_view(page, "library")
     pick_cat(page, path.split("/")[2])
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    before = page.text_content("#lib-count")
     page.fill("#lib-search", path.rsplit("/", 1)[1][:-4])
     sel = f"#lib-list .vrow[data-path={json.dumps(path)}]"
+    # The search applied (the count moved) before the click: the row seen in
+    # the folder's list before the filter lands would move under the pointer
+    # (on a card of thousands the filter takes a moment).
+    try:
+        page.wait_for_function(f"document.querySelector('#lib-count').textContent !== {json.dumps(before)}", timeout=10000)
+    except PlaywrightTimeoutError:
+        pass  # the search left the count as it was (a folder of one)
     page.wait_for_selector(sel, timeout=20000)
     page.click(sel)
-    page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
+    try:
+        page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
+    except PlaywrightTimeoutError:
+        # Say what the Details panel showed instead.
+        got = page.evaluate("(c => ({ shown: c?.dataset.shown, text: c?.textContent.slice(0, 120), toast: document.querySelector('.toast, #toasts')?.textContent || '' }))(document.querySelector('#lib-cap'))")
+        shot(page, "lib-row-timeout", "laptop")
+        raise RuntimeError(f"lib_row: {path} picked, but the Details panel shows {got}") from None
 
 
 def details_checks(page: Page, base: str, overlay: Path) -> None:
