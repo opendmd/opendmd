@@ -99,7 +99,8 @@ for f in "$assets"/*; do
 done
 echo "PASS  $tag: published, all $total assets with this build's digests"
 if [ ${#changed[@]} -gt 0 ]; then
-  (IFS=';'; echo "published: ${changed[*]}")
+  printf -v joined '%s; ' "${changed[@]}"
+  echo "published: ${joined%; }"
 else
   echo "published: nothing"
 fi
