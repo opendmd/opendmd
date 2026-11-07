@@ -223,12 +223,18 @@ releases with key 1 (`KEY_ID` in `tools/fw-sign.py`); retire key 0 from
 `KEYS` once no player needs it. A leak of key 0 before that means a USB
 reinstall for every player that never got the release with key 1.
 
-**Local-only signing.** Releases are signed on the maintainer's machine
-(`make release`, `tools/release.sh`): the private key exists only there,
-in `~/.config/opendmd/opendmd.key`, read by `tools/fw-sign.py` (pinned
-`pynacl==1.5.0`) and never copied into a build directory, a CI runner or
-the repo. CI builds and tests with a throwaway key (`FW_SIGN_KEY`,
-`FW_SIGN_PUB`); its release workflow is not the way releases are made.
+**Where the key is.** The private key exists in two places: the
+maintainer's machine (`~/.config/opendmd/opendmd.key`, read by
+`tools/fw-sign.py`, pinned `pynacl==1.5.0`, never copied into a build
+directory or the repo) and the repository's `OTA_SIGNING_KEY` Actions
+secret. Releases are published by `.github/workflows/release.yml`, which
+signs them with the secret (written to the runner's temporary directory
+for the build and removed after); the maintainer's copy signs the check
+builds `make release` makes before pushing a tag, and a release published
+from that machine while CI is down (`PUBLISH=local`; `docs/deploying.md`
+"Releasing"). Either way every bundle and pack is checked against the
+committed `firmware/keys/opendmd.pub` before it is published. CI's builds
+and tests otherwise use a throwaway key (`FW_SIGN_KEY`, `FW_SIGN_PUB`).
 
 The web app pack is signed with the same key and key ids
 (`docs/www-pack.md` "Signature").
