@@ -97,3 +97,9 @@ security key all go. Your SD card, GIFs and playlists are kept.
 
 The [Assembly section of dmdos.net](https://dmdos.net/) shows each step of
 the build with a photo.
+
+## Something else
+
+If none of this helps, [report the problem on GitHub](https://github.com/opendmd/opendmd/issues):
+say what you did, what the panel or the web app showed, and the firmware
+version from **Settings › Device**.
