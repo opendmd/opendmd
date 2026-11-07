@@ -487,7 +487,7 @@ function build(root) {
 
 function editor() {
   // The name is the formula's `name` line (typed here, written there).
-  const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; named(name.value); stash(); } });
+  const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); }, onchange: () => setTimeout(nameIn) });
   const setBtn = h('button', { id: 'psi-set-btn', 'aria-haspopup': 'dialog', title: 'Formula settings: name, about, controls, look', onclick: (e) => settings(e.currentTarget) }, '⚙ Settings');
   // (The site's page: no way back to a gallery, nothing saved there.)
   const head = h('div.card.psi-edhead', !PAGE && h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name, setBtn,
@@ -726,22 +726,30 @@ function editor() {
   // Always as typed (the browser's undo keeps it: setRangeText would wipe
   // its history). Not focused (a phone's strip, a picker): focused for it
   // with no keyboard (inputmode none), then back where focus was.
+  // (The focus moved for it blurs a field, whose change may ask for this
+  // same edit again meanwhile: `putting`, that one is dropped.)
+  let putting = false;
   function put(t, text) {
+    if (putting) return;
+    putting = true;
     const f = document.activeElement, away = f !== ta;
-    if (away) { ta.inputMode = 'none'; ta.focus({ preventScroll: true }); }
-    ta.setSelectionRange(t.s, t.e);
-    document.execCommand('insertText', false, text);
-    t.e = t.s + text.length;
-    ta.setSelectionRange(t.e, t.e);
-    if (away) { if (f && f !== document.body) f.focus({ preventScroll: true }); else ta.blur(); ta.inputMode = ''; }
+    try {
+      if (away) { ta.inputMode = 'none'; ta.focus({ preventScroll: true }); }
+      ta.setSelectionRange(t.s, t.e);
+      document.execCommand('insertText', false, text);
+      t.e = t.s + text.length;
+      ta.setSelectionRange(t.e, t.e);
+      if (away) { if (f && f !== document.body) f.focus({ preventScroll: true }); else ta.blur(); ta.inputMode = ''; }
+    } finally { putting = false; }
   }
   // A text tried without touching the textarea (a number dragged, a colour
   // or a stroke picked: each lands once, with put()): drawn in the code and
-  // played. peek() goes back to the text as it is.
+  // played (Show on panel follows when it lands). peek() goes back to the
+  // text as it is: the last version that worked, else nothing playing.
   function peek(src) {
-    if (src == null) { paint(); if (good) play(pv, live, info(good)); return; }
+    if (src == null) { paint(); if (good) play(pv, live, info(good)); else if (pv) pv.f = null; return; }
     hl.innerHTML = marks(src).html + '\n';
-    if (T(() => P.compile(src), false)) { hold(src); const f = { ...live, src }; play(pv, f, info(src)); PS?.follow(f); }
+    if (T(() => P.compile(src), false)) { hold(src); play(pv, { ...live, src }, info(src)); }
   }
   // Below zero is fine (a minus that would make `--`, a comment, gets brackets).
   function fmt(t, v, d) {
@@ -904,16 +912,25 @@ function editor() {
   // (A number in the selection, as an undo leaves it: dragged, it is the number's drag, not the text's.)
   ta.addEventListener('dragstart', (e) => { if (drag) e.preventDefault(); });
   ta.addEventListener('pointercancel', end);
+  // (Or the capture lost, or the window left mid-drag: it ends where it got to.)
+  ta.addEventListener('lostpointercapture', end);
+  pad.addEventListener('lostpointercapture', end);
+  addEventListener('blur', () => { if (drag) end({ pointerId: drag.id }); });
   pad.addEventListener('pointerdown', (e) => { if (num) { e.preventDefault(); dragFrom(num, e); } });
   pad.addEventListener('pointermove', dragMove);
   pad.addEventListener('pointerup', end);
   pad.addEventListener('pointercancel', end);
 
-  // The text replaced by `t` (only the part that changed, so the caret
-  // and scroll stay), then compiled at once.
+  // The text replaced by `t`: only the part that changed, typed in (put():
+  // one undo step, the history kept), the caret where it was (moved along
+  // when the change is before it); then compiled at once.
   function edit(t) {
-    const s = ta.value, [a, e] = span(s, t);
-    ta.setRangeText(t.slice(a, t.length - e), a, s.length - e, 'preserve');
+    if (putting) return;
+    const s = ta.value, [a, e] = span(s, t), b = s.length - e, d = t.length - s.length, c = [ta.selectionStart, ta.selectionEnd];
+    if (a >= b && a >= t.length - e) { paint(); compile(); return; }
+    put({ s: a, e: b }, t.slice(a, t.length - e));
+    const at = (k) => (k <= a ? k : k >= b ? k + d : t.length - e);
+    ta.setSelectionRange(at(c[0]), at(c[1]));
     paint();
     compile();
   }
@@ -924,6 +941,8 @@ function editor() {
     while (e < s.length - a && e < t.length - a && s[s.length - 1 - e] === t[t.length - 1 - e]) e++;
     return [a, e];
   }
+  // The name field's text as the `name` line, unless it is that already.
+  const nameIn = () => { if (P && (ctlOf({ src: ta.value })?.name || '') !== declText(name.value, MAX_NAME)) named(name.value); };
   // The `name` line set to `v` (taken out when empty).
   function named(v) {
     const t = declText(v, MAX_NAME);
@@ -946,8 +965,8 @@ function editor() {
     const f = B.draft;
     f.name = name.value.trim() || `My formula ${mine().length + 1}`;
     name.value = f.name;
-    // The name is its `name` line.
-    if (!ctlOf(f)?.name) named(f.name);
+    // The name is its `name` line (written on the field's change: here too, in case none came).
+    nameIn();
     const src = ta.value, k0 = hkey(f);
     let r;
     const done = said(async () => {
@@ -990,6 +1009,8 @@ function editor() {
     // The site's page: the text as typed (`paste`: every `use` line pasted
     // first, null when one can't be), whether it works, its info() and controls().
     now(paste) { if (paste && !ready()) return null; const src = ta.value, ok = good === src; return { name: B.draft.name, src, a: B.draft.a, b: B.draft.b, c: B.draft.c, ok, info: ok ? info(src) : [], ctl: ok ? ctlOf({ src }) : null }; },
+    // The name field's change, if it hasn't landed (leaving the editor).
+    flush: () => nameIn(),
     // Its settings sheet (Settings › Look's Change…).
     settings: () => settings(setBtn),
     back,
@@ -1052,6 +1073,7 @@ function edit() {
   if (B.sheet) { B.sheet = 0; setTimeout(() => B.ed.settings(), 0); }
 }
 function close(nav) {
+  B.ed.flush();
   B.editing = false;
   B.root.classList.remove('psied');
   closeMenu();
