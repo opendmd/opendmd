@@ -19,6 +19,15 @@ and enough Consoles rows for the Library list to scroll. Every GIF is
 128x32 with a few frames at varied delays, so previews light up and the
 mock's clock has real frame delays to run through.
 
+Where web-smoke measures sizes and screens, the card is shaped like the
+stock one: Consoles has ~3,400 rows (2,800 of them one-frame zz_row_*
+fillers in no playlist), so a 120,000 px fling lands among its GIFs; its
+GBA_* rows, the first on screen, have large copies (~60 KB: a blinking
+start, then noise) with a small first frame and a small hover clip;
+Arcade holds three noise GIFs whose copies are 40-60 KB (the listing
+queue's); Computers and Pinball_Short a screenful or more each; Other a
+1 px a frame scroll at 50 ms (Smooth motion's "already smooth").
+
 Then `opendmd-pack convert OUT_DIR --verify` makes the prepared copies
 under cache/ (skipped with --no-convert). Two Arcade GIFs past 256 colours
 (ARCADE_SF2_GameOver01/02, in no playlist) then get the lossy copy and no
@@ -56,6 +65,13 @@ CONSOLES = {
 }
 MANY = ["ARCADE_SF2_GameOver01", "ARCADE_SF2_GameOver02"]  # past 256 colours, in no playlist
 VARIANTS = 12  # _01.._12 of each title: ~570 Consoles rows, so the Library list scrolls well past 4000 px
+# Rows like the stock card's (3,781 in Consoles): web-smoke's thumbnail fling
+# scrolls 120,000 px and must still land among Consoles' GIFs. Tiny one-frame
+# GIFs in no playlist, named to sort last and match no title or platform.
+FILLER = 2800
+# web-smoke's listing queue holds the stream queue with three prepared
+# copies of 40-60 KB in Arcade (in no playlist).
+ARCADE_BIG = 3
 OTHER = 40
 ARCADE = ["Pacman", "Galaga", "Metal_Slug", "Outrun", "Final_Fight", "Bubble_Bobble", "Gauntlet", "Rastan"]
 COMPUTERS = ["AMIGA_Shadow_of_the_Beast", "C64_Turrican", "AMIGA_Lemmings", "C64_Giana_Sisters", "MSX_Penguin_Adventure"]
@@ -149,9 +165,37 @@ def scrolling(rng: random.Random, n: int, step: int) -> tuple[list[Image.Image],
     return frames, [rng.choice([40, 50, 60])] * n
 
 
+def noisy(rng: random.Random, n: int, first: tuple[list[Image.Image], list[int]] | None = None) -> tuple[list[Image.Image], list[int]]:
+    """`n` frames of random pixels in 16 colours: nothing for LZW or a delta
+    frame to save, so a prepared copy is about 3 KB a frame. After `first`
+    (its frames and delays) if given: a GIF whose first frame is small and
+    whose whole copy is large (web-smoke's thumbnails read only the first)."""
+    pal = palette(rng) + [(rng.randrange(256), rng.randrange(256), rng.randrange(256)) for _ in range(8)]
+    frames, delays = first or ([], [])
+    frames, delays = list(frames), list(delays)
+    for _ in range(n):
+        im = Image.new("RGB", (W, H))
+        im.putdata([pal[rng.randrange(16)] for _ in range(W * H)])
+        frames.append(im)
+        delays.append(100)
+    return frames, delays
+
+
 def make_gif(path: Path, seed: str, kind: str = "blink", n: int = 0) -> None:
     rng = random.Random(seed)
-    if kind == "scroll":
+    if kind == "noisy":
+        frames, delays = noisy(rng, n or 16)
+    elif kind == "heavy":
+        # A blinking GIF, then noise: a small first frame and a small clip
+        # (the web app's hover clip is the first 24 frames, at most 32 KB),
+        # but a large whole, as the stock card's copies are.
+        frames, delays = noisy(rng, n or 14, blinking(rng, 26))
+    elif kind == "filler":
+        frames, delays = [Image.new("RGB", (W, H))], [100]
+    elif kind == "scroll1":  # 1 px a frame at 50 ms: moves, nothing to smooth
+        frames, _ = scrolling(rng, n or 60, 1)
+        delays = [50] * len(frames)
+    elif kind == "scroll":
         frames, delays = scrolling(rng, n or 40, 4)
     elif kind == "small":
         frames, delays = blinking(rng, n or 3)
@@ -179,7 +223,11 @@ def build(out: Path) -> None:
     for plat, titles in CONSOLES.items():
         for t in titles:
             for v in range(1, VARIANTS + 1):
-                add("Consoles", f"{plat}_{t}_{v:02d}", "scroll" if "SCROLL" in t else "blink")
+                # GBA's sort first in Consoles: the rows web-smoke's
+                # thumbnails see, so their copies are large (a first frame,
+                # then noise), as the stock card's are.
+                kind = "scroll" if "SCROLL" in t else "heavy" if plat == "GBA" else "blink"
+                add("Consoles", f"{plat}_{t}_{v:02d}", kind)
     for i in range(1, 9):
         add("Consoles", f"SNES_Mega_Man_X_{i:02d}" + ("_sephirot68" if i >= 5 else ""))
     for i in range(1, 5):
@@ -192,13 +240,26 @@ def build(out: Path) -> None:
         add("Other", f"OTHER_{i:03d}")
     add("Other", "OTHER_DBZ01", "blink", 12)
     add("Other", "OTHER_SCROLL_Xmen01", "scroll", 48)
+    # web-smoke's Smooth motion "already smooth" case (SMOOTH_STEADY).
+    add("Other", "OTHER_SCROLL_The_Oluk_Squid_Game", "scroll1")
     for t in ARCADE:
         add("Arcade", f"ARCADE_{t}_01")
         add("Arcade", f"ARCADE_{t}_02")
+    for i in range(1, ARCADE_BIG + 1):
+        add("Arcade", f"ARCADE_Noise_{i:02d}", "noisy", in_list=False)
+    for i in range(1, FILLER + 1):
+        add("Consoles", f"zz_row_{i:04d}", "filler", in_list=False)
+    # A screenful (10+ rows) in Computers, and several in Pinball_Short:
+    # web-smoke's thumbnail load checks draw a whole screen of each, the
+    # second after scrolling 1,440 px into it.
     for t in COMPUTERS:
         add("Computers", t)
+        for v in (2, 3):
+            add("Computers", f"{t}_{v:02d}")
     for t in PINBALL:
         add("Pinball_Short", f"PINBALL_{t}")
+        for v in range(2, 13):
+            add("Pinball_Short", f"PINBALL_{t}_{v:02d}")
     add("logos", "RePlay")
     add("logos", "RGB-Pi")
     hall = [add("Halloween", n, in_list=False) for n in HALLOWEEN]
@@ -224,7 +285,7 @@ def build(out: Path) -> None:
     (out / "filelist.xmas").write_text("".join(p + "\n" for p in xmas))
     # The retired pre-rendered format's playlist: ignored, never listed.
     (out / "filelist.odm.txt").write_text("/odm/Consoles/00/SNES_Asterix01.odm\n")
-    print(f"{out}: {len(listed) + len(hall) + len(xmas)} GIFs, {len(listed)} in filelist.txt")
+    print(f"{out}: {sum(1 for _ in gifs.rglob('*.gif'))} GIFs, {len(listed)} in filelist.txt")
 
 
 def convert(root: Path) -> None:
