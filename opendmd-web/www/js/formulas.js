@@ -530,11 +530,12 @@ function editor() {
   const hex = () => { const v = kp.value, w = pend.was, x = w.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w) ? x.toUpperCase() : x; };
   const open = () => { if (!pend && kt) { const was = ta.value.slice(kt.s, kt.e); pend = { s: kt.s, e: kt.e, was, now: was }; } };
   // The pick in, unless the text under it changed meanwhile (a `use` line pasted): then dropped.
-  const picked = () => { if (!pend) return; if (ta.value.slice(pend.s, pend.e) !== pend.now) { pend = null; return; } pend.now = hex(); put(pend, pend.now, true); };
+  // (Tried with peek(): the text is left as it was until the pick lands.)
+  const picked = () => { if (!pend) return; if (ta.value.slice(pend.s, pend.e) !== pend.was) { pend = null; peek(); return; } pend.now = hex(); peek(ta.value.slice(0, pend.s) + pend.now + ta.value.slice(pend.e)); };
   function done() {
     const p = pend;
     pend = null;
-    if (p && p.now !== p.was && ta.value.slice(p.s, p.e) === p.now) { put(p, p.was, true); if (!touch) ta.focus({ preventScroll: true }); put(p, p.now); }
+    if (p && p.now !== p.was && ta.value.slice(p.s, p.e) === p.was) { if (!touch) ta.focus({ preventScroll: true }); put(p, p.now); } else if (p) peek();
     swatch();
   }
   const away = () => setTimeout(() => { const f = document.activeElement; if (pend && f && f !== document.body && f !== kp && f !== ta) done(); else swatch(); });
@@ -722,18 +723,25 @@ function editor() {
   // text), Alt+↑↓ at the caret, and on touch the strip under the code.
   // Edits go through insertText so the browser's undo has them.
   const at = (pos) => toks.find((t) => t.s <= pos && pos <= t.e);
-  function put(t, text, quiet) {
-    // Focused: as typing (the browser's undo keeps it); not (a phone's strip
-    // with the keyboard down), or mid-drag: straight in, no keyboard popping up.
-    if (document.activeElement === ta && !quiet) {
-      ta.setSelectionRange(t.s, t.e);
-      document.execCommand('insertText', false, text);
-    } else {
-      ta.setRangeText(text, t.s, t.e, 'end');
-      ta.dispatchEvent(new Event('input'));
-    }
+  // Always as typed (the browser's undo keeps it: setRangeText would wipe
+  // its history). Not focused (a phone's strip, a picker): focused for it
+  // with no keyboard (inputmode none), then back where focus was.
+  function put(t, text) {
+    const f = document.activeElement, away = f !== ta;
+    if (away) { ta.inputMode = 'none'; ta.focus({ preventScroll: true }); }
+    ta.setSelectionRange(t.s, t.e);
+    document.execCommand('insertText', false, text);
     t.e = t.s + text.length;
     ta.setSelectionRange(t.e, t.e);
+    if (away) { if (f && f !== document.body) f.focus({ preventScroll: true }); else ta.blur(); ta.inputMode = ''; }
+  }
+  // A text tried without touching the textarea (a number dragged, a colour
+  // or a stroke picked: each lands once, with put()): drawn in the code and
+  // played. peek() goes back to the text as it is.
+  function peek(src) {
+    if (src == null) { paint(); if (good) play(pv, live, info(good)); return; }
+    hl.innerHTML = marks(src).html + '\n';
+    if (T(() => P.compile(src), false)) { hold(src); const f = { ...live, src }; play(pv, f, info(src)); PS?.follow(f); }
   }
   // Below zero is fine (a minus that would make `--`, a comment, gets brackets).
   function fmt(t, v, d) {
@@ -777,7 +785,7 @@ function editor() {
   let SP = null;
   function blocks() {
     if (SP) return SP.caret?.();
-    if (/^[ \t]*(sprite[ \t]+\w+[ \t]*\{|palette[ \t]+\w+[ \t]*=)/m.test(ta.value)) SP = import('./fsprite.js').then((m) => { SP = m.blocks({ ta, put, measure, row }); SP.caret(); }, () => { SP = null; });
+    if (/^[ \t]*(sprite[ \t]+\w+[ \t]*\{|palette[ \t]+\w+[ \t]*=)/m.test(ta.value)) SP = import('./fsprite.js').then((m) => { SP = m.blocks({ ta, put, peek, measure, row }); SP.caret(); }, () => { SP = null; });
   }
   ta.addEventListener('blur', away);
   // Back in the text: the pick so far goes in as one undo step.
@@ -860,6 +868,7 @@ function editor() {
   let drag = null;
   function dragFrom(t, e) {
     drag = { t, x0: e.clientX, was: ta.value.slice(t.s, t.e), v0: num0(t), d: decs(t), moved: false, id: e.pointerId, el: e.currentTarget };
+    drag.now = drag.was;
   }
   function dragMove(e) {
     if (!drag || e.pointerId !== drag.id) return false;
@@ -871,7 +880,7 @@ function editor() {
     }
     const step = (drag.d ? 10 ** -drag.d : 1) * (e.shiftKey ? 10 : 1);
     const text = fmt(drag.t, drag.v0 + Math.round(dx / 4) * step, drag.d);
-    if (text !== ta.value.slice(drag.t.s, drag.t.e)) put(drag.t, text, true);
+    if (text !== drag.now) { drag.now = text; peek(ta.value.slice(0, drag.t.s) + text + ta.value.slice(drag.t.e)); }
     if (drag.el === pad) pad.setAttribute('aria-valuenow', val.textContent = text);
     return true;
   }
@@ -886,13 +895,8 @@ function editor() {
   });
   const end = (e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    if (drag.moved) {
-      // One undo step for the whole drag: back to where it started, then the result as typed.
-      const t = drag.t, now = ta.value.slice(t.s, t.e);
-      put(t, drag.was, true);
-      ta.focus({ preventScroll: true });
-      put(t, now);
-    }
+    // One undo step for the whole drag: what it came to, typed in once.
+    if (drag.moved) { if (drag.now !== drag.was) { if (drag.el !== pad) ta.focus({ preventScroll: true }); put(drag.t, drag.now); } else peek(); }
     drag = null;
     scrubbable();
   };

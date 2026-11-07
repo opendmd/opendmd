@@ -23,11 +23,14 @@ const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join
 // A colour picked, written as the one it replaces was: #rgb when it fits, upper case kept.
 const as = (v, w) => { const x = w?.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w || '') ? x.toUpperCase() : x; };
 
-// The sprite blocks: {k: 's', name, s, e (the block), key {s, e, le, ents [{ch, v}]},
-// rows [{s, e, le, t}] (the text of each, its line's end), ind}.
+// The sprite blocks, to a `}` alone on its line: {k: 's', name, s, e (the
+// block), key {s, e, le, ents [{ch, v}]}, rows [{s, e, le, t}] (the text of
+// each, its line's end), ind, ok}; `ok` only with a key, at most 32 rows of
+// at most 64 of its characters (else not this editor's: the compiler says
+// what is wrong).
 function sprites(s) {
   const out = [];
-  for (const b of s.matchAll(/^([ \t]*)sprite[ \t]+(\w+)[ \t]*\{[^\n]*\n([\s\S]*?)^[ \t]*\}/gm)) {
+  for (const b of s.matchAll(/^([ \t]*)sprite[ \t]+(\w+)[ \t]*\{[^\n]*\n([\s\S]*?)^[ \t]*\}[ \t]*(?:(?:--|\/\/)[^\n]*)?$/gm)) {
     const o = { k: 's', name: b[2], s: b.index, e: b.index + b[0].length, key: null, rows: [] };
     let at = b.index + b[0].indexOf('\n') + 1;
     for (const line of b[3].split('\n').slice(0, -1)) {
@@ -36,6 +39,8 @@ function sprites(s) {
       else if (r) o.rows.push({ s: a, e: a + r.length, le, t: r });
       at += line.length + 1;
     }
+    const ks = new Set(o.key?.ents.map((k) => k.ch));
+    o.ok = !!o.key && o.rows.length <= 32 && o.rows.every((r) => r.t.length <= 64 && [...r.t].every((c) => ks.has(c)));
     o.ind = o.rows[0] ? s.slice(s.lastIndexOf('\n', o.rows[0].s - 1) + 1, o.rows[0].s) : b[1] + '  ';
     out.push(o);
   }
@@ -95,7 +100,8 @@ function palText(s, o, L) {
   const ed = [], n = o.ents.length, m = L.length, tx = (x) => (x.lab ? x.lab + ' ' : '') + x.hex;
   for (let i = 0; i < Math.min(n, m); i++) ed.push([o.ents[i].s, o.ents[i].e, tx(L[i])]);
   if (m > n) ed.push([o.ents[n - 1].e, o.ents[n - 1].e, L.slice(n).map((x) => ', ' + tx(x)).join('')]);
-  if (m < n) ed.push([o.ents[m - 1].e, o.ents[n - 1].e, '']);
+  // (Their comments kept, each on its line.)
+  if (m < n) ed.push([o.ents[m - 1].e, o.ents[n - 1].e, s.slice(o.ents[m - 1].e, o.ents[n - 1].e).split('\n').map((l, k) => { const c = l.match(/(--|\/\/).*/)?.[0]; return c ? (k ? '\n' + l.match(/^[ \t]*/)[0] : ' ') + c : ''; }).join('')]);
   return apply(s, ed);
 }
 
@@ -110,9 +116,11 @@ const CSS = `#psi-blk{position:absolute;z-index:2;min-height:24px;padding:0 8px;
 .psi-pes{display:flex;flex-wrap:wrap;gap:6px}.psi-pe{display:flex;align-items:center;gap:4px;padding:3px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg3)}
 .psi-pe input[type=color]{touch-action:none;cursor:grab}.psi-pe input[type=text]{width:88px;padding:4px 6px}.psi-pe.drag{opacity:.6;outline:2px dashed var(--acc)}.psi-pe .n{min-width:20px;color:var(--mut);font-size:12px;text-align:right}`;
 
-// The editor's half (`kit`: {ta, put(t, text, quiet), measure(), row(src):
-// a scratch formula's top row, RGB, or null}): `caret()` after the caret
-// moves or the text changes.
+// The editor's half (`kit`: {ta, put(t, text): typed in, one undo step,
+// peek(src): a text tried in the code and the preview without touching
+// the textarea (peek() back to it), measure(), row(src): a scratch
+// formula's top row, RGB, or null}): `caret()` after the caret moves or the
+// text changes.
 export function blocks(kit) {
   const { ta } = kit;
   document.head.append(h('style', CSS));
@@ -121,33 +129,30 @@ export function blocks(kit) {
   ta.parentElement.append(btn);
   let cur = null, self = false, sync = null, dlg = null;
 
-  // The text made `t`: live (`was` null: straight in, no undo step), or as one
-  // undo step from `was` (the text as the gesture began): back to it, then
-  // the change typed in, the text focused for it (no phone keyboard).
-  function write(t, was) {
+  // A gesture's text tried while it lasts (`peek`), then in once (`land`):
+  // one undo step each, counted for the dialog's own Undo.
+  let steps = 0, undoB = null;
+  const peek = (t) => { kit.peek(t); peeked = t != null; };
+  let peeked = false;
+  function land(t) {
+    const d = diff(ta.value, t);
+    if (!d) { if (peeked) peek(); return; }
     self = true;
-    try {
-      if (was == null) { const d = diff(ta.value, t); if (d) kit.put({ s: d[0], e: d[1] }, d[2], true); return; }
-      const b = diff(ta.value, was);
-      if (b) kit.put({ s: b[0], e: b[1] }, b[2], true);
-      const d = diff(was, t);
-      if (!d) return;
-      const back = document.activeElement;
-      ta.inputMode = 'none';
-      ta.focus({ preventScroll: true });
-      kit.put({ s: d[0], e: d[1] }, d[2]);
-      back?.focus?.({ preventScroll: true });
-      ta.inputMode = '';
-    } finally { self = false; }
+    try { kit.put({ s: d[0], e: d[1] }, d[2]); } finally { self = false; }
+    peeked = false;
+    steps++;
+    if (undoB) undoB.disabled = false;
   }
-  // The browser's undo, from the editor's button (a phone has no Ctrl+Z).
+  // The browser's undo of the dialog's own steps, from its button (a phone has no Ctrl+Z).
   function undo() {
+    if (!steps) return;
     const back = document.activeElement;
     ta.inputMode = 'none';
     ta.focus({ preventScroll: true });
     document.execCommand('undo');
     back?.focus?.({ preventScroll: true });
     ta.inputMode = '';
+    undoB.disabled = !--steps;
   }
   // The text changed by someone else (typing, an undo): the open editor reads it again.
   ta.addEventListener('input', () => { if (!self && sync && dlg?.isConnected) sync(); });
@@ -164,35 +169,40 @@ export function blocks(kit) {
   // The button: at the end of the first line of the block the caret is in.
   function caret() {
     const f = document.activeElement, p = ta.selectionStart, s = ta.value;
-    cur = f === ta || f === btn ? [...sprites(s), ...palettes(s)].find((o) => o.s <= p && p <= o.e && (o.k == 's' ? o.key : !o.bad)) : null;
+    cur = f === ta || f === btn ? [...sprites(s), ...palettes(s)].find((o) => o.s <= p && p <= o.e && (o.k == 's' ? o.ok : !o.bad)) : null;
     if ((btn.hidden = !cur)) return;
-    const l = s.slice(0, cur.s).split('\n'), first = code(s.slice(cur.s, lineEnd(s, cur.s))).trimEnd(), st = getComputedStyle(ta);
+    const row = s.slice(0, cur.s).split('\n').length - 1, line = s.slice(cur.s, lineEnd(s, cur.s)), st = getComputedStyle(ta);
     let col = 0;
-    for (const c of l.at(-1) + first) col += c === '\t' ? 2 - (col % 2) : 1;
+    for (const c of line) col += c === '\t' ? 2 - (col % 2) : 1;
     clear(btn, cur.k == 's' ? 'Edit the picture' : [mini, 'Edit the palette']);
     if (cur.k == 'p') { const k = cur.ents.map((x) => x.hex).join(), rgb = k !== miniOf && strip(cur, cur.ents); if (rgb) { paint(mini, rgb); miniOf = k; } }
-    const lh = parseFloat(st.lineHeight);
-    btn.style.left = `${Math.max(0, Math.min(ta.clientLeft + parseFloat(st.paddingLeft) + (col + 2) * kit.measure() - ta.scrollLeft, ta.clientWidth - btn.offsetWidth))}px`;
-    btn.style.top = `${ta.clientTop + parseFloat(st.paddingTop) + (l.length - 1) * lh + (lh - btn.offsetHeight) / 2}px`;
+    // Past the line's end, as the colour swatch is (js/formulas.js): beside it
+    // when the caret is in a colour on this line, past it or else before it.
+    const lh = parseFloat(st.lineHeight), x = ta.clientLeft + parseFloat(st.paddingLeft) + (col + 1) * kit.measure() - ta.scrollLeft, w = ta.clientWidth, bw = btn.offsetWidth;
+    const kw = touch() ? 44 : 32, kl = Math.max(0, Math.min(x, w - kw)), on = [...line.matchAll(/#[\da-f]{3}([\da-f]{3})?\b/gi)].some((m) => cur.s + m.index <= p && p <= cur.s + m.index + m[0].length);
+    btn.style.left = `${on ? (kl + kw + 8 + bw <= w ? kl + kw + 8 : Math.max(0, kl - bw - 8)) : Math.max(0, Math.min(x, w - bw))}px`;
+    btn.style.top = `${ta.clientTop + parseFloat(st.paddingTop) + row * lh + (lh - btn.offsetHeight) / 2}px`;
   }
   function open(o) {
     const r = btn.getBoundingClientRect();
+    steps = 0;
     dlg = o.k == 's' ? picture(o) : palette(o);
     popup(dlg, r.left, r.bottom + 4);
-    dlg.onclose = () => { sync = dlg = null; };
+    // Closed mid-gesture (Escape): the gesture is dropped, the text as it was.
+    dlg.onclose = () => { dlg.cancel?.(); if (peeked) peek(); sync = dlg = null; };
   }
-  const foot = (...x) => h('div.row.acts', ...x, h('button.sm', { id: 'psi-blk-undo', onclick: undo }, 'Undo'), h('button.sm.pri', { onclick: closeMenu }, 'Done'));
+  const foot = (...x) => h('div.row.acts', ...x, undoB = h('button.sm', { id: 'psi-blk-undo', disabled: true, onclick: undo }, 'Undo'), h('button.sm.pri', { onclick: closeMenu }, 'Done'));
 
   // --- A sprite's picture.
   function picture(o0) {
     const name = o0.name, grid = h('div.psi-grid'), cv = h('canvas', { id: 'psi-pic' }), keys = h('div.psi-keys', { role: 'group', 'aria-label': 'Paint with' });
-    const size = h('span.cap', { id: 'psi-pic-size' });
+    const size = h('span.cap', { id: 'psi-pic-size' }), el0 = h('div.menu.wide.psi-big', { id: 'psi-pic-ed', role: 'dialog' });
     grid.append(cv);
     let o = o0, rows = [], W = 0, H = 0, cs = 20, pick = null, map = {}, empty = '.';
     // The key: each character's colour (a number's a gray; 0 is see-through).
     function read() {
       o = find(ta.value, 's', name);
-      if (!o?.key) { closeMenu(); return false; }
+      if (!o?.ok) { closeMenu(); return false; }
       const ents = o.key.ents, hi = Math.max(1, ...ents.map((k) => +k.v || 0));
       map = {};
       for (const k of ents) map[k.ch] = HEX.test(k.v) ? six(k.v) : +k.v ? `rgb(${Array(3).fill(Math.round(255 * Math.min(1, +k.v / hi))).join()})` : null;
@@ -204,20 +214,19 @@ export function blocks(kit) {
       if (!(pick in map)) pick = ents.find((k) => map[k.ch])?.ch ?? empty;
       return true;
     }
+    // A cell: its colour, or a checker for see-through.
+    function px(g, u, v) {
+      const k = map[rows[v][u]];
+      if (k) { g.fillStyle = k; g.fillRect(u * cs, v * cs, cs, cs); } else for (let q = 0; q < 4; q++) { g.fillStyle = (q + (q >> 1)) & 1 ? '#2a2a2a' : '#555'; g.fillRect(u * cs + (q & 1) * cs / 2, v * cs + (q >> 1) * cs / 2, cs / 2, cs / 2); }
+      g.strokeStyle = '#0006'; g.strokeRect(u * cs + 0.5, v * cs + 0.5, cs - 1, cs - 1);
+    }
     function draw() {
       cs = touch() ? 22 : Math.max(14, Math.min(28, Math.floor(700 / W)));
       const d = devicePixelRatio || 1, g = cv.getContext('2d');
       cv.width = W * cs * d; cv.height = H * cs * d;
       cv.style.width = `${W * cs}px`; cv.style.height = `${H * cs}px`;
       g.scale(d, d);
-      for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) {
-        const c = rows[v][u], k = map[c];
-        if (k) { g.fillStyle = k; g.fillRect(u * cs, v * cs, cs, cs); } else {
-          for (let q = 0; q < 4; q++) { g.fillStyle = (q + (q >> 1)) & 1 ? '#2a2a2a' : '#555'; g.fillRect(u * cs + (q & 1) * cs / 2, v * cs + (q >> 1) * cs / 2, cs / 2, cs / 2); }
-          if (!(c in map)) { g.fillStyle = '#e55'; g.font = `bold ${cs * 0.6}px monospace`; g.textAlign = 'center'; g.fillText(c, u * cs + cs / 2, v * cs + cs * 0.72); }
-        }
-        g.strokeStyle = '#0006'; g.strokeRect(u * cs + 0.5, v * cs + 0.5, cs - 1, cs - 1);
-      }
+      for (let v = 0; v < H; v++) for (let u = 0; u < W; u++) px(g, u, v);
       size.textContent = `${W} × ${H}`;
       cv.setAttribute('aria-label', `The picture, ${W} by ${H}`);
       for (const [b, n] of [[addC, W >= 64], [delC, W <= 1], [addR, H >= 32], [delR, H <= 1]]) b.disabled = n;
@@ -232,7 +241,7 @@ export function blocks(kit) {
       if (!read()) return;
       const ch = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz*+=%&@$'].find((c) => !(c in map) && !rows.some((r) => r.includes(c)));
       if (!ch) return;
-      write(spriteText(ta.value, o, rows, `, ${ch} ${v}`), ta.value);
+      land(spriteText(ta.value, o, rows, `, ${ch} ${v}`));
       read(); pick = ch; swatches(); draw();
     }
     // Rows and columns: added (see-through, or the key's first) or taken away, at the bottom and the right.
@@ -240,42 +249,43 @@ export function blocks(kit) {
       if (!read()) return;
       let r = rows.map((x) => (dw > 0 ? x + empty : dw < 0 ? x.slice(0, -1) : x));
       if (dh > 0) r.push(empty.repeat(r[0].length)); else if (dh < 0) r = r.slice(0, -1);
-      write(spriteText(ta.value, o, r), ta.value);
+      land(spriteText(ta.value, o, r));
       read(); draw();
     };
     const addC = h('button.sm', { id: 'psi-pic-c+', onclick: () => resize(1, 0) }, '+ Column'), delC = h('button.sm', { id: 'psi-pic-c-', onclick: () => resize(-1, 0) }, '− Column');
     const addR = h('button.sm', { id: 'psi-pic-r+', onclick: () => resize(0, 1) }, '+ Row'), delR = h('button.sm', { id: 'psi-pic-r-', onclick: () => resize(0, -1) }, '− Row');
-    // A stroke: each cell as it is reached (live), one undo step at the end.
+    // A stroke: each cell as it is reached (tried, the text untouched), in as one undo step at the end.
     let stroke = null;
+    el0.cancel = () => { stroke = null; };
     const cell = (e) => { const b = cv.getBoundingClientRect(); return [Math.floor((e.clientX - b.left) / cs), Math.floor((e.clientY - b.top) / cs)]; };
     function dab(e) {
       const [u, v] = cell(e);
       if (u < 0 || v < 0 || u >= W || v >= H || rows[v][u] === pick) return;
       rows[v] = rows[v].slice(0, u) + pick + rows[v].slice(u + 1);
-      write(spriteText(ta.value, find(ta.value, 's', name), rows));
-      draw();
+      peek(spriteText(ta.value, o, rows));
+      px(cv.getContext('2d'), u, v);
     }
     cv.onpointerdown = (e) => {
       if (grid.classList.contains('pan') && e.pointerType == 'touch' || e.button) return;
       if (!read()) return;
       e.preventDefault();
       cv.setPointerCapture(e.pointerId);
-      stroke = { id: e.pointerId, was: ta.value };
+      stroke = { id: e.pointerId };
       dab(e);
     };
     cv.onpointermove = (e) => { if (stroke?.id === e.pointerId) dab(e); };
     cv.onpointerup = cv.onpointercancel = (e) => {
       if (stroke?.id !== e.pointerId) return;
-      const was = stroke.was;
       stroke = null;
-      write(ta.value, was);
+      land(spriteText(ta.value, o, rows));
+      read();
     };
     sync = () => { if (!stroke && read()) { swatches(); draw(); } };
     const pan = touch() && h('button.sm', { 'aria-pressed': 'false', onclick: (e) => { const on = grid.classList.toggle('pan'); e.currentTarget.ariaPressed = String(on); } }, 'Scroll');
     read();
     swatches();
-    const el = h('div.menu.wide.psi-big', { id: 'psi-pic-ed', role: 'dialog', 'aria-label': `The picture of ${name}` }, h('div.mh', `The picture of ${name}`),
-      keys, grid, h('div.row', size, addC, delC, addR, delR, pan),
+    const el = Object.assign(el0, { ariaLabel: `The picture of ${name}` });
+    el.append(h('div.mh', `The picture of ${name}`), keys, grid, h('div.row', size, addC, delC, addR, delR, pan),
       h('p.cap', touch() ? 'Pick a character from the key, then tap or drag on the picture. Scroll moves the picture instead.' : 'Pick a character from the key, then click or drag on the picture.'), foot());
     draw();
     return el;
@@ -295,7 +305,7 @@ export function blocks(kit) {
       cv.dataset.rgb = rgb ? Array.from(rgb).join() : '';
       clear(ticks, L.map((x, i) => h('i', { style: `left:${L.length > 1 ? (i * 100) / (L.length - 1) : 0}%` })));
     }
-    const commit = (was) => { write(palText(ta.value, find(ta.value, 'p', name), L), was); if (read()) { show(); chips(); } };
+    const commit = () => { land(palText(ta.value, o, L)); if (read()) { show(); chips(); } };
     // (On the window: the chip moved in the list loses the pointer's capture.)
     let drag = null;
     function move(e) {
@@ -306,27 +316,27 @@ export function blocks(kit) {
       const t = document.elementsFromPoint(e.clientX, e.clientY).find((n) => n.classList?.contains('psi-pe') && n !== d.c), all = [...list.children];
       if (t) list.insertBefore(d.c, all.indexOf(t) > all.indexOf(d.c) ? t.nextSibling : t);
     }
+    const off = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
     function up(e) {
       const d = drag;
       if (d?.id !== e.pointerId) return;
-      removeEventListener('pointermove', move);
-      removeEventListener('pointerup', up);
-      removeEventListener('pointercancel', up);
+      off();
       setTimeout(() => { if (drag === d) drag = null; });
       if (!d.moved) return;
       const order = [...list.querySelectorAll('.psi-pe')].map((n) => +n.dataset.i);
-      if (order.some((j, q) => j !== q)) { L = order.map((j) => L[j]); commit(ta.value); } else chips();
+      if (order.some((j, q) => j !== q)) { L = order.map((j) => L[j]); commit(); } else chips();
     }
     function chips() {
       clear(list, L.map((x, i) => {
-        let was = null;
+        // (A pick tried while the picker is open, in once on its change.)
         const w0 = x.hex, k = h('input', { type: 'color', value: six(x.hex), 'aria-label': `Colour ${i + 1}${x.lab ? ', ' + x.lab : ''}: drag to move it`, title: 'Tap to change it, drag to move it',
-          onclick: (e) => { if (drag?.moved) e.preventDefault(); else was = ta.value; },
-          oninput: () => { if (was == null) was = ta.value; L[i].hex = as(k.value, w0); write(palText(ta.value, find(ta.value, 'p', name), L)); show(); },
-          onchange: () => { if (was != null) { const w = was; was = null; L[i].hex = as(k.value, w0); commit(w); } } });
+          onclick: (e) => { if (drag?.moved) e.preventDefault(); },
+          oninput: () => { if (!dlg) return; L[i].hex = as(k.value, w0); peek(palText(ta.value, o, L)); show(); },
+          onchange: () => { if (!dlg) return; L[i].hex = as(k.value, w0); commit(); } });
         const lab = h('input', { type: 'text', value: x.lab, placeholder: 'name', maxLength: 24, 'aria-label': `Name of colour ${i + 1}`,
-          onchange: () => { const v = lab.value.trim(); if (v && !/^[A-Za-z_]\w*$/.test(v)) { lab.value = x.lab; return; } L[i].lab = v; commit(ta.value); } });
-        const del = h('button.sm', { type: 'button', 'aria-label': `Remove colour ${i + 1}`, disabled: L.length < 2, onclick: () => { L.splice(i, 1); commit(ta.value); } }, '×');
+          // (Not `n` or `step`, the palette's own, nor another colour's name.)
+          onchange: () => { const v = lab.value.trim(); if (v && (!/^[A-Za-z_]\w*$/.test(v) || v == 'n' || v == 'step' || L.some((y, j) => j != i && y.lab == v))) { lab.value = x.lab; return; } L[i].lab = v; commit(); } });
+        const del = h('button.sm', { type: 'button', 'aria-label': `Remove colour ${i + 1}`, disabled: L.length < 2, onclick: () => { L.splice(i, 1); commit(); } }, '×');
         const c = h('div.psi-pe', { 'data-i': i }, h('span.n', i + 1), k, lab, del);
         // Dragged (6 px), it moves along the list; let go, the palette is in that order.
         k.onpointerdown = (e) => {
@@ -337,13 +347,13 @@ export function blocks(kit) {
           addEventListener('pointercancel', up);
         };
         return c;
-      }), h('button.sm', { id: 'psi-pal-add', type: 'button', disabled: L.length >= 32, onclick: () => { L.push({ lab: '', hex: L.at(-1).hex }); commit(ta.value); try { list.querySelectorAll('input[type=color]')[L.length - 1]?.showPicker?.(); } catch { /* not allowed now: a tap on it opens it */ } } }, '+ Colour'));
+      }), h('button.sm', { id: 'psi-pal-add', type: 'button', disabled: L.length >= 32, onclick: () => { L.push({ lab: '', hex: L.at(-1).hex }); commit(); try { list.querySelectorAll('input[type=color]')[L.length - 1]?.showPicker?.(); } catch { /* not allowed now: a tap on it opens it */ } } }, '+ Colour'));
     }
     sync = () => { if (!drag && read()) { show(); chips(); } };
     read();
     show();
     chips();
-    return h('div.menu.wide.psi-big', { id: 'psi-pal-ed', role: 'dialog', 'aria-label': `The palette ${name}` }, h('div.mh', `The palette ${name}`),
+    return h('div.menu.wide.psi-big', { id: 'psi-pal-ed', role: 'dialog', 'aria-label': `The palette ${name}`, cancel: () => { off(); drag = null; } }, h('div.mh', `The palette ${name}`),
       h('div.psi-strip2', cv), ticks, note, list,
       h('p.cap', 'The strip is the palette as the panel reads it, pal(' + name + ', x) from left to right. Tap a colour to change it, drag it to move it.'), foot());
   }

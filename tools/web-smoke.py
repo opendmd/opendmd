@@ -4283,12 +4283,13 @@ def psi_colour_checks(page: Page) -> None:
     page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new Event('click'));
         k.value = '#ff8000'; k.dispatchEvent(new Event('input')); }""")
     page.wait_for_timeout(300)
-    live = page.input_value("#psi-src")
+    # (Live: in the highlighted code and the preview, the text itself untouched until the pick lands.)
+    live = (page.input_value("#psi-src"), page.inner_text(".psi-hl"))
     page.evaluate("() => { const k = document.querySelector('#psi-kp'); k.value = '#40c0ff'; k.dispatchEvent(new Event('input')); k.dispatchEvent(new Event('change')); }")
     page.wait_for_timeout(400)
     got = page.input_value("#psi-src")
-    check(live == src.replace("#220a36", "#ff8000") and got == src.replace("#220a36", "#40c0ff") and page.get_attribute("#psi-ed", "data-err") is None,
-          f"formulas: a colour picked goes in its place, live and on change ({got!r})")
+    check(live[0] == src and "#ff8000" in live[1] and got == src.replace("#220a36", "#40c0ff") and page.get_attribute("#psi-ed", "data-err") is None,
+          f"formulas: a colour picked shows in its place live and goes in on change ({got!r})")
     page.keyboard.press("Control+z")
     page.wait_for_timeout(300)
     check(page.input_value("#psi-src") == src, f"formulas: one undo puts the colour back ({page.input_value('#psi-src')!r})")
@@ -4466,6 +4467,73 @@ def psi_typing_checks(page: Page) -> None:
 HEART = "sprite heart {\n  key . 0, R #e24\n  .R.R.\n  RRRRR\n  .RRR.\n  ..R..\n}\ndraw { spr(heart, 60, 12) }"
 
 
+def undos(page: Page, n: int) -> list[str]:
+    """The text after each of `n` Ctrl+Z in the code."""
+    page.focus("#psi-src")
+    out = []
+    for _ in range(n):
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(250)
+        out.append(page.input_value("#psi-src"))
+    return out
+
+
+def typed_first(page: Page, src: str) -> str:
+    """`src`, then typed at its end (a step of the browser's undo of its own)."""
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(300)
+    page.focus("#psi-src")
+    page.keyboard.press("Control+End")
+    page.keyboard.type("\n-- typed")
+    page.wait_for_timeout(400)
+    return page.input_value("#psi-src")
+
+
+def psi_undo_checks(page: Page) -> None:
+    """Every gesture is one step of the browser's undo and leaves the steps
+    before it alone (nothing rewrites the text behind the undo's back): two
+    number drags, two colour picks, two sprite strokes each take two undos,
+    and what was typed before them is still undone after."""
+    t = typed_first(page, "gray(x*0.5)")
+    scrub(page, 0, 8, 40)
+    one = page.input_value("#psi-src")
+    scrub(page, 0, 8, 40)
+    two = page.input_value("#psi-src")
+    u = undos(page, 3)
+    check(t != one != two and u[0] == one and u[1] == t and u[2] != t and "-- typed" not in u[2],
+          f"undo: two number drags are two undos, and the typing before them still undoes ({[t, one, two, *u]})")
+    src = "palette p = #000, #f80, #fff\npal(p, x)"
+    t = typed_first(page, src)
+    picks = []
+    for colour, to in (("#f80", "#00ff00"), ("#fff", "#0000ff")):
+        page.focus("#psi-src")
+        at = t.index(colour) + 1
+        page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+        page.wait_for_timeout(200)
+        page.evaluate(f"""() => {{ const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new Event('click'));
+            k.value = '{to}'; k.dispatchEvent(new Event('input')); k.dispatchEvent(new Event('change')); }}""")
+        page.wait_for_timeout(300)
+        picks.append(page.input_value("#psi-src"))
+    u = undos(page, 3)
+    check(picks == [t.replace("#f80", "#0f0"), t.replace("#f80", "#0f0").replace("#fff", "#00f")] and u[0] == picks[0] and u[1] == t and "-- typed" not in u[2],
+          f"undo: two colour picks are two undos, and the typing before them still undoes ({[*picks, *u]})")
+    t = typed_first(page, HEART)
+    caret_at(page, t.index("key") + 1)
+    page.click("#psi-blk")
+    page.wait_for_selector("#psi-pic-ed", timeout=5000)
+    off = page.get_attribute("#psi-blk-undo", "disabled") is not None
+    strokes = []
+    for u_, v_ in ((0, 0), (0, 3)):
+        x, y = pic_cell(page, u_, v_)
+        page.mouse.click(x, y)
+        page.wait_for_timeout(300)
+        strokes.append(page.input_value("#psi-src"))
+    page.keyboard.press("Escape")
+    u = undos(page, 3)
+    check(off and strokes[0] == t.replace(".R.R.", "RR.R.") and strokes[1] == strokes[0].replace("  ..R..\n}", "  R.R..\n}") and u[0] == strokes[0] and u[1] == t and "-- typed" not in u[2],
+          f"undo: two strokes are two undos, the typing before them still undoes, the dialog's Undo starts off ({off}, {[*strokes, *u]})")
+
+
 def caret_at(page: Page, at: int) -> None:
     page.focus("#psi-src")
     page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
@@ -4599,6 +4667,45 @@ def psi_sprite_checks(page: Page) -> None:
     check(got == neon.replace("black #000, #05020c,", "black #000, night #05020c,") and page.get_attribute("#psi-ed", "data-err") is None,
           f"palettes: a colour named goes in, the lines kept ({got[got.index('palette'):got.index('palette') + 80]!r})")
     page.keyboard.press("Escape")
+    # Refused: a name the palette has (`step`) or another colour's.
+    caret_at(page, neon.index("farTower"))
+    page.click("#psi-blk")
+    page.wait_for_selector("#psi-pal-ed", timeout=5000)
+    before = page.input_value("#psi-src")
+    for v in ("step", "kerb"):
+        lab = page.locator("#psi-pal-list .psi-pe input[type=text]").nth(2)
+        lab.fill(v)
+        lab.press("Enter")
+        page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == before and lab.input_value() == "", f"palettes: a name the palette has or another colour has is refused ({lab.input_value()!r})")
+    page.keyboard.press("Escape")
+    # Taken away across lines: a comment between them stays, on its line.
+    src = "palette p = #000, #f80, -- warm\n  #fff, #0f0\npal(p, x)"
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(400)
+    caret_at(page, 3)
+    page.click("#psi-blk")
+    page.wait_for_selector("#psi-pal-ed", timeout=5000)
+    for _ in range(2):
+        page.locator("#psi-pal-list .psi-pe button").nth(1).click()
+        page.wait_for_timeout(300)
+    got = page.input_value("#psi-src")
+    check(got == "palette p = #000, #0f0 -- warm\npal(p, x)" and page.get_attribute("#psi-ed", "data-err") is None,
+          f"palettes: colours taken away across lines keep the comment between them ({got!r})")
+    # Escape mid-drag: nothing changes, and letting go after it does nothing.
+    a, c = (page.locator("#psi-pal-list .psi-pe input[type=color]").nth(k).bounding_box() for k in (0, 1))
+    page.mouse.move(a["x"] + 10, a["y"] + 10)
+    page.mouse.down()
+    page.mouse.move(c["x"] + 30, c["y"] + 10, steps=6)
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == got and page.locator("#psi-pal-ed").count() == 0, f"palettes: Escape mid-drag drops the drag ({page.input_value('#psi-src')!r})")
+    # An unclosed sprite (its `}` missing): its rows would run into the code after it, so no editor.
+    page.fill("#psi-src", "sprite s {\n  key . 0, X 1\n  .X.\ndraw {\n  dot(1, 1)\n}\ngray(0)")
+    page.wait_for_timeout(400)
+    caret_at(page, 30)
+    check(page.locator("#psi-blk").is_hidden(), "sprites: an unclosed sprite has no picture editor")
 
 
 def unheader(t: str) -> str:
@@ -4742,6 +4849,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(200)
     check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
     psi_colour_checks(page)
+    psi_undo_checks(page)
     psi_sprite_checks(page)
     # A choice: `control name = word, word, …` is a row of buttons (a radio
     # group); the value is the choice's number, and the arrows move it.
