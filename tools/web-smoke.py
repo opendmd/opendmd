@@ -4292,6 +4292,46 @@ def psi_colour_checks(page: Page) -> None:
     page.evaluate("document.querySelector('#psi-src').setSelectionRange(2, 2)")
     page.wait_for_timeout(200)
     check(kp.is_hidden(), "formulas: the caret off a colour hides its picker")
+    # Past its line's end: no text under it (#220a36 is on line 1).
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(300)
+    page.focus("#psi-src")
+    at = src.index("#220a36") + 2
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(200)
+    box, tb = kp.bounding_box(), page.locator("#psi-src").bounding_box()
+    end = tb["x"] + 1 + 8 + cw * len(src.split("\n")[0])
+    check(box["x"] >= end - 1, f"formulas: the picker sits past its line's end ({box['x']:.0f} >= {end:.0f})")
+    # Safari: a click doesn't focus the picker (focus goes to the page); it
+    # stays up and the pick goes in.
+    page.evaluate("""() => { const k = document.querySelector('#psi-kp'), ta = document.querySelector('#psi-src');
+        k.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ta.blur(); }""")
+    page.wait_for_timeout(200)
+    up = kp.is_visible() and page.evaluate("document.activeElement === document.body")
+    page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.dispatchEvent(new Event('click'));
+        k.value = '#123456'; k.dispatchEvent(new Event('input')); k.dispatchEvent(new Event('change')); }""")
+    page.wait_for_timeout(300)
+    check(up and page.input_value("#psi-src") == src.replace("#220a36", "#123456"),
+          f"formulas: a picker that never takes focus stays up and its pick goes in ({up}, {page.input_value('#psi-src')!r})")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == src, f"formulas: and one undo puts it back ({page.input_value('#psi-src')!r})")
+    # Chrome: the picker closed by a click back in the code, its change
+    # after: the pick is in, as one undo step, and the late change is no second edit.
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(200)
+    page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        k.dispatchEvent(new Event('click')); k.value = '#abcdef'; k.dispatchEvent(new Event('input')); }""")
+    page.wait_for_timeout(200)
+    page.mouse.click(tb["x"] + 1 + 8 + cw * 2.5, tb["y"] + 1 + 8 + 21 * 1.5)
+    page.wait_for_timeout(200)
+    page.evaluate("() => document.querySelector('#psi-kp').dispatchEvent(new Event('change'))")
+    page.wait_for_timeout(300)
+    got = page.input_value("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(got == src.replace("#220a36", "#abcdef") and page.input_value("#psi-src") == src,
+          f"formulas: a pick closed by a click in the code goes in, one undo ({got!r}, {page.input_value('#psi-src')!r})")
 
 
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
