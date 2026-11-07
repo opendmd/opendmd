@@ -5408,13 +5408,17 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     opener.context.close()
     # A bundled one: here already, nothing fetched, nothing saved.
     asked.clear()
-    before = sorted(p.name for p in (overlay / "formulas").glob("*"))
+    # (Leaving out the compiled .psb of a Formula on the card itself, which
+    # the panel writes when it first plays it: tools/ci-card.py's ci-test.)
+    card_psb = {p.stem + ".psb" for p in (CARD / "formulas").glob("*.psi")}
+    saved = lambda: sorted(p.name for p in (overlay / "formulas").glob("*") if p.name not in card_psb)
+    before = saved()
     page.goto("about:blank")
     page.goto(base + "/#gallery=starfield")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     star = next(e for e in bundled() if e["name"] == "Starfield")
-    after = sorted(p.name for p in (overlay / "formulas").glob("*"))
+    after = saved()
     check(page.input_value("#psi-src") == star["src"] and not asked and after == before,
           f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, {after})")
     # A name the gallery doesn't have (its 404 expected).
@@ -7188,6 +7192,16 @@ def lib_row(page: Page, path: str) -> None:
     except PlaywrightTimeoutError:
         pass  # the search left the count as it was (a folder of one)
     page.wait_for_selector(sel, timeout=20000)
+    # Click it once the list has stopped moving: the filtered list shrinks
+    # and its scroll settles after the row first shows (on a slow machine a
+    # click aimed at the row then lands on its folder's header, closing it).
+    box, deadline = None, time.time() + 5
+    while time.time() < deadline:
+        now = page.locator(sel).first.bounding_box()
+        if now and now == box:
+            break
+        box = now
+        page.wait_for_timeout(250)
     page.click(sel)
     try:
         page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
