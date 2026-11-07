@@ -5412,7 +5412,14 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     # the panel writes when it first plays it: tools/ci-card.py's ci-test.)
     card_psb = {p.stem + ".psb" for p in (CARD / "formulas").glob("*.psi")}
     saved = lambda: sorted(p.name for p in (overlay / "formulas").glob("*") if p.name not in card_psb)
-    before = saved()
+    # The earlier steps' writes settled first (a compiled .psb lands a moment
+    # after its Formula is saved; on a slow machine, after this started).
+    before, still, deadline = saved(), 0.0, time.time() + 15
+    while still < 1.5 and time.time() < deadline:
+        time.sleep(0.25)
+        now = saved()
+        still = still + 0.25 if now == before else 0.0
+        before = now
     page.goto("about:blank")
     page.goto(base + "/#gallery=starfield")
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
@@ -5420,7 +5427,7 @@ def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) 
     star = next(e for e in bundled() if e["name"] == "Starfield")
     after = saved()
     check(page.input_value("#psi-src") == star["src"] and not asked and after == before,
-          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, {after})")
+          f"remix: a bundled one opens from the panel's own copy, nothing saved ({asked}, new {sorted(set(after) - set(before))}, gone {sorted(set(before) - set(after))})")
     # A name the gallery doesn't have (its 404 expected).
     expected.append("/formulas/src/no-such-formula")
     page.goto("about:blank")
