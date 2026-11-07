@@ -260,14 +260,28 @@ function call(s, c) {
   return null;
 }
 
+// The list (one for the page, whichever editor has it: CUR), kept in place
+// as the page scrolls, closed when it resizes.
+let BOX = null, CUR = null;
+function boxed() {
+  if (BOX) return BOX;
+  BOX = h('div.psi-ac', { id: 'psi-ac', hidden: true, onpointerdown: (e) => e.preventDefault(), onclick: (e) => { const d = e.target.closest('[data-i]'); if (d) CUR?.pick(+d.dataset.i); } });
+  document.body.append(BOX);
+  addEventListener('scroll', () => { if (!BOX.hidden) CUR?.show(); }, { passive: true, capture: true });
+  addEventListener('resize', () => CUR?.close());
+  return BOX;
+}
+
 // `o`: {ta, put(range, text), measure() (a character's width), after (the
 // element the chips go after), touch}.
 export function hint(o) {
   const { ta, touch } = o;
   BUILT ??= NAMES.map((n) => item(n));
-  const box = h('div.psi-ac', { id: 'psi-ac', hidden: true, onpointerdown: (e) => e.preventDefault() });
-  const chips = h('div.psi-chips', { id: 'psi-chips', hidden: true });
-  (touch ? o.after.after(chips) : document.body.append(box));
+  const box = touch ? h('div.psi-chips', { id: 'psi-chips', hidden: true }) : boxed();
+  if (touch) o.after.after(box);
+  // (A combobox's list, for a screen reader: the option chosen, the call's values described.)
+  Object.entries({ 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': box.id }).forEach(([k, v]) => ta.setAttribute(k, v));
+  const desc = ta.getAttribute('aria-describedby') || '';
   let items = [], sel = 0, at = -1, word = '';
   // The name being typed (at the caret, outside comments and quotes), or ''.
   const typed = () => {
@@ -298,19 +312,21 @@ export function hint(o) {
     const s = ta.value, c = ta.selectionStart, f = !items.length && document.activeElement === ta && c === ta.selectionEnd && call(s, c);
     const it = f && [...own(s), ...BUILT].find((x) => x.f && x.n === f.n);
     const tip = it ? `<span class="mono">${sig(it, f.k)}</span>${it.d ? ' ' + esc(it.d) : ''}` : '';
+    if (!touch && CUR !== me) return;
+    box.hidden = !items.length && !tip;
+    ta.setAttribute('aria-expanded', !!items.length);
+    ta.setAttribute('aria-describedby', tip ? `${desc} ${box.id}` : desc);
+    if (items.length) ta.setAttribute('aria-activedescendant', `${box.id}-${sel}`); else ta.removeAttribute('aria-activedescendant');
+    if (box.hidden) return;
+    box.setAttribute('role', items.length ? 'listbox' : 'tooltip');
     if (touch) {
-      clear(chips, items.map((x, i) => h('button.sm.mono', { onpointerdown: (e) => e.preventDefault(), onclick: () => accept(i) }, x.n)));
-      if (tip) chips.append(h('span.cap', { innerHTML: tip }));
-      chips.hidden = !items.length && !tip;
+      clear(box, items.map((x, i) => h('button.sm.mono', { id: `${box.id}-${i}`, role: 'option', 'aria-selected': i === sel, onpointerdown: (e) => e.preventDefault(), onclick: () => accept(i) }, x.n)));
+      if (tip) box.append(h('span.cap', { innerHTML: tip }));
       return;
     }
-    box.hidden = !items.length && !tip;
-    if (box.hidden) return;
-    box.innerHTML = items.length ? items.map((x, i) => `<div role="option" aria-selected="${i === sel}" data-i="${i}"><span class="mono">${esc(x.sig)}</span></div>`).join('') + (items[sel].d ? `<p class="cap">${esc(items[sel].d)}</p>` : '') : `<p class="cap">${tip}</p>`;
-    box.setAttribute('role', items.length ? 'listbox' : 'tooltip');
+    box.innerHTML = items.length ? items.map((x, i) => `<div role="option" id="${box.id}-${i}" aria-selected="${i === sel}" data-i="${i}"><span class="mono">${esc(x.sig)}</span></div>`).join('') + (items[sel].d ? `<p class="cap">${esc(items[sel].d)}</p>` : '') : `<p class="cap">${tip}</p>`;
     place(box);
   }
-  box.addEventListener('click', (e) => { const d = e.target.closest('[data-i]'); if (d) accept(+d.dataset.i); });
   function accept(i) {
     const x = items[i], c = ta.selectionStart, p = word, f = x.f && ta.value[c] !== '(';
     items = [];
@@ -325,6 +341,8 @@ export function hint(o) {
   // closes, the call's values stay.
   function update(t) {
     const c = ta.selectionStart;
+    CUR = me;
+    if (document.activeElement !== ta) return close();
     if (t) {
       word = typed();
       const seen = new Set();
@@ -336,15 +354,21 @@ export function hint(o) {
     } else if (c !== at) items = [];
     show();
   }
-  const close = () => { items = []; at = -1; box.hidden = chips.hidden = true; };
-  addEventListener('scroll', () => { if (!box.hidden) place(box); }, { passive: true, capture: true });
-  return {
-    update, close,
+  function close() {
+    items = [];
+    at = -1;
+    if (touch || CUR === me) box.hidden = true;
+    ta.setAttribute('aria-expanded', false);
+    ta.setAttribute('aria-describedby', desc);
+    ta.removeAttribute('aria-activedescendant');
+  }
+  const me = {
+    update, close, show, pick: accept,
     // A key while the list is open: ↑ ↓ choose, Tab or Enter put it in (Enter
     // goes on as a new line when the name is typed in full), Esc closes it.
     // True when it was the list's.
     key(e) {
-      if (!items.length || e.altKey || e.ctrlKey || e.metaKey) return false;
+      if (!items.length || e.altKey || e.ctrlKey || e.metaKey || e.isComposing || e.keyCode === 229) return false;
       const k = e.key, n = items.length;
       if (k === 'ArrowDown' || k === 'ArrowUp') sel = (sel + (k === 'ArrowDown' ? 1 : n - 1)) % n;
       else if (k === 'Escape') close();
@@ -355,6 +379,7 @@ export function hint(o) {
       return true;
     },
   };
+  return me;
 }
 
 // The cheat sheet: a tap on a name puts it in at the caret.

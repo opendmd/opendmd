@@ -4372,12 +4372,16 @@ def psi_fix_checks(page: Page) -> None:
         page.wait_for_timeout(300)
         got.append((page.input_value("#psi-src"), caret(page)))
     page.fill("#psi-src", "gray(foo)")
-    page.wait_for_selector("#psi-err a.ecode", timeout=5000)
+    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E201'", timeout=5000)
     none = page.locator("#psi-fix").count()
+    # A habit from another language names a whole call (`mix(a, b, k)`): no Fix it.
+    page.fill("#psi-src", "gray(lerp(0, 1, x))")
+    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E202'", timeout=5000)
+    none += page.locator("#psi-fix").count()
     check([g[0] for g in got] == ["gray(sin(x))", "gray(sin())", "gray(0 < x and x < 0.5)", "gray(2 * x)"] and got[1][1] == [9, 9] and none == 0,
-          f"formulas: Fix it for E202, E205 (the caret in the brackets), E218, E005; none without a suggestion ({got}, {none})")
+          f"formulas: Fix it for E202, E205 (the caret in the brackets), E218, E005; none without a suggestion or for lerp ({got}, {none})")
     page.fill("#psi-src", "loop 4\nv = sin(x*2 + t/4)\ngray(tme)")
-    page.wait_for_selector("#psi-err a.ecode", timeout=10000)
+    page.wait_for_function("document.querySelector('#psi-err a.ecode')?.textContent == 'E201'", timeout=10000)
 
 
 def psi_typing_checks(page: Page) -> None:
@@ -4392,14 +4396,15 @@ def psi_typing_checks(page: Page) -> None:
     page.keyboard.type("gray(smo", delay=20)
     page.wait_for_selector("#psi-ac [role=option]", timeout=5000)
     listed = page.inner_text("#psi-ac [aria-selected=true]")
+    aria = page.evaluate("(t => [t.getAttribute('aria-expanded'), t.getAttribute('aria-controls'), t.getAttribute('aria-activedescendant')])(document.querySelector('#psi-src'))")
     page.keyboard.press("Tab")
     page.wait_for_timeout(200)
     put, at = page.input_value(ta), caret(page)
     page.keyboard.type("0, 1, ", delay=20)
     page.wait_for_timeout(200)
     bold = page.inner_text("#psi-ac b") if page.locator("#psi-ac b").count() else None
-    check(listed == "smoothstep(e0, e1, v)" and put == "gray(smoothstep()" and at == [16, 16] and bold == "v",
-          f"formulas: smo lists {listed!r}, Tab puts in {put!r} (caret {at}), the third value in bold ({bold!r})")
+    check(listed == "smoothstep(e0, e1, v)" and put == "gray(smoothstep()" and at == [16, 16] and bold == "v" and aria == ["true", "psi-ac", "psi-ac-0"],
+          f"formulas: smo lists {listed!r} ({aria}), Tab puts in {put!r} (caret {at}), the third value in bold ({bold!r})")
     page.fill(ta, "palette sea = deep #024, foam #fff\nspeed = 2\ngray(sp")
     page.focus(ta)
     page.keyboard.press("Control+End")
@@ -4444,6 +4449,15 @@ def psi_typing_checks(page: Page) -> None:
     page.keyboard.press("Escape")
     page.keyboard.press("Tab")
     left = page.evaluate("document.activeElement.id")
+    # Esc that closes the list arms it too.
+    page.focus(ta)
+    page.keyboard.press("Control+End")
+    page.keyboard.type(" + ab", delay=20)
+    page.wait_for_selector("#psi-ac [role=option]", timeout=5000)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Tab")
+    left2 = page.evaluate("document.activeElement.id")
+    check(left2 != "psi-src" and page.input_value(ta).endswith(" + ab"), f"formulas: Esc closing the list, then Tab, leaves the code too (to {left2!r})")
     check(ind == "  a = 1\n  b = 2\ngray(a*b)" and out == "a = 1\nb = 2\ngray(a*b)" and two == "  a = 1\nb = 2\ngray(a*b)" and left != "psi-src",
           f"formulas: Tab and Shift+Tab move lines two spaces ({ind!r}, {out!r}, {two!r}); Esc then Tab leaves the code (to {left!r})")
 
