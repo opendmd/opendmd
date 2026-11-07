@@ -77,3 +77,13 @@
 .psi-diff{margin:4px 8px;padding:6px;background:#0a0b0c;border-radius:var(--r);font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow:auto;max-height:40vh}
 .psi-diff .a{color:var(--ok)}.psi-diff .d{color:var(--bad)}
 #psi-vers .mi{display:flex;gap:8px;align-items:baseline}#psi-vers [id$=-go]{margin:4px 8px 8px}
+/* The names at the caret (js/fhint.js): a list under it, on touch chips under the code. */
+#psi-ac{position:fixed;z-index:20;max-width:min(420px,90vw);background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 4px 16px #0008;font-size:13px;padding:2px 0}
+#psi-ac [role=option]{padding:2px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#psi-ac [aria-selected=true]{background:var(--bg3);color:var(--acc)}
+#psi-ac .cap{margin:0;padding:2px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#psi-ac b,.psi-chips b{color:var(--acc)}
+.psi-chips{display:flex;gap:4px;align-items:center;margin-top:8px;overflow-x:auto}
+.psi-chips .cap{margin:0;white-space:nowrap}
+@media (max-width:760px){.psi-chips{position:sticky;bottom:calc(60px + env(safe-area-inset-bottom));z-index:2;background:var(--bg2);padding:4px 0}}
+#psi-err .txt{padding:0;min-height:0;color:inherit;text-decoration:underline;font:inherit}

@@ -4267,8 +4267,17 @@ def psi_colour_checks(page: Page) -> None:
     kp = page.locator("#psi-kp")
     check(kp.is_visible() and kp.input_value() == "#220a36", f"formulas: the caret in a colour shows its picker ({kp.is_visible()}, {kp.input_value()})")
     shot(page, "formulas-colour-picker", "laptop")
+    # Tab indents, there too (one undo takes it back); Esc, then Tab, reaches the picker.
     page.keyboard.press("Tab")
-    check(page.evaluate("document.activeElement.id") == "psi-kp" and kp.is_visible(), "formulas: Tab from a colour reaches its picker")
+    tabbed = page.input_value("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(200)
+    page.evaluate(f"document.querySelector('#psi-src').setSelectionRange({at}, {at})")
+    page.wait_for_timeout(200)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Tab")
+    check(tabbed == src[:at] + "  " + src[at:] and page.evaluate("document.activeElement.id") == "psi-kp" and kp.is_visible(),
+          f"formulas: Tab in a colour indents ({tabbed[:30]!r}); Esc, then Tab, reaches its picker")
     # (The browser's own picker can't be driven headless: its events instead.)
     page.evaluate("""() => { const k = document.querySelector('#psi-kp'); k.focus(); k.dispatchEvent(new Event('click'));
         k.value = '#ff8000'; k.dispatchEvent(new Event('input')); }""")
@@ -4334,6 +4343,111 @@ def psi_colour_checks(page: Page) -> None:
           f"formulas: a pick closed by a click in the code goes in, one undo ({got!r}, {page.input_value('#psi-src')!r})")
 
 
+def caret(page: Page) -> list[int]:
+    return page.evaluate("(t => [t.selectionStart, t.selectionEnd])(document.querySelector('#psi-src'))")
+
+
+def psi_fix_checks(page: Page) -> None:
+    """An error with a suggestion (by its code, js/psierr.js): Fix it puts
+    the suggestion in where the error is (one undo takes it back); `…` in
+    it is where the caret goes. "Line N" puts the caret on the error."""
+    page.click("#psi-err-line")
+    page.wait_for_timeout(200)
+    src = page.input_value("#psi-src")
+    check(page.evaluate("document.activeElement.id") == "psi-src" and caret(page) == [src.index("tme")] * 2,
+          f"formulas: Line 3 puts the caret on the error ({caret(page)})")
+    page.click("#psi-fix")
+    page.wait_for_timeout(400)
+    fixed = page.input_value("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    back = page.input_value("#psi-src")
+    check(fixed == "loop 4\nv = sin(x*2 + t/4)\ngray(t)" and back == src,
+          f"formulas: Fix it writes the suggestion ({fixed!r}), one undo takes it back")
+    got = []
+    for bad, code in (("gray(sine(x))", "E202"), ("gray(sin)", "E205"), ("gray(0 < x < 0.5)", "E218"), ("gray(2x)", "E005")):
+        page.fill("#psi-src", bad)
+        page.wait_for_function("c => document.querySelector('#psi-err a.ecode')?.textContent == c && document.querySelector('#psi-fix')", arg=code, timeout=5000)
+        page.click("#psi-fix")
+        page.wait_for_timeout(300)
+        got.append((page.input_value("#psi-src"), caret(page)))
+    page.fill("#psi-src", "gray(foo)")
+    page.wait_for_selector("#psi-err a.ecode", timeout=5000)
+    none = page.locator("#psi-fix").count()
+    check([g[0] for g in got] == ["gray(sin(x))", "gray(sin())", "gray(0 < x and x < 0.5)", "gray(2 * x)"] and got[1][1] == [9, 9] and none == 0,
+          f"formulas: Fix it for E202, E205 (the caret in the brackets), E218, E005; none without a suggestion ({got}, {none})")
+    page.fill("#psi-src", "loop 4\nv = sin(x*2 + t/4)\ngray(tme)")
+    page.wait_for_selector("#psi-err a.ecode", timeout=10000)
+
+
+def psi_typing_checks(page: Page) -> None:
+    """Typing code: the names that fit what is typed under the caret (Tab
+    puts one in, a function with its brackets), a call's values with the
+    one being typed in bold, the formula's own names; Enter keeps the
+    indent and is never the list's when it is closed; `{` + Enter, `}`,
+    Tab, Shift+Tab, and Esc then Tab leaving the code."""
+    ta = "#psi-src"
+    page.fill(ta, "")
+    page.focus(ta)
+    page.keyboard.type("gray(smo", delay=20)
+    page.wait_for_selector("#psi-ac [role=option]", timeout=5000)
+    listed = page.inner_text("#psi-ac [aria-selected=true]")
+    page.keyboard.press("Tab")
+    page.wait_for_timeout(200)
+    put, at = page.input_value(ta), caret(page)
+    page.keyboard.type("0, 1, ", delay=20)
+    page.wait_for_timeout(200)
+    bold = page.inner_text("#psi-ac b") if page.locator("#psi-ac b").count() else None
+    check(listed == "smoothstep(e0, e1, v)" and put == "gray(smoothstep()" and at == [16, 16] and bold == "v",
+          f"formulas: smo lists {listed!r}, Tab puts in {put!r} (caret {at}), the third value in bold ({bold!r})")
+    page.fill(ta, "palette sea = deep #024, foam #fff\nspeed = 2\ngray(sp")
+    page.focus(ta)
+    page.keyboard.press("Control+End")
+    page.keyboard.type("e", delay=20)
+    page.wait_for_selector("#psi-ac [role=option]", timeout=5000)
+    own = page.inner_text("#psi-ac [aria-selected=true]")
+    page.keyboard.press("Enter")
+    page.keyboard.type(" * pal(sea, sea.fo", delay=20)
+    page.wait_for_timeout(200)
+    entry = page.inner_text("#psi-ac [aria-selected=true]")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(100)
+    shut = page.locator("#psi-ac [role=option]").count()
+    page.keyboard.press("Enter")
+    check(own == "speed" and shut == 0 and entry == "sea.foam" and page.input_value(ta) == "palette sea = deep #024, foam #fff\nspeed = 2\ngray(speed * pal(sea, sea.fo\n",
+          f"formulas: the formula's own names ({own!r}, {entry!r}); Esc closes the list, then Enter is a new line ({page.input_value(ta)!r})")
+    page.fill(ta, "loop 4\nlayer {")
+    page.focus(ta)
+    page.keyboard.press("Control+End")
+    page.keyboard.press("Enter")
+    page.keyboard.type("v = x", delay=20)
+    page.keyboard.press("Enter")
+    page.keyboard.type("gray(v)", delay=20)
+    page.keyboard.press("Enter")
+    page.keyboard.type("}", delay=20)
+    typed = page.input_value(ta)
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(100)
+    undone = page.input_value(ta)
+    check(typed == "loop 4\nlayer {\n  v = x\n  gray(v)\n}" and undone == "loop 4\nlayer {\n  v = x\n  gray(v)\n  \n}",
+          f"formulas: Enter keeps the indent, {{ + Enter closes the block, }} steps onto it ({typed!r}), one undo a key ({undone!r})")
+    page.fill(ta, "a = 1\nb = 2\ngray(a*b)")
+    page.focus(ta)
+    page.evaluate("document.querySelector('#psi-src').setSelectionRange(0, 11)")
+    page.keyboard.press("Tab")
+    ind = page.input_value(ta)
+    page.keyboard.press("Shift+Tab")
+    out = page.input_value(ta)
+    page.evaluate("document.querySelector('#psi-src').setSelectionRange(0, 0)")
+    page.keyboard.press("Tab")
+    two = page.input_value(ta)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Tab")
+    left = page.evaluate("document.activeElement.id")
+    check(ind == "  a = 1\n  b = 2\ngray(a*b)" and out == "a = 1\nb = 2\ngray(a*b)" and two == "  a = 1\nb = 2\ngray(a*b)" and left != "psi-src",
+          f"formulas: Tab and Shift+Tab move lines two spaces ({ind!r}, {out!r}, {two!r}); Esc then Tab leaves the code (to {left!r})")
+
+
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
     """Library → Formulas: the module loads only then; the examples render;
     a plain error with its line; a number scrubbed changes the text, the
@@ -4383,11 +4497,13 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     formula_editor(page, "loop 4\nv = sin(x*2 + t/4)\ngray(tme)")
     page.wait_for_selector("#psi-err a.ecode", timeout=10000)
     err = page.inner_text("#psi-err")
-    check(err == "Line 3: unknown name tme — did you mean t? E201" and page.get_attribute("#psi-ed", "data-err") == "3"
+    check(err == "Line 3: unknown name tme — did you mean t? Fix it E201" and page.get_attribute("#psi-ed", "data-err") == "3"
           and page.locator(".psi-hl .e").inner_text() == "tme" and page.locator(".psi-gut b").inner_text() == "3",
           f"formulas: an error says '{err}' and marks the word and the line")
     shot(page, "formulas-error", "laptop")
+    psi_fix_checks(page)
     psi_error_links(page)
+    psi_typing_checks(page)
     # A still formula: a scrubbed number changes the text and the picture.
     page.fill("#psi-src", "gray(x*0.5)")
     page.wait_for_timeout(400)
@@ -5793,6 +5909,16 @@ def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(300)
     check(page.input_value("#psi-src") == "gray(x*0.6)" and tall,
           f"formulas (360): the strip (44 px targets: {tall}) and its + ({page.input_value('#psi-src')!r})")
+    # Names on touch: a row of chips under the code, not a list at the caret.
+    page.fill("#psi-src", "")
+    page.focus("#psi-src")
+    page.keyboard.type("gray(noi", delay=20)
+    page.wait_for_selector("#psi-chips:not([hidden]) button", timeout=5000)
+    shot(page, "formulas-chips", "phone")
+    page.tap("#psi-chips button >> nth=0")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == "gray(noise()" and page.locator("#psi-ac").count() == 0 and "noise(x, y, z)" in page.inner_text("#psi-chips"),
+          f"formulas (360): a chip puts the name in ({page.input_value('#psi-src')!r}), its values shown in the row")
     ctx.close()
 
 

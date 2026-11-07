@@ -111,7 +111,9 @@ the formula underneath; the preview follows as you type. Under it, a line
 says how long the loop is (or that the formula follows the clock) and how
 hard it is for the panel. If something is wrong, the editor says what in
 plain words just above the formula, marks the place, and keeps playing the
-last version that worked, dimmed.
+last version that worked, dimmed. **Line N** at the start of the message
+takes you there; when the message suggests a fix (`did you mean t?`),
+**Fix it** writes it in.
 
 - **Drag a number** left or right to try other values. On a computer, drag
   it right in the text, or put the cursor on it and press Alt + ↑ or ↓
@@ -122,7 +124,7 @@ last version that worked, dimmed.
   bar under it in that colour. Click or tap in one and a swatch appears at
   the end of its line: it opens your browser's colour picker, and the
   colour you pick takes its place. On a computer, Ctrl+Z (⌘Z) puts the old
-  one back; with the keyboard, put the cursor in the colour and press Tab
+  one back; with the keyboard, put the cursor in the colour and press Esc, then Tab,
   to reach the swatch.
 - **Controls:** a line at the top like `control speed 0..4 = 1 "Speed"`
   gives the formula a slider: `speed` is a value you use in it, from 0 to 4,
@@ -154,6 +156,15 @@ last version that worked, dimmed.
   goes on), with `t` beside it. Edit while it is held and the new text is
   drawn at the same moment. Thumbnails, Save as GIF and Show on panel play
   as usual.
+- **Names as you type:** after two letters a list shows the names that
+  fit, the formula's own first; ↑ ↓ choose, Tab or Enter puts one in, Esc
+  closes it (on a phone they are buttons under the formula). Inside a
+  function's brackets a line says what it takes, the value you are typing
+  in bold.
+- **Keys:** Enter keeps the line's indent, and after `{` starts an
+  indented line with the `}` under it; Tab and Shift+Tab indent and
+  unindent (Esc, then Tab, moves on out of the formula). Ctrl+S (⌘S) saves,
+  Ctrl+Enter (⌘Enter) shows it on the panel.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps it on your panel, under its name (in the demo, in this browser).

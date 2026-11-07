@@ -176,6 +176,9 @@ let PS = null;
 // An error's code and the reference's entry for it (js/psierr.js, imported
 // at the first error); the demo's reference is its own site's.
 const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, ROOT()), () => null);
+// The errors whose sentence carries a fix (by code, js/psierr.js): which `…` in it is the fix, for Fix it.
+// (E218's is the text the `…` after it quotes.)
+const FIX = { 5: 1, 201: 1, 202: 1, 205: 1, 206: 1, 207: 1, 218: 0 };
 // Use as the look: a player's, or the demo's (js/demo.js).
 const LOOK = () => app.device || !!app.demo;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
@@ -478,100 +481,6 @@ function build(root) {
 }
 
 // --- The editor (`#formulas/edit`)
-// psi-builtins: cheat sheet (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
-const VARS = [
-  ['x, y', 'where the pixel is: 0 to 1 across from the left, and down from the top'],
-  ['px, py', 'the pixel’s column 0–127 from the left and row 0–31 from the top'],
-  ['t', 'seconds into the loop'],
-  ['hour, minute, second', 'the time of day'],
-  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own'],
-  ['w, h', '128 and 32'],
-  ['i', 'the pixel’s number, 0–4095'],
-  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 down'],
-  ['r, angle', 'distance and angle (turns, clockwise from the right) from the middle'],
-  ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
-  ['ul', 'how bright that is'],
-  ['under(x, y)', 'the picture under at pixel x, y (the nearest, held to the panel): a colour, as #…: under(px + 2, py) shifts it, under(floor(px/4)*4, floor(py/4)*4) pixelates it; under alone is this pixel\'s'],
-  ['daylight', 'how light it is outside where the panel is, 0 at night to 1 by day (twilight between); the panel\'s location in Settings, else 1'],
-  ['sun.alt', 'the sun\'s height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location'],
-  ['moon.phase, season, yearday', 'the moon (0 new, 0.5 full), the time of year (0 midwinter, 0.5 midsummer) and the day of the year (0 on 1 January)'],
-  ['night, bright', '1 while night mode dims the panel; the panel\'s brightness, 0 to 1'],
-  ['replay.playing, replay.platform, replay.game', 'RePlayOS: 1 while a game plays; its platform as a number (0 none); a number 0 to 1 for the game, the same each time it plays']
-];
-const FUNCS = [
-  ['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'],
-  ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
-  ['abs floor frac sqrt', 'size, whole part, fraction, square root'],
-  ['min max clamp(v, lo, hi)', 'limits'],
-  ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
-  ['step(edge, v)', '1 past the edge, else 0'],
-  ['smoothstep(e0, e1, v)', 'a soft step'],
-  ['len(dx, dy)', 'distance'],
-  ['atan2(dy, dx)', 'angle, in turns'],
-  ['noise(x, y, z)', 'smooth random hills, 0 to 1'],
-  ['hash(a, b)', 'random 0 to 1'],
-  ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
-  ['pick(k, a, b, …)', 'a at k = 0, b at 1, …; else 0'],
-  ['since(replay.game)', 'seconds since a built-in input last changed (32767 when it never has): a flash is max(0, 1 - since(replay.game))'],
-  ['was(replay.game)', 'a built-in input\'s value before its last change: mix(was(k), k, min(1, since(k))) fades from the old to the new'],
-  ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
-  ['glyph(\'A\', col, row)', 'the same for a character'],
-  ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
-  ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'],
-  ['%', 'remainder: v % 1 is the fraction'],
-  [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'],
-  ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'],
-  ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
-  ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
-  ['layer rate 4 { … }', 'a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame', 'layer rate 4 {\n  \n}\n'],
-  ['fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1', 'a function: a value worked out from its values, used as ring(64, 8); with { … } instead of = …, lines that draw, called on a line of their own in draw', 'fn f(a) = '],
-  ['fn p(x, y) { … }', 'a function whose values are x and y: px, py, r, angle … inside follow them; its last line a colour, p(1 - x, y) draws it mirrored', 'fn p(x, y) {\n  \n}\n'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as a function fn p(x, y) { … }', 'use Plasma as p\n']
-];
-const DRAW = [
-  ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
-  ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
-  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels from the top left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
-  ['dot(x, y, v)', 'one pixel of ink v'],
-  ['cls(#102)', 'paint: the whole panel one colour (paint is drawn over the colour line; the last painted wins)'],
-  ['pset(x, y, #f80)', 'paint one pixel; line(x0, y0, x1, y1, c) and dot(x, y, c) paint too when their last value is a colour'],
-  ['rect(x0, y0, x1, y1, c) rectfill(…)', 'paint a box (its corners included), or a filled one'],
-  ['circ(x, y, r, c) circfill(…)', 'paint a circle, or a filled one'],
-  ['trifill(x0, y0, x1, y1, x2, y2, c)', 'paint a filled triangle'],
-  ['print("TEXT", x, y, c)', 'paint text in the panel\'s font (add small); or a number: print(minute, x, y, c, small, 2) with at least 2 digits'],
-  ['spr(s, x, y, flip)', 'paint sprite s with its top left at x, y (its key gives colours: key . 0, R #f00); flip 1 across, 2 down, 3 both'],
-  ['pal(fire, v), gray(v)', 'colours to paint with besides #…: a palette\'s or a gray, v 0 to 1'],
-  ['if c { … } else { … }', 'inside draw: only when c is not 0', 'if  {\n  \n}'],
-  ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
-  ['ink(16)', 'the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels'],
-  ['table T = 1, -2, 0.5', 'numbers, 256 a table and 1024 in all (tables and sprites)', 'table T = '],
-  ['T[k]', 'number k of table T, from 0 (0 outside it)'],
-  ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
-  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']
-];
-const COLS = [
-  ['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'],
-  ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
-  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
-  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (8 palettes; pal and cycle read 3): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'],
-  ['scene s when c { v = … }', 'values worked out only while c (once a frame or a row) is not 0; after it its names are 0 while it is off; the estimate counts two scenes at once', 'scene s when  {\n  \n}\n'],
-  ['palette sky = tween(day, night, w)', 'a palette mixed once a frame, day towards night by w (0 to 1, of t or sliders); tweens nest; tween(a, b, w), tween(c, d, v) fills the low and high 16 colours', 'palette p = tween(, , )\n'],
-  ['palette sea = deep #024, foam #fff', 'a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many)'],
-  ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'],
-  ['cycle(fire, v, s)', 'palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame'],
-  ['gray(v)', 'white, 0 to 1'],
-  ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
-  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']
-];
-const DECLS = [
-  ['name "Sunrise"', 'the formula’s name (60 characters at most)', 'name ""\n'],
-  ['about "…"', 'one line about it (120 at most)', 'about ""\n'],
-  ['control speed 0..1 = 0.5 "Speed"', 'a slider: its name in the formula, range, default and label (three controls at most)', 'control speed 0..1 = 0.5 "Speed"\n'],
-  ['control mode = calm, wild', 'buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch', 'control mode = calm, wild\n'],
-  ['look screen 40', 'it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100)', 'look\n']
-];
-// psi-builtins end
 
 function editor() {
   // The name is the formula's `name` line (typed here, written there).
@@ -589,7 +498,7 @@ function editor() {
   const pad = h('div.psi-pad', { id: 'psi-pad', role: 'slider', 'aria-label': 'Drag to change the number' }, '◀ ', val, ' ▶');
   const nudge = (k) => h('button.sm', { 'aria-label': k > 0 ? 'More' : 'Less', onpointerdown: (e) => e.preventDefault(), onclick: () => bump(k) }, k > 0 ? '+' : '−');
   const strip = h('div.psi-strip', { id: 'psi-scrub', hidden: true }, nudge(-1), pad, nudge(1));
-  const help = h('button.sm', { id: 'psi-help', 'aria-haspopup': 'dialog', onclick: (e) => cheat(e.currentTarget) }, 'Cheat sheet');
+  const help = h('button.sm', { id: 'psi-help', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hint().then((m) => m.cheat(b, ta)); } }, 'Cheat sheet');
   const vers = h('button.sm', { id: 'psi-vers-btn', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hist((m) => m.menu(b, { key: hkey(B.draft), cur: ta.value, back, site: !!PAGE })); } }, 'Earlier versions…');
   const canvas = h('canvas.panel', { id: 'psi-ed-panel', tabIndex: 0, 'aria-label': 'Preview (, and . step a frame)' });
   // The preview's time: paused (pv.hold, ms), a frame back or on, or dragged
@@ -634,7 +543,7 @@ function editor() {
   top.addEventListener('keydown', (e) => { if ((e.key === ',' || e.key === '.') && e.target !== tr && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); step(e.key === '.' ? 1 : -1); } });
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
-      h('div.row.acts', help, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another'))),
+      h('div.row.acts', help, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
@@ -757,14 +666,20 @@ function editor() {
     } else {
       bad = miss ? [miss.s, miss.e] : T(() => P.errorAt(), [0, 0]);
       top.classList.toggle('stale', good != null);
-      const line = ta.value.slice(0, bad[0]).split('\n').length;
+      const line = ta.value.slice(0, bad[0]).split('\n').length, at = bad, was = ta.value;
       el.dataset.err = line;
       const msg = miss ? miss.why : T(() => P.error(), '');
-      clear(err, `Line ${line}: `, msg.split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
+      // "Line N" takes the caret there; Fix it (only on the text it was for).
+      clear(err, h('button.txt', { id: 'psi-err-line', onclick: () => goLine(at[0]) }, `Line ${line}`), ': ', msg.split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
       // Its code, linked to the language reference's entry (the editor's
-      // own messages, `miss`, have none).
+      // own messages, `miss`, have none); one with a suggestion, Fix it.
       const shown = err.textContent;
-      if (!miss) errRef(msg).then((r) => { if (r && err.textContent === shown) err.append(' ', h('a.ecode', { href: r.href, target: '_blank', rel: 'noopener', title: 'What this error means' }, r.code)); });
+      if (!miss) errRef(msg).then((r) => {
+        if (!r || err.textContent !== shown) return;
+        const c = +r.code.slice(1), q = msg.split('`'), x = q[2 * FIX[c] + 1], o = c == 218 && q[3], k = o ? ta.value.lastIndexOf(o, at[1]) : 0, to = o ? [k, k + o.length] : at;
+        if (x && k >= 0) err.append(' ', h('button.sm', { id: 'psi-fix', title: `Write ${x.replace('…', '')}`, onclick: () => { if (ta.value === was) fix(to, x, c); } }, 'Fix it'));
+        err.append(' ', h('a.ecode', { href: r.href, target: '_blank', rel: 'noopener', title: 'What this error means' }, r.code));
+      });
       paint();
     }
     stash();
@@ -772,7 +687,24 @@ function editor() {
   }
   // Before saving or sharing: every use line pasted, or nothing happens.
   const ready = () => { const m = compile(true); if (m) toast(`First fix line ${ta.value.slice(0, m.s).split('\n').length}: ${m.why}`, 'bad'); return !m; };
-  ta.addEventListener('input', () => { paint(); scrubbable(); build(); });
+  ta.addEventListener('input', () => { paint(); scrubbable(); build(); HN?.update(true); });
+  ta.addEventListener('blur', () => HN?.close());
+  // The names at the caret and the cheat sheet (js/fhint.js), from the first key.
+  let HN = null, hm = null;
+  const hint = () => (hm ??= import('./fhint.js').then((m) => { HN = m.hint({ ta, put, measure, after: strip, touch }); HN.update(true); return m; }));
+  // A suggestion put in (`…` where the caret goes, a placeholder chosen).
+  function fix(at, x, c) {
+    const k = x.indexOf('…'), t = x.replace('…', ''), q = k >= 0 ? [k, k] : c == 206 ? [t.length - 2, t.length - 1] : c == 207 ? [6, 7] : [t.length, t.length];
+    ta.focus({ preventScroll: true });
+    put({ s: at[0], e: at[1] }, t);
+    ta.setSelectionRange(at[0] + q[0], at[0] + q[1]);
+  }
+  function goLine(p) {
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(p, p);
+    const r = ta.getBoundingClientRect(), y = r.top + parseFloat(getComputedStyle(ta).lineHeight) * (ta.value.slice(0, p).split('\n').length - 1);
+    scrollBy({ top: y - innerHeight / 2, behavior: 'smooth' });
+  }
   ta.addEventListener('scroll', () => { hl.scrollLeft = ta.scrollLeft; swatch(); });
 
   // Draggable numbers: under the pointer (a mouse or pen, straight in the
@@ -834,13 +766,46 @@ function editor() {
   ta.addEventListener('pointerdown', () => { if (pend) done(); });
   ta.addEventListener('keydown', () => { if (pend) done(); });
   ta.addEventListener('focus', () => { if (pend) done(); });
-  document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); if (/^\s*use\s/m.test(ta.value)) build(); } });
+  document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); HN?.update(); if (/^\s*use\s/m.test(ta.value)) build(); } });
   ta.addEventListener('keydown', (e) => {
+    hint();
+    if (HN?.key(e)) return;
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && at(ta.selectionStart)) {
       e.preventDefault();
       bump((e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1), at(ta.selectionStart));
-    }
+    } else keys(e);
   });
+  // Typing code: Enter keeps the line's indent (after `{`, a line further in
+  // and the `}` under it), `}` on an indent steps back, Tab and Shift+Tab
+  // put two spaces in or take them out (Esc, then Tab, leaves the field);
+  // Ctrl/Cmd+S saves, Ctrl/Cmd+Enter shows it on the panel. As typed
+  // (insertText), so undo has them.
+  let esc = false;
+  function keys(e) {
+    const s = ta.value, a = ta.selectionStart, z = ta.selectionEnd, l0 = s.lastIndexOf('\n', a - 1) + 1, ind = /^[ \t]*/.exec(s.slice(l0, a))[0], k = e.key, was = esc, mod = e.ctrlKey || e.metaKey;
+    esc = k === 'Escape';
+    const ins = (t, from = a, to = z) => { e.preventDefault(); ta.setSelectionRange(from, to); document.execCommand('insertText', false, t); };
+    if (mod && k.toLowerCase() === 's' && !PAGE) { e.preventDefault(); save().catch(() => {}); } else if (mod && k === 'Enter') { const b = el.querySelector('#psi-ed-show'); if (b) { e.preventDefault(); b.click(); } } else if (mod || e.altKey || e.isComposing) return;
+    else if (k === 'Enter' && !e.shiftKey) {
+      const end = s.indexOf('\n', z), rest = s.slice(z, end < 0 ? s.length : end), shut = /^\s*\}/.test(rest);
+      if (!/\{[ \t]*$/.test(s.slice(l0, a))) return ins('\n' + ind);
+      ins(`\n${ind}  ` + (shut ? '\n' + ind : (s.match(/\{/g) || []).length > (s.match(/\}/g) || []).length ? `\n${ind}}` : ''));
+      ta.setSelectionRange(a + ind.length + 3, a + ind.length + 3);
+    } else if (k === '}' && a === z && a > l0 && ind.length === a - l0) {
+      // (On the line over a `}` already there, as Enter after `{` leaves: onto it.)
+      const n = s.slice(a).match(/^\n([ \t]*)\}/);
+      if (n && l0 && n[1] === ind.slice(0, -2) && (s.match(/\{/g) || []).length <= (s.match(/\}/g) || []).length) ins(`\n${n[1]}}`, l0 - 1, a + n[0].length);
+      else ins(ind.slice(0, -2) + '}', l0);
+    }
+    else if (k === 'Tab' && !was) {
+      if (a === z && !e.shiftKey) return ins('  ');
+      const end = s.indexOf('\n', z > a && s[z - 1] === '\n' ? z - 1 : z), e1 = end < 0 ? s.length : end, b = s.slice(l0, e1), t = e.shiftKey ? b.replace(/^( {1,2}|\t)/gm, '') : b.replace(/^/gm, '  ');
+      e.preventDefault();
+      if (t === b) return;
+      ins(t, l0, e1);
+      if (a === z) { const q = Math.max(l0, a - b.length + t.length); ta.setSelectionRange(q, q); } else ta.setSelectionRange(l0, l0 + t.length);
+    }
+  }
   // Where a pointer is in the text (monospace, no wrapping, tabs of 2).
   function posAt(e) {
     const r = ta.getBoundingClientRect(), s = getComputedStyle(ta);
@@ -916,15 +881,6 @@ function editor() {
   pad.addEventListener('pointermove', dragMove);
   pad.addEventListener('pointerup', end);
   pad.addEventListener('pointercancel', end);
-
-  function cheat(btn) {
-    const r = btn.getBoundingClientRect();
-    const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
-    const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
-    popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
-      rows('At the top: what the formula is', DECLS), rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
-      h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
-  }
 
   // The text replaced by `t` (only the part that changed, so the caret
   // and scroll stay), then compiled at once.
