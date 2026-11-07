@@ -253,6 +253,8 @@ fi
 
 [ -z "$(git status --porcelain)" ] || { git status --short; die "the working tree is not clean"; }
 pass "the tree is clean"
+! git submodule status | grep -q '^[-+]' || { git submodule status; die "a submodule is missing or not at the committed commit: git submodule update --init"; }
+pass "the submodules are checked out at their committed commits"
 if [ "$ANY_BRANCH" = 1 ]; then
   info "--any-branch: on ${START_REF:-a detached HEAD}, not checking for main"
 else
