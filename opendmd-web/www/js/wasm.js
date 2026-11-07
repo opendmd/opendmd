@@ -7,7 +7,7 @@
 // every fetch of its wasm goes through here; js/web.js is the main one's.
 import { V } from './build.js';
 
-const NAMES = { pkg: 'opendmd_web', 'pkg-psi': 'opendmd_psi_web', 'pkg-art': 'opendmd_art_web' };
+const NAMES = { pkg: 'opendmd_web', 'pkg-psi': 'opendmd_psi_web', 'pkg-art': 'opendmd_art_web', 'pkg-psi-lang': 'opendmd_psi_web' };
 
 // `path` (from the app's root) at this build's address; `tag` first, for
 // another instance of the same module (`look`, `demo`, a slot number).

@@ -23,6 +23,7 @@ filelist.odm.txt
 opendmd-web/www/pkg/
 opendmd-web/www/pkg-art/
 opendmd-web/www/pkg-psi/
+opendmd-web/www/pkg-psi-lang/
 opendmd-web/www/**/*.gz
 opendmd-web/www/version.txt
 opendmd-web/www/js/build.js

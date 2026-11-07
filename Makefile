@@ -172,6 +172,7 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test --features lang lang
 	@echo "==> Testing $(PSICLI) (the psi command)"
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(GAL) (the formula gallery's checker)"
@@ -307,9 +308,13 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
+	@# The site's language service (What costs most, Tidy up: js/fcost.js): the same crate with only observe() and
+	@# format() (`lang`), never packed (opendmd-pack www.rs SITE_ONLY).
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi-lang -- --features bare,bump,lang
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
+	rm -f $(WEB_WWW)/pkg-psi-lang/package.json $(WEB_WWW)/pkg-psi-lang/*.d.ts $(WEB_WWW)/pkg-psi-lang/README.md $(WEB_WWW)/pkg-psi-lang/.gitignore
 	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
 	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
@@ -562,6 +567,7 @@ clippy:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings
 	@echo "==> Clippy $(PSIWEB)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features lang -- -D warnings
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --features bare,bump -- -D warnings
 	@echo "==> Clippy $(GAL)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings

@@ -33,10 +33,17 @@ use opendmd_psi::{
     compile_declared, compile_into, render_rows_ink, Control, Ink, Inputs, Program, Scratch, H, OWN,
     W,
 };
+// (Unused in the `lang` build, whose only exports are src/lang.rs's.)
+#[cfg_attr(feature = "lang", allow(unused_imports))]
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "bump"))]
 mod bump;
+
+// The site's language service (`lang`: a module of its own, pkg-psi-lang/,
+// whose only exports are its two; the ones above and below are left out).
+#[cfg(feature = "lang")]
+mod lang;
 
 // The sky's integer maths, the firmware's own file (no dependencies), so
 // the editor's time travel and the panel agree bit for bit; this crate
@@ -120,7 +127,7 @@ fn utf16_at(s: &str, byte: usize) -> u32 {
 /// Compile `src`. True: it is the formula drawn from now on. False:
 /// [`error`] says why and [`error_at`] where, and the last formula that
 /// compiled is still the one drawn.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn compile(src: &str) -> bool {
     build(src)
 }
@@ -128,14 +135,14 @@ pub fn compile(src: &str) -> bool {
 /// `src` compiled for the player (`opendmd_psi::psb`: what a card's `.psb`
 /// file holds and `@formula?psb=` carries), or empty when it does not
 /// compile ([`compile`] says why). The player never compiles.
-#[wasm_bindgen(js_name = program)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = program))]
 pub fn program(src: &str) -> Vec<u8> {
     opendmd_psi::build(src).unwrap_or_default()
 }
 
 /// The compiled Formulas' format ([`program`]): the player says its own in
 /// `/api/status` (`psi_abi`); bytes for another are refused there.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn abi() -> u8 {
     opendmd_psi::psb::ABI
 }
@@ -174,7 +181,7 @@ fn fail(msg: &str) {
 /// max min`, at `amount` percent: `look`, `look screen 40`), or taken out
 /// (`blend` empty): the Formula settings sheet's switch, a text edit
 /// (`opendmd_psi::look::set`); nothing is compiled. Empty for another blend.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn look(src: &str, blend: &str, amount: u8) -> String {
     opendmd_psi::look::set(src, blend, amount).unwrap_or_default()
 }
@@ -184,7 +191,7 @@ pub fn look(src: &str, blend: &str, amount: u8) -> String {
 /// when `line` is empty, or put in at the top when there is none
 /// (`opendmd_psi::look::declare`): the settings sheet's edits. Nothing is
 /// compiled.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
     opendmd_psi::look::declare(src, word, nth, line)
 }
@@ -192,7 +199,7 @@ pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
 /// `src` as a function, `fn name(x, y) { … }`, for the editor's `use
 /// Plasma as p` (`opendmd_psi::look::function`); empty for one that can't
 /// be one (layers, a draw stage, tables, sprites, palettes, functions).
-#[wasm_bindgen(js_name = asFunction)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = asFunction))]
 pub fn as_function(src: &str, name: &str) -> String {
     opendmd_psi::look::function(src, name).unwrap_or_default()
 }
@@ -201,7 +208,7 @@ pub fn as_function(src: &str, name: &str) -> String {
 /// (`fx_psi::FormulaLook`): the formula as its `look` line asks
 /// (`opendmd_psi::look::program`), compiled — [`info`] and [`error`] then
 /// describe the look. `src` when it compiles, else empty.
-#[wasm_bindgen(js_name = asLook)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = asLook))]
 pub fn as_look(src: &str) -> String {
     let s = state();
     match opendmd_psi::look::program(src, &mut s.next) {
@@ -225,7 +232,7 @@ pub fn as_look(src: &str) -> String {
 /// then describes the look. False when the bytes are not a compiled
 /// Formula or are for another ABI ([`error`] says); the last formula that
 /// compiled is still the one drawn.
-#[wasm_bindgen(js_name = asLookPsb)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = asLookPsb))]
 pub fn as_look_psb(psb: &[u8]) -> bool {
     let s = state();
     match opendmd_psi::psb::load_into(psb, opendmd_psi::psb::Which::Look, &mut s.next) {
@@ -245,7 +252,7 @@ pub fn as_look_psb(psb: &[u8]) -> bool {
 
 /// The last compile's error, a sentence ("unknown name `tme` — did you
 /// mean `t`?"); empty after a compile that worked.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn error() -> String {
     let s = state();
     // SAFETY: copied from a `String`, cut at a char boundary.
@@ -254,7 +261,7 @@ pub fn error() -> String {
 
 /// Where the last error is: `[start, end]` as JS string indices (the page
 /// works out the line and column).
-#[wasm_bindgen(js_name = errorAt)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = errorAt))]
 pub fn error_at() -> Vec<u32> {
     state().at.to_vec()
 }
@@ -276,7 +283,7 @@ pub fn error_at() -> Vec<u32> {
 /// takes it (`Program::jit_takes`: then [11] and [13] are the tier and what
 /// the limits count, [14] and [6] the "without the JIT" figures; 0: the VM
 /// draws it, [14] and [6] are)]`; empty before anything compiled.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {
     let s = state();
     if !s.ok {
@@ -307,7 +314,7 @@ pub fn info() -> Vec<u32> {
 /// The `seed` a formula that goes on without repeating (`loop forever`) is
 /// drawn with from now on, Q16.16 0..1 (65,536 is 1); 0 until set (the
 /// panel picks a new one each time it plays).
-#[wasm_bindgen(js_name = setSeed)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = setSeed))]
 pub fn set_seed(seed: i32) {
     state().seed = seed;
 }
@@ -323,14 +330,14 @@ pub const UNSET: i32 = i32::MIN;
 /// clock and the sliders (Q16.16: 65,536 is 1; [`UNSET`], -2³¹, for the
 /// formula's default); [`pixels`] is where it is. Black before anything
 /// compiled.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn frame(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     draw(false, ms, hour, minute, second, a, b, c);
 }
 
 /// [`frame`] over the picture at [`under`] (what `ur ug ub ul` read and
 /// what shows through the layers): the formula drawn over a GIF's frame.
-#[wasm_bindgen(js_name = frameOver)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = frameOver))]
 pub fn frame_over(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     draw(true, ms, hour, minute, second, a, b, c);
 }
@@ -385,7 +392,7 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
 /// names and words are the source's text (the lexer allows no `"`, `\` or
 /// control characters in it, so it is JSON as it is). Numbers to 4
 /// decimals. The formula drawn is not changed.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn controls(src: &str) -> String {
     let s = state();
     let Ok(d) = compile_declared(src, &mut s.next) else {
@@ -510,7 +517,7 @@ fn number(j: &mut String, v: i32) {
 
 /// Every built-in input back at its default ([`World::default`]): what
 /// previews, thumbnails and the gallery draw with.
-#[wasm_bindgen(js_name = worldReset)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = worldReset))]
 pub fn world_reset() {
     state().world = World::default();
 }
@@ -519,7 +526,7 @@ pub fn world_reset() {
 /// from now on: its value, its value before its last change, and the
 /// seconds since that change (Q16.16; the page keeps when each change was,
 /// so `since` grows with real time). Each read is held to its range.
-#[wasm_bindgen(js_name = worldSet)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = worldSet))]
 pub fn world_set(id: u8, value: i32, was: i32, since: i32) {
     let w = &mut state().world;
     let i = id as usize % world::MAX_KEYS;
@@ -530,14 +537,14 @@ pub fn world_set(id: u8, value: i32, was: i32, since: i32) {
 
 /// Built-in input `id` changed to `v` now (`World::change`: `was` the value
 /// it had, `since` 0; the same value is no change).
-#[wasm_bindgen(js_name = worldChange)]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen(js_name = worldChange))]
 pub fn world_change(id: u8, v: i32) {
     state().world.change(id, v);
 }
 
 /// Built-in input `id` as the frames read it: `[value, was, since]`
 /// (Q16.16, before the range).
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn world(id: u8) -> Vec<i32> {
     let w = &state().world;
     let i = id as usize % world::MAX_KEYS;
@@ -550,7 +557,7 @@ pub fn world(id: u8) -> Vec<i32> {
 /// moon.phase, season, yearday]` (Q16.16; [`UNSET`] where it can't be
 /// known: the sun and the season without a place) and `[hour, minute,
 /// second]` of the local time, whole.
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn sky(unix: f64, utc_offset: i32, lat: f64, lon: f64) -> Vec<i32> {
     let (t, off) = (unix as i64, i64::from(utc_offset));
     let k = sky::inputs(t, off, sky::Place::from_degrees(lat, lon));
@@ -573,7 +580,7 @@ pub fn sky(unix: f64, utc_offset: i32, lat: f64, lon: f64) -> Vec<i32> {
 /// "hi": 1, "default": 1, "whole": false, "reads": 3}]`, `reads` bits 0
 /// its value, 1 `since(…)`, 2 `was(…)`; numbers to 4 decimals. `[]` for
 /// one that reads none (or before anything compiled).
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn builtins() -> String {
     let s = state();
     let mut j = String::from("[");
@@ -612,14 +619,14 @@ pub fn builtins() -> String {
 
 /// Where the page puts the picture [`frame_over`] draws over: 128 × 32
 /// RGB888 bytes in the module's memory, top row first (kept until changed).
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn under() -> *mut u8 {
     UNDER.0.get().cast()
 }
 
 /// Where the frame is in the module's memory: 128 × 32 RGB888 bytes, top
 /// row first (a view on it is good until the next call).
-#[wasm_bindgen]
+#[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn pixels() -> *const u8 {
     state().out.as_ptr()
 }

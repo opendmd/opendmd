@@ -403,6 +403,16 @@ updates, WiFi and restarting keep their controls and say in a line that the
 demo can't do them. A new browser session starts from a new player's
 settings.
 
+The Formula editor on the site (the demo's and `/f/`) has two aids the
+player's copy leaves out (`js/fcost.js`, imported only there, and its wasm
+module `pkg-psi-lang/`, opendmd-psi-web's `lang` build; neither is in the
+www pack). Once a Formula is past light, **What costs most**: a bar in the
+gutter beside each line for its share of the panel's work, and the
+compiler's notes on the cost, each with a **Line N** button. **Tidy up**
+lays the text out as `psi fmt` does, as one edit the browser's undo takes
+back. The module is the whole compiler (~120 KB gzipped), so it loads only
+when a Formula is heavy or Tidy up is pressed.
+
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
 (`tools/demo-card.py`). `make site` builds the whole public site into

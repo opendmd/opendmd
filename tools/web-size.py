@@ -400,7 +400,7 @@ FSUBMIT = {"js/fsubmit.js"}
 # 14 (Add to my panel), 13 (short links), 12.
 SHARE_GZ_BUDGET = 8 * 1024
 # What the formula page loads from the demo (its own files aside).
-SHARE_USES = ("pkg/", "pkg-psi/", "js/wasm.js", "js/web.js", "js/build.js", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
+SHARE_USES = ("pkg/", "pkg-psi/", "js/fcost.js", "js/wasm.js", "js/web.js", "js/build.js", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "js/formulas.js", "js/fstore.js",
               "js/overrides.js", "js/fsubmit.js", "formulas.json", "app.css", "formulas.css", "fonts/silkscreen.woff2")
 # Create Art's page on the site (`--share`'s create/: its page, script and
 # style; never packed): a line of its own, <= 5 KB (2026-11-02, branch
@@ -425,7 +425,7 @@ LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,
 # the schedule, what settings do to the demo's panel): imported by app.js
 # only for the site's demo and left out of the pack (opendmd-pack www.rs
-# DEMO_ONLY), so outside the 60 KB line.
+# SITE_ONLY), so outside the 60 KB line.
 # 9 KB since formula-refs (2026-10-29): a look named `@formula:<stem>`
 # resolved from formulas.json, as the player has the bundled ones built in.
 DEMO_GZ_BUDGET = 9 * 1024
@@ -468,6 +468,17 @@ FHIST = {"js/fhist.js"}
 # cheat sheet's rows, the rest the names and the list.
 FHINT_GZ_BUDGET = 7 * 1024
 FHINT = {"js/fhint.js"}
+# The site editor's What costs most and Tidy up (2026-11-07, branch
+# editor-cost): js/fcost.js (imported by js/formulas.js only on the site's
+# /f/ and demo) and its wasm, pkg-psi-lang/ (opendmd-psi-web's `lang`
+# build: observe() and format() on the compiler with its `syntax` hook),
+# both left out of the pack (opendmd-pack www.rs SITE_ONLY). The wasm is
+# loaded only when a Formula is past light or Tidy up is pressed. It is the
+# whole compiler (the observations need it), 121,347 B gz with its glue: the same module
+# with the device's exports too would be ~154 KB (pkg-psi + ~24.6 KB).
+FCOST_GZ_BUDGET = 3 * 1024
+FCOST = {"js/fcost.js"}
+PSI_LANG_GZ_BUDGET = 124 * 1024
 # The site's Psi language reference script (`--share`'s ref/psiref.js,
 # copied to dev/psi/: the live examples, highlighting, search and the cheat
 # sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
@@ -530,6 +541,10 @@ def main() -> int:
             kind = "art wasm"
         elif rel.startswith("pkg-psi/"):
             kind = "psi wasm"
+        elif rel.startswith("pkg-psi-lang/"):
+            kind = "psi lang"
+        elif rel in FCOST:
+            kind = "fcost"
         elif rel in FORMULAS:
             kind = "formulas"
         elif rel in SHOW:
@@ -683,6 +698,7 @@ def main() -> int:
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
+                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")
