@@ -15,9 +15,12 @@ const lang = () => (L ??= load('pkg-psi-lang').then(([m]) => m).catch((e) => { L
 // µs a frame on the panel (psikit est()): under it, light, and nothing said about the cost.
 const LIGHT = 5000;
 // Notes about what went well (kept, a column at a time, lanes) are not news here.
-const WELL = /^(still cache:|column run:|this loop of \d+ turns runs as lanes)/;
+// (A column run left out is not: said in its own words, below.)
+const WELL = /^(still cache:|column run: (?!left out)|this loop of \d+ turns runs as lanes)/;
+const LOST = { 'it is over 255 steps': 'there are too many of them', 'it holds more values at once than the registers': 'they would hold more values at once than the panel can',
+  'its marker does not fit the program': 'the program has no room left for it', "the scenes' steps could not be laid out around it": 'the scenes’ steps can’t be laid out around them' };
 const COST = /for every pixel|per pixel/;
-const plain = (t) => t.replace('it would be kept in the still cache but', 'it could be worked out once and kept, but')
+const plain = (t) => t.replace(/^column run: left out \((.+?)\): .*/, (_, w) => `Some values here change only from column to column, but they are worked out for every pixel, not once a column: ${LOST[w] || w}`).replace('it would be kept in the still cache but', 'it could be worked out once and kept, but')
   .replace(/ \([^()]*psi check[^()]*\)/, '').replace(/^./, (c) => c.toUpperCase());
 const said = (t) => plain(t).split('`').map((x, k) => (k % 2 ? h('code', x) : x));
 const CSS = '.psi-gut{position:relative;z-index:0}.fc-bar{position:absolute;left:0;height:1.5em;background:var(--acc);opacity:.4;border-radius:0 2px 2px 0;z-index:-1}'
@@ -50,8 +53,10 @@ export function cost({ ta, gut, code, help, put }) {
     gut.append(...bars);
     const most = heavy ? o.lines.slice(0, 3).filter((l) => l[1] >= 100) : [];
     const ns = (o?.notes || []).filter(([, t]) => !WELL.test(t) && (heavy || !COST.test(t)));
-    clear(notes, heavy && us <= LIGHT && h('p', 'Light for the panel: nothing here needs to change.'),
-      most.length > 0 && h('p', 'What costs most: ', most.map(([k, p]) => [line(k), `${Math.round(p / 10)}% `])), ns.map(([k, t]) => h('p', line(k), said(t))));
+    // Light (shown on demand): plainly so, and nothing to change unless a note says otherwise.
+    const tips = ns.some(([, t]) => COST.test(t));
+    clear(notes, heavy && us <= LIGHT && h('p', tips ? 'Light for the panel.' : 'Light for the panel: nothing here needs to change.'),
+      most.length > 0 && h('p', 'What costs most: ', most.map(([k, p]) => [line(k), `${Math.round(p / 10)}% `])), ns.map(([k, t]) => h('p', /^column run: left out/.test(t) ? null : line(k), said(t))));
     notes.hidden = !notes.firstChild;
   }
   // After the editor's own compile, a pause: never in the way of typing.

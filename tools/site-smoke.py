@@ -2031,7 +2031,7 @@ def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     page.click("#psi-cost")
     page.wait_for_selector(".psi-gut .fc-bar", timeout=20000)
     notes = page.inner_text("#psi-notes")
-    check(page.get_attribute("#psi-cost", "aria-pressed") == "true" and notes.startswith("Light for the panel: nothing here needs to change") and "What costs most" in notes,
+    check(page.get_attribute("#psi-cost", "aria-pressed") == "true" and notes.startswith("Light for the panel") and "What costs most" in notes,
           f"/f/: What costs most on a light bundled Formula ({notes[:90]!r}…)")
     page.locator("#psi-ed").screenshot(path=str(shots / "f-cost-light.png"))
     page.click("#psi-tidy")
