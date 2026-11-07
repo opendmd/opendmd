@@ -28,7 +28,10 @@ export async function sheet(x, btn) {
   const line = (w, k, l) => x.put(P.declare(x.get(), w, k, l));
   const field = (id, label, max, w) => {
     const i = h('input', { type: 'text', id, maxLength: max, placeholder: w == 'name' ? 'Untitled formula' : 'One line about it' });
-    i.oninput = () => { const t = text(i.value, max); if (w == 'name') x.f.name = t; line(w, 0, t ? `${w} "${t}"` : ''); };
+    // (Its line written on change, not each key: the text's undo keeps a step for it; once
+    // focus has gone where it was going, which the text's focus for the edit gives back.)
+    i.oninput = () => { if (w == 'name') x.f.name = text(i.value, max); };
+    i.onchange = () => setTimeout(() => { const t = text(i.value, max); if (w == 'name') x.f.name = t; line(w, 0, t ? `${w} "${t}"` : ''); });
     return [h('label.stack', label, i), i];
   };
   const [nameL, name] = field('psi-set-name', 'Name', 60, 'name'), [aboutL, about] = field('psi-set-about', 'About', 120, 'about');

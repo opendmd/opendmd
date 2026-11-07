@@ -4517,6 +4517,16 @@ def psi_undo_checks(page: Page) -> None:
     u = undos(page, 3)
     check(picks == [t.replace("#f80", "#0f0"), t.replace("#f80", "#0f0").replace("#fff", "#00f")] and u[0] == picks[0] and u[1] == t and "-- typed" not in u[2],
           f"undo: two colour picks are two undos, and the typing before them still undoes ({[*picks, *u]})")
+    # The name: its line written once the field changes, one step, the code's typing still undone after.
+    t = typed_first(page, "gray(x)")
+    page.fill("#psi-name", "Undo me")
+    page.focus("#psi-src")
+    page.wait_for_timeout(400)
+    named = page.input_value("#psi-src")
+    # (Chromium's undo is the page's: the step between is the name field's own.)
+    u = undos(page, 3)
+    check(named == 'name "Undo me"\n' + t and u[0] == t and "-- typed" not in u[2],
+          f"undo: a name changed is one step, and the code typed before it still undoes ({[named, *u]})")
     t = typed_first(page, HEART)
     caret_at(page, t.index("key") + 1)
     page.click("#psi-blk")
@@ -5002,6 +5012,9 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     # undeclared slider).
     formula_editor(page, "-- a: level\nloop 4\ngray(a * x + saw(t / 4) * 0.1)")
     page.fill("#psi-name", "Smoke & ramp")
+    # (Its line goes in once the field changes: focus elsewhere.)
+    page.focus("#psi-src")
+    page.wait_for_timeout(300)
     src = page.input_value("#psi-src")
     page.click("#psi-ed-pl")
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
