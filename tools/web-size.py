@@ -447,6 +447,13 @@ EDITOR = {"js/pledit.js"}
 # left) nor the page's 60 KB line, as it never loads with either.
 PSIERR_GZ_BUDGET = 4 * 1024
 PSIERR = {"js/psierr.js"}
+# Earlier versions of a Formula (`js/fhist.js`, branch editor-save,
+# 2026-11-07: the ring of the last 10 per Formula in this browser, the line
+# diff, its menu, and the site's /f/ draft and Continue where you left off),
+# imported by js/formulas.js on a save, an arrival or the menu, and by /f/
+# as it starts: a line of its own, <= 3 KB, not the Formulas line.
+FHIST_GZ_BUDGET = 3 * 1024
+FHIST = {"js/fhist.js"}
 # The site's Psi language reference script (`--share`'s ref/psiref.js,
 # copied to dev/psi/: the live examples, highlighting, search and the cheat
 # sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
@@ -563,6 +570,8 @@ def main() -> int:
             kind = "editor"
         elif rel in PSIERR:
             kind = "psierr"
+        elif rel in FHIST:
+            kind = "fhist"
         elif rel in IMPORT:
             kind = "import"
         else:
@@ -657,7 +666,7 @@ def main() -> int:
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
-                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET),
+                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

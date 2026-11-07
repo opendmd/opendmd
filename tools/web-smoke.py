@@ -4501,6 +4501,8 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     formulas_more(browser, base, errors)
     formulas_combine_checks(browser, base, errors)
     formulas_inputs_checks(browser, base, errors)
+    formulas_time_checks(browser, base, errors)
+    formulas_versions_checks(browser, base, errors)
     location_checks(browser, base, errors)
 
 
@@ -5397,6 +5399,119 @@ def location_checks(browser, base: str, errors: list[str]) -> None:
           f"location: this browser's location, rounded in the page before it is sent ({asked[-1:]})")
     put_json(base + "/api/config", {"lat": None, "lon": None})
     page.context.close()
+
+
+def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
+    """The editor's preview time: paused it holds the frame, , and . step it
+    a frame (20 ms) with the preview focused, the range drags through the
+    loop (a loop forever one's first 10 s), Play goes on; Save as GIF still
+    takes the whole loop."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/")
+    formula_editor(page, "loop 2\ngray(frac(t/2))")
+    page.wait_for_function("+document.querySelector('#psi-ed-panel').dataset.frames > 5", timeout=10000)
+    t = lambda: page.inner_text("#psi-t-now")
+    page.click("#psi-pause")
+    page.wait_for_timeout(150)
+    f0, a0, t0 = psi_frames(page, "#psi-ed-panel"), canvas_sum(page, "#psi-ed-panel"), t()
+    page.wait_for_timeout(500)
+    check(psi_frames(page, "#psi-ed-panel") == f0 and canvas_sum(page, "#psi-ed-panel") == a0 and t() == t0
+          and page.get_attribute("#psi-pause", "aria-label") == "Play" and page.get_attribute("#psi-t", "max") == "99",
+          f"formulas time: paused, the frame holds ({t0}, {f0} frames; 100 frames to drag through)")
+    page.focus("#psi-ed-panel")
+    page.keyboard.press(".")
+    page.wait_for_timeout(200)
+    s0 = float(t0.split()[2])
+    t1 = t()
+    check(psi_frames(page, "#psi-ed-panel") == f0 + 1 and abs(float(t1.split()[2]) - (s0 + 0.02) % 2) < 1e-6 and canvas_sum(page, "#psi-ed-panel") != a0,
+          f"formulas time: . steps one frame on ({t0} -> {t1})")
+    page.keyboard.press(",")
+    page.keyboard.press(",")
+    page.wait_for_timeout(200)
+    check(abs(float(t().split()[2]) - (s0 - 0.02) % 2) < 1e-6, f"formulas time: , steps back ({t()})")
+    set_range(page, "#psi-t", 50)
+    a1 = canvas_sum(page, "#psi-ed-panel")
+    check(t() == "t = 1.00 s" and page.get_attribute("#psi-pause", "aria-label") == "Play", f"formulas time: dragged to the middle ({t()})")
+    # An edit while held keeps the time: the new text drawn at the same moment.
+    page.fill("#psi-src", "loop 2\ngray(frac(t/2) + 0.1)")
+    page.wait_for_timeout(500)
+    check(t() == "t = 1.00 s" and canvas_sum(page, "#psi-ed-panel") != a1, f"formulas time: an edit while paused draws at the same t ({t()})")
+    page.click("#psi-pause")
+    f1 = psi_frames(page, "#psi-ed-panel")
+    page.wait_for_timeout(400)
+    check(psi_frames(page, "#psi-ed-panel") > f1 + 3 and page.get_attribute("#psi-pause", "aria-label") == "Pause", "formulas time: Play goes on")
+    page.fill("#psi-src", "loop forever\ngray(frac(t/3))")
+    page.wait_for_timeout(500)
+    check(page.get_attribute("#psi-t", "max") == "499", f"formulas time: loop forever drags through its first 10 s ({page.get_attribute('#psi-t', 'max')} frames)")
+    # Held, Save as GIF takes the whole loop all the same.
+    page.fill("#psi-src", "loop 2\ngray(frac(t/2))")
+    page.wait_for_timeout(400)
+    page.click("#psi-pause")
+    page.click("#psi-ed-gif")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames)(document.querySelector('#studio'))", timeout=30000)
+    check(studio_data(page).get("srcFrames") == "100", f"formulas time: paused, Save as GIF still has the loop ({studio_data(page).get('srcFrames')} frames)")
+    page.context.close()
+    # A phone: the controls are a thumb's size.
+    page = new_page(browser, "phone", errors)
+    page.goto(base + "/")
+    formula_editor(page, "loop 2\ngray(x)")
+    sizes = page.eval_on_selector_all(".psi-time button, #psi-t", "els => els.map(e => { const r = e.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })")
+    check(len(sizes) == 4 and all(w >= 44 and h >= 44 for w, h in sizes) and page.evaluate("document.documentElement.scrollWidth <= innerWidth"),
+          f"formulas time (phone): every control at least 44 px, no sideways scroll ({sizes})")
+    page.context.close()
+
+
+def formulas_versions_checks(browser, base: str, errors: list[str]) -> None:
+    """Earlier versions…: each save keeps one (the last 10 a Formula, in this
+    browser), each shows what going back would change, Go back to this is
+    one undo; a full storage is survived."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/")
+    formula_editor(page, "loop 4\ngray(x*0.25)")
+    page.fill("#psi-name", "Smoke versions")
+    page.click("#psi-save")
+    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    s1 = page.input_value("#psi-src")
+    page.fill("#psi-src", s1.replace("0.25", "0.75") + "\n-- second")
+    page.wait_for_timeout(400)
+    page.click("#psi-save")
+    page.wait_for_function("document.querySelector('#psi-ed .tick')?.dataset.n >= 2", timeout=10000)
+    s3 = s1.replace("gray(x*0.25)", "gray(y)")
+    page.fill("#psi-src", s3)
+    page.wait_for_timeout(400)
+    page.click("#psi-vers-btn")
+    page.wait_for_selector("#psi-vers", timeout=10000)
+    rows = page.eval_on_selector_all("#psi-vers button.mi", "els => els.map(e => e.textContent)")
+    words = page.inner_text("#psi-vers").lower()
+    check(len(rows) == 2 and all(r.startswith("Today ") and "Saved" in r for r in rows)
+          and not any(w in words for w in ("cache", "copy", "bucket", "history", "version control")),
+          f"formulas versions: two saves, two versions ({rows})")
+    page.click("#psi-v-1")
+    d = page.inner_text("#psi-v-1-d .psi-diff")
+    check("+ gray(x*0.25)" in d and "− gray(y)" in d, f"formulas versions: what going back would change ({d!r})")
+    shot(page, "formulas-versions", "laptop")
+    page.click("#psi-v-1-go")
+    page.wait_for_timeout(400)
+    back = page.input_value("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(400)
+    check(back == s1 and page.input_value("#psi-src") == s3, "formulas versions: Go back to this restores the first save, one undo takes it away")
+    # Storage full: kept or not, nothing breaks.
+    got = page.evaluate("""async () => { const m = await import('./js/fhist.js'), junk = [];
+        try { for (let k = 0; k < 400; k++) { localStorage.setItem('smoke.junk.' + k, 'x'.repeat(1 << 16)); junk.push(k); } } catch { /* full */ }
+        let ok = true;
+        try { for (let k = 0; k < 12; k++) m.keep('smoke', { src: 'gray(' + k + ')' + ' '.repeat(30000) }, 's'); m.draft('smoke', { src: 'x', base: 'y' }); } catch { ok = false; }
+        for (const k of junk) localStorage.removeItem('smoke.junk.' + k);
+        m.keep('smoke', { src: 'gray(1)' }, 's');
+        return [ok, junk.length, m.list('smoke').length <= 10, m.list('smoke')[0]?.src]; }""")
+    check(got[0] and got[2] and got[3] == "gray(1)", f"formulas versions: a full storage throws nothing, 10 at most ({got})")
+    page.context.close()
+    for f in ("smoke-versions.psi", "smoke-versions.psb"):
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"{base}/api/files/formulas/{f}", method="DELETE"), timeout=30).read()
+        except OSError:
+            pass
 
 
 def formulas_inputs_checks(browser, base: str, errors: list[str]) -> None:

@@ -18,6 +18,11 @@
 // nothing in the link, nothing kept on the site. An https page can open
 // or navigate to http, never fetch from it. A gallery tile's Open on my
 // panel comes marked `&panel=1`: with the address known it goes straight on.
+//
+// Never lost: the text as changed is kept in this browser per Formula (its
+// gallery name, or `open`), offered back on return (Continue where you left
+// off), and Earlier versions… has it as it came, as it went to the panel
+// and as it was left (js/fhist.js).
 
 import { init } from '../demo/js/web.js';
 import { from, unheader, vals, num, READY, REMIX, MAX_SRC } from '../demo/js/psikit.js';
@@ -67,7 +72,10 @@ async function load() {
 }
 
 async function start() {
-  const got = await load();
+  const H = await import('../demo/js/fhist.js'), key = ref?.gallery ? 'g' + ref.gallery : 'open', d = H.draft(key);
+  let got = await load();
+  // #open again (its text is read once): what it started from, the draft offered.
+  if (!got && opening && d?.base) got = { name: d.name, src: d.base };
   if (!got || !got.src.trim()) {
     $('f-none').hidden = false;
     $('f-none-why').textContent = opening ? 'There’s no formula waiting here: open one from the Psi language reference or the formula gallery.'
@@ -82,13 +90,20 @@ async function start() {
   const btn = (id, text, cls = '') => Object.assign(document.createElement('button'), { id, textContent: text, className: cls });
   const open = btn('f-open', 'Open on my panel', 'pri'), copyCode = btn('f-copy-code', 'Copy code'), submit = btn('f-submit', 'Submit to the gallery…');
   const ed = await editorPage($('f-ed'), { ...got, ...(ref?.f || {}) }, {
-    acts: [open, copyCode, submit],
+    acts: [open, copyCode, submit], key,
     note: 'Open on my panel saves it on your own panel, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery.',
     changed: () => { clearTimeout(changed.t); changed.t = setTimeout(changed, 150); },
   });
   let subForm = null;
+  // The draft as it was: kept, and offered while the page is as it loaded.
+  H.keep(key, got, ref?.gallery ? 'g' : 'o');
+  const old = d && d.src !== orig && (ref?.gallery || d.base === orig) ? d : null;
+  if (d && d.src !== orig) H.keep(key, d, 'd');
+  if (old) $('f-ed').before(H.offer(old, () => ed.back(old)));
+  let asked = !!old;
   function changed() {
     const x = ed.now();
+    if (x.src !== orig) { asked = false; H.draft(key, { src: x.src, name: x.name, a: x.a, b: x.b, c: x.c, base: orig }); } else if (!asked) H.draft(key, null);
     const name = x.ctl?.name || x.name || 'Formula';
     $('f-name').textContent = name;
     document.title = `${name} · OpenDMD`;
@@ -106,6 +121,7 @@ async function start() {
     const x = ed.now(true);
     if (!x) return;
     const v = q(x, x.ctl);
+    H.keep(key, x, 'p');
     if (ref?.gallery && x.src === orig) { location.href = `http://${a}/#gallery=${ref.gallery}${v ? '&' + v : ''}`; return; }
     // Its app says it is ready (once it has loaded): the Formula, to that window only.
     const data = { type: REMIX, name: x.ctl?.name || x.name || '', src: x.src, a: x.a, b: x.b, c: x.c };

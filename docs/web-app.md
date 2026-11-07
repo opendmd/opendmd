@@ -432,6 +432,18 @@ doesn't compile is kept as an unsaved draft), then opens it in the
 editor. There are no anonymous short links:
 sharing is submitting to the gallery.
 
+**Earlier versions and drafts** (`js/fhist.js`, imported when needed): a
+ring of the last 10 texts per Formula in the browser's `localStorage`
+(`odmd.psi.v.<key>`; the key is a saved Formula's id, `g<slug>` for one from
+the gallery, `n…` for a new one, moved to the id on its first save), kept on
+each save and as a Formula arrives (and, on `/f/`, as it goes to a panel),
+each at most 32 KB; the oldest go first when storage is full. A version
+goes back through the editor's minimal-range edit as typed, so undo has
+it. `/f/` keeps its draft per Formula (`odmd.psi.fd.<key>`, with the text
+it started from) and offers it back on return; `#open`, read once, starts
+again from that text. The editor's preview can be held (`hold` on the
+view, ms): the loop draws that moment until it plays on.
+
 **The formula gallery** (`/formulas/`) is the app's examples plus the
 files merged into the public gallery repository's `gallery/`
 (github.com/opendmd/opendmd.github.io) by pull request. A workflow there

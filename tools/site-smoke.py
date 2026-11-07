@@ -279,6 +279,65 @@ def sent(popup: Page) -> dict:
     return json.loads(popup.title())
 
 
+def f_drafts(browser, base: str, errors: list[str], shots: Path | None) -> None:
+    """/f/ never loses work: the text as changed is kept in this browser per
+    Formula and offered back after a reload (a gallery one and an #open one,
+    whose text the reference leaves once); Earlier versions… has it as it
+    came, and Go back to this is one undo."""
+    e = next(x for x in examples() if not x["bundle"])
+    page = new_page(browser, "laptop", errors)
+    page.goto(gallery_link(base, e["slug"]))
+    f_ready(page)
+    orig = page.input_value("#psi-src")
+    mine = orig.rstrip("\n") + "\n-- my change"
+    page.fill("#psi-src", mine)
+    page.wait_for_timeout(600)
+    page.goto("about:blank")
+    page.goto(gallery_link(base, e["slug"]))
+    f_ready(page)
+    check(page.is_visible("#f-cont") and "still here" in page.inner_text("#f-cont") and page.input_value("#psi-src") == orig,
+          f"/f/: a reload offers the changes back, the gallery's text loaded ({page.inner_text('#f-cont') if page.is_visible('#f-cont') else 'no offer'})")
+    if shots:
+        page.screenshot(path=str(shots / "f-continue-laptop.png"))
+    page.click("#f-cont-go")
+    page.wait_for_timeout(400)
+    check(page.input_value("#psi-src") == mine and page.locator("#f-cont").count() == 0, "/f/: Continue where you left off puts the changes back")
+    page.click("#psi-vers-btn")
+    page.wait_for_selector("#psi-vers", timeout=10000)
+    rows = page.eval_on_selector_all("#psi-vers button.mi", "els => els.map(e => e.textContent)")
+    words = page.inner_text("#psi-vers").lower()
+    check(len(rows) == 2 and any("As it came from the gallery" in r for r in rows) and any("Your changes" in r for r in rows)
+          and not any(w in words for w in ("cache", "copy", "bucket", "history", "version control")),
+          f"/f/: Earlier versions has it as it came and the changes ({rows})")
+    k = next(i for i, r in enumerate(rows) if "As it came" in r)
+    page.click(f"#psi-v-{k}")
+    check(page.is_visible(f"#psi-v-{k}-d .psi-diff .d") and "my change" in page.inner_text(f"#psi-v-{k}-d .psi-diff .d"),
+          "/f/: a version shows what going back would take out")
+    if shots:
+        page.screenshot(path=str(shots / "f-versions-laptop.png"))
+    page.click(f"#psi-v-{k}-go")
+    page.wait_for_timeout(400)
+    back = page.input_value("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(400)
+    check(back == orig and page.input_value("#psi-src") == mine, "/f/: Go back to this restores it, and one undo takes that away")
+    page.context.close()
+    # #open: its text is read once, so a reload starts from the draft's.
+    page = new_page(browser, "laptop", errors)
+    src = "loop 4\ngray(frac(x + t/4))"
+    open_text(page, base, src, "Draft")
+    page.fill("#psi-src", src + "\n-- more")
+    page.wait_for_timeout(600)
+    page.goto("about:blank")
+    page.goto(f"{base}/f/#open")
+    f_ready(page)
+    shown = page.input_value("#psi-src")
+    page.click("#f-cont-go")
+    page.wait_for_timeout(400)
+    check(shown == src and page.input_value("#psi-src") == src + "\n-- more", "/f/#open: a reload still has it, and the changes back")
+    page.context.close()
+
+
 def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path | None) -> None:
     src = "control size = 0 \"Size\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*(1 + size) - t/2))"
     name = 'Rings <img src=x onerror="window.pwned=1">'
@@ -1997,6 +2056,7 @@ def main() -> int:
         hero_show(browser, base, errors)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
+        f_drafts(browser, base, errors, a.shots)
         print("Create Art (/create/)")
         create_page(browser, base, a.site, errors, a.shots)
         create_send(browser, base, a.site, errors)
