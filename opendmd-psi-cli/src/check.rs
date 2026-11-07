@@ -33,7 +33,7 @@
 //! when it doesn't compile, 2 for a missing file or a bad option.
 
 use opendmd_psi::golden::fnv;
-use opendmd_psi::syntax::{compile_observed, Defined, Level, Sink};
+use opendmd_psi::syntax::{compile_observed, Defined, Kept, Level, Sink};
 use opendmd_psi::{
     compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_STEPS,
     MAX_SCALARS, OWN, REGS, W,
@@ -502,9 +502,11 @@ pub fn run(args: Vec<String>) -> i32 {
 struct Seen {
     defs: Vec<Def>,
     notes: Vec<((usize, usize), String)>,
-    /// Each step the compiler made: where, and its cost a frame (ns: a
-    /// pixel's ×4,096, a row's ×32), for the heaviest lines.
-    ops: Vec<(usize, u64)>,
+    /// Each step the compiler made: where, its code, its cost a frame (ns:
+    /// a pixel's ×4,096, a row's ×32) and what that is divided by once laid
+    /// out (1; 32 for the column run's; 0, nothing, for the still cache's),
+    /// for the heaviest lines.
+    ops: Vec<((usize, usize), u8, u64, u64)>,
 }
 
 struct Def {
@@ -530,24 +532,30 @@ impl Sink for Seen {
     fn note(&mut self, at: (usize, usize), text: &str) {
         self.notes.push((at, text.into()));
     }
-    fn op(&mut self, at: (usize, usize), level: Level, _: u8, cost_ns: u32) {
+    fn op(&mut self, at: (usize, usize), level: Level, code: u8, cost_ns: u32) {
         let n = match level {
             Level::Pixel => 4096,
             Level::Row => 32,
             _ => 1,
         };
-        self.ops.push((at.0, u64::from(cost_ns) * n));
+        self.ops.push((at, code, u64::from(cost_ns) * n, 1));
+    }
+    fn kept(&mut self, at: (usize, usize), code: u8, how: Kept) {
+        if let Some(o) = self.ops.iter_mut().find(|o| o.0 == at && o.1 == code && o.3 == 1) {
+            o.3 = if how == Kept::Once { 0 } else { 32 };
+        }
     }
 }
 
 impl Seen {
     /// The lines whose steps cost the most a frame (pixel steps 4,096
-    /// times, row steps 32), with their share: what to make lighter first.
+    /// times, row steps 32; none for what the still cache keeps, a 32nd
+    /// for the column run's), with their share: what to make lighter first.
     fn heaviest(&self, src: &str) -> String {
         let line = |at: usize| src[..at.min(src.len())].bytes().filter(|&b| b == b'\n').count() + 1;
         let mut per: std::collections::BTreeMap<usize, u64> = Default::default();
-        for &(at, ns) in &self.ops {
-            *per.entry(line(at)).or_default() += ns;
+        for &(at, _, ns, d) in &self.ops {
+            *per.entry(line(at.0)).or_default() += ns.checked_div(d).unwrap_or(0);
         }
         let total: u64 = per.values().sum::<u64>().max(1);
         let mut v: Vec<(usize, u64)> = per.into_iter().collect();
