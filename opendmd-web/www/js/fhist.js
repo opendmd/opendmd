@@ -11,7 +11,9 @@
 import { h, toast } from './util.js';
 import { popup, closeMenu } from './overrides.js';
 
-const N = 10, MAX = 32768, RINGS = 30, DRAFTS = 20, V = 'odmd.psi.v.', FD = 'odmd.psi.fd.';
+// (At most ~640 K characters of them all, ~1.3 MB: the oldest Formula's go
+// first, so the rest of what this site keeps always fits.)
+const N = 10, MAX = 32768, RINGS = 30, DRAFTS = 20, ALL = 655360, V = 'odmd.psi.v.', FD = 'odmd.psi.fd.';
 const get = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const keys = (p) => { try { return Object.keys(localStorage).filter((k) => k.startsWith(p)); } catch { return []; } };
 // Written, else the oldest kept version anywhere dropped until it fits (never `k`'s newest).
@@ -27,6 +29,18 @@ function put(k, v) {
   }
   return false;
 }
+const raw = (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+const drop = (k) => { try { localStorage.removeItem(k); } catch { /* blocked */ } };
+// Past ALL: whole Formulas' versions and drafts dropped, the least recent first (never `k`'s).
+function budget(k) {
+  const all = [...keys(V), ...keys(FD)].map((r) => { const s = raw(r); let t = 0; try { const x = JSON.parse(s); t = (Array.isArray(x) ? x[0]?.t : x?.t) || 0; } catch { /* not ours */ } return [r, s.length + r.length, t]; });
+  let n = all.reduce((a, x) => a + x[1], 0);
+  for (const [r, b] of all.filter((x) => x[0] !== k).sort((a, b) => a[2] - b[2])) { if (n <= ALL) break; drop(r); n -= b; }
+}
+// FNV-1a of a text, in base 36: an #open Formula's key.
+export const hash = (s) => { let x = 0x811c9dc5; for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619) >>> 0; return x.toString(36); };
+// The key of the #open Formula last opened (set: kept), for a reload.
+export const opened = (k) => { try { if (k) localStorage.setItem('odmd.psi.fo', k); return k || localStorage.getItem('odmd.psi.fo'); } catch { return k || null; } };
 // The oldest of more than `n` of `p…` (by `t` of what each holds) dropped.
 function trim(p, n, t) {
   const ks = keys(p);
@@ -37,14 +51,14 @@ function trim(p, n, t) {
 export const list = (key) => { const l = get(V + key, []); return Array.isArray(l) ? l.filter((v) => typeof v?.src == 'string') : []; };
 // Kept: {src, name, a, b, c, t?}, `w` why.
 export function keep(key, f, w) {
-  const l = list(key), i = f?.src ? l.findIndex((v) => v.src === f.src) : 0;
-  // (One as it arrives once; another the same as one kept moves up.)
-  if (i >= 0 && (!f?.src || 'gro'.includes(w))) return;
-  if (i >= 0) l.splice(i, 1);
+  const l = list(key);
+  // (The same text kept already: as it was, its time and why.)
+  if (!f?.src || l.some((v) => v.src === f.src)) return;
   const v = { t: f.t || Date.now(), src: f.src.slice(0, MAX), name: f.name || '', w };
   for (const k of 'abc') if (typeof f[k] == 'number') v[k] = f[k];
   put(V + key, [v, ...l].sort((a, b) => b.t - a.t).slice(0, N));
   trim(V, RINGS, (l) => l?.[0]?.t || 0);
+  budget(V + key);
 }
 // A new Formula saved: its versions go with it.
 export function move(from, to) {
@@ -60,6 +74,7 @@ export function draft(key, d) {
   if (!d) { try { localStorage.removeItem(FD + key); } catch { /* blocked */ } return; }
   put(FD + key, { ...d, t: Date.now(), src: d.src.slice(0, MAX) });
   trim(FD, DRAFTS, (x) => x?.t || 0);
+  budget(FD + key);
 }
 
 // Lines of `a` (now) against `b` (that version): [[' ' | '-' | '+', line]].
@@ -105,13 +120,13 @@ export function when(t) {
 
 // Grown past the window's foot: up again (a sheet on a phone stays put).
 const fit = (m) => { const r = m.getBoundingClientRect(); if (!m.classList.contains('sheet') && r.bottom > innerHeight - 8) m.style.top = Math.max(8, innerHeight - r.height - 8) + 'px'; };
-// The menu, under `btn`: o = {key, cur (the text now), back(version), site}.
+// The menu, under `btn`: o = {key, cur (the text now), back(version): whether undo has it, site}.
 export function menu(btn, o) {
   const r = btn.getBoundingClientRect(), vs = list(o.key);
   const item = (v, k) => {
     const d = diff(o.cur, v.src), add = d.filter((x) => x[0] === '+').length, del = d.filter((x) => x[0] === '-').length;
     const box = h('div', { id: `psi-v-${k}-d`, hidden: true }, add + del ? h('div.psi-diff', shown(d)) : h('p.cap', 'The same as now.'),
-      h('button.pri', { id: `psi-v-${k}-go`, disabled: !(add + del), onclick: () => { closeMenu(); o.back(v); toast(`Back to ${v.w === 's' ? 'the one saved ' + when(v.t) : (WHY[v.w] || 'it').toLowerCase()}: undo takes it away again`, 'ok'); } }, 'Go back to this'));
+      h('button.pri', { id: `psi-v-${k}-go`, disabled: !(add + del), onclick: () => { closeMenu(); toast(`Back to the text from ${when(v.t)}` + (o.back(v) ? ': undo takes it away again' : ''), 'ok'); } }, 'Go back to this'));
     const tag = WHY[v.w] || '', lead = v.w === 's' || v.w === 'd' || !tag ? when(v.t) : tag;
     return [h('button.mi', { id: `psi-v-${k}`, 'aria-expanded': 'false', onclick: (e) => { box.hidden = !box.hidden; e.currentTarget.setAttribute('aria-expanded', !box.hidden); fit(box.closest('.menu')); } },
       h('span.grow', h('b', lead), h('span.cap', ` ${lead === tag ? when(v.t) : tag}${v.name ? ' · ' + v.name : ''}`)), h('span.cap', add + del ? `+${add} −${del}` : 'as now')), box];

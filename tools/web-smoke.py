@@ -5494,6 +5494,8 @@ def formulas_versions_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-v-1-go")
     page.wait_for_timeout(400)
     back = page.input_value("#psi-src")
+    t = last_toast(page, "ok")
+    check(t.startswith("Back to the text from Today ") and t.endswith(": undo takes it away again"), f"formulas versions: the toast says so ('{t}')")
     page.keyboard.press("Control+z")
     page.wait_for_timeout(400)
     check(back == s1 and page.input_value("#psi-src") == s3, "formulas versions: Go back to this restores the first save, one undo takes it away")
@@ -5506,6 +5508,14 @@ def formulas_versions_checks(browser, base: str, errors: list[str]) -> None:
         m.keep('smoke', { src: 'gray(1)' }, 's');
         return [ok, junk.length, m.list('smoke').length <= 10, m.list('smoke')[0]?.src]; }""")
     check(got[0] and got[2] and got[3] == "gray(1)", f"formulas versions: a full storage throws nothing, 10 at most ({got})")
+    # 40 Formulas of 10 big versions: ~1.3 MB in all at most, the newest kept.
+    got = page.evaluate("""async () => { const m = await import('./js/fhist.js');
+        for (let f = 0; f < 40; f++) for (let k = 0; k < 10; k++) m.keep('big' + f, { src: 'gray(' + k + ')' + ' '.repeat(30000) }, 's');
+        const ks = Object.keys(localStorage).filter((k) => /^odmd[.]psi[.](v|fd)[.]/.test(k)), n = ks.reduce((a, k) => a + k.length + localStorage.getItem(k).length, 0);
+        const newest = m.list('big39').length;
+        for (const k of ks) if (k.includes('.big')) localStorage.removeItem(k);
+        return [n, newest]; }""")
+    check(got[0] <= 655360 and got[1] == 10, f"formulas versions: kept within ~1.3 MB in all, the newest whole ({got})")
     page.context.close()
     for f in ("smoke-versions.psi", "smoke-versions.psb"):
         try:
