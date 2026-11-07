@@ -175,6 +175,8 @@ test:
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test --features lang lang
 	@echo "==> Testing $(PSICLI) (the psi command)"
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo test
+	@# The bundled Formulas (and the rest of the gallery's examples) stay as psi fmt lays them out: it names any that don't.
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- fmt --check $(abspath $(wildcard $(WEB)/formulas/*.psi))
 	@echo "==> Testing $(GAL) (the formula gallery's checker)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEBMIN) (make web's minifier)"

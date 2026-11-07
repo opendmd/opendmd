@@ -4,8 +4,8 @@ name "Spotlight"
 about "A spotlight sweeping across a brick wall"
 control size = 0.5 "Spotlight size"
 loop 8
-row = floor((31 - py)/8)
-brick = step(1, (31 - py)%8) * step(1, (px + row%2*8) % 16)
+row = floor((31 - py) / 8)
+brick = step(1, (31 - py) % 8) * step(1, (px + row%2*8) % 16)
 dx = cx - 0.38*sin(t/8)*4
 dy = (-cy) - 0.3*sin(t/4)
 light = clamp(1.3 - (dx*dx + dy*dy)/(0.05 + size*0.5), 0.15, 1)
