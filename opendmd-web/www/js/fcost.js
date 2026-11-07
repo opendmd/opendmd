@@ -1,11 +1,12 @@
 // What costs most and Tidy up: the site's Formula editor only (/f/ and the
 // demo: js/formulas.js imports this when its PAGE or app.demo is set; the
-// pack leaves it out, opendmd-pack www.rs SITE_ONLY). Once a Formula that
-// compiles is past light: a bar in the gutter beside each line for its share
-// of the panel's work, and the compiler's notes as sentences over the code,
-// each with a Line N button to go there. Tidy up lays the text out as
-// `psi fmt` does, as one edit (one undo). The wasm (pkg-psi-lang: observe(),
-// format(); the whole compiler, ~121 KB gz) loads only then.
+// pack leaves it out, opendmd-pack www.rs SITE_ONLY). What costs most (by
+// itself once a Formula is past light, else its button): a bar in the gutter
+// beside each line for its share of the panel's work, and the compiler's
+// notes as sentences over the code, each with a Line N button to go there.
+// Tidy up lays the text out as `psi fmt` does, as one edit (one undo). The
+// wasm (pkg-psi-lang: observe(), format(); the whole compiler, ~121 KB gz)
+// loads only for one of these.
 import { h, clear, toast, debounce } from './util.js';
 import { load } from './wasm.js';
 
@@ -30,9 +31,11 @@ export function cost({ ta, gut, code, help, put }) {
   if (!document.getElementById('fc-css')) document.head.append(h('style', { id: 'fc-css' }, CSS));
   const notes = h('div.cap.fc-notes', { id: 'psi-notes', hidden: true });
   const tidy = h('button.sm', { id: 'psi-tidy', hidden: true, title: 'Lay the code out the usual way: spaces and indents only', onclick: () => tidyUp() }, 'Tidy up');
+  // On demand for a light one (a heavy one shows it by itself), until pressed again.
+  const ask = h('button.sm', { id: 'psi-cost', hidden: true, 'aria-pressed': 'false', title: 'Which lines take the panel the most work', onclick: () => { asked = !asked; ask.setAttribute('aria-pressed', asked); if (asked) look(); else show(null); } }, 'What costs most');
   code.prepend(notes);
-  help.after(tidy);
-  let src = null, us = 0, bars = [], lines = 0;
+  help.after(ask, tidy);
+  let src = null, us = 0, bars = [], lines = 0, asked = false;
   const go = (k) => {
     const s = ta.value.split('\n').slice(0, k).reduce((n, l) => n + l.length + 1, 0);
     ta.focus();
@@ -42,12 +45,13 @@ export function cost({ ta, gut, code, help, put }) {
   function show(o) {
     for (const b of gut.querySelectorAll('.fc-bar')) b.remove();
     lines = ta.value.split('\n').length;
-    const heavy = !!o && us > LIGHT, top = o?.lines[0]?.[1] || 1;
+    const heavy = !!o && (us > LIGHT || asked), top = o?.lines[0]?.[1] || 1;
     bars = heavy ? o.lines.filter((l) => l[1] >= 10).map(([k, p]) => h('i.fc-bar', { style: `top:calc(8px + ${k * 1.5}em);width:${Math.max(6, Math.round((p * 100) / top))}%` })) : [];
     gut.append(...bars);
     const most = heavy ? o.lines.slice(0, 3).filter((l) => l[1] >= 100) : [];
     const ns = (o?.notes || []).filter(([, t]) => !WELL.test(t) && (heavy || !COST.test(t)));
-    clear(notes, most.length > 0 && h('p', 'What costs most: ', most.map(([k, p]) => [line(k), `${Math.round(p / 10)}% `])), ns.map(([k, t]) => h('p', line(k), said(t))));
+    clear(notes, heavy && us <= LIGHT && h('p', 'Light for the panel: nothing here needs to change.'),
+      most.length > 0 && h('p', 'What costs most: ', most.map(([k, p]) => [line(k), `${Math.round(p / 10)}% `])), ns.map(([k, t]) => h('p', line(k), said(t))));
     notes.hidden = !notes.firstChild;
   }
   // After the editor's own compile, a pause: never in the way of typing.
@@ -83,7 +87,8 @@ export function cost({ ta, gut, code, help, put }) {
       src = s;
       us = e || 0;
       tidy.hidden = s == null;
-      if (s != null && (us > LIGHT || L)) look();
+      ask.hidden = s == null || us > LIGHT;
+      if (s != null && (us > LIGHT || asked || L)) look();
       else show(null);
     },
     // The gutter drawn again (n lines): its bars, while the lines are where they were.

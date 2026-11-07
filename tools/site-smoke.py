@@ -2000,7 +2000,8 @@ def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     pkg-psi-lang): a heavy Formula gets a bar in the gutter beside its
     costly lines and the compiler's notes with Line buttons that move the
     caret; Tidy up lays the text out as `psi fmt` does and one undo takes it
-    back; a light one stays quiet; the demo's editor has Tidy up too."""
+    back; a light one stays quiet until What costs most is pressed; the
+    demo's editor has Tidy up too."""
     src = 'name "Heavy"\nloop 4\na = noise(x*8, y*8, t)\nb = noise(x*4 + a,  y*4, t/2)\nc = sqrt(x*x + y*y) + atan2(y - 0.5, x - 0.5)\ngray(frac(a + b + c))'
     page = new_page(browser, "laptop", errors)
     open_text(page, base, src, "Heavy")
@@ -2022,10 +2023,23 @@ def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     check(page.input_value("#psi-src") == src, "/f/: one undo takes Tidy up back")
     page.context.close()
     page = new_page(browser, "laptop", errors)
-    open_text(page, base, 'name "Light"\ngray(x)', "Light")
+    road = next(e for e in examples(True) if e["slug"] == "endless-road")
+    open_text(page, base, road["src"], road["name"])
     page.wait_for_selector("#psi-tidy:not([hidden])", timeout=20000)
     page.wait_for_timeout(800)
-    check(page.locator(".psi-gut .fc-bar").count() == 0 and not page.is_visible("#psi-notes"), "/f/: a light Formula: no bars, no notes")
+    check(page.locator(".psi-gut .fc-bar").count() == 0 and not page.is_visible("#psi-notes"), "/f/: a light Formula: no bars, no notes by themselves")
+    page.click("#psi-cost")
+    page.wait_for_selector(".psi-gut .fc-bar", timeout=20000)
+    notes = page.inner_text("#psi-notes")
+    check(page.get_attribute("#psi-cost", "aria-pressed") == "true" and notes.startswith("Light for the panel: nothing here needs to change") and "What costs most" in notes,
+          f"/f/: What costs most on a light bundled Formula ({notes[:90]!r}…)")
+    page.locator("#psi-ed").screenshot(path=str(shots / "f-cost-light.png"))
+    page.click("#psi-tidy")
+    page.wait_for_selector("#toasts .toast", timeout=10000)
+    check("Already tidy" in page.inner_text("#toasts"), "/f/: a bundled Formula is already tidy")
+    page.click("#psi-cost")
+    page.wait_for_timeout(300)
+    check(page.locator(".psi-gut .fc-bar").count() == 0 and not page.is_visible("#psi-notes"), "/f/: pressed again, What costs most goes")
     page.goto(f"{base}/demo/#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-new")
