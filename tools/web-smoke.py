@@ -1582,6 +1582,8 @@ def tree_checks(browser, base: str, errors: list[str]) -> None:
     ← ←), Consoles virtualised (3,781 GIFs, a few dozen rows in the page,
     the last GIF reached by End), a link to a folder, Select's folder tick;
     shots at laptop and phone widths."""
+    # The card's own count (3,781 on the stock card, fewer on tools/ci-card.py's).
+    n_consoles = sum(1 for p in (CARD / "gifs/Consoles").iterdir() if p.suffix.lower() == ".gif" and not p.name.startswith("."))
     for size in ("laptop", "phone"):
         page = new_page(browser, size, errors)
         page.goto(base + "/#library")
@@ -1604,7 +1606,7 @@ def tree_checks(browser, base: str, errors: list[str]) -> None:
             page.keyboard.press("ArrowDown")
         focus = page.evaluate("document.activeElement.dataset.cat")
         page.keyboard.press("ArrowRight")
-        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === 3781", timeout=30000)
+        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === {n_consoles}", timeout=30000)
         exp = page.evaluate("document.activeElement.getAttribute('aria-expanded')")
         check(focus == "Consoles" and exp == "true", f"tree: ↓ to Consoles ({focus}), → opens it (aria-expanded {exp})")
         page.keyboard.press("ArrowRight")
@@ -1620,26 +1622,34 @@ def tree_checks(browser, base: str, errors: list[str]) -> None:
         check(back == "Consoles", f"tree: ← steps out to the folder ({back}), ← closes it")
         # Virtualised: the model has every GIF, the page a screenful.
         page.keyboard.press("ArrowRight")
-        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === 3781", timeout=30000)
+        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === {n_consoles}", timeout=30000)
         page.keyboard.press("End")
         last = page.evaluate(f"{TREE}.rows.at(-1)")
         page.wait_for_function("document.activeElement?.dataset?.cat || document.activeElement?.dataset?.path", timeout=5000)
         dom = page.locator("#lib-list .vrow, #lib-list .vdir").count()
         at = page.evaluate("document.activeElement.dataset.path || document.activeElement.dataset.cat")
-        check(dom <= 40 and at == (last.get("path") or last.get("cat")), f"tree: Consoles' 3,781 GIFs in {dom} rows; End reaches the last row ({at})")
+        check(dom <= 40 and at == (last.get("path") or last.get("cat")), f"tree: Consoles' {n_consoles:,} GIFs in {dom} rows; End reaches the last row ({at})")
         shot(page, "library-tree", "laptop")
-        # A link to a folder: it alone, open, at the top.
-        page.goto(base + "/#library/" + urllib.parse.quote("NEW 2021"))
-        page.wait_for_function(f"(t => t && t.open.size === 1 && t.open.has('NEW 2021') && t.rows.some(r => r.path))({TREE})", timeout=30000)
-        top = page.evaluate("document.querySelector('#lib-list').scrollTop")
-        idx = page.evaluate(f"{TREE}.rows.findIndex(r => r.cat === 'NEW 2021' && !r.path)")
-        check(abs(top - idx * 44) < 2, f"tree: #library/NEW%202021 opens that folder at the top ({top} px, row {idx})")
+        # A link to a folder: it alone, open, at the top. The stock card's
+        # "NEW 2021" (a name with a space); on another card a folder with a
+        # space if it has one, else any small folder of GIFs.
+        dirs = sorted(p.name for p in (CARD / "gifs").iterdir() if p.is_dir() and not p.name.startswith((".", "_"))
+                      and any(q.suffix.lower() == ".gif" for q in p.iterdir()))
+        fold = "NEW 2021" if "NEW 2021" in dirs else next((d for d in dirs if " " in d), None) or \
+            min((d for d in dirs if d != "Consoles"), key=lambda d: sum(1 for _ in (CARD / "gifs" / d).iterdir()))
+        fsel = json.dumps(fold)
+        page.goto(base + "/#library/" + urllib.parse.quote(fold))
+        page.wait_for_function(f"(t => t && t.open.size === 1 && t.open.has({fsel}) && t.rows.some(r => r.path))({TREE})", timeout=30000)
+        top, most = page.evaluate("(l => [l.scrollTop, l.scrollHeight - l.clientHeight])(document.querySelector('#lib-list'))")
+        idx = page.evaluate(f"{TREE}.rows.findIndex(r => r.cat === {fsel} && !r.path)")
+        # At the top, or as far as the list scrolls (a short card's last folders).
+        check(abs(top - min(idx * 44, most)) < 2, f"tree: #library/{urllib.parse.quote(fold)} opens that folder at the top ({top} px, row {idx})")
         # Select: a folder's tick takes every GIF in it.
         page.click("#lib-select")
-        page.click("#lib-list .vdir[data-cat='NEW 2021'] input[type=checkbox]")
-        n = len(list((CARD / "gifs" / "NEW 2021").glob("*.gif")))
+        page.click(f"#lib-list .vdir[data-cat={fsel}] input[type=checkbox]")
+        n = len(list((CARD / "gifs" / fold).glob("*.gif")))
         page.wait_for_function(f"document.querySelector('#lib-selbar b').textContent === '{n}'", timeout=10000)
-        check(page.is_checked("#lib-list .vdir[data-cat='NEW 2021'] input[type=checkbox]"), f"tree: Select's folder tick picks its {n} GIFs")
+        check(page.is_checked(f"#lib-list .vdir[data-cat={fsel}] input[type=checkbox]"), f"tree: Select's folder tick picks its {n} GIFs")
         page.click("#lib-sel-done")
         no_leaks(page, "library (tree)")
         page.context.close()
