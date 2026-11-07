@@ -594,12 +594,28 @@ function editor() {
   const under = overRow('psi-ed-under');
   const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }, () => keep()); } }, 'Set as the panel’s look');
   const touch = matchMedia('(pointer:coarse)').matches;
+  // Colours (#rgb, #rrggbb): with the caret in one, a swatch under it opens
+  // the browser's colour picker; the colour picked goes in its place, live
+  // while picking and one undo for the lot (`kwas`: the text it started as).
+  let ks = [], kt = null, kwas = null;
+  const hex = () => { const v = kp.value, w = kwas, x = w.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w) ? x.toUpperCase() : x; };
+  const kp = h('input', { type: 'color', id: 'psi-kp', hidden: true, title: 'Pick a colour', 'aria-label': 'Pick a colour',
+    onclick: () => { if (kt) kwas = ta.value.slice(kt.s, kt.e); },
+    oninput: () => { if (kt && kwas != null) put(kt, hex(), true); },
+    onchange: () => {
+      if (!kt || kwas == null) return;
+      const v = hex();
+      put(kt, kwas, true);
+      if (v !== kwas) { if (!touch) ta.focus({ preventScroll: true }); put(kt, v); }
+      kwas = null;
+    },
+    onblur: () => setTimeout(swatch) });
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
   const top = h('div.psi-top', canvas, cap, under);
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
-    h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
-      h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
+    h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
+      h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
@@ -613,6 +629,7 @@ function editor() {
   function paint() {
     const s = ta.value, m = marks(s, bad);
     toks = m.toks;
+    ks = m.cols;
     hl.innerHTML = m.html + '\n';
     const n = s.split('\n').length, el = bad && s.slice(0, bad[0]).split('\n').length;
     gut.innerHTML = Array.from({ length: n }, (_, k) => (k + 1 === el ? `<b>${k + 1}</b>` : k + 1)).join('\n');
@@ -698,7 +715,7 @@ function editor() {
   // Before saving or sharing: every use line pasted, or nothing happens.
   const ready = () => { const m = compile(true); if (m) toast(`First fix line ${ta.value.slice(0, m.s).split('\n').length}: ${m.why}`, 'bad'); return !m; };
   ta.addEventListener('input', () => { paint(); scrubbable(); build(); });
-  ta.addEventListener('scroll', () => { hl.scrollLeft = ta.scrollLeft; });
+  ta.addEventListener('scroll', () => { hl.scrollLeft = ta.scrollLeft; swatch(); });
 
   // Draggable numbers: under the pointer (a mouse or pen, straight in the
   // text), Alt+↑↓ at the caret, and on touch the strip under the code.
@@ -736,7 +753,24 @@ function editor() {
     num = ta.selectionStart === ta.selectionEnd || document.activeElement !== ta ? at(ta.selectionStart) : null;
     strip.hidden = !num || !touch;
     if (num) pad.setAttribute('aria-valuenow', val.textContent = ta.value.slice(num.s, num.e));
+    swatch();
   }
+  // The colour swatch: under the colour the caret is in (its start), or
+  // hidden; left as it is while the picker has it.
+  function swatch() {
+    const f = document.activeElement, p = ta.selectionStart;
+    if (f !== ta) { if (f !== kp) kp.hidden = true; return; }
+    kt = p === ta.selectionEnd ? ks.find((t) => t.s <= p && p <= t.e) : null;
+    kwas = null;
+    if ((kp.hidden = !kt)) return;
+    const v = ta.value.slice(kt.s, kt.e), l = ta.value.slice(0, kt.s).split('\n'), s = getComputedStyle(ta);
+    let col = 0;
+    for (const c of l.at(-1)) col += c === '\t' ? 2 - (col % 2) : 1;
+    kp.value = v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v;
+    kp.style.left = `${Math.max(0, Math.min(ta.clientLeft + parseFloat(s.paddingLeft) + col * measure() - ta.scrollLeft, ta.clientWidth - kp.offsetWidth))}px`;
+    kp.style.top = `${ta.clientTop + parseFloat(s.paddingTop) + l.length * parseFloat(s.lineHeight)}px`;
+  }
+  ta.addEventListener('blur', () => setTimeout(swatch));
   document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); if (/^\s*use\s/m.test(ta.value)) build(); } });
   ta.addEventListener('keydown', (e) => {
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && at(ta.selectionStart)) {

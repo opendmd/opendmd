@@ -118,6 +118,11 @@ last version that worked, dimmed.
   (Shift for bigger steps). On a phone, tap a number and drag the bar that
   appears under the formula, or use its − and + buttons. Numbers can go
   below zero. Ctrl+Z (⌘Z) undoes a whole drag at once.
+- **Pick a colour:** every colour in the formula (`#f80`, `#ff8800`) has a
+  bar under it in that colour. Click or tap in one and a swatch appears
+  under it: it opens your browser's colour picker, and the colour you pick
+  takes its place (Ctrl+Z puts the old one back). With the keyboard, put
+  the cursor in the colour and press Tab to reach the swatch.
 - **Controls:** a line at the top like `control speed 0..4 = 1 "Speed"`
   gives the formula a slider: `speed` is a value you use in it, from 0 to 4,
   starting at 1, labelled "Speed" (the range is 0 to 1 when you leave it
