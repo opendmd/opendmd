@@ -10,18 +10,17 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use opendmd_psi::syntax::{compile_observed, Defined, Level, Sink};
+use opendmd_psi::syntax::{compile_observed, Kept, Level, Sink};
 use opendmd_psi::{compile, Program};
 use wasm_bindgen::prelude::*;
 
 struct Seen {
     /// Each line's start (bytes), for the line an op or note is on.
     starts: Vec<usize>,
-    /// Each step: where, whether per pixel, its work a frame (ns: a pixel's
-    /// ×4,096, a row's ×32).
-    ops: Vec<(usize, bool, u64)>,
-    /// The values worked out per pixel: name, where.
-    pixel: Vec<(String, usize)>,
+    /// Each step: where, its code, its work a frame (ns: a pixel's ×4,096,
+    /// a row's ×32), and what that is divided by once the program is laid
+    /// out (1; 32 for the column run's; 0, nothing, for the still cache's).
+    ops: Vec<((usize, usize), u8, u64, u64)>,
     notes: Vec<(usize, String)>,
     reads: Vec<((usize, usize), (usize, usize))>,
 }
@@ -31,59 +30,38 @@ impl Seen {
         self.starts.partition_point(|&s| s <= at).max(1) - 1
     }
 
-    /// Each line's work a frame. The steps are told before the still cache
-    /// and the column run take values out of the pixel loop; their notes
-    /// name what they took, so a kept value's line costs nothing a frame,
-    /// one worked out once a column a 32nd.
+    /// Each line's work a frame.
     fn cost(&self) -> Vec<u64> {
         let mut per = vec![0u64; self.starts.len()];
-        let mut div = vec![1u64; self.starts.len()];
-        for (_, t) in &self.notes {
-            let (d, rest) = if let Some(r) = t.strip_prefix("still cache: ") {
-                (0, r)
-            } else if let Some(r) = t.strip_prefix("column run: ") {
-                (32, r)
-            } else {
-                continue;
-            };
-            let names = rest.split(" worked out").next().unwrap_or("");
-            for n in names.split('`').skip(1).step_by(2) {
-                if let Some(p) = self.pixel.iter().rev().find(|p| p.0 == n) {
-                    div[self.line(p.1)] = d;
-                }
-            }
-        }
-        for &(at, px, ns) in &self.ops {
-            let l = self.line(at);
-            per[l] += match (px, div[l]) {
-                (true, 0) => 0,
-                (true, d) => ns / d,
-                _ => ns,
-            };
+        for &(at, _, ns, d) in &self.ops {
+            per[self.line(at.0)] += ns.checked_div(d).unwrap_or(0);
         }
         per
     }
 }
 
 impl Sink for Seen {
-    fn defined(&mut self, name: &str, at: (usize, usize), _: Defined, _: u16, level: Level) {
-        if level == Level::Pixel {
-            self.pixel.push((name.into(), at.0));
-        }
-    }
     fn read(&mut self, at: (usize, usize), defined: Option<(usize, usize)>) {
         if let Some(d) = defined {
             self.reads.push((at, d));
         }
     }
-    fn op(&mut self, at: (usize, usize), level: Level, _: u8, cost_ns: u32) {
+    fn op(&mut self, at: (usize, usize), level: Level, code: u8, cost_ns: u32) {
         let n = match level {
             Level::Pixel => 4096,
             Level::Row => 32,
             _ => 1,
         };
-        self.ops
-            .push((at.0, level == Level::Pixel, u64::from(cost_ns) * n));
+        self.ops.push((at, code, u64::from(cost_ns) * n, 1));
+    }
+    fn kept(&mut self, at: (usize, usize), code: u8, how: Kept) {
+        if let Some(o) = self
+            .ops
+            .iter_mut()
+            .find(|o| o.0 == at && o.1 == code && o.3 == 1)
+        {
+            o.3 = if how == Kept::Once { 0 } else { 32 };
+        }
     }
     fn note(&mut self, at: (usize, usize), text: &str) {
         self.notes.push((self.line(at.0), text.into()));
@@ -131,7 +109,6 @@ pub fn observe(src: &str) -> String {
     let mut seen = Seen {
         starts,
         ops: Vec::new(),
-        pixel: Vec::new(),
         notes: Vec::new(),
         reads: Vec::new(),
     };

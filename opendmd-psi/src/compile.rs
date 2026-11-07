@@ -7020,7 +7020,7 @@ fn finish(
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     #[cfg(feature = "syntax")]
-    let mut seen = (Vec::new(), Vec::new(), None);
+    let mut seen = (Vec::new(), Vec::new(), None, Vec::new());
     if cmp {
         fuse_compares(&mut p.dag, &steps, &p.draw, &tweens)?;
     }
@@ -7962,7 +7962,7 @@ fn emit(
     reuse: bool,
     slow: Option<Slow>,
     prog: &mut Program,
-    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>),
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>, Option<&'static str>, Vec<usize>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
@@ -8650,6 +8650,17 @@ fn emit(
             Vec::new()
         };
         seen.2 = if col_len > 0 { None } else { col_lost };
+        // What the still cache took out of the pixel loop: every value
+        // worked out each frame without it and not with it (its values and
+        // what only they read).
+        seen.3 = if run_len > 0 {
+            let (all, left) = (per_frame(dag, steps, &[]), per_frame(dag, steps, &cached));
+            (0..n)
+                .filter(|&i| nodes[i].level == LV_PIXEL && all[i] && (!left[i] || cached.contains(&i)))
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
     #[cfg(not(feature = "syntax"))]
     let _ = col_lost;

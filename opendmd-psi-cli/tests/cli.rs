@@ -119,3 +119,12 @@ fn check_same_as_compares_programs_and_frames() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("same as ") && out.contains(": no: "), "{out}");
 }
+
+#[test]
+fn check_heaviest_lines_leave_out_what_the_still_cache_keeps() {
+    let src = "loop 4\na = noise(x*8, y*8, t)\nb = noise(x*4 + a, y*4, t/2)\nc = sqrt(x*x + y*y) + atan2(y - 0.5, x - 0.5)\ngray(frac(a + b + c))\n";
+    let (code, out, _) = psi(&["check", "-", "--out", "-"], src);
+    assert_eq!(code, 0, "{out}");
+    let heavy = out.split("heaviest lines").nth(1).expect(&out);
+    assert!(out.contains("still cache: `c`") && heavy.contains("line 3 (") && !heavy.contains("line 4 ("), "{out}");
+}
