@@ -48,7 +48,7 @@ runs:
 
     - name: Save ESP-IDF (~/.espressif)
       if: inputs.espressif-hit != 'true' && steps.check.outputs.idf == 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           ~/.espressif
@@ -57,7 +57,7 @@ runs:
 
     - name: Save firmware/target
       if: inputs.fw-target-hit != 'true' && steps.check.outputs.fw == 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: firmware/target
         key: ${{ inputs.fw-target-key }}

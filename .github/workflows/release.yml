@@ -37,7 +37,8 @@ name: Release
 #                          nothing is published. Untick dry_run and pick a v*
 #                          tag in "Use workflow from" to rerun a tag's release.
 #
-# A rerun is safe ("Re-run all jobs", or the dispatch above): once a tag's
+# A rerun is safe ("Re-run all jobs", or the dispatch above; not "Re-run
+# failed jobs", which keeps the first attempt's plan): once a tag's
 # GitHub release is published its assets ARE the release, so a rerun builds
 # no firmware, downloads them (checked against their SHA256SUMS and
 # opendmd.pub) and goes on from there; a draft left by a run that stopped is
@@ -97,12 +98,16 @@ on:
   push:
     tags: ["v*"]
 
+# One release at a time, whatever the tag: two tags pushed close together
+# publish in turn, the second seeing the first's release. (GitHub keeps one
+# run waiting per group: a third queued while one waits cancels the waiting
+# one, which is then run again by hand: "Re-run all jobs".)
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -111,6 +116,8 @@ jobs:
   plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.plan.outputs.version }}
       kind: ${{ steps.plan.outputs.kind }}
@@ -119,7 +126,7 @@ jobs:
       final: ${{ steps.plan.outputs.final }}
       adopt: ${{ steps.plan.outputs.adopt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -140,12 +147,12 @@ jobs:
           # Newer than every other v* tag, as release.sh insists: a final below
           # a live beta would otherwise put beta.json back on the final, and an
           # old tag's rerun would put the site back on it.
-          NEWEST="$( (git tag -l 'v*' | sed 's/^v//' | grep -vx "$VERSION"; echo "$VERSION") | sed 's/-/~/' | sort -V | tail -1 | sed 's/~/-/')"
+          NEWEST="$(tools/release-tags.sh newest "$VERSION")"
           [ "$NEWEST" = "$VERSION" ] || { echo "::error::$VERSION is not newer than every v* tag (newest: $NEWEST)"; exit 1; }
           # The channel: a beta after a final release updates beta.json only
           # (release.json stays on the newest final, FINAL); anything else both.
           # 0.x finals (v0.3.0) predate the channels: not counted.
-          FINAL="$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^0\.' | grep -vx "$VERSION" | sort -V | tail -1 || true)"
+          FINAL="$(tools/release-tags.sh newest-final "$VERSION")"
           if [[ "$VERSION" == *-* && -n "$FINAL" ]]; then
             echo "channel=beta" >> "$GITHUB_OUTPUT"; echo "final=$FINAL" >> "$GITHUB_OUTPUT"
             echo "Channel: beta (after the final $FINAL): beta.json names $VERSION, release.json stays on $FINAL"
@@ -178,17 +185,29 @@ jobs:
           fi
           if [[ "$TAG" == *-* ]]; then echo "kind=prerelease" >> "$GITHUB_OUTPUT"
           else echo "kind=release" >> "$GITHUB_OUTPUT"; fi
-          # Published already (a rerun): its assets are the release.
-          draft="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
-          if [ "$draft" = false ]; then
-            echo "adopt=true" >> "$GITHUB_OUTPUT"
-            echo "The release $TAG is published: this run takes its assets as the build (no firmware build)"
-          else
-            echo "adopt=false" >> "$GITHUB_OUTPUT"
-            [ "$draft" = none ] || echo "A draft release $TAG exists: this run completes it"
-          fi
+          # Published already (a rerun): its assets are the release, if they
+          # were built from this very tag object. A release the dev box made
+          # (PUBLISH=local) is its own: never adopted or completed here.
+          state="$(GH_REPO="$GITHUB_REPOSITORY" tools/release-tags.sh state "$TAG")"
+          case $state in
+            *local)
+              echo "kind=local" >> "$GITHUB_OUTPUT"; echo "adopt=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::the release $TAG says 'Publisher: local' ($state): tools/release.sh PUBLISH=local publishes it; nothing to do here"
+              exit 0 ;;
+            published)
+              recorded="$(GH_REPO="$GITHUB_REPOSITORY" tools/release-tags.sh tag-object "$TAG")"
+              [ "$recorded" = "$(git rev-parse "refs/tags/$TAG")" ] ||
+                { echo "::error::the published release $TAG was built from tag object '${recorded:-unrecorded}', not $TAG's $(git rev-parse "refs/tags/$TAG") (a moved or re-pushed tag): not adopting it; fix by hand"; exit 1; }
+              echo "adopt=true" >> "$GITHUB_OUTPUT"
+              echo "The release $TAG is published (from this tag object): this run takes its assets as the build (no firmware build)" ;;
+            draft)
+              echo "adopt=false" >> "$GITHUB_OUTPUT"; echo "A draft release $TAG exists: this run completes it" ;;
+            none)
+              echo "adopt=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unexpected release state '$state'"; exit 1 ;;
+          esac
           missing=()
-          [ "$draft" = false ] || [ "$HAVE_OTA_SIGNING_KEY" = true ] || missing+=(OTA_SIGNING_KEY)
+          [ "$state" = published ] || [ "$HAVE_OTA_SIGNING_KEY" = true ] || missing+=(OTA_SIGNING_KEY)
           [ "$HAVE_SITE_DEPLOY_KEY" = true ] || missing+=(SITE_DEPLOY_KEY)
           [ "$HAVE_CLOUDFLARE_TOKEN" = true ] || missing+=(CLOUDFLARE_API_TOKEN)
           if [ ${#missing[@]} -gt 0 ]; then
@@ -199,6 +218,8 @@ jobs:
   release:
     needs: plan
     if: needs.plan.outputs.kind != 'local'
+    permissions:
+      contents: write
     # Not ubuntu-latest (Ubuntu 26): IDF v5.3's esp-clang 16 needs
     # libxml2.so.2, which 26.04 no longer has.
     runs-on: ubuntu-24.04
@@ -213,7 +234,7 @@ jobs:
       FINAL: ${{ needs.plan.outputs.final }}
       ADOPT: ${{ needs.plan.outputs.adopt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the web app's version is `git describe --tags`
           submodules: recursive
@@ -236,7 +257,7 @@ jobs:
 
       - name: Cache the updater's build
         if: env.ADOPT != 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/updater
           key: updater-${{ steps.esp.outputs.image }}-${{ hashFiles('ota/updater/**', 'firmware/.cargo/config.toml') }}
@@ -348,7 +369,7 @@ jobs:
             sha256sum -- * | tee SHA256SUMS
           fi
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: opendmd-${{ env.VERSION }}-dist
           path: ${{ runner.temp }}/assets
@@ -359,7 +380,7 @@ jobs:
       # The demo card's recordings (the simulator's effects, a frame at a
       # time) are kept between runs unless the simulator or the script changed.
       - name: Cache the site's demo card
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/demo-card
           key: demo-card-${{ hashFiles('tools/demo-card.py', 'opendmd-sim/src/**', 'opendmd-render/src/**', 'opendmd-core/src/**', 'opendmd-web/experiments/art/process/out/**') }}
@@ -410,6 +431,9 @@ jobs:
           set -euo pipefail
           d="$RUNNER_TEMP/final-dist"
           mkdir -p "$d"
+          # Published, not a draft still being made (nor gone).
+          st="$(GH_REPO="$GITHUB_REPOSITORY" tools/release-tags.sh state "v$FINAL")"
+          [ "${st%% *}" = published ] || { echo "::error::the final release v$FINAL is '$st', not published: release.json cannot name it yet"; exit 1; }
           gh release download "v$FINAL" -R "$GITHUB_REPOSITORY" -D "$d"
           (cd "$d" && sha256sum -c SHA256SUMS)
           for v in 4mb; do
@@ -482,7 +506,7 @@ jobs:
           git status --porcelain
           test -z "$(git status --porcelain)"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: opendmd-${{ env.VERSION }}-site
           path: target/site
@@ -496,8 +520,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tools/release-notes.sh "$VERSION" "$CHANNEL" "$RUNNER_TEMP/assets/SHA256SUMS" > "$RUNNER_TEMP/notes.md"
-          GH_REPO="$GITHUB_REPOSITORY" tools/release-publish.sh "$TAG" "$RUNNER_TEMP/assets" "$RUNNER_TEMP/notes.md"
+          tools/release-notes.sh "$VERSION" "$CHANNEL" "$RUNNER_TEMP/assets/SHA256SUMS" "$(git rev-parse "refs/tags/$TAG")" ci > "$RUNNER_TEMP/notes.md"
+          # Latest only while it is the newest final, asked now (the plan's
+          # outputs may be an earlier attempt's): a rerun of an older final
+          # never takes "latest" from a newer one.
+          git fetch -q --tags --force origin
+          latest=false
+          [[ "$KIND" != release || "$(tools/release-tags.sh newest-final)" != "$VERSION" ]] || latest=true
+          GH_REPO="$GITHUB_REPOSITORY" PUBLISHER=ci RELEASE_LATEST=$latest tools/release-publish.sh "$TAG" "$RUNNER_TEMP/assets" "$RUNNER_TEMP/notes.md"
 
       # A newer tag pushed while this ran publishes the gallery repo and the
       # site itself: this run must not put them back on an older release.
@@ -507,7 +537,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q --tags --force origin
-          NEWEST="$( (git tag -l 'v*' | sed 's/^v//' | grep -vx "$VERSION"; echo "$VERSION") | sed 's/-/~/' | sort -V | tail -1 | sed 's/~/-/')"
+          NEWEST="$(tools/release-tags.sh newest "$VERSION")"
           if [ "$NEWEST" = "$VERSION" ]; then
             echo "newest=true" >> "$GITHUB_OUTPUT"
           else
@@ -558,6 +588,8 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::the CLOUDFLARE_API_TOKEN secret is not set (see the header of release.yml)"; exit 1; }
           make site-deploy-built
+          # Wait for this deploy (its version on /api/health), not the one before.
+          export SITE_LIVE_VERSION="$TAG"
           if [[ "$CHANNEL" == beta ]]; then
             tools/site-live-check.sh "$VERSION" "$FINAL" "$RUNNER_TEMP/final-dist/SHA256SUMS" "$RUNNER_TEMP/assets/SHA256SUMS"
           else
