@@ -271,17 +271,20 @@ against it. A board that boot-loops after an 80 MHz install or update
 recovers with one USB install of a 40 MHz build (`docs/ota.md`, "If a
 board can't run its flash at 80 MHz").
 
-### Releasing (local)
+### Releasing
 
-While GitHub Actions is unavailable (the private repo has no build minutes
-until it goes public), a release is made on the dev box by
-`tools/release.sh`. `.github/workflows/release.yml` stays, for when Actions
-is available again; the script does the same steps.
+A release is built and checked on the dev box, and published by GitHub
+Actions: `.github/workflows/release.yml`, on the `v*` tag the dev box
+pushes, is the one publisher (the GitHub release and its assets, the public
+gallery repo, the site). `tools/release.sh` (`make release`) does the dev
+box's half.
 
 ```bash
-make release VERSION=1.0.0                       # dry run: builds and checks everything, publishes nothing
-make release VERSION=1.0.0 PUBLISH=1             # the same, then publishes
-make release VERSION=1.0.0 PUBLISH=1 RESUME=1    # after a publish that stopped part way
+make release VERSION=1.0.1                        # dry run: builds and checks everything, publishes nothing
+make release VERSION=1.0.1 PUBLISH=1              # the same, then pushes main and the tag; CI publishes; waits and checks
+make release VERSION=1.0.1 PUBLISH=1 RESUME=1     # after the push: wait for CI's run again (or check it) and check what it published
+make release VERSION=1.0.1 PUBLISH=local          # fallback, CI down: publish everything from the dev box
+make release VERSION=1.0.1 PUBLISH=local RESUME=1 # after a local publish that stopped part way
 ```
 
 **A dry run** (the default):
@@ -292,14 +295,17 @@ make release VERSION=1.0.0 PUBLISH=1 RESUME=1    # after a publish that stopped 
    main are in it, gh can push, and the signing key is there.
 2. Bump: the version in every crate's `Cargo.toml` and `Cargo.lock`,
    committed as "Release <version>" (on a detached HEAD: main does not
-   move) and tagged `v<version>` locally.
+   move) and tagged `v<version>` locally (an annotated tag whose message
+   says `Publisher: ci`, or `Publisher: local` for `PUBLISH=local`).
 3. Build: `make fw-release`, signed with
    `~/.config/opendmd/opendmd.key`, into
    `target/release/v<version>/dist` (`RELEASE_DIR=` moves it; with
    `SCRATCH` set, e.g. in a gitignored `local.mk`, it is
-   `$SCRATCH/opendmd-release`); then the version in the images, manifests, bundles and www pack,
-   and at least 64 KB of factory spare.
-4. Assets: the GitHub release's files, `SHA256SUMS` and the release notes.
+   `$SCRATCH/opendmd-release`); then the version in the images, manifests,
+   bundles and www pack, at least 64 KB of factory spare, and the bundle and
+   the pack verify against `firmware/keys/opendmd.pub`.
+4. Assets: the GitHub release's files, `SHA256SUMS` and the release notes
+   (`tools/release-notes.sh`).
 5. Site: `make site` with the public gallery repo's contributions and
    earlier API pages, this release's API page frozen; the `release.json`,
    `beta.json` and installer checks (which files each feed names depends
@@ -309,24 +315,107 @@ make release VERSION=1.0.0 PUBLISH=1 RESUME=1    # after a publish that stopped 
 It then goes back to main and deletes the local tag: nothing has left the
 machine.
 
-**`PUBLISH=1`** (`--publish`) does all of the above, then, in order:
+**`PUBLISH=1`** (`--publish`) does all of the above (with
+`PUBLISH=1` the plan also checks that the repository has the three secrets
+below, by name), then:
 
 1. main fast-forwarded to the release commit;
 2. main and the tag pushed to GitHub (over https with gh's credentials) and
-   to the local mirror `origin`;
-3. the GitHub release on opendmd/opendmd (a pre-release for a `-` version,
-   marked latest otherwise) and its assets;
-4. the public gallery repo updated (`tools/gallery-repo-publish.sh`);
-5. the site deployed to opendmd.dev (`make site-deploy-built`, cf's login),
-   then checked live: `install/beta.json` says this version and
-   `install/release.json` the release it should (below).
+   to the local mirror `origin`. The tag push starts `release.yml`;
+3. it waits for that run (`gh run watch`; a cold firmware build takes 30
+   minutes or more; interrupting the wait is safe, `RESUME=1` waits again);
+4. it checks what CI published: the GitHub release (not a draft; a
+   pre-release for a `-` version), its assets (the same names as the local
+   build; SHA256SUMS holds; the bundle and the www pack verify against
+   `firmware/keys/opendmd.pub`), and opendmd.dev live
+   (`tools/site-live-check.sh`: `install/beta.json` and
+   `install/release.json` name the versions they should and serve the
+   release's own bytes).
+
+The build on the dev box is the check that the tag is releasable; what
+ships is CI's build of the same commit. Builds are not byte-reproducible,
+so the two differ in bytes, never in what they are checked for.
+
+**What `release.yml` does on the tag** (its header has the details):
+plans (the tag is the version in `firmware/Cargo.toml` and newer than every
+other `v*` tag; every secret is set, or it fails before building), builds
+and signs with the `OTA_SIGNING_KEY` secret, runs the same image, bundle,
+pack and site checks, then publishes: the GitHub release through
+`tools/release-publish.sh` (created as a draft, every asset uploaded, then
+published: a pre-release for a `-` version, else marked latest), the public
+gallery repo (`SITE_DEPLOY_KEY`), and the site (`make site-deploy-built`,
+`CLOUDFLARE_API_TOKEN`), checked live. A run that fails part way is rerun
+on GitHub ("Re-run failed jobs", or `gh run rerun <id> --failed`): once the
+release is published its assets are the release, so a rerun builds no
+firmware and takes them as they are; a draft left behind is completed;
+same-digest assets are skipped and a published asset is never replaced;
+the gallery repo is committed to only when something changed; the deploy is
+the same site again. If a newer tag appears while a run is going, that run
+skips the gallery repo and the deploy (the newer one's run does them).
+
+**Who signs what.** The first-party key (`~/.config/opendmd/opendmd.key`,
+whose public half is the committed `firmware/keys/opendmd.pub`) exists in
+two places: on the dev box, and as the `OTA_SIGNING_KEY` secret. CI signs
+everything that ships with `PUBLISH=1`: the `.odfw` bundle and the www pack
+on the GitHub release and the site. The dev box's copy signs its own
+check builds (dry runs, and the build before the tag goes out, which is
+never uploaded) and everything `PUBLISH=local` publishes. Every bundle and
+pack, either way, is checked to verify against `firmware/keys/opendmd.pub`
+before it is published, and again (downloaded) after. CI's dry runs and
+`ci.yml` sign with a throwaway key made in the job, checked against its own
+public half.
+
+**`PUBLISH=local`** (`--publish-local`) is the fallback for when Actions
+is down. It refuses if `release.yml` has run for the tag at all, or if the
+GitHub release exists (unless it is resuming a publish it started itself).
+Its tag says `Publisher: local`, so a `release.yml` run that starts later
+does nothing. It does the dry run's steps, the same pushes, then publishes
+from the dev box: the GitHub release and assets (`tools/release-publish.sh`,
+the same as CI), the gallery repo (`tools/gallery-repo-publish.sh` over
+https with gh's credentials) and the site (`make site-deploy-built` with
+cf's own login), checked live. If a `PUBLISH=1` tag was pushed but CI never
+started a run for it, `PUBLISH=local RESUME=1` can take it over (no run and
+no release exist); should CI run for it later after all, it finds the
+release published and takes its assets as they are.
 
 Each step prints its outcome, and the first failure stops it with what was
 and wasn't published. A failure before the first push undoes the local
-commit and tag. After that, rerun with `RESUME=1`: it reuses the build and
-skips whatever is already done (the pushes, the release, each asset with
-the same digest, a live site already at this version). A published tag is
-never moved, and nothing on GitHub is overwritten.
+commit and tag. After that, rerun with `RESUME=1`: it skips whatever is
+already done. A published tag is never moved, and nothing published on
+GitHub is overwritten.
+
+**What the owner sets up once** (Settings → Secrets and variables →
+Actions on opendmd/opendmd; `OTA_SIGNING_KEY` and `SITE_DEPLOY_KEY` are
+set, how to make them is in `release.yml`'s header):
+
+- **`CLOUDFLARE_API_TOKEN`** (secret), used by `release.yml` and `site.yml`
+  to deploy the `opendmd-site` Worker. In the Cloudflare dashboard: My
+  Profile → API Tokens → Create Token → the **Edit Cloudflare Workers**
+  template, then
+  - Permissions: keep the template's (Account: Workers Scripts Edit,
+    Account Settings Read, and the rest; User: User Details Read,
+    Memberships Read; Zone: Workers Routes Edit) and add **Account → D1 →
+    Edit** (the migrations `make site-deploy-built` applies before every
+    deploy) and **Zone → DNS → Edit** (the Worker's custom domains,
+    `opendmd.dev` and `www.opendmd.dev`, are asserted on every deploy);
+  - Account Resources: Include → the one account;
+  - Zone Resources: Include → Specific zone → `opendmd.dev`;
+  - no client IP filtering (GitHub's runners have no fixed addresses).
+
+  Then, on a machine logged in to gh, type it in at the prompt (so it
+  never goes through a file, the shell history or anyone else):
+
+  ```bash
+  gh secret set CLOUDFLARE_API_TOKEN -R opendmd/opendmd
+  ```
+- **`CLOUDFLARE_ACCOUNT_ID`** (a repository *variable*, not a secret: the
+  account's id, on the dashboard's Workers & Pages overview), so wrangler
+  never has to pick an account: `gh variable set CLOUDFLARE_ACCOUNT_ID -R
+  opendmd/opendmd --body <id>` (already set).
+
+To try the token without releasing: run the **Site** workflow by hand
+(Actions → Site → Run workflow, on main). It deploys main's docs with the
+latest release's files, and checks the result live.
 
 ### Betas: the two update feeds
 
@@ -372,13 +461,12 @@ docs on the site are the tree's (the beta's) either way, and the frozen
 API page is the beta's (`dev/api/v<beta>.html`), so a beta's Settings →
 About link has its page.
 
-To redeploy the docs between releases while a beta is newer than the
-final, give the Site workflow both tags (`release` the final, `beta` the
-beta), or locally `make site DIST=<final's files> BETA_DIST=<beta's files>`
-(each a GitHub release's assets: `gh release download v<version> -D dir`).
-A site built from one dist alone would point `beta.json` back at the
-final, which is harmless (beta players see nothing newer) but hides the
-beta until the next deploy.
+Between releases the Site workflow works out both by itself from the
+published GitHub releases (`tools/site-releases.sh`). Locally, `make site
+DIST=<final's files> BETA_DIST=<beta's files>` (each a GitHub release's
+assets: `gh release download v<version> -D dir`). A site built from one
+dist alone would point `beta.json` back at the final, which is harmless
+(beta players see nothing newer) but hides the beta until the next deploy.
 
 A release must be newer than every `v*` tag (release.sh and release.yml
 both refuse otherwise). So once a beta of the next version is out (say
@@ -452,13 +540,28 @@ The site, installer and update check included, is
 (`site/worker/`) serving `make site`'s `target/site` as static assets.
 There is no other host.
 
-- **A release** (`release.yml`, on a `v*` tag) builds the site and deploys
-  it with `make site-deploy-built` once the `CLOUDFLARE_API_TOKEN` secret
-  exists; until then the step skips and the site is deployed from the dev
-  box. The **Site** workflow (manual) redeploys the docs between releases
-  with an existing release's files (and a beta's, when one is newer than
-  the final: "Betas" above).
-- **From the maintainer's machine**: `make fw-release` (or a release's
+- **A release** (`release.yml`, on a `v*` tag) builds the site from the
+  tag and deploys it with `make site-deploy-built`, then checks it live
+  ("Releasing" above).
+- **Between releases** the **Site** workflow (`site.yml`) deploys main: on
+  every push to main that touches what the site is built from (the docs,
+  `site/`, the web app and the crates it builds, the site's tools; not a
+  release commit, whose release run deploys it), and by hand (Actions →
+  Site → Run workflow). The pages and demo are main's; the installer,
+  `install/release.json` and `install/beta.json` come only from the latest
+  **published** GitHub releases (`tools/site-releases.sh`: the newest
+  final, and a newer beta for `beta.json`; a tag whose release is still
+  being made does not count), downloaded and checked against their
+  `SHA256SUMS` and `firmware/keys/opendmd.pub`. So a deploy from main never
+  offers a firmware newer than the latest release. While a `release.yml`
+  run is queued or running it waits for it; if one starts, or the releases
+  change, while it builds, it deploys nothing (the release's run deploys
+  the site). It checks the result live (`tools/site-live-check.sh`). By
+  hand it also takes `release` (and `beta`) to put the installer and feeds
+  on earlier releases (a rollback; the next push to main puts them back on
+  the latest).
+- **From the maintainer's machine** (only for `PUBLISH=local`, or with CI
+  down; the next CI deploy replaces it): `make fw-release` (or a release's
   files in `dist/`), then `make site-deploy` (refuses a dirty tree), or
   `make site` and `make site-deploy-built`. `make site-deploy-check` is a
   dry run. Build with `API_ARCHIVE=` (a checkout of the public gallery
