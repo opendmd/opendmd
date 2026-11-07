@@ -594,22 +594,26 @@ function editor() {
   const under = overRow('psi-ed-under');
   const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }, () => keep()); } }, 'Set as the panel’s look');
   const touch = matchMedia('(pointer:coarse)').matches;
-  // Colours (#rgb, #rrggbb): with the caret in one, a swatch under it opens
-  // the browser's colour picker; the colour picked goes in its place, live
-  // while picking and one undo for the lot (`kwas`: the text it started as).
-  let ks = [], kt = null, kwas = null;
-  const hex = () => { const v = kp.value, w = kwas, x = w.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w) ? x.toUpperCase() : x; };
+  // Colours (#rgb, #rrggbb): with the caret in one, a swatch at its line's
+  // end opens the browser's colour picker; the colour picked goes in its
+  // place, live while picking and one undo for the lot. `pend`, from the
+  // picker opening to its change (or a click or key back in the text, or
+  // focus elsewhere): the colour's range, the text it was and is now.
+  // (Safari never focuses the picker: `pend` keeps the swatch up.)
+  let ks = [], kt = null, pend = null;
+  const hex = () => { const v = kp.value, w = pend.was, x = w.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(v) ? '#' + v[1] + v[3] + v[5] : v; return /[A-F]/.test(w) ? x.toUpperCase() : x; };
+  const open = () => { if (!pend && kt) { const was = ta.value.slice(kt.s, kt.e); pend = { s: kt.s, e: kt.e, was, now: was }; } };
+  // The pick in, unless the text under it changed meanwhile (a `use` line pasted): then dropped.
+  const picked = () => { if (!pend) return; if (ta.value.slice(pend.s, pend.e) !== pend.now) { pend = null; return; } pend.now = hex(); put(pend, pend.now, true); };
+  function done() {
+    const p = pend;
+    pend = null;
+    if (p && p.now !== p.was && ta.value.slice(p.s, p.e) === p.now) { put(p, p.was, true); if (!touch) ta.focus({ preventScroll: true }); put(p, p.now); }
+    swatch();
+  }
+  const away = () => setTimeout(() => { const f = document.activeElement; if (pend && f && f !== document.body && f !== kp && f !== ta) done(); else swatch(); });
   const kp = h('input', { type: 'color', id: 'psi-kp', hidden: true, title: 'Pick a colour', 'aria-label': 'Pick a colour',
-    onclick: () => { if (kt) kwas = ta.value.slice(kt.s, kt.e); },
-    oninput: () => { if (kt && kwas != null) put(kt, hex(), true); },
-    onchange: () => {
-      if (!kt || kwas == null) return;
-      const v = hex();
-      put(kt, kwas, true);
-      if (v !== kwas) { if (!touch) ta.focus({ preventScroll: true }); put(kt, v); }
-      kwas = null;
-    },
-    onblur: () => setTimeout(swatch) });
+    onpointerdown: open, onclick: open, oninput: picked, onchange: () => { picked(); done(); }, onblur: away });
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
   const top = h('div.psi-top', canvas, cap, under);
@@ -755,22 +759,27 @@ function editor() {
     if (num) pad.setAttribute('aria-valuenow', val.textContent = ta.value.slice(num.s, num.e));
     swatch();
   }
-  // The colour swatch: under the colour the caret is in (its start), or
-  // hidden; left as it is while the picker has it.
+  // The colour swatch: beside the colour the caret is in, or hidden; left
+  // as it is while the picker is open.
   function swatch() {
     const f = document.activeElement, p = ta.selectionStart;
+    if (pend) return;
     if (f !== ta) { if (f !== kp) kp.hidden = true; return; }
     kt = p === ta.selectionEnd ? ks.find((t) => t.s <= p && p <= t.e) : null;
-    kwas = null;
     if ((kp.hidden = !kt)) return;
-    const v = ta.value.slice(kt.s, kt.e), l = ta.value.slice(0, kt.s).split('\n'), s = getComputedStyle(ta);
+    const v = ta.value.slice(kt.s, kt.e), row = ta.value.slice(0, kt.s).split('\n').length - 1, s = getComputedStyle(ta), lh = parseFloat(s.lineHeight);
     let col = 0;
-    for (const c of l.at(-1)) col += c === '\t' ? 2 - (col % 2) : 1;
+    for (const c of ta.value.split('\n')[row]) col += c === '\t' ? 2 - (col % 2) : 1;
     kp.value = v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v;
-    kp.style.left = `${Math.max(0, Math.min(ta.clientLeft + parseFloat(s.paddingLeft) + col * measure() - ta.scrollLeft, ta.clientWidth - kp.offsetWidth))}px`;
-    kp.style.top = `${ta.clientTop + parseFloat(s.paddingTop) + l.length * parseFloat(s.lineHeight)}px`;
+    // Past the line's end (held inside the box), so it covers no text there is room for.
+    kp.style.left = `${Math.max(0, Math.min(ta.clientLeft + parseFloat(s.paddingLeft) + (col + 1) * measure() - ta.scrollLeft, ta.clientWidth - kp.offsetWidth))}px`;
+    kp.style.top = `${ta.clientTop + parseFloat(s.paddingTop) + (row + 0.5) * lh - kp.offsetHeight / 2}px`;
   }
-  ta.addEventListener('blur', () => setTimeout(swatch));
+  ta.addEventListener('blur', away);
+  // Back in the text: the pick so far goes in as one undo step.
+  ta.addEventListener('pointerdown', () => { if (pend) done(); });
+  ta.addEventListener('keydown', () => { if (pend) done(); });
+  ta.addEventListener('focus', () => { if (pend) done(); });
   document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); if (/^\s*use\s/m.test(ta.value)) build(); } });
   ta.addEventListener('keydown', (e) => {
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && at(ta.selectionStart)) {
