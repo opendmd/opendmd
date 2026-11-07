@@ -74,7 +74,7 @@ fi
 # The bundle path defaults to dist/opendmd-<Cargo.toml version>.odfw, which
 # after a `make fw-release FW_VERSION=…` can be an old bundle; the device
 # installs an older one without asking (docs/ota.md), so ask here.
-have=$(printf '%s' "$before" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+have=$(printf '%s' "$before" | sed -n 's/^{"version":"\([^"]*\)".*/\1/p')
 if [ -n "$have" ] && [ "${OPENDMD_ALLOW_OLDER:-}" != 1 ] \
    && [ "$(printf '%s\n%s\n' "$want" "$have" | tr - '~' | sort -V | tail -1)" = "$(printf %s "$have" | tr - '~')" ]; then
     echo "$bundle is '$want', not newer than the device's '$have': pass BUNDLE= or FW_VERSION=," >&2
