@@ -455,14 +455,22 @@ def start_mock(args: list[str]) -> tuple[subprocess.Popen, str]:
         proc = subprocess.Popen(
             ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
             stdout=f, stderr=subprocess.STDOUT)
-    for _ in range(100):
+    # Up to ~30 s: on a fresh machine uv may first install the mock's packages.
+    for _ in range(300):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                 return proc, f"http://127.0.0.1:{port}"
         except OSError:
+            if proc.poll() is not None:
+                break
             time.sleep(0.1)
-    proc.kill()
-    raise RuntimeError("mock-device.py did not come up")
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait()
+    # Say why: the mock's own output (a missing --root, a bad argument, a traceback).
+    out = log.read_text(errors="replace").strip() if log.is_file() else ""
+    raise RuntimeError(f"mock-device.py did not come up on port {port} (exit {proc.returncode}), "
+                       f"arguments {args}; its output ({log}):\n{out or '(none)'}")
 
 
 def start_replay(token: str = "4321", speed: float = 1.0) -> tuple[subprocess.Popen, str, int]:

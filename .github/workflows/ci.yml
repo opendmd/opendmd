@@ -26,9 +26,8 @@ name: CI
 #             linked (tools/notices.py), and the signed bundle. The same build as
 #             release.yml, so the two share the firmware caches.
 #
-# The repo is private on the free plan, so minutes count: everything that
-# can be is cached (~/.espressif, the esp toolchain, every target dir, uv,
-# wasm-pack, Playwright's Chromium). The first firmware run installs ESP-IDF
+# Everything that can be is cached (~/.espressif, the esp toolchain, every
+# target dir, uv, wasm-pack, Playwright's Chromium). The first firmware run installs ESP-IDF
 # (cold: ~30+ min); later ones restore it.
 #
 # No secrets: the bundle is signed with a key made in the job and checked
@@ -59,6 +58,10 @@ jobs:
       - uses: ./.github/actions/web-tools
         with:
           cache-key: host
+
+      # opendmd-core's tests/fatopen_mixed.rs builds real FAT32 images.
+      - name: dosfstools and mtools (the FAT image tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends dosfstools mtools
 
       - name: Test
         run: make test
@@ -114,10 +117,10 @@ jobs:
       - name: A synthetic card (tools/ci-card.py)
         run: uv run tools/ci-card.py "$RUNNER_TEMP/ci-card"
 
+      # CARD_ROOT on make's command line: the Makefile's default (card/,
+      # the dev box's card copy) does not exist here.
       - name: Smoke test (make web-smoke)
-        env:
-          DMD_CARD_ROOT: ${{ runner.temp }}/ci-card
-        run: make web-smoke
+        run: make web-smoke CARD_ROOT="$RUNNER_TEMP/ci-card"
 
       - name: Upload the smoke test's screenshots
         if: failure()

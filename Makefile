@@ -384,8 +384,9 @@ web-mock: web
 
 # Headless Chromium drive of the app against the mock (and, with DEVICE=,
 # a read-mostly pass against a real device), over the card copy CARD_ROOT
+# (or DMD_CARD_ROOT from the environment, as CI and tools/ci-card.py set it)
 web-smoke: web
-	DMD_CARD_ROOT=$(CARD_ROOT) uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
+	DMD_CARD_ROOT="$${DMD_CARD_ROOT:-$(CARD_ROOT)}" uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
 
 # The README's and the site's screenshots (docs/images/): the web app in
 # headless Chromium against the mock over the demo card (only the panel's
