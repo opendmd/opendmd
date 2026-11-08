@@ -407,9 +407,6 @@ live in your browser, and its start-up show) and the
 
 # The pages' chrome and styles (see the docstring).
 THEME = ROOT / "site/theme"
-# Until the public launch: a line across the top of every page. Set to "" to drop it.
-BANNER = ("<strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, "
-          "but it may change, and the source code isn't public yet.")
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
 # The HTTP API's frozen copies (see the docstring): dev/api/v<version>.html.
 API_PAGE = "docs/api.md"
@@ -629,10 +626,9 @@ def wordmark(up: str, wm: dict) -> str:
 
 
 def header(page: str, wm: dict) -> str:
-    """The banner, the wordmark and the top bar (site/theme/header.html)."""
+    """The wordmark and the top bar (site/theme/header.html)."""
     up = "../" * page.count("/")
     return theme("header.html").strip().format(
-        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else "",
         home="/" if page == NOT_FOUND_PAGE else up or "./", wordmark=wordmark(up, wm), links=top_links(page))
 
 
