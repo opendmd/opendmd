@@ -68,7 +68,7 @@ the editor.
 | `r, angle` | distance and angle (turns, clockwise from the right) from the middle | <code class="psi-ex">loop 4; hsv(angle + t/4, 1, 1 - r/2)</code> |
 | `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 | <code class="psi-ex">rgb(ub, ug, ur)</code> |
 | `ul` | how bright that is | <code class="psi-ex">pal(fire, ul)</code> |
-| `under(x, y)` | the picture under the formula at pixel x, y (the nearest, held to the panel), as a colour like #…. under(px + 2, py) shifts it; under(floor(px/4)*4, floor(py/4)*4) pixelates it. under alone is this pixel's | <code class="psi-ex">loop 2; under(floor(px/4)&#42;4 + 2 + floor(sin(t/2)&#42;2), floor(py/4)&#42;4 + 2)</code> |
+| `under(x, y)` | the picture under the formula at pixel x, y (the nearest, held to the panel), as a #… colour. under(px + 2, py) shifts it; under(floor(px/4)*4, floor(py/4)*4) pixelates it. under alone is this pixel's | <code class="psi-ex">loop 2; under(floor(px/4)&#42;4 + 2 + floor(sin(t/2)&#42;2), floor(py/4)&#42;4 + 2)</code> |
 | `daylight` | how light it is outside where the panel is, 0 at night to 1 by day (twilight between); the panel's location in Settings, else 1 | <code class="psi-ex">mix(&#35;081030, &#35;70b0ff, daylight) &#42; (1 - y&#42;0.5)</code> |
 | `sun.alt` | the sun's height in turns: 0 on the horizon, 0.25 straight up, below 0 at night; 0.1 without a location | <code class="psi-ex">s = 16 - sun.alt&#42;120; mix(&#35;102040, &#35;ffd060, len(px - 64, py - s) &lt; 4)</code> |
 | `moon.phase, season, yearday` | the moon (0 new, 0.5 full), the time of year (0 midwinter, 0.5 midsummer) and the day of the year (0 on 1 January) | <code class="psi-ex">hsv(season + 0.3, 0.6, (abs(px - 64) &lt; 6) &#42; (abs(py - 16) &lt; 6) &#42; step(x, moon.phase + 0.4))</code> |
@@ -104,7 +104,7 @@ the editor.
 | `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
 | `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
-| `layer rate 4 { … }` | a slow bottom layer, redrawn every 4th frame a band of rows at a time, and when the clock or a control it reads changes. The layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
+| `layer rate 4 { … }` | a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
 | `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
 | `fn p(x, y) { … }` | a function whose values are x and y, so px, py, r, angle … inside follow them. With a colour as its last line, p(1 - x, y) draws it mirrored | <code class="psi-ex">loop 8<br>fn p(x, y) {<br>  wave = sin(x&#42;2 + t/8) + sin(y&#42;1.5 - t/4)<br>  hsv(wave/4 + t/8, 0.9, r &lt; 0.6)<br>}<br>p(abs(x - 0.5)&#42;2, y)</code> |
 | `use Plasma as p` | puts in one of your formulas or an example, as a function fn p(x, y) { … } | <code class="psi-ex">fn p(x, y) = hsv(x + t/8, 1, 1)<br>p(1 - x, y)</code> |
@@ -224,7 +224,7 @@ every GIF. The gallery takes a formula of 10 ms or less.
 ## Recipes
 
 Each recipe is a complete formula. Open one in the editor and change it.
-Three of them are Formulas from the [gallery](/formulas/).
+Three of them are Formulas from the [gallery](/formulas/), word for word.
 
 ### Scrolling text
 
@@ -515,8 +515,9 @@ of 1/65,536 (Q16.16). Arithmetic saturates rather than wrapping.
 `since(KEY)` is the seconds since a built-in input last changed. It is held
 at 32766 (about 9 hours), and reads 32767 when the input has never changed,
 so `since(k) < 32767` means "it has changed". `was(KEY)` is the input's
-value before that change. A built-in input with no value on the panel reads
-its default: no location set, the clock not set, or RePlayOS not followed.
+value before that change. A built-in input the panel has no value for reads
+its default. That is the case with no location set, the clock not set, or
+RePlayOS not followed.
 
 Where a function is defined by a table (`sin`, `noise`, `hash`, `atan2`,
 the palettes, the fonts), the table is the definition. **A formula gives
@@ -528,7 +529,7 @@ Each item below shows in a formula's pixels or in whether it compiles.
 From OpenDMD 1.0.0, changing any of it makes a Psi 2 (see "Versions").
 
 Machinery that gives the same bytes is not on the list and may change at
-any release. That is the `.psb` ABI, the steps and their narrowed and fused
+any release. It includes the `.psb` ABI, the steps and their narrowed and fused
 forms, the JIT, keeping values that never change from frame to frame, the
 column run, the cost model and its tiers, and the error sentences. A
 formula refused as too heavy meets a product limit, not the language.
@@ -635,8 +636,8 @@ prints the compiler's **notes**, each with its line number:
 `--levels` lists every value with how often it is worked out and the chain
 that makes it so (`beam  per pixel: reads `off` (line 3) ← `px``).
 
-`--same-as other.psi` checks a rewrite. It passes when the two are the same
-program, or else when they give the same frames. The frames are three seeds
+`--same-as other.psi` checks a rewrite. It reports whether the two are the same
+program, and passes when they give the same frames. The frames are three seeds
 × 120 frames over a loop, or a `loop forever` formula's first 5 minutes,
 with the clock moving and the sliders at 0 and at 1. `--seeds` and
 `--frames` change the counts. It exits 1 at the first frame that differs.
@@ -651,5 +652,5 @@ program before it writes.
 
 `psi builtins --json` and `psi errors --json` give this page's tables as
 data. The name tables, the limits and the error codes are generated from
-the compiler. The tests compile every example and recipe, and hold the
+the compiler, and the tests fail when they drift. The tests compile every example and recipe, and hold the
 panel, the browser and a computer to the same frames.
