@@ -3579,12 +3579,12 @@ mod tests {
     fn a_look_short_of_memory_is_tried_again() {
         let look = super::path("look\nlayer multiply { gray(x) }", "");
         refuse_loads(1);
-        let e = FormulaLook::from_path(&look).err().expect("refused for the heap");
+        let e = FormulaLook::from_path(&look).expect_err("refused for the heap");
         assert_eq!((e.msg.as_str(), look_retry(&e)), (psi::NO_MEMORY, Some(LOOK_RETRY)));
         assert!(FormulaLook::from_path(&look).is_ok(), "the heap back: it builds");
-        let e = FormulaLook::from_bytes(b"not a compiled Formula", "").err().expect("not a psb");
+        let e = FormulaLook::from_bytes(b"not a compiled Formula", "").expect_err("not a psb");
         assert_eq!(look_retry(&e), None, "{}", e.msg);
-        let e = FormulaLook::from_path(&super::path("gray(x)", "")).err().expect("covers the GIF");
+        let e = FormulaLook::from_path(&super::path("gray(x)", "")).expect_err("covers the GIF");
         assert_eq!(look_retry(&e), None, "{}", e.msg);
     }
 
