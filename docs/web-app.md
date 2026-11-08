@@ -150,8 +150,8 @@ button lands on them.
   the first time one opens), a screen of its own (`#sets/edit`: on a phone
   it replaces the list, with **‹ Playlists** to go back; on a laptop it is
   the right-hand column, empty until something is open). Its header names
-  the playlist; the card's own are saved as a copy (**Save a copy as**,
-  prefilled "Halloween copy"). **+ New playlist** opens an empty one with a
+  the playlist; the card's own are saved as a new one (**Save as a new playlist**,
+  prefilled "Halloween 2"). **+ New playlist** opens an empty one with a
   Name field. The entries show their thumbnails; drag ⠿ (or Alt+↑/↓) to
   reorder, ✕ to remove, a tap picks them for **Arrange** (Shuffle, Sort
   A–Z, Picked to top, Remove picked, Clear). **+ Add GIFs** opens the same

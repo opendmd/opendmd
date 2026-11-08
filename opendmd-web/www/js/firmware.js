@@ -21,7 +21,7 @@ const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 export const askKey = () => new Promise((res) => {
   const i = h('input', { type: 'password', id: 'key-in', style: 'width:100%;box-sizing:border-box' });
   const d = h('dialog.card', { id: 'key-dlg', style: 'color:inherit;border:0;margin:auto;width:min(360px,90vw)' }, h('form', { method: 'dialog' },
-    h('h2', 'This player needs its API key'), i, h('p.row', h('button.pri', { value: 1 }, 'OK'), h('button', 'Cancel'))));
+    h('h2', 'This display needs its API key'), i, h('p.row', h('button.pri', { value: 1 }, 'OK'), h('button', 'Cancel'))));
   d.onclose = () => { const k = d.returnValue && i.value.trim(); d.remove(); if (k) store.set('apiKey', k); res(k); };
   document.body.append(d);
   d.showModal();
@@ -68,7 +68,7 @@ export const put = (path, body, progress) => new Promise((res, rej) => {
     try { why = JSON.parse(x.responseText).error || why; } catch { /* not JSON */ }
     res({ s: x.status, why, text: x.responseText });
   };
-  x.onerror = () => rej(new Error('The upload failed: the player stopped answering'));
+  x.onerror = () => rej(new Error('The upload failed: the display stopped answering'));
   x.send(body);
 });
 
@@ -86,8 +86,8 @@ export const otherLayout = (b) => b.length >= 140 && !fwLayout(b) && td.decode(b
 export const playerLayout = (f) => f?.layout ?? 2;
 // Why firmware for table `want` can't go on a player on `have` over WiFi.
 export const layoutWhy = (want, have) => (want === have ? null : want > have
-  ? 'This firmware needs a one-time USB reinstall on this player: use the installer at opendmd.dev/install (Update OpenDMD keeps your WiFi and settings)'
-  : 'This file is for an older flash layout than this player has: get the latest from opendmd.dev/install');
+  ? 'This firmware needs a one-time USB reinstall on this display: use the installer at opendmd.dev/install (Update OpenDMD keeps your WiFi and settings)'
+  : 'This file is for an older flash layout than this display has: get the latest from opendmd.dev/install');
 
 // The bundle's version from its 140-byte header, or null if it is not one.
 export const fwHead = (b) => fwVariant(b) && td.decode(b.subarray(8, 40)).replace(/\0+$/, '');
@@ -95,8 +95,8 @@ export const fwHead = (b) => fwVariant(b) && td.decode(b.subarray(8, 40)).replac
 export async function sendFw(file, progress) {
   const { s, why } = await put('/api/firmware', file, progress);
   if (s !== 200) {
-    throw new Error(s === 422 ? `The player refused this file: ${why}` : s === 408 ? 'The upload was cut short. Nothing was installed; try again'
-      : s === 413 ? 'This file is too big to be OpenDMD firmware' : s === 503 ? `The player can’t take it now (${why}). Try again in a moment`
+    throw new Error(s === 422 ? `The display refused this file: ${why}` : s === 408 ? 'The upload was cut short. Nothing was installed; try again'
+      : s === 413 ? 'This file is too big to be OpenDMD firmware' : s === 503 ? `The display can’t take it now (${why}). Try again in a moment`
         : `Couldn’t update (${s}: ${why})`);
   }
 }
@@ -108,7 +108,7 @@ export async function restart(v, say) {
   for (const t = Date.now(); ;) {
     await sleep(2000);
     try { if ((await app.src.status()).version === v) return; } catch { /* still restarting */ }
-    if (Date.now() - t > 180000) throw new Error(`The player has not come back with ${v} after 3 minutes. Check it has power, then reload this page (Update log says what the updater did)`);
+    if (Date.now() - t > 180000) throw new Error(`The display has not come back with ${v} after 3 minutes. Check it has power, then reload this page (Update log says what the updater did)`);
   }
 }
 
@@ -144,9 +144,9 @@ export function fwCards(fw, sec) {
     file.value = '';
     if (!f) return;
     const head = new Uint8Array(await f.slice(0, 140).arrayBuffer()), v = fwHead(head), b = board(variant);
-    if (otherLayout(head)) return say(`This file is for another flash layout than this player's. Use the ${b || board('4mb')} update file`, 1);
+    if (otherLayout(head)) return say(`This file is for another flash layout than this display's. Use the ${b || board('4mb')} update file`, 1);
     if (!v) return say('This is not an OpenDMD firmware file (.odfw)', 1);
-    if (variant && fwVariant(head) !== variant) return say(`This file is for the ${board(fwVariant(head))}, and this player runs the ${b} firmware. Use the ${b} update file`, 1);
+    if (variant && fwVariant(head) !== variant) return say(`This file is for the ${board(fwVariant(head))}, and this display runs the ${b} firmware. Use the ${b} update file`, 1);
     const why = variant && layoutWhy(fwLayout(head)[1], layout);
     if (why) return say(why, 1);
     const ask = running && older(v, running) ? `Firmware ${v}: this is older than the firmware on the panel (${running}). Install it anyway?`
@@ -170,7 +170,7 @@ export function fwCards(fw, sec) {
   const fwh = h('h3', 'Firmware'), save = saver(fwh);
   const beta = h('input.sw', { type: 'checkbox', id: 'fw-beta' });
   const betaBox = h('div', { id: 'fw-beta-box', hidden: true }, h('label', { style: 'margin-top:12px' }, beta, 'Get beta updates'),
-    h('p.cap', 'Betas are early versions of the next release: new things sooner, and they may have problems. You can switch this off at any time. That doesn’t take the player back to an older version: it keeps its beta until the next regular release comes out.'));
+    h('p.cap', 'Betas are early versions of the next release: new things sooner, and they may have problems. You can switch this off at any time. That doesn’t take the display back to an older version: it keeps its beta until the next regular release comes out.'));
   const bsync = (c) => { betaBox.hidden = !c || !('beta_updates' in c); beta.checked = !!c?.beta_updates; };
   beta.onchange = () => save(async () => {
     try { await app.src.putConfig({ beta_updates: beta.checked }); } catch (e) { bsync(app.config); throw e; }
@@ -200,7 +200,7 @@ export function fwCards(fw, sec) {
   });
   on('config', sync);
   sync(app.config);
-  sec.append(head, h('p.cap', 'Keeps casual visitors and other web pages out. It does not protect against someone on the same WiFi: the player speaks plain HTTP.'),
+  sec.append(head, h('p.cap', 'Keeps casual visitors and other web pages out. It does not protect against someone on the same WiFi: the display speaks plain HTTP.'),
     h('label', { style: 'margin-top:12px' }, sw, 'Require a key for the API'), shown);
   sec.hidden = false;
 }

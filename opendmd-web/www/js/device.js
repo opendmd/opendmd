@@ -121,10 +121,10 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
     h('div.grp', { id: 'st-cs', hidden: c.card_speed == null }, csH, h('div.form.f2', h('label.stack', 'Speed', csSel)), csCap, csSlow),
     h('div.grp', { id: 'pc' }, pcH,
-      note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
+      note('GIFs prepared for the panel start sooner and play in less memory', 'Preparing leaves your GIF files as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
       h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox, thumbs()),
-    h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
+    h('div.grp', { id: 'st-net' }, netH, note('WiFi changes need a reboot', 'With no saved network the display raises the open OpenDMD-Setup access point.'),
       h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
@@ -226,7 +226,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   }
 
   async function reboot() {
-    if (!confirm('Reboot the player?')) return;
+    if (!confirm('Reboot the display?')) return;
     try { await app.src.reboot(); toast('rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('reboot: ' + e.message, 'bad'); }
   }
 
@@ -244,7 +244,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       autoBox.hidden = !a;
       if (a) { autoLine.textContent = autoText(a, r) + '. '; always.checked = a.mode === 'always'; }
       if ((run || r.state === 'counting') && live()) cachePoll = setTimeout(loadCache, run ? 4000 : 2000);
-    } catch (e) { cacheLine.textContent = 'cache: ' + e.message; }
+    } catch (e) { cacheLine.textContent = 'Ready to play: ' + e.message; }
   }
   function autoText(a, r) {
     const n = (x) => x.toLocaleString(), e = a.eta_s, nt = sched.night();

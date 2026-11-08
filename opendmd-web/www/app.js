@@ -65,7 +65,7 @@ async function route() {
 // The Formulas view on a player built without them.
 function noFormulas(el) {
   el.append(h('div.card', { id: 'f-none' }, h('h2', 'Formulas'), h('p', NO_FORMULAS + '.'),
-    h('p.cap', 'This player plays your GIFs and playlists; a playlist’s Formulas are skipped.')));
+    h('p.cap', 'This display plays your GIFs and playlists; a playlist’s Formulas are skipped.')));
 }
 
 function setSource(src) {
@@ -99,7 +99,7 @@ if (found) {
   app.status = found.status;
   const s = found.status;
   // The device's name; its address and version are in Settings → About.
-  $('#where').textContent = s.hostname || 'OpenDMD player';
+  $('#where').textContent = s.hostname || 'OpenDMD display';
   // No API key: one banner offering to set one (js/keynag.js), gone once set.
   on('config', (c) => { if (c && c.api_key_set === false) import('./js/keynag.js').then((m) => m.show()); else $('#keynag')?.remove(); });
   app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));

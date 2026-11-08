@@ -71,7 +71,7 @@ export class Overrides {
       try {
         if (text || !app.device) await app.src.writeFile(file, text);
         else await app.src.deleteFile(file);
-        toast(`saved for “${this.name}”${app.device && app.activePath === this.path ? ' · the player is catching up (a few seconds)' : ''}`, 'ok');
+        toast(`saved for “${this.name}”${app.device && app.activePath === this.path ? ' · the display is catching up (a few seconds)' : ''}`, 'ok');
       } catch (e) { toast(`saving for “${this.name}”: ${e.message}`, 'bad'); this.load(this.path); }
     })();
     await this.saving;
