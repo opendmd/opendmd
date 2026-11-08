@@ -17,7 +17,7 @@ There **Send to my panel** asks for your panel's address once (the name or
 IP address it shows), then opens your panel's web app with the GIF ready to
 add: pick its folder and press **Add GIF**. Your computer or phone must be
 on the same network as the panel. **Download GIF** saves it instead; Library
-→ **Add GIFs** in your panel's web app puts it on the card.
+› **Add GIFs** in your panel's web app puts it on the card.
 
 ## 1. Find
 
@@ -60,11 +60,11 @@ opens in a new tab. When you find one, bring it back:
   the page. The **Open in Create Art** bookmarklet does it in one press:
   drag it from Your own to your bookmarks bar, then press it on a page
   with a GIF.
-- **On Android:** install Create Art (your browser's menu → **Add to Home
+- **On Android:** install Create Art (your browser's menu › **Add to Home
   screen** or **Install app**). It then appears in the Share menu: share a
   GIF, a video or a link to **Create Art** and it opens there.
 - **On iPhone and iPad:** there is no Share menu entry for websites. Touch
-  and hold the GIF, then **Copy** (or **Save to Photos**), or press Share →
+  and hold the GIF, then **Copy** (or **Save to Photos**), or press Share ›
   **Copy** on a link. In Create Art paste it into the address box (or press
   **Choose a picture, GIF or video…** and pick it from Photos).
 

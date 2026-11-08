@@ -5,7 +5,7 @@ made for DMDoS exactly as it is: no conversion, nothing to rename. The card
 also keeps working with DMDoS.
 
 OpenDMD doesn't come with any GIFs. A card you set up for DMDoS works as
-it is, and the DMDoS GIF pack (**DMDos GUI v1 + GIFs**) is in the Software
+it is, and the DMDoS GIF pack (DMDos GUI v1 + GIFs) is in the Software
 section of [dmdos.net](https://dmdos.net/). To set up a card, format it
 FAT32 and copy your DMDoS card, or the DMDoS GIF pack, onto it as it is.
 You can also add your own GIFs from the [Library](web-app.md#library), or
@@ -54,7 +54,7 @@ title with underscores between words, then a number so several GIFs of the
 same game can sit side by side. An author name, in lower case, can go at
 the end.
 
-The first word only counts as the platform if it's one the player knows:
+The first word only counts as the platform if it's one OpenDMD knows:
 the usual short names such as `SNES`, `NES`, `MD`, `N64`, `GBA`, `PS1`,
 `ARCADE`, `PINBALL`, `AMIGA`, `C64`, `SPECTRUM` and `PICO-8`, and the rest
 of the list in the Platform menu of **Add GIFs**. Any other first word
@@ -62,7 +62,7 @@ isn't a platform: the GIF has no platform, and its whole file name becomes
 the title, so `THE_END.gif` is titled "THE END".
 
 If a platform you need is missing, it can't be added from the web app yet:
-the list is part of the player's software, and new platforms arrive with
+the list is part of OpenDMD, and new platforms arrive with
 updates.
 
 You rarely need to type these yourself. **+ Add GIFs**, **Edit details…**
@@ -72,8 +72,8 @@ way and they'll sort into the right platform.
 
 ## Using a new card
 
-The player reads cards formatted as **FAT32**. Most cards up to 32 GB come
-that way. Bigger cards usually come formatted as exFAT, which the player
+The display reads cards formatted as FAT32. Most cards up to 32 GB come
+that way. Bigger cards usually come formatted as exFAT, which the display
 can't read: put one in and the web app's **Now** view says it needs FAT32
 and offers **Format card…**, which sets it up for you. Formatting erases
 the card, so do it before adding GIFs.
@@ -85,15 +85,15 @@ To move a DMDoS collection to a new card, copy the `gifs` folder and the
 `filelist` files from the old card to the new one with a computer.
 
 You don't have to do anything after filling a card: it plays fine as it
-is. The player also gets each GIF ready by itself, so it starts a little
-faster, while the panel is dark at night or the player is paused. The
+is. OpenDMD also gets each GIF ready by itself, so it starts a little
+faster, while the panel is dark at night or playback is paused. The
 whole DMDoS pack is ready after about four hours of that: turn on **Night
 mode** (off, not dimmed) under **Schedule** and it happens overnight, or
-pause the player for a while. **Settings** shows how far it has got, and
+pause playback for a while. **Settings** shows how far it has got, and
 **Prepare remaining files** there does the rest from your browser.
 
 ## If a card starts failing
 
-Cards wear out. If the player keeps hitting read errors it slows the card
+Cards wear out. If the display keeps hitting read errors it slows the card
 down to keep going, and **Settings** shows "Card errors: N, retrying".
 That means it's time for a new card.
