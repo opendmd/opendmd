@@ -605,7 +605,7 @@ pub fn trip(serial: u32, khz: u32, mode: CardSpeed) -> Trip {
             restart,
             slow_down,
             summary: format!(
-                "card failing again: {counts}; not restarting ({reboots} card-failure restarts in {} min); the player has stopped, one restart when that window ends in {} min",
+                "card failing again: {counts}; not restarting ({reboots} card-failure restarts in {} min); playback has stopped, one restart when that window ends in {} min",
                 SD_REBOOT_WINDOW.as_secs() / 60,
                 window_left_ms().div_ceil(60_000)
             ),

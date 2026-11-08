@@ -485,7 +485,7 @@ fn run_upload_inner(up: &mut Upload, work: UploadWork) {
         if let Some(aborted) = e.downcast_ref::<UploadAborted>() {
             if let Some((code, status)) = aborted.status {
                 let why = if code == 503 {
-                    "the player needs the heap right now; retry shortly".to_string()
+                    "the display is short of memory right now; retry shortly".to_string()
                 } else {
                     format!(
                         "upload aborted at {} of {} B",

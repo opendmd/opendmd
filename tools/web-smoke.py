@@ -2935,7 +2935,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         code, why = 200, ""
     except urllib.error.HTTPError as e:
         code, why = e.code, json.loads(e.read() or b"{}").get("error", "")
-    check(code == 422 and why.startswith("this update is for another flash layout than this player's: use the DevKit (4 MB)")
+    check(code == 422 and why.startswith("this update is for another flash layout than this display's: use the DevKit (4 MB)")
           and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of an 8mb bundle -> {code} '{why}'")
     # A bundle for the DevKit's older partition table (v2, 1.0.0-beta.15 and
     # earlier): refused in the page and by the mock (the firmware), in words.
@@ -5541,7 +5541,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     def short(route, _req):
         tries.append(time.time())
         if len(tries) == 1:
-            route.fulfill(status=503, body=json.dumps({"error": "the player needs the heap right now; retry shortly"}),
+            route.fulfill(status=503, body=json.dumps({"error": "the display is short of memory right now; retry shortly"}),
                           headers={"content-type": "application/json", "retry-after": "1"})
         else:
             route.continue_()

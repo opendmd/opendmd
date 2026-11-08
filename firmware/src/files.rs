@@ -58,7 +58,7 @@ pub fn affordable(req: &mut Req) -> Result<bool> {
     req.error(
         503,
         "503 Service Unavailable",
-        "the player needs the heap right now; retry shortly",
+        "the display is short of memory right now; retry shortly",
     )?;
     Ok(false)
 }
@@ -237,7 +237,7 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
         req.error(
             503,
             "503 Service Unavailable",
-            "the player needs the heap right now; retry shortly",
+            "the display is short of memory right now; retry shortly",
         )?;
         return Ok(true);
     };

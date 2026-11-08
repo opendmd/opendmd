@@ -1693,7 +1693,7 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
         raise ValueError(f"truncated: {len(data)} B, the bundle header is {OTA_HEADER_LEN} B")
     if data[:8] not in OTA_LAYOUTS:
         if data[:4] == b"ODFW":  # opendmd_core::ota::OtaError::OtherLayout
-            raise ValueError("this update is for another flash layout than this player's: use the DevKit (4 MB) "
+            raise ValueError("this update is for another flash layout than this display's: use the DevKit (4 MB) "
                              "update file (opendmd.dev/install has the latest)")
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
     bundle, table = OTA_LAYOUTS[data[:8]]
@@ -1705,7 +1705,7 @@ def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     if not version or "\0" in version or not version.isprintable():
         raise ValueError("the bundle's version field is malformed")
     if bundle != variant:
-        raise ValueError(f"this update is for the {OTA_BOARDS[bundle]} and this player runs the {OTA_BOARDS[variant]} "
+        raise ValueError(f"this update is for the {OTA_BOARDS[bundle]} and this display runs the {OTA_BOARDS[variant]} "
                          f"firmware: use the {OTA_BOARDS[variant]} update file")
     have = OTA_CURRENT[variant]
     if table > have:
@@ -1750,12 +1750,12 @@ def www_signature_check(data: bytes, pub) -> None:
     unless the pack is signed by `pub` (key 0)."""
     from nacl.exceptions import BadSignatureError
     if not data[19] & 1:
-        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+        raise ValueError("not signed: this display takes only a release's web app pack (signed)")
     t = data[-72:]
     if len(data) < 64 + 72 or t[:4] != b"ODWS" or t[5:8] != b"\0\0\0":
-        raise ValueError("not signed: this player takes only a release's web app pack (signed)")
+        raise ValueError("not signed: this display takes only a release's web app pack (signed)")
     if t[4] != 0:
-        raise ValueError(f"signed with key {t[4]}, which this player does not know")
+        raise ValueError(f"signed with key {t[4]}, which this display does not know")
     body = bytearray(data[:-72])
     body[12:16] = b"\0" * 4
     msg = b"ODWPSIG1" + bytes([t[4]]) + hashlib.sha256(bytes(body)).digest()
@@ -4386,7 +4386,7 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_error_json(400, "the body is the compiled Formula (Content-Length bytes)")
                 return
             if psb_info(body) is None:
-                self.send_error_json(400, "this is not a Formula compiled for this player")
+                self.send_error_json(400, "this is not a Formula compiled for this display")
                 return
             with ctx.lock:
                 if not ctx.player.playlist:
@@ -4599,7 +4599,7 @@ def make_handler(ctx: Context, quiet: bool):
                                      {"Retry-After": "10"})
                 return
             if not data[19] & 1:
-                self.send_error_json(422, "not signed: this player takes only a release's web app pack (signed); "
+                self.send_error_json(422, "not signed: this display takes only a release's web app pack (signed); "
                                           "the web app in flash is unchanged")
                 return
             if zlib.crc32(data[64:]) != int.from_bytes(data[12:16], "little"):

@@ -477,7 +477,7 @@ fn verify_on_worker(
 ) -> std::result::Result<(), Option<&'static str>> {
     crate::ota::verify_www_on_worker(signed, net).map_err(|e| {
         e.map(|e| match e {
-            opendmd_core::ota::OtaError::UnknownKey(_) => "signed with a key this player does not know",
+            opendmd_core::ota::OtaError::UnknownKey(_) => "signed with a key this display does not know",
             _ => "bad signature: not signed by this firmware's key, or the pack was changed",
         })
     })?;
@@ -882,7 +882,7 @@ pub fn receive(
         return up.error(
             503,
             "503 Service Unavailable",
-            "the player needs the heap right now; retry shortly",
+            "the display is short of memory right now; retry shortly",
         );
     };
 
@@ -914,7 +914,7 @@ pub fn receive(
         return up.error(
             422,
             "422 Unprocessable Entity",
-            "not signed: this player takes only a release's web app pack (signed); the web app in flash is unchanged",
+            "not signed: this display takes only a release's web app pack (signed); the web app in flash is unchanged",
         );
     }
     let verify = Verify::Worker(net);
