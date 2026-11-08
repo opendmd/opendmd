@@ -1,6 +1,6 @@
 # The web app
 
-Everything about your display is managed from a web page the player serves
+Everything about your display is managed from a web page the display serves
 itself: open **<http://opendmd.local/>** on any phone, tablet or computer on
 the same WiFi. There is nothing to install.
 
@@ -108,7 +108,7 @@ phone it takes the whole screen, and **‹ Playlists** goes back.
   twice. **Add by filter…** fills it by rules instead: platforms,
   categories and title words (**Leave out** drops logos, intros and the
   like), shuffled or cut to a number if you like. Or pick GIFs in the
-  Library and choose **Add to playlist… → New playlist…**.
+  Library and choose **Add to playlist… › New playlist…**.
 - **Edit one:** open it; every GIF shows its first frame. Drag the ⠿
   handles to reorder, ✕ to remove one, or pick GIFs and use **Arrange** to
   move or remove them, then **Save**. The ones that come with your card
@@ -184,12 +184,12 @@ Settings has four tabs, and everything saves as you change it (a green
     **Time**.
 - **Device:**
   - **Status**: the playlist and how many GIFs it has, the card, how long
-    the player has been running, its memory, and late frames (frames the
+    the display has been running, its memory, and late frames (frames the
     panel showed late enough to see). **Reload playlist** reads the card
-    again if you changed it in a computer; **Reboot** restarts the player.
+    again if you changed it in a computer; **Reboot** restarts it.
   - **Ready to play** shows how many GIFs are ready to play at their
-    smoothest. The player gets them ready by itself while the panel is
-    dark at night (**Night mode** under **Schedule**) or the player is
+    smoothest. The display gets them ready by itself while the panel is
+    dark at night (**Night mode** under **Schedule**) or playback is
     paused; **Also while playing** lets it do a little more while it
     plays, slowly.
     **Prepare remaining files** does the rest now from your browser.
@@ -210,7 +210,7 @@ Settings has four tabs, and everything saves as you change it (a green
     undone unless you press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
   - **Firmware** shows the version and installs updates (see
     [Updating](updating.md)).
-  - **Security** can require a key before the player can be controlled.
+  - **Security** can require a key before the display can be controlled.
     Without one, anyone on your WiFi can change the panel, so the web app
     shows a banner offering to set one until you do (the setup page offers
     one too). Each browser asks for the key once. The key is the only lock,
@@ -226,6 +226,6 @@ bottom, a playlist opens as a screen of its own (and its **+ Add GIFs**
 takes the whole screen until **Done**), and long-press replaces
 right-click (in the Library, long-press starts Select).
 
-**Thumbnails** are on unless you switch them off (Settings → Device →
-*Thumbnails in the Library and playlists*). Each GIF's picture is fetched
+**Thumbnails** are on unless you switch them off (Settings › Device ›
+**Thumbnails in the Library and playlists**). Each GIF's picture is fetched
 once and kept by your browser, so they cost the panel next to nothing.

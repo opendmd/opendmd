@@ -4,8 +4,8 @@ Put OpenDMD on your display straight from this page. It takes about a
 minute, your SD card and its GIFs are left alone, and the installer gets
 the board onto your WiFi before you unplug it.
 
-OpenDMD replaces the DMDoS firmware on the same ESP32 board: nothing to
-rewire or swap. Want the original firmware back later? Install it again
+OpenDMD replaces the DMDoS software on the same ESP32 board: nothing to
+rewire or swap. Want the original software back later? Install it again
 from the Software section of [dmdos.net](https://dmdos.net/).
 
 > **Works in:** Chrome, Edge, Opera or Firefox (version 151 or later) on a
@@ -86,7 +86,7 @@ recognises it and shows its name and the version it runs. From there:
 ## WiFi without the installer
 
 If you skipped the WiFi step, or the installer couldn't reach the board
-afterwards, the player makes its own network for you to join instead.
+afterwards, the display makes its own WiFi network for you to join instead.
 While it waits, the panel says **Join WiFi  OpenDMD-Setup**.
 
 <!-- site:steps -->
@@ -104,7 +104,7 @@ While it waits, the panel says **Join WiFi  OpenDMD-Setup**.
     lowercase letters, digits and hyphens, up to 32.
 
     If the OpenDMD web app pops up by itself when you join, you can do the
-    same there under **Settings → Device → Network**. The board restarts
+    same there under **Settings › Device › Network**. The board restarts
     every ten minutes while it waits; if the setup network vanishes, wait a
     moment and join it again.
 
@@ -118,15 +118,15 @@ up a new one.
 
 ## Firmware update file
 
-Once you're set up, **Check for updates** in the web app keeps the player
-current over WiFi ([Updating](updating.md)). If you'd rather install the
-firmware from a file, here it is:
+Once you're set up, **Check for updates** in the web app keeps OpenDMD
+up to date over WiFi ([Updating](updating.md)). If you'd rather install an
+update from a file, here it is:
 
 <!-- site:firmware-bundle -->
 
 ## Going back to DMDoS
 
-OpenDMD doesn't lock you in. To put the original DMDoS firmware back, use
+OpenDMD doesn't lock you in. To put the original DMDoS software back, use
 the browser installer in the Software section of
 [dmdos.net](https://dmdos.net/) the same way. Your SD card works with
 either.

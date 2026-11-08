@@ -15,12 +15,12 @@
 
 ## I can't open opendmd.local
 
-- Make sure your phone or computer is on the same WiFi as the player.
-- Some devices and networks don't support `.local` names. Use the player's
+- Make sure your phone or computer is on the same WiFi as the display.
+- Some devices and networks don't support `.local` names. Use the display's
   address instead: find it in your router's list of connected devices, or
   take the SD card out and power the display on, and the panel shows its
   address.
-- If the player can't join its saved WiFi (a new router, a changed
+- If the display can't join its saved WiFi (a new router, a changed
   password), plug it into a computer, open the [installer](install.md),
   click **Install** and choose **Change Wi-Fi**. Or join the
   **OpenDMD-Setup** network it opens and enter the new details there, as
@@ -29,29 +29,29 @@
   until you rename it. When a second one joins your network with the same
   name, one of them moves to `opendmd-2.local` (and it may be the one you
   had first). Open `opendmd-2.local` or the display's address,
-  then give each display its own name in **Settings → Device → Network**
-  (a name another display already has is refused). **Settings → Device →
+  then give each display its own name in **Settings › Device › Network**
+  (a name another display already has is refused). **Settings › Device ›
   About** shows the address a display really has.
 
 ## The panel says there's no card, or the card can't be read
 
 - Check the card is pushed fully into its slot.
-- The player needs a **FAT32** card. If the web app's **Now** view says the
+- The display needs a FAT32 card. If the web app's **Now** view says the
   card needs FAT32, use **Format card…** there (this erases it), then add
   your GIFs again. See [The SD card](card.md).
-- The player keeps checking for a card, so you don’t need to
+- The display keeps checking for a card, so you don’t need to
   restart it after swapping cards.
 
 ## The display resets or flickers when it's bright
 
 The power supply can't keep up at high brightness, especially on mostly
 white pictures. Lower the brightness, or lower **Maximum brightness** in
-**Settings → Playback** if you raised it.
+**Settings › Playback** if you raised it.
 
 ## Some LEDs show the wrong colours on certain pictures
 
 If a few dots come out the wrong colour on some pictures but not others,
-the panel may be fussy about timing. Open **Settings → Device → Panel
+the panel may be fussy about timing. Open **Settings › Device › Panel
 timing** and press **Test panel timing**. The panel shows some test
 pictures, switching between **A** and **B** (the letter is in the bottom
 corner): pick the one that looks clean and it is saved. If both have dots,
@@ -70,21 +70,21 @@ may be faulty.
 ## Settings shows card errors
 
 Settings says "Card errors: N, retrying". The card is wearing out. The
-player keeps going as best it can, but replace the card soon and put your
+display keeps going as best it can, but replace the card soon and put your
 GIFs on the new one.
 
 ## The web app won't load, or looks broken
 
-The player always has a simple backup page at
+The display always has a simple backup page at
 **<http://opendmd.local/setup>**: WiFi, basic playback settings and a
 restart button. To put the web app right, run the
 [installer](install.md) again with **Erase device** unticked.
 
 ## A WiFi update didn't finish
 
-If the board's light blinks fast after a firmware update, it is waiting to
+If the board's light blinks fast after an update over WiFi, it is waiting to
 finish installing from the SD card: make sure the card is in and leave it.
-If the player still doesn't come back, run the [installer](install.md)
+If the display still doesn't come back, run the [installer](install.md)
 again with **Erase device** unticked.
 
 ## Starting over
@@ -101,5 +101,5 @@ the build with a photo.
 ## Something else
 
 If none of this helps, [report the problem on GitHub](https://github.com/opendmd/opendmd/issues):
-say what you did, what the panel or the web app showed, and the firmware
-version from **Settings › Device**.
+say what you did, what the panel or the web app showed, and the
+version under **Settings › Device › About**.

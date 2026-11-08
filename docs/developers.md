@@ -59,9 +59,9 @@ WebAssembly crates. `make fw-release` and CI fail when they are out of date
 or a dependency's licence is not one the project accepts.
 
 A release build has no WiFi credentials in it: the installer gives it
-your WiFi over USB (Improv Serial), or the player starts its
+your WiFi over USB (Improv Serial), or the firmware starts its
 `OpenDMD-Setup` network instead. Firmware updates over WiFi are signed
-bundles: the player checks the signature before installing, and a small
+bundles: the firmware checks the signature before installing, and a small
 updater program copies the new firmware into place from the SD card.
 
 The repository's deploying notes (`docs/deploying.md`),
@@ -94,11 +94,11 @@ board, `make sim ARGS="--play '@boot?len=full'"`.
 
 ## Reference
 
-- [HTTP API](api.md): every route the player answers, with `curl`
+- [HTTP API](api.md): every route the display answers, with `curl`
   examples. Anything the web app does, a script can do too. The page
   follows the latest docs; it links a copy for each release, as that
-  release described it, and the web app's Settings → Device → About opens
-  the one for the player's firmware.
+  release described it, and the web app's Settings › Device › About opens
+  the one for the display's firmware version.
 - [Psi language reference](psi-spec.md): the Formula language, every
   name it knows, its limits and its error codes; the `psi` command.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,
