@@ -42,7 +42,7 @@ export async function sent(fn, busy) {
       const wait = Math.max((e?.after || 0) * 1000, 2000 + Math.random() * 2000);
       const refused = e?.status === 503 && (!busy || e.after) || !busy && e instanceof TypeError;
       if (!refused || Date.now() - t0 + wait > RETRY_FOR) throw e;
-      if (Date.now() - calm > 15000) { calm = Date.now(); toast('The panel is busy: trying again shortly'); }
+      if (Date.now() - calm > 15000) { calm = Date.now(); toast('The display is busy: trying again shortly'); }
       await new Promise((r) => setTimeout(r, wait));
     }
   }

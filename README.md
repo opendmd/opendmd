@@ -25,7 +25,7 @@ it is, and adds a web app to manage it.
 - **The firmware** runs on the display's own ESP32 board. It plays the card and serves the web
   app over WiFi.
 - **The web app** at `http://opendmd.local/` works in any browser, on a phone or a computer.
-  Previews and GIF preparation run right in the browser, using the same engine as the player.
+  Previews and GIF preparation run right in the browser, using the same engine as the display.
 - **The simulator** plays a card in a desktop window, drawn as LEDs rather than flat pixels
   (for developers: [build it from source](docs/simulator.md); everyone else can try the
   [web demo](https://opendmd.dev/demo/)).
@@ -59,7 +59,7 @@ Open the **[installer](https://opendmd.dev/install/)** in Chrome, Edge, Opera or
 Firefox on a computer, plug the
 display's ESP32 board into your computer by USB, and click **Install**. When it's done, the
 installer asks for your WiFi and puts the board on it; the web app is then at
-`http://opendmd.local/`. (Skipped that? The player opens a WiFi network called
+`http://opendmd.local/`. (Skipped that? The display opens a WiFi network called
 `OpenDMD-Setup` to set it up from instead.) [Install](docs/guide/install.md) has the details.
 
 From source: `make fw-release && make flasher` (see [For developers](docs/developers.md)).
@@ -84,7 +84,7 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
 - **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
   panel off or dims it.
-- **Smooth playback:** the player gets each GIF ready in the background, so GIFs start
+- **Smooth playback:** the display gets each GIF ready in the background, so GIFs start
   quickly and play smoothly.
 
 ## Screenshots
@@ -133,7 +133,7 @@ The firmware and the web app are built on other open-source software (ESP-IDF, F
 lwIP, Mbed TLS and the Rust crates among it), listed with each licence's full text in
 [the firmware's](licenses/THIRD-PARTY-LICENSES-firmware.txt) and
 [the web app's](licenses/THIRD-PARTY-LICENSES-web.txt) third-party notices. Each release and
-the player itself carry them (Settings › Device › About › Open-source licences).
+the web app itself carry them (Settings › Device › About › Open-source licences).
 
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from

@@ -173,13 +173,15 @@ export function editor(se, ctx) {
       pane),
     h('div.edfoot.row', saveB, playB)));
 
-  // The header: the playlist's name; a built-in one is saved as a copy.
+  // A built-in playlist is saved under a new name: "Halloween 2", or the next number free.
+  const freeName = (base) => { const known = ctx.known(); let i = 2; while (known.includes(`/sets/${base} ${i}.txt`)) i++; return `${base} ${i}`; };
+  // The header: the playlist's name; a built-in one is saved as a new playlist.
   function header() {
     const d = app.draft, root = d.path && !d.path.startsWith('/sets/');
     title.textContent = d.path ? playlistLabel(d.path) : 'New playlist';
     nameRow.hidden = d.path && !root;
     nameL.textContent = root ? 'Save as a new playlist' : 'Name';
-    name.value = root ? (d.copyName ??= `${playlistLabel(d.path)} 2`) : d.name;
+    name.value = root ? (d.copyName ??= freeName(playlistLabel(d.path))) : d.name;
     saveB.textContent = root ? 'Save as new' : 'Save';
     if (playB) playB.textContent = root ? 'Save as new & play' : 'Save & play';
   }
