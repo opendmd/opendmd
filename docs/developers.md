@@ -83,13 +83,21 @@ layout, recovery and the update flow in detail.
 
 The crates are deliberately not a Cargo workspace.
 
-**Virtual files.** Paths that begin with `@` are drawn by the core, not read
-from the card (`opendmd-core/src/synth.rs` parses them): `@boot`, `@power-on`, `@card:` and `@formula?psb=…`, a Psi Formula (`docs/psi-for-models.md`)
-compiled by `opendmd-psi` in the browser (or `psi build`) and run by the
-player on the same code in the firmware, the simulator and the browser; the
-player never compiles. Formulas draw everything, including the clock.
-Options and limits are in the [HTTP API](api.md#virtual-files); to see one without a
-board, `make sim ARGS="--play '@boot?len=full'"`.
+### Virtual files
+
+Paths that begin with `@` are drawn by the core instead of read from the
+card. `opendmd-core/src/synth.rs` parses them.
+
+- `@boot` is the start-up show.
+- `@power-on` is the power-on effect.
+- `@card:<title>|<subtitle>` is a title card.
+- `@formula?psb=…` is a compiled Psi Formula (`docs/psi-for-models.md`).
+  `opendmd-psi` compiles it in the browser, or `psi build` does; the same
+  code runs it in the firmware, the simulator and the browser, and the
+  firmware never compiles. Formulas draw everything, the clock included.
+
+Their options and limits are in the [HTTP API](api.md#virtual-files). To
+see one without a board, run `make sim ARGS="--play '@boot?len=full'"`.
 
 ## Reference
 

@@ -28,15 +28,19 @@ make sim ARGS="--demo"                    # the built-in demo, no files needed
 (`cd opendmd-sim && cargo run --release -- <options>` does the same.) With
 no argument a folder picker opens, and the demo plays if you cancel it. A
 folder or GIF dropped onto the program counts as the argument.
-`opendmd-sim --help` lists every option: filters for a card (`--platforms`,
-`--title`, `--category`), `--shuffle`, `--scale` (pixels per LED, default
-10), `--transition`, `--look` (the panel's tints), `--glow`, and
-`--play '@card:Title|Subtitle'` or `--play '@boot?len=full'` for a single
-virtual file, `--formula FILE.psi` (with
-`--formula-opts a=0.5&fps=100`) or `--play '@formula?psb=…'` (a compiled
-Formula, `psi build FILE.psi --base64`) for a Formula
-(the `psi` feature is on by default; `opendmd-psi/formulas/` has `plasma.psi`,
-`fire.psi` and others).
+`opendmd-sim --help` lists every option. The ones used most:
+
+- `--platforms`, `--title` and `--category` filter a card, and `--shuffle`
+  mixes it.
+- `--scale` is pixels per LED, 10 by default.
+- `--transition`, `--look` (the panel's tints) and `--glow` set how it
+  plays.
+- `--formula FILE.psi` plays a Formula, with `--formula-opts a=0.5&fps=100`
+  for its settings. `opendmd-psi/formulas/` has `plasma.psi`, `fire.psi`
+  and others, and the `psi` feature is on by default.
+- `--play` plays one virtual file: `'@card:Title|Subtitle'`,
+  `'@boot?len=full'`, or `'@formula?psb=…'` for a compiled Formula from
+  `psi build FILE.psi --base64`.
 
 | Key | |
 |---|---|

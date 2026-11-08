@@ -90,6 +90,5 @@ is in the Software section of [dmdos.net](https://dmdos.net/), and
 
 - [Install OpenDMD](install.md) on the ESP32.
 
-OpenDMD is an independent project, not made by or affiliated with DMDoS,
-MORTACA or Retromojones. Thanks to all three for the display, the board and
+Thanks to DMDoS, MORTACA and Retromojones for the display, the board and
 the frame.
