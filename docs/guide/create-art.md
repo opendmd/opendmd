@@ -9,15 +9,8 @@ added to the card until you save.
 
 It works in six steps. Until you've picked something only step 1 shows;
 after that it folds away (**Change picture** opens it again) and the other
-steps appear.
-
-Create Art is also on the project site, at
-[opendmd.dev/create/](https://opendmd.dev/create/), with the same steps.
-There **Send to my panel** asks for your panel's address once (the name or
-IP address it shows), then opens your panel's web app with the GIF ready to
-add: pick its folder and press **Add GIF**. Your computer or phone must be
-on the same network as the panel. **Download GIF** saves it instead; Library
-› **Add GIFs** in your panel's web app puts it on the card.
+steps appear. Create Art is also on the OpenDMD website, with a few extras
+([below](#create-art-on-opendmddev)).
 
 ## 1. Find
 
@@ -32,48 +25,49 @@ Pick a source:
   picture onto the page, or paste one you've copied.
 
 Click a result to load it. Searching for art needs an internet connection
-(the computer or phone you're using needs it, not the display): the list of
-games comes from the OpenDMD website, the pictures from where they're kept.
+on the computer or phone you're using, not on the display. The list of
+games comes from the OpenDMD website, and the pictures from where they're
+kept.
 If it can't be reached, Find says so; **Try again** when you're back online.
 
 Some sites don't let other pages load their pictures. On
 [opendmd.dev/create/](https://opendmd.dev/create/) Create Art then fetches
-the picture for you, through the OpenDMD website, and keeps nothing; it
-says so plainly if the file is too big (over 16 MB), isn't a picture or a
-video, or the site refused. In your panel's own web app, download the
-picture and add the file instead.
+the picture for you, through the OpenDMD website, and keeps nothing. If
+the file is over 16 MB, isn't a picture or a video, or the site refuses, it
+says so. In your display's own web app, download the picture and add the
+file instead.
 
 On the website, `opendmd.dev/create/?url=` followed by a picture's address
-opens it in Create Art straight away. The address of a page works too (a
-Tenor, GIPHY, Reddit or Imgur link, as their Share buttons give it):
+opens it in Create Art straight away. The address of a page works too,
+such as a Tenor, GIPHY, Reddit or Imgur link from their Share buttons, and
 Create Art finds the GIF or video on it.
 
 ### Bringing a GIF from another site
 
 On the website, **Your own** has links that search other sites for pixel
-art with your words: Tenor, Klipy, GIPHY, Google and Bing images (animated
-only), DuckDuckGo, Reddit's r/PixelArt, Tumblr, DeviantArt and Imgur. Each
+art with your words: Tenor, Klipy, GIPHY, animated Google and Bing
+images, DuckDuckGo, Reddit's r/PixelArt, Tumblr, DeviantArt and Imgur. Each
 opens in a new tab. When you find one, bring it back:
 
-- **On a computer:** right-click the GIF and pick **Copy Image Address**
+- On a computer, right-click the GIF and pick **Copy Image Address**
   (or **Copy Image**), then paste it into Create Art; or drag the GIF onto
   the page. The **Open in Create Art** bookmarklet does it in one press:
   drag it from Your own to your bookmarks bar, then press it on a page
   with a GIF.
-- **On Android:** install Create Art (your browser's menu › **Add to Home
-  screen** or **Install app**). It then appears in the Share menu: share a
-  GIF, a video or a link to **Create Art** and it opens there.
-- **On iPhone and iPad:** there is no Share menu entry for websites. Touch
-  and hold the GIF, then **Copy** (or **Save to Photos**), or press Share ›
-  **Copy** on a link. In Create Art paste it into the address box (or press
-  **Choose a picture, GIF or video…** and pick it from Photos).
+- On Android, install Create Art from your browser's menu with **Add to
+  Home screen** or **Install app**. It then appears in the Share menu:
+  share a GIF, a video or a link to **Create Art** and it opens there.
+- On iPhone and iPad there is no Share menu entry for websites. Touch and
+  hold the GIF, then **Copy** or **Save to Photos**, or press Share ›
+  **Copy** on a link. In Create Art, paste it into the address box, or press
+  **Choose a picture, GIF or video…** and pick it from Photos.
 
 ### Videos
 
 On the website Create Art also takes MP4 and WebM videos, from a file, a
 link or a share: many "GIFs" on the web are really videos. The first 10
 seconds become up to 20 frames a second, fitted to the panel; trim and
-edit them on the timeline as for any animation. In your panel's own web
+edit them on the timeline as for any animation. In your display's own web
 app, make the video into a GIF on the website first.
 
 ## 2. Frame
@@ -94,7 +88,7 @@ A still picture can also slowly **Pan →** or **Scroll ↓** across the panel.
 
 Adjust colours and brightness so it reads well on LEDs. **Brighten dark
 outlines** helps black lines and lettering, which disappear on a panel
-because black LEDs are simply off.
+because a black dot is an LED that is off.
 
 ## 4. Text
 
@@ -105,7 +99,7 @@ spots. On an animation you can put it on every frame or only some.
 
 See it playing as it will look on the panel. For an animation there is a
 timeline of frames: trim the start and end, delete frames, change the speed,
-play it backwards or there-and-back (**Ping-pong**), and choose how many
+play it backwards or there-and-back with **Ping-pong**, and choose how many
 times it plays. **Undo** is there if you change your mind.
 
 If the animation moves in jumpy steps, a **Smooth motion** switch offers to
@@ -123,3 +117,14 @@ that's playing.
 In the Library, open a GIF and choose **Edit in Create Art**. It loads with
 all its frames and details. When you save, **Replace the original** keeps it
 in every playlist it's in, or **Save as new** keeps both.
+
+## Create Art on opendmd.dev
+
+Create Art is also on the OpenDMD website, at
+[opendmd.dev/create/](https://opendmd.dev/create/), with the same steps.
+There **Send to my panel** asks once for your display's address, the name
+or IP address it shows, then opens your display's web app with the GIF
+ready to add. Pick its folder and press **Add GIF**. Your computer or phone
+must be on the same network as the display. **Download GIF** saves it
+instead, and Library › **Add GIFs** in your display's web app puts it on
+the card.

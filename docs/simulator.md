@@ -3,12 +3,12 @@
 `opendmd-sim` plays a card, or any folder of GIFs, in a desktop window drawn
 as the panel's LEDs: the same `opendmd-core` engine the firmware runs, with
 a renderer that models the real P4 panel's dots and glow instead of flat
-squares. It is a tool for developers (checking a Formula, a transition or a
-card without a board on the desk).
+squares. It is a tool for developers, for checking a Formula, a transition
+or a card without a board on the desk.
 
-**Most people want the web demo instead.** It runs in any browser, with
-nothing to install, and plays a demo card on the same engine:
-[opendmd.dev/demo](https://opendmd.dev/demo/).
+Most people want the [web demo](https://opendmd.dev/demo/) instead. It runs
+in any browser with nothing to install, and plays a demo card on the same
+engine.
 
 ![The simulator playing a tunnel Formula](images/sim-tunnel.png)
 

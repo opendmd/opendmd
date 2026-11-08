@@ -20,18 +20,19 @@ column = odd pins, row 1 at the top.
 ESP32-HUB75-MatrixPanel-DMA config:
 R1=25 G1=26 B1=27 R2=14 G2=12 B2=13 A=33 B=32 C=22 D=17 E=-1 LAT=4 OE=15 CLK=16
 
-Sanity check: this is the library's ESP32 default map with only A/B/C moved
-(23→33, 19→32, 5→22) — precisely the three defaults that collide with the SD SPI bus.
+This is the library's ESP32 default map with only A, B and C moved
+(23→33, 19→32, 5→22), the three defaults that collide with the SD card's SPI bus.
 
-## microSD (SPI, on the 6-pin socket module — NOT SDMMC)
+## microSD (SPI on the 6-pin socket module, not SDMMC)
 
-VSPI defaults: SCK=18, MISO=19, MOSI=23, CS=5 — VSPI's IO_MUX pins, so the
-firmware drives them from SPI3 (= VSPI; SPI2 is HSPI and would route them
-through the GPIO matrix, which caps reads at 26.7 MHz), at 20 MHz by default
-(40 MHz only with `card_speed` fast; config.rs `SD_SPEED_KHZ` is the 40 MHz clock). Module also has 3V3 and GND
-(3V3 is the last hole on the back-side row; shorting it to GND resets the board).
-The card answers only with this assignment of the four pins; every other
-permutation is silent.
+The card is on VSPI's default pins: SCK=18, MISO=19, MOSI=23, CS=5. They are
+VSPI's IO_MUX pins, so the firmware drives them from SPI3 (VSPI); SPI2 (HSPI)
+would route them through the GPIO matrix, which caps reads at 26.7 MHz. The
+clock is 20 MHz by default, and 40 MHz only with `card_speed` set to fast
+(`SD_SPEED_KHZ` in config.rs is the 40 MHz clock). The module also has 3V3
+and GND. 3V3 is the last hole on the back-side row, and shorting it to GND
+resets the board. The card answers only with this assignment of the four
+pins; every other permutation is silent.
 
 ## Power
 

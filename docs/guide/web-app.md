@@ -19,7 +19,7 @@ browser, with a few sample animations.
 ![The Now view, previewing what the panel plays](../images/now.png)
 
 Now shows what the panel is playing: the title, its platform and category,
-where it is in the playlist ("14 of 10,162"), and a moving preview drawn
+where it is in the playlist, such as "14 of 10,162", and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
 brightness. To hide the preview, turn off **Mirror the panel on Now** in
@@ -240,8 +240,8 @@ once.
 **Network** changes the WiFi network or the **Display name** (`opendmd` in
 `opendmd.local`); press **Save network** to keep the change. A WiFi change
 needs a reboot, and a new name works straight away. Give each display its
-own name if you have more than one ([two displays with the same
-name](troubleshooting.md#i-cant-open-opendmdlocal)). **Work or school
+own name if you have more than one; [Troubleshooting](troubleshooting.md#two-displays-with-the-same-name)
+says what happens when two share one. **Work or school
 login** is here too, as on the setup page.
 
 **Moving pictures** has two switches for GIFs that move fast. **Sync to the
