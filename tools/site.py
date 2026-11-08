@@ -220,8 +220,6 @@ SECTIONS = {
         ("Create Art", "guide/create-art.html"),
         ("Formulas", "guide/formulas.html"),
         ("Make a Formula", "guide/psi-1.html"),
-        ("2: Make it move", "guide/psi-2.html"),
-        ("3: Add a shape", "guide/psi-3.html"),
         ("How Psi thinks", "guide/psi.html"),
         ("The editor", "guide/editor.html"),
         ("The SD card", "guide/card.html"),
@@ -239,6 +237,9 @@ SECTIONS = {
         ("Licences", "licenses/index.html"),
     ]),
 }
+# Pages outside the side menu that mark another page's entry in it: the
+# tour's later pages mark its first.
+MENU_AS = {"guide/psi-2.html": "guide/psi-1.html", "guide/psi-3.html": "guide/psi-1.html"}
 # What a link named after a file (`card.md`) is called instead.
 TITLES = {e[1]: e[0] for _, entries in SECTIONS.values() for e in entries if e}
 
@@ -1094,7 +1095,7 @@ def main() -> None:
     versions = api_pages(out, info, art, a.api_archive, a.api_freeze, assets)
     for src, page in PAGES.items():
         extra = api_versions_line(page, versions) if src == API_PAGE else ""
-        bodies.append(write_doc(out, src, page, info, art, assets, extra))
+        bodies.append(write_doc(out, src, page, info, art, assets, extra, on=MENU_AS.get(page)))
     # The formula gallery: generated, in the menu.
     write_gallery(out, EXAMPLES, a.gallery, a.gallery_tool, art["wordmark"])
     # The licences page: not a doc; the footer and the developers' menu link it.

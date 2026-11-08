@@ -31,7 +31,7 @@ simplest.
 | `x`, `y` | 0 to 1 across from the left, and 0 to 1 down from the top |
 | `px`, `py` | the column, 0 to 127 from the left, and the row, 0 to 31 from the top |
 | `cx`, `cy` | from the middle, −2 to 2 across and −0.5 to 0.5 down |
-| `r`, `angle` | how far from the middle, and the angle round it in turns, clockwise from the right |
+| `r`, `angle` | how far from the middle, and the angle round it in turns, from −0.5 to 0.5, 0 on the right |
 
 `y` counts down, as on a screen. For something that rises from the
 bottom, use `1 - y`.
@@ -97,7 +97,8 @@ character.
 There is no power sign. Write `x * x` for x squared.
 
 Numbers go from −32,768 to 32,767. A sum that goes past the end stays at
-the end, and dividing by zero gives the biggest number there is.
+the end. Dividing by zero gives the biggest number, with the sign of what
+you divided.
 
 ```psi
 name "Checks"
@@ -114,23 +115,14 @@ so `u = x; v = y` is two lines in one.
 
 ## Colours
 
-The last line is the colour. It can be written in several ways.
+The last line is the colour. Write it as `#f80`, as `rgb(r, g, b)` or
+`hsv(hue, strength, brightness)` with numbers from 0 to 1, or as a colour
+from a palette such as `pal(fire, v)`. A plain number is a gray. A colour
+can be dimmed with a number, `#f80 * 0.5`, or mixed with another,
+`mix(#102040, #f80, x)`. It can't be given a name, so write it in the
+last line, where it is used.
 
-- `#f80` or `#ff8800`, the way web pages write colours.
-- `rgb(r, g, b)`, red, green and blue from 0 to 1 each.
-- `hsv(hue, strength, brightness)`, with the hue in turns round the
-  rainbow.
-- `gray(v)`, from black to white. A last line that is a plain number is
-  read as `gray` of it.
-- `pal(fire, v)`, a colour from a palette, with `v` from 0 to 1. The
-  palettes are `fire`, `ice`, `ocean`, `chrono`, `amber`, `rainbow` and
-  `gray`.
-
-A colour can be dimmed with a number, `#f80 * 0.5`, or mixed with another,
-`mix(#102040, #f80, x)`. A colour can't be given a name of its own. Write
-it in the last line, where it is used.
-
-`palette sea = #024, #08c, #fff` near the top makes a palette of your own
+`palette sea = #024, #08c, #fff` near the top makes a palette from your
 colours, read with `pal(sea, v)`. `cycle(sea, v, t/8)` turns the palette
 round once in eight seconds while the picture stays still, the way old
 games made water and fire move.
@@ -145,7 +137,7 @@ cycle(sea, sin(x*2) + sin(y*1.5), t/8)
 ## Layers
 
 A Formula can be a stack of layers. Each `layer { }` has its own names
-and its own colour line, and the panel draws them from the first, at the
+and a colour line, and the panel draws them from the first, at the
 back, to the last, in front.
 
 The word after `layer` says how it goes onto what is behind it. `over`,
@@ -169,7 +161,7 @@ layer multiply { gray(py % 2 ? 1 : 0.6) }
 ## Functions
 
 A piece you use more than once can be a function. `fn ring(k) = …` is a
-function on one line, and with `{ }` it can have lines of its own. Call it
+function on one line, and with `{ }` it can have several lines. Call it
 with values, as in `ring(0.5)`.
 
 A function whose values are called `x` and `y` draws somewhere else.
@@ -195,15 +187,11 @@ tables, sprites or palettes.
 
 Some pictures are easier to draw than to work out one pixel at a time,
 such as stars or a wireframe. A `draw { }` block runs once a frame, before
-the pixels, and draws into the panel in pixels counted from the top left.
-
-- `line` and `dot` draw *ink*, from 0 to 1. The colour line reads it as
-  `ink`, as in `pal(ice, ink)`.
-- `for k < 12 { }` runs its lines twelve times, with `k` from 0 to 11.
-- `table T = 1, -2, 0.5` holds a list of numbers, and `T[k]` reads number
-  `k`, counting from 0.
-- Inside `draw`, only values that are the same for every pixel can be
-  used, such as `t`, the clock, the sliders and `k`.
+the pixels. Its `line` and `dot` draw *ink*, from 0 to 1, in pixels
+counted from the top left, and the colour line reads it back as `ink`.
+`for k < 64 { }` runs the lines inside it 64 times, with `k` from 0 to 63.
+Inside `draw` only values that are the same for every pixel can be used,
+such as `t`, the clock, the sliders and `k`.
 
 ```psi
 name "Stars"
@@ -218,11 +206,11 @@ gray(ink)
 
 ## Painting
 
-`draw { }` can also paint in colours. `pset`, `rect`, `rectfill`, `circ`,
-`circfill`, `trifill`, `print` and `spr` paint a pixel, a box, a circle, a
-triangle, text and a sprite. Paint goes on top of the colour line, and the
-last thing painted is in front, as in an old games console. Paint the
-back first.
+`draw { }` can also paint in colours. `cls` paints the whole panel one
+colour, and `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`,
+`print` and `spr` paint a pixel, a box, a circle, a triangle, text and a
+sprite. Paint goes on top of the colour line, and the last thing painted
+is in front, as in an old games console. Paint the back first.
 
 A `sprite` is a little picture written as text, one character a pixel,
 with a `key` that says what each character is. In the editor, **Edit the
@@ -237,6 +225,9 @@ draw {
 }
 ```
 
+This one has no colour line. Then the paint goes straight onto what is
+under the Formula, a GIF or black, and here `cls` covers it first.
+
 ## Over a GIF
 
 A Formula can draw over the GIF that plays instead of covering it. Four
@@ -245,8 +236,10 @@ green and blue, and `ul` how bright it is, each from 0 to 1.
 `under(px + 2, py)` is the colour two pixels along, so a Formula can move
 the GIF too.
 
-The first layer, and any colour that covers less than all of a pixel, let
-the GIF show through. A `look` line says the Formula can be the panel's
+The GIF lies under the first layer. It shows wherever a colour covers
+less than all of a pixel, and through a first layer with a blend such as
+`multiply`. A colour made from `ul`, `ur`, `ug` or `ub` shows the GIF
+changed. A `look` line says the Formula can be the panel's
 look, drawn over every GIF.
 
 ```psi
@@ -258,10 +251,16 @@ under(floor(px/4)*4 + 2, floor(py/4)*4 + 2)
 ## The world around the panel
 
 A few values come from the display itself, the same for every pixel.
-`daylight` is how light it is outside, `night` is 1 while night mode dims
-the panel, and `replay.game` changes when RePlayOS starts a game. The
-[reference](../psi-spec.md) lists them all. In the editor's preview each
-reads a default, and **Try it out** under the preview changes them.
+`daylight` is how light it is outside, from 0 at night to 1 by day,
+`night` is 1 while night mode dims the panel, and `replay.game` changes
+when RePlayOS starts a game. The [reference](../psi-spec.md) lists them
+all. In the editor's preview each reads a default, and **Try it out**
+under the preview changes them.
+
+```psi
+name "Sky"
+mix(#081030, #70b0ff, daylight) * (1 - y*0.5)
+```
 
 ## Keeping it fast
 
@@ -282,5 +281,5 @@ shows which lines take the most work.
   exception, so leave big areas of colour to the colour line.
 - For a rainbow, `pal(rainbow, h)` is cheaper than `hsv`.
 
-The [reference](../psi-spec.md) has the limits, such as the 32,768
-characters a Formula can have.
+The [reference](../psi-spec.md) has the limits, such as the 32 KB of text
+a Formula can have.

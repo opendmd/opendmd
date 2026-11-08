@@ -53,7 +53,8 @@ dimmed.
 - **Pick a colour.** Each colour in the text, such as `#f80`, has a bar
   under it in that colour. Click or tap in one and a swatch appears at the
   end of its line. The swatch opens your browser's colour picker, and the
-  colour you pick takes the old one's place. With the keyboard, put the
+  colour you pick takes the old one's place. Ctrl+Z (⌘Z) puts the old
+  colour back. With the keyboard, put the
   cursor in the colour and press Esc, then Tab.
 - **Paint a sprite.** With the cursor in a `sprite` block, press **Edit
   the picture** at its first line. The picture opens as a grid. Pick a
@@ -82,13 +83,14 @@ dimmed.
   each. Tap a name to put it in.
 - A line such as `use Plasma as p` puts the Formula called Plasma in as a
   function, `p`, once the cursor leaves the line. It works for your
-  Formulas and the bundled ones.
+  Formulas and the bundled ones that have a single colour line and no
+  layers, drawing, tables, sprites or palettes. See [How Psi
+  thinks](psi.md#functions).
 
 ## Settings and controls
 
 **⚙ Settings** opens one sheet for what the Formula says about itself.
-Each change there is a line at the top of the text, so the text and the
-sheet always agree.
+Each change there is a line at the top of the text.
 
 - **Name** and **About** are its `name` and `about` lines.
 - **Controls** are its sliders and buttons, three at most. **+ Add a
@@ -129,9 +131,11 @@ In your web app, the buttons under the code are these.
 - **Add to playlist…** puts it in one of your playlists.
 - **Set as the panel's look** keeps it over every GIF.
 - **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
+- **Copy code** puts the Formula's text on the clipboard.
 - **Submit to the gallery…** shares it. See [Formulas](formulas.md#sharing).
 
-On this site the editor has **Open on my panel** instead of Save. It saves
+On this site the editor has **Open on my panel** instead of Save, and
+**Copy code** and **Submit to the gallery…** as well. It saves
 the Formula on your panel under **Your formulas** and opens it in your web
 app. Your changes on the site are kept in this browser, and **Continue
 where you left off** puts them back when you come back to the Formula. In
