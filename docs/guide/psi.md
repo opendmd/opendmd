@@ -5,12 +5,15 @@ one at a time, each with a small example that plays as you read it. To
 learn by doing first, start with [Make a Formula](psi-1.md). Every name is
 listed in the [language reference](../psi-spec.md).
 
-## One rule for every pixel
+## Every pixel, every frame
 
-A Formula is a rule for one pixel. The panel works it out for each of its
-4,096 pixels, 50 times a second, and each time the pixel's place and the
-time are different. The rule ends in a colour, and that colour is what the
-pixel shows.
+A Formula describes a picture that changes over time. The display draws a
+new frame of it 50 times a second, or 25 or 100 when the Formula asks.
+For each frame it works out a colour for every one of the panel's 4,096
+pixels, from the pixel's place, the time and whatever else the Formula
+reads. The simplest Formula is a single line that gives that colour.
+[Layers](#layers), [drawing](#drawing) and [painting](#painting) build a
+picture up from parts.
 
 A Formula has no memory. Each frame is worked out fresh from the pixel's
 place, the time, the clock and the sliders, and from the GIF under it when
@@ -264,10 +267,10 @@ mix(#081030, #70b0ff, daylight) * (1 - y*0.5)
 
 ## Keeping it fast
 
-The panel's small processor works out every pixel 50 times a second. The
-editor rates each Formula **light**, **medium** or **heavy** for the
-panel. In the editor on this site and in the demo, **What costs most**
-shows which lines take the most work.
+The display's small processor works out every pixel of every frame,
+usually 50 times a second. The editor rates each Formula **light**,
+**medium** or **heavy** for the panel. In the editor on this site and in
+the demo, **What costs most** shows which lines take the most work.
 
 - Adding, multiplying, the waves, comparisons and `pal` are cheap.
 - `noise`, `len`, `sqrt`, `atan2`, `smoothstep`, `hash` and dividing by a
