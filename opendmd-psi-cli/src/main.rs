@@ -4,7 +4,7 @@
 //!
 //!     psi check FILE.psi|- [options]     does it compile; the panel's estimates; a contact sheet
 //!     psi fmt [--check|--write] FILE…|-  the canonical layout (same program, comments kept)
-//!     psi build FILE.psi [--base64|-o FILE.psb]  compiled for the player (it never compiles)
+//!     psi build FILE.psi [--base64|-o FILE.psb]  compiled for the panel (it never compiles)
 //!     psi builtins --json                every name the language knows
 //!     psi errors --json                  the error codes
 //!

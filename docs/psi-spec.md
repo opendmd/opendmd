@@ -394,8 +394,10 @@ editor does not write the line yet; it will once there is a version 2.
 
 **The promise starts at OpenDMD 1.0.0.** Psi 1 is the language as OpenDMD
 1.0.0 ships it. Through the betas it changed without a new version: `y`
-turned to count down, `part` and `frame { }` went, and `/` became exact at
-every level. From 1.0.0:
+turned to count down, `part` blocks and `frame { }` went, and `/` became
+exact at every level. `part` stays a reserved word: a formula can't use it
+as a name, and one that still writes a `part` block is told to write a
+function instead. From 1.0.0:
 
 - Within version 1, new built-in names may be added under the name rule
   ("Every name"). A name a formula sets is that formula's, even where a

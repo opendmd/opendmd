@@ -3805,8 +3805,8 @@ def make_handler(ctx: Context, quiet: bool):
                             400, "tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0"
                         )
                         return
-                    if field == "tz_name" and len(v) > 64:
-                        self.send_error_json(400, "tz_name is at most 64 characters")
+                    if field == "tz_name" and len(v.encode()) > 64:
+                        self.send_error_json(400, "tz_name is at most 64 bytes")
                         return
                     if field == "transition":
                         # Kind::from_name: case-insensitive, '-' for '_', "wipe" = wipe_left
@@ -3859,8 +3859,8 @@ def make_handler(ctx: Context, quiet: bool):
                         if len(v) > 64 or any(c in v for c in "/ \0?#@"):
                             self.send_error_json(400, "follow_host must be a host name or address, optionally :port")
                             return
-                    if field == "follow_code" and (len(v) > 64 or any(c in v for c in "\0\r\n")):
-                        self.send_error_json(400, "follow_code must be at most 64 characters, with no control characters")
+                    if field == "follow_code" and (len(v.encode()) > 64 or any(c in v for c in "\0\r\n")):
+                        self.send_error_json(400, "follow_code is at most 64 bytes on one line")
                         return
                     if field == "hostname":
                         v = v.strip().lower()

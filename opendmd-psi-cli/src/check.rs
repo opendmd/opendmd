@@ -337,7 +337,7 @@ pub fn run(args: Vec<String>) -> i32 {
     );
     if prog.still_lanes() > 0 {
         println!(
-            "still cache: {} value{} worked out once ({} KB of the player's heap); ~{:.1} ms a frame without it",
+            "still cache: {} value{} worked out once ({} KB of the display's heap); ~{:.1} ms a frame without it",
             prog.still_lanes(),
             if prog.still_lanes() == 1 { "" } else { "s" },
             Still::bytes_for(&prog) / 1024,

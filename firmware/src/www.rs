@@ -185,7 +185,9 @@ static INFO: Mutex<Info> = Mutex::new(Info {
 
 /// Whether this boot's last `PUT /api/www` was staged on the card:
 /// 0 none yet (or the last one was refused before it got that far: at its
-/// header), 1 no (written to flash from the upload), 2 yes.
+/// header), 2 yes. (1, written to flash from the upload, went with
+/// 1.0.0-beta.15: every update is staged or refused, so `staged` is never
+/// `false`.)
 static STAGED_LAST: AtomicU8 = AtomicU8::new(0);
 
 pub fn info() -> Info {
@@ -223,11 +225,7 @@ pub fn info_json() -> String {
         i.error
             .as_deref()
             .map_or_else(|| "null".into(), json_string),
-        match STAGED_LAST.load(Relaxed) {
-            1 => "false",
-            2 => "true",
-            _ => "null",
-        },
+        if STAGED_LAST.load(Relaxed) == 2 { "true" } else { "null" },
     )
 }
 
