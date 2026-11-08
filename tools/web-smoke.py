@@ -4284,7 +4284,7 @@ def psi_refused_note(page: Page) -> None:
     page.fill("#psi-src", f"loop 4\ng = {waves}\npal(rainbow, frac(g/40))")
     page.wait_for_timeout(500)
     note, cap = page.inner_text("#psi-heavy"), page.inner_text("#psi-ed-cap")
-    check(page.is_visible("#psi-heavy") and note.startswith("Too heavy for the panel: it plays a Formula only up to 40 ms")
+    check(page.is_visible("#psi-heavy") and note.startswith("Too heavy for the panel: drawn the slow way, it would take about 44 ms a frame, and the panel allows 40 (32 at 100 frames a second; 12 over GIFs). Simplify it")
           and "too heavy for the panel" in cap and "bad" in (page.get_attribute("#psi-heavy", "class") or ""),
           f"formulas: one the panel refuses by the VM's figure says so ('{note}'; '{cap}')")
     page.fill("#psi-src", "loop 4\ngray(x)")

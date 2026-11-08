@@ -164,9 +164,9 @@ const vmEst = (i) => (i[5] & 32 ? i[6] : i[14] ?? i[6]);
 export const refused = (i) => i[6] > i[16];
 const ms = (us) => (us / 1000).toFixed(1);
 export const about = (i) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
-export const TIP = (i) => `${i[0]} steps, about ${ms(est(i))} ms a frame on the panel${vmEst(i) > est(i) ? `, ${ms(vmEst(i))} without the JIT` : ''} (light: under 5 ms; medium: under 8)${refused(i) ? `; the panel refuses it: ${ms(i[6])} ms without the JIT or its still cache, over its ${i[16] / 1000}` : ''}`;
-// The editor's sentence for one the panel refuses.
-export const TOO_HEAVY = (i) => `Too heavy for the panel: it plays a Formula only up to ${i[16] / 1000} ms a frame without the JIT, in case it has to draw it that way, and this one takes about ${Math.ceil(i[6] / 1000)}`;
+export const TIP = (i) => `${i[0]} steps, about ${ms(est(i))} ms a frame on the panel${vmEst(i) > est(i) ? `, ${ms(vmEst(i))} the slow way` : ''} (light: under 5 ms; medium: under 8)${refused(i) ? `; too heavy for the panel: ${ms(i[6])} ms the slow way, over its ${i[16] / 1000}` : ''}`;
+// The editor's sentence for one the panel refuses (docs/guide/editor.md: its faster path, the slow way).
+export const TOO_HEAVY = (i) => `Too heavy for the panel: drawn the slow way, it would take about ${Math.ceil(i[6] / 1000)} ms a frame, and the panel allows ${i[16] / 1000}${i[5] & 32 ? ' over GIFs' : i[10] == 10 ? ' at 100 frames a second' : ' (32 at 100 frames a second; 12 over GIFs)'}`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
 // comments `.c`, colours `.k` with `--k` their colour, for a swatch, the

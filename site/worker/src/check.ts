@@ -15,6 +15,8 @@ export const MAX_DESCRIPTION = 120;
 export const MAX_AUTHOR = 40;
 export const MAX_SLUG = 48;
 export const MAX_US = 10_000;
+/** The version of these rules (opendmd-gallery's): a sync after it changes checks every file again (gallery.ts `sync`). 2: the panel's own refusal (info[16]). */
+export const RULES = 2;
 export const LICENCES = ["CC0-1.0", "CC-BY-4.0"];
 // Keep in step with opendmd-gallery's RESERVED (and the public repo's CODEOWNERS).
 const RESERVED = ["opendmd", "duggan"];

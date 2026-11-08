@@ -1057,8 +1057,14 @@ fn main() -> Result<()> {
                 Command::ApplyConfig {
                     settings: mut next,
                     panel: panel_op,
+                    look_named,
                     reply,
                 } => {
+                    // A look the request did not name is this task's own
+                    // (the sender's copy may predate its Formula's delete).
+                    if !look_named && next.look_formula != settings.look_formula {
+                        next.look_formula.clone_from(&settings.look_formula);
+                    }
                     // Values the loop only picks up (brightness, dwell,
                     // tint, glow, sync, …): taken in one small step, the
                     // replaced settings freed by the handler on CPU0.
@@ -1559,12 +1565,25 @@ fn main() -> Result<()> {
             0 => 0,
             _ => formula_look::CHANGED.swap(0, Ordering::Relaxed),
         };
-        if changed != 0 && formula_look::on_card(&settings.look_formula) {
+        // (Or built again after a build short of memory, a second on.)
+        if (changed != 0 && formula_look::on_card(&settings.look_formula)) || looks.retry_due() {
             handled = true;
-            if changed == formula_look::GONE {
+            // Only if it still names the Formula deleted (a config change
+            // may have picked another meanwhile; then it is just built again).
+            let gone = (changed == formula_look::GONE)
+                .then(|| formula_look::gone_for(&settings.look_formula))
+                .flatten();
+            if let Some(gone) = gone {
                 settings.look_formula.clear();
                 unsaved = true;
                 SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+                // The shared copy too, if it still names it (the handler
+                // cleared it; this holds whatever came after).
+                if let Ok(mut s) = shared_settings.lock() {
+                    if formula_look::names(&s.look_formula, &gone) {
+                        s.look_formula.clear();
+                    }
+                }
             }
             let shown = match engine.as_mut() {
                 Some(e) => e.display_mut(&mut canvas),

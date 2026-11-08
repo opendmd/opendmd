@@ -44,6 +44,8 @@ export function compiled(src: string): Compiled | { ok: false; error: string; at
   }
   if (!ok) return { ok: false, error: error(), at: errorAt()[0] ?? 0 };
   const info_ = Array.from(info());
+  // (An older pkg-psi has no info[16], the panel's limit: the check would quietly pass anything.)
+  if (info_.length < 17) throw new Error(`pkg-psi info() has ${info_.length} entries, the checker needs 17: rebuild it (make web)`);
   let meta: Compiled["meta"];
   try {
     meta = JSON.parse(controls(src));

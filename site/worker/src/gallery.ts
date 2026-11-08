@@ -21,7 +21,7 @@
 //   the store holds this build's examples and a first sync, or when D1
 //   fails, the built files are served as they are.
 
-import { checkFile, checkSlug, type Entry } from "./check";
+import { checkFile, checkSlug, RULES, type Entry } from "./check";
 import { thumbnail } from "./psi";
 import { png } from "./png";
 
@@ -230,10 +230,12 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
     if (!(await claim(db, "sync_started", GAP))) return { ...r, busy: true };
     r.examples = await seed(env, origin);
     const commit = await head();
-    const m = await metaGet(db, ["commit"]);
+    const m = await metaGet(db, ["commit", "rules"]);
     r.commit = commit;
     r.previous = m.commit ?? null;
-    r.changed = m.commit !== commit;
+    // The check's rules changed since the last full sync (check.ts RULES): every file is checked again, kept or not.
+    const recheck = m.rules !== String(RULES);
+    r.changed = m.commit !== commit || recheck;
     if (!r.changed) {
       await db.batch([metaSet(db, "synced", String(now()))]);
       return { ...r, ok: true };
@@ -251,12 +253,12 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
     for (const [slug, f] of want) {
       const sha = "bytes" in f ? await blobSha(f.bytes) : `not-a-file:${f.why}`;
       const row = rows.get(slug);
-      if (row && row.sha === sha && row.status === "ok") {
+      if (row && row.sha === sha && row.status === "ok" && !recheck) {
         r.kept++;
         if (refusedAt.has(slug)) writes.push(db.prepare("delete from gallery_refused where slug = ?").bind(slug));
         continue;
       }
-      if (refusedAt.get(slug) === sha) continue; // refused before, unchanged
+      if (refusedAt.get(slug) === sha && !recheck) continue; // refused before, unchanged
       if (checked >= PER_RUN) {
         r.more = true;
         continue;
@@ -265,6 +267,11 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
       const v = "bytes" in f ? checkFile(slug, f.bytes) : { ok: false as const, problems: [f.why] };
       if (!v.ok) {
         r.refused.push({ slug, problems: v.problems });
+        // One the gallery had, now refused by the new rules as it is: taken down.
+        if (row && row.sha === sha && row.status === "ok") {
+          r.gone.push(slug);
+          writes.push(db.prepare("update gallery set status = 'gone', updated = ? where source = 'gallery' and slug = ?").bind(t, slug));
+        }
         writes.push(
           db.prepare("insert into gallery_refused (slug, sha, problems, seen) values (?1, ?2, ?3, ?4) on conflict(slug) do update set sha = ?2, problems = ?3, seen = ?4")
             .bind(slug, sha, JSON.stringify(v.problems), t),
@@ -296,7 +303,7 @@ export async function sync(env: GalleryEnv, origin?: string): Promise<Report> {
     for (const slug of refusedAt.keys()) {
       if (!want.has(slug)) writes.push(db.prepare("delete from gallery_refused where slug = ?").bind(slug));
     }
-    if (!r.more) writes.push(metaSet(db, "commit", commit));
+    if (!r.more) writes.push(metaSet(db, "commit", commit), metaSet(db, "rules", String(RULES)));
     writes.push(metaSet(db, "synced", String(t)));
     await db.batch(writes);
     return { ...r, ok: true };

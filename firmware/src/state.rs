@@ -557,6 +557,11 @@ pub enum Command {
     ApplyConfig {
         settings: Box<crate::nvs_config::Settings>,
         panel: Option<opendmd_core::panel_timing::PanelOp>,
+        /// The request named `look_formula`. If not, `settings` carries the
+        /// look its sender copied, which may be stale (the look's Formula
+        /// deleted since: `formula_look::file_changed`): the main task's own
+        /// stays.
+        look_named: bool,
         reply: Reply,
     },
     /// Rebuild the engine and its on-card index — a fresh streaming pass over

@@ -758,6 +758,9 @@ class Lane:
         api.call("PUT", "/api/files" + psb, good)
         self.wait_status(api, lambda s: fl(s).get("source") == "setting" and not fl(s).get("error"), 60, "the look rebuilt from the real .psb")
         self.expect(api.json("GET", "/api/config")[1].get("look_formula") == psi, "look", "look_formula changed by a .psb write")
+        # By an 8.3 alias: refused (a write path is the long name), the look kept.
+        api.call("DELETE", "/api/files/formulas/EMU-LO~1.PSI", want=(400,))
+        self.expect(api.json("GET", "/api/config")[1].get("look_formula") == psi, "look", "look_formula changed by a refused alias delete")
         # The Formula deleted: the look goes with it.
         api.call("DELETE", "/api/files" + psi)
         _, cfg = api.json("GET", "/api/config")
@@ -765,7 +768,7 @@ class Lane:
         self.wait_status(api, lambda s: s.get("formula_look") is None, 60, "no look once its Formula was deleted")
         emu.wait_for(re.compile(r"formula look: its Formula was deleted"), 30, mark, "the look's end on the console")
         api.call("DELETE", "/api/files" + psb)
-        self.ok("look", f"a card Formula as the look; its .psb written anew rebuilt it at once (a bad one: {why!r}; then drawn again); its .psi deleted cleared look_formula and the look")
+        self.ok("look", f"a card Formula as the look; its .psb written anew rebuilt it at once (a bad one: {why!r}; then drawn again); an 8.3 alias delete refused (400); its .psi deleted cleared look_formula and the look")
 
     def sent(self, emu, api):
         """Show on panel as the web app sends it: the compiled bytes as the body."""

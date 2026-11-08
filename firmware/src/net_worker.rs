@@ -202,6 +202,7 @@ fn save_wifi(
     cmd.send(Command::ApplyConfig {
         settings: Box::new(next),
         panel: None,
+        look_named: false,
         reply: tx,
     })
     .map_err(|_| "playback not running")?;

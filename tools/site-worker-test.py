@@ -1108,6 +1108,21 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
               f"a contribution changed: the new version served, the date it was first taken kept ({st} {rep.get('updated')})")
         write_state({**{k: state_b2[k] for k in ("site-test-ripple.psi", "copycat.psi", "site-test-jit.psi", "site-test-stars.psi")}}, shown_b)
         compare_store(base, site, tool, shown_b, {k: v for k, v in want_b.items() if k != "site-test-ripple"}, "after a good update", tmp)
+        # The check's rules changed (check.ts RULES): the same commit, every
+        # file checked again (none kept unchecked), the version stored after.
+        rules = re.search(r"export const RULES = (\d+);", (WORKER / "src/check.ts").read_text()).group(1)
+        with sqlite3.connect(local_d1()) as c:
+            had_rules = c.execute("select value from meta where key = 'rules'").fetchone()
+            c.execute("update meta set value = '0' where key = 'rules'")
+        time.sleep(11)
+        st, h, raw = get(base, "/api/gallery/sync", "POST")
+        rep = json.loads(raw) if raw else {}
+        with sqlite3.connect(local_d1()) as c:
+            now_rules = c.execute("select value from meta where key = 'rules'").fetchone()
+        check(st == 200 and had_rules == (rules,) and now_rules == (rules,) and rep.get("commit") == sha_b2 and rep.get("kept") == 0
+              and sorted(rep.get("updated", [])) == ["copycat", "site-test-jit", "site-test-ripple", "site-test-stars"] and not rep.get("gone"),
+              f"the rules changed, the commit not: every file checked again ({st} rules {had_rules} -> {now_rules}; "
+              f"{json.dumps({k: rep.get(k) for k in ('updated', 'gone', 'kept')})})")
         gone = [get(base, p)[0] for p in ("/formulas/src/site-test-glow.psi", "/formulas/thumbs/site-test-glow.png")]
         check(gone == [404, 404] and "Site test glow" not in get(base, "/formulas/")[2].decode(),
               f"a contribution removed: gone from the page, src/ and thumbs/ ({gone})")

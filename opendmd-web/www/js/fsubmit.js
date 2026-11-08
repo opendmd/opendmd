@@ -69,7 +69,7 @@ export function form(P, get) {
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(file.value) || ['readme', 'index'].includes(file.value)) out.push('The file name can be lower-case letters, digits and single hyphens.');
     if (!x.ok) out.push('The formula has to work first.');
     else if (est(x.info) > MAX_US) out.push('This formula is too heavy for the panel: the gallery takes ones up to 10 ms a frame.');
-    else if (refused(x.info)) out.push(`The panel refuses this formula: it takes about ${Math.ceil(x.info[6] / 1000)} ms a frame without the JIT, over the panel’s ${x.info[16] / 1000}.`);
+    else if (refused(x.info)) out.push(`The panel refuses this formula: drawn the slow way, it would take about ${Math.ceil(x.info[6] / 1000)} ms a frame, and the panel allows ${x.info[16] / 1000}.`);
     if (x.src.replace(/\r\n?/g, '\n').split('\n').some((l) => BAD.test(l.replace(/\t/g, '')))) out.push('The formula has an invisible or special character in it.');
     if (new TextEncoder().encode(fileText(x)).length > 36864) out.push('The file would be over 36 KB: the gallery takes shorter formulas.');
     const n = x.ok ? P.program(x.src).length : 0;
