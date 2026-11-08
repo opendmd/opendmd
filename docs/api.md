@@ -571,6 +571,9 @@ A playlist (`/filelist.*`, `/sets/*`) is installed as by
 rebuilds its playlist if in play. With a GIF, upload its prepared copy
 too, or forget the old one. The compiled file of the Formula that
 `look_formula` names (`/formulas/<stem>.psb`) rebuilds the look at once.
+One that doesn't build, or a deleted `.psb`, leaves the look off, with
+`formula_look.error` saying why, until a good `.psb` is written (the
+display short of memory just then tries again a second later).
 
 Errors: `400` the path is not allowed (below); `408` the body stalled;
 `409` with `?new=1`, the file exists; `503` busy, or the display did not let

@@ -72,6 +72,24 @@ pub static CHANGED: AtomicU8 = AtomicU8::new(0);
 pub const REBUILD: u8 = 1;
 pub const GONE: u8 = 2;
 
+/// The `.psi` a [`GONE`] was for: the main loop clears its look only if it
+/// still names that file ([`gone_for`]; a config change may have picked
+/// another look meanwhile).
+static GONE_PATH: Mutex<String> = Mutex::new(String::new());
+
+/// The Formula a [`GONE`] was for (taken: asked once), if `look` (a
+/// `look_formula` value) still names it.
+pub fn gone_for(look: &str) -> Option<String> {
+    let gone = GONE_PATH.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    names(look, &gone).then_some(gone)
+}
+
+/// Whether `look` (a `look_formula` value) names the card Formula `file`
+/// (`/formulas/<stem>.psi`, as FAT compares names).
+pub fn names(look: &str, file: &str) -> bool {
+    !file.is_empty() && opendmd_core::synth::formula_file(look).is_some_and(|(f, _)| f.eq_ignore_ascii_case(file))
+}
+
 /// A handler wrote (`removed` false) or deleted the card file `card`
 /// (card-absolute): if it is the setting's formula's — its `.psb` (what
 /// the look is built from) or, deleted, its `.psi` (the Formula itself) —
@@ -80,7 +98,9 @@ pub const GONE: u8 = 2;
 /// on the card, `settings_card`; the main loop clears its own and NVS):
 /// the look goes with its Formula. Every writer of the file (the web
 /// app's Save and Delete, the site's Open on my panel, the API) comes
-/// through `PUT`/`DELETE /api/files`, so through here.
+/// through `PUT`/`DELETE /api/files`, so through here. (Those refuse an
+/// 8.3 alias, `MYFORM~1.PSI`, with a 400: `files::card_path_for_write`;
+/// so `card` is the long name the look names.)
 pub fn file_changed(shared: &Mutex<crate::nvs_config::Settings>, card: &str, removed: bool) {
     use opendmd_core::synth::{compiled_path, formula_file};
     let what = {
@@ -97,6 +117,9 @@ pub fn file_changed(shared: &Mutex<crate::nvs_config::Settings>, card: &str, rem
     };
     if what == GONE {
         log::info!("formula look: its Formula was deleted, so the look is off: {}", crate::short(card));
+        if let Ok(mut g) = GONE_PATH.lock() {
+            card.clone_into(&mut g);
+        }
         crate::settings_card::save_shared(shared);
     }
     CHANGED.fetch_max(what, Ordering::Relaxed);
@@ -173,6 +196,9 @@ mod with_psi {
         /// heap has been back at `TAKE_HEAP` (a yield's calm).
         yielded: Option<Instant>,
         calm_since: std::cell::Cell<Option<Instant>>,
+        /// When the setting's formula is built again after a build short
+        /// of memory (`fx_psi::look_retry`; `None`: not waiting).
+        retry_at: Option<Instant>,
     }
 
     impl Looks {
@@ -230,22 +256,27 @@ mod with_psi {
 
         /// The setting's formula (`""`: none). One that does not build
         /// (checked when saved, so a formula a later build refuses) is
-        /// logged, left out, and its reason goes to the status.
+        /// logged, left out, and its reason goes to the status; one only
+        /// short of memory is built again a second later ([`retry_due`]).
         #[inline(never)]
         pub fn set_saved(&mut self, path: &str, display: &mut Canvas) {
             if let Some(mut l) = self.saved.take() {
                 l.release(display);
             }
             let mut why = String::new();
+            self.retry_at = None;
             if !path.is_empty() {
                 match super::build(path) {
                     Ok(l) => self.saved = Some(l),
                     Err(e) => {
+                        let retry = opendmd_core::fx_psi::look_retry(&e);
                         log::warn!(
-                            "formula look: the saved look does not build, none drawn ({}): {}",
+                            "formula look: the saved look does not build, none drawn ({}{}): {}",
                             e.msg,
+                            if retry.is_some() { "; again in a second" } else { "" },
                             crate::short(path)
                         );
+                        self.retry_at = retry.map(|d| Instant::now() + d);
                         why = e.msg;
                     }
                 }
@@ -416,6 +447,12 @@ mod with_psi {
             self.active_ref().and_then(|l| l.due_between(transitioning))
         }
 
+        /// The setting's formula is due to be built again: its last build
+        /// was short of memory a second ago ([`set_saved`] again).
+        pub fn retry_due(&self) -> bool {
+            self.retry_at.is_some_and(|t| Instant::now() >= t)
+        }
+
         /// Its mean render time, µs (0 with none).
         pub fn avg_us(&self) -> u32 {
             self.active_ref().map_or(0, FormulaLook::avg_us)
@@ -517,6 +554,9 @@ mod without {
         }
         pub fn avg_us(&self) -> u32 {
             0
+        }
+        pub fn retry_due(&self) -> bool {
+            false
         }
         #[allow(dead_code)]
         pub fn is_on(&self) -> bool {

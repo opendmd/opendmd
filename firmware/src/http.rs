@@ -3480,12 +3480,14 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         let panel_asked = panel_op.is_some();
         let api_key = patch.api_key.take();
         let speed_asked = patch.card_speed.is_some();
+        let look_named = patch.look_formula.is_some();
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
             .send(Command::ApplyConfig {
                 settings: next,
                 panel: panel_op,
+                look_named,
                 reply: tx,
             })
             .is_err()
@@ -3520,7 +3522,17 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                     shared.panel_sync,
                     shared.panel_split
                 );
-                *c.settings.lock().unwrap() = *shared;
+                {
+                    // The look as it is now, unless this request named one:
+                    // its Formula may have been deleted since the copy was
+                    // taken (`formula_look::file_changed` cleared it).
+                    let mut live = c.settings.lock().unwrap();
+                    let mut shared = shared;
+                    if !look_named {
+                        std::mem::swap(&mut shared.look_formula, &mut live.look_formula);
+                    }
+                    *live = *shared;
+                }
                 // In effect at once: the sky's inputs for the new location
                 // (or zone), here on CPU0 (the zone is already set).
                 if sky_changed {

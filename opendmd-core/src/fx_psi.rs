@@ -1713,6 +1713,18 @@ pub const LOOK_MAX_EST_US: u32 = psi::LOOK_MAX_US;
 pub const COVERS: &str =
     "this Formula covers the GIF entirely: choose a lower amount or another blend";
 
+/// How soon a Formula look that would not build is tried again: a
+/// moment later when it was only short of memory ([`psi::NO_MEMORY`]: the
+/// heap comes back, as after a burst of uploads), never for a real error
+/// (it doesn't compile, its file is missing or isn't a compiled Formula),
+/// which stays until the look or its file changes.
+pub fn look_retry(e: &psi::Error) -> Option<Duration> {
+    (e.msg == psi::NO_MEMORY).then_some(LOOK_RETRY)
+}
+
+/// [`look_retry`]'s wait.
+pub const LOOK_RETRY: Duration = Duration::from_secs(1);
+
 /// A formula drawn over whatever the player shows — a GIF, a transition, a
 /// live item: the Look setting's formula, or the editor's "over the GIF".
 /// Its `ur ug ub ul` read the picture under it and its layers blend onto
@@ -3561,6 +3573,21 @@ mod tests {
     /// Formula the editor calls light or heavy but the panel refuses says
     /// so there. The cases: JIT and VM, and still cache and VM, either side
     /// of a limit.
+    /// A look short of memory is tried again a second later; one that
+    /// doesn't compile, or isn't a compiled Formula, is final.
+    #[test]
+    fn a_look_short_of_memory_is_tried_again() {
+        let look = super::path("look\nlayer multiply { gray(x) }", "");
+        refuse_loads(1);
+        let e = FormulaLook::from_path(&look).err().expect("refused for the heap");
+        assert_eq!((e.msg.as_str(), look_retry(&e)), (psi::NO_MEMORY, Some(LOOK_RETRY)));
+        assert!(FormulaLook::from_path(&look).is_ok(), "the heap back: it builds");
+        let e = FormulaLook::from_bytes(b"not a compiled Formula", "").err().expect("not a psb");
+        assert_eq!(look_retry(&e), None, "{}", e.msg);
+        let e = FormulaLook::from_path(&super::path("gray(x)", "")).err().expect("covers the GIF");
+        assert_eq!(look_retry(&e), None, "{}", e.msg);
+    }
+
     #[test]
     fn the_panel_and_psi_refuse_by_the_same_figure() {
         for grid in [10, 20, 40] {
