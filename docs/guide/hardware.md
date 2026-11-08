@@ -14,8 +14,7 @@ already have a working DMDoS display, go straight to [Install](install.md).
 ### 1 · ESP32 DevKit V1 (USB-C or micro-USB)
 
 The brain of the display, a common ESP32 development board. It runs
-OpenDMD, drives the panels and serves the web app over WiFi, and OpenDMD
-installs onto it from your browser.
+OpenDMD, drives the panels and serves the web app over WiFi.
 
 **Where:** the Hardware section of [dmdos.net](https://dmdos.net/) links
 to it on AliExpress.
@@ -52,8 +51,6 @@ to the panels it uses. Check the size and pitch if you buy elsewhere.
 A USB data cable to install OpenDMD from a computer (some cables only
 carry power), and a USB-C power supply to run the display. The panels draw
 a lot of current when bright, and a weak supply makes the display reset.
-
-**Where:** any shop that sells phone chargers.
 
 ### 6 · A frame (optional)
 

@@ -21,8 +21,8 @@ anything goes wrong it tells you what, and nothing is left half-installed.
 
 ## Beta updates
 
-Before each release there are betas, early versions of it, so you can try
-what's new sooner. They may have problems. To get them, switch on **Get
+Before each release there are betas: early versions you can try sooner.
+They may have problems. To get them, switch on **Get
 beta updates** under **Settings › Device › Firmware**, and **Check for
 updates** then offers the newest beta as well as the releases. The switch
 is kept on the display, so every phone or computer you use sees the same
