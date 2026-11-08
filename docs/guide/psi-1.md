@@ -1,134 +1,94 @@
 # Make a Formula, 1: change one
 
-A Formula is a short piece of text that the display turns into a moving
-picture, usually 50 frames a second. You don't need to have programmed
-before. On this page you write one line, change it a few times, and end
-with your own Formula on the panel. Then [make it move](psi-2.md) and
-[add a shape](psi-3.md).
+A Formula is a few lines of text that make a moving picture on the panel. The language they are written in is called Psi. This tour takes three short pages. You change numbers first, then make things move, then draw shapes.
 
-Each example plays as you read it. Press **Open in editor** under one to
-change it yourself. In your web app, open **Formulas** and press **+ New
-formula**, then type over the text that is there.
+## Where to type
 
-## One colour
+Every example on these pages plays as you read. Under each one, **Open in editor** opens it in the editor on this site, where you can change it and watch the result. When you like what you have, press **Open on my panel**. The first time, it asks for your display's address. It then saves the Formula on your display, under Your formulas, and opens it there.
 
-```psi
-name "Step 1"
-#f80
-```
+If you already have the web app open on your display, you can type into its own editor instead: **Formulas**, then **+ New formula**. **Save** keeps the Formula on the display (in this browser, on a display with no card), and **Show on panel** plays it there. [The editor](editor.md) has the details.
 
-The whole panel turns orange. `#f80` is a colour written the way web
-pages write them, with one digit each for red, green and blue, from `0`
-to `f`. `#f00` is red, `#0f0` green and `#fff` white.
+The [gallery](/formulas/) has finished Formulas to open in the editor and change.
 
-In the editor, click in a colour and a swatch appears at the end of its
-line. Click the swatch to open a colour picker. The colour you pick takes
-the old one's place.
+In both places the picture beside the code is drawn in your browser by the same rules the display uses, and it changes as you type.
 
-The last line of a Formula is a colour, and it is what the panel shows.
-A plain number there is a gray, from 0 for black to 1 for white.
-
-## A fade
+## One colour everywhere
 
 ```psi
-name "Step 2"
-#f80 * x
+name "First light"
+hsv(0.6, 1, 1)
 ```
 
-Now the orange fades in from the left. `x` is where the pixel is across
-the panel, 0 at the left edge and 1 at the right. Multiplying a colour by
-a number between 0 and 1 dims it, so the left is black and the right is
-full orange.
+The first line gives the Formula its name. The last line is the colour, and a Formula always ends with one. The display works it out for all 4,096 pixels of the panel, 128 across and 32 down, and does that again for every frame.
 
-Try `y` instead of `x`. It is 0 at the top and 1 at the bottom, so the
-fade now comes in from the top. To fade in from the bottom, write
-`#f80 * (1 - y)`.
+`hsv` takes three numbers, each from 0 to 1:
 
-The display works that one line out for each of the panel's 4,096
-pixels, and each pixel has its own `x` and `y`.
+- the hue, the colour's place round the colour wheel;
+- the saturation, from grey to full colour;
+- the value, from black to full brightness.
 
-## Two colours
+Drag the 0.6 down towards 0 in the editor and the blue turns cyan, then green, yellow and red. A hue of 0 and a hue of 1 are the same red, because the wheel comes round to where it started.
+
+## A colour that changes across the panel
+
+The colour line can read where the pixel is. `x` runs from 0 at the left edge to 1 at the right, and `y` from 0 at the top to 1 at the bottom.
 
 ```psi
-name "Step 3"
-mix(#102040, #f80, x)
+name "Fade"
+gray(x)
 ```
 
-`mix` slides from the first colour to the second as the third number goes
-from 0 to 1. Here that number is `x`, so the panel is dark blue on the
-left and orange on the right.
-
-Click in `#102040` and pick a green from its swatch. Then replace `x` with
-`y`, or with `x * y`.
-
-## A dot
+`gray` takes one number, 0 for black and 1 for white. With `x` in it, every column gets its own shade.
 
 ```psi
-name "Step 4"
-#f80 * (r < 0.3)
+name "Corners"
+rgb(x, y, 0.5)
 ```
 
-`r` is how far the pixel is from the middle of the panel. `r < 0.3` is a
-question, and the panel answers it with a number. It is 1 where the answer
-is yes and 0 where it is no. Multiplied by the colour, that gives an
-orange dot on black.
-
-Drag the `0.3` left and right to change the size. On a phone, tap the
-number and drag the bar that appears under the code. Change `<` to `>`
-for a hole instead of a dot.
-
-## Put the dot somewhere else
+`rgb` mixes red, green and blue, each from 0 to 1. Here red grows to the right, green grows downwards and blue stays at half. Values past 1 stay at full, and values under 0 stay at none.
 
 ```psi
-name "Step 5"
-#f80 * (len(cx - 1, cy) < 0.3)
+name "Rainbow"
+hsv(x, 1, 1)
 ```
 
-`cx` and `cy` say where the pixel is, measured from the middle. `cx` runs
-from −2 at the left edge to 2 at the right, and `cy` from −0.5 at the top
-to 0.5 at the bottom. `len` gives the distance to a point, and here the
-point is 1 to the right of the middle. Drag the `1`, and the dot goes with
-it.
+Put `x` where the hue goes and the whole colour wheel spreads across the panel once. Try `x*2` to see it twice.
 
-## A slider
+## Palettes
+
+A palette is a ready-made run of colours. `pal(fire, v)` runs from black through red, orange and yellow to white as `v` goes from 0 to 1.
 
 ```psi
-name "Step 6"
-control size 0.1..0.5 = 0.3 "Size"
-#f80 * (len(cx - 1, cy) < size)
+name "Embers"
+pal(fire, 1 - y)
 ```
 
-A `control` line at the top makes a slider under the preview. `size` is
-its name in the Formula, `0.1..0.5` its range, `0.3` where it starts and
-`"Size"` its label. Move the slider and the dot grows.
+`1 - y` is 1 at the top and 0 at the bottom, so the heat is at the top. Change it to `y` to turn it over. The other palettes are `ice` (also called `ocean`), `chrono`, `amber`, `rainbow` and `gray`.
 
-A Formula can have up to three controls. They go with it to the panel, to
-your playlists and to the gallery.
+## Whole pixels
 
-## A dot on a sky
+`px` is the pixel's column, from 0 to 127, and `py` is its row, from 0 to 31. They count whole pixels, so they suit sharp patterns.
 
 ```psi
-name "Step 7"
-control size 0.1..0.5 = 0.3 "Size"
-dot = len(cx - 1, cy) < size
-mix(#102040, #f80, dot)
+name "Grid"
+gray(px % 8 == 0 or py % 8 == 0)
 ```
 
-You can give something a name on a line by itself and use it further
-down. `dot` is 1 inside the disc and 0 outside, so `mix` picks orange
-inside and dark blue outside.
+`%` gives the remainder, so `px % 8` counts 0 to 7 over and over. A comparison such as `==` or `<` gives 1 when it is true and 0 when it is false. `or` joins two of them. So the grey is 1 on every eighth column and every eighth row, and 0 everywhere else. Change both 8s to 16 for a wider grid.
 
-## Make it yours
+## When it goes wrong
 
-Change the colours, the place and the size until you like it. Then change
-`name "Step 7"` to a name of your own. It is what the panel, your
-playlists and the gallery call it.
+When a line doesn't make sense to Psi, the editor shows the problem above the code, as **Line N:** and a message. The picture keeps showing the last version that worked. Sometimes there is a **Fix it** button that makes the change for you.
 
-In your web app's editor, press **Save** to keep it on your panel under
-**Your formulas**. Press **Show on panel** (Ctrl+Enter) to play it there.
+```psi-bad
+name "Oops"
+gray(2x)
+```
 
-In the editor on this site, press **Open on my panel** instead. It saves
-the Formula on your panel and opens it in your web app's editor.
+On paper, `2x` means two times x. Psi needs the `*`: `gray(2 * x)`. The message here says so: "`2x` is not a number or a name (to multiply, write `2 * x`)".
 
-Next, [make it move](psi-2.md). The dot swings from side to side, and you
-meet `t`, the time.
+## Naming and keeping it
+
+The `name "…"` line is the Formula's name, up to 60 characters. When you save in the web app, it fills that line in from the name box at the top. An `about "…"` line under it can hold one line of description. Both go at the top, before the other lines. Lines that start with `--` are comments, notes for people that the display ignores.
+
+Next: [Make a Formula, 2: make it move](psi-2.md).

@@ -1,6 +1,6 @@
 # Install OpenDMD
 
-Put OpenDMD on your display from this page. It takes about a minute, and
+Put OpenDMD on your display from this page. It takes a minute or two, and
 the installer gets the board onto your WiFi before you unplug it. OpenDMD
 replaces the DMDoS software on the same ESP32 board, with nothing to rewire
 or swap, and it doesn't change your [SD card](card.md).
@@ -32,7 +32,7 @@ or swap, and it doesn't change your [SD card](card.md).
 3. **Choose whether to erase.** On a first install, when the board still
    runs DMDoS or anything else, the installer asks whether to **Erase
    device**. Tick it: this clears the board completely before installing.
-4. **Wait for it to finish.** It takes about a minute. The panel stays
+4. **Wait for it to finish.** It takes a minute or two. The panel stays
    dark while the installer writes over USB, and lights up when the board
    restarts.
 5. **Connect it to your WiFi.** When it says **Installation complete**,
@@ -44,7 +44,7 @@ or swap, and it doesn't change your [SD card](card.md).
 > **If it won't connect**
 >
 > - If the installer can't connect, hold down the board's **BOOT** button
->   while it says "Connecting", and let go once it starts writing.
+>   as you click **Install**, and let go once it starts writing.
 >   Unplugging the board and trying again helps too.
 > - If the board doesn't show up in the list at all, try another cable,
 >   then install the driver for the board's USB chip.

@@ -61,8 +61,8 @@ or another playlist.
 **Add to playlist…** puts a Formula in one of your playlists. There the
 display draws it itself. It follows the clock, loops for as long as it
 plays, and takes one line of the playlist instead of the space of a GIF.
-The playlist shows it by its name, marked *Formula*, and so does Now while
-it plays.
+The playlist shows it by its name, marked *Formula*. Now shows its name
+while it plays.
 
 A bundled Formula goes into a playlist by its name. One of yours is saved
 first, and the playlist plays it with the sliders as they were when you
@@ -126,8 +126,10 @@ every GIF is listed as too heavy. The sheet also says how fast the look
 moves, about 50 times a second, or 25 for a heavy one that takes more than
 8 ms a frame. The GIFs play at their own speed either way.
 
-The display keeps the whole Formula, so editing or deleting it in the web
-app does not change the look. When the display is short of memory, such as
+The look is one of your saved Formulas, read from the display's card. A
+change you save reaches the look when the display next restarts. Delete
+the Formula and the look stops; pick another in Settings › Look. When the
+display is short of memory, such as
 during several uploads at once, it shows the GIFs without the look for a
 while.
 
@@ -135,13 +137,13 @@ while.
 
 **Open on my panel** is on every tile in the [formula
 gallery](#the-formula-gallery) and on every Formula's page there. Press it
-and the Formula is saved on your display, under **Your formulas**, and
-opens in your web app's editor. From there you can change it, show it on
+and the Formula opens in your web app's editor, not saved yet. **Save**
+keeps it under **Your formulas**. From there you can change it, show it on
 the panel, add it to a playlist or use it as the look.
 
-A bundled Formula is on the display already, so nothing new is saved. The
-same Formula opened twice is saved once. One that doesn't work isn't
-saved, and the web app says why and keeps it in the editor.
+A Formula you have changed on the site's editor is saved as it arrives,
+once, however often you send it. One that doesn't work isn't saved, and
+the web app says why and keeps it in the editor.
 
 The first time, the site asks for your display's address. It suggests
 `opendmd.local`, and the name or IP address is also in the web app under
@@ -174,7 +176,7 @@ To add yours, press **Submit to the gallery…** in the editor. Give it a
 name and a line about it, which become its `name` and `about` lines. Add
 your name or GitHub handle and a licence, either CC0 for anyone to use or
 CC BY 4.0 with credit, then press **Open on GitHub**. GitHub opens with the
-file ready and makes the pull request for you. You need a free GitHub
+file ready. Commit it there and GitHub offers the pull request. You need a free GitHub
 account.
 
 A check says if anything needs fixing, a maintainer looks at it, and once

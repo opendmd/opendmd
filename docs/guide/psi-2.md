@@ -1,126 +1,111 @@
 # Make a Formula, 2: make it move
 
-On [page 1](psi-1.md) you made a still picture. This page sets it moving
-and ends with a plasma, the classic of the demo scene. Press **Open in
-editor** under any step to change it.
+On the first page every picture stood still. To make one move, the colour line reads the time.
 
-## The dot swings
+## Time and the loop
 
-```psi
-name "Swing"
-control size 0.1..0.5 = 0.3 "Size"
-loop 4
-#f80 * (len(cx - sin(t/4)*1.5, cy) < size)
-```
-
-This is the dot from page 1 with one change. Where it said `cx - 1`, it
-now says `cx - sin(t/4)*1.5`.
-
-`t` is the time, in seconds since the loop began. `loop 4` makes the loop
-four seconds long, so `t` goes from 0 to 4 and starts again. Without a
-`loop` line the loop is eight seconds.
-
-`sin` makes a wave between −1 and 1. As the number you give it goes from 0
-to 1, the wave goes once up, down and back, and Psi calls that one
-*turn*. `t/4` goes from 0 to 1 in the four seconds, so the dot makes one
-swing a loop. `*1.5` makes the swing wider.
-
-## A ramp that slides
+`t` is the number of seconds since the loop began. A `loop 4` line near the top makes the loop 4 seconds long, so `t` counts from 0 to 4 and then starts again. Without a `loop` line the loop is 8 seconds. It can be anything from 0.1 to 3,600 seconds.
 
 ```psi
 name "Slide"
 loop 4
-gray(frac(x - t/4))
+hsv(x + t/4, 1, 1)
 ```
 
-`gray` turns a number into a shade, 0 black and 1 white. `frac` keeps the
-part of a number after the point, so it climbs from 0 to almost 1 and
-drops back to 0. The ramp slides to the right, once across in a loop.
+As `t` goes from 0 to 4, `t/4` goes from 0 to 1. That moves the hue once round the whole colour wheel, so when the loop starts again the colours are exactly where they began, and there is no jump.
 
-Try `frac(x*4 - t/4)` for four ramps, or `frac(x + t/4)` to slide the
-other way.
+## Waves
 
-## A wave
+`sin(v)` makes a smooth wave between −1 and 1. Psi measures it in turns: the wave goes round once as `v` goes from 0 to 1. There is no pi to multiply by.
 
 ```psi
-name "Wave"
-loop 8
-gray(sin(x*2 + t/8)*0.5 + 0.5)
+name "Breathe"
+loop 2
+gray(0.5 + 0.5*sin(t/2))
 ```
 
-`sin(x*2)` makes two waves across the panel, because `x*2` goes from 0
-to 2. `*0.5 + 0.5` turns the wave's −1 to 1 into 0 to 1, which is what
-`gray` wants. Adding `t/8` moves the wave along one turn in the eight
-seconds of the loop.
+`0.5 + 0.5*sin(…)` turns the wave's −1 to 1 into 0 to 1, the range `gray` wants. `t/2` goes from 0 to 1 over the two-second loop, so the panel brightens and dims once each loop. `cos`, `tri` (a triangle wave), `saw` (a sawtooth) and `sqr` (a square wave) keep the same timing.
 
-Drag the `2` to change how many waves there are.
+## Giving a value a name
 
-## Loops that don't jump
+A line like `wave = …` works out a value and gives it a name. Later lines can use the name.
 
 ```psi
-name "Two speeds"
-loop 8
-top = sin(x*2 + t/8)
-bottom = sin(x*2 + t*3/8)
-gray((y < 0.5 ? top : bottom)*0.5 + 0.5)
+name "Swell"
+loop 4
+wave = sin(x*2 - t/4)
+hsv(0.55, 1, wave/2 + 0.5)
 ```
 
-When the loop starts again, `t` goes back to 0. A wave that has come
-round a whole number of turns is back where it started, so you can't see
-the join. `t/8` is one turn in a loop of 8, and `t*3/8` is three. Change
-the `3` to `2.5` and watch the bottom half jump each time the loop starts
-again.
+With `x` and `t` both in the wave, it rolls across the panel. `x*2` puts two waves side by side, and `- t/4` moves them to the right, one wave further each loop. The name `wave` only exists in this Formula, so pick any word that isn't one of Psi's own (`loop`, `layer`, `draw`, `fn` and a few others).
 
-`y < 0.5 ? top : bottom` picks `top` where the question is yes and
-`bottom` where it is no.
-
-## Two waves
+A wave can also bend a line:
 
 ```psi
-name "Two waves"
-loop 8
-wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
-gray(wave/4 + 0.5)
+name "Ribbon"
+loop 4
+gray(abs(y - 0.5 - 0.4*sin(x*2 + t/4)) < 0.06)
 ```
 
-The second wave goes down the panel and moves the other way, twice as
-fast. Added together the two make a number from −2 to 2, so `wave/4 +
-0.5` brings it back to 0 to 1.
+`0.5 + 0.4*sin(…)` is the height of a wavy line at each column. `abs(y - …)` is how far the pixel is from it, and `< 0.06` lights only the pixels close to it. Make 0.06 bigger for a thicker ribbon.
 
-## Every colour
+## The clock
+
+`hour` (0 to 23), `minute` and `second` read the display's clock. On these pages they read your computer's clock.
 
 ```psi
-name "Colours"
-loop 8
-wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
-hsv(wave/4 + t/8, 1, 1)
+name "Seconds bar"
+gray(x < second/60)
 ```
 
-`hsv` makes a colour from three numbers. The first is the hue, in turns
-round the rainbow. 0 is red, 1/3 green, 2/3 blue, and 1 is red again. The
-second is how strong the colour is, from 0 for gray to 1 for full, and the
-third how bright, from 0 for black to 1.
+The bar grows across the panel during each minute. Until the display's clock has been set, all three read 0.
 
-Here the wave picks the hue, and `+ t/8` turns the whole rainbow once a
-loop.
+## A slider
 
-## The plasma
+A `control` line at the top makes a slider. You set it in the editor, or on the Formula's card in the web app, without touching the code.
 
 ```psi
-name "My plasma"
-loop 8
-wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
-hsv(wave/6 + t/8, 0.9, 1)
+name "Speed dial"
+control speed 0..2 = 1 "Speed"
+loop 4
+gray(frac(x - t*speed/4))
 ```
 
-Add a third wave on a slant and you have, very nearly, the gallery's
-**Plasma**. Three waves make a number from −3 to 3, so the hue takes
-`wave/6`.
+This reads as a control called `speed`, going from 0 to 2, starting at 1, with the label "Speed". `frac` keeps only the part after the decimal point, so the grey climbs from 0 to 1 and drops back, and the ramp slides along as `t` grows. The examples on these pages play with each slider at its starting value. Open one in the editor to move the slider. A Formula can have three controls.
 
-Now drag the numbers. Each `*2` and `*1.5` changes the size of a wave,
-each `t/8` and `t/4` its speed, and `0.9` how strong the colours are. If a
-change makes the loop jump, check that each speed is a whole number of
-turns.
+## Frames a second
 
-Next, [add a shape](psi-3.md). You put a ring over a sky and paint a little
-picture of your own.
+The display shows a Formula at 50 frames a second unless it asks for another rate. `fps 25`, `fps 50` and `fps 100` are the choices.
+
+```psi
+name "Fast sweep"
+fps 100
+loop 1
+gray(abs(x - frac(t)) < 0.02)
+```
+
+At 100 frames a second a fast line looks smoother. The display only keeps that rate for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Look) the display holds Formulas to 50.
+
+The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". A heavy one moves less smoothly on the display, because the display shows fewer frames. A Formula that is far too heavy isn't played at all. The page [How Psi thinks](psi.md) explains what makes a Formula heavy.
+
+## Never the same twice
+
+`loop forever` makes a Formula that doesn't repeat. `t` keeps growing for as long as it plays.
+
+```psi
+name "Drift"
+loop forever
+hsv(frac(x + t/10), 1, 1)
+```
+
+A number that grows without end can't go straight into a colour, so Psi asks you to wrap it first. `frac`, `%`, `sin`, `noise` and a comparison all do that.
+
+```psi-bad
+name "Oops"
+loop forever
+gray(t*x)
+```
+
+Here the editor says "`t` grows without end in `loop forever`, and this can't take it", and lists the ways to wrap it. A `loop forever` Formula can also read `seed`, a number from 0 to 1 that is new each time it starts playing.
+
+Next: [Make a Formula, 3: add a shape](psi-3.md).

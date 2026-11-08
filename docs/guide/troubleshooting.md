@@ -11,7 +11,7 @@
   [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
   or [FTDI](https://ftdichip.com/drivers/). The chip's name is printed on
   it, next to the USB socket.
-- Hold the board's **BOOT** button while the installer says "Connecting".
+- Hold the board's **BOOT** button as you click **Install**, and let go once it starts writing.
 
 ## I can't open opendmd.local
 
@@ -42,7 +42,7 @@ really has.
 - The display needs a FAT32 card. If the web app's **Now** view says the
   card needs FAT32, use **Format card…** there (this erases it), then add
   your GIFs again. See [The SD card](card.md).
-- The display keeps checking for a card, so you don’t need to
+- The display looks for a card once a minute, so you don’t need to
   restart it after swapping cards.
 
 ## The display resets or flickers when it's bright
@@ -72,9 +72,10 @@ may be faulty.
 
 ## Settings shows card errors
 
-Settings says **Card errors: N, retrying** when the card is wearing out.
-The display retries and slows the card down to keep going, but replace the
-card soon and put your GIFs on the new one.
+Settings says **Card errors: N, retrying** when reads from the card keep
+failing, usually because it is wearing out. The display retries, and
+restarts if it has to, but replace the card soon and put your GIFs on the
+new one.
 
 ## The web app won't load, or looks broken
 
