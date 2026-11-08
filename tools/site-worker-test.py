@@ -1021,7 +1021,7 @@ def gallery_local(base: str, site: Path, tool: Path, repo: FixtureRepo) -> None:
         "Bad_Name.psi": ripple,
         # A file over 36 KB is refused (the 12 KB ripple is taken).
         "site-test-huge.psi": ripple + "-- padding padding\n" * 2000,
-        # Over 4,500 B compiled (a file of 7.7 KB) is refused; one the VM draws in 40 ms and the JIT in 7.4, compiled 4.1 KB, is taken (the tier is the gate).
+        # Over 4,500 B compiled (a file of 7.7 KB) is refused; one the VM draws in 34 ms and the JIT in 6.4, compiled 3.9 KB, is taken (the tier is the gate, under the panel's 40 ms by the VM).
         "site-test-long.psi": (ROOT / "tools/fixtures/gallery-over-4500.psi").read_text(),
         "site-test-jit.psi": (ROOT / "tools/fixtures/gallery-jit-only.psi").read_text(),
         "site-test-link.psi": ("link", "site-test-ripple.psi"),

@@ -215,6 +215,10 @@ export function checkFile(slug: string, bytes: Uint8Array): Verdict {
   if (us > MAX_US) {
     problems.push(`the formula is too heavy for the panel: about ${(us / 1000).toFixed(1)} ms a frame, ${(MAX_US / 1000).toFixed(0)} ms at most`);
   }
+  // opendmd-gallery panel_refuses: the panel's own refusal, by the VM's figure (info[6] over info[16]).
+  if (c.info[6] > c.info[16]) {
+    problems.push(`the panel refuses the formula: about ${(c.info[6] / 1000).toFixed(1)} ms a frame without the JIT and its still cache, ${(c.info[16] / 1000).toFixed(0)} ms at most (the panel must be able to draw it that way)`);
+  }
   // The Formula as compiled for the panel (a `@formula?psb=…` link carries it).
   if (c.psb === 0) problems.push("the formula could not be prepared for the panel");
   else if (c.psb > MAX_PSB) {

@@ -30,7 +30,8 @@
 //! `pick` worked out per pixel, a sum that brackets better, what the still
 //! cache and the column run took, draw loops run as lanes) and whether the
 //! panel's JIT takes it (and why not) are always printed. Exit status 1
-//! when it doesn't compile, 2 for a missing file or a bad option.
+//! when it doesn't compile or the panel refuses it (its VM estimate over
+//! the panel's limit: `refused:`), 2 for a missing file or a bad option.
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::syntax::{compile_observed, Defined, Kept, Level, Sink};
@@ -143,13 +144,15 @@ pub fn run(args: Vec<String>) -> i32 {
     let (f, r, x) = prog.counts();
     let inputs = prog.inputs();
     let plain_us = prog.esp32_us();
-    // As the player draws it: with its still cache when it has values for one,
-    // and with the JIT where its kernel takes the formula (P0b-2: the tier
-    // and the limits count what the panel draws; the VM's beside it).
+    // As the panel draws it: with its still cache when it has values for one,
+    // and with the JIT where its kernel takes the formula (the tier and the
+    // gallery's limit count what the panel draws, the VM's beside it; the
+    // panel's own refusal counts the VM's without the cache, below).
     let vm_us = prog.esp32_us_still();
     let jit_ok = opendmd_psi::jit::refusal(&prog).is_none();
     let us = if jit_ok { prog.esp32_us_jit_still() } else { vm_us };
     let rating = match us {
+        _ if prog.panel_refusal(prog.over()).is_some() => "too heavy, refused (below)",
         0..=5000 => "light",
         5001..=8000 => "medium",
         _ => "heavy",
@@ -260,19 +263,21 @@ pub fn run(args: Vec<String>) -> i32 {
     );
     if us < vm_us {
         println!(
-            "panel: ~{:.1} ms a frame with the JIT, ~{:.1} without: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
+            "panel: ~{:.1} ms a frame with the JIT, ~{:.1} without: {rating} (light ≤ 5 ms, medium ≤ 8 ms; the panel takes ≤ {} ms on the VM, a look ≤ 12)",
             us as f64 / 1000.0,
-            vm_us as f64 / 1000.0
+            vm_us as f64 / 1000.0,
+            prog.panel_limit_us(false) / 1000
         );
     } else {
         println!(
-            "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
-            us as f64 / 1000.0
+            "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; the panel takes ≤ {} ms on the VM, a look ≤ 12)",
+            us as f64 / 1000.0,
+            prog.panel_limit_us(false) / 1000
         );
     }
     // The panel's JIT (pixel and row stages compiled; never slower: the
-    // player keeps whichever draws faster): where it takes the formula,
-    // its estimate is the tier and what the limits count.
+    // panel keeps whichever draws faster): where it takes the formula, its
+    // estimate is the tier and what the gallery's limit counts.
     let jit = prog.esp32_us_jit_still();
     match opendmd_psi::jit::refusal(&prog) {
         Some(why) => println!(
@@ -284,13 +289,39 @@ pub fn run(args: Vec<String>) -> i32 {
             }
         ),
         None if jit < vm_us => println!(
-            "JIT: yes, ~{:.1} ms a frame compiled (what the tier and the limits count; ~{:.1} ms without the JIT)",
+            "JIT: yes, ~{:.1} ms a frame compiled (what the tier and the gallery's limit count; ~{:.1} ms without the JIT)",
             jit as f64 / 1000.0,
             vm_us as f64 / 1000.0
         ),
         None => println!("JIT: yes, but no faster by the estimate (the panel keeps whichever draws faster)"),
     }
-    // How long it is, as written and compiled (the player never compiles:
+    // The panel's own limits, by the VM's estimate with no still cache
+    // (`Program::panel_refusal`): it may have to draw the formula that way
+    // (the JIT off, its kernel refused for memory or failing its
+    // self-check, the cache refused), so neither the JIT nor the cache
+    // counts here.
+    let refused = match prog.panel_refusal(prog.over()) {
+        Some((vm, limit)) => {
+            println!(
+                "refused: the panel won't play it: ~{:.1} ms a frame without the JIT and the still cache, over its {} ms{} (it must be able to draw it that way); make it lighter",
+                vm as f64 / 1000.0,
+                limit / 1000,
+                if prog.over() { " for a look" } else if grid == 10 { " at fps 100" } else { "" }
+            );
+            true
+        }
+        None => {
+            if !prog.over() && prog.meta().look().is_some() && prog.panel_refusal(true).is_some() {
+                println!(
+                    "look: too heavy to be the panel's look (~{:.1} ms a frame without the JIT, over {} ms)",
+                    plain_us as f64 / 1000.0,
+                    opendmd_psi::LOOK_MAX_US / 1000
+                );
+            }
+            false
+        }
+    };
+    // How long it is, as written and compiled (the panel never compiles:
     // it plays the compiled Formula, a card's `.psb`, or `@formula?psb=…`).
     let psb = opendmd_psi::build(&src).map_or(0, |b| b.len());
     let p = "@formula?psb=".len() + psb.div_ceil(3) * 4;
@@ -333,7 +364,7 @@ pub fn run(args: Vec<String>) -> i32 {
     if levels {
         print!("{}", seen.levels(&src));
     }
-    let mut status = 0;
+    let mut status = i32::from(refused);
     if let Some(other) = &same_as {
         status = same(&prog, &path, other, seeds, frames.unwrap_or(120), &sl, seed);
     }

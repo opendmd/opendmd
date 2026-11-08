@@ -22,14 +22,15 @@ const USAGE: &str = "usage: psi <command> …
                        [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]
                        [--levels] [--same-as OTHER.psi [--seeds N]]
       does it compile (an error's code, line, column and carets); steps and values; the panel's
-      estimate on the VM and whether its JIT takes it (and why not); the compile's heap; its
-      length; the compiler's notes; a PNG contact sheet. --levels: how often each value is
+      estimate on the VM and whether its JIT takes it (and why not), and whether the panel
+      refuses it (exit 1); the compile's heap; its length; the compiler's notes; a PNG
+      contact sheet. --levels: how often each value is
       worked out and why; --same-as: the same program and frames as another
   psi fmt [--check | --write] FILE.psi…|-
       the canonical layout: the same program, the comments kept; to stdout, or --write in
       place, or --check (exit 1 naming what isn't formatted)
   psi build FILE.psi|- [-o FILE.psb | --base64]
-      the Formula compiled for the player (which never compiles): beside it as FILE.psb,
+      the Formula compiled for the panel (which never compiles): beside it as FILE.psb,
       to -o, or --base64 for a path (`@formula?psb=…`)
   psi builtins --json    every name the language knows, with the cheat sheet's words
   psi errors --json      the error codes: code, title, sentence, what to do

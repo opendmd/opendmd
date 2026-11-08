@@ -16,6 +16,13 @@ follows the clock, and how hard it is for the panel: **light**, **medium**
 or **heavy**. Hover over that line to see the estimate in milliseconds a
 frame.
 
+The rating counts how fast the panel usually draws the Formula. The panel
+also needs to be able to draw it the slow way, when it can't use its
+faster path, and refuses a Formula that would take more than about 40 ms a
+frame that way (32 ms at 100 frames a second). Such a Formula is rated
+**too heavy**, and a line under the preview says so, even when it would
+usually be light.
+
 The row under the preview holds the time.
 
 - **❚❚** holds the picture still, and **▶** plays on.

@@ -23,7 +23,7 @@ export interface Control {
 export interface Compiled {
   ok: true;
   meta: { name: string | null; about: string | null; look: [string, number] | null; controls: Control[] };
-  /** pkg-psi info(): [steps, …, loop ms (4), inputs (5), …, µs with the still cache on the VM (14), 1 when the JIT takes it (15: then 11 is the tier and 14 "without the JIT"; else 14 is the tier)] */
+  /** pkg-psi info(): [steps, …, loop ms (4), inputs (5), …, µs with the still cache on the VM (14), 1 when the JIT takes it (15: then 11 is the tier and 14 "without the JIT"; else 14 is the tier), the panel's limit (16: it refuses one whose 6, the VM's figure, is over it)] */
   info: number[];
   /** pkg-psi program(): the Formula compiled for the panel, its length and the format's version (byte 3). */
   psb: number;

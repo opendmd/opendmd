@@ -4275,6 +4275,23 @@ def psi_error_links(page: Page) -> None:
     check(len(cases) >= 150 and not bad, f"formulas: psierr.js codes all {len(cases)} golden messages as the compiler's index does ({bad})")
 
 
+def psi_refused_note(page: Page) -> None:
+    """A Formula the panel refuses by its own figure (the VM's: 40 waves a
+    pixel, ~9.5 ms with the JIT, ~44 without) is "too heavy" in the editor,
+    with the panel's sentence, though the JIT would make it heavy at most
+    (opendmd-core fx_psi's the_panel_and_psi_refuse_by_the_same_figure)."""
+    waves = " + ".join(f"step(0.5, frac(x*{k + 2} + y*{(k * 7) % 13 + 1} + t*{k % 5 + 1}))*{k % 3 + 1}" for k in range(1, 41))
+    page.fill("#psi-src", f"loop 4\ng = {waves}\npal(rainbow, frac(g/40))")
+    page.wait_for_timeout(500)
+    note, cap = page.inner_text("#psi-heavy"), page.inner_text("#psi-ed-cap")
+    check(page.is_visible("#psi-heavy") and note.startswith("Too heavy for the panel: it plays a Formula only up to 40 ms")
+          and "too heavy for the panel" in cap and "bad" in (page.get_attribute("#psi-heavy", "class") or ""),
+          f"formulas: one the panel refuses by the VM's figure says so ('{note}'; '{cap}')")
+    page.fill("#psi-src", "loop 4\ngray(x)")
+    page.wait_for_timeout(400)
+    check(page.is_hidden("#psi-heavy") and "light for the panel" in page.inner_text("#psi-ed-cap"), "formulas: a light one, no note")
+
+
 def psi_colour_checks(page: Page) -> None:
     """Colours in the code: every one's swatch shows on the editor's dark
     background, black and near-black too (a bar in the colour, ringed); the
@@ -4857,6 +4874,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     shot(page, "formulas-error", "laptop")
     psi_fix_checks(page)
     psi_error_links(page)
+    psi_refused_note(page)
     psi_typing_checks(page)
     # A still formula: a scrubbed number changes the text and the picture.
     page.fill("#psi-src", "gray(x*0.5)")

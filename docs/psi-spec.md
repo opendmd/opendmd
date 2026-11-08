@@ -218,7 +218,14 @@ the editor.
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
 refuses a formula past 40 ms a frame by the plain VM estimate (32 ms for
-one at `fps 100`), or past 12 ms for a look drawn over every GIF. The gallery takes a formula of 10 ms or less.
+one at `fps 100`), or past 12 ms for a look drawn over every GIF. That is
+the VM's figure with no still cache even where the JIT or the cache would
+draw it faster, because the panel may have to draw it that way (the JIT
+switched off, short of memory, or failing its self-check). The light,
+medium and heavy ratings count the JIT's estimate where it draws, so a
+Formula can rate light and still be refused: the editor and `psi check`
+say so. The gallery takes a formula of 10 ms or less by the rating, and
+none the panel refuses.
 
 <a id="cookbook"></a>
 
@@ -609,16 +616,17 @@ from the source with `cargo install --path opendmd-psi-cli`, or with
 
 ```text
 $ psi check storm-front.psi --out -
-ok: 41 of 768 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
+ok: 39 of 768 steps (per frame 11, draw 0, per row 5, per pixel 23), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
-panel: ~5.6 ms a frame with the JIT, ~6.8 without: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
-JIT: yes, ~5.6 ms a frame compiled (what the tier and the limits count; ~6.8 ms without the JIT)
-length: 559 B as written (32,768 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look); compiled 360 B of the gallery's 4,500
+panel: ~5.5 ms a frame with the JIT, ~6.8 without: medium (light ≤ 5 ms, medium ≤ 8 ms; the panel takes ≤ 40 ms on the VM, a look ≤ 12)
+JIT: yes, ~5.5 ms a frame compiled (what the tier and the gallery's limit count; ~6.8 ms without the JIT)
+length: 563 B as written (32,768 at most), 355 B compiled (489 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look); compiled 355 B of the gallery's 4,500
+note: line 14: `d` is worked out for every pixel each frame (~666 ns a pixel): it would be kept in the still cache but it reads `fall`, which changes from frame to frame
 heaviest lines (their share of the work a frame; make these lighter first):
-  line 8 (68%): cl = noise(x*3 - t*0.15, (1 - y)*2, 0)*0.7 + noise(x*7 - …
-  line 14 (20%): d = hash(px, floor(py/4 + hash(px, 1)*8 - fall))
-  line 9 (8%): pal(ice, cl*0.8 + (1 - y)*0.3) * (0.35 + cl*0.5)
+  line 8 (74%): cl = noise(x*3 - t*0.15, (1 - y) * 2, 0)*0.7 + noise(x*7 …
+  line 14 (12%): d = hash(px, floor(py/4 + hash(px, 1)*8 - fall))
+  line 9 (9%): pal(ice, cl*0.8 + (1 - y)*0.3) * (0.35 + cl*0.5)
 
 $ psi check broken.psi
 error[E202]: line 3, column 6: unknown function `sine` — did you mean `sin`?
