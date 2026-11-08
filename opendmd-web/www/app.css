@@ -21,6 +21,9 @@ p{margin:8px 0}
 #top{position:fixed;top:0;left:0;right:0;height:44px;display:flex;gap:12px;align-items:baseline;padding:12px 16px 0;background:var(--bg2);z-index:5}
 #where{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
 .demo-own{margin-left:auto;align-self:center;margin-top:-12px;flex:none}
+.demo-site{flex:none;display:flex;gap:12px;font-size:13px}
+/* A phone: the wordmark is the way home; Install stays */
+@media (max-width:600px){.demo-site a:first-child{display:none}}
 #nav{position:fixed;z-index:5;background:var(--bg2);display:flex}
 #nav a{display:flex;gap:12px;align-items:center;color:var(--mut);text-decoration:none;padding:12px 16px}
 #nav a i{font-style:normal;width:16px;text-align:center;font-variant-emoji:text}

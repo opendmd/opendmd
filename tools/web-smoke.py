@@ -4229,7 +4229,7 @@ def psi_error_links(page: Page) -> None:
     opendmd-psi/tests/diagnostics.txt the code the compiler's own index
     gives it (`=== E…`), so the JS table and its weighing are the Rust's."""
     a = page.locator("#psi-err a.ecode")
-    check(a.inner_text() == "E201" and a.get_attribute("href") == "https://opendmd.dev/dev/psi/#E201"
+    check(a.inner_text() == "E201" and a.get_attribute("href") == "https://opendmd.dev/dev/psi/errors/#E201"
           and a.get_attribute("target") == "_blank" and "noopener" in (a.get_attribute("rel") or ""),
           f"formulas: the error's code links the reference ({a.get_attribute('href')})")
     page.fill("#psi-src", "gray(sine(x))")

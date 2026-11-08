@@ -73,7 +73,7 @@ fn the_json_lists_every_name_and_code() {
     for e in opendmd_psi::errors::ERRORS {
         assert!(out.contains(&format!("\"{}\"", opendmd_psi::errors::label(e.code))));
     }
-    assert!(out.contains("https://opendmd.dev/dev/psi/#E203"));
+    assert!(out.contains("https://opendmd.dev/dev/psi/errors/#E203"));
 }
 
 #[test]

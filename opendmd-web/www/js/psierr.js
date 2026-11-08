@@ -189,9 +189,9 @@ export function codeOf(msg) {
 }
 // "E203".
 export const label = (c) => 'E' + String(c).padStart(3, '0');
-// The reference's entry for `msg`'s code (`site`: the site's root, as
+// The error codes page's entry for `msg`'s code (`site`: the site's root, as
 // util.js's SITE or the demo's own), or null.
 export function refOf(msg, site) {
   const c = codeOf(msg);
-  return c == null ? null : { code: label(c), href: `${site}dev/psi/#${label(c)}` };
+  return c == null ? null : { code: label(c), href: `${site}dev/psi/errors/#${label(c)}` };
 }

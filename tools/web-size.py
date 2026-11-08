@@ -487,11 +487,13 @@ PSI_LANG_GZ_BUDGET = 124 * 1024
 # with it), as it never loads with the Formulas line.
 FSPRITE_GZ_BUDGET = 6 * 1024
 FSPRITE = {"js/fsprite.js"}
-# The site's Psi language reference script (`--share`'s ref/psiref.js,
-# copied to dev/psi/: the live examples, highlighting, search and the cheat
-# sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
-# ref-ergo: ~4.1 KB gz), apart from /f/'s share line, which it never loads
-# with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
+# The site's Psi pages' script (`--share`'s ref/psiref.js, copied to the
+# site's root and loaded by the reference, its error codes and the guide's
+# Psi pages: the live examples, highlighting, the name index, search and the
+# cheat sheet; never packed): a line of its own, <= 6 KB (2026-10-30, branch
+# ref-ergo: ~4.1 KB gz; branch psi-machinery, every page's ```psi blocks,
+# row ids and the index, the old #E addresses sent on: unchanged budget),
+# apart from /f/'s share line, which it never loads with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
 # own lines, loaded only when the first example scrolls near.
 PSIREF_GZ_BUDGET = 6 * 1024
 # The site's other live Formulas, on the same psiled.js: the home page's
