@@ -37,7 +37,7 @@ export function form(P, get) {
   const long = h('p.cap', { id: 's-long', hidden: true }, 'This one is too long to hand to GitHub in a link: copy the file, then open GitHub, name the file as above and paste it in.');
   const lab = (f, t) => h('label', { for: f }, t);
   const el = h('div.sub', { id: 's-form' },
-    h('p.cap', 'Formulas in the gallery are files in a public GitHub repository, added by pull request. Fill this in and GitHub opens with the file ready: it makes your own copy and the pull request for you (you need a free GitHub account). A maintainer checks it before it appears.'),
+    h('p.cap', 'Formulas in the gallery are files in a public GitHub repository, added by pull request. Fill this in and GitHub opens with the file ready and makes the pull request for you (you need a free GitHub account). A maintainer checks it before it appears.'),
     h('div.grid', lab('s-name', 'Name'), name, lab('s-desc', 'Description'), desc, lab('s-author', 'Your name or GitHub handle'), author,
       lab('s-lic', 'Licence'), lic, lab('s-file', 'File name'), h('span.file', 'gallery/', file, '.psi')),
     err, text, h('div.row.acts', go, cp), long);

@@ -149,7 +149,7 @@ function status(recent) {
 function putConfig(patch) {
   const c = { ...S.c }, b = patch.brightness, mx = patch.max_brightness;
   for (const [k, v] of Object.entries(patch)) {
-    if (k == 'wifi_ssid' || k == 'wifi_pass' || /^wifi_eap_/.test(k) && v !== c[k]) throw cant('join a WiFi network: on a player, this saves it for the next restart');
+    if (k == 'wifi_ssid' || k == 'wifi_pass' || /^wifi_eap_/.test(k) && v !== c[k]) throw cant('join a WiFi network: on a display, this saves it for the next restart');
     if (k == 'hostname') {
       const n = String(v).trim().toLowerCase();
       if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n)) bad('hostname must be 1-32 lowercase letters, digits and hyphens, not starting or ending with a hyphen');
@@ -309,10 +309,10 @@ function banner() {
 // What only a player can do: its controls stay, with a line saying so; a
 // press says it again.
 const CANT = [
-  ['#st-fw', 'The demo can’t install firmware: on a player, this updates it over WiFi.', '#fw-go,#fw-check'],
+  ['#st-fw', 'The demo can’t install firmware: on a display, this updates it over WiFi.', '#fw-go,#fw-check'],
   ['#st-net', 'The demo can’t scan for or join WiFi networks; a new display name is shown, not announced.', '#st-scan'],
-  ['#st-status', 'The demo can’t restart: on a player, Reboot does.', '#st-reboot-btn'],
-  ['#st-panel', 'The demo has no panel to test or restart: changes here are tried and kept as on a player, with nothing to see.', '#pt-test,#pt-restart'],
+  ['#st-status', 'The demo can’t restart: on a display, Reboot does.', '#st-reboot-btn'],
+  ['#st-panel', 'The demo has no panel to test or restart: changes here are tried and kept as on a display, with nothing to see.', '#pt-test,#pt-restart'],
 ];
 function lines(root) {
   for (const [g, text, btns] of CANT) {
@@ -336,7 +336,7 @@ export async function simulate(src) {
     putSchedule: async (s) => putSchedule(s),
     wake: async (minutes) => { S.wake = minutes > 0 ? Date.now() + minutes * 60000 : 0; keep(); apply(); return { ok: true }; },
     json: async (m, u, b) => json(m, u, b),
-    reboot: async () => { throw cant('restart: on a player, Reboot restarts it'); },
+    reboot: async () => { throw cant('restart: on a display, Reboot restarts it'); },
     wifiScan: async () => { throw cant('scan for WiFi networks'); },
     reindex: async () => ({ ok: true, entries: entries = await count() }),
     cache: async () => { const n = [...src.files.keys()].filter((p) => /^\/gifs\/.*\.gif$/i.test(p)).length; return { total: n, prepared: n, state: 'ready', auto: { mode: S.c.auto_prepare, state: 'done', failed: 0 } }; },

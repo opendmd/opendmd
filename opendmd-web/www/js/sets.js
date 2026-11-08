@@ -81,7 +81,7 @@ export async function mount(el) {
   }
 
   async function activate(p) {
-    if (app.building) { toast('the player is still reading a playlist; try again in a moment', 'bad'); return; }
+    if (app.building) { toast('the display is still reading a playlist; try again in a moment', 'bad'); return; }
     const set = p.value, n = p.label;
     try {
       toast(`switching to “${n}”…`);
@@ -95,7 +95,7 @@ export async function mount(el) {
   async function del(p) {
     const path = p.path, set = p.value;
     const isActive = app.device && app.activeSet === set;
-    if (!confirm(isActive ? `"${p.label}" is playing. Switch the player back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
+    if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
     try {
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
       await app.src.deleteFile(path);

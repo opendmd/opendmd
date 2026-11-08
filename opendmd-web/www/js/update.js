@@ -101,9 +101,9 @@ export async function check(ui) {
     if (newer && !file && !wwwUp) {
       say(`Firmware ${v} is out, but not for the ${board(variant)}`);
     } else if (!fwUp && !wwwUp) {
-      say(ahead ? `This player’s firmware (${bare(fwv)}) is newer than the latest release (${v})` : `Up to date (${v}${dev ? ', development build' : ''})`);
+      say(ahead ? `This display’s firmware (${bare(fwv)}) is newer than the latest release (${v})` : `Up to date (${v}${dev ? ', development build' : ''})`);
     } else {
-      say([fwUp && `Firmware ${v} is out${from} (this player has ${bare(fwv)}).`,
+      say([fwUp && `Firmware ${v} is out${from} (this display has ${bare(fwv)}).`,
         wwwUp && `Web app ${nice(rel.www_version)} is out${fwUp ? '' : from} (this one is ${nice(wv) || 'unknown'}).`,
         fwUp && 'The panel goes dark for about a minute while it installs.'].filter(Boolean).join(' '));
       row.prepend(h('button.pri', { id: 'fw-upd', onclick: (e) => { e.target.remove(); update(ui, rel, u, fwUp && { v, file, variant, layout }, wwwUp); } }, 'Update'));
@@ -133,7 +133,7 @@ async function update(ui, rel, u, fw, www) {
         || td.decode(b.subarray(20, 20 + b[18])) !== rel.www_version) throw new Error('The web app download is not the release it should be. Nothing was installed');
     }
     if (fb) {
-      await sendFw(fb, (p) => show('Sending the firmware to the player', p));
+      await sendFw(fb, (p) => show('Sending the firmware to the display', p));
       barBox.hidden = true;
       await restart(fw.v, say);
       done = `Firmware updated to ${fw.v}`;
@@ -157,19 +157,19 @@ async function update(ui, rel, u, fw, www) {
 // in words, and after a failure whether the old web app is still there.
 async function sendWww(b, want, show, say) {
   for (let i = 0; ; i++) {
-    const { s, why, text } = await put('/api/www', b, (p) => show('Sending the web app to the player', p));
+    const { s, why, text } = await put('/api/www', b, (p) => show('Sending the web app to the display', p));
     if (s === 200) {
       const w = JSON.parse(text);
       if (w.ok && w.version === want) return;
-      throw new Error(`The player still reports web app ${nice(w.version) || 'none'}${w.error ? ` (${w.error})` : ''}`);
+      throw new Error(`The display still reports web app ${nice(w.version) || 'none'}${w.error ? ` (${w.error})` : ''}`);
     }
-    if (s === 503 && i < 4) { say('The player is busy, trying again…'); await sleep(3000); continue; }
-    let m = s === 400 ? `The player refused the web app: ${why}` : s === 408 ? 'The upload was cut short'
-      : s === 413 ? 'The web app is too big for this player' : s === 422 ? `The web app arrived damaged (${why})`
-        : s === 500 ? `The player couldn’t write the web app (${why})` : `Couldn’t update the web app (${s}: ${why})`;
+    if (s === 503 && i < 4) { say('The display is busy, trying again…'); await sleep(3000); continue; }
+    let m = s === 400 ? `The display refused the web app: ${why}` : s === 408 ? 'The upload was cut short'
+      : s === 413 ? 'The web app is too big for this display' : s === 422 ? `The web app arrived damaged (${why})`
+        : s === 500 ? `The display couldn’t write the web app (${why})` : `Couldn’t update the web app (${s}: ${why})`;
     try {
       m += (await app.src.json('GET', '/api/www')).ok ? '. The old web app is still in place; try again'
-        : `. The player has no web app until one goes through: keep this page open and ${s === 500 ? 'restart the player (it finishes from the card) or ' : ''}try again`;
+        : `. The display has no web app until one goes through: keep this page open and ${s === 500 ? 'restart the display (it finishes from the card) or ' : ''}try again`;
     } catch { /* the reason alone */ }
     throw new Error(m);
   }

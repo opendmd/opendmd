@@ -102,7 +102,7 @@ export function panelCard(el) {
   }, list.map(([v, l]) => h('option', { value: JSON.stringify(v) }, v === D[k] ? `${l} (default)` : l)))));
   el.append(h('h3', 'Panel timing'),
     note('If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time',
-      'Each change is tried for a minute, then undone unless you press Keep (if the panel goes dark, wait). The driver chip, data clock and refresh rate are tried after a restart; after another driver chip, switch the player off and on if colours stay odd.'),
+      'Each change is tried for a minute, then undone unless you press Keep (if the panel goes dark, wait). The driver chip, data clock and refresh rate are tried after a restart; after another driver chip, switch the display off and on if colours stay odd.'),
     h('div.form.f2', fields), bar, tb,
     h('div.row', { style: 'margin-top:12px' }, h('button.sm', { id: 'pt-test', hidden: app.src.kind !== 'device', onclick: () => import('./paneltest.js').then((m) => m.panelTest(tb)) }, 'Test panel timing'), btn('pt-reset', 'Reset to defaults', () => send({ panel: null }))));
   el.hidden = false;

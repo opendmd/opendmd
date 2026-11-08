@@ -290,7 +290,7 @@ the firmware's words, and the app's Send to panel toasts them; Formulas is
 one note (#f-none, no editor); Settings › Look has the note (#st-look-none),
 not the Formula look picker, and Playback no Formula keep; a playlist with
 two Formulas plays its two GIFs (`entries` 2) and the editor marks the
-Formulas "skipped on this player".
+Formulas "skipped on this display".
 
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
@@ -2899,7 +2899,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     check(st0.get("layout") == 3, f"firmware: /api/status layout {st0.get('layout')}")
     why = page.evaluate("async () => { const m = await import('/js/firmware.js');"
                         " return [m.layoutWhy(3, 2), m.layoutWhy(2, 3), m.layoutWhy(3, 3), m.playerLayout({}), m.playerLayout({ layout: 3 })]; }")
-    check(why[0].startswith("This firmware needs a one-time USB reinstall on this player") and "opendmd.dev/install" in why[0]
+    check(why[0].startswith("This firmware needs a one-time USB reinstall on this display") and "opendmd.dev/install" in why[0]
           and why[1].startswith("This file is for an older flash layout") and "opendmd.dev/install" in why[1]
           and why[2] is None and why[3:] == [2, 3]
           and not any(re.search(r"\b(cache|copy|bucket)", w, re.I) for w in why[:2]),
@@ -2926,7 +2926,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     # it too, at the header: a 422 before anything is written.
     page.set_input_files("#fw-file", str(ota["board8"]))
     t = fw_message(page, "^This file is for another flash layout")
-    check(not asked and t == "This file is for another flash layout than this player's. Use the DevKit (4 MB) update file",
+    check(not asked and t == "This file is for another flash layout than this display's. Use the DevKit (4 MB) update file",
           f"firmware: an 8mb bundle is refused in the page ('{t}')")
     req = urllib.request.Request(base + "/api/firmware", data=ota["board8"].read_bytes(), method="PUT",
                                  headers={"Content-Type": "application/octet-stream"})
@@ -2953,7 +2953,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
           and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of a layout v2 bundle -> {code} '{why2}'")
     expected.append("/api/firmware")
     page.set_input_files("#fw-file", str(ota["bad"]))
-    t = fw_message(page, "^The player refused this file")
+    t = fw_message(page, "^The display refused this file")
     check("SHA-256 mismatch" in t and asked == [f"Install firmware {OTA_VERSION}? The panel goes dark for about a minute."],
           f"firmware: the tampered bundle is refused ('{t}'; asked {asked})")
     # An older bundle: asked differently; declined, nothing is sent.
@@ -3104,14 +3104,14 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         t = check_now(f"{site}/install/garbage.json")
         check("not readable" in t and not upd(), f"update: a release.json that is not JSON -> '{t}'")
         t = check_now(release("old.json", version="0.0.1"))
-        check(t == f"This player’s firmware ({fw0}) is newer than the latest release (0.0.1)" and not upd(),
+        check(t == f"This display’s firmware ({fw0}) is newer than the latest release (0.0.1)" and not upd(),
               f"update: firmware ahead of the release -> '{t}' (no web app offered either)")
         check("/install/old.json" in asked and not any(a.startswith("/install/old.json?") for a in asked),
               "update: a feed of one's own is asked as given (no ?v=, only opendmd.dev's is told the version)")
         # A release for a newer partition table than the player's: not
         # offered, a USB install named instead.
         t = check_now(release("relayout.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}.odfw", "layout": 4}}))
-        check(t.startswith(f"Firmware {UPD_VERSION} is out. This firmware needs a one-time USB reinstall on this player")
+        check(t.startswith(f"Firmware {UPD_VERSION} is out. This firmware needs a one-time USB reinstall on this display")
               and "opendmd.dev/install" in t and not upd(), f"update: a release for another flash layout -> '{t}'")
         # A release.json without `layout` whose file is for the older table:
         # its magic gives it away after the download, nothing is sent.
@@ -3126,7 +3126,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
         frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named
-        check(t.startswith(f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
+        check(t.startswith(f"Firmware {UPD_VERSION} is out{frm} (this display has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
         page.click("#fw-upd")
         page.wait_for_function("() => /404/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=20000)
@@ -3150,12 +3150,12 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         page.wait_for_function("() => /SHA-256/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=30000)
         t = page.inner_text("#fw-msg")
-        check(t.startswith("The player refused this file:") and get_json(base + "/api/firmware")["version"] == fw0
+        check(t.startswith("The display refused this file:") and get_json(base + "/api/firmware")["version"] == fw0
               and get_json(base + "/api/www")["version"] == w0 and "/install/firmware/tampered.odfw" in asked,
               f"update: a refused firmware stops there, the web app untouched -> '{t}'")
         # The real thing: both, then the reload.
         t = check_now(release("release.json"))
-        want = f"Firmware {UPD_VERSION} is out{frm} (this player has {fw0}). Web app {UPD_VERSION} is out"
+        want = f"Firmware {UPD_VERSION} is out{frm} (this display has {fw0}). Web app {UPD_VERSION} is out"
         check(t.startswith(want) and "The panel goes dark" in t and upd() == 1, f"update: both offered -> '{t}'")
         page.locator("#st-fw").screenshot(path=str(OUT / "settings-update-laptop.png"))
         page.evaluate("""() => { sessionStorage.setItem('upd', '[]');
@@ -3166,10 +3166,10 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
             page.click("#fw-upd")
         page.wait_for_load_state()
         log = json.loads(page.evaluate("sessionStorage.getItem('upd')") or "[]")
-        steps = ["Downloading the firmware", "Downloading the web app", "Sending the firmware to the player",
-                 "Restarting", "Sending the web app to the player", "Updated. Reloading the page"]
+        steps = ["Downloading the firmware", "Downloading the web app", "Sending the firmware to the display",
+                 "Restarting", "Sending the web app to the display", "Updated. Reloading the page"]
         seen = [any(m.startswith(st) for m in log) for st in steps]
-        check(all(seen) and "Sending the firmware to the player… 100%" in log,
+        check(all(seen) and "Sending the firmware to the display… 100%" in log,
               f"update: each step shown ({[st for st, ok in zip(steps, seen) if not ok]} missing; {len(log)} messages)")
         fw, w = get_json(base + "/api/firmware"), get_json(base + "/api/www")
         check(fw["version"] == UPD_VERSION and w["version"] == f"v{UPD_VERSION}" and w["ok"],
@@ -3488,7 +3488,7 @@ def key_checks(browser, page: Page, base: str) -> None:
         other = new_page(browser, "laptop", fresh, banner=True)
         other.goto(base + "/")
         other.wait_for_selector("#key-dlg[open]", timeout=20000)
-        check("This player needs its API key" in other.inner_text("#key-dlg"), "key: a fresh browser gets the key dialog")
+        check("This display needs its API key" in other.inner_text("#key-dlg"), "key: a fresh browser gets the key dialog")
         other.screenshot(path=str(OUT / "key-dialog-laptop.png"))
         other.fill("#key-in", "wrong-key-wrong")
         other.click("#key-dlg button.pri")
@@ -7787,8 +7787,8 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("location.hash === '#sets/edit'", timeout=10000)
     page.wait_for_selector("#set-entries .vrow[data-path]", timeout=20000)
     label = page.inner_text("#set-name-row > span")
-    check(page.is_hidden("#sets-list") and page.inner_text("#set-title") == "Halloween" and label == "Save a copy as"
-          and page.input_value("#set-name") == "Halloween copy" and page.inner_text("#set-save") == "Save copy",
+    check(page.is_hidden("#sets-list") and page.inner_text("#set-title") == "Halloween" and label == "Save as a new playlist"
+          and page.input_value("#set-name") == "Halloween 2" and page.inner_text("#set-save") == "Save as new",
           f"phone playlists: Halloween opens as a screen of its own, named, saved as a copy ({label!r})")
     foot = page.eval_on_selector(".edfoot", "e => [getComputedStyle(e).position, Math.round(e.getBoundingClientRect().bottom)]")
     nav = page.eval_on_selector("#nav", "e => Math.round(e.getBoundingClientRect().top)")
@@ -8769,7 +8769,7 @@ def no_formulas_pass(browser) -> None:
         page.wait_for_function("document.querySelectorAll('#set-entries .vrow[data-path]').length === 4", timeout=20000)
         skipped = page.eval_on_selector_all("#set-entries .vrow.skip", "els => els.map((e) => [e.dataset.path, e.querySelector('.tag').textContent])")
         check(sorted(p for p, _ in skipped) == ["/formulas/smoke.psi?a=0.5", "@formula:plasma"]
-              and all(t == "Formula: skipped on this player" for _, t in skipped),
+              and all(t == "Formula: skipped on this display" for _, t in skipped),
               f"no formulas: the playlist's two Formulas are marked as skipped ({skipped})")
         shot(page, "noformulas-playlist", "laptop")
         page.context.close()

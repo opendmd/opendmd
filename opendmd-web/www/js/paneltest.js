@@ -41,7 +41,7 @@ export function panelTest(box) {
       h('div.row', b('A looks clean', pick('a')), b('B looks clean', pick('b')),
         b('Both look the same / fine', () => stop('Nothing changed.')),
         b('Both have dots', () => (k === 'clk_phase' ? run('latch_blanking', 1)
-          : stop('Neither helped. Try Driver chip below, then switch the player off and on. If the dots stay, it may be the panel.'))),
+          : stop('Neither helped. Try Driver chip below, then switch the display off and on. If the dots stay, it may be the panel.'))),
         b('Stop', () => stop())));
     close = () => say();
     app.endPanelTest = () => stop();

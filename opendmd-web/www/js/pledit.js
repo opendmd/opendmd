@@ -65,7 +65,7 @@ export function editor(se, ctx) {
       const skipped = app.noFormulas && isFormula(p);
       const o = ov.get(p), cv = thumbsOn() && !drawn(p) && h('canvas.th', { width: 128, height: 32 });
       clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
-        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p)) && h('span.tag', e.platform || (skipped ? 'Formula: skipped on this player' : 'Formula')),
+        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p)) && h('span.tag', e.platform || (skipped ? 'Formula: skipped on this display' : 'Formula')),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
         moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       if (cv) attach(cv, p);
@@ -178,10 +178,10 @@ export function editor(se, ctx) {
     const d = app.draft, root = d.path && !d.path.startsWith('/sets/');
     title.textContent = d.path ? playlistLabel(d.path) : 'New playlist';
     nameRow.hidden = d.path && !root;
-    nameL.textContent = root ? 'Save a copy as' : 'Name';
-    name.value = root ? (d.copyName ??= `${playlistLabel(d.path)} copy`) : d.name;
-    saveB.textContent = root ? 'Save copy' : 'Save';
-    if (playB) playB.textContent = root ? 'Save copy & play' : 'Save & play';
+    nameL.textContent = root ? 'Save as a new playlist' : 'Name';
+    name.value = root ? (d.copyName ??= `${playlistLabel(d.path)} 2`) : d.name;
+    saveB.textContent = root ? 'Save as new' : 'Save';
+    if (playB) playB.textContent = root ? 'Save as new & play' : 'Save & play';
   }
   // A playlist (or a new one) is in app.draft: show it.
   function opened() {

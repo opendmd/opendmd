@@ -1102,7 +1102,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.goto(f"{base}/demo/#now")
     wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     tab("play")
-    check(page.locator("text=Device settings, WiFi and reboot live on the player").count() == 0
+    check(page.locator("text=Device settings, WiFi and reboot live on the display").count() == 0
           and all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
           "demo settings: Playback has the player's controls, not the local-mode sentence")
     page.evaluate("(e => { e.value = 30; e.dispatchEvent(new Event('input')); })(document.querySelector('#st-brightness'))")

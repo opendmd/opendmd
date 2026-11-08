@@ -25,7 +25,7 @@ const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).cat
 export async function mount(el) {
   // (The demo's player answers too: js/demo.js.)
   if (!app.src.config) {
-    el.append(h('h1.ptitle', 'Settings'), h('div.card', h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them'), thumbs()));
+    el.append(h('h1.ptitle', 'Settings'), h('div.card', h('p.muted', 'Device settings, WiFi and reboot live on the display. This page is in local mode: open it from the display (http://opendmd.local/) to use them'), thumbs()));
     return {};
   }
   const c = app.config || await app.refreshConfig();
@@ -212,7 +212,7 @@ export async function mount(el) {
   const tab = (k, ...kids) => h('div.stab', { id: 'st-tab-' + k, role: 'tabpanel', 'aria-labelledby': 'st-t-' + k }, kids);
   const BUILD = {
     play: () => (import('./power.js').then((m) => m.powerCard(power, playH)), tab('play',
-      h('div.card', playH, note('A playlist, platform or shuffle change takes a few seconds', 'The player reads the playlist again; the panel holds its frame meanwhile.'),
+      h('div.card', playH, note('A playlist, platform or shuffle change takes a few seconds', 'The display reads the playlist again; the panel holds its frame meanwhile.'),
         h('div.form.f2',
           h('div', h('label.stack', 'Brightness', bright.el), power),
           h('label.stack', 'Playlist', f.set),
@@ -228,7 +228,7 @@ export async function mount(el) {
           ...(app.noFormulas ? [h('p.cap', { id: 'st-look-none', style: 'margin-top:12px' }, `No Formula over the GIFs: ${NO_FORMULAS.replace(/^F/, 'f')}`)]
             : [(lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
               h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.')]),
-          h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
+          h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the display a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
           h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview')),
@@ -267,7 +267,7 @@ export async function mount(el) {
   // behind it: the status every 2 s until it is done.
   on('status', (s) => {
     f.set.disabled = s.index_state === 'building';
-    f.set.title = f.set.disabled ? 'the player is still reading the playlist' : '';
+    f.set.title = f.set.disabled ? 'the display is still reading the playlist' : '';
     if (f.set.disabled) app.watch('reindex', 2000); else app.unwatch('reindex');
   });
 
