@@ -519,7 +519,7 @@ fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
                     '&' | '|' => " (write `and` / `or`)",
                     // E001.
-                    '"' => " (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')",
+                    '"' => " (there are no strings but on `name`, `about` and `control` lines and in `print(…)`: for a character's code write it in single quotes, 'A')",
                     _ => "",
                 };
                 return Err(Error::new(
@@ -6689,7 +6689,7 @@ fn compile_inner<'s>(
         return Err(Error::new(
             MAX_SOURCE,
             src.len(),
-            format!("too long: a formula can be {MAX_SOURCE} characters at most"),
+            format!("too long: a formula can be {MAX_SOURCE} bytes at most"),
         ));
     }
     let toks = lex(src)?;

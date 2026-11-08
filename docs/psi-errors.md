@@ -14,9 +14,9 @@ in the [Psi language reference](psi-spec.md).
 
 > I don't understand `…`
 
-Psi has numbers, names, a few operators and brackets; anything else, such as `^`, `$` or a double quote outside a declaration, is not part of it.
+Psi has numbers, names, a few operators and brackets; anything else, such as `^`, `$` or a double quote outside a declaration or `print(…)`, is not part of it.
 
-Take the character out. Text in quotes only goes on `name`, `about` and `control` lines; for a character's code write it in single quotes, 'A'.
+Take the character out. Text in quotes only goes on `name`, `about` and `control` lines and in `print(…)`; for a character's code write it in single quotes, 'A'.
 
 Before:
 
@@ -606,7 +606,7 @@ Give `rgb(r, g, b)` three numbers, or write the colour on its own.
 
 <h3 id="E401">E401 · a formula that is too long to read</h3>
 
-> too long: a formula can be … characters at most
+> too long: a formula can be … bytes at most
 
 Shorten the formula.
 

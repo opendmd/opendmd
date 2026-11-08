@@ -67,7 +67,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | NAME "=" expr                     -- may set a name again: a read sees the latest
-          | "layer" [BLEND] "{" { assign } colourline "}"
+          | "layer" [BLEND] ["rate" NUMBER] "{" { assign | fn } colourline "}"   -- rate 2..200; fn: a "fn" line as below
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
@@ -81,6 +81,7 @@ dstmt     = NAME "=" expr                     -- the same for every pixel (no x,
           | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
           | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
           | "dot" "(" e "," e [ "," e ] ")"                            -- x, y [, v]
+          | "print" "(" ( TEXT | e ) "," e "," e "," e [ "," FONT [ "," e ] ] ")"   -- text (32 characters) or a number, x, y, colour [, font [, digits]]
 colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
           | "rgb" "(" ce [ "," cover ] ")"       -- a colour, maybe covering less
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
@@ -107,7 +108,7 @@ sep       = newline | ";"                      -- newlines inside ( ) and [ ] ar
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
 COLOUR    = "#" 6 hex digits | "#" 3 hex digits   -- #ff8800, #f80 (each digit twice); colour lines only
-TEXT      = '"' characters '"'                -- on name/about/control lines only; no " < > \ or tabs inside; label 24 characters
+TEXT      = '"' characters '"'                -- on name/about/control lines and in print only; no " < > \ or tabs inside; label 24 characters
 NUM       = [ "-" ] NUMBER
 WORD      = NAME
 FONT      = "normal" | "small" | "bold"      -- bold: digit only
@@ -711,7 +712,7 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 
 | limit | value | error says |
 |---|---|---|
-| source | 32,768 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes formulas up to 4,500 bytes once compiled) | too long |
+| source | 32,768 bytes, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes formulas up to 4,500 bytes once compiled) | too long |
 | steps | 768 in all: per frame + draw + per row + per pixel + one per layer (the column run's and the still cache's markers not counted) | too long for the panel: N steps (per frame …, draw …, per row …, per pixel …) |
 | live per-pixel values at once | 12 | holds more than 12 values at once |
 | constants + per-frame/per-row values held at once | 241 with the inputs, ~232 of your own (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs N numbers and once-a-frame values, more than the 241 it can hold (with the steps by section) |
@@ -1063,7 +1064,7 @@ gray(digit(3, px % 5, 31 - py, 2))
 gray(glyph('AB', px % 5, py))
 ```
 
-There are no strings: one `glyph` per character cell (the idiom above).
+There are no strings as values (quoted text goes only to `print`): one `glyph` per character cell (the idiom above).
 
 ```psi error
 -- error: unknown palette `blue`

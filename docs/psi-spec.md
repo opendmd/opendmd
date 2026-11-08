@@ -38,9 +38,9 @@ On the site, the search box filters the built-ins (press `/`), and
 
 **The name rule.** A formula's names win over the built-ins.
 
-- Any built-in value's, function's or drawing call's name may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`). From the line that sets it, the name reads as the formula's value wherever a value is read. A call `name(…)` is still the built-in function, and `since`, `was`, `under` and `ink(n)` work the same way as `sin`.
+- Any built-in value's, function's or drawing call's name may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`). From the line that sets it, the name reads as the formula's value wherever a value is read (setting `x` or `y` moves `px py i cx cy r angle` with it, as in a function). A call `name(…)` is still the built-in function, and `since`, `was`, `under` and `ink(n)` work the same way as `sin`.
 - The keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216) are not names.
-- A `fn`, table, sprite or palette of the formula's needs a name of its own. It may not take a built-in function's name (E215) or the name of a value the formula has set (E203).
+- A `fn`, table, sprite or palette of the formula's needs a name of its own. None may take the name of a value the formula has set (E203), and a `fn` may not take a built-in function's name either (E215).
 - `since(k)` and `was(k)` read the built-in inputs only. On a name the formula has set they are refused (E217), so a name is not read two ways on one line.
 - A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.
 <!-- psi-builtins end -->
@@ -187,8 +187,9 @@ the editor.
   `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`,
   `replay.game`) are read by name. Each is the same for every pixel of a
   frame and is held to its range. When the panel has no value for one, the
-  input reads its default; previews and the gallery always draw at the
-  defaults. `since(KEY)` says when one last changed and `was(KEY)` what it
+  input reads its default; thumbnails, the gallery and `psi check` draw at
+  the defaults, and the editor's preview does until its inputs panel
+  moves them. `since(KEY)` says when one last changed and `was(KEY)` what it
   was before ("Numbers" gives their ends). A formula has no memory between
   frames.
 
@@ -197,7 +198,7 @@ the editor.
 <!-- psi-builtins: limits (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins) -->
 | limit | at most |
 | --- | --- |
-| a formula's text, comments included | 32,768 characters |
+| a formula's text, comments included | 32,768 bytes |
 | steps (per frame, draw, per row, per pixel, and one per layer) | 768 |
 | values held a pixel at once | 12 |
 | constants and per-frame and per-row values held at once | 241 |
@@ -216,8 +217,8 @@ the editor.
 
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
-refuses a formula past 40 ms a frame, or past 12 ms for a look drawn over
-every GIF. The gallery takes a formula of 10 ms or less.
+refuses a formula past 40 ms a frame by the plain VM estimate (32 ms for
+one at `fps 100`), or past 12 ms for a look drawn over every GIF. The gallery takes a formula of 10 ms or less.
 
 <a id="cookbook"></a>
 
@@ -408,7 +409,7 @@ every level. From 1.0.0:
 
 ### Text
 
-- A formula is text, at most 32,768 characters, comments included.
+- A formula is text, at most 32,768 bytes (of UTF-8), comments included.
 - **Lines.** Each statement is a line; `;` ends a statement too (`a = 1;
   b = 2`). Inside `( )` and `[ ]` a line end is a space. After an
   operator or a `,` the statement continues on the next line.
@@ -416,11 +417,13 @@ every level. From 1.0.0:
 - **Numbers** are digits with at most one point, no sign and no exponent:
   `12`, `0.5`, `.5`. A minus sign is an operator.
 - **Characters** in single quotes are numbers: `'A'` is 65, one printable
-  ASCII character at a time. There are no strings.
+  ASCII character at a time. There are no strings as values; only
+  `print("…", …)` in `draw { }` takes text.
 - **Colours** are `#` and 3 or 6 hex digits: `#f80` is `#ff8800`.
 - **Names** are a letter or `_`, then letters, digits and `_`.
 - **Text in quotes** (`"…"`) goes only on `name`, `about` and `control`
-  lines, on one line, without `"`, `<`, `>`, `\`, tabs, control characters
+  lines and in `print("…", …)` inside `draw { }`, on one line, without
+  `"`, `<`, `>`, `\`, tabs, control characters
   or characters that hide or reorder text.
 - A **sprite** starts with `sprite NAME {` on a line of its own, then a key
   line and rows of characters, and ends with `}` alone. Its rows are read
@@ -440,7 +443,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | NAME "=" expr                     -- may set a name again: a read sees the latest
-          | "layer" [BLEND] "{" { assign } colourline "}"
+          | "layer" [BLEND] ["rate" NUMBER] "{" { assign | fn } colourline "}"   -- rate 2..200; fn: a "fn" line as below
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "{" { assign | dstmt } last "}"
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
@@ -454,6 +457,7 @@ dstmt     = NAME "=" expr                     -- the same for every pixel (no x,
           | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
           | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
           | "dot" "(" e "," e [ "," e ] ")"                            -- x, y [, v]
+          | "print" "(" ( TEXT | e ) "," e "," e "," e [ "," FONT [ "," e ] ] ")"   -- text (32 characters) or a number, x, y, colour [, font [, digits]]
 colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
           | "rgb" "(" ce [ "," cover ] ")"       -- a colour, maybe covering less
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
@@ -480,7 +484,7 @@ sep       = newline | ";"                      -- newlines inside ( ) and [ ] ar
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
 COLOUR    = "#" 6 hex digits | "#" 3 hex digits   -- #ff8800, #f80 (each digit twice); colour lines only
-TEXT      = '"' characters '"'                -- on name/about/control lines only; no " < > \ or tabs inside; label 24 characters
+TEXT      = '"' characters '"'                -- on name/about/control lines and in print only; no " < > \ or tabs inside; label 24 characters
 NUM       = [ "-" ] NUMBER
 WORD      = NAME
 FONT      = "normal" | "small" | "bold"      -- bold: digit only
@@ -500,7 +504,7 @@ Every value is a fixed-point number from −32,768 to 32,767.99998, in steps
 of 1/65,536 (Q16.16). Arithmetic saturates rather than wrapping.
 
 - `a / b` is the exact quotient, truncated towards zero to a step and held
-  to the ends. `-1/65536 / 2` is 0.
+  to the ends. Half of the step below zero is 0.
 - `a / 0` is the largest number of `a`'s sign, and `0 / 0` is 0.
 - `a % 0` is 0. `%` is floored, so `-1 % 3` is 2.
 - Comparisons and `and`, `or`, `not` give 1 or 0. Any number but 0 is
@@ -519,8 +523,9 @@ value before that change. A built-in input the panel has no value for reads
 its default. That is the case with no location set, the clock not set, or
 RePlayOS not followed.
 
-Where a function is defined by a table (`sin`, `noise`, `hash`, `atan2`,
-the palettes, the fonts), the table is the definition. **A formula gives
+Where a function is defined by a table (`sin`, `sqrt`, `atan2`, the
+palettes, the fonts), the table is the definition; `noise` and `hash` are
+defined by their integer arithmetic. **A formula gives
 the same bytes on the panel, in the browser and on a computer.**
 
 ### What stays the same
@@ -550,12 +555,13 @@ Error codes are only ever added, and a retired code is not used again.
   rounding down; `/` truncating towards zero, exact at every level; `/ 0`,
   `0 / 0`, `% 0`; floored `%`; `floor` and `frac` of negatives; `sqrt` of 0
   and below is 0; `abs` of the lowest number is the highest.
-- **Tables are definitions**: `sin`/`cos` (256 entries, interpolated),
+- **Tables and fixed arithmetic are definitions**: `sin`/`cos` (256 entries, interpolated),
   `sqrt`, `atan2`, `noise`, `hash`, the three fonts, the hsv conversion,
   `ul`'s weights, the blends and coverage in 8-bit channels, `cycle`'s
   turn, tweens' rounding, and the palettes' colours. In particular:
-  - `pal(P, k)` reads the one of the palette's **32 entries** nearest to
-    `k`, with no blending between them. A three-colour palette bands
+  - `pal(P, k)` reads the one of the palette's **32 entries** whose band
+    holds `k` (entry `floor(k × 32)`, 31 at `k = 1`), with no blending
+    between them. A three-colour palette bands
     rather than ramps. An interpolated read would be a new name.
   - `rainbow` is **black at 0** and dark at 1, its hues between;
   - `ocean` is **the same table as `ice`** (one palette, two names).
@@ -591,8 +597,8 @@ Error codes are only ever added, and a retired code is not used again.
   (`@formula?psb=…`, base64url). That line is 6,144 bytes at most, or
   2,048 for a look set that way. The panel does not compile formulas.
 - **In the gallery** a formula is a file of two comment lines (`--
-  author: …` and `-- licence: CC0-1.0`) followed by the formula. The
-  formula is at most 32,768 characters and 4,500 bytes once compiled; the
+  author: …` and `-- licence: CC0-1.0` or `CC-BY-4.0`) followed by the formula. The
+  formula is at most 32,768 bytes and 4,500 bytes once compiled; the
   file is at most 36 KB.
 
 ### Tools
@@ -606,9 +612,9 @@ $ psi check storm-front.psi --out -
 ok: 41 of 768 steps (per frame 11, draw 0, per row 5, per pixel 25), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
 never repeats (loop forever) at 50 fps; reads t
-panel: ~6.8 ms a frame: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
-JIT: yes, ~5.6 ms a frame compiled (the VM's ~6.8 ms is what the limits count)
-length: 559 B as written (32,768 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look)
+panel: ~5.6 ms a frame with the JIT, ~6.8 without: medium (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)
+JIT: yes, ~5.6 ms a frame compiled (what the tier and the limits count; ~6.8 ms without the JIT)
+length: 559 B as written (32,768 at most), 360 B compiled (493 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look); compiled 360 B of the gallery's 4,500
 heaviest lines (their share of the work a frame; make these lighter first):
   line 8 (68%): cl = noise(x*3 - t*0.15, (1 - y)*2, 0)*0.7 + noise(x*7 - …
   line 14 (20%): d = hash(px, floor(py/4 + hash(px, 1)*8 - fall))
@@ -631,7 +637,8 @@ prints the compiler's **notes**, each with its line number:
 - which values are worked out once and kept, and which once a column;
 - the heaviest value that could not be kept, and the value that kept it
   out;
-- a draw loop run as lanes (32 turns or more, costed for 128 a lane).
+- a draw loop run as lanes (32 turns or more, costed for the next
+  multiple of 128 turns).
 
 `--levels` lists every value with how often it is worked out and the chain
 that makes it so (`beam  per pixel: reads `off` (line 3) ← `px``).
@@ -647,7 +654,8 @@ rewrites the file, and `--check` names the files that aren't in it. The
 layout is one statement a line, two spaces inside `{ }`, and spaces round
 `=`, comparisons and `+ -`. `*`, `/` and `%` close up where they bind
 tighter (`x*3 + t/8`). Comments stay where they are. It changes only the
-spaces between the formula's words, and checks that the result is the same
+spacing between the formula's words (a `;` becomes a line end, a `{ }`
+block is opened out onto lines), and checks that the result is the same
 program before it writes.
 
 `psi builtins --json` and `psi errors --json` give this page's tables as
