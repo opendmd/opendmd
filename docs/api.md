@@ -400,7 +400,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `attract` | string, `""` | only `""` (the playlist): anything else (`"clock"`, `"text:…"`, `"fx:…"`) is `400` (`attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set`). A `clock`, `text:…` or `fx:` value stored by an earlier firmware reads as `""`, with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted and whenever its `.psb` is written; cleared when the `.psi` is deleted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
@@ -569,7 +569,8 @@ failed upload leaves no file.
 A playlist (`/filelist.*`, `/sets/*`) is installed as by
 `PUT /api/sets/<name>`, with its reply; an overrides file (`.meta`)
 rebuilds its playlist if in play. With a GIF, upload its prepared copy
-too, or forget the old one.
+too, or forget the old one. The compiled file of the Formula that
+`look_formula` names (`/formulas/<stem>.psb`) rebuilds the look at once.
 
 Errors: `400` the path is not allowed (below); `408` the body stalled;
 `409` with `?new=1`, the file exists; `503` busy, or the display did not let
@@ -592,7 +593,9 @@ curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNE
 
 Delete a file (the display moves off it first): a GIF with its prepared
 copy, a playlist with its index; an overrides file rebuilds its playlist.
-An empty directory too (`409` if it is not empty). Reply: `{"ok":true}`.
+The Formula that `look_formula` names (`/formulas/<stem>.psi`) takes the
+look with it: `look_formula` becomes `""`. An empty directory too (`409`
+if it is not empty). Reply: `{"ok":true}`.
 
 `?recursive=1` removes a whole directory, only under `/cache/` (and the
 retired `/odm/`), else `400`; 4 s of work a request:

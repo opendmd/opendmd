@@ -442,7 +442,8 @@ function build(root) {
     gifBtn.onclick = () => toGif(f);
     codeBtn.onclick = () => copyCode(f);
     del.hidden = !mineToo;
-    del.onclick = (e) => ask(`Delete “${f.name}”?`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
+    // The panel's look: it goes with its Formula (the panel clears it).
+    del.onclick = (e) => { const lk = !!f.file && (app.config?.look_formula || '').split('?')[0].toLowerCase() == f.file.toLowerCase(); ask(`Delete “${f.name}”?${lk ? ' It’s the panel’s look: the panel will have none.' : ''}`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); if (lk) { app.refreshConfig(); toast(`“${f.name}” is deleted: the panel has no look now (Settings › Look picks another)`, 'ok'); } }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget); };
     for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f === f);
     if (i.length) play(pv, f, i); else { pv.f = null; pv.pv.clear(); }
   }

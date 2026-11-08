@@ -250,7 +250,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   until the ordinal changes; `""` takes it off; `live` with none on is a
   409. Config `look_formula` (`""` or a formula's path; not compiled here:
   its name, blend and amount are the formula's own `name` and `look`
-  lines, as on the firmware); status `formula_look`
+  lines, as on the firmware; `DELETE /api/files/formulas/<stem>.psi` of
+  the one it names clears it, as on the firmware); status `formula_look`
   (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
 - **`GET /api/exists?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -4890,6 +4891,11 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 existed = ctx.fs.delete(rel)
                 ctx.player.delays.clear()
+                # The look's Formula deleted: the look goes with it
+                # (formula_look::file_changed).
+                look = ctx.settings.get("look_formula") or ""
+                if existed and look.startswith("/") and look.partition("?")[0].lower() == "/" + rel.lower():
+                    ctx.settings["look_formula"] = ""
                 if existed:
                     self.forget_copy("/" + rel)
                     if rel.lower().startswith(CACHE_DIR + "/"):

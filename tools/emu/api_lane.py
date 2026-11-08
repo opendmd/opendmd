@@ -18,6 +18,9 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               byte, listings (?names=1 and a walk), moves (and their 409/404), deletes (404 after)
   play        /api/play of an uploaded GIF, a Formula (`@formula?psb=`), the same saved to
               the card (.psi + .psb) by its path; skip, pause and resume
+  look        (--look, --look-psb) a card Formula as look_formula: drawn; its .psb written
+              anew (a bad one, then the real one) rebuilds the look at once (formula_look.error
+              comes, then goes); its .psi deleted clears look_formula and the look
   sent        (--long-psb) Show on panel of a long Formula (Endless road V2, past any path):
               POST /api/play/formula, played as `@formula:~sent` by its name line, live
               edits ~200 ms apart in place (the same start), off Recently played; 413 past
@@ -454,6 +457,10 @@ class Lane:
                 self.files(api)
                 self.sent(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "look":
+                # (A diagnostic shortcut: the look's Formula alone, then stop.)
+                self.look(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "events":
                 # (A diagnostic shortcut: the event stream alone, then stop.)
                 self.events(emu, api)
@@ -472,6 +479,8 @@ class Lane:
             self.long_request(api)
             self.files(api)
             self.play(emu, api)
+            if getattr(self.a, "look_psb", None):
+                self.look(emu, api)
             if getattr(self.a, "long_psb", None):
                 self.sent(emu, api)
             self.www(api)
@@ -731,6 +740,32 @@ class Lane:
         self.expect(r.get("paused") is False, "pause", f"resume answered {r}")
         self.wait_status(api, lambda s: s.get("paused") is False, 30, "playing again")
         self.ok("play", f"an uploaded GIF (from the original), a Formula by psb (frame {fms.get('frame_ms')} ms, jit {fms.get('jit')}), a Formula saved to the card (.psi and .psb, read back) by its path; a missing file 404, a relative path 400; skip; pause and resume")
+
+    def look(self, emu, api):
+        """The look's own Formula saved anew and deleted (formula_look::file_changed)."""
+        psi, psb = "/formulas/emu-look.psi", "/formulas/emu-look.psb"
+        good = self.a.look_psb.read_bytes()
+        api.call("PUT", "/api/files" + psi, self.a.look.read_bytes())
+        api.call("PUT", "/api/files" + psb, good)
+        api.json("PUT", "/api/config", {"look_formula": psi})
+        fl = lambda s: s.get("formula_look") or {}
+        self.wait_status(api, lambda s: fl(s).get("source") == "setting" and not fl(s).get("error"), 60, "the card's look drawn")
+        # Compiled anew (garbage: does not build): rebuilt at once, so the status says why.
+        mark = emu.mark()
+        api.call("PUT", "/api/files" + psb, b"not a compiled Formula")
+        st = self.wait_status(api, lambda s: fl(s).get("error"), 60, "the look rebuilt from a bad .psb (formula_look.error)")
+        why = fl(st)["error"]
+        api.call("PUT", "/api/files" + psb, good)
+        self.wait_status(api, lambda s: fl(s).get("source") == "setting" and not fl(s).get("error"), 60, "the look rebuilt from the real .psb")
+        self.expect(api.json("GET", "/api/config")[1].get("look_formula") == psi, "look", "look_formula changed by a .psb write")
+        # The Formula deleted: the look goes with it.
+        api.call("DELETE", "/api/files" + psi)
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("look_formula") == "", "look", f"look_formula {cfg.get('look_formula')!r} after its Formula was deleted")
+        self.wait_status(api, lambda s: s.get("formula_look") is None, 60, "no look once its Formula was deleted")
+        emu.wait_for(re.compile(r"formula look: its Formula was deleted"), 30, mark, "the look's end on the console")
+        api.call("DELETE", "/api/files" + psb)
+        self.ok("look", f"a card Formula as the look; its .psb written anew rebuilt it at once (a bad one: {why!r}; then drawn again); its .psi deleted cleared look_formula and the look")
 
     def sent(self, emu, api):
         """Show on panel as the web app sends it: the compiled bytes as the body."""
@@ -1503,6 +1538,8 @@ class Lane:
             ran = st.get("version")
             _, cfg = api.json("GET", "/api/config")
             self.expect(cfg.get("dwell_max") == self.dwell_set, "boot B", f"dwell_max {cfg.get('dwell_max')} after the power cycle, saved {self.dwell_set}")
+            # (The look's Formula was deleted in boot A: cleared for good.)
+            self.expect(cfg.get("look_formula") == "", "boot B", f"look_formula {cfg.get('look_formula')!r} after the power cycle")
             for p, data in self.expected.items():
                 code, back = api.call("GET", q(p), want=(200, 404))
                 self.expect(code == 200 and back == data, "boot B", f"GET {p}: HTTP {code}, {'same' if back == data else 'different'} bytes")

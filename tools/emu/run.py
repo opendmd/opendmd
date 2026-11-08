@@ -148,6 +148,8 @@ def main():
     ap.add_argument("--old-updater", type=Path, help="api: an updater from before the panel (a release's): boot C installs the bundle through it")
     ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
     ap.add_argument("--long-psb", type=Path, help="api: a long Formula compiled (`psi build -o`), past any path: shown with POST /api/play/formula")
+    ap.add_argument("--look", type=Path, help="api: a Formula that can be a look (its source), saved to the card and set as look_formula")
+    ap.add_argument("--look-psb", type=Path, help="api: that look compiled (`psi build -o`)")
     ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=5,
                     help="api: the load's connections at once: 5 (the default: display-stress's five loads each on its own, and the simultaneous-upload bursts), 2 (status polls beside the rest) or 1")
     ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")

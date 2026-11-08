@@ -62,6 +62,47 @@ pub static HELD: AtomicBool = AtomicBool::new(false);
 /// after a firmware change): `/api/status` `formula_look.error`.
 pub static ERROR: Mutex<String> = Mutex::new(String::new());
 
+/// The card file the setting's formula names changed under it
+/// ([`file_changed`], from the handlers on CPU0): the main loop builds the
+/// look again ([`REBUILD`]: its `.psb` was written or removed) or takes it
+/// off ([`GONE`]: its `.psi` was deleted, and `look_formula` with it). 0:
+/// nothing to do. The larger value wins when both come before the loop
+/// looks.
+pub static CHANGED: AtomicU8 = AtomicU8::new(0);
+pub const REBUILD: u8 = 1;
+pub const GONE: u8 = 2;
+
+/// A handler wrote (`removed` false) or deleted the card file `card`
+/// (card-absolute): if it is the setting's formula's — its `.psb` (what
+/// the look is built from) or, deleted, its `.psi` (the Formula itself) —
+/// tell the main loop ([`CHANGED`], woken from its frame's sleep). A
+/// deleted `.psi` clears `look_formula` in the shared settings here (and
+/// on the card, `settings_card`; the main loop clears its own and NVS):
+/// the look goes with its Formula. Every writer of the file (the web
+/// app's Save and Delete, the site's Open on my panel, the API) comes
+/// through `PUT`/`DELETE /api/files`, so through here.
+pub fn file_changed(shared: &Mutex<crate::nvs_config::Settings>, card: &str, removed: bool) {
+    use opendmd_core::synth::{compiled_path, formula_file};
+    let what = {
+        let Ok(mut s) = shared.lock() else { return };
+        let Some((file, _)) = formula_file(&s.look_formula) else { return };
+        if removed && card.eq_ignore_ascii_case(file) {
+            s.look_formula.clear();
+            GONE
+        } else if card.eq_ignore_ascii_case(&compiled_path(file)) {
+            REBUILD
+        } else {
+            return;
+        }
+    };
+    if what == GONE {
+        log::info!("formula look: its Formula was deleted, so the look is off: {}", crate::short(card));
+        crate::settings_card::save_shared(shared);
+    }
+    CHANGED.fetch_max(what, Ordering::Relaxed);
+    crate::wake::kick();
+}
+
 #[cfg(feature = "psi")]
 pub use with_psi::Looks;
 #[cfg(not(feature = "psi"))]
