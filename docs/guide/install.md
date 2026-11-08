@@ -1,6 +1,6 @@
 # Install OpenDMD
 
-Put OpenDMD on your display from this page. It takes a minute or two, and
+Put OpenDMD on your display from this page. It takes about four minutes, and
 the installer gets the board onto your WiFi before you unplug it. OpenDMD
 replaces the DMDoS software on the same ESP32 board, with nothing to rewire
 or swap, and it doesn't change your [SD card](card.md).
@@ -27,12 +27,13 @@ or swap, and it doesn't change your [SD card](card.md).
 
 1. **Plug in the board.** Connect the ESP32 to your computer with the USB
    cable.
-2. **Click the Install button** above and pick its port from the list. It
-   is often called "USB Serial", "CH340", "CH343" or "CP210x".
+2. **Click the Install button** above and pick its port from the list. Its
+   name depends on the board's USB chip: "USB Serial" (CH340), "USB Single
+   Serial" (CH343) or "CP2102 USB to UART Bridge Controller" (CP210x).
 3. **Choose whether to erase.** On a first install, when the board still
    runs DMDoS or anything else, the installer asks whether to **Erase
    device**. Tick it: this clears the board completely before installing.
-4. **Wait for it to finish.** It takes a minute or two. The panel stays
+4. **Wait for it to finish.** It takes about four minutes. The panel stays
    dark while the installer writes over USB, and lights up when the board
    restarts.
 5. **Connect it to your WiFi.** When it says **Installation complete**,
