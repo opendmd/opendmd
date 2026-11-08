@@ -940,7 +940,7 @@ fn grid(delay_ms: u8) -> u32 {
 /// What a formula that draws gets when the heap hasn't its canvas (4 KB,
 /// 8 KB for one that paints): as the compiler's own thread does when it
 /// can't start.
-pub const NO_CANVAS: &str = "the player is short of memory just now: try again in a moment";
+pub const NO_CANVAS: &str = "the display is short of memory just now: try again in a moment";
 
 /// A canvas for `prog` if it draws, with the planes it uses (taken from
 /// the heap only if it may fail: `None` for one that doesn't draw, `Err`

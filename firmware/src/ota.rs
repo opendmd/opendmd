@@ -351,7 +351,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(
             503,
             "503 Service Unavailable",
-            "the player needs the heap right now; retry shortly",
+            "the display is short of memory right now; retry shortly",
         );
     };
     // From here the panel says an update is coming in, until this returns

@@ -135,7 +135,7 @@ pub fn admit(ask: Ask, heap: Heap) -> Result<(), Refusal> {
 }
 
 /// The sentence a refused client reads (no word the UI may not show).
-pub const BUSY: &str = "the player needs the memory right now; retry shortly";
+pub const BUSY: &str = "the display is short of memory right now; retry shortly";
 
 #[cfg(test)]
 mod tests {

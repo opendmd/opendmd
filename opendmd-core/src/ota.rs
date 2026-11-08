@@ -231,7 +231,7 @@ impl fmt::Display for OtaError {
             }
             OtaError::BadMagic => f.write_str("not an OpenDMD firmware bundle (bad magic)"),
             OtaError::OtherLayout => f.write_str(
-                "this update is for another flash layout than this player's: use the DevKit (4 MB) \
+                "this update is for another flash layout than this display's: use the DevKit (4 MB) \
                  update file (opendmd.dev/install has the latest)",
             ),
             OtaError::BadVersion => f.write_str("the bundle's version field is malformed"),
@@ -253,7 +253,7 @@ impl fmt::Display for OtaError {
             OtaError::HashMismatch => f.write_str("SHA-256 mismatch: the image is damaged"),
             OtaError::WrongVariant { bundle, device } => write!(
                 f,
-                "this update is for the {} and this player runs the {} firmware: use the {} update file",
+                "this update is for the {} and this display runs the {} firmware: use the {} update file",
                 variant_name(bundle),
                 variant_name(device),
                 variant_name(device)
@@ -290,13 +290,13 @@ impl fmt::Display for OtaError {
             ),
             OtaError::BelowFloor { version, floor } => write!(
                 f,
-                "firmware {version} is older than {floor}, the oldest this player installs"
+                "firmware {version} is older than {floor}, the oldest this display installs"
             ),
             OtaError::Unsigned => f.write_str(
-                "not signed: this player takes only a release's web app pack (signed)",
+                "not signed: this display takes only a release's web app pack (signed)",
             ),
             OtaError::UnknownKey(id) => {
-                write!(f, "signed with key {id}, which this player does not know")
+                write!(f, "signed with key {id}, which this display does not know")
             }
         }
     }
@@ -1327,7 +1327,7 @@ mod tests {
         assert_eq!(e, OtaError::OtherLayout);
         assert_eq!(
             e.to_string(),
-            "this update is for another flash layout than this player's: use the DevKit (4 MB) \
+            "this update is for another flash layout than this display's: use the DevKit (4 MB) \
              update file (opendmd.dev/install has the latest)"
         );
         for magic in [b"ODFW116m", b"ODFW44mb", b"ODFW\0\0\0\0"] {
@@ -1559,7 +1559,7 @@ mod tests {
         check_floor("1.0.0-beta.15", Some("1.0.0-beta.15")).unwrap();
         assert_eq!(
             check_floor("1.0.0-beta.14", Some("1.0.0-beta.15")).unwrap_err().to_string(),
-            "firmware 1.0.0-beta.14 is older than 1.0.0-beta.15, the oldest this player installs"
+            "firmware 1.0.0-beta.14 is older than 1.0.0-beta.15, the oldest this display installs"
         );
     }
 

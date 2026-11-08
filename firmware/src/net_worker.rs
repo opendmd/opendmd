@@ -204,7 +204,7 @@ fn save_wifi(
         panel: None,
         reply: tx,
     })
-    .map_err(|_| "player not running")?;
+    .map_err(|_| "playback not running")?;
     let answer = rx.recv_timeout(config::IMPROV_SAVE_TIMEOUT);
     crate::state::drop_spent();
     match answer {
@@ -220,7 +220,7 @@ fn save_wifi(
             Ok(())
         }
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("player did not answer".into()),
+        Err(_) => Err("playback did not answer".into()),
     }
 }
 

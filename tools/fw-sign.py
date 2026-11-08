@@ -186,7 +186,7 @@ def parse_header(data: bytes) -> dict:
     layout = next((k for k, (m, _) in LAYOUTS.items() if data[:8] == m), None)
     if layout is None:
         if data[:4] == b"ODFW":
-            raise ValueError("this update is for another flash layout than this player's: use the DevKit (4 MB) "
+            raise ValueError("this update is for another flash layout than this display's: use the DevKit (4 MB) "
                              "update file (opendmd.dev/install has the latest)")
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
     variant, table = layout

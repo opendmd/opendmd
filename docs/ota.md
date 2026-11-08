@@ -33,7 +33,7 @@ version: going back is a feature (a release that misbehaves). A firmware
 can be built with a **rollback floor** instead, off by default:
 `OPENDMD_OTA_FLOOR=1.0.0` in the environment of the firmware build (read at
 compile time; no Makefile variable sets it) refuses any bundle older than that version with a 422 at its header
-("firmware X is older than 1.0.0, the oldest this player installs";
+("firmware X is older than 1.0.0, the oldest this display installs";
 `opendmd_core::ota::check_floor`, the same order as `older()`). The web
 app's Firmware card reads the chosen file's header and, when its version
 is older than the running one (semver-ish: dot-separated numbers, a
@@ -78,7 +78,7 @@ on v2), the boot banner as `4mb layout v3`.
   its header, before the signature and before anything reaches the card,
   with a 422 in words. Any other magic that starts `ODFW` (such as
   `ODFW18mb`, the 8mb layout that releases up to 1.0.0-beta.16 also
-  carried): "this update is for another flash layout than this player's:
+  carried): "this update is for another flash layout than this display's:
   use the DevKit (4 MB) update file (opendmd.dev/install has the latest)"
   (`OtaError::OtherLayout`); on a v3 board, a v2 bundle: "this update is
   for the older flash layout v2 and this DevKit (4 MB) has layout v3: use
@@ -105,11 +105,11 @@ on v2), the boot banner as `4mb layout v3`.
   (below).
 - **The web app** reads the chosen file's magic and refuses another
   layout's or another table's in words (another layout: "This file is for
-  another flash layout than this player's. Use the DevKit (4 MB) update
+  another flash layout than this display's. Use the DevKit (4 MB) update
   file"; a newer table: "This firmware needs a one-time USB reinstall on
-  this player: use the installer at opendmd.dev/install (Update OpenDMD
+  this display: use the installer at opendmd.dev/install (Update OpenDMD
   keeps your WiFi and settings)"; an older one: "This file is for an older
-  flash layout than this player has: get the latest from
+  flash layout than this display has: get the latest from
   opendmd.dev/install"). Check for updates takes the release's file for
   the player's variant (`release.json` `variants`), and does not offer one
   whose `layout` is not the player's (it says the same words, after

@@ -75,7 +75,7 @@ fn player_busy(req: &mut Req) -> Result<()> {
     PLAYER_BUSY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     log::warn!("{}: the player did not take it in {} ms, 503", req.path(), TAKE_WAIT.as_millis());
     req.header("Retry-After", "1")?;
-    req.error(503, "503 Service Unavailable", "the player is busy; retry shortly")
+    req.error(503, "503 Service Unavailable", "the display is busy; retry shortly")
 }
 
 /// Requests answered [`player_busy`] (`net.player_busy` in `/api/status`).
@@ -264,7 +264,7 @@ fn send_play(req: &mut Req, c: &Ctx, path: String, live: bool, over: bool, psb: 
         reply: tx,
     };
     if c.cmd.send(cmd).is_err() {
-        return req.error(503, "503 Service Unavailable", "player not running");
+        return req.error(503, "503 Service Unavailable", "playback not running");
     }
     crate::wake::kick();
     play_reply(req, from_main(&rx, PLAY_ANSWER), &ok)
@@ -954,7 +954,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let mut json = String::new();
             if json.try_reserve_exact(512).is_err() {
                 req.header("Retry-After", "1")?;
-                return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+                return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
             }
             now_json(&snap, &mut json);
             drop(snap);
@@ -1021,7 +1021,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if free < STATUS_MIN_HEAP {
             STATUS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             req.header("Retry-After", "1")?;
-            return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+            return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
         }
         let snap = status_snapshot(&c.status);
         if fast {
@@ -1032,7 +1032,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let want = STATUS_LEN.load(std::sync::atomic::Ordering::Relaxed) as usize + STATUS_SLACK;
             if json.try_reserve_exact(want).is_err() {
                 req.header("Retry-After", "1")?;
-                return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+                return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
             }
             status_json(&snap, &looks, recent, &mut json);
             drop(snap);
@@ -1050,7 +1050,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // stream task in an upload, every time).
         let Some(mut out) = Piecewise::new(req) else {
             req.header("Retry-After", "1")?;
-            return req.error(503, "503 Service Unavailable", "the player needs the heap right now; retry shortly");
+            return req.error(503, "503 Service Unavailable", "the display is short of memory right now; retry shortly");
         };
         out.req.begin_chunked("200 OK", "application/json")?;
         status_json(&snap, &looks, recent, &mut out);
@@ -1090,7 +1090,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::Back(tx)).is_err() {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         play_reply(req, from_main(&rx, PLAY_ANSWER), r#"{"ok":true}"#)
@@ -1100,7 +1100,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/pause", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::TogglePause(tx)).is_err() {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         match from_main(&rx, PLAY_ANSWER) {
@@ -1137,14 +1137,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/reindex", Method::Post, #[optimize(size)] move |req| {
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::Reindex(tx)).is_err() {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         long_job(req, REINDEX_TIMEOUT, Box::new(#[optimize(size)] move |req, expired| {
             Some(match job_answer(&rx, expired)? {
                 Ok(Ok(applied)) => req.json(&format!(r#"{{"ok":true,{}}}"#, applied_json(&applied))),
                 Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+                Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
             })
         }))
     })?;
@@ -1201,7 +1201,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             })
             .is_err()
         {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         let (c, minutes) = (c.clone(), wake.minutes);
@@ -1214,7 +1214,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                         opt_json(until.as_deref())
                     ))
                 }
-                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+                Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
             })
         }))
     })?;
@@ -1334,7 +1334,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         };
         let (tx, rx) = mpsc::channel();
         if c.cmd.send(Command::PanelTest { setting, reply: tx }).is_err() {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         // A pattern on the panel, at once once taken: a play's waits.
@@ -1355,7 +1355,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 }
             },
             Ok(Err(e)) => req.error(409, "409 Conflict", &e),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
         }
     })?;
 
@@ -2161,7 +2161,7 @@ fn wait_until_not(held: impl Fn() -> bool) -> bool {
 
 
 /// The answer when [`release_for_write`] got none: the file is left alone.
-const NOT_RELEASED: &str = "the player did not let go of the file; try again";
+const NOT_RELEASED: &str = "playback did not let go of the file; try again";
 
 /// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
 /// must be `cache/` or the retired `odm/` tree (or a directory in one). The
@@ -2562,7 +2562,7 @@ fn install_manifest(req: &mut Upload, ctx: &Ctx, dest: String) -> Result<()> {
         .is_err()
     {
         let _ = std::fs::remove_file(&temp);
-        return req.error(503, "503 Service Unavailable", "player not running");
+        return req.error(503, "503 Service Unavailable", "playback not running");
     }
     // A full reindex of the stock card's 10,162-line manifest takes a few
     // seconds over SPI, so this waits longer than the non-playlist replies.
@@ -2573,7 +2573,7 @@ fn install_manifest(req: &mut Upload, ctx: &Ctx, dest: String) -> Result<()> {
             applied_json(&applied)
         )),
         Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-        Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
     }
 }
 
@@ -2600,7 +2600,7 @@ fn apply_meta<R: Respond>(
         if let Some(t) = &temp {
             let _ = std::fs::remove_file(t);
         }
-        return req.error(503, "503 Service Unavailable", "player not running");
+        return req.error(503, "503 Service Unavailable", "playback not running");
     }
     match rx.recv_timeout(REINDEX_TIMEOUT) {
         Ok(Ok(applied)) => {
@@ -2618,7 +2618,7 @@ fn apply_meta<R: Respond>(
             ))
         }
         Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-        Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
     }
 }
 
@@ -3486,7 +3486,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             })
             .is_err()
         {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         crate::wake::kick();
         let c = c.clone();
@@ -3568,7 +3568,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             // The formula look does not compile or is too heavy: nothing saved.
             Ok(Err(e)) if e.starts_with(crate::state::LOOK_FORMULA_BAD) => req.bad_request(&e),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+            Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
         })
         }))
     }
@@ -3620,7 +3620,7 @@ fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             })
             .is_err()
         {
-            return req.error(503, "503 Service Unavailable", "player not running");
+            return req.error(503, "503 Service Unavailable", "playback not running");
         }
         // Applying may switch the playlist (a rule in force now).
         crate::wake::kick();
@@ -3636,7 +3636,7 @@ fn put_schedule(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                     req.json(&format!(r#"{{"ok":true,"rules":{rules},"night":{night}}}"#))
                 }
                 Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
-                Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+                Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
             })
         }))
     }
