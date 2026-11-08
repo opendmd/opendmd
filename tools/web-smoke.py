@@ -5839,8 +5839,12 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
         return [k.path({ src: 'gray(a)', a: 0.5 }, c), k.path({ src: 'gray(a)', a: 0.25 }, c), k.vals({ src: 'gray(a)', a: 0.5 }, c), k.vals({ src: 'gray(a)', a: 0.75 }, c)]; })""")
     check(f0[0].startswith("@formula?psb=") and "&" not in f0[0] and f0[1] == f0[0] + "&a=0.25" and f0[2:] == ["", "&a=0.75"],
           f"looks: a value at its default stays out of paths and the site's hand-over ({f0})")
-    put_json(base + "/api/config", {"look_formula": ""})
+    # The look's Formula deleted: the look goes with it (formula_look::file_changed).
+    put_json(base + "/api/config", {"look_formula": "/formulas/matrix-glow.psi"})
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/matrix-glow.psi", method="DELETE"), timeout=30)
+    c6 = get_json(base + "/api/config")
+    check(c6["look_formula"] == "", f"looks: deleting the look's Formula clears the look ({c6['look_formula']!r})")
+    put_json(base + "/api/config", {"look_formula": ""})
     page.context.close()
 
 

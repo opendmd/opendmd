@@ -127,8 +127,9 @@ moves, about 50 times a second, or 25 for a heavy one that takes more than
 8 ms a frame. The GIFs play at their own speed either way.
 
 The look is one of your saved Formulas, read from the display's card. A
-change you save reaches the look when the display next restarts. Delete
-the Formula and the look stops; pick another in Settings › Look. When the
+change you save reaches the look on the panel a moment later. Delete the
+Formula and the look goes with it: the app says so before you delete it,
+and Settings › Look shows None until you pick another. When the
 display is short of memory, such as
 during several uploads at once, it shows the GIFs without the look for a
 while.

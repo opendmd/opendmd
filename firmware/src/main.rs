@@ -1551,6 +1551,30 @@ fn main() -> Result<()> {
                 }
             }
         }
+        // The look's Formula saved anew or deleted (`formula_look::
+        // file_changed`, one relaxed load): built again from its `.psb`, or
+        // taken off with `look_formula` cleared (the handler cleared the
+        // shared copy and the card's; NVS gets it when nothing races).
+        let changed = match formula_look::CHANGED.load(Ordering::Relaxed) {
+            0 => 0,
+            _ => formula_look::CHANGED.swap(0, Ordering::Relaxed),
+        };
+        if changed != 0 && formula_look::on_card(&settings.look_formula) {
+            handled = true;
+            if changed == formula_look::GONE {
+                settings.look_formula.clear();
+                unsaved = true;
+                SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+            }
+            let shown = match engine.as_mut() {
+                Some(e) => e.display_mut(&mut canvas),
+                None => &mut canvas,
+            };
+            looks.set_saved(&settings.look_formula, shown);
+            if !sched.off() && engine.is_some() {
+                repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
+            }
+        }
         if handled {
             use std::sync::atomic::Ordering::Relaxed;
             let took = uclock::since(cmd_t0);

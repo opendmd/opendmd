@@ -1892,6 +1892,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
                 }
+                // The look's Formula deleted: the look goes with it.
+                crate::formula_look::file_changed(&c.settings, &card, true);
                 req.json(r#"{"ok":true}"#)
             }
             Err(e) => req.not_found(&format!("{rel}: {e}")),
@@ -2407,6 +2409,8 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str, create_new: bool) -> Result<()>
         // A GIF written anew is a new file: its failure line (or "plays as
         // it is") was about the old one.
         crate::cache_builder::drop_failed(&format!("/{}", rel.trim_start_matches('/')));
+        // The look's own Formula compiled anew: it is built again.
+        crate::formula_look::file_changed(&c.settings, &format!("/{}", rel.trim_start_matches('/')), false);
     }
     up.json(&format!(
         r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
