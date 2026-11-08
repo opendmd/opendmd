@@ -494,8 +494,10 @@ FSPRITE = {"js/fsprite.js"}
 # ref-ergo: ~4.1 KB gz; branch psi-machinery, every page's ```psi blocks,
 # row ids and the index, the old #E addresses sent on: unchanged budget),
 # apart from /f/'s share line, which it never loads with. It runs on the demo's pkg-psi and js/psikit.js, counted in their
-# own lines, loaded only when the first example scrolls near.
-PSIREF_GZ_BUDGET = 6 * 1024
+# own lines, loaded only when the first example scrolls near. 7 KB from
+# psi-site (2026-11-08): measured unminified with psiled.js, ~6.1 KB; the
+# minified /psiref.js served is ~2.8 KB gz.
+PSIREF_GZ_BUDGET = 7 * 1024
 # The site's other live Formulas, on the same psiled.js: the home page's
 # panels (ref/home.js) and the gallery's tiles on hover (ref/ftiles.js),
 # a line each with psiled.js, <= 4 KB (2026-10-30: ~3.1 KB gz each).
