@@ -93,7 +93,7 @@ async function start() {
   const open = btn('f-open', 'Open on my panel', 'pri'), copyCode = btn('f-copy-code', 'Copy code'), submit = btn('f-submit', 'Submit to the gallery…');
   const ed = await editorPage($('f-ed'), { ...got, ...(ref?.f || {}) }, {
     acts: [open, copyCode, submit], key,
-    note: 'Open on my panel saves it on your own panel, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery.',
+    note: 'Open on my panel saves it on your own display, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery.',
     changed: () => { clearTimeout(changed.t); changed.t = setTimeout(changed, 150); },
   });
   let subForm = null;
@@ -127,7 +127,7 @@ async function start() {
     if (ref?.gallery && x.src === orig) { location.href = `http://${a}/#gallery=${ref.gallery}${v ? '&' + v : ''}`; return; }
     // Its app says it is ready (once it has loaded): the Formula, to that window only.
     const data = { type: REMIX, name: x.ctl?.name || x.name || '', src: x.src, a: x.a, b: x.b, c: x.c };
-    if (!handOff(a, 'remix', READY, { data })) say('Your browser didn’t open the panel’s page: allow pop-ups for opendmd.dev, then press Open on my panel again.');
+    if (!handOff(a, 'remix', READY, { data })) say('Your browser didn’t open the display’s web app: allow pop-ups for opendmd.dev, then press Open on my panel again.');
   }
   const { ask } = addressForm('f', go, 'formula');
   open.onclick = () => { if (addr()) go(addr()); else ask(); };

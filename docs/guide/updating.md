@@ -8,16 +8,17 @@ details, playlists and GIFs stay as they are whichever way you update.
 
 1. In the web app, open **Settings › Device › Firmware** and press
    **Check for updates**.
-2. If there's a new version, the app says what's new and shows an
+2. If there's a new version, the app names it and shows an
    **Update** button. Press it.
 3. Keep the page open and the SD card in. The panel says **Updating**, then
    **Installing** for about a minute (it goes dark for a moment when the
-   board restarts), then **Updated to** the new version, and the web app
-   reloads. If the update doesn't go through, your GIFs carry on as before.
+   board restarts), then **Updated to** the new version. The web app
+   reloads if it was updated too. If the update doesn't go through, your
+   GIFs carry on as before.
 
 The phone or computer you're using needs to be online, because the app
 downloads the update from this site before sending it to the display. If
-anything goes wrong it tells you what, and nothing is left half-installed.
+anything goes wrong it tells you what, and whether to try again.
 
 ## Beta updates
 
@@ -43,8 +44,10 @@ If the display won't start or you can't reach the web app, the
    display's board into your computer by USB.
 2. Click **Install** and pick the board's port. The installer shows the
    version the board runs.
-3. Click **Update OpenDMD**. Leave **Erase device** unticked for an
-   update, because ticking it wipes your WiFi details and settings.
+3. Click **Update OpenDMD**. If the board didn't answer, the installer
+   offers **Install OpenDMD** instead and asks about **Erase device**.
+   Leave it unticked, because ticking it wipes your WiFi details and
+   settings.
 
 The panel stays dark while the installer writes. The board then restarts
 with the new version, shows **Updated to** it on the panel, and rejoins

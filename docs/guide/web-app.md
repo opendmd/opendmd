@@ -77,7 +77,7 @@ category and author. From there:
 
 Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
 tap picks a GIF, and a folder's box picks every GIF in it. **Add to
-playlist** puts them all in the playlist you're editing, and **Done**
+playlist** puts them all in the playlist you're editing, or in a new one, and **Done**
 leaves Select.
 
 ### Adding GIFs
@@ -93,7 +93,7 @@ as it uploads.
 
 Some GIFs scroll or move in jumpy steps of a few pixels. When the app spots
 one, a **Smooth motion** switch appears under its preview. Turn it on and
-the panel fills in the in-between steps so it glides instead. Your GIF file
+the web app fills in the in-between steps so it glides instead. Your GIF file
 isn't changed, and you can switch it off again. A GIF with more than 256
 colours doesn't get the switch.
 
@@ -119,8 +119,9 @@ goes back. Fill it in any of these ways:
 - Press **Add by filter…** to fill it by rules: platforms, categories and
   title words, shuffled or cut to a number if you like. **Leave out**
   drops logos, intros and the like.
-- In the Library, pick GIFs and choose **Add to playlist… › New
-  playlist…**.
+- In the Library, open a GIF and choose **Add to playlist… › New
+  playlist…**, or **Select** several and press **Add to playlist** with
+  no playlist open.
 
 A GIF already in the playlist has a ✓ and isn't added twice.
 

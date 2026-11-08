@@ -1,175 +1,175 @@
 # How Psi thinks
 
-Psi is the language Formulas are written in. This page explains its ideas
-one at a time, each with a small example that plays as you read it. To
-learn by doing first, start with [Make a Formula](psi-1.md). Every name is
-listed in the [language reference](../psi-spec.md).
+The three Make a Formula pages show what to type. This page explains the ideas underneath, one at a time. Every name and function is listed in [the language reference](../psi-spec.md).
 
-## Every pixel, every frame
+## A Formula draws a whole frame
 
-A Formula describes a picture that changes over time. The display draws a
-new frame of it 50 times a second, or 25 or 100 when the Formula asks.
-For each frame it works out a colour for every one of the panel's 4,096
-pixels, from the pixel's place, the time and whatever else the Formula
-reads. The simplest Formula is a single line that gives that colour.
-[Layers](#layers), [drawing](#drawing) and [painting](#painting) build a
-picture up from parts.
+A Formula is a short program for one frame of the panel. Its last line is the colour. The display works that colour out at all 4,096 pixels, 128 across and 32 down, and then does the whole frame again for the next one.
 
-A Formula has no memory. Each frame is worked out fresh from the pixel's
-place, the time, the clock and the sliders, and from the GIF under it when
-it draws over one.
+The lines above the colour set up values for it to use. The colour comes last, and only the last line can be the colour.
 
-```psi
-name "Corners"
-rgb(x, y, 0.5)
+```psi-bad
+name "Oops"
+gray(x)
+v = 1
 ```
 
-## Where the pixel is
+Here the editor says "the colour has to be the last line". The last line can also be a plain number, as in `x` alone. Then it is drawn as a grey.
 
-The pixel's place comes in several forms. Use whichever makes the sum
-simplest.
+## Once, once a frame, once a row, every pixel
 
-| name | what it is |
-| --- | --- |
-| `x`, `y` | 0 to 1 across from the left, and 0 to 1 down from the top |
-| `px`, `py` | the column, 0 to 127 from the left, and the row, 0 to 31 from the top |
-| `cx`, `cy` | from the middle, −2 to 2 across and −0.5 to 0.5 down |
-| `r`, `angle` | how far from the middle, and the angle round it in turns, from −0.5 to 0.5, 0 on the right |
+The lines of a Formula don't all run as often as each other. Psi looks at what each value reads, and works it out only as often as that changes:
 
-`y` counts down, as on a screen. For something that rises from the
-bottom, use `1 - y`.
+- a value made only of numbers costs next to nothing;
+- one that reads the time, the clock or a control is worked out **once a frame**;
+- one that reads `y` or `py`, the row, is worked out **once a row**, 32 times a frame;
+- one that reads `x`, `px` or the picture under the Formula is worked out **for every pixel**, 4,096 times a frame.
 
-The panel is four times wider than it is tall. `cx`, `cy` and `r` are
-measured in panel heights, so `r < 0.4` is a round disc and not a long
-oval.
+A value that uses another value moves up to that one's level. The comments here say where each line lands.
 
 ```psi
-name "Grid and disc"
-gray((px % 8 == 0 or py % 8 == 0) + (r < 0.4)*0.5)
-```
-
-## Time
-
-`t` is the time in seconds since the loop began. `loop 4` at the top
-makes the loop four seconds long, and the picture starts again after it.
-Without a `loop` line it is eight seconds.
-
-`loop forever` gives a Formula with no loop. Then `t` counts the seconds
-since it started playing and never goes back. Each time it plays it also
-gets a new `seed`, a number from 0 to 1, so it can start somewhere new.
-
-```psi
-name "Rainbow road"
-loop forever
-hsv(frac(x + t/10 + seed), 1, 1 - y*0.6)
-```
-
-A Formula plays at 50 frames a second. `fps 100` asks for 100, for things
-that move fast, and `fps 25` for 25. The panel plays 100 only for a
-Formula that is light enough.
-
-`hour`, `minute` and `second` are the time of day, so a Formula can be a
-clock.
-
-## Turns
-
-Waves and angles are measured in *turns*. One turn is once round a
-circle, and `sin` repeats every 1. `sin(0.25)` is 1, a quarter of the way
-round.
-
-Turns make loops easy. In a loop of 8 seconds, `t/8` goes once round, so
-`sin(x*2 + t/8)` comes back to where it started just as the loop does.
-Keep every speed a whole number of turns a loop and the loop never jumps.
-
-```psi
-name "Waves"
+name "Levels"
 loop 4
-gray(abs(y - 0.5 - 0.4*sin(x*2 + t/4)) < 0.06)
+-- once a frame: reads only t
+glow = 0.5 + 0.5*sin(t/4)
+-- once a row: reads y
+band = floor(y*4)/4
+-- every pixel: reads x
+hsv(band + x/4, 1, glow)
 ```
 
-## Everything is a number
+Almost all of a Formula's work is the work it does for every pixel, so this is the idea that matters most. The section on [what costs](#what-costs) comes back to it.
 
-Every value in Psi is a number. A question such as `x < 0.5` is a number
-too, 1 for yes and 0 for no, so you can multiply by it. `and`, `or` and
-`not` join questions. `q ? a : b` is `a` where `q` is yes and `b` where it
-is no.
+## Turns, not degrees
 
-A character in single quotes, such as `'A'`, is the number of that
-character.
+`sin`, `cos`, `tri`, `saw` and `sqr` go round once as their value goes from 0 to 1. The hue in `hsv` works the same way, and so do `atan2` and `angle`, which give directions in turns. So `sin(0.25)` is 1, and `sin(x)` is one wave across the panel. Writing 6.28 to make a full circle gives six of them instead.
 
-There is no power sign. Write `x * x` for x squared.
-
-Numbers go from −32,768 to 32,767. A sum that goes past the end stays at
-the end. Dividing by zero gives the biggest number, with the sign of what
-you divided.
+Turns also make loops join up. In a `loop 4` Formula, `t/4` goes from 0 to 1 over the loop. A wave or a hue driven by it ends exactly where it began.
 
 ```psi
-name "Checks"
-gray((px % 16 < 8) != (py % 16 < 8))
+name "Turns"
+loop 4
+gray(sin(x + t/4)/2 + 0.5)
 ```
 
-## Names
+## Numbers and colours
 
-A line such as `wave = sin(x*2)` gives a value a name, and the lines below
-can use it. Set a name again and the lines after that read the new value.
+Psi's numbers run from about −32,768 to 32,767. A result past either end stays at the end rather than wrapping round. Dividing by zero gives no error. A colour channel takes 0 to 1, and anything outside that is held at the nearest end.
 
-`--` starts a comment, which the panel skips. A `;` counts as a new line,
-so `u = x; v = y` is two lines in one.
+A colour such as `#f80` is not a number, so it can't be stored in a name.
 
-## Colours
+```psi-bad
+name "Oops"
+v = #f80
+gray(v)
+```
 
-The last line is the colour. Write it as `#f80`, as `rgb(r, g, b)` or
-`hsv(hue, strength, brightness)` with numbers from 0 to 1, or as a colour
-from a palette such as `pal(fire, v)`. A plain number is a gray. A colour
-can be dimmed with a number, `#f80 * 0.5`, or mixed with another,
-`mix(#102040, #f80, x)`. It can't be given a name, so write it in the
-last line, where it is used.
+It belongs on the colour line, where it can be dimmed (`#f80 * k`) or mixed (`mix(#000, #f80, k)`).
 
-`palette sea = #024, #08c, #fff` near the top makes a palette from your
-colours, read with `pal(sea, v)`. `cycle(sea, v, t/8)` turns the palette
-round once in eight seconds while the picture stays still, the way old
-games made water and fire move.
+A palette steps from one colour to the next. It does not blend between them. A palette you write yourself with three colours gives three bands:
 
 ```psi
-name "Sea"
-loop 8
-palette sea = #024, #08c, #4ce, #fff, #4ce, #08c
-cycle(sea, sin(x*2) + sin(y*1.5), t/8)
+name "Three bands"
+palette sea = #024, #08c, #fff
+pal(sea, y)
 ```
+
+For a smooth fade, mix the colours instead:
+
+```psi
+name "Smooth"
+mix(#024, #fff, y)
+```
+
+The built-in palettes have 32 steps each, which is close to smooth. A `table` is a list of numbers, read from 0.
+
+```psi
+name "Cells"
+table level = 0.2, 0.6, 1, 0.6
+gray(level[floor(x*4)])
+```
+
+## Time and loops
+
+`t` counts seconds from the start of the loop, and starts again from 0 when the loop ends. The loop is 8 seconds unless a `loop` line near the top says otherwise. In `loop forever`, `t` goes on growing, and Psi asks you to wrap it with `frac`, `%`, `sin`, `noise` or a comparison before it reaches a colour. `hour`, `minute` and `second` come from the display's clock.
+
+When the display can't work frames out in time, it shows fewer of them, so a heavy Formula moves less smoothly.
+
+## Frame rates
+
+A Formula plays at 50 frames a second unless it has `fps 25`, `fps 50` or `fps 100`. The display measures how long each frame takes. When frames take too long, it shows each one for two, four or eight frame times. When they get faster again, it speeds back up. A rate of 100 only holds for a light Formula, and only with **Phosphor glow** off.
 
 ## Layers
 
-A Formula can be a stack of layers. Each `layer { }` has its own names
-and a colour line, and the panel draws them from the first, at the
-back, to the last, in front.
+A Formula can have several colour lines, each in its own `layer { … }`. Each layer has its own names and ends in its own colour. The first is at the bottom.
 
-The word after `layer` says how it goes onto what is behind it. `over`,
-the default, covers it. `add` and `screen` make it lighter, `multiply`
-makes it darker, and `max` and `min` keep the lighter or the darker of the
-two.
+A layer can name how it goes onto what is under it: `over` (the default), `add`, `multiply`, `screen`, `max` or `min`. A colour may also take a last value, how much of the pixel it covers, from 0 to 1. Once a Formula has a layer, every colour line has to be inside one.
 
-Any colour can take one more number, how much of the pixel it covers,
-from 0 to 1. Where it covers less than all, what is behind shows through.
+If the bottom layer doesn't cover everything, the picture under the Formula shows through. That picture is the GIF it is drawn over, or black when the Formula plays alone. On this page, and in the editor until a GIF is picked, it is a sample picture of sky, sun and hills. A multiply layer on its own darkens what is under it:
 
 ```psi
-name "Bars on a wave"
-loop 4
-layer {
-  wave = sin(x*2 + t/4) + sin(y*1.5 - t/2)
-  hsv(wave/4 + t/4, 0.9, 1)
+name "Rows"
+layer multiply {
+  gray(py % 2 ? 0.4 : 1)
 }
-layer multiply { gray(py % 2 ? 1 : 0.6) }
+```
+
+A layer that is `over` and covers every pixel hides everything below it. Psi leaves the hidden layers out, so they cost nothing.
+
+`cycle(P, v, s)` reads palette `P` at `v`, turned round by `s`. It is the old palette-cycling trick. The turn can change with the time or the row, but not along a row.
+
+```psi
+name "Copper"
+loop 6
+palette sunset = #102, #315, #a24, #f62, #fb4, #fe8, #fb4, #f62, #a24, #315
+cycle(sunset, 0, t/6 + py/40)
+```
+
+`layer rate N { … }` makes a slow bottom layer. It is redrawn a band of rows at a time, so every row is redrawn every Nth frame. The layers above it are drawn every frame.
+
+```psi
+name "Slow clouds"
+loop 4
+layer rate 4 {
+  gray(noise(x*6, y*2, t))
+}
+layer {
+  rgb(1, 0.5, 0, abs(x - frac(t/4)) < 0.01)
+}
+```
+
+## Drawing
+
+A `draw { … }` block runs once a frame, before any pixel. It can set names, repeat with `for k < N { … }` (two deep at most), choose with `if c { … } else { … }`, and draw. Because it runs before the pixels, it can't read `x`, `y` or anything that changes from pixel to pixel. Positions in it are pixels from the top left.
+
+Drawing comes in two kinds:
+
+- **Ink.** `line` and `dot` with a brightness put marks into the ink. The colour line reads it as `ink`, from 0 to 1, and gives it colour.
+- **Paint.** `cls`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `spr` and `print`, and `line` and `dot` with a colour, paint in colour directly. Paint lies over every layer, and the last thing painted wins. A paint colour is a `#…` colour, `pal(…)` or `gray(…)`.
+
+```psi
+name "Hello"
+draw {
+  cls(#102)
+  print("HELLO", 4, 4, #ff0)
+  print(minute, 90, 20, #0ff, small, 2)
+}
 ```
 
 ## Functions
 
-A piece you use more than once can be a function. `fn ring(k) = …` is a
-function on one line, and with `{ }` it can have several lines. Call it
-with values, as in `ring(0.5)`.
+`fn` makes a function: a value worked out from the values you give it.
 
-A function whose values are called `x` and `y` draws somewhere else.
-Inside it, `px`, `r` and the rest follow the `x` and `y` it is given, so
-`p(1 - x, y)` draws `p` mirrored.
+```psi
+name "Ring"
+loop 4
+fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) < 1
+gray(ring(64 + sin(t/4)*30, 8) + ring(64, 12))
+```
+
+Inside the function, `cx` and `r` are the values it was called with. A function written with `{ … }` instead of `= …` holds several lines. If those lines draw, you call the function on a line of its own inside `draw`. If they end in a colour, the function can be the colour line.
+
+When a function's values are called `x` and `y`, the built-in positions inside it follow them. So it can be drawn anywhere, stretched or mirrored:
 
 ```psi
 name "Mirror"
@@ -181,108 +181,63 @@ fn p(x, y) {
 p(abs(x - 0.5)*2, y)
 ```
 
-In the editor, a line such as `use Plasma as p` puts the Formula called
-Plasma into yours as the function `p`. It works for one of your Formulas
-or a bundled one that has a single colour line and no layers, drawing,
-tables, sprites or palettes.
+Psi copies a function's lines in wherever it is called, so each call adds its own work. A function can't call itself.
 
-## Drawing
+In the editor, a line `use Plasma as p` puts in one of your own Formulas, or one that comes with the web app, as a function `p(x, y)`. It works with Formulas that have one colour line and no layers, drawing, tables, sprites, palettes or functions of their own.
 
-Some pictures are easier to draw than to work out one pixel at a time,
-such as stars or a wireframe. A `draw { }` block runs once a frame, before
-the pixels. Its `line` and `dot` draw *ink*, from 0 to 1, in pixels
-counted from the top left, and the colour line reads it back as `ink`.
-`for k < 64 { }` runs the lines inside it 64 times, with `k` from 0 to 63.
-Inside `draw` only values that are the same for every pixel can be used,
-such as `t`, the clock, the sliders and `k`.
+## Controls
 
-```psi
-name "Stars"
-loop 4
-draw {
-  for k < 64 {
-    dot(frac(hash(k, 1) - t/4)*128, hash(k, 2)*32, hash(k, 3))
-  }
-}
-gray(ink)
-```
+A `control` line at the top gives the Formula a slider or a row of buttons:
 
-## Painting
+- `control size 0..1 = 0.5 "Size"` is a slider: its name, its range, where it starts and its label;
+- `control mode = calm, wild` is a row of buttons, and `mode` reads 0 for the first, 1 for the next.
 
-`draw { }` can also paint in colours. `cls` paints the whole panel one
-colour, and `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`,
-`print` and `spr` paint a pixel, a box, a circle, a triangle, text and a
-sprite. Paint goes on top of the colour line, and the last thing painted
-is in front, as in an old games console. Paint the back first.
-
-A `sprite` is a little picture written as text, one character a pixel,
-with a `key` that says what each character is. In the editor, **Edit the
-picture** paints it on a grid.
-
-```psi
-name "Hello"
-draw {
-  cls(#102)
-  circfill(110, 16, 9, #f80)
-  print("HELLO", 4, 4, #ff0)
-}
-```
-
-This one has no colour line. Then the paint goes straight onto what is
-under the Formula, a GIF or black, and here `cls` covers it first.
+A Formula has three controls at most. They also answer to `a`, `b` and `c`, in the order they are written. `a` read without a `control` line is 0 on the display. The examples on these pages play at the controls' starting values.
 
 ## Over a GIF
 
-A Formula can draw over the GIF that plays instead of covering it. Four
-values say what is under it at the pixel. `ur`, `ug` and `ub` are its red,
-green and blue, and `ul` how bright it is, each from 0 to 1.
-`under(px + 2, py)` is the colour two pixels along, so a Formula can move
-the GIF too.
-
-The GIF lies under the first layer. It shows wherever a colour covers
-less than all of a pixel, and through a first layer with a blend such as
-`multiply`. A colour made from `ul`, `ur`, `ug` or `ub` shows the GIF
-changed. A `look` line says the Formula can be the panel's
-look, drawn over every GIF.
+A Formula can draw over the GIF that is playing. `ur`, `ug` and `ub` read the red, green and blue of the picture under the Formula at this pixel, from 0 to 1, and `ul` reads how bright it is. `under(px + 2, py)` reads another pixel, the nearest one on the panel. When a Formula plays on its own there is no picture under it, and all of these read 0. On these pages, and in the editor until you pick a GIF, they read a sample picture of sky, sun and hills.
 
 ```psi
-name "Pixelate"
+name "Sepia"
 look
-under(floor(px/4)*4 + 2, floor(py/4)*4 + 2)
+mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), 0.8)
 ```
 
-## The world around the panel
+The `look` line says the Formula can be the panel's look, drawn over every GIF. Its card in the web app then offers **Set as the panel’s look**. `look screen 40` would put it on with the screen blend, covering 40 %. A Formula with layers takes `look` or `look over N` only.
 
-A few values come from the display itself, the same for every pixel.
-`daylight` is how light it is outside, from 0 at night to 1 by day,
-`night` is 1 while night mode dims the panel, and `replay.game` changes
-when RePlayOS starts a game. The [reference](../psi-spec.md) lists them
-all. In the editor's preview each reads a default, and **Try it out**
-under the preview changes them.
+The display won't use a look that hides the GIF completely. Over a GIF, a look doesn't follow its own `fps` line, and the limit on how heavy it can be is stricter than for a Formula playing alone.
+
+## The world around it
+
+A Formula can read a few things the display knows:
+
+- `daylight` is 0 at night and 1 by day. It needs the display's location in Settings, and reads 1 without it.
+- `night` is 1 while night mode has the panel dimmed.
+- `bright` is the panel's brightness.
+- `replay.playing` and `replay.game` follow RePlayOS.
 
 ```psi
-name "Sky"
+name "Dusk"
 mix(#081030, #70b0ff, daylight) * (1 - y*0.5)
 ```
 
-## Keeping it fast
+## What costs
 
-The display's small processor works out every pixel of every frame,
-usually 50 times a second. The editor rates each Formula **light**,
-**medium** or **heavy** for the panel. In the editor on this site and in
-the demo, **What costs most** shows which lines take the most work.
+The editor rates a Formula under its picture as "light for the panel" (under 5 ms a frame), "medium for the panel" (under 8 ms) or "heavy for the panel". Light Formulas can run at 100 frames a second, medium ones at 50, and a heavy one is slowed down. A Formula that is far too heavy isn't played at all, and one with more than 768 steps doesn't compile.
 
-- Adding, multiplying, the waves, comparisons and `pal` are cheap.
-- `noise`, `len`, `sqrt`, `atan2`, `smoothstep`, `hash` and dividing by a
-  value that changes from pixel to pixel cost the most. One of them is
-  fine, and several add up. `r` is a `len` and `angle` an `atan2`.
-- Anything that doesn't depend on the pixel, such as `sin(t/8)`, is worked
-  out once a frame.
-- Anything that depends only on the column and the time is worked out
-  once a column.
-- Drawing costs by the line, not by the pixel. Painted shapes are the
-  exception, so leave big areas of colour to the colour line.
-- For a rainbow, `pal(rainbow, h)` is cheaper than `hsv`.
+Nearly all the cost is in the work done for every pixel. A step there runs 4,096 times a frame, a step once a row runs 32 times, and a step once a frame runs once. So the biggest saving is to move work out of the pixel. Work out what you can from `t` alone, or from `y` alone, and give it a name. The editor's warning names the costliest steps: "noise, len, sqrt, atan2 and dividing by a changing value".
 
-The [reference](../psi-spec.md) has the limits, such as the 32 KB of text
-a Formula can have.
+`c ? a : b` picks one of two values, but every pixel still works out both. To skip work while something is off, use a `scene`. Its lines are only worked out while its condition is not 0, and its names read 0 while it is off.
+
+```psi
+name "Blink"
+loop 4
+on = frac(t/4) > 0.5
+scene s when on {
+  w = sin(x*9 + t*3)*0.5 + 0.5
+}
+gray(w)
+```
+
+The condition of a `scene` has to be worked out once a frame or once a row, never per pixel.

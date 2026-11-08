@@ -1,130 +1,130 @@
 # Make a Formula, 3: add a shape
 
-On [page 2](psi-2.md) the whole panel moved. This page puts shapes on it,
-one in front of another, then a little picture you paint yourself, and
-ends with a Formula that draws over your GIFs.
+There are two ways to put a shape on the panel. You can describe it by distance, as a rule every pixel checks. You can also draw it, with lines and circles, the way you would on paper. This page does both.
 
-## A ring
+## A shape by distance
+
+`len(dx, dy)` is the distance across `dx` and down `dy`. Measured from a point in pixels, it gives a circle.
 
 ```psi
-name "Ring"
-loop 4
-hsv(angle + t/4, 1, abs(r - 0.35) < 0.05)
+name "Disc"
+gray(len(px - 64, py - 16) < 10)
 ```
 
-`r` is the distance from the middle, as on page 1. `abs(r - 0.35)` is how
-far the pixel is from a circle of size 0.35, so `< 0.05` keeps a thin ring.
+Every pixel works out how far it is from column 64, row 16. The ones closer than 10 pixels are lit. Change the 10 to change the size, and the 64 to move it.
 
-`angle` is where the pixel is round the middle, in turns. It is 0 on the
-right, 0.25 at the bottom, 0.5 or −0.5 on the left and −0.25 at the top.
-A hue goes round again after each whole turn, so used as the hue, `angle`
-puts the whole rainbow round the ring. `+ t/4` turns it once a loop.
-
-## A ring over a sky
+A hard edge is either on or off. `smoothstep` gives a soft one.
 
 ```psi
-name "Ring over a sky"
-loop 4
-layer { mix(#102040, #f84, y) }
-layer { hsv(angle + t/4, 1, 1, abs(r - 0.35) < 0.05) }
+name "Soft disc"
+d = len(px - 64, py - 16)
+#ffa040 * smoothstep(12, 8, d)
 ```
 
-A Formula can be a stack of layers. Each `layer { }` has its own colour,
-and the panel draws them from the first, at the back, to the last, in
-front.
+`smoothstep(12, 8, d)` is 0 when `d` is 12 or more, 1 when it is 8 or less, and eases between the two. `#ffa040` is a colour written as red, green and blue in hex, the same as in web pages, and `#f80` is a short way to write `#ff8800`. A colour times a number is that colour dimmed.
 
-The ring's colour has a fourth number now. It says how much of the pixel
-the colour covers, from 0 to 1. On the ring it is 1, so the ring covers
-the sky. Everywhere else it is 0, and the sky shows through.
-
-## Lines
+## Moving it
 
 ```psi
-name "Rays"
+name "Orbit"
+loop 4
+bx = 64 + 40*sin(t/4)
+d = len(px - bx, py - 16)
+pal(fire, 1 - d/12)
+```
+
+`bx` swings between 24 and 104 and back, once a loop. Notice that `bx` reads only the time, so it is the same for every pixel. Psi works it out once a frame. `d` reads `px` and `py`, so it is worked out for each of the 4,096 pixels. That difference matters when a Formula gets bigger, and [How Psi thinks](psi.md) explains it.
+
+## Drawing instead
+
+A `draw { … }` block works the way a pen does. It runs once a frame, before any pixel is worked out, and puts marks on the panel at positions in pixels, counted from the top left.
+
+```psi
+name "Ball"
 loop 4
 draw {
-  for k < 12 {
-    an = k/12 + t/4
-    line(64, 16, 64 + cos(an)*40, 16 + sin(an)*14, 0.2, 1)
+  circfill(64 + 40*sin(t/4), 16, 8, #f80)
+}
+```
+
+`circfill(x, y, r, colour)` paints a filled circle. Painting is drawn on top of everything else, so this Formula needs no colour line. Under the paint you see whatever is under the Formula: on this page a sample picture of sky, sun and hills, and on the display black, or the GIF it is drawn over. There are also `circ` for a ring, `rect` and `rectfill` for boxes, `trifill` for triangles, `pset` for one pixel, `print` for text and `cls` to fill the whole panel.
+
+Inside `draw`, there is no "this pixel". A line such as `dot(x, 1)` gets an error, because `x` changes from pixel to pixel and `draw` runs before any of them.
+
+```psi-bad
+name "Oops"
+draw {
+  dot(x, 1)
+}
+gray(ink)
+```
+
+## Ink
+
+`line` and `dot` can also draw with a brightness instead of a colour. That puts marks into a picture called the ink, and the colour line reads it as `ink`, from 0 to 1. Where two marks cross, the brighter one wins.
+
+```psi
+name "Sweep"
+loop 4
+draw {
+  line(64, 16, 64 + 40*cos(t/4), 16 + 15*sin(t/4))
+}
+pal(fire, ink)
+```
+
+The line goes from the middle to a point that goes round it. `pal(fire, ink)` then colours the ink. Change `fire` to `ice` and the same line is drawn in blue.
+
+## Many at once
+
+`for k < 64 { … }` repeats its lines 64 times, with `k` counting 0, 1, 2 and on up to 63.
+
+```psi
+name "Snow"
+loop 4
+draw {
+  for k < 64 {
+    dot(hash(k, 1)*128, frac(hash(k, 2) + t/4)*32)
   }
 }
-hsv(x, 0.6, ink)
+gray(ink)
 ```
 
-Some pictures are easier to draw than to work out pixel by pixel. A
-`draw { }` block runs once a frame, before the pixels, and draws lines and
-dots.
+`hash(a, b)` gives a number between 0 and 1 that looks random but is always the same for the same `a` and `b`. Each flake gets its own place across and its own start down. `frac(… + t/4)` makes each one fall the whole height of the panel once a loop and start again at the top. A frame can run 2,048 turns of `for` loops in all.
 
-`line` takes the two ends in pixels, counted from the top left. The panel
-is 128 pixels across and 32 down, so `64, 16` is the middle. The last two
-numbers are how bright the line is at each end, here 0.2 at the middle and
-1 at the tip. `cos` is the same wave as `sin`, a quarter of a turn
-earlier, so `cos(an)*40` and `sin(an)*14` go round an oval together as
-`an` goes round a turn. `for k < 12` runs the lines inside it twelve times, with `k`
-from 0 to 11, so `k/12` spreads the twelve rays round a turn.
+## A small picture
 
-The last line reads what was drawn as `ink`, from 0 where nothing was to 1.
-Here it is the brightness of a colour that changes across the panel.
-
-## A little picture
+A sprite is a little picture drawn in characters. The `key` line says what each character stands for: here `.` is nothing and `R` is a red.
 
 ```psi
-name "Drive"
-loop 4
-sprite car {
-  key . 0, R #d22, W #fff, K #222
-  ..RRRR..
-  .RWWWWR.
-  RRRRRRRR
-  .K....K.
+name "Heart"
+sprite heart {
+  key . 0, R #e24
+  .R.R.
+  RRRRR
+  .RRR.
+  ..R..
 }
 draw {
-  circfill(100, 8, 6, #fc4)
-  rectfill(0, 27, 127, 31, #333)
-  spr(car, frac(t/4)*136 - 8, 23)
+  spr(heart, 61, 14)
 }
-mix(#124, #f84, y)
 ```
 
-A `sprite` is a picture written as text, one character a pixel. Its `key`
-line says what each character is. `.` is `0`, which shows nothing, and
-`R #d22` makes `R` red.
+`spr(heart, 61, 14)` paints it with its top left corner at column 61, row 14. Add a fourth value of 1 to flip it left to right, 2 to flip it upside down, or 3 for both.
 
-In the editor, put the cursor in the sprite and press **Edit the
-picture**. Pick a character from the key, then click or drag on the grid
-to paint with it. **+ Colour** adds a colour to the key, and **+ Column**
-and **+ Row** make the picture bigger.
+## Layers
 
-Inside `draw { }`, `circfill` paints a filled circle for the sun,
-`rectfill` a filled box for the road, and `spr` the car, with its top left
-corner where you say. Paint goes on top of the last line's colour, here
-the sky. What is painted last is in front, so paint the things at the back
-first.
-
-## Over a GIF
+A Formula can have several colour lines, each in its own `layer { … }`. Layers stack, the first at the bottom.
 
 ```psi
-name "Warm"
-look
-rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65)
+name "Moon over sea"
+layer {
+  pal(ocean, y)
+}
+layer {
+  rgb(1, 0.9, 0.6, r < 0.3)
+}
 ```
 
-`ul` is how bright the GIF under the Formula is at this pixel, from 0 to
-1. A Formula that reads it draws over a GIF instead of covering it. This
-one turns the GIF into warm browns, like an old photo.
+The first layer fills the panel with the `ocean` palette, another name for `ice`: black at the top, through blue, to white at the bottom. The second has a fourth value, how much of the pixel it covers, from 0 to 1. `r` is the distance from the middle of the panel, so `r < 0.3` is 1 inside a disc and 0 outside it. Where it is 0, the sea below shows through.
 
-In the editor it is drawn over a sample picture. Press **Pick a GIF…** to
-try it over one of your GIFs.
-
-The `look` line says the Formula can be the panel's look. In your web app,
-**Set as the panel's look** then keeps it over every GIF the panel plays.
-
-## Where next
-
-- [How Psi thinks](psi.md) explains the ideas behind everything here, a
-  few lines each.
-- [The editor](editor.md) has every button and key.
-- The [recipes](../psi-spec.md#cookbook) are complete Formulas to open and
-  change, and the [language reference](../psi-spec.md) lists every name.
-- The [formula gallery](https://opendmd.dev/formulas/) has many more. Open
-  any one to see how it is made.
+That's the tour. The [gallery](/formulas/) has finished Formulas to open in the editor and change. [How Psi thinks](psi.md) takes the ideas behind it one at a time. When you want every name and function, [the language reference](../psi-spec.md) lists them all.

@@ -81,7 +81,9 @@ On a computer, a tool such as [Rufus](https://rufus.ie) (Windows) can
 format a card as FAT32 too, as dmdos.net suggests for its pack.
 
 To move a DMDoS collection to a new card, copy the `gifs` folder and the
-`filelist` files from the old card to the new one with a computer.
+`filelist` files from the old card to the new one with a computer. If
+OpenDMD has used the old card, copy its `sets` and `formulas` folders too,
+for your playlists and Formulas.
 
 OpenDMD gets each GIF ready so it starts a little faster, while the panel
 is dark at night or playback is paused. The whole DMDoS pack is ready

@@ -115,7 +115,7 @@ async function start() {
       const buf = o.gif.slice().buffer; // (a copy: the one sent is transferred, and Download keeps its own)
       return { data: { type: IMPORT, gif: buf, name: o.name, title: o.title, platform: o.platform, author: o.author, logo: o.logo }, transfer: [buf] };
     });
-    if (!handOff(a, 'import', READY, gif)) say('Your browser didn’t open the panel’s page: allow pop-ups for opendmd.dev, then press Send to my panel again, or download the GIF.');
+    if (!handOff(a, 'import', READY, gif)) say('Your browser didn’t open the display’s web app: allow pop-ups for opendmd.dev, then press Send to my panel again, or download the GIF.');
   }
   const { ask } = addressForm('c', go, 'GIF');
   send.onclick = () => { if (addr()) go(addr()); else ask(); };

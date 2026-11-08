@@ -70,8 +70,8 @@ dimmed.
 
 ## Typing
 
-- After two letters, a list shows the names that fit, the Formula's own
-  first. ↑ and ↓ choose, Tab or Enter puts one in, and Esc closes the
+- After two letters, a list shows the names that fit. ↑ and ↓ choose,
+  Tab or Enter puts one in, and Esc closes the
   list. On a phone the names are buttons under the code.
 - Inside a function's brackets, a line says what it takes, with the value
   you are typing in bold.
