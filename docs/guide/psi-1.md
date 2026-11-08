@@ -3,7 +3,8 @@
 A Formula is a short piece of text that the panel turns into a picture,
 pixel by pixel, 50 times a second. You don't need to have programmed
 before. On this page you write one line, change it a few times, and end
-with a Formula of your own on the panel.
+with your own Formula on the panel. Then [make it move](psi-2.md) and
+[add a shape](psi-3.md).
 
 Each example plays as you read it. Press **Open in editor** under one to
 change it yourself. In your web app, open **Formulas** and press **+ New
@@ -25,6 +26,7 @@ line. Click the swatch to open a colour picker. The colour you pick takes
 the old one's place.
 
 The last line of a Formula is a colour, and it is what the panel shows.
+A plain number there is a gray, from 0 for black to 1 for white.
 
 ## A fade
 
@@ -112,10 +114,9 @@ dot = len(cx - 1, cy) < size
 mix(#102040, #f80, dot)
 ```
 
-You can give something a name on a line of its own and use it further
+You can give something a name on a line by itself and use it further
 down. `dot` is 1 inside the disc and 0 outside, so `mix` picks orange
-inside and dark blue outside. Names make a Formula easier to read and to
-change.
+inside and dark blue outside.
 
 ## Make it yours
 

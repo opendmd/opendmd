@@ -115,19 +115,21 @@ panel's look**. Turned on, the look has a **Blend** and an **Amount**.
 A Formula that draws over a GIF starts at Over, 100 %. One that covers
 the whole panel, like Plasma, starts at Screen, 40 %, or Over, 30 % when
 that is lighter for the panel. The preview shows the choice as you move
-it. A Formula with layers of its own goes Over only.
+it. A Formula with layers goes Over only, because its layers keep their
+own blends.
 
 Settings › Look lists your Formulas and the bundled ones that can be a
 look, and **Change…** opens the chosen one's settings. Over at 100 % of a
 Formula that covers the whole panel would hide the GIF, and the sheet
 says so. A Formula that would take more than about 12 ms a frame over
-every GIF is listed as too heavy. The GIFs play at their own speed either
-way.
+every GIF is listed as too heavy. The sheet also says how fast the look
+moves, about 50 times a second, or 25 for a heavy one that takes more than
+8 ms a frame. The GIFs play at their own speed either way.
 
-A look keeps working after the Formula is edited or deleted in the web
-app, because the display is sent the whole Formula. When the display is
-short of memory, during several uploads at once for example, it shows the
-GIFs without the look for a while.
+The display keeps the whole Formula, so editing or deleting it in the web
+app does not change the look. When the display is short of memory, such as
+during several uploads at once, it shows the GIFs without the look for a
+while.
 
 ## Open on my panel
 

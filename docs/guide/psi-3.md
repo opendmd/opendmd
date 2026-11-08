@@ -15,9 +15,10 @@ hsv(angle + t/4, 1, abs(r - 0.35) < 0.05)
 `r` is the distance from the middle, as on page 1. `abs(r - 0.35)` is how
 far the pixel is from a circle of size 0.35, so `< 0.05` keeps a thin ring.
 
-`angle` is where the pixel is round the middle, in turns. It starts at 0
-on the right and goes clockwise to 1. Used as the hue, it puts the whole
-rainbow round the ring, and `+ t/4` turns it once a loop.
+`angle` is where the pixel is round the middle, in turns. It is 0 on the
+right, 0.25 at the bottom, 0.5 or −0.5 on the left and −0.25 at the top.
+A hue goes round again after each whole turn, so used as the hue, `angle`
+puts the whole rainbow round the ring. `+ t/4` turns it once a loop.
 
 ## A ring over a sky
 
@@ -57,7 +58,9 @@ dots.
 `line` takes the two ends in pixels, counted from the top left. The panel
 is 128 pixels across and 32 down, so `64, 16` is the middle. The last two
 numbers are how bright the line is at each end, here 0.2 at the middle and
-1 at the tip. `for k < 12` runs the lines inside it twelve times, with `k`
+1 at the tip. `cos` is the same wave as `sin`, a quarter of a turn
+earlier, so `cos(an)*40` and `sin(an)*14` go round an oval together as
+`an` goes round a turn. `for k < 12` runs the lines inside it twelve times, with `k`
 from 0 to 11, so `k/12` spreads the twelve rays round a turn.
 
 The last line reads what was drawn as `ink`, from 0 where nothing was to 1.
