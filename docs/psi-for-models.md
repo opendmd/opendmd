@@ -21,7 +21,7 @@ and `panel: ~N ms a frame: light|medium|heavy`, and writes a PNG contact
 sheet of frames across one loop (over a sample picture — sky, sun, hills —
 when the formula draws over what is under it). On a compile error it prints
 `error[E###]: line L, column C: <sentence>` (the code links the language
-reference's error index, `/dev/psi/#E###`), the line and carets, and fails:
+reference's error index, `/dev/psi/errors/#E###`), the line and carets, and fails:
 the tool itself exits 1 (2 for a missing file or a bad option), and
 `make psi-check` then exits 2, as make does for any failed command.
 Look at the sheet: the numbers say it runs, only the picture says it is

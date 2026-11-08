@@ -17,9 +17,12 @@ const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.crea
 
 // --- the sections -------------------------------------------------------------
 
+// The address's #fragment (as it is, if it isn't valid %-encoding).
+const frag = () => { const h = location.hash.slice(1); try { return decodeURIComponent(h); } catch { return h; } };
+
 // An error code's address on a page without the entries: its entry.
 const fwd = () => {
-  const id = decodeURIComponent(location.hash.slice(1));
+  const id = frag();
   if (/^E\d{3}$/.test(id) && !main.querySelector('h3[id^=E]')) location.replace(SITE + 'dev/psi/errors/#' + id);
 };
 fwd();
@@ -170,7 +173,7 @@ function draw(x, el_ms, d) {
 const what = [rows.length && 'built-ins', errs.length && 'error codes'].filter(Boolean);
 if (what.length) tools();
 // A link to a row (#n-sin): its id is new.
-if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+if (location.hash.length > 1) document.getElementById(frag())?.scrollIntoView();
 main.dataset.psiRef = 'ready';
 
 function tools() {
@@ -235,7 +238,7 @@ function tools() {
   }
   // A link to an entry (#E203) or a row (#n-sin) shows it, whatever was filtered.
   addEventListener('hashchange', () => {
-    const t = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    const t = document.getElementById(frag());
     if (t && t.closest('[hidden]')) { q.value = ''; cheat.setAttribute('aria-pressed', 'false'); apply(); t.scrollIntoView(); }
   });
 }

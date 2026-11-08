@@ -378,7 +378,9 @@ def headers(base: str, site: Path) -> None:
         "/create/create.js": ("media-src 'self' blob:", None, None, "no-cache"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
         "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
+        "/dev/psi/errors/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
         "/psiled.js": (None, None, None, "no-cache"),
+        "/psiref.js": (None, None, None, "no-cache"),
         "/formulas/ftiles.js": (None, None, None, "no-cache"),
     }
     bad = []
