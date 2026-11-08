@@ -6,7 +6,8 @@
 //! ```psi block of the cookbook compiles and lights the panel, and a block
 //! marked `<!-- psi-gallery: <stem> -->` is that gallery Formula, word for
 //! word (`PSI_BLESS=1 cargo test --features docs --test reference`
-//! rewrites those blocks).
+//! rewrites those blocks); and every ```psi block of the guide's Psi pages
+//! (Make a Formula, How Psi thinks) compiles, lights the panel and is named.
 #![cfg(not(target_arch = "wasm32"))]
 
 use opendmd_psi::builtins::cheat;
@@ -280,4 +281,54 @@ fn every_cookbook_recipe_compiles_and_lights_the_panel() {
         text = format!("{}{}", &text[..at], text[at..].replacen(&have, &want, 1));
     }
     std::fs::write(&path, text).unwrap();
+}
+
+/// The guide's pages that teach Psi: every ```psi block on them is a whole
+/// Formula a reader opens in the editor.
+const GUIDE: [&str; 5] = [
+    "docs/guide/psi-1.md",
+    "docs/guide/psi-2.md",
+    "docs/guide/psi-3.md",
+    "docs/guide/psi.md",
+    "docs/guide/editor.md",
+];
+
+/// Every ```psi block of a page: (the line it starts on, its text).
+fn blocks(text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < lines.len() {
+        if lines[k] == "```psi" {
+            let start = k + 1;
+            let mut end = start;
+            while lines[end] != "```" {
+                end += 1;
+            }
+            out.push((start + 1, lines[start..end].join("\n")));
+            k = end;
+        }
+        k += 1;
+    }
+    out
+}
+
+#[test]
+fn every_guide_example_compiles_and_lights_the_panel() {
+    let mut n = 0;
+    for page in GUIDE {
+        let text = std::fs::read_to_string(root(page)).unwrap();
+        for (line, src) in blocks(&text) {
+            n += 1;
+            let p = compile(&src)
+                .unwrap_or_else(|e| panic!("{page} line {line}: the example fails: {}", e.msg));
+            let lit = lit(&p);
+            assert!(lit >= 24, "{page} line {line}: the example lights only {lit} pixels");
+            assert!(
+                src.lines().any(|l| l.starts_with("name \"")),
+                "{page} line {line}: give the example a `name` line"
+            );
+        }
+    }
+    assert!(n >= 30, "the guide's Psi pages have {n} examples");
 }

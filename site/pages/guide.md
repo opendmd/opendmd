@@ -21,8 +21,14 @@ your browser, with no display needed.
   Formulas and Settings, view by view.
 - **[Create Art](../../docs/guide/create-art.md):** Make a GIF for the panel
   from game art, an old GeoCities GIF or your own picture.
-- **[Formulas](../../docs/guide/formulas.md):** Play them, change them, write
-  your own and share them.
+- **[Formulas](../../docs/guide/formulas.md):** Play them, put them in
+  playlists and share them.
+- **[Make a Formula](../../docs/guide/psi-1.md):** Write your first one, a
+  step at a time, over three short pages.
+- **[How Psi thinks](../../docs/guide/psi.md):** The ideas behind Formulas,
+  each with an example.
+- **[The editor](../../docs/guide/editor.md):** Every button and key in the
+  Formula editor.
 - **[The SD card](../../docs/guide/card.md):** Where GIFs go, and how their
   names become details like the game and the system.
 

@@ -4,7 +4,7 @@
 of arithmetic, worked out for every pixel of the 128 × 32 panel, every
 frame, ending in a colour. This page is the reference: what the language
 is, every name it knows, its limits and its error codes. To learn it, start
-with [the guide's Formulas page](guide/formulas.md); to try it, open the
+with [Make a Formula](guide/psi-1.md) in the guide; to try it, open the
 [demo](/demo/)'s Formulas.
 
 The tables of names, the limits and the error codes on this page are
