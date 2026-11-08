@@ -293,7 +293,7 @@ function toGif(f) {
 }
 
 // --- The tab: the gallery, the details, the editor
-const STARTER = `-- x: 0-1 across, y: 0-1 up
+const STARTER = `-- x: 0-1 across, y: 0-1 down
 -- t: seconds. Drag numbers!
 loop 8
 v = sin(x*2 - t/8)
