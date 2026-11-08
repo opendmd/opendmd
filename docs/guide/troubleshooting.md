@@ -5,8 +5,8 @@
 - Use Chrome, Edge, Opera or Firefox 151+ on a computer, not Safari or a
   phone.
 - Try a different USB cable: many only carry power.
-- On Windows or older macOS, install the driver for the board's USB chip,
-  then plug the board in again:
+- On Windows, or a Mac older than macOS 10.15, install the driver for the
+  board's USB chip, then plug the board in again:
   [CH340/CH341](http://www.wch-ic.com/downloads/CH341SER_ZIP.html),
   [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
   or [FTDI](https://ftdichip.com/drivers/). The chip's name is printed on
