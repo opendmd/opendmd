@@ -37,7 +37,7 @@ curl -s $DMD/api/status
   nothing was done. Retry after the delay; do not fire requests in
   parallel.
 - **Slow commands.** A playlist change waits up to 60 s for the index
-  rebuild, other commands 10 s, then `504`; the display not running, `503`.
+  rebuild, other commands 10 s, then `504`; playback not running, `503`.
 - **Paths** are card-absolute (`/gifs/Consoles/SNES_Super_Metroid_01.gif`),
   percent-encoded in URLs; one that leaves the card is a `400`.
 

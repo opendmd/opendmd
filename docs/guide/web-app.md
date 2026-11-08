@@ -172,8 +172,8 @@ how many there are, or the ones you picked. **Choose…** lists them with how
 many GIFs each has, with the rare ones behind **+N more** and a box to find
 one. Tap the ones you want and press **Only these**, or **All platforms**.
 
-**Each GIF stays** sets the shortest and longest time a GIF is on, 3 to 30
-seconds to start with, and **Shuffle** mixes the order. **A Formula you
+**Each GIF stays** sets the shortest and longest time a GIF is on (3 to
+30 seconds unless you change them), and **Shuffle** mixes the order. **A Formula you
 show on the panel stays** for one turn, 1 or 5 minutes, or until you change
 it.
 
@@ -233,8 +233,8 @@ Safe again if GIFs look damaged.
 **Ready to play** shows how many GIFs have been prepared for their
 smoothest playback. The display does this by itself while it is dark at
 night or paused; **Prepare remaining files** does the rest now, from your
-browser. **Thumbnails in the Library and playlists** switches the small
-pictures off. Your browser keeps each one, so the display sends it only
+browser. **Thumbnails in the Library and playlists** turns the small
+pictures on or off. Your browser keeps each one, so the display sends it only
 once.
 
 **Network** changes the WiFi network or the **Display name** (`opendmd` in
