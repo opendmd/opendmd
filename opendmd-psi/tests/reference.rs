@@ -8,7 +8,9 @@
 //! word (`PSI_BLESS=1 cargo test --features docs --test reference`
 //! rewrites those blocks). The site draws every ```psi block of its Psi
 //! pages (tools/site.py PSI_PAGES, psiref.js): each one compiles and
-//! lights something, and each ```psi-bad block (shown, never drawn) fails.
+//! lights something, and each ```psi-bad block (shown, never drawn) fails; every
+//! ```psi block of the guide's Psi pages (Make a Formula, How Psi thinks)
+//! is a whole, named Formula that lights the panel well.
 #![cfg(not(target_arch = "wasm32"))]
 
 use opendmd_psi::builtins::cheat;
@@ -333,4 +335,55 @@ fn every_block_the_psi_pages_draw_compiles_and_lights_and_every_bad_one_fails() 
             assert!(compile(&src).is_err(), "{doc} line {line}: a ```psi-bad block compiles (make it ```psi, and it is drawn)");
         }
     }
+}
+
+/// The guide's pages that teach Psi: every ```psi block on them is a whole
+/// Formula a reader opens in the editor.
+const GUIDE: [&str; 5] = [
+    "docs/guide/psi-1.md",
+    "docs/guide/psi-2.md",
+    "docs/guide/psi-3.md",
+    "docs/guide/psi.md",
+    "docs/guide/editor.md",
+];
+
+/// Every ```psi block of a page: (the line it starts on, its text).
+fn blocks(page: &str, text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < lines.len() {
+        if lines[k] == "```psi" {
+            let start = k + 1;
+            let end = start
+                + lines[start..]
+                    .iter()
+                    .position(|l| *l == "```")
+                    .unwrap_or_else(|| panic!("{page} line {}: a ```psi block with no end", start));
+            out.push((start + 1, lines[start..end].join("\n")));
+            k = end;
+        }
+        k += 1;
+    }
+    out
+}
+
+#[test]
+fn every_guide_example_compiles_and_lights_the_panel() {
+    let mut n = 0;
+    for page in GUIDE {
+        let text = std::fs::read_to_string(root(page)).unwrap();
+        for (line, src) in blocks(page, &text) {
+            n += 1;
+            let p = compile(&src)
+                .unwrap_or_else(|e| panic!("{page} line {line}: the example fails: {}", e.msg));
+            let lit = lit(&p);
+            assert!(lit >= 24, "{page} line {line}: the example lights only {lit} pixels");
+            assert!(
+                src.lines().any(|l| l.starts_with("name \"")),
+                "{page} line {line}: give the example a `name` line"
+            );
+        }
+    }
+    assert!(n >= 25, "the guide's Psi pages have only {n} examples");
 }
