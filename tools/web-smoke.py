@@ -5202,7 +5202,8 @@ def import_open(opener: Page, base: str, errors: list[str], gif: bytes | None, f
         opener.evaluate(IMPORT_SEND, [base + "/#import", base64.b64encode(gif).decode() if gif else "", fields, size])
     app = info.value
     app.on("pageerror", lambda e: errors.append(f"[import] pageerror: {e}"))
-    app.on("dialog", lambda d: d.dismiss())  # (the playlist offer: not this time)
+    app.offers = []  # the playlist offers dismissed, so a check can wait for one
+    app.on("dialog", lambda d: (app.offers.append(d.message), d.dismiss()))  # (the playlist offer: not this time)
     return app
 
 
@@ -5248,6 +5249,12 @@ def import_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     while time.time() < deadline and not (f.exists() and copy.exists()):
         time.sleep(0.2)
     check(f.exists() and f.read_bytes() == gif and copy.exists(), f"import: Add -> {path} on the card, byte for byte, and its prepared copy")
+    # The playlist offer comes after the Library shows the GIF: let it be
+    # asked (and dismissed) first, or the reload lands on an open dialog.
+    deadline = time.time() + 20
+    while time.time() < deadline and not app.offers:
+        app.wait_for_timeout(100)
+    check(bool(app.offers), f"import: the playlist offer was asked ({app.offers[:1]})")
     app.reload()
     app.wait_for_selector("#view-library.on", timeout=20000)
     check(app.locator("#dl").count() == 0, "import: a reload doesn't ask again")
