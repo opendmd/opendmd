@@ -350,7 +350,7 @@ ART_INDEX_FORMATS = {
 STATS_PAGE = "stats.html"
 STATS_NUMBERS = ('<!-- stats:numbers --><p class="us-empty">The numbers can\'t be read just now. '
                  'Try again in a few minutes.</p><!-- stats:numbers-end -->')
-STATS = """# Is anyone using OpenDMD?
+STATS = """# Usage
 
 A rough count of installs and update checks, kept so the project can tell
 whether anyone is using it. It counts requests, not people.
@@ -359,14 +359,15 @@ whether anyone is using it. It counts requests, not people.
 
 ## What's counted
 
-- **An install**: each time the [installer](/install/) downloads the firmware
-  for a board. A reinstall counts again, and so does trying again after a
+- An install is counted each time the [installer](/install/) downloads the
+  firmware for a board. A reinstall counts again, and so does trying again after a
   failed install. A reinstall from the same browser may not reach the site at
   all (the browser already has the file), and then it isn't counted.
-- **An update check**: each time a panel's web app checks for updates
-  (Settings › Check for updates), with the panel's firmware version and board,
-  whether it gets beta updates or not. Panels themselves never contact this site, so a panel that never checks for
-  updates isn't seen.
+- An update check is counted each time a display's web app checks for
+  updates (Settings › Device › Firmware › Check for updates), with the
+  display's firmware version and board, and whether it gets beta updates.
+  Displays themselves never contact this site, so a display that never
+  checks for updates isn't seen.
 
 ## What isn't
 
@@ -392,8 +393,8 @@ with each licence's full text:
   [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0), served from this site
   with what it bundles (esptool-js, Lit, Material Web, pako).
 
-The player carries the firmware's and the web app's notices too: in the web app, **Settings ›
-Device › About › Open-source licences**.
+The display carries the firmware's and the web app's notices too, under **Settings › Device ›
+About › Open-source licences** in the web app.
 
 **Find art for a game** searches a list of game names taken from the file names of the
 [libretro-thumbnails](https://github.com/libretro-thumbnails) collections (published here

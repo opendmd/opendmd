@@ -2,7 +2,7 @@
 
 OpenDMD is Rust throughout: one core shared by the ESP32 firmware, the
 desktop simulator and the WebAssembly web app. This page is the starting
-point for building it yourself. Everyday users don't need any of it: the
+point for building it yourself. Everyday users don't need any of it; the
 [installer](guide/install.md) puts a release on the board from the browser.
 
 ## Building from source
@@ -32,12 +32,11 @@ make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 ```
 
-Settings for your own machine go in a `local.mk` beside the Makefile
-(gitignored), which the Makefile reads first: for example
-`CARD_ROOT = /path/to/card`, the card copy that `make sim`, `make web-mock`
-and `make web-smoke` use (default: `card/` in the repo), or
-`export SCRATCH = /path/outside/the/tree`, where the updater, emulator and
-release builds go instead of `target/`.
+Put settings for your own machine in a `local.mk` beside the Makefile. It
+is gitignored, and the Makefile reads it first. `CARD_ROOT = /path/to/card`
+is the card that `make sim`, `make web-mock` and `make web-smoke` use
+(`card/` in the repo by default); `export SCRATCH = /path/outside/the/tree`
+moves the updater, emulator and release builds out of `target/`.
 
 ## Releases and updates
 
@@ -52,17 +51,17 @@ make notices                 # rewrite the third-party licence notices from the 
 ```
 
 The third-party notices in `licenses/` are generated from what each build
-links: the firmware's from the release ELFs (every C and C++ source file
-compiled in, mapped to its package by `licenses/components.toml`) and
-`cargo-about` over its crates, the web app's from `cargo-about` over the
-WebAssembly crates. `make fw-release` and CI fail when they are out of date
+links. The firmware's come from the release ELFs, with every C and C++
+source file compiled in mapped to its package by
+`licenses/components.toml`, and from `cargo-about` over its crates. The
+web app's come from `cargo-about` over the WebAssembly crates. `make fw-release` and CI fail when they are out of date
 or a dependency's licence is not one the project accepts.
 
-A release build has no WiFi credentials in it: the installer gives it
-your WiFi over USB (Improv Serial), or the firmware starts its
+A release build has no WiFi credentials in it. The installer gives it
+your WiFi over USB with Improv Serial, or the firmware starts its
 `OpenDMD-Setup` network instead. Firmware updates over WiFi are signed
-bundles: the firmware checks the signature before installing, and a small
-updater program copies the new firmware into place from the SD card.
+bundles; the firmware checks the signature before installing, and a small
+updater program puts the new firmware in place from the SD card.
 
 The repository's deploying notes (`docs/deploying.md`),
 firmware notes (`docs/firmware.md`) and OTA notes (`docs/ota.md`) cover the flash
@@ -77,7 +76,7 @@ layout, recovery and the update flow in detail.
 | `opendmd-sim` | The desktop simulator |
 | `opendmd-web` | The web app: wasm module plus hand-written HTML, CSS and JS in `www/` |
 | `opendmd-art-web` | Create Art's image processing and GIF writer, loaded on demand |
-| `opendmd-pack` | Prepares a card's GIF copies offline |
+| `opendmd-pack` | Prepares a card's GIFs for playback, offline |
 | `opendmd-psi` | Psi, the Formula language: its compiler and VM (`no_std`), shared by the firmware, the simulator and the browser |
 | `opendmd-psi-cli` | `psi`, Formulas from the command line: `psi check` and `psi fmt` (`make psi` installs it) |
 | `firmware` | The ESP32 firmware |
@@ -95,10 +94,10 @@ board, `make sim ARGS="--play '@boot?len=full'"`.
 ## Reference
 
 - [HTTP API](api.md): every route the display answers, with `curl`
-  examples. Anything the web app does, a script can do too. The page
-  follows the latest docs; it links a copy for each release, as that
-  release described it, and the web app's Settings › Device › About opens
-  the one for the display's firmware version.
+  examples. The web app uses nothing else, so a script can do what it
+  does. The page follows the latest docs and links the page for each
+  release, as that release described it; the web app's Settings › Device ›
+  About opens the one for the display's firmware version.
 - [Psi language reference](psi-spec.md): the Formula language, every
   name it knows, its limits and its error codes; the `psi` command.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,

@@ -1,9 +1,8 @@
 # The guide
 
-How to set up OpenDMD and get the most from your display. New here? Start
-with **What you need** and **Install**; the rest is here when you want it.
-Want to look around first? <a href="/demo/">The demo</a> runs the web app in
-your browser, no display needed.
+How to set up OpenDMD and get the most from your display. Start with What
+you need, then Install. <a href="/demo/">The demo</a> runs the web app in
+your browser, with no display needed.
 
 ## Getting started
 
