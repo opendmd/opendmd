@@ -1,7 +1,7 @@
 // Formulas drawn live in the site's LED panels: a 128x32 canvas inside a
 // `.led` (site.css's dot mask), each frame drawn as the panel draws it by
 // the demo's Psi (pkg-psi). Shared by the Psi reference's examples
-// (dev/psi/psiref.js), the home page's panels (home.js, and its hero's
+// (psiref.js, the Psi pages), the home page's panels (home.js, and its hero's
 // show, hero.js) and the gallery's
 // tiles on hover (formulas/ftiles.js); tools/site.py copies it to the
 // site's root. The wasm loads only when `psi()` is first called, at this

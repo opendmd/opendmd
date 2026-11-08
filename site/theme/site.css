@@ -211,7 +211,13 @@ ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
 
 p.vers{font-size:14px;color:var(--mut)}
 
-/* The Psi language reference (dev/psi/, psiref.js): search, the cheat sheet, live examples */
+/* "On this page": a long page's sections, folded under its heading (tools/site.py TOC_PAGES) */
+.onpage{margin:0 0 20px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.onpage summary{cursor:pointer;padding:8px 14px;font-size:15px;color:var(--mut)}
+.onpage ul{margin:0;padding:0 14px 10px 32px;columns:2 220px;column-gap:24px;font-size:15px}
+.onpage li{break-inside:avoid;margin:2px 0}
+
+/* The Psi pages (tools/site.py PSI_PAGES, psiref.js): search, the cheat sheet, live examples */
 main [hidden]{display:none!important}
 .psi-tools{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px;padding:10px 0;background:var(--bg)}
 .psi-tools input{flex:1 1 220px;min-width:0;font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg2);color:var(--fg)}
@@ -226,12 +232,13 @@ table.psi-ex-t td:first-child code{overflow-wrap:normal}
 .psi-open{font-size:13px}
 .psi-hl .n{color:var(--ink)}.psi-hl .c{color:var(--mut)}.psi-hl .w{color:var(--pink)}.psi-hl .s{color:var(--green)}
 .psi-hl .k{color:var(--cyan)}.psi-hl .p{color:var(--violet)}
-h4[id^=E]{scroll-margin-top:64px}
-h4[id^=E]:target{color:var(--ink)}
+h3[id^=E],tr[id^=n-]{scroll-margin-top:64px}
+h3[id^=E]:target{color:var(--ink)}
+tr[id^=n-]:target{background:var(--glow)}
 .badge{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--pink);border-radius:6px;font-size:12px;font-weight:400;color:var(--pink);vertical-align:middle}
-main.cheat .psi-err>:not(h4){display:none}
-main.cheat .psi-err h4{margin:0;padding:2px 0;font-size:14px;font-weight:400;cursor:pointer}
-main.cheat .psi-err h4:hover{color:var(--ink)}
+main.cheat .psi-err>:not(h3){display:none}
+main.cheat .psi-err h3{margin:0;padding:2px 0;font-size:14px;font-weight:400;cursor:pointer}
+main.cheat .psi-err h3:hover{color:var(--ink)}
 main.cheat td:nth-child(3),main.cheat th:nth-child(3),main.cheat .psi-live{display:none}
 main.cheat table{font-size:14px;margin:8px 0}
 main.cheat td{padding:3px 8px}
@@ -257,6 +264,8 @@ main.cheat td{padding:3px 8px}
   .subnav summary{cursor:pointer;padding:10px 14px;font-size:15px;color:var(--mut)}
   .subnav summary b{color:var(--fg)}
   .subnav nav{padding:0 8px 10px}
+  /* The reference's grammar and psi transcript wrap rather than scroll sideways */
+  main:has(#what-each-does) pre code.language-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
   main{padding:24px 0 56px}
   h1{font-size:24px}
   h2{font-size:24px;margin-top:40px}

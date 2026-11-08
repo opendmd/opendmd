@@ -288,6 +288,7 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path, adde
             f'panel\'s editor, where you can change it, save it, play it, put it in a playlist or lay it over your GIFs as the look.</p>\n'
             f'<p><strong>Open</strong> plays it here in the editor, with its sliders and its code, ready to change. To share one '
             f'of yours, press <strong>Submit to the gallery</strong> on its page, or read {how}.</p>\n'
+            f'<p>New to Formulas? <a href="../guide/psi-1.html">Make one in ten minutes</a>.</p>\n'
             + CONTROLS
             + f'<section class="fsec" data-part="community">\n<h2 id="community">From the community</h2>\n'
             + listed("community", f'<ul class="ftiles">{community}</ul>\n' if community else EMPTY)

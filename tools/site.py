@@ -30,9 +30,11 @@
 - /dev/        the developer pages: an overview and a few clean references
                (the detailed notes in docs/ stay in the repo), among them
                /dev/psi/, the Psi language reference (docs/psi-spec.md:
-               its tables and error codes generated from the compiler's;
-               live examples, search and a cheat sheet by
-               opendmd-web/share/ref/psiref.js, on the demo's Psi)
+               its tables generated from the compiler's), and
+               /dev/psi/errors/, its error codes (docs/psi-errors.md,
+               generated); live examples, search and a cheat sheet by
+               /psiref.js (opendmd-web/share/ref/, on the demo's Psi), which
+               the guide's Psi pages load too (PSI_PAGES)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
@@ -95,7 +97,7 @@
                caching, CSP), MOVED as 301s, what not to upload
 
 Every page has the same chrome, from site/theme/: page.html around it,
-header.html (the wordmark and the top bar: Guide, Formulas, Create Art, Demo, For
+header.html (the wordmark and the top bar: Guide, Gallery, Create Art, Demo, For
 developers and Install; a Menu button on a phone), footer.html, and
 site.css (light and dark follow the system). A page in a SECTION (the guide,
 the developers' pages) also gets that section's menu: down the side on a
@@ -160,6 +162,7 @@ PAGES = {
     "docs/developers.md": "dev/index.html",
     "docs/api.md": "dev/api.html",
     "docs/psi-spec.md": "dev/psi/index.html",
+    "docs/psi-errors.md": "dev/psi/errors/index.html",
     "docs/simulator.md": "dev/simulator.html",
     "hardware/PINOUT.md": "dev/pinout.html",
 }
@@ -195,7 +198,7 @@ ALIASES = {"README.md": "index.html"}
 # wordmark; Install, last, is drawn as a button.
 TOP = [
     ("Guide", "guide/index.html", "guide"),
-    ("Formulas", "formulas/index.html", "formulas"),
+    ("Gallery", "formulas/index.html", "formulas"),
     ("Create Art", "create/index.html", "create"),
     ("Demo", "demo/", "demo"),
     ("For developers", "dev/index.html", "dev"),
@@ -223,6 +226,7 @@ SECTIONS = {
         ("Building from source", "dev/index.html"),
         ("HTTP API", "dev/api.html"),
         ("Psi language", "dev/psi/index.html"),
+        ("Psi error codes", "dev/psi/errors/index.html"),
         ("The simulator", "dev/simulator.html"),
         ("Hardware pinout", "dev/pinout.html"),
         None,
@@ -250,18 +254,33 @@ def section(page: str) -> tuple[str | None, str | None]:
 # The installer page: ESP Web Tools, pinned (the flashing itself is
 # esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
 INSTALL_PAGE = "install/index.html"
-# The Psi language reference: its live examples, highlighting, search and
-# cheat sheet (opendmd-web/share/ref/psiref.js, copied beside the page; it
-# imports the demo's Psi, so its CSP allows wasm: CSP["psi"]).
-PSI_PAGE = "dev/psi/index.html"
-PSI_HEAD = '<script type="module" src="psiref.js"></script>'
+# The pages that teach or look up Psi: the reference, its error codes and
+# the guide's Psi pages (written as docs/guide/psi*.md; a page here whose
+# source is not in PAGES yet is simply not built). Each loads psiref.js
+# (opendmd-web/share/ref/, copied once to the site's root beside psiled.js):
+# every ```psi block drawn live (```psi-bad: highlighted, never drawn), the
+# reference's tables live with their names linked, and the search and cheat
+# sheet where the name tables or the error entries are. It runs the demo's
+# Psi, so these pages' CSP allows wasm (CSP["psi"]).
+PSI_PAGES = ("dev/psi/index.html", "dev/psi/errors/index.html",
+             "guide/psi.html", "guide/psi-1.html", "guide/psi-2.html", "guide/psi-3.html")
+PSI_SCRIPT = "psiref.js"
+
+
+def psi_head(page: str) -> str:
+    return f'<script type="module" src="{rel(page, PSI_SCRIPT)}"></script>'
+
+
+# Long pages open with an "On this page" list of their sections (the toc
+# extension's h2s, folded: a <details> under the heading).
+TOC_PAGES = ("dev/api.html", "guide/web-app.html", "dev/psi/index.html", "dev/psi/errors/index.html")
 # The home page's panel plays a bundled Formula live once the page has
 # loaded (opendmd-web/share/ref/home.js, on psiled.js, the reference's
 # drawing; both copied to the root): the demo's Psi again, so CSP["home"].
 # Its hero plays a little show (hero.js, imported by home.js once it runs):
 # Formulas, the site's own GIFs and a look, with the panel's transitions.
 HOME_HEAD = '<script type="module" src="home.js"></script>'
-ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js")  # from opendmd-web/share/ref/
+ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js", PSI_SCRIPT)  # from opendmd-web/share/ref/
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
 # on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
 GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="module" src="ftsort.js"></script>'
@@ -474,7 +493,7 @@ CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release
 # later app.js would ask for an earlier wasm module (js/wasm.js).
 CACHE_APP = "no-cache"
 APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/dev/psi/*", "/panel.js",
-             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
+             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "psiref.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
 CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
 
@@ -489,6 +508,11 @@ def headers_file() -> str:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
     for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
+    # The guide's Psi pages (PSI_PAGES outside /dev/psi/): at their address and as .html.
+    for p in PSI_PAGES:
+        if not p.startswith("dev/psi/"):
+            for path in dict.fromkeys((served(p), "/" + p)):
+                rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP['psi']}"]))
     # Web Serial and WebUSB only where boards are flashed.
     rules.append(("/install/*", ["! Permissions-Policy",
                                  "Permissions-Policy: serial=(self), usb=(self), camera=(), microphone=(), geolocation=(), payment=()"]))
@@ -965,13 +989,25 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     title = "OpenDMD" if title == "OpenDMD" else f"{title}{title_note} · OpenDMD"
     if src == HOME:
         body, title = home(art, assets), "OpenDMD: open firmware and a web app for the DMDoS LED display"
+    if page in TOC_PAGES or on in TOC_PAGES:
+        extra += on_this_page(md.toc_tokens)
     body = after_h1(decorate(body), extra)
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
-    head = "\n" + {INSTALL_PAGE: INSTALL_HEAD, PSI_PAGE: PSI_HEAD}.get(page, HOME_HEAD if src == HOME else "")
+    head = "\n" + (INSTALL_HEAD if page == INSTALL_PAGE else psi_head(page) if page in PSI_PAGES
+                   else HOME_HEAD if src == HOME else "")
     dest.write_text(render(page, title, body, art["wordmark"], head=head, on=on,
                            kind="home" if src == HOME else "doc"), encoding="utf-8")
     return body
+
+
+def on_this_page(tokens: list[dict]) -> str:
+    """The page's h2s as a folded list of links (the h1's children in the toc's tree)."""
+    h2 = [t for top in tokens for t in (top["children"] if top["level"] == 1 else [top]) if t["level"] == 2]
+    if len(h2) < 3:
+        return ""
+    items = "".join(f'<li><a href="#{html.escape(t["id"])}">{t["name"]}</a></li>' for t in h2)
+    return f'<details class="onpage"><summary>On this page</summary><ul>{items}</ul></details>\n'
 
 
 def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: str, assets: set[str]) -> list[str]:
@@ -1064,9 +1100,7 @@ def main() -> None:
         app_page(out, page, art["wordmark"])
     # Their way to a panel (the address, the hand-off), shared.
     share_copy(ROOT / "opendmd-web/share/panel.js", out / "panel.js")
-    # The Psi reference's script (the page itself is a doc, written below).
-    (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    share_copy(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
+    # The Psi pages' script is one of them (the pages themselves are docs, written below).
     for name in ROOT_SCRIPTS:
         share_copy(ROOT / "opendmd-web/share/ref" / name, out / name)
     info, beta = release(a.dist, out, a.beta_dist)

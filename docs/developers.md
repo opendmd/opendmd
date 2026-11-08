@@ -107,7 +107,8 @@ see one without a board, run `make sim ARGS="--play '@boot?len=full'"`.
   release, as that release described it; the web app's Settings › Device ›
   About opens the one for the display's firmware version.
 - [Psi language reference](psi-spec.md): the Formula language, every
-  name it knows, its limits and its error codes; the `psi` command.
+  name it knows, its limits; the `psi` command. Its
+  [error codes](psi-errors.md) have a page of their own.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,
   and where the LED model lives.
 - [Hardware pinout](../hardware/PINOUT.md): the DMDoS carrier board's

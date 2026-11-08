@@ -116,7 +116,8 @@ if (found) {
     $('#where').textContent = `${src.label || 'Picked files'} · ${src.count} files`;
     setSource(src);
   } }));
-  $('#top').append(own);
+  // The way back to the site, and to installing it on a display.
+  $('#top').append(own, h('span.demo-site', h('a', { href: '../' }, '‹ opendmd.dev'), h('a', { href: '../install/' }, 'Install')));
   $('#top strong').replaceChildren(h('a', { href: '../', style: 'color:inherit;text-decoration:none' }, 'OpenDMD'));
   // Its player's settings and status (js/demo.js).
   await (await import('./js/demo.js')).simulate(app.demo);

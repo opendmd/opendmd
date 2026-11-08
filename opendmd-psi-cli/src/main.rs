@@ -1,6 +1,6 @@
 //! `psi`: Psi Formulas from the command line (opendmd-notes docs/research/psi-tooling-plan.md,
 //! Phase 1; the language reference is docs/psi-spec.md, on the site at
-//! /dev/psi/).
+//! /dev/psi/, its error codes docs/psi-errors.md, at /dev/psi/errors/).
 //!
 //!     psi check FILE.psi|- [options]     does it compile; the panel's estimates; a contact sheet
 //!     psi fmt [--check|--write] FILE…|-  the canonical layout (same program, comments kept)

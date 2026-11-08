@@ -501,7 +501,9 @@ function editor() {
   const pad = h('div.psi-pad', { id: 'psi-pad', role: 'slider', 'aria-label': 'Drag to change the number' }, '◀ ', val, ' ▶');
   const nudge = (k) => h('button.sm', { 'aria-label': k > 0 ? 'More' : 'Less', onpointerdown: (e) => e.preventDefault(), onclick: () => bump(k) }, k > 0 ? '+' : '−');
   const strip = h('div.psi-strip', { id: 'psi-scrub', hidden: true }, nudge(-1), pad, nudge(1));
-  const help = h('button.sm', { id: 'psi-help', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hint().then((m) => m.cheat(b, ta)); } }, 'Cheat sheet');
+  const help = h('button.sm', { id: 'psi-help', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hint().then((m) => m.cheat(b, ta, ROOT())); } }, 'Cheat sheet');
+  // The tour (the site's guide; on a panel, opendmd.dev's).
+  const learn = h('a.btn.sm', { id: 'psi-learn', href: ROOT() + 'guide/psi-1.html', target: '_blank', rel: 'noopener' }, 'Learn Psi');
   const vers = h('button.sm', { id: 'psi-vers-btn', 'aria-haspopup': 'dialog', onclick: (e) => { const b = e.currentTarget; hist((m) => m.menu(b, { key: hkey(B.draft), cur: ta.value, back, site: !!PAGE })); } }, 'Earlier versions…');
   const canvas = h('canvas.panel', { id: 'psi-ed-panel', tabIndex: 0, 'aria-label': 'Preview (, and . step a frame)' });
   // The preview's time: paused (pv.hold, ms), a frame back or on, or dragged
@@ -547,7 +549,7 @@ function editor() {
   top.addEventListener('keydown', (e) => { if ((e.key === ',' || e.key === '.') && e.target !== tr && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); step(e.key === '.' ? 1 : -1); } });
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
-      h('div.row.acts', help, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
+      h('div.row.acts', help, learn, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
     h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));

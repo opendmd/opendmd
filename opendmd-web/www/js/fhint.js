@@ -382,12 +382,14 @@ export function hint(o) {
   return me;
 }
 
-// The cheat sheet: a tap on a name puts it in at the caret.
-export function cheat(btn, ta) {
+// The cheat sheet: a tap on a name puts it in at the caret. `root`: the
+// site's (its guide's tour is linked at the foot).
+export function cheat(btn, ta, root) {
   const r = btn.getBoundingClientRect();
   const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
   const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
   popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
     rows('At the top: what the formula is', DECLS), rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
-    h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
+    h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment. New to Formulas? ',
+      h('a', { href: root + 'guide/psi-1.html', target: '_blank', rel: 'noopener' }, 'Learn Psi'))), r.left, r.bottom + 4);
 }

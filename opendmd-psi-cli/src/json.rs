@@ -99,7 +99,7 @@ pub fn errors() -> String {
                 s(e.title),
                 s(e.sentence),
                 s(e.fix),
-                s(&format!("https://opendmd.dev/dev/psi/#{}", errors::label(e.code)))
+                s(&format!("https://opendmd.dev/dev/psi/errors/#{}", errors::label(e.code)))
             )
         })
         .collect();
