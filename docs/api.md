@@ -17,7 +17,9 @@ curl -s $DMD/api/status
 - **JSON in, JSON out.** Bodies are JSON unless a route takes raw bytes,
   with `Content-Type: application/json` (`415` otherwise; `curl --json`
   sets it). Every error is a non-2xx status with `{"error":"<why>"}`, except
-  `405` (a route that exists for another method), the server's `text/html`.
+  what the HTTP server refuses before a route sees it (`405` for a route
+  that exists for another method, a malformed request, too long a URI or
+  header): those are its own `text/html`.
 - **Names ad blockers leave alone.** A path named like analytics (`stat`, `track`, `log`) is on EasyPrivacy,
   and uBlock Origin and Brave then fail the web app's request as a network
   error. `make blocklist-check` (`tools/blocklist-check.py`) tests every route
@@ -28,8 +30,9 @@ curl -s $DMD/api/status
 - **One thing at a time.** One server task, at most 7 open connections
   (`HTTP_MAX_SOCKETS`). Transfers and the listings (`/api/files`,
   `/api/cache/list`, `/api/cache/failed`) run one at a time, two more
-  waiting; a third transfer gets `503` + `Retry-After: 1` after 2 s, a
-  listing at once. Short of memory, a listing
+  waiting; with both places taken, a GIF, a prepared copy or a listing
+  gets `503` + `Retry-After: 1` at once, a web app file, a playlist or a
+  Formula file after 1 s (at once while an upload is in hand). Short of memory, a listing
   or transfer is refused up front: `503` + `Retry-After: 2`. So is any
   request with a body (a settings change, a play, a schedule, a Formula
   sent to the panel) when the heap has too little free, or no single block
@@ -37,7 +40,10 @@ curl -s $DMD/api/status
   nothing was done. Retry after the delay; do not fire requests in
   parallel.
 - **Slow commands.** A playlist change waits up to 60 s for the index
-  rebuild, other commands 10 s, then `504`; playback not running, `503`.
+  rebuild, a WiFi scan 12 s, a Follow test 20 s, then `504`; a play, pause
+  or Previous not taken within 0.8 s is a `503` + `Retry-After: 1`, and one
+  taken but not done within 0.7 s more a `202` (`"pending":true`); playback
+  not running, `503`.
 - **Paths** are card-absolute (`/gifs/Consoles/SNES_Super_Metroid_01.gif`),
   percent-encoded in URLs; one that leaves the card is a `400`.
 
@@ -52,6 +58,10 @@ Commands that touch the playlist answer with what the display now has:
 | `index_ms` | how long opening or building the index took, ms |
 | `overrides` | per-GIF overrides resolved into the playlist |
 | `hidden` | entries hidden from it ("Hide from this playlist") |
+
+`overrides` and `hidden` are the rebuild's counts: with `index` `null`
+they are 0 whatever the playlist has (`GET /api/status` carries the
+playlist's own).
 
 A **playlist name** (`set`): `""` is `/filelist.txt`, `filelist.<x>` is
 that file at the root, any other name is `/sets/<name>.txt`. No `/` or `..`.
@@ -71,8 +81,8 @@ none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
 it changes that formula (`409` once the playlist has moved on); `"path":""`
-takes it off. `"over"` skips the card-path check (the path is a formula or
-`""`); with no playlist running it is a `503`; a formula that covers the GIF
+takes it off. `"over"` takes only a formula or `""` (a card `.psi` path must still
+be card-absolute); with no playlist running it is a `503`; a formula that covers the GIF
 entirely (it reads none of `ur ug ub ul` and nothing shows through it) or is
 too heavy to draw over GIFs is a `400` with the reason.
 
@@ -86,7 +96,7 @@ Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
 Errors: `400` neither card-absolute nor a Formula, or a bad formula (`path must be card-absolute and stay on the card, or a Formula (@formula…)`);
 `404` the file does not open, or no bundled Formula has that name
-(`there is no bundled Formula by that name`; what was playing carries on); `415` not a
+(the path, cut to 96 bytes, then `: there is no bundled Formula by that name`; what was playing carries on); `415` not a
 GIF, a virtual file this firmware does not know (`@nonsense`), a retired
 `@clock`/`@text` path (`the clock and the scrolling text are gone: play a
 Formula (a clock is one, @formula:big-clock)`), or a retired `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
@@ -117,9 +127,10 @@ The display holds it in memory, one at a time, and plays it as
 `name` line, else "Formula"). Each one sent replaces the last (whose memory
 goes before the new body is read), and it is let go once the panel moves on
 to anything else; it is not kept in Recently played, and it can't be the
-`look_formula` (`400`). Once let go, `@formula:~sent` is a `404` (`that
+`look_formula` (`400`). Once let go, `@formula:~sent` is a `404` (the path, then `: that
 Formula is no longer on the panel: show it again`). Nothing touches the
-card, so it works with none.
+card, but a playlist must be running: with none (as without a card) it is
+a `503` (`no playlist is running`).
 
 Reply and errors as `/api/play` (`409` a live edit after the playlist moved
 on, `400` a formula that does not load, `503` no playlist), and `503` +
@@ -150,8 +161,9 @@ The answer to a long request. `PUT /api/config`, `/api/schedule`,
 and `/api/name-check` are answered at once if they are done within 0.3 s;
 otherwise `202` `{"pending":true,"job":N}` with `X-Job: N` and
 `Retry-After: 1`, and `GET /api/job?id=N` gives the request's own answer
-once it is there (`202` again until then; `404` for no such job: answered
-already, or given up after 5 s without a poll). One long request at a time:
+once it is there (`202` again until then, `504` once the request's own limit has passed;
+`404` for no such job: answered already, or dropped to make way for
+another long request after 5 s without a poll). One long request at a time:
 another while one is pending is a `503` + `Retry-After: 2`. The web app
 follows these by itself (`source.js` `req`).
 
@@ -238,20 +250,20 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `psi_abi` | the compiled Formulas this display plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the display's clock, ms, as the reply was built |
-| `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
+| `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
 | `paused` | bool |
 | `transfer` | a file is going to or from the card on the stream task, or an upload is in hand (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
-| `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each; the index of the one on screen |
+| `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each (640 B of paths in all, none over 200 B; not the title cards, the power-on effect or a sent Formula); the index of the one on screen |
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
 | `heap` | `{free, floor, idf_min, transitions_cut}`: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds `main_stack`, the main task's stack bytes never used, and `pushed`, pixels pushed to the panel) |
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
 | `refresh_hz` | panel refresh rate |
-| `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
-| `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`); `recent` the last 8 late frames (newest last), each `{late_ms, cause, open, read, decode, blit, log, other, wake, transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us, kind}`: its cause (as above), each step's µs, whether a transition was running, the engine tick split into the file's advance (`advance_us`: opens, decoding, the outgoing file's drop at a switch) and the dissolve's step (`step_us`), seconds since boot, the frame's card reads split into µs waiting for the card (another task's transfer ahead) and µs transferring (`card_wait_us`, `card_xfer_us`), the decoder of the file on screen (`kind`: `slim`, `gif`, `synth`, a Formula), and its opens by step (`open_index_us` through the FAT index, `open_path_us` by path behind FatFs's volume lock, `open_builder_us` waiting for the cache builder to let go of its heap, `open_catalog_us` the playlist's lookup of the next file; a diagnostic), `net` what the network side was doing (a bit mask: 1 an upload in hand, 2 a transfer sharing the card in flight, so nothing opened ahead and the cache builder stopped, 4 the read-ahead ring held) and `heap` the free heap at the miss; `transfer` the late frames while a transfer was in flight, by cause as `by_cause`, with `switches`, the file changes made meanwhile (each opened in its own frame) |
+| `deadline_misses`, `worst_lateness_ms` | all late frames; the worst since boot, ms |
+| `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`); `recent` the last 8 late frames (newest last), each `{late_ms, cause, open, read, decode, blit, log, other, wake, transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us, kind}`: its cause (as above), each step's µs, whether a transition was running, the engine tick split into the file's advance (`advance_us`: opens, decoding, the outgoing file's drop at a switch) and the dissolve's step (`step_us`), seconds since boot, the frame's card reads split into µs waiting for the card (another task's transfer ahead) and µs transferring (`card_wait_us`, `card_xfer_us`), the decoder of the file on screen (`kind`: `slim`, `gif`, `synth`, which a Formula is too, `gone`, or `none`), and its opens by step (`open_index_us` through the FAT index, `open_path_us` by path behind FatFs's volume lock, `open_builder_us` waiting for the cache builder to let go of its heap, `open_catalog_us` the playlist's lookup of the next file; a diagnostic), `net` what the network side was doing (a bit mask: 1 an upload in hand, 2 a transfer sharing the card in flight, so nothing opened ahead and the cache builder stopped, 4 the read-ahead ring held) and `heap` the free heap at the miss; `transfer` the late frames while a transfer was in flight, by cause as `by_cause`, with `switches`, the file changes made meanwhile (each opened in its own frame) |
 | `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
 | `net` | the network side, for loads of simultaneous requests: `heap_low` the least free heap met on CPU0 where the network's allocations peak (`at`: `status` a status answer's pieces, `upload` an upload's chunks, `refusal` a 503 for a busy upload, `request` a request's start, `worker` the network worker's turn), with the uploads in hand, seconds since boot (`up_s`) and what lwIP held just after (`rx_frames`, received frames held, also by connections not taken yet, each one of the WiFi driver's eight receive buffers; `tx_bytes`, bytes sent and not yet acknowledged); null before one. `heap_low_recent`: the same for the current and the previous `window_s` (30 s). `lwip`: now (`pcbs`, `time_wait`, `rx_frames`, `tx_bytes`, `rtx` the most retransmissions of one segment, `backlog` connections waiting for the server to take them: at 6 a new connection's SYN is dropped), walked once a second; `lwip_max`: the most of `rx_frames`, `tx_bytes`, `rtx` and `backlog` over the current and the previous window. `aborted_at_close`: connections reset at close because the client had closed with data of ours unacknowledged (a poll that gave up); `status_refused`: status reads (and `GET /api/config`) answered 503 for want of heap (under 10 KB free); `heavy_refused`: requests with a body answered 503 + `Retry-After` at the door for want of heap or of a block that size; `body_stalled`: request bodies read on the httpd task (JSON, a Formula) that stopped for 2 s, answered 503 + `Retry-After` and the connection dropped; `player_busy`: requests the display did not take within 0.8 s, answered 503 + `Retry-After` (see "Waiting on the display"); `events`: `GET /api/events`' `{listeners, dropped, no_heap}`, listening now, closed for not reading, looks at the state skipped for want of heap |
 | `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale, raw_open, raw_reads, raw_fallbacks, slots_full, intent_refused, delta, path_opens, path_open_max_us, index_busy, index_unloaded, building}` diagnostics of the index that opens GIFs and their prepared copies without a directory scan (`delta`: files written, renamed or removed since it was built, which it already knows) and of the display's card opens and reads (both past FatFs's volume lock; opens refused while a write holds the file); `path_opens`, `path_open_max_us` the display's opens the index could not serve (by path, behind the volume lock) and the longest, `index_busy`, `index_unloaded` why (its lock held for a swap; no index loaded), `absent` prepared copies the index showed are not there (no path open; only with an index built this boot whose delta has kept every change since), `catalog_fatfs` playlist files read through FatFs instead of raw (their lookups wait for the volume lock), `building` a build or names walk running; `write_yields`, `write_yield_us` the card writes that stepped aside between their chunks for reads, and how long (at most 5 ms a chunk); `gave_way`, `gave_way_us` other tasks' card transfers that waited for the display's read first (at most 5 ms each); `write_max_us` the longest single write transfer (a chunk with the card's busy time); `player_wait_max_us`, `player_xfer_max_us` the display's longest single card read's wait for the card and transfer, since boot; `readahead` `{active, bytes, fill, fill_min, hits, underruns, fetches, taken, no_heap, busy, errors, task_starts, stack_unused}`: the playing GIF's read-ahead (`bytes`, 8 KB, of the file kept ahead of the display by a CPU0 task while a GIF plays): `fill` the bytes ahead now, `fill_min` the least after a served read since the last status (null: none), `hits` reads served from it, `underruns` reads it could not serve once filling (from the card), `fetches` blocks read ahead, `taken` times its memory was taken (given back 5 s after the last read), `no_heap` looks that found no room (one each 200 ms while short), `busy` reads that found it locked (from the card), `errors` card errors filling it; `settings_store` where the settings are kept: `card` (`/opendmd.json`, see Settings), `nvs (no card)`, or `nvs (card write failed: …)` (technical: an app showing it says "Settings are kept on the card") |
@@ -267,8 +279,8 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
 | `max_brightness`, `brightness_safe_max`, `safe_start_until` | the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after) |
-| `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one whose own frame time is over three quarters of its budget for 2 for ~4,096 frames; a lighter one keeps its rate), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
-| `display` | how the display loop kept its time, since boot: `{wakes, wake_late, wake_max_us, spin_us, publish_skipped, status_lock_us, status_build_us, status_cached, pre_start, commands}` — the loop's wakes, those over 100 µs after their time and the latest (µs), the µs it spun waiting for its frame (it blocks until 0.4 ms before, then spins), frames whose status publish was skipped because a status read held it (the display never waits for one), the last status read's time holding that lock (a copy) and building in all (µs), status reads answered from the last answer (it is reused for 100 ms); `pre_start {n, us, mean_us, max_us, spikes}` a raced frame's time from the wake to its start (the loop's work, the tick, the frame's steps and draw stage; `spikes` over its running mean by 300 µs); `commands {n, us, max_us}` the loop's handling of what the HTTP handlers asked (loops that had any, µs in all, the longest); `buffers` where the display's hot memory is (a measurement: each `{at, bytes, pool}` or `null`, `pool` IDF's SRAM pool such as `SRAM2/15` or `SRAM1/7`): `formula` (the playing Formula's program and VM scratch), `ink`, `plane`, `kernel` (its JIT code), `arena` (`formula_arena`), `canvas`, `dma_rows` (the panel's DMA rows, `{at, end, bytes, pool, pool_end}`), `dma_desc`; `arena` `{hits, busy}` while `formula_arena` is in force, else `null`; `card_read_max_us` the display's longest single card read since the last `?take_read_max=1`; `uploads` `{paced, rate_kb_s, paced_ms, on_pct}`: uploads are read at `rate_kb_s` at most while a Formula plays near its frame budget (its mean render over `on_pct` % of the frame time, 60 by default, until 10 points under), full speed otherwise; `paced_ms` the time slept for it since boot. A dev field of `PUT /api/config`, `pace_on_pct` (1..100, live only, never saved), moves the start for a test |
+| `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, a `rate` formula, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one whose own frame time is over three quarters of its budget for 2 for ~4,096 frames; a lighter one keeps its rate), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
+| `display` | how the display loop kept its time, since boot: `{wakes, wake_late, wake_max_us, spin_us, publish_skipped, status_lock_us, status_build_us, status_cached, pre_start, commands}` — the loop's wakes, those over 100 µs after their time and the worst since boot (µs), the µs it spun waiting for its frame (it blocks until 0.4 ms before, then spins), frames whose status publish was skipped because a status read held it (the display never waits for one), the last status read's time holding that lock (a copy) and building in all (µs), status reads answered from the last answer (it is reused for 100 ms); `pre_start {n, us, mean_us, max_us, spikes}` a raced frame's time from the wake to its start (the loop's work, the tick, the frame's steps and draw stage; `spikes` over its running mean by 300 µs); `commands {n, us, max_us}` the loop's handling of what the HTTP handlers asked (loops that had any, µs in all, the longest); `buffers` where the display's hot memory is (a measurement: each `{at, bytes, pool}` or `null`, `pool` IDF's SRAM pool such as `SRAM2/15` or `SRAM1/7`): `formula` (the playing Formula's program and VM scratch), `ink`, `plane`, `kernel` (its JIT code), `arena` (`formula_arena`), `canvas`, `dma_rows` (the panel's DMA rows, `{at, end, bytes, pool, pool_end}`), `dma_desc`; `arena` `{hits, busy}` while `formula_arena` is in force, else `null`; `card_read_max_us` the display's longest single card read since the last `?take_read_max=1`; `uploads` `{paced, rate_kb_s, paced_ms, on_pct}`: uploads are read at `rate_kb_s` at most while a Formula plays near its frame budget (its mean render over `on_pct` % of the frame time, 60 by default, until 10 points under), full speed otherwise; `paced_ms` the time slept for it since boot. A dev field of `PUT /api/config`, `pace_on_pct` (1..100, live only, never saved), moves the start for a test |
 | `?pools=1` | answers `{"pools":{"SRAM2/15":{used, blocks, free}, …}}` instead of the status: one walk of the heap, bytes in use and free per SRAM pool (a measurement) |
 | `?take_read_max=1` | answers `{read_max_us, open_max_us}` instead of the status: the display's longest card read and open since the last ask, then both start again from 0 |
 
@@ -372,18 +384,18 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `wifi_eap_ttls` | `mschapv2` | TTLS's inner method: `mschapv2`, `pap`, `mschap` or `chap` (PEAP's is always MSCHAPv2) |
 | `brightness` | 0..=`max_brightness`, 96 | panel brightness |
 | `max_brightness` | 16..=255, 144 | the ceiling `brightness` may not pass |
-| `dwell_min`, `dwell_max` | seconds, 3 and 30 | how long a file stays up (at least 1; `dwell_max` ≥ `dwell_min`) |
+| `dwell_min`, `dwell_max` | seconds, 3 and 30 | how long a file stays up (below 1 reads as 1; `dwell_max` ≥ `dwell_min`, else `400`) |
 | `shuffle` | bool, true | shuffle the playlist |
 | `platforms` | string, `""` | comma-separated platform prefixes to play, e.g. `"MD,SNES"`; empty = all |
 | `set` | string, `""` | the playlist (see "Fields that recur") |
 | `hostname` | string, `"opendmd"` | name on the network (`opendmd.local`): 1-32 of `a-z 0-9 -`, no `-` at either end (lowercased) |
-| `tz`, `tz_name` | strings, `"UTC0"`, `"UTC"` | POSIX time zone (`GMT0IST,M3.5.0/1,M10.5.0`, ≤ 64 characters); its display name (≤ 64) |
+| `tz`, `tz_name` | strings, `"UTC0"`, `"UTC"` | POSIX time zone (`GMT0IST,M3.5.0/1,M10.5.0`, ≤ 64 bytes, not empty); its display name (≤ 64 bytes) |
 | `transition` | `dissolve` | `dissolve`, `wipe_left`, `wipe_right`, `wipe_down`, `wipe_up`, `blinds`, `push`, `fade`, `none` |
 | `transition_ms` | 20..=2000, 400 | transition length |
 | `auto_prepare` | `idle` | prepare copies by itself: `idle` (only while the panel is dark or paused), `always` (also slowly while a prepared GIF plays), `off` |
 | `follow` | bool, false | Follow RePlayOS |
 | `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
-| `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
+| `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64 bytes, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
 | `attract` | string, `""` | only `""` (the playlist): anything else (`"clock"`, `"text:…"`, `"fx:…"`) is `400` (`attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set`). A `clock`, `text:…` or `fx:` value stored by an earlier firmware reads as `""`, with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
@@ -460,7 +472,7 @@ curl -s -X PUT $DMD/api/config --json '{"lat":53.35,"lon":-6.26}'
 ### GET /api/name-check
 
 `?name=kitchen`: does another device answer to `kitchen.local`? Asked over
-mDNS (≤ 1.2 s): `{"name","valid","taken","by"}` (`by` its address;
+mDNS (a 1.2 s query; up to 3 s with the network worker busy): `{"name","valid","taken","by"}` (`by` its address;
 `taken` null if it could not ask: an invalid name, setup mode, the network
 busy; never for this display's own name). A taken `hostname` in `PUT
 /api/config` is a `409` `{"error":"name taken: …","name","by"}`.
@@ -474,7 +486,9 @@ nothing plays. `{"setting":"clk_phase"}` (A rising, B falling) or
 starts or restarts it; `{"stop":true}` ends it. It also ends after 120 s
 or on any `PUT /api/config`; either way the saved timing and playback come
 back. Nothing is saved (`panel_now` stays the saved values): save the pick
-with `"panel_confirm":true`. Reply: `{"ok":true, "setting","a","b",
+with `{"panel":{"<setting>":<value>},"panel_confirm":true}`
+(`panel_confirm` alone confirms a running trial, and the test is none:
+`409`). Reply: `{"ok":true, "setting","a","b",
 "left_s"}` (`a`, `b` as `panel`). `409` during a trial, with a change
 waiting for a restart, with the panel off for the night, or `clk_phase`
 on `mbi5124`/`dp3246`.
@@ -490,8 +504,8 @@ couple of seconds' scan: `[{"ssid","rssi","channel","auth","secure"}]`,
 `rssi` in dBm. `auth` is `Open`, `WEP`, `WPA`, `WPA2`, `WPA/WPA2`,
 `WPA2-Ent` (a work or school network: 802.1X), `WPA3`, `WPA2/WPA3`,
 `WAPI`, or `Other` for a mode without a name here (WPA3-Enterprise among
-them). Empty in setup (access-point) mode: a scan would drop the browser
-that asked. `504` if it takes over 12 s.
+them). It works in setup (access-point) mode too (the setup network runs as
+AP+STA for it). `504` if it takes over 12 s.
 
 ```sh
 curl -s $DMD/api/wifi/scan
@@ -509,8 +523,11 @@ The card's files are served as they are:
 | GET | `/formulas/…` | one of the user's Formulas (`/formulas/<stem>.psi`, written with `PUT /api/files/formulas/<stem>.psi`) |
 | GET | `/filelist.txt`, `/filelist.<x>` | a playlist at the card's root |
 
-With a `Content-Length` and the type from the extension; playlists and
-`.meta` are `text/plain` and `no-cache`. A missing file is a `404`.
+With a `Content-Length`. An image (`.gif`, `.png`, `.jpg`, `.webp`) goes
+out as its own type; anything else, playlists and `.meta` included, as
+`application/octet-stream` with `Content-Disposition: attachment`, so no
+card file can run as a page on the display's origin. Playlists and
+`.meta` are `no-cache`. A missing file is a `404`.
 
 ```sh
 curl -s -O $DMD/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -564,7 +581,8 @@ the card and be spelled the one way: no empty, `.` or `..` component
 8.3 short name (`NAME~1.GIF`, `CONSOL~2`: it names a file whose long name
 is something else, so its prepared copy and whether the display has it
 open could not be told). Use the long name. The `400` says so. Reads by
-path accept what FAT accepts.
+path are held to the same rules, except that an 8.3 name is read as FAT
+reads it.
 
 ```sh
 curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNES_Super_Metroid_01.gif
@@ -574,7 +592,7 @@ curl -s -X PUT --data-binary @Super_Metroid.gif $DMD/api/files/gifs/Consoles/SNE
 
 Delete a file (the display moves off it first): a GIF with its prepared
 copy, a playlist with its index; an overrides file rebuilds its playlist.
-An empty directory under `/gifs/` too. Reply: `{"ok":true}`.
+An empty directory too (`409` if it is not empty). Reply: `{"ok":true}`.
 
 `?recursive=1` removes a whole directory, only under `/cache/` (and the
 retired `/odm/`), else `400`; 4 s of work a request:
@@ -820,7 +838,7 @@ card file is a `403`; any other page redirects to the setup page.
 
 | method | path | what |
 |---|---|---|
-| GET | `/` | the web app (in setup mode with no good web app in flash, the setup page) |
+| GET | `/` | the web app (in setup mode, the setup page; the web app is at `/index.html` there) |
 | GET | `/setup` | the built-in setup page: join a network |
 | GET | `/hotspot-detect.html`, `/generate_204`, … | captive-portal probes: a redirect to `/` in setup mode, else 404 |
 
@@ -862,7 +880,7 @@ only lock, and it travels in clear text on your network.**
   answers to after a clash; after a rename, the old name too until the
   restart), the bare names, the panel's current IP address, or
   `localhost`/`127.0.0.1` (any port). Anything else is a `421`
-  ("this panel answers only to its own names"): a web page whose DNS name was pointed
+  ("this panel answers only to its own names"; in setup mode a GET is sent to the setup page instead): a web page whose DNS name was pointed
   at the panel (DNS rebinding) cannot use it. A request with no `Host`
   (HTTP/1.0) is fine. Reach the panel by one of those names; a name your
   router hands out (`opendmd.lan`) is refused.
@@ -905,8 +923,8 @@ The web app is one file in the display's flash, a www pack
 `{"version","bytes","entries","ok","error","staged"}`: the pack's version
 (`git describe` of its build), size, file count, whether it verified, why
 not (erased, damaged, an update cut short, being written), whether this
-boot's last update was staged on the card (null: none, or refused at its
-header).
+boot's last update was staged on the card (`true`, or null: none, or
+refused at its header).
 
 ```sh
 curl -s $DMD/api/www
@@ -955,12 +973,12 @@ descriptor, `"<version> <variant>"`), the flash layout it is built for
 read mode the flash runs at (`flash`: `{"mhz": 40|80, "mode": "dio"|…}`,
 read back from the chip), the updater in flash (`updater`:
 `{"version": "updater 2", "panel": true}`, its app descriptor's version, or
-`null` if it cannot be read; `panel`: it shows "Installing" on the panel
+`null` for `version` if it cannot be read; `panel`: it shows "Installing" on the panel
 while it installs, which only an updater from a USB install of 1.0.0 or
 later does, since an update over WiFi never replaces the updater), a staged
 update not yet installed (or null), the last
-line of the card's `/update/log.txt` and its last ≤ 1 KB of whole lines
-(`log`, the firmware's and the updater's; both null without a card or log).
+non-blank line of the card's `/update/log.txt` (`last`, ≤ 200 characters)
+and its last ≤ 1 KB of whole lines (`log`, the firmware's and the updater's; both null without a card or log).
 
 ```sh
 curl -s $DMD/api/firmware
@@ -1004,7 +1022,7 @@ curl -s -X PUT --data-binary @dist/opendmd-1.0.0-4mb.odfw $DMD/api/firmware
 Paths beginning with `@` are drawn, not read from the card: for
 `POST /api/play`, a playlist line. Options follow `?` as
 `key=value` pairs joined by `&`; unknown keys and bad values are ignored
-(the default stays). Colours are `RRGGBB` (or `%23RRGGBB`, `#RRGGBB`).
+(the default stays).
 
 **`@formula`** — a formula (the app's Formulas), **compiled**: the display
 never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
@@ -1017,9 +1035,9 @@ used). A heavy one is shown at fewer frames a second; status
 its frames are not raced, see `scan.beam`),
 `compile_us` (the load's time, µs), `still` (the still cache's bytes) and `jit`:
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
-its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
-`it reads the picture under it`, `it draws (ink)`, `off (setting)`,
-`being checked`), and `render_us_total`/`renders`: the playing
+its pixel stage, else `{"on":false,"why":"…"}` (e.g. `off (setting)`,
+`being checked`, `the VM is faster for this formula`, `no executable
+memory`, `too many values for the kernel`, `not in this build`), and `render_us_total`/`renders`: the playing
 formula's render µs in all (wrapping) and renders since boot, whose
 differences give a stretch's exact mean (`frame_us` is a running mean of
 the last few frames). The whole inline path is at most 6,144 B (a longer
@@ -1028,8 +1046,8 @@ Formula is sent as bytes: `POST /api/play/formula`, `@formula:~sent`);
 
 **By reference** (what playlists and the look use, so a Formula's length
 never matters there): `@formula:<stem>[?a=&b=&c=&fps=]` plays a bundled
-Formula (its file's stem in `opendmd-web/formulas/`, compiled into the
-firmware: `endless-road`, `big-clock`, …); a card path ending `.psi`,
+Formula (its file's stem in `opendmd-web/formulas/`, for the files there with a
+`-- bundle` line, compiled into the firmware: `endless-road`, `big-clock`, …); a card path ending `.psi`,
 `/formulas/<stem>.psi[?a=…]`, plays one of the user's from the compiled
 file beside it, `/formulas/<stem>.psb` (16 KB at most), which the web app
 writes whenever it saves the `.psi`. A name that is not bundled, or a

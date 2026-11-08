@@ -342,7 +342,7 @@ fn spec_names() -> String {
         s.push_str(&format!("| {kind} | {} |\n", cell(&names)));
     }
     s.push_str(
-        "\n**The name rule.** A formula's names win over the built-ins.\n\n- Any built-in value's, function's or drawing call's name may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`). From the line that sets it, the name reads as the formula's value wherever a value is read. A call `name(…)` is still the built-in function, and `since`, `was`, `under` and `ink(n)` work the same way as `sin`.\n- The keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216) are not names.\n- A `fn`, table, sprite or palette of the formula's needs a name of its own. It may not take a built-in function's name (E215) or the name of a value the formula has set (E203).\n- `since(k)` and `was(k)` read the built-in inputs only. On a name the formula has set they are refused (E217), so a name is not read two ways on one line.\n- A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
+        "\n**The name rule.** A formula's names win over the built-ins.\n\n- Any built-in value's, function's or drawing call's name may be set as a value of the formula's (`t = 0.5`, `sin = 0.25`, `line = 3`). From the line that sets it, the name reads as the formula's value wherever a value is read (setting `x` or `y` moves `px py i cx cy r angle` with it, as in a function). A call `name(…)` is still the built-in function, and `since`, `was`, `under` and `ink(n)` work the same way as `sin`.\n- The keywords (E204), the palettes (E208) and `sun`, `moon` and `replay` (E216) are not names.\n- A `fn`, table, sprite or palette of the formula's needs a name of its own. None may take the name of a value the formula has set (E203), and a `fn` may not take a built-in function's name either (E215).\n- `since(k)` and `was(k)` read the built-in inputs only. On a name the formula has set they are refused (E217), so a name is not read two ways on one line.\n- A built-in added later is read only where a formula has not set its name, so a formula saved before it means what it meant.\n",
     );
     s.push_str("<!-- psi-builtins end -->\n");
     s
@@ -393,7 +393,7 @@ fn spec_limits() -> String {
     let rows = [
         (
             "a formula's text, comments included",
-            format!("{} characters", n(p::MAX_SOURCE)),
+            format!("{} bytes", n(p::MAX_SOURCE)),
         ),
         (
             "steps (per frame, draw, per row, per pixel, and one per layer)",
