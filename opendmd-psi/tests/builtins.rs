@@ -494,12 +494,11 @@ fn the_reference_pages_grammar_is_the_models() {
     );
 }
 
-/// Every built-in is named in the guide's and the models' own words too
-/// (their tables are written by hand).
+/// Every built-in is named in the models' own words too (their tables are
+/// written by hand; the guide teaches and links to the reference instead).
 #[test]
-fn the_guide_and_the_models_name_every_built_in() {
+fn the_models_name_every_built_in() {
     for doc in [
-        "docs/guide/formulas.md",
         "docs/psi-for-models.md",
         "docs/psi-card.md",
     ] {

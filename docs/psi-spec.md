@@ -6,7 +6,7 @@ frame, ending in a colour. This page is the reference: every name the
 language knows and what it does, how a formula runs, its limits, some
 recipes, and then the language in full. The error codes have
 [a page of their own](psi-errors.md). To learn it, start with
-[the guide's Formulas page](guide/formulas.md); to try it, open the
+[Make a Formula](guide/psi-1.md) in the guide; to try it, open the
 [demo](/demo/)'s Formulas.
 
 The tables of names and the limits on this page are generated from the
