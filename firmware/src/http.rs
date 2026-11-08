@@ -585,7 +585,7 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     }
     if let Some(v) = patch.tz_name.clone() {
         if v.len() > 64 {
-            return Err(PatchErr::bad("tz_name is at most 64 characters"));
+            return Err(PatchErr::bad("tz_name is at most 64 bytes"));
         }
         next.tz_name = v;
     }
@@ -636,7 +636,7 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
     }
     if let Some(v) = patch.follow_code.clone() {
         if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
-            return Err(PatchErr::bad("follow_code is at most 64 characters on one line"));
+            return Err(PatchErr::bad("follow_code is at most 64 bytes on one line"));
         }
         next.follow_code = v;
     }

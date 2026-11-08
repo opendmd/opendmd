@@ -223,8 +223,9 @@ impl WifiManager {
             .map(|info| info.ip.octets())
     }
 
-    /// On-demand scan for the setup page. Unsupported in AP mode: a STA scan
-    /// would tear the AP down and disconnect the browser that asked.
+    /// On-demand scan for the setup page and `GET /api/wifi/scan`. It works
+    /// in setup mode too: the setup network runs as AP+STA, so the station
+    /// half scans without taking the AP down.
     pub fn scan_networks(&mut self) -> anyhow::Result<Vec<ScannedAp>> {
         let aps = self
             .wifi

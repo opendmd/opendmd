@@ -45,8 +45,8 @@ use opendmd_psi::{compile, compile_declared, render_rows_ink, Inputs, Program, S
 pub mod png;
 
 /// A gallery file's size limit, bytes: a formula as long as the compiler
-/// takes ([`opendmd_psi::MAX_SOURCE`], 16,384 characters, whose own error
-/// says so) and room for the header. This is only the public repo's guard
+/// takes ([`opendmd_psi::MAX_SOURCE`], 32,768 bytes, whose own error says
+/// so) and room for the header. This is only the public repo's guard
 /// against a huge file on disk; what the panel minds is the formula's
 /// compiled length ([`MAX_PSB`]) and its cost ([`MAX_US`]).
 pub const MAX_FILE: usize = 36 * 1024;
