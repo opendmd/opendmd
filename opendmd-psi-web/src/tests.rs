@@ -38,16 +38,20 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
-    assert_eq!(i.len(), 16);
+    assert_eq!(i.len(), 17);
     assert_eq!(i[15], 1, "the JIT takes it");
+    assert_eq!(i[16], opendmd_psi::PANEL_MAX_US, "the panel's limit: 40 ms at 50 fps");
     assert!(i[14] > 0 && i[14] <= i[6], "the still estimate: never more than the VM's");
-    assert_eq!(i[10], 0, "no `fps` line: the player's 20 ms");
+    assert_eq!(i[10], 0, "no `fps` line: the panel's 20 ms");
     assert!(compile("fps 100\nloop 4\ngray(x)"));
     assert_eq!(
         (info()[4], info()[10]),
         (4000, 10),
         "`fps 100`: a 10 ms grid"
     );
+    assert_eq!(info()[16], 32_000, "`fps 100`: the panel's limit is 32 ms");
+    assert!(compile("look\nlayer multiply { gray(x) }"));
+    assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 
     // An error keeps the last formula drawn; the span is in JS's units
     // ("é" is 2 bytes in UTF-8, one unit in JS).

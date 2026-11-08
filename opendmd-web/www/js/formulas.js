@@ -17,7 +17,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, store, toast, debounce, saver, base, SITE, drawn, keepSelect } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { controls, control, fit, Q, about, TIP, est, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC, compiler } from './psikit.js';
+import { controls, control, fit, Q, about, TIP, est, refused, TOO_HEAVY, marks, sample, declText, fetchFormula, READY, REMIX, MAX_NAME, MAX_PATH, MAX_SRC, compiler } from './psikit.js';
 import * as S from './fstore.js';
 import { load } from './wasm.js';
 
@@ -184,6 +184,7 @@ const errRef = (msg) => import('./psierr.js').then((m) => m.refOf(msg, ROOT()), 
 const FIX = { 5: 1, 201: 1, 202: 1, 205: 1, 206: 1, 207: 1, 218: 0 };
 // Use as the look: a player's, or the demo's (js/demo.js).
 const LOOK = () => app.device || !!app.demo;
+const HEAVY = 'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most';
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
 
 // A preview: the LED canvas, the formula it plays and its own clock.
@@ -514,8 +515,7 @@ function editor() {
   const pz = h('button.sm', { id: 'psi-pause', onclick: () => seek(pv.hold == null ? elapsed() : null) });
   const stp = (k) => h('button.sm', { id: k < 0 ? 'psi-t-back' : 'psi-t-on', 'aria-label': k < 0 ? 'A frame back' : 'A frame on', title: k < 0 ? 'A frame back (,)' : 'A frame on (.)', onclick: () => step(k) }, k < 0 ? '‹' : '›');
   const trow = h('div.psi-time', pz, stp(-1), tr, stp(1), tnow);
-  const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true },
-    'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
+  const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true }, HEAVY);
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
   // A formula that reads a built-in input: its controls (js/fconds.js).
   const cond = h('div', { hidden: true });
@@ -656,7 +656,9 @@ function editor() {
       const i = info(f.src);
       cap.textContent = about(i);
       cap.title = TIP(i);
-      heavy.hidden = est(i) <= 8000;
+      heavy.hidden = est(i) <= 8000 && !refused(i);
+      heavy.textContent = refused(i) ? TOO_HEAVY(i) + '. Simplify it: noise, len, sqrt, atan2 and dividing by a changing value cost the most' : HEAVY;
+      heavy.classList.toggle('bad', refused(i));
       under.hidden = !(i[5] & 32);
       const c = ctlOf(f);
       if (look) look.hidden = !c?.look;

@@ -747,9 +747,15 @@ It is calibrated on the device (within ~12 % for layers and looks).
 **The JIT's estimate is the tier where it draws**: the panel compiles the
 pixel and row stages of most formulas (the JIT: its steps cost ~a third
 of the VM's), and where its kernel takes the formula `psi check`, the
-editor's light / medium / heavy and the limits count the JIT's estimate,
-the VM's shown beside it as "without the JIT" (`psi check` says when the
-JIT refuses one, and why: then the VM's counts). The JIT's estimate is
+editor's light / medium / heavy and the gallery's 10 ms count the JIT's
+estimate, the VM's shown beside it as "without the JIT" (`psi check` says
+when the JIT refuses one, and why: then the VM's counts). **The panel's
+refusals count the VM's**: 40 ms (32 at `fps 100`) and 12 ms for a look,
+by the plain VM estimate with no still cache, because the panel may have
+to draw any formula that way (the JIT off, short of memory, or failing
+its self-check; the cache refused). A formula can rate light with the
+JIT and still be refused; `psi check` then prints `refused:` and exits 1,
+and the editor says "Too heavy for the panel". The JIT's estimate is
 fitted to the panel's effect path (−13 % to +11 % on the measured
 Formulas); the frame the panel reports while it plays adds racing the
 beam and the writes (~15 % more, the VM's the same).
@@ -856,7 +862,7 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   value) is ~470 ns, half the 855 of a moving one.
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
-25 frames a second or fewer; `fps 100` needs ≤ 5 ms, else it plays at 50; GIF looks take ≤ 12 ms, and the worked
+25 frames a second or fewer; `fps 100` needs ≤ 5 ms, else it plays at 50; the panel refuses past 40 ms on the VM, 12 ms for a look, and the worked
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.

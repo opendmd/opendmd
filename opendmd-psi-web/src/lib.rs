@@ -281,8 +281,11 @@ pub fn error_at() -> Vec<u32> {
 /// checker's weight rule: `opendmd-gallery`'s `MAX_US`, which the site's
 /// Worker applies to the gallery files it syncs), 1 when the panel's JIT
 /// takes it (`Program::jit_takes`: then [11] and [13] are the tier and what
-/// the limits count, [14] and [6] the "without the JIT" figures; 0: the VM
-/// draws it, [14] and [6] are)]`; empty before anything compiled.
+/// the gallery's limit counts, [14] and [6] the "without the JIT" figures;
+/// 0: the VM draws it, [14] and [6] are), the panel's limit for it in µs
+/// (`Program::panel_limit_us`: 40 ms, 32 at `fps 100`, 12 for one drawn
+/// over a GIF; the panel refuses it when [6], the VM's figure, is over it,
+/// whatever the JIT would make of it)]`; empty before anything compiled.
 #[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -308,6 +311,7 @@ pub fn info() -> Vec<u32> {
         p.esp32_us_jit(),
         p.esp32_us_still(),
         u32::from(p.jit_takes()),
+        p.panel_limit_us(p.inputs() & 32 != 0),
     ]
 }
 

@@ -154,13 +154,19 @@ export function picker(names, label, v, set) {
 }
 // What it is, from info(): its loop, the clock, its cost on the panel.
 const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
-// Its µs a frame on the panel: with the JIT where its kernel takes it (i[15]: then the tier and the limits count it), else the VM's;
+// Its µs a frame on the panel: with the JIT where its kernel takes it (i[15]: then the tier counts it), else the VM's;
 // with its still cache (i[11], i[14] on the VM) unless it draws over a GIF (a look: i[13], i[6] on the VM, no cache).
 export const est = (i) => (i[15] === 0 ? (i[5] & 32 ? i[6] : i[14] ?? i[6]) : i[5] & 32 ? i[13] ?? i[6] : i[11] ?? i[6]);
 // The same without the JIT (the VM's), shown beside it.
 const vmEst = (i) => (i[5] & 32 ? i[6] : i[14] ?? i[6]);
-export const about = (i) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
-export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms a frame on the panel${vmEst(i) > est(i) ? `, ${(vmEst(i) / 1000).toFixed(1)} without the JIT` : ''} (light: under 5 ms; medium: under 8)`;
+// The panel refuses it: its own figure, the VM's with no still cache (i[6]), over its limit (i[16]: 40 ms,
+// 32 at fps 100, 12 over a GIF), whatever the JIT makes of it (the panel may draw any Formula on the VM).
+export const refused = (i) => i[6] > i[16];
+const ms = (us) => (us / 1000).toFixed(1);
+export const about = (i) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
+export const TIP = (i) => `${i[0]} steps, about ${ms(est(i))} ms a frame on the panel${vmEst(i) > est(i) ? `, ${ms(vmEst(i))} without the JIT` : ''} (light: under 5 ms; medium: under 8)${refused(i) ? `; the panel refuses it: ${ms(i[6])} ms without the JIT or its still cache, over its ${i[16] / 1000}` : ''}`;
+// The editor's sentence for one the panel refuses.
+export const TOO_HEAVY = (i) => `Too heavy for the panel: it plays a Formula only up to ${i[16] / 1000} ms a frame without the JIT, in case it has to draw it that way, and this one takes about ${Math.ceil(i[6] / 1000)}`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
 // comments `.c`, colours `.k` with `--k` their colour, for a swatch, the

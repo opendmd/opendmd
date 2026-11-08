@@ -220,7 +220,7 @@ pub fn still_held() -> u32 {
 /// ESP32) is refused: ~3.5 × the ring clock sketch, ~5 × the heaviest
 /// example. The [`Governor`]'s slowest step (8 frames held, 160 ms at
 /// 50 fps) still keeps it under 40 % of the main core.
-pub const MAX_EST_US: u32 = 40_000;
+pub const MAX_EST_US: u32 = psi::PANEL_MAX_US;
 
 /// Keeps a formula inside the effect budget (CLAUDE.md, "Live effects":
 /// ≤ 5 ms a frame at 100 fps, else ≤ 40 % of the frame — 8 ms at 50 fps)
@@ -1703,7 +1703,7 @@ pub fn mark_pair(dirty: &mut crate::canvas::DirtyMap, p: usize, a: u32, b: u32) 
 /// the estimate calibrated on the device, 12 ms: on a test board, looks of
 /// 8.6 and 12.3 ms measured left the GIFs at 0 steady misses (the animated
 /// one at 25 fps: over 8 ms its governor holds 40 ms frames).
-pub const LOOK_MAX_EST_US: u32 = 12_000;
+pub const LOOK_MAX_EST_US: u32 = psi::LOOK_MAX_US;
 
 /// Why a formula that never lets the picture under it show through (it
 /// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
@@ -3541,6 +3541,64 @@ mod tests {
             clock.retune(&b).is_none(),
             "a formula only replaces a formula"
         );
+    }
+
+    /// `n` waves a pixel, each moving every frame: the JIT draws them ~4.5×
+    /// faster than the VM, so the two estimates can fall either side of a
+    /// limit (built and checked with `psi check`).
+    fn waves(n: usize) -> String {
+        let terms: Vec<String> = (1..=n)
+            .map(|k| format!("step(0.5, frac(x*{} + y*{} + t*{}))*{}", k + 2, (k * 7) % 13 + 1, k % 5 + 1, k % 3 + 1))
+            .collect();
+        format!("loop 4\ng = {}\npal(rainbow, frac(g/40))", terms.join(" + "))
+    }
+
+    /// The panel refuses by the VM's estimate, never the JIT's or the still
+    /// cache's (the panel may draw any Formula on the VM: the JIT off, its
+    /// kernel not made yet or refused for memory, a failed self-check, the
+    /// cache refused or let go); `psi::Program::panel_refusal` (what the
+    /// editor, `psi check` and the gallery warn by) is the same rule, so a
+    /// Formula the editor calls light or heavy but the panel refuses says
+    /// so there. The cases: JIT and VM, and still cache and VM, either side
+    /// of a limit.
+    #[test]
+    fn the_panel_and_psi_refuse_by_the_same_figure() {
+        for grid in [10, 20, 40] {
+            assert_eq!(MAX_EST_US.min(Governor::slowest_budget_us(grid)), psi::panel_limit_us(grid), "{grid} ms");
+        }
+        assert_eq!(LOOK_MAX_EST_US, psi::LOOK_MAX_US);
+        let open =
+            |p: &str| crate::synth::SynthSource::new(crate::synth::open(p).unwrap()).map(|_| ());
+        // ~11 ms a frame with the JIT, ~52 without.
+        let jit_side = waves(48);
+        // ~1 ms with the still cache and the JIT, ~64 without either.
+        let still_side = format!(
+            "loop 4\ng = {}\npal(rainbow, frac(g - t/4))",
+            (1..=16).map(|k| format!("noise(x*{}, y*{}, 0)/{}", k * 5 + 3, (k * 11) % 37 + 3, 1 << (k % 4))).collect::<Vec<_>>().join(" + ")
+                + " + atan2(y - 0.5, x - 0.5) + atan2(y - 0.2, x - 0.8) + atan2(y - 0.9, x - 0.1) + sqrt(len(x - 0.3, y - 0.6))"
+        );
+        for (what, src) in [("jit", &jit_side), ("still", &still_side)] {
+            let prog = psi::compile(src).unwrap();
+            let (tier, vm) = (prog.tier_us(false), prog.esp32_us());
+            assert!(tier < MAX_EST_US / 2 && vm > MAX_EST_US, "{what}: tier {tier}, VM {vm}");
+            assert_eq!(prog.panel_refusal(false), Some((vm, MAX_EST_US)), "{what}");
+            let e = open(&super::path(src, "")).unwrap_err();
+            assert!(e.to_string().starts_with("this formula is too heavy for the panel"), "{what}: {e}");
+        }
+        assert!(psi::compile(&jit_side).unwrap().jit_takes());
+        assert!(psi::compile(&still_side).unwrap().still_lanes() > 0);
+        // A look: ~5 ms with the JIT, ~18 without.
+        let look = format!("look\nlayer multiply {{\n{}\n}}", waves(14).replace("loop 4\n", "").replace("pal(rainbow, frac(g/40))", "gray(frac(g/40))"));
+        let prog = psi::compile(&look).unwrap();
+        let (tier, vm) = (prog.tier_us(true), prog.esp32_us());
+        assert!(tier < LOOK_MAX_EST_US && vm > LOOK_MAX_EST_US, "look: tier {tier}, VM {vm}");
+        assert_eq!(prog.panel_refusal(true), Some((vm, LOOK_MAX_EST_US)));
+        let e = FormulaLook::from_path(&super::path(&look, "")).unwrap_err();
+        assert!(e.msg.starts_with("this formula is too heavy to draw over GIFs"), "{}", e.msg);
+        // Under the limits, each opens (a lighter count of the same waves).
+        let fine = waves(30);
+        assert_eq!(psi::compile(&fine).unwrap().panel_refusal(false), None);
+        open(&super::path(&fine, "")).unwrap();
     }
 
     #[test]

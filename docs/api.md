@@ -1032,7 +1032,10 @@ never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
 the web app's pkg-psi `program(src)` makes, or `psi build`), `a=`, `b=`,
 `c=` (sliders), `fps=50|100|25` (default:
 the formula's `fps` line, else 50; as a look over the GIF the line is not
-used). A heavy one is shown at fewer frames a second; status
+used). A heavy one is shown at fewer frames a second; one estimated over
+40 ms a frame on the VM (32 ms at `fps=100`), with no JIT and no still
+cache, is a `400` (`this formula is too heavy for the panel …`), however
+fast the JIT would draw it; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms`,
 `beam_us` (the raced frame time on the panel's refresh, µs; 0 while
 its frames are not raced, see `scan.beam`),
