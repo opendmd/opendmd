@@ -153,7 +153,7 @@ another. **Reset** puts it back to normal.
 
 Formulas are a few lines of maths that draw on the panel. The view has
 examples to remix, a live editor, the gallery and **Save as GIF…**. See
-[Formulas](formulas.md).
+[Formulas](formulas.md), and [Make a Formula](psi-1.md) to write your own.
 
 ## Settings
 
