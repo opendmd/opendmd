@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-webmin"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "make web's minifier: each of the web app's scripts (oxc) and stylesheets (lightningcss) on its own, no bundling."
 license = "MIT OR Apache-2.0"
