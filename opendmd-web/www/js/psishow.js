@@ -55,7 +55,7 @@ async function pump() {
     } else await app.src.json('POST', '/api/play', { path: '', live, over: true }, 8000);
     if (!live) toast(!f.src ? 'Taken off the panel' : o ? `Over the panel’s GIF: ${name}` : `On the panel: ${name}`, 'ok');
     // Over the GIF, it needs the player's memory: say so if it is waiting for it.
-    if (o && f.src && !live) setTimeout(() => app.refreshStatus?.().then((st) => { if (shown === f && st?.formula_look?.held === 0) toast('The panel is short of memory just now: it draws this over the GIF as soon as there is room', 'bad'); }).catch(() => {}), 1500);
+    if (o && f.src && !live) setTimeout(() => app.refreshStatus?.().then((st) => { if (shown === f && st?.formula_look?.held === 0) toast('The display is short of memory just now: it draws this over the GIF as soon as there is room', 'bad'); }).catch(() => {}), 1500);
   } catch (e) {
     const s = e.status;
     // (A newer change goes instead, if one came.)
@@ -70,7 +70,7 @@ async function pump() {
     // A change after the playlist moved on: it just stops following.
     const why = e.message?.replace(/^400: /, '');
     if (s != 409) toast(s == 415 || s == 404 || s == 405 ? 'Update OpenDMD to show formulas on the panel' : s == 400 ? `The panel can’t ${o ? 'draw' : 'show'} “${name}”${o ? ' over its GIF' : ''}: ${why}`
-      : s == 413 ? 'This formula is too long to show on the panel' : s == 503 && e.after ? 'The panel is busy just now: try again in a moment' : s == 503 ? `The panel has nothing playing to ${o ? 'draw over' : 'interrupt'}` : s ? 'Show on panel: ' + e.message : 'Couldn’t reach the panel', 'bad');
+      : s == 413 ? 'This formula is too long to show on the panel' : s == 503 && e.after ? 'The display is busy just now: try again in a moment' : s == 503 ? `The display has nothing playing to ${o ? 'draw over' : 'interrupt'}` : s ? 'Show on panel: ' + e.message : 'Couldn’t reach the display', 'bad');
   }
   busy = false;
   mark();

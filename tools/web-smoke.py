@@ -5557,7 +5557,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     for status, body, want in ((415, "@formula: not a playable file", "Update OpenDMD to show formulas on the panel"),
                                (404, "Not Found", "Update OpenDMD to show formulas on the panel"),
                                (400, "unknown name `q`", "The panel can’t show"),
-                               (0, "", "Couldn’t reach the panel")):
+                               (0, "", "Couldn’t reach the display")):
         def answer(route, _req, status=status, body=body):
             if not status:
                 route.abort()

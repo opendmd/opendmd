@@ -89,12 +89,12 @@
       unticked):
       <ul>
         <li><b>Ticked</b> (a new board, or one that ran DMDoS or other firmware): the whole flash is erased first. That includes the
-          player's settings in NVS: <b>WiFi network and password, brightness, the playlist, the schedule and night window, and
+          display's settings in NVS: <b>WiFi network and password, brightness, the playlist, the schedule and night window, and
           Follow RePlayOS</b>. When it is done, <b>Next</b> asks for your WiFi (the board lists the networks it sees), the board joins and
           saves it, and <b>Visit device</b> opens the web app. Skip that and the board starts as the open WiFi access point
           <code>OpenDMD-Setup</code> (it can take a minute or two to appear); join it and enter your network.</li>
         <li><b>Unticked</b> (an update of a board already running OpenDMD): only the firmware, its updater, the web app, the bootloader and the
-          partition table are written. The settings stay, and the player comes back on your network.</li>
+          partition table are written. The settings stay, and the display comes back on your network.</li>
       </ul>
     </li>
     <li>Wait for it to finish (about a minute), then the board restarts by itself. The panel stays dark while the installer
