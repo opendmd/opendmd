@@ -79,7 +79,8 @@ function apply(s) {
   let note = false; // the empty community list's note shown
   for (const sec of document.querySelectorAll('main .fsec')) {
     const ul = sec.querySelector('ul.ftiles');
-    sec.hidden = ul ? !kidsShown(ul) : !!filtered && s.show !== 'community';
+    // The empty community list shows only when asked for (Show: From the community).
+    sec.hidden = ul ? !kidsShown(ul) : s.show !== 'community';
     note ||= !ul && !sec.hidden;
   }
   if (none) none.hidden = shown > 0 || !filtered || note;

@@ -96,11 +96,6 @@ Running the [installer](install.md) with **Erase device** ticked wipes the
 board back to a fresh install: WiFi details, settings and a forgotten
 security key all go. Your SD card, GIFs and playlists are kept.
 
-## Building the display
-
-The [Assembly section of dmdos.net](https://dmdos.net/) shows each step of
-the build with a photo.
-
 ## Something else
 
 If none of this helps, [report the problem on GitHub](https://github.com/opendmd/opendmd/issues):
