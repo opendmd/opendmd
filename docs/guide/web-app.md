@@ -1,66 +1,68 @@
 # The web app
 
-Everything about your display is managed from a web page the display serves
-itself: open **<http://opendmd.local/>** on any phone, tablet or computer on
-the same WiFi. There is nothing to install.
+You manage the display from a web page it serves itself. Open
+**<http://opendmd.local/>** on any phone, tablet or computer on the same
+WiFi; there is nothing to install.
 
-On a computer the views are listed down the left side; on a phone they are
-along the bottom: **Now**, **Library**, **Playlists**, **Formulas**,
-**Create Art** and **Settings** (on a small phone, Create Art is just
-**Create**).
+The first time, open **Now** to see what's playing and try **Skip**, then
+open **Playlists** to choose what plays.
 
-Want to look around first? The [demo](https://opendmd.dev/demo/) is
-the same app running in your browser, with a few sample animations.
+On a computer the views are listed down the left side, and on a phone along
+the bottom. They are **Now**, **Library**, **Playlists**, **Formulas**,
+**Create Art** (**Create** on a small phone) and **Settings**.
+
+The [demo](https://opendmd.dev/demo/) is the same app running in your
+browser, with a few sample animations.
 
 ## Now
 
 ![The Now view, previewing what the panel plays](../images/now.png)
 
-What the panel is showing right now: the title, its platform and category,
-where it is in the playlist ("14 of 10,162"), and a moving preview of it
-drawn the way the LEDs look. Use it as a remote: **Skip** to the next GIF,
-**Pause** and **Resume**, and drag the brightness slider. (Don't want the
-preview? Turn off **Mirror the panel on Now** in Settings › Look.)
+Now shows what the panel is playing: the title, its platform and category,
+where it is in the playlist ("14 of 10,162"), and a moving preview drawn
+the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
+**Pause** and **Resume** stop and start it, and the slider sets the
+brightness. To hide the preview, turn off **Mirror the panel on Now** in
+Settings › Look.
 
-Missed something? **Recently played** under the preview lists what the panel
-showed last, even while no page was open: tap one to play it again.
-**Replay** restarts what is on now, and **Previous** steps back one at a
-time.
+**Recently played**, under the preview, lists what the panel showed last,
+even while no page was open. Tap one to play it again. **Replay** restarts
+what is on now, and **Previous** steps back one at a time.
 
-Like what's on? Tap **☆** next to the title to make it a favourite in the
-playlist that's playing (it turns to **★**; tap again to undo). The
-message that pops up names the playlist. The **…** on a Recently played
-GIF has the rest: play less often, hide, play longer. Formulas have no ☆.
+Tap **☆** next to the title to make the GIF a favourite in the playlist
+that's playing. It turns to **★**, and a second tap undoes it; the message
+that pops up names the playlist. The **…** on a Recently played GIF has the
+other choices: play less often, hide, play longer. Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
 
-When there's nothing to play, Now says why instead: no card, an empty
-playlist, or a platform filter that matches none of the playlist's GIFs
-(with a **Clear filter** button).
+When there's nothing to play, Now says why instead. It can be no card, an
+empty playlist, or a platform filter that matches none of the playlist's
+GIFs, which comes with a **Clear filter** button.
 
 ## Library
 
 ![The Library, with a GIF's details playing](../images/library.png)
 
-Every GIF on your card, by folder: the folders on your card (Arcade,
-Consoles, and so on), each with how many
-GIFs it holds. Click a folder to open it, again to close it; **⊟** closes
-them all. Big folders scroll smoothly however many GIFs they hold. Each GIF
-has a small picture of its first frame; rest the pointer on one (or move
-to it with the keyboard) and it plays a moment of it. The chips at the top
-narrow the list by platform.
+The Library lists every GIF on your card by folder (Arcade, Consoles and so
+on), each folder with how many GIFs it holds. Click a folder to open it and
+again to close it; **⊟** closes them all. Each GIF has a small picture of
+its first frame, and resting the pointer on one, or moving to it with the
+keyboard, plays a moment of it. The chips at the top narrow the list by
+platform.
 
 **Search** looks through every GIF on the card. Only the folders with
-matches stay, opened, each saying how many it has; the chips show the
-platforms of the matches, say **SNES 17**: tap one to narrow the results,
-tap it again to undo. Clear the box to go back to the folders as they were.
+matches stay, opened, each saying how many it has. The chips show the
+platforms of the matches, such as **SNES 17**; tap one to narrow the
+results and tap it again to undo. Clear the box to go back to the folders
+as they were.
 
-**With a keyboard:** ↑ and ↓ move, → opens a folder (or steps into it),
-← closes it (or steps back out), Enter opens a folder or a GIF.
+With a keyboard, ↑ and ↓ move, → opens a folder or steps into it, ← closes
+it or steps back out, and Enter opens a folder or a GIF.
 
-Click a GIF to open its details: a preview, its title, platform, category
-and author, and what you can do with it:
+Click a GIF to open its details, with a preview and its title, platform,
+category and author. From there:
 
 - **Send to panel** plays it now; afterwards the playlist carries on.
 - **Add to playlist…** puts it in a playlist.
@@ -71,161 +73,206 @@ and author, and what you can do with it:
 - **Delete…** removes it from the card and from every playlist, after
   asking first.
 
-**Several at once.** Press **Select** (or long-press a GIF on a phone):
-tick boxes appear, a tap picks a GIF, a folder's box picks every GIF in it,
-and **Add to playlist** puts them all in the playlist you're editing.
-**Done** leaves Select.
+### Several at once
 
-**Adding GIFs.** Press **+ Add GIFs** and pick files from your computer or
-phone. For each one, give it a title, a platform, a category (or a new one)
-and, if you like, an author. The app suggests a title from the file name and
-shows the name the GIF will get on the card. Afterwards it offers to add the
-new GIFs to the playlist that's playing. Each GIF is also made ready for
-smooth playback as it uploads; you don't need to do anything.
+Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
+tap picks a GIF, and a folder's box picks every GIF in it. **Add to
+playlist** puts them all in the playlist you're editing, and **Done**
+leaves Select.
 
-**Smooth motion.** Some GIFs scroll or move in jumpy steps of a few pixels.
-When the app spots one, a **Smooth motion** switch appears under its
-preview. Turn it on and the panel fills in the in-between steps so it glides
-instead. Your GIF file isn't changed, and you can switch it off again any
-time.
+### Adding GIFs
+
+Press **+ Add GIFs** and pick files from your computer or phone. For each
+one, give it a title, a platform, a category (or a new one) and, if you
+like, an author. The app suggests a title from the file name and shows the
+name the GIF will get on the card. Afterwards it offers to add the new GIFs
+to the playlist that's playing. Each GIF is made ready for smooth playback
+as it uploads.
+
+### Smooth motion
+
+Some GIFs scroll or move in jumpy steps of a few pixels. When the app spots
+one, a **Smooth motion** switch appears under its preview. Turn it on and
+the panel fills in the in-between steps so it glides instead. Your GIF file
+isn't changed, and you can switch it off again. A GIF with more than 256
+colours doesn't get the switch.
 
 ## Playlists
 
 ![A playlist open in the editor](../images/playlists.png)
 
-A playlist is the set of GIFs the panel cycles through. **All files** is the
-default and plays everything listed on your card; **Halloween** and
+A playlist is the set of GIFs the panel cycles through. **All files** is
+the default and plays everything listed on your card; **Halloween** and
 **Christmas** appear too if your card has those lists.
 
 Tap a playlist to open it. On a computer it opens beside the list; on a
 phone it takes the whole screen, and **‹ Playlists** goes back.
 
-- **Make one:** press **+ New playlist** and give it a name. Then **+ Add
-  GIFs** shows your folders beside the playlist (on a phone, in its place;
-  **Done** goes back): tick GIFs, or a whole folder, and press **Add 12
-  ticked**. Or search, say "mario" with the **SNES** chip, and press **Add
-  all 41 shown**. A GIF already in the playlist has a ✓ and isn't added
-  twice. **Add by filter…** fills it by rules instead: platforms,
-  categories and title words (**Leave out** drops logos, intros and the
-  like), shuffled or cut to a number if you like. Or pick GIFs in the
-  Library and choose **Add to playlist… › New playlist…**.
-- **Edit one:** open it; every GIF shows its first frame. Drag the ⠿
-  handles to reorder, ✕ to remove one, or pick GIFs and use **Arrange** to
-  move or remove them, then **Save**. The ones that come with your card
-  (All files, Halloween, Christmas) are saved as a copy under a name of
-  your own.
-- **Switch to one:** **Save & play** while editing, or **Play** from a
-  playlist's **…** menu. The panel switches over in a few seconds.
+### Making a playlist
+
+Press **+ New playlist** and give it a name. Then **+ Add GIFs** shows your
+folders beside the playlist, or in its place on a phone, where **Done**
+goes back. Fill it in any of these ways:
+
+- Tick GIFs, or a whole folder, and press **Add 12 ticked**.
+- Search for "mario", tap the **SNES** chip and press **Add all 41 shown**.
+- Press **Add by filter…** to fill it by rules: platforms, categories and
+  title words, shuffled or cut to a number if you like. **Leave out**
+  drops logos, intros and the like.
+- In the Library, pick GIFs and choose **Add to playlist… › New
+  playlist…**.
+
+A GIF already in the playlist has a ✓ and isn't added twice.
+
+### Editing a playlist
+
+Open it, and every GIF shows its first frame. Drag the ⠿ handles to
+reorder, press ✕ to remove one, or pick GIFs and use **Arrange** to move or
+remove them, then **Save**. The playlists that come with your card (All
+files, Halloween, Christmas) are saved under a name of your own.
+
+**Save & play** while editing, or **Play** from a playlist's **…** menu,
+switches the panel to it in a few seconds.
 
 ### Favourites and hiding
 
-Right-click a GIF in the Library or a playlist (or use its **…** button;
-on a phone, long-press in a playlist) to tune how it plays in that
-playlist:
+Right-click a GIF in the Library or a playlist, or use its **…** button, to
+tune how it plays in that playlist. On a phone, long-press it in a
+playlist.
 
-- **Favourite**: plays more often.
-- **Play less often.**
-- **Hide from this playlist**: never plays there.
-- **Play longer or loop…**: stays on screen twice as long or for a number
-  of seconds, or plays a set number of times.
+- **Favourite** plays it more often.
+- **Play less often** does the opposite.
+- **Hide from this playlist** means it never plays there.
+- **Play longer or loop…** keeps it on screen twice as long or for a
+  number of seconds, or plays it a set number of times.
 
 These are per playlist, so a GIF can be a favourite in one and hidden in
-another. **Reset** puts it back to normal. On **Now**, the ☆ next to the
-title makes the GIF on screen a favourite in the playlist that's playing.
+another. **Reset** puts it back to normal.
 
 ## Formulas
 
-A few lines of maths that draw on the panel, with examples to remix, a
-live editor, the gallery and Save as GIF. See [Formulas](formulas.md).
+Formulas are a few lines of maths that draw on the panel. The view has
+examples to remix, a live editor, the gallery and **Save as GIF…**. See
+[Formulas](formulas.md).
 
 ## Settings
 
-Settings has four tabs, and everything saves as you change it (a green
-**Saved ✓** says so):
+Settings has four tabs. Changes save as you make them, and a green
+**Saved ✓** says so.
 
-- **Playback:** brightness, and under it **Maximum brightness**, a ceiling
-  for the brightness slider (going above the suggested level can make the
-  display reset on the power supply it came with, so only raise it if
-  you've fitted a stronger one); which playlist plays, **Platforms** and
-  **Shuffle**, and how long **each GIF stays** on (3 to 30 seconds, say).
-  Platforms says **All** with how many there are; **Choose…** lists them
-  with how many GIFs each has (the rare ones behind **+N more**, and a box
-  to find one): tap the ones you want and press **Only these**, or **All
-  platforms**.
-- **Look:** **Colour**, to show everything in full colour or in a single
-  colour like a classic dot-matrix display (amber, red, green, blue or
-  white); **Phosphor glow**, which makes dots fade out softly like an old
-  plasma display; **Mirror the panel on Now**, the preview on Now (this
-  browser only); the **Transition** from one GIF to the next (dissolve,
-  wipe, blinds, push, fade or none) and how fast; and the **Start-up** show
-  the panel plays when it powers on.
-- **Schedule:**
-  - **Time** sets your time zone, for the clock and schedules.
-  - **Location** is where the panel is, roughly (latitude and longitude,
-    to about a kilometre), so Formulas can follow the real sun: daylight,
-    dawn and dusk, the seasons. Type the two numbers (a map app shows
-    them), or press **Use this browser’s location** (browsers only share it
-    with secure https pages, so on the panel's own page you'll usually type
-    them); **Clear** removes it. It stays on your panel: it is never written
-    to the card or shared.
-  - **Schedule** picks a playlist or brightness for certain days and times
-    ("weekday evenings: Consoles"). The first rule that matches wins, and
-    your normal settings come back when it ends.
-  - **Night mode** turns the panel off, or dims it, every night between the
-    times you choose.
-  - **Follow RePlayOS** links the display to a RePlayOS gaming box: when you
-    start a game, the panel shows the console's logo, a title card and art
-    for that game; in the menus it plays a playlist of your choice. Turn on
-    NET CONTROL on the box, then enter its address and code here and press
-    **Test**.
-    The **attract playlist** is what the menus show. To show a Formula
-    there, make a playlist of it and choose that playlist; the bundled
-    **Big clock** Formula is a clock, and it follows the time zone under
-    **Time**.
-- **Device:**
-  - **Status**: the playlist and how many GIFs it has, the card, how long
-    the display has been running, its memory, and late frames (frames the
-    panel showed late enough to see). **Reload playlist** reads the card
-    again if you changed it in a computer; **Reboot** restarts it.
-  - **Ready to play** shows how many GIFs are ready to play at their
-    smoothest. The display gets them ready by itself while the panel is
-    dark at night (**Night mode** under **Schedule**) or playback is
-    paused; **Also while playing** lets it do a little more while it
-    plays, slowly.
-    **Prepare remaining files** does the rest now from your browser.
-  - **Network** changes the WiFi network or the **Display name** (`opendmd`
-    in `opendmd.local`). Give each display its own name if you have more
-    than one; a name another display on your network already answers to is
-    refused, and nothing is saved. A WiFi change needs a reboot; a new name
-    works straight away: Settings shows the display's new address and, if
-    you opened the web app by its old `.local` name (which stops working), a
-    link to the new one.
-    **About** shows the address the display really has: if another display
-    already had its name, it's `<name>-2.local` and About says so. Its
-    **API reference** link opens, on the OpenDMD site, the HTTP API for the
-    display's firmware version, for scripts and home automation.
-  - **Panel timing** is for a panel that shows a few wrong-coloured dots on
-    some pictures: **Test panel timing** shows test pictures under A and B
-    and saves the one you pick; a change by hand is tried for a minute and
-    undone unless you press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
-  - **Firmware** shows the version and installs updates (see
-    [Updating](updating.md)).
-  - **Security** can require a key before the display can be controlled.
-    Without one, anyone on your WiFi can change the panel, so the web app
-    shows a banner offering to set one until you do (the setup page offers
-    one too). Each browser asks for the key once. The key is the only lock,
-    and it travels in clear text on your network: keep the panel on a
-    network you trust.
+### Playback
+
+**Brightness** sets how bright the panel is, and **Maximum brightness**
+under it caps the slider. Going above the suggested level can make the
+display reset on the power supply it came with, so only raise it if you've
+fitted a stronger one.
+
+**Playlist** picks which playlist plays. **Platforms** says **All** with
+how many there are, or the ones you picked. **Choose…** lists them with how
+many GIFs each has, with the rare ones behind **+N more** and a box to find
+one. Tap the ones you want and press **Only these**, or **All platforms**.
+
+**Each GIF stays** sets the shortest and longest time a GIF is on, 3 to 30
+seconds to start with, and **Shuffle** mixes the order. **A Formula you
+show on the panel stays** for one turn, 1 or 5 minutes, or until you change
+it.
+
+### Look
+
+**Colour** shows everything in full colour, or in a single colour like a
+classic dot-matrix display: amber, red, green, blue or white. **Phosphor
+glow** makes dots fade out softly like an old plasma display.
+
+**Formula over every GIF** lays a Formula, such as scanlines or an old TV,
+over everything the panel plays.
+
+**Mirror the panel on Now** turns the preview on Now on or off, in this
+browser only.
+
+Under **Transition**, **Style** is how the panel moves from one GIF to the
+next (dissolve, wipe, blinds, push, fade or none) and **Speed** is how fast;
+**Preview** shows it. **Start-up show** is what the panel plays when it
+powers on.
+
+### Schedule
+
+**Time** sets your time zone, for the clock and schedules.
+
+**Location** is roughly where the panel is, so Formulas can follow the real
+sun: daylight, dawn and dusk, the seasons. Type the latitude and longitude
+from a map app, or press **Use this browser’s location**. Browsers only
+share a location with secure https pages, so on the display's own page
+you'll usually type them. **Clear** removes it. The location stays on the
+display and is never written to the card or shared.
+
+**Schedule** picks a playlist or brightness for certain days and times,
+such as "weekday evenings: Consoles". The first rule that matches wins, and
+your normal settings come back when it ends.
+
+**Night mode** turns the panel off, or dims it, every night between the
+times you choose.
+
+**Follow RePlayOS** links the display to a RePlayOS gaming box. When you
+start a game, the panel shows the console's logo, a title card and art for
+that game. In the menus it plays the **Attract playlist** of your choice.
+Turn on NET CONTROL on the box, then enter its address and code here and
+press **Test**. For a clock in the menus, add the bundled **Big clock**
+Formula to a playlist and choose that one; it follows the time zone under
+**Time**.
+
+### Device
+
+**Status** shows the playlist and how many GIFs it has, the card, and how
+long the display has been running. **Reload playlist** reads the card again
+if you changed it in a computer, and **Reboot** restarts the display.
+
+**Card speed** is **Safe** unless you choose **Fast**, which reads the card
+faster. Some cards return wrong data at Fast without an error, so choose
+Safe again if GIFs look damaged.
+
+**Ready to play** shows how many GIFs have been prepared for their
+smoothest playback. The display does this by itself while it is dark at
+night or paused; **Prepare remaining files** does the rest now, from your
+browser. **Thumbnails in the Library and playlists** switches the small
+pictures off. Your browser keeps each one, so the display sends it only
+once.
+
+**Network** changes the WiFi network or the **Display name** (`opendmd` in
+`opendmd.local`); press **Save network** to keep the change. A WiFi change
+needs a reboot, and a new name works straight away. Give each display its
+own name if you have more than one ([two displays with the same
+name](troubleshooting.md#i-cant-open-opendmdlocal)). **Work or school
+login** is here too, as on the setup page.
+
+**Moving pictures** has two switches for GIFs that move fast. **Sync to the
+panel’s refresh** stops tearing, and **Delay the bottom half one refresh**
+takes away the step at mid-height on fast scrollers.
+
+**Panel timing** is for a panel that shows a few wrong-coloured dots on
+some pictures. **Test panel timing** shows test pictures under A and B and
+saves the one you pick. A change by hand is tried for a minute and undone
+unless you press **Keep**; [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)
+has the steps.
+
+**Firmware** shows the version and installs updates; see
+[Updating](updating.md).
+
+**Security** has **Require a key for the API**. Without a key, anyone on
+your WiFi can change the panel, so the web app shows a banner offering to
+set one until you do; the setup page offers one too. Each browser asks for
+the key once. The key is the only lock, and it travels in clear text on
+your network, so keep the display on a network you trust.
+
+**About** shows the display's address, the firmware and web app versions,
+an **API reference** link to the HTTP API for scripts, and the
+**Open-source licences**. If another display already has its name, About
+says so.
 
 ## On a phone
 
 <img src="../images/phone-library.png" width="300" alt="The Library on a phone">
 
-Everything works on a phone too. The details of a GIF slide up from the
-bottom, a playlist opens as a screen of its own (and its **+ Add GIFs**
-takes the whole screen until **Done**), and long-press replaces
-right-click (in the Library, long-press starts Select).
-
-**Thumbnails** are on unless you switch them off (Settings › Device ›
-**Thumbnails in the Library and playlists**). Each GIF's picture is fetched
-once and kept by your browser, so they cost the panel next to nothing.
+The web app works the same on a phone. The details of a GIF slide up from
+the bottom, and a playlist opens as a screen of its own, where **+ Add
+GIFs** takes the whole screen until **Done**. Long-press replaces
+right-click; in the Library, long-press starts Select.
