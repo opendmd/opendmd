@@ -31,8 +31,8 @@ section of [dmdos.net](https://dmdos.net/).
 
 ### 3 · A microSD card
 
-Where your GIFs live. DMDoS suggests a 32 GB card, but any card you have
-will do. OpenDMD reads FAT32 cards; a bigger card that comes as exFAT can
+Where your GIFs live. DMDoS suggests a 32 GB Raspberry Pi card, as a
+precaution against bad cards, but any card in good order will do. OpenDMD reads FAT32 cards; a bigger card that comes as exFAT can
 be formatted from the web app. See [The SD card](card.md).
 
 **Where:** any shop; the Hardware section of [dmdos.net](https://dmdos.net/)
