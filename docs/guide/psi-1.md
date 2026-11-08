@@ -1,7 +1,7 @@
 # Make a Formula, 1: change one
 
-A Formula is a short piece of text that the panel turns into a picture,
-pixel by pixel, 50 times a second. You don't need to have programmed
+A Formula is a short piece of text that the display turns into a moving
+picture, usually 50 frames a second. You don't need to have programmed
 before. On this page you write one line, change it a few times, and end
 with your own Formula on the panel. Then [make it move](psi-2.md) and
 [add a shape](psi-3.md).
@@ -44,8 +44,8 @@ Try `y` instead of `x`. It is 0 at the top and 1 at the bottom, so the
 fade now comes in from the top. To fade in from the bottom, write
 `#f80 * (1 - y)`.
 
-The panel works that one line out for each of its 4,096 pixels, and each
-pixel has its own `x` and `y`.
+The display works that one line out for each of the panel's 4,096
+pixels, and each pixel has its own `x` and `y`.
 
 ## Two colours
 
