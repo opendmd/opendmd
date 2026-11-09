@@ -476,10 +476,13 @@ struct Opts {
     force_short: u32,
 }
 
-/// Whether a pass ran a compile (prepared, or not after all).
+/// Whether a pass ran a compile (prepared, or not after all), and the
+/// Formulas short of memory even after their compile ran: the retries skip
+/// them (they would take every retry's one compile), the next start tries.
 #[derive(Default)]
 struct Left {
     compiled: bool,
+    heavy: Vec<u32>,
 }
 
 /// Prepare the card's Formulas (the boot task once the card is handed
@@ -505,10 +508,9 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
         force_short: if cfg!(feature = "emu-census") && !online { 1 } else { 0 },
     };
     let mut shorts = Vec::new();
-    let (c, left) = pass(settings, &mut shorts, opts);
+    let (c, left) = pass(settings, &mut shorts, opts, &[]);
     publish(c);
-    let _ = left;
-    if c.short + c.queued > 0 && tries > 0 {
+    if c.short as usize + c.queued as usize > left.heavy.len() && tries > 0 {
         // The retries are the network worker's ([`tick`]): the boot task
         // ends now and its stack goes back to the heap.
         *RETRY.lock().unwrap_or_else(|p| p.into_inner()) = Some(Retry {
@@ -519,6 +521,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
             left: tries,
             next: Instant::now() + wait,
             t0,
+            heavy: left.heavy,
         });
         return c;
     }
@@ -539,6 +542,8 @@ struct Retry {
     left: u32,
     next: Instant,
     t0: Instant,
+    /// Short of memory after their compile ran: skipped by the retries.
+    heavy: Vec<u32>,
 }
 static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
 
@@ -559,7 +564,8 @@ fn retry_tick() {
     if room && give_way(false) {
         let mut shorts = Vec::new();
         let opts = Opts { wait: false, compiles: 1, force_short: 0 };
-        let (again, left) = pass(&r.settings, &mut shorts, opts);
+        let (again, left) = pass(&r.settings, &mut shorts, opts, &r.heavy);
+        r.heavy.extend(left.heavy.iter().copied());
         let c = r.counts;
         // The later pass counts the earlier passes' compiles as ready:
         // they are this start's prepared, not its ready.
@@ -580,7 +586,7 @@ fn retry_tick() {
             r.next = Instant::now() + AFTER_COMPILE;
         }
     }
-    if r.counts.short + r.counts.queued == 0 || r.left == 0 {
+    if (r.counts.short + r.counts.queued) as usize <= r.heavy.len() || r.left == 0 {
         if let Some(r) = g.take() {
             finish(r.counts, &r.shorts, r.t0);
         }
@@ -599,7 +605,7 @@ fn finish(c: Counts, shorts: &[String], t0: Instant) {
     }
     if c.sources > 0 {
         log::info!(
-            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, {} not tried (the card busy), in {} ms",
+            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, {} not tried yet, in {} ms",
             c.sources,
             c.current,
             c.prepared,
@@ -709,11 +715,11 @@ fn redo_keys(path: &str) -> Vec<u32> {
 
 #[optimize(size)]
 #[inline(never)]
-fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts) -> (Counts, Left) {
+fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32]) -> (Counts, Left) {
     // In flight from the listing to the last write: a crash in between
     // counts against the next start ([`boot`]); none outside it.
     guard(0).store(GUARD_MAGIC, Relaxed);
-    let r = pass_in(settings, shorts, opts);
+    let r = pass_in(settings, shorts, opts, skip);
     guard(0).store(0, Relaxed);
     guard(1).store(crashes_word(0), Relaxed);
     r
@@ -721,7 +727,7 @@ fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<Str
 
 #[optimize(size)]
 #[inline(never)]
-fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts) -> (Counts, Left) {
+fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts, skip: &[u32]) -> (Counts, Left) {
     let card_dir = "/formulas";
     let dir = format!("{}{card_dir}", config::SD_MOUNT);
     let entries = list(card_dir);
@@ -772,6 +778,10 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             }
             State::Stale(why) => why,
         };
+        if skip.contains(&k) {
+            c.short += 1;
+            continue;
+        }
         // Past this pass's compiles, or the card busy: queued for later.
         if stopped || budget == 0 || !give_way(opts.wait) {
             if opts.wait && !stopped {
@@ -781,8 +791,20 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             c.queued += 1;
             continue;
         }
+        // (Test images: `heavy*` as a Formula whose compile runs out of
+        // memory every time; `zlate*` short at the first pass.)
         #[cfg(feature = "emu-census")]
-        if force_short > 0 {
+        if force_short > 0 && name.starts_with("heavy") {
+            log::info!("formulas: /formulas/{name} taken as short of memory after its compile (a test image)");
+            shorts.push(format!("/formulas/{name}"));
+            c.short += 1;
+            budget = budget.saturating_sub(1);
+            left.compiled = true;
+            left.heavy.push(k);
+            continue;
+        }
+        #[cfg(feature = "emu-census")]
+        if force_short > 0 && name.starts_with("zlate") {
             force_short -= 1;
             log::info!("formulas: /formulas/{name} taken as short of memory (a test image), for a retry");
             c.min_need = 1;
@@ -803,6 +825,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
                 if compiled {
                     budget = budget.saturating_sub(1);
                     left.compiled = true;
+                    left.heavy.push(k);
                 }
             }
             Done::Busy => {
@@ -826,13 +849,11 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             .map(|b| key(&format!("{card_dir}/{b}")))
             .collect();
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let now: Vec<u32> = redo_keys(&redo_path)
-            .into_iter()
-            .filter(|k| !redone.contains(k) && present.contains(k))
-            .collect();
+        let all = redo_keys(&redo_path);
+        let now: Vec<u32> = all.iter().copied().filter(|k| !redone.contains(k) && present.contains(k)).collect();
         if now.is_empty() {
             let _ = fs::remove_file(&redo_path);
-        } else {
+        } else if now.len() != all.len() {
             let text: String = now.iter().map(|k| format!("{k:08x}\n")).collect();
             let _ = fs::write(&redo_path, text);
         }

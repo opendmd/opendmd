@@ -287,6 +287,18 @@ class Lane:
             # The emu-census image takes one Formula as short at first: a
             # retry compiles it on the network worker, whose stack is read.
             if e.find(re.compile(r"census: \d+ blocks in use")):
+                # `heavy.psi` is short even after its compile, every time
+                # (the image's hook): the retries skip it, and `zlate.psi`,
+                # behind it, short at the first pass, is still prepared.
+                if not e.find(re.compile(r"formulas: /formulas/heavy\.psi taken as short of memory after its compile")):
+                    raise LaneFail("heavy.psi was not taken as short after its compile")
+                if e.find(re.compile(r"formulas: /formulas/heavy\.psi prepared for the panel")):
+                    raise LaneFail("heavy.psi was prepared (the hook should keep it short)")
+                zs = e.find(re.compile(r"formulas: /formulas/zlate\.psi taken as short of memory \(a test image\), for a retry"))
+                zp = e.find(re.compile(r"formulas: /formulas/zlate\.psi prepared for the panel"))
+                if not zs or not zp or zp[0][0] < zs[0][0]:
+                    raise LaneFail("zlate.psi (behind the always-short heavy.psi) was not prepared by a retry")
+                self.ok("past a heavy one", "heavy.psi short after its compile, skipped by the retries; zlate.psi behind it prepared by a retry")
                 r = e.find(re.compile(r"formulas: a retry compiled on the network worker \((\d+) B of its stack unused at its deepest\)"))
                 if not r:
                     raise LaneFail("no retry compiled on the network worker (an emu-census image takes one Formula as short at first)")
@@ -312,7 +324,7 @@ class Lane:
             self.booted_ours(e)
             _, m = e.wait_for(SUMMARY, 300, what="the second start's summary")
             want = 0 if self.cut_healed else 1
-            if int(m[3]) != want or int(m[2]) + int(m[3]) + int(m[4]) != int(m[1]):
+            if int(m[3]) != want or int(m[2]) + int(m[3]) + int(m[4]) + int(m[5]) != int(m[1]):
                 raise LaneFail(f"the second start should compile {want} (the refused one, if not healed already): {m[0]}")
             if want and not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
                 raise LaneFail("cut.psi was not prepared again at the next start")
