@@ -1,6 +1,6 @@
 // Settings › Device (imported when the tab is first open; its own size
 // line): the player's status, the playback cache, network (its own Save; a
-// new name is live at once), reload and reboot, and About. Panel timing
+// new name is live at once), offline mode, reload and reboot, and About. Panel timing
 // (js/panel.js), Firmware and Security (js/firmware.js) are modules of
 // their own, loaded with it.
 
@@ -93,6 +93,9 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   // Where and what this player is: its address, its firmware and this page's version; the API reference
   // (on the site, see apiDoc) and the third-party licences (licenses.txt, from licenses/ by make web).
   const about = h('dl.facts', { id: 'st-about' });
+  const off = h('div', { id: 'st-offline', style: 'margin-top:16px' },
+    h('p.cap', 'Offline mode: the display plays its card only, with no WiFi, and this web app can’t reach it.'),
+    h('button.danger', { id: 'st-wifi-off', onclick: wifiOff }, 'Turn WiFi off…'));
 
   banner.append('Saved. WiFi changes take effect after a reboot. ', h('button.sm', { onclick: reboot }, 'Reboot now'));
   // --- playback cache
@@ -133,7 +136,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       taken,
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', ...ent.checked ? ['wifi_eap_ttls'] : [], 'hostname'], netRun) }, 'Save network')), moved),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'wifi_eap_user', 'wifi_eap_identity', ...ent.checked ? ['wifi_eap_ttls'] : [], 'hostname'], netRun) }, 'Save network')), moved, off),
     ps, pt, fw, sec, h('div.grp', h('h3', 'About'), about));
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
@@ -195,6 +198,46 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     u.hostname = at;
     clear(moved, 'Saved. ', m ? [`This display is now at ${at}. `, /\.local$/.test(location.hostname) && h('a', { id: 'st-goto', href: u }, `Go to ${at}`)]
       : s?.mdns && `For now it still answers at ${s.mdns}.local.`);
+  }
+
+  // Offline mode (config `network`, absent on older firmware: no group):
+  // "off" from the next boot means no WiFi at all, so this page loses the
+  // display for good. Asked once in a dialog, then the PUT and the restart,
+  // and a last word in the dialog instead of waiting for a display that
+  // will not come back.
+  function wifiOff() {
+    const msg = h('p.cap', { id: 'off-msg' });
+    const go = h('button.danger', { id: 'off-go', onclick: run }, 'Turn WiFi off');
+    const close = h('button', { id: 'off-cancel', onclick: () => d.close() }, 'Cancel');
+    const d = h('dialog.card', { id: 'off-dlg', style: 'color:inherit;border:0;margin:auto;width:min(420px,90vw)' },
+      h('h2', 'Turn WiFi off?'),
+      h('p', 'The display will stop using WiFi and keep playing its card. This web app won’t be able to reach it until WiFi is back on: take the card out and, on a computer, change "network": "off" to "network": "on" in opendmd.json on the card, or connect the display by USB and use Connect to Wi-Fi in the installer at ',
+        h('a', { href: SITE + 'install/', target: '_blank', rel: 'noopener' }, 'opendmd.dev/install'), '.'),
+      msg, h('p.row', { style: 'margin-top:12px' }, go, close));
+    let busy = false;
+    d.oncancel = (e) => busy && e.preventDefault();
+    d.onclose = () => d.remove();
+    document.body.append(d);
+    d.showModal();
+    async function run() {
+      busy = go.disabled = close.disabled = true;
+      msg.className = 'cap';
+      msg.textContent = 'Turning WiFi off…';
+      try {
+        await app.src.putConfig({ network: 'off' });
+      } catch (e) {
+        msg.className = 'cap bad'; msg.textContent = 'Couldn’t save: ' + e.message;
+        busy = go.disabled = close.disabled = false;
+        return;
+      }
+      let r = 1;
+      try { await app.src.reboot(); } catch { r = 0; }
+      go.hidden = true;
+      msg.textContent = r ? 'WiFi is off. The display is restarting and will play its card without WiFi. You can close this page.'
+        : 'Saved. WiFi turns off the next time the display restarts: unplug it and plug it back in.';
+      busy = close.disabled = false;
+      close.textContent = 'Close';
+    }
   }
 
   async function scan() {
@@ -282,7 +325,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     if (!j.running && j.phase !== 'idle') loadCache();
   }
   on('prepare', renderJob);
-  const show = () => { csSay(); renderFacts(app.status); renderJob(prep.job); loadCache(); };
+  const show = () => { off.hidden = app.config?.network == null; csSay(); renderFacts(app.status); renderJob(prep.job); loadCache(); };
   show();
   // Leaving the tab: no more cache polls, and a panel test in progress ends.
   return { show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };

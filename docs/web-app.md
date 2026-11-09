@@ -205,7 +205,11 @@ button lands on them.
     a `.local` name; a name another display already answers to is said
     under the field when it is left and stops Save network — `GET
     /api/name-check` — and the device's 409 for one that slips by is
-    explained, nothing saved); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
+    explained, nothing saved), and **Turn WiFi off…** (offline mode,
+    shown when `/api/config` has `network`: a dialog, then `PUT
+    /api/config {"network":"off"}` and `POST /api/reboot`, and a last word
+    in the dialog instead of waiting for a display that will not come
+    back); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
     latch blanking, driver chip, data clock and minimum refresh, each change
     a trial with Keep/Undo and a countdown, the boot-time ones through
     "Restart now", and Reset to defaults; **Test panel timing**,
