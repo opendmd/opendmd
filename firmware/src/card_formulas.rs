@@ -78,7 +78,7 @@ const MAX_FILES: usize = 256;
 /// many times, and only once the heap has risen to what the least of them
 /// needs; online (where the web app prepares Formulas too, and the heap is
 /// the network's as well) fewer, further apart.
-const RETRY_OFFLINE: (Duration, u32) = (Duration::from_secs(30), 10);
+const RETRY_OFFLINE: (Duration, u32) = (Duration::from_secs(30), 20);
 const RETRY_ONLINE: (Duration, u32) = (Duration::from_secs(60), 2);
 /// After a late frame, compiles wait this long.
 const AFTER_LATE: Duration = Duration::from_secs(5);
@@ -106,8 +106,11 @@ pub struct Counts {
     pub prepared: u32,
     /// Do not compile (an empty `.psb` or a mark beside them says so).
     pub failed: u32,
-    /// Not compiled: the heap stayed short (tried again at the next start).
+    /// Not compiled: the heap was short (tried again later, or at the next
+    /// start).
     pub short: u32,
+    /// Not tried yet: the card was busy, or past a retry's one compile.
+    pub queued: u32,
     /// Free heap at the lowest point measured around a compile (B; 0: none).
     pub heap_low: u32,
     /// The least of the compile task's stack left unused (B; 0: none).
@@ -167,8 +170,8 @@ pub fn status_json() -> String {
     match *LAST.lock().unwrap_or_else(|p| p.into_inner()) {
         None => r#","card_formulas":null"#.into(),
         Some(c) => format!(
-            r#","card_formulas":{{"sources":{},"current":{},"prepared":{},"failed":{},"short_of_memory":{}}}"#,
-            c.sources, c.current, c.prepared, c.failed, c.short
+            r#","card_formulas":{{"sources":{},"current":{},"prepared":{},"failed":{},"short_of_memory":{},"queued":{}}}"#,
+            c.sources, c.current, c.prepared, c.failed, c.short, c.queued
         ),
     }
 }
@@ -430,9 +433,11 @@ pub fn tick() {
     if REDO.iter().all(|s| s.load(Relaxed) == 0) || !crate::CARD_READY.load(Relaxed) {
         return;
     }
-    let keys: Vec<u32> = REDO.iter().map(|s| s.load(Relaxed)).filter(|&k| k != 0).collect();
+    // A snapshot per slot: each cleared below only if it still holds what
+    // was written (one noted meanwhile stays).
+    let snap: [u32; 4] = core::array::from_fn(|i| REDO[i].load(Relaxed));
     let mut line = String::new();
-    for k in &keys {
+    for k in snap.iter().filter(|&&k| k != 0) {
         line.push_str(&format!("{k:08x}\n"));
     }
     let path = format!("{}/formulas/{REDO_FILE}", config::SD_MOUNT);
@@ -445,9 +450,10 @@ pub fn tick() {
     };
     match written {
         Ok(()) => {
-            // Only the keys written go (one noted meanwhile stays).
-            for (slot, k) in REDO.iter().zip(keys.iter().copied().chain(std::iter::repeat(0))) {
-                let _ = slot.compare_exchange(k, 0, Relaxed, Relaxed);
+            for (slot, &k) in REDO.iter().zip(snap.iter()) {
+                if k != 0 {
+                    let _ = slot.compare_exchange(k, 0, Relaxed, Relaxed);
+                }
             }
             log::info!("formulas: a compiled file the panel refused is prepared again at the next start");
         }
@@ -470,19 +476,16 @@ struct Opts {
     force_short: u32,
 }
 
-/// What a pass left over besides its counts.
+/// Whether a pass ran a compile (prepared, or not after all).
 #[derive(Default)]
 struct Left {
-    /// Stopped for a busy card, or at its compile limit, with sources to
-    /// do: the next try comes soon and costs no retry.
-    more: bool,
-    /// A compile ran (prepared or not).
     compiled: bool,
 }
 
 /// Prepare the card's Formulas (the boot task once the card is handed
-/// over, CPU0): a pass; the compiles the heap could not hold are tried
-/// again by the network worker ([`tick`], see [`RETRY_OFFLINE`]). `settings`
+/// over, CPU0): a pass; the compiles the heap could not hold, or a busy
+/// card put off, are tried again by the network worker ([`tick`], see
+/// [`RETRY_OFFLINE`]: a finite number of tries, one compile each). `settings`
 /// for a look that names one ([`crate::formula_look::file_changed`]) and the
 /// network setting.
 #[optimize(size)] // (CPU0, after the handover: no frame runs it)
@@ -504,7 +507,8 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     let mut shorts = Vec::new();
     let (c, left) = pass(settings, &mut shorts, opts);
     publish(c);
-    if (c.short > 0 || left.more) && tries > 0 {
+    let _ = left;
+    if c.short + c.queued > 0 && tries > 0 {
         // The retries are the network worker's ([`tick`]): the boot task
         // ends now and its stack goes back to the heap.
         *RETRY.lock().unwrap_or_else(|p| p.into_inner()) = Some(Retry {
@@ -513,7 +517,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
             shorts,
             wait,
             left: tries,
-            next: Instant::now() + if left.more { MORE_SOON } else { wait },
+            next: Instant::now() + wait,
             t0,
         });
         return c;
@@ -522,9 +526,9 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     c
 }
 
-/// A retry that stopped for a busy card, or did its one compile with more
-/// to do, comes again this soon (and costs no try).
-const MORE_SOON: Duration = Duration::from_secs(2);
+/// Right after a retry compiled one, the next comes this soon (it still
+/// spends a try: the number of retries is finite whatever the card does).
+const AFTER_COMPILE: Duration = Duration::from_secs(2);
 
 /// Compiles still to be tried again (the network worker's [`tick`]).
 struct Retry {
@@ -538,9 +542,9 @@ struct Retry {
 }
 static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
 
-/// One retry when due: one compile at most (the network worker goes on
-/// with its loop between them), only once the heap has room for the least
-/// of the ones short.
+/// One retry when due. Each spends a try. A busy card (or a late frame)
+/// is seen before any card I/O, and the heap's room before the listing;
+/// then at most one compile, so the network worker goes on with its loop.
 #[optimize(size)]
 #[inline(never)]
 fn retry_tick() {
@@ -549,9 +553,10 @@ fn retry_tick() {
     if Instant::now() < r.next {
         return;
     }
-    let mut more = false;
-    let mut tried = false;
-    if r.counts.min_need == 0 || crate::state::free_heap() >= r.counts.min_need {
+    r.left = r.left.saturating_sub(1);
+    r.next = Instant::now() + r.wait;
+    let room = r.counts.queued > 0 || r.counts.min_need == 0 || crate::state::free_heap() >= r.counts.min_need;
+    if room && give_way(false) {
         let mut shorts = Vec::new();
         let opts = Opts { wait: false, compiles: 1, force_short: 0 };
         let (again, left) = pass(&r.settings, &mut shorts, opts);
@@ -568,25 +573,14 @@ fn retry_tick() {
         };
         r.shorts = shorts;
         publish(r.counts);
-        more = left.more;
-        tried = left.compiled;
         if left.compiled {
             // SAFETY: a read of the calling task's own high-water mark.
             let unused = unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) };
             log::info!("formulas: a retry compiled on the network worker ({unused} B of its stack unused at its deepest)");
+            r.next = Instant::now() + AFTER_COMPILE;
         }
     }
-    // A busy card, or one compile done with more to do: again soon, free.
-    // The heap still short: a try spent.
-    if more {
-        r.next = Instant::now() + MORE_SOON;
-    } else {
-        if !tried {
-            r.left = r.left.saturating_sub(1);
-        }
-        r.next = Instant::now() + r.wait;
-    }
-    if (r.counts.short == 0 && !more) || r.left == 0 {
+    if r.counts.short + r.counts.queued == 0 || r.left == 0 {
         if let Some(r) = g.take() {
             finish(r.counts, &r.shorts, r.t0);
         }
@@ -605,12 +599,13 @@ fn finish(c: Counts, shorts: &[String], t0: Instant) {
     }
     if c.sources > 0 {
         log::info!(
-            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, in {} ms",
+            "formulas: {} on the card: {} ready, {} prepared now, {} do not compile, {} short of memory, {} not tried (the card busy), in {} ms",
             c.sources,
             c.current,
             c.prepared,
             c.failed,
             c.short,
+            c.queued,
             t0.elapsed().as_millis()
         );
     }
@@ -752,6 +747,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let mut c = Counts::default();
     let mut left = Left::default();
     let mut budget = opts.compiles;
+    let mut stopped = false;
     #[cfg(feature = "emu-census")] // (a test image's only: compiled out of releases)
     let mut force_short = opts.force_short;
     for psi_entry in sources {
@@ -776,13 +772,13 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             }
             State::Stale(why) => why,
         };
-        // Past this pass's compiles, or the card busy: the rest later.
-        if left.more || budget == 0 || !give_way(opts.wait) {
-            if opts.wait && !left.more {
+        // Past this pass's compiles, or the card busy: queued for later.
+        if stopped || budget == 0 || !give_way(opts.wait) {
+            if opts.wait && !stopped {
                 log::warn!("formulas: the card stayed busy; the rest is prepared later");
             }
-            left.more = true;
-            c.short += 1;
+            stopped |= budget > 0;
+            c.queued += 1;
             continue;
         }
         #[cfg(feature = "emu-census")]
@@ -802,26 +798,41 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
                     redone.push(k);
                 }
             }
-            Done::Short => {}
+            // (A compile that ran and was short counts against the budget.)
+            Done::Short { compiled } => {
+                if compiled {
+                    budget = budget.saturating_sub(1);
+                    left.compiled = true;
+                }
+            }
             Done::Busy => {
-                left.more = true;
-                c.short += 1;
+                stopped = true;
+                c.queued += 1;
             }
         }
     }
     // Every header checked under this ABI (and every source looked at):
     // record it, so the next start reads none.
-    if !abi_same && c.short == 0 && !left.more && n_sources < MAX_FILES {
+    if !abi_same && c.short + c.queued == 0 && n_sources < MAX_FILES {
         let _ = fs::write(&abi_path, [psi::psb::ABI, b'\n']);
     }
-    // The refused ones dealt with leave the card's list; any not yet (or
-    // noted meanwhile, `tick`) stay for a retry or the next start.
+    // The refused ones dealt with leave the card's list, and any whose
+    // source is gone; the rest (or one noted meanwhile, `tick`) stay for a
+    // retry or the next start.
     if !redo.is_empty() {
+        let present: Vec<u32> = entries
+            .iter()
+            .filter_map(|e| stem(&e.name, ".psi"))
+            .map(|b| key(&format!("{card_dir}/{b}")))
+            .collect();
         let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let now: Vec<u32> = redo_keys(&redo_path).into_iter().filter(|k| !redone.contains(k)).collect();
+        let now: Vec<u32> = redo_keys(&redo_path)
+            .into_iter()
+            .filter(|k| !redone.contains(k) && present.contains(k))
+            .collect();
         if now.is_empty() {
             let _ = fs::remove_file(&redo_path);
-        } else if !redone.is_empty() {
+        } else {
             let text: String = now.iter().map(|k| format!("{k:08x}\n")).collect();
             let _ = fs::write(&redo_path, text);
         }
@@ -833,8 +844,9 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
 enum Done {
     /// Prepared, or found not to compile (marked): nothing left to do.
     Resolved,
-    /// Short of memory (counted, in `shorts`): tried again later.
-    Short,
+    /// Short of memory (counted, in `shorts`): tried again later;
+    /// `compiled`, after a compile ran.
+    Short { compiled: bool },
     /// A transfer began: tried again soon (not counted here).
     Busy,
 }
@@ -875,7 +887,7 @@ fn compile_one(
         c.min_need = if c.min_need == 0 { need as u32 } else { c.min_need.min(need as u32) };
         shorts.push(format!("/formulas/{name}"));
         c.short += 1;
-        return Done::Short;
+        return Done::Short { compiled: false };
     }
     // Marked first: a compile that crashes the board leaves it so, and the
     // next start moves on. (Meanwhile the panel finds the mark if it plays
@@ -895,7 +907,7 @@ fn compile_one(
         let _ = fs::remove_file(&psb_path);
         shorts.push(format!("/formulas/{name}"));
         c.short += 1;
-        return Done::Short;
+        return Done::Short { compiled: false };
     };
     c.stack_left = low(c.stack_left, left);
     let heap_low = crate::psi_stack::last_low();
@@ -907,7 +919,7 @@ fn compile_one(
             let _ = fs::remove_file(&psb_path);
             shorts.push(format!("/formulas/{name}"));
             c.short += 1;
-            return Done::Short;
+            return Done::Short { compiled: true };
         }
         Err(e) => {
             // (The mark written before stays: it says so.)

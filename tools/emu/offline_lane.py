@@ -238,18 +238,12 @@ class Lane:
                 raise LaneFail("zlate.psi was not skipped, then prepared, then played")
             self.ok("played once ready", "/formulas/zlate.psi: skipped while not prepared, prepared in the background, then played")
             # The cut .psb: refused where it plays (the engine logs a pass's
-            # first failure only), noted on the card, and prepared again by
-            # the next pass this start (a retry) or the next start.
-            n_i, _ = e.wait_for(re.compile(r"formulas: a compiled file the panel refused is prepared again"), 400,
-                                what="the refused cut.psb noted")
-            self.cut_healed = False
-            hit = e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)"), n_i)
-            if hit:
-                e.wait_for(re.compile(r"\] /formulas/cut\.psi <- "), 400, start=hit[0][0], what="cut.psi played once prepared again")
-                self.cut_healed = True
-                self.ok("refused, healed", "cut.psb refused where it played, noted, prepared again by a retry this start, then played")
-            else:
-                self.ok("refused, noted", "cut.psb refused where it played, noted for the next start")
+            # first failure only) and noted on the card; prepared again by a
+            # retry this start or at the next one (decided from the whole
+            # log at the end of this boot).
+            e.wait_for(re.compile(r"formulas: a compiled file the panel refused is prepared again"), 400,
+                       what="the refused cut.psb noted")
+            self.ok("refused, noted", "cut.psb refused where it played, noted on the card")
             j, _ = e.wait_for(re.compile(r"\] /formulas/ramp\.psi <- "), 400, what="the compiled card Formula playing")
             skipped = [i for i, _ in e.find(re.compile(r"skipping /formulas/ramp\.psi"))]
             self.ok("compiled formula plays", f"/formulas/ramp.psi, compiled after the playlist started, played"
@@ -284,6 +278,12 @@ class Lane:
                 if hit:
                     raise LaneFail(f"boot A: {what}: {hit[0][1].string[:160]}")
             self.ok("quiet", "no WiFi driver, httpd, setup network, mDNS/SNTP, web app or Join WiFi")
+            # Healed this start (a retry) or left for the next: the whole log.
+            healed = e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)"))
+            self.cut_healed = bool(healed)
+            if healed and not e.find(re.compile(r"\] /formulas/cut\.psi <- "), healed[0][0]):
+                raise LaneFail("cut.psi was prepared again but never played after")
+            self.ok("refused, then", "prepared again by a retry this start, then played" if healed else "left for the next start")
             # The emu-census image takes one Formula as short at first: a
             # retry compiles it on the network worker, whose stack is read.
             if e.find(re.compile(r"census: \d+ blocks in use")):
