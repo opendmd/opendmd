@@ -92,11 +92,11 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 
 | Library | Create Art |
 | --- | --- |
-| ![The Library, with a GIF's details playing](docs/images/library.png) | ![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](docs/images/create-art.png) |
+| ![The Library: two GIFs ticked, and the menu that adds them to a playlist](docs/images/library.png) | ![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](docs/images/create-art.png) |
 | **Now playing** | **Formulas** |
-| ![The Now view, previewing what the panel plays](docs/images/now.png) | ![Formulas: the examples, and Plasma playing in its details](docs/images/formulas.png) |
+| ![The Now view, previewing what the panel plays](docs/images/now.png) | ![Formulas: the ones that come with OpenDMD, and one playing in its details](docs/images/formulas.png) |
 | **Playlists** | **On a phone** |
-| ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone"> |
+| ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone, two GIFs ticked to add to a playlist"> |
 
 The demo card in these screenshots holds OpenDMD's own Formulas and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0);
