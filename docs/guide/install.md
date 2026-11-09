@@ -41,6 +41,9 @@ or swap, and it doesn't change your [SD card](card.md).
    **Connect**. **Visit device** then opens the web app. OpenDMD joins
    2.4 GHz networks that are open or take a WPA2 or WPA3 password; a
    [work or school login](#work-or-school-wifi) is set up another way.
+   With **Play from the card only, no WiFi** ticked there is no WiFi
+   step: the display starts playing its card ([A display without
+   WiFi](#a-display-without-wifi)).
 
 > **If it won't connect**
 >
@@ -88,15 +91,54 @@ While it waits, the panel says **Join WiFi  OpenDMD-Setup**.
     hyphens.
 
     If the OpenDMD web app pops up when you join, you can do the same
-    there under **Settings › Device › Network**. The board restarts every
-    ten minutes while it waits; if the setup network vanishes, wait a
-    moment and join it again.
+    there under **Settings › Device › Network**. While a display has no
+    WiFi to join, it restarts every ten minutes to try again; if the setup
+    network vanishes, wait a moment and join it again. A display set to
+    [play from the card only](#a-display-without-wifi) makes no setup
+    network at all.
 
 3. **Open the web app.** Rejoin your usual WiFi and open
    **<http://opendmd.local/>**, or the name you gave it. You manage the
    display from there from now on.
 
 With your card in, the panel starts playing straight away.
+
+## A display without WiFi
+
+A display can also do without WiFi altogether: it plays its card, and never
+starts WiFi, the setup network or the web app. You change what it plays by
+changing the card on a computer, as with DMDoS.
+
+- **On the install page:** tick **Play from the card only, no WiFi** under
+  the Install button before you click it. This erases the display's saved
+  settings (WiFi, name, brightness and the rest) whether or not you tick
+  **Erase device**, and the installer asks for no WiFi at the end.
+- **Or on the card:** copy the one-line file `opendmd.json` offered beside
+  the box to the top folder of the card (or write it yourself: it holds
+  `{"network":"off"}`). A card that already has an `opendmd.json` from an
+  OpenDMD display: open it in a text editor and change `"network":"on"` to
+  `"network":"off"`. The display reads it when it starts with the card in.
+
+Leave the box unticked for anything else you do with the installer later:
+only then does it recognise the display and offer **Update OpenDMD** and
+**Connect to Wi-Fi**. **Update OpenDMD** keeps the display without WiFi.
+
+### Turning WiFi back on
+
+- **With the installer:** plug the display in, click **Install** with the
+  box unticked, then **Connect to Wi-Fi**, and pick your network. The
+  display joins it, turns WiFi on for good and restarts.
+- **On the card:** open the card's `opendmd.json` on a computer and change
+  `"off"` to `"on"` (`"network":"on"`). Deleting the line does not turn
+  WiFi back on: the display keeps what it had. Check the file is still
+  valid (the quotes, the braces, a comma between settings): the display
+  replaces a file it can't read. With no WiFi saved, it then makes its
+  [setup network](#wifi-without-the-installer).
+
+The card has the last word. A fresh install with **Erase device** ticked
+turns WiFi back on, but if the card still says `"network":"off"`, the
+display goes back to playing without WiFi as soon as it starts with that
+card. Change the card's file too.
 
 ## Work or school WiFi
 
