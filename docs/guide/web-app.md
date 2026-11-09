@@ -23,7 +23,7 @@ where it is in the playlist, such as "14 of 10,162", and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
 brightness. To hide the preview, turn off **Mirror the panel on Now** in
-Settings › Look.
+Settings › Panel.
 
 **Recently played**, under the preview, lists what the panel showed last,
 even while no page was open. Tap one to play it again. **Replay** restarts
@@ -163,11 +163,6 @@ Settings has five tabs. Changes save as you make them, and a green
 
 ### Playback
 
-**Brightness** sets how bright the panel is, and **Maximum brightness**
-under it caps the slider. Going above the suggested level can make the
-display reset on the power supply it came with, so only raise it if you've
-fitted a stronger one.
-
 **Playlist** picks which playlist plays. **Platforms** says **All** with
 how many there are, or the ones you picked. **Choose…** lists them with how
 many GIFs each has, with the rare ones behind **+N more** and a box to find
@@ -178,7 +173,12 @@ one. Tap the ones you want and press **Only these**, or **All platforms**.
 show on the panel stays** for one turn, 1 or 5 minutes, or until you change
 it.
 
-### Look
+### Panel
+
+**Brightness** sets how bright the panel is, and **Maximum brightness**
+under it caps the slider. Going above the suggested level can make the
+display reset on the power supply it came with, so only raise it if you've
+fitted a stronger one.
 
 **Colour** shows everything in full colour, or in a single colour like a
 classic dot-matrix display: amber, red, green, blue or white. **Phosphor

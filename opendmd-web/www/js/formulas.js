@@ -149,10 +149,10 @@ function overRow(id) {
 }
 
 // On a device (or the demo's player): a Formula that declares `look` kept
-// as the panel's look (Settings › Look), over every GIF (js/looks.js).
+// as the panel's look (Settings › Panel), over every GIF (js/looks.js).
 const setLook = (f, keep) => import('./looks.js').then((L) => L.useSaid(f, keep));
 // On a device: a Formula as what the panel shows while it starts
-// (boot_formula; Settings › Look › Start-up), as light as the show needs.
+// (boot_formula; Settings › Panel › Start-up), as light as the show needs.
 const setBoot = (f, keep) => import('./looks.js').then((L) => L.startUp(f, keep));
 const BOOT = () => app.device && !!app.src.config;
 const light = (i) => i.length && i[6] <= 12000;
@@ -454,7 +454,7 @@ function build(root) {
     del.onclick = (e) => {
       const is = (k) => !!f.file && (app.config?.[k] || '').split('?')[0].toLowerCase() == f.file.toLowerCase(), lk = is('look_formula'), bk = is('boot_formula');
       const gone = [lk && 'the panel has no look now', bk && 'the panel shows OpenDMD when it starts'].filter(Boolean).join(', and ');
-      ask(`Delete “${f.name}”?${lk ? ' It’s the panel’s look: the panel will have none.' : ''}${bk ? ' It plays when the panel starts: the panel will show OpenDMD instead.' : ''}`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); if (gone) { app.refreshConfig(); toast(`“${f.name}” is deleted: ${gone} (Settings › Look picks another)`, 'ok'); } }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
+      ask(`Delete “${f.name}”?${lk ? ' It’s the panel’s look: the panel will have none.' : ''}${bk ? ' It plays when the panel starts: the panel will show OpenDMD instead.' : ''}`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); if (gone) { app.refreshConfig(); toast(`“${f.name}” is deleted: ${gone} (Settings › Panel picks another)`, 'ok'); } }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
     };
     for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f === f);
     if (i.length) play(pv, f, i); else { pv.f = null; pv.pv.clear(); }
@@ -1029,7 +1029,7 @@ function editor() {
     now(paste) { if (paste && !ready()) return null; const src = ta.value, ok = good === src; return { name: B.draft.name, src, a: B.draft.a, b: B.draft.b, c: B.draft.c, ok, info: ok ? info(src) : [], ctl: ok ? ctlOf({ src }) : null }; },
     // The name field's change, if it hasn't landed (leaving the editor).
     flush: () => nameIn(),
-    // Its settings sheet (Settings › Look's Change…).
+    // Its settings sheet (Settings › Panel's Change…).
     settings: () => settings(setBtn),
     back,
   };
@@ -1063,7 +1063,7 @@ function edit() {
   if (!P) return; // the module didn't load: the gallery says so; a link waits for a reload
   B.draft ??= stored() || { name: '', src: STARTER };
   let later;
-  // From Settings › Look's Change…: that Formula (yours as saved), its settings open.
+  // From Settings › Panel's Change…: that Formula (yours as saved), its settings open.
   const pe = app.psiEdit, m = pe?.f.mine && mine().find((x) => x.id === pe.f.id);
   app.psiEdit = null;
   if (pe) B.sheet = 1;

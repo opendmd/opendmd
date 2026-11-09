@@ -264,7 +264,7 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path, adde
         # What the formula says of itself: whether it can be the panel's look
         # (its `look` line), whether the panel comes with it, its controls.
         badges = "".join(f'<span class="fbadge" title="{t(why)}">{t(b)}</span>' for b, why, on in (
-            ("look", "It can be the panel's look: drawn over every GIF (Settings › Look)", e.get("look")),
+            ("look", "It can be the panel's look: drawn over every GIF (Settings › Panel)", e.get("look")),
             ("on the panel", "The web app comes with it: in Formulas, under Bundled", e.get("bundle"))) if on)
         ctl = e.get("controls") or []
         # What ftsort.js sorts and filters by (its own copy of the order and the badges).

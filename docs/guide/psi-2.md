@@ -84,7 +84,7 @@ loop 1
 gray(abs(x - frac(t)) < 0.02)
 ```
 
-At 100 frames a second a fast line looks smoother. The display only keeps that rate for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Look) the display holds Formulas to 50.
+At 100 frames a second a fast line looks smoother. The display only keeps that rate for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Panel) the display holds Formulas to 50.
 
 The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". A heavy one moves less smoothly on the display, because the display shows fewer frames. A Formula that is far too heavy isn't played at all. The page [How Psi thinks](psi.md) explains what makes a Formula heavy.
 
