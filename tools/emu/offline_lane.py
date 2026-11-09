@@ -237,10 +237,19 @@ class Lane:
             if not s_i < p_i < z_i:
                 raise LaneFail("zlate.psi was not skipped, then prepared, then played")
             self.ok("played once ready", "/formulas/zlate.psi: skipped while not prepared, prepared in the background, then played")
-            _, m = e.wait_for(re.compile(r"skipping /formulas/cut\.psi: (.*)"), 400, what="the cut compiled file refused")
-            e.wait_for(re.compile(r"formulas: a compiled file the panel refused is prepared again at the next start"), 120,
-                       what="the refused file noted for the next start")
-            self.ok("refused, noted", f"cut.psb: {m[1][:70]}; noted for the next start")
+            # The cut .psb: refused where it plays (the engine logs a pass's
+            # first failure only), noted on the card, and prepared again by
+            # the next pass this start (a retry) or the next start.
+            n_i, _ = e.wait_for(re.compile(r"formulas: a compiled file the panel refused is prepared again"), 400,
+                                what="the refused cut.psb noted")
+            self.cut_healed = False
+            hit = e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)"), n_i)
+            if hit:
+                e.wait_for(re.compile(r"\] /formulas/cut\.psi <- "), 400, start=hit[0][0], what="cut.psi played once prepared again")
+                self.cut_healed = True
+                self.ok("refused, healed", "cut.psb refused where it played, noted, prepared again by a retry this start, then played")
+            else:
+                self.ok("refused, noted", "cut.psb refused where it played, noted for the next start")
             j, _ = e.wait_for(re.compile(r"\] /formulas/ramp\.psi <- "), 400, what="the compiled card Formula playing")
             skipped = [i for i, _ in e.find(re.compile(r"skipping /formulas/ramp\.psi"))]
             self.ok("compiled formula plays", f"/formulas/ramp.psi, compiled after the playlist started, played"
@@ -275,6 +284,16 @@ class Lane:
                 if hit:
                     raise LaneFail(f"boot A: {what}: {hit[0][1].string[:160]}")
             self.ok("quiet", "no WiFi driver, httpd, setup network, mDNS/SNTP, web app or Join WiFi")
+            # The emu-census image takes one Formula as short at first: a
+            # retry compiles it on the network worker, whose stack is read.
+            if e.find(re.compile(r"census: \d+ blocks in use")):
+                r = e.find(re.compile(r"formulas: a retry compiled on the network worker \((\d+) B of its stack unused at its deepest\)"))
+                if not r:
+                    raise LaneFail("no retry compiled on the network worker (an emu-census image takes one Formula as short at first)")
+                unused = min(int(m[1]) for _, m in r)
+                if unused < 1024:
+                    raise LaneFail(f"the network worker's stack had only {unused} B unused after a retry compile")
+                self.ok("retry on the worker", f"a retry compiled on the network worker: {unused} B of its stack unused at its deepest")
             done = e.find(BOOT_DONE)
             if done:
                 self.ok("boot task stack", done[0][1][0][:160])
@@ -292,11 +311,12 @@ class Lane:
         try:
             self.booted_ours(e)
             _, m = e.wait_for(SUMMARY, 300, what="the second start's summary")
-            if int(m[3]) != 1 or int(m[2]) + int(m[3]) + int(m[4]) != int(m[1]):
-                raise LaneFail(f"the second start should compile only the refused one: {m[0]}")
-            if not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
+            want = 0 if self.cut_healed else 1
+            if int(m[3]) != want or int(m[2]) + int(m[3]) + int(m[4]) != int(m[1]):
+                raise LaneFail(f"the second start should compile {want} (the refused one, if not healed already): {m[0]}")
+            if want and not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
                 raise LaneFail("cut.psi was not prepared again at the next start")
-            self.ok("next start", m[0] + " (only the refused cut.psb again; the marks and times kept)")
+            self.ok("next start", m[0] + " (the marks and times kept)")
             _, m = e.wait_for(re.compile(r"boot show: formula /formulas/tick\.psi does not build \((.*)\): the built-in show"), 120,
                               what="the clock start-up show refused")
             if "shows the time" not in m[1]:

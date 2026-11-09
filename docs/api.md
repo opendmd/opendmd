@@ -552,11 +552,15 @@ look or start-up show of it is not drawn; a look is built again once its
 until the source changes. A source that does not compile is marked (its `.psb`
 holds the mark, which plays as "this Formula does not compile") and not tried
 again until it changes. A compile the memory cannot hold is tried again once
-the heap has room (every 30 s, up to 10 times, with WiFi off; every 60 s,
-twice, with it on), and failing that at the next start. A `.psb` refused where
-it plays (damaged, or another version's) is prepared again at the next start.
+the heap has room (one compile at a time, every 30 s, up to 10 times, with
+WiFi off; every 60 s, twice, with it on), and failing that at the next
+start. A compile holds the card as a file transfer does: the playback
+cache's builder waits for it. A `.psb` refused where
+it plays (damaged, or another version's) is prepared again: by the next retry
+if one is due, else at the next start.
 While a `.psb` is being written, a `PUT`, `DELETE` or move of that Formula
-waits for it (up to 1 s, else `503`). It happens whether or not the network
+(or of `/formulas` itself) waits for it, up to 1 s, else `503` "the display
+is preparing this Formula; try again in a moment" (nothing done: ask again). It happens whether or not the network
 is on. The log has a line for each and a summary; the counts are
 `/api/status` `card_formulas`, set after the first pass and after each
 retry.

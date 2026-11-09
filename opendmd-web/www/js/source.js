@@ -178,7 +178,9 @@ export class DeviceSource {
   // main task (the `.idx` goes first, then a reindex if it is active).
   // `createNew`: only if the file is not there (409 if it is).
   writeFile(path, data, o) { return sent(() => this.json('PUT', '/api/files' + enc(path) + (o?.createNew ? '?new=1' : ''), data)); }
-  deleteFile(path) { return this.json('DELETE', '/api/files' + enc(path)); }
+  // (A 503 deleted nothing: asked again, as an upload is; e.g. while the
+  // display writes that Formula's compiled file.)
+  deleteFile(path) { return sent(() => this.json('DELETE', '/api/files' + enc(path))); }
   saveSet(name, text) { return sent(() => this.json('PUT', '/api/sets/' + encodeURIComponent(name), text)); }
 }
 
