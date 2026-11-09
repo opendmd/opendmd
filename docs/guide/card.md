@@ -63,8 +63,8 @@ mode do nothing, and Formulas that show the time are skipped.
 
 Your Formulas are in `formulas/`, each as a `.psi` file. You can copy one
 there from a computer and name it in a playlist (`/formulas/<name>.psi`).
-The display prepares it for the panel the next time it starts with the
-card, and again after an update that needs it. A Formula with a mistake in
+The display prepares it for the panel shortly after it starts with the
+card (it plays from then on), and again after an update that needs it. A Formula with a mistake in
 it is skipped where it plays.
 
 ## How names become details
