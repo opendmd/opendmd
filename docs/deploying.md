@@ -17,7 +17,7 @@ make pack ARGS="convert $CARD --verify"   # prepare every GIF (the playback cach
 sync && umount "$CARD"
 
 # once per board (and once more to move a board to flash table v3): over USB
-make fw-release                            # dist/ (4mb, the DevKit): app, bootloader, table, full image, manifest, signed bundle; updater, otadata, web app pack
+make fw-release                            # dist/ (4mb, the DevKit): app, bootloader, table, full image, manifests (normal and offline, with its NVS image), signed bundle; updater, otadata, web app pack
 make flasher                               # http://localhost:8765 in Chrome/Edge -> the board's Install button
 #   or: make fw-release-flash PORT=/dev/ttyUSB0   (after `make fw-erase` if it ran anything else)
 # join the OpenDMD-Setup WiFi, enter the network, then http://opendmd.local/
@@ -171,7 +171,7 @@ layout").
 |---|---|---|---|
 | (bootloader) | 0x1000 | | the project's second-stage bootloader |
 | (partition table) | 0x8000 | | `firmware/partitions.csv` |
-| `nvs` | 0x9000 | 24 KB | WiFi and the secrets; a copy of the settings (their store is the card's `/opendmd.json`) |
+| `nvs` | 0x9000 | 24 KB | WiFi and the secrets; a copy of the settings (their store is the card's `/opendmd.json`), `network` among them; the offline install writes it whole |
 | `otadata` | 0xF000 | 8 KB | which app boots next; erased = `factory` |
 | `phy_init` | 0x11000 | 4 KB | |
 | `factory` | 0x20000 | 2,560 KB | the firmware |
@@ -251,6 +251,8 @@ this build. It runs `make web` first, then builds the layout (`<var>` is
 | `partition-table-<var>.bin` | 0x8000 | |
 | `opendmd-<version>-<var>-full.bin` | 0x0 | all six merged and padded to the flash size: `esptool write-flash 0 <it>` or any "flash one image" tool (it rewrites NVS too: the settings in it go) |
 | `manifest-<var>.json` | | ESP Web Tools: the six parts and their offsets |
+| `nvs-offline-<var>.bin` | 0x9000 | the offline install's NVS: the whole `nvs` partition (24 KB), namespace `opendmd`, string `network` = `off` ("Offline installs" below) |
+| `manifest-<var>-offline.json` | | ESP Web Tools, the offline install: the six parts and `nvs-offline-<var>.bin`, seven in flash order |
 | `opendmd-<version>-<var>.odfw` | | the signed bundle for an update over WiFi (`make fw-ota`; `make fw-sign`); its magic names the layout and table (`ODFW34mb`) |
 
 The target fails if the app image leaves less than 64 KB of the
@@ -532,6 +534,46 @@ which starts unticked (`new_install_prompt_erase`):
   `otadata` is written erased (`ota_data_initial.bin`), so whatever an older
   layout left at 0xF000-0x11000 cannot steer the bootloader: it boots
   `factory`.
+
+#### Offline installs
+
+The install page's **Play from the card only, no WiFi** box (under each
+Install button: `flasher/index.html`, `tools/site.py` `OFFLINE_BOX`, both
+driven by `flasher/offline.js`) swaps the button's `manifest` attribute to
+`manifest-4mb-offline.json` while it is ticked; ESP Web Tools reads the
+attribute when the button is clicked. That manifest is `manifest-4mb.json`
+plus `nvs-offline-4mb.bin` at 0x9000 (seven parts, in flash order), with
+`new_install_prompt_erase: true` and `new_install_improv_wait_time: 0`: no
+WiFi form after the install, and no Improv detection before it, so a board
+already on OpenDMD is not recognised through it (no Update, no Change
+Wi-Fi: those need the box unticked).
+
+`nvs-offline-4mb.bin` is the whole `nvs` partition (offset and size read
+from `firmware/partitions.csv`), made by `make fw-release` with IDF v5.3's
+`nvs_partition_gen` (`python -m esp_idf_nvs_partition_gen generate`, from
+the IDF Python env under `~/.espressif/python_env/idf5.3_py3*_env`, which
+the firmware's build sets up) from a CSV holding namespace `opendmd` and one
+string, `network` = `off`. It is written whether or not **Erase device** is
+ticked, so every setting NVS held goes (WiFi, the API key, the Follow code,
+the name, panel timing). `fw-release` asserts both manifests (six parts and
+seven, the NVS part at the partition's offset, the image the partition's
+size, the Improv waits); `make flasher-smoke` also reads the image back as
+an NVS partition.
+
+The setting itself (`network` among the settings, `on` by default) is also the
+card's: `{"network":"off"}` in `/opendmd.json` (the page offers that one
+line as a download) turns WiFi off at the next boot with the card, and the
+card wins over NVS once mounted. With `network` off the firmware starts no
+WiFi, setup network or web server; Improv still answers over USB, and its
+WifiSettings joins, saves the network, sets `network` on and restarts.
+
+| installer action | NVS | card's `/opendmd.json` | result |
+|---|---|---|---|
+| **Update OpenDMD** (box unticked) | kept | kept | as it was: offline stays offline |
+| **Install**, erase unticked, box unticked | kept | kept | as it was |
+| **Install**, erase ticked, box unticked | erased: `network` absent, so on | kept | online, unless the card says `off` (the card wins once mounted) |
+| **Install**, box ticked (erase either way) | replaced by `nvs-offline-4mb.bin` | kept | offline, unless the card says `on` |
+| **Connect to Wi-Fi** / **Change Wi-Fi** (box unticked) | `network` = on, the credentials | rewritten at the next save | online after one restart |
 
 The page cannot be tested end to end without a person at a real board (Web
 Serial asks for a port by hand); `tools/web-smoke.py`-style checks cover

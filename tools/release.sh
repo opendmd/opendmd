@@ -421,6 +421,21 @@ else
     manifest="$(jq -r .version "$DIST/manifest-$v.json")"
     [ "$manifest" = "$VERSION" ] || die "manifest-$v.json says $manifest, want $VERSION"
     pass "manifest-$v.json version $manifest"
+    # The offline install (docs/deploying.md "Offline installs"): the same
+    # version, the six parts plus the NVS image at 0x9000, the image the
+    # nvs partition's size (firmware/partitions.csv).
+    off="$DIST/manifest-$v-offline.json" nvs="$DIST/nvs-offline-$v.bin"
+    read -r nvs_off nvs_size < <(awk -F'[[:space:]]*,[[:space:]]*' '$1 == "nvs" && $3 == "nvs" { print $4, $5 }' firmware/partitions.csv)
+    nvs_off=$(( nvs_off )) nvs_size=$(( nvs_size ))
+    [ "$(jq -r .version "$off")" = "$VERSION" ] || die "manifest-$v-offline.json is not $VERSION"
+    jq -e --slurpfile m "$DIST/manifest-$v.json" --arg nvs "nvs-offline-$v.bin" --argjson off "$nvs_off" '
+      (.builds | length) == 1 and (.builds[0].parts | length) == 7 and ($m[0].builds[0].parts | length) == 6
+      and (.builds[0].parts | del(.[2])) == $m[0].builds[0].parts and .builds[0].parts[2] == {path: $nvs, offset: $off}
+      and .new_install_prompt_erase == true and .new_install_improv_wait_time == 0 and .name == $m[0].name' "$off" >/dev/null ||
+      die "manifest-$v-offline.json is not manifest-$v.json's six parts and nvs-offline-$v.bin at $nvs_off (erase asked, no Improv wait)"
+    [ "$(stat -c %s "$nvs")" -eq "$nvs_size" ] && [ "$(od -An -tx4 -N4 "$nvs" | tr -d ' ')" = fffffffe ] ||
+      die "nvs-offline-$v.bin is not a $nvs_size B NVS partition image"
+    pass "manifest-$v-offline.json: the six parts and nvs-offline-$v.bin at $nvs_off ($nvs_size B, an NVS image)"
     uv run --quiet tools/fw-sign.py inspect "$DIST/opendmd-$VERSION-$v.odfw" | tee "$REL/inspect-$v.txt"
     grep -qx "variant  $v" "$REL/inspect-$v.txt" || die "opendmd-$VERSION-$v.odfw is not a $v bundle"
     grep -qx "layout   v[0-9]* (current)" "$REL/inspect-$v.txt" || die "opendmd-$VERSION-$v.odfw is not for this tree's $v partition table"
@@ -451,7 +466,7 @@ else
   files=("opendmd-$VERSION-www.pack" ota_data_initial.bin updater.bin THIRD-PARTY-LICENSES-firmware.txt THIRD-PARTY-LICENSES-web.txt)
   for v in 4mb; do
     files+=("opendmd-$VERSION-$v-app.bin" "opendmd-$VERSION-$v-full.bin" "opendmd-$VERSION-$v.odfw"
-            "bootloader-$v.bin" "partition-table-$v.bin" "manifest-$v.json")
+            "bootloader-$v.bin" "partition-table-$v.bin" "manifest-$v.json" "manifest-$v-offline.json" "nvs-offline-$v.bin")
   done
   for f in "${files[@]}"; do cp "$DIST/$f" "$ASSETS/"; done
   (cd "$ASSETS" && sha256sum -- * | tee SHA256SUMS)
@@ -525,6 +540,26 @@ else
     [ "$f" = "$dir/opendmd-$ver-www.pack" ] && cmp "$inst/$f" "$src/opendmd-$ver-www.pack" || die "$file's www is '$f', not $src's pack"
     pass "$file: version $ver, every layout's bundle and the www pack under install/$dir/ ($src's)"
   }
+  # check_offline DIR BUTTON SRC: SRC's offline install (its manifest and
+  # NVS image) under install/DIR/ byte for byte, and BUTTON's box that
+  # swaps to it. SRC is this build (it has one: 3b) or a final's release
+  # (one from before the offline install has none: then none on the page).
+  check_offline() {
+    local dir=$1 button=$2 src=$3 f
+    if [ ! -f "$src/manifest-4mb-offline.json" ]; then
+      [ "$src" != "$DIST" ] || die "$DIST has no manifest-4mb-offline.json"
+      [ ! -e "$inst/$dir/manifest-4mb-offline.json" ] && ! grep -q "data-offline-for=\"$button\"" "$inst/index.html" ||
+        die "install/$dir/ has an offline install $src does not have"
+      skip "install page: $src has no offline install (a release from before it): no box for $button"
+      return
+    fi
+    for f in manifest-4mb-offline.json nvs-offline-4mb.bin; do
+      cmp "$inst/$dir/$f" "$src/$f" || die "install/$dir/$f is not $src's"
+    done
+    grep -q "data-manifest-offline=\"$dir/manifest-4mb-offline.json\"" "$inst/index.html" &&
+      grep -q "data-offline-for=\"$button\"" "$inst/index.html" || die "the install page has no offline box for $button"
+    pass "install page: $button's offline box, install/$dir/manifest-4mb-offline.json and nvs-offline-4mb.bin ($src's)"
+  }
   if [ "$CHANNEL" = beta ]; then
     check_feed release.json "$FINAL" firmware "$FINAL_DIST" "$REL/inspect-final"
     check_feed beta.json "$VERSION" firmware/beta "$DIST" "$REL/inspect"
@@ -532,6 +567,7 @@ else
     grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || die "the install page has no beta button"
     cmp "$inst/firmware/beta/manifest-4mb.json" "$DIST/manifest-4mb.json" || die "install/firmware/beta/manifest-4mb.json is not this beta's"
     pass "install page: the beta's own button, its 4mb manifest under firmware/beta/"
+    check_offline firmware/beta install-beta-4mb "$DIST"
   else
     check_feed release.json "$VERSION" firmware "$DIST" "$REL/inspect"
     cmp "$inst/beta.json" "$inst/release.json" || die "beta.json is not release.json (no beta is newer than $VERSION)"
@@ -547,6 +583,7 @@ else
   cmp "$inst/firmware/manifest-4mb.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest-4mb.json is not $REL_VERSION's"
   cmp "$inst/firmware/manifest.json" "$INSTALL_SRC/manifest-4mb.json" || die "install/firmware/manifest.json is not the 4mb manifest"
   pass "install page: $REL_VERSION's 4mb button, its manifest published, no 8mb files"
+  check_offline firmware install-4mb "$INSTALL_SRC"
   [ -f "$SITE/dev/api/$TAG.html" ] || die "the site has no frozen dev/api/$TAG.html"
   grep -q "OpenDMD $VERSION" "$SITE/dev/api/$TAG.html" || die "dev/api/$TAG.html does not name $VERSION"
   grep -q "api/$TAG.html" "$SITE/dev/api.html" || die "dev/api.html does not link $TAG.html"
@@ -656,10 +693,17 @@ if [ "$MODE" = ci ]; then
   fi
   pub=$REL/published
   rm -rf "$pub"; mkdir -p "$pub"
-  gh release download "$TAG" -R "$GH_REPO" -D "$pub" -p SHA256SUMS -p "opendmd-$VERSION-4mb.odfw" -p "opendmd-$VERSION-www.pack" -p manifest-4mb.json ||
-    die "cannot download $TAG's assets"
+  gh release download "$TAG" -R "$GH_REPO" -D "$pub" -p SHA256SUMS -p "opendmd-$VERSION-4mb.odfw" -p "opendmd-$VERSION-www.pack" -p manifest-4mb.json \
+    -p manifest-4mb-offline.json -p nvs-offline-4mb.bin || die "cannot download $TAG's assets"
+  for f in manifest-4mb-offline.json nvs-offline-4mb.bin; do [ -f "$pub/$f" ] || die "$TAG has no $f"; done
   (cd "$pub" && sha256sum --quiet -c --ignore-missing SHA256SUMS) || die "$TAG's assets do not match its SHA256SUMS"
   [ "$(jq -r .version "$pub/manifest-4mb.json")" = "$VERSION" ] || die "$TAG's manifest-4mb.json is not $VERSION"
+  [ "$(jq -r .version "$pub/manifest-4mb-offline.json")" = "$VERSION" ] || die "$TAG's manifest-4mb-offline.json is not $VERSION"
+  # (CI's own build: the image's size and page header, as 3b checks this one's.)
+  read -r nvs_off nvs_size < <(awk -F'[[:space:]]*,[[:space:]]*' '$1 == "nvs" && $3 == "nvs" { print $4, $5 }' firmware/partitions.csv)
+  [ "$(stat -c %s "$pub/nvs-offline-4mb.bin")" -eq $(( nvs_size )) ] && [ "$(od -An -tx4 -N4 "$pub/nvs-offline-4mb.bin" | tr -d ' ')" = fffffffe ] &&
+    jq -e --argjson off $(( nvs_off )) '.builds[0].parts[2] == {path: "nvs-offline-4mb.bin", offset: $off} and (.builds[0].parts | length) == 7' "$pub/manifest-4mb-offline.json" >/dev/null ||
+    die "$TAG's manifest-4mb-offline.json and nvs-offline-4mb.bin are not the offline install (the NVS image at the nvs partition, its size)"
   uv run --quiet tools/fw-sign.py verify "$pub/opendmd-$VERSION-4mb.odfw" --pub firmware/keys/opendmd.pub >/dev/null ||
     die "$TAG's opendmd-$VERSION-4mb.odfw does not verify against firmware/keys/opendmd.pub"
   uv run --quiet tools/fw-sign.py verify-www "$pub/opendmd-$VERSION-www.pack" --pub firmware/keys/opendmd.pub >/dev/null ||

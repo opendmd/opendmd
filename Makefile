@@ -847,6 +847,16 @@ FW_FULL_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-full.bin
 FW_DIST_BOOTLOADER := $(DIST)/bootloader-$(FW_VARIANT).bin
 FW_DIST_TABLE := $(DIST)/partition-table-$(FW_VARIANT).bin
 FW_MANIFEST := $(DIST)/manifest-$(FW_VARIANT).json
+# Offline mode (docs/deploying.md "Offline installs"): the installer's "Play
+# from the card only, no WiFi" box swaps the button to this manifest, the six
+# parts plus an image of the whole `nvs` partition that holds one setting,
+# namespace `opendmd`, string `network` = `off`. The partition's offset and
+# size come from the layout's table.
+FW_MANIFEST_OFFLINE := $(DIST)/manifest-$(FW_VARIANT)-offline.json
+FW_NVS_OFFLINE := $(DIST)/nvs-offline-$(FW_VARIANT).bin
+FW_NVS_ROW = $(shell awk -F'[[:space:]]*,[[:space:]]*' '$$1 == "nvs" && $$3 == "nvs" { print $$4, $$5 }' $(FW_PARTITIONS))
+FW_NVS_OFFSET = $(word 1,$(FW_NVS_ROW))
+FW_NVS_SIZE = $(word 2,$(FW_NVS_ROW))
 # Panic locations name source files: the release names them from neutral
 # roots instead of this machine's paths (cargo joins these to the config's
 # rustflags).
@@ -861,7 +871,8 @@ fw-release: web
 	  $(MAKE) --no-print-directory fw-release-variant VARIANT=$$v || exit 1; \
 	done
 	@echo "dist/:"; ls -l $(foreach v,$(or $(VARIANT),$(FW_VARIANTS)),$(DIST)/opendmd-$(FW_VERSION)-$(v)-app.bin $(DIST)/opendmd-$(FW_VERSION)-$(v).odfw \
-	  $(DIST)/opendmd-$(FW_VERSION)-$(v)-full.bin $(DIST)/bootloader-$(v).bin $(DIST)/partition-table-$(v).bin $(DIST)/manifest-$(v).json) \
+	  $(DIST)/opendmd-$(FW_VERSION)-$(v)-full.bin $(DIST)/bootloader-$(v).bin $(DIST)/partition-table-$(v).bin $(DIST)/manifest-$(v).json \
+	  $(DIST)/manifest-$(v)-offline.json $(DIST)/nvs-offline-$(v).bin) \
 	  $(FW_WWW_IMAGE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt
 
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
@@ -949,30 +960,61 @@ endif
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 	@echo "==> $(FW_VARIANT) (emulator-only) done: no manifest"
 else
-	@# The parts in the order ESP Web Tools writes them.
+	@# The offline install's NVS image (FW_NVS_OFFLINE): the whole `nvs`
+	@# partition, written by IDF v5.3's nvs_partition_gen from the IDF
+	@# Python env the firmware's build set up (found now, not when make
+	@# started: on a fresh machine that build is what makes it).
+	@test -n "$(FW_NVS_OFFSET)" && test -n "$(FW_NVS_SIZE)" || { echo "no nvs partition in $(FW_PARTITIONS)"; exit 1; }
+	@py=$$(ls -d $(ESPRESSIF)/python_env/idf5.3_py3*_env/bin/python 2>/dev/null | sort | tail -1); \
+	 test -n "$$py" || { echo "no ESP-IDF v5.3 Python env under $(ESPRESSIF)/python_env (its nvs_partition_gen makes $(FW_NVS_OFFLINE))"; exit 1; }; \
+	 printf '%s\n' key,type,encoding,value opendmd,namespace,, network,data,string,off > $(FW_RELEASE_VTARGET)/nvs-offline.csv; \
+	 "$$py" -m esp_idf_nvs_partition_gen generate $(FW_RELEASE_VTARGET)/nvs-offline.csv $(FW_NVS_OFFLINE) $(FW_NVS_SIZE) >/dev/null \
+	   || { echo "nvs_partition_gen failed for $(FW_NVS_OFFLINE)"; exit 1; }; \
+	 echo "$(FW_NVS_OFFLINE): $$(stat -c %s $(FW_NVS_OFFLINE)) B for the nvs partition at $(FW_NVS_OFFSET) ($(FW_NVS_SIZE)), network = off"
+	@# The two manifests, the parts in the order ESP Web Tools writes them
+	@# (flash order): the normal one, and the offline one with the NVS image
+	@# and no Improv wait (no WiFi form after the install; nor is a board
+	@# recognised through it).
 	@boot='        { "path": "bootloader-$(FW_VARIANT).bin", "offset": 4096 }'; \
 	 table='        { "path": "partition-table-$(FW_VARIANT).bin", "offset": 32768 }'; \
+	 nvs='        { "path": "nvs-offline-$(FW_VARIANT).bin", "offset": '$$(( $(FW_NVS_OFFSET) ))' }'; \
 	 otadata='        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' }'; \
 	 app='        { "path": "opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin", "offset": '$$(( $(FW_APP_OFFSET) ))' }'; \
 	 upd='        { "path": "updater.bin", "offset": '$$(( $(UPDATER_OFFSET) ))' }'; \
 	 www='        { "path": "opendmd-$(FW_VERSION)-www.pack", "offset": '$$(( $(WWW_OFFSET) ))' }'; \
-	 { printf '%s\n' '{' \
+	 manifest() { \
+	  wait=$$1; shift; \
+	  printf '%s\n' '{' \
 	  '  "name": "$(FW_MANIFEST_NAME_$(FW_VARIANT))",' \
 	  '  "version": "$(FW_VERSION)",' \
 	  '  "new_install_prompt_erase": true,' \
-	  '  "new_install_improv_wait_time": 15,' \
+	  '  "new_install_improv_wait_time": '$$wait',' \
 	  '  "builds": [' \
 	  '    {' \
 	  '      "chipFamily": "ESP32",' \
 	  '      "parts": ['; \
-	  sep=; for part in boot table otadata app upd www; do \
+	  sep=; for part in "$$@"; do \
 	    eval "line=\$$$$part"; [ -z "$$sep" ] || printf ',\n'; printf '%s' "$$line"; sep=1; done; echo; \
 	  printf '%s\n' '      ]' \
 	  '    }' \
 	  '  ]' \
-	  '}'; } > $(FW_MANIFEST)
-	@uv run --quiet python -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert len(m["builds"][0]["parts"]) == 6' $(FW_MANIFEST) \
-	  || { echo "$(FW_MANIFEST) is not the manifest it should be"; exit 1; }
+	  '}'; }; \
+	 manifest 15 boot table otadata app upd www > $(FW_MANIFEST); \
+	 manifest 0 boot table nvs otadata app upd www > $(FW_MANIFEST_OFFLINE)
+	@uv run --quiet python -I -c 'import json, os, struct, sys; \
+	  m, o = (json.load(open(f)) for f in sys.argv[1:3]); nvs, off, size = sys.argv[3], int(sys.argv[4], 0), int(sys.argv[5], 0); \
+	  p, q = m["builds"][0]["parts"], o["builds"][0]["parts"]; \
+	  assert len(m["builds"]) == len(o["builds"]) == 1 and len(p) == 6 and len(q) == 7, "part counts"; \
+	  assert m["new_install_improv_wait_time"] == 15 and o["new_install_improv_wait_time"] == 0, "Improv wait"; \
+	  assert m["new_install_prompt_erase"] is True and o["new_install_prompt_erase"] is True, "erase prompt"; \
+	  assert (o["name"], o["version"]) == (m["name"], m["version"]), "name and version"; \
+	  assert q[:2] + q[3:] == p and q[2] == {"path": os.path.basename(nvs), "offset": off}, "the offline parts"; \
+	  assert [x["offset"] for x in q] == sorted(x["offset"] for x in q), "flash order"; \
+	  b = open(nvs, "rb").read(); assert len(b) == size, "the nvs image is not the partition size"; \
+	  assert struct.unpack_from("<I", b)[0] == 0xFFFFFFFE and b"opendmd" in b[64:4096] and b"network" in b[64:4096], "the nvs image holds no opendmd/network"' \
+	  $(FW_MANIFEST) $(FW_MANIFEST_OFFLINE) $(FW_NVS_OFFLINE) $(FW_NVS_OFFSET) $(FW_NVS_SIZE) \
+	  || { echo "$(FW_MANIFEST) or $(FW_MANIFEST_OFFLINE) is not the manifest it should be"; exit 1; }
+	@echo "==> $(FW_VARIANT) offline install: $(FW_MANIFEST_OFFLINE) (seven parts, $(notdir $(FW_NVS_OFFLINE)) at $(FW_NVS_OFFSET))"
 	@echo "==> $(FW_VARIANT) done: $(FW_MANIFEST)"
 endif
 
@@ -1080,20 +1122,21 @@ fw-ota:
 FLASHER_PORT ?= 8765
 FLASHER_SITE := target/flasher-site
 flasher:
-	@for v in $(FW_VARIANTS); do test -f $(DIST)/manifest-$$v.json || { echo "no $(DIST)/manifest-$$v.json: run make fw-release first"; exit 2; }; done
+	@for v in $(FW_VARIANTS); do for f in manifest-$$v.json manifest-$$v-offline.json; do test -f $(DIST)/$$f || { echo "no $(DIST)/$$f: run make fw-release first"; exit 2; }; done; done
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
-	cp flasher/index.html $(FLASHER_SITE)/
+	cp flasher/index.html flasher/offline.js $(FLASHER_SITE)/
 	cp -r flasher/esp-web-tools $(FLASHER_SITE)/ && cp licenses/THIRD-PARTY-LICENSES-installer.txt $(FLASHER_SITE)/esp-web-tools/
 	cp $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FW_WWW_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
-	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
+	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/manifest-$$v-offline.json $(DIST)/nvs-offline-$$v.bin $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
 	  $(DIST)/opendmd-$(FW_VERSION)-$$v-app.bin $(DIST)/opendmd-$(FW_VERSION)-$$v-full.bin $(FLASHER_SITE)/firmware/ || exit 1; done
 	@echo "open http://localhost:$(FLASHER_PORT)/ in Chrome or Edge"
 	uv run python -m http.server $(FLASHER_PORT) --bind 127.0.0.1 -d $(FLASHER_SITE)
 
 # Headless Chromium: the flasher page loads, ESP Web Tools renders its
-# button, the manifest's parts are served (the flash itself needs a person).
+# button, both manifests' parts are served, the offline box swaps the
+# button's manifest (the flash itself needs a person). DIST=<a dist>.
 flasher-smoke:
-	uv run tools/flasher-smoke.py
+	DIST=$(DIST) uv run tools/flasher-smoke.py
 
 # The real Improv Serial host library (improv-wifi-serial-sdk 2.8.0, what ESP
 # Web Tools 10.4.0 runs) against opendmd-core's framing, under node: the
