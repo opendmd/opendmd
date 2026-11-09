@@ -389,7 +389,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   back as `{"rules":[],"night":null}`); `POST /api/wake {"minutes"}`
   suspends it. Evaluated (rules in order, first match wins; night beats
   every rule for `mode`; a wrapped `to <= from` window belongs to the day it
-  starts) on every status read, right after a PUT/wake, and once a second in
+  starts; a night with `"sun":true` runs from sunset to sunrise at the
+  saved `lat`/`lon`, `offset` minutes inside, the sun in floats -- off
+  without a location) on every status read, right after a PUT/wake, and once a second in
   the ticker. A rule's `set` overlays the playlist actually playing (`/api/
   config`'s own `set` is untouched); night mode `"off"` freezes the
   simulated player the same way a manual pause does. `time`/`tz` in status
@@ -1965,6 +1967,41 @@ def days_mask(days) -> int | None:
     return mask
 
 
+def sun_altitude(unix: float, lat: float, lon: float) -> float:
+    """The sun's altitude in degrees (opendmd_core::sky::sun, in floats:
+    the almanac's low-precision position)."""
+    n = (unix - 946_728_000) / 86_400.0
+    r = math.radians
+    lam = r(280.460 + 0.985_647_4 * n + 1.915 * math.sin(r(357.528 + 0.985_600_3 * n))
+            + 0.020 * math.sin(2 * r(357.528 + 0.985_600_3 * n)))
+    eps = r(23.439)
+    dec = math.asin(math.sin(eps) * math.sin(lam))
+    ra = math.atan2(math.cos(eps) * math.sin(lam), math.cos(lam))
+    h = r(280.460_618_37 + 360.985_647_366_29 * n) + r(lon) - ra
+    return math.degrees(math.asin(math.sin(r(lat)) * math.sin(dec) + math.cos(r(lat)) * math.cos(dec) * math.cos(h)))
+
+
+def sun_night(unix: float, lat: float, lon: float, offset: int) -> bool:
+    """Port of schedule::sun_night: the sun below -0.833 degrees `offset`
+    minutes before and after (both for offset >= 0, either below 0)."""
+    a = sun_altitude(unix - offset * 60, lat, lon) < -0.833
+    b = sun_altitude(unix + offset * 60, lat, lon) < -0.833
+    return (a and b) if offset >= 0 else (a or b)
+
+
+def sun_night_end(unix: float, lat: float, lon: float, offset: int) -> float | None:
+    """Port of schedule::sun_night_end: the first minute it is off, within
+    26 hours, else None (a polar night)."""
+    hi = next((unix + k * 1800 for k in range(1, 53) if not sun_night(unix + k * 1800, lat, lon, offset)), None)
+    if hi is None:
+        return None
+    lo = max(unix, hi - 1800)
+    while hi - lo > 60:
+        mid = lo + (hi - lo) // 2
+        lo, hi = (mid, hi) if sun_night(mid, lat, lon, offset) else (lo, mid)
+    return hi - hi % 60
+
+
 def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int) -> bool:
     """Port of schedule::Window::contains."""
     def on(day: int) -> bool:
@@ -2581,11 +2618,15 @@ class Schedule:
         if night_in is not None:
             if not isinstance(night_in, dict):
                 return (400, "invalid JSON: 'night' must be an object or null")
-            nfrm = parse_hhmm(night_in.get("from"))
-            if nfrm is None:
+            sun = night_in.get("sun") is True
+            nfrm, nto = parse_hhmm(night_in.get("from")), parse_hhmm(night_in.get("to"))
+            if sun:
+                off = night_in.get("offset", 0)
+                if not isinstance(off, int) or isinstance(off, bool) or not (-180 <= off <= 180):
+                    return (400, "night: offset is -180 to 180 minutes")
+            elif nfrm is None:
                 return (400, f"night: from '{night_in.get('from')}' is not HH:MM")
-            nto = parse_hhmm(night_in.get("to"))
-            if nto is None:
+            elif nto is None:
                 return (400, f"night: to '{night_in.get('to')}' is not HH:MM")
             mode = night_in.get("mode")
             if mode not in ("off", "dim"):
@@ -2662,7 +2703,15 @@ class Schedule:
                         break
 
             mode, mode_until = "normal", None
-            if not woken and night is not None:
+            if not woken and night is not None and night.get("sun") is True:
+                # From sunset to sunrise at the saved location (none: off).
+                lat, lon, off = self.ctx.settings.get("lat"), self.ctx.settings.get("lon"), night.get("offset", 0)
+                unix = now.timestamp()
+                if lat is not None and lon is not None and sun_night(unix, lat, lon, off):
+                    mode = night.get("mode") or "normal"
+                    end = sun_night_end(unix, lat, lon, off)
+                    mode_until = None if end is None else datetime.datetime.fromtimestamp(end, now.tzinfo).strftime("%H:%M")
+            elif not woken and night is not None:
                 nfrm, nto = parse_hhmm(night.get("from")), parse_hhmm(night.get("to"))
                 if nfrm is not None and nto is not None and window_contains(nfrm, nto, 0x7F, weekday, minute):
                     mode = night.get("mode") or "normal"

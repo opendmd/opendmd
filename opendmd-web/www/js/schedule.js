@@ -2,11 +2,13 @@
 // shows while the schedule has the panel. The device keeps the clock (NTP)
 // and a timezone, and evaluates the schedule once a minute; rules pick a
 // playlist and/or a brightness for a stretch of the week, night mode turns
-// the panel off (or dims it) every night. None of it changes the playlist or
-// brightness saved in Playback: when a rule ends, those come back.
+// the panel off (or dims it) every night, between two times or from sunset
+// to sunrise (the device works out the sun for the saved location). None of
+// it changes the playlist or brightness saved in Playback: when a rule
+// ends, those come back.
 
 import { app, playlistLabel, setPath } from './state.js';
-import { h, clear, toast, note, saver, debounce } from './util.js';
+import { h, clear, on, toast, note, saver, debounce } from './util.js';
 
 // A short list of common zones (POSIX TZ strings, what the device's clock
 // library reads); anything else goes in "Custom".
@@ -92,6 +94,10 @@ export function scheduleCard() {
   const nightOn = h('input', { type: 'checkbox', id: 'sc-night-on' });
   const nFrom = h('input', { type: 'time', id: 'sc-night-from', value: '23:30' });
   const nTo = h('input', { type: 'time', id: 'sc-night-to', value: '07:00' });
+  const nWhen = h('select', { id: 'sc-night-when', 'aria-label': 'When' }, h('option', { value: 'clock' }, 'at set times'), h('option', { value: 'sun' }, 'from sunset to sunrise'));
+  const nOffset = h('select', { id: 'sc-night-offset', 'aria-label': 'Start and end' }, [[0, 'exactly'], [30, '30 min shorter'], [60, '1 hour shorter'], [-30, '30 min longer'], [-60, '1 hour longer']].map(([v, l]) => h('option', { value: v }, l)));
+  const clockPart = h('span.row', h('span', 'from'), nFrom, h('span', 'to'), nTo), sunPart = h('span.row', { hidden: true }, nOffset);
+  const sunNote = h('p.cap', { id: 'sc-night-sun-note', hidden: true });
   const nMode = h('select', { id: 'sc-night-mode' }, h('option', { value: 'off' }, 'Panel off'), h('option', { value: 'dim' }, 'Dim'));
   const nLevel = h('input', { type: 'range', min: 1, max: 255, id: 'sc-night-level', value: 8 });
   const nLevelOut = h('output.mono', '8');
@@ -118,9 +124,27 @@ export function scheduleCard() {
   function renderNight() {
     const n = sched.night;
     nightOn.checked = !!n;
-    if (n) { nFrom.value = n.from; nTo.value = n.to; nMode.value = n.mode; nLevel.value = n.brightness ?? 8; nLevelOut.textContent = nLevel.value; }
+    if (n) {
+      if (n.from) { nFrom.value = n.from; nTo.value = n.to; }
+      nWhen.value = n.sun ? 'sun' : 'clock'; nOffset.value = n.offset ?? 0;
+      nMode.value = n.mode; nLevel.value = n.brightness ?? 8; nLevelOut.textContent = nLevel.value;
+    }
     levelRow.hidden = nMode.value !== 'dim';
+    sunFields();
   }
+  // Sunset to sunrise needs the location (Location, above: the panel works
+  // out the sun there); a player that keeps none doesn't offer it.
+  function sunFields() {
+    const c = app.config || {}, sun = nWhen.value === 'sun', place = c.lat != null;
+    nWhen.options[1].disabled = !place && !sun;
+    nWhen.hidden = !('lat' in c) && !sun;
+    clockPart.hidden = sun;
+    sunPart.hidden = !sun;
+    sunNote.hidden = place && !sun;
+    sunNote.textContent = !place ? (sun ? 'Night mode is off until the panel has a location again: set it under Location.' : 'For sunset to sunrise, set the panel’s location under Location.')
+      : 'Shorter starts after sunset and ends before sunrise; longer starts before sunset and ends after sunrise.';
+  }
+  on('config', sunFields);
 
   async function edit(i) {
     editing = i;
@@ -162,12 +186,15 @@ export function scheduleCard() {
     editor.hidden = false;
   }
 
+  // (The times stay with a night by the sun, for going back to them.)
   const saveNight = () => run(async () => {
-    const night = nightOn.checked ? { from: nFrom.value, to: nTo.value, mode: nMode.value, brightness: +nLevel.value } : null;
-    if (night && (!night.from || !night.to)) throw new Error('enter both times');
+    const sun = nWhen.value === 'sun';
+    const night = nightOn.checked ? { from: nFrom.value, to: nTo.value, ...(sun && { sun, offset: +nOffset.value }), mode: nMode.value, brightness: +nLevel.value } : null;
+    if (night && !sun && (!night.from || !night.to)) throw new Error('enter both times');
     await put({ ...sched, night });
   });
-  nightOn.onchange = nFrom.onchange = nTo.onchange = saveNight;
+  nightOn.onchange = nFrom.onchange = nTo.onchange = nOffset.onchange = saveNight;
+  nWhen.onchange = () => { sunFields(); saveNight(); };
   nMode.onchange = () => { levelRow.hidden = nMode.value !== 'dim'; saveNight(); };
   nLevel.addEventListener('input', debounce(saveNight, 400));
 
@@ -181,7 +208,7 @@ export function scheduleCard() {
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule')),
     editor,
     nightH,
-    h('div.row', h('label', nightOn, 'Every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow));
+    h('div.row', h('label', nightOn, 'Every night'), nWhen, clockPart, sunPart, nMode, levelRow), sunNote);
   load();
   return { el, load, night: () => sched.night };
 }

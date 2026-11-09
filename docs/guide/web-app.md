@@ -228,8 +228,11 @@ display and is never written to the card or shared.
 such as "weekday evenings: Consoles". The first rule that matches wins, and
 your normal settings come back when it ends.
 
-**Night mode** turns the panel off, or dims it, every night between the
-times you choose.
+**Night mode** turns the panel off, or dims it, every night: between the
+times you choose, or **from sunset to sunrise** where the panel is. That
+needs the **Location** above, and follows the seasons by itself. Make it
+30 minutes or an hour **shorter** (starting after sunset, ending before
+sunrise) or **longer**. While it's on, Now says until when.
 
 ### RePlayOS
 

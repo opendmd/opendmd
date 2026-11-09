@@ -197,7 +197,10 @@ button lands on them.
     the wordmark or a Formula light enough for the show; a Formula's
     preview is pkg-psi's frame with the main module's information line over
     it, `Preview.showBoot`, the panel's `@boot?formula=…`).
-  - **Schedule**: time zone, location, schedule rules, night mode.
+  - **Schedule**: time zone, location, schedule rules, night mode
+    (between two times, or from sunset to sunrise with an offset: `sun`
+    and `offset` in the schedule, offered only with a location; the
+    device works out the sun, `opendmd_core::schedule::sun_night`).
   - **RePlayOS**: Follow RePlayOS (`js/follow.js`), with a link to the
     guide's page.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
