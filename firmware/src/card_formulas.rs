@@ -39,7 +39,8 @@
 //! task's priority 1, under the network and the httpd) and starts only if
 //! the heap has its stack, two programs, `psi::compile_heap_estimate` of
 //! the source and [`RESERVE`] free, with a block for the stack; otherwise
-//! it waits ([`RETRY`], up to [`RETRIES`] times), then is left for the
+//! the network worker tries it again later ([`tick`]: only once the heap
+//! has room, [`RETRY_OFFLINE`]/[`RETRY_ONLINE`]), then it is left for the
 //! next start. Between files the pass waits for a transfer on the card
 //! to end. The bytes are `psi::build`'s: what the web app and `psi
 //! build` write.
@@ -413,10 +414,12 @@ pub fn refused(path: &str) {
     }
 }
 
-/// The network worker's turn (CPU0): refused compiled files noted on the
-/// card, so the next start prepares them again (a cut write, another
-/// version's copy). Rare: nothing to do almost always.
+/// The network worker's turn (CPU0): a retry of the compiles the heap
+/// could not hold, when due ([`retry_tick`]); and refused compiled files
+/// noted on the card, so the next start prepares them again (a cut write,
+/// another version's copy). Nothing to do almost always.
 pub fn tick() {
+    retry_tick();
     if REDO.iter().all(|s| s.load(Relaxed) == 0) || !crate::CARD_READY.load(Relaxed) {
         return;
     }
@@ -436,8 +439,8 @@ pub fn tick() {
 }
 
 /// Prepare the card's Formulas (the boot task once the card is handed
-/// over, CPU0): a pass, then the compiles the heap could not hold tried
-/// again (see [`RETRY_OFFLINE`]). `settings` for a look that names one
+/// over, CPU0): a pass; the compiles the heap could not hold are tried
+/// again by the network worker ([`tick`], see [`RETRY_OFFLINE`]). `settings` for a look that names one
 /// ([`crate::formula_look::file_changed`]) and the network setting.
 #[optimize(size)] // (CPU0, after the handover: no frame runs it)
 #[inline(never)]
@@ -451,32 +454,80 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     let online = settings.lock().map(|s| s.network).unwrap_or(true);
     let (wait, tries) = if online { RETRY_ONLINE } else { RETRY_OFFLINE };
     let mut shorts = Vec::new();
-    let mut c = pass(settings, &mut shorts);
+    let c = pass(settings, &mut shorts, true);
     publish(c);
-    let mut left = tries;
-    while c.short > 0 && left > 0 {
-        left -= 1;
-        std::thread::sleep(wait);
-        // Only once the heap has room for the least of them.
-        if (crate::state::free_heap()) < c.min_need {
-            continue;
-        }
-        shorts.clear();
-        let again = pass(settings, &mut shorts);
+    if c.short > 0 && tries > 0 {
+        // The retries are the network worker's ([`tick`]): the boot task
+        // ends now and its stack goes back to the heap.
+        *RETRY.lock().unwrap_or_else(|p| p.into_inner()) = Some(Retry {
+            settings: settings.clone(),
+            counts: c,
+            shorts,
+            wait,
+            left: tries,
+            next: Instant::now() + wait,
+            t0,
+        });
+        return c;
+    }
+    finish(c, &shorts, t0);
+    c
+}
+
+/// Compiles still to be tried again (the network worker's [`tick`]).
+struct Retry {
+    settings: Arc<Mutex<crate::nvs_config::Settings>>,
+    counts: Counts,
+    shorts: Vec<String>,
+    wait: Duration,
+    left: u32,
+    next: Instant,
+    t0: Instant,
+}
+static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
+
+/// One retry, when due and the heap has room for the least of them.
+#[optimize(size)]
+#[inline(never)]
+fn retry_tick() {
+    let mut g = RETRY.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(r) = g.as_mut() else { return };
+    if Instant::now() < r.next {
+        return;
+    }
+    r.left -= 1;
+    r.next = Instant::now() + r.wait;
+    if crate::state::free_heap() >= r.counts.min_need {
+        let mut shorts = Vec::new();
+        // (Not waiting for the card: this is the worker's loop; a busy card
+        // leaves the rest for the next retry.)
+        let again = pass(&r.settings, &mut shorts, false);
+        let c = r.counts;
         // The later pass counts the earlier passes' compiles as ready:
         // they are this start's prepared, not its ready.
-        c = Counts {
+        r.counts = Counts {
             heap_low: low(c.heap_low, again.heap_low),
             stack_left: low(c.stack_left, again.stack_left),
             prepared: c.prepared + again.prepared,
             current: again.current.saturating_sub(c.prepared),
+            min_need: if again.min_need == 0 { c.min_need } else { again.min_need },
             ..again
         };
-        publish(c);
+        r.shorts = shorts;
+        publish(r.counts);
     }
+    if r.counts.short == 0 || r.left == 0 {
+        if let Some(r) = g.take() {
+            finish(r.counts, &r.shorts, r.t0);
+        }
+    }
+}
+
+/// The pass's end: the ones left short (once) and the summary.
+fn finish(c: Counts, shorts: &[String], t0: Instant) {
     if !shorts.is_empty() {
         log::warn!(
-            "formulas: short of memory for {} (it needs {} B free at least; {} B free): prepared at the next start",
+            "formulas: short of memory for {} (the least needs {} B free; {} B free): prepared at the next start",
             shorts.join(", "),
             c.min_need,
             crate::state::free_heap()
@@ -493,7 +544,6 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
             t0.elapsed().as_millis()
         );
     }
-    c
 }
 
 fn publish(c: Counts) {
@@ -540,8 +590,8 @@ fn put(path: &str, bytes: &[u8]) -> bool {
 /// Wait while the card is someone else's (a file going to or from it, the
 /// cache builder at work) or the panel just missed a frame. False: it
 /// stayed busy for two minutes (the rest waits for the next start).
-fn give_way() -> bool {
-    for _ in 0..1200 {
+fn give_way(wait: bool) -> bool {
+    for _ in 0..if wait { 1200 } else { 1 } {
         let late = LATE_AT.load(Relaxed);
         let recent_late = late != 0 && now_ms().wrapping_sub(late) < AFTER_LATE.as_millis() as u32;
         if !crate::cache_builder::transfer_in_flight() && !crate::cache_builder::task_up() && !recent_late {
@@ -573,11 +623,11 @@ impl Drop for Writing {
 
 #[optimize(size)]
 #[inline(never)]
-fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>) -> Counts {
+fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, wait: bool) -> Counts {
     // In flight from the listing to the last write: a crash in between
     // counts against the next start ([`boot`]); none outside it.
     guard(0).store(GUARD_MAGIC, Relaxed);
-    let c = pass_in(settings, shorts);
+    let c = pass_in(settings, shorts, wait);
     guard(0).store(0, Relaxed);
     guard(1).store(crashes_word(0), Relaxed);
     c
@@ -585,7 +635,7 @@ fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<Str
 
 #[optimize(size)]
 #[inline(never)]
-fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>) -> Counts {
+fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, wait: bool) -> Counts {
     let card_dir = "/formulas";
     let dir = format!("{}{card_dir}", config::SD_MOUNT);
     let entries = list(card_dir);
@@ -638,8 +688,10 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             }
             State::Stale(why) => why,
         };
-        if !give_way() {
-            log::warn!("formulas: the card stayed busy; the rest is prepared at the next start");
+        if !give_way(wait) {
+            if wait {
+                log::warn!("formulas: the card stayed busy; the rest is prepared later");
+            }
             stopped = true;
             c.short += 1;
             continue;
