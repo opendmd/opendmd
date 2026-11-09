@@ -29,6 +29,13 @@ Settings › Panel.
 even while no page was open. Tap one to play it again. **Replay** restarts
 what is on now, and **Previous** steps back one at a time.
 
+On a computer the keyboard works too: **Space** pauses and resumes, **→**
+skips and **←** goes back, as Previous does.
+
+**Preview look**, at the bottom, changes how this page draws the preview
+(its glow and contrast), to match your panel better. It doesn't change the
+panel.
+
 Tap **☆** next to the title to make the GIF a favourite in the playlist
 that's playing. It turns to **★**, and a second tap undoes it; the message
 that pops up names the playlist. The **…** on a Recently played GIF has the
