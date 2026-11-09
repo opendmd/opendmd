@@ -66,3 +66,27 @@ check() {  # FEED VERSION DIR SUMS
 check release.json "$rel" firmware "$sums_rel"
 if [ "$beta" = "$rel" ]; then sums_beta=$sums_rel; fi
 check beta.json "$beta" "$dir" "$sums_beta"
+
+# The offline install (the install page's "Play from the card only"): the
+# manifest and its NVS image beside the release's, when the release has
+# them (releases before the box have neither: nothing to check).
+offline() {  # VERSION DIR
+  local ver=$1 d=$2 got nvs size word
+  if ! get "install/$d/manifest-4mb-offline.json" > "$tmp/offline.json" 2>/dev/null; then
+    echo "SKIP  $base/install/$d/manifest-4mb-offline.json: none ($ver is from before the offline install)"
+    return
+  fi
+  got=$(jq -r .version "$tmp/offline.json")
+  [ "$got" = "$ver" ] || fail "$base/install/$d/manifest-4mb-offline.json says '$got', want $ver"
+  nvs=$(jq -r '.builds[0].parts[] | select(.offset == 36864) | .path' "$tmp/offline.json")
+  [ "$nvs" = "nvs-offline-4mb.bin" ] || fail "$base/install/$d/manifest-4mb-offline.json has no nvs-offline-4mb.bin at 0x9000 ('$nvs')"
+  [ "$(jq '.builds[0].parts | length' "$tmp/offline.json")" = 7 ] || fail "$base/install/$d/manifest-4mb-offline.json does not have seven parts"
+  get "install/$d/$nvs" > "$tmp/nvs.bin" || fail "$base/install/$d/$nvs is not served"
+  size=$(stat -c %s "$tmp/nvs.bin")
+  [ "$size" = 24576 ] || fail "$base/install/$d/$nvs is $size B, not 24,576"
+  word=$(head -c 4 "$tmp/nvs.bin" | od -An -tx1 | tr -d ' \n')
+  [ "$word" = feffffff ] || fail "$base/install/$d/$nvs does not start with an active NVS page (fffffffe; got bytes $word)"
+  echo "PASS  $base/install/$d/manifest-4mb-offline.json: $ver, seven parts, $nvs 24,576 B, an active NVS page"
+}
+offline "$rel" firmware
+[ "$beta" = "$rel" ] || offline "$beta" "$dir"
