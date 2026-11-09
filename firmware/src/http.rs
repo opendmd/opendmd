@@ -2102,6 +2102,13 @@ struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
 /// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
 /// folder: the intent and the wait are for the whole folder then.
 fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
+    // A Formula's compiled file the display is writing now (`card_formulas`):
+    // its turn first (FAT has no file locks here: two writers of one file
+    // corrupt it).
+    #[cfg(feature = "psi")]
+    if !crate::card_formulas::wait_not_writing(fs_path) {
+        return None;
+    }
     let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
     let alias = !opendmd_core::fatread::is_canonical(card);
     let parent = fs_path.rsplit_once('/').map_or(fs_path, |(d, _)| d).to_string();

@@ -163,6 +163,11 @@ class Lane:
         stale = b"PSB\x02" + bytes(40)  # another version's compiled file
         files = {f"/formulas/{p.name}": p.read_bytes() for p in sorted(FIXTURES.glob("*.psi"))}
         files["/formulas/stale.psb"] = stale
+        # A compiled file cut short (a power cut mid-write) with a good
+        # header and its source's date: current by the check, refused where
+        # it plays, so prepared again at the next start.
+        files["/formulas/cut.psi"] = (FIXTURES / "ramp.psi").read_bytes()
+        files["/formulas/cut.psb"] = (Path(self.a.host_psb) / "ramp.psb").read_bytes()[:20]
         # A card with many Formulas (a test board had 79), so the pass is
         # still going when the playlist starts ...
         for k in range(FILLERS):
@@ -172,7 +177,7 @@ class Lane:
         # played.
         files["/formulas/zlate.psi"] = (FIXTURES / "ramp.psi").read_bytes()
         files["/filelist.txt"] = (
-            "/formulas/zlate.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
+            "/formulas/zlate.psi\n/formulas/cut.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
             "/formulas/tick.psi\n/formulas/stale.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_02.gif\n"
             "/formulas/broken.psi\n/formulas/deep.psi\n/gifs/Pixel_Art/PIXEL_ART_02.gif\n"
         ).encode()
@@ -232,6 +237,10 @@ class Lane:
             if not s_i < p_i < z_i:
                 raise LaneFail("zlate.psi was not skipped, then prepared, then played")
             self.ok("played once ready", "/formulas/zlate.psi: skipped while not prepared, prepared in the background, then played")
+            _, m = e.wait_for(re.compile(r"skipping /formulas/cut\.psi: (.*)"), 400, what="the cut compiled file refused")
+            e.wait_for(re.compile(r"formulas: a compiled file the panel refused is prepared again at the next start"), 120,
+                       what="the refused file noted for the next start")
+            self.ok("refused, noted", f"cut.psb: {m[1][:70]}; noted for the next start")
             j, _ = e.wait_for(re.compile(r"\] /formulas/ramp\.psi <- "), 400, what="the compiled card Formula playing")
             skipped = [i for i, _ in e.find(re.compile(r"skipping /formulas/ramp\.psi"))]
             self.ok("compiled formula plays", f"/formulas/ramp.psi, compiled after the playlist started, played"
@@ -283,9 +292,11 @@ class Lane:
         try:
             self.booted_ours(e)
             _, m = e.wait_for(SUMMARY, 300, what="the second start's summary")
-            if int(m[3]) != 0 or int(m[2]) + int(m[4]) != int(m[1]):
-                raise LaneFail(f"the second start compiled again or lost one: {m[0]}")
-            self.ok("next start", m[0] + " (the marks and times kept)")
+            if int(m[3]) != 1 or int(m[2]) + int(m[3]) + int(m[4]) != int(m[1]):
+                raise LaneFail(f"the second start should compile only the refused one: {m[0]}")
+            if not e.find(re.compile(r"formulas: /formulas/cut\.psi prepared for the panel \(refused where it played\)")):
+                raise LaneFail("cut.psi was not prepared again at the next start")
+            self.ok("next start", m[0] + " (only the refused cut.psb again; the marks and times kept)")
             _, m = e.wait_for(re.compile(r"boot show: formula /formulas/tick\.psi does not build \((.*)\): the built-in show"), 120,
                               what="the clock start-up show refused")
             if "shows the time" not in m[1]:
