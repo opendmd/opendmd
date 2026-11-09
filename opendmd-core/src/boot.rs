@@ -1310,4 +1310,21 @@ mod tests {
             assert_eq!(a, b, "at {t} ms");
         }
     }
+
+    /// Deleting a card Formula clears a setting that names it (the look and
+    /// the start-up show alike); writing its `.psb` rebuilds; other files
+    /// and other values are left alone.
+    #[test]
+    fn a_deleted_formula_clears_the_setting_that_names_it() {
+        use crate::synth::{file_change, FileChange};
+        let v = "/formulas/My-Show.psi?a=0.5";
+        assert_eq!(file_change(v, "/formulas/my-show.psi", true), Some(FileChange::Gone));
+        assert_eq!(file_change(v, "/formulas/my-show.psi", false), None);
+        assert_eq!(file_change(v, "/formulas/MY-SHOW.PSB", false), Some(FileChange::Rebuild));
+        assert_eq!(file_change(v, "/formulas/my-show.psb", true), Some(FileChange::Rebuild));
+        assert_eq!(file_change(v, "/formulas/other.psi", true), None);
+        for other in ["", "@formula:starfield", "@formula?psb=AAAA"] {
+            assert_eq!(file_change(other, "/formulas/my-show.psi", true), None, "{other}");
+        }
+    }
 }

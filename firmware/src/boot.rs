@@ -66,6 +66,12 @@ pub enum Event {
     NoCard,
     /// The card is mounted and checked, and its playlist opened or built.
     Ready(Box<Handover>),
+    /// The start-up show's Formula is on the card (the card's
+    /// `boot_formula`, `/formulas/<stem>.psi`): its compiled bytes, read
+    /// once the card is mounted, before the playlist (`show::Screen::
+    /// card_formula`), or why not.
+    #[cfg(feature = "psi")]
+    Formula(Box<(String, Result<Vec<u8>, opendmd_core::psi::Error>)>),
 }
 
 /// The playlist's catalog as `open_catalog` returns it.
@@ -368,6 +374,15 @@ fn run(task: BootTask) {
         // The card's settings over the device's (or written from them).
         let (snapshot, card_settings) = crate::settings_card::adopt_at_mount(&settings);
         crate::heapmap::cp("card settings adopted");
+        // The start-up show's Formula, if it is one of the card's: read
+        // here, where the card is this task's, while the show runs.
+        #[cfg(feature = "psi")]
+        if snapshot.boot_show != opendmd_core::boot::ShowLength::Off {
+            if let Some((file, _)) = opendmd_core::synth::formula_file(&snapshot.boot_formula) {
+                let read = crate::formulas::read_card(file);
+                let _ = tx.send(Event::Formula(Box::new((snapshot.boot_formula.clone(), read))));
+            }
+        }
         let mut handover = prepare(c, &snapshot, &status);
         crate::heapmap::cp("playlist index (prepare)");
         handover.settings = card_settings;

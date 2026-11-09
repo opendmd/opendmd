@@ -44,7 +44,10 @@
 //! address, "Updated to"): never the version. A bundled or inline Formula
 //! is built before the boot task starts (it needs neither the card nor
 //! the network: its ~10-14 KB taken while the heap is whole); one on the
-//! card is not played yet (the wordmark, said why). Missing, broken, too heavy for
+//! card waits (dark) for the boot task, which reads its `.psb` once the
+//! card is mounted ([`Screen::card_formula`]: the display loop never
+//! touches the card before the handover), and plays the wordmark if the
+//! card is not there in [`CARD_WAIT_MS`]. Missing, broken, too heavy for
 //! the show (`boot::FORMULA_MAX_EST_US`) or out of memory, the wordmark
 //! plays, with a log line and `/api/status` `boot_formula.error`; short of
 //! memory it is built again a second later (`fx_psi::look_retry`), the
@@ -234,13 +237,18 @@ impl Drop for Updating {
 
 // --- The start-up show's Formula ------------------------------------------------
 
+/// How long a card Formula's show stays dark waiting for the card (ms into
+/// the show) before the wordmark plays instead.
+pub const CARD_WAIT_MS: u32 = 500;
+
 /// What `/api/status` says of the start-up show's Formula this boot
 /// (`boot_formula`): [`NO_FORMULA`] (none set, or the show `off`), played,
-/// or the wordmark in its place, and why
+/// waiting for the card, or the wordmark in its place, and why
 /// ([`BOOT_ERROR`]).
 static BOOT_STATE: AtomicU8 = AtomicU8::new(NO_FORMULA);
 pub const NO_FORMULA: u8 = 0;
 pub const PLAYED: u8 = 1;
+pub const WAITING: u8 = 2;
 pub const FELL_BACK: u8 = 3;
 /// Why the wordmark played in the Formula's place.
 pub static BOOT_ERROR: Mutex<String> = Mutex::new(String::new());
@@ -258,9 +266,13 @@ pub fn boot_state() -> u8 {
 pub enum Formula {
     /// The wordmark (none set, or it fell back).
     Wordmark,
-    /// Short of memory: built again at `at`.
+    /// A card Formula: dark until the boot task reads it.
+    #[cfg_attr(not(feature = "psi"), allow(dead_code))]
+    Waiting,
+    /// Short of memory: built again at `at`, from `psb` (a card Formula's
+    /// bytes, with its options) or else the path.
     #[cfg(feature = "psi")]
-    Retry { at: RetryAt },
+    Retry { at: RetryAt, psb: Option<(Vec<u8>, String)> },
     #[cfg(feature = "psi")]
     Playing(Box<boot::FormulaShow>),
 }
@@ -268,7 +280,7 @@ pub enum Formula {
 impl Formula {
     /// The Formula `path` names (a `boot_formula` value) for a show of
     /// `len`: built now if it is bundled or inline (before the boot task
-    /// starts, on a whole heap); one on the card not yet. Logged,
+    /// starts, on a whole heap), waited for if it is on the card. Logged,
     /// and said in the status.
     pub fn new(path: &str, len: ShowLength) -> Formula {
         if path.is_empty() || len == ShowLength::Off {
@@ -277,7 +289,12 @@ impl Formula {
         }
         #[cfg(feature = "psi")]
         {
-            Formula::built(path, boot::FormulaShow::open(path))
+            if opendmd_core::synth::formula_file(path).is_some() {
+                log::info!("boot show: formula {}, from the card once it is mounted", crate::short(path));
+                BOOT_STATE.store(WAITING, Relaxed);
+                return Formula::Waiting;
+            }
+            Formula::built(path, boot::FormulaShow::open(path), None)
         }
         #[cfg(not(feature = "psi"))]
         {
@@ -287,9 +304,13 @@ impl Formula {
     }
 
     /// A build's outcome: playing, or the wordmark (again in a second if
-    /// it was only short of memory).
+    /// it was only short of memory, from `psb` if it came from the card).
     #[cfg(feature = "psi")]
-    fn built(path: &str, r: Result<boot::FormulaShow, opendmd_core::psi::Error>) -> Formula {
+    fn built(
+        path: &str,
+        r: Result<boot::FormulaShow, opendmd_core::psi::Error>,
+        psb: Option<(Vec<u8>, String)>,
+    ) -> Formula {
         match r {
             Ok(s) => {
                 log::info!("boot show: formula {}", crate::short(path));
@@ -303,7 +324,7 @@ impl Formula {
             Err(e) => match opendmd_core::fx_psi::look_retry(&e) {
                 Some(d) => {
                     log::warn!("boot show: no room for formula {} yet ({}): the built-in show, again in a second", crate::short(path), e.msg);
-                    Formula::Retry { at: RetryAt::now() + d }
+                    Formula::Retry { at: RetryAt::now() + d, psb }
                 }
                 None => {
                     fell_back(path, &e.msg);
@@ -316,7 +337,8 @@ impl Formula {
 
 /// A `boot_formula` value checked before it is saved: `""` (the wordmark)
 /// or a Formula that builds as the start-up show (compiles, fits the show:
-/// `boot::FORMULA_MAX_EST_US`). The error is the sentence why.
+/// `boot::FORMULA_MAX_EST_US`); one on the card read from it (so the card
+/// must be ready). The error is the sentence why.
 pub fn check_formula(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Ok(());
@@ -327,7 +349,11 @@ pub fn check_formula(path: &str) -> Result<(), String> {
     }
     #[cfg(feature = "psi")]
     {
-        boot::FormulaShow::open(path).map(drop).map_err(|e| e.msg)
+        let r = match opendmd_core::synth::formula_file(path) {
+            Some((file, opts)) => crate::formulas::read_card(file).and_then(|b| boot::FormulaShow::from_bytes(&b, opts)),
+            None => boot::FormulaShow::open(path),
+        };
+        r.map(drop).map_err(|e| e.msg)
     }
     #[cfg(not(feature = "psi"))]
     Err(crate::state::NO_FORMULAS.to_string())
@@ -368,7 +394,6 @@ pub struct Screen {
     logged: Option<Text>,
     /// The show's Formula (`boot_formula`), and the path it names.
     formula: Formula,
-    #[cfg_attr(not(feature = "psi"), allow(dead_code))]
     path: String,
 }
 
@@ -410,24 +435,64 @@ impl Screen {
         }
     }
 
+    /// The boot task read the card Formula `path` (the card's `boot_formula`,
+    /// which wins over NVS's as every card setting does): played from here
+    /// if the show still runs, else the wordmark goes on (and why is said).
+    #[cfg(feature = "psi")]
+    pub fn card_formula(&mut self, path: &str, psb: Result<Vec<u8>, opendmd_core::psi::Error>) {
+        if self.scene != Scene::Show || self.len == ShowLength::Off {
+            return;
+        }
+        path.clone_into(&mut self.path);
+        let opts = opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o).to_string();
+        self.formula = match psb {
+            Ok(b) => {
+                let r = boot::FormulaShow::from_bytes(&b, &opts);
+                let keep = r.as_ref().err().and_then(opendmd_core::fx_psi::look_retry).map(|_| (b, opts));
+                log::info!("boot show: the card's formula read at {} ms", self.t());
+                Formula::built(path, r, keep)
+            }
+            Err(e) => {
+                fell_back(path, &e.msg);
+                Formula::Wordmark
+            }
+        };
+    }
+
     /// The Formula is done with (the show ended): its memory goes back.
     fn let_go(&mut self) {
-        #[cfg(feature = "psi")]
-        if let Formula::Retry { .. } = self.formula {
-            fell_back(&self.path, opendmd_core::psi::NO_MEMORY);
+        match self.formula {
+            Formula::Waiting => fell_back(&self.path, "the card was not ready in time"),
+            #[cfg(feature = "psi")]
+            Formula::Retry { .. } => fell_back(&self.path, opendmd_core::psi::NO_MEMORY),
+            _ => {}
         }
         self.formula = Formula::Wordmark;
         FORMULA_SHOWN.store(false, Relaxed);
     }
 
-    /// Before a show frame: a Formula short of memory is built again when
-    /// due.
-    fn step_formula(&mut self) {
-        #[cfg(feature = "psi")]
-        if let Formula::Retry { at } = &self.formula {
-            if RetryAt::now() >= *at {
-                self.formula = Formula::built(&self.path, boot::FormulaShow::open(&self.path));
+    /// Before a show frame: a card Formula still waited for past
+    /// [`CARD_WAIT_MS`] (or with no card) gives way to the wordmark; one
+    /// short of memory is built again when due.
+    fn step_formula(&mut self, t: u32) {
+        match &mut self.formula {
+            Formula::Waiting if t >= CARD_WAIT_MS || self.no_card => {
+                let why = if self.no_card { "no card" } else { "the card was not ready in time" };
+                fell_back(&self.path, why);
+                self.formula = Formula::Wordmark;
             }
+            #[cfg(feature = "psi")]
+            Formula::Retry { at, psb } if RetryAt::now() >= *at => {
+                let psb = psb.take();
+                let r = match &psb {
+                    Some((b, o)) => boot::FormulaShow::from_bytes(b, o),
+                    None => boot::FormulaShow::open(&self.path),
+                };
+                let path = std::mem::take(&mut self.path);
+                self.formula = Formula::built(&path, r, psb);
+                self.path = path;
+            }
+            _ => {}
         }
     }
 
@@ -565,7 +630,7 @@ impl Screen {
             Scene::Card { .. } => {}
         }
         if self.scene == Scene::Show && self.len != ShowLength::Off {
-            self.step_formula();
+            self.step_formula(t);
         }
         if self.text_at.is_none_or(|at| at.elapsed() >= TEXT_EVERY) {
             self.text = Text::read(status, problem, self.ready_at.is_some() && !self.over);
@@ -593,6 +658,13 @@ impl Screen {
                             // Its frame is on the panel already.
                             return period.saturating_sub(begun.elapsed()).max(Duration::from_millis(1));
                         }
+                    }
+                    Formula::Waiting => {
+                        // Dark until the card is read.
+                        if self.drawn {
+                            return Duration::from_millis(2);
+                        }
+                        canvas.clear();
                     }
                     _ => {
                         let p = boot::phase(self.len, t);

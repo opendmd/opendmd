@@ -80,8 +80,25 @@ static GONE_PATH: Mutex<String> = Mutex::new(String::new());
 /// The Formula a [`GONE`] was for (taken: asked once), if `look` (a
 /// `look_formula` value) still names it.
 pub fn gone_for(look: &str) -> Option<String> {
-    let gone = GONE_PATH.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
-    names(look, &gone).then_some(gone)
+    take_gone(&GONE_PATH, look)
+}
+
+/// The start-up show's Formula (`boot_formula`) was deleted ([`file_changed`]
+/// cleared the shared copy and the card's): the main loop clears its own
+/// and NVS's, if it still names [`boot_gone_for`]'s file. Nothing to
+/// rebuild when its `.psb` is written: the show reads it at the next boot.
+pub static BOOT_GONE: AtomicBool = AtomicBool::new(false);
+static BOOT_GONE_PATH: Mutex<String> = Mutex::new(String::new());
+
+/// The Formula a [`BOOT_GONE`] was for (taken), if `boot` (a
+/// `boot_formula` value) still names it.
+pub fn boot_gone_for(boot: &str) -> Option<String> {
+    take_gone(&BOOT_GONE_PATH, boot)
+}
+
+fn take_gone(path: &Mutex<String>, value: &str) -> Option<String> {
+    let gone = path.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default();
+    names(value, &gone).then_some(gone)
 }
 
 /// Whether `look` (a `look_formula` value) names the card Formula `file`
@@ -96,34 +113,50 @@ pub fn names(look: &str, file: &str) -> bool {
 /// tell the main loop ([`CHANGED`], woken from its frame's sleep). A
 /// deleted `.psi` clears `look_formula` in the shared settings here (and
 /// on the card, `settings_card`; the main loop clears its own and NVS):
-/// the look goes with its Formula. Every writer of the file (the web
+/// the look goes with its Formula. The same for `boot_formula`, the
+/// start-up show's Formula ([`BOOT_GONE`]): deleted, the show is the
+/// wordmark again. Every writer of the file (the web
 /// app's Save and Delete, the site's Open on my panel, the API) comes
 /// through `PUT`/`DELETE /api/files`, so through here. (Those refuse an
 /// 8.3 alias, `MYFORM~1.PSI`, with a 400: `files::card_path_for_write`;
 /// so `card` is the long name the look names.)
 pub fn file_changed(shared: &Mutex<crate::nvs_config::Settings>, card: &str, removed: bool) {
-    use opendmd_core::synth::{compiled_path, formula_file};
-    let what = {
+    use opendmd_core::synth::{file_change, FileChange};
+    let (look, boot_gone) = {
         let Ok(mut s) = shared.lock() else { return };
-        let Some((file, _)) = formula_file(&s.look_formula) else { return };
-        if removed && card.eq_ignore_ascii_case(file) {
+        let look = file_change(&s.look_formula, card, removed);
+        let boot_gone = file_change(&s.boot_formula, card, removed) == Some(FileChange::Gone);
+        if look == Some(FileChange::Gone) {
             s.look_formula.clear();
-            GONE
-        } else if card.eq_ignore_ascii_case(&compiled_path(file)) {
-            REBUILD
-        } else {
-            return;
         }
+        if boot_gone {
+            s.boot_formula.clear();
+        }
+        (look, boot_gone)
     };
-    if what == GONE {
+    let look_gone = look == Some(FileChange::Gone);
+    if look_gone {
         log::info!("formula look: its Formula was deleted, so the look is off: {}", crate::short(card));
         if let Ok(mut g) = GONE_PATH.lock() {
             card.clone_into(&mut g);
         }
+    }
+    if boot_gone {
+        log::info!("start-up show: its Formula was deleted, so the show is the wordmark again: {}", crate::short(card));
+        if let Ok(mut g) = BOOT_GONE_PATH.lock() {
+            card.clone_into(&mut g);
+        }
+        BOOT_GONE.store(true, Ordering::Relaxed);
+    }
+    if look_gone || boot_gone {
         crate::settings_card::save_shared(shared);
     }
-    CHANGED.fetch_max(what, Ordering::Relaxed);
-    crate::wake::kick();
+    if look.is_some() {
+        CHANGED.fetch_max(if look_gone { GONE } else { REBUILD }, Ordering::Relaxed);
+    }
+    if look.is_some() || boot_gone {
+        crate::wake::kick();
+    }
 }
 
 #[cfg(feature = "psi")]

@@ -254,7 +254,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the one it names clears it, as on the firmware); status `formula_look`
   (null, or `{"source":"setting"|"over_gif","held":20480,...}`). Config
   `boot_formula` (the start-up show's Formula: `""`, the wordmark, or a
-  Formula's path, checked as `look_formula` is); status `boot_formula` (null, or `{"played":true}`:
+  Formula's path, checked as `look_formula` is; deleting the `.psi` it
+  names clears it too); status `boot_formula` (null, or `{"played":true}`:
   the mock never falls back).
 - **`GET /api/exists?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -4902,11 +4903,12 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 existed = ctx.fs.delete(rel)
                 ctx.player.delays.clear()
-                # The look's Formula deleted: the look goes with it
-                # (formula_look::file_changed).
-                look = ctx.settings.get("look_formula") or ""
-                if existed and look.startswith("/") and look.partition("?")[0].lower() == "/" + rel.lower():
-                    ctx.settings["look_formula"] = ""
+                # The look's Formula deleted: the look goes with it, and
+                # the start-up show's (formula_look::file_changed).
+                for key in ("look_formula", "boot_formula"):
+                    named = ctx.settings.get(key) or ""
+                    if existed and named.startswith("/") and named.partition("?")[0].lower() == "/" + rel.lower():
+                        ctx.settings[key] = ""
                 if existed:
                     self.forget_copy("/" + rel)
                     if rel.lower().startswith(CACHE_DIR + "/"):

@@ -1616,6 +1616,22 @@ fn main() -> Result<()> {
                 repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
             }
         }
+        // The start-up show's Formula deleted (`formula_look::file_changed`
+        // cleared the shared copy and the card's): this task's and NVS's
+        // too, if it still names that file.
+        if formula_look::BOOT_GONE.load(Ordering::Relaxed) && formula_look::BOOT_GONE.swap(false, Ordering::Relaxed) {
+            handled = true;
+            if let Some(gone) = formula_look::boot_gone_for(&settings.boot_formula) {
+                settings.boot_formula.clear();
+                unsaved = true;
+                SETTINGS_UNSAVED.store(true, Ordering::Relaxed);
+                if let Ok(mut s) = shared_settings.lock() {
+                    if formula_look::names(&s.boot_formula, &gone) {
+                        s.boot_formula.clear();
+                    }
+                }
+            }
+        }
         if handled {
             use std::sync::atomic::Ordering::Relaxed;
             let took = uclock::since(cmd_t0);
@@ -1772,6 +1788,11 @@ fn main() -> Result<()> {
         if let Some(rx) = boot_rx.as_ref().filter(|_| pending.is_none()) {
             match rx.try_recv() {
                 Ok(boot::Event::NoCard) => screen.no_card(),
+                #[cfg(feature = "psi")]
+                Ok(boot::Event::Formula(f)) => {
+                    let (path, psb) = *f;
+                    screen.card_formula(&path, psb);
+                }
                 Ok(boot::Event::Ready(h)) => {
                     screen.ready();
                     pending = Some(h);
