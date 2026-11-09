@@ -11,7 +11,7 @@
 // local mode, a simulator over the picked folder that plays one file at a
 // time with the firmware's dwell.
 
-import { app, playlistLabel } from './state.js';
+import { app, playlistLabel, platName } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
@@ -33,7 +33,6 @@ const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
 // and flags by name and the author, each once (no "Arcade · Arcade", no
 // "Kenney · by kenney"; OTHER is no platform); "Formula" for one, nothing
 // for a title card.
-const platName = (p) => p && p != 'OTHER' && (app.wasm.consoleName(p) || (p.includes('_') ? niceName(p) : p.length > 4 ? p[0] + p.slice(1).toLowerCase() : p));
 const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
 function tags(p, e) {
   if (drawn(p)) return isFormula(p) ? 'Formula' : '';
@@ -267,7 +266,8 @@ function mountDevice(el) {
     const fl = followLine(s);
     followEl.hidden = !fl;
     followEl.textContent = followEl.title = fl ?? '';
-    ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
+    // (`ordinal` counts the GIFs started since start-up, not a place in the playlist.)
+    ord.textContent = `${np.ordinal.toLocaleString()} played · ${s.entries.toLocaleString()} in the playlist`;
     // (A GIF's; a Formula or a title card next says nothing.)
     const nx = np.next;
     nextEl.textContent = nx && !drawn(nx) ? ` · Next: ${label(app.wasm.parsePath(nx))}` : '';

@@ -8,7 +8,7 @@
 // ever shows its path.
 
 import wasm from './web.js';
-import { emit, toast, base } from './util.js';
+import { emit, toast, base, niceName } from './util.js';
 
 // Root manifests with a name people know them by. Anything else shows its
 // file name.
@@ -21,6 +21,10 @@ const OBSOLETE = /^filelist\.odm\./i;
 // What the Formulas view says on a player built without them (the
 // firmware's own words for a Formula sent there, its 501).
 export const NO_FORMULAS = 'Formulas aren’t in this firmware build';
+
+// A platform by name, as users read it ("Mega Drive", "Neo Geo"): the
+// wasm's console names, else the code made readable; OTHER is no platform.
+export const platName = (p) => p && p != 'OTHER' && (app.wasm.consoleName(p) || (p.includes('_') ? niceName(p) : p.length > 4 ? p[0] + p.slice(1).toLowerCase() : p)) || '';
 
 export function playlistLabel(name) {
   const n = base(name);
