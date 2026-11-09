@@ -2427,6 +2427,12 @@ fn main() -> Result<()> {
                 s.frame_shown_at = at;
                 s.frame_due_at = due;
             }
+            // What plays next: the strings move only when the pick changes.
+            let next = eng.ahead_path().map_or("", |(p, _)| p);
+            if s.next != next {
+                s.next.clear();
+                s.next.push_str(next);
+            }
         }
 
         // The sleep should end at `judged + sleep_for`; anything after that

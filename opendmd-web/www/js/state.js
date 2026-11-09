@@ -54,6 +54,11 @@ export async function listOr(dir) {
   }
 }
 
+// A name for a playlist of the user's: not `filelist.*` (the firmware reads
+// such a `set` as a root manifest), and what a FAT name takes.
+export const SET_NAME = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
+export const SET_NAME_RULE = 'playlist names are letters, digits, space, _ . - (no slashes, not filelist.*)';
+
 // The playlist being edited has changes that are not on the card.
 export const dirty = (d = app.draft) => d.paths.join('\n') !== (d.saved ?? '');
 

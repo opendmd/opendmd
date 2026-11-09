@@ -202,6 +202,9 @@ pub struct Status {
     pub ordinal: u64,
     pub path: String,
     pub title: String,
+    /// What plays next, once the engine has picked it (`Engine::ahead_path`;
+    /// empty until then).
+    pub next: String,
     /// A Formula sent to the panel and kept there (`formula_keep`): the
     /// ordinal of its start and its seconds (`0`: until something else
     /// plays). Reported only while that start is on screen.
@@ -315,6 +318,7 @@ impl Status {
             ordinal: 0,
             path: String::new(),
             title: String::new(),
+            next: String::new(),
             kept: None,
             paused: false,
             epoch,

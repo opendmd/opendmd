@@ -19,7 +19,8 @@ browser, with a few sample animations.
 ![The Now view, previewing what the panel plays](../images/now.png)
 
 Now shows what the panel is playing: the title, its platform and category,
-where it is in the playlist, such as "14 of 10,162", and a moving preview drawn
+where it is in the playlist, such as "14 of 10,162" (with what comes next,
+once the display has picked it), and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
 brightness. To hide the preview, turn off **Mirror the panel on Now** in
@@ -138,7 +139,10 @@ message. Leaving with changes not saved asks whether to save them. The playlists
 files, Halloween, Christmas) are saved under a name of your own.
 
 **Save & play** while editing, or **Play** from a playlist's **…** menu,
-switches the panel to it in a few seconds.
+switches the panel to it in a few seconds. The same menu has **Rename…**
+and **Duplicate** (the new one is called "Consoles 2", say): favourites come
+along, and a renamed playlist keeps playing and keeps its place in the
+schedule.
 
 ### Favourites
 

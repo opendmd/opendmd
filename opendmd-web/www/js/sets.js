@@ -1,10 +1,11 @@
 // Playlists: the list (#sets), and the editor as a screen of its own
 // (#sets/edit: on a phone it replaces the list, with a ‹ back; on a laptop
 // the right column), js/pledit.js, imported the first time a playlist
-// opens. Play PUT /api/config {set}; Delete DELETE /api/files/sets/….
+// opens. Play PUT /api/config {set}; Delete DELETE /api/files/sets/…;
+// Rename and Duplicate write the playlist (and its overrides) anew.
 
-import { app } from './state.js';
-import { actions, closeMenu } from './overrides.js';
+import { app, SET_NAME, SET_NAME_RULE } from './state.js';
+import { actions, closeMenu, Overrides, fileFor } from './overrides.js';
 import { h, clear, on, toast, lines, note, isSys, byNice, gone } from './util.js';
 
 export async function mount(el) {
@@ -42,13 +43,14 @@ export async function mount(el) {
     const active = app.activeSet;
     const rows = lists.sort((a, b) => a.root - b.root || byNice(a.label, b.label)).map((p) => {
       const isActive = app.device && p.value === active, n = h('span.n');
-      const acts = (app.device && !isActive) || !p.root;
       return [p, n, h('div' + (ed() && p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
         h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
           p.label, !p.value && h('span.tag', 'Default'), isActive && h('span.tag.act', 'Playing'), n),
-        acts && h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
+        h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
-          !p.root && [{ 'data-do': 'delete' }, 'Delete…', () => del(p), '.danger']], p.label) }, '…'), !acts && h('i.more'))];
+          !p.root && [{ 'data-do': 'rename' }, 'Rename…', () => rename(p)],
+          [{ 'data-do': 'duplicate' }, 'Duplicate', () => duplicate(p)],
+          !p.root && [{ 'data-do': 'delete' }, 'Delete…', () => del(p), '.danger']], p.label) }, '…'))];
     });
     // None of the user's own yet: how to start one.
     const none = !lists.some((p) => !p.root) && h('div.empty', { id: 'sets-empty' },
@@ -107,6 +109,54 @@ export async function mount(el) {
       toast(`deleted "${set}"`, 'ok');
       loadSets();
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
+  }
+
+  // Rename and Duplicate (no request renames a playlist): its lines and its
+  // overrides written under the new name; a rename then moves what names
+  // the old one (the display's playlist, the schedule's rules, the editor)
+  // and deletes it. A name taken gets the next number: "Halloween 2".
+  const lc = (s) => s.toLowerCase();
+  const taken = (n) => known.some((k) => lc(k) === lc(`/sets/${n}.txt`));
+  const free = (n) => { let i = 2; while (taken(`${n} ${i}`)) i++; return `${n} ${i}`; };
+  async function copyTo(p, n, move) {
+    const to = `/sets/${n}.txt`, text = await app.text(p.path, true);
+    if (text == null) throw new Error('not served by this source');
+    const ov = await new Overrides().load(p.path);
+    if (!ov.ok) throw new Error('its favourites could not be read');
+    await app.src.saveSet(n, text);
+    app.texts.set(to, text);
+    const meta = app.wasm.renderOverrides([...ov.map.values()]);
+    if (meta) await app.src.writeFile(fileFor(to), meta);
+    if (!move) return;
+    if (app.device && app.activeSet === p.value) { await app.src.putConfig({ set: n }); await app.refreshStatus(); await app.refreshConfig(); }
+    if (app.src.schedule) {
+      const s = await app.src.schedule();
+      if (s.rules?.some((r) => r.set === p.value)) await app.src.putSchedule({ ...s, rules: s.rules.map((r) => (r.set === p.value ? { ...r, set: n } : r)) });
+    }
+    await app.src.deleteFile(p.path);
+    if (meta) await app.src.deleteFile(fileFor(p.path));
+    app.texts.delete(p.path);
+    const d = app.draft;
+    if (d.path === p.path) { d.path = to; d.name = n; edi?.header(); }
+  }
+  async function rename(p) {
+    const n = (prompt(`Rename “${p.label}” to`, p.value) || '').trim().replace(/\.txt$/, '');
+    if (!n || n === p.value) return;
+    if (!SET_NAME.test(n)) { toast(SET_NAME_RULE, 'bad'); return; }
+    const same = lc(n) === lc(p.value);
+    if (!same && taken(n)) { toast(`a playlist named “${n}” exists`, 'bad'); return; }
+    try {
+      // A change of case alone names the same file on the card: by way of another name.
+      if (same) { const t = free(n); await copyTo(p, t, true); await copyTo({ path: `/sets/${t}.txt`, value: t }, n, true); }
+      else await copyTo(p, n, true);
+      toast(`Renamed “${p.label}” to “${n}”`, 'ok');
+    } catch (e) { toast('rename: ' + e.message, 'bad'); }
+    loadSets();
+  }
+  async function duplicate(p) {
+    const n = free(p.root ? p.label : p.value);
+    try { await copyTo(p, n, false); toast(`Duplicated as “${n}”`, 'ok'); } catch (e) { toast('duplicate: ' + e.message, 'bad'); }
+    loadSets();
   }
 
   on('config', () => loadSets());
