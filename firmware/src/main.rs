@@ -1312,6 +1312,7 @@ fn main() -> Result<()> {
                                 }
                             }
                             if place_changed {
+                                sched.sun_end = None;
                                 sched.dirty = true;
                             }
                             if tz_changed {
@@ -2739,7 +2740,8 @@ impl Scheduling {
 
     /// Night mode by the sun at this minute, for a schedule that has one,
     /// with a location (`place`) and a clock: two positions of the sun, and
-    /// once a night the time it ends (~100: a few ms, so not every minute).
+    /// once a night the time it ends (up to ~110 of them, a few ms: too
+    /// many for every minute on this core).
     #[optimize(size)] // (once a minute)
     #[inline(never)]
     fn sun_now(&mut self, place: Option<Place>) -> Option<SunNow> {
