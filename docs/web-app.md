@@ -135,7 +135,10 @@ button lands on them.
   averages ~87 KB); decoded by the browser (a GIF that starts dark reads on to its clip, ≤ 32 KB, and shows its first lit frame where the browser has WebCodecs' `ImageDecoder`); kept in IndexedDB per card
   (`odmd-thumbs-<card>`), keyed by path with the file's size, capped at
   24 MB (least recently used out), so a GIF is asked for once, across
-  visits. A Details preview, which reads the whole file anyway, re-makes a
+  visits. A clip is kept only beside its still: a row whose still has not
+  come (or failed) plays its clip without keeping it, as a record with no
+  still means "nothing to show" and is never asked for again. A Details
+  preview, which reads the whole file anyway, re-makes a
   thumbnail whose size no longer matches; the app's own Add, Edit details
   and Delete forget it.
 
