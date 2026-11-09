@@ -251,7 +251,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the display's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name. (`"off"` with `network` off: the display's own log and heartbeat say so; nothing answers HTTP then) |
-| `card_formulas` | the card's Formulas as the display prepared them after it mounted the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled now, that do not compile, and not compiled for want of memory (tried again at the next mount); `null` before a card is mounted or in a build without Formulas |
+| `card_formulas` | the card's Formulas as the display prepares them in the background after it mounts the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled since the card was mounted, that do not compile, and not compiled yet for want of memory (tried again later, and at the next start); set after the first pass and again after each retry; `null` until the first pass ends, or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
 | `paused` | bool |
@@ -550,10 +550,16 @@ when the version may have changed since the last check, which
 look or start-up show of it is not drawn; a look is built again once its
 `.psb` is written. The `.psb` is given the `.psi`'s date, so it stays current
 until the source changes. A source that does not compile is marked (its `.psb`
-holds the mark) and not tried again until it changes; a compile the memory
-cannot hold waits and is tried again, and failing that at the next start. It
-happens whether or not the network is on. The log has a line for each and a
-summary; the counts are `/api/status` `card_formulas`.
+holds the mark, which plays as "this Formula does not compile") and not tried
+again until it changes. A compile the memory cannot hold is tried again once
+the heap has room (every 30 s, up to 10 times, with WiFi off; every 60 s,
+twice, with it on), and failing that at the next start. A `.psb` refused where
+it plays (damaged, or another version's) is prepared again at the next start.
+While a `.psb` is being written, a `PUT`, `DELETE` or move of that Formula
+waits for it (up to 1 s, else `503`). It happens whether or not the network
+is on. The log has a line for each and a summary; the counts are
+`/api/status` `card_formulas`, set after the first pass and after each
+retry.
 
 ### GET /api/files
 

@@ -201,7 +201,8 @@ pub fn build(path: &str) -> Result<opendmd_core::fx_psi::FormulaLook, opendmd_co
 }
 
 /// Whether a `look_formula` value is read from the card (built again once
-/// the card is mounted: at boot the look is set before it is).
+/// the card is mounted: at boot the look is set before it is; and again
+/// once its compiled file is prepared, `card_formulas` → [`file_changed`]).
 pub fn on_card(path: &str) -> bool {
     opendmd_core::synth::formula_file(path).is_some()
 }

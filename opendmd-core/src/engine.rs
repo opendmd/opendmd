@@ -767,6 +767,43 @@ pub struct Engine {
 static TICK_CLOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static TICK_SPLIT: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
 
+/// Told when a card Formula's compiled file (`path`: its `/formulas/*.psi`
+/// line) is refused for a reason a fresh compile cures (not a compiled
+/// Formula, another version's, damaged): the firmware has the card's
+/// Formulas prepared again at the next start (`card_formulas`). Called on
+/// the playing task, rarely: it must not block.
+pub type RefusedHook = fn(&str);
+static REFUSED_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install the [`RefusedHook`].
+pub fn set_formula_refused(hook: Option<RefusedHook>) {
+    REFUSED_HOOK.store(hook.map_or(0, |f| f as usize), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether an open's error says the compiled file itself is at fault.
+#[cfg(feature = "psi")]
+pub fn compiled_file_refused(e: &io::Error) -> bool {
+    use crate::psi::psb;
+    if e.kind() != io::ErrorKind::InvalidInput {
+        return false;
+    }
+    let m = e.to_string();
+    m == psb::NOT_PSB || m == psb::OTHER_ABI || m == psb::DAMAGED
+}
+
+fn formula_refused(path: &str, e: &io::Error) {
+    #[cfg(feature = "psi")]
+    if synth::formula_file(path).is_some() && compiled_file_refused(e) {
+        if let a @ 1.. = REFUSED_HOOK.load(std::sync::atomic::Ordering::Relaxed) {
+            // SAFETY: only `set_formula_refused` stores, from a `RefusedHook`.
+            let f = unsafe { std::mem::transmute::<usize, RefusedHook>(a) };
+            f(path);
+        }
+    }
+    #[cfg(not(feature = "psi"))]
+    let _ = (path, e);
+}
+
 /// Install the clock ([`tick_split`]).
 pub fn set_tick_clock(clock: Option<fn() -> u32>) {
     TICK_CLOCK.store(clock.map_or(0, |f| f as usize), std::sync::atomic::Ordering::Relaxed);
@@ -1744,6 +1781,7 @@ impl Engine {
                 Err(e) => {
                     self.started_ahead = false;
                     log::warn!("skipping {path}: {e}");
+                    formula_refused(&path, &e);
                 }
             }
         }
@@ -1784,7 +1822,10 @@ impl Engine {
                     self.current = Some(playing);
                     return true;
                 }
-                Err(e) => note(format_args!("skipping {path}: {e}")),
+                Err(e) => {
+                    formula_refused(&path, &e);
+                    note(format_args!("skipping {path}: {e}"))
+                }
             }
         }
         log::error!("no playable entries after {budget} attempts ({failed} not opened; the first is above)");

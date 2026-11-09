@@ -409,6 +409,8 @@ fn run(worker: NetWorker) {
 
         // A cache count put off for a transfer, once it is over.
         crate::cache::tick();
+        #[cfg(feature = "psi")]
+        crate::card_formulas::tick();
 
         // The FAT index (`fatidx`): built or rebuilt when due.
         let before = crate::state::free_heap();
@@ -521,6 +523,9 @@ fn run_offline(mut o: Offline, rx: mpsc::Receiver<NetCommand>) {
         // (lwIP's sockets: none without WiFi or the httpd) and
         // `diag::check` (a diagnostic build's heap walk on the network's
         // own paths); `clock::log_new_syncs` has no sync to log.
+        // A compiled Formula the panel refused, noted for the next start.
+        #[cfg(feature = "psi")]
+        crate::card_formulas::tick();
         crate::cache::tick();
         let before = crate::state::free_heap();
         crate::readahead::tick();

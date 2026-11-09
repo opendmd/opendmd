@@ -429,7 +429,7 @@ fn run(task: BootTask) {
         // (`card_formulas`).
         #[cfg(feature = "psi")]
         {
-            crate::card_formulas::prepare_in_background(&settings);
+            crate::card_formulas::prepare_after_handover(&settings);
             log::info!("boot: card Formulas checked (stack {} B unused)", stack_unused());
         }
         return;
@@ -559,7 +559,7 @@ fn run(task: BootTask) {
             );
             #[cfg(feature = "psi")]
             {
-                crate::card_formulas::prepare_in_background(&settings);
+                crate::card_formulas::prepare_after_handover(&settings);
                 log::info!("boot: card Formulas checked (stack {} B unused)", stack_unused());
             }
             return;
