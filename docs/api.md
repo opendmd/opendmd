@@ -250,7 +250,8 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `psi_abi` | the compiled Formulas this display plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the display's clock, ms, as the reply was built |
-| `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name |
+| `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name. (`"off"` with `network` off: the display's own log and heartbeat say so; nothing answers HTTP then) |
+| `card_formulas` | the card's Formulas as the display prepared them when it mounted the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled now, that do not compile, and not compiled for want of memory (tried again at the next mount); `null` before a card is mounted or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
 | `paused` | bool |
@@ -354,7 +355,7 @@ with the card, in `/opendmd.json` at its root: brightness and its
 ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
 the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
 host, attract, look, glow, `look_formula`, `boot_show`, `boot_formula`, `panel_sync`,
-`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`, `beta_updates`. A change is
+`panel_split`, `formula_jit`, `formula_arena`, `formula_keep`, `beta_updates`, `network`. A change is
 on the card the moment it is saved, whatever plays. The device keeps the
 rest itself, never on the card: the WiFi details and name, the
 location (`lat`, `lon`), the API key and the RePlayOS code (secrets), the
@@ -402,6 +403,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
 | `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted and whenever its `.psb` is written; cleared when the `.psi` is deleted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `network` | `"on"` | WiFi at all, `"on"` or `"off"`, from the next boot (a change answers `reboot_required: true`). `"off"`: no WiFi driver, no station, no setup network, no mDNS or time sync, and no HTTP server: this API and the web app are unreachable, and the display plays its card. With no clock, the schedule and night mode do nothing, Follow RePlayOS does nothing, and a Formula that reads the time (`hour`, `minute`, `second`) does not play: a playlist moves past it, a look or start-up show of it is not drawn (none; the wordmark). Turned back on by the card's `/opendmd.json` (`"network": "on"`: the file is a patch, so a missing key changes nothing) or by Improv Serial's WiFi settings over USB (the installer's Connect to Wi-Fi), which joins the network, saves it with `network` on, answers and restarts. The card's value wins over the display's once the card is read. Anything else is a `400` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `boot_formula` | `""` | what the start-up show plays, from the next boot: `""`, the OpenDMD wordmark, or a Formula in its place, named as `look_formula` names one (a bundled Formula by name, one of yours on the card, `/formulas/<stem>.psi`, maybe `?a=…`, or inline `@formula?psb=…` ≤ 2,048 B, else `413`). It plays for `boot_show`'s length (none with `off`) and ends when the wordmark's show would, with the information line over it only when there is something to say (the setup network to join, a card problem, the address, "Updated to v…"; never the version), and the status card, the setup screen and the update notices take over from it as from the wordmark. One that does not compile, is too heavy for the show (12 ms estimated) or is not on the card is a `400` with the reason, nothing saved; one that no longer builds at boot (missing, broken, out of memory, no card, or the card not ready within half a second; a card that mounts later plays it from the next start) plays the wordmark, with `boot_formula.error` in the status saying why. Deleting its `.psi` clears it |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
@@ -534,6 +536,21 @@ card file can run as a page on the display's origin. Playlists and
 ```sh
 curl -s -O $DMD/gifs/Consoles/SNES_Super_Metroid_01.gif
 ```
+
+### Formulas compiled on the display
+
+Each card Formula, `/formulas/<stem>.psi`, plays from its compiled file beside
+it, `/formulas/<stem>.psb` (what the web app writes when it saves one, or `psi
+build`). When the display mounts a card it compiles, one at a time and before
+anything plays from the card, every `.psi` whose `.psb` is missing, is for
+another version of the compiled format (`psi_abi`: after an update that
+changed it), is not a compiled Formula, or is older than its `.psi` (FAT's
+2 s stamps). The `.psb` is written beside it and given the `.psi`'s time, so it
+stays current until the source changes. A source that does not compile gets
+an empty `.psb` (as the web app writes), and is not tried again until it
+changes; a compile the memory cannot hold is left for the next mount. It
+happens whether or not the network is on. The log has a line for each and a
+summary; the counts are `/api/status` `card_formulas`.
 
 ### GET /api/files
 
