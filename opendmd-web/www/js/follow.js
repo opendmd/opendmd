@@ -66,7 +66,8 @@ export function followCard() {
     return run(async () => {
       if (patch.follow && !patch.follow_host) throw new Error('enter the RePlayOS box’s address first');
       await app.src.putConfig(patch);
-      code.value = '';
+      // (Only the code sent: one typed while this was saving stays.)
+      if (patch.follow_code && code.value === patch.follow_code) code.value = '';
       await app.refreshConfig();
       if (moved) { result.className = 'muted'; result.textContent = 'New address: type its NET CONTROL code again.'; }
     });

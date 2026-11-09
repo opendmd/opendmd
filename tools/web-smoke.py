@@ -1014,7 +1014,9 @@ def sun_checks(page: Page, base: str) -> None:
     goto_view(page, "now")
     page.wait_for_selector("#now-banner[data-mode='dim']", timeout=15000)
     banner = page.inner_text("#now-banner")
-    check(banner.startswith(f"Dimmed for the night until {got}"), f"sun: Now's banner '{banner}'")
+    # (Worked out once a night, as on the device: the same minute at every read.)
+    again = get_json(base + "/api/status")["mode_until"]
+    check(banner.startswith(f"Dimmed for the night until {got}") and again == got, f"sun: Now's banner '{banner}', the end still {again}")
     # An offset that isn't one of the choices (the API's) is shown, and kept by the next change.
     put_json(base + "/api/schedule", {"rules": [], "night": {**n, "offset": 45}})
     goto_view(page, "settings/time")
@@ -1565,6 +1567,9 @@ def load_checks(page: Page, base: str) -> None:
     queue), and a hover while scrolling, measured."""
     # Failures that pass (here 500s): blank for now, not kept, drawn on the next visit.
     expected.append("/gifs/Arcade/")
+    # (The pointer off the list: left over a row by the hover checks, it
+    # starts a clip on whichever Arcade row comes under it, when it likes.)
+    page.mouse.move(5, 5)
     get_json(base + "/mock/io?reset=1&fail500=3")
     pick_cat(page, "Arcade")
     rows = drawn(page)
@@ -1575,10 +1580,19 @@ def load_checks(page: Page, base: str) -> None:
     blank = [p for p in rows if kept[p] is None]
     check(len(blank) >= 1 and not any(v == "none" for v in kept.values()),
           f"load: {len(blank)} rows whose request failed (500) are not kept as failures ({thumbs_stats(page)['failed']} failed)")
+    # A hover on such a row plays its clip, and still keeps no record
+    # without a still: one would read as "nothing to show", never asked again.
+    row = f"#lib-list .vrow[data-path={json.dumps(blank[0])}]"
+    page.hover(f"{row} .t")
+    page.wait_for_selector(f"{row} img.th", timeout=10000)
+    page.mouse.move(5, 5)
+    page.wait_for_selector(f"{row} img.th", state="detached", timeout=5000)
+    kept = page.evaluate(STORED, [blank[0]])
+    check(kept[blank[0]] is None, f"load: a hover's clip on a row whose still failed is not kept as its record ({kept})")
     page.reload()
     pick_cat(page, "Arcade")
     drawn(page)
-    page.wait_for_timeout(800)
+    page.wait_for_function(f"{json.dumps(blank)}.every(p => document.querySelector(`#lib-list .vrow[data-path=\"${{p}}\"] canvas.th[data-done=\"1\"]`))", timeout=20000)
     kept = page.evaluate(STORED, blank)
     check(all(kept[p] == "still" for p in blank), f"load: a later visit asks for them again and draws them ({kept})")
     expected.remove("/gifs/Arcade/")
@@ -1951,6 +1965,9 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     deadline = time.time() + 10
     while time.time() < deadline and f.read_text().split("\n")[:-1] != before[1:]:
         page.wait_for_timeout(100)
+    # The file is written before the page has the answer: Undo once the
+    # page counts it saved (its toast), or the save lands after the Undo.
+    page.wait_for_selector("#toasts .toast.ok:has-text('Saved “browse”')", timeout=10000)
     page.click("#toasts .toast:has(button) >> nth=-1 >> button")
     is_dirty = page.evaluate("async () => (await import('./js/state.js')).dirty()")
     check(entries(page) == before and is_dirty and f.read_text().split("\n")[:-1] == before[1:],
@@ -2078,6 +2095,10 @@ def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.on("dialog", lambda d: asked.append(d.message))
     page.goto(base + "/#library")
     page.wait_for_selector("#lib-select", timeout=20000)
+    # The Library done mounting (its first sync() labels the bar's button):
+    # a selection there before that turns Select on, and the click below
+    # would then turn it off and clear the picks.
+    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
     pick = f"async (ps) => {{ const {{ app }} = await import('./js/state.js'); ps.forEach((p) => app.selection.add(p)); }}"
     page.evaluate(pick, g[:3])
     page.click("#lib-select")
@@ -2440,6 +2461,16 @@ AMBER_PIXELS = """(sel) => {
     return { bright, bad };
 }"""
 
+def amber_until(page: Page, cond: str, timeout: int = 10000) -> dict:
+    """AMBER_PIXELS of the Now preview once `cond` (over `r`) holds, or as
+    it is when `timeout` ms pass (the check after it then fails)."""
+    try:
+        page.wait_for_function(f"(r => {cond})(({AMBER_PIXELS})('#now-panel'))", timeout=timeout)
+    except PlaywrightTimeoutError:
+        pass
+    return page.evaluate(AMBER_PIXELS, "#now-panel")
+
+
 # A Preview built on a detached 128 px canvas (scale 1, flat: its pixels are the
 # panel's), showing `path` after `look`; the 128x32 RGBA bytes as a list.
 WASM_CANVAS = """async ([path, look]) => {
@@ -2534,8 +2565,8 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
             check(st["glow_held"] == 12288 or st["paused"], f"status: glow short while playing holds 12288 B ({st['glow_held']})")
         goto_view(page, "now")
         wait_lit(page, "#now-panel", "now (amber)")
-        page.wait_for_timeout(600)
-        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        # (Until the preview has drawn in the new look, not a fixed while.)
+        r = amber_until(page, "r.bright > 100 && r.bad === 0")
         check(r["bright"] > 100 and r["bad"] == 0,
               f"now: the preview wears amber (every one of {r['bright']} bright pixels has r > g > b; {r['bad']} do not)")
         shot(page, "now-amber", "laptop")
@@ -2544,8 +2575,7 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
         st = get_json(base + "/api/status")
         check(st["glow_held"] == 0, f"status: glow off holds nothing ({st['glow_held']})")
         goto_view(page, "now")
-        page.wait_for_timeout(600)
-        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        r = amber_until(page, "r.bad > 0")
         check(r["bad"] > 0, f"now: back to full colour, the preview is no longer amber ({r['bad']} pixels off-hue)")
     finally:
         if (get_json(base + "/api/config")["look"], get_json(base + "/api/config")["glow"]) != orig:
@@ -6409,11 +6439,16 @@ def location_checks(browser, base: str, errors: list[str]) -> None:
     wait_config(base, lambda c: c.get("lat") == 51.51 and c.get("lon") == -0.13)
     page.wait_for_function("/51.51°N, 0.13°W/.test(document.querySelector('#loc-now').textContent)", timeout=5000)
     check(sent() == {"lat": 51.51, "lon": -0.13}, f"location: typed, saved rounded to 0.01° ({asked[-1:]})")
-    page.click("#loc-clear")
+    # (The request itself, not `asked`: a request event reaches it only
+    # while a Playwright call runs, and wait_config makes none.)
+    put_config = lambda r: r.method == "PUT" and r.url.endswith("/api/config")
+    with page.expect_request(put_config, timeout=10000):
+        page.click("#loc-clear")
     wait_config(base, lambda c: c.get("lat") is None and c.get("lon") is None)
     check(sent() == {"lat": None, "lon": None}, f"location: Clear sends both null ({asked[-1:]})")
-    page.click("#loc-here")
     # (Headless Chromium's position can take seconds.)
+    with page.expect_request(put_config, timeout=30000):
+        page.click("#loc-here")
     page.wait_for_function("document.querySelector('#loc-lat').value == '53.35'", timeout=30000)
     check(sent() == {"lat": 53.35, "lon": -6.26} and page.input_value("#loc-lat") == "53.35",
           f"location: this browser's location, rounded in the page before it is sent ({asked[-1:]})")
@@ -6667,6 +6702,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     check(toast >= 1 and mine() == before, f"formulas: Save refuses a use line it can't paste ({toast} toast, saved {mine()})")
     # A formula naming itself: never pasted into itself, not saved bare.
     page.fill("#psi-name", "Loopy")
+    # The field's change writes its `name` line (a timeout after the
+    # change): let it land first, or it lands in the text filled next.
+    page.dispatch_event("#psi-name", "change")
+    page.wait_for_function("document.querySelector('#psi-src').value.includes('name \"Loopy\"')", timeout=10000)
     page.fill("#psi-src", "use Loopy as p\np")
     page.click("#psi-save")
     page.wait_for_timeout(400)
@@ -6927,9 +6966,17 @@ def recent_checks(page: Page, base: str) -> None:
     flipped = wait_until(lambda: status(False)["paused"] != p0, 10)
     page.keyboard.press("Space")
     back_again = wait_until(lambda: status(False)["paused"] == p0, 10)
+    # → is a skip: the device's ordinal one on, and Now showing that start.
+    # (Not "the path changed": the playlist's next entry can be the one on
+    # screen -- on CI's card, a rebuilt shuffle's second entry is gifs[3].)
+    o0 = status(False)["now_playing"]["ordinal"]
     page.keyboard.press("ArrowRight")
-    page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(a)}", timeout=10000)
-    check(flipped and back_again, "now: keys ← Previous, Space pause/resume twice, → skip")
+    skipped = wait_until(lambda: status(False)["now_playing"]["ordinal"] == o0 + 1, 10)
+    np = status(False)["now_playing"]
+    page.wait_for_function(f"document.querySelector('#now-ord').textContent.startsWith('{np['ordinal']} ')"
+                           f" && document.querySelector('#now-path').textContent === {json.dumps(np['path'])}", timeout=10000)
+    check(flipped and back_again and skipped,
+          f"now: keys ← Previous, Space pause/resume twice, → skip (ordinal {o0} -> {np['ordinal']}, {np['path']})")
     codes = [back() for _ in range(RECENT_MAX + 1)]
     s = status()
     check(codes[-1] == 404 and 200 in codes and s["recent_at"] == len(s["recent"]) - 1,
@@ -8272,9 +8319,28 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         check("401" in t, f"follow: Test with a wrong code -> '{t}'")
         page.fill("#fo-code", "4321")
         page.click("#fo-test")
-        page.wait_for_function("document.querySelector('#fo-result').textContent.includes('answered')", timeout=10000)
+        # ("answered ·": the wrong code's "answered, but: 401" is not this.)
+        page.wait_for_function("!document.querySelector('#fo-result').textContent.includes('asking')", timeout=10000)
         t = page.inner_text("#fo-result")
-        check("answered" in t, f"follow: Test with the right code -> '{t}'")
+        check("answered ·" in t, f"follow: Test with the right code -> '{t}'")
+
+        # A code typed while an earlier one is saving stays in the field
+        # (the save clears only the code it sent).
+        held: list = []
+        page.route("**/api/config", lambda r: held.append(r) if r.request.method == "PUT" else r.continue_())
+        n0 = page.evaluate("+(document.querySelector('#fo .tick')?.dataset.n || 0)")
+        page.fill("#fo-code", "first")
+        page.dispatch_event("#fo-code", "change")
+        deadline = time.time() + 10
+        while not held and time.time() < deadline:
+            page.wait_for_timeout(50)
+        page.fill("#fo-code", "4321")
+        for r in held:
+            r.continue_()
+        page.unroute("**/api/config")
+        page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=n0, timeout=10000)
+        kept = page.input_value("#fo-code")
+        check(bool(held) and kept == "4321", f"follow: a code typed while one saves stays in the field ('{kept}')")
 
         # Saved as changed: follow on, host, code 4321 (when the field is
         # left), attract = the current playlist.
