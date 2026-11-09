@@ -24,7 +24,8 @@ export async function mount(el) {
   async function goEd() { (await editor()).header(); if (!el.classList.contains('ed')) { pushed = true; location.hash = '#sets/edit'; } }
   function closeEd() { if (pushed) history.back(); else location.replace('#sets'); }
   async function newList() {
-    app.draft = { name: '', paths: [], path: '' };
+    if (edi && !(await edi.guard())) return;
+    app.draft = { name: '', paths: [], path: '', saved: '' };
     (await editor()).opened();
     goEd();
   }
@@ -49,7 +50,11 @@ export async function mount(el) {
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
           !p.root && [{ 'data-do': 'delete' }, 'Delete…', () => del(p), '.danger']], p.label) }, '…'), !acts && h('i.more'))];
     });
-    clear(setsList, rows.map((r) => r[2]));
+    // None of the user's own yet: how to start one.
+    const none = !lists.some((p) => !p.root) && h('div.empty', { id: 'sets-empty' },
+      h('p.cap', 'No playlists of your own yet. Start one here, or pick GIFs in the Library and add them to a new playlist.'),
+      h('div.row', h('button.pri', { id: 'sets-empty-new', onclick: newList }, '+ New playlist'), h('button', { id: 'sets-empty-lib', onclick: () => app.go('library') }, 'Go to the Library')));
+    clear(setsList, rows.map((r) => r[2]), none);
     counts(rows);
   }
   async function counts(rows) {
@@ -67,13 +72,12 @@ export async function mount(el) {
   }
 
   async function open(p) {
+    if (edi && !(await edi.guard())) return;
     try {
       const text = await app.text(p.path, true);
       if (text == null) throw new Error('not served by this source');
-      app.draft.paths = lines(text).filter((p) => !gone(p));
-      app.draft.name = p.root ? '' : p.value;
-      app.draft.path = p.path;
-      delete app.draft.copyName;
+      const paths = lines(text).filter((p) => !gone(p));
+      app.draft = { paths, name: p.root ? '' : p.value, path: p.path, saved: paths.join('\n') };
       (await editor()).opened();
       for (const r of setsList.children) r.classList.toggle('cur', r.dataset.path === p.path);
       goEd();
@@ -111,6 +115,8 @@ export async function mount(el) {
   await loadSets();
   return {
     show() { edi?.show(); if (app.device) app.refreshStatus().catch(() => {}); },
+    // Another view: the editor's changes are asked about on the way.
+    hide() { if (ed()) edi?.left(); },
     async sub(sub) {
       el.classList.toggle('ed', sub == 'edit');
       if (!ed()) { pushed = false; closeMenu(); edQ?.then((e) => e.left()); } else { (await editor()).header(); scrollTo(0, 0); }

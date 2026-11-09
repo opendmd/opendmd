@@ -2,13 +2,13 @@
 // Details for the one picked (finding new art on the web is Create Art's,
 // js/studio.js). See "The Library's layout" in CLAUDE.md.
 
-import { app, playlistLabel } from './state.js';
+import { app } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
-import { authorOf, addOne, appendTo, offerPlaylist } from './gifs.js';
-import { h, clear, emit, on, store, toast, label, niceName, flagName, isFlag, SITE } from './util.js';
+import { authorOf, addOne, offerPlaylist, targetMenu } from './gifs.js';
+import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;
@@ -39,10 +39,13 @@ export async function mount(el) {
   const addCard = h('div.lib-progress', { id: 'lib-add', hidden: true }, h('div.bar', addBar), h('div.cap', addMsg), addErr);
 
   const selCount = h('b');
-  const toSetBtn = h('button.pri', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist');
+  // Into a playlist picked from a menu; the selection clears once it is in
+  // (and Select ends with a new playlist, off in the editor).
+  const toSetBtn = h('button.pri', { id: 'lib-to-set', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [...app.selection], (fresh) => { if (fresh) selMode(false); else { app.selection.clear(); sync(); } }) });
   const selbar = h('div.selbar.row', { hidden: true, id: 'lib-selbar' },
     h('span.grow', selCount, ' selected'),
     h('button', { id: 'lib-all', onclick: selectAll }, 'Select all shown'),
+    h('button', { id: 'lib-none', onclick: () => { app.selection.clear(); sync(); } }, 'None'),
     toSetBtn,
     h('button', { id: 'lib-sel-done', onclick: () => selMode(false) }, 'Done'));
 
@@ -71,7 +74,7 @@ export async function mount(el) {
   const dTitle = h('h2', { id: 'lib-d-title' });
   const meta = h('div.cap', { id: 'lib-d-meta' });
   const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Send to panel');
-  const plBtn = h('button', { id: 'lib-d-add', onclick: (e) => pickPlaylist(e.currentTarget) }, 'Add to playlist…');
+  const plBtn = h('button', { id: 'lib-d-add', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [current.path]) }, 'Add to playlist…');
   const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
@@ -156,12 +159,6 @@ export async function mount(el) {
     }]), 'In which playlist?');
   }
 
-  async function pickPlaylist(btn) {
-    const it = current, lists = await app.playlists().catch(() => []);
-    actions(btn, 'lib-pl-menu', [...lists.map((p) => [{ 'data-path': p.path }, p.label, () => appendTo(p.path, [it.path])]),
-      ['lib-pl-new', 'New playlist…', () => { app.selection.add(it.path); toSet(); }]], 'Add to');
-  }
-
   function toggle(path, onOff) {
     if (onOff) app.selection.add(path); else app.selection.delete(path);
     sync();
@@ -174,19 +171,13 @@ export async function mount(el) {
     sync();
   }
   function sync() {
-    if (app.selection.size) selecting = true;
-    selCount.textContent = app.selection.size;
+    const n = app.selection.size;
+    if (n) selecting = true;
+    selCount.textContent = n;
     selbar.hidden = !selecting;
-    toSetBtn.disabled = !app.selection.size;
+    toSetBtn.disabled = !n;
+    toSetBtn.textContent = `Add ${n ? n.toLocaleString() + ' ' : ''}to playlist ▾`;
     tree.refresh();
-  }
-  function toSet() {
-    const have = new Set(app.draft.paths), n = app.selection.size;
-    for (const p of app.selection) if (!have.has(p)) app.draft.paths.push(p);
-    toast(`${n} GIF${n > 1 ? 's' : ''} added to “${app.draft.path ? playlistLabel(app.draft.path) : app.draft.name || 'New playlist'}”`, 'ok');
-    selMode(false);
-    emit('draft');
-    app.go('sets/edit');
   }
 
   // The search, the platforms: the tree filters; counted() shows the result.

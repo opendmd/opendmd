@@ -110,8 +110,13 @@ button lands on them.
   details…** and **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
-  **Add to playlist** and **Done**: a tap then picks a row instead of
-  opening it. A GIF whose name has no title, or only a number
+  **None**, **Add N to playlist ▾** and **Done**: a tap then picks a row
+  instead of opening it. Add to playlist (here and in Details) is one menu
+  (`gifs.js` `targetMenu`): the playlist playing first, then the user's
+  others with their counts (the one in the editor marked), then **New
+  playlist…**; never the card's own. `appendTo` skips lines already in it
+  (case-insensitively, as FAT matches names) and patches the editor's copy
+  when it is the one open. A GIF whose name has no title, or only a number
   (`N64_LOGO_01.gif`), is listed by its platform and flags: "N64 Logo 01".
 
   **Thumbnails** (`js/thumbs.js`; on by default, Settings → Device →
@@ -153,8 +158,13 @@ button lands on them.
   the playlist; the card's own are saved as a new one (**Save as a new playlist**,
   prefilled "Halloween 2"). **+ New playlist** opens an empty one with a
   Name field. The entries show their thumbnails; drag ⠿ (or Alt+↑/↓) to
-  reorder, ✕ to remove, a tap picks them for **Arrange** (Shuffle, Sort
-  A–Z, Picked to top, Remove picked, Clear). **+ Add GIFs** opens the same
+  reorder, a row's **…** to move it (up, down, to top, to end), ✕ to
+  remove, a tap (or **Select**'s ticks, with an "N picked" chip) picks
+  them for **Arrange** (Shuffle, Sort A–Z, Picked to top, Picked to end,
+  Remove picked, Clear). Remove, Clear, Shuffle and a replace by filter
+  offer one Undo in their toast. `app.draft.saved` holds the lines as last
+  saved: leaving the editor, or opening another playlist, with changes
+  asks "Save changes to X?" (OK saves, Cancel puts them back). **+ Add GIFs** opens the same
   folder tree as the Library, with a checkbox on every GIF and folder (on a
   laptop beside the entries, the playlist list stepping aside; on a phone
   in their place, **Done** to go back): tick GIFs or whole folders and
