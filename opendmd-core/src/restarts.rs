@@ -76,6 +76,9 @@ pub enum Reason {
     StackOverflow = 13,
     /// A `diag-heap` build's check found the heap or a handler corrupt.
     Diag = 14,
+    /// An offline display (`network` off) joined the WiFi network a
+    /// browser installer gave it over USB, and restarted onto it.
+    NetworkOn = 15,
     /// Powered on (the ring starts here).
     PowerOn = 20,
     /// The supply dipped (brownout detector).
@@ -88,8 +91,9 @@ pub enum Reason {
 }
 
 impl Reason {
-    const ALL: [Reason; 18] = [
+    const ALL: [Reason; 19] = [
         Reason::Diag,
+        Reason::NetworkOn,
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -133,6 +137,7 @@ impl Reason {
             Reason::StackOverflow => "stack_overflow",
             Reason::PowerOn => "power_on",
             Reason::Diag => "diag_abort",
+            Reason::NetworkOn => "network_on",
             Reason::Brownout => "brownout",
             Reason::Unrecorded => "unrecorded",
             Reason::Crash => "unrecorded_crash",
@@ -158,6 +163,7 @@ impl Reason {
             Reason::StackOverflow => "crashed (stack overflow)",
             Reason::PowerOn => "powered on",
             Reason::Diag => "stopped by a heap check (diagnostic build)",
+            Reason::NetworkOn => "restarted to use the WiFi network given over USB",
             Reason::Brownout => "the power supply dipped",
             Reason::Unrecorded => "restarted without a recorded reason",
             Reason::Crash => "crashed without a recorded cause",

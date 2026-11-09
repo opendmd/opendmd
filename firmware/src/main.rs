@@ -80,8 +80,9 @@ mod psi_probe;
 #[cfg(feature = "paint-probe")]
 mod paint_probe;
 #[cfg(feature = "psi")]
-#[cfg(feature = "psi-probe")]
 mod psi_stack;
+#[cfg(feature = "psi")]
+mod card_formulas;
 mod restarts;
 mod sched;
 mod sd;
@@ -642,8 +643,12 @@ fn main() -> Result<()> {
     // The location the built-in inputs' sky is worked out for (the
     // network worker writes the sky once SNTP has set the clock).
     inputs::set_place(settings.location);
-    // Formulas read local time (`hour`, `minute`, …) from here.
+    // Formulas read local time (`hour`, `minute`, …) from here. With WiFi
+    // off there is none this boot: those Formulas do not open (the boot
+    // task decides again once the card's settings are read).
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_no_clock(!settings.network);
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
@@ -675,7 +680,9 @@ fn main() -> Result<()> {
         sched.schedule.rules.len(),
         if sched.schedule.night.is_some() { " + night mode" } else { "" },
         settings.hostname,
-        if settings.wifi_ssid.is_empty() {
+        if !settings.network {
+            "off".to_string()
+        } else if settings.wifi_ssid.is_empty() {
             "unconfigured".to_string()
         } else {
             format!("'{}'", settings.wifi_ssid)
@@ -833,6 +840,7 @@ fn main() -> Result<()> {
             rx: net_rx,
             settings: shared_settings.clone(),
             cmd: cmd_tx.clone(),
+            offline: !settings.network,
         },
         tx: boot_tx,
     })?;

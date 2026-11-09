@@ -479,7 +479,7 @@ pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 pub const PSI_COMPILE_RESERVE: usize = 6 * 1024;
 /// The largest free block a compile needs: its stack (12 KB) and the
 /// tokens of a 2 KB formula (~12 KB) are each one block.
-#[cfg(feature = "psi-probe")]
+#[cfg(feature = "psi")]
 pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
 /// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
