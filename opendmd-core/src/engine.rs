@@ -1104,7 +1104,7 @@ impl Engine {
         self.ahead.release_file();
         self.ahead.blocked = false;
         self.started_ahead = false;
-        let gif = Stream::open(reader)?;
+        let gif = Stream::open(reader).inspect_err(|e| formula_refused(path, e))?;
         self.started_count += 1;
         // A paused engine has not run its clock; `resume` shifts these by the
         // pause, so start them at the pause instant rather than `now`.
@@ -2103,6 +2103,24 @@ mod tests {
         let err = e.play_now("/formulas/long.psi", Duration::ZERO).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("too long"), "{err}");
+    }
+
+    /// A card Formula's compiled file that is not one, played by hand
+    /// (`/api/play`) as from the playlist, reaches the refused hook: the
+    /// firmware prepares it again at the next start.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_damaged_compiled_file_played_by_hand_is_noted() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        set_formula_refused(Some(|p| SEEN.lock().unwrap().push(p.to_string())));
+        let mut e = engine_with(
+            &[("/formulas/cut.psi", b"gray(x)".to_vec()), ("/formulas/cut.psb", b"{\"error\":1}".to_vec())],
+            "/formulas/cut.psi",
+            DwellPolicy::default(),
+        );
+        let err = e.play_now("/formulas/cut.psi", Duration::ZERO).unwrap_err();
+        assert_eq!(err.to_string(), crate::psi::psb::NOT_PSB);
+        assert!(SEEN.lock().unwrap().iter().any(|p| p == "/formulas/cut.psi"));
     }
 
     /// A formula played over a formula is retuned in place, and the title

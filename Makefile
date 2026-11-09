@@ -1290,7 +1290,9 @@ EMU_NOCARD_IMAGE = $(EMU_DIR)/nocard/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-nocard:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/nocard/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/nocard/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
+	@# (A test image, never a release: the no-card hooks add a few KB, so it
+	@# is held to 32 KB of spare like the census image, not the release's 64.)
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
 	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
