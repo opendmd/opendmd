@@ -135,7 +135,11 @@ export function scheduleCard() {
     nightOn.checked = !!n;
     if (n) {
       if (n.from) { nFrom.value = n.from; nTo.value = n.to; }
-      nWhen.value = n.sun ? 'sun' : 'clock'; nOffset.value = n.offset ?? 0;
+      nWhen.value = n.sun ? 'sun' : 'clock';
+      // An offset saved some other way (the API: 45) is listed as it is, not lost.
+      const o = n.offset ?? 0;
+      if (![...nOffset.options].some((x) => x.value == o)) nOffset.append(h('option', { value: o }, `${Math.abs(o)} min ${o > 0 ? 'shorter' : 'longer'}`));
+      nOffset.value = o;
       nMode.value = n.mode; nLevel.value = n.brightness ?? 8; nLevelOut.textContent = nLevel.value;
     }
     levelRow.hidden = nMode.value !== 'dim';

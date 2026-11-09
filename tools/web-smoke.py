@@ -1015,7 +1015,14 @@ def sun_checks(page: Page, base: str) -> None:
     page.wait_for_selector("#now-banner[data-mode='dim']", timeout=15000)
     banner = page.inner_text("#now-banner")
     check(banner.startswith(f"Dimmed for the night until {got}"), f"sun: Now's banner '{banner}'")
+    # An offset that isn't one of the choices (the API's) is shown, and kept by the next change.
+    put_json(base + "/api/schedule", {"rules": [], "night": {**n, "offset": 45}})
     goto_view(page, "settings/time")
+    page.wait_for_function("document.querySelector('#sc-night-offset').value === '45'", timeout=10000)
+    page.select_option("#sc-night-mode", value="off")
+    sched = wait_schedule(base, lambda s: (s.get("night") or {}).get("mode") == "off")
+    check((sched.get("night") or {}).get("offset") == 45 and "45 min shorter" in page.inner_text("#sc-night-offset"),
+          f"sun: an offset of 45 shows as '45 min shorter' and survives a change ({sched.get('night')})")
     page.uncheck("#sc-night-on")
     wait_schedule(base, lambda s: s.get("night") is None)
     put_json(base + "/api/config", {"lat": None, "lon": None})
