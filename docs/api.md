@@ -251,7 +251,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the display's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name. (`"off"` with `network` off: the display's own log and heartbeat say so; nothing answers HTTP then) |
-| `card_formulas` | the card's Formulas as the display prepared them when it mounted the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled now, that do not compile, and not compiled for want of memory (tried again at the next mount); `null` before a card is mounted or in a build without Formulas |
+| `card_formulas` | the card's Formulas as the display prepared them after it mounted the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled now, that do not compile, and not compiled for want of memory (tried again at the next mount); `null` before a card is mounted or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
 | `paused` | bool |
@@ -541,14 +541,17 @@ curl -s -O $DMD/gifs/Consoles/SNES_Super_Metroid_01.gif
 
 Each card Formula, `/formulas/<stem>.psi`, plays from its compiled file beside
 it, `/formulas/<stem>.psb` (what the web app writes when it saves one, or `psi
-build`). When the display mounts a card it compiles, one at a time and before
-anything plays from the card, every `.psi` whose `.psb` is missing, is for
-another version of the compiled format (`psi_abi`: after an update that
-changed it), is not a compiled Formula, or is older than its `.psi` (FAT's
-2 s stamps). The `.psb` is written beside it and given the `.psi`'s time, so it
-stays current until the source changes. A source that does not compile gets
-an empty `.psb` (as the web app writes), and is not tried again until it
-changes; a compile the memory cannot hold is left for the next mount. It
+build`). Once the display has mounted a card and started playing, it checks
+the folder in one pass and compiles, one at a time in the background, every
+`.psi` whose `.psb` is missing, older than its `.psi` (FAT's 2 s stamps) or for
+another version of the compiled format (`psi_abi`: the headers are read only
+when the version may have changed since the last check, which
+`/formulas/.psb-abi` records). Until one is ready a playlist skips it and a
+look or start-up show of it is not drawn; a look is built again once its
+`.psb` is written. The `.psb` is given the `.psi`'s date, so it stays current
+until the source changes. A source that does not compile is marked (its `.psb`
+holds the mark) and not tried again until it changes; a compile the memory
+cannot hold waits and is tried again, and failing that at the next start. It
 happens whether or not the network is on. The log has a line for each and a
 summary; the counts are `/api/status` `card_formulas`.
 

@@ -436,8 +436,8 @@ pub const NET_WORKER_STACK: usize = 11 * 1024;
 /// attempts and the playlist index (opened, or built: one streaming pass
 /// with its buffers on the heap), as the main task (16 KB) did them before.
 /// The `boot task done (stack N B unused)` line says what was left; 12 KB
-/// since the card's Formulas are prepared at mount (`card_formulas`, also
-/// from the late-mount retry loop, the deeper path).
+/// since the card's Formulas are prepared on this task after the handover
+/// (`card_formulas`, also from the late-mount retry loop, the deeper path).
 pub const BOOT_STACK: usize = 12 * 1024;
 /// The httpd task's stack, and one contiguous internal allocation — which is
 /// why the server is started before the first GIF is decoded. stripe-dashboard
@@ -844,10 +844,10 @@ pub const FATIDX_GROUP_MIN: usize = 2 * 1024;
 /// GIFs open by path meanwhile.
 pub const FATIDX_AFTER_CRASH_S: u32 = 30 * 60;
 pub const FATIDX_CRASHES_OFF: u32 = 3;
-/// The card's Formulas prepared at mount (`card_formulas`): past this many
-/// starts in a row that crashed while they were prepared, none are until a
-/// power-on or an update (each source is marked before its compile, so this
-/// is for a crash outside one).
+/// The card's Formulas prepared after the handover (`card_formulas`): past
+/// this many starts in a row that crashed while they were prepared, none
+/// are until a power-on or an update (each source is marked before its
+/// compile, so this is for a crash outside one).
 #[cfg(feature = "psi")]
 pub const CARD_COMPILE_CRASHES_OFF: u32 = 3;
 /// The read-ahead's filling task (`readahead`): card reads only (the SD

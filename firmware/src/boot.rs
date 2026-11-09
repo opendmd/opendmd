@@ -386,14 +386,6 @@ fn run(task: BootTask) {
         // the httpd and the network would start.
         let online = snapshot.network;
         network_decided(&status, &snapshot);
-        // The card's Formulas compiled where their compiled files are
-        // missing or stale, one at a time, while the card is this task's
-        // and the heap is at its widest (before the index).
-        #[cfg(feature = "psi")]
-        {
-            crate::card_formulas::prepare_at_mount();
-            crate::heapmap::cp("card formulas prepared");
-        }
         // The start-up show's Formula as the card's settings name it: one
         // of the card's read here, where the card is this task's, while the
         // show runs; any other told when it is not NVS's. Then room for the
@@ -432,6 +424,14 @@ fn run(task: BootTask) {
             t0.elapsed().as_millis(),
             stack_unused()
         );
+        // The card's Formulas, compiled where their compiled files are
+        // missing or stale: in the background, the card the player's
+        // (`card_formulas`).
+        #[cfg(feature = "psi")]
+        {
+            crate::card_formulas::prepare_in_background(&settings);
+            log::info!("boot: card Formulas checked (stack {} B unused)", stack_unused());
+        }
         return;
     }
 
@@ -549,8 +549,7 @@ fn run(task: BootTask) {
                     crate::nvs_config::network_name(now.network)
                 );
             }
-            #[cfg(feature = "psi")]
-            crate::card_formulas::prepare_at_mount();
+
             let mut handover = prepare(c, &now, &status);
             handover.settings = card_settings;
             let _ = tx.send(Event::Ready(Box::new(handover)));
@@ -558,6 +557,11 @@ fn run(task: BootTask) {
                 "boot: card handed over after {remounts} retries; boot task done (stack {} B unused)",
                 stack_unused()
             );
+            #[cfg(feature = "psi")]
+            {
+                crate::card_formulas::prepare_in_background(&settings);
+                log::info!("boot: card Formulas checked (stack {} B unused)", stack_unused());
+            }
             return;
         }
     }

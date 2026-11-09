@@ -9,8 +9,10 @@ compiler's cap, one that reads the clock, a look that reads the clock), a playli
 and four GIFs, and the clock Formulas as the start-up show and the look. It must:
   - say the network is off, start no WiFi driver, no httpd, no setup network, no mDNS or
     SNTP, and never put "Join WiFi" on the panel;
-  - prepare the card's Formulas at mount (each the right reason, the broken one an empty
-    compiled file), report the counts, the heap and the compile task's stack;
+  - hand the card over first, then prepare the card's Formulas in the background (each
+    the right reason, the broken one marked), report the counts, the heap and the compile
+    task's stack; the playlist plays a Formula once it is ready, and the look is built again
+    once its file is written;
   - play GIFs and the Formula it compiled, skip the clock Formula with the reason, refuse
     the clock look and start-up show (the wordmark plays);
   - run on past the setup network's old reboot timer (`AP_TIMEOUT`, 600 s) with no restart.
@@ -92,6 +94,8 @@ def psk_and_frame(prefix="offline-pw") -> tuple[str, bytes]:
 # this much of its task's stack untouched.
 DEEP = ["deep", "deepcall", "fncall", "drawif", "tern", "ternelse", "spriteread"]
 STACK_LEFT_MIN = 8 * 1024
+# Generated Formulas on boot A's card besides the fixtures.
+FILLERS = 100
 # Compiled at mount, then compared byte for byte with the host's `psi build` (the
 # compiler's optimize(size) on the ESP32 must not change what it writes).
 SAME_AS_HOST = ["ramp", "stale", "deepcall", "fncall", "drawif", "spriteread"]
@@ -159,14 +163,22 @@ class Lane:
         stale = b"PSB\x02" + bytes(40)  # another version's compiled file
         files = {f"/formulas/{p.name}": p.read_bytes() for p in sorted(FIXTURES.glob("*.psi"))}
         files["/formulas/stale.psb"] = stale
+        # A card with many Formulas (a test board had 79), so the pass is
+        # still going when the playlist starts ...
+        for k in range(FILLERS):
+            files[f"/formulas/fill{k:03d}.psi"] = f'name "Fill {k}"\nrgb(frac(x + t / {k + 2}), {k % 7} / 7, y)\n'.encode()
+        # ... and one copied last, so compiled last, and first in the
+        # playlist with no start-up show: skipped until it is ready, then
+        # played.
+        files["/formulas/zlate.psi"] = (FIXTURES / "ramp.psi").read_bytes()
         files["/filelist.txt"] = (
-            "/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
+            "/formulas/zlate.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_01.gif\n/formulas/ramp.psi\n/gifs/Pixel_Art/PIXEL_ART_01.gif\n"
             "/formulas/tick.psi\n/formulas/stale.psi\n/gifs/Spectrum_Slide/SPECTRUM_SLIDE_02.gif\n"
             "/formulas/broken.psi\n/formulas/deep.psi\n/gifs/Pixel_Art/PIXEL_ART_02.gif\n"
         ).encode()
         # A patch with no `network` key: NVS's off stands.
         files["/opendmd.json"] = (
-            b'{"dwell_min":4,"dwell_max":6,"shuffle":false,"boot_show":"short",'
+            b'{"dwell_min":4,"dwell_max":6,"shuffle":false,"boot_show":"off",'
             b'"boot_formula":"/formulas/tick.psi","look_formula":"/formulas/ticklook.psi"}\n'
         )
         card = make_card(self.a.card, self.dir / "card-a.img", files)
@@ -182,7 +194,7 @@ class Lane:
             _, m = e.wait_for(SUMMARY, 300, what="the card Formulas' summary")
             self.ok("card formulas", m[0])
             want = {"ramp": "not prepared", "stale": "prepared for another version", "tick": "not prepared",
-                    "ticklook": "not prepared", **{d: "not prepared" for d in DEEP}}
+                    "ticklook": "not prepared", "zlate": "not prepared", **{d: "not prepared" for d in DEEP}}
             got = {m[1]: m for _, m in e.find(PREPARED)}
             for stem, why in want.items():
                 if stem not in got:
@@ -200,18 +212,30 @@ class Lane:
                 raise LaneFail("broken.psi did not fail to compile")
             if int(m_sum(e)[4]) < 1:
                 raise LaneFail("the summary counts no Formula that does not compile")
-            self.ok("broken", "does not compile: an empty compiled file, skipped where it plays")
-            _, m = e.wait_for(re.compile(r"boot show: formula /formulas/tick\.psi does not build \((.*)\): the built-in show"), 300,
-                              what="the clock start-up show refused")
-            if "shows the time" not in m[1]:
-                raise LaneFail(f"the start-up show was refused for another reason: {m[0]}")
-            self.ok("start-up show", "the clock Formula refused, the wordmark: " + m[1])
-            _, m = e.wait_for(re.compile(r"formula look: the saved look does not build, none drawn .*"), 300, what="the clock look refused")
-            if "shows the time" not in m[0]:
-                raise LaneFail(f"the look was refused for another reason: {m[0]}")
-            self.ok("look", "the clock look refused, none drawn")
-            e.wait_for(re.compile(r"\] /formulas/ramp\.psi <- "), 400, what="the compiled card Formula playing")
-            self.ok("compiled formula plays", "/formulas/ramp.psi, compiled at mount, played")
+            self.ok("broken", "does not compile: marked, skipped where it plays")
+            # The card is handed over before its Formulas are prepared.
+            handed = e.find(re.compile(r"boot: card handed over (\d+) ms after the boot task started"))
+            first_prep = min(i for i, _ in e.find(PREPARED))
+            if not handed or handed[0][0] > first_prep:
+                raise LaneFail("a card Formula was compiled before the card was handed over")
+            self.ok("in the background", f"handed over in {handed[0][1][1]} ms, the compiles after it")
+            # The look is built again once its file is written, and
+            # refused for the clock.
+            _, m = e.wait_for(re.compile(r"formula look: the saved look does not build, none drawn \(this Formula shows the time.*"), 300,
+                              what="the clock look rebuilt once prepared, and refused")
+            self.ok("look", "rebuilt once its file was written; the clock look refused, none drawn")
+            # The playlist's first line, not ready at first: skipped, then
+            # played once prepared.
+            s_i, _ = e.wait_for(re.compile(r"skipping /formulas/zlate\.psi: (.*)"), 300, what="the not-yet-prepared Formula skipped")
+            p_i, _ = e.wait_for(re.compile(r"formulas: /formulas/zlate\.psi prepared for the panel"), 300, what="zlate prepared")
+            z_i, _ = e.wait_for(re.compile(r"\] /formulas/zlate\.psi <- "), 400, start=p_i, what="zlate played once ready")
+            if not s_i < p_i < z_i:
+                raise LaneFail("zlate.psi was not skipped, then prepared, then played")
+            self.ok("played once ready", "/formulas/zlate.psi: skipped while not prepared, prepared in the background, then played")
+            j, _ = e.wait_for(re.compile(r"\] /formulas/ramp\.psi <- "), 400, what="the compiled card Formula playing")
+            skipped = [i for i, _ in e.find(re.compile(r"skipping /formulas/ramp\.psi"))]
+            self.ok("compiled formula plays", f"/formulas/ramp.psi, compiled after the playlist started, played"
+                    + (f" (skipped {len(skipped)} time(s) before it was ready)" if skipped else ""))
             e.wait_for(re.compile(r"\] /formulas/stale\.psi <- "), 400, what="the re-prepared Formula playing")
             self.ok("re-prepared formula plays", "/formulas/stale.psi")
             _, m = e.wait_for(re.compile(r"skipping /formulas/tick\.psi: (.*)"), 400, what="the clock Formula skipped")
@@ -250,13 +274,23 @@ class Lane:
             e.kill()
         self.same_as_host(out)
         # The next start from that card: everything current, nothing compiled again.
-        e = self.emu("A2", image, out, 30, ("--net", "none"))
+        again = self.dir / "card-a2.img"
+        shutil.copyfile(out, again)
+        tmp = self.dir / "a2.json"
+        tmp.write_bytes(b'{"boot_show":"short","boot_formula":"/formulas/tick.psi"}\n')
+        mtools(again, str(tmp), "::/opendmd.json")
+        e = self.emu("A2", image, again, 30, ("--net", "none"))
         try:
             self.booted_ours(e)
             _, m = e.wait_for(SUMMARY, 300, what="the second start's summary")
             if int(m[3]) != 0 or int(m[2]) + int(m[4]) != int(m[1]):
                 raise LaneFail(f"the second start compiled again or lost one: {m[0]}")
             self.ok("next start", m[0] + " (the marks and times kept)")
+            _, m = e.wait_for(re.compile(r"boot show: formula /formulas/tick\.psi does not build \((.*)\): the built-in show"), 120,
+                              what="the clock start-up show refused")
+            if "shows the time" not in m[1]:
+                raise LaneFail(f"the start-up show was refused for another reason: {m[0]}")
+            self.ok("start-up show, prepared", "the clock Formula refused, the wordmark")
         finally:
             e.kill()
 
@@ -275,9 +309,10 @@ class Lane:
             a, b = (got_dir / f"{stem}.psb").read_bytes(), (host / f"{stem}.psb").read_bytes()
             if a != b:
                 raise LaneFail(f"/formulas/{stem}.psb compiled on the display ({len(a)} B) differs from the host's psi build ({len(b)} B)")
-        if (got_dir / "broken.psb").stat().st_size != 0:
-            raise LaneFail("broken.psb is not the empty mark")
-        self.ok("same as the host", f"{', '.join(SAME_AS_HOST)}: byte for byte the host's psi build; broken.psb the empty mark")
+        mark = (got_dir / "broken.psb").read_bytes()
+        if len(mark) != 12 or mark[:4] != b"PSB\0":
+            raise LaneFail(f"broken.psb is not the mark ({mark[:16]!r})")
+        self.ok("same as the host", f"{', '.join(SAME_AS_HOST)}: byte for byte the host's psi build; broken.psb the mark")
 
     # -- boot C: no card, NVS says off -----------------------------------------------
 
