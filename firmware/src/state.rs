@@ -202,6 +202,9 @@ pub struct Status {
     pub ordinal: u64,
     pub path: String,
     pub title: String,
+    /// What plays next, once the engine has picked it (`Engine::ahead_path`;
+    /// empty until then).
+    pub next: String,
     /// A Formula sent to the panel and kept there (`formula_keep`): the
     /// ordinal of its start and its seconds (`0`: until something else
     /// plays). Reported only while that start is on screen.
@@ -276,10 +279,8 @@ pub struct Status {
     pub sd_format_error: Option<String>,
     /// Why the chip last reset (`esp_reset_reason`), e.g. `panic`, `poweron`.
     pub reset_reason: &'static str,
-    /// The playlist's resolved overrides (`.meta`), and how many of them hide
-    /// an entry.
+    /// The playlist's resolved overrides (`.meta`).
     pub overrides: usize,
-    pub hidden: usize,
     // The schedule, as last applied by the main loop.
     /// `"normal"`, `"dim"` or `"off"` (night mode).
     pub mode: &'static str,
@@ -317,6 +318,7 @@ impl Status {
             ordinal: 0,
             path: String::new(),
             title: String::new(),
+            next: String::new(),
             kept: None,
             paused: false,
             epoch,
@@ -347,7 +349,6 @@ impl Status {
             sd_format_error: None,
             reset_reason: "unknown",
             overrides: 0,
-            hidden: 0,
             mode: "normal",
             mode_until: None,
             rule: None,
@@ -418,10 +419,8 @@ pub struct Applied {
     pub entries: usize,
     pub index: Option<IndexSource>,
     pub index_ms: u64,
-    /// Overrides resolved into the playlist (its `.meta`), when rebuilt,
-    /// and how many of them hide an entry.
+    /// Overrides resolved into the playlist (its `.meta`), when rebuilt.
     pub overrides: usize,
-    pub hidden: usize,
 }
 
 impl Applied {
@@ -432,7 +431,6 @@ impl Applied {
             index: None,
             index_ms: 0,
             overrides: 0,
-            hidden: 0,
         }
     }
 }

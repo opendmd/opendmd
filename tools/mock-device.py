@@ -379,11 +379,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   for whichever playlist is actually playing; `GET /api/overrides?set=`
   dumps one `.meta`'s overrides, parsed but unresolved. Replies that touch
   the playlist (`/api/reindex`, `/api/config` PUT, a manifest or `.meta`
-  install/delete) now carry `overrides`/`hidden` too: how many of the
-  playing playlist's entries have one, resolved case-insensitively
-  (`opendmd_core::overrides::OverrideSet`), and how many of those are
-  `never` (dropped from the simulated playback order -- a "nice to have",
-  not modelled: weight, dwell and loop overrides).
+  install/delete) now carry `overrides` too: how many of the playing
+  playlist's entries have one, resolved case-insensitively
+  (`opendmd_core::overrides::OverrideSet`); weight, dwell and loop
+  overrides are not modelled in the simulated playback order.
 - **The schedule and night mode** (`opendmd_core::schedule`): `GET`/`PUT
   /api/schedule` store the JSON verbatim (`""` for the empty schedule, read
   back as `{"rules":[],"night":null}`); `POST /api/wake {"minutes"}`
@@ -1846,9 +1845,6 @@ def apply_override_field(ov: dict, field: str) -> bool:
         key, val = field.strip(), None
     else:
         key, val = key.strip(), val.strip()
-    if key == "never" and val is None:
-        ov["never"] = True
-        return True
     if key == "w" and val is not None:
         w = parse_decimal(val)
         if w is not None and 0.0 <= w <= 1000.0:
@@ -2240,7 +2236,6 @@ class Player:
         # ordinal of its start and its seconds (0: until something else plays).
         self.kept: tuple[int, int] | None = None
         self.overrides_count = 0
-        self.hidden_count = 0
         # The file's own clock: its position is (now or frozen_at) - file_t0,
         # advanced through the real frame delays (see position()). Frozen by
         # a manual pause or by night mode "off" -- either shifts the clocks
@@ -2318,20 +2313,9 @@ class Player:
         ci: dict[str, dict] = {}
         for path, ov in meta_map.items():
             ci[path.lower()] = ov  # later line (in file order) wins
-        overrides_n = 0
-        hidden: set[str] = set()
-        for b in base:
-            ov = ci.get(b.lower())
-            if ov is not None:
-                overrides_n += 1
-                if ov.get("never"):
-                    hidden.add(b.lower())
-        self.overrides_count = overrides_n
-        self.hidden_count = len(hidden)
-        # Nice to have: the simulated player skips entries marked `never`.
-        filtered = [b for b in base if b.lower() not in hidden]
-        self.playlist = filtered
-        n = len(filtered)
+        self.overrides_count = sum(1 for b in base if b.lower() in ci)
+        self.playlist = base
+        n = len(base)
         self.order = list(range(n))
         if self.ctx.settings["shuffle"] and n > 1:
             random.Random(1234).shuffle(self.order)
@@ -2512,6 +2496,20 @@ class Player:
         dwell = self.ctx.dwell if kept is None else kept or float("inf")
         if time.monotonic() - self.last_advance >= dwell:
             self.advance()
+
+    def peek_next(self):
+        """`now_playing.next` (Engine::ahead_path): the entry after
+        this one in the order, skipping files the card lacks as advance()
+        does; None when nothing is picked ahead -- an off-playlist play, a
+        Formula on the panel, or a playlist of one."""
+        cur = self.current()
+        if self.played or not cur or len(self.order) < 2 or cur.startswith("@") or FORMULA_FILE_RE.match(cur):
+            return None
+        for k in range(1, len(self.order)):
+            path = self.playlist[self.order[(self.pos + k) % len(self.order)]]
+            if not path.startswith("/") or self.ctx.fs.read_path(path.lstrip("/")) is not None:
+                return path
+        return None
 
     def current(self):
         if self.played:
@@ -3597,6 +3595,7 @@ def make_handler(ctx: Context, quiet: bool):
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                         **({} if player.kept_s() is None else {"kept_s": player.kept_s()}),
+                        "next": player.peek_next(),
                     },
                     "paused": player.paused,
                     "entries": len(player.playlist),
@@ -3615,7 +3614,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "reset_note": RESTART_NOTES.get(ctx.restarts[0]["reason"]),
                     "restarts": ctx.restarts,
                     "overrides": player.overrides_count,
-                    "hidden": player.hidden_count,
                     "mode": ctx.schedule.mode,
                     "mode_until": ctx.schedule.mode_until,
                     "time": now_local.strftime("%H:%M"),
@@ -3649,7 +3647,7 @@ def make_handler(ctx: Context, quiet: bool):
                 if ctx.sd_state != "ok":
                     # No card the player can use: nothing plays (the boot
                     # task never hands an unreadable card over).
-                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0)
+                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0, next=None)
                     obj.update(entries=0, index_state="unavailable")
             return obj
 
@@ -3818,7 +3816,7 @@ def make_handler(ctx: Context, quiet: bool):
             ctx.player.boot_time += RESTART_SECS
 
         def playlist_fields(self, index, index_ms) -> dict:
-            """`"entries","index","index_ms","overrides","hidden"` for a
+            """`"entries","index","index_ms","overrides"` for a
             reply that touched the playlist -- always the one actually
             playing (http.rs `applied_json`). Caller holds ctx.lock."""
             return {
@@ -3826,7 +3824,6 @@ def make_handler(ctx: Context, quiet: bool):
                 "index": index,
                 "index_ms": index_ms,
                 "overrides": ctx.player.overrides_count,
-                "hidden": ctx.player.hidden_count,
             }
 
         def json_body(self) -> bytes | None:
@@ -4196,8 +4193,6 @@ def make_handler(ctx: Context, quiet: bool):
             overrides = []
             for gif_path, ov in meta_map.items():
                 o = {"path": gif_path}
-                if ov.get("never"):
-                    o["never"] = True
                 if "w" in ov:
                     o["w"] = num_json(ov["w"])
                 if "dwell" in ov:
@@ -4878,7 +4873,7 @@ def make_handler(ctx: Context, quiet: bool):
             """A playlist's overrides file was written or removed. Caller
             holds ctx.lock. `index` is "built" only when the edited meta
             belongs to the playlist actually playing (which is always what
-            `entries`/`overrides`/`hidden` describe)."""
+            `entries`/`overrides` describe)."""
             active = ctx.player.manifest_rel() == manifest_rel
             if active:
                 index_ms = random.randint(30, 150)

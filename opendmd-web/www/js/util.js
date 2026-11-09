@@ -65,10 +65,13 @@ export function debounce(fn, ms) {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
-export function toast(msg, kind = '') {
-  const el = h('div.toast' + (kind ? '.' + kind : ''), String(msg));
+// `act`: an optional [text, fn] button in it (the editor's Undo), which
+// keeps it up longer.
+export function toast(msg, kind = '', act) {
+  const el = h('div.toast' + (kind ? '.' + kind : ''), String(msg),
+    act && h('button.sm.txt', { onclick: () => { el.remove(); act[1](); } }, act[0]));
   $('#toasts').append(el);
-  setTimeout(() => el.remove(), kind === 'bad' ? 8000 : 4000);
+  setTimeout(() => el.remove(), kind === 'bad' || act ? 8000 : 4000);
 }
 
 // Card paths go into URLs one segment at a time: `NEW 2021`, `+` and `#`

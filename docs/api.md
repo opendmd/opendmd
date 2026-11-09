@@ -57,10 +57,9 @@ Commands that touch the playlist answer with what the display now has:
 | `index` | `"loaded"` (the index on the card was current), `"built"` (rebuilt now), `"in-ram"`, or `null` (the playlist was not touched) |
 | `index_ms` | how long opening or building the index took, ms |
 | `overrides` | per-GIF overrides resolved into the playlist |
-| `hidden` | entries hidden from it ("Hide from this playlist") |
 
-`overrides` and `hidden` are the rebuild's counts: with `index` `null`
-they are 0 whatever the playlist has (`GET /api/status` carries the
+`overrides` is the rebuild's count: with `index` `null` it is 0 whatever
+the playlist has (`GET /api/status` carries the
 playlist's own).
 
 A **playlist name** (`set`): `""` is `/filelist.txt`, `filelist.<x>` is
@@ -252,7 +251,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `t_ms` | the display's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
-| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
+| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
 | `paused` | bool |
 | `transfer` | a file is going to or from the card on the stream task, or an upload is in hand (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each (640 B of paths in all, none over 200 B; not the title cards, the power-on effect or a sent Formula); the index of the one on screen |
@@ -269,7 +268,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale, raw_open, raw_reads, raw_fallbacks, slots_full, intent_refused, delta, path_opens, path_open_max_us, index_busy, index_unloaded, building}` diagnostics of the index that opens GIFs and their prepared copies without a directory scan (`delta`: files written, renamed or removed since it was built, which it already knows) and of the display's card opens and reads (both past FatFs's volume lock; opens refused while a write holds the file); `path_opens`, `path_open_max_us` the display's opens the index could not serve (by path, behind the volume lock) and the longest, `index_busy`, `index_unloaded` why (its lock held for a swap; no index loaded), `absent` prepared copies the index showed are not there (no path open; only with an index built this boot whose delta has kept every change since), `catalog_fatfs` playlist files read through FatFs instead of raw (their lookups wait for the volume lock), `building` a build or names walk running; `write_yields`, `write_yield_us` the card writes that stepped aside between their chunks for reads, and how long (at most 5 ms a chunk); `gave_way`, `gave_way_us` other tasks' card transfers that waited for the display's read first (at most 5 ms each); `write_max_us` the longest single write transfer (a chunk with the card's busy time); `player_wait_max_us`, `player_xfer_max_us` the display's longest single card read's wait for the card and transfer, since boot; `readahead` `{active, bytes, fill, fill_min, hits, underruns, fetches, taken, no_heap, busy, errors, task_starts, stack_unused}`: the playing GIF's read-ahead (`bytes`, 8 KB, of the file kept ahead of the display by a CPU0 task while a GIF plays): `fill` the bytes ahead now, `fill_min` the least after a served read since the last status (null: none), `hits` reads served from it, `underruns` reads it could not serve once filling (from the card), `fetches` blocks read ahead, `taken` times its memory was taken (given back 5 s after the last read), `no_heap` looks that found no room (one each 200 ms while short), `busy` reads that found it locked (from the card), `errors` card errors filling it; `settings_store` where the settings are kept: `card` (`/opendmd.json`, see Settings), `nvs (no card)`, or `nvs (card write failed: …)` (technical: an app showing it says "Settings are kept on the card") |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `interrupt watchdog`, `task watchdog`, `brownout`, `external`, …; why this boot's restart was made in plain words — `"card failure"`, `"different card"`, `"restarted on request"`, `"restarted to apply a card speed change"`, `"crashed (panic)"`, `"restarted without a recorded reason"`, … — or null after a power-on |
 | `restarts` | the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: `{reason, reset, uptime_s, heap_free, largest, where?}`. `reason`: `api_reboot`, `firmware_update`, `ap_timeout` (setup network timed out), `card_full_speed`, `card_speed`, `fresh_heap` (playlist index needed a fresh heap), `panel_trial`, `card_failure`, `new_card`, `card_lost` (SPI device lost), `card_retry`, `panic`, `stack_overflow`, `diag_abort` (a `diag-heap` build's heap check), or, when the restart wrote nothing, from the reset alone: `power_on` (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), `brownout`, `unrecorded` (a software restart), `unrecorded_crash`. `reset`: the chip's reset after it (`reset_reason`'s words; null if no boot has seen it yet). `uptime_s`, `heap_free`, `largest`: when it was written (for `unrecorded`/`unrecorded_crash`/`brownout`, the last heartbeat's, ≤ 30 s earlier; null when unknown; `largest` null for `panic`, `stack_overflow` and `diag_abort`, which do not walk the heap). `where`: a panic's `file:line message` (message ≤ 48 B), the overflowing task (`task <name>`), the heap check's site, or for `unrecorded_crash` the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe) |
-| `overrides`, `hidden` | as in "Fields that recur" |
+| `overrides` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
 | `time`, `tz`, `time_synced_s` | `"HH:MM"` (null before network time); zone name; seconds since the last sync |
 | `wake_until` | while `/api/wake` holds the schedule off, `"HH:MM"` |
@@ -444,7 +443,7 @@ then reverts unless `"panel_confirm":true` keeps it (`false` undoes it; with
 `panel`, it saves at once). `clk_phase` and `latch_blanking` apply live; the
 others at a restart, and revert with one. `"panel":null` saves the defaults.
 
-Reply: `{"ok":true, entries, index, index_ms, overrides, hidden,
+Reply: `{"ok":true, entries, index, index_ms, overrides,
 "brightness", "max_brightness", "reboot_required", "panel", …}` (the
 playlist fields as in "Fields that recur", the panel ones as above;
 `reboot_required`: a WiFi or panel change waits for a reboot). With
@@ -645,7 +644,7 @@ Write `/sets/<name>.txt` (`.txt` added if missing), the body the file;
 reindexed at once if in play.
 
 Reply: `{"ok":true,"path":"/sdcard/sets/<name>.txt", entries, index,
-index_ms, overrides, hidden}`. `400` a name with `/` or `..`.
+index_ms, overrides}`. `400` a name with `/` or `..`.
 
 ```sh
 printf '/gifs/Consoles/SNES_Super_Metroid_01.gif\n' > consoles.txt
@@ -675,13 +674,14 @@ curl -s -X POST $DMD/api/reindex
 
 `?set=<playlist name>`. A playlist's per-GIF overrides, streamed:
 
-`{"set","playlist":"/filelist.txt","overrides":[{"path", "never"?, "w"?, "dwell"?, "dwell_x"?, "loops"?}]}`
+`{"set","playlist":"/filelist.txt","overrides":[{"path", "w"?, "dwell"?, "dwell_x"?, "loops"?}]}`
 
-`never` hidden; `w` weight (Favourite 3, Play less 0.5); `dwell` seconds,
+`w` weight (Favourite 3, Play less 0.5); `dwell` seconds,
 or `dwell_x` times the usual; `loops`. To change them, write the `.meta`
 beside the playlist (`/sets/<name>.meta`, `/filelist.meta`), a line per GIF:
-its path, then tab-separated `never`, `w=<n>`, `dwell=<s>` or `dwell=<k>x`,
-`loops=<n>`.
+its path, then tab-separated `w=<n>`, `dwell=<s>` or `dwell=<k>x`,
+`loops=<n>` (anything else on the line is skipped, as earlier firmware's
+`never` now is: that GIF plays again).
 
 ```sh
 curl -s "$DMD/api/overrides?set="

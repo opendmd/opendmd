@@ -107,17 +107,22 @@ button lands on them.
   with matches show, open, with their match counts — the category facets —
   and the platform chips count the matches, most first, and narrow them;
   clearing the box clears the platforms picked with it. Each GIF row shows
-  a thumbnail (below), its title, platform and favourite/hidden marks. Pick
+  a thumbnail (below), its title, platform and favourite marks. Pick
   one and the **Details** panel (the right-hand column; a sheet from the
   bottom on a phone) plays it with the panel look and shows its title,
   platform, category, author and file name, with **Send to panel**, **Add
-  to playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in
-  the playlist chosen beside them), Smooth motion where it applies, **Edit
+  to playlist…**, **Edit in Create Art**, **Favourite** (in the playlist
+  chosen beside it), Smooth motion where it applies, **Edit
   details…** and **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
-  **Add to playlist** and **Done**: a tap then picks a row instead of
-  opening it. A GIF whose name has no title, or only a number
+  **None**, **Add N to playlist ▾** and **Done**: a tap then picks a row
+  instead of opening it. Add to playlist (here and in Details) is one menu
+  (`gifs.js` `targetMenu`): the playlist playing first, then the user's
+  others with their counts (the one in the editor marked), then **New
+  playlist…**; never the card's own. `appendTo` skips lines already in it
+  (case-insensitively, as FAT matches names) and patches the editor's copy
+  when it is the one open. A GIF whose name has no title, or only a number
   (`N64_LOGO_01.gif`), is listed by its platform and flags: "N64 Logo 01".
 
   **Thumbnails** (`js/thumbs.js`; on by default, Settings → Device →
@@ -159,8 +164,13 @@ button lands on them.
   the playlist; the card's own are saved as a new one (**Save as a new playlist**,
   prefilled "Halloween 2"). **+ New playlist** opens an empty one with a
   Name field. The entries show their thumbnails; drag ⠿ (or Alt+↑/↓) to
-  reorder, ✕ to remove, a tap picks them for **Arrange** (Shuffle, Sort
-  A–Z, Picked to top, Remove picked, Clear). **+ Add GIFs** opens the same
+  reorder, a row's **…** to move it (up, down, to top, to end), ✕ to
+  remove, a tap (or **Select**'s ticks, with an "N picked" chip) picks
+  them for **Arrange** (Shuffle, Sort A–Z, Picked to top, Picked to end,
+  Remove picked, Clear). Remove, Clear, Shuffle and a replace by filter
+  offer one Undo in their toast. `app.draft.saved` holds the lines as last
+  saved: leaving the editor, or opening another playlist, with changes
+  asks "Save changes to X?" (OK saves, Cancel puts them back). **+ Add GIFs** opens the same
   folder tree as the Library, with a checkbox on every GIF and folder (on a
   laptop beside the entries, the playlist list stepping aside; on a phone
   in their place, **Done** to go back): tick GIFs or whole folders and
@@ -175,8 +185,14 @@ button lands on them.
   /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All files,
   a root manifest's file name, or a set's name — which the device applies
   in a few seconds), kept in reach at the bottom; a list row's **…** has
-  **Play** and **Delete…**. Deleting the active playlist switches the
-  player back to All files first. Switching is disabled while status says
+  **Play**, **Rename…**, **Duplicate** and **Delete…**. Deleting the
+  active playlist switches the display back to All files first. Rename and
+  Duplicate are the web app's (no request renames a set): the lines `PUT
+  /api/sets/<new>`, the overrides read and written to `<new>.meta`; a
+  rename then moves `config.set` if it plays, rewrites schedule rules that
+  name it, deletes the old `.txt`/`.meta` and follows in the editor (a
+  change of case alone goes by way of another name: FAT sees one file). A
+  taken name gets the next number ("Halloween 2"). Switching is disabled while status says
   an index is `building`. Entries are GIF paths or Formulas.
 - **Settings** — five tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
@@ -337,13 +353,13 @@ the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 
-## Favourites, hiding and schedules
+## Favourites and schedules
 
-**Favourites, hiding and schedules.** Right-click a GIF in the Library or a
+**Favourites and schedules.** Right-click a GIF in the Library or a
 playlist (its "…" button; on a phone a long press in a playlist) to make it a
-favourite, play it less, hide it, or — a second step, **Play longer or
+favourite, play it less, or — a second step, **Play longer or
 loop…** — play it twice as long, for N seconds, or N times — per playlist, so a GIF can
-be a favourite in one and hidden in another. Settings → Schedule → Time sets the zone
+be a favourite in one and play less often in another. Settings → Schedule → Time sets the zone
 (the player keeps time over NTP), and its Schedule picks a playlist
 and/or brightness for parts of the week ("Weekdays 18:00–23:00 → Consoles")
 and a night mode that turns the panel off or dims it; Now shows when either
