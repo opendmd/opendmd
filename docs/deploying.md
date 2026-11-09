@@ -16,13 +16,13 @@ cp -r <DMDoS pack>/gifs <DMDoS pack>/filelist.txt "$CARD"/
 make pack ARGS="convert $CARD --verify"   # prepare every GIF (the playback cache, under cache/)
 sync && umount "$CARD"
 
-# once per board (and once more to move a board to flash table v3): over USB
-make fw-release                            # dist/ (4mb, the DevKit): app, bootloader, table, full image, manifest, signed bundle; updater, otadata, web app pack
+# once per board (and once more to move a board to flash table v4): over USB
+make fw-release                            # dist/ (4mb, the DevKit): app, bootloader, table, full image, manifests (normal and offline, with its NVS image), signed bundle; updater, otadata, web app pack
 make flasher                               # http://localhost:8765 in Chrome/Edge -> the board's Install button
 #   or: make fw-release-flash PORT=/dev/ttyUSB0   (after `make fw-erase` if it ran anything else)
 # join the OpenDMD-Setup WiFi, enter the network, then http://opendmd.local/
 
-# a firmware update over WiFi (the board must already have table v3: v2 boards refuse v3 updates)
+# a firmware update over WiFi (the board must already have table v4: v3 boards refuse v4 updates)
 make fw-release && make fw-ota HOST=opendmd.local
 
 # a web app update on its own, over WiFi
@@ -171,36 +171,59 @@ layout").
 |---|---|---|---|
 | (bootloader) | 0x1000 | | the project's second-stage bootloader |
 | (partition table) | 0x8000 | | `firmware/partitions.csv` |
-| `nvs` | 0x9000 | 24 KB | WiFi and the secrets; a copy of the settings (their store is the card's `/opendmd.json`) |
+| `nvs` | 0x9000 | 24 KB | WiFi and the secrets; a copy of the settings (their store is the card's `/opendmd.json`), `network` among them; the offline install writes it whole |
 | `otadata` | 0xF000 | 8 KB | which app boots next; erased = `factory` |
 | `phy_init` | 0x11000 | 4 KB | |
-| `factory` | 0x20000 | 2,560 KB | the firmware |
-| `ota_0` | 0x2A0000 | 384 KB | the updater (`ota/updater`), run only to install a firmware update |
-| `www` | 0x300000 | 1,024 KB | the web app, one **www pack** (`docs/www-pack.md`) |
+| `factory` | 0x20000 | 2,816 KB | the firmware |
+| `ota_0` | 0x2E0000 | 384 KB | the updater (`ota/updater`), run only to install a firmware update |
+| `www` | 0x340000 | 768 KB | the web app, one **www pack** (`docs/www-pack.md`) |
 
-This is table **v3** (`docs/ota.md`; `/api/status` and `GET /api/firmware`
-say `"layout":3`). v2 (1.0.0-beta.15 and earlier) had a 2,304 KB `factory`,
-`ota_0` at 0x260000 and a 1,280 KB `www` at 0x2C0000; v1 had one 2,752 KB
-app at 0x10000 and no `otadata`. Moving a board to v3 takes one USB install
-(below), after which firmware updates go over WiFi again.
+This is table **v4** (`docs/ota.md`; `/api/status` and `GET /api/firmware`
+say `"layout":4`). v3 (1.0.0-beta.16 to 1.0.1) had a 2,560 KB `factory`,
+`ota_0` at 0x2A0000 and a 1,024 KB `www` at 0x300000; v2 (1.0.0-beta.15
+and earlier) a 2,304 KB `factory`, `ota_0` at 0x260000 and a 1,280 KB
+`www` at 0x2C0000; v1 had one 2,752 KB app at 0x10000 and no `otadata`.
+Moving a board to v4 takes one USB install (below), after which firmware
+updates go over WiFi again.
 
-### Moving a board to table v3 (once, before 1.0)
+### Moving a board to table v4 (once)
 
-An update over WiFi never changes the partition table, and a v3 firmware
-would not fit a v2 board's `factory` for long, so the layout is in every
-update file and both sides refuse a mismatch before anything is written: a
-v2 board (beta.15) refuses a v3 `.odfw` ("not an OpenDMD firmware bundle
-(bad magic)", or in its web app "The firmware download is not the release
-it should be" / "This is not an OpenDMD firmware file"), a v3 board refuses
-a v2 one ("this update is for the older flash layout v2 …"), and this web
-app tells a v2 player to reinstall over USB at opendmd.dev/install. So every
-board moves once, over USB, with any of:
+An update over WiFi never changes the partition table, and a v4 firmware
+does not fit a v3 board's `factory` for long, so the layout is in every
+update file and both sides refuse a mismatch before anything is written:
+
+- **A v3 board** (1.0.0-beta.16 to 1.0.1) refuses a v4 `.odfw` (`ODFW44mb`).
+  Its firmware does not know the magic and answers 422 "this update is for
+  another flash layout than this display's: use the DevKit (4 MB) update
+  file (opendmd.dev/install has the latest)" (1.0.0-beta.16's says "not an
+  OpenDMD firmware bundle (bad magic)"); its updater, had a bundle got
+  that far, logs "not a firmware bundle (bad magic)" and boots the firmware
+  that is there (`make emu-api`'s boot C runs exactly that); its web app's
+  **Update from file…** says "This file is for another flash layout than
+  this display's. Use the DevKit (4 MB) update file".
+- **Check for updates** on a v3 board reads the release's
+  `variants.4mb.layout` (4, from the bundle's magic: `tools/site.py`) and
+  offers nothing, firmware or web app: "Firmware X is out. This firmware
+  needs a one-time USB reinstall on this display: use the installer at
+  opendmd.dev/install (Update OpenDMD keeps your WiFi and settings)". The
+  same holds for `beta.json` with **Get beta updates** on. (The feed's
+  `?layout=` is the variant, `4mb`, for the counts only: the Worker
+  answers every board the same file, and the web app decides.)
+- **A v4 board** refuses a v3 one ("this update is for the older flash
+  layout v3 and this DevKit (4 MB) has layout v4: use a release made for
+  layout v4 (opendmd.dev/install has the latest)"), and its web app says
+  "This file is for an older flash layout than this display has: get the
+  latest from opendmd.dev/install".
+
+So every board moves once, over USB, with any of:
 
 - **The installer** (<https://opendmd.dev/install/> or `make flasher`): a
   board on OpenDMD answers Improv, so it offers **Update OpenDMD**, which
   writes the six parts and does not erase: WiFi and settings stay. (A board
   that does not answer gets **Install**: leave **Erase device** unticked to
-  keep them.)
+  keep them.) The offline install (**Play from the card only, no WiFi**)
+  works too, and writes `nvs-offline-4mb.bin` at 0x9000 as always: NVS did
+  not move, so it is the same image as for v3.
 - **`make fw-release-flash PORT=/dev/ttyUSB0`** (no `fw-erase` first): the
   pack and the updater at their new offsets, then bootloader, table,
   `otadata` erased and the app. Keeps NVS.
@@ -211,16 +234,24 @@ board moves once, over USB, with any of:
   code need entering again; the other settings come back from the card's
   `/opendmd.json`.
 
-What the move writes over: the v2 updater (0x260000) and the first 256 KB
-of the v2 pack (0x2C0000..0x300000) become the end of the v3 `factory`;
-the new updater goes to 0x2A0000 and the pack to 0x300000. A move that
-leaves out the pack (a bench `espflash flash` of the app alone) finds no
-pack at 0x300000 (the API and `/setup` work without one); `make www-push`
-or `/setup` puts one there. The card is not touched. NVS (0x9000), `otadata` (0xF000) and `phy_init` are
-where they were.
+What the move writes over: the v3 updater (0x2A0000..0x300000) and the
+first 256 KB of the v3 pack (0x300000..0x340000) become the end of the v4
+`factory` (the new firmware is ~2.5 MB, so most of that is left as it was
+until a bigger firmware uses it); the new updater goes to 0x2E0000 and the
+pack to 0x340000, over the rest of the old pack. A move that leaves out the
+pack (a bench `espflash flash` of the app alone) finds no pack at 0x340000
+(the API and `/setup` work without one); `make www-push` or `/setup` puts
+one there. The card is not touched. NVS (0x9000), `otadata` (0xF000) and
+`phy_init` are where they were.
 
-After the move, `GET /api/firmware` says `"layout":3` and the boot banner
-`(4mb layout v3, …)`; updates over WiFi work as before, with v3 files.
+After the move, `GET /api/firmware` says `"layout":4` and the boot banner
+`(4mb layout v4, …)`; updates over WiFi work as before, with v4 files.
+
+**Back to v3** is the same move the other way: a v3 release's parts
+(1.0.1's from its GitHub release: `gh release download v1.0.1`) written the
+same way, without erasing (its installer manifest, or its parts by hand at
+the v3 offsets: updater 0x2A0000, pack 0x300000, then bootloader, table,
+`otadata` erased, app at 0x20000). NVS stays there too.
 
 The web app is not on the card. `make web` packs it (every file gzipped as
 `make web` always did) into `opendmd-web/www.pack` — ~0.5 MB — and the
@@ -244,19 +275,23 @@ this build. It runs `make web` first, then builds the layout (`<var>` is
 | file | flashed at | |
 |---|---|---|
 | `opendmd-<version>-<var>-app.bin` | 0x20000 | the app image; its descriptor carries `"<version> <var>"` (checked) |
-| `updater.bin` | 0x2A0000 | the updater (`make updater`, `ota/updater`) |
+| `updater.bin` | 0x2E0000 | the updater (`make updater`, `ota/updater`) |
 | `ota_data_initial.bin` | 0xF000 | `otadata` erased (8 KB of 0xFF): the bootloader boots `factory` |
-| `opendmd-<version>-www.pack` | 0x300000 | the web app |
+| `opendmd-<version>-www.pack` | 0x340000 | the web app |
 | `bootloader-<var>.bin` | 0x1000 | its header carries the flash size (checked) |
 | `partition-table-<var>.bin` | 0x8000 | |
 | `opendmd-<version>-<var>-full.bin` | 0x0 | all six merged and padded to the flash size: `esptool write-flash 0 <it>` or any "flash one image" tool (it rewrites NVS too: the settings in it go) |
 | `manifest-<var>.json` | | ESP Web Tools: the six parts and their offsets |
-| `opendmd-<version>-<var>.odfw` | | the signed bundle for an update over WiFi (`make fw-ota`; `make fw-sign`); its magic names the layout and table (`ODFW34mb`) |
+| `nvs-offline-<var>.bin` | 0x9000 | the offline install's NVS: the whole `nvs` partition (24 KB), namespace `opendmd`, string `network` = `off` ("Offline installs" below) |
+| `manifest-<var>-offline.json` | | ESP Web Tools, the offline install: the six parts and `nvs-offline-<var>.bin`, seven in flash order |
+| `opendmd-<version>-<var>.odfw` | | the signed bundle for an update over WiFi (`make fw-ota`; `make fw-sign`); its magic names the layout and table (`ODFW44mb`) |
 
 The target fails if the app image leaves less than 64 KB of the
-`factory` partition (2,621,440 B), if the updater
-leaves less than 32 KB of its 393,216 B `ota_0`, and the packer refuses a
-web app over the `www` partition (1,048,576 B). Signing needs the private key, `~/.config/opendmd/opendmd.key`
+`factory` partition (2,883,584 B), if the updater
+leaves less than 32 KB of its 393,216 B `ota_0`, or if the signed web app
+pack leaves less than 64 KB of the `www` partition (786,432 B;
+`WWW_PACK_SPARE`, also enforced by `make web`'s size lines); the packer
+refuses a pack over the partition outright. Signing needs the private key, `~/.config/opendmd/opendmd.key`
 (`uv run tools/fw-sign.py keygen` made it, once; it is never in the repo;
 `FW_SIGN_KEY=` points elsewhere); the device checks bundles against
 `firmware/keys/opendmd.pub`. The release build needs ~1.5 GB of scratch;
@@ -527,11 +562,51 @@ which starts unticked (`new_install_prompt_erase`):
 - **Erase unticked — a firmware update that keeps the settings.** ESP Web
   Tools writes only the six parts (the sectors they cover); NVS at 0x9000
   is not among them, so the WiFi, the schedule and every setting survive.
-  This also moves a board from table v1 or v2 (or the older dual-OTA one) to v3:
+  This also moves a board from table v1, v2 or v3 (or the older dual-OTA one) to v4:
   NVS is at 0x9000 in every table, the new table replaces the old one, and
   `otadata` is written erased (`ota_data_initial.bin`), so whatever an older
   layout left at 0xF000-0x11000 cannot steer the bootloader: it boots
   `factory`.
+
+#### Offline installs
+
+The install page's **Play from the card only, no WiFi** box (under each
+Install button: `flasher/index.html`, `tools/site.py` `OFFLINE_BOX`, both
+driven by `flasher/offline.js`) swaps the button's `manifest` attribute to
+`manifest-4mb-offline.json` while it is ticked; ESP Web Tools reads the
+attribute when the button is clicked. That manifest is `manifest-4mb.json`
+plus `nvs-offline-4mb.bin` at 0x9000 (seven parts, in flash order), with
+`new_install_prompt_erase: true` and `new_install_improv_wait_time: 0`: no
+WiFi form after the install, and no Improv detection before it, so a board
+already on OpenDMD is not recognised through it (no Update, no Change
+Wi-Fi: those need the box unticked).
+
+`nvs-offline-4mb.bin` is the whole `nvs` partition (offset and size read
+from `firmware/partitions.csv`), made by `make fw-release` with IDF v5.3's
+`nvs_partition_gen` (`python -m esp_idf_nvs_partition_gen generate`, from
+the IDF Python env under `~/.espressif/python_env/idf5.3_py3*_env`, which
+the firmware's build sets up) from a CSV holding namespace `opendmd` and one
+string, `network` = `off`. It is written whether or not **Erase device** is
+ticked, so every setting NVS held goes (WiFi, the API key, the Follow code,
+the name, panel timing). `fw-release` asserts both manifests (six parts and
+seven, the NVS part at the partition's offset, the image the partition's
+size, the Improv waits); `make flasher-smoke` also reads the image back as
+an NVS partition.
+
+The setting itself (`network` among the settings, `on` by default) is also the
+card's: `{"network":"off"}` in `/opendmd.json` (the page offers that one
+line as a download) turns WiFi off at the next boot with the card, and the
+card wins over NVS once mounted. With `network` off the firmware starts no
+WiFi, setup network or web server; Improv still answers over USB, and its
+WifiSettings joins, saves the network, sets `network` on and restarts.
+
+| installer action | NVS | card's `/opendmd.json` | result |
+|---|---|---|---|
+| **Update OpenDMD** (box unticked) | kept | kept | as it was: offline stays offline |
+| **Install**, erase unticked, box unticked | kept | kept | as it was |
+| **Install**, erase ticked, box unticked | erased: `network` absent, so on | kept | online, unless the card says `off` (the card wins once mounted) |
+| **Install**, box ticked (erase either way) | replaced by `nvs-offline-4mb.bin` | kept | offline, unless the card says `on` |
+| **Connect to Wi-Fi** / **Change Wi-Fi** (box unticked) | `network` = on, the credentials | rewritten at the next save | online after one restart |
 
 The page cannot be tested end to end without a person at a real board (Web
 Serial asks for a port by hand); `tools/web-smoke.py`-style checks cover
@@ -640,7 +715,7 @@ the flasher's. On the bench, `make fw-flash` does the same with the bench
 build (`dev-credentials`).
 
 Put the card in and power up. The boot banner reads
-`OpenDMD firmware v1.0.0 (4mb layout v3, features […], app desc '1.0.0 4mb')`, then `www: pack
+`OpenDMD firmware v<version> (4mb layout v4, features […], app desc '<version> 4mb')`, then `www: pack
 '<version>' verified, 37 entries, … B, … CRC pass N ms`, and on first boot
 the player builds the default manifest's index on the card
 (`filelist.txt.idx`; ~6 s for the full card) before it starts playing.
@@ -670,7 +745,7 @@ erase the chip.
 
 ### Updating the firmware
 
-**Over WiFi** (a board already on table v3, with a card in): `make
+**Over WiFi** (a board already on table v4, with a card in): `make
 fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Device → Firmware → "Update from file…" with
 `dist/opendmd-<version>-<variant>.odfw`, the board's own layout and
 table: the device, the web app and `fw-ota` refuse any other. The

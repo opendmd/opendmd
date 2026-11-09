@@ -268,6 +268,15 @@ every view like a person would:
             version that is no release number) dev/api.html; no api.html in
             the www pack, and the mock serves none
 
+Offline mode (mock pass, after Panel timing): `network` defaults to "on"
+and anything but on/off is a 400; Settings › Device › Network has "Turn
+WiFi off…" (#st-wifi-off); it opens a dialog warning that the web app
+can't reach the display until opendmd.json on the card is edited or the
+installer's Connect to Wi-Fi is used over USB; Cancel sends nothing (still
+"on"), Turn WiFi off sends the PUT and POST /api/reboot and ends on "WiFi
+is off"; then "on" again. With `network` taken out of /api/config (an
+older firmware, Playwright route) the control is not shown.
+
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
 
@@ -1014,7 +1023,9 @@ def sun_checks(page: Page, base: str) -> None:
     goto_view(page, "now")
     page.wait_for_selector("#now-banner[data-mode='dim']", timeout=15000)
     banner = page.inner_text("#now-banner")
-    check(banner.startswith(f"Dimmed for the night until {got}"), f"sun: Now's banner '{banner}'")
+    # (Worked out once a night, as on the device: the same minute at every read.)
+    again = get_json(base + "/api/status")["mode_until"]
+    check(banner.startswith(f"Dimmed for the night until {got}") and again == got, f"sun: Now's banner '{banner}', the end still {again}")
     # An offset that isn't one of the choices (the API's) is shown, and kept by the next change.
     put_json(base + "/api/schedule", {"rules": [], "night": {**n, "offset": 45}})
     goto_view(page, "settings/time")
@@ -1565,6 +1576,9 @@ def load_checks(page: Page, base: str) -> None:
     queue), and a hover while scrolling, measured."""
     # Failures that pass (here 500s): blank for now, not kept, drawn on the next visit.
     expected.append("/gifs/Arcade/")
+    # (The pointer off the list: left over a row by the hover checks, it
+    # starts a clip on whichever Arcade row comes under it, when it likes.)
+    page.mouse.move(5, 5)
     get_json(base + "/mock/io?reset=1&fail500=3")
     pick_cat(page, "Arcade")
     rows = drawn(page)
@@ -1575,10 +1589,19 @@ def load_checks(page: Page, base: str) -> None:
     blank = [p for p in rows if kept[p] is None]
     check(len(blank) >= 1 and not any(v == "none" for v in kept.values()),
           f"load: {len(blank)} rows whose request failed (500) are not kept as failures ({thumbs_stats(page)['failed']} failed)")
+    # A hover on such a row plays its clip, and still keeps no record
+    # without a still: one would read as "nothing to show", never asked again.
+    row = f"#lib-list .vrow[data-path={json.dumps(blank[0])}]"
+    page.hover(f"{row} .t")
+    page.wait_for_selector(f"{row} img.th", timeout=10000)
+    page.mouse.move(5, 5)
+    page.wait_for_selector(f"{row} img.th", state="detached", timeout=5000)
+    kept = page.evaluate(STORED, [blank[0]])
+    check(kept[blank[0]] is None, f"load: a hover's clip on a row whose still failed is not kept as its record ({kept})")
     page.reload()
     pick_cat(page, "Arcade")
     drawn(page)
-    page.wait_for_timeout(800)
+    page.wait_for_function(f"{json.dumps(blank)}.every(p => document.querySelector(`#lib-list .vrow[data-path=\"${{p}}\"] canvas.th[data-done=\"1\"]`))", timeout=20000)
     kept = page.evaluate(STORED, blank)
     check(all(kept[p] == "still" for p in blank), f"load: a later visit asks for them again and draws them ({kept})")
     expected.remove("/gifs/Arcade/")
@@ -1951,6 +1974,9 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     deadline = time.time() + 10
     while time.time() < deadline and f.read_text().split("\n")[:-1] != before[1:]:
         page.wait_for_timeout(100)
+    # The file is written before the page has the answer: Undo once the
+    # page counts it saved (its toast), or the save lands after the Undo.
+    page.wait_for_selector("#toasts .toast.ok:has-text('Saved “browse”')", timeout=10000)
     page.click("#toasts .toast:has(button) >> nth=-1 >> button")
     is_dirty = page.evaluate("async () => (await import('./js/state.js')).dirty()")
     check(entries(page) == before and is_dirty and f.read_text().split("\n")[:-1] == before[1:],
@@ -2078,6 +2104,10 @@ def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.on("dialog", lambda d: asked.append(d.message))
     page.goto(base + "/#library")
     page.wait_for_selector("#lib-select", timeout=20000)
+    # The Library done mounting (its first sync() labels the bar's button):
+    # a selection there before that turns Select on, and the click below
+    # would then turn it off and clear the picks.
+    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
     pick = f"async (ps) => {{ const {{ app }} = await import('./js/state.js'); ps.forEach((p) => app.selection.add(p)); }}"
     page.evaluate(pick, g[:3])
     page.click("#lib-select")
@@ -2440,6 +2470,16 @@ AMBER_PIXELS = """(sel) => {
     return { bright, bad };
 }"""
 
+def amber_until(page: Page, cond: str, timeout: int = 10000) -> dict:
+    """AMBER_PIXELS of the Now preview once `cond` (over `r`) holds, or as
+    it is when `timeout` ms pass (the check after it then fails)."""
+    try:
+        page.wait_for_function(f"(r => {cond})(({AMBER_PIXELS})('#now-panel'))", timeout=timeout)
+    except PlaywrightTimeoutError:
+        pass
+    return page.evaluate(AMBER_PIXELS, "#now-panel")
+
+
 # A Preview built on a detached 128 px canvas (scale 1, flat: its pixels are the
 # panel's), showing `path` after `look`; the 128x32 RGBA bytes as a list.
 WASM_CANVAS = """async ([path, look]) => {
@@ -2534,8 +2574,8 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
             check(st["glow_held"] == 12288 or st["paused"], f"status: glow short while playing holds 12288 B ({st['glow_held']})")
         goto_view(page, "now")
         wait_lit(page, "#now-panel", "now (amber)")
-        page.wait_for_timeout(600)
-        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        # (Until the preview has drawn in the new look, not a fixed while.)
+        r = amber_until(page, "r.bright > 100 && r.bad === 0")
         check(r["bright"] > 100 and r["bad"] == 0,
               f"now: the preview wears amber (every one of {r['bright']} bright pixels has r > g > b; {r['bad']} do not)")
         shot(page, "now-amber", "laptop")
@@ -2544,8 +2584,7 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
         st = get_json(base + "/api/status")
         check(st["glow_held"] == 0, f"status: glow off holds nothing ({st['glow_held']})")
         goto_view(page, "now")
-        page.wait_for_timeout(600)
-        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        r = amber_until(page, "r.bad > 0")
         check(r["bad"] > 0, f"now: back to full colour, the preview is no longer amber ({r['bad']} pixels off-hue)")
     finally:
         if (get_json(base + "/api/config")["look"], get_json(base + "/api/config")["glow"]) != orig:
@@ -2974,6 +3013,90 @@ def panel_test_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"panel": None})
 
 
+def offline_checks(page: Page, base: str) -> None:
+    """Settings -> Device -> Network's "Turn WiFi off…" (offline mode,
+    config `network`). Mock only: it turns the mock's WiFi "off" (the mock
+    keeps answering) and puts it back "on"."""
+    def net():
+        return get_json(base + "/api/config").get("network")
+
+    check(net() == "on", f"offline: /api/config network defaults to on ({net()!r})")
+    for bad in ({"network": "maybe"}, {"network": "OFF"}, {"network": False}):
+        check(put_status(base, bad) == 400, f"offline: {json.dumps(bad)} refused (400)")
+    check(net() == "on", "offline: nothing changed by the refused requests")
+    try:
+        r = put_json(base + "/api/config", {"network": "on"})
+        check(r.get("reboot_required") is False, f"offline: on -> on asks for no reboot ({r.get('reboot_required')})")
+    except urllib.error.HTTPError as e:
+        check(False, f"offline: PUT network on: {e.code}")
+
+    sent: list[str] = []
+    def seen(r):
+        if (r.method == "PUT" and r.url.endswith("/api/config")) or r.url.endswith("/api/reboot"):
+            sent.append(f"{r.method} {urllib.parse.urlsplit(r.url).path} {r.post_data or ''}")
+    page.on("request", seen)
+    try:
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-offline:not([hidden]) #st-wifi-off", timeout=10000)
+        btn = page.inner_text("#st-wifi-off")
+        check(btn == "Turn WiFi off…" and page.locator("#st-net #st-wifi-off").count() == 1,
+              f"offline: Network has the button ({btn!r})")
+        page.click("#st-wifi-off")
+        page.wait_for_selector("#off-dlg[open]", timeout=5000)
+        text = page.inner_text("#off-dlg")
+        check(all(t in text for t in ("Turn WiFi off?", "stop using WiFi", "keep playing its card", "won’t be able to reach it",
+                                      '"network": "off" to "network": "on"', "opendmd.json on the card", "Connect to Wi-Fi", "USB",
+                                      "opendmd.dev/install")),
+              f"offline: the dialog warns in plain words ({text!r})")
+        check(not any(w in text.lower() for w in ("odm ", "bucket", "nvs", "player")), "offline: no internals in the dialog")
+        page.click("#off-cancel")
+        page.wait_for_selector("#off-dlg", state="detached", timeout=5000)
+        page.wait_for_timeout(500)
+        check(not sent and net() == "on", f"offline: Cancel sends nothing, still on ({sent})")
+
+        page.click("#st-wifi-off")
+        page.wait_for_selector("#off-dlg[open]", timeout=5000)
+        page.click("#off-go")
+        page.wait_for_function("() => /WiFi is off/.test(document.querySelector('#off-msg')?.textContent)", timeout=15000)
+        msg = page.inner_text("#off-msg")
+        check(net() == "off", f"offline: Turn WiFi off saved network off ({net()!r})")
+        check(len(sent) == 2 and sent[0].startswith("PUT /api/config") and '"network":"off"' in sent[0]
+              and sent[1].startswith("POST /api/reboot"), f"offline: the PUT, then the restart ({sent})")
+        restarts = get_json(base + "/api/status").get("restarts") or [{}]
+        check(restarts[0].get("reason") == "api_reboot",
+              f"offline: the mock restarted ({restarts[0].get('reason')})")
+        check(page.is_hidden("#off-go") and page.inner_text("#off-cancel") == "Close"
+              and msg == "WiFi is off. The display is restarting and will play its card without WiFi. You can close this page.",
+              f"offline: the last word, no wait for the display ({msg!r})")
+        page.click("#off-cancel")
+        page.wait_for_selector("#off-dlg", state="detached", timeout=5000)
+    finally:
+        page.remove_listener("request", seen)
+        r = put_json(base + "/api/config", {"network": "on"})
+    check(net() == "on" and r.get("reboot_required") is True, f"offline: back on (reboot_required {r.get('reboot_required')})")
+
+    # An older firmware: no `network` in /api/config, no control.
+    def without(route):
+        if route.request.method != "GET":
+            return route.fallback()
+        res = route.fetch()
+        j = res.json()
+        j.pop("network", None)
+        route.fulfill(response=res, json=j)
+    page.route("**/api/config", without)
+    try:
+        page.reload()
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-save-net", timeout=20000)
+        check(page.locator("#st-wifi-off").count() == 1 and page.is_hidden("#st-offline"),
+              "offline: hidden when /api/config has no network (an older firmware)")
+    finally:
+        page.unroute("**/api/config")
+    page.reload()
+    goto_view(page, "settings/device")
+    page.wait_for_selector("#st-offline:not([hidden])", timeout=20000)
+
+
 def no_live_checks(page: Page, base: str, mock: bool) -> None:
     """The clock and the scrolling text are gone: no Live folder or form in
     the Library, no "The clock" in Follow's attract select, the editor drops
@@ -3298,16 +3421,16 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     board8.write_bytes(b"ODFW18mb" + good.read_bytes()[8:])
     newer8 = tmp / f"opendmd-{UPD_VERSION}-8mb.odfw"
     newer8.write_bytes(b"ODFW18mb" + newer.read_bytes()[8:])
-    # For the DevKit's partition table v2 (what 1.0.0-beta.15 and earlier
-    # were): the mock, on table v3, must refuse them.
-    v2 = tmp / "opendmd-9.9.9-smoke-v2.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--layout", "2", "--out", str(v2),
+    # For the DevKit's partition table v3 (what 1.0.0-beta.16 to 1.0.1
+    # were): the mock, on table v4, must refuse them.
+    v3 = tmp / "opendmd-9.9.9-smoke-v3.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--layout", "3", "--out", str(v3),
                     "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
-    newer_v2 = tmp / f"opendmd-{UPD_VERSION}-v2.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", UPD_VERSION, "--layout", "2", "--out", str(newer_v2),
+    newer_v3 = tmp / f"opendmd-{UPD_VERSION}-v3.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", UPD_VERSION, "--layout", "3", "--out", str(newer_v3),
                     "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
     return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old, "newer": newer, "newer_bad": newer_bad,
-            "board8": board8, "newer8": newer8, "v2": v2, "newer_v2": newer_v2}
+            "board8": board8, "newer8": newer8, "v3": v3, "newer_v3": newer_v3}
 
 
 def status_of(req: urllib.request.Request) -> tuple[int, dict]:
@@ -3341,9 +3464,9 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
     check(sorted(fw) == ["build", "features", "flash_size", "last", "layout", "log", "pending", "updater", "variant", "version"] and fw["features"] == ["formulas", "jit"] and fw["pending"] is None
-          and fw["variant"] == "4mb" and fw["layout"] == 3 and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
+          and fw["variant"] == "4mb" and fw["layout"] == 4 and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
     st0 = get_json(base + "/api/status")
-    check(st0.get("layout") == 3, f"firmware: /api/status layout {st0.get('layout')}")
+    check(st0.get("layout") == 4, f"firmware: /api/status layout {st0.get('layout')}")
     why = page.evaluate("async () => { const m = await import('/js/firmware.js');"
                         " return [m.layoutWhy(3, 2), m.layoutWhy(2, 3), m.layoutWhy(3, 3), m.playerLayout({}), m.playerLayout({ layout: 3 })]; }")
     check(why[0].startswith("This firmware needs a one-time USB reinstall on this display") and "opendmd.dev/install" in why[0]
@@ -3384,20 +3507,20 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         code, why = e.code, json.loads(e.read() or b"{}").get("error", "")
     check(code == 422 and why.startswith("this update is for another flash layout than this display's: use the DevKit (4 MB)")
           and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of an 8mb bundle -> {code} '{why}'")
-    # A bundle for the DevKit's older partition table (v2, 1.0.0-beta.15 and
-    # earlier): refused in the page and by the mock (the firmware), in words.
-    page.set_input_files("#fw-file", str(ota["v2"]))
+    # A bundle for the DevKit's older partition table (v3, 1.0.0-beta.16 to
+    # 1.0.1): refused in the page and by the mock (the firmware), in words.
+    page.set_input_files("#fw-file", str(ota["v3"]))
     t = fw_message(page, "^This file is for an older flash layout")
-    check(not asked and "opendmd.dev/install" in t, f"firmware: a layout v2 bundle is refused in the page ('{t}')")
-    req = urllib.request.Request(base + "/api/firmware", data=ota["v2"].read_bytes(), method="PUT",
+    check(not asked and "opendmd.dev/install" in t, f"firmware: a layout v3 bundle is refused in the page ('{t}')")
+    req = urllib.request.Request(base + "/api/firmware", data=ota["v3"].read_bytes(), method="PUT",
                                  headers={"Content-Type": "application/octet-stream"})
     try:
         urllib.request.urlopen(req, timeout=30).read()
         code, why2 = 200, ""
     except urllib.error.HTTPError as e:
         code, why2 = e.code, json.loads(e.read() or b"{}").get("error", "")
-    check(code == 422 and why2.startswith("this update is for the older flash layout v2 and this DevKit (4 MB) has layout v3")
-          and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of a layout v2 bundle -> {code} '{why2}'")
+    check(code == 422 and why2.startswith("this update is for the older flash layout v3 and this DevKit (4 MB) has layout v4")
+          and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of a layout v3 bundle -> {code} '{why2}'")
     expected.append("/api/firmware")
     page.set_input_files("#fw-file", str(ota["bad"]))
     t = fw_message(page, "^The display refused this file")
@@ -3495,7 +3618,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     (tmp / "nocors").symlink_to(tmp)
     shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
     shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
-    shutil.copy(ota["newer_v2"], inst / "firmware" / f"opendmd-{UPD_VERSION}-v2.odfw")
+    shutil.copy(ota["newer_v3"], inst / "firmware" / f"opendmd-{UPD_VERSION}-v3.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
     built = (REPO / "opendmd-web" / "www.pack").read_bytes()
 
@@ -3521,7 +3644,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         # `variants`, the layout's file and table.
         fw4 = kw.get("firmware", f"firmware/opendmd-{UPD_VERSION}.odfw")
         obj = {"version": UPD_VERSION, "firmware": fw4,
-               "variants": {"4mb": {"firmware": fw4, "layout": 3}},
+               "variants": {"4mb": {"firmware": fw4, "layout": 4}},
                "www": f"firmware/opendmd-{UPD_VERSION}-www.pack", "www_version": f"v{UPD_VERSION}", **kw}
         (inst / name).write_text(json.dumps(obj))
         return f"{site}/install/{name}"
@@ -3569,19 +3692,19 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               "update: a feed of one's own is asked as given (no ?v=, only opendmd.dev's is told the version)")
         # A release for a newer partition table than the player's: not
         # offered, a USB install named instead.
-        t = check_now(release("relayout.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}.odfw", "layout": 4}}))
+        t = check_now(release("relayout.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}.odfw", "layout": 5}}))
         check(t.startswith(f"Firmware {UPD_VERSION} is out. This firmware needs a one-time USB reinstall on this display")
               and "opendmd.dev/install" in t and not upd(), f"update: a release for another flash layout -> '{t}'")
         # A release.json without `layout` whose file is for the older table:
         # its magic gives it away after the download, nothing is sent.
-        check_now(release("v2.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-v2.odfw"}}))
+        check_now(release("v3.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-v3.odfw"}}))
         page.click("#fw-upd")
         page.wait_for_function("() => /older flash layout/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=20000)
         t = page.inner_text("#fw-msg")
         check(t.startswith("This file is for an older flash layout") and t.endswith("Nothing was installed")
-              and get_json(base + "/api/firmware")["version"] == fw0 and f"/install/firmware/opendmd-{UPD_VERSION}-v2.odfw" in asked,
-              f"update: a layout v2 file for a v3 player installs nothing -> '{t}'")
+              and get_json(base + "/api/firmware")["version"] == fw0 and f"/install/firmware/opendmd-{UPD_VERSION}-v3.odfw" in asked,
+              f"update: a layout v3 file for a v4 player installs nothing -> '{t}'")
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
         frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named
@@ -4048,6 +4171,7 @@ def mock_pass(browser) -> None:
         boot_checks(page, base, True)
         power_checks(page, base)
         panel_checks(page, base)
+        offline_checks(page, base)
         no_live_checks(page, base, True)
         no_effects_checks(page, base, True)
         sim_checks(page)
@@ -6409,11 +6533,16 @@ def location_checks(browser, base: str, errors: list[str]) -> None:
     wait_config(base, lambda c: c.get("lat") == 51.51 and c.get("lon") == -0.13)
     page.wait_for_function("/51.51°N, 0.13°W/.test(document.querySelector('#loc-now').textContent)", timeout=5000)
     check(sent() == {"lat": 51.51, "lon": -0.13}, f"location: typed, saved rounded to 0.01° ({asked[-1:]})")
-    page.click("#loc-clear")
+    # (The request itself, not `asked`: a request event reaches it only
+    # while a Playwright call runs, and wait_config makes none.)
+    put_config = lambda r: r.method == "PUT" and r.url.endswith("/api/config")
+    with page.expect_request(put_config, timeout=10000):
+        page.click("#loc-clear")
     wait_config(base, lambda c: c.get("lat") is None and c.get("lon") is None)
     check(sent() == {"lat": None, "lon": None}, f"location: Clear sends both null ({asked[-1:]})")
-    page.click("#loc-here")
     # (Headless Chromium's position can take seconds.)
+    with page.expect_request(put_config, timeout=30000):
+        page.click("#loc-here")
     page.wait_for_function("document.querySelector('#loc-lat').value == '53.35'", timeout=30000)
     check(sent() == {"lat": 53.35, "lon": -6.26} and page.input_value("#loc-lat") == "53.35",
           f"location: this browser's location, rounded in the page before it is sent ({asked[-1:]})")
@@ -6667,6 +6796,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     check(toast >= 1 and mine() == before, f"formulas: Save refuses a use line it can't paste ({toast} toast, saved {mine()})")
     # A formula naming itself: never pasted into itself, not saved bare.
     page.fill("#psi-name", "Loopy")
+    # The field's change writes its `name` line (a timeout after the
+    # change): let it land first, or it lands in the text filled next.
+    page.dispatch_event("#psi-name", "change")
+    page.wait_for_function("document.querySelector('#psi-src').value.includes('name \"Loopy\"')", timeout=10000)
     page.fill("#psi-src", "use Loopy as p\np")
     page.click("#psi-save")
     page.wait_for_timeout(400)
@@ -6927,9 +7060,17 @@ def recent_checks(page: Page, base: str) -> None:
     flipped = wait_until(lambda: status(False)["paused"] != p0, 10)
     page.keyboard.press("Space")
     back_again = wait_until(lambda: status(False)["paused"] == p0, 10)
+    # → is a skip: the device's ordinal one on, and Now showing that start.
+    # (Not "the path changed": the playlist's next entry can be the one on
+    # screen -- on CI's card, a rebuilt shuffle's second entry is gifs[3].)
+    o0 = status(False)["now_playing"]["ordinal"]
     page.keyboard.press("ArrowRight")
-    page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(a)}", timeout=10000)
-    check(flipped and back_again, "now: keys ← Previous, Space pause/resume twice, → skip")
+    skipped = wait_until(lambda: status(False)["now_playing"]["ordinal"] == o0 + 1, 10)
+    np = status(False)["now_playing"]
+    page.wait_for_function(f"document.querySelector('#now-ord').textContent.startsWith('{np['ordinal']} ')"
+                           f" && document.querySelector('#now-path').textContent === {json.dumps(np['path'])}", timeout=10000)
+    check(flipped and back_again and skipped,
+          f"now: keys ← Previous, Space pause/resume twice, → skip (ordinal {o0} -> {np['ordinal']}, {np['path']})")
     codes = [back() for _ in range(RECENT_MAX + 1)]
     s = status()
     check(codes[-1] == 404 and 200 in codes and s["recent_at"] == len(s["recent"]) - 1,
@@ -8275,9 +8416,28 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         check("401" in t, f"follow: Test with a wrong code -> '{t}'")
         page.fill("#fo-code", "4321")
         page.click("#fo-test")
-        page.wait_for_function("document.querySelector('#fo-result').textContent.includes('answered')", timeout=10000)
+        # ("answered ·": the wrong code's "answered, but: 401" is not this.)
+        page.wait_for_function("!document.querySelector('#fo-result').textContent.includes('asking')", timeout=10000)
         t = page.inner_text("#fo-result")
-        check("answered" in t, f"follow: Test with the right code -> '{t}'")
+        check("answered ·" in t, f"follow: Test with the right code -> '{t}'")
+
+        # A code typed while an earlier one is saving stays in the field
+        # (the save clears only the code it sent).
+        held: list = []
+        page.route("**/api/config", lambda r: held.append(r) if r.request.method == "PUT" else r.continue_())
+        n0 = page.evaluate("+(document.querySelector('#fo .tick')?.dataset.n || 0)")
+        page.fill("#fo-code", "first")
+        page.dispatch_event("#fo-code", "change")
+        deadline = time.time() + 10
+        while not held and time.time() < deadline:
+            page.wait_for_timeout(50)
+        page.fill("#fo-code", "4321")
+        for r in held:
+            r.continue_()
+        page.unroute("**/api/config")
+        page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=n0, timeout=10000)
+        kept = page.input_value("#fo-code")
+        check(bool(held) and kept == "4321", f"follow: a code typed while one saves stays in the field ('{kept}')")
 
         # Saved as changed: follow on, host, code 4321 (when the field is
         # left), attract = the current playlist.

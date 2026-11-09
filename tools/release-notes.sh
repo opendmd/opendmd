@@ -27,7 +27,7 @@ For the ESP32 DevKit V1 (4 MB); the browser installer is at $where.
 | whole flash at offset 0 | \`opendmd-$v-4mb-full.bin\` |
 | ESP Web Tools manifest | \`manifest-4mb.json\` |
 
-The DevKit build is for flash layout v3 (a bigger firmware partition; docs/deploying.md): a DevKit on layout v2 (1.0.0-beta.15 or earlier) refuses its update file and needs one USB install from https://opendmd.dev/install/ (Update OpenDMD, or Install with Erase unticked, keeps the WiFi and settings).
+The DevKit build is for flash layout v4 (a bigger firmware partition, a smaller web app one; docs/deploying.md): a DevKit on layout v3 (1.0.0 to 1.0.1, and the betas from 1.0.0-beta.16) or v2 refuses its update file and needs one USB install from https://opendmd.dev/install/ (Update OpenDMD, or Install with Erase unticked, keeps the WiFi and settings).
 
 SHA-256:
 

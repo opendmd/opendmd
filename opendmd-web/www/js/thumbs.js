@@ -351,7 +351,12 @@ export function watch(el) {
       if (!rec?.clip) {
         const e = epoch, { gif, size } = await fetchCut(q.path, CLIP_FRAMES, CLIP_BYTES);
         if (e !== epoch) return;
-        await put(rec = { ...(rec || {}), k: q.path, size, clip: gif || null });
+        // Kept only beside a still: a record without one reads as "nothing
+        // to show", and a row whose still has not come (or failed) would
+        // then never ask for it again.
+        const had = rec;
+        rec = { ...(rec || {}), k: q.path, size, clip: gif || null };
+        if (had) await put(rec);
       }
       // (The row may have been drawn again meanwhile: its canvas now.)
       const c = [...el.querySelectorAll('canvas.th')].find((x) => x._p === q.path && live(x));

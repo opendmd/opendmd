@@ -1,39 +1,40 @@
-# OpenDMD partition table v3, 4 MB flash (docs/ota.md): the firmware, a small
+# OpenDMD partition table v4, 4 MB flash (docs/ota.md): the firmware, a small
 # updater, and the web app. Variant "4mb" (the ESP32 DevKit V1).
-# The table's version is in every 4mb firmware bundle's magic (ODFW34mb;
-# v2's was ODFW1 + NULs): a player installs a bundle over WiFi only for its
-# own table, so moving a board from v2 to v3 takes one USB install.
+# The table's version is in every 4mb firmware bundle's magic (ODFW44mb;
+# v3's was ODFW34mb, v2's ODFW1 + NULs): a player installs a bundle over
+# WiFi only for its own table, so moving a board from v3 to v4 takes one
+# USB install.
 # - factory: the firmware. Never overwritten by itself: a LAN update
 #   (PUT /api/firmware) stages a signed bundle on the card, points otadata
 #   at ota_0 and restarts; the updater copies the image into factory, sets
-#   factory to boot (erasing otadata) and restarts. 2,560 KB (v2: 2,304 KB):
-#   the release image is ~2.29 MB, and `make fw-release` insists on 64 KB
-#   to spare.
+#   factory to boot (erasing otadata) and restarts. 2,816 KB (v3: 2,560 KB,
+#   v2: 2,304 KB): the release image is ~2.5 MB with the Formula compiler,
+#   and `make fw-release` insists on 64 KB to spare.
 # - ota_0: the updater (ota/updater, C on ESP-IDF, `make updater`). An app
 #   partition of subtype ota_0 so esp_ota_set_boot_partition can select it;
-#   it never holds the firmware. 384 KB, as in v2, moved up behind factory.
+#   it never holds the firmware. 384 KB, as in v2 and v3, moved up behind
+#   factory.
 # - otadata: which app boots next. Erased (all 0xFF, as a full flash or the
 #   flasher leaves it) = the bootloader boots factory.
 # - www: the web app's pack (docs/www-pack.md), memory-mapped and served from
-#   flash, rewritten by PUT /api/www. 1,024 KB (v2: 1,280 KB at 0x2C0000):
-#   the pack is ~0.6 MB. It moved, so a USB install of v3 writes the pack
-#   too (the installer and the full image do). Its subtype is IDF's
-#   `esphttpd` (0x80, "web server data"): a custom subtype such as 0x40 is
-#   only accepted by espflash under a custom *type* (its partition parser
-#   panics on an unknown data subtype), and `esphttpd` says what the
-#   partition is for.
-# - nvs, otadata, phy_init: where v1 and v2 had them, so a USB install that
-#   does not erase the chip keeps the settings.
+#   flash, rewritten by PUT /api/www. 768 KB (v3: 1,024 KB at 0x300000, v2:
+#   1,280 KB at 0x2C0000): the pack is ~0.55 MB. It moved, so a USB install
+#   of v4 writes the pack too (the installer and the full image do). Its
+#   subtype is IDF's `esphttpd` (0x80, "web server data"): a custom subtype
+#   such as 0x40 is only accepted by espflash under a custom *type* (its
+#   partition parser panics on an unknown data subtype), and `esphttpd` says
+#   what the partition is for.
+# - nvs, otadata, phy_init: where v1, v2 and v3 had them, so a USB install
+#   that does not erase the chip keeps the settings.
 # 0x9000 + 0x6000 = 0xF000 (otadata, 8 KB as IDF requires); + 0x2000 =
 # 0x11000 (phy_init); apps start on a 64 KB boundary (the MMU page), so
-# factory is at 0x20000 (0x12000..0x20000 unused); 0x20000 + 0x280000 =
-# 0x2A0000; + 0x60000 = 0x300000; + 0x100000 = 0x400000, the end of the chip.
-# Moving from v1 (one factory app at 0x10000, no otadata) or v2 needs one
-# USB flash of the full image; see docs/deploying.md.
+# factory is at 0x20000 (0x12000..0x20000 unused); 0x20000 + 0x2C0000 =
+# 0x2E0000; + 0x60000 = 0x340000; + 0xC0000 = 0x400000, the end of the chip.
+# Moving from an older table needs one USB install; see docs/deploying.md.
 # Name,    Type, SubType,  Offset,   Size
 nvs,       data, nvs,      0x9000,   0x6000,
 otadata,   data, ota,      0xF000,   0x2000,
 phy_init,  data, phy,      0x11000,  0x1000,
-factory,   app,  factory,  0x20000,  0x280000,
-ota_0,     app,  ota_0,    0x2A0000, 0x60000,
-www,       data, esphttpd, 0x300000, 0x100000,
+factory,   app,  factory,  0x20000,  0x2C0000,
+ota_0,     app,  ota_0,    0x2E0000, 0x60000,
+www,       data, esphttpd, 0x340000, 0xC0000,

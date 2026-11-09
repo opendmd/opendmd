@@ -37,6 +37,36 @@ filelist.xmas
 Playlists you make in the web app are saved on the card too, so they move
 with it.
 
+## The settings file
+
+OpenDMD keeps the display's settings in `opendmd.json` at the top of the
+card, so they move with it. You can edit it on a computer. Only the
+settings you write in it change: a line you leave out leaves that setting
+as the display has it. Keep the file valid JSON (mind the commas): a file
+the display can't read is replaced with its own settings.
+
+To play from the card only, with no WiFi, the file needs just this line:
+
+```json
+{"network": "off"}
+```
+
+The display then starts no WiFi and no web app; it just plays the card.
+To turn WiFi back on, change `"off"` to `"on"`. Deleting the line doesn't
+turn it back on. See [Turning WiFi back on](install.md#turning-wifi-back-on)
+for the other way, over USB.
+
+With WiFi off the display doesn't know the time, so the schedule and night
+mode do nothing, and Formulas that show the time are skipped.
+
+## Formulas on the card
+
+Your Formulas are in `formulas/`, each as a `.psi` file. You can copy one
+there from a computer and name it in a playlist (`/formulas/<name>.psi`).
+The display prepares it for the panel shortly after it starts with the
+card (it plays from then on), and again after an update that needs it. A Formula with a mistake in
+it is skipped where it plays.
+
 ## How names become details
 
 The web app reads each GIF's platform, title and author from its file name:

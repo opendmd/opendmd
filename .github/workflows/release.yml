@@ -321,6 +321,16 @@ jobs:
             test "$desc" = "$VERSION $v" || { echo "::error::$app's descriptor is '$desc', want '$VERSION $v'"; exit 1; }
             manifest="$(jq -r .version "dist/manifest-$v.json")"
             test "$manifest" = "$VERSION" || { echo "::error::dist/manifest-$v.json says $manifest, want $VERSION"; exit 1; }
+            # The offline install (docs/deploying.md "Offline installs"): the six
+            # parts and the NVS image at the nvs partition, its size.
+            read -r nvs_off nvs_size < <(awk -F'[[:space:]]*,[[:space:]]*' '$1 == "nvs" && $3 == "nvs" { print $4, $5 }' firmware/partitions.csv)
+            jq -e --slurpfile m "dist/manifest-$v.json" --arg nvs "nvs-offline-$v.bin" --argjson off $(( nvs_off )) --arg ver "$VERSION" '
+              .version == $ver and (.builds[0].parts | length) == 7 and ($m[0].builds[0].parts | length) == 6
+              and (.builds[0].parts | del(.[2])) == $m[0].builds[0].parts and .builds[0].parts[2] == {path: $nvs, offset: $off}
+              and .new_install_prompt_erase == true and .new_install_improv_wait_time == 0' "dist/manifest-$v-offline.json" >/dev/null \
+              || { echo "::error::dist/manifest-$v-offline.json is not the six parts and nvs-offline-$v.bin at $nvs_off for $VERSION"; exit 1; }
+            test "$(stat -c %s "dist/nvs-offline-$v.bin")" -eq $(( nvs_size )) && test "$(od -An -tx4 -N4 "dist/nvs-offline-$v.bin" | tr -d ' ')" = fffffffe \
+              || { echo "::error::dist/nvs-offline-$v.bin is not a $(( nvs_size )) B NVS partition image"; exit 1; }
             uv run --quiet tools/fw-sign.py inspect "dist/opendmd-$VERSION-$v.odfw" | tee "$RUNNER_TEMP/inspect-$v.txt"
             grep -qx "variant  $v" "$RUNNER_TEMP/inspect-$v.txt" || { echo "::error::dist/opendmd-$VERSION-$v.odfw is not a $v bundle"; exit 1; }
             grep -qx "layout   v[0-9]* (current)" "$RUNNER_TEMP/inspect-$v.txt" || { echo "::error::dist/opendmd-$VERSION-$v.odfw is not for this tree's $v partition table"; exit 1; }
@@ -331,7 +341,7 @@ jobs:
             test "$(stat -c %s "$full")" -eq "$want" || { echo "::error::$full is $(stat -c %s "$full") B, want $want (the $v flash)"; exit 1; }
             echo "$full: $want B"
             # The factory partition the app goes in (firmware/partitions.csv).
-            factory=2621440 size="$(stat -c %s "$app")"
+            factory=$(( $(awk -F, '$1 ~ /^factory/ { gsub(/ /, "", $5); print $5 }' firmware/partitions.csv) )) size="$(stat -c %s "$app")"
             test $(( factory - size )) -ge 65536 || { echo "::error::$app is $size B: less than 64 KB of the $factory B factory partition spare"; exit 1; }
           done
           # The web app pack's version (its header, docs/www-pack.md): what
@@ -354,7 +364,7 @@ jobs:
           files=("opendmd-$VERSION-www.pack" ota_data_initial.bin updater.bin THIRD-PARTY-LICENSES-firmware.txt THIRD-PARTY-LICENSES-web.txt)
           for v in 4mb; do
             files+=("opendmd-$VERSION-$v-app.bin" "opendmd-$VERSION-$v-full.bin" "opendmd-$VERSION-$v.odfw"
-                    "bootloader-$v.bin" "partition-table-$v.bin" "manifest-$v.json")
+                    "bootloader-$v.bin" "partition-table-$v.bin" "manifest-$v.json" "manifest-$v-offline.json" "nvs-offline-$v.bin")
           done
           for f in "${files[@]}"; do
             cp "dist/$f" "$RUNNER_TEMP/assets/"
@@ -463,6 +473,18 @@ jobs:
           set -euo pipefail
           inst=target/site/install
           fail() { echo "::error::$*"; exit 1; }
+          # offline DIR BUTTON SRC: SRC's offline install under install/DIR/ and
+          # BUTTON's box (a final from before the offline install has none).
+          offline() {
+            local dir=$1 button=$2 src=$3 f
+            if [[ ! -f "$src/manifest-4mb-offline.json" ]]; then
+              [[ "$src" != dist ]] || fail "dist has no manifest-4mb-offline.json"
+              test ! -e "$inst/$dir/manifest-4mb-offline.json" && ! grep -q "data-offline-for=\"$button\"" "$inst/index.html" || fail "install/$dir has an offline install $src does not have"
+              return
+            fi
+            for f in manifest-4mb-offline.json nvs-offline-4mb.bin; do cmp "$inst/$dir/$f" "$src/$f" || fail "install/$dir/$f is not $src's"; done
+            grep -q "data-manifest-offline=\"$dir/manifest-4mb-offline.json\"" "$inst/index.html" && grep -q "data-offline-for=\"$button\"" "$inst/index.html" || fail "the install page has no offline box for $button"
+          }
           feed() {  # FILE VER DIR SRC
             local file=$1 ver=$2 dir=$3 src=$4 f v
             cat "$inst/$file"
@@ -482,6 +504,7 @@ jobs:
             feed beta.json "$VERSION" firmware/beta dist
             grep -q 'manifest="firmware/beta/manifest-4mb.json"' "$inst/index.html" || fail "the install page has no beta button"
             cmp "$inst/firmware/beta/manifest-4mb.json" dist/manifest-4mb.json || fail "install/firmware/beta/manifest-4mb.json is not this beta's"
+            offline firmware/beta install-beta-4mb dist
           else
             src=dist
             feed release.json "$VERSION" firmware dist
@@ -496,6 +519,7 @@ jobs:
           ! jq -e '.variants | has("8mb")' "$inst/release.json" >/dev/null || fail "release.json names an 8mb variant"
           cmp "$inst/firmware/manifest-4mb.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest-4mb.json is not the release's"
           cmp "$inst/firmware/manifest.json" "$src/manifest-4mb.json" || fail "install/firmware/manifest.json is not the 4mb manifest"
+          offline firmware install-4mb "$src"
           if [[ "$KIND" != dry ]]; then
             test -f "target/site/dev/api/$TAG.html" || fail "the site has no frozen dev/api/$TAG.html"
             grep -q "api/$TAG.html" target/site/dev/api.html || fail "dev/api.html does not link $TAG.html"

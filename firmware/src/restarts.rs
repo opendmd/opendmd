@@ -291,6 +291,8 @@ pub fn alive() {
 pub fn booted_after_update() {
     // A new firmware: the FAT index's crash count was the old one's.
     crate::fatidx::forget_crashes();
+    #[cfg(feature = "psi")]
+    crate::card_formulas::forget_crashes();
     if ring::mark_update(&mut Rtc) {
         log::info!("reset reason: the restart out of the updater (firmware_update)");
     }

@@ -18,7 +18,8 @@
 //! `variant` (`4mb`, the one this tree builds) and the version of that
 //! variant's partition table ([`LAYOUTS`]). `"ODFW1"` + three NULs is the
 //! DevKit's table v2 (every 4mb bundle up to 1.0.0-beta.15), `"ODFW34mb"`
-//! the DevKit's table v3 (a bigger `factory`, `firmware/partitions.csv`).
+//! its table v3 (1.0.0-beta.16 to 1.0.1), `"ODFW44mb"` its table v4 (a
+//! bigger `factory` again, a smaller `www`: `firmware/partitions.csv`).
 //! The signature covers it. A player installs a bundle only for its own
 //! variant *and* table ([`Header::check_layout`]): an update over WiFi never
 //! changes the table, so a bundle built for another one needs a USB install.
@@ -28,7 +29,9 @@
 //! updater from before a layout knows nothing of its magic and refuses it
 //! as not a bundle at all (1.0.0-beta.15 and earlier: "bad magic" for
 //! `ODFW34mb`), which is what keeps a v3 image out of a v2 board's smaller
-//! `factory`.
+//! `factory`; a v3 firmware (1.0.0 to 1.0.1) takes `ODFW44mb` for another
+//! layout's ([`OtaError::OtherLayout`]) and its updater refuses it as "bad
+//! magic", which keeps a v4 image out of a v3 board's `factory`.
 //!
 //! **The key id** (1.0.0-beta.15 on): the image's last 16 bytes are a key
 //! trailer, `"ODFWKEY1"`, the id of the key that signed it, 7 zero bytes
@@ -59,8 +62,11 @@ pub const MAGIC: [u8; 8] = *b"ODFW1\0\0\0";
 /// table in [`LAYOUTS`], is a bundle for another flash layout.
 pub const MAGIC_PREFIX: &[u8; 4] = b"ODFW";
 /// A 4mb bundle for the DevKit's table v3: `ODFW`, the table version, the
-/// variant. A later table gets the next digit (`ODFW44mb`, `ODFW38mb`).
+/// variant (1.0.0-beta.16 to 1.0.1). Refused by a v4 player.
 pub const MAGIC_4MB_V3: [u8; 8] = *b"ODFW34mb";
+/// A 4mb bundle for the DevKit's table v4. A later table gets the next
+/// digit (`ODFW54mb`).
+pub const MAGIC_4MB_V4: [u8; 8] = *b"ODFW44mb";
 /// The flash layouts, as the firmware names them (`/api/status`
 /// `variant`, the app descriptor's `"<version> <variant>"`).
 pub const VARIANTS: [&str; 1] = ["4mb"];
@@ -79,7 +85,13 @@ pub struct Layout {
 /// Every table a bundle may name, the current one of each variant first
 /// (what this tree builds: [`layout_of`]); the older ones after, so their
 /// bundles are recognised and refused in words.
-pub const LAYOUTS: [Layout; 2] = [
+pub const LAYOUTS: [Layout; 3] = [
+    Layout {
+        variant: "4mb",
+        table: 4,
+        magic: MAGIC_4MB_V4,
+        factory: 0x2C_0000,
+    },
     Layout {
         variant: "4mb",
         table: 3,
@@ -979,6 +991,13 @@ mod tests {
         376f2b24d7382d4f08799c67f4e31eb4c756d689720e0521f298ed3e75cec3c69ed431039b4cff6ff9fe463197e4\
         74f35b7abc746731e208";
 
+    /// The same seed, version and image, signed for the DevKit's table v4
+    /// (`build_header(..., "4mb", 4)`): magic `ODFW44mb`.
+    const KAT_HEADER_V4: &str = "4f44465734346d62302e342e302d746573740000000000000000000000000000000000000000\
+        000040000000ac4a16884561961261469a1a0d7dd650eb0beb0e7dd9ade9d85d0af56bcdb061855764e0c46be5b2\
+        c89f9c86d870dff34071d8f17b78ec1814964c695e4aa1f768641ce4d60976f925788f11ffb3e0cf69f227a94d5f\
+        c0978a86c7fc1ed6eb08";
+
     /// The same seed, version and image, signed as an 8mb bundle by
     /// `tools/fw-sign.py` up to 1.0.0-beta.16 (magic `ODFW18mb`): a layout
     /// this tree no longer builds, refused.
@@ -1043,8 +1062,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(made, header);
-        // `new` is for the variant's current table: v3 for 4mb.
-        let bytes3 = unhex(KAT_HEADER_V3);
+        // `new` is for the variant's current table: v4 for 4mb.
+        let bytes3 = unhex(KAT_HEADER_V4);
         let h3 = Header::parse(&bytes3).unwrap();
         assert_eq!(h3.to_bytes().to_vec(), bytes3);
         assert_eq!(
@@ -1189,7 +1208,7 @@ mod tests {
 
     #[test]
     fn variants_and_their_magics() {
-        assert_eq!(magic_for("4mb"), Some(*b"ODFW34mb"));
+        assert_eq!(magic_for("4mb"), Some(*b"ODFW44mb"));
         assert_eq!(magic_for("8mb"), None);
         assert_eq!(magic_for("16mb"), None);
         for v in VARIANTS {
@@ -1197,7 +1216,8 @@ mod tests {
         }
         assert_eq!(variant_of_magic(&MAGIC), Some("4mb"));
         assert_eq!(layout_of_magic(&MAGIC).map(|l| l.table), Some(2));
-        assert_eq!(layout_of("4mb").map(|l| l.table), Some(3));
+        assert_eq!(layout_of_magic(&MAGIC_4MB_V3).map(|l| l.table), Some(3));
+        assert_eq!(layout_of("4mb").map(|l| l.table), Some(4));
         assert_eq!(layout_of("8mb"), None);
         assert_eq!(variant_of_magic(b"ODFW18mb"), None);
         assert_eq!(variant_of_magic(b"ODFW116m"), None);
@@ -1212,59 +1232,73 @@ mod tests {
             }
         }
         assert_ne!(&MAGIC_4MB_V3[..5], b"ODFW1");
+        assert_ne!(&MAGIC_4MB_V4[..5], b"ODFW1");
+        assert_ne!(MAGIC_4MB_V4, MAGIC_4MB_V3);
         assert_eq!(variant_name("4mb"), "DevKit (4 MB)");
         assert_eq!(variant_name("8mb"), "8mb");
     }
 
     #[test]
     fn the_layout_is_the_variant_and_its_table() {
-        // A v3 bundle on a v3 player: taken. The same bundle on a v2 player
+        // A v4 bundle on a v4 player: taken. The same bundle on a v3 player
         // (a firmware that knew both, checking against its own table): a
         // USB reinstall, in words.
-        let h3 = Header::parse(&unhex(KAT_HEADER_V3)).unwrap();
-        assert_eq!((h3.variant(), h3.table()), ("4mb", 3));
-        h3.check_variant("4mb").unwrap();
-        h3.check_layout("4mb", 3).unwrap();
-        let e = h3.check_layout("4mb", 2).unwrap_err();
+        let h4 = Header::parse(&unhex(KAT_HEADER_V4)).unwrap();
+        assert_eq!((h4.variant(), h4.table()), ("4mb", 4));
+        h4.check_variant("4mb").unwrap();
+        h4.check_layout("4mb", 4).unwrap();
+        let e = h4.check_layout("4mb", 3).unwrap_err();
         assert_eq!(
             e,
             OtaError::WrongLayout {
                 variant: "4mb",
-                bundle: 3,
-                device: 2
-            }
-        );
-        assert_eq!(
-            e.to_string(),
-            "this update needs flash layout v3 and this DevKit (4 MB) has layout v2: reinstall it \
-             once over USB from opendmd.dev/install (an update over WiFi cannot change the layout)"
-        );
-        // A v2 bundle (every DevKit release up to 1.0.0-beta.15) on a v3
-        // player: refused before the signature, in words.
-        let h2 = Header::parse(&kat_header()).unwrap();
-        assert_eq!((h2.variant(), h2.table()), ("4mb", 2));
-        let e = h2.check_variant("4mb").unwrap_err();
-        assert_eq!(
-            e,
-            OtaError::WrongLayout {
-                variant: "4mb",
-                bundle: 2,
+                bundle: 4,
                 device: 3
             }
         );
         assert_eq!(
             e.to_string(),
-            "this update is for the older flash layout v2 and this DevKit (4 MB) has layout v3: \
-             use a release made for layout v3 (opendmd.dev/install has the latest)"
+            "this update needs flash layout v4 and this DevKit (4 MB) has layout v3: reinstall it \
+             once over USB from opendmd.dev/install (an update over WiFi cannot change the layout)"
+        );
+        // A v3 bundle (1.0.0-beta.16 to 1.0.1) on a v4 player: refused
+        // before the signature, in words.
+        let h3 = Header::parse(&unhex(KAT_HEADER_V3)).unwrap();
+        assert_eq!((h3.variant(), h3.table()), ("4mb", 3));
+        let e = h3.check_variant("4mb").unwrap_err();
+        assert_eq!(
+            e,
+            OtaError::WrongLayout {
+                variant: "4mb",
+                bundle: 3,
+                device: 4
+            }
+        );
+        assert_eq!(
+            e.to_string(),
+            "this update is for the older flash layout v3 and this DevKit (4 MB) has layout v4: \
+             use a release made for layout v4 (opendmd.dev/install has the latest)"
+        );
+        // A v2 bundle (every DevKit release up to 1.0.0-beta.15) too.
+        let h2 = Header::parse(&kat_header()).unwrap();
+        assert_eq!((h2.variant(), h2.table()), ("4mb", 2));
+        assert_eq!(
+            h2.check_variant("4mb"),
+            Err(OtaError::WrongLayout {
+                variant: "4mb",
+                bundle: 2,
+                device: 4
+            })
         );
         // The variant is checked first.
         assert!(matches!(
-            h3.check_layout("16mb", 3),
+            h4.check_layout("16mb", 4),
             Err(OtaError::WrongVariant { bundle: "4mb", .. })
         ));
         // It verifies as any bundle does (the layout check is the refusal).
-        let meta = verify_header(&h3, &kat_pub()).unwrap();
+        let meta = verify_header(&h4, &kat_pub()).unwrap();
         meta.check_fits(layout_of("4mb").unwrap().factory).unwrap();
+        verify_header(&h3, &kat_pub()).unwrap();
     }
 
     /// `firmware/partitions.csv` is the table
@@ -1330,7 +1364,7 @@ mod tests {
             "this update is for another flash layout than this display's: use the DevKit (4 MB) \
              update file (opendmd.dev/install has the latest)"
         );
-        for magic in [b"ODFW116m", b"ODFW44mb", b"ODFW\0\0\0\0"] {
+        for magic in [b"ODFW116m", b"ODFW54mb", b"ODFW\0\0\0\0"] {
             let mut b = kat_header();
             b[..8].copy_from_slice(magic);
             assert_eq!(Header::parse(&b), Err(OtaError::OtherLayout), "{magic:?}");
@@ -1349,6 +1383,12 @@ mod tests {
         b[..8].copy_from_slice(&MAGIC);
         let h = Header::parse(&b).unwrap();
         assert_eq!(h.variant(), "4mb");
+        assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
+        // A v4 bundle relabelled v3.
+        let mut b = unhex(KAT_HEADER_V4);
+        b[..8].copy_from_slice(&MAGIC_4MB_V3);
+        let h = Header::parse(&b).unwrap();
+        assert_eq!(h.table(), 3);
         assert_eq!(verify_header(&h, &kat_pub()), Err(OtaError::BadSignature));
         // A v3 bundle relabelled v2, and the reverse.
         let mut b = unhex(KAT_HEADER_V3);

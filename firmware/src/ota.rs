@@ -9,8 +9,8 @@
 //! image's flash layout ([`crate::state::FLASH_VARIANT`] and its table,
 //! [`crate::state::flash_layout`]: a bundle for another layout, such as an
 //! 8mb one from 1.0.0-beta.16 or earlier, is refused at its magic, a table
-//! v3 player refuses a v2 bundle; a v2 player, beta.15 and
-//! earlier, does not know the v3 magic at all), that the image fits the factory
+//! v4 player refuses a v3 or v2 bundle; a v3 player, 1.0.0 to 1.0.1, takes
+//! the v4 magic for another layout's), that the image fits the factory
 //! partition, the ESP image magic 0xE9, the SHA-256, the Ed25519 signature
 //! against [`PUBLIC_KEY`], and that the image's app descriptor is a build
 //! for the same layout). The layout and the signature are checked as soon
@@ -435,7 +435,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
             500,
             "500 Internal Server Error",
             &format!(
-                "the updater in flash cannot be started (error {err}): install a v2 release over USB"
+                "the updater in flash cannot be started (error {err}): reinstall it over USB from opendmd.dev/install"
             ),
         );
     }

@@ -29,7 +29,7 @@ FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # with this sdkconfig rather than espflash's bundled one.
 FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
-# The flash layout (docs/ota.md): `4mb`, table v3, for the ESP32 DevKit V1
+# The flash layout (docs/ota.md): `4mb`, table v4, for the ESP32 DevKit V1
 # (firmware/partitions.csv): otadata, the firmware in factory, the updater in
 # ota_0, the web app's www pack. The one layout this tree builds; the
 # variant name stays in file names, the app descriptor and /api/status.
@@ -62,14 +62,14 @@ FW_FLASH_SIZE_emu8mb := 8mb
 FW_FLASH_SIZE := $(FW_FLASH_SIZE_$(FW_VARIANT))
 FW_FLASH_BYTES_4mb := 4194304
 FW_FLASH_BYTES_emu8mb := 8388608
-FW_APP_BYTES_4mb := 2621440
+FW_APP_BYTES_4mb := 2883584
 FW_APP_BYTES_emu8mb := 3145728
-UPDATER_OFFSET_4mb := 0x2A0000
+UPDATER_OFFSET_4mb := 0x2E0000
 UPDATER_OFFSET_emu8mb := 0x320000
-WWW_OFFSET_4mb := 0x300000
+WWW_OFFSET_4mb := 0x340000
 WWW_OFFSET_emu8mb := 0x380000
-WWW_BYTES_4mb := 1048576
-WWW_BYTES_emu8mb := 1048576
+WWW_BYTES_4mb := 786432
+WWW_BYTES_emu8mb := 786432
 # What ESP Web Tools' manifest calls the firmware: it must equal the Improv
 # answer's name (firmware/src/improv.rs FIRMWARE_NAME).
 FW_MANIFEST_NAME_4mb := OpenDMD
@@ -81,8 +81,10 @@ FW_APP_BYTES := $(FW_APP_BYTES_$(FW_VARIANT))
 UPDATER_OFFSET := $(UPDATER_OFFSET_$(FW_VARIANT))
 WWW_OFFSET := $(WWW_OFFSET_$(FW_VARIANT))
 WWW_BYTES := $(WWW_BYTES_$(FW_VARIANT))
-# The www pack: built to fit the www partition.
+# The www pack: built to fit the www partition, and (tools/web-size.py)
+# signed it must leave WWW_PACK_SPARE of it, the web app's headroom.
 WWW_PACK_BYTES := $(WWW_BYTES_4mb)
+WWW_PACK_SPARE := 65536
 # `make web` writes the pack here (gitignored); fw-flash writes it at WWW_OFFSET.
 WWW_PACK := $(WEB)/www.pack
 
@@ -133,7 +135,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release
 
@@ -332,7 +334,7 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
+	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -810,9 +812,9 @@ fw-clean:
 #
 # and:
 #
-#   updater.bin                    the updater (ota/updater), at ota_0 (0x2A0000)
+#   updater.bin                    the updater (ota/updater), at ota_0 (0x2E0000)
 #   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
-#   opendmd-<ver>-www.pack         the web app, at www (0x300000)
+#   opendmd-<ver>-www.pack         the web app, at www (0x340000)
 #   THIRD-PARTY-LICENSES-firmware.txt, THIRD-PARTY-LICENSES-web.txt
 #                                  the third-party notices (licenses/, `make notices`),
 #                                  checked against each build first
@@ -850,12 +852,22 @@ FW_FULL_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-full.bin
 FW_DIST_BOOTLOADER := $(DIST)/bootloader-$(FW_VARIANT).bin
 FW_DIST_TABLE := $(DIST)/partition-table-$(FW_VARIANT).bin
 FW_MANIFEST := $(DIST)/manifest-$(FW_VARIANT).json
+# Offline mode (docs/deploying.md "Offline installs"): the installer's "Play
+# from the card only, no WiFi" box swaps the button to this manifest, the six
+# parts plus an image of the whole `nvs` partition that holds one setting,
+# namespace `opendmd`, string `network` = `off`. The partition's offset and
+# size come from the layout's table.
+FW_MANIFEST_OFFLINE := $(DIST)/manifest-$(FW_VARIANT)-offline.json
+FW_NVS_OFFLINE := $(DIST)/nvs-offline-$(FW_VARIANT).bin
+FW_NVS_ROW = $(shell awk -F'[[:space:]]*,[[:space:]]*' '$$1 == "nvs" && $$3 == "nvs" { print $$4, $$5 }' $(FW_PARTITIONS))
+FW_NVS_OFFSET = $(word 1,$(FW_NVS_ROW))
+FW_NVS_SIZE = $(word 2,$(FW_NVS_ROW))
 # Panic locations name source files: the release names them from neutral
 # roots instead of this machine's paths (cargo joins these to the config's
 # rustflags).
 FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(HOME)/.cargo=/cargo --remap-path-prefix=$(HOME)/.rustup=/rustup
 # The app image must leave at least this much of the layout's factory
-# partition free (2,621,440 B).
+# partition free (2,883,584 B in table v4).
 FW_APP_SPARE := 65536
 
 # The layout (FW_VARIANTS) through fw-release-variant, after `make web`.
@@ -864,7 +876,8 @@ fw-release: web
 	  $(MAKE) --no-print-directory fw-release-variant VARIANT=$$v || exit 1; \
 	done
 	@echo "dist/:"; ls -l $(foreach v,$(or $(VARIANT),$(FW_VARIANTS)),$(DIST)/opendmd-$(FW_VERSION)-$(v)-app.bin $(DIST)/opendmd-$(FW_VERSION)-$(v).odfw \
-	  $(DIST)/opendmd-$(FW_VERSION)-$(v)-full.bin $(DIST)/bootloader-$(v).bin $(DIST)/partition-table-$(v).bin $(DIST)/manifest-$(v).json) \
+	  $(DIST)/opendmd-$(FW_VERSION)-$(v)-full.bin $(DIST)/bootloader-$(v).bin $(DIST)/partition-table-$(v).bin $(DIST)/manifest-$(v).json \
+	  $(DIST)/manifest-$(v)-offline.json $(DIST)/nvs-offline-$(v).bin) \
 	  $(FW_WWW_IMAGE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt
 
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
@@ -910,8 +923,9 @@ fw-release-variant:
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
 	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
 	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
-	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
-	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
+	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition, $$(( $(WWW_BYTES) - size )) B spare (need $(WWW_PACK_SPARE))"; \
+	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }; \
+	 test $$(( $(WWW_BYTES) - size )) -ge $(WWW_PACK_SPARE) || { echo "the www pack leaves less than $(WWW_PACK_SPARE) B of the $(FW_VARIANT) www partition"; exit 1; }
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 	@echo "$(FW_VARIANT) is emulator-only: no signed bundle"
 else
@@ -952,30 +966,61 @@ endif
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 	@echo "==> $(FW_VARIANT) (emulator-only) done: no manifest"
 else
-	@# The parts in the order ESP Web Tools writes them.
+	@# The offline install's NVS image (FW_NVS_OFFLINE): the whole `nvs`
+	@# partition, written by IDF v5.3's nvs_partition_gen from the IDF
+	@# Python env the firmware's build set up (found now, not when make
+	@# started: on a fresh machine that build is what makes it).
+	@test -n "$(FW_NVS_OFFSET)" && test -n "$(FW_NVS_SIZE)" || { echo "no nvs partition in $(FW_PARTITIONS)"; exit 1; }
+	@py=$$(ls -d $(ESPRESSIF)/python_env/idf5.3_py3*_env/bin/python 2>/dev/null | sort | tail -1); \
+	 test -n "$$py" || { echo "no ESP-IDF v5.3 Python env under $(ESPRESSIF)/python_env (its nvs_partition_gen makes $(FW_NVS_OFFLINE))"; exit 1; }; \
+	 printf '%s\n' key,type,encoding,value opendmd,namespace,, network,data,string,off > $(FW_RELEASE_VTARGET)/nvs-offline.csv; \
+	 "$$py" -m esp_idf_nvs_partition_gen generate $(FW_RELEASE_VTARGET)/nvs-offline.csv $(FW_NVS_OFFLINE) $(FW_NVS_SIZE) >/dev/null \
+	   || { echo "nvs_partition_gen failed for $(FW_NVS_OFFLINE)"; exit 1; }; \
+	 echo "$(FW_NVS_OFFLINE): $$(stat -c %s $(FW_NVS_OFFLINE)) B for the nvs partition at $(FW_NVS_OFFSET) ($(FW_NVS_SIZE)), network = off"
+	@# The two manifests, the parts in the order ESP Web Tools writes them
+	@# (flash order): the normal one, and the offline one with the NVS image
+	@# and no Improv wait (no WiFi form after the install; nor is a board
+	@# recognised through it).
 	@boot='        { "path": "bootloader-$(FW_VARIANT).bin", "offset": 4096 }'; \
 	 table='        { "path": "partition-table-$(FW_VARIANT).bin", "offset": 32768 }'; \
+	 nvs='        { "path": "nvs-offline-$(FW_VARIANT).bin", "offset": '$$(( $(FW_NVS_OFFSET) ))' }'; \
 	 otadata='        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' }'; \
 	 app='        { "path": "opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin", "offset": '$$(( $(FW_APP_OFFSET) ))' }'; \
 	 upd='        { "path": "updater.bin", "offset": '$$(( $(UPDATER_OFFSET) ))' }'; \
 	 www='        { "path": "opendmd-$(FW_VERSION)-www.pack", "offset": '$$(( $(WWW_OFFSET) ))' }'; \
-	 { printf '%s\n' '{' \
+	 manifest() { \
+	  wait=$$1; shift; \
+	  printf '%s\n' '{' \
 	  '  "name": "$(FW_MANIFEST_NAME_$(FW_VARIANT))",' \
 	  '  "version": "$(FW_VERSION)",' \
 	  '  "new_install_prompt_erase": true,' \
-	  '  "new_install_improv_wait_time": 15,' \
+	  '  "new_install_improv_wait_time": '$$wait',' \
 	  '  "builds": [' \
 	  '    {' \
 	  '      "chipFamily": "ESP32",' \
 	  '      "parts": ['; \
-	  sep=; for part in boot table otadata app upd www; do \
+	  sep=; for part in "$$@"; do \
 	    eval "line=\$$$$part"; [ -z "$$sep" ] || printf ',\n'; printf '%s' "$$line"; sep=1; done; echo; \
 	  printf '%s\n' '      ]' \
 	  '    }' \
 	  '  ]' \
-	  '}'; } > $(FW_MANIFEST)
-	@uv run --quiet python -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert len(m["builds"][0]["parts"]) == 6' $(FW_MANIFEST) \
-	  || { echo "$(FW_MANIFEST) is not the manifest it should be"; exit 1; }
+	  '}'; }; \
+	 manifest 15 boot table otadata app upd www > $(FW_MANIFEST); \
+	 manifest 0 boot table nvs otadata app upd www > $(FW_MANIFEST_OFFLINE)
+	@uv run --quiet python -I -c 'import json, os, struct, sys; \
+	  m, o = (json.load(open(f)) for f in sys.argv[1:3]); nvs, off, size = sys.argv[3], int(sys.argv[4], 0), int(sys.argv[5], 0); \
+	  p, q = m["builds"][0]["parts"], o["builds"][0]["parts"]; \
+	  assert len(m["builds"]) == len(o["builds"]) == 1 and len(p) == 6 and len(q) == 7, "part counts"; \
+	  assert m["new_install_improv_wait_time"] == 15 and o["new_install_improv_wait_time"] == 0, "Improv wait"; \
+	  assert m["new_install_prompt_erase"] is True and o["new_install_prompt_erase"] is True, "erase prompt"; \
+	  assert (o["name"], o["version"]) == (m["name"], m["version"]), "name and version"; \
+	  assert q[:2] + q[3:] == p and q[2] == {"path": os.path.basename(nvs), "offset": off}, "the offline parts"; \
+	  assert [x["offset"] for x in q] == sorted(x["offset"] for x in q), "flash order"; \
+	  b = open(nvs, "rb").read(); assert len(b) == size, "the nvs image is not the partition size"; \
+	  assert struct.unpack_from("<I", b)[0] == 0xFFFFFFFE and b"opendmd" in b[64:4096] and b"network" in b[64:4096], "the nvs image holds no opendmd/network"' \
+	  $(FW_MANIFEST) $(FW_MANIFEST_OFFLINE) $(FW_NVS_OFFLINE) $(FW_NVS_OFFSET) $(FW_NVS_SIZE) \
+	  || { echo "$(FW_MANIFEST) or $(FW_MANIFEST_OFFLINE) is not the manifest it should be"; exit 1; }
+	@echo "==> $(FW_VARIANT) offline install: $(FW_MANIFEST_OFFLINE) (seven parts, $(notdir $(FW_NVS_OFFLINE)) at $(FW_NVS_OFFSET))"
 	@echo "==> $(FW_VARIANT) done: $(FW_MANIFEST)"
 endif
 
@@ -1000,19 +1045,21 @@ fw-sign:
 
 # First install on a board over USB, from the release build: the same parts
 # as dist/ (bootloader, table, otadata erased, app, updater, pack) for
-# the DevKit (4mb). From
-# DMDoS, other firmware or an older table: `make fw-erase` first.
+# the DevKit (4mb), at the table's offsets; NVS is not written, so a board
+# on an older OpenDMD table (v3: docs/deploying.md "Moving a board to table
+# v4") keeps its WiFi and settings. From DMDoS or other firmware: `make
+# fw-erase` first.
 fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
 	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # Updates across releases and flash layouts (tools/ota-compat.sh): an older
-# release's own opendmd-core (OTA_COMPAT_TAG, the last DevKit table v2 one,
+# release's own opendmd-core (OTA_COMPAT_TAG, the last DevKit table v3 one,
 # a detached worktree under target/) must refuse a 4mb bundle signed now
-# (table v3) and take a v2 one and the www pack; this tree's must take the
-# v3 bundle and refuse the v2 one. Throwaway-key files, or
-# OTA_COMPAT_FILES="<v3 bundle> <pub> <www>". OTA_COMPAT_OK.
-OTA_COMPAT_TAG ?= v1.0.0-beta.15
+# (table v4) and take a v3 one and the www pack; this tree's must take the
+# v4 bundle and refuse the v3 one. Throwaway-key files, or
+# OTA_COMPAT_FILES="<v4 bundle> <pub> <www>". OTA_COMPAT_OK.
+OTA_COMPAT_TAG ?= v1.0.1
 # DIST's 4mb release bundle and pack too, when it has them (signed with the
 # release key: checked against FW_SIGN_PUB).
 OTA_COMPAT_DIST_BUNDLE = $(DIST)/opendmd-$(FW_VERSION)-4mb.odfw
@@ -1083,20 +1130,21 @@ fw-ota:
 FLASHER_PORT ?= 8765
 FLASHER_SITE := target/flasher-site
 flasher:
-	@for v in $(FW_VARIANTS); do test -f $(DIST)/manifest-$$v.json || { echo "no $(DIST)/manifest-$$v.json: run make fw-release first"; exit 2; }; done
+	@for v in $(FW_VARIANTS); do for f in manifest-$$v.json manifest-$$v-offline.json; do test -f $(DIST)/$$f || { echo "no $(DIST)/$$f: run make fw-release first"; exit 2; }; done; done
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
-	cp flasher/index.html $(FLASHER_SITE)/
+	cp flasher/index.html flasher/offline.js $(FLASHER_SITE)/
 	cp -r flasher/esp-web-tools $(FLASHER_SITE)/ && cp licenses/THIRD-PARTY-LICENSES-installer.txt $(FLASHER_SITE)/esp-web-tools/
 	cp $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FW_WWW_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
-	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
+	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/manifest-$$v-offline.json $(DIST)/nvs-offline-$$v.bin $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
 	  $(DIST)/opendmd-$(FW_VERSION)-$$v-app.bin $(DIST)/opendmd-$(FW_VERSION)-$$v-full.bin $(FLASHER_SITE)/firmware/ || exit 1; done
 	@echo "open http://localhost:$(FLASHER_PORT)/ in Chrome or Edge"
 	uv run python -m http.server $(FLASHER_PORT) --bind 127.0.0.1 -d $(FLASHER_SITE)
 
 # Headless Chromium: the flasher page loads, ESP Web Tools renders its
-# button, the manifest's parts are served (the flash itself needs a person).
+# button, both manifests' parts are served, the offline box swaps the
+# button's manifest (the flash itself needs a person). DIST=<a dist>.
 flasher-smoke:
-	uv run tools/flasher-smoke.py
+	DIST=$(DIST) uv run tools/flasher-smoke.py
 
 # The real Improv Serial host library (improv-wifi-serial-sdk 2.8.0, what ESP
 # Web Tools 10.4.0 runs) against opendmd-core's framing, under node: the
@@ -1189,9 +1237,10 @@ emu-api-psb:
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LOOK)) -o $(EMU_API_LOOK_PSB)
 # The pack it pushes is this build's, signed (PUT /api/www takes no other).
 EMU_API_WWW = $(EMU_DIR)/api/www.pack
-# Boot C's updater: one from before the panel (OLD_UPDATER_TAG's ota/updater,
-# "updater 1", on the same table v3), built once from `git archive` into
-# $(EMU_DIR)/old-updater, never the release's.
+# Boot C's updater: one from before the panel and table v4 (OLD_UPDATER_TAG's
+# ota/updater, "updater 1", tables v3 and v2 only), built once from `git
+# archive` into $(EMU_DIR)/old-updater, never the release's: in a v4 image's
+# ota_0 it must refuse the v4 bundle at its magic and boot the firmware.
 OLD_UPDATER_TAG ?= v1.0.0-beta.16
 EMU_OLD_UPDATER = $(EMU_DIR)/old-updater/$(OLD_UPDATER_TAG)/build/opendmd-updater.bin
 emu-old-updater:
@@ -1230,6 +1279,21 @@ emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
+# The offline lane (tools/emu/offline_lane.py): the emu-census image (the API
+# lane's; with WiFi off it takes one card Formula as short at first, so a
+# retry compiles on the network worker) with WiFi off (NVS, then
+# the card's one-line opendmd.json), the card's Formulas compiled at mount, no WiFi or
+# httpd for 700 emulated s, then Connect to Wi-Fi over Improv joining and restarting
+# online. EMU_OFFLINE_OK.
+EMU_OFFLINE_HOST = $(EMU_DIR)/offline/host-psb
+emu-offline-psb:
+	@mkdir -p $(EMU_OFFLINE_HOST)
+	cd $(PSICLI) && for f in $(abspath tools/emu/offline)/*.psi; do \
+	  RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $$f -o $(EMU_OFFLINE_HOST)/$$(basename $$f .psi).psb 2>/dev/null || true; done
+emu-offline: emu-build emu-card emu-offline-psb
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
+	uv run --quiet tools/emu/run.py offline --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --host-psb $(EMU_OFFLINE_HOST) $(EMU_ARGS)
+
 # The no-card lane: an image with the `nocard-test` feature (src/nocard_test.rs)
 # booted with no card (an empty card image): it must boot, run its panel, keep
 # its settings in NVS and keep a change across a restart. EMU_NOCARD_OK.
@@ -1237,14 +1301,17 @@ EMU_NOCARD_IMAGE = $(EMU_DIR)/nocard/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-nocard:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/nocard/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/nocard/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
+	@# (A test image, never a release: the no-card hooks add a few KB, so it
+	@# is held to 32 KB of spare like the census image, not the release's 64.)
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=nocard-test FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_DIR)/nocard/target DIST=$(EMU_DIR)/nocard/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
 	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe
-# outgrew the 4mb factory partition (2,664,032 B of 2,621,440, 2026-11-06).
+# outgrew table v3's 4mb factory partition (2,664,032 B of 2,621,440,
+# 2026-11-06; v4's is 2,883,584).
 # EMU_PROBE_SPARE (64 KB, as for a release) of its 3 MB factory.
 # FW_IMAGE=... skips the build.
 EMU_PROBE_VARIANT ?= $(FW_EMU_VARIANT)

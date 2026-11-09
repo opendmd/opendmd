@@ -135,7 +135,10 @@ button lands on them.
   averages ~87 KB); decoded by the browser (a GIF that starts dark reads on to its clip, ≤ 32 KB, and shows its first lit frame where the browser has WebCodecs' `ImageDecoder`); kept in IndexedDB per card
   (`odmd-thumbs-<card>`), keyed by path with the file's size, capped at
   24 MB (least recently used out), so a GIF is asked for once, across
-  visits. A Details preview, which reads the whole file anyway, re-makes a
+  visits. A clip is kept only beside its still: a row whose still has not
+  come (or failed) plays its clip without keeping it, as a record with no
+  still means "nothing to show" and is never asked for again. A Details
+  preview, which reads the whole file anyway, re-makes a
   thumbnail whose size no longer matches; the app's own Add, Edit details
   and Delete forget it.
 
@@ -236,7 +239,11 @@ button lands on them.
     a `.local` name; a name another display already answers to is said
     under the field when it is left and stops Save network — `GET
     /api/name-check` — and the device's 409 for one that slips by is
-    explained, nothing saved); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
+    explained, nothing saved), and **Turn WiFi off…** (offline mode,
+    shown when `/api/config` has `network`: a dialog, then `PUT
+    /api/config {"network":"off"}` and `POST /api/reboot`, and a last word
+    in the dialog instead of waiting for a display that will not come
+    back); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
     latch blanking, driver chip, data clock and minimum refresh, each change
     a trial with Keep/Undo and a countdown, the boot-time ones through
     "Restart now", and Reset to defaults; **Test panel timing**,

@@ -1,0 +1,8 @@
+name "Deep spriteread"
+-- sprite reads nested to the compiler's cap: the compile task's stack, measured (emu-offline)
+sprite dot {
+  key . 0, W #ffffff
+  W.
+  .W
+}
+gray(dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[dot[x, 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0], 0])

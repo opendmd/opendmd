@@ -15,8 +15,8 @@
 A bundle is a 140-byte header and then the app image (what `espflash
 save-image` writes, starting with the ESP image magic 0xE9):
 
-    magic     the flash layout: "ODFW34mb" (4mb, table v3);           8 B
-              "ODFW1\\0\\0\\0" was 4mb's table v2
+    magic     the flash layout: "ODFW44mb" (4mb, table v4);           8 B
+              "ODFW34mb" was 4mb's table v3, "ODFW1\\0\\0\\0" its v2
     version   32 B, UTF-8, NUL-padded
     length    u32 LE, image bytes
     sha256    32 B, of the image
@@ -42,11 +42,12 @@ file, so it takes a signed pack as it took any; from beta.15 on, PUT
 The magic names the flash layout the image is built for: the variant and the
 version of its partition table (LAYOUTS; opendmd_core::ota::LAYOUTS). `sign`
 uses the variant's current table (what this tree builds) unless `--layout`
-names an older one (test bundles: a v3 player must refuse them). A player
+names an older one (test bundles: a v4 player must refuse them). A player
 refuses a bundle for another variant or another table (an update over WiFi
 never changes the table), and players from before a table refuse its magic
-as not a bundle at all (1.0.0-beta.15, on the DevKit's table v2, refuses
-"ODFW34mb"). It also refuses an image whose app descriptor (the version
+before anything is written (1.0.0-beta.15, on the DevKit's table v2, as not
+a bundle at all for "ODFW34mb"; 1.0.0 to 1.0.1, on v3, as another flash
+layout's for "ODFW44mb"). It also refuses an image whose app descriptor (the version
 string at 0x30, "<version> <variant>") is not a build for the bundle's
 variant: `sign` and `verify` check the same.
 
@@ -74,10 +75,11 @@ from nacl.signing import SigningKey, VerifyKey
 # variant. Any other "ODFW" magic (such as "ODFW18mb", the 8mb layout of
 # 1.0.0-beta.16 and earlier) is a bundle for a layout this tree does not build.
 LAYOUTS = {
+    ("4mb", 4): (b"ODFW44mb", 0x2C0000),
     ("4mb", 3): (b"ODFW34mb", 0x280000),
     ("4mb", 2): (b"ODFW1\0\0\0", 0x240000),
 }
-CURRENT = {"4mb": 3}
+CURRENT = {"4mb": 4}
 VARIANTS = sorted(CURRENT)
 VERSION_LEN = 32
 SIGNED_LEN = 8 + VERSION_LEN + 4 + 32  # 76
@@ -417,16 +419,19 @@ def cmd_selftest(_a: argparse.Namespace) -> None:
         print(f"key id 1         -> refused: {e}")
     else:
         die("a bundle naming key 1 verified as key 0's")
-    if (h := check(bundle, sk.verify_key))["table"] != CURRENT["4mb"] or bundle[:8] != b"ODFW34mb":
+    if (h := check(bundle, sk.verify_key))["table"] != CURRENT["4mb"] or bundle[:8] != b"ODFW44mb":
         die(f"a 4mb bundle is not for the current table: {h['table']}, {bundle[:8]!r}")
-    old = build_header("9.9.9-selftest", image, sk, "4mb", 2) + image
-    if (h := check(old, sk.verify_key))["table"] != 2 or old[:8] != b"ODFW1\0\0\0":
-        die("a 4mb v2 bundle did not read back as v2")
-    print("4mb v3, and v2   -> ok")
-    # The layout is signed: a v3 bundle relabelled v2 fails; one relabelled
-    # with another layout's magic (the old 8mb one) is refused at the magic.
-    m42 = LAYOUTS[("4mb", 2)][0]
-    for name, b in (("4mb v3 as v2", m42 + bundle[8:]), ("4mb as ODFW18mb", b"ODFW18mb" + bundle[8:])):
+    for t, m in ((3, b"ODFW34mb"), (2, b"ODFW1\0\0\0")):
+        old = build_header("9.9.9-selftest", image, sk, "4mb", t) + image
+        if (h := check(old, sk.verify_key))["table"] != t or old[:8] != m:
+            die(f"a 4mb v{t} bundle did not read back as v{t}")
+    print("4mb v4, v3, v2   -> ok")
+    # The layout is signed: a v4 bundle relabelled v3 or v2 fails; one
+    # relabelled with another layout's magic (the old 8mb one) is refused
+    # at the magic.
+    m43, m42 = LAYOUTS[("4mb", 3)][0], LAYOUTS[("4mb", 2)][0]
+    for name, b in (("4mb v4 as v3", m43 + bundle[8:]), ("4mb v4 as v2", m42 + bundle[8:]),
+                    ("4mb as ODFW18mb", b"ODFW18mb" + bundle[8:])):
         try:
             check(b, sk.verify_key)
         except ValueError as e:
