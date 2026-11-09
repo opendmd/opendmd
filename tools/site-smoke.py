@@ -401,7 +401,7 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
                 page.screenshot(path=str(shots / "f-submit-laptop.png"))
             # Live: an edit plays at once, its name line names the page.
             page.fill("#psi-src", 'name "Edited rings"\n' + src.replace("t/2", "t/4"))
-            page.wait_for_function("document.querySelector('#f-name').textContent === 'Edited rings'", timeout=5000)
+            wait_js(page, "document.querySelector('#f-name').textContent === 'Edited rings'", timeout=5000)
             check(page.get_attribute("#psi-ed", "data-err") is None and page.input_value("#psi-name") == "Edited rings",
                   "/f/: edited live, the name follows its name line")
             page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
@@ -1018,7 +1018,7 @@ def panel_end_to_end(browser, base: str, errors: list[str]) -> None:
             f_ready(page)
             src = 'name "Site rings"\nloop 4\ngray(saw(x - t/4))'
             page.fill("#psi-src", src)
-            page.wait_for_function("document.querySelector('#f-name').textContent === 'Site rings'", timeout=5000)
+            wait_js(page, "document.querySelector('#f-name').textContent === 'Site rings'", timeout=5000)
             with page.context.expect_page() as info:
                 page.click("#f-open")
             app = info.value
@@ -1201,6 +1201,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
           f"demo settings: a rule's playlist plays, with Now's banner ('{rule}')")
     tab("time")
     page.click("#sc-rules [data-rule='0'] button:has-text('Delete')")
+    tab("replay")  # (Follow RePlayOS: a tab of its own)
     page.check("#fo-on")
     page.fill("#fo-host", "192.168.1.20")
     page.wait_for_timeout(700)
@@ -1503,7 +1504,7 @@ def gallery_sort(browser, base: str, errors: list[str]) -> None:
     page.keyboard.press(" ")
     # (Space ticks a box on its keyup's click, which can land after press() returns.)
     with contextlib.suppress(Exception):
-        page.wait_for_function("location.search.includes('controls=1')", timeout=3000)
+        wait_js(page, "location.search.includes('controls=1')", timeout=3000)
     st = query()
     check(on_sort == "sort" and st.get("q") == "plasma" and st.get("sort") == "old" and st.get("controls") == "1"
           and shown() == want("old", controls=True, q="plasma"), f"gallery: by keyboard (Tab, arrows, Space) {st}")
