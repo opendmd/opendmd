@@ -96,6 +96,7 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 @media (max-width:760px){#toasts{left:12px;right:12px;bottom:74px}}
 .toast{background:var(--bg3);border-left:3px solid var(--acc);border-radius:var(--r);padding:8px 12px;max-width:420px;box-shadow:0 4px 16px #0008}
 .toast.bad{border-left-color:var(--bad)}.toast.ok{border-left-color:var(--ok)}
+.toast button{margin-left:8px;min-height:24px;color:var(--acc)}
 .banner{border:1px solid var(--acc);background:#2a2418;border-radius:var(--r);padding:12px;margin:0 0 16px}
 [hidden]{display:none!important}
 .grow>input,.grow>select,label.stack>input,label.stack>select{width:100%}
@@ -189,6 +190,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .transport{display:flex;gap:8px;margin-top:12px}.transport>button{flex:1 1 0;justify-content:center;padding:4px;max-width:140px}
 /* Playlists: the editor a screen of its own on a phone. */
 #view-sets:not(.ed) #set-editor,#view-sets.ed .sehint,.back{display:none}
+#sets-empty{padding:12px 4px}#set-empty .row{margin-top:8px}
 #set-title{margin:0}.edfoot{position:sticky;bottom:0;background:var(--bg2);padding:12px 0 0;margin-top:4px}
 #set-entries{height:calc(100dvh - 380px)}#set-name-row:not([hidden])~#set-entries{height:calc(100dvh - 450px)}
 @media (max-width:1000px){.ed .sl,#view-sets:not(.ed) .se{display:none}.back{display:inline-flex}}

@@ -1,12 +1,15 @@
 // The playlist editor (#sets/edit; on a phone it replaces the list, on a
 // laptop it is the right column), imported by sets.js the first time a
-// playlist opens: the entries with their thumbnails (drag ⠿ or Alt+↑/↓,
-// ✕, Arrange), **Add GIFs** — the card's folders as a tree (js/tree.js):
-// tick GIFs or whole folders, or add everything a search shows; beside the
-// entries on a laptop, in their place on a phone —, Add by filter (the
-// core's Filter, a sheet), Save PUT /api/sets/<name>, play PUT /api/config.
+// playlist opens: the entries with their thumbnails (drag ⠿, Alt+↑/↓ or
+// a row's Move items, ✕, Select and Arrange), **Add GIFs** — the card's
+// folders as a tree (js/tree.js): tick GIFs or whole folders, or add
+// everything a search shows; beside the entries on a laptop, in their
+// place on a phone —, Add by filter (the core's Filter, a sheet), Save PUT
+// /api/sets/<name>, play PUT /api/config. Changes not saved are asked
+// about on the way out (`guard`); the ones that take many GIFs at once
+// have an Undo in their toast.
 
-import { app, playlistLabel } from './state.js';
+import { app, playlistLabel, dirty } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
@@ -37,11 +40,17 @@ export function editor(se, ctx) {
   const nameL = h('span'), nameRow = h('label.stack', { id: 'set-name-row', style: 'margin-bottom:12px' }, nameL, name);
   const title = h('h2.grow', { id: 'set-title' });
   const saveB = h('button.pri', { id: 'set-save', onclick: () => save(false) }), playB = app.device && h('button', { id: 'set-save-activate', onclick: () => save(true) });
-  const empty = h('p.cap', { id: 'set-empty' }, 'Nothing in it yet. + Add GIFs picks them from your folders; Add by filter takes every GIF that matches');
+  const empty = h('div', { id: 'set-empty' },
+    h('p.cap', 'Nothing in it yet. + Add GIFs picks them from your folders; Add by filter takes every GIF that matches.'),
+    h('div.row', h('button.pri', { id: 'set-empty-add', onclick: () => adding(true) }, '+ Add GIFs'),
+      h('button', { id: 'set-empty-build', onclick: (e) => openBuilder(e.currentTarget) }, 'Add by filter…')));
   const eCount = h('span.muted', { id: 'set-count' });
   const eSearch = h('input', { type: 'search', id: 'set-search', placeholder: 'Filter GIFs', oninput: () => refresh() });
-  let view = [], have = new Set();
+  let view = [], have = new Set(), selecting = false;
   const picked = new Set();
+  // Select: a tick on every row; the chip says how many are picked, and unpicks them.
+  const selB = h('button', { id: 'set-select', 'aria-pressed': 'false', onclick: () => select(!selecting) }, 'Select');
+  const pickChip = h('button.chip.on', { id: 'set-picked', hidden: true, title: 'Unpick them', onclick: () => { picked.clear(); refresh(); } });
 
   const ov = new Overrides();
   ov.onChange = () => list.refresh();
@@ -64,18 +73,39 @@ export function editor(se, ctx) {
       const e = app.wasm.parsePath(p);
       const skipped = app.noFormulas && isFormula(p);
       const o = ov.get(p), cv = thumbsOn() && !drawn(p) && h('canvas.th', { width: 128, height: 32 });
-      clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
+      clear(row, selecting && h('input', { type: 'checkbox', checked: picked.has(i), tabIndex: -1, 'aria-label': 'Pick' }),
+        h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
         cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p)) && h('span.tag', e.platform || (skipped ? 'Formula: skipped on this display' : 'Formula')),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
-        moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
+        moreButton(ov, p, rowItems(i)));
       if (cv) attach(cv, p);
       row.classList.toggle('cur', picked.has(i));
       row.classList.toggle('skip', skipped);
       row.dataset.path = p;
     },
-    onClick: (i, _k, e) => { if (e.target.closest('.grip')) return; if (!picked.delete(i)) picked.add(i); list.refresh(); },
-    onMenu: (i, _k, x, y) => menu(ov, app.draft.paths[i], x, y),
+    onClick: (i, _k, e) => { if (e.target.closest('.grip')) return; if (!picked.delete(i)) picked.add(i); list.refresh(); chip(); },
+    onMenu: (i, _k, x, y) => menu(ov, app.draft.paths[i], x, y, rowItems(i)),
   });
+  // A row's own items in its menu: where it goes, and out.
+  const rowItems = (i) => {
+    const k = view.indexOf(i), last = app.draft.paths.length - 1;
+    return [['set-up', 'Move up', () => moveTo(i, view[k - 1]), k < 1],
+      ['set-down', 'Move down', () => moveTo(i, view[k + 1]), k < 0 || k >= view.length - 1],
+      ['set-to-top', 'Move to top', () => moveTo(i, 0), i === 0],
+      ['set-to-end', 'Move to end', () => moveTo(i, last), i === last],
+      ['set-rm', 'Remove from playlist', () => remove(i)]];
+  };
+  function chip() {
+    pickChip.hidden = !picked.size;
+    pickChip.textContent = `${picked.size.toLocaleString()} picked ✕`;
+  }
+  function select(v) {
+    selecting = v;
+    selB.classList.toggle('on', v);
+    selB.setAttribute('aria-pressed', String(v));
+    if (!v) picked.clear();
+    refresh();
+  }
   list.el.id = 'set-entries';
   watch(list.el);
   list.el.addEventListener('keydown', (e) => {
@@ -91,9 +121,10 @@ export function editor(se, ctx) {
   const arrange = (b) => actions(b, 'set-arrange-menu', [
     ['set-shuffle', 'Shuffle', shuffle],
     ['set-sort', 'Sort A–Z', sortTitle],
-    ['set-top', 'Picked to top', movePicked, '', !picked.size],
+    ['set-top', 'Picked to top', () => movePicked(false), '', !picked.size],
+    ['set-end', 'Picked to end', () => movePicked(true), '', !picked.size],
     ['set-rm-picked', 'Remove picked', removePicked, '.danger', !picked.size],
-    ['set-clear', 'Clear', () => { if (confirm('Remove every GIF from this playlist?')) { app.draft.paths = []; picked.clear(); refresh(); } }, '.danger']]);
+    ['set-clear', 'Clear', () => undoable(() => { app.draft.paths = []; }, 'Cleared'), '.danger', !app.draft.paths.length]]);
 
   // Add GIFs: the folders, ticks, a search (and its platforms).
   const ticked = new Set(), aPl = new Set();
@@ -166,8 +197,8 @@ export function editor(se, ctx) {
         h('div.row', { style: 'margin-bottom:8px' }, h('div.grow', { style: 'min-width:140px' }, eSearch),
           h('button', { id: 'set-add', onclick: () => adding(true) }, '+ Add GIFs'),
           h('button', { id: 'set-build', 'aria-haspopup': 'dialog', onclick: (e) => openBuilder(e.currentTarget) }, 'Add by filter…'),
-          h('button', { id: 'set-arrange', 'aria-haspopup': 'menu', onclick: (e) => arrange(e.currentTarget) }, 'Arrange ▾')),
-        note('Drag ⠿ to reorder; tap GIFs to pick them', 'Alt+↑/↓ moves the focused GIF; ✕ removes it; its … menu favourites it or plays it longer'),
+          selB, h('button', { id: 'set-arrange', 'aria-haspopup': 'menu', onclick: (e) => arrange(e.currentTarget) }, 'Arrange ▾'), pickChip),
+        note('Drag ⠿ to reorder; tap GIFs to pick them', 'Alt+↑/↓ moves the focused GIF; ✕ removes it; its … menu moves it, favourites it or plays it longer; Arrange works on the GIFs picked'),
         empty, list.el),
       pane),
     h('div.edfoot.row', saveB, playB)));
@@ -235,14 +266,11 @@ export function editor(se, ctx) {
   }
   async function build(append) {
     try {
-      const paths = await run();
-      if (append) app.draft.paths.push(...paths);
-      else app.draft.paths = paths; // the same playlist, new contents
-      picked.clear();
+      const paths = await run(), msg = `${paths.length.toLocaleString()} GIFs ${append ? 'added' : 'in the list'}`;
       closeMenu();
+      if (append) { app.draft.paths.push(...paths); picked.clear(); refresh(); toast(msg, 'ok'); }
+      else undoable(() => { app.draft.paths = paths; }, msg); // the same playlist, new contents
       header();
-      refresh();
-      toast(`${paths.length.toLocaleString()} GIFs ${append ? 'added' : 'in the list'}`, 'ok');
     } catch (e) { toast(e.message, 'bad'); }
   }
   for (const i of [baseSel, bPlat, bTitle, bShuffle, bSeed, bLimit]) i.addEventListener('change', count);
@@ -256,7 +284,17 @@ export function editor(se, ctx) {
     list.el.hidden = !empty.hidden;
     list.set(view);
     have = new Set(app.draft.paths);
+    chip();
     if (el.classList.contains('adding')) tree.refresh();
+  }
+  // A change that takes many GIFs at once, with one step back in its toast
+  // (while the same playlist is open).
+  function undoable(fn, msg) {
+    const d = app.draft, was = [...d.paths];
+    fn();
+    picked.clear();
+    refresh();
+    toast(msg, 'ok', ['Undo', () => { if (app.draft !== d) return; d.paths = was; picked.clear(); refresh(); }]);
   }
   function moveTo(i, j) {
     const p = app.draft.paths;
@@ -282,18 +320,23 @@ export function editor(se, ctx) {
       if (k !== k0) moveTo(i, view[k]);
     };
   }
-  function movePicked() {
+  function movePicked(end) {
     const p = app.draft.paths;
-    const top = [...picked].sort((a, b) => a - b).map((i) => p[i]);
-    app.draft.paths = [...top, ...p.filter((_, i) => !picked.has(i))];
+    const them = [...picked].sort((a, b) => a - b).map((i) => p[i]), rest = p.filter((_, i) => !picked.has(i));
+    app.draft.paths = end ? [...rest, ...them] : [...them, ...rest];
     picked.clear();
     refresh();
   }
-  function remove(i) { app.draft.paths.splice(i, 1); picked.clear(); refresh(); }
-  function removePicked() { app.draft.paths = app.draft.paths.filter((_, i) => !picked.has(i)); picked.clear(); refresh(); }
+  function remove(i) {
+    const t = fname(app.draft.paths[i]) || label(app.wasm.parsePath(app.draft.paths[i]));
+    undoable(() => app.draft.paths.splice(i, 1), `“${t}” taken out`);
+  }
+  function removePicked() {
+    const n = picked.size;
+    undoable(() => { app.draft.paths = app.draft.paths.filter((_, i) => !picked.has(i)); }, `${n.toLocaleString()} taken out`);
+  }
   function shuffle() {
-    app.draft.paths = app.wasm.filterManifest(app.draft.paths.join('\n'), JSON.stringify({ shuffle: true, seed: Date.now() % 1e9 }));
-    refresh();
+    undoable(() => { app.draft.paths = app.wasm.filterManifest(app.draft.paths.join('\n'), JSON.stringify({ shuffle: true, seed: Date.now() % 1e9 })); }, 'Shuffled');
   }
   function sortTitle() {
     const key = new Map(app.draft.paths.map((p) => [p, app.wasm.normalizeTitle(label(app.wasm.parsePath(p)))]));
@@ -301,36 +344,56 @@ export function editor(se, ctx) {
     refresh();
   }
 
+  // True once saved.
   async function save(andActivate) {
     const n = name.value.trim().replace(/\.txt$/, '');
-    if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return; }
-    if (!NAME_RE.test(n)) { toast('playlist names are letters, digits, space, _ . - (no slashes, not filelist.*)', 'bad'); return; }
-    if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return; }
+    if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return false; }
+    if (!NAME_RE.test(n)) { toast('playlist names are letters, digits, space, _ . - (no slashes, not filelist.*)', 'bad'); return false; }
+    if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return false; }
     const path = `/sets/${n}.txt`;
-    if (ctx.known().includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return;
+    if (ctx.known().includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return false;
     try {
-      const text = app.draft.paths.join('\n') + '\n';
+      const d = app.draft, body = d.paths.join('\n'), text = body + '\n';
       await app.src.saveSet(n, text);
-      app.draft.name = n;
+      d.name = n;
+      d.saved = body;
       app.texts.set(path, text);
-      if (app.draft.path !== path) { app.draft.path = path; ov.load(path); }
+      if (d.path !== path) { d.path = path; ov.load(path); }
       header();
-      toast(`Saved “${n}” · ${app.draft.paths.length.toLocaleString()} GIFs`, 'ok');
+      toast(`Saved “${n}” · ${d.paths.length.toLocaleString()} GIFs`, 'ok');
       if (andActivate && app.activeSet !== n) await ctx.activate({ value: n, label: n });
       await ctx.loadSets();
-    } catch (e) { toast('save: ' + e.message, 'bad'); }
+      return true;
+    } catch (e) { toast('save: ' + e.message, 'bad'); return false; }
   }
+  // Before the editor lets go of the playlist (another view, the list,
+  // another playlist): changes not saved are saved, or put back. False if
+  // the save did not go through (the editor stays).
+  async function guard() {
+    const d = app.draft;
+    if (!dirty(d)) return true;
+    if (confirm(`Save changes to “${d.path ? playlistLabel(d.path) : name.value.trim() || 'New playlist'}”?`)) return save(false);
+    d.paths = d.saved ? d.saved.split('\n') : [];
+    refresh();
+    return true;
+  }
+  addEventListener('beforeunload', (e) => { if (dirty()) e.preventDefault(); });
 
   name.oninput = () => { const d = app.draft, v = name.value.trim(); if (!d.path) d.name = v; else if (!d.path.startsWith('/sets/')) d.copyName = v; };
-  on('draft', () => { header(); refresh(); });
+  // Another playlist put in app.draft (a new one from the Library): its overrides.
+  on('draft', () => { if (ov.path !== app.draft.path) { ov.load(app.draft.path); picked.clear(); } header(); refresh(); });
   if (app.draft.path) ov.load(app.draft.path);
   header();
   refresh();
   return {
-    header, opened, refresh,
+    header, opened, refresh, guard,
     show() { refresh(); if (ov.path) ov.load(ov.path); },
-    // Leaving the editor: the Add pane closes with it.
-    left() { adding(false); list.refresh(); },
-    shown() { list.refresh(); },
+    // Leaving the editor: the Add pane closes with it, and changes are asked about.
+    left() { adding(false); list.refresh(); guard().then((ok) => ok || app.go('sets/edit')); },
+    shown() {
+      list.refresh();
+      // A new playlist from the Library: its name first.
+      if (app.draft.focus && el.classList.contains('ed')) { delete app.draft.focus; name.focus(); }
+    },
   };
 }

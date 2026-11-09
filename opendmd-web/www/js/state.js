@@ -54,6 +54,9 @@ export async function listOr(dir) {
   }
 }
 
+// The playlist being edited has changes that are not on the card.
+export const dirty = (d = app.draft) => d.paths.join('\n') !== (d.saved ?? '');
+
 function cardKey(a) {
   if (!a.device) return a.src ? 'l' + (a.src.label || '') : null;
   const sd = a.status?.sd;
@@ -68,7 +71,8 @@ export const app = {
   stApplied: 0,
   config: null,
   selection: new Set(),
-  draft: { name: '', paths: [], path: '' },
+  // The playlist being edited: `saved` is its lines as opened or last saved.
+  draft: { name: '', paths: [], path: '', saved: '' },
   texts: new Map(),
   // A page of the site's own (its Create Art page, share/create/), not the
   // web app: no source, no card; Game art's index is beside it.

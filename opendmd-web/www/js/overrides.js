@@ -109,8 +109,8 @@ let wide = innerWidth;
 addEventListener('resize', () => { if (wide != (wide = innerWidth)) closeMenu(); });
 
 // The menu for one GIF, at (x, y) — a sheet along the bottom on a phone.
-// `extra`: an optional [text, action] item at the end (Playlists' Remove);
-// with no saved playlist, the only one.
+// `extra`: optional [id, text, action, off] items at the end (the editor's
+// Move and Remove); with no saved playlist, the only ones.
 export function menu(ov, path, x, y, extra) {
   closeMenu();
   if (!ov.path && !extra) { toast('save the playlist first', 'bad'); return; }
@@ -133,7 +133,7 @@ export function menu(ov, path, x, y, extra) {
     item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS })),
     item('ov-longer', o.dwell || o.dwell_x || o.loops, '◔ Play longer or loop…', longer),
     item('ov-reset', false, 'Reset', () => put({ w: null, dwell: null, dwell_x: null, loops: null }))],
-    extra && item('ov-extra', false, extra[0], () => { closeMenu(); extra[1](); }));
+    extra?.map(([id, t, act, off]) => Object.assign(item(id, false, t, () => { closeMenu(); act(); }), { disabled: !!off })));
   const r = open.querySelector('#ov-reset');
   if (r) r.disabled = !ov.get(path);
   popup(open, x, y);

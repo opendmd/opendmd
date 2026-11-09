@@ -2,9 +2,10 @@
 // dialogs (js/details.js) and Create Art (js/studio.js), which so need not
 // load the Library's tree and thumbnails.
 
-import { app, playlistLabel } from './state.js';
+import { app, playlistLabel, dirty } from './state.js';
 import { prepareBytes } from './prepare.js';
-import { emit, toast, lines, isFlag } from './util.js';
+import { actions } from './overrides.js';
+import { h, emit, toast, lines, isFlag } from './util.js';
 
 export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
 
@@ -42,16 +43,54 @@ export async function savePlaylist(path, text) {
   if (path === app.activePath) await app.refreshStatus().catch(() => {});
 }
 
+// (The card's FAT names files case-insensitively.)
+const lc = (p) => p.toLowerCase();
+
+// The GIFs not yet in it, at the end; true once done (or nothing to add).
 export async function appendTo(path, paths) {
   const name = playlistLabel(path);
   try {
     const text = await app.text(path, true);
-    const have = new Set(lines(text || ''));
-    const add = paths.filter((p) => !have.has(p));
-    if (!add.length) { toast(`already in “${name}”`); return; }
+    const have = new Set(lines(text || '').map(lc));
+    const add = paths.filter((p) => !have.has(lc(p)) && have.add(lc(p))), n = paths.length - add.length;
+    if (!add.length) { toast(`already in “${name}”`); return true; }
     await savePlaylist(path, (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n');
-    toast(`${add.length} added to “${name}”`, 'ok');
-  } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); }
+    // Open in the editor: it gains them too (its Save would put the old list back).
+    const d = app.draft;
+    if (d.path === path) {
+      const clean = !dirty(d), mine = new Set(d.paths.map(lc));
+      d.paths.push(...add.filter((p) => !mine.has(lc(p))));
+      if (clean) d.saved = d.paths.join('\n');
+      emit('draft');
+    }
+    toast(`${add.length.toLocaleString()} added to “${name}”${n ? ` · ${n.toLocaleString()} already in it` : ''}`, 'ok');
+    return true;
+  } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); return false; }
+}
+
+// A new playlist of these GIFs, in the editor with its name to fill in.
+export function newDraft(paths) {
+  app.draft = { name: '', paths: [...paths], path: '', saved: '', focus: true };
+  emit('draft');
+  app.go('sets/edit');
+}
+
+// Add these GIFs to which playlist? Under `btn`: the one playing first (one
+// of yours), then the rest of yours with their counts (the one open in the
+// editor marked), then New playlist…. Not the card's own (All files,
+// Halloween, Christmas): the editor saves those as a new playlist.
+// `done(fresh)` after a playlist took them (`fresh`: a new one, in the editor).
+export async function targetMenu(btn, paths, done = () => {}) {
+  const lists = (await app.playlists().catch(() => [])).filter((p) => !p.root);
+  const playing = app.device ? lists.find((p) => p.path === app.activePath) : null;
+  const item = (p, text) => {
+    const n = h('small.muted');
+    app.text(p.path).then((t) => { n.textContent = ' ' + lines(t || '').length.toLocaleString(); }, () => {});
+    return [{ 'data-path': p.path }, [text, n, p.path === app.draft.path && h('span.tag', 'Editing')], async () => { if (await appendTo(p.path, paths)) done(); }];
+  };
+  const k = paths.length;
+  actions(btn, 'pl-target', [playing && item(playing, `Playing: ${playing.label}`), ...lists.filter((p) => p !== playing).map((p) => item(p, p.label)),
+    ['pl-new', 'New playlist…', () => { newDraft(paths); done(true); }]], `Add ${k === 1 ? 'it' : k.toLocaleString() + ' GIFs'} to`);
 }
 
 export async function offerPlaylist(paths) {
