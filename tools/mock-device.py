@@ -4780,7 +4780,7 @@ def make_handler(ctx: Context, quiet: bool):
             """A playlist's overrides file was written or removed. Caller
             holds ctx.lock. `index` is "built" only when the edited meta
             belongs to the playlist actually playing (which is always what
-            `entries`/`overrides`/`hidden` describe)."""
+            `entries`/`overrides` describe)."""
             active = ctx.player.manifest_rel() == manifest_rel
             if active:
                 index_ms = random.randint(30, 150)

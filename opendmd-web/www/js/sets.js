@@ -6,7 +6,7 @@
 
 import { app, SET_NAME, SET_NAME_RULE } from './state.js';
 import { actions, closeMenu, Overrides, fileFor } from './overrides.js';
-import { h, clear, on, toast, lines, note, isSys, byNice, gone } from './util.js';
+import { h, clear, emit, on, toast, lines, note, isSys, byNice, gone } from './util.js';
 
 export async function mount(el) {
   const setsList = h('div.list', { id: 'sets-list' });
@@ -134,10 +134,12 @@ export async function mount(el) {
       if (s.rules?.some((r) => r.set === p.value)) await app.src.putSchedule({ ...s, rules: s.rules.map((r) => (r.set === p.value ? { ...r, set: n } : r)) });
     }
     await app.src.deleteFile(p.path);
-    if (meta) await app.src.deleteFile(fileFor(p.path));
+    // (Even one that says nothing any more, such as earlier firmware's lines only.)
+    await app.src.deleteFile(fileFor(p.path)).catch((e) => { if (e.status !== 404 && e.name !== 'NotFoundError') throw e; });
     app.texts.delete(p.path);
+    // Open in the editor: it follows, its overrides read from the new name.
     const d = app.draft;
-    if (d.path === p.path) { d.path = to; d.name = n; edi?.header(); }
+    if (d.path === p.path) { d.path = to; d.name = n; emit('draft'); }
   }
   async function rename(p) {
     const n = (prompt(`Rename “${p.label}” to`, p.value) || '').trim().replace(/\.txt$/, '');

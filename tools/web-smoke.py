@@ -1824,6 +1824,36 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     goto_view(page, "sets/edit")
     goto_view(page, "sets")
     check(len(asked) == 1, f"editor: nothing changed since, nothing asked ({asked})")
+    # Undo after Save: the editor has the change back (not saved), the card keeps the save.
+    goto_view(page, "sets/edit")
+    before = entries(page)
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.hover("#set-entries .vrow:not([hidden]) >> nth=0")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    page.click("#set-save")
+    deadline = time.time() + 10
+    while time.time() < deadline and f.read_text().split("\n")[:-1] != before[1:]:
+        page.wait_for_timeout(100)
+    page.click("#toasts .toast:has(button) >> nth=-1 >> button")
+    is_dirty = page.evaluate("async () => (await import('./js/state.js')).dirty()")
+    check(entries(page) == before and is_dirty and f.read_text().split("\n")[:-1] == before[1:],
+          "editor: Undo after Save brings the GIF back, not saved, the card as saved")
+    # Leaving then, and Cancel: put back, with an Undo that reopens the change.
+    page.evaluate("() => { window.__confirm = window.confirm; window.confirm = () => false; }")
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    goto_view(page, "library")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('put back'))", timeout=5000)
+    t = page.eval_on_selector_all("#toasts .toast", "els => els.map(e => e.textContent).find(t => t.includes('put back'))")
+    check(entries(page) == before[1:] and f.read_text().split("\n")[:-1] == before[1:] and t == "Changes to “browse” put backUndo",
+          f"editor: Cancel on the way out puts the playlist back as saved ('{t}')")
+    page.click("#toasts .toast:has(button) >> nth=-1 >> button")
+    page.wait_for_function("location.hash === '#sets/edit'", timeout=5000)
+    check(entries(page) == before and f.read_text().split("\n")[:-1] == before[1:], "editor: its Undo reopens the editor with the change, still not saved")
+    page.evaluate("() => { window.confirm = window.__confirm; }")
+    page.click("#set-save")
+    deadline = time.time() + 10
+    while time.time() < deadline and page.evaluate("async () => (await import('./js/state.js')).dirty()"):
+        page.wait_for_timeout(100)
     page.context.close()
     # The phone: one pane at a time.
     phone = new_page(browser, "phone", errors)
@@ -1885,6 +1915,22 @@ def rename_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.wait_for_selector("#sets-list [data-path='/sets/RN-B 2.txt']", timeout=30000)
     names = sorted(p.name for p in sets.glob("*") if p.name.lower().startswith("rn-b"))
     check(names == ["RN-B 2.meta", "RN-B 2.txt", "rn-b.meta", "rn-b.txt"], f"rename: a change of case alone ({names})")
+    # The one open in the editor: renamed, then a favourite there lands in the new name's file.
+    page.click("#sets-list [data-path='/sets/rn-b.txt'] button.pl")
+    page.wait_for_selector("#set-entries .vrow[data-path]", timeout=10000)
+    page.evaluate("() => { window.prompt = () => 'rn-d'; }")
+    sets_do(page, "/sets/rn-b.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-d.txt']", timeout=30000)
+    page.wait_for_function("document.querySelector('#set-title').textContent === 'rn-d'", timeout=5000)
+    page.wait_for_timeout(500)  # (the editor's overrides read again)
+    open_row_menu(page, "#set-entries", 1, via="more")
+    page.click("#ov-fav")
+    want = render_meta_line(g[0], {"w": 3}) + "\n" + render_meta_line(g[1], {"w": 3}) + "\n"
+    deadline = time.time() + 10
+    while time.time() < deadline and not ((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want):
+        page.wait_for_timeout(100)
+    check((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want and not (sets / "rn-b.meta").exists(),
+          "rename: the open playlist's editor follows; a favourite then goes in the new name's file")
     # Now: what plays next, once the display has picked it.
     goto_view(page, "now")
     page.wait_for_function("document.querySelector('#now-next').textContent.startsWith(' · Next: ')", timeout=20000)
@@ -1893,7 +1939,7 @@ def rename_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.context.close()
     put_json(base + "/api/config", {"set": ""})
     put_json(base + "/api/schedule", {"rules": [], "night": None})
-    for n in ("rn-b.txt", "rn-b.meta", "RN-B 2.txt", "RN-B 2.meta"):
+    for n in ("rn-d.txt", "rn-d.meta", "RN-B 2.txt", "RN-B 2.meta"):
         urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/" + urllib.parse.quote(n), method="DELETE"), timeout=30).close()
 
 
@@ -1978,6 +2024,24 @@ def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.click("#pl-target [data-path='/sets/tm-c.txt']")
     last_toast(page, "ok")
     check(entries(page) == g[:3] and (sets / "tm-c.txt").read_text().split("\n")[:-1] == g[:3], "target: the editor's copy gains it too")
+    # Into the open playlist while it has changes not saved, then Cancel on
+    # the way out: the change goes, the GIF added stays.
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); app.draft.paths.splice(0, 1); }")
+    if page.is_visible("#lib-selbar"):
+        page.click("#lib-sel-done")
+    page.evaluate(pick, [g[3]])
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.click("#lib-select")
+    page.click("#lib-to-set")
+    page.click("#pl-target [data-path='/sets/tm-c.txt']")
+    last_toast(page, "ok")
+    goto_view(page, "sets/edit")
+    page.evaluate("() => { window.__confirm = window.confirm; window.confirm = () => false; }")
+    goto_view(page, "sets")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('put back'))", timeout=5000)
+    page.evaluate("() => { window.confirm = window.__confirm; }")
+    check(entries(page) == g[:4] and (sets / "tm-c.txt").read_text().split("\n")[:-1] == g[:4],
+          f"target: an add into an editor with changes, then Cancel, keeps the GIF added ({entries(page)})")
     goto_view(page, "sets/edit")
     goto_view(page, "sets")
     check(len(asked) == 1, f"target: nothing to save after that ({asked})")

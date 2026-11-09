@@ -5,7 +5,7 @@
 import { app, playlistLabel, dirty } from './state.js';
 import { prepareBytes } from './prepare.js';
 import { actions } from './overrides.js';
-import { h, emit, toast, lines, isFlag } from './util.js';
+import { h, emit, toast, lines, isFlag, gone } from './util.js';
 
 export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
 
@@ -54,13 +54,15 @@ export async function appendTo(path, paths) {
     const have = new Set(lines(text || '').map(lc));
     const add = paths.filter((p) => !have.has(lc(p)) && have.add(lc(p))), n = paths.length - add.length;
     if (!add.length) { toast(`already in “${name}”`); return true; }
-    await savePlaylist(path, (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n');
-    // Open in the editor: it gains them too (its Save would put the old list back).
+    const body = (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n';
+    await savePlaylist(path, body);
+    // Open in the editor: it gains them too (its Save would put the old list
+    // back), and what it would put back on Cancel is what the card has now.
     const d = app.draft;
     if (d.path === path) {
-      const clean = !dirty(d), mine = new Set(d.paths.map(lc));
+      const mine = new Set(d.paths.map(lc));
       d.paths.push(...add.filter((p) => !mine.has(lc(p))));
-      if (clean) d.saved = d.paths.join('\n');
+      d.saved = lines(body).filter((p) => !gone(p)).join('\n');
       emit('draft');
     }
     toast(`${add.length.toLocaleString()} added to “${name}”${n ? ` · ${n.toLocaleString()} already in it` : ''}`, 'ok');
