@@ -226,7 +226,13 @@ display and is never written to the card or shared.
 
 **Schedule** picks a playlist or brightness for certain days and times,
 such as "weekday evenings: Consoles". The first rule that matches wins, and
-your normal settings come back when it ends.
+your normal settings come back when it ends. A rule can also be for part of
+the year: tick **Only from** and pick the first and last days, such as 1
+October to 31 October. If your card has the Halloween or Christmas
+playlist, **Add Halloween** and **Add Christmas** make that rule in one
+press: the playlist all day from 1 to 31 October, or from 1 to 26
+December. They go first, so they win over your other rules while they
+last.
 
 **Night mode** turns the panel off, or dims it, every night: between the
 times you choose, or **from sunset to sunrise** where the panel is. That

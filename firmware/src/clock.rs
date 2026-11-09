@@ -107,9 +107,10 @@ pub fn utc_and_yday() -> Option<(i64, i64)> {
     Some((now, i64::from(local_tm()?.tm_yday)))
 }
 
-/// Local weekday and minute, for the schedule; `None` before the first sync.
+/// Local weekday, minute and date, for the schedule; `None` before the
+/// first sync.
 pub fn local_now() -> Option<LocalTime> {
-    local_tm().map(|tm| LocalTime::from_tm(tm.tm_wday, tm.tm_hour, tm.tm_min))
+    local_tm().map(|tm| LocalTime::from_tm(tm.tm_wday, tm.tm_hour, tm.tm_min, tm.tm_mon, tm.tm_mday))
 }
 
 /// Unix seconds (UTC), or `None` before the first sync.

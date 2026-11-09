@@ -1023,6 +1023,62 @@ def sun_checks(page: Page, base: str) -> None:
     check(wait_until(lambda: get_json(base + "/api/status")["mode"] == "normal", 10), "sun: night mode off again")
 
 
+def dates_checks(page: Page, base: str) -> None:
+    """Rules with dates (Settings › Schedule): Add Christmas puts its rule
+    first (the card has filelist.xmas), says its dates and goes from the
+    offers; a rule edited with dates round today plays, one with dates far
+    from it doesn't; a bad date is a 400. Leaves no rules."""
+    goto_view(page, "settings/time")
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", timeout=10000)
+    page.click("#sc-seasons [data-season='filelist.xmas']")
+    sched = wait_schedule(base, lambda s: bool(s.get("rules")))
+    r0 = (sched.get("rules") or [{}])[0]
+    page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", state="detached", timeout=10000)
+    text = page.inner_text("#sc-rules [data-rule='0'] .grow")
+    check(r0 == {"days": [], "from": "00:00", "to": "00:00", "set": "filelist.xmas", "dates": ["12-01", "12-26"]}
+          and text.startswith("1 Dec–26 Dec, Every day, all day → Christmas") and page.locator("#sc-seasons [data-season='filelist.xmas']").count() == 0,
+          f"dates: Add Christmas -> the first rule {r0}, '{text}', no longer offered")
+    tz = ZoneInfo(get_json(base + "/api/config")["tz_name"] or "UTC")
+    today = datetime.now(tz)
+    xmas = today.month == 12 and today.day <= 26
+    # A rule round today (a day either side: whatever the mock's minute), every day, all day.
+    page.click("#sc-add")
+    page.wait_for_selector("#sc-edit:not([hidden])")
+    for day in (6, 7):
+        page.click(f"#sc-days .chip[data-day='{day}']")
+    page.fill("#sc-from", "00:00")
+    page.fill("#sc-to", "00:00")
+    page.select_option("#sc-set", value="filelist.hall")
+    a, b = today - timedelta(days=1), today + timedelta(days=1)
+    page.fill("#sc-date-from-d", str(a.day))
+    page.select_option("#sc-date-from-m", str(a.month))
+    page.fill("#sc-date-to-d", str(b.day))
+    page.select_option("#sc-date-to-m", str(b.month))
+    page.click("#sc-rule-save")
+    page.wait_for_selector("#sc-rules [data-rule='1']", timeout=10000)
+    sched = get_json(base + "/api/schedule")
+    r1 = sched["rules"][1]
+    st = get_json(base + "/api/status")
+    check(r1.get("dates") == [f"{a:%m-%d}", f"{b:%m-%d}"] and sorted(r1["days"]) == [1, 2, 3, 4, 5, 6, 7]
+          and st["schedule"]["rule"] == (0 if xmas else 1),
+          f"dates: a rule from {a:%d %b} to {b:%d %b} saved ({r1}) and in force (rule {st['schedule']['rule']})")
+    far = today + timedelta(days=120)
+    put_json(base + "/api/schedule", {"rules": [{**r1, "dates": [f"{far:%m-%d}", f"{far:%m-%d}"]}], "night": None})
+    check(get_json(base + "/api/status")["schedule"]["rule"] is None, f"dates: one day in {far:%B} is not today")
+    try:
+        put_json(base + "/api/schedule", {"rules": [{**r1, "dates": ["02-30", "03-01"]}], "night": None})
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check(code == 400, f"dates: 30 February is a 400 ({code})")
+    put_json(base + "/api/schedule", {"rules": [], "night": None})
+    page.reload()
+    page.wait_for_selector("#view-settings.on #st-tab-time", timeout=20000)
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", timeout=10000)
+    check(get_json(base + "/api/status")["schedule"]["rule"] is None, "dates: rules cleared, Christmas offered again")
+
+
 def wait_schedule(base: str, ok, timeout_s: float = 10) -> dict:
     deadline = time.time() + timeout_s
     while True:
@@ -4226,6 +4282,7 @@ def mock_pass(browser) -> None:
         page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
         check(get_json(base + "/api/status")["mode"] == "normal", "now: schedule cleared -> status mode normal")
         sun_checks(page, base)
+        dates_checks(page, base)
         goto_view(page, "settings/device")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):

@@ -1,7 +1,8 @@
 // Time, schedule and night mode: the Settings cards, and the banner Now
 // shows while the schedule has the panel. The device keeps the clock (NTP)
 // and a timezone, and evaluates the schedule once a minute; rules pick a
-// playlist and/or a brightness for a stretch of the week, night mode turns
+// playlist and/or a brightness for a stretch of the week (and of the year:
+// Halloween's and Christmas's playlists come on by themselves), night mode turns
 // the panel off (or dims it) every night, between two times or from sunset
 // to sunrise (the device works out the sun for the saved location). None of
 // it changes the playlist or brightness saved in Playback: when a rule
@@ -27,6 +28,12 @@ export const ZONES = [
 ];
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Rules' dates are "MM-DD", inclusive, the second earlier for one over New Year.
+const mdText = (md) => `${+md.slice(3)} ${MONTHS[md.slice(0, 2) - 1]}`;
+const realDay = (m, d) => d >= 1 && d <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+// Quick rules, offered when the card has the playlist: all day, every day, in season.
+const SEASONS = [['filelist.hall', 'Halloween', ['10-01', '10-31']], ['filelist.xmas', 'Christmas', ['12-01', '12-26']]];
 
 export function daysText(days) {
   const d = [...new Set(days?.length ? days : [1, 2, 3, 4, 5, 6, 7])].sort();
@@ -41,7 +48,8 @@ export function ruleText(r) {
   const what = [];
   if (r.set != null) what.push(playlistLabel(setPath(r.set)));
   if (r.brightness != null) what.push(`brightness ${r.brightness}`);
-  return `${daysText(r.days)} ${r.from}–${r.to} → ${what.join(', ') || 'no change'}`;
+  const when = r.from === r.to ? ', all day' : ` ${r.from}–${r.to}`;
+  return `${r.dates ? `${mdText(r.dates[0])}–${mdText(r.dates[1])}, ` : ''}${daysText(r.days)}${when} → ${what.join(', ') || 'no change'}`;
 }
 
 function ago(s) {
@@ -110,6 +118,7 @@ export function scheduleCard() {
     await app.src.putSchedule(next);
     sched = next;
     renderRules();
+    offerSeasons();
     app.refreshStatus().catch(() => {});
   }
 
@@ -162,11 +171,24 @@ export function scheduleCard() {
     const bright = h('input', { type: 'range', min: 1, max: 255, id: 'sc-bright', value: r.brightness ?? 96 });
     const bOut = h('output.mono', bright.value);
     bright.oninput = () => { bOut.textContent = bright.value; bOn.checked = true; };
+    // Dates: a day and a month each end; none is every day of the year.
+    const dOn = h('input', { type: 'checkbox', id: 'sc-dates-on', checked: !!r.dates });
+    const md = (id, v) => {
+      const d = h('input', { type: 'number', id: id + '-d', min: 1, max: 31, value: +v.slice(3), style: 'width:64px', 'aria-label': 'day', oninput: () => { dOn.checked = true; } });
+      const m = h('select', { id: id + '-m', 'aria-label': 'month', onchange: () => { dOn.checked = true; } }, MONTHS.map((n, k) => h('option', { value: k + 1 }, n)));
+      m.value = +v.slice(0, 2);
+      return { d, m, get: () => realDay(+m.value, +d.value) && `${String(m.value).padStart(2, '0')}-${String(d.value).padStart(2, '0')}` };
+    };
+    const dFrom = md('sc-date-from', r.dates?.[0] || '10-01'), dTo = md('sc-date-to', r.dates?.[1] || '10-31');
     const save = () => run(async () => {
       const picked = [...days.querySelectorAll('.chip.on')].map((c) => +c.dataset.day);
       if (!picked.length) throw new Error('pick at least one day');
       if (!from.value || !to.value) throw new Error('enter both times');
       const rule = { days: picked, from: from.value, to: to.value };
+      if (dOn.checked) {
+        rule.dates = [dFrom.get(), dTo.get()];
+        if (!rule.dates.every(Boolean)) throw new Error('pick days that are in those months');
+      }
       if (set.value !== '\u0000') rule.set = set.value;
       if (bOn.checked) rule.brightness = +bright.value;
       const rules = [...sched.rules];
@@ -179,7 +201,8 @@ export function scheduleCard() {
       h('div.form', { style: 'margin-top:12px' },
         h('label.stack', 'From', from), h('label.stack', 'To', to),
         h('label.stack', 'Play', set),
-        h('label.stack', 'Brightness', h('div.row', bOn, bright, bOut))),
+        h('label.stack', 'Brightness', h('div.row', bOn, bright, bOut)),
+        h('div.stack', 'Dates', h('div.row', h('label', dOn, 'Only from'), dFrom.d, dFrom.m, h('span', 'to'), dTo.d, dTo.m))),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'sc-rule-save', onclick: save }, 'Save rule'),
         h('button', { onclick: () => { editor.hidden = true; } }, 'Cancel')));
@@ -199,13 +222,23 @@ export function scheduleCard() {
   nLevel.addEventListener('input', debounce(saveNight, 400));
 
   async function load() {
-    try { sched = await app.src.schedule(); sched.rules ||= []; renderRules(); renderNight(); } catch (e) { toast('schedule: ' + e.message, 'bad'); }
+    try { sched = await app.src.schedule(); sched.rules ||= []; renderRules(); renderNight(); offerSeasons(); } catch (e) { toast('schedule: ' + e.message, 'bad'); }
+  }
+
+  // A season's rule, first (the first that matches wins): its playlist all
+  // day, every day, from its first date to its last.
+  const seasons = h('span.row', { id: 'sc-seasons' });
+  async function offerSeasons() {
+    const have = new Set((await app.playlists().catch(() => [])).map((p) => p.value));
+    clear(seasons, SEASONS.filter(([set]) => have.has(set) && !sched.rules.some((r) => r.set === set && r.dates)).map(([set, name, dates]) =>
+      h('button', { 'data-season': set, onclick: () => run(() => put({ ...sched, rules: [{ days: [], from: '00:00', to: '00:00', set, dates }, ...sched.rules] })) },
+        `Add ${name} (${mdText(dates[0])}–${mdText(dates[1])})`)));
   }
 
   const el = h('div.grp', { id: 'sc' }, head,
-    note('The first rule that matches the day and time wins', 'A rule’s playlist and brightness last while it runs; afterwards the ones in Playback come back.'),
+    note('The first rule that matches the day and time wins', 'A rule’s playlist and brightness last while it runs; afterwards the ones in Playback come back. A rule with dates plays only on those days of the year.'),
     list,
-    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule')),
+    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule'), seasons),
     editor,
     nightH,
     h('div.row', h('label', nightOn, 'Every night'), nWhen, clockPart, sunPart, nMode, levelRow), sunNote);
