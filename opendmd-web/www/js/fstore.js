@@ -1,5 +1,5 @@
 // Your Formulas, and how a playlist line or the look names a Formula
-// (imported by js/formulas.js and Settings › Look; its own size line).
+// (imported by js/formulas.js and Settings › Panel; its own size line).
 //
 // On a device with a card a saved Formula lives on the panel, a file in
 // /formulas/ (`<stem>.psi`, the stem made from its name at the first save
@@ -79,7 +79,7 @@ export async function load() {
 
 // The list as last loaded.
 export const list = () => (card || !known ? cache : local());
-// Loaded once (Settings › Look; the Formulas view loads it when it opens).
+// Loaded once (Settings › Panel; the Formulas view loads it when it opens).
 let once = null;
 export const loaded = () => (once ??= load().catch(() => (once = null, list())));
 // Before a change: loaded again if the last try failed (it throws again if so).

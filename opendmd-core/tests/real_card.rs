@@ -461,7 +461,7 @@ fn follow_context_on_the_real_card() {
         let draw = |window: usize| {
             let mut sched = Scheduler::new(cat.len(), Mode::Shuffle, 0x5eed).with_no_repeat(window);
             for (i, o) in read_back.iter() {
-                sched.set_weight(*i as usize, o.scheduler_weight().unwrap());
+                sched.set_weight(*i as usize, o.weight.unwrap());
             }
             let n = 60_000;
             let mut c = [0usize; 3];

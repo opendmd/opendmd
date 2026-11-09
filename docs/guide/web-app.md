@@ -19,20 +19,28 @@ browser, with a few sample animations.
 ![The Now view, previewing what the panel plays](../images/now.png)
 
 Now shows what the panel is playing: the title, its platform and category,
-where it is in the playlist, such as "14 of 10,162", and a moving preview drawn
+where it is in the playlist, such as "14 of 10,162" (with what comes next,
+once the display has picked it), and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
 brightness. To hide the preview, turn off **Mirror the panel on Now** in
-Settings › Look.
+Settings › Panel.
 
 **Recently played**, under the preview, lists what the panel showed last,
 even while no page was open. Tap one to play it again. **Replay** restarts
 what is on now, and **Previous** steps back one at a time.
 
+On a computer the keyboard works too: **Space** pauses and resumes, **→**
+skips and **←** goes back, as Previous does.
+
+**Preview look**, at the bottom, changes how this page draws the preview
+(its glow and contrast), to match your panel better. It doesn't change the
+panel.
+
 Tap **☆** next to the title to make the GIF a favourite in the playlist
 that's playing. It turns to **★**, and a second tap undoes it; the message
 that pops up names the playlist. The **…** on a Recently played GIF has the
-other choices: play less often, hide, play longer. Formulas have no ☆.
+other choices: play less often, play longer. Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -65,7 +73,8 @@ Click a GIF to open its details, with a preview and its title, platform,
 category and author. From there:
 
 - **Send to panel** plays it now; afterwards the playlist carries on.
-- **Add to playlist…** puts it in a playlist.
+- **Add to playlist…** puts it in one of your playlists: the one playing
+  comes first, or start a new one.
 - **Edit in Create Art** opens it in [Create Art](create-art.md) to
   change it.
 - **Edit details…** changes its title, platform, category or author. The
@@ -76,9 +85,10 @@ category and author. From there:
 ### Several at once
 
 Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
-tap picks a GIF, and a folder's box picks every GIF in it. **Add to
-playlist** puts them all in the playlist you're editing, or in a new one, and **Done**
-leaves Select.
+tap picks a GIF, and a folder's box picks every GIF in it, and **None**
+unpicks them all. **Add 3 to playlist ▾** asks which of your playlists
+they go in (the one playing first) or starts a new one; GIFs already in it
+aren't added twice. **Done** leaves Select.
 
 ### Adding GIFs
 
@@ -120,22 +130,28 @@ goes back. Fill it in any of these ways:
   title words, shuffled or cut to a number if you like. **Leave out**
   drops logos, intros and the like.
 - In the Library, open a GIF and choose **Add to playlist… › New
-  playlist…**, or **Select** several and press **Add to playlist** with
-  no playlist open.
+  playlist…**, or **Select** several and press **Add to playlist ▾ › New
+  playlist…**.
 
 A GIF already in the playlist has a ✓ and isn't added twice.
 
 ### Editing a playlist
 
 Open it, and every GIF shows its first frame. Drag the ⠿ handles to
-reorder, press ✕ to remove one, or pick GIFs and use **Arrange** to move or
-remove them, then **Save**. The playlists that come with your card (All
+reorder, or use a GIF's **…** to move it up, down, to the top or to the
+end. Press ✕ to remove one, or tap GIFs (or press **Select** for tick
+boxes) and use **Arrange** to move or remove them, then **Save**. A
+removal, Clear, Shuffle or a replace by filter can be undone from its
+message. Leaving with changes not saved asks whether to save them. The playlists that come with your card (All
 files, Halloween, Christmas) are saved under a name of your own.
 
 **Save & play** while editing, or **Play** from a playlist's **…** menu,
-switches the panel to it in a few seconds.
+switches the panel to it in a few seconds. The same menu has **Rename…**
+and **Duplicate** (the new one is called "Consoles 2", say): favourites come
+along, and a renamed playlist keeps playing and keeps its place in the
+schedule.
 
-### Favourites and hiding
+### Favourites
 
 Right-click a GIF in the Library or a playlist, or use its **…** button, to
 tune how it plays in that playlist. On a phone, long-press it in a
@@ -143,12 +159,12 @@ playlist.
 
 - **Favourite** plays it more often.
 - **Play less often** does the opposite.
-- **Hide from this playlist** means it never plays there.
 - **Play longer or loop…** keeps it on screen twice as long or for a
   number of seconds, or plays it a set number of times.
 
-These are per playlist, so a GIF can be a favourite in one and hidden in
-another. **Reset** puts it back to normal.
+These are per playlist, so a GIF can be a favourite in one and play less
+often in another. **Reset** puts it back to normal. To keep a GIF from
+playing in a playlist, take it out of the playlist.
 
 ## Formulas
 
@@ -158,15 +174,10 @@ examples to remix, a live editor, the gallery and **Save as GIF…**. See
 
 ## Settings
 
-Settings has four tabs. Changes save as you make them, and a green
+Settings has five tabs. Changes save as you make them, and a green
 **Saved ✓** says so.
 
 ### Playback
-
-**Brightness** sets how bright the panel is, and **Maximum brightness**
-under it caps the slider. Going above the suggested level can make the
-display reset on the power supply it came with, so only raise it if you've
-fitted a stronger one.
 
 **Playlist** picks which playlist plays. **Platforms** says **All** with
 how many there are, or the ones you picked. **Choose…** lists them with how
@@ -178,7 +189,12 @@ one. Tap the ones you want and press **Only these**, or **All platforms**.
 show on the panel stays** for one turn, 1 or 5 minutes, or until you change
 it.
 
-### Look
+### Panel
+
+**Brightness** sets how bright the panel is, and **Maximum brightness**
+under it caps the slider. Going above the suggested level can make the
+display reset on the power supply it came with, so only raise it if you've
+fitted a stronger one.
 
 **Colour** shows everything in full colour, or in a single colour like a
 classic dot-matrix display: amber, red, green, blue or white. **Phosphor
@@ -219,18 +235,26 @@ display and is never written to the card or shared.
 
 **Schedule** picks a playlist or brightness for certain days and times,
 such as "weekday evenings: Consoles". The first rule that matches wins, and
-your normal settings come back when it ends.
+your normal settings come back when it ends. A rule can also be for part of
+the year: tick **Only from** and pick the first and last days, such as 1
+October to 31 October. If your card has the Halloween or Christmas
+playlist, **Add Halloween** and **Add Christmas** make that rule in one
+press: the playlist all day from 1 to 31 October, or from 1 to 26
+December. They go first, so they win over your other rules while they
+last.
 
-**Night mode** turns the panel off, or dims it, every night between the
-times you choose.
+**Night mode** turns the panel off, or dims it, every night: between the
+times you choose, or **from sunset to sunrise** where the panel is. That
+needs the **Location** above, and follows the seasons by itself. Make it
+30 minutes or an hour **shorter** (starting after sunset, ending before
+sunrise) or **longer**. While it's on, Now says until when.
 
-**Follow RePlayOS** links the display to a RePlayOS gaming box. When you
-start a game, the panel shows the console's logo, a title card and art for
-that game. In the menus it plays the **Attract playlist** of your choice.
-Turn on NET CONTROL on the box, then enter its address and code here and
-press **Test**. For a clock in the menus, add the bundled **Big clock**
-Formula to a playlist and choose that one; it follows the time zone under
-**Time**.
+### RePlayOS
+
+**Follow RePlayOS** links the display to a RePlayOS gaming box: when you
+start a game the panel shows that game, and in the menus it plays the
+**Attract playlist** of your choice. [Follow RePlayOS](replayos.md) has the
+steps to set it up and what the panel does.
 
 ### Device
 

@@ -234,7 +234,7 @@ every view like a person would:
             or ?key= with; the app's own files stay open); a fresh browser
             gets the key dialog, a wrong key asks again, the right one loads
             Now; the switch off opens the API again
-  Settings  four tabs at #settings/play|look|time|device, one in the page
+  Settings  five tabs at #settings/play|look|time|replay|device, one in the page
             at a time; www_version and the status (no "index") shown; PUT
             brightness, read it back, Saved ✓ fading; WiFi scan; a hostname change is live (reboot_required
             false, status hostname/mdns at once; a WiFi change true) and
@@ -303,7 +303,7 @@ the API is accepted, `auto` is a 400.
 No-Formulas pass: a fourth mock with `--no-formulas` (a firmware build
 without them, `features` []): POST /api/play of a Formula is the 501 with
 the firmware's words, and the app's Send to panel toasts them; Formulas is
-one note (#f-none, no editor); Settings › Look has the note (#st-look-none),
+one note (#f-none, no editor); Settings › Panel has the note (#st-look-none),
 not the Formula look picker, and Playback no Formula keep; a playlist with
 two Formulas plays its two GIFs (`entries` 2) and the editor marks the
 Formulas "skipped on this display".
@@ -745,6 +745,16 @@ def wait_config(base: str, ok, timeout_s: float = 10) -> dict:
         time.sleep(0.2)
 
 
+def wait_until(ok, timeout_s: float = 10) -> bool:
+    """Whether `ok()` came true within `timeout_s` (tried every 0.2 s)."""
+    deadline = time.time() + timeout_s
+    while not ok():
+        if time.time() > deadline:
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def mid_transition(page: Page, base: str) -> dict:
     """Skip on the device; ~200 ms after the Now preview loads the new file
     (the transition's start), compare the preview with the old picture and
@@ -901,13 +911,13 @@ def pick_cat(page: Page, value: str) -> None:
 
 
 def settings_tab_checks(page: Page) -> None:
-    """Settings' four tabs: bare #settings is Playback, each tab its own
+    """Settings' five tabs: bare #settings is Playback, each tab its own
     address, only the open one in the page, a click changes the address."""
     goto_view(page, "settings")
     tabs = page.eval_on_selector_all("#st-tabs .tab", "els => els.map(e => [e.dataset.tab, e.textContent, e.classList.contains('on')])")
-    check(tabs == [["play", "Playback", True], ["look", "Look", False], ["time", "Schedule", False], ["device", "Device", False]],
-          f"settings: four tabs, bare #settings opens Playback ({tabs})")
-    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("device", "#st-hostname"), ("play", "#st-set")):
+    check(tabs == [["play", "Playback", True], ["look", "Panel", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["device", "Device", False]],
+          f"settings: five tabs, bare #settings opens Playback ({tabs})")
+    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("replay", "#fo-host"), ("device", "#st-hostname"), ("play", "#st-set")):
         page.click(f"#st-tabs [data-tab={t}]")
         page.wait_for_selector(f"#st-tab-{t}", timeout=20000)
         page.wait_for_selector(sel, timeout=20000)
@@ -976,6 +986,113 @@ def font_checks(page: Page, base: str, size: str) -> None:
     fam = page.eval_on_selector("#lib-d-title", "e => getComputedStyle(e).fontFamily")
     check("Silkscreen" not in fam, f"font [{size}]: a GIF's title (Details) stays in the body face ({fam[:30]})")
     goto_view(page, "now")
+
+
+def sun_checks(page: Page, base: str) -> None:
+    """Night mode from sunset to sunrise (Settings › Schedule): offered only
+    with a location, a note says where to set it; with one where it is night
+    now (the equator at solar midnight) the panel dims, `mode_until` is the
+    sunrise less the offset, and Now's banner says so. Leaves no location
+    and no night mode."""
+    refresh = "import('./js/state.js').then(({ app }) => app.refreshConfig())"
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    goto_view(page, "settings/time")
+    page.evaluate(refresh)
+    page.wait_for_selector("#sc-night-sun-note:not([hidden])", timeout=10000)
+    off = page.eval_on_selector("#sc-night-when option[value=sun]", "o => o.disabled")
+    note = page.inner_text("#sc-night-sun-note")
+    check(off and "Location" in note, f"sun: no location -> sunset to sunrise disabled, the note points to Location ('{note}')")
+    utc = datetime.now(ZoneInfo("UTC"))
+    lon = round((-15 * (utc.hour + utc.minute / 60) + 180) % 360 - 180, 2)
+    put_json(base + "/api/config", {"lat": 0, "lon": lon})
+    page.evaluate(refresh)
+    page.wait_for_function("!document.querySelector('#sc-night-when option[value=sun]').disabled", timeout=10000)
+    page.check("#sc-night-on")
+    page.select_option("#sc-night-when", "sun")
+    page.select_option("#sc-night-offset", "30")
+    page.select_option("#sc-night-mode", value="dim")
+    sched = wait_schedule(base, lambda s: (s.get("night") or {}).get("sun") is True and s["night"].get("offset") == 30 and s["night"].get("mode") == "dim")
+    n = sched.get("night") or {}
+    check(n.get("sun") is True and n.get("offset") == 30 and n.get("mode") == "dim" and page.is_hidden("#sc-night-from"),
+          f"sun: saved as a night by the sun, 30 min shorter, dimmed ({n})")
+    st = wait_until(lambda: get_json(base + "/api/status")["mode"] == "dim", 10) and get_json(base + "/api/status")
+    want = datetime.now(ZoneInfo(get_json(base + "/api/config")["tz_name"] or "UTC")) + timedelta(hours=5.5)
+    got = st and st["mode_until"]
+    gap = got and ((int(got[:2]) * 60 + int(got[3:])) - (want.hour * 60 + want.minute) + 720) % 1440 - 720
+    check(bool(got) and abs(gap) <= 40, f"sun: on at the equator at solar midnight, until {got} (sunrise less 30 min: about {want:%H:%M})")
+    goto_view(page, "now")
+    page.wait_for_selector("#now-banner[data-mode='dim']", timeout=15000)
+    banner = page.inner_text("#now-banner")
+    check(banner.startswith(f"Dimmed for the night until {got}"), f"sun: Now's banner '{banner}'")
+    # An offset that isn't one of the choices (the API's) is shown, and kept by the next change.
+    put_json(base + "/api/schedule", {"rules": [], "night": {**n, "offset": 45}})
+    goto_view(page, "settings/time")
+    page.wait_for_function("document.querySelector('#sc-night-offset').value === '45'", timeout=10000)
+    page.select_option("#sc-night-mode", value="off")
+    sched = wait_schedule(base, lambda s: (s.get("night") or {}).get("mode") == "off")
+    check((sched.get("night") or {}).get("offset") == 45 and "45 min shorter" in page.inner_text("#sc-night-offset"),
+          f"sun: an offset of 45 shows as '45 min shorter' and survives a change ({sched.get('night')})")
+    page.uncheck("#sc-night-on")
+    wait_schedule(base, lambda s: s.get("night") is None)
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    page.evaluate(refresh)
+    check(wait_until(lambda: get_json(base + "/api/status")["mode"] == "normal", 10), "sun: night mode off again")
+
+
+def dates_checks(page: Page, base: str) -> None:
+    """Rules with dates (Settings › Schedule): Add Christmas puts its rule
+    first (the card has filelist.xmas), says its dates and goes from the
+    offers; a rule edited with dates round today plays, one with dates far
+    from it doesn't; a bad date is a 400. Leaves no rules."""
+    goto_view(page, "settings/time")
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", timeout=10000)
+    page.click("#sc-seasons [data-season='filelist.xmas']")
+    sched = wait_schedule(base, lambda s: bool(s.get("rules")))
+    r0 = (sched.get("rules") or [{}])[0]
+    page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", state="detached", timeout=10000)
+    text = page.inner_text("#sc-rules [data-rule='0'] .grow")
+    check(r0 == {"days": [], "from": "00:00", "to": "00:00", "set": "filelist.xmas", "dates": ["12-01", "12-26"]}
+          and text.startswith("1 Dec–26 Dec, Every day, all day → Christmas") and page.locator("#sc-seasons [data-season='filelist.xmas']").count() == 0,
+          f"dates: Add Christmas -> the first rule {r0}, '{text}', no longer offered")
+    tz = ZoneInfo(get_json(base + "/api/config")["tz_name"] or "UTC")
+    today = datetime.now(tz)
+    xmas = today.month == 12 and today.day <= 26
+    # A rule round today (a day either side: whatever the mock's minute), every day, all day.
+    page.click("#sc-add")
+    page.wait_for_selector("#sc-edit:not([hidden])")
+    for day in (6, 7):
+        page.click(f"#sc-days .chip[data-day='{day}']")
+    page.fill("#sc-from", "00:00")
+    page.fill("#sc-to", "00:00")
+    page.select_option("#sc-set", value="filelist.hall")
+    a, b = today - timedelta(days=1), today + timedelta(days=1)
+    page.fill("#sc-date-from-d", str(a.day))
+    page.select_option("#sc-date-from-m", str(a.month))
+    page.fill("#sc-date-to-d", str(b.day))
+    page.select_option("#sc-date-to-m", str(b.month))
+    page.click("#sc-rule-save")
+    page.wait_for_selector("#sc-rules [data-rule='1']", timeout=10000)
+    sched = get_json(base + "/api/schedule")
+    r1 = sched["rules"][1]
+    st = get_json(base + "/api/status")
+    check(r1.get("dates") == [f"{a:%m-%d}", f"{b:%m-%d}"] and sorted(r1["days"]) == [1, 2, 3, 4, 5, 6, 7]
+          and st["schedule"]["rule"] == (0 if xmas else 1),
+          f"dates: a rule from {a:%d %b} to {b:%d %b} saved ({r1}) and in force (rule {st['schedule']['rule']})")
+    far = today + timedelta(days=120)
+    put_json(base + "/api/schedule", {"rules": [{**r1, "dates": [f"{far:%m-%d}", f"{far:%m-%d}"]}], "night": None})
+    check(get_json(base + "/api/status")["schedule"]["rule"] is None, f"dates: one day in {far:%B} is not today")
+    try:
+        put_json(base + "/api/schedule", {"rules": [{**r1, "dates": ["02-30", "03-01"]}], "night": None})
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check(code == 400, f"dates: 30 February is a 400 ({code})")
+    put_json(base + "/api/schedule", {"rules": [], "night": None})
+    page.reload()
+    page.wait_for_selector("#view-settings.on #st-tab-time", timeout=20000)
+    page.wait_for_selector("#sc-seasons [data-season='filelist.xmas']", timeout=10000)
+    check(get_json(base + "/api/status")["schedule"]["rule"] is None, "dates: rules cleared, Christmas offered again")
 
 
 def wait_schedule(base: str, ok, timeout_s: float = 10) -> dict:
@@ -1189,7 +1306,7 @@ def reorder_checks(page: Page, two: list[str]) -> None:
     check(draft(page) == two[::-1], f"playlists: dragging the handle down a row moves the entry ({draft(page)})")
     page.click("#set-arrange")
     items = page.eval_on_selector_all("#set-arrange-menu .mi", "els => els.map(e => e.textContent + (e.classList.contains('danger') ? '!' : ''))")
-    check(items == ["Shuffle", "Sort A–Z", "Picked to top", "Remove picked!", "Clear!"], f"playlists: the Arrange menu ({items})")
+    check(items == ["Shuffle", "Sort A–Z", "Picked to top", "Picked to end", "Remove picked!", "Clear!"], f"playlists: the Arrange menu ({items})")
     page.click("#set-sort")
     check(page.locator("#set-arrange-menu").count() == 0 and len(draft(page)) == 2, "playlists: Sort A–Z from Arrange")
     page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft.paths = {json.dumps(two)}; emit('draft'); }}")
@@ -1768,14 +1885,101 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.hover("#set-entries .vrow:not([hidden]) >> nth=2")
     gone = order[2]
     page.click("#set-entries .vrow:not([hidden]) >> nth=2 >> button.rm")
+    t = last_toast(page, "ok")
+    check(gone not in entries(page) and len(entries(page)) == len(got) - 1 and "Undo" in t, f"editor: ✕ removes {gone.rsplit('/', 1)[1]}, Undo offered ('{t}')")
+    page.click("#toasts .toast.ok >> nth=-1 >> button")
+    check(entries(page) == order, "editor: Undo puts it back where it was")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=2 >> button.rm")
     order = entries(page)
-    check(gone not in order and len(order) == len(got) - 1, f"editor: ✕ removes {gone.rsplit('/', 1)[1]}")
+    # A row's menu moves it.
+    open_row_menu(page, "#set-entries", 0, via="more")
+    check(page.is_disabled("#ov-menu #set-up") and page.is_disabled("#ov-menu #set-to-top") and page.is_enabled("#ov-menu #set-down"),
+          "editor: the first row's menu has Move down, not Move up or to top")
+    no_leaks(page, "playlists (row menu)")
+    page.click("#ov-menu #set-down")
+    check(entries(page)[:2] == [order[1], order[0]], "editor: Move down from the row's menu")
+    open_row_menu(page, "#set-entries", 0, via="right-click")
+    page.click("#ov-menu #set-to-end")
+    m = entries(page)
+    check(m[-1] == order[1] and len(m) == len(order), "editor: Move to end from the row's menu")
+    page.eval_on_selector("#set-entries", "e => { e.scrollTop = 0; }")
+    open_row_menu(page, "#set-entries", 1, via="more")
+    page.click("#ov-menu #set-up")
+    check(entries(page)[:2] == [m[1], m[0]], "editor: Move up from the row's menu")
+    # Select: ticks on the rows, the chip, Picked to end.
+    page.click("#set-select")
+    page.wait_for_selector("#set-entries .vrow:not([hidden]) input[type=checkbox]")
+    page.wait_for_timeout(800)  # (VList takes a tap within 0.7 s of the right-click above as a long press's end)
+    m = entries(page)
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> input[type=checkbox]")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=2 >> .t")
+    chip = page.inner_text("#set-picked")
+    check(chip.startswith("2 picked") and page.is_checked("#set-entries .vrow:not([hidden]) >> nth=2 >> input[type=checkbox]"),
+          f"editor: Select ticks rows, the chip counts them ('{chip}')")
+    page.click("#set-arrange")
+    page.click("#set-end")
+    want = [p for i, p in enumerate(m) if i not in (0, 2)] + [m[0], m[2]]
+    check(entries(page) == want and page.is_hidden("#set-picked"), "editor: Picked to end, the chip gone with the picks")
+    page.click("#set-select")
+    check(page.locator("#set-entries .vrow:not([hidden]) input[type=checkbox]").count() == 0, "editor: Select again hides the ticks")
+    # Shuffle, then Undo.
+    m = entries(page)
+    page.click("#set-arrange")
+    page.click("#set-shuffle")
+    page.click("#toasts .toast.ok >> nth=-1 >> button")
+    check(entries(page) == m, "editor: Shuffle's Undo puts the order back")
+    order = m
     page.fill("#set-name", "browse")
     page.click("#set-save")
     page.wait_for_selector("#sets-list [data-path='/sets/browse.txt']", timeout=30000)
     f = overlay / "sets" / "browse.txt"
     check(f.exists() and f.read_text().split("\n")[:-1] == order, f"editor: saved, sets/browse.txt holds the {len(order)} entries in order")
     no_leaks(page, "playlists (add)")
+    # Leaving with a change not saved asks to save it (accepted: saved).
+    asked = []
+    page.on("dialog", lambda d: asked.append(d.message))
+    page.hover("#set-entries .vrow:not([hidden]) >> nth=0")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    order = entries(page)
+    goto_view(page, "library")
+    deadline = time.time() + 10
+    while time.time() < deadline and f.read_text().split("\n")[:-1] != order:
+        page.wait_for_timeout(100)
+    check(asked == ["Save changes to “browse”?"] and f.read_text().split("\n")[:-1] == order,
+          f"editor: leaving with a change asks to save it, and saves ({asked})")
+    goto_view(page, "sets/edit")
+    goto_view(page, "sets")
+    check(len(asked) == 1, f"editor: nothing changed since, nothing asked ({asked})")
+    # Undo after Save: the editor has the change back (not saved), the card keeps the save.
+    goto_view(page, "sets/edit")
+    before = entries(page)
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.hover("#set-entries .vrow:not([hidden]) >> nth=0")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    page.click("#set-save")
+    deadline = time.time() + 10
+    while time.time() < deadline and f.read_text().split("\n")[:-1] != before[1:]:
+        page.wait_for_timeout(100)
+    page.click("#toasts .toast:has(button) >> nth=-1 >> button")
+    is_dirty = page.evaluate("async () => (await import('./js/state.js')).dirty()")
+    check(entries(page) == before and is_dirty and f.read_text().split("\n")[:-1] == before[1:],
+          "editor: Undo after Save brings the GIF back, not saved, the card as saved")
+    # Leaving then, and Cancel: put back, with an Undo that reopens the change.
+    page.evaluate("() => { window.__confirm = window.confirm; window.confirm = () => false; }")
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    goto_view(page, "library")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('put back'))", timeout=5000)
+    t = page.eval_on_selector_all("#toasts .toast", "els => els.map(e => e.textContent).find(t => t.includes('put back'))")
+    check(entries(page) == before[1:] and f.read_text().split("\n")[:-1] == before[1:] and t == "Changes to “browse” put backUndo",
+          f"editor: Cancel on the way out puts the playlist back as saved ('{t}')")
+    page.click("#toasts .toast:has(button) >> nth=-1 >> button")
+    page.wait_for_function("location.hash === '#sets/edit'", timeout=5000)
+    check(entries(page) == before and f.read_text().split("\n")[:-1] == before[1:], "editor: its Undo reopens the editor with the change, still not saved")
+    page.evaluate("() => { window.confirm = window.__confirm; }")
+    page.click("#set-save")
+    deadline = time.time() + 10
+    while time.time() < deadline and page.evaluate("async () => (await import('./js/state.js')).dirty()"):
+        page.wait_for_timeout(100)
     page.context.close()
     # The phone: one pane at a time.
     phone = new_page(browser, "phone", errors)
@@ -1798,6 +2002,179 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
 
 
 PLAYING = "(document.querySelector('#sets-list .tag.act')?.closest('button.pl').textContent || '')"
+
+
+def rename_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Playlists' Rename… and Duplicate (js/sets.js), in a fresh browser: a
+    playlist that is playing, has a favourite and is named by a schedule
+    rule, renamed: its lines and favourite under the new name, the old ones
+    gone, the display and the rule following it; then duplicated ("rn-b 2",
+    the old one kept); a change of case alone. And Now's "Next:" line."""
+    g = card_gifs()[:3]
+    sets = overlay / "sets"
+    put_text(base + "/api/sets/rn-a", g[0] + "\n" + g[1] + "\n")
+    put_text(base + "/api/files/sets/rn-a.meta", render_meta_line(g[0], {"w": 3}) + "\n")
+    rules = [{"days": [7], "from": "03:00", "to": "03:01", "set": "rn-a"}, {"days": [7], "from": "04:00", "to": "04:01", "set": "filelist.hall"}]
+    put_json(base + "/api/schedule", {"rules": rules, "night": None})
+    put_json(base + "/api/config", {"set": "rn-a"})
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#sets")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-a.txt']", timeout=20000)
+    page.evaluate("() => { window.prompt = () => 'rn-b'; }")
+    sets_do(page, "/sets/rn-a.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-b.txt'] .tag.act", timeout=30000)
+    t = last_toast(page, "ok")
+    sched = get_json(base + "/api/schedule")
+    check((sets / "rn-b.txt").read_text() == g[0] + "\n" + g[1] + "\n" and (sets / "rn-b.meta").read_text() == render_meta_line(g[0], {"w": 3}) + "\n"
+          and not (sets / "rn-a.txt").exists() and not (sets / "rn-a.meta").exists(),
+          f"rename: the lines and the favourite under the new name, the old ones gone ('{t}')")
+    check(get_json(base + "/api/config")["set"] == "rn-b" and [r.get("set") for r in sched["rules"]] == ["rn-b", "filelist.hall"],
+          f"rename: the display plays it under its new name, the schedule's rule follows ({sched['rules']})")
+    no_leaks(page, "playlists (rename)")
+    sets_do(page, "/sets/rn-b.txt", "duplicate")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-b 2.txt']", timeout=30000)
+    t = last_toast(page, "ok")
+    check((sets / "rn-b 2.txt").read_text() == (sets / "rn-b.txt").read_text() and (sets / "rn-b 2.meta").exists()
+          and get_json(base + "/api/config")["set"] == "rn-b", f"duplicate: 'rn-b 2' with its favourite, the one playing kept ('{t}')")
+    page.evaluate("() => { window.prompt = () => 'RN-B 2'; }")
+    sets_do(page, "/sets/rn-b 2.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/RN-B 2.txt']", timeout=30000)
+    names = sorted(p.name for p in sets.glob("*") if p.name.lower().startswith("rn-b"))
+    check(names == ["RN-B 2.meta", "RN-B 2.txt", "rn-b.meta", "rn-b.txt"], f"rename: a change of case alone ({names})")
+    # The one open in the editor: renamed, then a favourite there lands in the new name's file.
+    page.click("#sets-list [data-path='/sets/rn-b.txt'] button.pl")
+    page.wait_for_selector("#set-entries .vrow[data-path]", timeout=10000)
+    page.evaluate("() => { window.prompt = () => 'rn-d'; }")
+    sets_do(page, "/sets/rn-b.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-d.txt']", timeout=30000)
+    page.wait_for_function("document.querySelector('#set-title').textContent === 'rn-d'", timeout=5000)
+    page.wait_for_timeout(500)  # (the editor's overrides read again)
+    open_row_menu(page, "#set-entries", 1, via="more")
+    page.click("#ov-fav")
+    want = render_meta_line(g[0], {"w": 3}) + "\n" + render_meta_line(g[1], {"w": 3}) + "\n"
+    deadline = time.time() + 10
+    while time.time() < deadline and not ((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want):
+        page.wait_for_timeout(100)
+    check((sets / "rn-d.meta").exists() and (sets / "rn-d.meta").read_text() == want and not (sets / "rn-b.meta").exists(),
+          "rename: the open playlist's editor follows; a favourite then goes in the new name's file")
+    # Now: what plays next, once the display has picked it.
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-next').textContent.startsWith(' · Next: ')", timeout=20000)
+    nx = get_json(base + "/api/status")["now_playing"].get("next")
+    check(nx in g[:2] and page.inner_text("#now-next").strip() != "· Next:", f"now: Next names what comes next ({nx}, '{page.inner_text('#now-next')}')")
+    page.context.close()
+    put_json(base + "/api/config", {"set": ""})
+    put_json(base + "/api/schedule", {"rules": [], "night": None})
+    for n in ("rn-d.txt", "rn-d.meta", "RN-B 2.txt", "RN-B 2.meta"):
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/" + urllib.parse.quote(n), method="DELETE"), timeout=30).close()
+
+
+def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Into a chosen playlist (js/gifs.js targetMenu), in a fresh browser:
+    the Library's Select, then "Add 3 to playlist ▾": the one playing first,
+    the user's others with their counts, no card playlists, New playlist…;
+    an existing one gains the GIFs not already in it (matched regardless of
+    case), said in the toast, and the selection clears; None; Details' Add
+    to playlist… into the one playing; New playlist… into the editor, its
+    name focused, and the leave guard when it has none yet."""
+    g = [p for p in card_gifs() if p.startswith("/gifs/Consoles/")][:5]  # (lib_row finds them by search)
+    sets = overlay / "sets"
+    put_text(base + "/api/sets/tm-a", g[0].upper() + "\n")
+    put_text(base + "/api/sets/tm-b", g[4] + "\n")
+    put_json(base + "/api/config", {"set": "tm-b"})
+    page = new_page(browser, "laptop", errors)
+    asked = []
+    page.on("dialog", lambda d: asked.append(d.message))
+    page.goto(base + "/#library")
+    page.wait_for_selector("#lib-select", timeout=20000)
+    pick = f"async (ps) => {{ const {{ app }} = await import('./js/state.js'); ps.forEach((p) => app.selection.add(p)); }}"
+    page.evaluate(pick, g[:3])
+    page.click("#lib-select")
+    check(page.inner_text("#lib-to-set") == "Add 3 to playlist ▾" and page.is_visible("#lib-none"), f"target: the bar reads '{page.inner_text('#lib-to-set')}', with None")
+    page.click("#lib-to-set")
+    page.wait_for_selector("#pl-target")
+    page.wait_for_function("[...document.querySelectorAll('#pl-target [data-path] small')].every(s => s.textContent)", timeout=10000)
+    items = page.eval_on_selector_all("#pl-target .mi", "els => els.map(e => [e.dataset.path || e.id, e.textContent])")
+    check([i[0] for i in items][:2] == ["/sets/tm-b.txt", "/sets/tm-a.txt"] and items[0][1].startswith("Playing: tm-b") and items[1][1] == "tm-a 1"
+          and items[-1] == ["pl-new", "New playlist…"] and not any(i[0].startswith("/filelist") for i in items),
+          f"target: playing first, the others counted, no card playlists, New playlist… ({items})")
+    check(page.inner_text("#pl-target .mh") == "Add 3 GIFs to", f"target: headed '{page.inner_text('#pl-target .mh')}'")
+    no_leaks(page, "target menu")
+    page.click("#pl-target [data-path='/sets/tm-a.txt']")
+    t = last_toast(page, "ok")
+    got = (sets / "tm-a.txt").read_text().split("\n")[:-1]
+    check(got == [g[0].upper(), g[1], g[2]] and t == "2 added to “tm-a” · 1 already in it",
+          f"target: tm-a gains the two not in it, case aside ('{t}', {got})")
+    check(page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar") and page.is_disabled("#lib-to-set"),
+          "target: the selection clears once added, Select stays on")
+    page.evaluate(pick, g[:2])
+    page.click("#lib-none")
+    left = page.evaluate("async () => (await import('./js/state.js')).app.selection.size")
+    check(left == 0 and page.inner_text("#lib-selbar b") == "0" and page.is_visible("#lib-selbar"), "target: None unpicks, Select stays on")
+    page.click("#lib-sel-done")
+    # Details: into the one playing.
+    lib_row(page, g[3])
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.click("#lib-d-add")
+    page.wait_for_selector("#pl-target")
+    check(page.inner_text("#pl-target .mh") == "Add it to", "target: Details' menu is for the one GIF")
+    page.click("#pl-target [data-path='/sets/tm-b.txt']")
+    t = last_toast(page, "ok")
+    check((sets / "tm-b.txt").read_text().split("\n")[:-1] == [g[4], g[3]], f"target: Details adds it to the playlist playing ('{t}')")
+    # New playlist…: the editor, the name first; leaving with no name asks,
+    # cannot save, and stays.
+    page.evaluate(pick, g[:2])
+    page.click("#lib-select")
+    page.click("#lib-to-set")
+    page.click("#pl-target #pl-new")
+    page.wait_for_function("location.hash === '#sets/edit'")
+    page.wait_for_function("document.activeElement && document.activeElement.id === 'set-name'", timeout=5000)
+    check(entries(page) == g[:2], "target: New playlist… opens the editor with them, its name focused")
+    page.evaluate("location.hash = '#library'")
+    t = last_toast(page, "bad")
+    page.wait_for_function("location.hash === '#sets/edit'", timeout=5000)
+    check(asked == ["Save changes to “New playlist”?"] and "name" in t, f"target: leaving it unnamed asks, can't save, stays ({asked}, '{t}')")
+    page.fill("#set-name", "tm-c")
+    page.click("#set-save")
+    page.wait_for_selector("#sets-list [data-path='/sets/tm-c.txt']", timeout=30000)
+    # The one open in the editor is marked, and gains them there too.
+    goto_view(page, "library")
+    if page.is_visible("#lib-selbar"):
+        page.click("#lib-sel-done")  # (Select stayed on from before)
+    page.evaluate(pick, [g[2]])
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.click("#lib-select")
+    page.click("#lib-to-set")
+    page.wait_for_selector("#pl-target [data-path='/sets/tm-c.txt'] .tag")
+    check(page.inner_text("#pl-target [data-path='/sets/tm-c.txt'] .tag") == "Editing", "target: the playlist open in the editor is marked")
+    page.click("#pl-target [data-path='/sets/tm-c.txt']")
+    last_toast(page, "ok")
+    check(entries(page) == g[:3] and (sets / "tm-c.txt").read_text().split("\n")[:-1] == g[:3], "target: the editor's copy gains it too")
+    # Into the open playlist while it has changes not saved, then Cancel on
+    # the way out: the change goes, the GIF added stays.
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); app.draft.paths.splice(0, 1); }")
+    if page.is_visible("#lib-selbar"):
+        page.click("#lib-sel-done")
+    page.evaluate(pick, [g[3]])
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.click("#lib-select")
+    page.click("#lib-to-set")
+    page.click("#pl-target [data-path='/sets/tm-c.txt']")
+    last_toast(page, "ok")
+    goto_view(page, "sets/edit")
+    page.evaluate("() => { window.__confirm = window.confirm; window.confirm = () => false; }")
+    goto_view(page, "sets")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('put back'))", timeout=5000)
+    page.evaluate("() => { window.confirm = window.__confirm; }")
+    check(entries(page) == g[:4] and (sets / "tm-c.txt").read_text().split("\n")[:-1] == g[:4],
+          f"target: an add into an editor with changes, then Cancel, keeps the GIF added ({entries(page)})")
+    goto_view(page, "sets/edit")
+    goto_view(page, "sets")
+    check(len(asked) == 1, f"target: nothing to save after that ({asked})")
+    page.context.close()
+    put_json(base + "/api/config", {"set": ""})
+    for n in ("tm-a", "tm-b", "tm-c"):
+        urllib.request.urlopen(urllib.request.Request(base + f"/api/files/sets/{n}.txt", method="DELETE"), timeout=30).close()
 
 
 def open_builder(page: Page) -> None:
@@ -1898,11 +2275,9 @@ def fmt_override_decimal(v: float) -> str:
 
 
 def render_meta_line(path: str, ov: dict) -> str:
-    """The canonical `.meta` line for one GIF: fields in order never, w,
+    """The canonical `.meta` line for one GIF: fields in order w,
     dwell/dwell_x, loops (overrides::render_fields)."""
     parts = [path]
-    if ov.get("never"):
-        parts.append("never")
     if "w" in ov:
         parts.append(f"w={fmt_override_decimal(ov['w'])}")
     if "dwell" in ov:
@@ -1953,10 +2328,13 @@ def now_fav_checks(page: Page, base: str) -> None:
     check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
     # Clicked while the list is still being read (slowed here): the others survive.
     # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
-    others = card_gifs()[-2:]
-    seeded = [{"path": others[0], "never": True}, {"path": others[1], "loops": 3}]
-    put_text(base + "/api/files/filelist.meta", "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
+    # An earlier build's `never` line (a GIF once hidden) is no override at all.
+    *_, retired, a, b = card_gifs()
+    others = [a, b]
+    seeded = [{"path": others[0], "w": 0.5}, {"path": others[1], "loops": 3}]
+    put_text(base + "/api/files/filelist.meta", f"{retired}\tnever\n" + "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
     settle(base, 2)
+    check(get_json(base + "/api/overrides?set=")["overrides"] == seeded, "now fav: an old `never` line is skipped")
     path = get_json(base + "/api/status")["now_playing"]["path"]
     goto_view(page, "library")
     page.evaluate("import('./js/state.js').then(({ app }) => { const f = app.src.overrides.bind(app.src); app.src._ov = f; app.src.overrides = (s) => new Promise((r) => setTimeout(r, 2500)).then(() => f(s)); })")
@@ -2281,8 +2659,8 @@ def power_checks(page: Page, base: str) -> None:
         return get_json(base + "/api/config")
 
     def at(sel):
-        # Brightness and its maximum are on Playback: open the tab first.
-        t = "play"
+        # Brightness and its maximum are on Panel (`look`): open the tab first.
+        t = "look"
         if not page.locator(f"#st-tab-{t}").count():
             page.click(f"#st-tabs [data-tab={t}]")
             page.wait_for_selector(f"#st-tab-{t}", timeout=10000)
@@ -2293,7 +2671,7 @@ def power_checks(page: Page, base: str) -> None:
 
     def reload_settings():
         # The page reads the config once; a PUT made behind its back needs a reload.
-        goto_view(page, "settings/play")
+        goto_view(page, "settings/look")
         page.reload()
         page.wait_for_selector(at("#st-maxbright"), state="attached", timeout=20000)
 
@@ -2342,8 +2720,8 @@ def power_checks(page: Page, base: str) -> None:
               f"power: PUT reply carries both ({r.get('brightness')}, {r.get('max_brightness')})")
         reload_settings()
         check(slider_max() == safe + 40, f"power: slider max follows a raised max_brightness ({slider_max()})")
-        check(page.is_visible(at("#st-maxbright")) and page.eval_on_selector("#st-tab-play", "t => !!t.querySelector('#st-brightness') && t.querySelector('#st-brightness').compareDocumentPosition(t.querySelector('#st-maxbright')) & 4"),
-              "power: Maximum brightness is on Playback, under the Brightness slider")
+        check(page.is_visible(at("#st-maxbright")) and page.eval_on_selector("#st-tab-look", "t => !!t.querySelector('#st-brightness') && t.querySelector('#st-brightness').compareDocumentPosition(t.querySelector('#st-maxbright')) & 4"),
+              "power: Maximum brightness is on Panel, under the Brightness slider")
         check(page.is_visible(at("#st-maxbright-warn")), "power: warning shown above the tested limit")
         w = page.inner_text(at("#st-maxbright-warn"))
         check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply",
@@ -2702,7 +3080,7 @@ def no_live_checks(page: Page, base: str, mock: bool) -> None:
           f"library: no Live folder, no live form ({opts[-3:]})")
     gone = page.evaluate("import('./js/util.js').then(m => ['@clock', '@clock?seconds=1', '@text?msg=Hi', '@card:A|', '@formula:big-clock', '/gifs/@clock.gif'].map(m.gone))")
     check(gone == [True, True, True, False, False, False], f"playlists: the editor drops @clock / @text lines, nothing else ({gone})")
-    goto_view(page, "settings/time")
+    goto_view(page, "settings/replay")
     page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
     attract = page.eval_on_selector_all("#fo-attract option", "els => els.map(e => [e.value, e.textContent])")
     check(not any(v == "@" or "clock" in label.lower() for v, label in attract),
@@ -3713,7 +4091,7 @@ def mock_pass(browser) -> None:
         check(order[:2] == ["now-skip", "now-pause"] and "pri" in page.get_attribute("#now-skip", "class"),
               f"now: the transport starts with Skip, the primary ({order})")
         lines = page.eval_on_selector_all("#view-now .nowt > div:not([hidden])", "els => els.map(e => e.textContent.trim())")
-        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+$", lines[2]) and lines[3] == "✎ Edit in Create Art"
+        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+( · Next: .+)?$", lines[2]) and lines[3] == "✎ Edit in Create Art"
               and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
               f"now: title, tags, position and Edit on lines of their own; no device stats or Follow switch here ({lines})")
         # The device's figures are Settings › Device's Status. Late frames in
@@ -3818,16 +4196,17 @@ def mock_pass(browser) -> None:
               "library: in Select mode a row tap picks it (no preview); three selected")
         selected = page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.selection]; }")
         # Per-GIF overrides on the playlist in play (filelist.txt): favourite,
-        # hide, play longer 2x, loop 3, on four distinct rows.
+        # play less, play longer 2x, loop 3, on four distinct rows.
         fav_path = row_path(page, "#lib-list", 3)
-        hide_path = row_path(page, "#lib-list", 4)
+        less_path = row_path(page, "#lib-list", 4)
         long_path = row_path(page, "#lib-list", 5)
         loop_path = row_path(page, "#lib-list", 6)
         open_row_menu(page, "#lib-list", 3, via="more")
         page.click("#ov-fav")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 4, via="right-click")
-        page.click("#ov-hide")
+        check(page.locator("#ov-menu #ov-hide").count() == 0, "row menu: no Hide")
+        page.click("#ov-less")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 5, via="more")
         check(page.locator("#ov-menu #ov-2x, #ov-menu #ov-secs").count() == 0, "row menu: Play longer's fields are a second step")
@@ -3840,14 +4219,12 @@ def mock_pass(browser) -> None:
         page.click("#ov-loops-set")
         page.wait_for_selector("#ov-menu", state="detached")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=3 >> i.fav").count() == 1, "library overrides: favourite glyph")
-        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=4 >> i.hid").count() == 1
-              and "hid" in (page.get_attribute("#lib-list .vrow:not([hidden]) >> nth=4", "class") or ""),
-              "library overrides: hidden glyph + row class")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=4 >> i.less").count() == 1, "library overrides: play-less glyph")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=5 >> i.long").count() == 1, "library overrides: play-longer glyph")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=6 >> i.loop").count() == 1, "library overrides: loop glyph")
         expected_over = [
             {"path": fav_path, "w": 3},
-            {"path": hide_path, "never": True},
+            {"path": less_path, "w": 0.5},
             {"path": long_path, "dwell_x": 2},
             {"path": loop_path, "loops": 3},
         ]
@@ -3858,7 +4235,7 @@ def mock_pass(browser) -> None:
         got_meta = meta_file.read_text() if meta_file.exists() else ""
         check(got_meta == want_meta, f"library overrides: filelist.meta byte-for-byte ({got_meta!r} vs {want_meta!r})")
         st = get_json(base + "/api/status")
-        check(st["overrides"] == 4 and st["hidden"] == 1, f"library overrides: status overrides=4 hidden=1 (got {st['overrides']}/{st['hidden']})")
+        check(st["overrides"] == 4 and "hidden" not in st, f"library overrides: status overrides=4, no hidden count (got {st['overrides']}/{st.get('hidden')})")
         no_leaks(page, "library (overrides menu)")
         shot(page, "override-menu", "laptop")
         # Phone: the same menu renders as a bottom sheet.
@@ -3889,6 +4266,8 @@ def mock_pass(browser) -> None:
         thumbs_checks(browser, base, errors)
         card_swap_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
+        target_checks(browser, base, overlay, errors)
+        rename_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)
@@ -4014,6 +4393,7 @@ def mock_pass(browser) -> None:
         # Cache: the three selected GIFs as a playlist, their copies forgotten.
         goto_view(page, "library")
         page.click("#lib-to-set")
+        page.click("#pl-target #pl-new")
         page.wait_for_selector("#view-sets.on")
         page.evaluate("async (sel) => { const { app } = await import('./js/state.js'); const { emit } = await import('./js/util.js'); app.draft = { paths: sel, name: '', path: '' }; emit('draft'); }", selected)
         page.fill("#set-name", "cachetest")
@@ -4144,17 +4524,17 @@ def mock_pass(browser) -> None:
         smooth_checks(page, base, overlay)
         # Settings
         settings_tab_checks(page)
-        goto_view(page, "settings/play")
+        goto_view(page, "settings/look")
         # The heading's save count before this change (an earlier save may
         # have shown, and cleared, its tick already).
-        n0 = page.evaluate("+(document.querySelector('#st-tab-play .card h2 .tick')?.dataset.n || 0)")
+        n0 = page.evaluate("+(document.querySelector('#st-tab-look .card h2 .tick')?.dataset.n || 0)")
         page.eval_on_selector("#st-brightness", "e => { e.value = 120; e.dispatchEvent(new Event('input')); }")
         check(wait_config(base, lambda c: c["brightness"] == 120)["brightness"] == 120, "settings: brightness saved as it settles, read back")
-        page.wait_for_function("n => +document.querySelector('#st-tab-play .card h2 .tick').dataset.n > n", arg=n0, timeout=5000)
-        tick = page.text_content("#st-tab-play .card h2 .tick")
-        anim = page.eval_on_selector("#st-tab-play .card h2 .tick", "e => getComputedStyle(e).animationName")
-        check(tick == "Saved ✓" and anim == "out", f"settings: the Playback heading shows Saved ✓, fading ({tick!r}, {anim})")
-        page.wait_for_function("document.querySelector('#st-tab-play .card h2 .tick').textContent === ''", timeout=5000)
+        page.wait_for_function("n => +document.querySelector('#st-tab-look .card h2 .tick').dataset.n > n", arg=n0, timeout=5000)
+        tick = page.text_content("#st-tab-look .card h2 .tick")
+        anim = page.eval_on_selector("#st-tab-look .card h2 .tick", "e => getComputedStyle(e).animationName")
+        check(tick == "Saved ✓" and anim == "out", f"settings: the Panel heading shows Saved ✓, fading ({tick!r}, {anim})")
+        page.wait_for_function("document.querySelector('#st-tab-look .card h2 .tick').textContent === ''", timeout=5000)
         check(True, "settings: the tick goes after a moment")
         goto_view(page, "settings/device")
         page.wait_for_selector("#st-facts dt")
@@ -4177,7 +4557,7 @@ def mock_pass(browser) -> None:
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
-        for t in ("play", "look", "time", "device"):
+        for t in ("play", "look", "time", "replay", "device"):
             goto_view(page, f"settings/{t}")
             no_leaks(page, f"settings ({t})")
             page.evaluate("window.scrollTo(0, 0)")
@@ -4265,6 +4645,8 @@ def mock_pass(browser) -> None:
         goto_view(page, "now")
         page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
         check(get_json(base + "/api/status")["mode"] == "normal", "now: schedule cleared -> status mode normal")
+        sun_checks(page, base)
+        dates_checks(page, base)
         goto_view(page, "settings/device")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):
@@ -5809,7 +6191,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     sample picture, then over a GIF picked from the playlist (decoded by
     pkg-art) and changes with it; Show over the panel's GIF sends
     `"over":true` and takes it off again; Set as the panel's look (it
-    declares `look`) sets the config, Settings › Look lists it and None
+    declares `look`) sets the config, Settings › Panel lists it and None
     clears it; Save as GIF over the GIF."""
     page = new_page(browser, "laptop", errors)
     plays: list[dict] = []
@@ -5848,7 +6230,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     check(t == "Taken off the panel" and plays[-1] == {"path": "", "live": False, "over": True}
           and get_json(base + "/api/status")["formula_look"] is None and page.inner_text("#psi-show") == "Show over the panel’s GIF",
           f"formulas over: pressed again, it comes off ('{t}', {plays[-1]})")
-    # Kept as the look (its own `look` line: over, 100 %); Settings › Look
+    # Kept as the look (its own `look` line: over, 100 %); Settings › Panel
     # lists it; None clears it. A Formula without the line has no button.
     clear_toasts(page)
     page.click("#psi-look")
@@ -5870,7 +6252,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
     check(c["look_formula"] == "" and "Scanlines" in opts and opts[0] == "None",
-          f"formulas over: Settings › Look lists the looks ({len(opts)}) and None turns it off")
+          f"formulas over: Settings › Panel lists the looks ({len(opts)}) and None turns it off")
     # Save as GIF over the picked GIF: Create Art, titled with both.
     goto_view(page, "formulas")
     page.click("#psi-ex .psi-tile[data-name='Old photo']")
@@ -5884,7 +6266,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def looks_checks(browser, base: str, errors: list[str]) -> None:
-    """A Formula as the panel's look (formula-apps F2): Settings › Look
+    """A Formula as the panel's look (formula-apps F2): Settings › Panel
     lists only Formulas that declare `look`, with no blend or amount of its
     own, and saves the Formula's path; one saved elsewhere is listed by its
     `name` line with how its `look` line goes on, and Change… opens its
@@ -5901,7 +6283,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     looks = {"Scanlines", "Old TV", "Vignette", "Old photo", "Glitter"}
     check(names[0] == "None" and set(names[1:]) == looks and all(o[2] == "Bundled Formulas" and not o[1] for o in opts[1:])
           and page.locator("#st-look-blend, #st-look-amt").count() == 0,
-          f"looks: Settings › Look lists the bundled Formulas that declare `look`, no blend or amount ({names})")
+          f"looks: Settings › Panel lists the bundled Formulas that declare `look`, no blend or amount ({names})")
     page.select_option("#st-look-formula", label="Vignette")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
@@ -6623,6 +7005,25 @@ def recent_checks(page: Page, base: str) -> None:
     s = status()
     check(s["now_playing"]["path"] == c and s["recent"][:3] == [c, a, b],
           f"recent: Replay restarts {c} (ordinal {ordinal} -> {s['now_playing']['ordinal']}), the list unchanged")
+    # The tags under the title and in the list: platforms by name, nothing twice.
+    tagl = page.eval_on_selector_all("#now-recent > div > .muted", "els => els.map(e => e.textContent)")
+    names = page.evaluate(f"import('./js/state.js').then(({{ app }}) => {json.dumps([c, a, b])}.map(p => app.wasm.consoleName(app.wasm.parsePath(p).platform || '')))")
+    squash = lambda t: "".join(ch for ch in t.lower() if ch.isalnum()).removeprefix("by")
+    check(all(len({squash(x) for x in t.split(" · ")}) == len(t.split(" · ")) for t in tagl if t)
+          and all(not n or t.startswith(n) for t, n in zip(tagl, names)) and page.inner_text("#now-tags") == tagl[0],
+          f"recent: tags name the platform ({names}), nothing twice, Now's the same ({tagl})")
+    # The keys, with nothing focused: ← is Previous, Space pauses and resumes, → skips.
+    page.evaluate("document.activeElement?.blur()")
+    page.keyboard.press("ArrowLeft")
+    path_is(a)
+    p0 = status(False)["paused"]
+    page.keyboard.press("Space")
+    flipped = wait_until(lambda: status(False)["paused"] != p0, 10)
+    page.keyboard.press("Space")
+    back_again = wait_until(lambda: status(False)["paused"] == p0, 10)
+    page.keyboard.press("ArrowRight")
+    page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(a)}", timeout=10000)
+    check(flipped and back_again, "now: keys ← Previous, Space pause/resume twice, → skip")
     codes = [back() for _ in range(RECENT_MAX + 1)]
     s = status()
     check(codes[-1] == 404 and 200 in codes and s["recent_at"] == len(s["recent"]) - 1,
@@ -7478,8 +7879,9 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
     page.click("#lib-d-more")
-    for sel in ("#lib-d-fav", "#lib-d-hide", "#lib-d-edit", "#lib-d-del"):
+    for sel in ("#lib-d-fav", "#lib-d-edit", "#lib-d-del"):
         check(page.is_visible(sel), f"details: {sel} in the … menu")
+    check(page.locator("#lib-d-hide").count() == 0, "details: no Hide in… in the … menu")
     check("danger" in (page.get_attribute("#lib-d-del", "class") or ""), "details: Delete… is destructive in the menu")
     page.keyboard.press("Escape")
     no_leaks(page, "library (details)")
@@ -7939,16 +8341,23 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     """Settings' "Follow RePlayOS" card and the Now line, against a fake
     RePlayOS (tools/mock-replay.py, started and stopped here)."""
     proc, replay_base, replay_port = start_replay("4321", "1")
-    host_val = f"127.0.0.1:{replay_port}"
+    # (A name, not an address: Follow resolves it.)
+    host_val = f"localhost:{replay_port}"
     try:
         print(f"\n== mock RePlayOS at {replay_base}")
-        goto_view(page, "settings/time")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo", timeout=10000)
         for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test"):
             check(page.locator(sel).count() == 1, f"follow: {sel} renders")
         page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
 
-        # Test: a wrong code, then the right one.
+        # Test: a name that resolves to nothing, a wrong code, then the right one.
+        page.fill("#fo-host", "no-such-box.invalid")
+        page.fill("#fo-code", "4321")
+        page.click("#fo-test")
+        page.wait_for_function("!document.querySelector('#fo-result').textContent.includes('asking')", timeout=15000)
+        t = page.inner_text("#fo-result")
+        check("name not found" in t, f"follow: Test with a name that doesn't resolve -> '{t}'")
         page.fill("#fo-host", host_val)
         page.fill("#fo-code", "wrong")
         page.click("#fo-test")
@@ -7995,6 +8404,14 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
             "document.querySelector('#now-follow-line').textContent.includes('attract')", timeout=15000)
         t = page.inner_text("#now-follow-line")
         check("Following RePlayOS" in t and "attract" in t, f"follow: menu -> Now line '{t}'")
+        # When the box last answered: in the full status, and the card.
+        c = wait_context(base, lambda c: isinstance(c.get("seen"), int))
+        goto_view(page, "settings/replay")
+        page.wait_for_function("document.querySelector('#fo-state').textContent.includes('last answered')", timeout=10000)
+        t = page.inner_text("#fo-state")
+        check(isinstance(c.get("seen"), int) and c["seen"] <= 20 and t.endswith(" s ago"),
+              f"follow: when the box last answered -> status seen {c.get('seen')} s, the card '{t}'")
+        goto_view(page, "now")
 
         # Sonic 3 (step 1): "starting" at some point, then the game line;
         # while the title card is up, the title shows the game and the path
@@ -8053,7 +8470,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         no_leaks(page, "now (follow)")
 
         # Leave the mock as it started: not following, no host.
-        goto_view(page, "settings/time")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo-on", timeout=10000)
         if page.is_checked("#fo-on"):
             page.uncheck("#fo-on")
@@ -8086,7 +8503,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         page.wait_for_timeout(500)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         check(over <= 0, f"phone 360: {view} has no horizontal scroll ({over}px)")
-    for view in ["settings/look", "settings/time", "settings/device", "sets/edit"]:
+    for view in ["settings/look", "settings/time", "settings/replay", "settings/device", "sets/edit"]:
         goto_view(page, view)
         page.wait_for_timeout(800)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
@@ -8973,6 +9390,7 @@ def device_pass(browser, device: str) -> None:
         follow_keys = ("follow", "follow_host", "follow_code_set", "attract_set")
         check(all(k in cfg for k in follow_keys), f"device config: follow keys present ({sorted(cfg)})")
         check("context" in st, f"device status: context present ({st.get('context')})")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo", timeout=10000)
         check(page.locator("#fo-on").count() == 1 and page.locator("#fo-host").count() == 1,
               "device settings: Follow RePlayOS group renders")
@@ -9060,7 +9478,7 @@ def no_formulas_pass(browser) -> None:
         shot(page, "noformulas-formulas", "laptop")
         goto_view(page, "settings/look")
         page.wait_for_selector("#st-look-none", timeout=20000)
-        check(page.locator("#st-look-formula").count() == 0, "no formulas: Settings › Look has the note, no Formula look picker")
+        check(page.locator("#st-look-formula").count() == 0, "no formulas: Settings › Panel has the note, no Formula look picker")
         goto_view(page, "settings/play")
         page.wait_for_selector("#st-tab-play", timeout=20000)
         check(page.locator("#st-keep").count() == 0, "no formulas: Settings › Playback has no Formula keep setting")

@@ -45,7 +45,7 @@ names the format or shows a copy's path.
 order: Now, Library, Playlists, Create Art, Settings. A view's address is
 `#now`, `#library`, `#sets`, `#create` or `#settings`; Settings' tabs and the
 Playlists editor have their own (`#settings/play`, `#settings/look`,
-`#settings/time`, `#settings/device`; `#sets/edit`), so a link or the back
+`#settings/time`, `#settings/replay`, `#settings/device`; `#sets/edit`), so a link or the back
 button lands on them.
 
 - **Now** — what the panel is playing: the title, then its platform,
@@ -57,9 +57,15 @@ button lands on them.
   **panel-look preview** of the same file plays alongside, kept in step with
   the panel by clock. It fetches the file's prepared copy first (cheap for
   the device; one 404 when there is none) and can be switched off (Settings
-  → Look → *Mirror the panel on Now*, per browser). The device's figures
+  → Panel → *Mirror the panel on Now*, per browser). The device's figures
   (uptime, memory, late frames) are Settings → Device → Status. The LED-look controls (gain,
-  bloom, gamma, flat) are here too and are remembered per browser. In local
+  bloom, gamma, flat: **Preview look**, this page's drawing only, never
+  the panel's) are here too and are remembered per browser. Previous is
+  disabled, not hidden, until Recently played has somewhere to go back to.
+  The tags under the title name the platform (`app.wasm.consoleName`), the
+  category, the flags and the author (unless the category names them);
+  a Formula's are "Formula". Keys while Now is up: Space pauses or
+  resumes, → skips, ← is Previous (not in a field or on a slider). In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
   **Recently played** (under the preview) and **Previous** / **Replay**
@@ -101,17 +107,22 @@ button lands on them.
   with matches show, open, with their match counts — the category facets —
   and the platform chips count the matches, most first, and narrow them;
   clearing the box clears the platforms picked with it. Each GIF row shows
-  a thumbnail (below), its title, platform and favourite/hidden marks. Pick
+  a thumbnail (below), its title, platform and favourite marks. Pick
   one and the **Details** panel (the right-hand column; a sheet from the
   bottom on a phone) plays it with the panel look and shows its title,
   platform, category, author and file name, with **Send to panel**, **Add
-  to playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in
-  the playlist chosen beside them), Smooth motion where it applies, **Edit
+  to playlist…**, **Edit in Create Art**, **Favourite** (in the playlist
+  chosen beside it), Smooth motion where it applies, **Edit
   details…** and **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
-  **Add to playlist** and **Done**: a tap then picks a row instead of
-  opening it. A GIF whose name has no title, or only a number
+  **None**, **Add N to playlist ▾** and **Done**: a tap then picks a row
+  instead of opening it. Add to playlist (here and in Details) is one menu
+  (`gifs.js` `targetMenu`): the playlist playing first, then the user's
+  others with their counts (the one in the editor marked), then **New
+  playlist…**; never the card's own. `appendTo` skips lines already in it
+  (case-insensitively, as FAT matches names) and patches the editor's copy
+  when it is the one open. A GIF whose name has no title, or only a number
   (`N64_LOGO_01.gif`), is listed by its platform and flags: "N64 Logo 01".
 
   **Thumbnails** (`js/thumbs.js`; on by default, Settings → Device →
@@ -153,8 +164,13 @@ button lands on them.
   the playlist; the card's own are saved as a new one (**Save as a new playlist**,
   prefilled "Halloween 2"). **+ New playlist** opens an empty one with a
   Name field. The entries show their thumbnails; drag ⠿ (or Alt+↑/↓) to
-  reorder, ✕ to remove, a tap picks them for **Arrange** (Shuffle, Sort
-  A–Z, Picked to top, Remove picked, Clear). **+ Add GIFs** opens the same
+  reorder, a row's **…** to move it (up, down, to top, to end), ✕ to
+  remove, a tap (or **Select**'s ticks, with an "N picked" chip) picks
+  them for **Arrange** (Shuffle, Sort A–Z, Picked to top, Picked to end,
+  Remove picked, Clear). Remove, Clear, Shuffle and a replace by filter
+  offer one Undo in their toast. `app.draft.saved` holds the lines as last
+  saved: leaving the editor, or opening another playlist, with changes
+  asks "Save changes to X?" (OK saves, Cancel puts them back). **+ Add GIFs** opens the same
   folder tree as the Library, with a checkbox on every GIF and folder (on a
   laptop beside the entries, the playlist list stepping aside; on a phone
   in their place, **Done** to go back): tick GIFs or whole folders and
@@ -169,28 +185,43 @@ button lands on them.
   /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All files,
   a root manifest's file name, or a set's name — which the device applies
   in a few seconds), kept in reach at the bottom; a list row's **…** has
-  **Play** and **Delete…**. Deleting the active playlist switches the
-  player back to All files first. Switching is disabled while status says
+  **Play**, **Rename…**, **Duplicate** and **Delete…**. Deleting the
+  active playlist switches the display back to All files first. Rename and
+  Duplicate are the web app's (no request renames a set): the lines `PUT
+  /api/sets/<new>`, the overrides read and written to `<new>.meta`; a
+  rename then moves `config.set` if it plays, rewrites schedule rules that
+  name it, deletes the old `.txt`/`.meta` and follows in the editor (a
+  change of case alone goes by way of another name: FAT sees one file). A
+  taken name gets the next number ("Halloween 2"). Switching is disabled while status says
   an index is `building`. Entries are GIF paths or Formulas.
-- **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
+- **Settings** — five tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
-  - **Playback**: brightness with **Maximum brightness** under it
-    (`js/power.js`; default 144, below the level tested safe on the
-    supplied power supply; raising it shows a warning, because the panel
-    can reset above it), the playlist, **Platforms** (one row — "All
+  - **Playback**: the playlist, **Platforms** (one row — "All
     (60)" or the ones picked — and **Choose…**, a sheet with a search box,
     the playlist's platforms with their counts, those under 5 behind "+N
     more", **Only these** and **All platforms**), shuffle, and **Each GIF
     stays** min – max seconds (the dwell). These apply live (the playlist
     not while the player is still reading one).
-  - **Look**: colour and phosphor glow, *Mirror the panel on Now* (this
+  - **Panel** (`#settings/look`): brightness with **Maximum brightness**
+    under it (`js/power.js`; default 144, below the level tested safe on
+    the supplied power supply; raising it shows a warning, because the
+    panel can reset above it), colour and phosphor glow, the Formula over
+    every GIF, *Mirror the panel on Now* (this
     browser's choice), the transition with a Preview and the start-up show
     (`js/boot.js`: its length, `boot_show`, and what plays, `boot_formula`:
     the wordmark or a Formula light enough for the show; a Formula's
     preview is pkg-psi's frame with the main module's information line over
     it, `Preview.showBoot`, the panel's `@boot?formula=…`).
-  - **Schedule**: time zone, schedule rules, night mode, Follow RePlayOS.
+  - **Schedule**: time zone, location, schedule rules (days, times and
+    optionally dates, `["MM-DD","MM-DD"]`; **Add Halloween** / **Add
+    Christmas** put a dated all-day rule first when the card has
+    `filelist.hall` / `filelist.xmas`), night mode
+    (between two times, or from sunset to sunrise with an offset: `sun`
+    and `offset` in the schedule, offered only with a location; the
+    device works out the sun, `opendmd_core::schedule::sun_night`).
+  - **RePlayOS**: Follow RePlayOS (`js/follow.js`), with a link to the
+    guide's page.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
     (the playlist and its count, the card, uptime, free memory and its
     floor, late frames, refresh rate, GIFs started) with **Reload playlist**
@@ -326,13 +357,13 @@ the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 
-## Favourites, hiding and schedules
+## Favourites and schedules
 
-**Favourites, hiding and schedules.** Right-click a GIF in the Library or a
+**Favourites and schedules.** Right-click a GIF in the Library or a
 playlist (its "…" button; on a phone a long press in a playlist) to make it a
-favourite, play it less, hide it, or — a second step, **Play longer or
+favourite, play it less, or — a second step, **Play longer or
 loop…** — play it twice as long, for N seconds, or N times — per playlist, so a GIF can
-be a favourite in one and hidden in another. Settings → Schedule → Time sets the zone
+be a favourite in one and play less often in another. Settings → Schedule → Time sets the zone
 (the player keeps time over NTP), and its Schedule picks a playlist
 and/or brightness for parts of the week ("Weekdays 18:00–23:00 → Consoles")
 and a night mode that turns the panel off or dims it; Now shows when either
@@ -342,7 +373,7 @@ brightness come back when a rule ends.
 ## Colour and glow
 
 **Colour and glow.** The player can show everything in one
-colour like a classic dot-matrix display — Settings → Look → *colour*:
+colour like a classic dot-matrix display — Settings → Panel → *colour*:
 full colour (the default), amber (the plasma-DMD orange), red, green, blue or
 white; each pixel becomes that colour at its own brightness (Rec. 601
 luminance) — and can give the dots a **phosphor glow**, *off* (the default),
@@ -355,7 +386,7 @@ else pass through them. Glow is opt-in because it keeps a 12 KB copy of what
 the panel shows while it is lit (none while it is dark or paused), which
 transitions and the cache builder would otherwise have.
 
-Follow RePlayOS can show a playlist (a Formula such as the bundled Big clock, `@formula:big-clock`, can be one) in the menus instead of its attract playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*).
+Follow RePlayOS can show a playlist (a Formula such as the bundled Big clock, `@formula:big-clock`, can be one) in the menus instead of its attract playlist (Settings → RePlayOS → *attract playlist*).
 
 There is no Live folder: the clock and the scrolling text (`@clock`, `@text`) are gone, a Formula draws a clock. A playlist line for either is skipped as the playlist is read (an info log line); `POST /api/play` of one is a `415`. The playlist editor drops such lines when it opens a playlist.
 

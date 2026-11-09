@@ -107,9 +107,27 @@ pub fn utc_and_yday() -> Option<(i64, i64)> {
     Some((now, i64::from(local_tm()?.tm_yday)))
 }
 
-/// Local weekday and minute, for the schedule; `None` before the first sync.
+/// Local weekday, minute and date, for the schedule; `None` before the
+/// first sync.
 pub fn local_now() -> Option<LocalTime> {
-    local_tm().map(|tm| LocalTime::from_tm(tm.tm_wday, tm.tm_hour, tm.tm_min))
+    local_tm().map(|tm| LocalTime::from_tm(tm.tm_wday, tm.tm_hour, tm.tm_min, tm.tm_mon, tm.tm_mday))
+}
+
+/// Unix seconds (UTC), or `None` before the first sync.
+pub fn unix_valid() -> Option<i64> {
+    let now = unix_now();
+    (now >= VALID_AFTER).then_some(now)
+}
+
+/// The local minute since midnight at Unix second `t` (its own zone
+/// offset: summer time as it will be then), for night mode's end.
+#[optimize(size)] // (once a night)
+#[inline(never)]
+pub fn minute_at(t: i64) -> Option<u16> {
+    // SAFETY: as in `local_tm`.
+    let mut tm: esp_idf_sys::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !esp_idf_sys::localtime_r(&t, &mut tm).is_null() };
+    ok.then(|| (tm.tm_hour * 60 + tm.tm_min) as u16)
 }
 
 /// `"HH:MM"` local, or `None` before the first sync.

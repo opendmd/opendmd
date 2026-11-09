@@ -16,7 +16,7 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider, drawn } from './util.js';
+import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
 // whenever Recently played is wanted; the slim one (`?now=1`, one segment:
@@ -29,8 +29,18 @@ const POLL_MS = 500, FULL_MS = 5000, SLOW_MS = 1500;
 // after a live one ends in AGAIN_MS.
 const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
 
-// "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
-const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).join(' · ');
+// "Mega Drive · Consoles · Slide · by pixelkid42": the platform, category
+// and flags by name and the author, each once (no "Arcade · Arcade", no
+// "Kenney · by kenney"; OTHER is no platform); "Formula" for one, nothing
+// for a title card.
+const platName = (p) => p && p != 'OTHER' && (app.wasm.consoleName(p) || (p.includes('_') ? niceName(p) : p.length > 4 ? p[0] + p.slice(1).toLowerCase() : p));
+const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+function tags(p, e) {
+  if (drawn(p)) return isFormula(p) ? 'Formula' : '';
+  const by = e.flags.find((f) => !isFlag(f)), seen = new Set();
+  return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by]
+    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).join(' · ');
+}
 
 // ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
 function favButton() {
@@ -87,7 +97,7 @@ function recentCard(prev, pick, fb) {
     clear(list, paths.map((p, k) => {
       const e = app.wasm.parsePath(p);
       const x = editFor(p);
-      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e)),
+      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(p, e)),
         x && h('button.more', { title: 'Edit in ' + x[0], 'aria-label': 'Edit in ' + x[0], onclick: (ev) => { ev.stopPropagation(); x[1](); } }, '✎'),
         fb.ov.path && !drawn(p) && moreButton(fb.ov, p));
     }));
@@ -101,7 +111,7 @@ export async function mount(el) {
 
 function mountDevice(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
-  // Settings › Look › Mirror the panel (this browser's choice).
+  // Settings › Panel › Mirror the panel (this browser's choice).
   const mirror = () => store.get('follow', true);
   const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
@@ -112,8 +122,12 @@ function mountDevice(el) {
   const followEl = h('span.tag.fl', { id: 'now-follow-line', hidden: true });
   const tagsEl = h('span', { id: 'now-tags' });
   const ord = h('span', { id: 'now-ord' });
+  // What plays next, once the display has picked it (`now_playing.next`).
+  const nextEl = h('span', { id: 'now-next' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
-  const prevBtn = h('button', { id: 'now-prev', hidden: true, onclick: back }, 'Previous');
+  // (Disabled, not hidden, until Recently played has one to go back to:
+  // the buttons keep their places.)
+  const prevBtn = h('button', { id: 'now-prev', disabled: true, onclick: back }, 'Previous');
   const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Replay');
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
@@ -135,7 +149,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta, ed, keptRow),
+      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, nextEl, ' ', conn), meta, ed, keptRow),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
@@ -151,7 +165,7 @@ function mountDevice(el) {
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
   let mirrored = mirror();
-  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Look)';
+  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Panel)';
   const sendBright = debounce(async (v) => {
     try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
   }, 300);
@@ -238,7 +252,7 @@ function mountDevice(el) {
   function render(s) {
     if (!s) return;
     const np = s.now_playing;
-    // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
+    // A virtual file (`@…`: Follow RePlayOS's cards, a Formula) shows its title only.
     const virt = !!np.path && drawn(np.path);
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
     // Why the playlist is empty; "No card" once a mount has failed.
@@ -248,12 +262,15 @@ function mountDevice(el) {
     unfilter.hidden = !pf;
     title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
-    tagsEl.textContent = np.path && !virt ? tags(e) : '';
+    tagsEl.textContent = np.path ? tags(np.path, e) : '';
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
     followEl.hidden = !fl;
     followEl.textContent = followEl.title = fl ?? '';
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
+    // (A GIF's; a Formula or a title card next says nothing.)
+    const nx = np.next;
+    nextEl.textContent = nx && !drawn(nx) ? ` · Next: ${label(app.wasm.parsePath(nx))}` : '';
     const kept = np.kept_s, left = Math.ceil(Math.max(0, kept * 1000 - np.elapsed_ms) / 1000);
     keptRow.hidden = kept == null;
     keptText.textContent = kept == null ? '' : kept ? `Kept on the panel: ${(left / 60) | 0}:${String(left % 60).padStart(2, '0')} left` : 'Kept on the panel until you change it';
@@ -297,7 +314,7 @@ function mountDevice(el) {
       render(s);
       if (ask) {
         recentOrd = s.recent ? s.now_playing.ordinal : -2;
-        if (s.recent) { prevBtn.hidden = false; rc.set(s.recent, s.recent_at); }
+        if (s.recent) rc.set(s.recent, s.recent_at);
       }
       sync();
       good();
@@ -360,6 +377,20 @@ function mountDevice(el) {
     live = false;
     ac?.abort();
   }
+  // A laptop's keys while Now is up: Space pauses or resumes, → skips, ←
+  // is Previous. Not while typing or on a slider, nor Space on a control
+  // reached with the keyboard (it presses that one); a button the mouse
+  // left focused lets go first, so the key isn't a second press of it.
+  function onKey(ev) {
+    const t = ev.target, f = { ' ': togglePause, ArrowRight: skip, ArrowLeft: () => prevBtn.disabled || back() }[ev.key];
+    if (!f || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat || t.closest?.('input,select,textarea,[contenteditable],dialog,[role=dialog],.menu')) return;
+    const ctl = t.closest?.('button,a,summary');
+    if (ev.key == ' ' && ctl?.matches(':focus-visible')) return;
+    ev.preventDefault();
+    ctl?.blur();
+    f();
+  }
+
   // Hidden: no stream (and the scheduler reads nothing); back: polling until it is live again.
   const onVis = () => { if (document.hidden) unlisten(); else { app.watch('now', POLL_MS, poll); listen(); } };
 
@@ -387,17 +418,19 @@ function mountDevice(el) {
     show() {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
-      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Look)'; }
+      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
       shown = true;
       // A status read at the start (polling until the stream is live).
       app.watch('now', POLL_MS, poll);
       app.soon('now');
       document.addEventListener('visibilitychange', onVis);
+      document.addEventListener('keydown', onKey);
       listen();
     },
     hide() {
       shown = false;
       document.removeEventListener('visibilitychange', onVis);
+      document.removeEventListener('keydown', onKey);
       unlisten();
       app.unwatch('now');
     },
