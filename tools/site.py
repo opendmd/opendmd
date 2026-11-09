@@ -435,6 +435,8 @@ stored on this site.
 The demo's and this site's animations are OpenDMD's own (its Formulas, recorded or playing
 live in your browser, and its start-up show) and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites and tiles (CC0).
+The web app's screenshots show game title screens from libretro-thumbnails, made into panel
+GIFs with Create Art; the GIFs themselves are not on this site.
 """
 
 # The pages' chrome and styles (see the docstring).
