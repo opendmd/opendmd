@@ -101,7 +101,7 @@ export async function mount(el) {
 
 function mountDevice(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
-  // Settings › Look › Mirror the panel (this browser's choice).
+  // Settings › Panel › Mirror the panel (this browser's choice).
   const mirror = () => store.get('follow', true);
   const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
@@ -151,7 +151,7 @@ function mountDevice(el) {
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
   let mirrored = mirror();
-  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Look)';
+  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Panel)';
   const sendBright = debounce(async (v) => {
     try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
   }, 300);
@@ -387,7 +387,7 @@ function mountDevice(el) {
     show() {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
-      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Look)'; }
+      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
       shown = true;
       // A status read at the start (polling until the stream is live).
       app.watch('now', POLL_MS, poll);

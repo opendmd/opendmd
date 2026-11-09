@@ -294,7 +294,7 @@ the API is accepted, `auto` is a 400.
 No-Formulas pass: a fourth mock with `--no-formulas` (a firmware build
 without them, `features` []): POST /api/play of a Formula is the 501 with
 the firmware's words, and the app's Send to panel toasts them; Formulas is
-one note (#f-none, no editor); Settings › Look has the note (#st-look-none),
+one note (#f-none, no editor); Settings › Panel has the note (#st-look-none),
 not the Formula look picker, and Playback no Formula keep; a playlist with
 two Formulas plays its two GIFs (`entries` 2) and the editor marks the
 Formulas "skipped on this display".
@@ -896,7 +896,7 @@ def settings_tab_checks(page: Page) -> None:
     address, only the open one in the page, a click changes the address."""
     goto_view(page, "settings")
     tabs = page.eval_on_selector_all("#st-tabs .tab", "els => els.map(e => [e.dataset.tab, e.textContent, e.classList.contains('on')])")
-    check(tabs == [["play", "Playback", True], ["look", "Look", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["device", "Device", False]],
+    check(tabs == [["play", "Playback", True], ["look", "Panel", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["device", "Device", False]],
           f"settings: five tabs, bare #settings opens Playback ({tabs})")
     for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("replay", "#fo-host"), ("device", "#st-hostname"), ("play", "#st-set")):
         page.click(f"#st-tabs [data-tab={t}]")
@@ -2272,8 +2272,8 @@ def power_checks(page: Page, base: str) -> None:
         return get_json(base + "/api/config")
 
     def at(sel):
-        # Brightness and its maximum are on Playback: open the tab first.
-        t = "play"
+        # Brightness and its maximum are on Panel (`look`): open the tab first.
+        t = "look"
         if not page.locator(f"#st-tab-{t}").count():
             page.click(f"#st-tabs [data-tab={t}]")
             page.wait_for_selector(f"#st-tab-{t}", timeout=10000)
@@ -2284,7 +2284,7 @@ def power_checks(page: Page, base: str) -> None:
 
     def reload_settings():
         # The page reads the config once; a PUT made behind its back needs a reload.
-        goto_view(page, "settings/play")
+        goto_view(page, "settings/look")
         page.reload()
         page.wait_for_selector(at("#st-maxbright"), state="attached", timeout=20000)
 
@@ -2333,8 +2333,8 @@ def power_checks(page: Page, base: str) -> None:
               f"power: PUT reply carries both ({r.get('brightness')}, {r.get('max_brightness')})")
         reload_settings()
         check(slider_max() == safe + 40, f"power: slider max follows a raised max_brightness ({slider_max()})")
-        check(page.is_visible(at("#st-maxbright")) and page.eval_on_selector("#st-tab-play", "t => !!t.querySelector('#st-brightness') && t.querySelector('#st-brightness').compareDocumentPosition(t.querySelector('#st-maxbright')) & 4"),
-              "power: Maximum brightness is on Playback, under the Brightness slider")
+        check(page.is_visible(at("#st-maxbright")) and page.eval_on_selector("#st-tab-look", "t => !!t.querySelector('#st-brightness') && t.querySelector('#st-brightness').compareDocumentPosition(t.querySelector('#st-maxbright')) & 4"),
+              "power: Maximum brightness is on Panel, under the Brightness slider")
         check(page.is_visible(at("#st-maxbright-warn")), "power: warning shown above the tested limit")
         w = page.inner_text(at("#st-maxbright-warn"))
         check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply",
@@ -4050,17 +4050,17 @@ def mock_pass(browser) -> None:
         smooth_checks(page, base, overlay)
         # Settings
         settings_tab_checks(page)
-        goto_view(page, "settings/play")
+        goto_view(page, "settings/look")
         # The heading's save count before this change (an earlier save may
         # have shown, and cleared, its tick already).
-        n0 = page.evaluate("+(document.querySelector('#st-tab-play .card h2 .tick')?.dataset.n || 0)")
+        n0 = page.evaluate("+(document.querySelector('#st-tab-look .card h2 .tick')?.dataset.n || 0)")
         page.eval_on_selector("#st-brightness", "e => { e.value = 120; e.dispatchEvent(new Event('input')); }")
         check(wait_config(base, lambda c: c["brightness"] == 120)["brightness"] == 120, "settings: brightness saved as it settles, read back")
-        page.wait_for_function("n => +document.querySelector('#st-tab-play .card h2 .tick').dataset.n > n", arg=n0, timeout=5000)
-        tick = page.text_content("#st-tab-play .card h2 .tick")
-        anim = page.eval_on_selector("#st-tab-play .card h2 .tick", "e => getComputedStyle(e).animationName")
-        check(tick == "Saved ✓" and anim == "out", f"settings: the Playback heading shows Saved ✓, fading ({tick!r}, {anim})")
-        page.wait_for_function("document.querySelector('#st-tab-play .card h2 .tick').textContent === ''", timeout=5000)
+        page.wait_for_function("n => +document.querySelector('#st-tab-look .card h2 .tick').dataset.n > n", arg=n0, timeout=5000)
+        tick = page.text_content("#st-tab-look .card h2 .tick")
+        anim = page.eval_on_selector("#st-tab-look .card h2 .tick", "e => getComputedStyle(e).animationName")
+        check(tick == "Saved ✓" and anim == "out", f"settings: the Panel heading shows Saved ✓, fading ({tick!r}, {anim})")
+        page.wait_for_function("document.querySelector('#st-tab-look .card h2 .tick').textContent === ''", timeout=5000)
         check(True, "settings: the tick goes after a moment")
         goto_view(page, "settings/device")
         page.wait_for_selector("#st-facts dt")
@@ -4083,7 +4083,7 @@ def mock_pass(browser) -> None:
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
-        for t in ("play", "look", "time", "device"):
+        for t in ("play", "look", "time", "replay", "device"):
             goto_view(page, f"settings/{t}")
             no_leaks(page, f"settings ({t})")
             page.evaluate("window.scrollTo(0, 0)")
@@ -5715,7 +5715,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     sample picture, then over a GIF picked from the playlist (decoded by
     pkg-art) and changes with it; Show over the panel's GIF sends
     `"over":true` and takes it off again; Set as the panel's look (it
-    declares `look`) sets the config, Settings › Look lists it and None
+    declares `look`) sets the config, Settings › Panel lists it and None
     clears it; Save as GIF over the GIF."""
     page = new_page(browser, "laptop", errors)
     plays: list[dict] = []
@@ -5754,7 +5754,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     check(t == "Taken off the panel" and plays[-1] == {"path": "", "live": False, "over": True}
           and get_json(base + "/api/status")["formula_look"] is None and page.inner_text("#psi-show") == "Show over the panel’s GIF",
           f"formulas over: pressed again, it comes off ('{t}', {plays[-1]})")
-    # Kept as the look (its own `look` line: over, 100 %); Settings › Look
+    # Kept as the look (its own `look` line: over, 100 %); Settings › Panel
     # lists it; None clears it. A Formula without the line has no button.
     clear_toasts(page)
     page.click("#psi-look")
@@ -5776,7 +5776,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
     check(c["look_formula"] == "" and "Scanlines" in opts and opts[0] == "None",
-          f"formulas over: Settings › Look lists the looks ({len(opts)}) and None turns it off")
+          f"formulas over: Settings › Panel lists the looks ({len(opts)}) and None turns it off")
     # Save as GIF over the picked GIF: Create Art, titled with both.
     goto_view(page, "formulas")
     page.click("#psi-ex .psi-tile[data-name='Old photo']")
@@ -5790,7 +5790,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def looks_checks(browser, base: str, errors: list[str]) -> None:
-    """A Formula as the panel's look (formula-apps F2): Settings › Look
+    """A Formula as the panel's look (formula-apps F2): Settings › Panel
     lists only Formulas that declare `look`, with no blend or amount of its
     own, and saves the Formula's path; one saved elsewhere is listed by its
     `name` line with how its `look` line goes on, and Change… opens its
@@ -5807,7 +5807,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     looks = {"Scanlines", "Old TV", "Vignette", "Old photo", "Glitter"}
     check(names[0] == "None" and set(names[1:]) == looks and all(o[2] == "Bundled Formulas" and not o[1] for o in opts[1:])
           and page.locator("#st-look-blend, #st-look-amt").count() == 0,
-          f"looks: Settings › Look lists the bundled Formulas that declare `look`, no blend or amount ({names})")
+          f"looks: Settings › Panel lists the bundled Formulas that declare `look`, no blend or amount ({names})")
     page.select_option("#st-look-formula", label="Vignette")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
@@ -8967,7 +8967,7 @@ def no_formulas_pass(browser) -> None:
         shot(page, "noformulas-formulas", "laptop")
         goto_view(page, "settings/look")
         page.wait_for_selector("#st-look-none", timeout=20000)
-        check(page.locator("#st-look-formula").count() == 0, "no formulas: Settings › Look has the note, no Formula look picker")
+        check(page.locator("#st-look-formula").count() == 0, "no formulas: Settings › Panel has the note, no Formula look picker")
         goto_view(page, "settings/play")
         page.wait_for_selector("#st-tab-play", timeout=20000)
         check(page.locator("#st-keep").count() == 0, "no formulas: Settings › Playback has no Formula keep setting")

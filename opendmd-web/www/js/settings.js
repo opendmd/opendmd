@@ -1,9 +1,9 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
 // partial patch, applied live except WiFi, which needs a reboot), in five
 // tabs, `#settings/play|look|time|replay|device` (bare `#settings` is the first);
-// only the open tab is in the page. Playback (brightness and its maximum
-// js/power.js, playlist, platforms, shuffle, how long each GIF stays),
-// Look (colour, glow, a formula over every GIF, mirroring on Now, the
+// only the open tab is in the page. Playback (playlist, platforms, shuffle,
+// how long each GIF stays), Panel at `look` (brightness and its maximum
+// js/power.js, colour, glow, a formula over every GIF, mirroring on Now, the
 // transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode), RePlayOS
 // (Follow RePlayOS, js/follow.js) and
 // Device (status, the playback cache, network — its own Save; a new name
@@ -18,7 +18,7 @@ import { popup, closeMenu } from './overrides.js';
 import { keepSelect, h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
-const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['replay', 'RePlayOS'], ['device', 'Device']];
+const TABS = [['play', 'Playback'], ['look', 'Panel'], ['time', 'Schedule'], ['replay', 'RePlayOS'], ['device', 'Device']];
 // The bundled Formulas (formulas.json: their sources), fetched once a session.
 let exQ = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
@@ -74,7 +74,7 @@ export async function mount(el) {
   const banner = h('div.banner', { hidden: true, id: 'st-reboot' });
   // Saved as changed: the slider when it settles, typed fields when left.
   let held = 0; // a slider change not saved yet: another card's config must not undo it
-  const later = debounce(() => save(['brightness'], play).then(() => { held = 0; }), 400);
+  const later = debounce(() => save(['brightness'], looks).then(() => { held = 0; }), 400);
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['shuffle', 'set']) f[k].onchange = () => save([k], play);
   for (const k of ['look', 'glow']) f[k].onchange = () => save([k], looks);
@@ -202,8 +202,8 @@ export async function mount(el) {
   }
   await loadPlaylists();
   on('config', loadPlaylists);
-  // Start-up (js/boot.js, loaded when Look is first open) and Maximum
-  // brightness (js/power.js, under Playback's Brightness): modules of their own.
+  // Start-up and Maximum brightness (js/boot.js and js/power.js, under the
+  // Brightness slider; loaded when Panel is first open): modules of their own.
   const boot = h('div.card', { id: 'st-boot-card' }), power = h('div', { id: 'st-power-card', style: 'margin-top:12px' });
   const time = timeCard();
   const sched = scheduleCard();
@@ -211,20 +211,21 @@ export async function mount(el) {
 
   const tab = (k, ...kids) => h('div.stab', { id: 'st-tab-' + k, role: 'tabpanel', 'aria-labelledby': 'st-t-' + k }, kids);
   const BUILD = {
-    play: () => (import('./power.js').then((m) => m.powerCard(power, playH)), tab('play',
+    play: () => tab('play',
       h('div.card', playH, note('A playlist, platform or shuffle change takes a few seconds', 'The display reads the playlist again; the panel holds its frame meanwhile.'),
         h('div.form.f2',
-          h('div', h('label.stack', 'Brightness', bright.el), power),
           h('label.stack', 'Playlist', f.set),
           h('div.stack', 'Platforms', h('div.row', platVal, h('button', { id: 'st-plat-btn', 'aria-haspopup': 'dialog', onclick: (e) => platSheet(e.currentTarget) }, 'Choose…'))),
           h('label.stack', 'Each GIF stays', h('div.row', f.dwell_min, '–', f.dwell_max, 's')),
           !app.noFormulas && h('label.stack', 'A Formula you show on the panel stays', f.formula_keep),
-          h('label', f.shuffle, 'Shuffle'))))),
+          h('label', f.shuffle, 'Shuffle')))),
     look: () => {
+      import('./power.js').then((m) => m.powerCard(power, lookH));
       import('./boot.js').then((m) => m.bootCard(boot, examples));
       return tab('look',
-        h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
-          h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
+        h('div.card', lookH, h('p.cap', 'How bright the panel is, and how it draws every GIF'),
+          h('div.form.f2', h('div', h('label.stack', 'Brightness', bright.el), power),
+            h('div', h('label.stack', 'Colour', f.look), h('label.stack', { style: 'margin-top:12px' }, 'Phosphor glow', f.glow))),
           ...(app.noFormulas ? [h('p.cap', { id: 'st-look-none', style: 'margin-top:12px' }, `No Formula over the GIFs: ${NO_FORMULAS.replace(/^F/, 'f')}`)]
             : [(lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
               h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.')]),

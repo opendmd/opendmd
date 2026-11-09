@@ -175,16 +175,17 @@ button lands on them.
 - **Settings** — five tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
-  - **Playback**: brightness with **Maximum brightness** under it
-    (`js/power.js`; default 144, below the level tested safe on the
-    supplied power supply; raising it shows a warning, because the panel
-    can reset above it), the playlist, **Platforms** (one row — "All
+  - **Playback**: the playlist, **Platforms** (one row — "All
     (60)" or the ones picked — and **Choose…**, a sheet with a search box,
     the playlist's platforms with their counts, those under 5 behind "+N
     more", **Only these** and **All platforms**), shuffle, and **Each GIF
     stays** min – max seconds (the dwell). These apply live (the playlist
     not while the player is still reading one).
-  - **Look**: colour and phosphor glow, *Mirror the panel on Now* (this
+  - **Panel** (`#settings/look`): brightness with **Maximum brightness**
+    under it (`js/power.js`; default 144, below the level tested safe on
+    the supplied power supply; raising it shows a warning, because the
+    panel can reset above it), colour and phosphor glow, the Formula over
+    every GIF, *Mirror the panel on Now* (this
     browser's choice), the transition with a Preview and the start-up show
     (`js/boot.js`: its length, `boot_show`, and what plays, `boot_formula`:
     the wordmark or a Formula light enough for the show; a Formula's
@@ -340,7 +341,7 @@ brightness come back when a rule ends.
 ## Colour and glow
 
 **Colour and glow.** The player can show everything in one
-colour like a classic dot-matrix display — Settings → Look → *colour*:
+colour like a classic dot-matrix display — Settings → Panel → *colour*:
 full colour (the default), amber (the plasma-DMD orange), red, green, blue or
 white; each pixel becomes that colour at its own brightness (Rec. 601
 luminance) — and can give the dots a **phosphor glow**, *off* (the default),

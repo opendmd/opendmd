@@ -1,8 +1,8 @@
-// Settings → Playback's Maximum brightness, under the Brightness slider
+// Settings › Panel's Maximum brightness, under the Brightness slider
 // (imported by settings.js; its own size line): the ceiling marked on the
 // brightness sliders, and a warning above the tested level. Saved when the
 // field is left (a lower maximum lowers the brightness with it); the Saved
-// tick is Playback's (`head`).
+// tick is Panel's (`head`).
 
 import { app } from './state.js';
 import { h, on, saver } from './util.js';

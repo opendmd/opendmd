@@ -1,4 +1,4 @@
-// A Formula as the panel's look (Settings › Look; the Formula settings
+// A Formula as the panel's look (Settings › Panel; the Formula settings
 // sheet, js/fsheet.js; imported by both, its own size line): a Formula
 // that declares `look` (its `look [blend] [amount]` line: how it goes over
 // every GIF). The line is the one record of the blend and amount: the
@@ -24,7 +24,7 @@ export { ctlOf as decl };
 // name, one of yours on the panel by its file, else its inline path; values
 // at their defaults left out).
 export const path = (m, f) => { const c = ctlOf(m, f.src); return line(f, c, fpath(f, c)); };
-// Whether `f` declares `look` (one Settings › Look lists).
+// Whether `f` declares `look` (one Settings › Panel lists).
 export const declares = (m, f) => !!ctlOf(m, f?.src)?.look;
 // Its name: its `name` line, else the one it was saved under.
 export const named = (m, f) => ctlOf(m, f.src)?.name || f.name || 'Formula';
@@ -67,7 +67,7 @@ export async function use(f, keep) {
 export async function useSaid(f, keep) {
   try {
     await use(f, keep);
-    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
+    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Panel changes it)`, 'ok');
   } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Set as the panel’s look: ' + e.message, 'bad'); }
 }
 
@@ -84,7 +84,7 @@ export async function startUp(f, keep) {
     if (/^@formula\?/.test(p) && p.length > 2048) throw new Error('this Formula is too long for the panel at start-up: save it first');
     await app.src.putConfig({ boot_formula: p });
     await app.refreshConfig();
-    toast(`“${f.name || 'Formula'}” plays when the panel starts now (Settings › Look changes it)`, 'ok');
+    toast(`“${f.name || 'Formula'}” plays when the panel starts now (Settings › Panel changes it)`, 'ok');
   } catch (e) { toast(e.status == 400 ? `The panel can’t use it at start-up: ${e.message.replace(/^400: (boot_formula: )?/, '')}` : 'Use at start-up: ' + e.message, 'bad'); }
 }
 
