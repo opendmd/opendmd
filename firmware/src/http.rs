@@ -711,6 +711,12 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         check_formula_value("boot_formula", &v, "as the start-up show")?;
         next.boot_formula = v;
     }
+    if let Some(v) = patch.network.as_deref() {
+        let Some(on) = crate::nvs_config::network_from_name(v) else {
+            return Err(PatchErr::bad("network must be on or off"));
+        };
+        next.network = on;
+    }
     if let Some(v) = patch.panel_sync {
         next.panel_sync = v;
     }
@@ -780,6 +786,8 @@ fn wifi_changes(s: &Settings, patch: &ConfigPatch) -> bool {
         || differs(&patch.wifi_eap_user, &s.wifi_eap_user, true)
         || differs(&patch.wifi_eap_identity, &s.wifi_eap_identity, true)
         || patch.wifi_eap_ttls.as_deref().is_some_and(|v| v != s.wifi_eap_ttls.as_str())
+        // WiFi on or off: read once, at boot.
+        || patch.network.as_deref().is_some_and(|v| v != crate::nvs_config::network_name(s.network))
 }
 
 /// Wire format for `PUT /api/config`. Every field is optional: what is absent
@@ -840,6 +848,9 @@ pub struct ConfigPatch {
     /// How long a Formula sent to the panel stays: `turn`, `1m`, `5m` or
     /// `hold` (until something else plays).
     pub(crate) formula_keep: Option<String>,
+    /// WiFi at all: `on` or `off` (`Settings::network`), in effect at the
+    /// next boot.
+    pub(crate) network: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     pub(crate) api_key: Option<String>,
@@ -2872,6 +2883,13 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         json_string(&s.hostname),
         json_string(&s.mdns),
     );
+    // The card's Formulas prepared when it was mounted (`card_formulas`).
+    #[cfg(feature = "psi")]
+    {
+        let j = crate::card_formulas::status_json();
+        let _ = out.write_str(&j[1..]);
+        let _ = out.write_str(",");
+    }
     now_playing_json(s, t, out);
     // `?recent=1`: Recently played, newest first, and which is on screen.
     if recent {
@@ -3345,7 +3363,7 @@ fn settings_json(s: &Settings) -> String {
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
             r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
-            r#""beta_updates":{},"#,
+            r#""beta_updates":{},"network":"{}","#,
             r#""lat":{},"lon":{}}}"#
         ),
         json_string(&s.wifi_ssid),
@@ -3384,6 +3402,7 @@ fn settings_json(s: &Settings) -> String {
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
         s.beta_updates,
+        crate::nvs_config::network_name(s.network),
         s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lat_c)),
         s.location.map_or_else(|| "null".to_string(), |p| centi_degrees(p.lon_c)),
     )

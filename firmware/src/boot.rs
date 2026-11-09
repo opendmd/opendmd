@@ -382,6 +382,18 @@ fn run(task: BootTask) {
         // The card's settings over the device's (or written from them).
         let (snapshot, card_settings) = crate::settings_card::adopt_at_mount(&settings);
         crate::heapmap::cp("card settings adopted");
+        // WiFi or not, as the card says (`network`): decided here, before
+        // the httpd and the network would start.
+        let online = snapshot.network;
+        network_decided(&status, &snapshot);
+        // The card's Formulas compiled where their compiled files are
+        // missing or stale, one at a time, while the card is this task's
+        // and the heap is at its widest (before the index).
+        #[cfg(feature = "psi")]
+        {
+            crate::card_formulas::prepare_at_mount();
+            crate::heapmap::cp("card formulas prepared");
+        }
         // The start-up show's Formula as the card's settings name it: one
         // of the card's read here, where the card is this task's, while the
         // show runs; any other told when it is not NVS's. Then room for the
@@ -401,15 +413,19 @@ fn run(task: BootTask) {
         let mut handover = prepare(c, &snapshot, &status);
         crate::heapmap::cp("playlist index (prepare)");
         handover.settings = card_settings;
-        start_http(ctx);
-        crate::heapmap::cp("httpd + stream task");
+        if online {
+            start_http(ctx);
+            crate::heapmap::cp("httpd + stream task");
+        }
         let _ = tx.send(Event::Ready(Box::new(handover)));
         let ready = t0.elapsed().as_millis();
-        crate::www::init();
-        // A pack an update left on the card, when flash has none (`www.rs`).
-        crate::www::restore_from_card();
-        crate::heapmap::cp("www pack");
-        start_network(net);
+        if online {
+            crate::www::init();
+            // A pack an update left on the card, when flash has none (`www.rs`).
+            crate::www::restore_from_card();
+            crate::heapmap::cp("www pack");
+        }
+        start_network(net, online);
         crate::heapmap::cp("net-worker spawned");
         log::info!(
             "boot: card handed over {ready} ms after the boot task started; boot task done in {} ms (stack {} B unused)",
@@ -419,16 +435,25 @@ fn run(task: BootTask) {
         return;
     }
 
+    // No card: WiFi or not as NVS says (what the card last said, or the
+    // installer's settings).
+    let nvs_settings = settings.lock().unwrap().clone();
+    let online = nvs_settings.network;
+    network_decided(&status, &nvs_settings);
+    drop(nvs_settings);
     if !health.capped && unreadable.is_none() {
         log::warn!(
-            "microSD: no card yet; starting the network and the web server anyway, and retrying every {} s",
+            "microSD: no card yet; {}retrying every {} s",
+            if online { "starting the network and the web server anyway, and " } else { "" },
             config::RETRY_INTERVAL.as_secs()
         );
     }
     let _ = tx.send(Event::NoCard);
-    start_http(ctx);
-    crate::www::init();
-    start_network(net);
+    if online {
+        start_http(ctx);
+        crate::www::init();
+    }
+    start_network(net, online);
 
     // No card mounted: try again every so often (a spent restart budget
     // waits longer, see `sdhealth`). A card that cannot be read is
@@ -518,6 +543,14 @@ fn run(task: BootTask) {
         }
         if let Some(c) = ready {
             let (now, card_settings) = crate::settings_card::adopt_at_mount(&settings);
+            if now.network != online {
+                log::warn!(
+                    "settings: the card turns WiFi {}; in effect from the next start",
+                    crate::nvs_config::network_name(now.network)
+                );
+            }
+            #[cfg(feature = "psi")]
+            crate::card_formulas::prepare_at_mount();
             let mut handover = prepare(c, &now, &status);
             handover.settings = card_settings;
             let _ = tx.send(Event::Ready(Box::new(handover)));
@@ -544,8 +577,33 @@ fn start_http(ctx: Arc<Ctx>) {
     }
 }
 
-/// The network worker, and with it WiFi: after the card, as before.
-fn start_network(net: net_worker::NetWorker) {
+/// The `network` setting as this boot has it (`s.network`, the card's
+/// or NVS's): off, the display has no WiFi and no clock this boot, and
+/// says so once; status says `wifi: "off"`.
+#[optimize(size)]
+#[inline(never)]
+fn network_decided(status: &Mutex<Status>, s: &Settings) {
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_no_clock(!s.network);
+    if s.network {
+        return;
+    }
+    status.lock().unwrap().wifi = "off";
+    crate::improv::set_network("off", "");
+    log::info!(
+        "network off (\"network\": \"off\" in the settings): no WiFi, no web app; the clock is not set, so the schedule and night mode are off and Formulas that show the time are skipped. \
+         To turn WiFi on: \"network\": \"on\" in the card's opendmd.json, or Connect to Wi-Fi in the browser installer"
+    );
+    if s.follow {
+        log::info!("follow: Follow RePlayOS is on, but the network is off: nothing to follow");
+    }
+}
+
+/// The network worker, and with it WiFi (`online`; offline, the worker
+/// without the radio: `net_worker::run_offline`): after the card, as
+/// before.
+fn start_network(mut net: net_worker::NetWorker, online: bool) {
+    net.offline = !online;
     crate::HEAP_FRESH.store(false, Ordering::Relaxed);
     if let Err(e) = net_worker::spawn(net) {
         log::error!("network worker failed to start ({e:#}); no WiFi this boot");

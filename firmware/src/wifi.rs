@@ -540,6 +540,28 @@ impl WifiManager {
     /// Raise the open setup network and point its DHCP server at ourselves.
     #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
     #[inline(never)]
+    /// Leave the network joined, if any (an offline display's join that
+    /// could not be saved).
+    pub fn disconnect(&mut self) -> anyhow::Result<()> {
+        if self.wifi.is_connected().unwrap_or(false) {
+            self.wifi.disconnect()?;
+        }
+        self.state = WifiState::Disconnected;
+        Ok(())
+    }
+
+    /// The station started with no network to join: what a scan needs
+    /// (an offline display's radio, started for the browser installer:
+    /// `net_worker::Offline`). Nothing is joined and nothing is advertised.
+    pub fn start_idle(&mut self) -> anyhow::Result<()> {
+        if !self.wifi.is_started().unwrap_or(false) {
+            self.wifi
+                .set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
+            self.wifi.start()?;
+        }
+        Ok(())
+    }
+
     pub fn start_ap(&mut self) -> anyhow::Result<()> {
         info!("starting AP mode: {}", config::AP_SSID);
 

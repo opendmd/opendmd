@@ -32,7 +32,7 @@ use crate::canvas::{Canvas, Rgb, PIXELS};
 use crate::fx::{Effect, PALETTES, SIN};
 pub use alloc_box::PsiBox;
 use opendmd_psi as psi;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// The lane width: one panel row.
@@ -523,9 +523,55 @@ pub(crate) fn refuse_loads(n: u32) {
     REFUSE.with(|r| r.set(n));
 }
 
-/// What a Formula on the card says when its compiled file is not there.
+/// What a Formula on the card says when its compiled file is not there
+/// (the display prepares a card's Formulas from their source when it
+/// mounts the card: this one is missing, or did not compile).
 pub const NOT_PREPARED: &str =
-    "this Formula is not on the card, or not prepared for the panel yet: open the OpenDMD app";
+    "this Formula is not on the card, or could not be prepared for the panel";
+
+/// What a Formula that reads the clock (`hour`, `minute`, `second`) says
+/// when the display has no time and never will this boot ([`set_no_clock`]).
+pub const NEEDS_TIME: &str =
+    "this Formula shows the time, and the display has no clock with WiFi off";
+
+/// The display has no clock this boot (WiFi off: no time sync), so a
+/// Formula that reads it does not open ([`NEEDS_TIME`]): a playlist moves
+/// past it, a look or start-up show of it falls back as for any Formula
+/// that does not open. Per thread in tests.
+#[cfg(not(test))]
+static NO_CLOCK: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+thread_local! {
+    static NO_CLOCK: AtomicBool = const { AtomicBool::new(false) };
+}
+
+/// Whether the display has no clock this boot (the firmware sets it when
+/// the network is off): Formulas that read the time are refused.
+pub fn set_no_clock(none: bool) {
+    #[cfg(not(test))]
+    NO_CLOCK.store(none, Ordering::Relaxed);
+    #[cfg(test)]
+    NO_CLOCK.with(|c| c.store(none, Ordering::Relaxed));
+}
+
+fn no_clock() -> bool {
+    #[cfg(not(test))]
+    return NO_CLOCK.load(Ordering::Relaxed);
+    #[cfg(test)]
+    NO_CLOCK.with(|c| c.load(Ordering::Relaxed))
+}
+
+/// [`NEEDS_TIME`] for a program that reads the clock while there is none.
+fn clock_check(prog: &psi::Prog) -> Result<(), psi::Error> {
+    if no_clock() && reads_clock(prog) {
+        return Err(psi::Error {
+            start: 0,
+            end: 0,
+            msg: NEEDS_TIME.to_string(),
+        });
+    }
+    Ok(())
+}
 
 /// A formula's program on the heap, with the store its formula needs
 /// ([`psi::Prog`]: its tables and sprites, a power of two of numbers, 4 for
@@ -1035,6 +1081,7 @@ impl PsiFx {
         // memory is asked for.)
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
         let (prog, est, delay) = compile(q)?;
+        clock_check(&prog)?;
         fx.prog = prog;
         fx.ink = canvas_for(&fx.prog, &mut None)?;
         fx.clock = reads_clock(&fx.prog);
@@ -1075,6 +1122,7 @@ impl PsiFx {
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = resolve(q)?;
         let (prog, est, delay) = compile(&q)?;
+        clock_check(&prog)?;
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
         self.ink = canvas_for(&prog, &mut self.ink)?;
@@ -1853,6 +1901,7 @@ impl FormulaLook {
         // Its look program: its own `look screen 40` line composed in by
         // the compiler (else the program as it plays).
         let prog = load_boxed(q.bytes(), psi::psb::Which::Look)?;
+        clock_check(&prog)?;
         if !prog.over() {
             return Err(psi::Error {
                 start: 0,
@@ -2694,6 +2743,32 @@ mod tests {
 
     fn path(src: &str) -> String {
         super::path(src, "")
+    }
+
+    #[test]
+    fn with_no_clock_a_formula_that_reads_the_time_does_not_open() {
+        let clock = psi::build("gray(minute/60)").unwrap();
+        let plain = psi::build("gray(x)").unwrap();
+        // The clock known (or coming): both open.
+        set_no_clock(false);
+        assert!(PsiFx::from_bytes(&clock, "").is_ok());
+        // No clock this boot: the one that reads the time is refused with
+        // the sentence the playlist's skip logs; the other still opens.
+        set_no_clock(true);
+        let e = PsiFx::from_bytes(&clock, "").expect_err("refused");
+        assert_eq!(e.msg, NEEDS_TIME);
+        assert!(PsiFx::from_bytes(&plain, "").is_ok());
+        // As a path too (what a playlist's `@formula…` line opens), and in
+        // place (`retune_from`): the playing formula stays.
+        let mut fx = PsiFx::from_bytes(&plain, "").unwrap();
+        assert_eq!(fx.retune_from(&path("gray(second/60)")[Q..]).err().map(|e| e.msg), Some(NEEDS_TIME.to_string()));
+        assert!(fx.retune_from(&path("gray(y)")[Q..]).is_ok());
+        assert!(Fx::parse(&path("gray(hour/24)")).is_none());
+        // A look of it likewise.
+        let look = psi::build("look screen 40\ngray(minute/60)").unwrap();
+        assert_eq!(FormulaLook::from_bytes(&look, "").err().map(|e| e.msg), Some(NEEDS_TIME.to_string()));
+        set_no_clock(false);
+        assert!(FormulaLook::from_bytes(&look, "").is_ok());
     }
 
     #[test]

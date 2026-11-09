@@ -67,7 +67,7 @@ pub type Refusal = &'static str;
 pub const NOT_PSB: Refusal = "not a compiled Formula";
 /// Compiled for another version of the player.
 pub const OTHER_ABI: Refusal =
-    "this Formula was prepared for another version of OpenDMD: open the OpenDMD app to prepare it again";
+    "this Formula was prepared for another version of OpenDMD: the display prepares it again from its source when the card is next mounted";
 
 /// The program was loaded into a store too small for its numbers (a
 /// caller's mistake: [`store_needed`] says how big).
