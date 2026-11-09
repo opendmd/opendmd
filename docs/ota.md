@@ -101,8 +101,9 @@ banner as `4mb layout v4`.
   not know its magic, so they refuse its bundles as "not an OpenDMD
   firmware bundle (bad magic)" at the header, or (a firmware that knows
   the `ODFW` prefix) as another flash layout's: **a DevKit on table v3
-  (1.0.0-beta.16 to 1.0.1) refuses every v4 bundle** (`ODFW44mb`: its
-  firmware's `Header::parse` answers `OtherLayout`, its updater's `memcmp`
+  (1.0.0-beta.16 to 1.0.1) refuses every v4 bundle** (`ODFW44mb`: the
+  firmware's `Header::parse` answers `OtherLayout` from 1.0.0, beta.16's
+  `BadMagic`, "bad magic"; its updater's `memcmp`
   against the magics it knows fails, "bad magic", and its web app's
   `otherLayout` says "another flash layout"), so a v4 image, which may be
   bigger than v3's 2,560 KB `factory`, can never reach a v3 board's

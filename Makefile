@@ -1307,7 +1307,8 @@ emu-nocard: emu-build
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe
-# outgrew the 4mb factory partition (2,664,032 B of 2,621,440, 2026-11-06).
+# outgrew table v3's 4mb factory partition (2,664,032 B of 2,621,440,
+# 2026-11-06; v4's is 2,883,584).
 # EMU_PROBE_SPARE (64 KB, as for a release) of its 3 MB factory.
 # FW_IMAGE=... skips the build.
 EMU_PROBE_VARIANT ?= $(FW_EMU_VARIANT)

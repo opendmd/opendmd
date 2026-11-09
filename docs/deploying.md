@@ -195,7 +195,8 @@ update file and both sides refuse a mismatch before anything is written:
 - **A v3 board** (1.0.0-beta.16 to 1.0.1) refuses a v4 `.odfw` (`ODFW44mb`).
   Its firmware does not know the magic and answers 422 "this update is for
   another flash layout than this display's: use the DevKit (4 MB) update
-  file (opendmd.dev/install has the latest)"; its updater, had a bundle got
+  file (opendmd.dev/install has the latest)" (1.0.0-beta.16's says "not an
+  OpenDMD firmware bundle (bad magic)"); its updater, had a bundle got
   that far, logs "not a firmware bundle (bad magic)" and boots the firmware
   that is there (`make emu-api`'s boot C runs exactly that); its web app's
   **Update from file…** says "This file is for another flash layout than
