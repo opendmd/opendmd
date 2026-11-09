@@ -1,0 +1,3 @@
+name "Stale"
+-- its .psb on the card is another version's: prepared again at mount (emu-offline)
+rgb(0.2, frac(y + t / 5), 0.6)

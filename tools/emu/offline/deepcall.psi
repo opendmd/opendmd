@@ -1,0 +1,3 @@
+name "Deep calls"
+-- calls nested to the compiler's cap: the compile task's stack, measured (emu-offline)
+gray(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(sin(x))))))))))))))))))))))))))))))))))))))))))))))))

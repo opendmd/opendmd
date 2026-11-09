@@ -136,7 +136,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -174,6 +174,8 @@ def main():
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
     if a.mode == "api":
         return api(a, sim, rom, want_sha)
+    if a.mode == "offline":
+        return offline(a, sim, rom, want_sha)
     if a.mode == "nocard":
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
         import api_lane
@@ -479,6 +481,22 @@ def main():
                 print(l[:230])
         print(f"golden: {golden[1]} match, {golden[2]} differ")
         print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+
+
+def offline(a, sim, rom, want_sha):
+    """The offline lane (offline_lane.py), in its own network namespace like the API lane's:
+    its second boot joins the virtual access point."""
+    import offline_lane
+    if os.environ.get("EMU_API_NETNS") != "1":
+        if not shutil.which("unshare"):
+            sys.exit("EMU_OFFLINE_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+        env = {**os.environ, "EMU_API_NETNS": "1"}
+        os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
+    ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
+    if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
+        sys.exit("EMU_OFFLINE_FAIL: cannot bring up the loopback in the lane's network namespace")
+    a.emu_dir, a.want_sha = EMU_DIR, want_sha
+    sys.exit(offline_lane.run(a, sim, rom, FAIL, ANSI, BOOT_SHA))
 
 
 def api(a, sim, rom, want_sha):
