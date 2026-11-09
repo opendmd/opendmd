@@ -25,7 +25,7 @@ curl -s $DMD/api/status
   error. `make blocklist-check` (`tools/blocklist-check.py`) tests every route
   against EasyPrivacy and EasyList; a new route must pass it.
 - **Size limits.** JSON bodies ≤ 8 KB (`413` over), the schedule ≤ 2 KB,
-  a web app pack ≤ the `www` partition (1,048,576 B). Uploads are streamed, any size, but no data
+  a web app pack ≤ the `www` partition (786,432 B in table v4). Uploads are streamed, any size, but no data
   for 5 s, or 120 s in all, is a `408`. A body needs a `Content-Length`.
 - **One thing at a time.** One server task, at most 7 open connections
   (`HTTP_MAX_SOCKETS`). Transfers and the listings (`/api/files`,
@@ -245,7 +245,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | field | meaning |
 |---|---|
 | `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit) |
-| `layout` | the version of the variant's partition table the firmware is built for: `3` for 4mb. An update over WiFi must be for the same one (`PUT /api/firmware`); firmware before it (1.0.0-beta.15 and earlier) has no field and table v2 |
+| `layout` | the version of the variant's partition table the firmware is built for: `4` for 4mb (`3` on 1.0.0-beta.16 to 1.0.1). An update over WiFi must be for the same one (`PUT /api/firmware`); firmware before it (1.0.0-beta.15 and earlier) has no field and table v2 |
 | `features` | the optional components this build has: `["formulas","jit"]` in a release; a build can leave them out (`"formulas"` missing: `/api/play` of a Formula is a `501`, a `look_formula` a `400`, a playlist's Formula lines are skipped) |
 | `psi_abi` | the compiled Formulas this display plays (`@formula?psb=…`, a card's `.psb`); `null` in a build without Formulas |
 | `uptime_secs` | seconds since boot |

@@ -142,7 +142,7 @@ enum Cmd {
         /// left out of the pack if it is inside <dir>.
         #[arg(long)]
         version_file: Option<PathBuf>,
-        /// Refuse a pack bigger than this (the `www` partition: 1,048,576, table v3).
+        /// Refuse a pack bigger than this (the `www` partition: 786,432, table v4).
         #[arg(long, default_value_t = www::PARTITION_BYTES)]
         max_bytes: usize,
     },

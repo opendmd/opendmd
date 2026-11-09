@@ -165,7 +165,7 @@ The browser runs the UI and the ESP32 just serves it — out of its own flash,
 not the card. `make web` packs the built app into one file,
 `opendmd-web/www.pack` (~0.5 MB, every file gzipped; the format is
 [`docs/www-pack.md`](www-pack.md)); `make fw-flash` writes it into the
-1,024 KB `www` partition along with the firmware, and the player maps it at
+768 KB `www` partition along with the firmware, and the player maps it at
 boot, checks its CRC and serves each file as a slice of flash. So the app
 works with no card in the slot. To update just the app over WiFi:
 
@@ -210,7 +210,7 @@ floor. The heartbeat line at the end of this log shows all three:
 ## Serial output
 
 ```
-I opendmd_firmware: OpenDMD firmware v1.0.0 (4mb layout v3, features ["formulas","jit"], app desc '1.0.0 4mb') — 128x32 HUB75 GIF player
+I opendmd_firmware: OpenDMD firmware v<version> (4mb layout v4, features ["formulas","jit"], app desc '<version> 4mb') — 128x32 HUB75 GIF player
 I opendmd_firmware: panel up: 128x32 (2 x 64x32), timing 1,1,shiftreg,8,60 (the defaults), double_buff=false, hub75_refresh_rate=100 Hz
 I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
 I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 9 ms (40532 B on card), heap 160664 B free

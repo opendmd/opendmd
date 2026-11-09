@@ -3013,16 +3013,16 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     board8.write_bytes(b"ODFW18mb" + good.read_bytes()[8:])
     newer8 = tmp / f"opendmd-{UPD_VERSION}-8mb.odfw"
     newer8.write_bytes(b"ODFW18mb" + newer.read_bytes()[8:])
-    # For the DevKit's partition table v2 (what 1.0.0-beta.15 and earlier
-    # were): the mock, on table v3, must refuse them.
-    v2 = tmp / "opendmd-9.9.9-smoke-v2.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--layout", "2", "--out", str(v2),
+    # For the DevKit's partition table v3 (what 1.0.0-beta.16 to 1.0.1
+    # were): the mock, on table v4, must refuse them.
+    v3 = tmp / "opendmd-9.9.9-smoke-v3.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--layout", "3", "--out", str(v3),
                     "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
-    newer_v2 = tmp / f"opendmd-{UPD_VERSION}-v2.odfw"
-    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", UPD_VERSION, "--layout", "2", "--out", str(newer_v2),
+    newer_v3 = tmp / f"opendmd-{UPD_VERSION}-v3.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", UPD_VERSION, "--layout", "3", "--out", str(newer_v3),
                     "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
     return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old, "newer": newer, "newer_bad": newer_bad,
-            "board8": board8, "newer8": newer8, "v2": v2, "newer_v2": newer_v2}
+            "board8": board8, "newer8": newer8, "v3": v3, "newer_v3": newer_v3}
 
 
 def status_of(req: urllib.request.Request) -> tuple[int, dict]:
@@ -3056,9 +3056,9 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
     check(sorted(fw) == ["build", "features", "flash_size", "last", "layout", "log", "pending", "updater", "variant", "version"] and fw["features"] == ["formulas", "jit"] and fw["pending"] is None
-          and fw["variant"] == "4mb" and fw["layout"] == 3 and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
+          and fw["variant"] == "4mb" and fw["layout"] == 4 and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
     st0 = get_json(base + "/api/status")
-    check(st0.get("layout") == 3, f"firmware: /api/status layout {st0.get('layout')}")
+    check(st0.get("layout") == 4, f"firmware: /api/status layout {st0.get('layout')}")
     why = page.evaluate("async () => { const m = await import('/js/firmware.js');"
                         " return [m.layoutWhy(3, 2), m.layoutWhy(2, 3), m.layoutWhy(3, 3), m.playerLayout({}), m.playerLayout({ layout: 3 })]; }")
     check(why[0].startswith("This firmware needs a one-time USB reinstall on this display") and "opendmd.dev/install" in why[0]
@@ -3099,20 +3099,20 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         code, why = e.code, json.loads(e.read() or b"{}").get("error", "")
     check(code == 422 and why.startswith("this update is for another flash layout than this display's: use the DevKit (4 MB)")
           and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of an 8mb bundle -> {code} '{why}'")
-    # A bundle for the DevKit's older partition table (v2, 1.0.0-beta.15 and
-    # earlier): refused in the page and by the mock (the firmware), in words.
-    page.set_input_files("#fw-file", str(ota["v2"]))
+    # A bundle for the DevKit's older partition table (v3, 1.0.0-beta.16 to
+    # 1.0.1): refused in the page and by the mock (the firmware), in words.
+    page.set_input_files("#fw-file", str(ota["v3"]))
     t = fw_message(page, "^This file is for an older flash layout")
-    check(not asked and "opendmd.dev/install" in t, f"firmware: a layout v2 bundle is refused in the page ('{t}')")
-    req = urllib.request.Request(base + "/api/firmware", data=ota["v2"].read_bytes(), method="PUT",
+    check(not asked and "opendmd.dev/install" in t, f"firmware: a layout v3 bundle is refused in the page ('{t}')")
+    req = urllib.request.Request(base + "/api/firmware", data=ota["v3"].read_bytes(), method="PUT",
                                  headers={"Content-Type": "application/octet-stream"})
     try:
         urllib.request.urlopen(req, timeout=30).read()
         code, why2 = 200, ""
     except urllib.error.HTTPError as e:
         code, why2 = e.code, json.loads(e.read() or b"{}").get("error", "")
-    check(code == 422 and why2.startswith("this update is for the older flash layout v2 and this DevKit (4 MB) has layout v3")
-          and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of a layout v2 bundle -> {code} '{why2}'")
+    check(code == 422 and why2.startswith("this update is for the older flash layout v3 and this DevKit (4 MB) has layout v4")
+          and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of a layout v3 bundle -> {code} '{why2}'")
     expected.append("/api/firmware")
     page.set_input_files("#fw-file", str(ota["bad"]))
     t = fw_message(page, "^The display refused this file")
@@ -3210,7 +3210,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     (tmp / "nocors").symlink_to(tmp)
     shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
     shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
-    shutil.copy(ota["newer_v2"], inst / "firmware" / f"opendmd-{UPD_VERSION}-v2.odfw")
+    shutil.copy(ota["newer_v3"], inst / "firmware" / f"opendmd-{UPD_VERSION}-v3.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
     built = (REPO / "opendmd-web" / "www.pack").read_bytes()
 
@@ -3236,7 +3236,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         # `variants`, the layout's file and table.
         fw4 = kw.get("firmware", f"firmware/opendmd-{UPD_VERSION}.odfw")
         obj = {"version": UPD_VERSION, "firmware": fw4,
-               "variants": {"4mb": {"firmware": fw4, "layout": 3}},
+               "variants": {"4mb": {"firmware": fw4, "layout": 4}},
                "www": f"firmware/opendmd-{UPD_VERSION}-www.pack", "www_version": f"v{UPD_VERSION}", **kw}
         (inst / name).write_text(json.dumps(obj))
         return f"{site}/install/{name}"
@@ -3284,19 +3284,19 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
               "update: a feed of one's own is asked as given (no ?v=, only opendmd.dev's is told the version)")
         # A release for a newer partition table than the player's: not
         # offered, a USB install named instead.
-        t = check_now(release("relayout.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}.odfw", "layout": 4}}))
+        t = check_now(release("relayout.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}.odfw", "layout": 5}}))
         check(t.startswith(f"Firmware {UPD_VERSION} is out. This firmware needs a one-time USB reinstall on this display")
               and "opendmd.dev/install" in t and not upd(), f"update: a release for another flash layout -> '{t}'")
         # A release.json without `layout` whose file is for the older table:
         # its magic gives it away after the download, nothing is sent.
-        check_now(release("v2.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-v2.odfw"}}))
+        check_now(release("v3.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-v3.odfw"}}))
         page.click("#fw-upd")
         page.wait_for_function("() => /older flash layout/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=20000)
         t = page.inner_text("#fw-msg")
         check(t.startswith("This file is for an older flash layout") and t.endswith("Nothing was installed")
-              and get_json(base + "/api/firmware")["version"] == fw0 and f"/install/firmware/opendmd-{UPD_VERSION}-v2.odfw" in asked,
-              f"update: a layout v2 file for a v3 player installs nothing -> '{t}'")
+              and get_json(base + "/api/firmware")["version"] == fw0 and f"/install/firmware/opendmd-{UPD_VERSION}-v3.odfw" in asked,
+              f"update: a layout v3 file for a v4 player installs nothing -> '{t}'")
         # A file the release names is missing: nothing installed.
         t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
         frm = f" (from 127.0.0.1:{srv.server_port})"  # a development build's own feed is named

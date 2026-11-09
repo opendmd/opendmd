@@ -5,8 +5,8 @@
 #
 # PUTs the signed bundle (`make fw-release` writes dist/opendmd-<v>-<variant>.odfw)
 # to /api/firmware and prints the reply. A bundle for another flash layout
-# than the device's (its magic: "ODFW34mb" 4mb table v3, "ODFW1" + NULs 4mb
-# table v2, any other "ODFW" magic another layout; the device's `variant` and `layout` in GET
+# than the device's (its magic: "ODFW44mb" 4mb table v4, "ODFW34mb" table
+# v3, "ODFW1" + NULs table v2, any other "ODFW" magic another layout; the device's `variant` and `layout` in GET
 # /api/firmware, no `layout` meaning v2) is refused here, before anything is
 # sent; the device would refuse it too. The device stages it on its card,
 # checks the signature, restarts into the updater, which installs it and
@@ -28,6 +28,7 @@ bundle=${2:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
 [ -f "$bundle" ] || { echo "no such bundle: $bundle (run make fw-release first)" >&2; exit 2; }
 # The bundle's flash layout and partition table, from its magic.
 case "$(head -c 8 "$bundle" | od -An -tx1 | tr -d ' \n')" in
+    4f44465734346d62) bundle_variant=4mb bundle_layout=4 ;;
     4f44465733346d62) bundle_variant=4mb bundle_layout=3 ;;
     4f44465731000000) bundle_variant=4mb bundle_layout=2 ;;
     4f444657*) echo "$bundle is a firmware bundle for a flash layout this script does not know" >&2; exit 2 ;;

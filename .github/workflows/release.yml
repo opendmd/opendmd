@@ -341,7 +341,7 @@ jobs:
             test "$(stat -c %s "$full")" -eq "$want" || { echo "::error::$full is $(stat -c %s "$full") B, want $want (the $v flash)"; exit 1; }
             echo "$full: $want B"
             # The factory partition the app goes in (firmware/partitions.csv).
-            factory=2621440 size="$(stat -c %s "$app")"
+            factory=$(( $(awk -F, '$1 ~ /^factory/ { gsub(/ /, "", $5); print $5 }' firmware/partitions.csv) )) size="$(stat -c %s "$app")"
             test $(( factory - size )) -ge 65536 || { echo "::error::$app is $size B: less than 64 KB of the $factory B factory partition spare"; exit 1; }
           done
           # The web app pack's version (its header, docs/www-pack.md): what

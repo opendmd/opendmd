@@ -43,7 +43,7 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               the heap census (`emu-census`) of the last quiet spell against the first's
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
-  ota         GET /api/firmware (layout v3); bundles for table v2, with a bad signature, a bad image: 422
+  ota         GET /api/firmware (layout v4); bundles for table v3, with a bad signature, a bad image: 422
   start-up    (boot A's NVS seeded with boot_fx = a bundled Formula, BOOT_GOOD) the start-up show
               was that Formula (`boot show: formula @formula:…`, its frames drawn, then the
               playlist; status boot_formula played); a bundled name that is not there, a
@@ -1429,17 +1429,17 @@ class Lane:
 
     def ota_refusals(self, api):
         _, info = api.json("GET", "/api/firmware")
-        self.expect(info.get("variant") == "4mb" and info.get("layout") == 3, "firmware", f"GET /api/firmware: {info}")
+        self.expect(info.get("variant") == "4mb" and info.get("layout") == 4, "firmware", f"GET /api/firmware: {info}")
         st = api.status()
-        self.expect(st.get("layout") == 3, "firmware", f"/api/status layout: {st.get('layout')}")
+        self.expect(st.get("layout") == 4, "firmware", f"/api/status layout: {st.get('layout')}")
         b = bytearray(self.a.bundle.read_bytes())
-        self.expect(b[:8] == b"ODFW34mb", "firmware", f"the bundle is not for the 4mb table v3: {bytes(b[:8])!r}")
-        # The same bundle labelled for the DevKit's table v2 (what 1.0.0-beta.15
-        # and earlier signed): refused at the header, before the signature, in words.
-        v2 = bytearray(b)
-        v2[:8] = b"ODFW1\0\0\0"
-        _, why = api.call("PUT", "/api/firmware", v2, want=(422,), timeout=300)
-        self.expect(b"older flash layout v2" in why and b"has layout v3" in why, "firmware", f"a table v2 bundle: {why[:200]!r}")
+        self.expect(b[:8] == b"ODFW44mb", "firmware", f"the bundle is not for the 4mb table v4: {bytes(b[:8])!r}")
+        # The same bundle labelled for the DevKit's table v3 (what 1.0.0-beta.16
+        # to 1.0.1 signed): refused at the header, before the signature, in words.
+        v3 = bytearray(b)
+        v3[:8] = b"ODFW34mb"
+        _, why = api.call("PUT", "/api/firmware", v3, want=(422,), timeout=300)
+        self.expect(b"older flash layout v3" in why and b"has layout v4" in why, "firmware", f"a table v3 bundle: {why[:200]!r}")
         sig = bytearray(b)
         sig[100] ^= 0x01  # in the Ed25519 signature (bytes 76..140)
         mark = self.emu.mark()
@@ -1459,7 +1459,7 @@ class Lane:
         self.ok("ota panel", "the message up while the bad-image bundle came in, down at its 422, a GIF after; none for the one refused at its header")
         _, info2 = api.json("GET", "/api/firmware")
         self.expect(info2.get("pending") is None, "firmware", f"a refused bundle left something pending: {info2}")
-        self.ok("ota refusals", f"GET /api/firmware {info.get('version')} (layout v3); a bundle for table v2 422 at the header ('{why[:60].decode(errors='replace')}…'), one with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
+        self.ok("ota refusals", f"GET /api/firmware {info.get('version')} (layout v4); a bundle for table v3 422 at the header ('{why[:60].decode(errors='replace')}…'), one with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
 
     def startup_a(self, emu, api):
         """The start-up show this boot: NVS's bundled Formula (BOOT_GOOD), drawn until the
@@ -1592,8 +1592,11 @@ class Lane:
 
     def run_c(self):
         """Boot C: the same update with an updater from before the panel in ota_0
-        (`--old-updater`, a release's): /api/firmware says so, the firmware's
-        Installing screen says the panel goes dark, and that updater installs it."""
+        (`--old-updater`, 1.0.0-beta.16's, which knows tables v3 and v2 only):
+        /api/firmware says so, the firmware's Installing screen says the panel
+        goes dark, and that updater refuses the table v4 bundle at its magic,
+        writes nothing and boots the firmware that is there (what keeps a v4
+        image out of a v3 board's smaller factory)."""
         image = with_updater(self.a.seeded, self.a.old_updater, self.logs / f"api-{self.stamp}-old-updater.bin")
         try:
             self.ota_boot("C", image, lit=False)
@@ -1641,6 +1644,9 @@ class Lane:
             emu.wait_for(re.compile(screen), 5, mark, "the installing message" + ("" if lit else ", dark updater's"))
             emu.wait_for(re.compile(r"rst:0x"), 60, mark, "the restart into the updater")
             back = time.time()
+            if not lit:
+                self.old_updater_refuses(emu, api, mark, ran, want, upd, took, back)
+                return
             end = back + 300
             info = None
             while time.time() < end:
@@ -1692,6 +1698,38 @@ class Lane:
         finally:
             emu.kill()
 
+    def old_updater_refuses(self, emu, api, mark, ran, want, upd, took, back):
+        """Boot C after the restart into the old updater: it refuses the v4
+        bundle as "bad magic" before erasing anything, boots the firmware that
+        is there, and that firmware removes the staged file and says so."""
+        end = back + 300
+        info = None
+        while time.time() < end:
+            emu.check()
+            try:
+                code, _, data = api.raw("GET", "/api/firmware", timeout=5)
+                if code == 200:
+                    info = json.loads(data)
+                    if info.get("last") and "was not installed" in info["last"]:
+                        break
+            except LaneFail:
+                pass
+            time.sleep(2)
+        self.expect(info and info.get("version") == ran and "was not installed" in (info.get("last") or ""), "ota",
+                    f"the firmware did not come back unchanged ({ran}) from the old updater: {info}")
+        log = info.get("log") or ""
+        self.expect("bad magic" in log and "image verified" not in log and f"installed {want}" not in log, "ota",
+                    f"the old updater's log: {log.splitlines()[-6:]}")
+        self.expect(emu.find(re.compile(r"updater: OpenDMD updater 1 started"), mark)
+                    and not emu.find(re.compile(r"updater: .*(panel up in|writing the firmware|image verified)"), mark), "ota",
+                    "not the old updater's run, or it wrote something")
+        self.expect(emu.resets == 3, "ota", f"{emu.resets} resets, wanted 3 (power-on, updater, firmware)")
+        _, fw2 = api.json("GET", "/api/firmware")
+        self.expect(fw2.get("pending") is None, "ota", f"the refused update is still pending: {fw2}")
+        self.ok("ota old updater", f"{upd.get('version')} in ota_0, panel {upd.get('panel')}: PUT {self.a.bundle.stat().st_size} B in "
+                f"{took:.0f} s wall, staged; the table v3 updater refused the v4 bundle ('bad magic'), wrote nothing and booted "
+                f"{info['version']} again in {time.time() - back:.0f} s wall ('{info['last']}')")
+        self.ok("ota dark updater", "the Installing screen said 'Dark while it installs'; the old updater ran with no panel")
 
 def network_wedged(lane) -> bool:
     """After a failure: the emulator runs, the API does not answer, GIFs still start."""

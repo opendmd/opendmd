@@ -449,7 +449,7 @@ else
     [ "$(stat -c %s "$full")" -eq "$want" ] || die "$full is $(stat -c %s "$full") B, want $want (the $v flash)"
     pass "opendmd-$VERSION-$v-full.bin: $want B"
     # The factory partition the app goes in (firmware/partitions.csv).
-    factory=2621440
+    factory=$(( $(awk -F, '$1 ~ /^factory/ { gsub(/ /, "", $5); print $5 }' "$ROOT/firmware/partitions.csv") ))
     size=$(stat -c %s "$app"); spare=$(( factory - size ))
     [ "$spare" -ge 65536 ] || die "$v app is $size B: $spare B spare of the $factory B factory partition, need 65536"
     pass "$v app $size B of $factory B factory: $spare B spare (>= 65536)"

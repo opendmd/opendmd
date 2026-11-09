@@ -272,7 +272,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   header), `bytes` the size of `www.pack` beside `--www` (0 if none),
   `entries` the files the pack would hold. `/api/status` carries the same
   object as `www`, and `www_version`. `PUT /api/www` wants a
-  `Content-Length` (411), at most 1,048,576 B (413) and the `ODWP` magic
+  `Content-Length` (411), at most 786,432 B (413) and the `ODWP` magic
   (400), a header whose total length is not the body's (400); it replies
   as `GET` does and changes nothing served, but from then on reports the
   pushed header's version (bytes 20.., length at 18) as `version` and
@@ -338,14 +338,14 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the 72-byte trailer, against `--ota-pub`): 422 otherwise.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, layout, flash_size, pending, last, log}` (`layout`: the
-  variant's partition table version, 3 for 4mb; `log`: the card's
+  variant's partition table version, 4 for 4mb; `log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
   `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
   and verifies it as the firmware does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
-  140 B + the layout's factory partition (2,621,440 B),
+  140 B + the layout's factory partition (2,883,584 B),
   422 `{"error":"<reason>"}` for any failure, a bundle for another flash
-  layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
+  layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v3 or v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
   among them (nothing changes). Success: `{"ok":true,"version",
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
@@ -479,16 +479,16 @@ CACHE_DIR = "cache"                    # the prepared copies (opendmd_core::layo
 LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
-WWW_PARTITION_SIZE = 1_048_576         # the www partition (partitions.csv, table v3)
+WWW_PARTITION_SIZE = 786_432           # the www partition (partitions.csv, table v4)
 # Firmware update (docs/ota.md, tools/fw-sign.py): the bundle header and the
 # factory partition the image must fit. A bundle's magic -> (variant, the
 # partition table version) (opendmd_core::ota::LAYOUTS); the mock runs each
 # variant's current table (OTA_CURRENT).
-OTA_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
-OTA_CURRENT = {"4mb": 3}
+OTA_LAYOUTS = {b"ODFW44mb": ("4mb", 4), b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
+OTA_CURRENT = {"4mb": 4}
 OTA_HEADER_LEN = 140
 OTA_SIGNED_LEN = 76
-OTA_FACTORY_BYTES = {"4mb": 0x280000}   # partitions.csv (v3)
+OTA_FACTORY_BYTES = {"4mb": 0x2C0000}   # partitions.csv (v4)
 OTA_BOARDS = {"4mb": "DevKit (4 MB)"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).

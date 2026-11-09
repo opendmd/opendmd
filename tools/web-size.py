@@ -4,7 +4,7 @@
 # ///
 """Print the web app's size, raw and gzipped, and enforce the budget.
 
-    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 1048576] [--unminified]
+    uv run tools/web-size.py opendmd-web/www-dist [--pack opendmd-web/www.pack --pack-limit 786432 --pack-spare 65536] [--unminified]
 
 It measures what ships: `make web`'s output directory (tools/web-minify.py:
 the sources with every script and stylesheet, wasm-pack's glue included,
@@ -142,9 +142,15 @@ when over budget.
 
 With `--pack`, one more line: the www pack `make web` built from this
 directory (what the device keeps in its `www` flash partition, served from
-flash), its size against the partition — "pack: N B of 1,024 KB". The
-budgets above are about load time over WiFi, not flash; the partition limit
-is enforced by the packer itself (`opendmd-pack www --max-bytes`).
+flash), its size signed (the pack and its 72-byte signature trailer) against
+the partition (768 KB in table v4) and what that leaves — "pack: N B
+signed of 768 KB (P%), S B spare (need 65536)". The budgets above are
+about load time over WiFi, not flash. The partition itself is enforced by
+the packer (`opendmd-pack www --max-bytes`); this line fails the build when
+the signed pack leaves less than `--pack-spare` (64 KB: the web app's
+headroom, as the firmware keeps 64 KB of `factory`), so a pack that is
+close to the partition is noticed before a release that cannot be
+installed.
 """
 import argparse
 import sys
@@ -520,6 +526,10 @@ HERO = "hero.js"
 HERO_GZ_BUDGET = 5 * 1024
 
 
+# The signature trailer `fw-sign.py sign-www` appends (docs/www-pack.md).
+WWW_SIGNATURE_BYTES = 72
+
+
 def q_ref(p: Path, share: Path) -> bool:
     """A file of the Psi reference's script (share/ref/), not /f/'s."""
     return p.relative_to(share).parts[0] == "ref"
@@ -529,7 +539,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("root", nargs="?", default="opendmd-web/www-dist")
     ap.add_argument("--pack", help="the www pack built from it")
-    ap.add_argument("--pack-limit", type=int, default=1_048_576, help="the www partition, bytes (firmware/partitions.csv)")
+    ap.add_argument("--pack-limit", type=int, default=786_432, help="the www partition, bytes (firmware/partitions.csv)")
+    ap.add_argument("--pack-spare", type=int, default=65_536, help="what the signed pack must leave of the partition, bytes")
     ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
     ap.add_argument("--unminified", action="store_true",
                     help="a WEB_MINIFY=0 build: print the lines, enforce none")
@@ -725,8 +736,12 @@ def main() -> int:
     all_gz = sum(t[1] for t in totals.values())
     print(f"{'total':<10} raw {all_raw:>9,}           gz {all_gz:>9,}")
     if args.pack:
-        n = Path(args.pack).stat().st_size
-        print(f"pack: {n:,} B of {args.pack_limit // 1024:,} KB ({n * 100 / args.pack_limit:.1f}%)")
+        n = Path(args.pack).stat().st_size + WWW_SIGNATURE_BYTES
+        spare = args.pack_limit - n
+        verdict = "ok" if spare >= args.pack_spare else "OVER BUDGET"
+        print(f"pack: {n:,} B signed of {args.pack_limit // 1024:,} KB ({n * 100 / args.pack_limit:.1f}%), "
+              f"{spare:,} B spare (need {args.pack_spare:,}) {verdict}")
+        ok &= spare >= args.pack_spare
     if args.unminified:
         print("unminified build (WEB_MINIFY=0): the budget lines are for minified files and are not enforced"
               + ("" if ok else " (some are over)"))

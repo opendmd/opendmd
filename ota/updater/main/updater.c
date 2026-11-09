@@ -1,8 +1,8 @@
 /*
  * The OpenDMD updater (docs/ota.md, steps 3 and 4).
  *
- * Lives in the `ota_0` partition (384 KB: 0x2A0000 in the 4 MB table v3,
- * 0x260000 in v2; the same build serves both,
+ * Lives in the `ota_0` partition (384 KB: 0x2E0000 in the 4 MB table v4,
+ * 0x2A0000 in v3, 0x260000 in v2; the same build serves each,
  * since it finds every partition by type at run time). The firmware boots it
  * once, after it has received a firmware bundle over the LAN, verified its
  * Ed25519 signature, written it to the card as /update/opendmd.bin and
@@ -20,7 +20,7 @@
  *   3. reads the 140-byte bundle header, checks the magic and that it names
  *      this board's flash layout (the variant: the flash size the installed
  *      bootloader set, 4 MB -> "4mb"; and the table: the
- *      factory partition's size, 2,560 KB -> 4mb v3), that the image fits
+ *      factory partition's size, 2,816 KB -> 4mb v4), that the image fits
  *      the factory partition, that the file holds exactly the image, and
  *      hashes the whole image off the card *before* erasing anything
  *      (SHA-256, mbedtls), with the ESP image magic 0xE9 at its start and
@@ -102,11 +102,13 @@ static const uint8_t HUB75_LOW[] = {25, 26, 27, 14, 12, 13, 33, 32, 22, 17, 4, 1
 /* The bundle's magic names the flash layout: the variant and the version of
  * its partition table (opendmd_core::ota::LAYOUTS), with the size of that
  * table's factory partition. "ODFW1" + NULs is the DevKit's table v2 (every
- * 4mb bundle up to 1.0.0-beta.15) and "ODFW34mb" the DevKit's table v3;
+ * 4mb bundle up to 1.0.0-beta.15), "ODFW34mb" its table v3 (1.0.0-beta.16
+ * to 1.0.1) and "ODFW44mb" its table v4;
  * any other magic (such as "ODFW18mb", the 8mb layout of 1.0.0-beta.16 and
  * earlier) is refused before anything is erased. An updater from before a table knows
  * nothing of its magic and refuses the bundle (beta.15's: "bad magic" for
- * ODFW34mb). */
+ * ODFW34mb; beta.16 to 1.0.1's for ODFW44mb, so a v4 image never reaches a
+ * v3 board's smaller factory). */
 typedef struct {
     uint8_t magic[8];
     const char *variant;
@@ -114,6 +116,7 @@ typedef struct {
     uint32_t factory;
 } layout_t;
 static const layout_t LAYOUTS[] = {
+    {{'O', 'D', 'F', 'W', '4', '4', 'm', 'b'}, "4mb", 4, 0x2C0000},
     {{'O', 'D', 'F', 'W', '3', '4', 'm', 'b'}, "4mb", 3, 0x280000},
     {{'O', 'D', 'F', 'W', '1', 0, 0, 0}, "4mb", 2, 0x240000},
 };
