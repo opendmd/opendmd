@@ -152,6 +152,15 @@ make emu-build emu-smoke          # the firmware in an emulator (esp32sim): corr
 - The site is public: its demo card holds only our own recordings, the CC0
   Kenney sprites and Formulas. Published docs describe how things are, not
   how they got there.
+- **One exception, for screenshots only** (owner, 2026-11-09): web app
+  screenshots (`docs/images/`, and the site pages that show them) may show
+  panel GIFs that Create Art made from libretro-thumbnails **title
+  screens**, credited ("Game title screens from libretro-thumbnails, made
+  into panel GIFs with Create Art"). `tools/game-art.py` makes them into
+  gitignored `target/game-art/` for `make screenshots`. The GIFs themselves
+  are never committed, hosted or put on a published card; no box art or
+  logos beyond what a title screen contains; never pack or card GIFs, and
+  nothing from GifCities.
 
 ## Commits
 
