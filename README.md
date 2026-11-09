@@ -99,8 +99,11 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 | ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone, two GIFs ticked to add to a playlist"> |
 
 The demo card in these screenshots holds OpenDMD's own Formulas and the
-[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0);
-`make screenshots` takes them again (`tools/screenshots.py`).
+[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
+Game title screens from [libretro-thumbnails](https://github.com/libretro-thumbnails),
+made into panel GIFs with Create Art. `make screenshots` takes them again
+(`tools/screenshots.py`); the GIFs themselves are made on your machine and
+never published.
 
 ## Documentation
 

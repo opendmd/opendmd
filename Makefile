@@ -391,11 +391,14 @@ web-smoke: web
 	DMD_CARD_ROOT="$(WEB_SMOKE_CARD)" uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
 
 # The README's and the site's screenshots (docs/images/): the web app in
-# headless Chromium against the mock over the demo card (only the panel's
-# own effects and the CC0 Kenney sprites: they are published).
+# headless Chromium against the mock over the demo card (the panel's own
+# effects and the CC0 Kenney sprites), with game title screens made into
+# panel GIFs by Create Art (tools/game-art.py, cached in target/game-art,
+# never committed or published: only the screenshots are).
 screenshots: web sim-build
 	uv run tools/demo-card.py target/demo-card
-	uv run tools/screenshots.py --card target/demo-card --out docs/images
+	uv run tools/game-art.py --card target/demo-card --out target/game-art
+	uv run tools/screenshots.py --card target/demo-card --out docs/images --game-art target/game-art
 
 # The public site (https://opendmd.dev/): the README, the docs, and the web app
 # with a demo card of the panel's own effects and CC0 sprites (tools/site.py,

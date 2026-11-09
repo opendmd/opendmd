@@ -6,22 +6,27 @@
 taken in headless Chromium against tools/mock-device.py over the demo card
 (and tools/mock-replay.py, a fake RePlayOS, for Follow).
 
-    uv run tools/screenshots.py [--card target/demo-card] [--out docs/images]
+    uv run tools/screenshots.py [--card target/demo-card] [--out docs/images] [--game-art target/game-art]
 
-(`make screenshots` builds the app and the demo card first.) Writes, at
-1280x800: now.png, formulas.png and playlists.png; create-art.png (1280
-wide, the whole page); at 2x, the part that matters in a 1280x800 window
-(the site's bands): library.png (Select, the playlist menu open),
-now-follow.png (Now while following RePlayOS, the title card up),
-settings-look.png (Settings › Panel) and settings-schedule.png (Settings ›
-Schedule: a Christmas rule, an evening rule, night mode from sunset to
-sunrise); and at 2x, phone-now.png (390x700) and phone-library.png
-(390x844).
+(`make screenshots` builds the app, the demo card and tools/game-art.py's
+GIFs first.) Writes, at 1280x800: now.png, formulas.png and playlists.png;
+create-art.png (1280 wide, the whole page); at 2x, the part that matters
+in a 1280x800 window (the site's bands): library.png (Select, the playlist
+menu open), now-follow.png (Now while following RePlayOS, as a game
+plays), settings-look.png (Settings › Panel) and settings-schedule.png
+(Settings › Schedule: a Christmas rule, an evening rule, night mode from
+sunset to sunrise); and at 2x, phone-now.png (390x700) and
+phone-library.png (390x844).
 
-The card must be tools/demo-card.py's: Formulas recorded as GIFs and the
-CC0 Kenney sprites, nothing from the DMDoS pack and no game art (these
-images are published). No shot may show a card path, "odm", "bucket" or
-"cache". Writes go to a throwaway overlay; the card is left as it was.
+The card is tools/demo-card.py's: Formulas recorded as GIFs and the CC0
+Kenney sprites, nothing from the DMDoS pack. On top of it, on the
+throwaway overlay, go tools/game-art.py's GIFs: game title screens from
+libretro-thumbnails made into panel GIFs with Create Art. They play in
+Now, the Library, Playlists and Follow; only these screenshots of them
+are published, with the credit line, never the GIFs (CLAUDE.md, "Content
+licensing"). Without them (no network) the Kenney sprites play every
+part. No shot may show a card path, "odm", "bucket" or "cache". The card
+is left as it was.
 Needs `make web` and, once, `uv run --with playwright playwright install
 chromium`.
 """
@@ -163,9 +168,11 @@ def folder(page: Page, cat: str) -> None:
 
 
 def select(page: Page, paths: list[str]) -> None:
-    """The Library's Select, with `paths` ticked."""
-    page.evaluate("async (ps) => { const { app } = await import('./js/state.js'); ps.forEach((p) => app.selection.add(p)); }", paths)
+    """The Library's Select, with `paths` ticked (a tap on each, as a user picks them)."""
     page.click("#lib-select")
+    for p in paths:
+        page.click(f"#lib-list .vrow[data-path={json.dumps(p)}]")
+        page.wait_for_timeout(150)
     page.wait_for_function(f"document.querySelector('#lib-selbar b')?.textContent === '{len(paths)}'", timeout=10000)
     page.wait_for_timeout(400)
 
@@ -200,10 +207,44 @@ def clip(page: Page, out: Path, name: str, parts: str, pad: int = 12) -> None:
     print(f"  {out / name}")
 
 
+def game_art(art: Path) -> list[str]:
+    """tools/game-art.py's GIFs (card paths), in its order, or [] (none made:
+    the Kenney sprites play every part)."""
+    try:
+        files = json.loads((art / "done.json").read_text())["files"]
+    except (OSError, ValueError, KeyError):
+        files = sorted(p.relative_to(art / "gifs").as_posix() for p in art.glob("gifs/*/*.gif"))
+    return ["/gifs/" + f for f in files if (art / "gifs" / f).is_file()]
+
+
+def cast(games: list[str], overlay: Path, art: Path) -> dict:
+    """Who plays what in the shots. With the game title GIFs: they go on the
+    throwaway overlay (never the card, never committed), All files is them
+    and the sprites, and a Favourites playlist plays; without, the sprites."""
+    by = {Path(g).name.split("_01")[0]: g for g in games}
+    want = ("MD_Sonic_the_Hedgehog_3", "ARCADE_Street_Fighter_II", "SNES_Super_Mario_World", "MD_Streets_of_Rage_2", "NES_Super_Mario_Bros._3")
+    if not all(k in by for k in want):
+        return {"phone_now": KENNEY_PAN, "now": KENNEY_SCROLL, "set": "Sprites", "folder": "Kenney",
+                "ticks": [KENNEY_WALK, KENNEY_SCROLL], "follow": None}
+    for g in games:
+        dst = overlay / g.lstrip("/")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(art / "gifs" / g.removeprefix("/gifs/"), dst)
+    first = [by[k] for k in want[:3]]
+    rest = [g for g in games if g not in first]
+    (overlay / "filelist.txt").write_text("\n".join(first + rest + [KENNEY_WALK, KENNEY_PAN, KENNEY_SCROLL]) + "\n")
+    fav = [g for g in games if g not in (by["MD_Streets_of_Rage_2"], by["NES_Super_Mario_Bros._3"])]
+    (overlay / "sets").mkdir(exist_ok=True)
+    (overlay / "sets/Favourites.txt").write_text("\n".join(fav) + "\n")
+    return {"phone_now": by["ARCADE_Street_Fighter_II"], "now": by["SNES_Super_Mario_World"], "set": "Favourites", "folder": "Consoles",
+            "ticks": [by["MD_Streets_of_Rage_2"], by["NES_Super_Mario_Bros._3"]], "follow": by["MD_Sonic_the_Hedgehog_3"]}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--card", type=Path, default=ROOT / "target/demo-card")
     ap.add_argument("--out", type=Path, default=ROOT / "docs/images")
+    ap.add_argument("--game-art", type=Path, default=ROOT / "target/game-art", help="tools/game-art.py's output")
     a = ap.parse_args()
     if not (a.card / "index.json").exists():
         sys.exit(f"{a.card}: not a demo card (uv run tools/demo-card.py {a.card})")
@@ -211,6 +252,9 @@ def main() -> int:
     overlay = Path(tempfile.mkdtemp(prefix="opendmd-shots-"))
     # A Christmas list beside the card's own (the schedule offers its rule).
     (overlay / "filelist.xmas").write_text("\n".join((KENNEY_WALK, KENNEY_PAN, KENNEY_SCROLL)) + "\n")
+    games = game_art(a.game_art)
+    c = cast(games, overlay, a.game_art)
+    print(f"  {'game title screens' if c['follow'] else 'the Kenney sprites'} on the card")
     proc, base = start_mock(a.card, overlay)
     replay = None
     try:
@@ -221,31 +265,31 @@ def main() -> int:
         reboot(base)
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
-            # Now on a phone, then on a laptop: the Kenney sprites, the ones
-            # before them in Recently played, what comes next.
+            # Now on a phone, then on a laptop: a GIF, the ones before it in
+            # Recently played, what comes next.
             # (A shorter phone for Now: its page ends above the fold.)
             phone = page_for(browser, {**PHONE, "viewport": {"width": 390, "height": 700}})
-            skip_to(base, KENNEY_PAN, 1)
+            skip_to(base, c["phone_now"], 1)
             phone.goto(base + "/#now")
-            now_ready(phone, KENNEY_PAN)
+            now_ready(phone, c["phone_now"])
             shot(phone, a.out, "phone-now.png")
             phone.context.close()
             page = page_for(browser, LAPTOP)
-            skip_to(base, KENNEY_SCROLL, 1)
+            skip_to(base, c["now"], 1)
             page.goto(base + "/#now")
-            now_ready(page, KENNEY_SCROLL)
+            now_ready(page, c["now"])
             shot(page, a.out, "now.png")
-            # Sprites playing from here: it heads the playlist menu.
-            call(base, "PUT", "/api/config", {"set": "Sprites"})
+            # A playlist of the user's playing from here: it heads the playlist menu.
+            call(base, "PUT", "/api/config", {"set": c["set"]})
             time.sleep(1.5)
             page.reload()
             # The site's bands: the parts that matter, at twice the scale.
-            # Library: the Kenney folder, two GIFs ticked, the playlist menu open
+            # Library: a folder, two GIFs ticked, the playlist menu open
             # (a shorter window: the list fills it).
             big = page_for(browser, {"viewport": {"width": 1280, "height": 560}, "device_scale_factor": 2})
             big.goto(base + "/#library")
-            folder(big, "Kenney")
-            select(big, [KENNEY_WALK, KENNEY_SCROLL])
+            folder(big, c["folder"])
+            select(big, c["ticks"])
             big.click("#lib-to-set")
             big.wait_for_function("[...document.querySelectorAll('#pl-target [data-path] small')].every(s => s.textContent)", timeout=10000)
             big.wait_for_timeout(300)
@@ -259,9 +303,9 @@ def main() -> int:
             wait_lit(page, "#psi-panel")
             page.wait_for_timeout(800)
             shot(page, a.out, "formulas.png")
-            # Playlists: Sprites, the one playing, open in the editor.
+            # Playlists: the one playing, open in the editor.
             go(page, "sets")
-            page.click("#sets-list [data-path='/sets/Sprites.txt'] button.pl")
+            page.click(f"#sets-list [data-path='/sets/{c['set']}.txt'] button.pl")
             page.wait_for_selector("#set-entries .vrow[data-path]", timeout=20000)
             page.wait_for_timeout(1200)
             shot(page, a.out, "playlists.png")
@@ -318,8 +362,8 @@ def main() -> int:
             phone = page_for(browser, PHONE)
             phone.goto(base + "/#library")
             phone.wait_for_selector("#lib-list", timeout=20000)
-            folder(phone, "Kenney")
-            select(phone, [KENNEY_WALK, KENNEY_PAN])
+            folder(phone, c["folder"])
+            select(phone, c["ticks"])
             shot(phone, a.out, "phone-library.png")
             phone.context.close()
 
@@ -334,7 +378,17 @@ def main() -> int:
             page.goto(base + "/#now")
             page.wait_for_function("document.querySelector('#now-follow-line')?.textContent.includes('attract')", timeout=30000)
             call(rbase, "POST", "/mock/goto?step=1")
-            page.wait_for_function("document.querySelector('#now-follow-line')?.textContent.includes('title card')", timeout=30000)
+            if c["follow"]:  # the game's own GIF, once the title card has played
+                # (it plays the console's GIFs, the game's most often: skip to it)
+                page.wait_for_function("document.querySelector('#now-follow-line')?.textContent.includes('matching')", timeout=60000)
+                for _ in range(12):
+                    if status(base)["now_playing"]["path"] == c["follow"]:
+                        break
+                    call(base, "POST", "/api/skip")
+                    time.sleep(1.0)
+                page.wait_for_function(f"document.querySelector('#now-path')?.textContent === {json.dumps(c['follow'])}", timeout=20000)
+            else:  # (nothing of the game on the card: its title card)
+                page.wait_for_function("document.querySelector('#now-follow-line')?.textContent.includes('title card')", timeout=30000)
             wait_lit(page, "#now-panel", 5)
             clip(page, a.out, "now-follow.png", "[document.querySelector('#now-panel').closest('.card')]")
             page.context.close()
