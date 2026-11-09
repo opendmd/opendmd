@@ -435,8 +435,10 @@ pub const NET_WORKER_STACK: usize = 11 * 1024;
 /// handed over): the web app's CRC pass, the HTTP server's start, the mount
 /// attempts and the playlist index (opened, or built: one streaming pass
 /// with its buffers on the heap), as the main task (16 KB) did them before.
-/// The `boot task done (stack N B unused)` line says what was left.
-pub const BOOT_STACK: usize = 10 * 1024;
+/// The `boot task done (stack N B unused)` line says what was left; 12 KB
+/// since the card's Formulas are prepared on this task after the handover
+/// (`card_formulas`, also from the late-mount retry loop, the deeper path).
+pub const BOOT_STACK: usize = 12 * 1024;
 /// The httpd task's stack, and one contiguous internal allocation — which is
 /// why the server is started before the first GIF is decoded. stripe-dashboard
 /// needs 16 KB because its OTA handler buffers on the stack; ours reads into a
@@ -479,7 +481,7 @@ pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 pub const PSI_COMPILE_RESERVE: usize = 6 * 1024;
 /// The largest free block a compile needs: its stack (12 KB) and the
 /// tokens of a 2 KB formula (~12 KB) are each one block.
-#[cfg(feature = "psi-probe")]
+#[cfg(feature = "psi")]
 pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
 /// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
@@ -842,6 +844,12 @@ pub const FATIDX_GROUP_MIN: usize = 2 * 1024;
 /// GIFs open by path meanwhile.
 pub const FATIDX_AFTER_CRASH_S: u32 = 30 * 60;
 pub const FATIDX_CRASHES_OFF: u32 = 3;
+/// The card's Formulas prepared after the handover (`card_formulas`): past
+/// this many starts in a row that crashed while they were prepared, none
+/// are until a power-on or an update (each source is marked before its
+/// compile, so this is for a crash outside one).
+#[cfg(feature = "psi")]
+pub const CARD_COMPILE_CRASHES_OFF: u32 = 3;
 /// The read-ahead's filling task (`readahead`): card reads only (the SD
 /// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
 /// network does not starve it.

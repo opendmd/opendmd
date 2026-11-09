@@ -65,12 +65,13 @@ firmware only, never the table or the bootloader. So a bundle carries its
 layout, and every place that installs one checks it.
 
 **A layout is a variant and the version of its partition table**
-(`opendmd_core::ota::LAYOUTS`; the CSV's first line says `v3`, and
+(`opendmd_core::ota::LAYOUTS`; the CSV's first line says `v4`, and
 `opendmd-core`'s test `the_partition_tables_are_the_layouts` holds the two
-together). The DevKit's table is **v3** (the releases after 1.0.0-beta.15: a 2,560 KB
-`factory`, below); 1.0.0-beta.15 and earlier ran **v2**. `/api/status` and
-`GET /api/firmware` report it as `layout` (firmware without the field is
-on v2), the boot banner as `4mb layout v3`.
+together). The DevKit's table is **v4** (the releases after 1.0.1: a 2,816 KB
+`factory` and a 768 KB `www`, below); 1.0.0-beta.16 to 1.0.1 ran **v3**,
+1.0.0-beta.15 and earlier **v2**. `/api/status` and `GET /api/firmware`
+report it as `layout` (firmware without the field is on v2), the boot
+banner as `4mb layout v4`.
 
 - **The bundle's magic** names the variant and the table (below). The
   signature covers it.
@@ -80,29 +81,36 @@ on v2), the boot banner as `4mb layout v3`.
   `ODFW18mb`, the 8mb layout that releases up to 1.0.0-beta.16 also
   carried): "this update is for another flash layout than this display's:
   use the DevKit (4 MB) update file (opendmd.dev/install has the latest)"
-  (`OtaError::OtherLayout`); on a v3 board, a v2 bundle: "this update is
-  for the older flash layout v2 and this DevKit (4 MB) has layout v3: use
-  a release made for layout v3 (opendmd.dev/install has the latest)"; and
-  (for a later table, on a firmware that knows both) "this update needs
-  flash layout v4 … : reinstall it once over USB from opendmd.dev/install".
+  (`OtaError::OtherLayout`); on a v4 board, a v3 (or v2) bundle: "this
+  update is for the older flash layout v3 and this DevKit (4 MB) has layout
+  v4: use a release made for layout v4 (opendmd.dev/install has the
+  latest)"; and (for a later table, on a firmware that knows both) "this
+  update needs flash layout v5 … : reinstall it once over USB from
+  opendmd.dev/install".
   After the image, it checks the image's app descriptor is `"<version>
   <variant>"` for the bundle's layout (`check_app_desc`), so an image
   signed under the wrong layout by mistake is refused too.
 - **The updater** knows the two magics and installs a bundle only if its
   layout is the board's: the variant from the flash size the installed
   bootloader set (4 MB is `4mb`), the table from the size of the board's
-  `factory` partition (2,560 KB is 4mb v3, 2,304 KB 4mb v2), and the
+  `factory` partition (2,816 KB is 4mb v4, 2,560 KB 4mb v3, 2,304 KB 4mb
+  v2), and the
   image's app descriptor must agree; otherwise it installs nothing and
   boots the firmware that is there.
 - **Players from before a layout** (their firmware and their updater) do
   not know its magic, so they refuse its bundles as "not an OpenDMD
-  firmware bundle (bad magic)" at the header: **a DevKit on table v2
-  (1.0.0-beta.15 and earlier) refuses every v3 bundle** (`ODFW34mb`; its
-  firmware's `Header::parse`, its updater's `memcmp` against the magics
-  it knows and its web app's `fwVariant` all fail on it), so a v3 image,
-  which may be bigger than v2's 2,304 KB `factory`, can never reach a v2
-  board's updater. `make ota-compat` proves it with beta.15's own code
-  (below).
+  firmware bundle (bad magic)" at the header, or (a firmware that knows
+  the `ODFW` prefix) as another flash layout's: **a DevKit on table v3
+  (1.0.0-beta.16 to 1.0.1) refuses every v4 bundle** (`ODFW44mb`: the
+  firmware's `Header::parse` answers `OtherLayout` from 1.0.0, beta.16's
+  `BadMagic`, "bad magic"; its updater's `memcmp`
+  against the magics it knows fails, "bad magic", and its web app's
+  `otherLayout` says "another flash layout"), so a v4 image, which may be
+  bigger than v3's 2,560 KB `factory`, can never reach a v3 board's
+  updater; and a DevKit on table v2 (1.0.0-beta.15 and earlier) refuses
+  every v3 and v4 bundle as "bad magic". `make ota-compat` proves the v3
+  case with 1.0.1's own code, `make emu-api`'s boot C with 1.0.0-beta.16's
+  updater in a v4 board's `ota_0` (below).
 - **The web app** reads the chosen file's magic and refuses another
   layout's or another table's in words (another layout: "This file is for
   another flash layout than this display's. Use the DevKit (4 MB) update
@@ -114,8 +122,11 @@ on v2), the boot banner as `4mb layout v3`.
   the player's variant (`release.json` `variants`), and does not offer one
   whose `layout` is not the player's (it says the same words, after
   "Firmware X is out."); the downloaded file's magic is checked for it
-  too. A v2 board still running beta.15's web app shows that web app's
-  words instead: "The firmware download is not the release it should be.
+  too (a v3 board's web app, 1.0.0 to 1.0.1, does the same with a v4
+  release: "Firmware X is out. This firmware needs a one-time USB
+  reinstall…", and its **Update from file…** calls a v4 file "for another
+  flash layout than this display's"). A v2 board still running beta.15's
+  web app shows that web app's words instead: "The firmware download is not the release it should be.
   Nothing was installed" (Check for updates), "This is not an OpenDMD
   firmware file (.odfw)" (Update from file…). `tools/fw-ota.sh` (`make
   fw-ota`) refuses a mismatch before sending; `tools/fw-sign.py sign`
@@ -138,32 +149,44 @@ installer connect.
 
 ## Why not two app slots
 
-The release image is ~2.3 MB and the web app pack has its own 1 MB
+The release image is ~2.5 MB and the web app pack has its own 768 KB
 partition (`docs/www-pack.md`), so two full app slots do not fit in 4 MB.
 The device cannot overwrite the partition it is running from either. So the
 update is staged on the card and written by a small second program.
 
 ## Flash layout
 
-4mb, table v3 (`firmware/partitions.csv`):
+4mb, table v4 (`firmware/partitions.csv`):
 
 ```
 nvs       0x9000   0x6000
 otadata   0xF000   0x2000      which app boots next
 phy_init  0x11000  0x1000
+factory   0x20000  0x2C0000    the firmware (2.75 MB)
+ota_0     0x2E0000 0x60000     the updater (384 KB, C on ESP-IDF)
+www       0x340000 0xC0000     the web app pack (768 KB)
+```
+
+v4 took another 256 KB from `www` (1,024 KB in v3; the pack is ~0.55 MB)
+for `factory` (2,560 KB in v3): the firmware with the Formula compiler had
+come down to ~67 KB to spare of v3's, against the 64 KB rule; v4 gives it
+~320 KB. The size line in `make fw-release` insists on 64 KB to spare of
+`factory`, and on 64 KB of `www` for the signed pack (`make web` checks the
+same). Both app partitions start on a 64 KB boundary (the MMU page), `www`
+too (it is memory-mapped), and the table ends at 0x400000. NVS, otadata
+and phy_init did not move, so a USB install of v4 that does not erase the
+chip keeps the settings (`docs/deploying.md` "Moving a board to table
+v4").
+
+v3 (1.0.0-beta.16 to 1.0.1), for the record:
+
+```
 factory   0x20000  0x280000    the firmware (2.5 MB)
-ota_0     0x2A0000 0x60000     the updater (384 KB, C on ESP-IDF)
+ota_0     0x2A0000 0x60000     the updater
 www       0x300000 0x100000    the web app pack (1 MB)
 ```
 
-v3 took 256 KB from `www` (1,280 KB in v2; the pack is ~0.6 MB and getting
-smaller) for `factory` (2,304 KB in v2): with the ~2.29 MB image that is
-~320 KB to spare instead of ~67 KB. The size line in `make fw-release`
-insists on 64 KB to spare. NVS, otadata and phy_init did not move, so a USB
-install of v3 that does not erase the chip keeps the settings
-(`docs/deploying.md` "Moving a board to table v3").
-
-v2 (1.0.0-beta.15 and earlier), for the record:
+v2 (1.0.0-beta.15 and earlier):
 
 ```
 factory   0x20000  0x240000    the firmware (2.25 MB)
@@ -176,8 +199,8 @@ www       0x2C0000 0x140000    the web app pack (1.25 MB; v1's offset and size)
 `opendmd-<version>-<variant>.odfw` = header + app image.
 
 ```
-magic     the layout: "ODFW34mb" (4mb, table v3);      8 B
-          "ODFW1\0\0\0" was 4mb's table v2
+magic     the layout: "ODFW44mb" (4mb, table v4);      8 B
+          "ODFW34mb" was 4mb's table v3, "ODFW1\0\0\0" its v2
 version   32 B, NUL-padded (e.g. "1.0.0")
 length    u32 LE, image bytes
 sha256    32 B, of the image
@@ -212,7 +235,7 @@ firmware takes the new format: `opendmd_core::ota`'s test
 `a_keyed_bundle_passes_the_beta14_checks` (the verification functions are
 unchanged since beta.14), and `make ota-compat` ran the beta.14 tag's own
 `opendmd-core` against a bundle and a www pack signed then. (It now runs
-beta.15's against table v3 and v2 bundles: below.)
+1.0.1's against table v4 and v3 bundles: below.)
 
 ## Keys
 
@@ -347,9 +370,11 @@ and takes `"updater <n>"` with `n` ≥ 2 as one that lights the panel
 test checks the one this tree builds passes). An older or unreadable one
 gets the old screen, "Installing / Dark while it installs / Don't unplug".
 `GET /api/firmware` reports it as `updater: {version, panel}`. The
-emulator's API lane installs through both: this tree's updater (boot B)
-and `OLD_UPDATER_TAG`'s, v1.0.0-beta.16 by default (boot C, `make
-emu-old-updater`). A USB install itself does not run the updater: the panel
+emulator's API lane runs both: this tree's updater installs (boot B), and
+`OLD_UPDATER_TAG`'s, v1.0.0-beta.16 by default (boot C, `make
+emu-old-updater`), gets the old screen and then refuses the bundle, since
+it knows no table after v3 (on a real board the USB move to v4 always
+writes the v4 updater with it). A USB install itself does not run the updater: the panel
 stays dark while the installer writes.
 
 ## Check for updates
@@ -404,7 +429,7 @@ browser doing the fetching: the player itself never goes to the internet.
 - **Update.** Everything needed is downloaded into memory first, with
   progress, and checked: the firmware's header must carry the release's
   version and the player's layout, the pack must start `ODWP` with its header's length equal to
-  the download, its version `www_version`, and at most 1,048,576 B (the
+  the download, its version `www_version`, and at most 786,432 B (the
   player then checks its signature). A
   failure there installs nothing. Then the firmware, if it is newer:
   `PUT /api/firmware` and the wait for the restart, exactly as "Update from
@@ -450,30 +475,33 @@ browser doing the fetching: the player itself never goes to the internet.
   verify, tamper → fail, a bundle relabelled to the other table → fail, one
   relabelled `ODFW18mb` → refused as another layout, an 8mb image in a 4mb
   bundle → fail); the firmware's verifier is in `opendmd-core::ota` with
-  tests on the header, a known-answer signature for each table (4mb v3,
-  4mb v2), an old 8mb bundle refused as another layout
+  tests on the header, a known-answer signature for each table (4mb v4,
+  v3, v2), an old 8mb bundle refused as another layout
   (`a_bundle_for_another_layout_is_refused`), the layout check, the
   partition CSV against `LAYOUTS` and the app descriptor check.
 - Across layouts: `make ota-compat` (`tools/ota-compat.sh`, OTA_COMPAT_OK)
-  checks out v1.0.0-beta.15 (the last DevKit release on table v2) and runs
-  `tools/fixtures/ota-compat.rs`, a 4mb player's checks in the firmware's
-  order, with that release's own `opendmd-core` and with this tree's,
-  against bundles signed now: beta.15 must refuse a table v3 bundle whose
-  image (2,400,000 B) is bigger than its 2,359,296 B `factory`, at the
-  header ("bad magic"), and take a table v2 one and the www pack; this tree
-  must take the v3 bundle and refuse the v2 one at the header ("the older
-  flash layout v2"). With `DIST=` holding a release build, its 4mb bundle
-  (the release key) goes through both too: refused by beta.15, taken here.
-  The emulator's API lane (`make emu-api`) sends a v2-labelled copy of the
-  real bundle to the v3 firmware (422 at the header, the words above)
-  before the real update.
+  checks out v1.0.1 (the last DevKit release on table v3; `OTA_COMPAT_TAG`)
+  and runs `tools/fixtures/ota-compat.rs`, a 4mb player's checks in the
+  firmware's order, with that release's own `opendmd-core` and with this
+  tree's, against bundles signed now: 1.0.1 must refuse a table v4 bundle
+  whose image (2,700,000 B) is bigger than its 2,621,440 B `factory`, at the
+  header ("another flash layout"), and take a table v3 one and the www
+  pack; this tree must take the v4 bundle and refuse the v3 one at the
+  header ("the older flash layout v3"). With `DIST=` holding a release
+  build, its 4mb bundle (the release key) goes through both too: refused by
+  1.0.1, taken here. The emulator's API lane (`make emu-api`) sends a
+  v3-labelled copy of the real bundle to the v4 firmware (422 at the
+  header, the words above) before the real update, and in boot C puts
+  1.0.0-beta.16's updater (tables v3 and v2 only) in `ota_0`: it refuses
+  the v4 bundle as "bad magic", writes nothing and boots the firmware,
+  which says the update "was not installed".
 - Browser: `make web-smoke` installs a bundle through "Update from
   file…" and runs "Check for updates" against a locally served
   `release.json` and files, through `tools/mock-device.py` (its simulated
   restart, and `PUT /api/www` taking on the pack's version): up to date,
   each failure, and an update applied and the page reloaded.
 - Device: a spare DevKit with any FAT32 card (no panel needed): flash
-  table v3 once over USB, then `make fw-ota HOST=…` twice (a version bump
+  table v4 once over USB, then `make fw-ota HOST=…` twice (a version bump
   between), then the fault drills: a tampered bundle (422), a cut-off upload
   (408, nothing staged), card pulled during the updater's write (recovers on
   reinsertion). The serial capture watches the updater's log.

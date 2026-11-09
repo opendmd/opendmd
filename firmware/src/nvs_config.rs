@@ -100,6 +100,9 @@ const KEY_PANEL_TRY: &str = "panel_try";
 /// Internal, not a setting: the CID serial of the card that failed at full
 /// speed and mounts at the fallback clock (`sdhealth`). Absent = none.
 const KEY_SD_SLOW: &str = "sd_slow";
+/// WiFi and everything on it (`Settings::network`): `"on"` or `"off"`, a
+/// string (the installer's offline NVS image writes `off`). Absent: on.
+const KEY_NETWORK: &str = "network";
 /// The firmware version that booted last (`Config::note_booted`): not a
 /// setting, never in `/api/config`.
 const KEY_BOOTED: &str = "booted_ver";
@@ -235,6 +238,30 @@ pub struct Settings {
     /// Kept by the device itself like the WiFi details: never in the card's
     /// settings file, `/api/status` or a link.
     pub location: Option<Place>,
+    /// WiFi at all (`"network"` in `/api/config` and the card's file:
+    /// `"on"`, the default, or `"off"`). Off: no WiFi driver, no setup
+    /// network, no web app, no clock (`boot.rs`); read at boot only. The
+    /// installer's Connect to Wi-Fi turns it back on (`net_worker`).
+    pub network: bool,
+}
+
+/// `"on"` / `"off"`: the `network` setting's words (NVS, `/api/config`,
+/// the card's file).
+pub fn network_name(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+/// The `network` setting from its word; `None` for anything else.
+pub fn network_from_name(v: &str) -> Option<bool> {
+    match v {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store? Only `""`: the
@@ -284,6 +311,7 @@ impl Default for Settings {
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
             location: None,
+            network: true,
         }
     }
 }
@@ -507,6 +535,10 @@ impl Config {
                 .unwrap_or(d.api_key),
             card_speed: self.card_speed(),
             location: self.location(),
+            network: self
+                .get_string(KEY_NETWORK)
+                .and_then(|s| network_from_name(&s))
+                .unwrap_or(d.network),
         }
     }
 
@@ -560,6 +592,7 @@ impl Config {
         self.nvs.set_str(KEY_FORMULA_KEEP, s.formula_keep.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
+        self.nvs.set_str(KEY_NETWORK, network_name(s.network))?;
         match s.location {
             Some(p) => {
                 self.nvs.set_i32(KEY_LAT, p.lat_c)?;

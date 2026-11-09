@@ -121,6 +121,7 @@ import posixpath
 import re
 import shutil
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 import markdown
@@ -300,7 +301,41 @@ GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="m
 # package's dist/web/, unchanged; its notices in
 # licenses/THIRD-PARTY-LICENSES-installer.txt): no CDN on the page that
 # flashes boards over Web Serial (the security review's M6).
-INSTALL_HEAD = '<script type="module" src="esp-web-tools/install-button.js"></script>'
+INSTALL_HEAD = ('<script type="module" src="esp-web-tools/install-button.js"></script>\n'
+                '<script type="module" src="offline.js"></script>')
+# The install buttons' "Play from the card only, no WiFi" box (flasher/offline.js,
+# beside the page: the CSP takes no inline script): ticked, it points its button
+# at the release's offline manifest (manifest-<v>-offline.json: the six parts
+# and an NVS image saying network = off; docs/deploying.md "Offline
+# installs"), which ESP Web Tools reads when the button is clicked. Offered for
+# a release whose dist has that manifest. OFFLINE_FILE: the one-line card file
+# that does the same, as a download.
+INSTALL_OFFLINE_JS = ROOT / "flasher/offline.js"
+OFFLINE_FILE = '{"network":"off"}\n'
+OFFLINE_HREF = "data:application/json;charset=utf-8," + urllib.parse.quote(OFFLINE_FILE, safe="")
+OFFLINE_BOX = """<div class="offline-box" style="margin-top:16px">
+<label><input type="checkbox" id="offline-{id}" data-offline-for="install-{id}" aria-describedby="offline-about-{id}"> Play from the card only, no WiFi</label>
+<p id="offline-about-{id}" style="font-size:14px;margin:6px 0 0">Ticked, the install erases the display's saved settings and turns WiFi off: the display plays its
+card and never starts WiFi or its web app. Leave the box unticked to update a display or set up its WiFi later: only then
+does the installer recognise it and offer <strong>Update</strong> and <strong>Connect to Wi-Fi</strong>. To turn WiFi back
+on, use <strong>Connect to Wi-Fi</strong> here with the box unticked, or change <code>"off"</code> to <code>"on"</code> in
+the card's <code>opendmd.json</code>. Instead of the box, you can also
+<a href="{href}" download="opendmd.json" id="offline-file-{id}">copy this file to the top folder of the card</a>
+(<code>opendmd.json</code>).</p>
+</div>"""
+
+
+def install_attrs(manifest: str, offline: str | None) -> str:
+    """An install button's manifest attribute, and with an offline manifest the two its box swaps between."""
+    if offline is None:
+        return f'manifest="{manifest}"'
+    return f'manifest="{manifest}" data-manifest-online="{manifest}" data-manifest-offline="{offline}"'
+
+
+def offline_box(id_: str, offline: str | None) -> str:
+    return OFFLINE_BOX.format(id=id_, href=OFFLINE_HREF) if offline else ""
+
+
 INSTALL_VENDOR = ROOT / "flasher/esp-web-tools"
 # The flash layout (the firmware's `variant`): the board, the words on its
 # button, and what it says about the board.
@@ -315,15 +350,26 @@ INSTALL_BOARDS = tuple(BOARDS)
 INSTALL_ONE = """<div class="board" id="board-{v}">
 <h3>{board}</h3>
 <p>{about}</p>
-<esp-web-install-button id="install-{v}" manifest="firmware/manifest-{v}.json">
+<esp-web-install-button id="install-{v}" {attrs}>
 <button slot="activate" id="install-activate-{v}">{label}</button>
 <span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge, Opera or Firefox on a computer.</span>
 <span slot="not-allowed">This page has to be opened over https.</span>
 </esp-web-install-button>
+{offline}
 </div>"""
-INSTALL_BUTTON = ('<div class="install"><div class="boards">'
-                  + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in ((v, BOARDS[v]) for v in INSTALL_BOARDS))
-                  + '</div><p class="ver">OpenDMD {version}.</p></div>')
+
+
+def install_button(version: str, offline: set[str]) -> str:
+    """The release's buttons (`offline`: the layouts whose offline manifest it publishes)."""
+    def one(v: str) -> str:
+        b, lab, about = BOARDS[v]
+        off = f"firmware/manifest-{v}-offline.json" if v in offline else None
+        return INSTALL_ONE.format(v=v, board=b, label=lab, about=about, attrs=install_attrs(f"firmware/manifest-{v}.json", off),
+                                  offline=offline_box(v, off))
+    return ('<div class="install"><div class="boards">' + "".join(one(v) for v in INSTALL_BOARDS)
+            + f'</div><p class="ver">OpenDMD {version}.</p></div>')
+
+
 # A beta newer than the final release (`--beta-dist`): its installer and
 # update files under install/firmware/beta/ (its own manifest, bootloader,
 # table and updater: a beta may change any of them), and a smaller button
@@ -333,11 +379,12 @@ INSTALL_BETA = """<details class="beta-install" id="beta-install">
 <summary>Or install the beta, OpenDMD {version}</summary>
 <p>Betas are early versions of the next release: new things sooner, and they may have problems. To get the next
 betas over WiFi as well, switch on Get beta updates in the web app's Settings, Firmware.</p>
-<esp-web-install-button id="install-beta-4mb" manifest="{dir}/manifest-4mb.json">
+<esp-web-install-button id="install-beta-4mb" {attrs}>
 <button slot="activate" id="install-activate-beta-4mb">Install the beta</button>
 <span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge, Opera or Firefox on a computer.</span>
 <span slot="not-allowed">This page has to be opened over https.</span>
 </esp-web-install-button>
+{offline}
 </details>"""
 # Other files published as they are: repo path -> published path.
 FILES = {
@@ -769,7 +816,7 @@ def decorate(body: str) -> str:
 
 # A firmware bundle's magic -> its flash layout: the variant and its
 # partition table's version (opendmd_core::ota::LAYOUTS, tools/fw-sign.py).
-BUNDLE_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
+BUNDLE_LAYOUTS = {b"ODFW44mb": ("4mb", 4), b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
 
 
 def bundle_layout(path: Path, variant: str) -> int:
@@ -795,6 +842,10 @@ def manifests(dist: Path) -> tuple[dict, str]:
     return ms, ver
 
 
+# The layouts each install/<sub>/ has an offline manifest for (publish).
+OFFLINE: dict[str, set[str]] = {}
+
+
 def publish(dist: Path, install: Path, sub: str) -> dict:
     """One release in dist/ (fw-release keeps older versions there too)
     into install/<sub>/: the parts the manifest names, the merged image and
@@ -808,7 +859,20 @@ def publish(dist: Path, install: Path, sub: str) -> dict:
     fw.mkdir(parents=True)
     shown = [v for v in ms if v in INSTALL_BOARDS]
     names = [f"manifest-{v}.json" for v in shown]
-    names += sorted({p["path"] for v in shown for b in ms[v]["builds"] for p in b["parts"]})
+    # The offline install's manifest (a release from before it has none):
+    # the same version, the six parts and its NVS image.
+    offline = {}
+    for v in shown:
+        f = dist / f"manifest-{v}-offline.json"
+        if f.is_file():
+            om = json.loads(f.read_text())
+            normal = [p for b in ms[v]["builds"] for p in b["parts"]]
+            extra = [p for b in om["builds"] for p in b["parts"] if p not in normal]
+            if om.get("version") != ver or len(extra) != 1 or [p for b in om["builds"] for p in b["parts"] if p in normal] != normal:
+                raise SystemExit(f"{f} is not {ver}'s offline manifest: its parts are not {dist / f'manifest-{v}.json'}'s and one NVS image")
+            offline[v] = om
+            names.append(f.name)
+    names += sorted({p["path"] for m in (*(ms[v] for v in shown), *offline.values()) for b in m["builds"] for p in b["parts"]})
     names += [f"opendmd-{ver}-{v}-full.bin" for v in shown]
     names += [f"opendmd-{ver}-{v}.odfw" for v in ms]
     for name in names:
@@ -821,6 +885,7 @@ def publish(dist: Path, install: Path, sub: str) -> dict:
     if pack[:4] != b"ODWP":
         raise SystemExit(f"opendmd-{ver}-www.pack is not a www pack")
     www_version = pack[20:20 + pack[18]].decode()
+    OFFLINE[sub] = set(offline)
     return {"version": ver, "firmware": f"{sub}/opendmd-{ver}-4mb.odfw",
             "variants": {v: {"firmware": f"{sub}/opendmd-{ver}-{v}.odfw",
                              "layout": bundle_layout(fw / f"opendmd-{ver}-{v}.odfw", v)} for v in ms},
@@ -859,9 +924,11 @@ def markers(page: str, text: str, rel_info: dict) -> str:
     """Site-only pieces, written in the docs as HTML comments (invisible on
     GitHub): the install button, the update bundle's download link."""
     ver = html.escape(rel_info["version"])
-    button = INSTALL_BUTTON.replace("{version}", ver)
+    button = install_button(ver, OFFLINE.get("firmware", set()))
     if rel_info.get("beta"):
-        button += INSTALL_BETA.format(version=html.escape(rel_info["beta"]), dir=BETA_DIR)
+        off = f"{BETA_DIR}/manifest-4mb-offline.json" if "4mb" in OFFLINE.get(BETA_DIR, set()) else None
+        button += INSTALL_BETA.format(version=html.escape(rel_info["beta"]), attrs=install_attrs(f"{BETA_DIR}/manifest-4mb.json", off),
+                                      offline=offline_box("beta-4mb", off))
     text = text.replace("<!-- site:install-button -->", button)
     links = []
     for v in INSTALL_BOARDS:
@@ -1148,6 +1215,7 @@ def main() -> None:
         shutil.copyfile(ROOT / src, out / dst)
     # ESP Web Tools beside the install page (INSTALL_HEAD), with its notices.
     shutil.copytree(INSTALL_VENDOR, out / "install/esp-web-tools")
+    shutil.copyfile(INSTALL_OFFLINE_JS, out / "install/offline.js")
     shutil.copyfile(ROOT / "licenses/THIRD-PARTY-LICENSES-installer.txt", out / "install/esp-web-tools/THIRD-PARTY-LICENSES-installer.txt")
     # The 404 page: links absolute (it answers at any depth), nothing marked.
     (out / NOT_FOUND_PAGE).write_text(render(NOT_FOUND_PAGE, "Not found · OpenDMD", markdown.Markdown().convert(NOT_FOUND),

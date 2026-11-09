@@ -1,0 +1,6 @@
+name "Tick look"
+-- a look that reads the clock: refused with WiFi off (emu-offline)
+look
+layer multiply {
+  gray(1 - second / 120)
+}

@@ -22,7 +22,7 @@ import { h, store, SITE } from './util.js';
 import { older, fwHead, fwVariant, fwLayout, playerLayout, layoutWhy, board, sendFw, put, restart } from './firmware.js';
 
 export const RELEASE = SITE + 'install/release.json', BETA = SITE + 'install/beta.json';
-const WWW_MAX = 1048576; // the smaller www partition (4mb, table v3): one pack fits both layouts
+const WWW_MAX = 786432; // the www partition (4mb, table v4: 768 KB)
 const td = new TextDecoder();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bare = (v) => String(v).replace(/^v/i, '');

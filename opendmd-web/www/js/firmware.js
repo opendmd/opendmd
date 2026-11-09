@@ -78,7 +78,7 @@ const td = new TextDecoder();
 // A bundle's flash layout (its magic): [variant, partition table], or null.
 // Any other magic starting ODFW (the 8mb layout of 1.0.0-beta.16 and earlier)
 // is a bundle for a layout this firmware does not build (otherLayout).
-const LAYOUTS = { ODFW34mb: ['4mb', 3], 'ODFW1\0\0\0': ['4mb', 2] };
+const LAYOUTS = { ODFW44mb: ['4mb', 4], ODFW34mb: ['4mb', 3], 'ODFW1\0\0\0': ['4mb', 2] };
 export const fwLayout = (b) => (b.length >= 140 && LAYOUTS[td.decode(b.subarray(0, 8))]) || null;
 export const fwVariant = (b) => fwLayout(b)?.[0] || null;
 export const otherLayout = (b) => b.length >= 140 && !fwLayout(b) && td.decode(b.subarray(0, 4)) === 'ODFW';

@@ -57,6 +57,9 @@ pub struct NetWorker {
     /// main task's command channel (where it sends what it decided).
     pub settings: Arc<Mutex<Settings>>,
     pub cmd: mpsc::Sender<Command>,
+    /// The `network` setting is off (`boot.rs`): no WiFi, unless the
+    /// browser installer asks for it over USB ([`run_offline`]).
+    pub offline: bool,
 }
 
 /// Spawn the worker on CPU0 (`task::spawn_core0`) and return immediately.
@@ -192,6 +195,9 @@ fn save_wifi(
     password: &str,
 ) -> Result<(), String> {
     let mut next = settings.lock().map_err(|_| "settings poisoned")?.clone();
+    // Details given over USB are for joining: WiFi on (an offline
+    // display's way back, `run_offline`).
+    next.network = true;
     next.wifi_ssid = ssid.to_string();
     next.wifi_pass = password.to_string();
     // The installer's details are a name and a password: no work or school
@@ -214,6 +220,7 @@ fn save_wifi(
             // The shared copy as the main task now has it (a later PUT
             // starts from it and would otherwise put the old WiFi back).
             if let Ok(mut s) = settings.lock() {
+                s.network = true;
                 s.wifi_ssid = ssid.to_string();
                 s.wifi_pass = password.to_string();
                 s.wifi_eap_user.clear();
@@ -272,7 +279,22 @@ fn run(worker: NetWorker) {
         rx,
         settings,
         cmd,
+        offline,
     } = worker;
+    if offline {
+        return run_offline(Offline {
+            modem: Some(modem),
+            sysloop,
+            nvs,
+            hostname,
+            status,
+            settings,
+            cmd,
+            wifi: None,
+            last_job: Instant::now(),
+            last_scan: None,
+        }, rx);
+    }
     let (save_settings, save_cmd) = (settings.clone(), cmd.clone());
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
     let Some(mut net) = start(modem, sysloop, nvs, ssid, password, eap, hostname, status, save_settings, save_cmd) else {
@@ -387,6 +409,8 @@ fn run(worker: NetWorker) {
 
         // A cache count put off for a transfer, once it is over.
         crate::cache::tick();
+        #[cfg(feature = "psi")]
+        crate::card_formulas::tick();
 
         // The FAT index (`fatidx`): built or rebuilt when due.
         let before = crate::state::free_heap();
@@ -413,6 +437,254 @@ fn run(worker: NetWorker) {
     }
 }
 
+
+/// An offline display's worker (`network` off, `boot.rs`): no WiFi, no
+/// setup network, no mDNS, no SNTP, no Follow RePlayOS. It does the card's
+/// CPU0 chores the online loop does besides (the read-ahead, the FAT index,
+/// the slow-clock record, the cache count), and answers the browser
+/// installer over USB (Improv, `improv.rs`): a scan or WiFi details start
+/// the radio on demand. Details that join are saved with `network` on, the
+/// answer goes back (Provisioned and the address), and the display
+/// restarts onto the network: join first, then restart, because a restart
+/// takes the console back to 921600 baud mid-session. Details that do not
+/// join are answered as such, nothing is saved and it stays offline. A
+/// radio no job has needed for [`OFFLINE_RADIO_IDLE`] is stopped again.
+struct Offline {
+    /// The radio before it is started (and again after it is stopped).
+    modem: Option<Modem>,
+    sysloop: EspSystemEventLoop,
+    nvs: EspNvsPartition<NvsDefault>,
+    hostname: String,
+    status: Arc<Mutex<Status>>,
+    settings: Arc<Mutex<Settings>>,
+    cmd: mpsc::Sender<Command>,
+    /// The radio, started for the installer.
+    wifi: Option<WifiManager>,
+    /// The installer's last job.
+    last_job: Instant,
+    /// The last scan, for the installer's rescans (`IMPROV_SCAN_FRESH`).
+    last_scan: Option<(Instant, Vec<crate::wifi::ScannedAp>)>,
+}
+
+/// How long an offline display keeps the radio it started for the
+/// installer once no job comes: the installer's WiFi form rescans every
+/// 3 s while it is open.
+const OFFLINE_RADIO_IDLE: std::time::Duration = std::time::Duration::from_secs(90);
+
+#[optimize(size)] // (CPU0: no frame runs it)
+#[inline(never)]
+fn run_offline(mut o: Offline, rx: mpsc::Receiver<NetCommand>) {
+    info!("[net] network off: no WiFi this boot (worker on CPU0 for the card's chores and the USB installer)");
+    if let Ok(mut s) = o.status.lock() {
+        s.wifi = "off";
+        s.ip.clear();
+    }
+    crate::improv::set_network("off", "");
+    loop {
+        let got = rx.recv_timeout(config::WIFI_POLL_INTERVAL);
+        crate::improv::log_events();
+        sync_sd_slow(&o.nvs);
+        if matches!(got, Ok(NetCommand::Improv(_))) {
+            crate::improv::taken();
+        }
+        match got {
+            Ok(NetCommand::Improv(job)) => {
+                o.last_job = Instant::now();
+                o.improv(job);
+                o.last_job = Instant::now();
+            }
+            Ok(NetCommand::CountCache) => crate::cache::run_count(),
+            // Nothing serves HTTP offline, so these do not come; answered
+            // anyway, so no sender is ever left waiting.
+            Ok(NetCommand::Scan(reply)) => {
+                let _ = reply.send(Vec::new());
+            }
+            Ok(NetCommand::FollowTest { reply, .. }) => {
+                let _ = reply.send(r#"{"ok":false,"error":"the network is off"}"#.into());
+            }
+            Ok(NetCommand::VerifyBundle { header, reply }) => {
+                let _ = reply.send(crate::ota::serve_verify(&header));
+            }
+            Ok(NetCommand::VerifyWww { signed, reply }) => {
+                let _ = reply.send(crate::ota::serve_verify_www(&signed));
+            }
+            Ok(NetCommand::NameCheck { reply, .. }) => {
+                let _ = reply.send(opendmd_core::hostname::Check::Unknown);
+            }
+            Ok(NetCommand::Rename(name)) => o.hostname = name,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("[net] command channel closed; worker exiting");
+                return;
+            }
+        }
+        // The online loop's other ticks are left out: `inputs::tick` (the
+        // sky's inputs, which need the time SNTP sets), `netstat::tick`
+        // (lwIP's sockets: none without WiFi or the httpd) and
+        // `diag::check` (a diagnostic build's heap walk on the network's
+        // own paths); `clock::log_new_syncs` has no sync to log.
+        // A compiled Formula the panel refused, noted for the next start.
+        #[cfg(feature = "psi")]
+        crate::card_formulas::tick();
+        crate::cache::tick();
+        let before = crate::state::free_heap();
+        crate::readahead::tick();
+        crate::heapmap::cp_if_moved("read-ahead first took heap", before);
+        let before = crate::state::free_heap();
+        crate::fatidx::tick();
+        crate::heapmap::cp_if_moved("fat index tick first took heap", before);
+        #[cfg(feature = "emu-census")]
+        census();
+        if o.wifi.is_some() && o.last_job.elapsed() >= OFFLINE_RADIO_IDLE && !crate::improv::pending() {
+            o.stop_radio();
+        }
+    }
+}
+
+impl Offline {
+    /// The radio, started now if it is not: `None` if it cannot be (the
+    /// heap), logged.
+    #[optimize(size)]
+    #[inline(never)]
+    fn radio(&mut self) -> Option<&mut WifiManager> {
+        if self.wifi.is_none() {
+            let modem = self.modem.take()?;
+            let free = crate::state::free_heap();
+            info!("[net] network off: starting the radio for the browser installer ({free} B free)");
+            match WifiManager::new(modem, self.sysloop.clone(), self.nvs.clone(), &self.hostname)
+                .and_then(|mut w| w.start_idle().map(|()| w))
+            {
+                Ok(w) => {
+                    info!(
+                        "[net] radio up for the installer: {} B free (took {} B)",
+                        crate::state::free_heap(),
+                        free.saturating_sub(crate::state::free_heap())
+                    );
+                    self.wifi = Some(w);
+                }
+                Err(e) => {
+                    error!("[net] the radio did not start ({e:#}); to turn WiFi on, change \"network\" to \"on\" in the card's opendmd.json");
+                    // SAFETY: the modem was moved into the failed driver
+                    // and dropped with it: nothing else holds it.
+                    self.modem = Some(unsafe { Modem::new() });
+                    return None;
+                }
+            }
+        }
+        self.wifi.as_mut()
+    }
+
+    /// The radio no longer needed: stopped (`esp_wifi_deinit`), its heap
+    /// back. Started again by the next job.
+    fn stop_radio(&mut self) {
+        if let Some(w) = self.wifi.take() {
+            drop(w);
+            self.last_scan = None;
+            // SAFETY: the driver that held the modem is gone.
+            self.modem = Some(unsafe { Modem::new() });
+            info!("[net] network off: radio stopped (no installer job for {} s); {} B free", OFFLINE_RADIO_IDLE.as_secs(), crate::state::free_heap());
+        }
+    }
+
+    #[optimize(size)]
+    #[inline(never)]
+    fn improv(&mut self, job: Job) {
+        match job {
+            Job::Scan { at } => {
+                if at.elapsed() >= config::IMPROV_STALE {
+                    crate::improv::send_scan(&[]);
+                    return;
+                }
+                if let Some((_, aps)) = self
+                    .last_scan
+                    .as_ref()
+                    .filter(|(t, _)| t.elapsed() < config::IMPROV_SCAN_FRESH)
+                {
+                    crate::improv::send_scan(aps);
+                    return;
+                }
+                let aps = match self.radio() {
+                    Some(w) => w.scan_networks().unwrap_or_else(|e| {
+                        warn!("[net] improv scan failed: {e:#}");
+                        Vec::new()
+                    }),
+                    None => Vec::new(),
+                };
+                crate::improv::send_scan(&aps);
+                self.last_scan = Some((Instant::now(), aps));
+            }
+            Job::Provision {
+                ssid,
+                password,
+                at,
+                stamp,
+            } => self.provision(ssid, password, at, stamp),
+        }
+    }
+
+    /// WiFi details over USB on an offline display: joined, then saved with
+    /// `network` on (NVS and the card's file), answered, and the display
+    /// restarted onto the network.
+    #[optimize(size)]
+    #[inline(never)]
+    fn provision(&mut self, ssid: String, password: String, at: Instant, stamp: u32) {
+        use opendmd_core::improv::Error;
+        info!("[net] improv: WiFi details for '{ssid}' received over USB (the network is off)");
+        if at.elapsed() >= config::IMPROV_STALE {
+            warn!("[net] improv: WiFi details for '{ssid}' waited too long; not tried");
+            crate::improv::provision_failed(stamp, Error::UnableToConnect);
+            return;
+        }
+        let deadline = at + config::IMPROV_ANSWER_WITHIN;
+        let Some(wifi) = self.radio() else {
+            crate::improv::provision_failed(stamp, Error::UnableToConnect);
+            return;
+        };
+        info!("[net] improv: joining '{ssid}'");
+        let joined = matches!(wifi.connect_sta(&ssid, &password, None, Some(deadline)), Ok(true));
+        let ip = if joined { wifi.ip_address().unwrap_or_default() } else { String::new() };
+        if !joined {
+            warn!("[net] improv: could not join '{ssid}'; the network stays off");
+            crate::improv::provision_failed(stamp, Error::UnableToConnect);
+            if let Some(w) = self.wifi.as_mut() {
+                let _ = w.disconnect();
+            }
+            return;
+        }
+        let saved = match save_wifi(&self.settings, &self.cmd, &ssid, &password) {
+            Ok(()) => {
+                // `network` is a card setting too: the card's file says on
+                // now, or the next boot would read off from it again.
+                crate::settings_card::save_shared(&self.settings);
+                true
+            }
+            Err(e) => {
+                error!("[net] improv: joined '{ssid}' but could not save it: {e}; the network stays off");
+                false
+            }
+        };
+        match (saved, crate::improv::parse_ipv4(&ip)) {
+            (true, Some(octets)) => {
+                info!("[net] improv: joined '{ssid}' at http://{ip}/; WiFi on, restarting onto the network");
+                crate::improv::set_network("sta", &ip);
+                crate::improv::provisioned(stamp, octets);
+                // The answer out through the log ring, no card write in
+                // flight, then the restart (as after an HTTP reply).
+                crate::sdhealth::note_restart();
+                let t = Instant::now();
+                crate::cache_builder::quiesce(std::time::Duration::from_secs(3));
+                std::thread::sleep(std::time::Duration::from_secs(1).saturating_sub(t.elapsed()));
+                crate::restart(opendmd_core::restarts::Reason::NetworkOn);
+            }
+            _ => {
+                crate::improv::provision_failed(stamp, Error::Unknown);
+                if let Some(w) = self.wifi.as_mut() {
+                    let _ = w.disconnect();
+                }
+            }
+        }
+    }
+}
 
 /// Start-up: the radio, the boot decision (the saved network, or the setup
 /// AP), mDNS, SNTP and the portal DNS. Out of `run` so its frames are not

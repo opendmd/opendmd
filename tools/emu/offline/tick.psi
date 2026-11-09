@@ -1,0 +1,3 @@
+name "Tick"
+-- reads the clock: skipped with WiFi off (emu-offline)
+gray(second / 60)

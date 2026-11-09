@@ -272,7 +272,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   header), `bytes` the size of `www.pack` beside `--www` (0 if none),
   `entries` the files the pack would hold. `/api/status` carries the same
   object as `www`, and `www_version`. `PUT /api/www` wants a
-  `Content-Length` (411), at most 1,048,576 B (413) and the `ODWP` magic
+  `Content-Length` (411), at most 786,432 B (413) and the `ODWP` magic
   (400), a header whose total length is not the body's (400); it replies
   as `GET` does and changes nothing served, but from then on reports the
   pushed header's version (bytes 20.., length at 18) as `version` and
@@ -302,6 +302,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `POST /api/card/full-speed` forgets the record (409 when `card_speed` is
   safe) and answers `{ok, applied, clock_khz}`; `POST /api/reboot?sd_io_fail=3`
   records the card slow too, `?sd_fallback=clear` forgets it.
+- **Offline mode** (`network`: `on` (the default) or `off`, else a 400
+  `network must be on or off`): a change answers `reboot_required: true`,
+  as a WiFi change does (the firmware also writes it to the card's
+  `/opendmd.json` and, after the restart, starts no WiFi at all). The mock
+  only stores it: it keeps answering after a reboot with `off`.
 - **Restarts**: `/api/status` `restarts` starts at `power_on`; a reboot,
   a firmware update, a panel trial undone and the `sd_io_fail` chain add
   theirs (newest first, at most 8), and `reset_reason`/`reset_note` follow
@@ -333,14 +338,14 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the 72-byte trailer, against `--ota-pub`): 422 otherwise.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
   build, variant, layout, flash_size, pending, last, log}` (`layout`: the
-  variant's partition table version, 3 for 4mb; `log`: the card's
+  variant's partition table version, 4 for 4mb; `log`: the card's
   `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
   `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
   and verifies it as the firmware does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
-  140 B + the layout's factory partition (2,621,440 B),
+  140 B + the layout's factory partition (2,883,584 B),
   422 `{"error":"<reason>"}` for any failure, a bundle for another flash
-  layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
+  layout (any other `ODFW` magic, such as an old 8mb one) or another partition table (a 4mb v3 or v2 bundle) and an image whose app descriptor is not `"<version> <variant>"`
   among them (nothing changes). Success: `{"ok":true,"version",
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
@@ -475,16 +480,16 @@ CACHE_DIR = "cache"                    # the prepared copies (opendmd_core::layo
 LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
-WWW_PARTITION_SIZE = 1_048_576         # the www partition (partitions.csv, table v3)
+WWW_PARTITION_SIZE = 786_432           # the www partition (partitions.csv, table v4)
 # Firmware update (docs/ota.md, tools/fw-sign.py): the bundle header and the
 # factory partition the image must fit. A bundle's magic -> (variant, the
 # partition table version) (opendmd_core::ota::LAYOUTS); the mock runs each
 # variant's current table (OTA_CURRENT).
-OTA_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
-OTA_CURRENT = {"4mb": 3}
+OTA_LAYOUTS = {b"ODFW44mb": ("4mb", 4), b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
+OTA_CURRENT = {"4mb": 4}
 OTA_HEADER_LEN = 140
 OTA_SIGNED_LEN = 76
-OTA_FACTORY_BYTES = {"4mb": 0x280000}   # partitions.csv (v3)
+OTA_FACTORY_BYTES = {"4mb": 0x2C0000}   # partitions.csv (v4)
 OTA_BOARDS = {"4mb": "DevKit (4 MB)"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 # `reset_note` for the reasons the mock plays (firmware `Reason::note`).
@@ -692,6 +697,7 @@ DEFAULT_SETTINGS = {
     "transition_ms": 400,
     "auto_prepare": "idle",     # opendmd_core::auto_prepare: idle (default) / always / off
     "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
+    "network": "on",            # offline mode: on / off (off: no WiFi from the next boot)
     "beta_updates": False,      # "Get beta updates": the web app's update check reads beta.json
     "follow": False,            # Follow RePlayOS
     "follow_host": "",
@@ -749,6 +755,7 @@ FIELD_TYPES = {
     "transition_ms": "u64",
     "auto_prepare": "str",
     "card_speed": "str",
+    "network": "str",
     "beta_updates": "bool",
     "follow": "bool",
     "follow_host": "str",
@@ -770,6 +777,7 @@ FIELD_TYPES = {
 }
 AUTO_PREPARE = ("idle", "always", "off")
 CARD_SPEED = ("safe", "fast", "full")
+NETWORK = ("on", "off")        # offline mode: config `network`
 # The simulated builder's pace (seconds per file) and its known failures.
 AUTO_FULL_S, AUTO_DRIP_S, AUTO_FAIL_EVERY = 2.0, 6.0, 25
 
@@ -1472,7 +1480,19 @@ class Follow:
                 continue
             self._poll_once(host)
             wait_s = self.POLL_BAD_S if self.state == "unreachable" else self.POLL_OK_S
-            self._stop.wait(wait_s)
+            # A new address or code (or follow turned off) is asked at
+            # once, as follow.rs `reconfigure` does (next_poll = now), not
+            # after the backoff that the old one earned.
+            target = self._target()
+            deadline = time.monotonic() + wait_s
+            while not self._stop.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+                if time.monotonic() >= deadline or self._target() != target:
+                    break
+
+    def _target(self) -> tuple:
+        with self.ctx.lock:
+            s = self.ctx.settings
+            return s["follow"], s["follow_host"], s["follow_code"]
 
     def _poll_once(self, host: str) -> None:
         if host != self._host:
@@ -2584,6 +2604,8 @@ class Schedule:
         self.until: str | None = None
         self._norm_rules: list = []
         self._norm_night: dict | None = None
+        # Night by the sun: ((lat, lon, offset), good until, its end).
+        self._sun_end: tuple | None = None
 
     def get_doc(self) -> dict:
         return self.doc if self.doc is not None else dict(self.EMPTY)
@@ -2741,7 +2763,15 @@ class Schedule:
                 unix = now.timestamp()
                 if lat is not None and lon is not None and sun_night(unix, lat, lon, off):
                     mode = night.get("mode") or "normal"
-                    end = sun_night_end(unix, lat, lon, off)
+                    # Worked out once a night, as main.rs `sun_now` does (and
+                    # afresh for another place or offset): halving from a new
+                    # start each read can land a minute either side.
+                    key, cached = (lat, lon, off), self._sun_end
+                    if cached and cached[0] == key and unix < cached[1]:
+                        end = cached[2]
+                    else:
+                        end = sun_night_end(unix, lat, lon, off)
+                        self._sun_end = (key, end if end is not None else unix + 3600, end)
                     mode_until = None if end is None else datetime.datetime.fromtimestamp(end, now.tzinfo).strftime("%H:%M")
             elif not woken and night is not None:
                 nfrm, nto = parse_hhmm(night.get("from")), parse_hhmm(night.get("to"))
@@ -3777,6 +3807,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "transition_ms": s["transition_ms"],
                     "auto_prepare": s["auto_prepare"],
                     "card_speed": s["card_speed"],
+                    "network": s["network"],
                     "beta_updates": s["beta_updates"],
                     "follow": s["follow"],
                     "follow_host": s["follow_host"],
@@ -3955,6 +3986,9 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "card_speed" and v not in CARD_SPEED:
                         self.send_error_json(400, "card_speed must be safe, fast or full")
                         return
+                    if field == "network" and v not in NETWORK:
+                        self.send_error_json(400, "network must be on or off")
+                        return
                     if field == "follow_host":
                         v = v.strip()
                         if len(v) > 64 or any(c in v for c in "/ \0?#@"):
@@ -4034,7 +4068,7 @@ def make_handler(ctx: Context, quiet: bool):
                 # WiFi takes effect after a reboot; a new hostname at once
                 # (status `hostname`/`mdns` read the saved one).
                 reboot_required = any(next_settings[k] != before[k] for k in (
-                    "wifi_ssid", "wifi_pass", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls"))
+                    "wifi_ssid", "wifi_pass", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls", "network"))
                 needs_reindex = (
                     next_settings["platforms"] != before["platforms"]
                     or next_settings["set"] != before["set"]

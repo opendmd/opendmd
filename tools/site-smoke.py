@@ -86,7 +86,13 @@ build URL serves. There the art index must also carry
   install/release.json names; install/beta.json the same shape: with
   `--beta-dist`, that beta's (files, manifest and parts under
   install/firmware/beta/) and a second button for it, else release.json
-  byte for byte and no beta button;
+  byte for byte and no beta button; for a release whose dist has the
+  offline install (manifest-4mb-offline.json, nvs-offline-4mb.bin), both
+  published byte for byte with every part, and its button's box "Play from
+  the card only, no WiFi" (a real label, under the site's CSP) switching the
+  button's `manifest` attribute to the offline manifest and back, with the
+  card file `opendmd.json` (`{"network":"off"}` and a newline) as a download
+  beside it; with none, no box;
 - /dev/psi/ (the Psi language reference): in the menu, its generated
   tables (each row an id, the name index linking them) and grammar, its
   "On this page", under its own CSP (the docs' and 'wasm-unsafe-eval')
@@ -2194,16 +2200,94 @@ def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
               and 'manifest="firmware/beta/manifest-4mb.json"' in install and f"install the beta, OpenDMD {bver}" in install
               and not any("8mb" in p.name for p in bdir.iterdir()),
               "install: the beta's own button, its manifest and parts under firmware/beta/ (the 4mb only)")
+    offline_published(site, dist, "firmware")
+    if beta_dist is not None:
+        offline_published(site, beta_dist, "firmware/beta")
     check((fw / "manifest-4mb.json").is_file() and (fw / "manifest.json").is_file() and not any("8mb" in p.name for p in fw.iterdir()),
           "install: the 4mb manifest is published, no 8mb file (a dist from 1.0.0-beta.16 has them)")
     check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and set(rel_info["variants"]) == {"4mb"},
           "install: release.json's one variant (4mb) and its bundle are published")
     # Each variant names the partition table its bundle is for (the web app
     # tells a player on another table to reinstall over USB): the bundle's magic.
-    magics = {("4mb", 3): b"ODFW34mb", ("4mb", 2): b"ODFW1\0\0\0"}
+    magics = {("4mb", 4): b"ODFW44mb", ("4mb", 3): b"ODFW34mb", ("4mb", 2): b"ODFW1\0\0\0"}
     lay = {k: (v.get("layout"), (site / "install" / v["firmware"]).read_bytes()[:8]) for k, v in rel_info["variants"].items()}
-    check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] == 3,
+    # (v3 for a site built from a release before table v4, 4 after.)
+    check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] in (3, 4),
           f"install: release.json's layouts are the bundles' ({ {k: l for k, (l, _) in lay.items()} })")
+
+
+# What the offline box's card file holds (tools/site.py OFFLINE_FILE).
+OFFLINE_FILE = b'{"network":"off"}\n'
+
+
+def offline_published(site: Path, src: Path, sub: str) -> bool:
+    """`src`'s offline install (when its dist has one) under install/<sub>/,
+    byte for byte with its parts, and its button's box on the page; False
+    when `src` has none (a release from before it)."""
+    install = (site / "install/index.html").read_text()
+    fw = site / "install" / sub
+    m = src / "manifest-4mb-offline.json"
+    bid = "install-4mb" if sub == "firmware" else "install-beta-4mb"
+    if not m.is_file():
+        check(not (fw / m.name).exists() and f'data-offline-for="{bid}"' not in install,
+              f"install: {src} has no offline install: none under install/{sub}/, no box for {bid}")
+        return False
+    om = json.loads(m.read_text())
+    parts = om["builds"][0]["parts"]
+    check(filecmp.cmp(fw / m.name, m, shallow=False) and len(parts) == 7
+          and all(filecmp.cmp(fw / pt["path"], src / pt["path"], shallow=False) for pt in parts)
+          and filecmp.cmp(fw / "nvs-offline-4mb.bin", src / "nvs-offline-4mb.bin", shallow=False),
+          f"install: {sub}/manifest-4mb-offline.json and its seven parts (nvs-offline-4mb.bin among them) are {src}'s")
+    check(f'data-manifest-offline="{sub}/manifest-4mb-offline.json"' in install and f'data-offline-for="{bid}"' in install,
+          f"install: {bid} has its offline box")
+    return True
+
+
+def install_page(browser, base: str, site: Path, dist: Path, beta_dist: Path | None, errors: list[str]) -> None:
+    """The install page in Chromium under its CSP: each offline box swaps its
+    button's manifest and back, its card file downloads, and the offline
+    manifest and NVS image are served."""
+    page = new_page(browser, "laptop", errors)
+    console: list[str] = []
+    page.on("console", lambda m: m.type == "error" and console.append(m.text[:160]))
+    page.on("pageerror", lambda e: console.append(str(e)[:160]))
+
+    def with_csp(route):
+        r = route.fetch()
+        route.fulfill(response=r, headers={**r.headers, "content-security-policy": csp_for(site, "/install/*")})
+    page.route(lambda u: urllib.parse.urlsplit(u).path.endswith(("/", ".html")), with_csp)
+    page.goto(base + "/install/", wait_until="load")
+    wait_js(page, "customElements.get('esp-web-install-button') !== undefined", timeout=30000)
+    for src, sub, bid in ((dist, "firmware", "4mb"), (beta_dist, "firmware/beta", "beta-4mb")):
+        if src is None or not (src / "manifest-4mb-offline.json").is_file():
+            continue
+        if sub != "firmware":
+            page.click("#beta-install summary")
+        box = page.locator(f"#offline-{bid}")
+        label = page.locator(f"label:has(#offline-{bid})").inner_text().strip()
+        check(box.is_visible() and not box.is_checked() and label == "Play from the card only, no WiFi"
+              and page.get_attribute(f"#install-{bid}", "manifest") == f"{sub}/manifest-4mb.json",
+              f"install: the {bid} box, labelled {label!r}, unticked, the button on {sub}/manifest-4mb.json")
+        box.check()
+        on = page.get_attribute(f"#install-{bid}", "manifest")
+        box.uncheck()
+        off = page.get_attribute(f"#install-{bid}", "manifest")
+        check(on == f"{sub}/manifest-4mb-offline.json" and off == f"{sub}/manifest-4mb.json",
+              f"install: ticked, the {bid} button reads {on}; unticked, {off}")
+        about = page.inner_text(f"#offline-about-{bid}")
+        check(all(w in about for w in ("erases", "Connect to Wi-Fi", "unticked", "opendmd.json", '"on"'))
+              and not HIDDEN_WORDS.search(about) and not any(w in about for w in ("NVS", "partition", "player")),
+              f"install: the {bid} box says what it does and how to undo it, in plain words")
+        with page.expect_download() as dl:
+            page.click(f"#offline-file-{bid}")
+        got = Path(dl.value.path()).read_bytes()
+        check(dl.value.suggested_filename == "opendmd.json" and got == OFFLINE_FILE,
+              f"install: the {bid} card file downloads as {dl.value.suggested_filename}: {got!r}")
+        for name in ("manifest-4mb-offline.json", "nvs-offline-4mb.bin"):
+            r = page.request.get(f"{base}/install/{sub}/{name}")
+            check(r.status == 200 and r.body() == (src / name).read_bytes(), f"install: served {sub}/{name} ({len(r.body()):,} B)")
+    check(not console, f"install: no console errors {console[:2]}")
+    page.context.close()
 
 
 def main() -> int:
@@ -2263,6 +2347,7 @@ def main() -> int:
         f_cost(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         print("install page")
         install_links(a.site, a.dist, a.beta_dist)
+        install_page(browser, base, a.site, a.dist, a.beta_dist, errors)
         if a.shots:
             screenshots(browser, base, errors, a.shots)
         browser.close()

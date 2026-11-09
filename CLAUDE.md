@@ -52,7 +52,7 @@ make blocklist-check              # no route, asset or site URL may look like a 
 make fw-build    # ESP32 firmware (bench build)
 make fw-clippy   # clippy -D warnings, firmware feature sets
 make fw-flash PORT=/dev/ttyUSB0   # bench build + web app + flash + monitor
-make fw-release  # release images into dist/ (both flash layouts), signed with FW_SIGN_KEY
+make fw-release  # release images into dist/ (the 4mb layout), signed with FW_SIGN_KEY
 make notices-check                # third-party notices up to date
 make emu-build emu-smoke          # the firmware in an emulator (esp32sim): correctness only, never timing
 ```

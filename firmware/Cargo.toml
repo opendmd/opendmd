@@ -79,7 +79,9 @@ diag-heap = []
 heapmap = []
 # Psi formulas, the code's name for `formulas` (opendmd-core's `psi`; the
 # probes below depend on it): enable `formulas`, not this.
-psi = ["opendmd-core/psi"]
+# The compiler with it (`card_formulas`: the card's Formulas prepared when
+# it is mounted, ~145 KB of code).
+psi = ["opendmd-core/psi", "opendmd-core/psi-compiler"]
 # The narrow JIT (opendmd-notes docs/research/psi-jit-esp32.md, phase 1): a Formula's
 # pixel stage as Xtensa code in executable heap, checked against the VM at
 # its first frame; `formula_jit` in /api/config turns it off. In every
@@ -104,8 +106,8 @@ paint-probe = ["psi", "opendmd-core/psi-stats"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
-# The built-in bundled Formulas are compiled at build time (build.rs): the
-# player never compiles.
+# The built-in bundled Formulas are compiled at build time (build.rs); the
+# card's are compiled on the display when it mounts the card (`psi`).
 opendmd-psi = { path = "../opendmd-psi", default-features = false, features = ["compiler"] }
 # The embedded setup page is rendered and gzipped at build time, the same way
 # ~/projects/stripe-dashboard does it.

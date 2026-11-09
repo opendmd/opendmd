@@ -9,6 +9,8 @@
      unchanged; licenses/THIRD-PARTY-LICENSES-installer.txt). The flashing itself is
      esptool-js over Web Serial. -->
 <script type="module" src="esp-web-tools/install-button.js"></script>
+<!-- The "Play from the card only, no WiFi" box: swaps the button's manifest (offline.js). -->
+<script type="module" src="offline.js"></script>
 <style>
   :root {
     --bg: #f6f7f9; --fg: #16181d; --muted: #5b6270; --card: #ffffff; --line: #dde1e7;
@@ -35,6 +37,9 @@
   .board h2 { margin: 0 0 4px; font-size: 18px; }
   .board p { margin: 0 0 14px; color: var(--muted); }
   .board button { font: inherit; font-weight: 600; padding: 10px 22px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+  .offline-box { margin: 16px 0 0; }
+  .offline-box label { font-weight: 600; cursor: pointer; }
+  .offline-box p { margin: 6px 0 0; font-size: 14px; }
   .note { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 12px 14px; margin: 16px 0 0; }
   code { background: var(--code); border-radius: 4px; padding: 1px 5px; font-size: 0.92em; }
   ol, ul { padding-left: 22px; }
@@ -58,12 +63,23 @@
         <h2>ESP32 DevKit V1</h2>
         <p>The ESP32 DevKit V1: the small board with a USB socket that plugs into the DMDoS board. Most displays have this one.</p>
         <div class="install">
-          <esp-web-install-button id="install-4mb" manifest="firmware/manifest-4mb.json">
+          <esp-web-install-button id="install-4mb" manifest="firmware/manifest-4mb.json"
+              data-manifest-online="firmware/manifest-4mb.json" data-manifest-offline="firmware/manifest-4mb-offline.json">
             <button slot="activate" id="install-activate-4mb">Install</button>
             <span slot="unsupported">This browser cannot talk to a USB serial port. Use Chrome, Edge, Opera or Firefox 151+ on a desktop.</span>
             <span slot="not-allowed">This page must be opened over https or from localhost.</span>
           </esp-web-install-button>
           <span id="version-4mb" class="mono" style="color: var(--muted)"></span>
+        </div>
+        <div class="offline-box">
+          <label><input type="checkbox" id="offline-4mb" data-offline-for="install-4mb" aria-describedby="offline-about-4mb"> Play from the card only, no WiFi</label>
+          <p id="offline-about-4mb">Ticked, the install erases the display's saved settings and turns WiFi off: the display plays
+            its card and never starts WiFi or its web app. Leave the box unticked to update a display or set up its WiFi later:
+            only then does the installer recognise it and offer <b>Update</b> and <b>Connect to Wi-Fi</b>. To turn WiFi back on,
+            use <b>Connect to Wi-Fi</b> here with the box unticked, or change <code>"off"</code> to <code>"on"</code> in the
+            card's <code>opendmd.json</code>. Instead of the box, you can also
+            <a href="data:application/json;charset=utf-8,%7B%22network%22%3A%22off%22%7D%0A" download="opendmd.json" id="offline-file-4mb">copy
+            this file to the top folder of the card</a> (<code>opendmd.json</code>).</p>
         </div>
       </div>
     </div>
@@ -114,6 +130,11 @@
     <code>opendmd-&lt;version&gt;-4mb-full.bin</code>, sits beside them for tools that flash
     one file at offset 0 (<code>esptool write-flash 0 …</code>): that rewrites the whole flash, settings included. Without
     a browser, from a checkout: <code>make fw-release-flash</code>.</p>
+  <p>With <b>Play from the card only, no WiFi</b> ticked, the button uses <a href="firmware/manifest-4mb-offline.json">the offline
+    manifest</a> instead: the same six parts and a seventh, <code>nvs-offline-4mb.bin</code> at <code>0x9000</code>, the whole
+    NVS partition holding one setting (<code>network</code> = <code>off</code>), so every saved setting goes, erase or not. It
+    does not wait for the board to answer after the install, so it asks for no WiFi, and it does not recognise a board that
+    runs OpenDMD (no <b>Update</b> or <b>Connect to Wi-Fi</b> with it).</p>
 
   <h2>Updating only the web app</h2>
   <p>The web app lives in the board's flash and can be updated over WiFi without this page: <code>make www-push HOST=opendmd.local</code>,
