@@ -133,6 +133,9 @@ pub enum Which {
 
 /// The bytes for a Formula: its `name` and its programs (portable: see the
 /// module's docs; [`crate::compile_portable`] makes them).
+// (The writer runs only after a compile: for size on the ESP32, like the
+// compiler; the reader below keeps the crate's speed.)
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn encode(name: &str, play: &Prog, look: Option<&Prog>) -> Vec<u8> {
     let mut o = Vec::with_capacity(1024);
     o.extend_from_slice(MAGIC);
@@ -159,6 +162,7 @@ pub fn encode(name: &str, play: &Prog, look: Option<&Prog>) -> Vec<u8> {
     o
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn put_program(o: &mut Vec<u8>, p: &Prog, meta: bool, ins: bool) {
     let at = o.len();
     o.extend_from_slice(&[0, 0]);

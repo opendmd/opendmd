@@ -466,6 +466,7 @@ struct Opts {
     compiles: u32,
     /// Test images (`emu-census`) with WiFi off: this many sources taken as
     /// short of memory at the first pass, so the lane sees a retry.
+    #[cfg_attr(not(feature = "emu-census"), allow(dead_code))]
     force_short: u32,
 }
 
@@ -751,6 +752,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let mut c = Counts::default();
     let mut left = Left::default();
     let mut budget = opts.compiles;
+    #[cfg(feature = "emu-census")] // (a test image's only: compiled out of releases)
     let mut force_short = opts.force_short;
     for psi_entry in sources {
         c.sources += 1;
@@ -783,6 +785,7 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             c.short += 1;
             continue;
         }
+        #[cfg(feature = "emu-census")]
         if force_short > 0 {
             force_short -= 1;
             log::info!("formulas: /formulas/{name} taken as short of memory (a test image), for a retry");
