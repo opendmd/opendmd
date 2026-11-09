@@ -1,0 +1,4 @@
+name "Offline ramp"
+-- compiled on the display when the card is mounted (emu-offline)
+v = frac(x + t / 3)
+rgb(v, 0.3, 1 - v)
