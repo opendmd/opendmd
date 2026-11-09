@@ -1,0 +1,4 @@
+name "Heavy"
+-- a test image takes it as short of memory even after its compile, every time:
+-- the retries must skip it and still prepare the Formulas behind it (emu-offline)
+rgb(frac(x + t / 7), 0.4, y)

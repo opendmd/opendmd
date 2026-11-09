@@ -179,8 +179,15 @@ export class DeviceSource {
   // `createNew`: only if the file is not there (409 if it is).
   writeFile(path, data, o) { return sent(() => this.json('PUT', '/api/files' + enc(path) + (o?.createNew ? '?new=1' : ''), data)); }
   // (A 503 deleted nothing: asked again, as an upload is; e.g. while the
-  // display writes that Formula's compiled file.)
-  deleteFile(path) { return sent(() => this.json('DELETE', '/api/files' + enc(path))); }
+  // display writes that Formula's compiled file. A dropped answer may have
+  // deleted it: a 404 when asked again is that.)
+  deleteFile(path) {
+    let again = 0;
+    return sent(() => this.json('DELETE', '/api/files' + enc(path)).catch((e) => {
+      if (again++ && e?.status === 404) return null;
+      throw e;
+    }));
+  }
   saveSet(name, text) { return sent(() => this.json('PUT', '/api/sets/' + encodeURIComponent(name), text)); }
 }
 
