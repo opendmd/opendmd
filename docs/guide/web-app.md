@@ -51,7 +51,7 @@ GIFs, which comes with a **Clear filter** button.
 
 ## Library
 
-![The Library, with a GIF's details playing](../images/library.png)
+![The Library: two GIFs ticked, and the menu that adds them to a playlist](../images/library.png)
 
 The Library lists every GIF on your card by folder (Arcade, Consoles and so
 on), each folder with how many GIFs it holds. Click a folder to open it and
@@ -306,7 +306,7 @@ says so.
 
 ## On a phone
 
-<img src="../images/phone-library.png" width="300" alt="The Library on a phone">
+<img src="../images/phone-library.png" width="300" alt="The Library on a phone, two GIFs ticked to add to a playlist">
 
 The web app works the same on a phone. The details of a GIF slide up from
 the bottom, and a playlist opens as a screen of its own, where **+ Add
