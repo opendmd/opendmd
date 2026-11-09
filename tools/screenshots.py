@@ -21,8 +21,7 @@ sunrise); and at 2x, phone-now.png (390x700) and phone-library.png
 The card must be tools/demo-card.py's: Formulas recorded as GIFs and the
 CC0 Kenney sprites, nothing from the DMDoS pack and no game art (these
 images are published). No shot may show a card path, "odm", "bucket" or
-"cache": the Library's details show the GIF's file name, so no shot has
-them open. Writes go to a throwaway overlay; the card is left as it was.
+"cache". Writes go to a throwaway overlay; the card is left as it was.
 Needs `make web` and, once, `uv run --with playwright playwright install
 chromium`.
 """
@@ -216,7 +215,7 @@ def main() -> int:
     replay = None
     try:
         # The name the site and README show; the mock's own is opendmd-mock.
-        # Now's "N of M" counts the GIFs started since boot: a reboot after
+        # Now's "N played" counts the GIFs started since boot: a reboot after
         # the settings, then a skip or two through All files (in order).
         call(base, "PUT", "/api/config", {"hostname": "opendmd", "set": "", "shuffle": False})
         reboot(base)
