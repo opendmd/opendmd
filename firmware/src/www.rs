@@ -2,7 +2,7 @@
 //!
 //! `make web` packs the built app into a www pack (`opendmd_core::www_pack`,
 //! `docs/www-pack.md`), which lives in the `www` data partition
-//! (`partitions.csv`: data/`esphttpd`, 0x300000, 1,024 KB; found by name).
+//! (`partitions.csv`: data/`esphttpd`, 0x340000, 768 KB in table v4; found by name).
 //! At boot [`init`]
 //! reads its 64-byte header, memory-maps exactly the pack's length
 //! (`esp_partition_mmap`, `ESP_PARTITION_MMAP_DATA`: MMU pages, no heap

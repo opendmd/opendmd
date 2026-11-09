@@ -53,6 +53,28 @@ The panel stays dark while the installer writes. The board then restarts
 with the new version, shows **Updated to** it on the panel, and rejoins
 your WiFi.
 
+## When an update needs the installer once
+
+Now and then a new version changes how the board's memory is divided
+up, for example to make room for a bigger firmware. A display can't make
+that change over WiFi, so the first update after it goes through the
+installer, once. **Check for updates** tells you so:
+
+> Firmware *(the new version)* is out. This firmware needs a one-time USB reinstall on
+> this display: use the installer at opendmd.dev/install (Update OpenDMD
+> keeps your WiFi and settings)
+
+Nothing is installed when it says that, and the display carries on as
+before. Follow the steps under [With the installer](#with-the-installer)
+and click **Update OpenDMD**. Your WiFi details, settings, playlists and
+GIFs stay. After that, updates come over WiFi again.
+
+Displays on version 1.0.0 or 1.0.1 need this once, to move to the
+versions after them. If you use **Update from file…** with a newer update
+file on one of those displays, the app says "This file is for another
+flash layout than this display's". That means the same thing: update
+once with the installer.
+
 ## From a file
 
 You can also download the firmware update file, which ends in `.odfw`,

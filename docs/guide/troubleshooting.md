@@ -91,6 +91,16 @@ finish installing from the SD card: make sure the card is in and leave it.
 If the display still doesn't come back, run the [installer](install.md)
 again with **Erase device** unticked.
 
+## Check for updates says to reinstall over USB
+
+"This firmware needs a one-time USB reinstall on this display" means the
+new version divides the board's memory differently, which only the
+installer can change. Nothing was installed. Plug the board in by USB, open
+the [installer](install.md), click **Install** and then **Update OpenDMD**
+(or, if it offers **Install OpenDMD**, leave **Erase device** unticked).
+Your WiFi details and settings stay. "This file is for another flash layout
+than this display's", after **Update from file…**, means the same.
+
 ## I turned WiFi off
 
 A display with WiFi off plays its card and nothing else: the web app, the

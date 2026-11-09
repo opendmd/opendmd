@@ -2179,9 +2179,10 @@ def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
           "install: release.json's one variant (4mb) and its bundle are published")
     # Each variant names the partition table its bundle is for (the web app
     # tells a player on another table to reinstall over USB): the bundle's magic.
-    magics = {("4mb", 3): b"ODFW34mb", ("4mb", 2): b"ODFW1\0\0\0"}
+    magics = {("4mb", 4): b"ODFW44mb", ("4mb", 3): b"ODFW34mb", ("4mb", 2): b"ODFW1\0\0\0"}
     lay = {k: (v.get("layout"), (site / "install" / v["firmware"]).read_bytes()[:8]) for k, v in rel_info["variants"].items()}
-    check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] == 3,
+    # (v3 for a site built from a release before table v4, 4 after.)
+    check(all(magics.get((k, l)) == m for k, (l, m) in lay.items()) and lay["4mb"][0] in (3, 4),
           f"install: release.json's layouts are the bundles' ({ {k: l for k, (l, _) in lay.items()} })")
 
 

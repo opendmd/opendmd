@@ -29,7 +29,7 @@ FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # with this sdkconfig rather than espflash's bundled one.
 FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
-# The flash layout (docs/ota.md): `4mb`, table v3, for the ESP32 DevKit V1
+# The flash layout (docs/ota.md): `4mb`, table v4, for the ESP32 DevKit V1
 # (firmware/partitions.csv): otadata, the firmware in factory, the updater in
 # ota_0, the web app's www pack. The one layout this tree builds; the
 # variant name stays in file names, the app descriptor and /api/status.
@@ -62,14 +62,14 @@ FW_FLASH_SIZE_emu8mb := 8mb
 FW_FLASH_SIZE := $(FW_FLASH_SIZE_$(FW_VARIANT))
 FW_FLASH_BYTES_4mb := 4194304
 FW_FLASH_BYTES_emu8mb := 8388608
-FW_APP_BYTES_4mb := 2621440
+FW_APP_BYTES_4mb := 2883584
 FW_APP_BYTES_emu8mb := 3145728
-UPDATER_OFFSET_4mb := 0x2A0000
+UPDATER_OFFSET_4mb := 0x2E0000
 UPDATER_OFFSET_emu8mb := 0x320000
-WWW_OFFSET_4mb := 0x300000
+WWW_OFFSET_4mb := 0x340000
 WWW_OFFSET_emu8mb := 0x380000
-WWW_BYTES_4mb := 1048576
-WWW_BYTES_emu8mb := 1048576
+WWW_BYTES_4mb := 786432
+WWW_BYTES_emu8mb := 786432
 # What ESP Web Tools' manifest calls the firmware: it must equal the Improv
 # answer's name (firmware/src/improv.rs FIRMWARE_NAME).
 FW_MANIFEST_NAME_4mb := OpenDMD
@@ -81,8 +81,10 @@ FW_APP_BYTES := $(FW_APP_BYTES_$(FW_VARIANT))
 UPDATER_OFFSET := $(UPDATER_OFFSET_$(FW_VARIANT))
 WWW_OFFSET := $(WWW_OFFSET_$(FW_VARIANT))
 WWW_BYTES := $(WWW_BYTES_$(FW_VARIANT))
-# The www pack: built to fit the www partition.
+# The www pack: built to fit the www partition, and (tools/web-size.py)
+# signed it must leave WWW_PACK_SPARE of it, the web app's headroom.
 WWW_PACK_BYTES := $(WWW_BYTES_4mb)
+WWW_PACK_SPARE := 65536
 # `make web` writes the pack here (gitignored); fw-flash writes it at WWW_OFFSET.
 WWW_PACK := $(WEB)/www.pack
 
@@ -332,7 +334,7 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_DIST) --out ../$(WWW_PACK) --version-file ../$(WEB_DIST)/version.txt --max-bytes $(WWW_PACK_BYTES)
-	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
+	@uv run tools/web-size.py $(WEB_DIST) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --pack-spare $(WWW_PACK_SPARE) --share $(WEB)/share $(if $(filter 0,$(WEB_MINIFY)),--unminified)
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -807,9 +809,9 @@ fw-clean:
 #
 # and:
 #
-#   updater.bin                    the updater (ota/updater), at ota_0 (0x2A0000)
+#   updater.bin                    the updater (ota/updater), at ota_0 (0x2E0000)
 #   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
-#   opendmd-<ver>-www.pack         the web app, at www (0x300000)
+#   opendmd-<ver>-www.pack         the web app, at www (0x340000)
 #   THIRD-PARTY-LICENSES-firmware.txt, THIRD-PARTY-LICENSES-web.txt
 #                                  the third-party notices (licenses/, `make notices`),
 #                                  checked against each build first
@@ -862,7 +864,7 @@ FW_NVS_SIZE = $(word 2,$(FW_NVS_ROW))
 # rustflags).
 FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(HOME)/.cargo=/cargo --remap-path-prefix=$(HOME)/.rustup=/rustup
 # The app image must leave at least this much of the layout's factory
-# partition free (2,621,440 B).
+# partition free (2,883,584 B in table v4).
 FW_APP_SPARE := 65536
 
 # The layout (FW_VARIANTS) through fw-release-variant, after `make web`.
@@ -918,8 +920,9 @@ fw-release-variant:
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
 	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
 	@size=$$(( $$(stat -c %s $(WWW_PACK)) + 72 )); \
-	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
-	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
+	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition, $$(( $(WWW_BYTES) - size )) B spare (need $(WWW_PACK_SPARE))"; \
+	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }; \
+	 test $$(( $(WWW_BYTES) - size )) -ge $(WWW_PACK_SPARE) || { echo "the www pack leaves less than $(WWW_PACK_SPARE) B of the $(FW_VARIANT) www partition"; exit 1; }
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 	@echo "$(FW_VARIANT) is emulator-only: no signed bundle"
 else
@@ -1039,19 +1042,21 @@ fw-sign:
 
 # First install on a board over USB, from the release build: the same parts
 # as dist/ (bootloader, table, otadata erased, app, updater, pack) for
-# the DevKit (4mb). From
-# DMDoS, other firmware or an older table: `make fw-erase` first.
+# the DevKit (4mb), at the table's offsets; NVS is not written, so a board
+# on an older OpenDMD table (v3: docs/deploying.md "Moving a board to table
+# v4") keeps its WiFi and settings. From DMDoS or other firmware: `make
+# fw-erase` first.
 fw-release-flash:
 	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
 	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --flash-freq $(FW_FLASH_FREQ)mhz --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # Updates across releases and flash layouts (tools/ota-compat.sh): an older
-# release's own opendmd-core (OTA_COMPAT_TAG, the last DevKit table v2 one,
+# release's own opendmd-core (OTA_COMPAT_TAG, the last DevKit table v3 one,
 # a detached worktree under target/) must refuse a 4mb bundle signed now
-# (table v3) and take a v2 one and the www pack; this tree's must take the
-# v3 bundle and refuse the v2 one. Throwaway-key files, or
-# OTA_COMPAT_FILES="<v3 bundle> <pub> <www>". OTA_COMPAT_OK.
-OTA_COMPAT_TAG ?= v1.0.0-beta.15
+# (table v4) and take a v3 one and the www pack; this tree's must take the
+# v4 bundle and refuse the v3 one. Throwaway-key files, or
+# OTA_COMPAT_FILES="<v4 bundle> <pub> <www>". OTA_COMPAT_OK.
+OTA_COMPAT_TAG ?= v1.0.1
 # DIST's 4mb release bundle and pack too, when it has them (signed with the
 # release key: checked against FW_SIGN_PUB).
 OTA_COMPAT_DIST_BUNDLE = $(DIST)/opendmd-$(FW_VERSION)-4mb.odfw
@@ -1229,9 +1234,10 @@ emu-api-psb:
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LOOK)) -o $(EMU_API_LOOK_PSB)
 # The pack it pushes is this build's, signed (PUT /api/www takes no other).
 EMU_API_WWW = $(EMU_DIR)/api/www.pack
-# Boot C's updater: one from before the panel (OLD_UPDATER_TAG's ota/updater,
-# "updater 1", on the same table v3), built once from `git archive` into
-# $(EMU_DIR)/old-updater, never the release's.
+# Boot C's updater: one from before the panel and table v4 (OLD_UPDATER_TAG's
+# ota/updater, "updater 1", tables v3 and v2 only), built once from `git
+# archive` into $(EMU_DIR)/old-updater, never the release's: in a v4 image's
+# ota_0 it must refuse the v4 bundle at its magic and boot the firmware.
 OLD_UPDATER_TAG ?= v1.0.0-beta.16
 EMU_OLD_UPDATER = $(EMU_DIR)/old-updater/$(OLD_UPDATER_TAG)/build/opendmd-updater.bin
 emu-old-updater:

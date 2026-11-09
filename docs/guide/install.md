@@ -61,7 +61,10 @@ Plug it in and click the **Install** button. The installer recognises it
 and shows its name and the version it runs. From there:
 
 - **Update OpenDMD** puts this page's version on it, keeping your WiFi and
-  settings. It only shows up when the versions differ.
+  settings. It only shows up when the versions differ. This is also the
+  way to take a display on 1.0.0 or 1.0.1 to a later version, once, when
+  its web app says the update needs a one-time USB reinstall
+  ([Updating](updating.md#when-an-update-needs-the-installer-once)).
 - **Change Wi-Fi** moves it to another network, or **Connect to Wi-Fi** if
   it isn't on one.
 - **Visit device** opens its web app.

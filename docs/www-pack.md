@@ -2,7 +2,8 @@
 
 The web app (`opendmd-web/www` after `make web`) ships to the device as one
 file, a **www pack**, written into the `www` flash partition
-(data/`esphttpd`: 0x300000, 1,024 KB in `firmware/partitions.csv`, table v3).
+(data/`esphttpd`: 0x340000, 768 KB in `firmware/partitions.csv`, table v4;
+0x300000 and 1,024 KB in table v3).
 At boot the
 firmware memory-maps it and serves every file from the mapping, through the
 flash cache: no card, no heap per file, no filesystem.
@@ -98,12 +99,18 @@ for the pictures anyway. Until 2026-10-26 it was `art/*.json` in the pack,
 The firmware sends a gzip entry with `Content-Encoding: gzip`, without
 looking at `Accept-Encoding` (every browser accepts it), and a `Content-Length` of the stored bytes.
 
-The packer prints `pack: N B of 1,024 KB (P%)` and refuses a pack larger
-than `--max-bytes` (default and `make web`'s: 1,048,576, the partition; 1,310,720 on table v2),
-writing nothing. It then reads the file back through the reader and checks
-it. `opendmd-pack www-info <pack>` prints the header and every entry and
-verifies the CRC. `tools/web-size.py` prints the same `pack:` line under
-its gzip budgets (which are about load time over WiFi, not flash).
+The packer prints `pack: N B of 768 KB (P%)` and refuses a pack larger
+than `--max-bytes` (default and `make web`'s: 786,432, the partition;
+1,048,576 on table v3, 1,310,720 on v2), writing nothing. It then reads the
+file back through the reader and checks it. `opendmd-pack www-info <pack>`
+prints the header and every entry and verifies the CRC. `tools/web-size.py`
+prints a `pack:` line under its gzip budgets (which are about load time
+over WiFi, not flash): the pack as signed (its 72-byte trailer included)
+against the partition and the bytes it leaves, and it fails `make web` when
+that is under 64 KB (`WWW_PACK_SPARE`), the web app's headroom; `make
+fw-release` checks the same on the release's pack. A pack that outgrows
+that headroom needs files made smaller, or a maintainer's decision on the
+flash layout (a table change: one USB install for every board).
 
 ## Signature
 

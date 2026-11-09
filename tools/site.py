@@ -823,7 +823,7 @@ def decorate(body: str) -> str:
 
 # A firmware bundle's magic -> its flash layout: the variant and its
 # partition table's version (opendmd_core::ota::LAYOUTS, tools/fw-sign.py).
-BUNDLE_LAYOUTS = {b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
+BUNDLE_LAYOUTS = {b"ODFW44mb": ("4mb", 4), b"ODFW34mb": ("4mb", 3), b"ODFW1\0\0\0": ("4mb", 2)}
 
 
 def bundle_layout(path: Path, variant: str) -> int:
