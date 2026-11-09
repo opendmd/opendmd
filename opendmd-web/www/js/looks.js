@@ -71,6 +71,22 @@ export async function useSaid(f, keep) {
   } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Set as the panel’s look: ' + e.message, 'bad'); }
 }
 
+// `f` as what the panel shows while it starts (boot_formula; the Formulas
+// view's Use at start-up): one light enough for the show (12 ms a frame,
+// the panel's limit), named as a look is; said in a toast.
+export async function startUp(f, keep) {
+  try {
+    if (keep && onCard()) f = { ...f, ...await keep() };
+    const m = await psi(), p = m.compile(f.src) && path(m, f);
+    if (!p) throw new Error(m.error() || 'it doesn’t work yet');
+    if (m.compile(f.src) && m.info()[6] > 12000) throw new Error('this Formula is too heavy for the start-up show');
+    if (/^@formula\?/.test(p) && p.length > 2048) throw new Error('this Formula is too long for the panel at start-up: save it first');
+    await app.src.putConfig({ boot_formula: p });
+    await app.refreshConfig();
+    toast(`“${f.name || 'Formula'}” plays when the panel starts now (Settings › Look changes it)`, 'ok');
+  } catch (e) { toast(e.status == 400 ? `The panel can’t use it at start-up: ${e.message.replace(/^400: (boot_formula: )?/, '')}` : 'Use at start-up: ' + e.message, 'bad'); }
+}
+
 // The look a path holds, as a formula (for one not found among this
 // browser's Formulas): its text and values.
 export function fromPath(m, p) {

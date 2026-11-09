@@ -151,6 +151,11 @@ function overRow(id) {
 // On a device (or the demo's player): a Formula that declares `look` kept
 // as the panel's look (Settings › Look), over every GIF (js/looks.js).
 const setLook = (f, keep) => import('./looks.js').then((L) => L.useSaid(f, keep));
+// On a device: a Formula as what the panel shows while it starts
+// (boot_formula; Settings › Look › Start-up), as light as the show needs.
+const setBoot = (f, keep) => import('./looks.js').then((L) => L.startUp(f, keep));
+const BOOT = () => app.device && !!app.src.config;
+const light = (i) => i.length && i[6] <= 12000;
 
 // Add to playlist: a line in one of the card's playlists (a player's, the
 // demo's, a card folder's) naming the Formula (js/fstore.js `line`): a
@@ -402,6 +407,7 @@ function build(root) {
   let cur = null;
   const show = showBtn('psi-show', () => cur);
   const look = LOOK() && h('button', { id: 'psi-look', onclick: () => setLook({ ...cur, name: nameOf(cur) }) }, 'Set as the panel’s look');
+  const boot = BOOT() && h('button', { id: 'psi-boot', onclick: () => setBoot({ ...cur, name: nameOf(cur) }) }, 'Use at start-up');
   const sets = h('button', { id: 'psi-settings' }, 'Settings…');
   const pl = plBtn('psi-pl', () => cur);
   const under = overRow('psi-under');
@@ -415,7 +421,7 @@ function build(root) {
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
     h('div.row.acts', show, main, gifBtn), keep && h('label.row', { id: 'psi-keep-row' }, 'Keep on the panel', keep),
-    h('div.row.acts', pl, look, sets, codeBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', pl, look, boot, sets, codeBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
@@ -432,6 +438,7 @@ function build(root) {
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
     if (look) look.hidden = !i.length || !c?.look;
+    if (boot) boot.hidden = !light(i);
     if (pl) pl.hidden = !i.length;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
@@ -443,8 +450,12 @@ function build(root) {
     gifBtn.onclick = () => toGif(f);
     codeBtn.onclick = () => copyCode(f);
     del.hidden = !mineToo;
-    // The panel's look: it goes with its Formula (the panel clears it).
-    del.onclick = (e) => { const lk = !!f.file && (app.config?.look_formula || '').split('?')[0].toLowerCase() == f.file.toLowerCase(); ask(`Delete “${f.name}”?${lk ? ' It’s the panel’s look: the panel will have none.' : ''}`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); if (lk) { app.refreshConfig(); toast(`“${f.name}” is deleted: the panel has no look now (Settings › Look picks another)`, 'ok'); } }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget); };
+    // The panel's look, and its start-up show: they go with their Formula (the panel clears them).
+    del.onclick = (e) => {
+      const is = (k) => !!f.file && (app.config?.[k] || '').split('?')[0].toLowerCase() == f.file.toLowerCase(), lk = is('look_formula'), bk = is('boot_formula');
+      const gone = [lk && 'the panel has no look now', bk && 'the panel shows OpenDMD when it starts'].filter(Boolean).join(', and ');
+      ask(`Delete “${f.name}”?${lk ? ' It’s the panel’s look: the panel will have none.' : ''}${bk ? ' It plays when the panel starts: the panel will show OpenDMD instead.' : ''}`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); if (gone) { app.refreshConfig(); toast(`“${f.name}” is deleted: ${gone} (Settings › Look picks another)`, 'ok'); } }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
+    };
     for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f === f);
     if (i.length) play(pv, f, i); else { pv.f = null; pv.pv.clear(); }
   }
@@ -522,6 +533,7 @@ function editor() {
   let W = null;
   const under = overRow('psi-ed-under');
   const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }, () => keep()); } }, 'Set as the panel’s look');
+  const boot = BOOT() && h('button', { id: 'psi-ed-boot', hidden: true, onclick: () => { if (ready()) setBoot({ ...live }, () => keep()); } }, 'Use at start-up');
   const touch = matchMedia('(pointer:coarse)').matches;
   // Colours (#rgb, #rrggbb): with the caret in one, a swatch at its line's
   // end opens the browser's colour picker; the colour picked goes in its
@@ -551,7 +563,7 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), cond, err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta, kp)), strip,
       h('div.row.acts', help, learn, vers, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values; tap a colour to pick another' : 'Drag a number (or Alt + ↑ ↓) to try other values; click a colour to pick another · Tab indents: Esc, then Tab, leaves the code (or goes to the colour)'))),
-    h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
+    h('div.psi-acts', PAGE ? [h('div.row.acts', PAGE.acts), h('p.cap', PAGE.note)] : [h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, boot, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-code', onclick: () => copyCode({ src: ta.value }) }, 'Copy code'),
       h('button', { id: 'psi-ed-submit', onclick: (e) => { if (ready()) submit(e.currentTarget, B.draft); } }, 'Submit to the gallery…')), h('p.cap', NOTE())])));
   let pv = null, toks = [], bad = null, num = null, good = null;
@@ -662,6 +674,7 @@ function editor() {
       under.hidden = !(i[5] & 32);
       const c = ctlOf(f);
       if (look) look.hidden = !c?.look;
+      if (boot) boot.hidden = !light(i);
       // Its `name` line, typed in the text: the name.
       if (c?.name != null) f.name = c.name;
       if (document.activeElement !== name) name.value = f.name || '';

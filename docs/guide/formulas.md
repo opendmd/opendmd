@@ -100,6 +100,14 @@ On your display:
   under the colour and the phosphor glow. Settings › Look shows which
   Formula it is under **Formula over every GIF**, changes it, or turns it
   off with **None**.
+- **Use at start-up** plays it while the panel starts, in place of the
+  OpenDMD name, from the next start. The panel writes the network to join,
+  a card problem or its address over it when there's something to say.
+  Settings › Look › Start-up shows which Formula it is, or goes back to
+  **OpenDMD (built in)**. A Formula that would take more than about 12 ms
+  a frame is too heavy for the start-up show, and the button isn't
+  offered. Delete the Formula and the panel shows OpenDMD at start-up
+  again: the app says so before you delete it.
 
 Any Formula can be the look once its settings say so. In the editor,
 **⚙ Settings** (or **Settings…** in a Formula's details) has **Can be the

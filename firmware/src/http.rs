@@ -3110,10 +3110,12 @@ fn formula_look_json() -> String {
 /// `boot_formula` in the status: `null` (no Formula as the start-up show
 /// this boot, or the show `off`), or `{"played": true}`, or `{"played":
 /// false, "error": why}` once the wordmark played in its place (missing,
-/// broken, too heavy, short of memory).
+/// broken, too heavy, short of memory, no card), or `{"played": false}`
+/// while a card Formula is waited for.
 fn boot_formula_json() -> String {
     match crate::show::boot_state() {
         crate::show::PLAYED => r#"{"played":true}"#.to_string(),
+        crate::show::WAITING => r#"{"played":false}"#.to_string(),
         crate::show::FELL_BACK => {
             let why = crate::show::BOOT_ERROR.lock().map(|e| e.clone()).unwrap_or_default();
             format!(r#"{{"played":false,"error":{}}}"#, json_string(&why))

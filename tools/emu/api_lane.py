@@ -47,14 +47,17 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   start-up    (boot A's NVS seeded with boot_fx = a bundled Formula, BOOT_GOOD) the start-up show
               was that Formula (`boot show: formula @formula:…`, its frames drawn, then the
               playlist; status boot_formula played); a bundled name that is not there, a
-              broken inline one are 400s, nothing saved
+              broken inline one and an 8.3 alias are 400s, nothing saved; the card Formula
+              saved in `play` set as boot_formula for the next boot
   end         every file read back again; POST /api/reboot (boot A ends, the card written)
 Then the card boot A wrote: fatcheck (no cross-links or lost clusters), the settings file
 (/opendmd.json) holds the last setting saved, the files byte for byte, nothing left behind.
 Boot B (from that card, rebooting allowed; NVS seeded with a boot_fx that names no Formula,
 BOOT_BAD): the setting and the files survived the power cycle; the start-up show fell back
-to the wordmark for NVS's bad value; PUT /api/firmware with the signed bundle: verified,
-staged, the updater installs it, the firmware is back with the bundle's version.
+to the wordmark for NVS's bad value, then played the card's Formula once the boot task read
+it (the card's settings win); deleting that Formula clears boot_formula (config and status);
+PUT /api/firmware with the signed bundle: verified, staged, the updater installs it, the
+firmware is back with the bundle's version, and that boot's start-up show is the wordmark.
 
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
@@ -217,6 +220,7 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
 # one (Starfield: light, no card needed), boot B one that names nothing (the wordmark plays).
 BOOT_GOOD = "@formula:starfield"
 BOOT_BAD = "@formula:no-such-formula"
+BOOT_CARD = "/formulas/emu-api.psi"
 BOOT_SHOW = re.compile(r"boot show: (.*)")
 
 
@@ -1455,7 +1459,7 @@ class Lane:
 
     def startup_a(self, emu, api):
         """The start-up show this boot: NVS's bundled Formula (BOOT_GOOD), drawn until the
-        playlist; boot_formula's checks."""
+        playlist; boot_formula's checks; the card's Formula (saved in `play`) for boot B."""
         said = [m[1] for _, m in emu.find(BOOT_SHOW)]
         played = f"formula {BOOT_GOOD}" in said and any(re.fullmatch(r"formula at \d+ ms", x) for x in said)
         to_list = [s for s in said if s.startswith("show -> playlist")]
@@ -1469,17 +1473,31 @@ class Lane:
             api.call("PUT", "/api/config", {"boot_formula": bad}, want=(400,))
         api.call("PUT", "/api/config", {"boot_formula": "@formula?psb=" + "A" * 2100}, want=(413,))
         self.expect(api.json("GET", "/api/config")[1].get("boot_formula") == BOOT_GOOD, "start-up", "a refused boot_formula changed it")
+        _, r = api.json("PUT", "/api/config", {"boot_formula": BOOT_CARD})
+        self.expect(r.get("ok") is True and api.json("GET", "/api/config")[1].get("boot_formula") == BOOT_CARD, "start-up",
+                    f"the card's Formula as boot_formula: {r}")
         self.ok("start-up", f"the show was {BOOT_GOOD} (NVS) through to the playlist ({to_list[0]}), status played; "
-                f"4 bad values 400 (no such bundled one, a broken inline one, a card file, not a Formula), a long inline one 413, nothing saved")
+                f"4 bad values 400 (no such bundled one, a broken inline one, a card file that is not there, not a Formula), a long inline one 413, nothing saved; {BOOT_CARD} set for the next boot")
 
     def startup_b(self, emu, api):
-        """Boot B: NVS's BOOT_BAD fell back to the wordmark."""
+        """Boot B: NVS's BOOT_BAD fell back to the wordmark, then the card's Formula (its
+        settings win) played once the boot task read it; deleting it clears boot_formula."""
         said = [m[1] for _, m in emu.find(BOOT_SHOW)]
         fell = any(s.startswith(f"formula {BOOT_BAD} does not build") and s.endswith("the built-in show") for s in said)
-        self.expect(fell and any(s.startswith("power-on at") for s in said), "start-up", f"boot B's show did not fall back to the wordmark: {said[:12]}")
-        err = (api.status().get("boot_formula") or {}).get("error")
-        self.expect(bool(err), "start-up", f"status boot_formula {api.status().get('boot_formula')}")
-        self.ok("start-up B", f"NVS's {BOOT_BAD} fell back to the wordmark ({err!r})")
+        read = any(s.startswith("the card's formula read at") for s in said)
+        card = f"formula {BOOT_CARD}" in said
+        self.expect(fell and read and card and any(s.startswith("show -> playlist") for s in said), "start-up",
+                    f"boot B's show: fell back {fell}, the card's read {read}, played {card}: {said[:14]}")
+        self.expect(api.status().get("boot_formula") == {"played": True}, "start-up", f"status boot_formula {api.status().get('boot_formula')}")
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("boot_formula") == BOOT_CARD, "start-up", f"config boot_formula {cfg.get('boot_formula')!r} (the card's)")
+        mark = emu.mark()
+        api.call("DELETE", "/api/files" + BOOT_CARD)
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("boot_formula") == "", "start-up", f"boot_formula {cfg.get('boot_formula')!r} after its Formula was deleted")
+        emu.wait_for(re.compile(r"start-up show: its Formula was deleted"), 30, mark, "the start-up Formula's end on the console")
+        self.expected.pop(BOOT_CARD, None)
+        self.ok("start-up B", f"NVS's {BOOT_BAD} fell back to the wordmark, then the card's {BOOT_CARD} played once read; deleting it cleared boot_formula")
 
     def final_a(self, emu, api):
         for p, data in self.expected.items():
@@ -1552,6 +1570,7 @@ class Lane:
         js = json.loads(settings)
         self.expect(js.get("dwell_max") == self.dwell_set, "card", f"/opendmd.json has dwell_max {js.get('dwell_max')}, the last saved was {self.dwell_set}")
         self.expect("lat" not in js and "lon" not in js, "card", "/opendmd.json holds the location (the device keeps it itself)")
+        self.expect(js.get("boot_formula") == BOOT_CARD, "card", f"/opendmd.json has boot_formula {js.get('boot_formula')!r}, the last saved was {BOOT_CARD}")
         for p, data in self.expected.items():
             self.expect(read(p) == data, "card", f"{p} on the card is not the bytes uploaded")
         for p in sorted(self.absent):
@@ -1655,6 +1674,12 @@ class Lane:
             said = emu.find(re.compile(r"boot show: \w+, says 'Updated to' this boot"), mark)
             self.expect(bool(said) == (ran != want), "ota",
                         f"'Updated to' on the boot after the update: {bool(said)}, the versions {ran} -> {want}")
+            if lit:
+                # Its start-up Formula deleted before the update: the wordmark this boot.
+                shows = [m[1] for _, m in emu.find(BOOT_SHOW, mark)]
+                self.expect(any(s.startswith("power-on at") for s in shows) and not any(s.startswith("formula") for s in shows), "start-up",
+                            f"the boot after the update was not the wordmark: {shows[:10]}")
+                self.ok("start-up after", "the boot after the update (its Formula deleted) showed the wordmark")
             self.ok("ota" if lit else "ota old updater", f"{upd.get('version')} in ota_0, panel {upd.get('panel')}: PUT {self.a.bundle.stat().st_size} B in {took:.0f} s wall: signature ok, staged, verified; the updater ({len(ulog)} log lines, '{ulog[-2] if len(ulog) > 1 else ''}') installed it; back as {info['version']} ({st.get('reset_reason')}) in {time.time() - back:.0f} s wall")
             if lit:
                 self.ok("ota panel up", f"the updater's '{panel[0][1].group(1)}'; '{refresh[0][1].group(1) if refresh else 'no refresh line'}'")

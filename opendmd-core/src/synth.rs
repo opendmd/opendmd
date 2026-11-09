@@ -141,6 +141,33 @@ pub fn formula_file(path: &str) -> Option<(&str, &str)> {
     .then_some((file, opts))
 }
 
+/// What a card file's write or delete does to a setting that names a
+/// Formula (`look_formula`, `boot_formula`): [`file_change`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileChange {
+    /// Its compiled `.psb` was written or removed: built again from it.
+    Rebuild,
+    /// Its `.psi` was deleted: the Formula is gone, and the setting with it
+    /// (cleared).
+    Gone,
+}
+
+/// How the card file `card` (card-absolute, the long name), written
+/// (`removed` false) or deleted, changes `value`, a setting naming a
+/// Formula: `None` unless `value` is a card Formula (`/formulas/<stem>.psi`,
+/// maybe with options) and `card` is its `.psi` deleted or its `.psb`
+/// (compared as FAT compares names).
+pub fn file_change(value: &str, card: &str, removed: bool) -> Option<FileChange> {
+    let (file, _) = formula_file(value)?;
+    if removed && card.eq_ignore_ascii_case(file) {
+        Some(FileChange::Gone)
+    } else if card.eq_ignore_ascii_case(&compiled_path(file)) {
+        Some(FileChange::Rebuild)
+    } else {
+        None
+    }
+}
+
 /// Is `name` a bundled Formula's name as written (`[a-z0-9-]`, 1-40)?
 pub fn valid_formula_name(name: &str) -> bool {
     (1..=40).contains(&name.len())

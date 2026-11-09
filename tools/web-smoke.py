@@ -174,7 +174,10 @@ every view like a person would:
             starts with "OpenDMD (built in)" and shows the config's
             boot_formula; on the mock a bundled one picked is saved by name,
             its Preview lights and moves, a bad value is a 400, a long inline
-            one a 413, and back to the built-in
+            one a 413, and back to the built-in; the Formulas view's Use at
+            start-up names a bundled one, and one of yours by its file, which
+            Settings lists under Your Formulas; deleting it warns that the
+            panel will show OpenDMD at start-up, then clears boot_formula
   Power     Settings -> Power (js/power.js): the Playback brightness slider's
             max follows max_brightness (also after a save); brightness above
             max_brightness is a 400 with the plain message, in the same request
@@ -4025,6 +4028,7 @@ def mock_pass(browser) -> None:
         formulas_store_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
+        startup_checks(browser, base, overlay, errors)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -5898,6 +5902,61 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     check(c6["look_formula"] == "", f"looks: deleting the look's Formula clears the look ({c6['look_formula']!r})")
     put_json(base + "/api/config", {"look_formula": ""})
     page.context.close()
+
+
+def startup_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Use at start-up (the Formulas view): a bundled Formula named by its
+    name, one of yours by its file (Settings lists it under Your Formulas);
+    deleting that one warns that the panel will show OpenDMD when it starts,
+    and clears boot_formula (formula_look::file_changed)."""
+    d = overlay / "formulas"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "boot-rings.psi").write_text('name "Boot rings"\nloop 4\ngray(saw(x + t/4))')
+    page = new_page(browser, "laptop", errors)
+    try:
+        page.goto(base + "/#formulas")
+        open_formulas(page)
+        page.click("#psi-ex .psi-tile[data-name='Starfield']")
+        page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Starfield'", timeout=20000)
+        clear_toasts(page)
+        page.click("#psi-boot")
+        t = last_toast(page, "ok")
+        c = get_json(base + "/api/config")
+        check(c["boot_formula"] == "@formula:starfield" and t.startswith("“Starfield” plays when the panel starts now"),
+              f"start-up: Use at start-up names a bundled Formula ('{t}'; {c['boot_formula']!r})")
+        page.wait_for_selector("#psi-mine .psi-tile[data-name='Boot rings']", timeout=20000)
+        page.click("#psi-mine .psi-tile[data-name='Boot rings']")
+        page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Boot rings'", timeout=20000)
+        clear_toasts(page)
+        page.click("#psi-boot")
+        t = last_toast(page, "ok")
+        c = get_json(base + "/api/config")
+        check(c["boot_formula"] == "/formulas/boot-rings.psi" and get_json(base + "/api/status").get("boot_formula") == {"played": True},
+              f"start-up: Use at start-up names one of yours by its file ('{t}'; {c['boot_formula']!r})")
+        goto_view(page, "settings/look")
+        page.wait_for_function("document.querySelector('#st-boot-formula')?.selectedOptions[0]?.textContent == 'Boot rings'", timeout=20000)
+        grp = page.eval_on_selector("#st-boot-formula", "s => s.selectedOptions[0].parentElement.label")
+        check(grp == "Your Formulas", f"start-up: Settings shows it under Your Formulas ({grp!r})")
+        goto_view(page, "formulas")
+        page.wait_for_selector("#psi-mine .psi-tile[data-name='Boot rings']", timeout=20000)
+        page.click("#psi-mine .psi-tile[data-name='Boot rings']")
+        page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Boot rings'", timeout=20000)
+        page.click("#psi-del")
+        page.wait_for_selector("#psi-ask", timeout=5000)
+        said = page.inner_text("#psi-ask p")
+        check("It plays when the panel starts: the panel will show OpenDMD instead." in said and "look" not in said,
+              f"start-up: deleting it warns first ('{said}')")
+        clear_toasts(page)
+        page.click("#psi-ask button.danger")
+        t = last_toast(page, "ok")
+        c = get_json(base + "/api/config")
+        check(c["boot_formula"] == "" and "the panel shows OpenDMD when it starts" in t and not (d / "boot-rings.psi").exists(),
+              f"start-up: deleting it clears boot_formula ('{t}'; {c['boot_formula']!r})")
+        page.context.close()
+    finally:
+        put_json(base + "/api/config", {"boot_formula": ""})
+        for p in d.glob("boot-rings*"):
+            p.unlink()
 
 
 def psi_frames(page: Page, sel: str) -> int:

@@ -1,6 +1,6 @@
 // Settings → Start-up (imported by settings.js; its own size line): what
 // the panel shows while it starts — the OpenDMD name, or a Formula
-// (boot_formula: a bundled one, one light enough for the show,
+// (boot_formula: a bundled one or yours, one light enough for the show,
 // named as the look names one, js/looks.js) — how long (boot_show), and
 // previews of the show and of the no-card screen, drawn by the same core
 // as the panel (with this device's version and address in the line). A
@@ -28,22 +28,23 @@ export function bootCard(card, examples) {
   const canvas = h('canvas.panel', { id: 'st-boot-panel' });
   const box = h('div', { hidden: true, style: 'margin-top:12px' }, canvas);
   let pv = null, fs = [], L = null, M = null, raf = 0;
-  // The Formulas that can be the show: the bundled ones; one that
+  // The Formulas that can be the show: yours and the bundled ones; one that
   // doesn't work, is too heavy or too long is listed, not offered. One set
   // elsewhere stays listed, by its name.
   async function list() {
     if (app.noFormulas) return;
-    let ex;
-    try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch { return; }
+    let ex, mine;
+    try { [ex, L, mine] = await Promise.all([examples(), import('./looks.js'), import('./fstore.js').then((S) => S.loaded().then(() => S.list()))]); M = await L.psi(); } catch { return; }
     const cur = app.config?.boot_formula || '';
-    fs = (Array.isArray(ex) ? ex : [])
+    fs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : [])]
       .filter((x) => typeof x?.src == 'string').map((x) => ({ ...x, name: L.named(M, x), p: L.path(M, x) }));
     for (const x of fs) x.off = !M.compile(x.src) ? 'doesn’t work yet' : M.info()[6] > HEAVY ? 'too heavy' : /^@formula\?/.test(x.p) && x.p.length > 2048 ? 'too long' : '';
     let k = cur ? fs.findIndex((x) => x.p === cur) : -1;
     if (cur && k < 0) { fs.unshift({ ...L.fromPath(M, cur), p: cur }); k = 0; }
     const opt = (x) => { const i = fs.indexOf(x), off = i !== k && x.off; return h('option', { value: i, disabled: !!off }, x.name + (off ? ` (${off})` : '')); };
     const grp = (label, xs) => xs.length && h('optgroup', { label }, xs.map(opt));
-    clear(fsel, h('option', { value: '' }, 'OpenDMD (built in)'), fs.filter((x) => x.saved).map(opt), grp('Bundled Formulas', fs.filter((x) => !x.saved)));
+    clear(fsel, h('option', { value: '' }, 'OpenDMD (built in)'), fs.filter((x) => x.saved).map(opt),
+      grp('Your Formulas', fs.filter((x) => x.mine)), grp('Bundled Formulas', fs.filter((x) => !x.mine && !x.saved)));
     fsel.value = k < 0 ? '' : String(k);
   }
   const stop = () => { cancelAnimationFrame(raf); raf = 0; };
