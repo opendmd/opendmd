@@ -1472,7 +1472,19 @@ class Follow:
                 continue
             self._poll_once(host)
             wait_s = self.POLL_BAD_S if self.state == "unreachable" else self.POLL_OK_S
-            self._stop.wait(wait_s)
+            # A new address or code (or follow turned off) is asked at
+            # once, as follow.rs `reconfigure` does (next_poll = now), not
+            # after the backoff that the old one earned.
+            target = self._target()
+            deadline = time.monotonic() + wait_s
+            while not self._stop.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+                if time.monotonic() >= deadline or self._target() != target:
+                    break
+
+    def _target(self) -> tuple:
+        with self.ctx.lock:
+            s = self.ctx.settings
+            return s["follow"], s["follow_host"], s["follow_code"]
 
     def _poll_once(self, host: str) -> None:
         if host != self._host:
@@ -2584,6 +2596,8 @@ class Schedule:
         self.until: str | None = None
         self._norm_rules: list = []
         self._norm_night: dict | None = None
+        # Night by the sun: ((lat, lon, offset), good until, its end).
+        self._sun_end: tuple | None = None
 
     def get_doc(self) -> dict:
         return self.doc if self.doc is not None else dict(self.EMPTY)
@@ -2741,7 +2755,15 @@ class Schedule:
                 unix = now.timestamp()
                 if lat is not None and lon is not None and sun_night(unix, lat, lon, off):
                     mode = night.get("mode") or "normal"
-                    end = sun_night_end(unix, lat, lon, off)
+                    # Worked out once a night, as main.rs `sun_now` does (and
+                    # afresh for another place or offset): halving from a new
+                    # start each read can land a minute either side.
+                    key, cached = (lat, lon, off), self._sun_end
+                    if cached and cached[0] == key and unix < cached[1]:
+                        end = cached[2]
+                    else:
+                        end = sun_night_end(unix, lat, lon, off)
+                        self._sun_end = (key, end if end is not None else unix + 3600, end)
                     mode_until = None if end is None else datetime.datetime.fromtimestamp(end, now.tzinfo).strftime("%H:%M")
             elif not woken and night is not None:
                 nfrm, nto = parse_hhmm(night.get("from")), parse_hhmm(night.get("to"))
