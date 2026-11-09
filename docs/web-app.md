@@ -45,7 +45,7 @@ names the format or shows a copy's path.
 order: Now, Library, Playlists, Create Art, Settings. A view's address is
 `#now`, `#library`, `#sets`, `#create` or `#settings`; Settings' tabs and the
 Playlists editor have their own (`#settings/play`, `#settings/look`,
-`#settings/time`, `#settings/device`; `#sets/edit`), so a link or the back
+`#settings/time`, `#settings/replay`, `#settings/device`; `#sets/edit`), so a link or the back
 button lands on them.
 
 - **Now** — what the panel is playing: the title, then its platform,
@@ -172,7 +172,7 @@ button lands on them.
   **Play** and **Delete…**. Deleting the active playlist switches the
   player back to All files first. Switching is disabled while status says
   an index is `building`. Entries are GIF paths or Formulas.
-- **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
+- **Settings** — five tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
   - **Playback**: brightness with **Maximum brightness** under it
@@ -190,7 +190,9 @@ button lands on them.
     the wordmark or a Formula light enough for the show; a Formula's
     preview is pkg-psi's frame with the main module's information line over
     it, `Preview.showBoot`, the panel's `@boot?formula=…`).
-  - **Schedule**: time zone, schedule rules, night mode, Follow RePlayOS.
+  - **Schedule**: time zone, location, schedule rules, night mode.
+  - **RePlayOS**: Follow RePlayOS (`js/follow.js`), with a link to the
+    guide's page.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
     (the playlist and its count, the card, uptime, free memory and its
     floor, late frames, refresh rate, GIFs started) with **Reload playlist**
@@ -351,7 +353,7 @@ else pass through them. Glow is opt-in because it keeps a 12 KB copy of what
 the panel shows while it is lit (none while it is dark or paused), which
 transitions and the cache builder would otherwise have.
 
-Follow RePlayOS can show a playlist (a Formula such as the bundled Big clock, `@formula:big-clock`, can be one) in the menus instead of its attract playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*).
+Follow RePlayOS can show a playlist (a Formula such as the bundled Big clock, `@formula:big-clock`, can be one) in the menus instead of its attract playlist (Settings → RePlayOS → *attract playlist*).
 
 There is no Live folder: the clock and the scrolling text (`@clock`, `@text`) are gone, a Formula draws a clock. A playlist line for either is skipped as the playlist is read (an info log line); `POST /api/play` of one is a `415`. The playlist editor drops such lines when it opens a playlist.
 

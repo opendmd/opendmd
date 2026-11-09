@@ -1,10 +1,11 @@
-// Follow RePlayOS: Settings' card (host, the NET CONTROL code — sent, never
-// shown back —, on/off, the attract playlist, a Test button) and the line
+// Follow RePlayOS: Settings › RePlayOS's card (host, the NET CONTROL code —
+// sent, never shown back —, on/off, the attract playlist, a Test button,
+// the guide's page) and the line
 // Now shows under the title while it follows ("Following RePlayOS · Mega
 // Drive · Sonic the Hedgehog 3 · 14 matching", or the sequence step).
 
 import { app } from './state.js';
-import { h, clear, on, note, saver, debounce } from './util.js';
+import { h, clear, on, note, saver, debounce, SITE } from './util.js';
 
 const STEPS = { power_on: 'powering on', logo: 'console logo', title: 'title card', waiting: 'title card' };
 
@@ -92,6 +93,7 @@ export function followCard() {
       h('label.stack', 'NET CONTROL code', code),
       h('label.stack', 'Attract playlist', attract)),
     h('p.cap', 'A playlist can hold Formulas as well as GIFs: for a clock in the menus, add the Big clock Formula to one'),
+    h('p.cap', { id: 'fo-off-note' }, 'While the box is off or can’t be reached, the panel plays as usual. ', h('a', { href: SITE + 'guide/replayos.html', target: '_blank', rel: 'noopener' }, 'How to set it up')),
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'fo-test', onclick: test }, 'Test')),
     result, state);
   state.textContent = followLine(app.status) ?? 'Not following';

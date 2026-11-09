@@ -158,7 +158,7 @@ examples to remix, a live editor, the gallery and **Save as GIF…**. See
 
 ## Settings
 
-Settings has four tabs. Changes save as you make them, and a green
+Settings has five tabs. Changes save as you make them, and a green
 **Saved ✓** says so.
 
 ### Playback
@@ -224,13 +224,12 @@ your normal settings come back when it ends.
 **Night mode** turns the panel off, or dims it, every night between the
 times you choose.
 
-**Follow RePlayOS** links the display to a RePlayOS gaming box. When you
-start a game, the panel shows the console's logo, a title card and art for
-that game. In the menus it plays the **Attract playlist** of your choice.
-Turn on NET CONTROL on the box, then enter its address and code here and
-press **Test**. For a clock in the menus, add the bundled **Big clock**
-Formula to a playlist and choose that one; it follows the time zone under
-**Time**.
+### RePlayOS
+
+**Follow RePlayOS** links the display to a RePlayOS gaming box: when you
+start a game the panel shows that game, and in the menus it plays the
+**Attract playlist** of your choice. [Follow RePlayOS](replayos.md) has the
+steps to set it up and what the panel does.
 
 ### Device
 

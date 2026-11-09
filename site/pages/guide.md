@@ -21,6 +21,8 @@ your browser, with no display needed.
   Formulas and Settings, view by view.
 - **[Create Art](../../docs/guide/create-art.md):** Make a GIF for the panel
   from game art, an old GeoCities GIF or your own picture.
+- **[Follow RePlayOS](../../docs/guide/replayos.md):** The panel shows
+  the game you're playing on a RePlayOS box.
 - **[Formulas](../../docs/guide/formulas.md):** Play them, put them in
   playlists and share them.
 - **[Make a Formula](../../docs/guide/psi-1.md):** Write your first one, a
