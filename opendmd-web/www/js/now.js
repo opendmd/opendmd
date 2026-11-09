@@ -378,7 +378,7 @@ function mountDevice(el) {
   // left focused lets go first, so the key isn't a second press of it.
   function onKey(ev) {
     const t = ev.target, f = { ' ': togglePause, ArrowRight: skip, ArrowLeft: () => prevBtn.disabled || back() }[ev.key];
-    if (!f || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat || t.closest?.('input,select,textarea,[contenteditable],dialog,.menu')) return;
+    if (!f || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat || t.closest?.('input,select,textarea,[contenteditable],dialog,[role=dialog],.menu')) return;
     const ctl = t.closest?.('button,a,summary');
     if (ev.key == ' ' && ctl?.matches(':focus-visible')) return;
     ev.preventDefault();
