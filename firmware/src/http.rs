@@ -508,6 +508,35 @@ impl PatchErr {
     }
 }
 
+/// A setting that names a Formula (`look_formula`, `boot_formula`), `key`,
+/// checked for its form: `""`, a bundled Formula by name, one on the card
+/// (its path on the card) or inline within `MAX_LOOK_PATH` (else a 413:
+/// `role` says what it is for). Whether it builds is the main task's check.
+fn check_formula_value(key: &str, v: &str, role: &str) -> Result<(), PatchErr> {
+    use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
+    match formula_ref(v) {
+        _ if v.is_empty() => {}
+        // A build without Formulas draws none.
+        _ if !crate::state::FORMULAS => return Err(PatchErr::bad(crate::state::NO_FORMULAS)),
+        Some(FormulaRef::File { file, .. }) if files::card_path(config::SD_MOUNT, file).is_none() => {
+            return Err(PatchErr::bad(&format!("{key}: the Formula's path must stay on the card")));
+        }
+        Some(_) => {}
+        None => {
+            return Err(PatchErr::bad(&format!(
+                "{key} must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)"
+            )))
+        }
+    }
+    if v.len() > MAX_LOOK_PATH {
+        return Err(PatchErr::too_large(&format!(
+            "this formula is too long for the panel {role} ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
+            v.len(),
+        )));
+    }
+    Ok(())
+}
+
 /// Apply `patch` to `next`, checked as `PUT /api/config` checks it (and the
 /// settings file on the card, `settings_card`, read through the same
 /// checks): the first value refused is the error, and `next` is then
@@ -669,29 +698,7 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         next.glow = glow;
     }
     if let Some(v) = patch.look_formula.clone() {
-        use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
-        match formula_ref(&v) {
-            _ if v.is_empty() => {}
-            // A build without Formulas draws none.
-            _ if !crate::state::FORMULAS => return Err(PatchErr::bad(crate::state::NO_FORMULAS)),
-            Some(FormulaRef::File { file, .. })
-                if files::card_path(config::SD_MOUNT, file).is_none() =>
-            {
-                return Err(PatchErr::bad("look_formula: the Formula's path must stay on the card"));
-            }
-            Some(_) => {}
-            None => {
-                return Err(PatchErr::bad(
-                    "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)",
-                ))
-            }
-        }
-        if v.len() > MAX_LOOK_PATH {
-            return Err(PatchErr::too_large(&format!(
-                "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
-                v.len(),
-            )));
-        }
+        check_formula_value("look_formula", &v, "as a look")?;
         next.look_formula = v;
     }
     if let Some(v) = patch.boot_show.clone() {
@@ -699,6 +706,10 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
             return Err(PatchErr::bad("boot_show must be off, short or full"));
         };
         next.boot_show = len;
+    }
+    if let Some(v) = patch.boot_formula.clone() {
+        check_formula_value("boot_formula", &v, "as the start-up show")?;
+        next.boot_formula = v;
     }
     if let Some(v) = patch.panel_sync {
         next.panel_sync = v;
@@ -814,6 +825,9 @@ pub struct ConfigPatch {
     /// lines (no fields of their own: unknown fields are ignored).
     pub(crate) look_formula: Option<String>,
     pub(crate) boot_show: Option<String>,
+    /// The start-up show's Formula, as `look_formula` names one, `""` =
+    /// the wordmark (checked by the main task before anything is saved).
+    pub(crate) boot_formula: Option<String>,
     /// Refresh-synchronised blits, applied at once.
     pub(crate) panel_sync: Option<bool>,
     /// With it, the bottom half a refresh after the top; applied at once.
@@ -3093,13 +3107,28 @@ fn formula_look_json() -> String {
     format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}{jit}{error}}}"#)
 }
 
+/// `boot_formula` in the status: `null` (no Formula as the start-up show
+/// this boot, or the show `off`), or `{"played": true}`, or `{"played":
+/// false, "error": why}` once the wordmark played in its place (missing,
+/// broken, too heavy, short of memory).
+fn boot_formula_json() -> String {
+    match crate::show::boot_state() {
+        crate::show::PLAYED => r#"{"played":true}"#.to_string(),
+        crate::show::FELL_BACK => {
+            let why = crate::show::BOOT_ERROR.lock().map(|e| e.clone()).unwrap_or_default();
+            format!(r#"{{"played":false,"error":{}}}"#, json_string(&why))
+        }
+        _ => "null".to_string(),
+    }
+}
+
 /// The end of the status object: `"look","glow","glow_held","formula_look",
-/// "max_brightness","brightness_safe_max","safe_start_until","scan"`
+/// "boot_formula","max_brightness","brightness_safe_max","safe_start_until","scan"`
 /// (see the API table), from the settings and the main loop's flags.
 fn looks_json(set: &Settings) -> String {
     use std::sync::atomic::Ordering::Relaxed;
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"boot_formula":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{},"display":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -3108,6 +3137,7 @@ fn looks_json(set: &Settings) -> String {
             0
         },
         formula_look_json(),
+        boot_formula_json(),
         set.max_brightness,
         crate::config::BRIGHTNESS_SAFE_MAX,
         match crate::state::SAFE_START_UNTIL.load(Relaxed) {
@@ -3312,7 +3342,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
+            r#""boot_show":"{}","boot_formula":{},"panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","api_key_set":{},"card_speed":"{}","#,
             r#""beta_updates":{},"#,
             r#""lat":{},"lon":{}}}"#
         ),
@@ -3343,6 +3373,7 @@ fn settings_json(s: &Settings) -> String {
         s.glow.name(),
         json_string(&s.look_formula),
         s.boot_show.name(),
+        json_string(&s.boot_formula),
         s.panel_sync,
         s.panel_split,
         s.formula_jit,
@@ -3481,6 +3512,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
         let api_key = patch.api_key.take();
         let speed_asked = patch.card_speed.is_some();
         let look_named = patch.look_formula.is_some();
+        let boot_named = patch.boot_formula.is_some();
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -3488,6 +3520,7 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                 settings: next,
                 panel: panel_op,
                 look_named,
+                boot_named,
                 reply: tx,
             })
             .is_err()
@@ -3530,6 +3563,10 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
                     let mut shared = shared;
                     if !look_named {
                         std::mem::swap(&mut shared.look_formula, &mut live.look_formula);
+                    }
+                    // The start-up show's Formula likewise.
+                    if !boot_named {
+                        std::mem::swap(&mut shared.boot_formula, &mut live.boot_formula);
                     }
                     *live = *shared;
                 }
@@ -3583,6 +3620,8 @@ fn put_config(req: &mut Req, c: &Arc<Ctx>) -> Result<()> {
             Ok(Err(e)) if e.starts_with(crate::state::FILTER_EMPTY) => req.bad_request(&e),
             // The formula look does not compile or is too heavy: nothing saved.
             Ok(Err(e)) if e.starts_with(crate::state::LOOK_FORMULA_BAD) => req.bad_request(&e),
+            // The start-up show's Formula likewise.
+            Ok(Err(e)) if e.starts_with(crate::state::BOOT_FORMULA_BAD) => req.bad_request(&e),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "playback did not answer"),
         })

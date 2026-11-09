@@ -252,7 +252,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   its name, blend and amount are the formula's own `name` and `look`
   lines, as on the firmware; `DELETE /api/files/formulas/<stem>.psi` of
   the one it names clears it, as on the firmware); status `formula_look`
-  (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
+  (null, or `{"source":"setting"|"over_gif","held":20480,...}`). Config
+  `boot_formula` (the start-up show's Formula: `""`, the wordmark, or a
+  Formula's path, checked as `look_formula` is); status `boot_formula` (null, or `{"played":true}`:
+  the mock never falls back).
 - **`GET /api/exists?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
@@ -697,6 +700,7 @@ DEFAULT_SETTINGS = {
     "glow": "off",              # off / short / long
     "look_formula": "",         # the Formula look: "" or a formula's @formula?psb=.. path
     "boot_show": "short",       # the start-up show: off / short / full
+    "boot_formula": "",         # the start-up show's Formula: "" (the wordmark) or a Formula's path
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
@@ -752,6 +756,7 @@ FIELD_TYPES = {
     "glow": "str",
     "look_formula": "str",
     "boot_show": "str",
+    "boot_formula": "str",
     "panel_sync": "bool",
     "panel_split": "bool",
     "formula_jit": "bool",
@@ -3531,6 +3536,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "glow": ctx.settings["glow"],
                     "glow_held": GLOW_HELD_BYTES if ctx.settings["glow"] != "off" and not player._frozen() else 0,
                     "formula_look": player.formula_look(ctx.settings["look_formula"]),
+                    "boot_formula": {"played": True} if ctx.settings["boot_formula"] and ctx.settings["boot_show"] != "off" else None,
                     "max_brightness": ctx.settings["max_brightness"],
                     "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
                     "safe_start_until": SAFE_START_SECS
@@ -3690,6 +3696,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "glow": s["glow"],
                     "look_formula": s["look_formula"],
                     "boot_show": s["boot_show"],
+                    "boot_formula": s["boot_formula"],
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
@@ -3827,14 +3834,18 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
                         return
-                    if field == "look_formula" and v and not ctx.formulas:
-                        self.send_error_json(400, f"look_formula: {NO_FORMULAS}")
+                    if field in ("look_formula", "boot_formula") and v and not ctx.formulas:
+                        self.send_error_json(400, f"{field}: {NO_FORMULAS}")
                         return
-                    if field == "look_formula" and v and not is_formula_ref(v):
-                        self.send_error_json(400, "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)")
+                    if field in ("look_formula", "boot_formula") and v and not is_formula_ref(v):
+                        self.send_error_json(400, f"{field} must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?psb=…)")
                         return
-                    if field == "look_formula" and len(v.encode()) > LOOK_INLINE_MAX:
-                        self.send_error_json(413, f"this formula is too long for the panel as a look ({len(v.encode())} B as sent; the limit is {LOOK_INLINE_MAX} B): save it and set it by name")
+                    if field in ("look_formula", "boot_formula") and len(v.encode()) > LOOK_INLINE_MAX:
+                        role = "as a look" if field == "look_formula" else "as the start-up show"
+                        self.send_error_json(413, f"this formula is too long for the panel {role} ({len(v.encode())} B as sent; the limit is {LOOK_INLINE_MAX} B): save it and set it by name")
+                        return
+                    if field == "boot_formula" and v.startswith("@formula:~sent"):
+                        self.send_error_json(400, "boot_formula: save the Formula first")
                         return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")

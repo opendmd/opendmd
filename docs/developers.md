@@ -88,7 +88,8 @@ The crates are deliberately not a Cargo workspace.
 Paths that begin with `@` are drawn by the core instead of read from the
 card. `opendmd-core/src/synth.rs` parses them.
 
-- `@boot` is the start-up show.
+- `@boot` is the start-up show (`formula=` puts a Formula in the
+  wordmark's place, as the `boot_formula` setting does).
 - `@power-on` is the power-on effect.
 - `@card:<title>|<subtitle>` is a title card.
 - `@formula?psb=…` is a compiled Psi Formula (`docs/psi-for-models.md`).

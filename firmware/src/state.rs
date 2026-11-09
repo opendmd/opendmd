@@ -481,6 +481,9 @@ pub const FILTER_EMPTY: &str = "no GIFs in the playlist match the platform filte
 /// sentence; nothing was saved): the handler turns it into a 400.
 pub const LOOK_FORMULA_BAD: &str = "look_formula: ";
 
+/// The same for `boot_formula`: it does not build as the start-up show.
+pub const BOOT_FORMULA_BAD: &str = "boot_formula: ";
+
 /// Why [`Command::PlayNow`] did not start the file. Each carries the message.
 #[derive(Debug)]
 pub enum PlayError {
@@ -562,6 +565,9 @@ pub enum Command {
         /// deleted since: `formula_look::file_changed`): the main task's own
         /// stays.
         look_named: bool,
+        /// The request named `boot_formula` (the same, for the start-up
+        /// show's Formula).
+        boot_named: bool,
         reply: Reply,
     },
     /// Rebuild the engine and its on-card index — a fresh streaming pass over

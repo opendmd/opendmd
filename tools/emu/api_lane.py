@@ -44,12 +44,17 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
   ota         GET /api/firmware (layout v3); bundles for table v2, with a bad signature, a bad image: 422
+  start-up    (boot A's NVS seeded with boot_fx = a bundled Formula, BOOT_GOOD) the start-up show
+              was that Formula (`boot show: formula @formula:…`, its frames drawn, then the
+              playlist; status boot_formula played); a bundled name that is not there, a
+              broken inline one are 400s, nothing saved
   end         every file read back again; POST /api/reboot (boot A ends, the card written)
 Then the card boot A wrote: fatcheck (no cross-links or lost clusters), the settings file
 (/opendmd.json) holds the last setting saved, the files byte for byte, nothing left behind.
-Boot B (from that card, rebooting allowed): the setting and the files survived the power
-cycle; PUT /api/firmware with the signed bundle: verified, staged, the updater installs it,
-the firmware is back with the bundle's version.
+Boot B (from that card, rebooting allowed; NVS seeded with a boot_fx that names no Formula,
+BOOT_BAD): the setting and the files survived the power cycle; the start-up show fell back
+to the wordmark for NVS's bad value; PUT /api/firmware with the signed bundle: verified,
+staged, the updater installs it, the firmware is back with the bundle's version.
 
 Fails at once on a panic, Guru Meditation, stack overflow, abort() or a reset not asked for;
 prints EMU_API_OK or EMU_API_FAIL with the reason. Correctness only, never timing.
@@ -175,11 +180,13 @@ def nvs_gen_python() -> Path:
     return found[-1]
 
 
-def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-password") -> Path:
+def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-password", extra: dict | None = None) -> Path:
     """A copy of `image` whose NVS holds WiFi credentials (namespace `opendmd`, `wifi_ssid`/
-    `wifi_pass`), written with IDF v5.3's nvs_partition_gen. Cached by the image's bytes."""
+    `wifi_pass`) and the `extra` string keys, written with IDF v5.3's nvs_partition_gen.
+    Cached by the image's bytes and the keys."""
     data = image.read_bytes()
-    digest = hashlib.sha256(data).hexdigest()[:16]
+    extra = extra or {}
+    digest = hashlib.sha256(data + repr(sorted(extra.items())).encode()).hexdigest()[:16]
     out = out_dir / f"{image.stem}-wifi-{digest}.bin"
     if out.exists():
         return out
@@ -190,7 +197,8 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
             old.unlink(missing_ok=True)
     start, size = nvs_partition(data)
     csv, binf = out_dir / f"nvs-{digest}.csv", out_dir / f"nvs-{digest}.bin"
-    csv.write_text(f"key,type,encoding,value\nopendmd,namespace,,\nwifi_ssid,data,string,{ssid}\nwifi_pass,data,string,{password}\n")
+    rows = "".join(f"{k},data,string,{v}\n" for k, v in extra.items())
+    csv.write_text(f"key,type,encoding,value\nopendmd,namespace,,\nwifi_ssid,data,string,{ssid}\nwifi_pass,data,string,{password}\n{rows}")
     subprocess.run([str(nvs_gen_python()), "-m", "esp_idf_nvs_partition_gen", "generate", str(csv), str(binf), hex(size)],
                    check=True, stdout=subprocess.DEVNULL)
     nvs = binf.read_bytes()
@@ -203,6 +211,13 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
     binf.unlink()
     print(f"api: seeded WiFi credentials into {out} (nvs at {start:#x})", flush=True)
     return out
+
+
+# The start-up show's Formula seeded into NVS (`boot_fx`, nvs_config.rs): boot A a bundled
+# one (Starfield: light, no card needed), boot B one that names nothing (the wordmark plays).
+BOOT_GOOD = "@formula:starfield"
+BOOT_BAD = "@formula:no-such-formula"
+BOOT_SHOW = re.compile(r"boot show: (.*)")
 
 
 # --- the emulator and its console ------------------------------------------------
@@ -490,6 +505,7 @@ class Lane:
             self.load_rounds(emu, api)
             self.cache_delete(emu, api)
             self.ota_refusals(api)
+            self.startup_a(emu, api)
             self.final_a(emu, api)
         finally:
             if not emu.done:
@@ -1437,6 +1453,34 @@ class Lane:
         self.expect(info2.get("pending") is None, "firmware", f"a refused bundle left something pending: {info2}")
         self.ok("ota refusals", f"GET /api/firmware {info.get('version')} (layout v3); a bundle for table v2 422 at the header ('{why[:60].decode(errors='replace')}…'), one with a flipped signature bit 422 at the header, one with a flipped image bit 422 after its upload; nothing pending")
 
+    def startup_a(self, emu, api):
+        """The start-up show this boot: NVS's bundled Formula (BOOT_GOOD), drawn until the
+        playlist; boot_formula's checks."""
+        said = [m[1] for _, m in emu.find(BOOT_SHOW)]
+        played = f"formula {BOOT_GOOD}" in said and any(re.fullmatch(r"formula at \d+ ms", x) for x in said)
+        to_list = [s for s in said if s.startswith("show -> playlist")]
+        self.expect(played and to_list and not any("does not build" in s for s in said), "start-up",
+                    f"boot A's show was not {BOOT_GOOD} through to the playlist: {said[:12]}")
+        st = api.status()
+        self.expect(st.get("boot_formula") == {"played": True}, "start-up", f"status boot_formula {st.get('boot_formula')}")
+        _, cfg = api.json("GET", "/api/config")
+        self.expect(cfg.get("boot_formula") == BOOT_GOOD, "start-up", f"config boot_formula {cfg.get('boot_formula')!r}")
+        for bad in ("@formula:no-such-formula", "@formula?psb=AAAA", "/formulas/no-such.psi", "starfield"):
+            api.call("PUT", "/api/config", {"boot_formula": bad}, want=(400,))
+        api.call("PUT", "/api/config", {"boot_formula": "@formula?psb=" + "A" * 2100}, want=(413,))
+        self.expect(api.json("GET", "/api/config")[1].get("boot_formula") == BOOT_GOOD, "start-up", "a refused boot_formula changed it")
+        self.ok("start-up", f"the show was {BOOT_GOOD} (NVS) through to the playlist ({to_list[0]}), status played; "
+                f"4 bad values 400 (no such bundled one, a broken inline one, a card file, not a Formula), a long inline one 413, nothing saved")
+
+    def startup_b(self, emu, api):
+        """Boot B: NVS's BOOT_BAD fell back to the wordmark."""
+        said = [m[1] for _, m in emu.find(BOOT_SHOW)]
+        fell = any(s.startswith(f"formula {BOOT_BAD} does not build") and s.endswith("the built-in show") for s in said)
+        self.expect(fell and any(s.startswith("power-on at") for s in said), "start-up", f"boot B's show did not fall back to the wordmark: {said[:12]}")
+        err = (api.status().get("boot_formula") or {}).get("error")
+        self.expect(bool(err), "start-up", f"status boot_formula {api.status().get('boot_formula')}")
+        self.ok("start-up B", f"NVS's {BOOT_BAD} fell back to the wordmark ({err!r})")
+
     def final_a(self, emu, api):
         for p, data in self.expected.items():
             code, back = api.call("GET", q(p), want=(200, 404))
@@ -1521,7 +1565,7 @@ class Lane:
     # -- boot B: the card again, the real firmware update ----------------------------
 
     def run_b(self):
-        self.ota_boot("B", self.a.seeded, lit=True)
+        self.ota_boot("B", self.a.seeded_bad, lit=True)
 
     def run_c(self):
         """Boot C: the same update with an updater from before the panel in ota_0
@@ -1547,6 +1591,8 @@ class Lane:
                 code, back = api.call("GET", q(p), want=(200, 404))
                 self.expect(code == 200 and back == data, "boot B", f"GET {p}: HTTP {code}, {'same' if back == data else 'different'} bytes")
             self.ok(f"boot {label}", f"from boot A's card: dwell_max {self.dwell_set} kept, {len(self.expected)} files the same")
+            if lit:
+                self.startup_b(emu, api)
             # Which updater ota_0 holds, and whether it lights the panel.
             _, fw = api.json("GET", "/api/firmware")
             upd = fw.get("updater") or {}

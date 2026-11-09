@@ -47,6 +47,7 @@ const GROUPS: &[&[&str]] = &[
     &["glow"],
     &["look_formula"],
     &["boot_show"],
+    &["boot_formula"],
     &["panel_sync"],
     &["panel_split"],
     &["formula_jit"],
@@ -80,6 +81,7 @@ fn group_patch(full: &ConfigPatch, g: &[&str]) -> ConfigPatch {
             "glow" => p.glow = full.glow.clone(),
             "look_formula" => p.look_formula = full.look_formula.clone(),
             "boot_show" => p.boot_show = full.boot_show.clone(),
+            "boot_formula" => p.boot_formula = full.boot_formula.clone(),
             "panel_sync" => p.panel_sync = full.panel_sync,
             "panel_split" => p.panel_split = full.panel_split,
             "formula_jit" => p.formula_jit = full.formula_jit,
@@ -99,6 +101,7 @@ fn has_any(p: &ConfigPatch) -> bool {
         || p.set.is_some() || p.tz.is_some() || p.tz_name.is_some() || p.auto_prepare.is_some()
         || p.follow.is_some() || p.follow_host.is_some() || p.attract_set.is_some() || p.attract.is_some()
         || p.look.is_some() || p.glow.is_some() || p.look_formula.is_some() || p.boot_show.is_some()
+        || p.boot_formula.is_some()
         || p.panel_sync.is_some() || p.panel_split.is_some() || p.formula_jit.is_some()
         || p.formula_arena.is_some() || p.formula_keep.is_some() || p.beta_updates.is_some()
 }
@@ -131,7 +134,7 @@ pub fn to_json(s: &Settings) -> String {
             r#"{{"max_brightness":{},"brightness":{},"dwell_min":{},"dwell_max":{},"shuffle":{},"#,
             r#""platforms":{},"set":{},"tz":{},"tz_name":{},"schedule":{},"transition":"{}","#,
             r#""transition_ms":{},"auto_prepare":"{}","follow":{},"follow_host":{},"attract_set":{},"#,
-            r#""attract":{},"look":"{}","glow":"{}","look_formula":{},"boot_show":"{}","#,
+            r#""attract":{},"look":"{}","glow":"{}","look_formula":{},"boot_show":"{}","boot_formula":{},"#,
             r#""panel_sync":{},"panel_split":{},"formula_jit":{},"formula_arena":{},"formula_keep":"{}","#,
             r#""beta_updates":{}}}"#
         ),
@@ -156,6 +159,7 @@ pub fn to_json(s: &Settings) -> String {
         s.glow.name(),
         j(&s.look_formula),
         s.boot_show.name(),
+        j(&s.boot_formula),
         s.panel_sync,
         s.panel_split,
         s.formula_jit,

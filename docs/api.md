@@ -277,6 +277,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
 | `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
+| `boot_formula` | null (no Formula as the start-up show this boot, or `boot_show` `off`), or `{"played": true}`, or `{"played": false, "error": why}` once the wordmark played in its place (`{"played": false}` alone while a card Formula is waited for) |
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
 | `max_brightness`, `brightness_safe_max`, `safe_start_until` | the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after) |
 | `scan` | null when the firmware cannot read the panel's scan position; else `{row_us, sync, blits, torn, in_pair, waited, wait_us, wait_max_us, gave_up, split_on, split, split_ok, unsplit, spin_us, retimed, beam}`, counts since boot: `row_us` one row pair's share of the measured refresh (µs), `sync` = `panel_sync`; of the `blits`, `torn` left a seam (a row pair shown complete a refresh after another) and `in_pair` wrote a pair while it was being scanned; with `panel_sync`, `waited` waited for the scan (`wait_us` in all, wrapping; `wait_max_us`) and `gave_up` could not within the frame's time; with `panel_split` (`split_on`), `split` blits went up in two passes, `split_ok` of them with the bottom exactly one refresh after the top, and `unsplit` went up whole for want of time; `spin_us` the waits' busy part (µs in all, wrapping; the rest is asleep); `retimed` Formula frames whose tick came half a frame or more late, so the Formula's schedule restarted from the tick; `beam` racing the beam, the way Formulas play (a Formula's frames drawn in the panel's row-pair order, each pair written as soon as it is drawn, behind the scan, on the panel's refresh: every refresh for a 100 fps Formula, every 2nd for 50 fps; the governor holds a heavy one to every 2nd, 4th …; not a Formula's first frame, its JIT check, a `rate` formula, under the glow or a formula look, or while a transition runs: those go up as GIFs do): `{frames, late_frames, late_pairs, late_starts, retargets, waits, pair_waits, wait_us, write_us, pair_us, first_us, last_us, unread}` — raced Formula frames, those with a pair written past its window (`late_pairs` in all: each shows a refresh late, a seam for that refresh), the starts past their window's late edge and of them those moved to the next refresh instead (a Formula held for two refreshes or more: over 1 late frame in 1,024 holds one whose own frame time is over three quarters of its budget for 2 for ~4,096 frames; a lighter one keeps its rate), frames that waited for their window at the start and pairs that waited for theirs (`wait_us` in all, wrapping), the µs spent writing pairs and in the pair hook altogether, writes included (both wrapping), the running means of when a frame's first and last pair are drawn (µs after its start), and frames not raced because the scan could not be read |
@@ -352,7 +353,7 @@ curl -s -X POST $DMD/api/card/full-speed
 with the card, in `/opendmd.json` at its root: brightness and its
 ceiling, dwell, shuffle, platforms, the playlist (`set`), the time zone,
 the schedule, transition, `auto_prepare`, Follow RePlayOS on/off and its
-host, attract, look, glow, `look_formula`, `boot_show`, `panel_sync`,
+host, attract, look, glow, `look_formula`, `boot_show`, `boot_formula`, `panel_sync`,
 `panel_split`, `formula_jit`, `formula_arena`, `formula_keep`, `beta_updates`. A change is
 on the card the moment it is saved, whatever plays. The device keeps the
 rest itself, never on the card: the WiFi details and name, the
@@ -402,6 +403,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
 | `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted and whenever its `.psb` is written; cleared when the `.psi` is deleted) or inline, `@formula?psb=…` (≤ 2,048 B, else `413`: save it and set it by name; any Formula on a build without Formulas is a `400`, `Formulas aren’t in this firmware build`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: its colour put on the GIF with the screen blend, covering 40 %; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
+| `boot_formula` | `""` | what the start-up show plays, from the next boot: `""`, the OpenDMD wordmark, or a Formula in its place, named as `look_formula` names one (a bundled Formula by name, one of yours on the card, `/formulas/<stem>.psi`, maybe `?a=…`, or inline `@formula?psb=…` ≤ 2,048 B, else `413`). It plays for `boot_show`'s length (none with `off`) and ends when the wordmark's show would, with the information line over it only when there is something to say (the setup network to join, a card problem, the address, "Updated to v…"; never the version), and the status card, the setup screen and the update notices take over from it as from the wordmark. One that does not compile or is too heavy for the show (12 ms estimated) is a `400` with the reason, nothing saved (a Formula on the card can't be the start-up show yet); one that no longer builds at boot (missing, broken, out of memory) plays the wordmark, with `boot_formula.error` in the status saying why |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way. Formulas race the beam either way (`scan.beam`) |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
 | `formula_jit` | `true` | the narrow JIT for Formulas on the ESP32: a Formula's pixel stage compiled to machine code at its first frame, checked against the VM there, then drawing the same bytes faster. `false` is the kill switch: every Formula plays on the VM (a kernel held is let go at its next frame). `/api/status` `now_playing.formula.jit` says which draws |
@@ -1090,10 +1092,18 @@ them)`); the rest of the playlist plays.
 (`card`: the status card; `updating`, `installing`: a firmware update's
 still message, 2 s), and for it `v=<version>`, `ip=<address>`,
 `ap=<network>`, `note=<text>` (≤ 32 characters each), `up=1` (the first
-boot of a new version: "Updated to v<version>").
+boot of a new version: "Updated to v<version>"). `formula=<path>`
+(URL-encoded; a bundled Formula by name or an inline one, as
+`boot_formula` holds them) plays the show with that Formula in the
+wordmark's place, the frames the panel draws at start-up: the line over it
+only when there is something to say. One that does not build, or a
+Formula on the card (the panel reads those from the card at start-up, not
+from a path), plays the wordmark. The path may then be as long as a
+Formula's (6,144 B).
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"@boot?len=full"}'
+curl -s $DMD/api/play --json '{"path":"@boot?len=short&ap=OpenDMD-Setup&formula=%40formula%3Astarfield"}'
 ```
 
 Also `@power-on` (the power-on effect) and `@card:<title>|<subtitle>` (a

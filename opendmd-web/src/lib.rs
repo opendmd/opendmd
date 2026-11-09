@@ -363,6 +363,16 @@ impl Preview {
         let _ = self.blit();
     }
 
+    /// A Formula start-up show's frame (`rgb`, drawn by the Psi module)
+    /// with the information line of `boot` (`@boot?len=&v=&ip=&ap=&note=&up=`)
+    /// over it at `t` ms, as the panel draws it.
+    #[wasm_bindgen(js_name = showBoot)]
+    pub fn show_boot(&mut self, rgb: &[u8], boot: &str, t: u32) {
+        self.error.clear();
+        self.player.show_boot(rgb, boot, t, at(now_ms()));
+        let _ = self.blit();
+    }
+
     /// Stop and blank the panel.
     pub fn clear(&mut self) {
         self.error.clear();

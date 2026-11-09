@@ -170,7 +170,11 @@ every view like a person would:
             Preview lights #st-boot-panel and moves, "No card screen" lights
             it; on the mock POST /api/play of @boot?len=card&.. plays as
             "Startup"; the simulator and the page draw that status card
-            identically (settings-boot-laptop.png)
+            identically (settings-boot-laptop.png). #st-boot-formula (Start-up)
+            starts with "OpenDMD (built in)" and shows the config's
+            boot_formula; on the mock a bundled one picked is saved by name,
+            its Preview lights and moves, a bad value is a 400, a long inline
+            one a 413, and back to the built-in
   Power     Settings -> Power (js/power.js): the Playback brightness slider's
             max follows max_brightness (also after a save); brightness above
             max_brightness is a 400 with the plain message, in the same request
@@ -2119,22 +2123,22 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-17:] == ["attract", "look", "glow", "look_formula", "boot_show",
+    check(list(cfg0)[-18:] == ["attract", "look", "glow", "look_formula", "boot_show", "boot_formula",
                               "panel_sync", "panel_split", "formula_jit", "formula_arena", "formula_keep", "api_key_set", "lat", "lon",
                               "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
-          f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"formula_jit/formula_arena/formula_keep/api_key_set/lat/lon, then the panel keys, end the object ({list(cfg0)[-17:]})")
+          f"config: attract/look/glow/look_formula/boot_show/boot_formula/panel_sync/panel_split/"
+          f"formula_jit/formula_arena/formula_keep/api_key_set/lat/lon, then the panel keys, end the object ({list(cfg0)[-18:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
     mock_keys = set(cfg0) - {"panel", "panel_now", "panel_next", "panel_trial_s"}
     check(len(fw) > 20 and set(fw) == mock_keys and "look_formula" in fw,
           f"config: the mock's keys are the firmware's settings_json ({len(fw)}; only in the firmware {sorted(set(fw) - mock_keys)}, only in the mock {sorted(mock_keys - set(fw))})")
-    check(list(st0)[-8:] == ["look", "glow", "glow_held", "formula_look", "max_brightness",
+    check(list(st0)[-9:] == ["look", "glow", "glow_held", "formula_look", "boot_formula", "max_brightness",
                              "brightness_safe_max", "safe_start_until", "scan"] and "attract_live" not in st0,
-          f"status: look/glow/glow_held/formula_look/max_brightness/brightness_safe_max/safe_start_until/scan"
-          f" end the object, no attract_live ({list(st0)[-8:]})")
+          f"status: look/glow/glow_held/formula_look/boot_formula/max_brightness/brightness_safe_max/safe_start_until/scan"
+          f" end the object, no attract_live ({list(st0)[-9:]})")
     ssu = st0["safe_start_until"]
     check(ssu is None or (isinstance(ssu, int) and ssu >= st0["uptime_secs"] - 1),
           f"status: safe_start_until is null or an uptime not yet passed ({ssu}, uptime {st0['uptime_secs']})")
@@ -2216,6 +2220,36 @@ def boot_checks(page: Page, base: str, mock: bool) -> None:
     wait_lit(page, "#st-boot-panel", "settings: no-card screen preview")
     page.select_option("#st-boot", orig)
     wait_config(base, lambda c: c["boot_show"] == orig)
+    # Start-up: the built-in name first, the config's choice shown.
+    page.wait_for_function("document.querySelectorAll('#st-boot-formula option').length > 5", timeout=20000)
+    first = page.eval_on_selector("#st-boot-formula option", "o => [o.value, o.textContent]")
+    groups = page.eval_on_selector_all("#st-boot-formula optgroup", "els => els.map(e => e.label)")
+    bf0 = get_json(base + "/api/config").get("boot_formula")
+    check(first == ["", "OpenDMD (built in)"] and "Bundled Formulas" in groups and isinstance(bf0, str)
+          and (bf0 != "" or page.input_value("#st-boot-formula") == ""),
+          f"settings: Start-up offers OpenDMD (built in) first, then the Formulas ({first}, {groups}; boot_formula {bf0!r})")
+    if mock:
+        for bad, code in (({"boot_formula": "starfield"}, 400), ({"boot_formula": 3}, 400), ({"boot_formula": "@formula?psb=" + "A" * 3000}, 413)):
+            check(put_status(base, bad) == code, f"settings: boot_formula {str(bad)[:40]} refused ({code})")
+        check(get_json(base + "/api/config")["boot_formula"] == bf0, "settings: a refused boot_formula changed nothing")
+        star = page.eval_on_selector_all("#st-boot-formula optgroup[label='Bundled Formulas'] option", "els => els.filter(e => e.textContent == 'Starfield').map(e => e.value)")
+        page.select_option("#st-boot-formula", star[0])
+        wait_config(base, lambda c: c["boot_formula"] == "@formula:starfield")
+        check(get_json(base + "/api/config")["boot_formula"] == "@formula:starfield", "settings: Start-up Starfield saved by its name")
+        page.select_option("#st-boot", "short")
+        wait_config(base, lambda c: c["boot_show"] == "short")
+        page.click("#st-boot-preview")
+        page.wait_for_timeout(400)
+        wait_lit(page, "#st-boot-panel", "settings: the start-up Formula's preview")
+        a = canvas_sum(page, "#st-boot-panel")
+        page.wait_for_timeout(300)
+        check(a != canvas_sum(page, "#st-boot-panel"), "settings: the start-up Formula's preview moves")
+        shot(page, "settings-boot-formula", "laptop")
+        page.select_option("#st-boot-formula", "")
+        wait_config(base, lambda c: c["boot_formula"] == "")
+        page.select_option("#st-boot", orig)
+        wait_config(base, lambda c: c["boot_show"] == orig)
+        check(get_json(base + "/api/config")["boot_formula"] == "", "settings: Start-up back to OpenDMD (built in)")
     shot(page, "settings-boot", "laptop")
     if mock:
         post_json(base + "/api/play", {"path": BOOT_CARD})
