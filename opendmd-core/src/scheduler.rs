@@ -145,7 +145,7 @@ impl Scheduler {
         }
         let index = match self.mode {
             Mode::Sequential => {
-                // Step over zero-weighted (hidden) entries; a whole lap of
+                // Step over zero-weighted entries; a whole lap of
                 // them means nothing is playable.
                 let mut found = None;
                 for _ in 0..self.len {

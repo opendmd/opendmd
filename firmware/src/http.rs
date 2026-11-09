@@ -1089,7 +1089,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let brightness = c.settings.lock().unwrap().brightness;
         let snap = status_snapshot(&c.status);
         // Sized on the strings as escaped: a title of quotes doubles.
-        let strings = json_string_len(&snap.path) + json_string_len(&snap.title) + json_string_len(&snap.manifest);
+        let strings = json_string_len(&snap.path) + json_string_len(&snap.title) + json_string_len(&snap.manifest)
+            + json_string_len(&snap.next);
         let mut ev = crate::events::Event::new(EVENT_ROOM + strings)?;
         event_json(&snap, brightness, &mut ev);
         Some(ev)
@@ -2675,8 +2676,8 @@ fn stream_names(req: &mut Req, dir: &str, names: crate::fatidx::Names) -> Result
     req.finish()
 }
 
-/// `GET /api/overrides`: `{"set","playlist","overrides":[{path, never?, w?,
-/// dwell?, dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
+/// `GET /api/overrides`: `{"set","playlist","overrides":[{path, w?, dwell?,
+/// dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
 /// is an empty list).
 fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Result<()> {
     use opendmd_core::overrides::{format_decimal, scan_meta, Dwell};
@@ -2701,9 +2702,6 @@ fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Res
             }
             first = false;
             buf.push_str(&format!(r#"{{"path":{}"#, json_string(path)));
-            if ov.never {
-                buf.push_str(r#","never":true"#);
-            }
             if let Some(w) = ov.weight {
                 buf.push_str(&format!(r#","w":{}"#, format_decimal(w)));
             }
@@ -2740,13 +2738,12 @@ fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Res
 /// not touch the playlist; `overrides` is how many were resolved into it.
 fn applied_json(a: &Applied) -> String {
     format!(
-        r#""entries":{},"index":{},"index_ms":{},"overrides":{},"hidden":{}"#,
+        r#""entries":{},"index":{},"index_ms":{},"overrides":{}"#,
         a.entries,
         a.index
             .map_or_else(|| "null".to_string(), |i| json_string(i.as_str())),
         a.index_ms,
-        a.overrides,
-        a.hidden
+        a.overrides
     )
 }
 
@@ -2759,7 +2756,7 @@ fn applied_json(a: &Applied) -> String {
 fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::Write) {
     let _ = write!(
         out,
-        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{}}},"paused":{},"transfer":{},"#,
+        r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}{},"next":{}}},"paused":{},"transfer":{},"#,
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),
@@ -2767,6 +2764,7 @@ fn now_playing_json(s: &Status, t: std::time::Duration, out: &mut dyn std::fmt::
         s.frame,
         formula_json(&s.path),
         kept_json(s),
+        opt_json((!s.next.is_empty()).then_some(s.next.as_str())),
         s.paused,
         stream::transfers() > 0 || stream::uploads() > 0,
     );
@@ -2785,7 +2783,7 @@ fn now_json(s: &Status, out: &mut String) {
     out.push('}');
 }
 
-/// An event's room besides its three strings (path, title, playlist): the
+/// An event's room besides its strings (path, title, playlist, next): the
 /// rest is ~450 B, a Formula's stats and a RePlayOS game included.
 const EVENT_ROOM: usize = 768;
 
@@ -2816,8 +2814,9 @@ fn event_json(s: &Status, brightness: u8, ev: &mut crate::events::Event) {
     drop(formula);
     let _ = write!(
         ev,
-        r#"{}}},"paused":{},"entries":{},"manifest":{},"index_state":{},"brightness":{},"#,
+        r#"{},"next":{}}},"paused":{},"entries":{},"manifest":{},"index_state":{},"brightness":{},"#,
         kept_json(s),
+        opt_json((!s.next.is_empty()).then_some(s.next.as_str())),
         s.paused,
         s.entries,
         json_string(&s.manifest),
@@ -2959,9 +2958,8 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     );
     let _ = write!(
         out,
-        r#""overrides":{},"hidden":{},"mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
+        r#""overrides":{},"mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
         s.overrides,
-        s.hidden,
         json_string(s.mode),
         opt_json(s.mode_until.as_deref()),
         opt_json(crate::clock::hhmm_now().as_deref()),

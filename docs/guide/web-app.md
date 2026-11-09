@@ -19,7 +19,8 @@ browser, with a few sample animations.
 ![The Now view, previewing what the panel plays](../images/now.png)
 
 Now shows what the panel is playing: the title, its platform and category,
-where it is in the playlist, such as "14 of 10,162", and a moving preview drawn
+where it is in the playlist, such as "14 of 10,162" (with what comes next,
+once the display has picked it), and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
 brightness. To hide the preview, turn off **Mirror the panel on Now** in
@@ -39,7 +40,7 @@ panel.
 Tap **☆** next to the title to make the GIF a favourite in the playlist
 that's playing. It turns to **★**, and a second tap undoes it; the message
 that pops up names the playlist. The **…** on a Recently played GIF has the
-other choices: play less often, hide, play longer. Formulas have no ☆.
+other choices: play less often, play longer. Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -72,7 +73,8 @@ Click a GIF to open its details, with a preview and its title, platform,
 category and author. From there:
 
 - **Send to panel** plays it now; afterwards the playlist carries on.
-- **Add to playlist…** puts it in a playlist.
+- **Add to playlist…** puts it in one of your playlists: the one playing
+  comes first, or start a new one.
 - **Edit in Create Art** opens it in [Create Art](create-art.md) to
   change it.
 - **Edit details…** changes its title, platform, category or author. The
@@ -83,9 +85,10 @@ category and author. From there:
 ### Several at once
 
 Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
-tap picks a GIF, and a folder's box picks every GIF in it. **Add to
-playlist** puts them all in the playlist you're editing, or in a new one, and **Done**
-leaves Select.
+tap picks a GIF, and a folder's box picks every GIF in it, and **None**
+unpicks them all. **Add 3 to playlist ▾** asks which of your playlists
+they go in (the one playing first) or starts a new one; GIFs already in it
+aren't added twice. **Done** leaves Select.
 
 ### Adding GIFs
 
@@ -127,22 +130,28 @@ goes back. Fill it in any of these ways:
   title words, shuffled or cut to a number if you like. **Leave out**
   drops logos, intros and the like.
 - In the Library, open a GIF and choose **Add to playlist… › New
-  playlist…**, or **Select** several and press **Add to playlist** with
-  no playlist open.
+  playlist…**, or **Select** several and press **Add to playlist ▾ › New
+  playlist…**.
 
 A GIF already in the playlist has a ✓ and isn't added twice.
 
 ### Editing a playlist
 
 Open it, and every GIF shows its first frame. Drag the ⠿ handles to
-reorder, press ✕ to remove one, or pick GIFs and use **Arrange** to move or
-remove them, then **Save**. The playlists that come with your card (All
+reorder, or use a GIF's **…** to move it up, down, to the top or to the
+end. Press ✕ to remove one, or tap GIFs (or press **Select** for tick
+boxes) and use **Arrange** to move or remove them, then **Save**. A
+removal, Clear, Shuffle or a replace by filter can be undone from its
+message. Leaving with changes not saved asks whether to save them. The playlists that come with your card (All
 files, Halloween, Christmas) are saved under a name of your own.
 
 **Save & play** while editing, or **Play** from a playlist's **…** menu,
-switches the panel to it in a few seconds.
+switches the panel to it in a few seconds. The same menu has **Rename…**
+and **Duplicate** (the new one is called "Consoles 2", say): favourites come
+along, and a renamed playlist keeps playing and keeps its place in the
+schedule.
 
-### Favourites and hiding
+### Favourites
 
 Right-click a GIF in the Library or a playlist, or use its **…** button, to
 tune how it plays in that playlist. On a phone, long-press it in a
@@ -150,12 +159,12 @@ playlist.
 
 - **Favourite** plays it more often.
 - **Play less often** does the opposite.
-- **Hide from this playlist** means it never plays there.
 - **Play longer or loop…** keeps it on screen twice as long or for a
   number of seconds, or plays it a set number of times.
 
-These are per playlist, so a GIF can be a favourite in one and hidden in
-another. **Reset** puts it back to normal.
+These are per playlist, so a GIF can be a favourite in one and play less
+often in another. **Reset** puts it back to normal. To keep a GIF from
+playing in a playlist, take it out of the playlist.
 
 ## Formulas
 

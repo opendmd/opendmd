@@ -1477,13 +1477,10 @@ fn main() -> Result<()> {
                         });
                     // The GIF on screen carries on (starting over), so a
                     // favourite tapped on Now doesn't jump the panel to
-                    // another one; unless the new overrides hide it.
+                    // another one.
                     if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
-                        let hidden = read_meta(&dest).get(&on_screen).is_some_and(|o| o.never);
-                        if !hidden {
-                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
-                                log::warn!("overrides: {on_screen} did not carry on: {e:?}");
-                            }
+                        if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
+                            log::warn!("overrides: {on_screen} did not carry on: {e:?}");
                         }
                     }
                     log::info!(
@@ -2439,6 +2436,12 @@ fn main() -> Result<()> {
                 s.frame_shown_at = at;
                 s.frame_due_at = due;
             }
+            // What plays next: the strings move only when the pick changes.
+            let next = eng.ahead_path().map_or("", |(p, _)| p);
+            if s.next != next {
+                s.next.clear();
+                s.next.push_str(next);
+            }
         }
 
         // The sleep should end at `judged + sleep_for`; anything after that
@@ -2598,7 +2601,6 @@ fn rebuild_context(
                 index: Some(IndexSource::Loaded),
                 index_ms: started.elapsed().as_millis() as u64,
                 overrides: ov.len(),
-                hidden: 0,
             })
         }
         Ok(_) => Err(format!("{} is empty", ctx.index)),
@@ -2607,7 +2609,6 @@ fn rebuild_context(
     let mut s = status.lock().unwrap();
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
     s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
-    s.hidden = 0;
     s.index_state = if outcome.is_ok() {
         "ready"
     } else {
@@ -3396,26 +3397,22 @@ fn finish_build(
                 log::error!("{path} matched no entries under the configured filter");
                 Err(format!("{path} {NO_ENTRIES}"))
             } else {
-                let (hidden, weighted, timed) = ov.summary();
+                let (weighted, timed) = ov.summary();
                 log::info!(
                     "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), \
-                     overrides {} ({hidden} hidden, {weighted} more/less often, {timed} timed), heap {} B free",
+                     overrides {} ({weighted} more/less often, {timed} timed), heap {} B free",
                     source.as_str(),
                     entries * 4,
                     if source == IndexSource::InRam { "in RAM" } else { "on card" },
                     ov.len(),
                     free_heap()
                 );
-                if hidden >= entries {
-                    log::warn!("{path}: every entry is hidden; nothing will play");
-                }
                 *engine = Some(built);
                 Ok(Applied {
                     entries,
                     index: Some(source),
                     index_ms: ms,
                     overrides: ov.len(),
-                    hidden,
                 })
             }
         }
@@ -3434,7 +3431,6 @@ fn finish_build(
     // (the frame loop only republishes it after its next frame).
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
     s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
-    s.hidden = outcome.as_ref().map_or(0, |a| a.hidden);
     s.index_state = if outcome.is_ok() {
         "ready"
     } else {

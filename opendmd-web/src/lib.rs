@@ -201,14 +201,11 @@ pub fn cache_path_for(gif_path: &str) -> Option<String> {
 // --- Per-entry overrides (the playlist's `.meta`) --------------------------
 
 /// One override as the device's `GET /api/overrides` sends it:
-/// `{path, never?, w?, dwell?, dwell_x?, loops?}` — absent fields are left
+/// `{path, w?, dwell?, dwell_x?, loops?}` — absent fields are left
 /// out, `dwell` is seconds and `dwell_x` a multiple of the configured dwell.
 fn override_object(path: &str, ov: &Override) -> Object {
     let o = Object::new();
     set(&o, "path", path);
-    if ov.never {
-        set(&o, "never", true);
-    }
     if let Some(w) = ov.weight {
         set(&o, "w", w);
     }
@@ -229,7 +226,6 @@ fn override_from(v: &JsValue) -> Option<MetaLine> {
     let path = get(v, "path").as_string().filter(|p| !p.is_empty())?;
     let num = |k: &str| get(v, k).as_f64();
     let ov = Override {
-        never: get(v, "never").as_bool() == Some(true),
         weight: num("w").map(|w| w as f32),
         dwell: match (num("dwell"), num("dwell_x")) {
             (Some(s), _) if s >= 0.0 && s <= u32::MAX as f64 => Some(Dwell::Secs(s as u32)),
@@ -243,8 +239,8 @@ fn override_from(v: &JsValue) -> Option<MetaLine> {
     (ov.is_valid() && !ov.is_empty()).then_some(MetaLine { path, ov })
 }
 
-/// A playlist's `.meta` text -> `[{path, never?, w?, dwell?, dwell_x?,
-/// loops?}]`, tolerant like the device.
+/// A playlist's `.meta` text -> `[{path, w?, dwell?, dwell_x?, loops?}]`,
+/// tolerant like the device.
 #[wasm_bindgen(js_name = parseOverrides)]
 pub fn parse_overrides(text: &str) -> Array {
     parse_meta(text)

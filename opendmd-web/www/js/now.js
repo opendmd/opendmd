@@ -122,6 +122,8 @@ function mountDevice(el) {
   const followEl = h('span.tag.fl', { id: 'now-follow-line', hidden: true });
   const tagsEl = h('span', { id: 'now-tags' });
   const ord = h('span', { id: 'now-ord' });
+  // What plays next, once the display has picked it (`now_playing.next`).
+  const nextEl = h('span', { id: 'now-next' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
   // (Disabled, not hidden, until Recently played has one to go back to:
   // the buttons keep their places.)
@@ -147,7 +149,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, ' ', conn), meta, ed, keptRow),
+      h('div.nowt', h('div', title, ' ', fb, ' ', unfilter), h('div.muted', tagsEl, ' ', followEl), h('div.muted', ord, nextEl, ' ', conn), meta, ed, keptRow),
       h('div.transport', h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn, prevBtn, againBtn),
       h('label', { style: 'margin-top:12px' }, 'Brightness', bright.el)),
     rc,
@@ -266,6 +268,9 @@ function mountDevice(el) {
     followEl.hidden = !fl;
     followEl.textContent = followEl.title = fl ?? '';
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
+    // (A GIF's; a Formula or a title card next says nothing.)
+    const nx = np.next;
+    nextEl.textContent = nx && !drawn(nx) ? ` · Next: ${label(app.wasm.parsePath(nx))}` : '';
     const kept = np.kept_s, left = Math.ceil(Math.max(0, kept * 1000 - np.elapsed_ms) / 1000);
     keptRow.hidden = kept == null;
     keptText.textContent = kept == null ? '' : kept ? `Kept on the panel: ${(left / 60) | 0}:${String(left % 60).padStart(2, '0')} left` : 'Kept on the panel until you change it';
