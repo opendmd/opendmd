@@ -234,7 +234,7 @@ every view like a person would:
             or ?key= with; the app's own files stay open); a fresh browser
             gets the key dialog, a wrong key asks again, the right one loads
             Now; the switch off opens the API again
-  Settings  four tabs at #settings/play|look|time|device, one in the page
+  Settings  five tabs at #settings/play|look|time|replay|device, one in the page
             at a time; www_version and the status (no "index") shown; PUT
             brightness, read it back, Saved ✓ fading; WiFi scan; a hostname change is live (reboot_required
             false, status hostname/mdns at once; a WiFi change true) and
@@ -892,13 +892,13 @@ def pick_cat(page: Page, value: str) -> None:
 
 
 def settings_tab_checks(page: Page) -> None:
-    """Settings' four tabs: bare #settings is Playback, each tab its own
+    """Settings' five tabs: bare #settings is Playback, each tab its own
     address, only the open one in the page, a click changes the address."""
     goto_view(page, "settings")
     tabs = page.eval_on_selector_all("#st-tabs .tab", "els => els.map(e => [e.dataset.tab, e.textContent, e.classList.contains('on')])")
-    check(tabs == [["play", "Playback", True], ["look", "Look", False], ["time", "Schedule", False], ["device", "Device", False]],
-          f"settings: four tabs, bare #settings opens Playback ({tabs})")
-    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("device", "#st-hostname"), ("play", "#st-set")):
+    check(tabs == [["play", "Playback", True], ["look", "Look", False], ["time", "Schedule", False], ["replay", "RePlayOS", False], ["device", "Device", False]],
+          f"settings: five tabs, bare #settings opens Playback ({tabs})")
+    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("replay", "#fo-host"), ("device", "#st-hostname"), ("play", "#st-set")):
         page.click(f"#st-tabs [data-tab={t}]")
         page.wait_for_selector(f"#st-tab-{t}", timeout=20000)
         page.wait_for_selector(sel, timeout=20000)
@@ -2609,7 +2609,7 @@ def no_live_checks(page: Page, base: str, mock: bool) -> None:
           f"library: no Live folder, no live form ({opts[-3:]})")
     gone = page.evaluate("import('./js/util.js').then(m => ['@clock', '@clock?seconds=1', '@text?msg=Hi', '@card:A|', '@formula:big-clock', '/gifs/@clock.gif'].map(m.gone))")
     check(gone == [True, True, True, False, False, False], f"playlists: the editor drops @clock / @text lines, nothing else ({gone})")
-    goto_view(page, "settings/time")
+    goto_view(page, "settings/replay")
     page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
     attract = page.eval_on_selector_all("#fo-attract option", "els => els.map(e => [e.value, e.textContent])")
     check(not any(v == "@" or "clock" in label.lower() for v, label in attract),
@@ -7848,7 +7848,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     host_val = f"127.0.0.1:{replay_port}"
     try:
         print(f"\n== mock RePlayOS at {replay_base}")
-        goto_view(page, "settings/time")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo", timeout=10000)
         for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test"):
             check(page.locator(sel).count() == 1, f"follow: {sel} renders")
@@ -7959,7 +7959,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         no_leaks(page, "now (follow)")
 
         # Leave the mock as it started: not following, no host.
-        goto_view(page, "settings/time")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo-on", timeout=10000)
         if page.is_checked("#fo-on"):
             page.uncheck("#fo-on")
@@ -7992,7 +7992,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         page.wait_for_timeout(500)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         check(over <= 0, f"phone 360: {view} has no horizontal scroll ({over}px)")
-    for view in ["settings/look", "settings/time", "settings/device", "sets/edit"]:
+    for view in ["settings/look", "settings/time", "settings/replay", "settings/device", "sets/edit"]:
         goto_view(page, view)
         page.wait_for_timeout(800)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
@@ -8879,6 +8879,7 @@ def device_pass(browser, device: str) -> None:
         follow_keys = ("follow", "follow_host", "follow_code_set", "attract_set")
         check(all(k in cfg for k in follow_keys), f"device config: follow keys present ({sorted(cfg)})")
         check("context" in st, f"device status: context present ({st.get('context')})")
+        goto_view(page, "settings/replay")
         page.wait_for_selector("#fo", timeout=10000)
         check(page.locator("#fo-on").count() == 1 and page.locator("#fo-host").count() == 1,
               "device settings: Follow RePlayOS group renders")

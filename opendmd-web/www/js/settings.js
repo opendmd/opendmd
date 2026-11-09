@@ -1,10 +1,11 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
-// partial patch, applied live except WiFi, which needs a reboot), in four
-// tabs, `#settings/play|look|time|device` (bare `#settings` is the first);
+// partial patch, applied live except WiFi, which needs a reboot), in five
+// tabs, `#settings/play|look|time|replay|device` (bare `#settings` is the first);
 // only the open tab is in the page. Playback (brightness and its maximum
 // js/power.js, playlist, platforms, shuffle, how long each GIF stays),
 // Look (colour, glow, a formula over every GIF, mirroring on Now, the
-// transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode, Follow RePlayOS) and
+// transition, Start-up js/boot.js), Schedule (time, location js/location.js, schedule, night mode), RePlayOS
+// (Follow RePlayOS, js/follow.js) and
 // Device (status, the playback cache, network — its own Save; a new name
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
@@ -17,7 +18,7 @@ import { popup, closeMenu } from './overrides.js';
 import { keepSelect, h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
-const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
+const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['replay', 'RePlayOS'], ['device', 'Device']];
 // The bundled Formulas (formulas.json: their sources), fetched once a session.
 let exQ = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
@@ -206,7 +207,6 @@ export async function mount(el) {
   const boot = h('div.card', { id: 'st-boot-card' }), power = h('div', { id: 'st-power-card', style: 'margin-top:12px' });
   const time = timeCard();
   const sched = scheduleCard();
-  const follow = followCard();
   on('status', time.render);
 
   const tab = (k, ...kids) => h('div.stab', { id: 'st-tab-' + k, role: 'tabpanel', 'aria-labelledby': 'st-t-' + k }, kids);
@@ -236,7 +236,8 @@ export async function mount(el) {
         boot);
     },
     // Location (js/location.js): on a player that keeps one (`lat` in its config).
-    time: () => { const loc = 'lat' in c && h('div.grp', { id: 'loc' }); if (loc) import('./location.js').then((m) => m.locationCard(loc)); return tab('time', time.el, loc, sched.el, follow.el); },
+    time: () => { const loc = 'lat' in c && h('div.grp', { id: 'loc' }); if (loc) import('./location.js').then((m) => m.locationCard(loc)); return tab('time', time.el, loc, sched.el); },
+    replay: () => tab('replay', followCard().el),
     device: () => {
       const t = tab('device');
       import('./device.js').then((m) => { dev = m.deviceTab(t, { f, save, banner, sched, thumbs, live: () => visible && open === 'device' }); });
