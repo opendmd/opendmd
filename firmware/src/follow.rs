@@ -43,7 +43,7 @@ use opendmd_core::overrides::Override;
 use opendmd_core::synth;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -345,6 +345,12 @@ pub struct Poller {
     next_poll: Instant,
     key: u32,
     last_error: Option<String>,
+    /// The saved host's address as last resolved: looked up again only
+    /// after a connect to it fails (`getaddrinfo` blocks the worker, ~7 s
+    /// for a `.local` name nobody answers, up to ~14 s with DNS).
+    addr: Option<SocketAddr>,
+    /// The last [`get`](Self::get) failed to resolve its name.
+    unresolved: bool,
     /// The logos file was found current for this `(manifest, length)`.
     logos_ok: Option<(String, u64)>,
     settings: Arc<Mutex<Settings>>,
@@ -378,6 +384,8 @@ impl Poller {
             next_poll: Instant::now(),
             key: 0,
             last_error: None,
+            addr: None,
+            unresolved: false,
             logos_ok: None,
             settings,
             status,
@@ -437,7 +445,10 @@ impl Poller {
             SHARED.lock().unwrap().seen = Some(Instant::now());
         }
         let action = self.follow.observe(self.now(), polled.as_ref().ok());
-        self.next_poll = Instant::now() + self.follow.poll_interval();
+        // A name that doesn't resolve has cost a long lookup already: the
+        // unreachable backoff at once, not another in 2 s.
+        let wait = if self.unresolved { rules::BACKOFF } else { self.follow.poll_interval() };
+        self.next_poll = Instant::now() + wait;
         if error != self.last_error {
             match &error {
                 Some(e) => log::warn!("follow: {} {e}", self.cfg.host),
@@ -489,6 +500,7 @@ impl Poller {
         self.cfg = cfg;
         if target_changed || !self.cfg.enabled {
             self.last_error = None;
+            self.addr = None;
         }
         if base_changed {
             self.logos_ok = None;
@@ -596,7 +608,11 @@ impl Poller {
     /// buffered here). Nothing is kept between polls (a kept-alive
     /// `esp_http_client` held 3.35 KB of heap for a request every 2 s; this
     /// is a plain socket now, `opendmd_core::http_client`). Connecting,
-    /// each write and each read time out after `FOLLOW_TIMEOUT`.
+    /// each write and each read time out after `FOLLOW_TIMEOUT`, and the
+    /// exchange after the connect ends by `FOLLOW_DEADLINE`; the name's
+    /// lookup has no such bound (`getaddrinfo`: ~7 s for an unanswered
+    /// `.local` name, up to ~14 s with DNS), so the saved host's address is
+    /// kept (`addr`) and looked up again only after a connect to it fails.
     #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
     #[inline(never)]
     fn get(
@@ -619,17 +635,33 @@ impl Poller {
             None => &[],
         };
         crate::diag::check("follow: before a poll");
+        // (Only the saved host's address is kept: a Test of another looks
+        // its own up.)
+        let saved = host == self.cfg.host;
+        let kept = self.addr.filter(|_| saved);
+        self.unresolved = false;
         let result = (|| {
             if name.is_empty() {
                 return Err(PollError::BadHost);
             }
-            let addr = (name, port)
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut a| a.next())
-                .ok_or(PollError::Resolve)?;
-            let sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT)
-                .map_err(|_| PollError::Connect)?;
+            let addr = match kept {
+                Some(a) => a,
+                None => {
+                    let a = (name, port).to_socket_addrs().ok().and_then(|mut a| a.next());
+                    self.unresolved = a.is_none();
+                    let a = a.ok_or(PollError::Resolve)?;
+                    if saved {
+                        self.addr = Some(a);
+                    }
+                    a
+                }
+            };
+            let sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT).map_err(|_| {
+                if saved {
+                    self.addr = None;
+                }
+                PollError::Connect
+            })?;
             low = low.min(free_heap());
             sock.set_write_timeout(Some(config::FOLLOW_TIMEOUT))
                 .map_err(|e| PollError::Http(e.into()))?;
