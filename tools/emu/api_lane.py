@@ -47,7 +47,8 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   start-up    (boot A's NVS seeded with boot_fx = a bundled Formula, BOOT_GOOD) the start-up show
               was that Formula (`boot show: formula @formula:…`, its frames drawn, then the
               playlist; status boot_formula played); a bundled name that is not there, a
-              broken inline one and an 8.3 alias are 400s, nothing saved; the card Formula
+              broken inline one, a card file that is not there and a value that is no
+              Formula are 400s, a long inline one a 413, nothing saved; the card Formula
               saved in `play` set as boot_formula for the next boot
   end         every file read back again; POST /api/reboot (boot A ends, the card written)
 Then the card boot A wrote: fatcheck (no cross-links or lost clusters), the settings file
@@ -189,7 +190,7 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
     Cached by the image's bytes and the keys."""
     data = image.read_bytes()
     extra = extra or {}
-    digest = hashlib.sha256(data + repr(sorted(extra.items())).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(data + repr((ssid, sorted(extra.items()))).encode()).hexdigest()[:16]
     out = out_dir / f"{image.stem}-wifi-{digest}.bin"
     if out.exists():
         return out
@@ -201,7 +202,8 @@ def seeded_image(image: Path, out_dir: Path, ssid="demo", password="demo-passwor
     start, size = nvs_partition(data)
     csv, binf = out_dir / f"nvs-{digest}.csv", out_dir / f"nvs-{digest}.bin"
     rows = "".join(f"{k},data,string,{v}\n" for k, v in extra.items())
-    csv.write_text(f"key,type,encoding,value\nopendmd,namespace,,\nwifi_ssid,data,string,{ssid}\nwifi_pass,data,string,{password}\n{rows}")
+    wifi = f"wifi_ssid,data,string,{ssid}\nwifi_pass,data,string,{password}\n" if ssid else ""
+    csv.write_text(f"key,type,encoding,value\nopendmd,namespace,,\n{wifi}{rows}")
     subprocess.run([str(nvs_gen_python()), "-m", "esp_idf_nvs_partition_gen", "generate", str(csv), str(binf), hex(size)],
                    check=True, stdout=subprocess.DEVNULL)
     nvs = binf.read_bytes()

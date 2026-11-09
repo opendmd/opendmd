@@ -74,6 +74,8 @@ export function bootCard(card, examples) {
     pv ??= new PanelPreview(canvas);
     stop();
     const x = len != 'card' && fs[fsel.value];
+    // One set elsewhere, not in this browser's list: the panel plays it, but it can't be drawn here.
+    if (x && !x.src) { box.hidden = true; toast('“' + x.name + '” plays on the panel at start-up; it can’t be previewed here', 'ok'); return; }
     if (x?.src) return formula(x, '@boot?' + q, MS[len]);
     // Drawn every 10 ms: played by the page's clock, as Formulas are.
     if (await pv.show('@boot?' + q, (p) => app.previewBytes(p))) pv.syncTo(0, performance.now());

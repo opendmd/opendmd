@@ -1293,6 +1293,23 @@ mod tests {
         assert!(e.msg.starts_with("this Formula is too heavy for the start-up show (about "), "{}", e.msg);
     }
 
+    /// Short of memory, a Formula for the show is refused with
+    /// `psi::NO_MEMORY`, which the firmware tries again a second later
+    /// (`fx_psi::look_retry`); then it builds.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_short_of_memory_is_tried_again() {
+        crate::synth::install_test_bundled();
+        crate::fx_psi::refuse_loads(1);
+        let e = FormulaShow::open("@formula:red").unwrap_err();
+        assert_eq!(e.msg, crate::psi::NO_MEMORY);
+        assert!(crate::fx_psi::look_retry(&e).is_some());
+        assert!(FormulaShow::open("@formula:red").is_ok());
+        // A real error is not tried again.
+        let e = FormulaShow::open("@formula:nope").unwrap_err();
+        assert!(crate::fx_psi::look_retry(&e).is_none(), "{}", e.msg);
+    }
+
     /// `synth::boot_line` (the web app's preview) draws the line as the
     /// show does over the same frame.
     #[cfg(feature = "psi")]
