@@ -109,7 +109,8 @@ use opendmd_core::filter::Filter;
 use opendmd_core::index::{write_index_with_overrides, IndexHeader, IndexedCatalog};
 use opendmd_core::overrides::{self, OverrideSet, Overrides, NO_META};
 use opendmd_core::scan::Budget;
-use opendmd_core::schedule::{self, Decision, Schedule};
+use opendmd_core::schedule::{self, Decision, Schedule, SunNow};
+use opendmd_core::sky::Place;
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
@@ -355,6 +356,7 @@ fn adopt_card_settings(
     }
     if s.schedule != old.schedule {
         sched.schedule = sched::parse(s.schedule.as_bytes()).unwrap_or_default();
+        sched.sun_end = None;
         sched.dirty = true;
     }
     log::info!("settings: the card's applied (brightness {}, look {}, playlist '{}')", s.brightness, s.look.name(), s.set);
@@ -1195,6 +1197,8 @@ fn main() -> Result<()> {
                         || set_next != set_now
                         || next.shuffle != settings.shuffle;
                     let tz_changed = next.tz != settings.tz || next.tz_name != settings.tz_name;
+                    // (Night mode by the sun follows the location at once.)
+                    let place_changed = next.location != settings.location;
 
                     // A platform filter that would leave the playlist empty
                     // is refused before anything is saved. The build is the
@@ -1322,6 +1326,10 @@ fn main() -> Result<()> {
                                 {
                                     e.drop_current(&mut canvas);
                                 }
+                            }
+                            if place_changed {
+                                sched.sun_end = None;
+                                sched.dirty = true;
                             }
                             if tz_changed {
                                 clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -1485,13 +1493,10 @@ fn main() -> Result<()> {
                         });
                     // The GIF on screen carries on (starting over), so a
                     // favourite tapped on Now doesn't jump the panel to
-                    // another one; unless the new overrides hide it.
+                    // another one.
                     if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
-                        let hidden = read_meta(&dest).get(&on_screen).is_some_and(|o| o.never);
-                        if !hidden {
-                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
-                                log::warn!("overrides: {on_screen} did not carry on: {e:?}");
-                            }
+                        if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed(), None) {
+                            log::warn!("overrides: {on_screen} did not carry on: {e:?}");
                         }
                     }
                     log::info!(
@@ -1510,6 +1515,7 @@ fn main() -> Result<()> {
                         }
                         Ok(()) => {
                             sched.schedule = *parsed;
+                            sched.sun_end = None;
                             sched.dirty = true;
                             let _ = reply.send(Ok(Applied::unchanged(
                                 engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -1680,7 +1686,7 @@ fn main() -> Result<()> {
 
         // The schedule: at most once a second look at the clock, and act only
         // when the local minute (or the schedule, zone or a wake) changed.
-        if let Some(next) = sched.poll().filter(|_| !updating) {
+        if let Some(next) = sched.poll(settings.location).filter(|_| !updating) {
             // A change (night mode's dark panel, a rule's playlist or
             // brightness) ends the panel test first, then applies.
             end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a schedule change");
@@ -2449,6 +2455,12 @@ fn main() -> Result<()> {
                 s.frame_shown_at = at;
                 s.frame_due_at = due;
             }
+            // What plays next: the strings move only when the pick changes.
+            let next = eng.ahead_path().map_or("", |(p, _)| p);
+            if s.next != next {
+                s.next.clear();
+                s.next.push_str(next);
+            }
         }
 
         // The sleep should end at `judged + sleep_for`; anything after that
@@ -2608,7 +2620,6 @@ fn rebuild_context(
                 index: Some(IndexSource::Loaded),
                 index_ms: started.elapsed().as_millis() as u64,
                 overrides: ov.len(),
-                hidden: 0,
             })
         }
         Ok(_) => Err(format!("{} is empty", ctx.index)),
@@ -2617,7 +2628,6 @@ fn rebuild_context(
     let mut s = status.lock().unwrap();
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
     s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
-    s.hidden = 0;
     s.index_state = if outcome.is_ok() {
         "ready"
     } else {
@@ -2685,6 +2695,10 @@ struct Scheduling {
     /// every loop, so not `Instant`).
     last_check: u64,
     last_seen: Option<schedule::LocalTime>,
+    /// Night mode by the sun: when the night on now ends (Unix seconds,
+    /// `None` past a day: a polar night) and until when that answer holds,
+    /// worked out once a night (`schedule::sun_night_end`).
+    sun_end: Option<(i64, Option<i64>)>,
     /// Evaluate at the next poll, whatever the minute.
     dirty: bool,
     /// A rule's playlist that would not build: ignored until the decision
@@ -2705,6 +2719,7 @@ impl Scheduling {
             wake_label: None,
             last_check: uclock::now_us(),
             last_seen: None,
+            sun_end: None,
             dirty: true,
             broken_set: None,
         }
@@ -2743,9 +2758,35 @@ impl Scheduling {
         self.decision.mode == schedule::Mode::Off
     }
 
+    /// Night mode by the sun at this minute, for a schedule that has one,
+    /// with a location (`place`) and a clock: two positions of the sun, and
+    /// once a night the time it ends (up to ~110 of them, a few ms: too
+    /// many for every minute on this core).
+    #[optimize(size)] // (once a minute)
+    #[inline(never)]
+    fn sun_now(&mut self, place: Option<Place>) -> Option<SunNow> {
+        let offset = self.schedule.sun_offset()?;
+        let (place, unix) = (place?, clock::unix_valid()?);
+        if !schedule::sun_night(unix, place, offset) {
+            self.sun_end = None;
+            return Some(SunNow { night: false, until: None });
+        }
+        let end = match self.sun_end {
+            Some((good_until, end)) if unix < good_until => end,
+            _ => {
+                let end = schedule::sun_night_end(unix, place, offset);
+                // (A polar night's "not within a day" is asked again in an hour.)
+                self.sun_end = Some((end.unwrap_or(unix + 3600), end));
+                end
+            }
+        };
+        Some(SunNow { night: true, until: end.and_then(clock::minute_at) })
+    }
+
     /// A fresh decision, if the minute (or anything else) changed and it
     /// differs from what is applied. Cheap when it is not time to look.
-    fn poll(&mut self) -> Option<Decision> {
+    /// `place`: the saved location, for night mode by the sun.
+    fn poll(&mut self, place: Option<Place>) -> Option<Decision> {
         if !self.dirty && uclock::elapsed(self.last_check) < config::SCHEDULE_CHECK {
             return None;
         }
@@ -2763,7 +2804,10 @@ impl Scheduling {
         self.last_seen = now;
         let forced = std::mem::take(&mut self.dirty);
         let next = match now {
-            Some(t) if self.wake_until.is_none() => self.schedule.evaluate(t),
+            Some(t) if self.wake_until.is_none() => {
+                let sun = self.sun_now(place);
+                self.schedule.evaluate(t, sun)
+            }
             _ => Decision::default(),
         };
         (forced || next != self.decision).then_some(next)
@@ -3372,26 +3416,22 @@ fn finish_build(
                 log::error!("{path} matched no entries under the configured filter");
                 Err(format!("{path} {NO_ENTRIES}"))
             } else {
-                let (hidden, weighted, timed) = ov.summary();
+                let (weighted, timed) = ov.summary();
                 log::info!(
                     "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), \
-                     overrides {} ({hidden} hidden, {weighted} more/less often, {timed} timed), heap {} B free",
+                     overrides {} ({weighted} more/less often, {timed} timed), heap {} B free",
                     source.as_str(),
                     entries * 4,
                     if source == IndexSource::InRam { "in RAM" } else { "on card" },
                     ov.len(),
                     free_heap()
                 );
-                if hidden >= entries {
-                    log::warn!("{path}: every entry is hidden; nothing will play");
-                }
                 *engine = Some(built);
                 Ok(Applied {
                     entries,
                     index: Some(source),
                     index_ms: ms,
                     overrides: ov.len(),
-                    hidden,
                 })
             }
         }
@@ -3410,7 +3450,6 @@ fn finish_build(
     // (the frame loop only republishes it after its next frame).
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
     s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
-    s.hidden = outcome.as_ref().map_or(0, |a| a.hidden);
     s.index_state = if outcome.is_ok() {
         "ready"
     } else {

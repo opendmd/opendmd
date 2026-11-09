@@ -1107,12 +1107,15 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
     wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
-    tab("play")
-    check(page.locator("text=Device settings, WiFi and reboot live on the display").count() == 0
-          and all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
-          "demo settings: Playback has the player's controls, not the local-mode sentence")
+    tab("look")
+    check(all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-look", "#st-glow")),
+          "demo settings: Panel has the brightness, its maximum, the colour and the glow")
     page.evaluate("(e => { e.value = 30; e.dispatchEvent(new Event('input')); })(document.querySelector('#st-brightness'))")
     saved("#st-brightness")
+    tab("play")
+    check(page.locator("text=Device settings, WiFi and reboot live on the display").count() == 0
+          and all(page.locator(s).count() == 1 for s in ("#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
+          "demo settings: Playback has the player's controls, not the local-mode sentence")
     page.fill("#st-dwell-min", "2")
     page.fill("#st-dwell-max", "5")
     page.press("#st-dwell-max", "Tab")
@@ -1256,7 +1259,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.wait_for_selector("#st-tab-device", timeout=30000)
     tab("look")
     check(page.input_value("#st-look") == "amber" and page.input_value("#st-trans") == "wipe_left", "demo settings: kept across a reload")
-    for t in ("play", "look", "time", "device"):
+    for t in ("play", "look", "time", "replay", "device"):
         tab(t)
         page.wait_for_timeout(600)
         page.screenshot(path=str(shots / f"demo-settings-{t}-laptop.png"), full_page=True)
@@ -1266,7 +1269,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.goto(f"{base}/demo/#settings/look")
     page.wait_for_selector("#st-tab-look", timeout=30000)
     check(page.input_value("#st-look") == "colour", "demo settings: a new session starts with a new player's settings")
-    for t in ("play", "look", "time", "device"):
+    for t in ("play", "look", "time", "replay", "device"):
         tab(t)
         page.wait_for_timeout(600)
         check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"demo settings (phone): {t}, no sideways scroll")

@@ -97,13 +97,13 @@ On your display:
   playing, until the playlist moves on. Changes you make follow it there.
   Press it again to take it off.
 - **Set as the panel's look** keeps it over every GIF the panel plays,
-  under the colour and the phosphor glow. Settings › Look shows which
+  under the colour and the phosphor glow. Settings › Panel shows which
   Formula it is under **Formula over every GIF**, changes it, or turns it
   off with **None**.
 - **Use at start-up** plays it while the panel starts, in place of the
   OpenDMD name, from the next start. The panel writes the network to join,
   a card problem or its address over it when there's something to say.
-  Settings › Look › Start-up shows which Formula it is, or goes back to
+  Settings › Panel › Start-up shows which Formula it is, or goes back to
   **OpenDMD (built in)**. A Formula that would take more than about 12 ms
   a frame is too heavy for the start-up show, and the button isn't
   offered. Delete the Formula and the panel shows OpenDMD at start-up
@@ -126,7 +126,7 @@ that is lighter for the panel. The preview shows the choice as you move
 it. A Formula with layers goes Over only, because its layers keep their
 own blends.
 
-Settings › Look lists your Formulas and the bundled ones that can be a
+Settings › Panel lists your Formulas and the bundled ones that can be a
 look, and **Change…** opens the chosen one's settings. Over at 100 % of a
 Formula that covers the whole panel would hide the GIF, and the sheet
 says so. A Formula that would take more than about 12 ms a frame over
@@ -137,7 +137,7 @@ moves, about 50 times a second, or 25 for a heavy one that takes more than
 The look is one of your saved Formulas, read from the display's card. A
 change you save reaches the look on the panel a moment later. Delete the
 Formula and the look goes with it: the app says so before you delete it,
-and Settings › Look shows None until you pick another. When the
+and Settings › Panel shows None until you pick another. When the
 display is short of memory, such as
 during several uploads at once, it shows the GIFs without the look for a
 while.

@@ -63,28 +63,33 @@ function clock(at = Date.now()) {
   try {
     if (z) {
       const p = {};
-      for (const x of new Intl.DateTimeFormat('en-GB', { timeZone: z[0].split(',')[0], hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' }).formatToParts(at)) p[x.type] = x.value;
-      return { day: DAYS.indexOf(p.weekday) + 1, min: +p.hour * 60 + +p.minute };
+      for (const x of new Intl.DateTimeFormat('en-GB', { timeZone: z[0].split(',')[0], hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit', month: 'numeric', day: 'numeric' }).formatToParts(at)) p[x.type] = x.value;
+      return { day: DAYS.indexOf(p.weekday) + 1, min: +p.hour * 60 + +p.minute, date: +p.month * 32 + +p.day };
     }
   } catch { /* the offset, then */ }
   const m = /^(?:<[^>]*>|[A-Za-z]+)([+-]?)(\d+)(?::(\d+))?/.exec(S.c.tz || '');
   const u = new Date(at + (m ? (m[1] == '-' ? 1 : -1) * (m[2] * 60 + +(m[3] || 0)) : -new Date(at).getTimezoneOffset()) * 60000);
-  return { day: u.getUTCDay() || 7, min: u.getUTCHours() * 60 + u.getUTCMinutes() };
+  return { day: u.getUTCDay() || 7, min: u.getUTCHours() * 60 + u.getUTCMinutes(), date: (u.getUTCMonth() + 1) * 32 + u.getUTCDate() };
 }
 
-// opendmd_core::schedule: the first rule whose window holds the day and
-// minute; night mode every day; neither while woken.
-const inside = (f, t, days, d, m) => {
-  const on = (x) => !days?.length || days.includes(x), y = d == 1 ? 7 : d - 1;
-  return f == t ? on(d) : f < t ? on(d) && f <= m && m < t : (on(d) && m >= f) || (on(y) && m < t);
+// opendmd_core::schedule: the first rule whose window holds the day, date
+// (month * 32 + day; a window past midnight belongs to its start) and
+// minute; night mode every day (not one from sunset to sunrise: the demo's
+// player has no location); neither while woken.
+const mdOf = (s) => +s.slice(0, 2) * 32 + +s.slice(3);
+const inDates = (r, x) => !r || (mdOf(r[0]) <= mdOf(r[1]) ? mdOf(r[0]) <= x && x <= mdOf(r[1]) : x >= mdOf(r[0]) || x <= mdOf(r[1]));
+const yesterday = (x) => (x % 32 > 1 ? x - 1 : ((m) => m * 32 + [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1])(x >> 5 == 1 ? 12 : (x >> 5) - 1));
+const inside = (f, t, days, d, m, dates, x) => {
+  const on = (y, z) => (!days?.length || days.includes(y)) && inDates(dates, z), y = d == 1 ? 7 : d - 1;
+  return f == t ? on(d, x) : f < t ? on(d, x) && f <= m && m < t : (on(d, x) && m >= f) || (on(y, yesterday(x)) && m < t);
 };
 function evaluate() {
-  const { day, min } = clock(), r = { rule: null, set: null, until: null, mode: 'normal', mode_until: null, b: null };
+  const { day, min, date } = clock(), r = { rule: null, set: null, until: null, mode: 'normal', mode_until: null, b: null };
   if (S.wake <= Date.now()) S.wake = 0;
   if (S.wake) return r;
-  const i = S.sched.rules.findIndex((x) => inside(hm(x.from), hm(x.to), x.days, day, min)), x = S.sched.rules[i], n = S.sched.night;
+  const i = S.sched.rules.findIndex((x) => inside(hm(x.from), hm(x.to), x.days, day, min, x.dates, date)), x = S.sched.rules[i], n = S.sched.night;
   if (x) Object.assign(r, { rule: i, set: x.set ?? null, until: x.to, b: x.brightness ?? null });
-  if (n && inside(hm(n.from), hm(n.to), null, day, min)) Object.assign(r, { mode: n.mode, mode_until: n.to, b: n.mode == 'off' ? 0 : n.brightness ?? 8 });
+  if (n && !n.sun && inside(hm(n.from), hm(n.to), null, day, min, null, date)) Object.assign(r, { mode: n.mode, mode_until: n.to, b: n.mode == 'off' ? 0 : n.brightness ?? 8 });
   return r;
 }
 
@@ -182,9 +187,10 @@ function putSchedule(s) {
   if (rs.length > 16) bad(`at most 16 rules (got ${rs.length})`);
   rs.forEach((r, i) => {
     if (hm(r.from) == null || hm(r.to) == null) bad(`rule ${i + 1}: times are HH:MM`);
+    if (r.dates != null && !(Array.isArray(r.dates) && r.dates.length == 2 && r.dates.every((d) => /^\d\d-\d\d$/.test(d)))) bad(`rule ${i + 1}: dates are MM-DD ("10-31")`);
     if (r.set != null && !has(setPath(r.set))) throw new HttpError(404, `set not found: ${r.set}`);
   });
-  if (n && (hm(n.from) == null || hm(n.to) == null || !['off', 'dim'].includes(n.mode))) bad('night: from and to are HH:MM, mode off or dim');
+  if (n && (!n.sun && (hm(n.from) == null || hm(n.to) == null) || !['off', 'dim'].includes(n.mode))) bad('night: from and to are HH:MM, mode off or dim');
   S.sched = { rules: rs, night: n };
   keep();
   apply();

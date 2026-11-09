@@ -1306,7 +1306,7 @@ mod tests {
         use crate::scheduler::{Mode, Scheduler};
         let mut sched = Scheduler::new(cat.len(), Mode::Shuffle, 0x5eed).with_no_repeat(window);
         for (i, ov) in cat.overrides().unwrap().iter() {
-            sched.set_weight(*i as usize, ov.scheduler_weight().unwrap());
+            sched.set_weight(*i as usize, ov.weight.unwrap());
         }
         let class: Vec<Option<Match>> = (0..cat.len())
             .map(|i| classify(title_score(&cat.entry(i).unwrap().title, game)))

@@ -8,11 +8,17 @@
 //!  "night":{"from":"23:30","to":"07:00","mode":"off","brightness":8}}
 //! ```
 //!
-//! `days` are ISO weekdays (1 = Monday; empty or absent = every day); `set`
-//! and `brightness` are optional (absent = as configured); `night` is
+//! `days` are ISO weekdays (1 = Monday; empty or absent = every day);
+//! `dates` are optional (`["10-01","10-31"]`: month-day, inclusive,
+//! wrapping over New Year when the second is earlier; absent = every day of
+//! the year); `set` and `brightness` are optional (absent = as
+//! configured); `night` is
 //! optional, `mode` is `"off"` or `"dim"` and `brightness` is the dim level.
+//! A night with `"sun":true` runs from sunset to sunrise at the saved
+//! location instead of `from`–`to` (kept, but not needed), `offset` minutes
+//! after sunset and before sunrise (−180..180, default 0).
 
-use opendmd_core::schedule::{self, Night, NightMode, Rule, Schedule, Window};
+use opendmd_core::schedule::{self, Night, NightMode, NightWhen, Rule, Schedule, Window};
 use serde::Deserialize;
 
 use crate::config;
@@ -31,12 +37,20 @@ struct RuleJson {
     set: Option<String>,
     #[serde(default)]
     brightness: Option<u8>,
+    #[serde(default)]
+    dates: Option<(String, String)>,
 }
 
 #[derive(Deserialize)]
 struct NightJson {
+    #[serde(default)]
     from: String,
+    #[serde(default)]
     to: String,
+    #[serde(default)]
+    sun: bool,
+    #[serde(default)]
+    offset: i16,
     mode: String,
     #[serde(default)]
     brightness: Option<u8>,
@@ -86,8 +100,17 @@ pub fn parse(json: &[u8]) -> Result<Schedule, String> {
                 return Err(format!("{what}: '{set}' is not a playlist name"));
             }
         }
+        let dates = match &r.dates {
+            None => None,
+            Some((a, b)) => Some(
+                schedule::parse_month_day(a)
+                    .zip(schedule::parse_month_day(b))
+                    .ok_or(format!("{what}: dates are MM-DD (\"10-31\")"))?,
+            ),
+        };
         rules.push(Rule {
             days,
+            dates,
             window: window(&r.from, &r.to, &what)?,
             set: r.set.clone(),
             brightness: r.brightness,
@@ -96,7 +119,13 @@ pub fn parse(json: &[u8]) -> Result<Schedule, String> {
     let night = match &raw.night {
         None => None,
         Some(n) => Some(Night {
-            window: window(&n.from, &n.to, "night")?,
+            when: if !n.sun {
+                NightWhen::Clock(window(&n.from, &n.to, "night")?)
+            } else if (-180..=180).contains(&n.offset) {
+                NightWhen::Sun { offset: n.offset }
+            } else {
+                return Err("night: offset is -180 to 180 minutes".into());
+            },
             mode: match n.mode.as_str() {
                 "off" => NightMode::Off,
                 "dim" => NightMode::Dim,

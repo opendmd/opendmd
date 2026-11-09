@@ -71,7 +71,7 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 - **Library:** search, browse by category and platform, preview each GIF with the panel look,
   send it to the panel, and add, rename or delete GIFs.
 - **Playlists:** build them by platform, category and title words, then reorder and switch
-  between them live. A GIF can be a favourite in one playlist and hidden in another.
+  between them live. A GIF can be a favourite in one playlist and play less often in another.
 - **Create Art:** find game screenshots, boxes and logos, or GeoCities GIFs, or use your own
   picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without
@@ -82,8 +82,9 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   rest (plasma, fire, rain, a tunnel, Mode 7 rotozoom, a wireframe cube, …) and the ones people share.
   Remix one, drag a number and watch, submit it to the gallery, or save it as a GIF.
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
-- **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
-  panel off or dims it.
+- **Schedules:** a playlist or brightness for parts of the week or of the year (Halloween and
+  Christmas playlists that come on by themselves), and a night mode that turns the panel off
+  or dims it, between set times or from sunset to sunrise.
 - **Smooth playback:** the display gets each GIF ready in the background, so GIFs start
   quickly and play smoothly.
 

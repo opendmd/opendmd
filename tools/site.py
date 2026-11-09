@@ -156,6 +156,7 @@ PAGES = {
     "docs/guide/install.md": "install/index.html",
     "docs/guide/web-app.md": "guide/web-app.html",
     "docs/guide/create-art.md": "guide/create-art.html",
+    "docs/guide/replayos.md": "guide/replayos.html",
     "docs/guide/formulas.md": "guide/formulas.html",
     "docs/guide/psi-1.md": "guide/psi-1.html",
     "docs/guide/psi-2.md": "guide/psi-2.html",

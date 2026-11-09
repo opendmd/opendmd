@@ -49,7 +49,7 @@ really has.
 
 The power supply can't keep up at high brightness, especially on mostly
 white pictures. Lower the brightness, or lower **Maximum brightness** in
-**Settings › Playback** if you raised it.
+**Settings › Panel** if you raised it.
 
 ## Some LEDs show the wrong colours on certain pictures
 

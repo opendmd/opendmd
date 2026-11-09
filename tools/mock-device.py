@@ -384,17 +384,18 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   for whichever playlist is actually playing; `GET /api/overrides?set=`
   dumps one `.meta`'s overrides, parsed but unresolved. Replies that touch
   the playlist (`/api/reindex`, `/api/config` PUT, a manifest or `.meta`
-  install/delete) now carry `overrides`/`hidden` too: how many of the
-  playing playlist's entries have one, resolved case-insensitively
-  (`opendmd_core::overrides::OverrideSet`), and how many of those are
-  `never` (dropped from the simulated playback order -- a "nice to have",
-  not modelled: weight, dwell and loop overrides).
+  install/delete) now carry `overrides` too: how many of the playing
+  playlist's entries have one, resolved case-insensitively
+  (`opendmd_core::overrides::OverrideSet`); weight, dwell and loop
+  overrides are not modelled in the simulated playback order.
 - **The schedule and night mode** (`opendmd_core::schedule`): `GET`/`PUT
   /api/schedule` store the JSON verbatim (`""` for the empty schedule, read
   back as `{"rules":[],"night":null}`); `POST /api/wake {"minutes"}`
   suspends it. Evaluated (rules in order, first match wins; night beats
   every rule for `mode`; a wrapped `to <= from` window belongs to the day it
-  starts) on every status read, right after a PUT/wake, and once a second in
+  starts, and to the date its `dates` are checked against; a night with `"sun":true` runs from sunset to sunrise at the
+  saved `lat`/`lon`, `offset` minutes inside, the sun in floats -- off
+  without a location) on every status read, right after a PUT/wake, and once a second in
   the ticker. A rule's `set` overlays the playlist actually playing (`/api/
   config`'s own `set` is untouched); night mode `"off"` freezes the
   simulated player the same way a manual pause does. `time`/`tz` in status
@@ -1431,6 +1432,8 @@ class Follow:
         self.game: str | None = None
         self.matches: int | None = None
         self.step: str | None = None
+        self.seen: float | None = None  # when the box last answered (follow.rs `seen`)
+        self._host = None  # the address `seen` is for: a new one has not been seen
         self._loaded_key = None
         self._cooldown_deadline = 0.0
         self._stop = threading.Event()
@@ -1480,11 +1483,16 @@ class Follow:
             self._stop.wait(wait_s)
 
     def _poll_once(self, host: str) -> None:
+        if host != self._host:
+            self._host, self.seen = host, None
         h, p = follow_split_host_port(host)
         with self.ctx.lock:
             code = self.ctx.settings["follow_code"]
         try:
             status, data = follow_http_get(h, p, "/api/v1/get_status", token=code, timeout=self.TIMEOUT_S)
+        except socket.gaierror:  # the name does not resolve (follow.rs PollError::Resolve)
+            self._on_fail("name not found")
+            return
         except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
             self._on_fail("no answer")
             return
@@ -1500,6 +1508,7 @@ class Follow:
             self._on_fail("bad reply")
             return
         self.fail_count = 0
+        self.seen = time.monotonic()
         self._on_status(body)
 
     def _on_fail(self, error: str) -> None:
@@ -1603,6 +1612,7 @@ class Follow:
                 "game": self.game,
                 "matches": self.matches,
                 "since": since,
+                "seen": None if self.seen is None else int(time.monotonic() - self.seen),
                 "step": self.step if state == "starting" else None,
                 "error": self.error if state == "unreachable" else None,
             }
@@ -1843,9 +1853,6 @@ def apply_override_field(ov: dict, field: str) -> bool:
         key, val = field.strip(), None
     else:
         key, val = key.strip(), val.strip()
-    if key == "never" and val is None:
-        ov["never"] = True
-        return True
     if key == "w" and val is not None:
         w = parse_decimal(val)
         if w is not None and 0.0 <= w <= 1000.0:
@@ -1964,17 +1971,79 @@ def days_mask(days) -> int | None:
     return mask
 
 
-def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int) -> bool:
-    """Port of schedule::Window::contains."""
-    def on(day: int) -> bool:
-        return bool(mask & (1 << (day - 1)))
+def sun_altitude(unix: float, lat: float, lon: float) -> float:
+    """The sun's altitude in degrees (opendmd_core::sky::sun, in floats:
+    the almanac's low-precision position)."""
+    n = (unix - 946_728_000) / 86_400.0
+    r = math.radians
+    lam = r(280.460 + 0.985_647_4 * n + 1.915 * math.sin(r(357.528 + 0.985_600_3 * n))
+            + 0.020 * math.sin(2 * r(357.528 + 0.985_600_3 * n)))
+    eps = r(23.439)
+    dec = math.asin(math.sin(eps) * math.sin(lam))
+    ra = math.atan2(math.cos(eps) * math.sin(lam), math.cos(lam))
+    h = r(280.460_618_37 + 360.985_647_366_29 * n) + r(lon) - ra
+    return math.degrees(math.asin(math.sin(r(lat)) * math.sin(dec) + math.cos(r(lat)) * math.cos(dec) * math.cos(h)))
+
+
+def sun_night(unix: float, lat: float, lon: float, offset: int) -> bool:
+    """Port of schedule::sun_night: the sun below -0.833 degrees `offset`
+    minutes before and after (both for offset >= 0, either below 0)."""
+    a = sun_altitude(unix - offset * 60, lat, lon) < -0.833
+    b = sun_altitude(unix + offset * 60, lat, lon) < -0.833
+    return (a and b) if offset >= 0 else (a or b)
+
+
+def sun_night_end(unix: float, lat: float, lon: float, offset: int) -> float | None:
+    """Port of schedule::sun_night_end: the first minute it is off, within
+    26 hours, else None (a polar night)."""
+    hi = next((unix + k * 1800 for k in range(1, 53) if not sun_night(unix + k * 1800, lat, lon, offset)), None)
+    if hi is None:
+        return None
+    lo = max(unix, hi - 1800)
+    while hi - lo > 60:
+        mid = lo + (hi - lo) // 2
+        lo, hi = (mid, hi) if sun_night(mid, lat, lon, offset) else (lo, mid)
+    return hi - hi % 60
+
+
+def parse_month_day(s) -> int | None:
+    """Port of schedule::parse_month_day: 'MM-DD' to month * 32 + day
+    (29 February is a day)."""
+    if not isinstance(s, str) or len(s) != 5 or s[2] != "-" or not (s[:2].isdigit() and s[3:].isdigit()):
+        return None
+    m, d = int(s[:2]), int(s[3:])
+    days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return m * 32 + d if 1 <= m <= 12 and 1 <= d <= days[m - 1] else None
+
+
+def yesterday_md(md: int) -> int:
+    """Port of schedule's `yesterday` (the day before 1 March is 29 February)."""
+    m, d = divmod(md, 32)
+    if d > 1:
+        return md - 1
+    m = 12 if m <= 1 else m - 1
+    return m * 32 + [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+
+
+def in_dates(dates, md: int) -> bool:
+    """Port of schedule's `in_dates`: inclusive, wrapping over New Year; None is every day."""
+    if dates is None:
+        return True
+    a, b = dates
+    return a <= md <= b if a <= b else md >= a or md <= b
+
+
+def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int, dates=None, md: int = 0) -> bool:
+    """Port of schedule::Window::contains (`dates` as (from, to) month * 32 + day, `md` today's)."""
+    def on(day: int, date: int) -> bool:
+        return bool(mask & (1 << (day - 1))) and in_dates(dates, date)
 
     yesterday = 7 if weekday == 1 else weekday - 1
     if frm == to:
-        return on(weekday)
+        return on(weekday, md)
     if frm < to:
-        return on(weekday) and frm <= minute < to
-    return (on(weekday) and minute >= frm) or (on(yesterday) and minute < to)
+        return on(weekday, md) and frm <= minute < to
+    return (on(weekday, md) and minute >= frm) or (on(yesterday, yesterday_md(md)) and minute < to)
 
 
 # --------------------------------------------------------------------------
@@ -2175,7 +2244,6 @@ class Player:
         # ordinal of its start and its seconds (0: until something else plays).
         self.kept: tuple[int, int] | None = None
         self.overrides_count = 0
-        self.hidden_count = 0
         # The file's own clock: its position is (now or frozen_at) - file_t0,
         # advanced through the real frame delays (see position()). Frozen by
         # a manual pause or by night mode "off" -- either shifts the clocks
@@ -2253,20 +2321,9 @@ class Player:
         ci: dict[str, dict] = {}
         for path, ov in meta_map.items():
             ci[path.lower()] = ov  # later line (in file order) wins
-        overrides_n = 0
-        hidden: set[str] = set()
-        for b in base:
-            ov = ci.get(b.lower())
-            if ov is not None:
-                overrides_n += 1
-                if ov.get("never"):
-                    hidden.add(b.lower())
-        self.overrides_count = overrides_n
-        self.hidden_count = len(hidden)
-        # Nice to have: the simulated player skips entries marked `never`.
-        filtered = [b for b in base if b.lower() not in hidden]
-        self.playlist = filtered
-        n = len(filtered)
+        self.overrides_count = sum(1 for b in base if b.lower() in ci)
+        self.playlist = base
+        n = len(base)
         self.order = list(range(n))
         if self.ctx.settings["shuffle"] and n > 1:
             random.Random(1234).shuffle(self.order)
@@ -2448,6 +2505,20 @@ class Player:
         if time.monotonic() - self.last_advance >= dwell:
             self.advance()
 
+    def peek_next(self):
+        """`now_playing.next` (Engine::ahead_path): the entry after
+        this one in the order, skipping files the card lacks as advance()
+        does; None when nothing is picked ahead -- an off-playlist play, a
+        Formula on the panel, or a playlist of one."""
+        cur = self.current()
+        if self.played or not cur or len(self.order) < 2 or cur.startswith("@") or FORMULA_FILE_RE.match(cur):
+            return None
+        for k in range(1, len(self.order)):
+            path = self.playlist[self.order[(self.pos + k) % len(self.order)]]
+            if not path.startswith("/") or self.ctx.fs.read_path(path.lstrip("/")) is not None:
+                return path
+        return None
+
     def current(self):
         if self.played:
             return self.played
@@ -2568,6 +2639,10 @@ class Schedule:
                 if (not isinstance(set_name, str) or any(c in set_name for c in "/\\\0")
                         or ".." in set_name or set_name.lower() == OBSOLETE_SET.lower()):
                     return (400, f"{what}: '{set_name}' is not a playlist name")
+            dates = r.get("dates")
+            if dates is not None and not (isinstance(dates, list) and len(dates) == 2
+                                          and all(parse_month_day(x) is not None for x in dates)):
+                return (400, f'{what}: dates are MM-DD ("10-31")')
             brightness = r.get("brightness")
             if brightness is not None and (
                 not isinstance(brightness, int) or isinstance(brightness, bool) or not (0 <= brightness <= 255)
@@ -2580,11 +2655,15 @@ class Schedule:
         if night_in is not None:
             if not isinstance(night_in, dict):
                 return (400, "invalid JSON: 'night' must be an object or null")
-            nfrm = parse_hhmm(night_in.get("from"))
-            if nfrm is None:
+            sun = night_in.get("sun") is True
+            nfrm, nto = parse_hhmm(night_in.get("from")), parse_hhmm(night_in.get("to"))
+            if sun:
+                off = night_in.get("offset", 0)
+                if not isinstance(off, int) or isinstance(off, bool) or not (-180 <= off <= 180):
+                    return (400, "night: offset is -180 to 180 minutes")
+            elif nfrm is None:
                 return (400, f"night: from '{night_in.get('from')}' is not HH:MM")
-            nto = parse_hhmm(night_in.get("to"))
-            if nto is None:
+            elif nto is None:
                 return (400, f"night: to '{night_in.get('to')}' is not HH:MM")
             mode = night_in.get("mode")
             if mode not in ("off", "dim"):
@@ -2643,6 +2722,7 @@ class Schedule:
 
             weekday = now.isoweekday()
             minute = now.hour * 60 + now.minute
+            md = now.month * 32 + now.day
             doc = self.doc
             rules = (doc or {}).get("rules") or []
             night = (doc or {}).get("night")
@@ -2654,14 +2734,24 @@ class Schedule:
                     frm, to = parse_hhmm(r.get("from")), parse_hhmm(r.get("to"))
                     if mask is None or frm is None or to is None:
                         continue  # a stored rule should always be valid; be defensive
-                    if window_contains(frm, to, mask, weekday, minute):
+                    dates = r.get("dates")
+                    dates = dates and (parse_month_day(dates[0]), parse_month_day(dates[1]))
+                    if window_contains(frm, to, mask, weekday, minute, dates, md):
                         rule_idx = i
                         rule_set = r.get("set")
                         until = format_hhmm(to)
                         break
 
             mode, mode_until = "normal", None
-            if not woken and night is not None:
+            if not woken and night is not None and night.get("sun") is True:
+                # From sunset to sunrise at the saved location (none: off).
+                lat, lon, off = self.ctx.settings.get("lat"), self.ctx.settings.get("lon"), night.get("offset", 0)
+                unix = now.timestamp()
+                if lat is not None and lon is not None and sun_night(unix, lat, lon, off):
+                    mode = night.get("mode") or "normal"
+                    end = sun_night_end(unix, lat, lon, off)
+                    mode_until = None if end is None else datetime.datetime.fromtimestamp(end, now.tzinfo).strftime("%H:%M")
+            elif not woken and night is not None:
                 nfrm, nto = parse_hhmm(night.get("from")), parse_hhmm(night.get("to"))
                 if nfrm is not None and nto is not None and window_contains(nfrm, nto, 0x7F, weekday, minute):
                     mode = night.get("mode") or "normal"
@@ -3513,6 +3603,7 @@ def make_handler(ctx: Context, quiet: bool):
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                         **({} if player.kept_s() is None else {"kept_s": player.kept_s()}),
+                        "next": player.peek_next(),
                     },
                     "paused": player.paused,
                     "entries": len(player.playlist),
@@ -3531,7 +3622,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "reset_note": RESTART_NOTES.get(ctx.restarts[0]["reason"]),
                     "restarts": ctx.restarts,
                     "overrides": player.overrides_count,
-                    "hidden": player.hidden_count,
                     "mode": ctx.schedule.mode,
                     "mode_until": ctx.schedule.mode_until,
                     "time": now_local.strftime("%H:%M"),
@@ -3565,7 +3655,7 @@ def make_handler(ctx: Context, quiet: bool):
                 if ctx.sd_state != "ok":
                     # No card the player can use: nothing plays (the boot
                     # task never hands an unreadable card over).
-                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0)
+                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0, next=None)
                     obj.update(entries=0, index_state="unavailable")
             return obj
 
@@ -3580,7 +3670,7 @@ def make_handler(ctx: Context, quiet: bool):
             ev["brightness"] = ctx.settings["brightness"]
             ev["sd"] = {k: st["sd"].get(k) for k in ("mounted", "readable", "attempts", "error", "formatting")}
             ev.update({k: st[k] for k in self.EVENT_TAIL})
-            ev["context"] = {**st["context"], "since": None}
+            ev["context"] = {**st["context"], "since": None, "seen": None}
             return ev
 
         def h_events(self, path):
@@ -3735,7 +3825,7 @@ def make_handler(ctx: Context, quiet: bool):
             ctx.player.boot_time += RESTART_SECS
 
         def playlist_fields(self, index, index_ms) -> dict:
-            """`"entries","index","index_ms","overrides","hidden"` for a
+            """`"entries","index","index_ms","overrides"` for a
             reply that touched the playlist -- always the one actually
             playing (http.rs `applied_json`). Caller holds ctx.lock."""
             return {
@@ -3743,7 +3833,6 @@ def make_handler(ctx: Context, quiet: bool):
                 "index": index,
                 "index_ms": index_ms,
                 "overrides": ctx.player.overrides_count,
-                "hidden": ctx.player.hidden_count,
             }
 
         def json_body(self) -> bytes | None:
@@ -4116,8 +4205,6 @@ def make_handler(ctx: Context, quiet: bool):
             overrides = []
             for gif_path, ov in meta_map.items():
                 o = {"path": gif_path}
-                if ov.get("never"):
-                    o["never"] = True
                 if "w" in ov:
                     o["w"] = num_json(ov["w"])
                 if "dwell" in ov:
@@ -4208,8 +4295,9 @@ def make_handler(ctx: Context, quiet: bool):
             h, p = follow_split_host_port(host)
             try:
                 vstatus, vdata = follow_http_get(h, p, "/api/v1/get_version", timeout=3.0)
-            except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
-                self.send_json(200, {"ok": False, "reachable": False, "error": "no answer"})
+            except Exception as e:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
+                why = "name not found" if isinstance(e, socket.gaierror) else "no answer"
+                self.send_json(200, {"ok": False, "reachable": False, "error": why})
                 return
             if vstatus != 200:
                 self.send_json(200, {"ok": False, "reachable": True, "error": f"get_version: HTTP {vstatus}"})
@@ -4797,7 +4885,7 @@ def make_handler(ctx: Context, quiet: bool):
             """A playlist's overrides file was written or removed. Caller
             holds ctx.lock. `index` is "built" only when the edited meta
             belongs to the playlist actually playing (which is always what
-            `entries`/`overrides`/`hidden` describe)."""
+            `entries`/`overrides` describe)."""
             active = ctx.player.manifest_rel() == manifest_rel
             if active:
                 index_ms = random.randint(30, 150)

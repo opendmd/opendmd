@@ -1,5 +1,5 @@
 //! Per-entry overrides: what a user said about one GIF *in one playlist* —
-//! favourite, play less, hide, play longer, loop N times.
+//! favourite, play less, play longer, loop N times.
 //!
 //! # Card format
 //!
@@ -11,7 +11,6 @@
 //!
 //! ```text
 //! /gifs/Consoles/SNES_Plok_08.gif\tw=3
-//! /gifs/Arcade/ARCADE_Pac-Man_01.gif\tnever
 //! /gifs/Consoles/MD_Sonic3_spritefox11.gif\tdwell=45\tloops=3
 //! /gifs/Other/X.gif\tdwell=2x
 //! ```
@@ -19,15 +18,15 @@
 //! | field | meaning |
 //! |---|---|
 //! | `w=<f>` | relative weight in shuffle (`3` = favourite, `0.5` = play less; 1 is the default) |
-//! | `never` | never scheduled in this playlist |
 //! | `dwell=<s>` | holds the panel for `s` seconds (1..=86,400) |
 //! | `dwell=<k>x` | the configured dwell times `k` (0 < k <= 100) |
 //! | `loops=<n>` | plays exactly `n` loops (1..=1,000) and moves on |
 //!
 //! Parsing is tolerant in the manifest parser's way (BOM, CRLF, blank lines,
 //! `#` comment lines, trailing whitespace, unknown or malformed fields are
-//! skipped); [`render_meta`] writes the canonical form — fields in the order
-//! `never`, `w`, `dwell`, `loops`, tab-separated, LF-terminated lines — and a
+//! skipped: earlier builds' `never` among them, so a GIF once hidden plays
+//! again); [`render_meta`] writes the canonical form — fields in the order
+//! `w`, `dwell`, `loops`, tab-separated, LF-terminated lines — and a
 //! canonical file round-trips byte for byte.
 //!
 //! # How the player uses it
@@ -37,8 +36,8 @@
 //! paths themselves — and resolves it against the playlist while it streams
 //! the manifest, producing [`Overrides`]: `(playlist index, Override)` sorted
 //! by index. Those are stored in the `.idx` after the offsets, so reopening a
-//! current index costs no second pass. The engine turns `never` and `w` into
-//! the scheduler's sparse weights and consults `dwell`/`loops` when it opens
+//! current index costs no second pass. The engine turns `w` into the
+//! scheduler's sparse weights and consults `dwell`/`loops` when it opens
 //! an entry.
 
 use std::io::{self, BufRead};
@@ -64,8 +63,6 @@ pub enum Dwell {
 pub struct Override {
     /// Relative weight in shuffle; `None` is the default 1.
     pub weight: Option<f32>,
-    /// Never scheduled in this playlist.
-    pub never: bool,
     pub dwell: Option<Dwell>,
     /// Plays exactly this many loops.
     pub loops: Option<u16>,
@@ -77,23 +74,14 @@ impl Override {
         *self == Override::default()
     }
 
-    /// Does it change when (or whether) the entry is drawn?
+    /// Does it change how often the entry is drawn?
     pub fn affects_weight(&self) -> bool {
-        self.never || self.weight.is_some()
+        self.weight.is_some()
     }
 
     /// Does it change how long the entry plays?
     pub fn affects_dwell(&self) -> bool {
         self.dwell.is_some() || self.loops.is_some()
-    }
-
-    /// The weight the scheduler should use, if not the default.
-    pub fn scheduler_weight(&self) -> Option<f32> {
-        if self.never {
-            Some(0.0)
-        } else {
-            self.weight
-        }
     }
 
     /// Is every value in range — what the parser would have accepted? (For
@@ -108,7 +96,7 @@ impl Override {
             && self.loops.is_none_or(valid_loops)
     }
 
-    /// Apply one `key=value` (or `never`) field. False if it was not
+    /// Apply one `key=value` field. False if it was not
     /// understood (unknown key, bad value); the override is then unchanged.
     fn apply_field(&mut self, field: &str) -> bool {
         let (key, value) = match field.split_once('=') {
@@ -116,7 +104,6 @@ impl Override {
             None => (field.trim(), None),
         };
         match (key, value) {
-            ("never", None) => self.never = true,
             ("w", Some(v)) => match parse_decimal(v) {
                 Some(w) if valid_weight(w) => self.weight = Some(w),
                 _ => return false,
@@ -145,9 +132,6 @@ impl Override {
 
     /// The canonical fields, each preceded by a tab.
     fn render_fields(&self, out: &mut String) {
-        if self.never {
-            out.push_str("\tnever");
-        }
         if let Some(w) = self.weight {
             out.push_str("\tw=");
             push_decimal(out, w);
@@ -461,27 +445,27 @@ impl Overrides {
         self.entries.is_empty()
     }
 
-    /// `(hidden, weighted, timed)` counts, for logs and status.
-    pub fn summary(&self) -> (usize, usize, usize) {
-        let hidden = self.entries.iter().filter(|(_, o)| o.never).count();
+    /// `(weighted, timed)` counts, for logs and status.
+    pub fn summary(&self) -> (usize, usize) {
         let weighted = self
             .entries
             .iter()
-            .filter(|(_, o)| !o.never && o.weight.is_some())
+            .filter(|(_, o)| o.weight.is_some())
             .count();
         let timed = self
             .entries
             .iter()
             .filter(|(_, o)| o.affects_dwell())
             .count();
-        (hidden, weighted, timed)
+        (weighted, timed)
     }
 }
 
 /// Bytes per override record in a playlist index.
 pub const RECORD_LEN: usize = 16;
 
-const F_NEVER: u8 = 1;
+// Bit 1 was `never` (hidden from the playlist), retired: an index an
+// earlier build wrote may still set it, and decoding ignores it.
 const F_WEIGHT: u8 = 2;
 const F_DWELL_SECS: u8 = 4;
 const F_DWELL_TIMES: u8 = 8;
@@ -493,9 +477,6 @@ pub fn encode_record(index: u32, ov: &Override) -> [u8; RECORD_LEN] {
     let mut b = [0u8; RECORD_LEN];
     let mut flags = 0u8;
     b[0..4].copy_from_slice(&index.to_le_bytes());
-    if ov.never {
-        flags |= F_NEVER;
-    }
     if let Some(w) = ov.weight {
         flags |= F_WEIGHT;
         b[4..8].copy_from_slice(&w.to_le_bytes());
@@ -522,7 +503,6 @@ pub fn decode_record(b: &[u8; RECORD_LEN]) -> (u32, Override) {
     let flags = b[14];
     let loops = u16::from_le_bytes([b[12], b[13]]);
     let ov = Override {
-        never: flags & F_NEVER != 0,
         weight: (flags & F_WEIGHT != 0).then(|| f32::from_bits(u32_at(4))),
         dwell: if flags & F_DWELL_SECS != 0 {
             Some(Dwell::Secs(u32_at(8)))
@@ -569,7 +549,7 @@ mod tests {
     use super::*;
 
     const CANONICAL: &str = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
-                             /gifs/Arcade/ARCADE_Pac-Man_01.gif\tnever\n\
+                             /gifs/Arcade/ARCADE_Pac-Man_01.gif\tw=0\n\
                              /gifs/NEW 2021/MD_Sonic3_spritefox11.gif\tdwell=45\tloops=3\n\
                              /gifs/Other/X.gif\tw=0.5\tdwell=2x\n\
                              /gifs/Other/Y.gif\tdwell=1.5x\n";
@@ -579,7 +559,7 @@ mod tests {
         let lines = parse_meta(CANONICAL);
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0].ov.weight, Some(3.0));
-        assert!(lines[1].ov.never);
+        assert_eq!(lines[1].ov.weight, Some(0.0));
         assert_eq!(lines[2].path, "/gifs/NEW 2021/MD_Sonic3_spritefox11.gif");
         assert_eq!(lines[2].ov.dwell, Some(Dwell::Secs(45)));
         assert_eq!(lines[2].ov.loops, Some(3));
@@ -592,17 +572,18 @@ mod tests {
     fn parsing_is_tolerant_and_rendering_canonical() {
         let messy = "\u{feff}# hand-edited\r\n\
                      \r\n\
-                     /gifs/A/NES_A_01.gif\tloops=2\tnever  \r\n\
+                     /gifs/A/NES_A_01.gif\tloops=2\tnever\tw=0  \r\n\
                      /gifs/A/NES_B_01.gif\tbogus=1\tw=abc\tdwell=0\n\
                      /gifs/A/NES_C_01.gif\tw=2\tcolour=red\n\
                      /gifs/A/NES_C_01.gif\tw=4\n\
                      /gifs/A/NES_D_01.gif";
         let lines = parse_meta(messy);
-        // B has nothing valid, D has no fields: both dropped. C's later line wins.
+        // B has nothing valid, D has no fields: both dropped. C's later line
+        // wins. A's `never` (retired) is skipped like any unknown field.
         assert_eq!(lines.len(), 2);
         assert_eq!(
             render_meta(&lines),
-            "/gifs/A/NES_A_01.gif\tnever\tloops=2\n/gifs/A/NES_C_01.gif\tw=4\n"
+            "/gifs/A/NES_A_01.gif\tw=0\tloops=2\n/gifs/A/NES_C_01.gif\tw=4\n"
         );
         assert_eq!(
             render_meta(&parse_meta(&render_meta(&lines))),
@@ -640,7 +621,6 @@ mod tests {
             weight: Some(0.5),
             dwell: Some(Dwell::Times(2.0)),
             loops: Some(3),
-            never: false,
         };
         assert!(ok.is_valid());
         for bad in [
@@ -682,6 +662,7 @@ mod tests {
             "dwell=101x",
             "loops=0",
             "loops=1001",
+            "never",
             "never=1",
         ] {
             assert!(
@@ -708,6 +689,10 @@ mod tests {
             let rec = encode_record(77, &l.ov);
             assert_eq!(decode_record(&rec), (77, l.ov));
         }
+        // An earlier build's hidden GIF (bit 1, nothing else): no override.
+        let mut rec = encode_record(5, &Override::default());
+        rec[14] = 1;
+        assert!(decode_record(&rec).1.is_empty());
     }
 
     #[test]
@@ -728,14 +713,14 @@ mod tests {
             weight: Some(3.0),
             ..Default::default()
         };
-        let hide = Override {
-            never: true,
+        let less = Override {
+            weight: Some(0.5),
             ..Default::default()
         };
         s.insert("/gifs/A/X.gif", fav);
-        s.insert("/GIFS/a/x.GIF", hide);
+        s.insert("/GIFS/a/x.GIF", less);
         assert_eq!(s.len(), 1);
-        assert_eq!(s.get("/gifs/A/X.gif"), Some(hide));
+        assert_eq!(s.get("/gifs/A/X.gif"), Some(less));
         assert_eq!(s.get("/gifs/A/Y.gif"), None);
         for i in 0..MAX_OVERRIDES + 5 {
             s.insert(&format!("/gifs/B/{i}.gif"), fav);
@@ -747,7 +732,7 @@ mod tests {
     #[test]
     fn overrides_stay_sorted_and_capped() {
         let ov = Override {
-            never: true,
+            weight: Some(0.0),
             ..Default::default()
         };
         let mut o = Overrides::new();
@@ -757,7 +742,7 @@ mod tests {
         assert!(o.push(9, ov));
         assert_eq!(o.get(9), Some(&ov));
         assert_eq!(o.get(4), None);
-        assert_eq!(o.summary(), (2, 0, 0));
+        assert_eq!(o.summary(), (2, 0));
     }
 
     #[test]

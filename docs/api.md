@@ -57,10 +57,9 @@ Commands that touch the playlist answer with what the display now has:
 | `index` | `"loaded"` (the index on the card was current), `"built"` (rebuilt now), `"in-ram"`, or `null` (the playlist was not touched) |
 | `index_ms` | how long opening or building the index took, ms |
 | `overrides` | per-GIF overrides resolved into the playlist |
-| `hidden` | entries hidden from it ("Hide from this playlist") |
 
-`overrides` and `hidden` are the rebuild's counts: with `index` `null`
-they are 0 whatever the playlist has (`GET /api/status` carries the
+`overrides` is the rebuild's count: with `index` `null` it is 0 whatever
+the playlist has (`GET /api/status` carries the
 playlist's own).
 
 A **playlist name** (`set`): `""` is `/filelist.txt`, `filelist.<x>` is
@@ -216,7 +215,7 @@ curl -sN "$DMD/api/events"
 ```
 retry: 3000
 
-data: {"t_ms":57784,"now_playing":{"ordinal":12,"path":"/gifs/Arcade/ARCADE_Rockman2_08.gif","title":"Rockman2","elapsed_ms":2716,"frame":46},"paused":false,"entries":10162,"manifest":"/sdcard/filelist.txt","index_state":"ready","brightness":96,"sd":{"mounted":true,"readable":true,"attempts":1,"error":null,"formatting":false},"mode":"normal","mode_until":null,"wake_until":null,"schedule":{"rule":null,"set":null,"until":null},"context":{"source":"replayos","enabled":false,"state":"off","system":null,"platform":null,"console":null,"game":null,"matches":null,"since":null,"step":null,"error":null}}
+data: {"t_ms":57784,"now_playing":{"ordinal":12,"path":"/gifs/Arcade/ARCADE_Rockman2_08.gif","title":"Rockman2","elapsed_ms":2716,"frame":46},"paused":false,"entries":10162,"manifest":"/sdcard/filelist.txt","index_state":"ready","brightness":96,"sd":{"mounted":true,"readable":true,"attempts":1,"error":null,"formatting":false},"mode":"normal","mode_until":null,"wake_until":null,"schedule":{"rule":null,"set":null,"until":null},"context":{"source":"replayos","enabled":false,"state":"off","system":null,"platform":null,"console":null,"game":null,"matches":null,"since":null,"seen":null,"step":null,"error":null}}
 ```
 
 The fields are `GET /api/status`'s of the same name (`t_ms` the display's
@@ -253,7 +252,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `ip`, `wifi`, `hostname` | address; `"sta"`, `"ap"` (setup mode) or `"disconnected"` (before WiFi is up); name. (`"off"` with `network` off: the display's own log and heartbeat say so; nothing answers HTTP then) |
 | `card_formulas` | the card's Formulas as the display prepares them in the background after it mounts the card (see "Formulas compiled on the display" under Files and GIFs): `{sources, current, prepared, failed, short_of_memory, queued}`, the `.psi` files in `/formulas`, those whose `.psb` was current, compiled since the card was mounted, that do not compile, not compiled yet for want of memory, and not tried yet (the card was busy, or one compile a retry); the last two are tried again later, and at the next start; set after the first pass and again after each retry; `null` until the first pass ends, or in a build without Formulas |
 | `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
-| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays) |
+| `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based; `kept_s` while a Formula sent with `/api/play` is kept on the panel (`formula_keep`): its seconds from the start (`0`: until something else plays); `next` the path of what plays after it once the display has picked it, else `null` (in shuffle until the pick, while a Formula plays) |
 | `paused` | bool |
 | `transfer` | a file is going to or from the card on the stream task, or an upload is in hand (the Now page, polling, polls every 1.5 s then, else every 0.5 s) |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each (640 B of paths in all, none over 200 B; not the title cards, the power-on effect or a sent Formula); the index of the one on screen |
@@ -270,13 +269,13 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `sd` | `{mounted, readable, capacity_bytes, card_id, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `card_id` which card this is (16 hex digits from its serial number, its volume's serial and label, and its size: another card, or the same card formatted again, gives another; null with no readable card), for keeping a browser's per-card data apart; `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale, raw_open, raw_reads, raw_fallbacks, slots_full, intent_refused, delta, path_opens, path_open_max_us, index_busy, index_unloaded, building}` diagnostics of the index that opens GIFs and their prepared copies without a directory scan (`delta`: files written, renamed or removed since it was built, which it already knows) and of the display's card opens and reads (both past FatFs's volume lock; opens refused while a write holds the file); `path_opens`, `path_open_max_us` the display's opens the index could not serve (by path, behind the volume lock) and the longest, `index_busy`, `index_unloaded` why (its lock held for a swap; no index loaded), `absent` prepared copies the index showed are not there (no path open; only with an index built this boot whose delta has kept every change since), `catalog_fatfs` playlist files read through FatFs instead of raw (their lookups wait for the volume lock), `building` a build or names walk running; `write_yields`, `write_yield_us` the card writes that stepped aside between their chunks for reads, and how long (at most 5 ms a chunk); `gave_way`, `gave_way_us` other tasks' card transfers that waited for the display's read first (at most 5 ms each); `write_max_us` the longest single write transfer (a chunk with the card's busy time); `player_wait_max_us`, `player_xfer_max_us` the display's longest single card read's wait for the card and transfer, since boot; `readahead` `{active, bytes, fill, fill_min, hits, underruns, fetches, taken, no_heap, busy, errors, task_starts, stack_unused}`: the playing GIF's read-ahead (`bytes`, 8 KB, of the file kept ahead of the display by a CPU0 task while a GIF plays): `fill` the bytes ahead now, `fill_min` the least after a served read since the last status (null: none), `hits` reads served from it, `underruns` reads it could not serve once filling (from the card), `fetches` blocks read ahead, `taken` times its memory was taken (given back 5 s after the last read), `no_heap` looks that found no room (one each 200 ms while short), `busy` reads that found it locked (from the card), `errors` card errors filling it; `settings_store` where the settings are kept: `card` (`/opendmd.json`, see Settings), `nvs (no card)`, or `nvs (card write failed: …)` (technical: an app showing it says "Settings are kept on the card") |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `interrupt watchdog`, `task watchdog`, `brownout`, `external`, …; why this boot's restart was made in plain words — `"card failure"`, `"different card"`, `"restarted on request"`, `"restarted to apply a card speed change"`, `"crashed (panic)"`, `"restarted without a recorded reason"`, … — or null after a power-on |
 | `restarts` | the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: `{reason, reset, uptime_s, heap_free, largest, where?}`. `reason`: `api_reboot`, `firmware_update`, `ap_timeout` (setup network timed out), `card_full_speed`, `card_speed`, `fresh_heap` (playlist index needed a fresh heap), `panel_trial`, `card_failure`, `new_card`, `card_lost` (SPI device lost), `card_retry`, `panic`, `stack_overflow`, `diag_abort` (a `diag-heap` build's heap check), or, when the restart wrote nothing, from the reset alone: `power_on` (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), `brownout`, `unrecorded` (a software restart), `unrecorded_crash`. `reset`: the chip's reset after it (`reset_reason`'s words; null if no boot has seen it yet). `uptime_s`, `heap_free`, `largest`: when it was written (for `unrecorded`/`unrecorded_crash`/`brownout`, the last heartbeat's, ≤ 30 s earlier; null when unknown; `largest` null for `panic`, `stack_overflow` and `diag_abort`, which do not walk the heap). `where`: a panic's `file:line message` (message ≤ 48 B), the overflowing task (`task <name>`), the heap check's site, or for `unrecorded_crash` the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe) |
-| `overrides`, `hidden` | as in "Fields that recur" |
+| `overrides` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
 | `time`, `tz`, `time_synced_s` | `"HH:MM"` (null before network time); zone name; seconds since the last sync |
 | `wake_until` | while `/api/wake` holds the schedule off, `"HH:MM"` |
 | `schedule` | `{rule, set, until}`: the rule in force (by position), its playlist, its end |
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
-| `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s |
+| `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, seen, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s; `seen`: s since the box last answered a poll (null: not since the address was set; both null in the events) |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `boot_formula` | null (no Formula as the start-up show this boot, or `boot_show` `off`), or `{"played": true}`, or `{"played": false, "error": why}` once the wordmark played in its place (`{"played": false}` alone while a card Formula is waited for) |
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
@@ -396,7 +395,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `transition_ms` | 20..=2000, 400 | transition length |
 | `auto_prepare` | `idle` | prepare copies by itself: `idle` (only while the panel is dark or paused), `always` (also slowly while a prepared GIF plays), `off` |
 | `follow` | bool, false | Follow RePlayOS |
-| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
+| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400; RePlayOS's 55356 without one): an address, a DNS name or a `.local` name (mDNS) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64 bytes, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
 | `attract` | string, `""` | only `""` (the playlist): anything else (`"clock"`, `"text:…"`, `"fx:…"`) is `400` (`attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set`). A `clock`, `text:…` or `fx:` value stored by an earlier firmware reads as `""`, with one log line at boot |
@@ -446,7 +445,7 @@ then reverts unless `"panel_confirm":true` keeps it (`false` undoes it; with
 `panel`, it saves at once). `clk_phase` and `latch_blanking` apply live; the
 others at a restart, and revert with one. `"panel":null` saves the defaults.
 
-Reply: `{"ok":true, entries, index, index_ms, overrides, hidden,
+Reply: `{"ok":true, entries, index, index_ms, overrides,
 "brightness", "max_brightness", "reboot_required", "panel", …}` (the
 playlist fields as in "Fields that recur", the panel ones as above;
 `reboot_required`: a WiFi or panel change waits for a reboot). With
@@ -676,7 +675,7 @@ Write `/sets/<name>.txt` (`.txt` added if missing), the body the file;
 reindexed at once if in play.
 
 Reply: `{"ok":true,"path":"/sdcard/sets/<name>.txt", entries, index,
-index_ms, overrides, hidden}`. `400` a name with `/` or `..`.
+index_ms, overrides}`. `400` a name with `/` or `..`.
 
 ```sh
 printf '/gifs/Consoles/SNES_Super_Metroid_01.gif\n' > consoles.txt
@@ -706,13 +705,14 @@ curl -s -X POST $DMD/api/reindex
 
 `?set=<playlist name>`. A playlist's per-GIF overrides, streamed:
 
-`{"set","playlist":"/filelist.txt","overrides":[{"path", "never"?, "w"?, "dwell"?, "dwell_x"?, "loops"?}]}`
+`{"set","playlist":"/filelist.txt","overrides":[{"path", "w"?, "dwell"?, "dwell_x"?, "loops"?}]}`
 
-`never` hidden; `w` weight (Favourite 3, Play less 0.5); `dwell` seconds,
+`w` weight (Favourite 3, Play less 0.5); `dwell` seconds,
 or `dwell_x` times the usual; `loops`. To change them, write the `.meta`
 beside the playlist (`/sets/<name>.meta`, `/filelist.meta`), a line per GIF:
-its path, then tab-separated `never`, `w=<n>`, `dwell=<s>` or `dwell=<k>x`,
-`loops=<n>`.
+its path, then tab-separated `w=<n>`, `dwell=<s>` or `dwell=<k>x`,
+`loops=<n>` (anything else on the line is skipped, as earlier firmware's
+`never` now is: that GIF plays again).
 
 ```sh
 curl -s "$DMD/api/overrides?set="
@@ -733,19 +733,28 @@ curl -s $DMD/api/schedule
 Replace the schedule (≤ 2 KB, at most 16 rules):
 
 ```json
-{"rules":[{"days":[1,2,3,4,5],"from":"18:00","to":"23:00","set":"consoles","brightness":96}],
+{"rules":[{"days":[],"from":"00:00","to":"00:00","set":"filelist.hall","dates":["10-01","10-31"]},
+          {"days":[1,2,3,4,5],"from":"18:00","to":"23:00","set":"consoles","brightness":96}],
  "night":{"from":"23:30","to":"07:00","mode":"off","brightness":8}}
 ```
 
-`days` 1 (Monday) to 7 (empty or absent: every day); `set` and
-`brightness` optional. The first matching rule wins; `to` ≤ `from` runs past
-midnight. `night` (every day, beats every rule) has `mode` `"off"` (panel
-dark) or `"dim"` (at `brightness`, default 8). Rules change what plays, not
-the saved settings. Nothing applies before the clock is set from the
-network.
+`days` 1 (Monday) to 7 (empty or absent: every day); `dates` the first
+and last day of the year it runs, `"MM-DD"`, inclusive, wrapping over New
+Year when the last is earlier (`["12-27","01-06"]`; absent: every day of
+the year); `set` and `brightness` optional. The first matching rule wins;
+`to` ≤ `from` runs past midnight (and belongs to the day and date it
+starts), `to` = `from` is the whole day. `night` (every day, beats every rule) has `mode` `"off"` (panel
+dark) or `"dim"` (at `brightness`, default 8). With `"sun":true` it runs
+from sunset to sunrise at the saved location (`lat`/`lon` in
+`/api/config`) instead of `from`–`to` (which may stay, unused), starting
+`offset` minutes after sunset and ending as long before sunrise (−180 to
+180, default 0; negative: before sunset, after sunrise); without a
+location it stays off. Status `mode_until` is then when it ends (`null`
+in a polar night). Rules change what plays, not the saved
+settings. Nothing applies before the clock is set from the network.
 
 Reply: `{"ok":true,"rules":N,"night":bool}`. Errors: `400` a bad time, day,
-mode or playlist name (the message names the rule); `404` `set not found:
+date, mode, offset or playlist name (the message names the rule); `404` `set not found:
 <names>`; `413` over 2 KB.
 
 ```sh
