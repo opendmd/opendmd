@@ -140,7 +140,7 @@ export function scheduleCard() {
     nWhen.hidden = !('lat' in c) && !sun;
     clockPart.hidden = sun;
     sunPart.hidden = !sun;
-    sunNote.hidden = place && !sun;
+    sunNote.hidden = (place || !('lat' in c)) && !sun;
     sunNote.textContent = !place ? (sun ? 'Night mode is off until the panel has a location again: set it under Location.' : 'For sunset to sunrise, set the panel’s location under Location.')
       : 'Shorter starts after sunset and ends before sunrise; longer starts before sunset and ends after sunrise.';
   }
