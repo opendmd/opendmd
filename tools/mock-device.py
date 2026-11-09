@@ -1423,6 +1423,8 @@ class Follow:
         self.game: str | None = None
         self.matches: int | None = None
         self.step: str | None = None
+        self.seen: float | None = None  # when the box last answered (follow.rs `seen`)
+        self._host = None  # the address `seen` is for: a new one has not been seen
         self._loaded_key = None
         self._cooldown_deadline = 0.0
         self._stop = threading.Event()
@@ -1472,11 +1474,16 @@ class Follow:
             self._stop.wait(wait_s)
 
     def _poll_once(self, host: str) -> None:
+        if host != self._host:
+            self._host, self.seen = host, None
         h, p = follow_split_host_port(host)
         with self.ctx.lock:
             code = self.ctx.settings["follow_code"]
         try:
             status, data = follow_http_get(h, p, "/api/v1/get_status", token=code, timeout=self.TIMEOUT_S)
+        except socket.gaierror:  # the name does not resolve (follow.rs PollError::Resolve)
+            self._on_fail("name not found")
+            return
         except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
             self._on_fail("no answer")
             return
@@ -1492,6 +1499,7 @@ class Follow:
             self._on_fail("bad reply")
             return
         self.fail_count = 0
+        self.seen = time.monotonic()
         self._on_status(body)
 
     def _on_fail(self, error: str) -> None:
@@ -1595,6 +1603,7 @@ class Follow:
                 "game": self.game,
                 "matches": self.matches,
                 "since": since,
+                "seen": None if self.seen is None else int(time.monotonic() - self.seen),
                 "step": self.step if state == "starting" else None,
                 "error": self.error if state == "unreachable" else None,
             }
@@ -3572,7 +3581,7 @@ def make_handler(ctx: Context, quiet: bool):
             ev["brightness"] = ctx.settings["brightness"]
             ev["sd"] = {k: st["sd"].get(k) for k in ("mounted", "readable", "attempts", "error", "formatting")}
             ev.update({k: st[k] for k in self.EVENT_TAIL})
-            ev["context"] = {**st["context"], "since": None}
+            ev["context"] = {**st["context"], "since": None, "seen": None}
             return ev
 
         def h_events(self, path):
@@ -4196,8 +4205,9 @@ def make_handler(ctx: Context, quiet: bool):
             h, p = follow_split_host_port(host)
             try:
                 vstatus, vdata = follow_http_get(h, p, "/api/v1/get_version", timeout=3.0)
-            except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
-                self.send_json(200, {"ok": False, "reachable": False, "error": "no answer"})
+            except Exception as e:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
+                why = "name not found" if isinstance(e, socket.gaierror) else "no answer"
+                self.send_json(200, {"ok": False, "reachable": False, "error": why})
                 return
             if vstatus != 200:
                 self.send_json(200, {"ok": False, "reachable": True, "error": f"get_version: HTTP {vstatus}"})

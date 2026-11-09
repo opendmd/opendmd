@@ -47,7 +47,7 @@ and a game that's running shows once the panel comes back.
 
 Now shows what the display is following under the title, such as
 "Following RePlayOS · Mega Drive · Sonic the Hedgehog 3". Settings ›
-RePlayOS shows the same.
+RePlayOS shows the same, and when the box last answered.
 
 ## Tips
 

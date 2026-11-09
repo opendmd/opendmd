@@ -260,9 +260,9 @@ export async function mount(el) {
     if (k === 'device') dev?.show();
     tick();
   }
-  // Device's status, every 5 s while it is open (the app's scheduler).
+  // Device's and RePlayOS's status, every 5 s while open (the app's scheduler).
   function tick() {
-    if (visible && open === 'device') app.watch('device', 5000); else app.unwatch('device');
+    for (const k of ['device', 'replay']) if (visible && open === k) app.watch(k, 5000); else app.unwatch(k);
   }
 
   // A playlist change while the player is still reading one would queue
