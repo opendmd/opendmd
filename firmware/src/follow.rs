@@ -72,6 +72,8 @@ struct Shared {
     error: Option<String>,
     /// The sequence step on the panel (main task).
     step: Option<&'static str>,
+    /// When the box last answered a poll (`seen`); none for a new address.
+    seen: Option<Instant>,
 }
 
 static SHARED: Mutex<Shared> = Mutex::new(Shared {
@@ -85,17 +87,19 @@ static SHARED: Mutex<Shared> = Mutex::new(Shared {
     since: None,
     error: None,
     step: None,
+    seen: None,
 });
 
-/// `/api/status`'s `context` object (`since` null without `since`: the
-/// events, where a ticking count would be a change every second).
+/// `/api/status`'s `context` object (`since` and `seen` null without
+/// `since`: the events, where a ticking count would be a change every
+/// second).
 pub fn status_json(since: bool) -> String {
     let s = SHARED.lock().unwrap();
     let opt = |v: Option<&str>| v.map_or_else(|| "null".to_string(), json_string);
     format!(
         concat!(
             r#"{{"source":"replayos","enabled":{},"state":{},"system":{},"platform":{},"#,
-            r#""console":{},"game":{},"matches":{},"since":{},"step":{},"error":{}}}"#
+            r#""console":{},"game":{},"matches":{},"since":{},"seen":{},"step":{},"error":{}}}"#
         ),
         s.enabled,
         json_string(rules::state_name(s.state, s.step.is_some())),
@@ -106,6 +110,9 @@ pub fn status_json(since: bool) -> String {
         s.matches
             .map_or_else(|| "null".to_string(), |n| n.to_string()),
         s.since
+            .filter(|_| since)
+            .map_or_else(|| "null".to_string(), |t| t.elapsed().as_secs().to_string()),
+        s.seen
             .filter(|_| since)
             .map_or_else(|| "null".to_string(), |t| t.elapsed().as_secs().to_string()),
         opt(s.step),
@@ -273,7 +280,10 @@ struct VersionReply {
 enum PollError {
     /// The saved host is not `name[:port]` (cannot be saved any more).
     BadHost,
-    /// The name did not resolve, or the connection was refused or timed out.
+    /// The name did not resolve (DNS, or mDNS for a `.local` name: lwip's
+    /// one-shot queries, `CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES`).
+    Resolve,
+    /// The connection was refused or timed out.
     Connect,
     Http(http_client::Error),
 }
@@ -288,6 +298,7 @@ impl std::fmt::Display for PollError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PollError::BadHost => f.write_str("not a host name or address"),
+            PollError::Resolve => f.write_str("name not found"),
             PollError::Connect => f.write_str("no answer"),
             PollError::Http(e) => e.fmt(f),
         }
@@ -422,6 +433,9 @@ impl Poller {
         let before = self.follow.state();
         let polled = self.poll_status();
         let error = polled.as_ref().err().cloned();
+        if polled.is_ok() {
+            SHARED.lock().unwrap().seen = Some(Instant::now());
+        }
         let action = self.follow.observe(self.now(), polled.as_ref().ok());
         self.next_poll = Instant::now() + self.follow.poll_interval();
         if error != self.last_error {
@@ -500,6 +514,9 @@ impl Poller {
         }
         let mut s = SHARED.lock().unwrap();
         s.enabled = self.cfg.enabled;
+        if target_changed {
+            s.seen = None;
+        }
         drop(s);
         self.publish();
     }
@@ -610,7 +627,7 @@ impl Poller {
                 .to_socket_addrs()
                 .ok()
                 .and_then(|mut a| a.next())
-                .ok_or(PollError::Connect)?;
+                .ok_or(PollError::Resolve)?;
             let sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT)
                 .map_err(|_| PollError::Connect)?;
             low = low.min(free_heap());

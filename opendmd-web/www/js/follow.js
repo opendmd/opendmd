@@ -1,6 +1,6 @@
 // Follow RePlayOS: Settings › RePlayOS's card (host, the NET CONTROL code —
 // sent, never shown back —, on/off, the attract playlist, a Test button,
-// the guide's page) and the line
+// the guide's page, when the box last answered) and the line
 // Now shows under the title while it follows ("Following RePlayOS · Mega
 // Drive · Sonic the Hedgehog 3 · 14 matching", or the sequence step).
 
@@ -24,11 +24,14 @@ export function followLine(s) {
   }
 }
 
+// When the box last answered (status `context.seen`, full reads only).
+const seenText = (c) => !c?.enabled ? '' : c.seen == null ? ' · no answer yet' : ` · last answered ${c.seen < 90 ? `${c.seen} s` : c.seen < 5400 ? `${Math.round(c.seen / 60)} min` : `${Math.round(c.seen / 3600)} h`} ago`;
+
 // Settings' card: {el}.
 export function followCard() {
   const c = app.config || {};
   const on_ = h('input', { type: 'checkbox', id: 'fo-on', checked: !!c.follow });
-  const host = h('input', { type: 'text', id: 'fo-host', value: c.follow_host ?? '', placeholder: '192.168.1.20', autocomplete: 'off' });
+  const host = h('input', { type: 'text', id: 'fo-host', value: c.follow_host ?? '', placeholder: '192.168.1.20 or replay.local', autocomplete: 'off' });
   const code = h('input', { type: 'password', id: 'fo-code', autocomplete: 'new-password' });
   const attract = h('select', { id: 'fo-attract' });
   const state = h('div.muted', { id: 'fo-state' });
@@ -48,7 +51,8 @@ export function followCard() {
   playlists();
   // (The fields are the user's: a save in flight must not undo a later change.)
   on('config', () => { setPh(); playlists(); });
-  on('status', (s) => { state.textContent = followLine(s) ?? 'Not following'; });
+  const show = (s) => { state.textContent = (followLine(s) ?? 'Not following') + seenText(s?.context); };
+  on('status', show);
 
   // Saved as it changes: the switch and the playlist at once, the address
   // when typing settles, the code when the field is left (then cleared).
@@ -96,6 +100,6 @@ export function followCard() {
     h('p.cap', { id: 'fo-off-note' }, 'While the box is off or can’t be reached, the panel plays as usual. ', h('a', { href: SITE + 'guide/replayos.html', target: '_blank', rel: 'noopener' }, 'How to set it up')),
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'fo-test', onclick: test }, 'Test')),
     result, state);
-  state.textContent = followLine(app.status) ?? 'Not following';
+  show(app.status);
   return { el };
 }

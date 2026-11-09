@@ -216,7 +216,7 @@ curl -sN "$DMD/api/events"
 ```
 retry: 3000
 
-data: {"t_ms":57784,"now_playing":{"ordinal":12,"path":"/gifs/Arcade/ARCADE_Rockman2_08.gif","title":"Rockman2","elapsed_ms":2716,"frame":46},"paused":false,"entries":10162,"manifest":"/sdcard/filelist.txt","index_state":"ready","brightness":96,"sd":{"mounted":true,"readable":true,"attempts":1,"error":null,"formatting":false},"mode":"normal","mode_until":null,"wake_until":null,"schedule":{"rule":null,"set":null,"until":null},"context":{"source":"replayos","enabled":false,"state":"off","system":null,"platform":null,"console":null,"game":null,"matches":null,"since":null,"step":null,"error":null}}
+data: {"t_ms":57784,"now_playing":{"ordinal":12,"path":"/gifs/Arcade/ARCADE_Rockman2_08.gif","title":"Rockman2","elapsed_ms":2716,"frame":46},"paused":false,"entries":10162,"manifest":"/sdcard/filelist.txt","index_state":"ready","brightness":96,"sd":{"mounted":true,"readable":true,"attempts":1,"error":null,"formatting":false},"mode":"normal","mode_until":null,"wake_until":null,"schedule":{"rule":null,"set":null,"until":null},"context":{"source":"replayos","enabled":false,"state":"off","system":null,"platform":null,"console":null,"game":null,"matches":null,"since":null,"seen":null,"step":null,"error":null}}
 ```
 
 The fields are `GET /api/status`'s of the same name (`t_ms` the display's
@@ -275,7 +275,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `wake_until` | while `/api/wake` holds the schedule off, `"HH:MM"` |
 | `schedule` | `{rule, set, until}`: the rule in force (by position), its playlist, its end |
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
-| `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s |
+| `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, seen, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s; `seen`: s since the box last answered a poll (null: not since the address was set; both null in the events) |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
 | `boot_formula` | null (no Formula as the start-up show this boot, or `boot_show` `off`), or `{"played": true}`, or `{"played": false, "error": why}` once the wordmark played in its place (`{"played": false}` alone while a card Formula is waited for) |
 | `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture), "jit": as `now_playing.formula.jit`, for the look's kernel}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
@@ -395,7 +395,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `transition_ms` | 20..=2000, 400 | transition length |
 | `auto_prepare` | `idle` | prepare copies by itself: `idle` (only while the panel is dark or paused), `always` (also slowly while a prepared GIF plays), `off` |
 | `follow` | bool, false | Follow RePlayOS |
-| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
+| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400; RePlayOS's 55356 without one): an address, a DNS name or a `.local` name (mDNS) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64 bytes, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
 | `attract` | string, `""` | only `""` (the playlist): anything else (`"clock"`, `"text:…"`, `"fx:…"`) is `400` (`attract must be "" (the playlist): the clock, the scrolling text and the built-in effects are gone; for a Formula (a clock is one), make a playlist of it and choose it as attract_set`). A `clock`, `text:…` or `fx:` value stored by an earlier firmware reads as `""`, with one log line at boot |

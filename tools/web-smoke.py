@@ -7874,7 +7874,8 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     """Settings' "Follow RePlayOS" card and the Now line, against a fake
     RePlayOS (tools/mock-replay.py, started and stopped here)."""
     proc, replay_base, replay_port = start_replay("4321", "1")
-    host_val = f"127.0.0.1:{replay_port}"
+    # (A name, not an address: Follow resolves it.)
+    host_val = f"localhost:{replay_port}"
     try:
         print(f"\n== mock RePlayOS at {replay_base}")
         goto_view(page, "settings/replay")
@@ -7883,7 +7884,13 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
             check(page.locator(sel).count() == 1, f"follow: {sel} renders")
         page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
 
-        # Test: a wrong code, then the right one.
+        # Test: a name that resolves to nothing, a wrong code, then the right one.
+        page.fill("#fo-host", "no-such-box.invalid")
+        page.fill("#fo-code", "4321")
+        page.click("#fo-test")
+        page.wait_for_function("!document.querySelector('#fo-result').textContent.includes('asking')", timeout=15000)
+        t = page.inner_text("#fo-result")
+        check("name not found" in t, f"follow: Test with a name that doesn't resolve -> '{t}'")
         page.fill("#fo-host", host_val)
         page.fill("#fo-code", "wrong")
         page.click("#fo-test")
@@ -7930,6 +7937,14 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
             "document.querySelector('#now-follow-line').textContent.includes('attract')", timeout=15000)
         t = page.inner_text("#now-follow-line")
         check("Following RePlayOS" in t and "attract" in t, f"follow: menu -> Now line '{t}'")
+        # When the box last answered: in the full status, and the card.
+        c = wait_context(base, lambda c: isinstance(c.get("seen"), int))
+        goto_view(page, "settings/replay")
+        page.wait_for_function("document.querySelector('#fo-state').textContent.includes('last answered')", timeout=10000)
+        t = page.inner_text("#fo-state")
+        check(isinstance(c.get("seen"), int) and c["seen"] <= 20 and t.endswith(" s ago"),
+              f"follow: when the box last answered -> status seen {c.get('seen')} s, the card '{t}'")
+        goto_view(page, "now")
 
         # Sonic 3 (step 1): "starting" at some point, then the game line;
         # while the title card is up, the title shows the game and the path
