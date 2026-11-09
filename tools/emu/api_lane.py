@@ -113,10 +113,12 @@ ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 #   allocator, which the player's GIFs dominate) holds at the low above its quiet level in the same
 #   rounds: 22 KB. By construction one upload and one status read can hold ~20 KB there (six
 #   receive buffers ~10 KB, one reply's segments ~4.4 KB, a few pcbs and sockets, the upload's FIL);
-#   measured 11-18 KB. More means something grew per connection: a second reply in flight, refused
+#   measured 11-18 KB at first, since 18.2-22.9 KB from run to run on the same code (main 06622af
+#   at 22.5 KB), so 24 KB: a per-connection leak grows by a reply or more per round, well past it.
+#   More means something grew per connection: a second reply in flight, refused
 #   uploads' frames kept, replies piling up behind a client that left.
 BURST_HEAP_MIN = 20 * 1024
-BURST_NET_MAX = 22 * 1024
+BURST_NET_MAX = 24 * 1024
 # The heap census: the least of the last quiet spell against the first's (as emu-leak).
 LEAK_BLOCKS, LEAK_BYTES = 24, 2048
 
