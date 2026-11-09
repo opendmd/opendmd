@@ -3998,7 +3998,7 @@ def mock_pass(browser) -> None:
         check(order[:2] == ["now-skip", "now-pause"] and "pri" in page.get_attribute("#now-skip", "class"),
               f"now: the transport starts with Skip, the primary ({order})")
         lines = page.eval_on_selector_all("#view-now .nowt > div:not([hidden])", "els => els.map(e => e.textContent.trim())")
-        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+( · Next: .+)?$", lines[2]) and lines[3] == "✎ Edit in Create Art"
+        check(len(lines) == 4 and re.match(r"^[\d,]+ played · [\d,]+ in the playlist( · Next: .+)?$", lines[2]) and lines[3] == "✎ Edit in Create Art"
               and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
               f"now: title, tags, position and Edit on lines of their own; no device stats or Follow switch here ({lines})")
         # The device's figures are Settings › Device's Status. Late frames in
@@ -7778,10 +7778,13 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     known = "/gifs/Consoles/SNES_Mega_Man_X_08_sephirot68.gif"
     lib_row(page, known)
     got = {k: page.inner_text(f"#lib-d-{k}") for k in ("title", "platform", "category", "author")}
-    check(got == {"title": "Mega Man X 08", "platform": "SNES", "category": "Consoles", "author": "sephirot68"},
+    check(got == {"title": "Mega Man X 08", "platform": "Super Nintendo", "category": "Consoles", "author": "sephirot68"},
           f"details: the fields of {known.rsplit('/', 1)[1]} ({got})")
     meta = page.inner_text("#lib-d-meta")
-    check(meta == "SNES · Consoles · by sephirot68", f"details: one line '{meta}'")
+    check(meta == "Super Nintendo · Consoles · by sephirot68" and page.locator("#lib-d-file").count() == 0,
+          f"details: one line, the platform by name, and no file path '{meta}'")
+    row_tag = page.inner_text(f"#lib-list .vrow[data-path='{known}'] .tag")
+    check(row_tag == "Super Nintendo", f"library: a row's platform by name, as Now says it ('{row_tag}')")
     for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
     page.click("#lib-d-more")

@@ -2,7 +2,7 @@
 // Details for the one picked (finding new art on the web is Create Art's,
 // js/studio.js). See "The Library's layout" in CLAUDE.md.
 
-import { app } from './state.js';
+import { app, platName } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
@@ -63,7 +63,7 @@ export async function mount(el) {
     onTick: () => sync(),
     onError: (m) => toast(m, 'bad'),
     extra(it) {
-      return [glyphs(ov.get(it.path)), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path)];
+      return [glyphs(ov.get(it.path)), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
     },
     onUpdate: counted,
   });
@@ -78,14 +78,11 @@ export async function mount(el) {
   const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
-  const dPath = h('span.mono');
-  const dFile = h('div.file.muted', { id: 'lib-d-file' }, 'File ', dPath);
-  const gifOnly = [meta, editArt, moreBtn, dFile];
+  const gifOnly = [meta, editArt, moreBtn];
   const body = h('div', { id: 'lib-d-body', hidden: true },
     h('div.dhead', h('div.grow', dTitle, meta), moreBtn),
     h('div.row.acts', sendBtn, plBtn),
-    h('div.row.acts', editArt), smoothBox,
-    dFile);
+    h('div.row.acts', editArt), smoothBox);
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -123,9 +120,8 @@ export async function mount(el) {
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
     const a = authorOf(e), sp = (id, t) => t && h('span', { id }, t);
-    clear(meta, [sp('lib-d-platform', e.platform), sp('lib-d-category', e.category && niceName(e.category)),
+    clear(meta, [sp('lib-d-platform', platName(e.platform)), sp('lib-d-category', e.category && niceName(e.category)),
       a && ['by ', sp('lib-d-author', a)], ...e.flags.filter(isFlag).map(flagName)].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
-    dPath.textContent = it.path;
     if (sendBtn) { sendBtn.disabled = false; sendBtn.dataset.path = it.path; }
     cap.textContent = 'Loading…';
     delete cap.dataset.shown;

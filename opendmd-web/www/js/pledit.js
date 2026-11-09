@@ -9,7 +9,7 @@
 // about on the way out (`guard`); the ones that take many GIFs at once
 // have an Undo in their toast.
 
-import { app, playlistLabel, dirty, SET_NAME, SET_NAME_RULE } from './state.js';
+import { app, playlistLabel, platName, dirty, SET_NAME, SET_NAME_RULE } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
@@ -73,7 +73,7 @@ export function editor(se, ctx) {
       const o = ov.get(p), cv = thumbsOn() && !drawn(p) && h('canvas.th', { width: 128, height: 32 });
       clear(row, selecting && h('input', { type: 'checkbox', checked: picked.has(i), tabIndex: -1, 'aria-label': 'Pick' }),
         h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
-        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p)) && h('span.tag', e.platform || (skipped ? 'Formula: skipped on this display' : 'Formula')),
+        cv, h('span.t', fname(p) || label(e)), glyphs(o), (platName(e.platform) || isFormula(p)) && h('span.tag', platName(e.platform) || (skipped ? 'Formula: skipped on this display' : 'Formula')),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
         moreButton(ov, p, rowItems(i)));
       if (cv) attach(cv, p);
@@ -137,7 +137,7 @@ export function editor(se, ctx) {
     open: store.get('pl.open', []),
     onOpen: (o) => store.set('pl.open', o),
     mark: (it) => have.has(it.path),
-    extra: (it) => it.e.platform && h('span.tag', it.e.platform),
+    extra: (it) => platName(it.e.platform) && h('span.tag', platName(it.e.platform)),
     onTick: () => foot(),
     onError: (m) => toast(m, 'bad'),
     onUpdate: (st) => { chipRow(aChips, st.plats, aPl, 'data-platform', () => tree.filter(addQ.value, aPl)); foot(st); },

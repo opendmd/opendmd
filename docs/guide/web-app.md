@@ -19,7 +19,8 @@ browser, with a few sample animations.
 ![The Now view, previewing what the panel plays](../images/now.png)
 
 Now shows what the panel is playing: the title, its platform and category,
-where it is in the playlist, such as "14 of 10,162" (with what comes next,
+how many GIFs it has played since it started and how many the playlist
+has, such as "14 played · 10,162 in the playlist" (with what comes next,
 once the display has picked it), and a moving preview drawn
 the way the LEDs look. Use it as a remote. **Skip** goes to the next GIF,
 **Pause** and **Resume** stop and start it, and the slider sets the
