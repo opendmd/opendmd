@@ -302,6 +302,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `POST /api/card/full-speed` forgets the record (409 when `card_speed` is
   safe) and answers `{ok, applied, clock_khz}`; `POST /api/reboot?sd_io_fail=3`
   records the card slow too, `?sd_fallback=clear` forgets it.
+- **Offline mode** (`network`: `on` (the default) or `off`, else a 400
+  `network must be on or off`): a change answers `reboot_required: true`,
+  as a WiFi change does (the firmware also writes it to the card's
+  `/opendmd.json` and, after the restart, starts no WiFi at all). The mock
+  only stores it: it keeps answering after a reboot with `off`.
 - **Restarts**: `/api/status` `restarts` starts at `power_on`; a reboot,
   a firmware update, a panel trial undone and the `sd_io_fail` chain add
   theirs (newest first, at most 8), and `reset_reason`/`reset_note` follow
@@ -691,6 +696,7 @@ DEFAULT_SETTINGS = {
     "transition_ms": 400,
     "auto_prepare": "idle",     # opendmd_core::auto_prepare: idle (default) / always / off
     "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
+    "network": "on",            # offline mode: on / off (off: no WiFi from the next boot)
     "beta_updates": False,      # "Get beta updates": the web app's update check reads beta.json
     "follow": False,            # Follow RePlayOS
     "follow_host": "",
@@ -748,6 +754,7 @@ FIELD_TYPES = {
     "transition_ms": "u64",
     "auto_prepare": "str",
     "card_speed": "str",
+    "network": "str",
     "beta_updates": "bool",
     "follow": "bool",
     "follow_host": "str",
@@ -769,6 +776,7 @@ FIELD_TYPES = {
 }
 AUTO_PREPARE = ("idle", "always", "off")
 CARD_SPEED = ("safe", "fast", "full")
+NETWORK = ("on", "off")        # offline mode: config `network`
 # The simulated builder's pace (seconds per file) and its known failures.
 AUTO_FULL_S, AUTO_DRIP_S, AUTO_FAIL_EVERY = 2.0, 6.0, 25
 
@@ -3687,6 +3695,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "transition_ms": s["transition_ms"],
                     "auto_prepare": s["auto_prepare"],
                     "card_speed": s["card_speed"],
+                    "network": s["network"],
                     "beta_updates": s["beta_updates"],
                     "follow": s["follow"],
                     "follow_host": s["follow_host"],
@@ -3866,6 +3875,9 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "card_speed" and v not in CARD_SPEED:
                         self.send_error_json(400, "card_speed must be safe, fast or full")
                         return
+                    if field == "network" and v not in NETWORK:
+                        self.send_error_json(400, "network must be on or off")
+                        return
                     if field == "follow_host":
                         v = v.strip()
                         if len(v) > 64 or any(c in v for c in "/ \0?#@"):
@@ -3945,7 +3957,7 @@ def make_handler(ctx: Context, quiet: bool):
                 # WiFi takes effect after a reboot; a new hostname at once
                 # (status `hostname`/`mdns` read the saved one).
                 reboot_required = any(next_settings[k] != before[k] for k in (
-                    "wifi_ssid", "wifi_pass", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls"))
+                    "wifi_ssid", "wifi_pass", "wifi_eap_user", "wifi_eap_identity", "wifi_eap_ttls", "network"))
                 needs_reindex = (
                     next_settings["platforms"] != before["platforms"]
                     or next_settings["set"] != before["set"]

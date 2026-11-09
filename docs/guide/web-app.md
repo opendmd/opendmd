@@ -256,6 +256,13 @@ own name if you have more than one; [Troubleshooting](troubleshooting.md#two-dis
 says what happens when two share one. **Work or school
 login** is here too, as on the setup page.
 
+**Turn WiFi off…**, under Network, puts the display in offline mode: it
+restarts without WiFi and plays its card only, and this web app can no
+longer reach it. To turn WiFi back on, take the card out and, on a
+computer, change `"network": "off"` to `"network": "on"` in `opendmd.json`
+on the card, or connect the display by USB and use **Connect to Wi-Fi** in
+the [installer](install.md).
+
 **Moving pictures** has two switches for GIFs that move fast. **Sync to the
 panel’s refresh** stops tearing, and **Delay the bottom half one refresh**
 takes away the step at mid-height on fast scrollers.

@@ -268,6 +268,15 @@ every view like a person would:
             version that is no release number) dev/api.html; no api.html in
             the www pack, and the mock serves none
 
+Offline mode (mock pass, after Panel timing): `network` defaults to "on"
+and anything but on/off is a 400; Settings › Device › Network has "Turn
+WiFi off…" (#st-wifi-off); it opens a dialog warning that the web app
+can't reach the display until opendmd.json on the card is edited or the
+installer's Connect to Wi-Fi is used over USB; Cancel sends nothing (still
+"on"), Turn WiFi off sends the PUT and POST /api/reboot and ends on "WiFi
+is off"; then "on" again. With `network` taken out of /api/config (an
+older firmware, Playwright route) the control is not shown.
+
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
 
@@ -2596,6 +2605,90 @@ def panel_test_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"panel": None})
 
 
+def offline_checks(page: Page, base: str) -> None:
+    """Settings -> Device -> Network's "Turn WiFi off…" (offline mode,
+    config `network`). Mock only: it turns the mock's WiFi "off" (the mock
+    keeps answering) and puts it back "on"."""
+    def net():
+        return get_json(base + "/api/config").get("network")
+
+    check(net() == "on", f"offline: /api/config network defaults to on ({net()!r})")
+    for bad in ({"network": "maybe"}, {"network": "OFF"}, {"network": False}):
+        check(put_status(base, bad) == 400, f"offline: {json.dumps(bad)} refused (400)")
+    check(net() == "on", "offline: nothing changed by the refused requests")
+    try:
+        r = put_json(base + "/api/config", {"network": "on"})
+        check(r.get("reboot_required") is False, f"offline: on -> on asks for no reboot ({r.get('reboot_required')})")
+    except urllib.error.HTTPError as e:
+        check(False, f"offline: PUT network on: {e.code}")
+
+    sent: list[str] = []
+    def seen(r):
+        if (r.method == "PUT" and r.url.endswith("/api/config")) or r.url.endswith("/api/reboot"):
+            sent.append(f"{r.method} {urllib.parse.urlsplit(r.url).path} {r.post_data or ''}")
+    page.on("request", seen)
+    try:
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-offline:not([hidden]) #st-wifi-off", timeout=10000)
+        btn = page.inner_text("#st-wifi-off")
+        check(btn == "Turn WiFi off…" and page.locator("#st-net #st-wifi-off").count() == 1,
+              f"offline: Network has the button ({btn!r})")
+        page.click("#st-wifi-off")
+        page.wait_for_selector("#off-dlg[open]", timeout=5000)
+        text = page.inner_text("#off-dlg")
+        check(all(t in text for t in ("Turn WiFi off?", "stop using WiFi", "keep playing its card", "won’t be able to reach it",
+                                      '"network": "off" to "network": "on"', "opendmd.json on the card", "Connect to Wi-Fi", "USB",
+                                      "opendmd.dev/install")),
+              f"offline: the dialog warns in plain words ({text!r})")
+        check(not any(w in text.lower() for w in ("odm ", "bucket", "nvs", "player")), "offline: no internals in the dialog")
+        page.click("#off-cancel")
+        page.wait_for_selector("#off-dlg", state="detached", timeout=5000)
+        page.wait_for_timeout(500)
+        check(not sent and net() == "on", f"offline: Cancel sends nothing, still on ({sent})")
+
+        page.click("#st-wifi-off")
+        page.wait_for_selector("#off-dlg[open]", timeout=5000)
+        page.click("#off-go")
+        page.wait_for_function("() => /WiFi is off/.test(document.querySelector('#off-msg')?.textContent)", timeout=15000)
+        msg = page.inner_text("#off-msg")
+        check(net() == "off", f"offline: Turn WiFi off saved network off ({net()!r})")
+        check(len(sent) == 2 and sent[0].startswith("PUT /api/config") and '"network":"off"' in sent[0]
+              and sent[1].startswith("POST /api/reboot"), f"offline: the PUT, then the restart ({sent})")
+        restarts = get_json(base + "/api/status").get("restarts") or [{}]
+        check(restarts[0].get("reason") == "api_reboot",
+              f"offline: the mock restarted ({restarts[0].get('reason')})")
+        check(page.is_hidden("#off-go") and page.inner_text("#off-cancel") == "Close"
+              and msg == "WiFi is off. The display is restarting and will play its card without WiFi. You can close this page.",
+              f"offline: the last word, no wait for the display ({msg!r})")
+        page.click("#off-cancel")
+        page.wait_for_selector("#off-dlg", state="detached", timeout=5000)
+    finally:
+        page.remove_listener("request", seen)
+        r = put_json(base + "/api/config", {"network": "on"})
+    check(net() == "on" and r.get("reboot_required") is True, f"offline: back on (reboot_required {r.get('reboot_required')})")
+
+    # An older firmware: no `network` in /api/config, no control.
+    def without(route):
+        if route.request.method != "GET":
+            return route.fallback()
+        res = route.fetch()
+        j = res.json()
+        j.pop("network", None)
+        route.fulfill(response=res, json=j)
+    page.route("**/api/config", without)
+    try:
+        page.reload()
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-save-net", timeout=20000)
+        check(page.locator("#st-wifi-off").count() == 1 and page.is_hidden("#st-offline"),
+              "offline: hidden when /api/config has no network (an older firmware)")
+    finally:
+        page.unroute("**/api/config")
+    page.reload()
+    goto_view(page, "settings/device")
+    page.wait_for_selector("#st-offline:not([hidden])", timeout=20000)
+
+
 def no_live_checks(page: Page, base: str, mock: bool) -> None:
     """The clock and the scrolling text are gone: no Live folder or form in
     the Library, no "The clock" in Follow's attract select, the editor drops
@@ -3670,6 +3763,7 @@ def mock_pass(browser) -> None:
         boot_checks(page, base, True)
         power_checks(page, base)
         panel_checks(page, base)
+        offline_checks(page, base)
         no_live_checks(page, base, True)
         no_effects_checks(page, base, True)
         sim_checks(page)
