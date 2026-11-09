@@ -3074,6 +3074,8 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     expected.remove("/api/firmware")
 
 
+DEV_WWW_VERSION = "v1.0.1-1-gdeadbee-dirty"
+
 # js/update.js `wver(s)`: a web app version -> [release, development build].
 WVER_CASES = [("v1.0.0", ["1.0.0", False]), ("v1.0.0-3-gabc1234-dirty", ["1.0.0", True]),
               ("v1.0.0-3-gabc1234", ["1.0.0", True]), ("v1.0.0-dirty", ["1.0.0", True]),
@@ -3117,12 +3119,22 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
     shutil.copy(ota["newer_v2"], inst / "firmware" / f"opendmd-{UPD_VERSION}-v2.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
-    built = signed_www((REPO / "opendmd-web" / "www.pack").read_bytes())
-    pack = bytearray(built)
-    wv = f"v{UPD_VERSION}".encode()
-    pack[18] = len(wv)
-    pack[20:64] = wv.ljust(44, b"\0")
-    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(signed_www(bytes(pack)))
+    built = (REPO / "opendmd-web" / "www.pack").read_bytes()
+
+    def with_version(ver: str) -> bytes:
+        pack = bytearray(built)
+        wv = ver.encode()
+        pack[18] = len(wv)
+        pack[20:64] = wv.ljust(44, b"\0")
+        return signed_www(bytes(pack))
+    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(with_version(f"v{UPD_VERSION}"))
+    # js/update.js honours a custom ?updates= feed only for a development web
+    # app, and `make web` takes its version from `git describe`: a release
+    # build on a tree exactly at a tag. Whatever git says, the player under
+    # test runs a development build (as the mock's /api/www reports it).
+    code, reply = put_www(base, with_version(DEV_WWW_VERSION))
+    check(code == 200 and get_json(base + "/api/www")["version"] == DEV_WWW_VERSION,
+          f"update: the test's web app is a development build, whatever git describes ({code})")
     fw0 = get_json(base + "/api/firmware")["version"]
     w0 = get_json(base + "/api/www")["version"]
 
@@ -5636,6 +5648,10 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-src", v2)
     page.wait_for_timeout(1000)
     clear_toasts(page)
+    # Hold it on the panel for the next two checks: a loaded machine can take
+    # longer than the mock's 4 s dwell to fill 22 KB, and the playlist would
+    # move on under the edit (a new ordinal, a 409).
+    put_json(base + "/api/config", {"formula_keep": "hold"})
     n0 = len(plays)
     page.click("#psi-ed-show")
     t = last_toast(page, "ok")
@@ -5646,11 +5662,14 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
           f"formulas panel: a 22 KB Formula shows on the panel ('{t}', {st['path']}, {big[0][1] if big else None})")
     ordinal = st["ordinal"]
     page.fill("#psi-src", v2.replace('name "Endless road V2"', 'name "Endless road V2b"'))
-    page.wait_for_timeout(1200)
+    deadline = time.time() + 30
+    while time.time() < deadline and (len(plays) <= n0 + 1 or get_json(base + "/api/status")["now_playing"].get("title") != "Endless road V2b"):
+        page.wait_for_timeout(100)  # (not time.sleep: Playwright delivers the `plays` events only while it is called)
     st = get_json(base + "/api/status")["now_playing"]
     check(len(plays) > n0 + 1 and plays[-1][1]["live"] is True and st["ordinal"] == ordinal and st["title"] == "Endless road V2b"
           and not page.eval_on_selector_all("#toasts .toast.bad", "els => els.length"),
-          f"formulas panel: its edit follows it there, live (ordinal {st['ordinal']} vs {ordinal}, {st['title']})")
+          f"formulas panel: its edit follows it there, live (ordinal {st['ordinal']} vs {ordinal}, {st['title']}, {len(plays) - n0} plays, live {plays[-1][1].get('live')})")
+    put_json(base + "/api/config", {"formula_keep": "turn"})
     recent = get_json(base + "/api/status?recent=1").get("recent") or []
     check(not any(str(x).startswith(SENT) for x in recent), "formulas panel: a Formula shown from the editor stays out of Recently played")
     # A short heap on the panel: asked again after Retry-After, then shown.
