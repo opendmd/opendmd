@@ -14,7 +14,7 @@ import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from '
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
-import { h, clear, on, store, toast, label, note, niceName, isSys, byNice, FLAGS, isFormula, drawn } from './util.js';
+import { h, clear, emit, on, store, toast, label, note, niceName, isSys, byNice, FLAGS, isFormula, drawn } from './util.js';
 
 const picks = (box, k) => [...box.querySelectorAll('.on')].map((c) => c.dataset[k]);
 
@@ -365,14 +365,24 @@ export function editor(se, ctx) {
     } catch (e) { toast('save: ' + e.message, 'bad'); return false; }
   }
   // Before the editor lets go of the playlist (another view, the list,
-  // another playlist): changes not saved are saved, or put back. False if
-  // the save did not go through (the editor stays).
+  // another playlist): changes not saved are saved, or put back — with an
+  // Undo that brings them back into the editor. False if the save did not
+  // go through (the editor stays).
   async function guard() {
     const d = app.draft;
     if (!dirty(d)) return true;
-    if (confirm(`Save changes to “${d.path ? playlistLabel(d.path) : name.value.trim() || 'New playlist'}”?`)) return save(false);
+    const t = d.path ? playlistLabel(d.path) : name.value.trim() || 'New playlist';
+    if (confirm(`Save changes to “${t}”?`)) return save(false);
+    const was = d.paths;
     d.paths = d.saved ? d.saved.split('\n') : [];
     refresh();
+    toast(`Changes to “${t}” put back`, 'ok', ['Undo', async () => {
+      if (app.draft !== d && !(await guard())) return;
+      app.draft = d;
+      d.paths = was;
+      emit('draft');
+      app.go('sets/edit');
+    }]);
     return true;
   }
   addEventListener('beforeunload', (e) => { if (dirty()) e.preventDefault(); });
