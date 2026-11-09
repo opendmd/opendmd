@@ -979,6 +979,50 @@ def font_checks(page: Page, base: str, size: str) -> None:
     goto_view(page, "now")
 
 
+def sun_checks(page: Page, base: str) -> None:
+    """Night mode from sunset to sunrise (Settings › Schedule): offered only
+    with a location, a note says where to set it; with one where it is night
+    now (the equator at solar midnight) the panel dims, `mode_until` is the
+    sunrise less the offset, and Now's banner says so. Leaves no location
+    and no night mode."""
+    refresh = "import('./js/state.js').then(({ app }) => app.refreshConfig())"
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    goto_view(page, "settings/time")
+    page.evaluate(refresh)
+    page.wait_for_selector("#sc-night-sun-note:not([hidden])", timeout=10000)
+    off = page.eval_on_selector("#sc-night-when option[value=sun]", "o => o.disabled")
+    note = page.inner_text("#sc-night-sun-note")
+    check(off and "Location" in note, f"sun: no location -> sunset to sunrise disabled, the note points to Location ('{note}')")
+    utc = datetime.now(ZoneInfo("UTC"))
+    lon = round((-15 * (utc.hour + utc.minute / 60) + 180) % 360 - 180, 2)
+    put_json(base + "/api/config", {"lat": 0, "lon": lon})
+    page.evaluate(refresh)
+    page.wait_for_function("!document.querySelector('#sc-night-when option[value=sun]').disabled", timeout=10000)
+    page.check("#sc-night-on")
+    page.select_option("#sc-night-when", "sun")
+    page.select_option("#sc-night-offset", "30")
+    page.select_option("#sc-night-mode", value="dim")
+    sched = wait_schedule(base, lambda s: (s.get("night") or {}).get("sun") is True and s["night"].get("offset") == 30 and s["night"].get("mode") == "dim")
+    n = sched.get("night") or {}
+    check(n.get("sun") is True and n.get("offset") == 30 and n.get("mode") == "dim" and page.is_hidden("#sc-night-from"),
+          f"sun: saved as a night by the sun, 30 min shorter, dimmed ({n})")
+    st = wait_until(lambda: get_json(base + "/api/status")["mode"] == "dim", 10) and get_json(base + "/api/status")
+    want = datetime.now(ZoneInfo(get_json(base + "/api/config")["tz_name"] or "UTC")) + timedelta(hours=5.5)
+    got = st and st["mode_until"]
+    gap = got and ((int(got[:2]) * 60 + int(got[3:])) - (want.hour * 60 + want.minute) + 720) % 1440 - 720
+    check(bool(got) and abs(gap) <= 40, f"sun: on at the equator at solar midnight, until {got} (sunrise less 30 min: about {want:%H:%M})")
+    goto_view(page, "now")
+    page.wait_for_selector("#now-banner[data-mode='dim']", timeout=15000)
+    banner = page.inner_text("#now-banner")
+    check(banner.startswith(f"Dimmed for the night until {got}"), f"sun: Now's banner '{banner}'")
+    goto_view(page, "settings/time")
+    page.uncheck("#sc-night-on")
+    wait_schedule(base, lambda s: s.get("night") is None)
+    put_json(base + "/api/config", {"lat": None, "lon": None})
+    page.evaluate(refresh)
+    check(wait_until(lambda: get_json(base + "/api/status")["mode"] == "normal", 10), "sun: night mode off again")
+
+
 def wait_schedule(base: str, ok, timeout_s: float = 10) -> dict:
     deadline = time.time() + timeout_s
     while True:
@@ -4181,6 +4225,7 @@ def mock_pass(browser) -> None:
         goto_view(page, "now")
         page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
         check(get_json(base + "/api/status")["mode"] == "normal", "now: schedule cleared -> status mode normal")
+        sun_checks(page, base)
         goto_view(page, "settings/device")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):

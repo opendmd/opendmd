@@ -73,7 +73,8 @@ function clock(at = Date.now()) {
 }
 
 // opendmd_core::schedule: the first rule whose window holds the day and
-// minute; night mode every day; neither while woken.
+// minute; night mode every day (not one from sunset to sunrise: the demo's
+// player has no location); neither while woken.
 const inside = (f, t, days, d, m) => {
   const on = (x) => !days?.length || days.includes(x), y = d == 1 ? 7 : d - 1;
   return f == t ? on(d) : f < t ? on(d) && f <= m && m < t : (on(d) && m >= f) || (on(y) && m < t);
@@ -84,7 +85,7 @@ function evaluate() {
   if (S.wake) return r;
   const i = S.sched.rules.findIndex((x) => inside(hm(x.from), hm(x.to), x.days, day, min)), x = S.sched.rules[i], n = S.sched.night;
   if (x) Object.assign(r, { rule: i, set: x.set ?? null, until: x.to, b: x.brightness ?? null });
-  if (n && inside(hm(n.from), hm(n.to), null, day, min)) Object.assign(r, { mode: n.mode, mode_until: n.to, b: n.mode == 'off' ? 0 : n.brightness ?? 8 });
+  if (n && !n.sun && inside(hm(n.from), hm(n.to), null, day, min)) Object.assign(r, { mode: n.mode, mode_until: n.to, b: n.mode == 'off' ? 0 : n.brightness ?? 8 });
   return r;
 }
 
@@ -184,7 +185,7 @@ function putSchedule(s) {
     if (hm(r.from) == null || hm(r.to) == null) bad(`rule ${i + 1}: times are HH:MM`);
     if (r.set != null && !has(setPath(r.set))) throw new HttpError(404, `set not found: ${r.set}`);
   });
-  if (n && (hm(n.from) == null || hm(n.to) == null || !['off', 'dim'].includes(n.mode))) bad('night: from and to are HH:MM, mode off or dim');
+  if (n && (!n.sun && (hm(n.from) == null || hm(n.to) == null) || !['off', 'dim'].includes(n.mode))) bad('night: from and to are HH:MM, mode off or dim');
   S.sched = { rules: rs, night: n };
   keep();
   apply();

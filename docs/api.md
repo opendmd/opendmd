@@ -709,12 +709,17 @@ Replace the schedule (≤ 2 KB, at most 16 rules):
 `days` 1 (Monday) to 7 (empty or absent: every day); `set` and
 `brightness` optional. The first matching rule wins; `to` ≤ `from` runs past
 midnight. `night` (every day, beats every rule) has `mode` `"off"` (panel
-dark) or `"dim"` (at `brightness`, default 8). Rules change what plays, not
-the saved settings. Nothing applies before the clock is set from the
-network.
+dark) or `"dim"` (at `brightness`, default 8). With `"sun":true` it runs
+from sunset to sunrise at the saved location (`lat`/`lon` in
+`/api/config`) instead of `from`–`to` (which may stay, unused), starting
+`offset` minutes after sunset and ending as long before sunrise (−180 to
+180, default 0; negative: before sunset, after sunrise); without a
+location it stays off. Status `mode_until` is then when it ends (`null`
+in a polar night). Rules change what plays, not the saved
+settings. Nothing applies before the clock is set from the network.
 
 Reply: `{"ok":true,"rules":N,"night":bool}`. Errors: `400` a bad time, day,
-mode or playlist name (the message names the rule); `404` `set not found:
+mode, offset or playlist name (the message names the rule); `404` `set not found:
 <names>`; `413` over 2 KB.
 
 ```sh
