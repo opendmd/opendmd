@@ -702,13 +702,17 @@ curl -s $DMD/api/schedule
 Replace the schedule (≤ 2 KB, at most 16 rules):
 
 ```json
-{"rules":[{"days":[1,2,3,4,5],"from":"18:00","to":"23:00","set":"consoles","brightness":96}],
+{"rules":[{"days":[],"from":"00:00","to":"00:00","set":"filelist.hall","dates":["10-01","10-31"]},
+          {"days":[1,2,3,4,5],"from":"18:00","to":"23:00","set":"consoles","brightness":96}],
  "night":{"from":"23:30","to":"07:00","mode":"off","brightness":8}}
 ```
 
-`days` 1 (Monday) to 7 (empty or absent: every day); `set` and
-`brightness` optional. The first matching rule wins; `to` ≤ `from` runs past
-midnight. `night` (every day, beats every rule) has `mode` `"off"` (panel
+`days` 1 (Monday) to 7 (empty or absent: every day); `dates` the first
+and last day of the year it runs, `"MM-DD"`, inclusive, wrapping over New
+Year when the last is earlier (`["12-27","01-06"]`; absent: every day of
+the year); `set` and `brightness` optional. The first matching rule wins;
+`to` ≤ `from` runs past midnight (and belongs to the day and date it
+starts), `to` = `from` is the whole day. `night` (every day, beats every rule) has `mode` `"off"` (panel
 dark) or `"dim"` (at `brightness`, default 8). With `"sun":true` it runs
 from sunset to sunrise at the saved location (`lat`/`lon` in
 `/api/config`) instead of `from`–`to` (which may stay, unused), starting
@@ -719,7 +723,7 @@ in a polar night). Rules change what plays, not the saved
 settings. Nothing applies before the clock is set from the network.
 
 Reply: `{"ok":true,"rules":N,"night":bool}`. Errors: `400` a bad time, day,
-mode, offset or playlist name (the message names the rule); `404` `set not found:
+date, mode, offset or playlist name (the message names the rule); `404` `set not found:
 <names>`; `413` over 2 KB.
 
 ```sh

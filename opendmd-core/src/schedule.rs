@@ -5,23 +5,30 @@
 //! types (the core has no `serde`); this module is the evaluator, so it can
 //! be tested on the host.
 //!
-//! - **Rules** are tried in order and the **first** whose days and window
-//!   contain the time wins. A rule may name a playlist (`set`, the same
-//!   values as the config's `set`: `""` = all files) and/or a brightness;
-//!   whatever it leaves out stays as configured.
+//! - **Rules** are tried in order and the **first** whose days, dates and
+//!   window contain the time wins. A rule may name a playlist (`set`, the
+//!   same values as the config's `set`: `""` = all files) and/or a
+//!   brightness; whatever it leaves out stays as configured. Its dates are
+//!   a range of days of the year, inclusive, which may wrap over New Year
+//!   (1 Dec–6 Jan); none is every day of the year.
 //! - **Night mode** is one window every day, or from sunset to sunrise
 //!   ([`NightWhen::Sun`], [`sun_night`]), and beats every rule: `off`
 //!   (panel dark, playback paused) or `dim` (the level given; playback
 //!   carries on with whatever playlist applies).
 //! - A window `from..to` is half-open, in minutes since local midnight. If
 //!   `to <= from` it runs past midnight, and the *start* day is the one its
-//!   `days` are checked against (a Friday 22:00–02:00 rule is on at 01:00
-//!   on Saturday). `from == to` is the whole day.
+//!   `days` and dates are checked against (a Friday 22:00–02:00 rule is on
+//!   at 01:00 on Saturday; one for 31 October, at 01:00 on 1 November).
+//!   `from == to` is the whole day.
 
 use crate::sky::{self, Place};
 
 /// Minutes in a day.
 pub const DAY: u16 = 24 * 60;
+
+/// A day of the year as `month * 32 + day` (1 January = 33): ordered like
+/// the calendar, the year left out.
+pub type MonthDay = u16;
 
 /// A local wall-clock time, as the evaluator needs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,11 +37,14 @@ pub struct LocalTime {
     pub weekday: u8,
     /// Minutes since local midnight, `0..DAY`.
     pub minute: u16,
+    /// The date, for rules with dates.
+    pub date: MonthDay,
 }
 
 impl LocalTime {
-    /// From `struct tm` style fields: `tm_wday` (0 = Sunday), hour, minute.
-    pub fn from_tm(wday_sunday0: i32, hour: i32, min: i32) -> Self {
+    /// From `struct tm` style fields: `tm_wday` (0 = Sunday), hour, minute,
+    /// `tm_mon` (0 = January) and `tm_mday`.
+    pub fn from_tm(wday_sunday0: i32, hour: i32, min: i32, mon0: i32, mday: i32) -> Self {
         let weekday = if wday_sunday0 <= 0 {
             7
         } else {
@@ -43,7 +53,48 @@ impl LocalTime {
         LocalTime {
             weekday,
             minute: (hour.clamp(0, 23) * 60 + min.clamp(0, 59)) as u16,
+            date: (mon0.clamp(0, 11) as u16 + 1) * 32 + mday.clamp(1, 31) as u16,
         }
+    }
+}
+
+/// The day before `d`. (The day before 1 March is taken as 29 February:
+/// the year is not known, and a range that ends on 28 February misses only
+/// the small hours of 1 March in a window that runs past midnight.)
+fn yesterday(d: MonthDay) -> MonthDay {
+    let (m, day) = (d / 32, d % 32);
+    if day > 1 {
+        return d - 1;
+    }
+    let m = if m <= 1 { 12 } else { m - 1 };
+    m * 32 + days_in(m)
+}
+
+fn days_in(month: u16) -> u16 {
+    match month {
+        2 => 29,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// `"MM-DD"` (`10-31`) to a [`MonthDay`]; 29 February is a day.
+pub fn parse_month_day(s: &str) -> Option<MonthDay> {
+    let (m, d) = s.trim().split_once('-')?;
+    if m.len() != 2 || d.len() != 2 {
+        return None;
+    }
+    let (m, d): (u16, u16) = (m.parse().ok()?, d.parse().ok()?);
+    ((1..=12).contains(&m) && (1..=days_in(m)).contains(&d)).then_some(m * 32 + d)
+}
+
+/// Is `d` in the inclusive range `from..=to`, which wraps over New Year
+/// when `to < from`?
+fn in_dates((from, to): (MonthDay, MonthDay), d: MonthDay) -> bool {
+    if from <= to {
+        (from..=to).contains(&d)
+    } else {
+        d >= from || d <= to
     }
 }
 
@@ -56,16 +107,19 @@ pub struct Window {
 
 impl Window {
     /// Is `t` inside the window, where `days` is the bitmask of start days
-    /// allowed (bit `d - 1` for ISO day `d`)?
-    fn contains(&self, days: u8, t: LocalTime) -> bool {
-        let on = |day: u8| days & (1 << (day - 1)) != 0;
-        let yesterday = if t.weekday == 1 { 7 } else { t.weekday - 1 };
+    /// allowed (bit `d - 1` for ISO day `d`) and `dates` the start dates?
+    fn contains(&self, days: u8, dates: Option<(MonthDay, MonthDay)>, t: LocalTime) -> bool {
+        let on = |day: u8, date: MonthDay| {
+            days & (1 << (day - 1)) != 0 && dates.is_none_or(|r| in_dates(r, date))
+        };
+        let today = || on(t.weekday, t.date);
+        let before = || on(if t.weekday == 1 { 7 } else { t.weekday - 1 }, yesterday(t.date));
         if self.from == self.to {
-            on(t.weekday)
+            today()
         } else if self.from < self.to {
-            on(t.weekday) && (self.from..self.to).contains(&t.minute)
+            (self.from..self.to).contains(&t.minute) && today()
         } else {
-            (on(t.weekday) && t.minute >= self.from) || (on(yesterday) && t.minute < self.to)
+            (t.minute >= self.from && today()) || (t.minute < self.to && before())
         }
     }
 }
@@ -75,6 +129,8 @@ impl Window {
 pub struct Rule {
     /// Bit `d - 1` for ISO day `d` (Monday = bit 0).
     pub days: u8,
+    /// The dates it runs on, inclusive (`None`: every day of the year).
+    pub dates: Option<(MonthDay, MonthDay)>,
     pub window: Window,
     /// The playlist, as a config `set` value; `None` keeps the configured one.
     pub set: Option<String>,
@@ -175,7 +231,7 @@ impl Schedule {
             .rules
             .iter()
             .enumerate()
-            .find(|(_, r)| r.window.contains(r.days, t))
+            .find(|(_, r)| r.window.contains(r.days, r.dates, t))
         {
             d.rule = Some(i);
             d.rule_until = Some(rule.window.to);
@@ -184,7 +240,7 @@ impl Schedule {
         }
         if let Some(night) = &self.night {
             let (on, until) = match night.when {
-                NightWhen::Clock(w) => (w.contains(0x7f, t), Some(w.to)),
+                NightWhen::Clock(w) => (w.contains(0x7f, None, t), Some(w.to)),
                 NightWhen::Sun { .. } => sun.map_or((false, None), |s| (s.night, s.until)),
             };
             if on {
@@ -310,9 +366,14 @@ mod tests {
     const SUN: u8 = 7;
 
     fn at(weekday: u8, hhmm: &str) -> LocalTime {
+        on(weekday, "06-15", hhmm)
+    }
+
+    fn on(weekday: u8, date: &str, hhmm: &str) -> LocalTime {
         LocalTime {
             weekday,
             minute: parse_hhmm(hhmm).unwrap(),
+            date: parse_month_day(date).unwrap(),
         }
     }
 
@@ -326,6 +387,7 @@ mod tests {
     fn rule(days: &[u8], from: &str, to: &str, set: Option<&str>, brightness: Option<u8>) -> Rule {
         Rule {
             days: days_mask(days).unwrap(),
+            dates: None,
             window: window(from, to),
             set: set.map(str::to_string),
             brightness,
@@ -462,6 +524,61 @@ mod tests {
         assert_eq!(days_mask(&[8]), None);
     }
 
+    #[test]
+    fn dates_hold_a_rule_to_part_of_the_year_and_may_wrap() {
+        let dated = |from: &str, to: &str, set: &str| Rule {
+            dates: Some((parse_month_day(from).unwrap(), parse_month_day(to).unwrap())),
+            ..rule(&[], "00:00", "00:00", Some(set), None)
+        };
+        let s = Schedule {
+            rules: vec![
+                dated("10-01", "10-31", "filelist.hall"),
+                dated("12-01", "12-26", "filelist.xmas"),
+                dated("12-27", "01-06", "newyear"),
+                rule(&[], "00:00", "00:00", Some("everyday"), None),
+            ],
+            night: None,
+        };
+        let set = |date: &str| s.evaluate(on(MON, date, "12:00"), None).set.unwrap();
+        assert_eq!(set("09-30"), "everyday");
+        assert_eq!(set("10-01"), "filelist.hall");
+        assert_eq!(set("10-31"), "filelist.hall");
+        assert_eq!(set("11-01"), "everyday");
+        assert_eq!(set("12-01"), "filelist.xmas");
+        assert_eq!(set("12-26"), "filelist.xmas");
+        assert_eq!(set("12-31"), "newyear");
+        assert_eq!(set("01-01"), "newyear");
+        assert_eq!(set("01-06"), "newyear");
+        assert_eq!(set("01-07"), "everyday");
+
+        // A window past midnight belongs to its start date, as to its start day.
+        let late = Schedule {
+            rules: vec![Rule {
+                dates: Some((parse_month_day("10-31").unwrap(), parse_month_day("10-31").unwrap())),
+                ..rule(&[], "22:00", "02:00", Some("party"), None)
+            }],
+            night: None,
+        };
+        assert_eq!(late.evaluate(on(SAT, "10-31", "23:00"), None).rule, Some(0));
+        assert_eq!(late.evaluate(on(SUN, "11-01", "01:00"), None).rule, Some(0));
+        assert_eq!(late.evaluate(on(SAT, "10-31", "01:00"), None).rule, None);
+        assert_eq!(late.evaluate(on(SUN, "11-01", "23:00"), None).rule, None);
+    }
+
+    #[test]
+    fn month_days_parse_strictly_and_step_back() {
+        assert_eq!(parse_month_day("10-31"), Some(10 * 32 + 31));
+        assert_eq!(parse_month_day("02-29"), Some(2 * 32 + 29));
+        for bad in ["", "1-01", "01-1", "02-30", "04-31", "13-01", "00-10", "10/31", "aa-bb"] {
+            assert_eq!(parse_month_day(bad), None, "{bad}");
+        }
+        let md = |s| parse_month_day(s).unwrap();
+        assert_eq!(yesterday(md("03-01")), md("02-29"));
+        assert_eq!(yesterday(md("01-01")), md("12-31"));
+        assert_eq!(yesterday(md("05-01")), md("04-30"));
+        assert_eq!(yesterday(md("10-31")), md("10-30"));
+    }
+
     /// Unix seconds of a UTC date and time.
     fn utc(y: i64, m: i64, d: i64, hh: i64, mm: i64) -> i64 {
         // Days from 1970-01-01 (Howard Hinnant's days_from_civil).
@@ -576,8 +693,8 @@ mod tests {
 
     #[test]
     fn local_time_from_tm_fields() {
-        assert_eq!(LocalTime::from_tm(0, 7, 30), at(SUN, "07:30"));
-        assert_eq!(LocalTime::from_tm(1, 0, 0), at(MON, "00:00"));
-        assert_eq!(LocalTime::from_tm(6, 23, 59), at(SAT, "23:59"));
+        assert_eq!(LocalTime::from_tm(0, 7, 30, 5, 15), at(SUN, "07:30"));
+        assert_eq!(LocalTime::from_tm(1, 0, 0, 5, 15), at(MON, "00:00"));
+        assert_eq!(LocalTime::from_tm(6, 23, 59, 11, 31), on(SAT, "12-31", "23:59"));
     }
 }

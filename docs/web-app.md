@@ -197,7 +197,10 @@ button lands on them.
     the wordmark or a Formula light enough for the show; a Formula's
     preview is pkg-psi's frame with the main module's information line over
     it, `Preview.showBoot`, the panel's `@boot?formula=…`).
-  - **Schedule**: time zone, location, schedule rules, night mode
+  - **Schedule**: time zone, location, schedule rules (days, times and
+    optionally dates, `["MM-DD","MM-DD"]`; **Add Halloween** / **Add
+    Christmas** put a dated all-day rule first when the card has
+    `filelist.hall` / `filelist.xmas`), night mode
     (between two times, or from sunset to sunrise with an offset: `sun`
     and `offset` in the schedule, offered only with a location; the
     device works out the sun, `opendmd_core::schedule::sun_night`).

@@ -389,7 +389,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   back as `{"rules":[],"night":null}`); `POST /api/wake {"minutes"}`
   suspends it. Evaluated (rules in order, first match wins; night beats
   every rule for `mode`; a wrapped `to <= from` window belongs to the day it
-  starts; a night with `"sun":true` runs from sunset to sunrise at the
+  starts, and to the date its `dates` are checked against; a night with `"sun":true` runs from sunset to sunrise at the
   saved `lat`/`lon`, `offset` minutes inside, the sun in floats -- off
   without a location) on every status read, right after a PUT/wake, and once a second in
   the ticker. A rule's `set` overlays the playlist actually playing (`/api/
@@ -2002,17 +2002,44 @@ def sun_night_end(unix: float, lat: float, lon: float, offset: int) -> float | N
     return hi - hi % 60
 
 
-def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int) -> bool:
-    """Port of schedule::Window::contains."""
-    def on(day: int) -> bool:
-        return bool(mask & (1 << (day - 1)))
+def parse_month_day(s) -> int | None:
+    """Port of schedule::parse_month_day: 'MM-DD' to month * 32 + day
+    (29 February is a day)."""
+    if not isinstance(s, str) or len(s) != 5 or s[2] != "-" or not (s[:2].isdigit() and s[3:].isdigit()):
+        return None
+    m, d = int(s[:2]), int(s[3:])
+    days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return m * 32 + d if 1 <= m <= 12 and 1 <= d <= days[m - 1] else None
+
+
+def yesterday_md(md: int) -> int:
+    """Port of schedule's `yesterday` (the day before 1 March is 29 February)."""
+    m, d = divmod(md, 32)
+    if d > 1:
+        return md - 1
+    m = 12 if m <= 1 else m - 1
+    return m * 32 + [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+
+
+def in_dates(dates, md: int) -> bool:
+    """Port of schedule's `in_dates`: inclusive, wrapping over New Year; None is every day."""
+    if dates is None:
+        return True
+    a, b = dates
+    return a <= md <= b if a <= b else md >= a or md <= b
+
+
+def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int, dates=None, md: int = 0) -> bool:
+    """Port of schedule::Window::contains (`dates` as (from, to) month * 32 + day, `md` today's)."""
+    def on(day: int, date: int) -> bool:
+        return bool(mask & (1 << (day - 1))) and in_dates(dates, date)
 
     yesterday = 7 if weekday == 1 else weekday - 1
     if frm == to:
-        return on(weekday)
+        return on(weekday, md)
     if frm < to:
-        return on(weekday) and frm <= minute < to
-    return (on(weekday) and minute >= frm) or (on(yesterday) and minute < to)
+        return on(weekday, md) and frm <= minute < to
+    return (on(weekday, md) and minute >= frm) or (on(yesterday, yesterday_md(md)) and minute < to)
 
 
 # --------------------------------------------------------------------------
@@ -2606,6 +2633,10 @@ class Schedule:
                 if (not isinstance(set_name, str) or any(c in set_name for c in "/\\\0")
                         or ".." in set_name or set_name.lower() == OBSOLETE_SET.lower()):
                     return (400, f"{what}: '{set_name}' is not a playlist name")
+            dates = r.get("dates")
+            if dates is not None and not (isinstance(dates, list) and len(dates) == 2
+                                          and all(parse_month_day(x) is not None for x in dates)):
+                return (400, f'{what}: dates are MM-DD ("10-31")')
             brightness = r.get("brightness")
             if brightness is not None and (
                 not isinstance(brightness, int) or isinstance(brightness, bool) or not (0 <= brightness <= 255)
@@ -2685,6 +2716,7 @@ class Schedule:
 
             weekday = now.isoweekday()
             minute = now.hour * 60 + now.minute
+            md = now.month * 32 + now.day
             doc = self.doc
             rules = (doc or {}).get("rules") or []
             night = (doc or {}).get("night")
@@ -2696,7 +2728,9 @@ class Schedule:
                     frm, to = parse_hhmm(r.get("from")), parse_hhmm(r.get("to"))
                     if mask is None or frm is None or to is None:
                         continue  # a stored rule should always be valid; be defensive
-                    if window_contains(frm, to, mask, weekday, minute):
+                    dates = r.get("dates")
+                    dates = dates and (parse_month_day(dates[0]), parse_month_day(dates[1]))
+                    if window_contains(frm, to, mask, weekday, minute, dates, md):
                         rule_idx = i
                         rule_set = r.get("set")
                         until = format_hhmm(to)
