@@ -35,15 +35,18 @@
 //! A compile's writes: the mark, the result over it, one `f_utime`.
 //!
 //! **One at a time, within the heap, giving way.** Each compile runs on a
-//! task of its own ([`STACK`], `psi_stack::run_with`, CPU0 at the boot
-//! task's priority 1, under the network and the httpd) and starts only if
-//! the heap has its stack, two programs, `psi::compile_heap_estimate` of
-//! the source and [`RESERVE`] free, with a block for the stack; otherwise
-//! the network worker tries it again later ([`tick`]: only once the heap
-//! has room, [`RETRY_OFFLINE`]/[`RETRY_ONLINE`]), then it is left for the
-//! next start. Between files the pass waits for a transfer on the card
-//! to end. The bytes are `psi::build`'s: what the web app and `psi
-//! build` write.
+//! task of its own ([`STACK`], `psi_stack::run_with_prio`, CPU0 at priority 1,
+//! under the network, the httpd and the read-ahead, whoever calls it) and
+//! starts only if the heap has its stack, two programs,
+//! `psi::compile_heap_estimate` of the source and [`RESERVE`] free, with a
+//! block for the stack; otherwise the network worker tries it again later
+//! ([`tick`]: one compile a tick, only once the heap has room,
+//! [`RETRY_OFFLINE`]/[`RETRY_ONLINE`]), then it is left for the next start.
+//! Each compile holds `cache_builder::busy()`, as a transfer does: the cache
+//! builder stops for it (and goes on after) rather than the compiles
+//! waiting for the builder; between files the pass waits for a transfer
+//! on the card to end, and a moment after a late frame. The bytes are
+//! `psi::build`'s: what the web app and `psi build` write.
 //!
 //! The counts go to the log and to `/api/status` (`card_formulas`).
 
@@ -343,6 +346,9 @@ static LATE_AT: AtomicU32 = AtomicU32::new(0);
 /// Compiled files the player refused, waiting for [`tick`] to note them
 /// on the card (hashes as [`WRITING`]'s).
 static REDO: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+/// The card's list of them ([`REDO_FILE`]): its appends ([`tick`]) and a
+/// pass's update of it, one at a time.
+static REDO_LOCK: Mutex<()> = Mutex::new(());
 
 fn now_ms() -> u32 {
     // SAFETY: reads the system timer. Never 0.
@@ -415,33 +421,69 @@ pub fn refused(path: &str) {
 }
 
 /// The network worker's turn (CPU0): a retry of the compiles the heap
-/// could not hold, when due ([`retry_tick`]); and refused compiled files
-/// noted on the card, so the next start prepares them again (a cut write,
-/// another version's copy). Nothing to do almost always.
+/// could not hold, when due ([`retry_tick`]: one compile a tick); and
+/// refused compiled files noted on the card, so the next start prepares
+/// them again (a cut write, another version's copy). Nothing to do almost
+/// always.
 pub fn tick() {
     retry_tick();
     if REDO.iter().all(|s| s.load(Relaxed) == 0) || !crate::CARD_READY.load(Relaxed) {
         return;
     }
+    let keys: Vec<u32> = REDO.iter().map(|s| s.load(Relaxed)).filter(|&k| k != 0).collect();
     let mut line = String::new();
-    for slot in &REDO {
-        let k = slot.swap(0, Relaxed);
-        if k != 0 {
-            line.push_str(&format!("{k:08x}\n"));
-        }
+    for k in &keys {
+        line.push_str(&format!("{k:08x}\n"));
     }
     let path = format!("{}/formulas/{REDO_FILE}", config::SD_MOUNT);
-    let _ = fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| {
-        use std::io::Write;
-        f.write_all(line.as_bytes())
-    });
-    log::info!("formulas: a compiled file the panel refused is prepared again at the next start");
+    let written = {
+        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        fs::OpenOptions::new().create(true).append(true).open(&path).and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(line.as_bytes())
+        })
+    };
+    match written {
+        Ok(()) => {
+            // Only the keys written go (one noted meanwhile stays).
+            for (slot, k) in REDO.iter().zip(keys.iter().copied().chain(std::iter::repeat(0))) {
+                let _ = slot.compare_exchange(k, 0, Relaxed, Relaxed);
+            }
+            log::info!("formulas: a compiled file the panel refused is prepared again at the next start");
+        }
+        // Kept for the next tick.
+        Err(e) => log::warn!("formulas: noting a refused compiled file on the card failed ({e}); tried again"),
+    }
+}
+
+/// How a pass goes about it.
+#[derive(Clone, Copy)]
+struct Opts {
+    /// Wait for a busy card (the boot task's pass), or stop at once (a
+    /// retry on the network worker).
+    wait: bool,
+    /// Compiles at most (a retry: one a tick).
+    compiles: u32,
+    /// Test images (`emu-census`) with WiFi off: this many sources taken as
+    /// short of memory at the first pass, so the lane sees a retry.
+    force_short: u32,
+}
+
+/// What a pass left over besides its counts.
+#[derive(Default)]
+struct Left {
+    /// Stopped for a busy card, or at its compile limit, with sources to
+    /// do: the next try comes soon and costs no retry.
+    more: bool,
+    /// A compile ran (prepared or not).
+    compiled: bool,
 }
 
 /// Prepare the card's Formulas (the boot task once the card is handed
 /// over, CPU0): a pass; the compiles the heap could not hold are tried
-/// again by the network worker ([`tick`], see [`RETRY_OFFLINE`]). `settings` for a look that names one
-/// ([`crate::formula_look::file_changed`]) and the network setting.
+/// again by the network worker ([`tick`], see [`RETRY_OFFLINE`]). `settings`
+/// for a look that names one ([`crate::formula_look::file_changed`]) and the
+/// network setting.
 #[optimize(size)] // (CPU0, after the handover: no frame runs it)
 #[inline(never)]
 pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>) -> Counts {
@@ -453,10 +495,15 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     }
     let online = settings.lock().map(|s| s.network).unwrap_or(true);
     let (wait, tries) = if online { RETRY_ONLINE } else { RETRY_OFFLINE };
+    let opts = Opts {
+        wait: true,
+        compiles: u32::MAX,
+        force_short: if cfg!(feature = "emu-census") && !online { 1 } else { 0 },
+    };
     let mut shorts = Vec::new();
-    let c = pass(settings, &mut shorts, true);
+    let (c, left) = pass(settings, &mut shorts, opts);
     publish(c);
-    if c.short > 0 && tries > 0 {
+    if (c.short > 0 || left.more) && tries > 0 {
         // The retries are the network worker's ([`tick`]): the boot task
         // ends now and its stack goes back to the heap.
         *RETRY.lock().unwrap_or_else(|p| p.into_inner()) = Some(Retry {
@@ -465,7 +512,7 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
             shorts,
             wait,
             left: tries,
-            next: Instant::now() + wait,
+            next: Instant::now() + if left.more { MORE_SOON } else { wait },
             t0,
         });
         return c;
@@ -473,6 +520,10 @@ pub fn prepare_after_handover(settings: &Arc<Mutex<crate::nvs_config::Settings>>
     finish(c, &shorts, t0);
     c
 }
+
+/// A retry that stopped for a busy card, or did its one compile with more
+/// to do, comes again this soon (and costs no try).
+const MORE_SOON: Duration = Duration::from_secs(2);
 
 /// Compiles still to be tried again (the network worker's [`tick`]).
 struct Retry {
@@ -486,7 +537,9 @@ struct Retry {
 }
 static RETRY: Mutex<Option<Retry>> = Mutex::new(None);
 
-/// One retry, when due and the heap has room for the least of them.
+/// One retry when due: one compile at most (the network worker goes on
+/// with its loop between them), only once the heap has room for the least
+/// of the ones short.
 #[optimize(size)]
 #[inline(never)]
 fn retry_tick() {
@@ -495,13 +548,12 @@ fn retry_tick() {
     if Instant::now() < r.next {
         return;
     }
-    r.left -= 1;
-    r.next = Instant::now() + r.wait;
-    if crate::state::free_heap() >= r.counts.min_need {
+    let mut more = false;
+    let mut tried = false;
+    if r.counts.min_need == 0 || crate::state::free_heap() >= r.counts.min_need {
         let mut shorts = Vec::new();
-        // (Not waiting for the card: this is the worker's loop; a busy card
-        // leaves the rest for the next retry.)
-        let again = pass(&r.settings, &mut shorts, false);
+        let opts = Opts { wait: false, compiles: 1, force_short: 0 };
+        let (again, left) = pass(&r.settings, &mut shorts, opts);
         let c = r.counts;
         // The later pass counts the earlier passes' compiles as ready:
         // they are this start's prepared, not its ready.
@@ -515,8 +567,25 @@ fn retry_tick() {
         };
         r.shorts = shorts;
         publish(r.counts);
+        more = left.more;
+        tried = left.compiled;
+        if left.compiled {
+            // SAFETY: a read of the calling task's own high-water mark.
+            let unused = unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) };
+            log::info!("formulas: a retry compiled on the network worker ({unused} B of its stack unused at its deepest)");
+        }
     }
-    if r.counts.short == 0 || r.left == 0 {
+    // A busy card, or one compile done with more to do: again soon, free.
+    // The heap still short: a try spent.
+    if more {
+        r.next = Instant::now() + MORE_SOON;
+    } else {
+        if !tried {
+            r.left = r.left.saturating_sub(1);
+        }
+        r.next = Instant::now() + r.wait;
+    }
+    if (r.counts.short == 0 && !more) || r.left == 0 {
         if let Some(r) = g.take() {
             finish(r.counts, &r.shorts, r.t0);
         }
@@ -565,7 +634,10 @@ fn stem<'a>(name: &'a str, ext: &str) -> Option<&'a str> {
 }
 
 /// Write `bytes` as `path` (created or truncated: one lookup), in
-/// [`CHUNK`]s with the CPU yielded between them.
+/// [`CHUNK`]s with the CPU yielded between them. (Truncated first: a cut
+/// write leaves a short file, refused where it plays and so prepared again
+/// at the next start, `tick`; accepted rather than a temporary file and a
+/// rename, which cost a directory scan each.)
 fn put(path: &str, bytes: &[u8]) -> bool {
     use std::io::Write;
     let r = fs::File::create(path).and_then(|mut f| {
@@ -577,6 +649,8 @@ fn put(path: &str, bytes: &[u8]) -> bool {
     });
     match r {
         Ok(()) => {
+            // (The FAT index's record of it: it keeps `/gifs` and `/cache`
+            // only, so nothing for a Formula today.)
             crate::fatidx::note_written(path);
             true
         }
@@ -587,55 +661,71 @@ fn put(path: &str, bytes: &[u8]) -> bool {
     }
 }
 
-/// Wait while the card is someone else's (a file going to or from it, the
-/// cache builder at work) or the panel just missed a frame. False: it
-/// stayed busy for two minutes (the rest waits for the next start).
+/// Wait while a file goes to or from the card, or the panel just missed a
+/// frame (`wait`: up to two minutes; else not at all). False: still busy.
+/// The cache builder is not waited for: a compile holds
+/// `cache_builder::busy()` ([`claim`]), and the builder stops for it.
 fn give_way(wait: bool) -> bool {
     for _ in 0..if wait { 1200 } else { 1 } {
         let late = LATE_AT.load(Relaxed);
         let recent_late = late != 0 && now_ms().wrapping_sub(late) < AFTER_LATE.as_millis() as u32;
-        if !crate::cache_builder::transfer_in_flight() && !crate::cache_builder::task_up() && !recent_late {
-            std::thread::sleep(Duration::from_millis(20));
+        if !crate::cache_builder::transfer_in_flight() && !recent_late {
+            if wait {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             return true;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        if wait {
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     false
 }
 
-/// This module writes the Formula `k` now ([`WRITING`]): unless a file
-/// transfer has begun (it goes first). Cleared by the guard.
+/// This module writes the Formula `k` now ([`WRITING`], and
+/// `cache_builder::busy()` held, so the builder and the read-ahead stand
+/// back as for a transfer): unless a file transfer has begun (it goes
+/// first). Both released by the guard.
 fn claim(k: u32) -> Option<Writing> {
     WRITING.store(k, SeqCst);
     if crate::cache_builder::transfer_in_flight() {
         WRITING.store(0, SeqCst);
         return None;
     }
-    Some(Writing)
+    Some(Writing(crate::cache_builder::busy()))
 }
 
-struct Writing;
+struct Writing(#[allow(dead_code)] crate::cache_builder::Busy);
 impl Drop for Writing {
     fn drop(&mut self) {
         WRITING.store(0, SeqCst);
     }
 }
 
-#[optimize(size)]
-#[inline(never)]
-fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, wait: bool) -> Counts {
-    // In flight from the listing to the last write: a crash in between
-    // counts against the next start ([`boot`]); none outside it.
-    guard(0).store(GUARD_MAGIC, Relaxed);
-    let c = pass_in(settings, shorts, wait);
-    guard(0).store(0, Relaxed);
-    guard(1).store(crashes_word(0), Relaxed);
-    c
+/// The card's list of refused compiled files, as keys.
+fn redo_keys(path: &str) -> Vec<u32> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| u32::from_str_radix(l.trim(), 16).ok())
+        .collect()
 }
 
 #[optimize(size)]
 #[inline(never)]
-fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, wait: bool) -> Counts {
+fn pass(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts) -> (Counts, Left) {
+    // In flight from the listing to the last write: a crash in between
+    // counts against the next start ([`boot`]); none outside it.
+    guard(0).store(GUARD_MAGIC, Relaxed);
+    let r = pass_in(settings, shorts, opts);
+    guard(0).store(0, Relaxed);
+    guard(1).store(crashes_word(0), Relaxed);
+    r
+}
+
+#[optimize(size)]
+#[inline(never)]
+fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<String>, opts: Opts) -> (Counts, Left) {
     let card_dir = "/formulas";
     let dir = format!("{}{card_dir}", config::SD_MOUNT);
     let entries = list(card_dir);
@@ -645,14 +735,13 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
     let abi_path = format!("{dir}/{ABI_FILE}");
     let redo_path = format!("{dir}/{REDO_FILE}");
     let redo: Vec<u32> = if entries.iter().any(|e| e.name == REDO_FILE) {
-        fs::read_to_string(&redo_path)
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|l| u32::from_str_radix(l.trim(), 16).ok())
-            .collect()
+        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        redo_keys(&redo_path)
     } else {
         Vec::new()
     };
+    // The refused ones dealt with (prepared, or found not to compile).
+    let mut redone: Vec<u32> = Vec::new();
     let abi_same = redo.is_empty()
         && entries.iter().any(|e| e.name == ABI_FILE)
         && head(&abi_path, 4).first().is_some_and(|&b| b == psi::psb::ABI);
@@ -660,16 +749,13 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
         entries.iter().find(|e| stem(&e.name, ".psb").is_some_and(|s| s.eq_ignore_ascii_case(base)))
     };
     let mut c = Counts::default();
-    let mut stopped = false;
+    let mut left = Left::default();
+    let mut budget = opts.compiles;
+    let mut force_short = opts.force_short;
     for psi_entry in sources {
         c.sources += 1;
-        if stopped {
-            c.short += 1;
-            continue;
-        }
         let name = &psi_entry.name;
         let base = stem(name, ".psi").unwrap_or(name);
-        let psi_path = format!("{dir}/{name}");
         let psb_path = format!("{dir}/{base}.psb");
         let k = key(&format!("{card_dir}/{base}"));
         let checked = if redo.contains(&k) {
@@ -688,96 +774,157 @@ fn pass_in(settings: &Arc<Mutex<crate::nvs_config::Settings>>, shorts: &mut Vec<
             }
             State::Stale(why) => why,
         };
-        if !give_way(wait) {
-            if wait {
+        // Past this pass's compiles, or the card busy: the rest later.
+        if left.more || budget == 0 || !give_way(opts.wait) {
+            if opts.wait && !left.more {
                 log::warn!("formulas: the card stayed busy; the rest is prepared later");
             }
-            stopped = true;
+            left.more = true;
             c.short += 1;
             continue;
         }
-        let src = match read_source(&psi_path) {
-            Ok(s) => s,
-            Err(e) => {
-                // Marked, so it is not read again every start.
-                log::warn!("formulas: /formulas/{name} {e}: not prepared");
-                if let Some(_w) = claim(k) {
-                    put(&psb_path, &mark_bytes(psi_entry));
+        if force_short > 0 {
+            force_short -= 1;
+            log::info!("formulas: /formulas/{name} taken as short of memory (a test image), for a retry");
+            c.min_need = 1;
+            shorts.push(format!("/formulas/{name}"));
+            c.short += 1;
+            continue;
+        }
+        match compile_one(settings, psi_entry, &dir, card_dir, base, k, why, &mut c, shorts) {
+            Done::Resolved => {
+                budget = budget.saturating_sub(1);
+                left.compiled = true;
+                if redo.contains(&k) {
+                    redone.push(k);
                 }
-                c.failed += 1;
-                continue;
             }
-        };
-        if let Err((_free, need, _block)) = fits(&src) {
-            c.min_need = if c.min_need == 0 { need as u32 } else { c.min_need.min(need as u32) };
-            shorts.push(format!("/formulas/{name}"));
-            c.short += 1;
-            continue;
+            Done::Short => {}
+            Done::Busy => {
+                left.more = true;
+                c.short += 1;
+            }
         }
-        let Some(_writing) = claim(k) else {
-            // A file transfer began: this one at the next pass.
-            shorts.push(format!("/formulas/{name}"));
-            c.short += 1;
-            continue;
-        };
-        // Marked first: a compile that crashes the board leaves it so, and
-        // the next start moves on.
-        if !put(&psb_path, &mark_bytes(psi_entry)) {
+    }
+    // Every header checked under this ABI (and every source looked at):
+    // record it, so the next start reads none.
+    if !abi_same && c.short == 0 && !left.more && n_sources < MAX_FILES {
+        let _ = fs::write(&abi_path, [psi::psb::ABI, b'\n']);
+    }
+    // The refused ones dealt with leave the card's list; any not yet (or
+    // noted meanwhile, `tick`) stay for a retry or the next start.
+    if !redo.is_empty() {
+        let _g = REDO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let now: Vec<u32> = redo_keys(&redo_path).into_iter().filter(|k| !redone.contains(k)).collect();
+        if now.is_empty() {
+            let _ = fs::remove_file(&redo_path);
+        } else if !redone.is_empty() {
+            let text: String = now.iter().map(|k| format!("{k:08x}\n")).collect();
+            let _ = fs::write(&redo_path, text);
+        }
+    }
+    (c, left)
+}
+
+/// How one source's compile ended.
+enum Done {
+    /// Prepared, or found not to compile (marked): nothing left to do.
+    Resolved,
+    /// Short of memory (counted, in `shorts`): tried again later.
+    Short,
+    /// A transfer began: tried again soon (not counted here).
+    Busy,
+}
+
+/// One source compiled and written (see the module docs): the mark, the
+/// compile, the result over the mark, one `f_utime`.
+#[optimize(size)]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn compile_one(
+    settings: &Arc<Mutex<crate::nvs_config::Settings>>,
+    psi_entry: &Entry,
+    dir: &str,
+    card_dir: &str,
+    base: &str,
+    k: u32,
+    why: &str,
+    c: &mut Counts,
+    shorts: &mut Vec<String>,
+) -> Done {
+    let name = &psi_entry.name;
+    let psi_path = format!("{dir}/{name}");
+    let psb_path = format!("{dir}/{base}.psb");
+    let Some(_writing) = claim(k) else {
+        return Done::Busy;
+    };
+    let src = match read_source(&psi_path) {
+        Ok(s) => s,
+        Err(e) => {
+            // Marked, so it is not read again every start.
+            log::warn!("formulas: /formulas/{name} {e}: not prepared");
+            put(&psb_path, &mark_bytes(psi_entry));
             c.failed += 1;
-            continue;
+            return Done::Resolved;
         }
-        let before = crate::state::free_heap();
-        let started = Instant::now();
-        let built = crate::psi_stack::run_with(STACK, || psi::build(&src));
-        let took = started.elapsed().as_millis();
-        drop(src);
-        let Some((built, left)) = built else {
-            log::warn!("formulas: /formulas/{name} not prepared: no task to compile on ({} B free)", crate::state::free_heap());
+    };
+    if let Err((_free, need, _block)) = fits(&src) {
+        c.min_need = if c.min_need == 0 { need as u32 } else { c.min_need.min(need as u32) };
+        shorts.push(format!("/formulas/{name}"));
+        c.short += 1;
+        return Done::Short;
+    }
+    // Marked first: a compile that crashes the board leaves it so, and the
+    // next start moves on. (Meanwhile the panel finds the mark if it plays
+    // this Formula: skipped as "does not compile" for the compile's few
+    // milliseconds, accepted.)
+    if !put(&psb_path, &mark_bytes(psi_entry)) {
+        c.failed += 1;
+        return Done::Resolved;
+    }
+    let before = crate::state::free_heap();
+    let started = Instant::now();
+    let built = crate::psi_stack::run_with_prio(STACK, Some(1), || psi::build(&src));
+    let took = started.elapsed().as_millis();
+    drop(src);
+    let Some((built, left)) = built else {
+        log::warn!("formulas: /formulas/{name} not prepared: no task to compile on ({} B free)", crate::state::free_heap());
+        let _ = fs::remove_file(&psb_path);
+        shorts.push(format!("/formulas/{name}"));
+        c.short += 1;
+        return Done::Short;
+    };
+    c.stack_left = low(c.stack_left, left);
+    let heap_low = crate::psi_stack::last_low();
+    c.heap_low = low(c.heap_low, heap_low);
+    let bytes = match built {
+        Ok(b) => b,
+        Err(e) if e.msg == psi::NO_MEMORY => {
+            log::warn!("formulas: /formulas/{name} not prepared: the compile ran short of memory");
             let _ = fs::remove_file(&psb_path);
             shorts.push(format!("/formulas/{name}"));
             c.short += 1;
-            continue;
-        };
-        c.stack_left = low(c.stack_left, left);
-        let heap_low = crate::psi_stack::last_low();
-        c.heap_low = low(c.heap_low, heap_low);
-        let bytes = match built {
-            Ok(b) => b,
-            Err(e) if e.msg == psi::NO_MEMORY => {
-                log::warn!("formulas: /formulas/{name} not prepared: the compile ran short of memory");
-                let _ = fs::remove_file(&psb_path);
-                shorts.push(format!("/formulas/{name}"));
-                c.short += 1;
-                continue;
-            }
-            Err(e) => {
-                // (The mark written before stays: it says so.)
-                log::warn!("formulas: /formulas/{name} does not compile ({}); it is skipped where it plays", e.msg);
-                c.failed += 1;
-                continue;
-            }
-        };
-        if !put(&psb_path, &bytes) {
-            c.failed += 1;
-            continue;
+            return Done::Short;
         }
-        stamp(&psb_path, psi_entry);
-        drop(_writing);
-        c.prepared += 1;
-        log::info!(
-            "formulas: /formulas/{name} prepared for the panel ({why}): {} B in {took} ms; heap {before} B free before, {heap_low} B at the lowest; compile stack {left} B left",
-            bytes.len()
-        );
-        // A look (or the start-up show) that names it builds again now.
-        crate::formula_look::file_changed(settings, &format!("{card_dir}/{base}.psb"), false);
+        Err(e) => {
+            // (The mark written before stays: it says so.)
+            log::warn!("formulas: /formulas/{name} does not compile ({}); it is skipped where it plays", e.msg);
+            c.failed += 1;
+            return Done::Resolved;
+        }
+    };
+    if !put(&psb_path, &bytes) {
+        c.failed += 1;
+        return Done::Resolved;
     }
-    // Every header checked under this ABI (and every source looked at):
-    // record it, so the next start reads none; the refused ones are done.
-    if !abi_same && c.short == 0 && n_sources < MAX_FILES {
-        let _ = fs::write(&abi_path, [psi::psb::ABI, b'\n']);
-    }
-    if !redo.is_empty() {
-        let _ = fs::remove_file(&redo_path);
-    }
-    c
+    stamp(&psb_path, psi_entry);
+    drop(_writing);
+    c.prepared += 1;
+    log::info!(
+        "formulas: /formulas/{name} prepared for the panel ({why}): {} B in {took} ms; heap {before} B free before, {heap_low} B at the lowest; compile stack {left} B left",
+        bytes.len()
+    );
+    // A look (or the start-up show) that names it builds again now.
+    crate::formula_look::file_changed(settings, &format!("{card_dir}/{base}.psb"), false);
+    Done::Resolved
 }

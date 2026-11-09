@@ -1503,8 +1503,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         // The copy may be the one opened ahead (the GIF's path finds it).
         let _busy = crate::cache_builder::busy();
-        let Some(_held) = release_for_write(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) else {
-            return req.error(503, "503 Service Unavailable", NOT_RELEASED);
+        let _held = match release_for_write(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) {
+            Ok(h) => h,
+            Err(why) => return req.error(503, "503 Service Unavailable", why),
         };
         match crate::cache::forget(&forget.path) {
             Ok(removed) => {
@@ -1877,8 +1878,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Held to the end: the GIF's copy goes too, and nothing may open
         // it ahead in between.
         let _busy = crate::cache_builder::busy();
-        let Some(_held) = release_for_write(&c, &path) else {
-            return req.error(503, "503 Service Unavailable", NOT_RELEASED);
+        let _held = match release_for_write(&c, &path) {
+            Ok(h) => h,
+            Err(why) => return req.error(503, "503 Service Unavailable", why),
         };
         crate::fatidx::touched(&path);
         // A directory is told apart before anything is removed: FatFs's
@@ -2096,18 +2098,19 @@ struct Held(#[allow(dead_code)] Vec<crate::fatidx::WriteIntent>);
 /// at once (`Command::Release`, the loop woken from its frame's sleep);
 /// and wait until neither is held. The caller keeps the returned intents
 /// to the end of its card work, and holds `cache_builder::busy()` too, so
-/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). `None` if the
-/// player did not let go: the caller refuses and touches nothing.
+/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). `Err` (the
+/// 503's sentence) if the player did not let go, or the display is writing
+/// that Formula's compiled file: the caller refuses and touches nothing.
 ///
 /// A path that is an 8.3 alias (`NES_MA~1.GIF`) may name any file of its
 /// folder: the intent and the wait are for the whole folder then.
-fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
+fn release_for_write(ctx: &Ctx, fs_path: &str) -> std::result::Result<Held, &'static str> {
     // A Formula's compiled file the display is writing now (`card_formulas`):
     // its turn first (FAT has no file locks here: two writers of one file
     // corrupt it).
     #[cfg(feature = "psi")]
     if !crate::card_formulas::wait_not_writing(fs_path) {
-        return None;
+        return Err(PREPARING);
     }
     let card = fs_path.strip_prefix(config::SD_MOUNT).unwrap_or(fs_path);
     let alias = !opendmd_core::fatread::is_canonical(card);
@@ -2150,9 +2153,9 @@ fn release_for_write(ctx: &Ctx, fs_path: &str) -> Option<Held> {
     // else just the copy opened ahead (a transition's outgoing file closes
     // within the wait below).
     if (on_screen || crate::state::is_ahead(fs_path) || held()) && !release_player(ctx, on_screen) {
-        return None;
+        return Err(NOT_RELEASED);
     }
-    wait_until_not(held).then_some(Held(intents))
+    wait_until_not(held).then_some(Held(intents)).ok_or(NOT_RELEASED)
 }
 
 /// `Command::Release`: the main loop lets go of the copy opened ahead and,
@@ -2196,6 +2199,10 @@ fn wait_until_not(held: impl Fn() -> bool) -> bool {
 
 /// The answer when [`release_for_write`] got none: the file is left alone.
 const NOT_RELEASED: &str = "playback did not let go of the file; try again";
+/// The 503 when the display is writing that Formula's compiled file
+/// (`card_formulas`) past `release_for_write`'s wait.
+#[cfg(feature = "psi")]
+const PREPARING: &str = "the display is preparing this Formula; try again in a moment";
 
 /// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
 /// must be `cache/` or the retired `odm/` tree (or a directory in one). The
@@ -2401,8 +2408,9 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str, create_new: bool) -> Result<()>
     // copy — ask it to move on first: FAT cannot replace a file that is
     // being read.
     // Held to the end of the upload and its replace of `dest`.
-    let Some(_held) = release_for_write(c, &dest) else {
-        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    let _held = match release_for_write(c, &dest) {
+        Ok(h) => h,
+        Err(why) => return up.error(503, "503 Service Unavailable", why),
     };
     if create_new {
         // Taken now, empty (FatFs's create-new: the folder's one walk): a
@@ -2509,11 +2517,13 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     // `to` would have played it). The stream task holds
     // `cache_builder::busy()` throughout.
     // In turn: a refused `from` asks nothing more of the player.
-    let Some(_from_held) = release_for_write(c, &from) else {
-        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    let _from_held = match release_for_write(c, &from) {
+        Ok(h) => h,
+        Err(why) => return up.error(503, "503 Service Unavailable", why),
     };
-    let Some(_to_held) = release_for_write(c, &to) else {
-        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    let _to_held = match release_for_write(c, &to) {
+        Ok(h) => h,
+        Err(why) => return up.error(503, "503 Service Unavailable", why),
     };
     if let Some(dir) = std::path::Path::new(&to).parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {

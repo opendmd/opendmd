@@ -1,5 +1,5 @@
 //! Formulas compile on a stack of their own: the card's, prepared after
-//! the card is handed over (`card_formulas`, [`run_with`] a bigger stack),
+//! the card is handed over (`card_formulas`, [`run_with_prio`] a bigger stack),
 //! and psi-probe's. Psi's compiler is a recursive
 //! descent parser bounded at `psi::MAX_DEPTH` levels; at its worst (calls
 //! nested to the cap, a misspelt name at the bottom) it used 9,664 B of
@@ -52,10 +52,10 @@ use opendmd_core::psi;
 /// waits for it to suspend).
 #[cfg(feature = "psi-probe")]
 pub fn run<T: Send, F: FnOnce() -> T + Send>(f: F) -> Option<T> {
-    run_with(config::PSI_COMPILE_STACK, f).map(|(out, _)| out)
+    run_with_prio(config::PSI_COMPILE_STACK, None, f).map(|(out, _)| out)
 }
 
-/// The free heap at its lowest during the last [`run_with`] (B): IDF's
+/// The free heap at its lowest during the last [`run_with_prio`] (B): IDF's
 /// local minimum, the sum of each region's own low (so it can be lower
 /// than the heap ever was at once, never higher).
 static LAST_LOW: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -65,9 +65,9 @@ pub fn last_low() -> u32 {
     LAST_LOW.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-/// [`run`] with `stack` bytes of stack: the result, and how much of the
-/// stack was never touched (B).
-pub fn run_with<T: Send, F: FnOnce() -> T + Send>(stack: usize, f: F) -> Option<(T, u32)> {
+/// [`run`] with `stack` bytes of stack, at priority `prio` (`None`: the
+/// caller's): the result, and how much of the stack was never touched (B).
+pub fn run_with_prio<T: Send, F: FnOnce() -> T + Send>(stack: usize, prio: Option<u32>, f: F) -> Option<(T, u32)> {
     use esp_idf_sys as sys;
     struct Job<F, T> {
         f: Option<F>,
@@ -95,7 +95,7 @@ pub fn run_with<T: Send, F: FnOnce() -> T + Send>(stack: usize, f: F) -> Option<
     }
     let core = esp_idf_hal::cpu::core() as i32;
     // SAFETY: a query about the calling task.
-    let prio = unsafe { sys::uxTaskPriorityGet(core::ptr::null_mut()) }.clamp(1, 24);
+    let prio = prio.unwrap_or_else(|| unsafe { sys::uxTaskPriorityGet(core::ptr::null_mut()) }).clamp(1, 24);
     // (xSemaphoreCreateBinary: a queue of one empty item, type 3.)
     let done = unsafe { sys::xQueueGenericCreate(1, 0, 3) };
     if done.is_null() {

@@ -1270,7 +1270,9 @@ emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
-# The offline lane (tools/emu/offline_lane.py): the smoke image with WiFi off (NVS, then
+# The offline lane (tools/emu/offline_lane.py): the emu-census image (the API
+# lane's; with WiFi off it takes one card Formula as short at first, so a
+# retry compiles on the network worker) with WiFi off (NVS, then
 # the card's one-line opendmd.json), the card's Formulas compiled at mount, no WiFi or
 # httpd for 700 emulated s, then Connect to Wi-Fi over Improv joining and restarting
 # online. EMU_OFFLINE_OK.
@@ -1280,8 +1282,8 @@ emu-offline-psb:
 	cd $(PSICLI) && for f in $(abspath tools/emu/offline)/*.psi; do \
 	  RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $$f -o $(EMU_OFFLINE_HOST)/$$(basename $$f .psi).psb 2>/dev/null || true; done
 emu-offline: emu-build emu-card emu-offline-psb
-	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
-	uv run --quiet tools/emu/run.py offline --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --host-psb $(EMU_OFFLINE_HOST) $(EMU_ARGS)
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
+	uv run --quiet tools/emu/run.py offline --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --host-psb $(EMU_OFFLINE_HOST) $(EMU_ARGS)
 
 # The no-card lane: an image with the `nocard-test` feature (src/nocard_test.rs)
 # booted with no card (an empty card image): it must boot, run its panel, keep
