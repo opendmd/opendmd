@@ -1848,6 +1848,55 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
 PLAYING = "(document.querySelector('#sets-list .tag.act')?.closest('button.pl').textContent || '')"
 
 
+def rename_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Playlists' Rename… and Duplicate (js/sets.js), in a fresh browser: a
+    playlist that is playing, has a favourite and is named by a schedule
+    rule, renamed: its lines and favourite under the new name, the old ones
+    gone, the display and the rule following it; then duplicated ("rn-b 2",
+    the old one kept); a change of case alone. And Now's "Next:" line."""
+    g = card_gifs()[:3]
+    sets = overlay / "sets"
+    put_text(base + "/api/sets/rn-a", g[0] + "\n" + g[1] + "\n")
+    put_text(base + "/api/files/sets/rn-a.meta", render_meta_line(g[0], {"w": 3}) + "\n")
+    rules = [{"days": [7], "from": "03:00", "to": "03:01", "set": "rn-a"}, {"days": [7], "from": "04:00", "to": "04:01", "set": "filelist.hall"}]
+    put_json(base + "/api/schedule", {"rules": rules, "night": None})
+    put_json(base + "/api/config", {"set": "rn-a"})
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#sets")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-a.txt']", timeout=20000)
+    page.evaluate("() => { window.prompt = () => 'rn-b'; }")
+    sets_do(page, "/sets/rn-a.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-b.txt'] .tag.act", timeout=30000)
+    t = last_toast(page, "ok")
+    sched = get_json(base + "/api/schedule")
+    check((sets / "rn-b.txt").read_text() == g[0] + "\n" + g[1] + "\n" and (sets / "rn-b.meta").read_text() == render_meta_line(g[0], {"w": 3}) + "\n"
+          and not (sets / "rn-a.txt").exists() and not (sets / "rn-a.meta").exists(),
+          f"rename: the lines and the favourite under the new name, the old ones gone ('{t}')")
+    check(get_json(base + "/api/config")["set"] == "rn-b" and [r.get("set") for r in sched["rules"]] == ["rn-b", "filelist.hall"],
+          f"rename: the display plays it under its new name, the schedule's rule follows ({sched['rules']})")
+    no_leaks(page, "playlists (rename)")
+    sets_do(page, "/sets/rn-b.txt", "duplicate")
+    page.wait_for_selector("#sets-list [data-path='/sets/rn-b 2.txt']", timeout=30000)
+    t = last_toast(page, "ok")
+    check((sets / "rn-b 2.txt").read_text() == (sets / "rn-b.txt").read_text() and (sets / "rn-b 2.meta").exists()
+          and get_json(base + "/api/config")["set"] == "rn-b", f"duplicate: 'rn-b 2' with its favourite, the one playing kept ('{t}')")
+    page.evaluate("() => { window.prompt = () => 'RN-B 2'; }")
+    sets_do(page, "/sets/rn-b 2.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/RN-B 2.txt']", timeout=30000)
+    names = sorted(p.name for p in sets.glob("*") if p.name.lower().startswith("rn-b"))
+    check(names == ["RN-B 2.meta", "RN-B 2.txt", "rn-b.meta", "rn-b.txt"], f"rename: a change of case alone ({names})")
+    # Now: what plays next, once the display has picked it.
+    goto_view(page, "now")
+    page.wait_for_function("document.querySelector('#now-next').textContent.startsWith(' · Next: ')", timeout=20000)
+    nx = get_json(base + "/api/status")["now_playing"].get("next")
+    check(nx in g[:2] and page.inner_text("#now-next").strip() != "· Next:", f"now: Next names what comes next ({nx}, '{page.inner_text('#now-next')}')")
+    page.context.close()
+    put_json(base + "/api/config", {"set": ""})
+    put_json(base + "/api/schedule", {"rules": [], "night": None})
+    for n in ("rn-b.txt", "rn-b.meta", "RN-B 2.txt", "RN-B 2.meta"):
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/" + urllib.parse.quote(n), method="DELETE"), timeout=30).close()
+
+
 def target_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     """Into a chosen playlist (js/gifs.js targetMenu), in a fresh browser:
     the Library's Select, then "Add 3 to playlist ▾": the one playing first,
@@ -3768,7 +3817,7 @@ def mock_pass(browser) -> None:
         check(order[:2] == ["now-skip", "now-pause"] and "pri" in page.get_attribute("#now-skip", "class"),
               f"now: the transport starts with Skip, the primary ({order})")
         lines = page.eval_on_selector_all("#view-now .nowt > div:not([hidden])", "els => els.map(e => e.textContent.trim())")
-        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+$", lines[2]) and lines[3] == "✎ Edit in Create Art"
+        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+( · Next: .+)?$", lines[2]) and lines[3] == "✎ Edit in Create Art"
               and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
               f"now: title, tags, position and Edit on lines of their own; no device stats or Follow switch here ({lines})")
         # The device's figures are Settings › Device's Status. Late frames in
@@ -3943,6 +3992,7 @@ def mock_pass(browser) -> None:
         card_swap_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
         target_checks(browser, base, overlay, errors)
+        rename_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)

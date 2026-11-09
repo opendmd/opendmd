@@ -9,15 +9,13 @@
 // about on the way out (`guard`); the ones that take many GIFs at once
 // have an Undo in their toast.
 
-import { app, playlistLabel, dirty } from './state.js';
+import { app, playlistLabel, dirty, SET_NAME, SET_NAME_RULE } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
 import { h, clear, on, store, toast, label, note, niceName, isSys, byNice, FLAGS, isFormula, drawn } from './util.js';
 
-// Not `filelist.*`: the firmware reads such a `set` as a root manifest.
-const NAME_RE = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
 const picks = (box, k) => [...box.querySelectorAll('.on')].map((c) => c.dataset[k]);
 
 // ctx: {el (the view), closeEd(), activate(p), loadSets(), known() (playlist paths), lists() (playlists)}
@@ -348,7 +346,7 @@ export function editor(se, ctx) {
   async function save(andActivate) {
     const n = name.value.trim().replace(/\.txt$/, '');
     if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return false; }
-    if (!NAME_RE.test(n)) { toast('playlist names are letters, digits, space, _ . - (no slashes, not filelist.*)', 'bad'); return false; }
+    if (!SET_NAME.test(n)) { toast(SET_NAME_RULE, 'bad'); return false; }
     if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return false; }
     const path = `/sets/${n}.txt`;
     if (ctx.known().includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return false;

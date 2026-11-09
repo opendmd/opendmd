@@ -2424,6 +2424,20 @@ class Player:
         if time.monotonic() - self.last_advance >= dwell:
             self.advance()
 
+    def peek_next(self):
+        """`now_playing.next` (Engine::ahead_path): the entry after
+        this one in the order, skipping files the card lacks as advance()
+        does; None when nothing is picked ahead -- an off-playlist play, a
+        Formula on the panel, or a playlist of one."""
+        cur = self.current()
+        if self.played or not cur or len(self.order) < 2 or cur.startswith("@") or FORMULA_FILE_RE.match(cur):
+            return None
+        for k in range(1, len(self.order)):
+            path = self.playlist[self.order[(self.pos + k) % len(self.order)]]
+            if not path.startswith("/") or self.ctx.fs.read_path(path.lstrip("/")) is not None:
+                return path
+        return None
+
     def current(self):
         if self.played:
             return self.played
@@ -3489,6 +3503,7 @@ def make_handler(ctx: Context, quiet: bool):
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                         **({} if player.kept_s() is None else {"kept_s": player.kept_s()}),
+                        "next": player.peek_next(),
                     },
                     "paused": player.paused,
                     "entries": len(player.playlist),
@@ -3540,7 +3555,7 @@ def make_handler(ctx: Context, quiet: bool):
                 if ctx.sd_state != "ok":
                     # No card the player can use: nothing plays (the boot
                     # task never hands an unreadable card over).
-                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0)
+                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0, next=None)
                     obj.update(entries=0, index_state="unavailable")
             return obj
 

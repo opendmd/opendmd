@@ -179,8 +179,14 @@ button lands on them.
   /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All files,
   a root manifest's file name, or a set's name — which the device applies
   in a few seconds), kept in reach at the bottom; a list row's **…** has
-  **Play** and **Delete…**. Deleting the active playlist switches the
-  player back to All files first. Switching is disabled while status says
+  **Play**, **Rename…**, **Duplicate** and **Delete…**. Deleting the
+  active playlist switches the display back to All files first. Rename and
+  Duplicate are the web app's (no request renames a set): the lines `PUT
+  /api/sets/<new>`, the overrides read and written to `<new>.meta`; a
+  rename then moves `config.set` if it plays, rewrites schedule rules that
+  name it, deletes the old `.txt`/`.meta` and follows in the editor (a
+  change of case alone goes by way of another name: FAT sees one file). A
+  taken name gets the next number ("Halloween 2"). Switching is disabled while status says
   an index is `building`. Entries are GIF paths or Formulas.
 - **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
