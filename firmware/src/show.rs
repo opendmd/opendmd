@@ -238,8 +238,57 @@ impl Drop for Updating {
 // --- The start-up show's Formula ------------------------------------------------
 
 /// How long a card Formula's show stays dark waiting for the card (ms into
-/// the show) before the wordmark plays instead.
+/// the show) before the wordmark plays instead; the card's own value
+/// replaces NVS's only before then too ([`Screen::card_formula`]).
 pub const CARD_WAIT_MS: u32 = 500;
+const NOT_IN_TIME: &str = "the card was not ready in time";
+
+/// The boot task needs the heap before the playlist's index
+/// ([`make_room_for_index`]): the start-up Formula goes ([`Screen::heed`]).
+static LET_GO_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The display has taken the card's Formula event (built it or not).
+#[cfg(feature = "psi")]
+pub static CARD_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const LET_GO_WHY: &str = "not enough memory beside the playlist's index";
+/// The largest free block the boot task keeps for the in-RAM index
+/// fallback with the Formula held: `config::IN_RAM_INDEX_MIN_BLOCK` and
+/// a margin.
+#[cfg(feature = "psi")]
+const INDEX_ROOM: usize = crate::config::IN_RAM_INDEX_MIN_BLOCK + 8 * 1024;
+
+/// On the boot task (CPU0), before the playlist's index: the in-RAM
+/// fallback needs a 64 KB block (`main::open_catalog`; on the fresh heap
+/// it is not checked, and an allocation that fails aborts). With the
+/// start-up Formula held and the largest block short of [`INDEX_ROOM`],
+/// the display lets it go (the wordmark plays, said why) and this waits
+/// for it (at most half a second). `sent`: a card Formula event went just
+/// before: the display takes it first (at most 200 ms).
+#[cfg(feature = "psi")]
+pub fn make_room_for_index(sent: bool) {
+    let wait = |ms: u32, done: &dyn Fn() -> bool| {
+        for _ in 0..ms / 5 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    if sent {
+        crate::wake::kick();
+        wait(200, &|| CARD_SEEN.load(Relaxed));
+    }
+    if !FORMULA_SHOWN.load(Relaxed) {
+        return;
+    }
+    let block = crate::state::largest_free_block();
+    if block >= INDEX_ROOM {
+        return;
+    }
+    log::warn!("boot show: the largest free block is {block} B (the index may need {INDEX_ROOM} B): the formula goes, the built-in show plays");
+    LET_GO_ASKED.store(true, Relaxed);
+    crate::wake::kick();
+    wait(500, &|| !FORMULA_SHOWN.load(Relaxed));
+}
 
 /// What `/api/status` says of the start-up show's Formula this boot
 /// (`boot_formula`): [`NO_FORMULA`] (none set, or the show `off`), played,
@@ -312,6 +361,10 @@ impl Formula {
         psb: Option<(Vec<u8>, String)>,
     ) -> Formula {
         match r {
+            Ok(_) if LET_GO_ASKED.load(Relaxed) => {
+                fell_back(path, LET_GO_WHY);
+                Formula::Wordmark
+            }
             Ok(s) => {
                 log::info!("boot show: formula {}", crate::short(path));
                 BOOT_STATE.store(PLAYED, Relaxed);
@@ -350,6 +403,7 @@ pub fn check_formula(path: &str) -> Result<(), String> {
     #[cfg(feature = "psi")]
     {
         let r = match opendmd_core::synth::formula_file(path) {
+            Some(_) if !crate::CARD_READY.load(Relaxed) => return Err(crate::CARD_NOT_READY.to_string()),
             Some((file, opts)) => crate::formulas::read_card(file).and_then(|b| boot::FormulaShow::from_bytes(&b, opts)),
             None => boot::FormulaShow::open(path),
         };
@@ -435,34 +489,67 @@ impl Screen {
         }
     }
 
-    /// The boot task read the card Formula `path` (the card's `boot_formula`,
-    /// which wins over NVS's as every card setting does): played from here
-    /// if the show still runs, else the wordmark goes on (and why is said).
+    /// The card's `boot_formula` (`path`), which wins over NVS's as every
+    /// card setting does, from the boot task once the card is mounted: a
+    /// card Formula's compiled bytes (`psb`, or why not), `None` for any
+    /// other value (a bundled or inline Formula, or `""`: the wordmark).
+    /// Taken only early in the show (before [`CARD_WAIT_MS`]: in place of
+    /// what NVS named, or of the dark a card Formula waits in); later (the
+    /// card mounted on a second attempt, the wordmark already up) the show
+    /// goes on as it is, and the card's value plays from the next boot.
     #[cfg(feature = "psi")]
-    pub fn card_formula(&mut self, path: &str, psb: Result<Vec<u8>, opendmd_core::psi::Error>) {
-        if self.scene != Scene::Show || self.len == ShowLength::Off {
+    pub fn card_formula(&mut self, path: &str, psb: Option<Result<Vec<u8>, opendmd_core::psi::Error>>) {
+        let t = self.t();
+        if self.scene != Scene::Show || self.len == ShowLength::Off || t >= CARD_WAIT_MS || LET_GO_ASKED.load(Relaxed) {
+            if self.scene == Scene::Show && self.len != ShowLength::Off {
+                log::info!("boot show: the card's formula {} came at {t} ms: from the next start", crate::short(path));
+            }
             return;
         }
         path.clone_into(&mut self.path);
-        let opts = opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o).to_string();
         self.formula = match psb {
-            Ok(b) => {
+            _ if path.is_empty() => {
+                log::info!("boot show: the card's settings say the built-in show (at {t} ms)");
+                BOOT_STATE.store(NO_FORMULA, Relaxed);
+                FORMULA_SHOWN.store(false, Relaxed);
+                Formula::Wordmark
+            }
+            None => {
+                log::info!("boot show: the card's settings name formula {} (at {t} ms)", crate::short(path));
+                Formula::built(path, boot::FormulaShow::open(path), None)
+            }
+            Some(Ok(b)) => {
+                let opts = opendmd_core::synth::formula_file(path).map_or("", |(_, o)| o).to_string();
                 let r = boot::FormulaShow::from_bytes(&b, &opts);
                 let keep = r.as_ref().err().and_then(opendmd_core::fx_psi::look_retry).map(|_| (b, opts));
-                log::info!("boot show: the card's formula read at {} ms", self.t());
+                log::info!("boot show: the card's formula read at {t} ms");
                 Formula::built(path, r, keep)
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 fell_back(path, &e.msg);
                 Formula::Wordmark
             }
         };
+        if matches!(self.formula, Formula::Wordmark) {
+            FORMULA_SHOWN.store(false, Relaxed);
+        }
+    }
+
+    /// The boot task asked for the heap ([`make_room_for_index`]): the
+    /// Formula goes, the wordmark plays. Called every loop while the show
+    /// may run (also when night mode keeps the panel dark).
+    pub fn heed(&mut self) {
+        if LET_GO_ASKED.load(Relaxed) && !matches!(self.formula, Formula::Wordmark) {
+            fell_back(&self.path, LET_GO_WHY);
+            self.formula = Formula::Wordmark;
+            FORMULA_SHOWN.store(false, Relaxed);
+        }
     }
 
     /// The Formula is done with (the show ended): its memory goes back.
     fn let_go(&mut self) {
         match self.formula {
-            Formula::Waiting => fell_back(&self.path, "the card was not ready in time"),
+            Formula::Waiting => fell_back(&self.path, NOT_IN_TIME),
             #[cfg(feature = "psi")]
             Formula::Retry { .. } => fell_back(&self.path, opendmd_core::psi::NO_MEMORY),
             _ => {}
@@ -475,9 +562,10 @@ impl Screen {
     /// [`CARD_WAIT_MS`] (or with no card) gives way to the wordmark; one
     /// short of memory is built again when due.
     fn step_formula(&mut self, t: u32) {
+        self.heed();
         match &mut self.formula {
             Formula::Waiting if t >= CARD_WAIT_MS || self.no_card => {
-                let why = if self.no_card { "no card" } else { "the card was not ready in time" };
+                let why = if self.no_card { "no card" } else { NOT_IN_TIME };
                 fell_back(&self.path, why);
                 self.formula = Formula::Wordmark;
             }
@@ -514,6 +602,13 @@ impl Screen {
         self.no_card = true;
         log::info!("boot show: no card at {} ms", self.t());
         self.text_at = None;
+        // A card Formula given up for the wait: now it is known why.
+        if let Ok(mut e) = BOOT_ERROR.lock() {
+            if *e == NOT_IN_TIME {
+                log::info!("boot show: formula {}: no card", crate::short(&self.path));
+                "no card".clone_into(&mut e);
+            }
+        }
     }
 
     /// The card and its playlist are ready (the handover may wait for the

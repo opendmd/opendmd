@@ -88,6 +88,8 @@ NOCARD = [
     ("settings in NVS", re.compile(r'nocard-test: store,"settings_store":"nvs \(no card\)"')),
     ("change applied", re.compile(r"nocard-test: applied brightness 37: ok")),
     ("kept after the restart", re.compile(r"nocard-test: after the restart: brightness 37, kept")),
+    # NVS names a card Formula as the start-up show (seeded): with no card, the wordmark.
+    ("start-up formula: the wordmark", re.compile(r"boot show: formula /formulas/x\.psi does not build \((the card was not ready in time|no card)\): the built-in show")),
 ]
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
 # 60 after the warm-up (was 40): a sample's level depends on where in a GIF it
@@ -172,6 +174,10 @@ def main():
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
     if a.mode == "api":
         return api(a, sim, rom, want_sha)
+    if a.mode == "nocard":
+        # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
+        import api_lane
+        a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None, extra={"boot_fx": "/formulas/x.psi"})
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
     seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)

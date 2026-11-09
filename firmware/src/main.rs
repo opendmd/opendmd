@@ -158,7 +158,7 @@ static FRAME_SHOWN: AtomicBool = AtomicBool::new(false);
 /// task does not touch the card at all — every rebuild, set check and
 /// manifest install answers [`CARD_NOT_READY`], as they did with no card.
 pub static CARD_READY: AtomicBool = AtomicBool::new(false);
-const CARD_NOT_READY: &str = "the card is not ready";
+pub(crate) const CARD_NOT_READY: &str = "the card is not ready";
 /// How a build that matched nothing ends its error (`finish_build`).
 const NO_ENTRIES: &str = "matched no entries";
 /// Transitions refused by [`transition_gate`] since boot (heartbeat).
@@ -1785,6 +1785,8 @@ fn main() -> Result<()> {
 
         // The boot task's news: no card for now, or the card and its
         // playlist — taken over once the show has run its minimum.
+        // The boot task may ask for the start-up Formula's heap.
+        screen.heed();
         if let Some(rx) = boot_rx.as_ref().filter(|_| pending.is_none()) {
             match rx.try_recv() {
                 Ok(boot::Event::NoCard) => screen.no_card(),
@@ -1792,6 +1794,7 @@ fn main() -> Result<()> {
                 Ok(boot::Event::Formula(f)) => {
                     let (path, psb) = *f;
                     screen.card_formula(&path, psb);
+                    show::CARD_SEEN.store(true, Ordering::Relaxed);
                 }
                 Ok(boot::Event::Ready(h)) => {
                     screen.ready();

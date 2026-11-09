@@ -77,9 +77,10 @@ export async function useSaid(f, keep) {
 export async function startUp(f, keep) {
   try {
     if (keep && onCard()) f = { ...f, ...await keep() };
-    const m = await psi(), p = m.compile(f.src) && path(m, f);
-    if (!p) throw new Error(m.error() || 'it doesn’t work yet');
-    if (m.compile(f.src) && m.info()[6] > 12000) throw new Error('this Formula is too heavy for the start-up show');
+    const m = await psi();
+    if (!m.compile(f.src)) throw new Error(m.error() || 'it doesn’t work yet');
+    if (m.info()[6] > 12000) throw new Error('this Formula is too heavy for the start-up show');
+    const p = path(m, f);
     if (/^@formula\?/.test(p) && p.length > 2048) throw new Error('this Formula is too long for the panel at start-up: save it first');
     await app.src.putConfig({ boot_formula: p });
     await app.refreshConfig();

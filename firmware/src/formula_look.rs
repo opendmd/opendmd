@@ -175,6 +175,10 @@ pub fn check(path: &str) -> Result<(), String> {
     if opendmd_core::synth::is_sent(path) {
         return Err("save the Formula first".into());
     }
+    // (One on the card is read from it: not before the handover.)
+    if on_card(path) && !crate::CARD_READY.load(Ordering::Relaxed) {
+        return Err(crate::CARD_NOT_READY.to_string());
+    }
     #[cfg(feature = "psi")]
     {
         build(path).map(drop).map_err(|e| e.msg)
