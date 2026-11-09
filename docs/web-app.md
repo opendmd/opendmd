@@ -101,12 +101,12 @@ button lands on them.
   with matches show, open, with their match counts — the category facets —
   and the platform chips count the matches, most first, and narrow them;
   clearing the box clears the platforms picked with it. Each GIF row shows
-  a thumbnail (below), its title, platform and favourite/hidden marks. Pick
+  a thumbnail (below), its title, platform and favourite marks. Pick
   one and the **Details** panel (the right-hand column; a sheet from the
   bottom on a phone) plays it with the panel look and shows its title,
   platform, category, author and file name, with **Send to panel**, **Add
-  to playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in
-  the playlist chosen beside them), Smooth motion where it applies, **Edit
+  to playlist…**, **Edit in Create Art**, **Favourite** (in the playlist
+  chosen beside it), Smooth motion where it applies, **Edit
   details…** and **Delete…**. **Select** (or a long press on a row, on a
   phone) shows a checkbox on every row and folder (a folder's ticks every
   GIF in it that the search shows) and a bar with **Select all shown**,
@@ -322,13 +322,13 @@ the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 
-## Favourites, hiding and schedules
+## Favourites and schedules
 
-**Favourites, hiding and schedules.** Right-click a GIF in the Library or a
+**Favourites and schedules.** Right-click a GIF in the Library or a
 playlist (its "…" button; on a phone a long press in a playlist) to make it a
-favourite, play it less, hide it, or — a second step, **Play longer or
+favourite, play it less, or — a second step, **Play longer or
 loop…** — play it twice as long, for N seconds, or N times — per playlist, so a GIF can
-be a favourite in one and hidden in another. Settings → Schedule → Time sets the zone
+be a favourite in one and play less often in another. Settings → Schedule → Time sets the zone
 (the player keeps time over NTP), and its Schedule picks a playlist
 and/or brightness for parts of the week ("Weekdays 18:00–23:00 → Consoles")
 and a night mode that turns the panel off or dims it; Now shows when either

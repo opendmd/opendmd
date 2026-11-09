@@ -253,7 +253,7 @@ impl DwellPolicy {
     ///   `dwell` is also set, `min` is 0 so it moves on after the `n`th; `max`
     ///   is raised to [`LOOPS_MAX`] so a slow loop is not cut short.
     ///
-    /// Weights and `never` are the scheduler's business and change nothing
+    /// Weights are the scheduler's business and change nothing
     /// here.
     pub fn with_override(self, ov: &Override) -> DwellPolicy {
         let mut d = self;
@@ -952,8 +952,8 @@ impl Engine {
         self.dwell = dwell;
     }
 
-    /// Apply a playlist's resolved overrides: `never` and `w` become the
-    /// scheduler's sparse weights (0 for `never`), `dwell` and `loops` are
+    /// Apply a playlist's resolved overrides: `w` becomes the scheduler's
+    /// sparse weights, `dwell` and `loops` are
     /// kept here and bend the [`DwellPolicy`] of that entry when it plays
     /// ([`DwellPolicy::with_override`]). Takes effect from the next entry
     /// opened. The indices are the catalog's, as the index build resolved
@@ -963,7 +963,7 @@ impl Engine {
         self.drop_ahead();
         self.timed.clear();
         for (index, ov) in overrides.iter() {
-            if let Some(w) = ov.scheduler_weight() {
+            if let Some(w) = ov.weight {
                 self.scheduler.set_weight(*index as usize, w);
             }
             if ov.affects_dwell() {
@@ -2610,7 +2610,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_entry_is_never_opened() {
+    fn a_zero_weight_entry_is_never_opened() {
         let dwell = DwellPolicy {
             min: Duration::ZERO,
             max: Duration::from_secs(30),
@@ -2621,7 +2621,7 @@ mod tests {
         ov.push(
             1,
             Override {
-                never: true,
+                weight: Some(0.0),
                 ..Default::default()
             },
         );
@@ -3955,12 +3955,12 @@ mod tests {
         assert_eq!(r.e.ahead_stats().dropped, 1);
         assert_eq!(run_ahead(&mut r.e, ms(1100)).len(), 3);
         assert_eq!(r.e.ahead_path(), Some((B, true)));
-        // Overrides that hide B: the pick is redrawn under them.
+        // Overrides that give B no weight: the pick is redrawn under them.
         let mut ov = Overrides::default();
         ov.push(
             1,
             Override {
-                never: true,
+                weight: Some(0.0),
                 ..Override::default()
             },
         );
@@ -4090,13 +4090,13 @@ mod tests {
         let mut r = ahead_rig(&[], &[]);
         let mut canvas = Canvas::new();
         started(&mut r.e, ms(0), &mut canvas);
-        // Everything hidden while A plays on: no draw to make.
+        // Everything weighted 0 while A plays on: no draw to make.
         let mut ov = Overrides::default();
         for i in 0..3 {
             ov.push(
                 i,
                 Override {
-                    never: true,
+                    weight: Some(0.0),
                     ..Override::default()
                 },
             );

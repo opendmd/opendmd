@@ -59,10 +59,8 @@ export async function mount(el) {
     onHold: (it) => { selMode(true); toggle(it.path, true); },
     onTick: () => sync(),
     onError: (m) => toast(m, 'bad'),
-    extra(it, row) {
-      const o = ov.get(it.path);
-      row.classList.toggle('hid', !!o?.never);
-      return [glyphs(o), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path)];
+    extra(it) {
+      return [glyphs(ov.get(it.path)), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path)];
     },
     onUpdate: counted,
   });
@@ -145,7 +143,6 @@ export async function mount(el) {
     const o = ov.get(current.path) || {};
     actions(btn, 'lib-d-menu', [
       ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, fav, (x) => x.w > 1)],
-      ['lib-d-hide', '⊘ Hide in…', () => inList(btn, (x) => ({ never: x.never ? null : true, w: null }), (x) => x.never)],
       app.device && ['lib-d-edit', 'Edit details…', edit],
       app.device && ['lib-d-del', 'Delete…', remove, '.danger']], label(current.e));
   }

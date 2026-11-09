@@ -32,7 +32,7 @@ what is on now, and **Previous** steps back one at a time.
 Tap **☆** next to the title to make the GIF a favourite in the playlist
 that's playing. It turns to **★**, and a second tap undoes it; the message
 that pops up names the playlist. The **…** on a Recently played GIF has the
-other choices: play less often, hide, play longer. Formulas have no ☆.
+other choices: play less often, play longer. Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -135,7 +135,7 @@ files, Halloween, Christmas) are saved under a name of your own.
 **Save & play** while editing, or **Play** from a playlist's **…** menu,
 switches the panel to it in a few seconds.
 
-### Favourites and hiding
+### Favourites
 
 Right-click a GIF in the Library or a playlist, or use its **…** button, to
 tune how it plays in that playlist. On a phone, long-press it in a
@@ -143,12 +143,12 @@ playlist.
 
 - **Favourite** plays it more often.
 - **Play less often** does the opposite.
-- **Hide from this playlist** means it never plays there.
 - **Play longer or loop…** keeps it on screen twice as long or for a
   number of seconds, or plays it a set number of times.
 
-These are per playlist, so a GIF can be a favourite in one and hidden in
-another. **Reset** puts it back to normal.
+These are per playlist, so a GIF can be a favourite in one and play less
+often in another. **Reset** puts it back to normal. To keep a GIF from
+playing in a playlist, take it out of the playlist.
 
 ## Formulas
 

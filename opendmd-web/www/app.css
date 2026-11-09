@@ -144,8 +144,8 @@ input.sw:checked{background:var(--acc)}input.sw:checked::after{left:16px}
 @media (max-width:760px){.libgrid>.side{bottom:calc(58px + env(safe-area-inset-bottom));max-height:calc(100vh - 120px)}}
 
 .ov{display:inline-flex;gap:4px;flex:none;font-style:normal}
-.ov i{font-style:normal;font-size:13px;color:var(--acc)}.ov i.hid{color:var(--bad)}.ov i.less{color:var(--mut)}
-.vrow.hid .t{opacity:.45;text-decoration:line-through}.vrow.skip .t{opacity:.45}
+.ov i{font-style:normal;font-size:13px;color:var(--acc)}.ov i.less{color:var(--mut)}
+.vrow.skip .t{opacity:.45}
 button.more{min-height:28px;padding:0 8px;flex:none;border-color:transparent}
 .vrow .tag,.vrow .more{margin-left:auto}.vrow .tag{background:none;color:var(--mut);padding:0}.vrow .tag+.more{margin-left:0}
 @media (hover:hover){.vrow .more{opacity:0}.vrow:hover .more,.vrow:focus-within .more{opacity:1}}
