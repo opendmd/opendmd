@@ -71,7 +71,7 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 - **Library:** search, browse by category and platform, preview each GIF with the panel look,
   send it to the panel, and add, rename or delete GIFs.
 - **Playlists:** build them by platform, category and title words, then reorder and switch
-  between them live. A GIF can be a favourite in one playlist and hidden in another.
+  between them live. A GIF can be a favourite in one playlist and play less often in another.
 - **Create Art:** find game screenshots, boxes and logos, or GeoCities GIFs, or use your own
   picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without

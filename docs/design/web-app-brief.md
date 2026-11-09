@@ -98,7 +98,7 @@ Looking at every view side by side, the problems repeat:
 - Details: title, then one line "SNES · Consoles · by Author", preview,
   then the actions in two rows: Send to panel (primary) + Add to playlist;
   Edit in Make art + Smooth motion as a toggle row; a "…" menu for
-  Favourite/Hide in, Edit details, Delete. The file line last, small.
+  Favourite in, Edit details, Delete. The file line last, small.
 - Web sources: the results grid keeps its look; the narrowing row becomes
   part of row 2 (replacing the tabs) so nothing jumps.
 
@@ -106,7 +106,7 @@ Looking at every view side by side, the problems repeat:
 - The list: name, count, a "Playing" chip on the active one; the whole row
   is a button that opens it; Activate and Delete move to a "…" menu.
 - The editor: entries with a drag handle (keyboard: alt+arrow), the
-  platform tag muted, a single "…" for favourite/hide/duration/remove.
+  platform tag muted, a single "…" for favourite/duration/remove.
   Save (primary) + "Save & activate" quiet; Shuffle/Sort/Picked to top in a
   single "Arrange" menu.
 - Build from filters: human category names, "Flags to drop" as chips with

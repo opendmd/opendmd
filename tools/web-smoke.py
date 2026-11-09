@@ -1889,11 +1889,9 @@ def fmt_override_decimal(v: float) -> str:
 
 
 def render_meta_line(path: str, ov: dict) -> str:
-    """The canonical `.meta` line for one GIF: fields in order never, w,
+    """The canonical `.meta` line for one GIF: fields in order w,
     dwell/dwell_x, loops (overrides::render_fields)."""
     parts = [path]
-    if ov.get("never"):
-        parts.append("never")
     if "w" in ov:
         parts.append(f"w={fmt_override_decimal(ov['w'])}")
     if "dwell" in ov:
@@ -1944,10 +1942,13 @@ def now_fav_checks(page: Page, base: str) -> None:
     check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
     # Clicked while the list is still being read (slowed here): the others survive.
     # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
-    others = card_gifs()[-2:]
-    seeded = [{"path": others[0], "never": True}, {"path": others[1], "loops": 3}]
-    put_text(base + "/api/files/filelist.meta", "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
+    # An earlier build's `never` line (a GIF once hidden) is no override at all.
+    *_, retired, a, b = card_gifs()
+    others = [a, b]
+    seeded = [{"path": others[0], "w": 0.5}, {"path": others[1], "loops": 3}]
+    put_text(base + "/api/files/filelist.meta", f"{retired}\tnever\n" + "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
     settle(base, 2)
+    check(get_json(base + "/api/overrides?set=")["overrides"] == seeded, "now fav: an old `never` line is skipped")
     path = get_json(base + "/api/status")["now_playing"]["path"]
     goto_view(page, "library")
     page.evaluate("import('./js/state.js').then(({ app }) => { const f = app.src.overrides.bind(app.src); app.src._ov = f; app.src.overrides = (s) => new Promise((r) => setTimeout(r, 2500)).then(() => f(s)); })")
@@ -3724,16 +3725,17 @@ def mock_pass(browser) -> None:
               "library: in Select mode a row tap picks it (no preview); three selected")
         selected = page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.selection]; }")
         # Per-GIF overrides on the playlist in play (filelist.txt): favourite,
-        # hide, play longer 2x, loop 3, on four distinct rows.
+        # play less, play longer 2x, loop 3, on four distinct rows.
         fav_path = row_path(page, "#lib-list", 3)
-        hide_path = row_path(page, "#lib-list", 4)
+        less_path = row_path(page, "#lib-list", 4)
         long_path = row_path(page, "#lib-list", 5)
         loop_path = row_path(page, "#lib-list", 6)
         open_row_menu(page, "#lib-list", 3, via="more")
         page.click("#ov-fav")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 4, via="right-click")
-        page.click("#ov-hide")
+        check(page.locator("#ov-menu #ov-hide").count() == 0, "row menu: no Hide")
+        page.click("#ov-less")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 5, via="more")
         check(page.locator("#ov-menu #ov-2x, #ov-menu #ov-secs").count() == 0, "row menu: Play longer's fields are a second step")
@@ -3746,14 +3748,12 @@ def mock_pass(browser) -> None:
         page.click("#ov-loops-set")
         page.wait_for_selector("#ov-menu", state="detached")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=3 >> i.fav").count() == 1, "library overrides: favourite glyph")
-        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=4 >> i.hid").count() == 1
-              and "hid" in (page.get_attribute("#lib-list .vrow:not([hidden]) >> nth=4", "class") or ""),
-              "library overrides: hidden glyph + row class")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=4 >> i.less").count() == 1, "library overrides: play-less glyph")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=5 >> i.long").count() == 1, "library overrides: play-longer glyph")
         check(page.locator("#lib-list .vrow:not([hidden]) >> nth=6 >> i.loop").count() == 1, "library overrides: loop glyph")
         expected_over = [
             {"path": fav_path, "w": 3},
-            {"path": hide_path, "never": True},
+            {"path": less_path, "w": 0.5},
             {"path": long_path, "dwell_x": 2},
             {"path": loop_path, "loops": 3},
         ]
@@ -3764,7 +3764,7 @@ def mock_pass(browser) -> None:
         got_meta = meta_file.read_text() if meta_file.exists() else ""
         check(got_meta == want_meta, f"library overrides: filelist.meta byte-for-byte ({got_meta!r} vs {want_meta!r})")
         st = get_json(base + "/api/status")
-        check(st["overrides"] == 4 and st["hidden"] == 1, f"library overrides: status overrides=4 hidden=1 (got {st['overrides']}/{st['hidden']})")
+        check(st["overrides"] == 4 and "hidden" not in st, f"library overrides: status overrides=4, no hidden count (got {st['overrides']}/{st.get('hidden')})")
         no_leaks(page, "library (overrides menu)")
         shot(page, "override-menu", "laptop")
         # Phone: the same menu renders as a bottom sheet.
@@ -7384,8 +7384,9 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
     page.click("#lib-d-more")
-    for sel in ("#lib-d-fav", "#lib-d-hide", "#lib-d-edit", "#lib-d-del"):
+    for sel in ("#lib-d-fav", "#lib-d-edit", "#lib-d-del"):
         check(page.is_visible(sel), f"details: {sel} in the … menu")
+    check(page.locator("#lib-d-hide").count() == 0, "details: no Hide in… in the … menu")
     check("danger" in (page.get_attribute("#lib-d-del", "class") or ""), "details: Delete… is destructive in the menu")
     page.keyboard.press("Escape")
     no_leaks(page, "library (details)")

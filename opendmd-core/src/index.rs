@@ -529,9 +529,9 @@ mod tests {
     }
 
     const META: &str = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
-                        /gifs/consoles/md_sonic3_spritefox11.gif\tnever\n\
+                        /gifs/consoles/md_sonic3_spritefox11.gif\tw=0\n\
                         /gifs/XMAS/XMAS_Tree_02.gif\tdwell=45\tloops=2\n\
-                        /gifs/Nowhere/NES_Gone_01.gif\tnever\n";
+                        /gifs/Nowhere/NES_Gone_01.gif\tw=0\n";
 
     fn build_with_meta(filter: &Filter) -> (IndexHeader, Overrides, Vec<u8>) {
         let set = OverrideSet::read(META.as_bytes()).unwrap();
@@ -561,9 +561,9 @@ mod tests {
         let got: Vec<u32> = resolved.iter().map(|(i, _)| *i).collect();
         assert_eq!(got, vec![0, 2, 4]);
         assert_eq!(resolved.get(0).unwrap().weight, Some(3.0));
-        assert!(resolved.get(2).unwrap().never);
+        assert_eq!(resolved.get(2).unwrap().weight, Some(0.0));
         assert_eq!(resolved.get(4).unwrap().loops, Some(2));
-        assert_eq!(resolved.summary(), (1, 1, 1));
+        assert_eq!(resolved.summary(), (2, 1));
 
         let fp = overrides::fingerprint(META.as_bytes()).unwrap();
         assert!(header.is_valid_for(MANIFEST.len() as u32, &Filter::new(), fp));

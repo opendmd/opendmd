@@ -2675,8 +2675,8 @@ fn stream_names(req: &mut Req, dir: &str, names: crate::fatidx::Names) -> Result
     req.finish()
 }
 
-/// `GET /api/overrides`: `{"set","playlist","overrides":[{path, never?, w?,
-/// dwell?, dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
+/// `GET /api/overrides`: `{"set","playlist","overrides":[{path, w?, dwell?,
+/// dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
 /// is an empty list).
 fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Result<()> {
     use opendmd_core::overrides::{format_decimal, scan_meta, Dwell};
@@ -2701,9 +2701,6 @@ fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Res
             }
             first = false;
             buf.push_str(&format!(r#"{{"path":{}"#, json_string(path)));
-            if ov.never {
-                buf.push_str(r#","never":true"#);
-            }
             if let Some(w) = ov.weight {
                 buf.push_str(&format!(r#","w":{}"#, format_decimal(w)));
             }
@@ -2740,13 +2737,12 @@ fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Res
 /// not touch the playlist; `overrides` is how many were resolved into it.
 fn applied_json(a: &Applied) -> String {
     format!(
-        r#""entries":{},"index":{},"index_ms":{},"overrides":{},"hidden":{}"#,
+        r#""entries":{},"index":{},"index_ms":{},"overrides":{}"#,
         a.entries,
         a.index
             .map_or_else(|| "null".to_string(), |i| json_string(i.as_str())),
         a.index_ms,
-        a.overrides,
-        a.hidden
+        a.overrides
     )
 }
 
@@ -2959,9 +2955,8 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     );
     let _ = write!(
         out,
-        r#""overrides":{},"hidden":{},"mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
+        r#""overrides":{},"mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
         s.overrides,
-        s.hidden,
         json_string(s.mode),
         opt_json(s.mode_until.as_deref()),
         opt_json(crate::clock::hhmm_now().as_deref()),

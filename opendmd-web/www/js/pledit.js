@@ -70,7 +70,6 @@ export function editor(se, ctx) {
         moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       if (cv) attach(cv, p);
       row.classList.toggle('cur', picked.has(i));
-      row.classList.toggle('hid', !!o?.never);
       row.classList.toggle('skip', skipped);
       row.dataset.path = p;
     },
@@ -168,7 +167,7 @@ export function editor(se, ctx) {
           h('button', { id: 'set-add', onclick: () => adding(true) }, '+ Add GIFs'),
           h('button', { id: 'set-build', 'aria-haspopup': 'dialog', onclick: (e) => openBuilder(e.currentTarget) }, 'Add by filter…'),
           h('button', { id: 'set-arrange', 'aria-haspopup': 'menu', onclick: (e) => arrange(e.currentTarget) }, 'Arrange ▾')),
-        note('Drag ⠿ to reorder; tap GIFs to pick them', 'Alt+↑/↓ moves the focused GIF; ✕ removes it; its … menu favourites, hides or plays it longer'),
+        note('Drag ⠿ to reorder; tap GIFs to pick them', 'Alt+↑/↓ moves the focused GIF; ✕ removes it; its … menu favourites it or plays it longer'),
         empty, list.el),
       pane),
     h('div.edfoot.row', saveB, playB)));
