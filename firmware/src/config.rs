@@ -848,6 +848,7 @@ pub const FATIDX_CRASHES_OFF: u32 = 3;
 /// starts in a row that crashed while they were prepared, none are until a
 /// power-on or an update (each source is marked before its compile, so this
 /// is for a crash outside one).
+#[cfg(feature = "psi")]
 pub const CARD_COMPILE_CRASHES_OFF: u32 = 3;
 /// The read-ahead's filling task (`readahead`): card reads only (the SD
 /// probe's 4 KB does the same), at httpd's priority on CPU0 so a busy
