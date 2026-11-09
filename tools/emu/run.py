@@ -154,6 +154,7 @@ def main():
     ap.add_argument("--look-psb", type=Path, help="api: that look compiled (`psi build -o`)")
     ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=5,
                     help="api: the load's connections at once: 5 (the default: display-stress's five loads each on its own, and the simultaneous-upload bursts), 2 (status polls beside the rest) or 1")
+    ap.add_argument("--host-psb", type=Path, help="offline: a directory of the lane's Formulas compiled by the host's psi build")
     ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
     a = ap.parse_args()
 

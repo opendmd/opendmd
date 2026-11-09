@@ -14,6 +14,18 @@
 //! module's) record of a source that does not compile: not tried again
 //! until the source changes.
 //!
+//! **No crash loop.** Before a source is compiled its `.psb` is written
+//! empty (with the source's time): a compile that crashes the board leaves
+//! the source marked as one that does not compile, so the next boot moves
+//! on. A crash anywhere else in the mount compile (a count in RTC memory,
+//! [`boot`]) stops it after [`config::CARD_COMPILE_CRASHES_OFF`] boots in a
+//! row, until a power-on or an update. A source that cannot be read, or is
+//! too long, is marked the same way.
+//!
+//! **Cheap when nothing changed.** One listing of `/formulas` gives every
+//! `.psi` and `.psb`; a `.psi` with no `.psb` is compiled without another
+//! lookup, and only a pair is checked (two `stat`s and a 4-byte read).
+//!
 //! **One at a time, within the heap.** Each compile runs on a task of its
 //! own ([`STACK`], `psi_stack::run_with`) and starts only if the heap has its
 //! stack, two programs, `psi::compile_heap_estimate` of the source and
@@ -34,10 +46,10 @@ use std::time::{Instant, SystemTime};
 use crate::config;
 
 /// The compile task's stack. The parser recurses up to `psi::MAX_DEPTH`
-/// levels; this is the deepest Formula's (nested to the cap) with room to
-/// spare, measured in the emulator lane (`emu-offline`'s deep case logs the
-/// compile task's stack left).
-pub const STACK: usize = 24 * 1024;
+/// levels: the deepest of the lane's Formulas nested to the cap (calls,
+/// brackets, `?:`, `if` in `draw`, user functions, sprite reads) used
+/// ~20 KB of it; `emu-offline` asserts 8 KB left for each.
+pub const STACK: usize = 32 * 1024;
 /// The heap a compile leaves for everyone else (the show on the panel, the
 /// error's text, the allocator's overhead).
 const RESERVE: usize = 8 * 1024;
@@ -64,6 +76,52 @@ pub struct Counts {
 }
 
 static LAST: Mutex<Option<Counts>> = Mutex::new(None);
+
+/// The mount compile in flight (`GUARD_MAGIC` in the first word) and the
+/// boots in a row it was in flight at a crash (the second, with its
+/// complement), kept across a restart in RTC slow memory (`.rtc_noinit`;
+/// plain word loads and stores only), as `fatidx`'s guard.
+#[link_section = ".rtc_noinit"]
+static mut GUARD: [u32; 2] = [0; 2];
+const GUARD_MAGIC: u32 = 0x5053_4243;
+/// The crashes in a row this boot found.
+static CRASHES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn guard(i: usize) -> &'static core::sync::atomic::AtomicU32 {
+    // SAFETY: a word of `GUARD`, only ever accessed through this view
+    // (loads and stores).
+    unsafe { core::sync::atomic::AtomicU32::from_ptr((&raw mut GUARD).cast::<u32>().add(i)) }
+}
+
+fn crashes_word(n: u32) -> u32 {
+    (n & 0xFFFF) | (!n & 0xFFFF) << 16
+}
+
+/// First thing at boot (`main`, beside `fatidx::boot`): a mount compile in
+/// flight when the board crashed counts; a power-on (RTC memory lost)
+/// starts again from none.
+pub fn boot(crashed: bool, power_on: bool) {
+    use core::sync::atomic::Ordering::Relaxed;
+    let w = guard(1).load(Relaxed);
+    let stored = if w >> 16 == !w & 0xFFFF { w & 0xFFFF } else { 0 };
+    let mut n = if power_on { 0 } else { stored };
+    if guard(0).load(Relaxed) == GUARD_MAGIC && crashed {
+        n += 1;
+    }
+    guard(0).store(0, Relaxed);
+    guard(1).store(crashes_word(n), Relaxed);
+    CRASHES.store(n, Relaxed);
+    if n > 0 {
+        log::warn!("formulas: the card's Formulas were being prepared when the board crashed ({n} in a row)");
+    }
+}
+
+/// A new firmware booted (`restarts::booted_after_update`): the crashes
+/// counted were the old one's.
+pub fn forget_crashes() {
+    use core::sync::atomic::Ordering::Relaxed;
+    guard(1).store(crashes_word(0), Relaxed);
+}
 
 /// `,"card_formulas":{…}` for `/api/status` (null before a card mounted).
 pub fn status_json() -> String {
@@ -178,93 +236,20 @@ fn fits(src: &str) -> Result<(), (u32, usize, usize)> {
 pub fn prepare_at_mount() -> Counts {
     let t0 = Instant::now();
     let dir = format!("{}/formulas", config::SD_MOUNT);
-    let mut names: Vec<String> = match fs::read_dir(&dir) {
-        Ok(rd) => rd
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| n.len() > 4 && n[n.len() - 4..].eq_ignore_ascii_case(".psi"))
-            .take(MAX_FILES)
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    names.sort_unstable();
-    let mut c = Counts::default();
-    for name in &names {
-        c.sources += 1;
-        let psi_path = format!("{dir}/{name}");
-        let psb_path = format!("{dir}/{}.psb", &name[..name.len() - 4]);
-        let psi_time = mtime(&psi_path);
-        let why = match state(&psb_path, psi_time) {
-            State::Current => {
-                c.current += 1;
-                continue;
-            }
-            State::Failed => {
-                c.failed += 1;
-                continue;
-            }
-            State::Stale(why) => why,
-        };
-        let src = match read_source(&psi_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("formulas: /formulas/{name} {e}: not prepared");
-                c.failed += 1;
-                continue;
-            }
-        };
-        if let Err((free, need, block)) = fits(&src) {
-            log::warn!(
-                "formulas: /formulas/{name} not prepared ({why}): short of memory, {free} B free (needs {need}), largest block {block} B; tried again at the next start"
-            );
-            c.short += 1;
-            continue;
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        let n = CRASHES.load(Relaxed);
+        if n >= config::CARD_COMPILE_CRASHES_OFF {
+            log::warn!("formulas: {n} starts in a row crashed while the card's Formulas were prepared: not prepared this start (until a power-on or an update)");
+            return Counts::default();
         }
-        let before = crate::state::free_heap();
-        let started = Instant::now();
-        let built = crate::psi_stack::run_with(STACK, || psi::build(&src));
-        let took = started.elapsed().as_millis();
-        drop(src);
-        let Some((built, left)) = built else {
-            log::warn!("formulas: /formulas/{name} not prepared: no task to compile on ({} B free)", crate::state::free_heap());
-            c.short += 1;
-            continue;
-        };
-        c.stack_left = if c.stack_left == 0 { left } else { c.stack_left.min(left) };
-        let low = crate::psi_stack::last_low();
-        c.heap_low = if c.heap_low == 0 { low } else { c.heap_low.min(low) };
-        let (bytes, ok) = match built {
-            Ok(b) => (b, true),
-            Err(e) if e.msg == psi::NO_MEMORY => {
-                log::warn!("formulas: /formulas/{name} not prepared: the compile ran short of memory; tried again at the next start");
-                c.short += 1;
-                continue;
-            }
-            Err(e) => {
-                log::warn!("formulas: /formulas/{name} does not compile ({}); it is skipped where it plays", e.msg);
-                (Vec::new(), false)
-            }
-        };
-        match write(&psb_path, &bytes) {
-            Ok(()) => {
-                if let Some(t) = psi_time {
-                    stamp(&psb_path, t);
-                }
-                if ok {
-                    c.prepared += 1;
-                    log::info!(
-                        "formulas: /formulas/{name} prepared for the panel ({why}): {} B in {took} ms; heap {before} B free before, {low} B at the lowest; compile stack {left} B left",
-                        bytes.len()
-                    );
-                } else {
-                    c.failed += 1;
-                }
-            }
-            Err(e) => {
-                log::warn!("formulas: /formulas/{name}: writing its compiled file failed ({e})");
-                c.failed += 1;
-            }
-        }
+        guard(0).store(GUARD_MAGIC, Relaxed);
+    }
+    let c = prepare_in(&dir);
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        guard(0).store(0, Relaxed);
+        guard(1).store(crashes_word(0), Relaxed);
     }
     if c.sources > 0 {
         log::info!(
@@ -278,5 +263,145 @@ pub fn prepare_at_mount() -> Counts {
         );
     }
     *LAST.lock().unwrap_or_else(|p| p.into_inner()) = Some(c);
+    c
+}
+
+/// `path` written empty with the source's time (`t`): the mark of a source
+/// that does not compile (or not yet). False: it could not be written.
+fn mark(path: &str, t: Option<SystemTime>) -> bool {
+    match write(path, &[]) {
+        Ok(()) => {
+            if let Some(t) = t {
+                stamp(path, t);
+            }
+            true
+        }
+        Err(e) => {
+            log::warn!("formulas: {path}: writing it failed ({e}); not prepared");
+            false
+        }
+    }
+}
+
+/// `name`'s stem if it ends in `ext` (any case), on a char boundary.
+fn stem<'a>(name: &'a str, ext: &str) -> Option<&'a str> {
+    let at = name.len().checked_sub(ext.len())?;
+    (at > 0 && name.get(at..).is_some_and(|e| e.eq_ignore_ascii_case(ext))).then(|| &name[..at])
+}
+
+#[optimize(size)]
+#[inline(never)]
+fn prepare_in(dir: &str) -> Counts {
+    // One listing: the sources, and which have a compiled file (by stem,
+    // as FAT compares names: case aside).
+    let mut names: Vec<String> = Vec::new();
+    let mut compiled: Vec<String> = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.filter_map(|e| e.ok()) {
+            let Ok(n) = e.file_name().into_string() else {
+                continue;
+            };
+            if stem(&n, ".psi").is_some() {
+                if names.len() < MAX_FILES {
+                    names.push(n);
+                }
+            } else if let Some(s) = stem(&n, ".psb") {
+                compiled.push(s.to_ascii_lowercase());
+            }
+        }
+    }
+    names.sort_unstable();
+    compiled.sort_unstable();
+    let mut c = Counts::default();
+    for name in &names {
+        c.sources += 1;
+        let base = stem(name, ".psi").unwrap_or(name);
+        let psi_path = format!("{dir}/{name}");
+        let psb_path = format!("{dir}/{base}.psb");
+        let paired = compiled.binary_search(&base.to_ascii_lowercase()).is_ok();
+        let psi_time = mtime(&psi_path);
+        let checked = if paired { state(&psb_path, psi_time) } else { State::Stale("not prepared") };
+        let why = match checked {
+            State::Current => {
+                c.current += 1;
+                continue;
+            }
+            State::Failed => {
+                c.failed += 1;
+                continue;
+            }
+            State::Stale(why) => why,
+        };
+        let src = match read_source(&psi_path) {
+            Ok(s) => s,
+            Err(e) => {
+                // Marked, so it is not read again every start.
+                log::warn!("formulas: /formulas/{name} {e}: not prepared");
+                mark(&psb_path, psi_time);
+                c.failed += 1;
+                continue;
+            }
+        };
+        if let Err((free, need, block)) = fits(&src) {
+            log::warn!(
+                "formulas: /formulas/{name} not prepared ({why}): short of memory, {free} B free (needs {need}), largest block {block} B; tried again at the next start"
+            );
+            c.short += 1;
+            continue;
+        }
+        // Marked as not compiling first: a compile that crashes the board
+        // leaves it so, and the next start moves on.
+        if !mark(&psb_path, psi_time) {
+            c.failed += 1;
+            continue;
+        }
+        let before = crate::state::free_heap();
+        let started = Instant::now();
+        let built = crate::psi_stack::run_with(STACK, || psi::build(&src));
+        let took = started.elapsed().as_millis();
+        drop(src);
+        let Some((built, left)) = built else {
+            log::warn!("formulas: /formulas/{name} not prepared: no task to compile on ({} B free)", crate::state::free_heap());
+            let _ = fs::remove_file(&psb_path);
+            c.short += 1;
+            continue;
+        };
+        c.stack_left = if c.stack_left == 0 { left } else { c.stack_left.min(left) };
+        let low = crate::psi_stack::last_low();
+        c.heap_low = if c.heap_low == 0 { low } else { c.heap_low.min(low) };
+        let bytes = match built {
+            Ok(b) => b,
+            Err(e) if e.msg == psi::NO_MEMORY => {
+                log::warn!("formulas: /formulas/{name} not prepared: the compile ran short of memory; tried again at the next start");
+                let _ = fs::remove_file(&psb_path);
+                c.short += 1;
+                continue;
+            }
+            Err(e) => {
+                // (The empty file written before is the mark.)
+                log::warn!("formulas: /formulas/{name} does not compile ({}); it is skipped where it plays", e.msg);
+                c.failed += 1;
+                continue;
+            }
+        };
+        match write(&psb_path, &bytes) {
+            Ok(()) => {
+                if let Some(t) = psi_time {
+                    stamp(&psb_path, t);
+                }
+                {
+                    c.prepared += 1;
+                    log::info!(
+                        "formulas: /formulas/{name} prepared for the panel ({why}): {} B in {took} ms; heap {before} B free before, {low} B at the lowest; compile stack {left} B left",
+                        bytes.len()
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("formulas: /formulas/{name}: writing its compiled file failed ({e})");
+                c.failed += 1;
+            }
+        }
+    }
     c
 }

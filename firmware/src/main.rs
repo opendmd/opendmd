@@ -502,6 +502,9 @@ fn main() -> Result<()> {
     restarts::boot(reset);
     // A crash during a FAT index build defers the next (no crash loop).
     fatidx::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
+    // And during the card's Formulas' compile at mount (`card_formulas`).
+    #[cfg(feature = "psi")]
+    card_formulas::boot(reset.is_crash(), reset == opendmd_core::restarts::Reset::PowerOn);
     heapmap::cp("restarts + fatidx boot");
     // The flash clock the app set from its own header (FW_FLASH_FREQ).
     let (mhz, mode) = ota::flash_clock();

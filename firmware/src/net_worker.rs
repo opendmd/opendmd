@@ -516,6 +516,11 @@ fn run_offline(mut o: Offline, rx: mpsc::Receiver<NetCommand>) {
                 return;
             }
         }
+        // The online loop's other ticks are left out: `inputs::tick` (the
+        // sky's inputs, which need the time SNTP sets), `netstat::tick`
+        // (lwIP's sockets: none without WiFi or the httpd) and
+        // `diag::check` (a diagnostic build's heap walk on the network's
+        // own paths); `clock::log_new_syncs` has no sync to log.
         crate::cache::tick();
         let before = crate::state::free_heap();
         crate::readahead::tick();
