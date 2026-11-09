@@ -273,6 +273,10 @@ pub fn still_gate(take: usize) -> bool {
     if take == 0 {
         return look == 0 && !building && free >= config::STILL_SHED_HEAP;
     }
+    // Not for the start-up show's Formula (`show::FORMULA_SHOWN`).
+    if show::FORMULA_SHOWN.load(Ordering::Relaxed) {
+        return false;
+    }
     let block = largest_free_block();
     let ok = look == 0 && !building && free >= take + config::STILL_KEEP_HEAP && block >= 16 * 1024;
     if !ok {
@@ -366,6 +370,7 @@ fn picks_up(now: &Settings, next: &Settings) -> bool {
         && next.attract == now.attract
         && next.attract_set == now.attract_set
         && next.look_formula == now.look_formula
+        && next.boot_formula == now.boot_formula
         && next.tz == now.tz
         && next.tz_name == now.tz_name
         && next.schedule == now.schedule
@@ -796,6 +801,9 @@ fn main() -> Result<()> {
     // the boot used to do here before the first frame. It hands the card and
     // the catalog over on `boot_rx`; until then this loop plays the show and
     // never touches the card (`CARD_READY`).
+    // The start-up show's Formula, if it is bundled or inline: built now,
+    // before the boot task takes the heap for the card and its index.
+    let boot_formula = show::Formula::new(&settings.boot_formula, settings.boot_show);
     let (boot_tx, boot_rx) = mpsc::channel::<boot::Event>();
     // Dropped once the card is handed over: the channel's few hundred bytes
     // are not kept for the life of the run.
@@ -837,7 +845,7 @@ fn main() -> Result<()> {
     let mut card_dead = false;
     // The start-up show, then the status card while there is no card (or
     // nothing to play from it); see `Screen`.
-    let mut screen = Screen::new(settings.boot_show, updated_from.is_some());
+    let mut screen = Screen::new(settings.boot_show, updated_from.is_some(), boot_formula, &settings.boot_formula);
     drop(updated_from);
     // A handover waiting for the show's minimum.
     let mut pending: Option<Box<boot::Handover>> = None;
@@ -1058,12 +1066,17 @@ fn main() -> Result<()> {
                     settings: mut next,
                     panel: panel_op,
                     look_named,
+                    boot_named,
                     reply,
                 } => {
                     // A look the request did not name is this task's own
                     // (the sender's copy may predate its Formula's delete).
                     if !look_named && next.look_formula != settings.look_formula {
                         next.look_formula.clone_from(&settings.look_formula);
+                    }
+                    // The start-up show's Formula likewise.
+                    if !boot_named && next.boot_formula != settings.boot_formula {
+                        next.boot_formula.clone_from(&settings.boot_formula);
                     }
                     // Values the loop only picks up (brightness, dwell,
                     // tint, glow, sync, …): taken in one small step, the
@@ -1128,6 +1141,15 @@ fn main() -> Result<()> {
                         if let Err(e) = formula_look::check(&next.look_formula) {
                             log::warn!("config: look_formula refused: {e}");
                             let _ = reply.send(Err(format!("{}{e}", state::LOOK_FORMULA_BAD)));
+                            continue;
+                        }
+                    }
+                    // The start-up show's Formula too (it plays from the
+                    // next boot: checked now, so it is one that builds).
+                    if next.boot_formula != settings.boot_formula {
+                        if let Err(e) = show::check_formula(&next.boot_formula) {
+                            log::warn!("config: boot_formula refused: {e}");
+                            let _ = reply.send(Err(format!("{}{e}", state::BOOT_FORMULA_BAD)));
                             continue;
                         }
                     }

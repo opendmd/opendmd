@@ -186,7 +186,10 @@ button lands on them.
     not while the player is still reading one).
   - **Look**: colour and phosphor glow, *Mirror the panel on Now* (this
     browser's choice), the transition with a Preview and the start-up show
-    (`js/boot.js`).
+    (`js/boot.js`: its length, `boot_show`, and what plays, `boot_formula`:
+    the wordmark or a Formula light enough for the show; a Formula's
+    preview is pkg-psi's frame with the main module's information line over
+    it, `Preview.showBoot`, the panel's `@boot?formula=…`).
   - **Schedule**: time zone, schedule rules, night mode, Follow RePlayOS.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
     (the playlist and its count, the card, uptime, free memory and its

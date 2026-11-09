@@ -447,6 +447,162 @@ pub fn show(canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) {
     canvas.dirty_mut().mark_all();
 }
 
+// --- a Formula as the show ------------------------------------------------------
+
+/// The information line over a Formula show at `t`, and its light (/ 256):
+/// only when there is something to say, never the version. On the first
+/// boot of a new version "Updated to v…" for [`UPDATED_MS`], then (a 150 ms
+/// dip out and back in) the setup network to join, a card problem, or the
+/// address; else nothing. It comes up at the show's status beat, as the
+/// wordmark's line does.
+fn formula_status<'a>(b: &Beats, t: u32, info: &Info<'a>) -> (Parts<'a>, u32) {
+    let then = if !info.ap.is_empty() {
+        info.join()
+    } else if !info.note.is_empty() {
+        [info.note, ""]
+    } else if !info.ip.is_empty() {
+        [info.ip, ""]
+    } else {
+        NONE
+    };
+    let mut k = ramp(t, b.status, b.status + 300);
+    if !info.updated || info.version.is_empty() {
+        return (then, k);
+    }
+    let (first, swap) = (updated_line(info.version), b.status + UPDATED_MS);
+    let text = if t < swap { first } else { then };
+    if first != then {
+        k = k.min(t.abs_diff(swap).min(150) * 256 / 150);
+    }
+    (text, k)
+}
+
+/// The information line over a Formula show's frame at `t` (the Formula
+/// drawn into `canvas` first): when there is something to say
+/// ([`formula_status`]), the band behind it dimmed (a Formula covers every
+/// pixel) and the line over it, in the wordmark's place and colour. Marks
+/// what it changes; draws nothing otherwise.
+pub fn formula_line(canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) {
+    let b = beats(len);
+    if t < b.status {
+        return;
+    }
+    let (text, k) = formula_status(b, t, info);
+    let w = parts_width(&text);
+    if w == 0 || k == 0 {
+        return;
+    }
+    // A margin of 2 px around the text, dimmed to a quarter at full light.
+    let x0 = ((WIDTH as i32 - w) / 2 - 2).max(0) as usize;
+    let x1 = (x0 + w as usize + 4).min(WIDTH);
+    let y0 = (SHOW_LINE_Y - 1) as usize;
+    let y1 = y0 + Font::Small.height() + 2;
+    let keep = 256 - k * 3 / 4;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let c = canvas.get(x, y);
+            canvas.set(x, y, fx::scale(c, keep));
+        }
+    }
+    line(canvas, SHOW_LINE_Y, &text, fx::scale(LINE, k));
+}
+
+/// How heavy a Formula may be to play as the start-up show (its frame,
+/// estimated, µs): the look's limit, inside the show's 10 ms frames with
+/// room for the line and the blit.
+#[cfg(feature = "psi")]
+pub const FORMULA_MAX_EST_US: u32 = crate::fx_psi::LOOK_MAX_EST_US;
+
+/// A Formula as the start-up show (the `boot_formula` setting): drawn in
+/// the wordmark's place, the information line over it ([`formula_line`]),
+/// for as long as the wordmark's show would run. Pure in `t` as the show
+/// is, so the firmware's start-up and `@boot?formula=…` draw the same
+/// frames: the Formula's frame of its grid at or before `t`, drawn only
+/// when that frame changes.
+#[cfg(feature = "psi")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormulaShow {
+    fx: crate::fx::Fx,
+    /// The grid frame last drawn.
+    last: Option<u32>,
+}
+
+#[cfg(feature = "psi")]
+impl FormulaShow {
+    /// The show for a bundled Formula by name (`@formula:<stem>`) or an
+    /// inline one (`@formula?psb=…`), or why not (it does not compile, is
+    /// too heavy, the heap is short: `psi::NO_MEMORY`). A Formula on the
+    /// card is read by the player: [`FormulaShow::from_bytes`].
+    pub fn open(path: &str) -> Result<FormulaShow, crate::psi::Error> {
+        use crate::synth::{formula_ref, FormulaRef, FORMULA};
+        match formula_ref(path) {
+            Some(FormulaRef::Bundled { .. } | FormulaRef::Inline) => {
+                Self::checked(crate::fx_psi::PsiFx::from_query(&path[FORMULA.len()..])?)
+            }
+            Some(FormulaRef::File { .. }) => Err(err("a Formula on the card is read from the card")),
+            None => Err(err("that is not a Formula")),
+        }
+    }
+
+    /// The show for a compiled Formula read from its file (`.psb`) with its
+    /// options (`a=0.5&fps=…`).
+    pub fn from_bytes(psb: &[u8], opts: &str) -> Result<FormulaShow, crate::psi::Error> {
+        Self::checked(crate::fx_psi::PsiFx::from_bytes(psb, opts)?)
+    }
+
+    fn checked(fx: crate::fx_psi::PsiBox) -> Result<FormulaShow, crate::psi::Error> {
+        let est = fx.program().esp32_us();
+        if est > FORMULA_MAX_EST_US {
+            return Err(err(&format!(
+                "this Formula is too heavy for the start-up show (about {} ms a frame; the limit is {} ms)",
+                est.div_ceil(1000),
+                FORMULA_MAX_EST_US / 1000
+            )));
+        }
+        Ok(FormulaShow {
+            fx: crate::fx::Fx::Psi(fx),
+            last: None,
+        })
+    }
+
+    /// Its `seed` (tests: a Formula that never repeats plays a new one at
+    /// each open).
+    #[doc(hidden)]
+    pub fn set_seed(&mut self, seed: i32) {
+        let crate::fx::Fx::Psi(f) = &mut self.fx;
+        f.set_seed(seed);
+    }
+
+    /// Draw the show's frame at `t` ms into `canvas` (the canvas holds the
+    /// frame this drew last, or anything before the first): the Formula's
+    /// frame on its grid, the line over it. False when that frame is the
+    /// one already drawn (nothing changed).
+    pub fn frame(&mut self, canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) -> bool {
+        let grid = (self.fx.delay().as_millis() as u32).max(1);
+        let n = t / grid;
+        if self.last == Some(n) {
+            return false;
+        }
+        if self.last.is_none() {
+            canvas.dirty_mut().mark_all();
+        }
+        self.last = Some(n);
+        let at = n * grid;
+        self.fx.frame(Duration::from_millis(u64::from(at)), canvas);
+        formula_line(canvas, len, at, info);
+        true
+    }
+}
+
+#[cfg(feature = "psi")]
+fn err(msg: &str) -> crate::psi::Error {
+    crate::psi::Error {
+        start: 0,
+        end: 0,
+        msg: msg.to_string(),
+    }
+}
+
 /// The status card at `t` ms into it. `from_show`: it follows the show
 /// (its length and the show's time when the card took over), so it
 /// arrives from it ([`INTRO_MS`]) rather than cutting in. Every pixel is
@@ -1034,5 +1190,124 @@ mod tests {
         let mut want = Canvas::new();
         update_notice(&mut want, UpdateStage::Installing, "1.0.0-beta.17");
         assert_eq!(c, want);
+    }
+
+    /// `s` as a query value (what the web app's URLSearchParams sends).
+    #[cfg(feature = "psi")]
+    fn enc(s: &str) -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+
+    /// Every frame of `@boot?…` as played.
+    #[cfg(feature = "psi")]
+    fn frames_of(path: &str) -> Vec<Canvas> {
+        use crate::synth::{self, SynthSource};
+        let mut src = SynthSource::new(synth::open(path).unwrap()).unwrap();
+        let mut c = Canvas::new();
+        let mut out = Vec::new();
+        while let Some(d) = src.next_frame(&mut c).unwrap() {
+            assert_eq!(d, Duration::from_millis(10));
+            out.push(c.clone());
+        }
+        out
+    }
+
+    /// A Formula as the start-up show: `@boot?formula=` draws, frame for
+    /// frame, what the panel's start-up draws (`FormulaShow::frame` at the
+    /// show's times), the Formula with the line over it only when there is
+    /// something to say, and runs as long as the wordmark would.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_as_the_show_draws_what_the_panel_draws() {
+        crate::synth::install_test_bundled();
+        // (Reads no seed: two opens draw the same.)
+        let inline = crate::fx_psi::path("loop 2\nfps 50\nrgb(frac(x + t/2), y, 0.5)", "");
+        for (formula, len, text, updated) in [
+            ("@formula:red", ShowLength::Short, "&ap=OpenDMD-Setup", false),
+            (inline.as_str(), ShowLength::Short, "&ip=192.168.1.69", false),
+            (inline.as_str(), ShowLength::Full, "&note=Insert%20a%20microSD%20card", true),
+            (inline.as_str(), ShowLength::Short, "", false),
+        ] {
+            let path = format!(
+                "@boot?len={}&v=1.0.1{text}{}&formula={}",
+                len.name(),
+                if updated { "&up=1" } else { "" },
+                enc(formula)
+            );
+            let got = frames_of(&path);
+            let want_n = if updated { len.min_ms_updated() } else { len.min_ms() } / 10;
+            assert_eq!(got.len(), want_n as usize, "{path}");
+            let info = Info {
+                version: "1.0.1",
+                ip: if text.contains("ip=") { "192.168.1.69" } else { "" },
+                ap: if text.contains("ap=") { "OpenDMD-Setup" } else { "" },
+                note: if text.contains("note=") { "Insert a microSD card" } else { "" },
+                updated,
+            };
+            let mut show = FormulaShow::open(formula).unwrap();
+            let mut plain = FormulaShow::open(formula).unwrap();
+            let (mut c, mut bare) = (Canvas::new(), Canvas::new());
+            let none = Info { version: "1.0.1", ..Info::default() };
+            for (i, g) in got.iter().enumerate() {
+                let t = i as u32 * 10;
+                show.frame(&mut c, len, t, &info);
+                plain.frame(&mut bare, len, t, &none);
+                assert_eq!(g.as_bytes(), c.as_bytes(), "{path} at {t} ms");
+                // Before the status beat the Formula alone; with nothing
+                // to say, never anything else (no version line).
+                let lined = g.as_bytes() != bare.as_bytes();
+                let b = beats(len);
+                if t < b.status || (text.is_empty() && !updated) {
+                    assert!(!lined, "{path}: a line at {t} ms");
+                } else if t >= b.status + 300 && (!updated || t + 150 < b.status + UPDATED_MS) {
+                    assert!(lined, "{path}: no line at {t} ms");
+                }
+            }
+        }
+    }
+
+    /// A value that names no Formula that builds plays the wordmark, as the
+    /// panel falls back to it; one too heavy for the show is refused.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_that_does_not_build_plays_the_wordmark() {
+        crate::synth::install_test_bundled();
+        let wordmark = frames_of("@boot?len=short&v=1.0.1&ip=192.168.1.69");
+        let heavy = {
+            let terms: Vec<String> = (1..=14)
+                .map(|k| format!("step(0.5, frac(x*{} + y*{} + t*{}))*{}", k + 2, (k * 7) % 13 + 1, k % 5 + 1, k % 3 + 1))
+                .collect();
+            crate::fx_psi::path(&format!("loop 4\ng = {}\npal(rainbow, frac(g/40))", terms.join(" + ")), "")
+        };
+        for bad in ["@formula:nope", "@formula?psb=AAAA", "/formulas/mine.psi", "/gifs/a.gif", heavy.as_str()] {
+            let got = frames_of(&format!("@boot?len=short&v=1.0.1&ip=192.168.1.69&formula={}", enc(bad)));
+            assert!(got == wordmark, "{bad}: not the wordmark");
+            assert!(FormulaShow::open(bad).is_err(), "{bad}");
+        }
+        let e = FormulaShow::open(&heavy).unwrap_err();
+        assert!(e.msg.starts_with("this Formula is too heavy for the start-up show (about "), "{}", e.msg);
+    }
+
+    /// `synth::boot_line` (the web app's preview) draws the line as the
+    /// show does over the same frame.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn the_line_alone_is_the_shows() {
+        crate::synth::install_test_bundled();
+        let info = Info { version: "1.0.1", ap: "OpenDMD-Setup", ..Info::default() };
+        let mut show = FormulaShow::open("@formula:red").unwrap();
+        let mut bare = FormulaShow::open("@formula:red").unwrap();
+        for t in [0, 900, 1_000, 1_250] {
+            let (mut a, mut b) = (Canvas::new(), Canvas::new());
+            show.frame(&mut a, ShowLength::Short, t, &info);
+            bare.frame(&mut b, ShowLength::Short, t, &Info::default());
+            crate::synth::boot_line(&mut b, "@boot?len=short&v=1.0.1&ap=OpenDMD-Setup&formula=x", t);
+            assert_eq!(a, b, "at {t} ms");
+        }
     }
 }

@@ -192,8 +192,19 @@ browser only.
 
 Under **Transition**, **Style** is how the panel moves from one GIF to the
 next (dissolve, wipe, blinds, push, fade or none) and **Speed** is how fast;
-**Preview** shows it. **Start-up show** is what the panel plays when it
-powers on.
+**Preview** shows it.
+
+Under **Start-up**, **Start-up** is what the panel shows while it starts:
+**OpenDMD (built in)**, the name lighting up dot by dot, or one of your
+Formulas or a bundled one in its place. Formulas too heavy for the start-up
+show are listed but can't be picked. **Length** is how long the show runs
+(**Off**, **Short** or **Full**); the first GIF comes after it, or once the
+card is ready if that takes longer. While a Formula plays, the panel still
+writes what you need to know over it: the network to join when the display
+is new, a card problem, or its address. If the Formula can't play (deleted,
+broken, or the display short of memory), the panel shows OpenDMD instead,
+and Settings says why under the picker. **Preview** plays the show here,
+and **No card screen** shows what the panel says without a card.
 
 ### Schedule
 

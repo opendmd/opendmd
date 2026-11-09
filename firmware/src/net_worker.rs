@@ -203,6 +203,7 @@ fn save_wifi(
         settings: Box::new(next),
         panel: None,
         look_named: false,
+        boot_named: false,
         reply: tx,
     })
     .map_err(|_| "playback not running")?;

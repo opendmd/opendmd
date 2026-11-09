@@ -40,7 +40,7 @@ function zone() {
 const fresh = () => ({
   c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, wifi_eap_user: '', wifi_eap_identity: '', wifi_eap_ttls: 'mschapv2', brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
     hostname: 'opendmd', ...zone(), transition: 'dissolve', transition_ms: 400, auto_prepare: 'idle', card_speed: 'safe', beta_updates: false, follow: false, follow_host: '',
-    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', panel_sync: true, panel_split: true, formula_keep: 'turn', api_key_set: false },
+    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', boot_formula: '', panel_sync: true, panel_split: true, formula_keep: 'turn', api_key_set: false },
   sched: { rules: [], night: null },
   wake: 0,
   // Panel timing (opendmd_core::panel_timing's Tuner, as tools/mock-device.py

@@ -329,6 +329,20 @@ impl Player {
     /// Psi module) in place of a file: the file is dropped and the frame
     /// rendered with the look, the tint and the glow like any other.
     pub fn show_rgb(&mut self, rgb: &[u8], now: Duration) {
+        self.put_rgb(rgb, now);
+        self.draw();
+    }
+
+    /// A Formula start-up show's frame: `rgb` with the information line
+    /// of `boot` (an `@boot?…` path) over it at `t` ms into the show, as
+    /// the panel draws it (`opendmd_core::synth::boot_line`).
+    pub fn show_boot(&mut self, rgb: &[u8], boot: &str, t: u32, now: Duration) {
+        self.put_rgb(rgb, now);
+        opendmd_core::synth::boot_line(&mut self.canvas, boot, t);
+        self.draw();
+    }
+
+    fn put_rgb(&mut self, rgb: &[u8], now: Duration) {
         if self.engine.is_some() {
             self.engine = None;
             self.bytes = None;
@@ -341,7 +355,6 @@ impl Player {
         dirty.mark_all();
         self.shown = true;
         self.now = now;
-        self.draw();
     }
 
     /// The panel's tint and phosphor glow, as the device's config has them

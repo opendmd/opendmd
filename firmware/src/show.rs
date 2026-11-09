@@ -37,6 +37,20 @@
 //! guard's drop (a refused, cut-short or failed upload) takes it down and
 //! playback resumes. One relaxed atomic load per loop iteration otherwise.
 //!
+//! **A Formula as the show** (`boot_formula`, [`Formula`]): drawn in the
+//! wordmark's place by `opendmd_core::boot::FormulaShow` (the frames
+//! `@boot?formula=…` draws), for the same length, the information line over
+//! it only when there is something to say (`Join WiFi`, a card problem, the
+//! address, "Updated to"): never the version. A bundled or inline Formula
+//! is built before the boot task starts (it needs neither the card nor
+//! the network: its ~10-14 KB taken while the heap is whole); one on the
+//! card is not played yet (the wordmark, said why). Missing, broken, too heavy for
+//! the show (`boot::FORMULA_MAX_EST_US`) or out of memory, the wordmark
+//! plays, with a log line and `/api/status` `boot_formula.error`; short of
+//! memory it is built again a second later (`fx_psi::look_retry`), the
+//! wordmark meanwhile. The Formula is let go when the show ends (the
+//! status card or the first GIF). `off` plays no show, Formula or not.
+//!
 //! **The log.** One line per beat of the show (`boot show: warp at 0 ms`,
 //! `name`, `jump`, `status line`, `name settled`, `hold`), the card's
 //! readiness, the status card's text whenever it changes, and the
@@ -45,6 +59,8 @@
 use opendmd_core::boot::{self, Info, ShowLength, UpdateStage, CAP_MS};
 use opendmd_core::canvas::Canvas;
 use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+#[cfg(feature = "psi")]
+use std::time::Instant as RetryAt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -216,6 +232,116 @@ impl Drop for Updating {
     }
 }
 
+// --- The start-up show's Formula ------------------------------------------------
+
+/// What `/api/status` says of the start-up show's Formula this boot
+/// (`boot_formula`): [`NO_FORMULA`] (none set, or the show `off`), played,
+/// or the wordmark in its place, and why
+/// ([`BOOT_ERROR`]).
+static BOOT_STATE: AtomicU8 = AtomicU8::new(NO_FORMULA);
+pub const NO_FORMULA: u8 = 0;
+pub const PLAYED: u8 = 1;
+pub const FELL_BACK: u8 = 3;
+/// Why the wordmark played in the Formula's place.
+pub static BOOT_ERROR: Mutex<String> = Mutex::new(String::new());
+/// A Formula plays as the start-up show: its still cache is never taken
+/// (`main::still_gate`: 16 KB while the boot task opens the playlist's
+/// index on the heap; the show's Formulas fit its frames without it).
+pub static FORMULA_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`BOOT_STATE`].
+pub fn boot_state() -> u8 {
+    BOOT_STATE.load(Relaxed)
+}
+
+/// The start-up show's Formula as the show has it.
+pub enum Formula {
+    /// The wordmark (none set, or it fell back).
+    Wordmark,
+    /// Short of memory: built again at `at`.
+    #[cfg(feature = "psi")]
+    Retry { at: RetryAt },
+    #[cfg(feature = "psi")]
+    Playing(Box<boot::FormulaShow>),
+}
+
+impl Formula {
+    /// The Formula `path` names (a `boot_formula` value) for a show of
+    /// `len`: built now if it is bundled or inline (before the boot task
+    /// starts, on a whole heap); one on the card not yet. Logged,
+    /// and said in the status.
+    pub fn new(path: &str, len: ShowLength) -> Formula {
+        if path.is_empty() || len == ShowLength::Off {
+            BOOT_STATE.store(NO_FORMULA, Relaxed);
+            return Formula::Wordmark;
+        }
+        #[cfg(feature = "psi")]
+        {
+            Formula::built(path, boot::FormulaShow::open(path))
+        }
+        #[cfg(not(feature = "psi"))]
+        {
+            fell_back(path, crate::state::NO_FORMULAS);
+            Formula::Wordmark
+        }
+    }
+
+    /// A build's outcome: playing, or the wordmark (again in a second if
+    /// it was only short of memory).
+    #[cfg(feature = "psi")]
+    fn built(path: &str, r: Result<boot::FormulaShow, opendmd_core::psi::Error>) -> Formula {
+        match r {
+            Ok(s) => {
+                log::info!("boot show: formula {}", crate::short(path));
+                BOOT_STATE.store(PLAYED, Relaxed);
+                FORMULA_SHOWN.store(true, Relaxed);
+                if let Ok(mut e) = BOOT_ERROR.lock() {
+                    e.clear();
+                }
+                Formula::Playing(Box::new(s))
+            }
+            Err(e) => match opendmd_core::fx_psi::look_retry(&e) {
+                Some(d) => {
+                    log::warn!("boot show: no room for formula {} yet ({}): the built-in show, again in a second", crate::short(path), e.msg);
+                    Formula::Retry { at: RetryAt::now() + d }
+                }
+                None => {
+                    fell_back(path, &e.msg);
+                    Formula::Wordmark
+                }
+            },
+        }
+    }
+}
+
+/// A `boot_formula` value checked before it is saved: `""` (the wordmark)
+/// or a Formula that builds as the start-up show (compiles, fits the show:
+/// `boot::FORMULA_MAX_EST_US`). The error is the sentence why.
+pub fn check_formula(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    // (Held only while it is on the panel: a setting would outlive it.)
+    if opendmd_core::synth::is_sent(path) {
+        return Err("save the Formula first".into());
+    }
+    #[cfg(feature = "psi")]
+    {
+        boot::FormulaShow::open(path).map(drop).map_err(|e| e.msg)
+    }
+    #[cfg(not(feature = "psi"))]
+    Err(crate::state::NO_FORMULAS.to_string())
+}
+
+/// The wordmark plays in `path`'s place, for `why`: logged and said.
+fn fell_back(path: &str, why: &str) {
+    log::warn!("boot show: formula {} does not build ({why}): the built-in show", crate::short(path));
+    BOOT_STATE.store(FELL_BACK, Relaxed);
+    if let Ok(mut e) = BOOT_ERROR.lock() {
+        why.clone_into(&mut e);
+    }
+}
+
 // --- The start-up show and the status card --------------------------------------
 
 pub struct Screen {
@@ -240,10 +366,16 @@ pub struct Screen {
     text_at: Option<Instant>,
     /// The card's text last logged.
     logged: Option<Text>,
+    /// The show's Formula (`boot_formula`), and the path it names.
+    formula: Formula,
+    #[cfg_attr(not(feature = "psi"), allow(dead_code))]
+    path: String,
 }
 
 impl Screen {
-    pub fn new(len: ShowLength, updated: bool) -> Screen {
+    /// `formula`: [`Formula::new`] for `path`, made before the boot task
+    /// started.
+    pub fn new(len: ShowLength, updated: bool, formula: Formula, path: &str) -> Screen {
         let len = if updated { len.for_update() } else { len };
         let min = if updated {
             len.min_ms_updated()
@@ -273,6 +405,29 @@ impl Screen {
             text: Text::NONE,
             text_at: None,
             logged: None,
+            formula,
+            path: path.to_string(),
+        }
+    }
+
+    /// The Formula is done with (the show ended): its memory goes back.
+    fn let_go(&mut self) {
+        #[cfg(feature = "psi")]
+        if let Formula::Retry { .. } = self.formula {
+            fell_back(&self.path, opendmd_core::psi::NO_MEMORY);
+        }
+        self.formula = Formula::Wordmark;
+        FORMULA_SHOWN.store(false, Relaxed);
+    }
+
+    /// Before a show frame: a Formula short of memory is built again when
+    /// due.
+    fn step_formula(&mut self) {
+        #[cfg(feature = "psi")]
+        if let Formula::Retry { at } = &self.formula {
+            if RetryAt::now() >= *at {
+                self.formula = Formula::built(&self.path, boot::FormulaShow::open(&self.path));
+            }
         }
     }
 
@@ -347,6 +502,7 @@ impl Screen {
         self.scene = Scene::Playing;
         self.over = false;
         self.logged = None;
+        self.let_go();
     }
 
     /// Why the card is there but nothing plays, from the build's error.
@@ -379,6 +535,7 @@ impl Screen {
         };
         self.logged = None;
         self.text_at = None;
+        self.let_go();
     }
 
     /// Draw the frame due now and blit it; returns how long to sleep before
@@ -407,6 +564,9 @@ impl Screen {
             }
             Scene::Card { .. } => {}
         }
+        if self.scene == Scene::Show && self.len != ShowLength::Off {
+            self.step_formula();
+        }
         if self.text_at.is_none_or(|at| at.elapsed() >= TEXT_EVERY) {
             self.text = Text::read(status, problem, self.ready_at.is_some() && !self.over);
             self.text_at = Some(begun);
@@ -422,12 +582,27 @@ impl Screen {
                 return Duration::from_millis(2);
             }
             Scene::Show => {
-                let p = boot::phase(self.len, t);
-                if p != self.phase {
-                    self.phase = p;
-                    log::info!("boot show: {p} at {t} ms");
+                match &mut self.formula {
+                    #[cfg(feature = "psi")]
+                    Formula::Playing(f) => {
+                        if self.phase != "formula" {
+                            self.phase = "formula";
+                            log::info!("boot show: formula at {t} ms");
+                        }
+                        if !f.frame(canvas, self.len, t, &info) {
+                            // Its frame is on the panel already.
+                            return period.saturating_sub(begun.elapsed()).max(Duration::from_millis(1));
+                        }
+                    }
+                    _ => {
+                        let p = boot::phase(self.len, t);
+                        if p != self.phase {
+                            self.phase = p;
+                            log::info!("boot show: {p} at {t} ms");
+                        }
+                        boot::show(canvas, self.len, t, &info);
+                    }
                 }
-                boot::show(canvas, self.len, t, &info);
             }
             Scene::Card { since, from } => {
                 if self.logged != Some(self.text) {

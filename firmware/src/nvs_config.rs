@@ -73,6 +73,9 @@ const KEY_LOOK_FORMULA: &str = "look_fx";
 const STALE_KEYS: [&str; 2] = ["look_fx_name", "look_mix"];
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
+/// The start-up show's Formula (`boot_formula`): a Formula's path as the
+/// look's (`""`: the wordmark).
+const KEY_BOOT_FORMULA: &str = "boot_fx";
 /// Refresh-synchronised blits (`Panel::set_sync`), 0/1.
 const KEY_PANEL_SYNC: &str = "panel_sync";
 /// With it, the bottom half a refresh after the top (`Panel::set_sync`), 0/1.
@@ -192,6 +195,11 @@ pub struct Settings {
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
+    /// The start-up show's Formula (`show.rs`), played in the wordmark's
+    /// place for `boot_show`'s length: a bundled Formula's name, the
+    /// user's on the card or inline (at most `synth::MAX_LOOK_PATH`), as
+    /// the look's; `""` = the wordmark.
+    pub boot_formula: String,
     /// Refresh-synchronised blits (`panel.rs`, `opendmd_core::scan`): wait
     /// for a scan position from which a frame shows no seam. On by
     /// default since an eye test on a test panel.
@@ -266,6 +274,7 @@ impl Default for Settings {
             glow: GlowLevel::Off,
             look_formula: String::new(),
             boot_show: ShowLength::Short,
+            boot_formula: String::new(),
             panel_sync: true,
             panel_split: true,
             formula_jit: true,
@@ -450,6 +459,9 @@ impl Config {
                 .get_string(KEY_BOOT_SHOW)
                 .and_then(|s| ShowLength::from_name(&s))
                 .unwrap_or(d.boot_show),
+            boot_formula: self
+                .get_long_string(KEY_BOOT_FORMULA, opendmd_core::synth::MAX_LOOK_PATH)
+                .unwrap_or(d.boot_formula),
             panel_sync: self
                 .nvs
                 .get_u8(KEY_PANEL_SYNC)
@@ -539,6 +551,7 @@ impl Config {
             let _ = self.nvs.remove(k);
         }
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
+        self.nvs.set_str(KEY_BOOT_FORMULA, &s.boot_formula)?;
         self.nvs.set_u8(KEY_PANEL_SYNC, u8::from(s.panel_sync))?;
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;

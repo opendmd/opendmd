@@ -423,6 +423,16 @@ fn options(query: &str) -> impl Iterator<Item = (&[u8], &[u8])> {
         })
 }
 
+/// Is `path` the start-up show with a Formula (`@boot?…&formula=…`), which
+/// may be as long as a Formula's path?
+fn is_boot_formula(path: &str) -> bool {
+    path.len() <= MAX_FORMULA_PATH
+        && path
+            .strip_prefix(crate::boot::PATH)
+            .and_then(|r| r.strip_prefix('?'))
+            .is_some_and(|q| options(q).any(|(k, _)| k == b"formula"))
+}
+
 /// Is `path` a virtual file?
 pub fn is_virtual(path: &str) -> bool {
     path.starts_with('@')
@@ -532,11 +542,15 @@ enum Spec {
     Boot(BootSpec),
 }
 
-/// `@boot[?len=short|full|card|updating|installing&v=&ip=&ap=&note=&up=1]`:
+/// `@boot[?len=short|full|card|updating|installing&v=&ip=&ap=&note=&up=1&formula=]`:
 /// the start-up show once (`len`, default short; `up=1`: the first boot of
 /// a new version, "Updated to v…"), one loop of the status card, or two
 /// seconds of a firmware update's still message, with its text from the
-/// options ([`crate::boot`]).
+/// options ([`crate::boot`]). `formula=` (a bundled Formula by name or an
+/// inline one, URL-encoded: what `boot_formula` holds) plays it as the show
+/// in the wordmark's place ([`crate::boot::FormulaShow`]); one that does not
+/// build, a card file's (read by the player, not from a path) or any without
+/// the `psi` feature plays the wordmark, as the panel falls back to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootSpec {
     /// The status card instead of the show.
@@ -550,6 +564,11 @@ pub struct BootSpec {
     ip: String,
     ap: String,
     note: String,
+    /// `formula=`, as given.
+    formula: String,
+    /// It, built (by [`SynthSource::new`]).
+    #[cfg(feature = "psi")]
+    show: Option<crate::boot::FormulaShow>,
 }
 
 fn parse_boot(query: &str) -> BootSpec {
@@ -563,6 +582,9 @@ fn parse_boot(query: &str) -> BootSpec {
         ip: String::new(),
         ap: String::new(),
         note: String::new(),
+        formula: String::new(),
+        #[cfg(feature = "psi")]
+        show: None,
     };
     for (k, v) in options(query) {
         // One line of the small font across the panel at most.
@@ -596,6 +618,7 @@ fn parse_boot(query: &str) -> BootSpec {
             b"ap" => b.ap = text(),
             b"note" => b.note = text(),
             b"up" => b.updated = v == b"1",
+            b"formula" => b.formula = url_decode(v),
             _ => {}
         }
     }
@@ -675,19 +698,30 @@ impl<R: Read> SynthSource<R> {
                 });
             }
         }
-        // Only a formula may be longer than a virtual path.
-        let path = if path.len() > MAX_PATH && !is_formula(path) {
+        // Only a formula (or the show with one) may be longer than a
+        // virtual path.
+        let path = if path.len() > MAX_PATH && !is_formula(path) && !is_boot_formula(path) {
             ""
         } else {
             path
         };
-        let Some(spec) = parse(path) else {
+        let Some(mut spec) = parse(path) else {
             #[cfg(feature = "psi")]
             if let Some(e) = crate::fx_psi::open_error(path) {
                 return Err(e);
             }
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown virtual file"));
         };
+        // The show's Formula, if it builds (else the wordmark, as on the
+        // panel).
+        #[cfg(feature = "psi")]
+        if let Spec::Boot(b) = &mut spec {
+            if !b.formula.is_empty() {
+                b.show = crate::boot::FormulaShow::open(&b.formula).ok();
+            }
+        }
+        #[cfg(not(feature = "psi"))]
+        let _ = &mut spec;
         Ok(SynthSource {
             reader,
             spec,
@@ -789,12 +823,24 @@ impl<R: Read> SynthSource<R> {
                     note: &b.note,
                     updated: b.updated,
                 };
-                if let Some(stage) = b.notice {
-                    crate::boot::update_notice(canvas, stage, &b.version);
-                } else if b.card {
-                    crate::boot::card(canvas, t, &info, None);
-                } else {
-                    crate::boot::show(canvas, b.len, t, &info);
+                #[cfg(feature = "psi")]
+                let shown = match (&mut b.show, b.notice.is_none() && !b.card) {
+                    (Some(s), true) => {
+                        s.frame(canvas, b.len, t, &info);
+                        true
+                    }
+                    _ => false,
+                };
+                #[cfg(not(feature = "psi"))]
+                let shown = false;
+                if !shown {
+                    if let Some(stage) = b.notice {
+                        crate::boot::update_notice(canvas, stage, &b.version);
+                    } else if b.card {
+                        crate::boot::card(canvas, t, &info, None);
+                    } else {
+                        crate::boot::show(canvas, b.len, t, &info);
+                    }
                 }
                 delay
             }
@@ -802,6 +848,27 @@ impl<R: Read> SynthSource<R> {
         self.frames += 1;
         Ok(Some(delay))
     }
+}
+
+/// The information line of `@boot?…` (its `len`, `v`, `ip`, `ap`, `note`
+/// and `up`) at `t` ms over a Formula's frame already in `canvas`
+/// ([`crate::boot::formula_line`]): how the web app, whose main module
+/// draws no Formulas, previews a Formula start-up show over the Formulas
+/// module's frame. Nothing for another path.
+pub fn boot_line(canvas: &mut Canvas, path: &str, t: u32) {
+    let Some(q) = path.strip_prefix(crate::boot::PATH) else { return };
+    if !(q.is_empty() || q.starts_with('?')) {
+        return;
+    }
+    let b = parse_boot(q.trim_start_matches('?'));
+    let info = crate::boot::Info {
+        version: &b.version,
+        ip: &b.ip,
+        ap: &b.ap,
+        note: &b.note,
+        updated: b.updated,
+    };
+    crate::boot::formula_line(canvas, b.len, t, &info);
 }
 
 /// How long `@boot?len=updating|installing` plays its still message.

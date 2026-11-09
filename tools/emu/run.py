@@ -483,7 +483,8 @@ def api(a, sim, rom, want_sha):
         if not p or not p.exists():
             sys.exit(f"EMU_API_FAIL: {what} missing: {p}")
     try:
-        a.seeded = api_lane.seeded_image(a.image, EMU_DIR / "api")
+        a.seeded = api_lane.seeded_image(a.image, EMU_DIR / "api", extra={"boot_fx": api_lane.BOOT_GOOD})
+        a.seeded_bad = api_lane.seeded_image(a.image, EMU_DIR / "api", extra={"boot_fx": api_lane.BOOT_BAD})
     except api_lane.LaneFail as e:
         sys.exit(f"EMU_API_FAIL: {e}")
     if os.environ.get("EMU_API_NETNS") != "1":

@@ -33,8 +33,10 @@ refresh, 2026-10-22, which treats 60 KB as a ceiling). The Studio ("Make art") i
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
 above. Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
-`boot_show` select and the previews of the start-up show) has a line of its own
-too, <= 2 KB, and so does Settings' Power card (`js/power.js`: the Maximum brightness
+`boot_show` select, the start-up Formula's picker, `boot_formula`, and the previews of the start-up show) has a line of its own
+too, <= 3 KB (2 KB until the start-up Formula, 2026-11-09: its picker, its
+preview through a pkg-psi instance of its own and the panel's word when it
+fell back took the line from 756 to ~2,000 B gz), and so does Settings' Power card (`js/power.js`: the Maximum brightness
 control and its warning), <= 2 KB, and the Library's Add GIFs and Edit
 details dialogs with Delete (`js/details.js`, imported when first used),
 <= 8 KB, and so does the Library's search of the web (`js/find.js` +
@@ -161,7 +163,7 @@ JS_CSS_GZ_BUDGET = 60 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
-BOOT_GZ_BUDGET = 2 * 1024
+BOOT_GZ_BUDGET = 3 * 1024
 BOOT = {"js/boot.js"}
 POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}

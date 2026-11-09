@@ -93,7 +93,7 @@ export async function mount(el) {
     if (app.noFormulas) return; // a build without Formulas: no Formula looks (the tab says so)
     let ex;
     let mine;
-    try { [ex, L, mine] = await Promise.all([examples(), import('./looks.js'), import('./fstore.js').then((S) => S.loaded())]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
+    try { [ex, L, mine] = await Promise.all([examples(), import('./looks.js'), import('./fstore.js').then((S) => S.loaded().then(() => S.list()))]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
     const cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map(opt));
     const opt = (x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'));
     lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))]
@@ -221,7 +221,7 @@ export async function mount(el) {
           !app.noFormulas && h('label.stack', 'A Formula you show on the panel stays', f.formula_keep),
           h('label', f.shuffle, 'Shuffle'))))),
     look: () => {
-      import('./boot.js').then((m) => m.bootCard(boot));
+      import('./boot.js').then((m) => m.bootCard(boot, examples));
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
