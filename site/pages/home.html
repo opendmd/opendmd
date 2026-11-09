@@ -1,76 +1,116 @@
 <!-- The home page (tools/site.py writes it as index.html). Site-only: the README is
      GitHub's front page. {{led:NAME}} is that animation from tools/site-art.py drawn as
-     LEDs, {{led:NAME:alt}} the same with no alt text (beside its own words);
-     {{tiles}} the grid of them. Links are relative to the site's root. A panel's
-     data-formula (a bundled Formula) plays live in place of its still once the page has
-     loaded (opendmd-web/share/ref/home.js); the hero's caption names its Formula.
-     The hero's data-show is a little playlist, played as the panel plays one
-     (hero.js): each <li> a bundled Formula (data-formula) or a GIF of the site's
-     art ({{art:NAME}}, its address) with a look over it (data-look), how long it
-     plays (data-ms), the panel's transition that brings it in (data-in, kind:ms),
-     and its caption. -->
+     LEDs, {{led:NAME:alt}} the same with no alt text (beside its own words). Links are
+     relative to the site's root, and each docs/images/ picture is published with the
+     page (tools/screenshots.py takes them). A panel's data-formula (a bundled Formula)
+     plays live in place of its still once the page has loaded
+     (opendmd-web/share/ref/home.js). The hero's data-show is a little playlist, played
+     as the panel plays one (hero.js): each <li> a bundled Formula (data-formula) or a
+     GIF of the site's art ({{art:NAME}}, its address) with a look over it (data-look),
+     how long it plays (data-ms), the panel's transition that brings it in (data-in,
+     kind:ms), and its caption.
+     The five bands after the hero are in the owner's order: control, RePlayOS,
+     playlists, brightness and colour, night mode. Formulas are named only under
+     Explore more. -->
 <section class="hero">
 <div class="hero-text">
 <a class="chip" href="guide/hardware.html">For the DMDoS display</a>
 <h1>Your DMDoS display, with a web app</h1>
-<p class="lead">OpenDMD is free, open-source software for the display. It plays the GIFs already on your
-SD card and adds a web app for your phone or computer. Choose what plays, build playlists, make
-your own art, and add Formulas: small animations you can change while they run.</p>
-<p class="ctas"><a class="cta" href="install/">Install OpenDMD</a><a class="cta alt" href="demo/">Try the demo</a><a class="cta alt" href="formulas/">Browse Formulas</a></p>
+<p class="lead">OpenDMD is free, open-source software for the display. It plays the GIFs already on
+your SD card, and adds a web app for your phone or computer: skip and pause, build playlists, set
+the brightness and colour, and dim the panel at night by itself.</p>
+<p class="ctas"><a class="cta" href="install/">Install OpenDMD</a><a class="cta alt" href="demo/">Try the demo</a></p>
 <ul class="ticks">
-<li>Installs from your browser in a few minutes</li>
+<li>Installs from your browser in about four minutes</li>
 <li>Your SD card and its GIFs work as they are</li>
 <li>Free, and you can go back to DMDoS any time</li>
 </ul>
 </div>
 <div class="hero-panel"><div class="bezel" data-formula="formulas/src/endless-road.psi" data-show="hero-show">{{led:endless-road}}</div>
-<p class="cap">Endless road, one of the Formulas that come with OpenDMD.</p>
+<p class="cap">Endless road, one of the animations that come with OpenDMD.</p>
 <ol id="hero-show" hidden>
-<li data-formula="formulas/src/endless-road.psi" data-ms="8000" data-in="push:700">Endless road, one of the Formulas that come with OpenDMD.</li>
+<li data-formula="formulas/src/endless-road.psi" data-ms="8000" data-in="push:700">Endless road, one of the animations that come with OpenDMD.</li>
 <li data-gif="{{art:kenney-walk}}" data-ms="6000" data-in="fade:700">A GIF from your SD card, played as the panel plays it.</li>
-<li data-formula="formulas/src/starfield.psi" data-ms="6000" data-in="wipe_left:700">Starfield, another Formula.</li>
-<li data-gif="{{art:kenney-run}}" data-look="formulas/src/old-tv.psi" data-ms="7000" data-in="blinds:700">Old TV, a look laid over a GIF.</li>
+<li data-formula="formulas/src/starfield.psi" data-ms="6000" data-in="wipe_left:700">Starfield, another of OpenDMD's own.</li>
+<li data-gif="{{art:kenney-run}}" data-look="formulas/src/old-tv.psi" data-ms="7000" data-in="blinds:700">Old TV, an effect laid over a GIF.</li>
 </ol></div>
+</section>
+
+<section class="band split focus" aria-labelledby="control">
+<div>
+<h2 id="control">Control it from your phone</h2>
+<p>Open <code>opendmd.local</code> on any phone, tablet or computer on your WiFi. Skip, pause, or
+step back through what just played, and see what's coming next. Recently played lists the last
+GIFs on the panel: tap one to see it again.</p>
+<p>On a computer, Space pauses and the arrow keys skip and go back.
+<a href="guide/web-app.html">A tour of the web app</a></p>
+</div>
+<figure class="shot phone"><img src="docs/images/phone-now.png" alt="Now on a phone: the panel's GIF, Skip, Pause, Previous and Replay, the brightness, and Recently played" width="390" height="700" loading="lazy" decoding="async">
+<figcaption>Now, on a phone.</figcaption></figure>
+</section>
+
+<section class="band split focus rev" aria-labelledby="replayos">
+<div>
+<h2 id="replayos">Follows RePlayOS</h2>
+<p>Play games on a RePlayOS box, and the display can follow it. When a game starts, the panel
+shows the console's logo or name, a title card, then GIFs of that console, with the game's own
+coming up most. In the menus it plays a playlist you pick.</p>
+<p>Nothing is installed on the box: turn on its NET CONTROL, then type its address and code into
+Settings. When the box is off, the display plays as usual. <a href="guide/replayos.html">Set it up</a></p>
+</div>
+<figure class="shot"><img src="docs/images/now-follow.png" alt="Now while following RePlayOS: the panel shows a game's title card, and the line under the title names the console and the game" width="1080" height="506" loading="lazy" decoding="async">
+<figcaption>Now, as a game starts on the box.</figcaption></figure>
+</section>
+
+<section class="band split focus" aria-labelledby="playlists">
+<div>
+<h2 id="playlists">Playlists</h2>
+<p>Tick GIFs in the Library, or a whole folder, and add them to a playlist; the one playing comes
+first. Or fill one by platform, category and words in the title.</p>
+<p>Reorder, rename and duplicate playlists, mark favourites to play more often, and switch the
+panel to another in a few seconds. <a href="guide/web-app.html#playlists">More about playlists</a></p>
+</div>
+<figure class="shot"><img src="docs/images/library.png" alt="The Library with two GIFs ticked, and the menu to add them to a playlist: the one playing first, then the others, then New playlist" width="670" height="516" loading="lazy" decoding="async">
+<figcaption>Two GIFs ticked in the Library, on their way to a playlist.</figcaption></figure>
+</section>
+
+<section class="band split focus rev" aria-labelledby="look">
+<div>
+<h2 id="look">Brightness and colour</h2>
+<p>Set the brightness from Now or Settings, with a maximum so the panel stays within what its
+power supply can give.</p>
+<p>Show everything in full colour, or in one colour like a classic dot-matrix display: amber, red,
+green, blue or white. Add a soft phosphor glow, and choose how the panel moves from one GIF to the
+next. <a href="guide/web-app.html#panel">The Panel settings</a></p>
+</div>
+<figure class="shot"><img src="docs/images/settings-look.png" alt="Settings, Panel: brightness, maximum brightness, colour set to amber, and phosphor glow" width="844" height="456" loading="lazy" decoding="async">
+<figcaption>Settings › Panel, with amber and a short glow.</figcaption></figure>
+</section>
+
+<section class="band split focus" aria-labelledby="night">
+<div>
+<h2 id="night">Night mode and schedules</h2>
+<p>Night mode dims the panel or turns it off every night: between times you choose, or from
+sunset to sunrise where the display is, following the seasons by itself. Wake for an hour from
+Now when you want it back.</p>
+<p>Schedule rules pick a playlist or a brightness for certain days and times, and for part of the
+year if you like. If your card has the Halloween or Christmas playlist, one press adds a rule that
+plays it in its season. <a href="guide/web-app.html#schedule">The schedule</a></p>
+</div>
+<figure class="shot"><img src="docs/images/settings-schedule.png" alt="Settings, Schedule: a Christmas rule from 1 to 26 December, a weekday evening rule, and night mode dimming the panel from sunset to sunrise" width="844" height="381" loading="lazy" decoding="async">
+<figcaption>A Christmas rule, weekday evenings, and night mode by the sun.</figcaption></figure>
 </section>
 
 <section class="band" aria-labelledby="start">
 <h2 id="start">Get started</h2>
-<div class="doors">
+<div class="doors two">
 <a class="door" href="install/">{{led:boot:}}<h3>Install</h3>
-<p>Plug the display's board into a computer, click Install, and pick your WiFi. It takes about a
-minute in Chrome, Edge, Opera or Firefox 151+.</p><span class="go">Install OpenDMD →</span></a>
+<p>Plug the display's board into a computer, click Install, and pick your WiFi. It takes about
+four minutes in Chrome, Edge, Opera or Firefox 151+.</p><span class="go">Install OpenDMD →</span></a>
 <a class="door" href="guide/">{{led:kenney-run:}}<h3>Using it</h3>
-<p>The web app view by view, playlists, Create Art, the SD card, updates, and what to do when
+<p>The web app view by view, playlists, Follow RePlayOS, the SD card, updates, and what to do when
 something isn't right.</p><span class="go">Read the guide →</span></a>
-<a class="door" href="formulas/" data-formula="formulas/src/matrix.psi">{{led:matrix:}}<h3>Formulas</h3>
-<p>Plasma, fire, starfields, clocks, and looks to lay over your GIFs. Add one to your panel in a
-click, or remix it in the demo.</p><span class="go">Open the gallery →</span></a>
 </div>
-</section>
-
-<section class="band" aria-labelledby="panel">
-<h2 id="panel">On the panel</h2>
-<p class="intro">Your GIFs and Formulas, all on the same 128 by 32 LEDs.</p>
-{{tiles}}
-</section>
-
-<section class="band split" aria-labelledby="app">
-<div>
-<h2 id="app">What you can do</h2>
-<p class="intro">You do it all in the web app, at <code>opendmd.local</code>, from any phone,
-tablet or computer on your WiFi.</p>
-<ul class="features">
-<li><strong>Choose what plays</strong>Search your GIFs, preview each with the panel's look, and send one to the panel.</li>
-<li><strong>Playlists</strong>Build them by game system, category or title words, reorder them, and switch live.</li>
-<li><strong>Create Art</strong>Turn game art, an old GeoCities GIF or your own picture into a GIF made for the panel.</li>
-<li><strong>Formulas</strong>Ten come with OpenDMD, and the gallery has many more to add.</li>
-<li><strong>Looks over your GIFs</strong>Lay scanlines, an old TV, a vignette or glitter over any GIF.</li>
-<li><strong>Colour and night mode</strong>Full colour or a single amber, red, green, blue or white, a soft glow, and a schedule that dims the panel at night.</li>
-</ul>
-<p><a href="guide/web-app.html">A tour of the web app</a> · <a href="demo/">try it in the demo</a>, no display needed.</p>
-</div>
-<figure class="shot phone"><img src="docs/images/phone-library.png" alt="The web app's Library on a phone" width="390" height="844" loading="lazy" decoding="async">
-<figcaption>The Library on a phone.</figcaption></figure>
 </section>
 
 <section class="band" aria-labelledby="need">
@@ -81,6 +121,21 @@ tablet or computer on your WiFi.</p>
 <li><strong>Your WiFi</strong>The display joins your 2.4 GHz WiFi, and you use it from any browser on the same network.</li>
 </ul>
 <p><a href="guide/hardware.html">More about what you need</a></p>
+</section>
+
+<section class="band" aria-labelledby="more">
+<h2 id="more">Explore more</h2>
+<div class="doors more">
+<a class="door" href="formulas/"><h3>Formulas</h3>
+<p>Animations written in a few lines of maths: clocks, plasma, starfields, and looks to lay over
+your GIFs. Add one from the gallery, or write your own.</p><span class="go">Open the gallery →</span></a>
+<a class="door" href="create/"><h3>Create Art</h3>
+<p>Turn a title screen, box art, an old GeoCities GIF or your own picture into a GIF made for the
+panel.</p><span class="go">Open Create Art →</span></a>
+<a class="door" href="dev/"><h3>For developers</h3>
+<p>Build OpenDMD from source, see how it works, or drive the display from your own scripts with
+its HTTP API.</p><span class="go">For developers →</span></a>
+</div>
 </section>
 
 <section class="band" aria-labelledby="dmdos">

@@ -6,9 +6,8 @@
 
     uv run tools/site-art.py OUT_DIR [--sim PATH]
 
-- strip/*.gif: the animations for the strip across the top of every page
-  and the landing page's tiles: Formulas (opendmd-web/formulas/*.psi) and a title
-  card, recorded from the simulator's raw canvas
+- strip/*.gif: the animations for the strip across the top of every page:
+  Formulas (opendmd-web/formulas/*.psi) and a title card, recorded from the simulator's raw canvas
   (--screenshot-canvas) a frame at a time, one whole loop each; and the
   Kenney "Pixel Platformer" (CC0) sprites the demo card has too, re-encoded
   lighter.
@@ -47,19 +46,19 @@ FORMULAS = ROOT / "opendmd-web/formulas"
 # name, source (a virtual file, formula:NAME[?--formula-opts] -- an example in
 # opendmd-web/formulas/ --, kenney:FILE, or scene:SCRIPT: a scene() in a script under
 # opendmd-web/experiments/art/process/), ms a frame, colours, where it shows
-# (strip, tiles, hero, doors: the home page's Get started), alt text, caption.
+# (strip, hero, doors: the home page's Get started), alt text, caption.
 ART = [
-    ("copper-bars", "formula:Copper bars", 40, 24, "strip tiles",
+    ("copper-bars", "formula:Copper bars", 40, 24, "strip",
      "Shiny Amiga-style bars bouncing up and down", "Copper bars (a Formula)"),
-    ("tunnel", "formula:Tunnel", 80, 32, "strip tiles",
+    ("tunnel", "formula:Tunnel", 80, 32, "strip",
      "A checkered tunnel turning and cycling colour", "Tunnel (a Formula)"),
-    ("kenney-walk", "kenney:b_walk.gif", 0, 32, "strip tiles",
+    ("kenney-walk", "kenney:b_walk.gif", 0, 32, "strip",
      "Pixel-art characters walking across the panel", "Kenney Pixel Platformer sprites (CC0)"),
-    ("wire-cube", "formula:Wireframe cube", 40, 24, "strip tiles",
+    ("wire-cube", "formula:Wireframe cube", 40, 24, "strip",
      "A turning wireframe cube", "Wireframe cube (a Formula)"),
-    ("starfield", "formula:Starfield", 40, 32, "strip tiles",
+    ("starfield", "formula:Starfield", 40, 32, "strip",
      "Stars flying towards the viewer", "Starfield (a Formula)"),
-    ("clock", "formula:Big clock", 0, 16, "strip tiles",
+    ("clock", "formula:Big clock", 0, 16, "strip",
      "The time in big rainbow digits, a seconds bar along the bottom", "Big clock (a Formula)"),
     ("time-gate", "formula:Time gate", 80, 32, "strip",
      "Star rings rushing out of a time gate", "Time gate (a Formula)"),
@@ -67,21 +66,13 @@ ART = [
     # plays it live: site/pages/home.html).
     ("endless-road", "formula:Endless road", 0, 128, "hero",
      "An OutRun road through a synthwave landscape, palms passing", "Endless road (a Formula)"),
-    # Get started: Install, Using it, Formulas (Matrix plays live; this is its still).
+    # Get started: Install and Using it.
     ("boot", "@boot?len=full&ip=opendmd.local", 40, 32, "doors",
      "OpenDMD's start-up show: the name lighting up dot by dot", "The start-up show"),
     ("kenney-run", "scene:kenney-pixel-platformer/scene.py", 0, 64, "doors",
      "A little alien running across a grassy level, picking up coins", "Kenney Pixel Platformer tiles (CC0)"),
-    ("matrix", "formula:Matrix", 0, 16, "doors",
-     "Green code raining down the panel", "Matrix (a Formula)"),
     ("game-over", "@card:GAME OVER|thanks for playing", 0, 8, "strip",
      "A title card reading GAME OVER, thanks for playing", "Title card"),
-    ("rotozoom-floor", "formula:Rotozoom floor", 80, 32, "tiles",
-     "A Mode 7 floor running away to a foggy horizon", "Mode 7 rotozoom floor (a Formula)"),
-    ("kaleidoscope", "formula:Kaleidoscope", 80, 32, "tiles",
-     "Plasma folded into a mirror pattern", "Kaleidoscope (a Formula)"),
-    ("plasma", "formula:Plasma", 40, 24, "tiles",
-     "Three waves making every colour of a plasma", "Plasma (a Formula)"),
 ]
 WORDMARK = "@boot?len=card"
 # Recordings of something that plays once rather than loops (name: its

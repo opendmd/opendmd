@@ -1664,11 +1664,37 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
             if scheme == "light":
                 page.goto(base + "/")
                 hrefs = page.eval_on_selector_all(".hero .cta", "els => els.map(e => e.getAttribute('href'))")
-                doors = page.eval_on_selector_all(".door", "els => els.map(e => e.getAttribute('href'))")
-                check(hrefs == ["install/", "demo/", "formulas/"] and doors == ["install/", "guide/", "formulas/"],
-                      f"home ({size}): Install, the demo and Formulas up top {hrefs}; Install, the guide and the gallery below {doors}")
-                lit_tiles = page.eval_on_selector_all(".tiles img, .hero img", "els => els.filter(i => i.getAttribute('src').startsWith('art/')).length")
-                check(lit_tiles >= 8 and page.inner_text("h1").strip() != "", f"home ({size}): a heading, the panel and {lit_tiles} pieces of art")
+                doors = page.eval_on_selector_all("[aria-labelledby=start] .door", "els => els.map(e => e.getAttribute('href'))")
+                more = page.eval_on_selector_all("[aria-labelledby=more] .door", "els => els.map(e => e.getAttribute('href'))")
+                check(hrefs == ["install/", "demo/"] and doors == ["install/", "guide/"] and more == ["formulas/", "create/", "dev/"],
+                      f"home ({size}): Install and the demo up top {hrefs}; Install and the guide to get started {doors}; "
+                      f"the gallery, Create Art and For developers under Explore more {more}")
+                art = page.eval_on_selector_all(".hero img, .door img", "els => els.filter(i => i.getAttribute('src').startsWith('art/')).length")
+                check(art == 3 and page.inner_text("h1").strip() != "" and not page.query_selector(".tiles"),
+                      f"home ({size}): a heading, the panel and the two doors' pictures ({art} pieces of art), no grid of tiles")
+                # The five focus bands, in the owner's order, each words beside a
+                # screenshot of the web app that has loaded (they load lazily: each
+                # scrolled to): side by side on a laptop, every other one swapped,
+                # the words first on a phone.
+                page.eval_on_selector_all("section.focus figure", "els => els.forEach(f => f.scrollIntoView())")
+                wait_js(page, "[...document.querySelectorAll('section.focus img')].every(i => i.complete && i.naturalWidth > 0)")
+                page.evaluate("scrollTo(0, 0)")
+                bands = page.evaluate("""[...document.querySelectorAll('section.focus')].map(s => {
+                    const t = s.querySelector(':scope > div').getBoundingClientRect(), f = s.querySelector(':scope > figure').getBoundingClientRect();
+                    return [s.querySelector('h2').textContent, s.querySelector('img').getAttribute('src'),
+                            f.left >= t.right - 1 ? 'right' : f.right <= t.left + 1 ? 'left' : f.top >= t.bottom - 1 ? 'below' : 'over'];
+                })""")
+                want = [["Control it from your phone", "docs/images/phone-now.png"], ["Follows RePlayOS", "docs/images/now-follow.png"],
+                        ["Playlists", "docs/images/library.png"], ["Brightness and colour", "docs/images/settings-look.png"],
+                        ["Night mode and schedules", "docs/images/settings-schedule.png"]]
+                check([b[:2] for b in bands] == want, f"home ({size}): the five bands in order, each with its screenshot {[b[:2] for b in bands]}")
+                sides = [b[2] for b in bands]
+                check(sides == (["below"] * 5 if size == "phone" else ["right", "left", "right", "left", "right"]),
+                      f"home ({size}): the screenshots {'below their words' if size == 'phone' else 'beside their words, the sides alternating'} {sides}")
+                # Formulas are named only under Explore more (the menus aside).
+                named = page.evaluate("""[...document.querySelectorAll('main section:not([aria-labelledby=more])')]
+                    .filter(s => /formula/i.test(s.innerText)).map(s => s.getAttribute('aria-labelledby') || s.className)""")
+                check(not named, f"home ({size}): Formulas named only under Explore more {named}")
                 # The hero's Formula plays live once the page has loaded (home.js).
                 wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
                 check(True, f"home ({size}): the hero plays its Formula live")

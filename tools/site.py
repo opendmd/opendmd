@@ -69,7 +69,7 @@
                validator, every one published, so a new format cannot drop
                an old one): each
                file is checked to be exactly its format's shape
-- /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
+- /art/        the home page's panels, the strip and the wordmark (tools/site-art.py: recordings of the
                OpenDMD's own Formulas and live items, and CC0 sprites), drawn
                as LEDs by CSS
 - /dev/api/    the HTTP API as each release described it: v<version>.html, a
@@ -703,14 +703,6 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
             f'{LAZY if lazy else ""}></picture>')
 
 
-def tiles(art: dict) -> str:
-    figs = "".join(f'<figure>{led("", i, lazy=True)}<figcaption>{html.escape(i["caption"])}</figcaption></figure>'
-                   for i in art["items"] if "tiles" in i["where"])
-    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from OpenDMD: its own Formulas '
-            f'and the CC0 Kenney Pixel Platformer sprites. Your own GIFs play the same way, '
-            f'and Create Art makes new ones.</p>')
-
-
 # The home page (site/pages/home.html).
 HOME = "site/pages/home.html"
 HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
@@ -723,21 +715,19 @@ TRANSITIONS = ("none", "dissolve", "wipe_left", "wipe_right", "wipe_down", "wipe
 
 def home(art: dict, assets: set[str]) -> str:
     """The home page's body: its {{led:NAME}} (`{{led:NAME:}}`: no alt
-    text), {{art:NAME}} (that animation's GIF, its address) and {{tiles}}
-    filled in, its comment dropped, its pictures noted."""
+    text) and {{art:NAME}} (that animation's GIF, its address) filled in,
+    its comment dropped, its pictures noted."""
     items = {i["name"]: i for i in art["items"]}
     text = re.sub(r"<!--.*?-->\s*", "", (ROOT / HOME).read_text(encoding="utf-8"), count=1, flags=re.S)
 
     def fill(m: re.Match) -> str:
         what, name, alt = m.group(1), m.group(2), m.group(3)
-        if what == "tiles":
-            return tiles(art)
         if name not in items:
             raise SystemExit(f"{HOME}: no animation {name!r} in the site's art")
         if what == "art":
             return html.escape("art/" + items[name]["gif"])
         return led("", items[name], alt=None if alt is None else "")
-    text = re.sub(r"\{\{(tiles|led|art):?([\w-]*)(:)?\}\}", fill, text)
+    text = re.sub(r"\{\{(led|art):([\w-]+)(:)?\}\}", fill, text)
     for m in HOME_TRANSITION.finditer(text):
         if m.group(1) not in TRANSITIONS or not 20 <= int(m.group(2)) <= 2000:
             raise SystemExit(f"{HOME}: data-in={m.group(0)[8:]} is not one of the panel's transitions ({', '.join(TRANSITIONS)}) over 20..2000 ms")

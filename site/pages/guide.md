@@ -10,8 +10,8 @@ your browser, with no display needed.
 
 - **[What you need](../../docs/guide/hardware.md):** The display, where its
   parts come from, and what OpenDMD expects of them.
-- **[Install](../../docs/guide/install.md):** From your browser in about a
-  minute, then onto your WiFi.
+- **[Install](../../docs/guide/install.md):** From your browser in about
+  four minutes, then onto your WiFi.
 
 ## Every day
 

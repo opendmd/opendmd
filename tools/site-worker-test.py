@@ -33,9 +33,9 @@ runs against the same server (--base).
 - every request names itself in User-Agent: Cloudflare's Browser Integrity
   Check refuses urllib's default one (error 1010);
 - _headers, _redirects and .assetsignore not served;
-- in Chromium, the home page's live panels (the hero's Endless road and
-  the Formulas door's Matrix): each poster first, then a canvas drawing lit,
-  changing pixels with no CSP violation or console error; with reduced
+- in Chromium, the home page's live panel (the hero's Endless road): its
+  poster first, then a canvas drawing lit, changing pixels with no CSP
+  violation or console error; with reduced
   motion the stills stay and no wasm loads; with the wasm blocked the
   stills stay; the gallery's tiles: hovering one plays it (changing
   pixels), leaving brings its thumbnail back, keyboard focus plays one
@@ -684,12 +684,9 @@ def live_panels(base: str, shots: Path) -> None:
               f"home: Psi's module and wasm asked for at the build's address, ?v= (js/wasm.js) {[u.rsplit('/', 1)[-1] for u in psi][:4]}")
         check(bool(a and b and b["h"] != a["h"] and b["frames"] > a["frames"]),
               f"home: the hero plays Endless road live (lit {a and a['lit']} of 4096, frames {a and a['frames']} -> {b and b['frames']})")
-        d1 = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{door}'); return x && x.frames >= 10 && x.lit > 20 && x; }}")
-        page.wait_for_timeout(300)
-        d2 = page.evaluate(PIXELS, door)
-        check(bool(d1 and d2 and d1["h"] != d2["h"]), f"home: the Formulas door plays Matrix live ({d1 and d1['lit']} lit)")
+        check(page.locator(door).count() == 0, "home: only the hero plays live (the doors keep their pictures)")
         page.locator(".hero-panel").screenshot(path=str(shots / "home-hero-live.png"))
-        page.locator(".doors").screenshot(path=str(shots / "home-get-started.png"))
+        page.locator("[aria-labelledby=start] .doors").screenshot(path=str(shots / "home-get-started.png"))
         # Off-screen: the hero stops drawing.
         page.evaluate("scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(400)
