@@ -57,9 +57,15 @@ button lands on them.
   **panel-look preview** of the same file plays alongside, kept in step with
   the panel by clock. It fetches the file's prepared copy first (cheap for
   the device; one 404 when there is none) and can be switched off (Settings
-  → Look → *Mirror the panel on Now*, per browser). The device's figures
+  → Panel → *Mirror the panel on Now*, per browser). The device's figures
   (uptime, memory, late frames) are Settings → Device → Status. The LED-look controls (gain,
-  bloom, gamma, flat) are here too and are remembered per browser. In local
+  bloom, gamma, flat: **Preview look**, this page's drawing only, never
+  the panel's) are here too and are remembered per browser. Previous is
+  disabled, not hidden, until Recently played has somewhere to go back to.
+  The tags under the title name the platform (`app.wasm.consoleName`), the
+  category, the flags and the author (unless the category names them);
+  a Formula's are "Formula". Keys while Now is up: Space pauses or
+  resumes, → skips, ← is Previous (not in a field or on a slider). In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
   **Recently played** (under the preview) and **Previous** / **Replay**

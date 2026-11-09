@@ -120,6 +120,13 @@ pub fn parse_path(path: &str) -> JsValue {
     entry_object(&Entry::from_path(path)).into()
 }
 
+/// What people call a platform tag (`MD` -> "Mega Drive", the title
+/// cards' names); empty if the core has no name for it.
+#[wasm_bindgen(js_name = consoleName)]
+pub fn console_name(platform: &str) -> String {
+    opendmd_core::follow::console_name(platform).into()
+}
+
 /// [`parse_path`] over every non-blank line of a manifest, in one call.
 #[wasm_bindgen(js_name = parseManifest)]
 pub fn parse_manifest(text: &str) -> Array {

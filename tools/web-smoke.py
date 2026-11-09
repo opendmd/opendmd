@@ -736,6 +736,16 @@ def wait_config(base: str, ok, timeout_s: float = 10) -> dict:
         time.sleep(0.2)
 
 
+def wait_until(ok, timeout_s: float = 10) -> bool:
+    """Whether `ok()` came true within `timeout_s` (tried every 0.2 s)."""
+    deadline = time.time() + timeout_s
+    while not ok():
+        if time.time() > deadline:
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def mid_transition(page: Page, base: str) -> dict:
     """Skip on the device; ~200 ms after the Now preview loads the new file
     (the transition's start), compare the preview with the old picture and
@@ -6529,6 +6539,25 @@ def recent_checks(page: Page, base: str) -> None:
     s = status()
     check(s["now_playing"]["path"] == c and s["recent"][:3] == [c, a, b],
           f"recent: Replay restarts {c} (ordinal {ordinal} -> {s['now_playing']['ordinal']}), the list unchanged")
+    # The tags under the title and in the list: platforms by name, nothing twice.
+    tagl = page.eval_on_selector_all("#now-recent > div > .muted", "els => els.map(e => e.textContent)")
+    names = page.evaluate(f"import('./js/state.js').then(({{ app }}) => {json.dumps([c, a, b])}.map(p => app.wasm.consoleName(app.wasm.parsePath(p).platform || '')))")
+    squash = lambda t: "".join(ch for ch in t.lower() if ch.isalnum()).removeprefix("by")
+    check(all(len({squash(x) for x in t.split(" · ")}) == len(t.split(" · ")) for t in tagl if t)
+          and all(not n or t.startswith(n) for t, n in zip(tagl, names)) and page.inner_text("#now-tags") == tagl[0],
+          f"recent: tags name the platform ({names}), nothing twice, Now's the same ({tagl})")
+    # The keys, with nothing focused: ← is Previous, Space pauses and resumes, → skips.
+    page.evaluate("document.activeElement?.blur()")
+    page.keyboard.press("ArrowLeft")
+    path_is(a)
+    p0 = status(False)["paused"]
+    page.keyboard.press("Space")
+    flipped = wait_until(lambda: status(False)["paused"] != p0, 10)
+    page.keyboard.press("Space")
+    back_again = wait_until(lambda: status(False)["paused"] == p0, 10)
+    page.keyboard.press("ArrowRight")
+    page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(a)}", timeout=10000)
+    check(flipped and back_again, "now: keys ← Previous, Space pause/resume twice, → skip")
     codes = [back() for _ in range(RECENT_MAX + 1)]
     s = status()
     check(codes[-1] == 404 and 200 in codes and s["recent_at"] == len(s["recent"]) - 1,

@@ -115,7 +115,8 @@ export function lookControls(extra) {
     return h('label', key[0].toUpperCase() + key.slice(1), input, out);
   };
   const flat = h('input', { type: 'checkbox', id: 'look-flat', checked: look.flat, onchange: () => setLook({ flat: flat.checked }) });
-  return h('details.card.look', h('summary', 'Panel look'),
+  return h('details.card.look', h('summary', 'Preview look'),
+    h('p.cap', 'How this page draws the preview: the panel itself doesn’t change'),
     h('div.row', slider('gain', 0, 4, 0.05), slider('bloom', 0, 1, 0.01), slider('gamma', 0.5, 4, 0.05),
       h('label', flat, 'Flat'),
       h('button.sm', { onclick: (e) => { setLook(DEFAULT_LOOK); const d = lookControls(extra); d.open = true; e.target.closest('details').replaceWith(d); } }, 'Reset'), extra));

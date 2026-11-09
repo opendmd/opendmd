@@ -16,7 +16,7 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider, drawn } from './util.js';
+import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
 // whenever Recently played is wanted; the slim one (`?now=1`, one segment:
@@ -29,8 +29,18 @@ const POLL_MS = 500, FULL_MS = 5000, SLOW_MS = 1500;
 // after a live one ends in AGAIN_MS.
 const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
 
-// "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
-const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).join(' · ');
+// "Mega Drive · Consoles · Slide · by pixelkid42": the platform, category
+// and flags by name and the author, each once (no "Arcade · Arcade", no
+// "Kenney · by kenney"; OTHER is no platform); "Formula" for one, nothing
+// for a title card.
+const platName = (p) => p && p != 'OTHER' && (app.wasm.consoleName(p) || (p.includes('_') ? niceName(p) : p.length > 4 ? p[0] + p.slice(1).toLowerCase() : p));
+const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+function tags(p, e) {
+  if (drawn(p)) return isFormula(p) ? 'Formula' : '';
+  const by = e.flags.find((f) => !isFlag(f)), seen = new Set();
+  return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by]
+    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).join(' · ');
+}
 
 // ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
 function favButton() {
@@ -87,7 +97,7 @@ function recentCard(prev, pick, fb) {
     clear(list, paths.map((p, k) => {
       const e = app.wasm.parsePath(p);
       const x = editFor(p);
-      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e)),
+      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(p, e)),
         x && h('button.more', { title: 'Edit in ' + x[0], 'aria-label': 'Edit in ' + x[0], onclick: (ev) => { ev.stopPropagation(); x[1](); } }, '✎'),
         fb.ov.path && !drawn(p) && moreButton(fb.ov, p));
     }));
@@ -113,7 +123,9 @@ function mountDevice(el) {
   const tagsEl = h('span', { id: 'now-tags' });
   const ord = h('span', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
-  const prevBtn = h('button', { id: 'now-prev', hidden: true, onclick: back }, 'Previous');
+  // (Disabled, not hidden, until Recently played has one to go back to:
+  // the buttons keep their places.)
+  const prevBtn = h('button', { id: 'now-prev', disabled: true, onclick: back }, 'Previous');
   const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Replay');
   const fb = favButton();
   const rc = recentCard(prevBtn, pick, fb);
@@ -238,7 +250,7 @@ function mountDevice(el) {
   function render(s) {
     if (!s) return;
     const np = s.now_playing;
-    // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
+    // A virtual file (`@…`: Follow RePlayOS's cards, a Formula) shows its title only.
     const virt = !!np.path && drawn(np.path);
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
     // Why the playlist is empty; "No card" once a mount has failed.
@@ -248,7 +260,7 @@ function mountDevice(el) {
     unfilter.hidden = !pf;
     title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
-    tagsEl.textContent = np.path && !virt ? tags(e) : '';
+    tagsEl.textContent = np.path ? tags(np.path, e) : '';
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
     followEl.hidden = !fl;
@@ -297,7 +309,7 @@ function mountDevice(el) {
       render(s);
       if (ask) {
         recentOrd = s.recent ? s.now_playing.ordinal : -2;
-        if (s.recent) { prevBtn.hidden = false; rc.set(s.recent, s.recent_at); }
+        if (s.recent) rc.set(s.recent, s.recent_at);
       }
       sync();
       good();
@@ -360,6 +372,20 @@ function mountDevice(el) {
     live = false;
     ac?.abort();
   }
+  // A laptop's keys while Now is up: Space pauses or resumes, → skips, ←
+  // is Previous. Not while typing or on a slider, nor Space on a control
+  // reached with the keyboard (it presses that one); a button the mouse
+  // left focused lets go first, so the key isn't a second press of it.
+  function onKey(ev) {
+    const t = ev.target, f = { ' ': togglePause, ArrowRight: skip, ArrowLeft: () => prevBtn.disabled || back() }[ev.key];
+    if (!f || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat || t.closest?.('input,select,textarea,[contenteditable],dialog,.menu')) return;
+    const ctl = t.closest?.('button,a,summary');
+    if (ev.key == ' ' && ctl?.matches(':focus-visible')) return;
+    ev.preventDefault();
+    ctl?.blur();
+    f();
+  }
+
   // Hidden: no stream (and the scheduler reads nothing); back: polling until it is live again.
   const onVis = () => { if (document.hidden) unlisten(); else { app.watch('now', POLL_MS, poll); listen(); } };
 
@@ -393,11 +419,13 @@ function mountDevice(el) {
       app.watch('now', POLL_MS, poll);
       app.soon('now');
       document.addEventListener('visibilitychange', onVis);
+      document.addEventListener('keydown', onKey);
       listen();
     },
     hide() {
       shown = false;
       document.removeEventListener('visibilitychange', onVis);
+      document.removeEventListener('keydown', onKey);
       unlisten();
       app.unwatch('now');
     },
