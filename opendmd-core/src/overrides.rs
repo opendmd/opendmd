@@ -99,10 +99,7 @@ impl Override {
     /// Apply one `key=value` field. False if it was not
     /// understood (unknown key, bad value); the override is then unchanged.
     fn apply_field(&mut self, field: &str) -> bool {
-        let (key, value) = match field.split_once('=') {
-            Some((k, v)) => (k.trim(), Some(v.trim())),
-            None => (field.trim(), None),
-        };
+        let (key, value) = crate::sidecar::key_value(field);
         match (key, value) {
             ("w", Some(v)) => match parse_decimal(v) {
                 Some(w) if valid_weight(w) => self.weight = Some(w),
@@ -223,18 +220,7 @@ pub struct MetaLine {
 /// Parse one raw line: `None` for a blank line, a comment, or a line that
 /// overrides nothing it understood.
 fn parse_line(raw: &str) -> Option<(&str, Override)> {
-    let line = raw
-        .strip_prefix('\u{feff}')
-        .unwrap_or(raw)
-        .trim_end_matches(['\n', '\r', ' ', '\t']);
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let mut parts = line.split('\t');
-    let path = parts.next()?.trim_end();
-    if path.is_empty() {
-        return None;
-    }
+    let (path, parts) = crate::sidecar::split_line(raw)?;
     let mut ov = Override::default();
     for field in parts {
         if !field.trim().is_empty() && !ov.apply_field(field) {
@@ -292,45 +278,7 @@ pub fn scan_meta<R: BufRead>(
     }
 }
 
-/// FNV-1a 64 over `bytes`, continuing from `h`.
-fn fnv1a64(mut h: u64, bytes: &[u8]) -> u64 {
-    for b in bytes {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    h
-}
-
-const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-
-/// The fingerprint of a `.meta` file's bytes, recorded in the playlist index
-/// so that a changed file invalidates it: FNV-1a 64 over the content, mixed
-/// with its length. Never [`NO_META`] (which stands for "no file").
-pub fn fingerprint<R: io::Read>(mut reader: R) -> io::Result<u64> {
-    let mut h = FNV64_OFFSET;
-    let mut len: u64 = 0;
-    let mut buf = [0u8; 512];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h = fnv1a64(h, &buf[..n]);
-        len += n as u64;
-    }
-    let fp = fnv1a64(h, &len.to_le_bytes());
-    Ok(if fp == NO_META { 1 } else { fp })
-}
-
-/// The key an override path is held under: FNV-1a 64 of the ASCII-lowercased
-/// path (FAT compares names case-insensitively, so the player does too).
-pub fn path_key(path: &str) -> u64 {
-    let mut h = FNV64_OFFSET;
-    for b in path.bytes() {
-        h = fnv1a64(h, &[b.to_ascii_lowercase()]);
-    }
-    h
-}
+pub use crate::sidecar::{fingerprint, path_key};
 
 /// A parsed `.meta`, held only while the index is built: a sorted
 /// `(path_key, Override)` per line — 8 bytes of key instead of a path.

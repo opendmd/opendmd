@@ -43,6 +43,11 @@
 //! `smooth analyse <card-root> [--min-percent 10] [--jobs N] [--write]`
 //! finds the files worth smoothing (and `--write` lists them).
 //!
+//! `tags check <card-root> [--search "<words>"]` reads the card's
+//! `/sets/.tags` (the user's tags and ratings) against its GIFs: lines whose
+//! GIF is gone, the tags in use, the details the names give, and what a
+//! search (a smart playlist's words) finds.
+//!
 //! `www <dir> --out <pack> --version <v>` packs the built web app
 //! (`make web`'s `opendmd-web/www`) into a www pack for the firmware's `www`
 //! flash partition (`docs/www-pack.md`); `www-info <pack>` reads one back.
@@ -52,6 +57,7 @@
 
 mod recode;
 mod smooth;
+mod tags;
 mod www;
 
 use anyhow::{bail, Context, Result};
@@ -93,6 +99,11 @@ enum Cmd {
     Smooth {
         #[command(subcommand)]
         cmd: SmoothCmd,
+    },
+    /// The user's tags and ratings (/sets/.tags) and the search.
+    Tags {
+        #[command(subcommand)]
+        cmd: TagsCmd,
     },
     /// Experiment (docs/gifslim-experiment.md): write <name>.cap<N>[d].gif
     /// beside every original GIF — a standard GIF whose LZW codes never
@@ -160,6 +171,18 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum TagsCmd {
+    /// Lines of /sets/.tags whose GIF is gone, the tags in use, the
+    /// details the names give; with --search, what a search finds.
+    Check {
+        card_root: PathBuf,
+        /// A search, as typed in the Library (`platform:md rating>=4`).
+        #[arg(long)]
+        search: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SmoothCmd {
     /// Analyse every GIF; print those where at least --min-percent of the
     /// frame pairs would be tweened, with the frames each would gain.
@@ -196,6 +219,9 @@ fn main() -> Result<()> {
                     write,
                 },
         } => smooth::analyse(&card_root, min_percent, jobs, write),
+        Cmd::Tags {
+            cmd: TagsCmd::Check { card_root, search },
+        } => tags::check(&card_root, search.as_deref()),
         Cmd::Recode {
             card_root,
             cap,

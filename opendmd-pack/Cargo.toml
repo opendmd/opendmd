@@ -8,7 +8,7 @@ repository = "https://github.com/opendmd/opendmd"
 publish = false
 
 [dependencies]
-opendmd-core = { path = "../opendmd-core", features = ["tween"] }
+opendmd-core = { path = "../opendmd-core", features = ["tween", "tags"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 
