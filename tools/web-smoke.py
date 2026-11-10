@@ -1302,8 +1302,12 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     /sets/.smart written behind the page's back (another browser) keeps its
     line when the page saves a smart playlist of its own; a smart playlist
     open in the editor and written again behind it (a GIF tagged) saves
-    with no question and stays smart; a hand save started while a
-    refresh's write of the playlist is unanswered goes after it and wins."""
+    with no question and stays smart; then the races, each made certain
+    with a held request: a hand save after a refresh's unanswered write
+    wins (and no late date brings its line back); a refresh read during a
+    hand save, or under way when a new search is saved, writes nothing; a
+    refresh's date survives the searches read again; a delete after a
+    refresh's unanswered write stays; of two opens, the second wins."""
     sets = overlay / "sets"
     src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
     a, b = "/gifs/Consoles/MD_Smokefold_01.gif", "/gifs/Arcade/MD_Smokefold_02.gif"
@@ -1354,47 +1358,152 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     sm = wait_file(sets / ".smart", lambda t: "sm-g" in t)
     check(len(asked) == n and "/sets/sm-g.txt\tq=tag:smokefold" in sm and sorted((sets / "sm-g.txt").read_text().split()) == sorted([a, b]),
           f"smart: open in the editor and written again behind it, Save asks nothing and it stays smart ({asked[n:]}, {sm!r})")
-    # A refresh's write of the playlist still unanswered when a hand save
-    # of it starts: the hand save goes after it, and is what the card keeps.
+    # The races between the editor, a refresh and a delete, each made
+    # certain by holding a request (page.route) until the other side is in.
+    # Each playlist holds a and b; its search (title:smokefold) finds c too.
     c = "/gifs/Consoles/MD_Smokefold_03.gif"
-    put_text(base + "/api/sets/sm-h", a + "\n" + b + "\n")
-    put_text(base + "/api/files/sets/.smart", sm + "/sets/sm-h.txt\tq=title:smokefold\tat=1762732800\n")
+    races = ("sm-h", "sm-k", "sm-q", "sm-d", "sm-e")
+    for n in races:
+        put_text(base + "/api/sets/" + n, a + "\n" + b + "\n")
+    put_text(base + "/api/files/sets/.smart", sm + "".join(f"/sets/{n}.txt\tq=title:smokefold\tat=1762732800\n" for n in races))
     put_bytes(base + "/api/files" + c, src)
     page.goto(base + "/#sets")
     page.reload()
-    page.wait_for_selector("#sets-list [data-path='/sets/sm-h.txt'] .tag.smart", timeout=30000)
-    page.click("#sets-list [data-path='/sets/sm-h.txt'] button.pl")
-    page.wait_for_function("document.querySelector('#set-title')?.textContent === 'sm-h' && document.querySelector('#set-smart')?.hidden === false"
-                           " && document.querySelectorAll('#set-entries .vrow[data-path]:not([hidden])').length === 2", timeout=10000)
-    held: list = []
-    puts: list = []
-    def hold(r) -> None:
-        if r.request.method == "PUT" and urllib.parse.unquote(r.request.url).endswith("/api/sets/sm-h"):
-            puts.append(r.request.post_data)
-            if not held:
-                held.append(r)
-                return
-        r.continue_()
-    page.route("**/api/sets/sm-h*", hold)
+    page.wait_for_selector("#sets-list [data-path='/sets/sm-e.txt'] .tag.smart", timeout=30000)
+    smart_line = lambda n: re.search(rf"(^|\n)/sets/{n}\.txt\t[^\n]*", (sets / ".smart").read_text())
+    is_req = lambda r, method, end: r.request.method == method and urllib.parse.unquote(r.request.url).split("?")[0].endswith(end)
+    answered: list[str] = []
+    page.on("response", lambda r: answered.append(r.request.method + " " + urllib.parse.unquote(r.url).split("?")[0]))
+
+    def hold(pattern: str, ok, first: bool = True) -> list:
+        """Requests to `pattern` that `ok(route)` picks are held (the first only, or every one)."""
+        held: list = []
+        page.route(pattern, lambda r: held.append(r) if ok(r) and not (first and held) else r.continue_())
+        return held
+
+    def release(pattern: str, held: list) -> None:
+        for r in held:
+            r.continue_()
+        page.unroute(pattern)
+
+    def wait_for(cond, what: str, timeout_s: float = 30) -> None:
+        deadline = time.time() + timeout_s
+        while not cond() and time.time() < deadline:
+            page.wait_for_timeout(50)
+
+    def edit(n: str) -> None:
+        page.click(f"#sets-list [data-path='/sets/{n}.txt'] button.pl")
+        page.wait_for_function(f"document.querySelector('#set-title')?.textContent === '{n}' && document.querySelector('#set-smart')?.hidden === false"
+                               " && document.querySelectorAll('#set-entries .vrow[data-path]:not([hidden])').length === 2", timeout=10000)
+        page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.size)", timeout=10000)
+
+    def refreshed(n: str) -> None:
+        page.wait_for_function(f"[...document.querySelectorAll('#toasts .toast')].some((t) => /“{n}”(:| is up to date)/.test(t.textContent))", timeout=20000)
+
+    # A refresh's write still unanswered when a hand save starts: the hand
+    # save goes after it and is what the card keeps; the refresh does not
+    # then write its date (the line would come back once dropped).
+    edit("sm-h")
+    held = hold("**/api/sets/sm-h*", lambda r: is_req(r, "PUT", "/api/sets/sm-h"))
+    held_sm = hold("**/sets/.smart*", lambda r: r.request.method == "PUT" and "sm-h.txt" in (r.request.post_data or ""), first=False)
     sets_do(page, "/sets/sm-h.txt", "refresh")
-    deadline = time.time() + 30
-    while not held and time.time() < deadline:
-        page.wait_for_timeout(50)
+    wait_for(lambda: held, "the refresh's PUT")
     page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
     page.click("#set-save")
     page.wait_for_timeout(1000)  # (a hand save not waiting its turn is on its way by now)
-    early = len(puts)
-    for r in held:
-        r.continue_()
-    page.unroute("**/api/sets/sm-h*")
+    early = len([x for x in answered if x.endswith("/api/sets/sm-h")])
+    release("**/api/sets/sm-h*", held)
     page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=20000)
-    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((t) => /“sm-h”(:| is up to date)/.test(t.textContent))", timeout=20000)
-    sm = wait_file(sets / ".smart", lambda t: "sm-h" not in t)
+    wait_file(sets / ".smart", lambda t: "sm-h" not in t)
+    page.wait_for_timeout(500)
+    n_sm = len(held_sm)
+    release("**/sets/.smart*", held_sm)
+    refreshed("sm-h")
+    page.wait_for_timeout(1000)
     got = (sets / "sm-h.txt").read_text()
-    check(len(held) == 1 and early == 1 and got == b + "\n" and "sm-h" not in sm,
-          f"smart: a hand save waits for a refresh's write of the playlist still under way, and the card keeps it ({early} PUT while held, {got!r})")
+    check(len(held) == 1 and early == 0 and got == b + "\n" and not smart_line("sm-h") and n_sm == 0,
+          f"smart: a hand save waits for a refresh's write of the playlist still under way, and the card keeps it ({early} PUT answered while held, {got!r}, {n_sm} late date writes)")
+    # A refresh whose read lands while the hand save's PUT is unanswered
+    # (its search not yet dropped) writes nothing.
+    edit("sm-k")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    held = hold("**/api/sets/sm-k*", lambda r: is_req(r, "PUT", "/api/sets/sm-k"))
+    page.click("#set-save")
+    wait_for(lambda: held, "the hand save's PUT")
+    k0 = len(answered)
+    sets_do(page, "/sets/sm-k.txt", "refresh")
+    wait_for(lambda: any(x.endswith("/sets/sm-k.txt") and x.startswith("GET") for x in answered[k0:]), "the refresh's read")
+    page.wait_for_timeout(300)
+    release("**/api/sets/sm-k*", held)
+    page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=20000)
+    refreshed("sm-k")
+    wait_file(sets / ".smart", lambda t: "sm-k" not in t)
+    page.wait_for_timeout(500)
+    got = (sets / "sm-k.txt").read_text()
+    check(len(held) == 1 and got == b + "\n" and not smart_line("sm-k"),
+          f"smart: a refresh read while a hand save is unanswered writes nothing over it ({got!r})")
+    # A refresh under way with the old search when the editor saves a new
+    # one: it writes nothing (the old search's list, over the new one's).
+    edit("sm-q")
+    held = hold("**/sets/sm-q.txt*", lambda r: is_req(r, "GET", "/sets/sm-q.txt"))
+    sets_do(page, "/sets/sm-q.txt", "refresh")
+    wait_for(lambda: held, "the refresh's read")
+    page.click("#set-smart-edit")
+    page.wait_for_selector("#builder", timeout=5000)
+    page.fill("#b-words", "title:smokefold limit:1")
+    page.wait_for_function("document.querySelector('#b-use').textContent === 'Replace with 1 GIF'", timeout=60000)
+    page.click("#b-use")
+    page.wait_for_selector("#builder", state="detached", timeout=5000)
+    page.click("#set-save")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith('Saved “sm-q”'))", timeout=20000)
+    wait_file(sets / ".smart", lambda t: "/sets/sm-q.txt\tq=title:smokefold limit:1" in t)
+    release("**/sets/sm-q.txt*", held)
+    refreshed("sm-q")
+    page.wait_for_timeout(500)
+    got, rows = (sets / "sm-q.txt").read_text(), page.eval_on_selector_all("#set-entries .vrow[data-path]:not([hidden])", "els => els.length")
+    check(len(held) == 1 and len(got.split()) == 1 and rows == 1 and "limit:1" in smart_line("sm-q").group(0),
+          f"smart: a refresh under way with the old search writes nothing once a new one is saved ({got!r}, {rows} rows)")
+    # A refresh's date, with the searches read again meanwhile: written.
+    held = hold("**/sets/sm-d.txt*", lambda r: is_req(r, "GET", "/sets/sm-d.txt"))
+    sets_do(page, "/sets/sm-d.txt", "refresh")
+    wait_for(lambda: held, "the refresh's read")
+    page.evaluate("import('./js/smart.js').then((m) => m.load(true))")
+    release("**/sets/sm-d.txt*", held)
+    refreshed("sm-d")
+    line = wait_file(sets / ".smart", lambda t: "/sets/sm-d.txt\t" in t and "/sets/sm-d.txt\tq=title:smokefold\tat=1762732800" not in t, 10)
+    check(len(held) == 1 and "/sets/sm-d.txt\tq=title:smokefold\tat=1762732800" not in line,
+          f"smart: a refresh writes its date when the searches were read again meanwhile ({smart_line('sm-d').group(0)!r})")
+    # Delete while a refresh's write is unanswered: the delete goes after
+    # it, and the playlist stays gone.
+    held = hold("**/api/sets/sm-e*", lambda r: is_req(r, "PUT", "/api/sets/sm-e"))
+    sets_do(page, "/sets/sm-e.txt", "refresh")
+    wait_for(lambda: held, "the refresh's PUT")
+    sets_do(page, "/sets/sm-e.txt", "delete")
+    page.wait_for_timeout(1000)  # (a delete not waiting its turn is answered by now)
+    release("**/api/sets/sm-e*", held)
+    page.wait_for_selector("#sets-list [data-path='/sets/sm-e.txt']", state="detached", timeout=30000)
+    wait_file(sets / ".smart", lambda t: "sm-e" not in t)
+    page.wait_for_timeout(1000)
+    check(len(held) == 1 and not (sets / "sm-e.txt").exists() and not smart_line("sm-e"),
+          f"smart: a playlist deleted while a refresh writes it stays deleted ({(sets / 'sm-e.txt').exists()})")
+    # Two opens, the second asked for before the first's read answers: the
+    # editor ends on the second.
+    held_f = hold("**/sets/sm-f.txt*", lambda r: is_req(r, "GET", "/sets/sm-f.txt"))
+    held_x = hold("**/sets/sm-x.txt*", lambda r: is_req(r, "GET", "/sets/sm-x.txt"))
+    page.click("#sets-list [data-path='/sets/sm-f.txt'] button.pl")
+    wait_for(lambda: held_f, "sm-f's read")
+    page.click("#sets-list [data-path='/sets/sm-x.txt'] button.pl")
+    wait_for(lambda: held_x, "sm-x's read")
+    release("**/sets/sm-f.txt*", held_f)
+    page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.has('/sets/sm-f.txt'))", timeout=10000)
+    page.wait_for_timeout(300)
+    release("**/sets/sm-x.txt*", held_x)
+    page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.size)", timeout=10000)
+    page.wait_for_timeout(300)
+    t = page.text_content("#set-title")
+    check(len(held_f) == 1 and len(held_x) == 1 and t == "sm-x", f"smart: two opens one after the other, the editor ends on the second ({t!r})")
     page.context.close()
-    for p in ("/sets/sm-f.txt", "/sets/sm-x.txt", "/sets/sm-g.txt", "/sets/sm-h.txt", a, b, c):
+    for p in ("/sets/sm-f.txt", "/sets/sm-x.txt", "/sets/sm-g.txt", *[f"/sets/{n}.txt" for n in races], a, b, c):
         delete_path(base, p)
     put_text(base + "/api/files/sets/.smart", smart0) if smart0 else delete_path(base, "/sets/.smart")
     if tags0 is None:

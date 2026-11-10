@@ -99,22 +99,23 @@ export async function refresh(path, fresh) {
   const s = get(path);
   if (!s) return null;
   const paths = await find(s.q, s.from, fresh), text = await app.text(path, true);
-  // (Deleted meanwhile, or saved by hand, its search dropped: not written back.)
-  const mine = () => !byHand.has(lc(path)) && !!get(path);
+  // Still this search's playlist: not deleted, saved by hand or given
+  // another search meanwhile (asked again after each wait).
+  const mine = () => { const c = get(path); return !byHand.has(lc(path)) && !!c && c.q === s.q && c.from === s.from; };
   if (text == null || !mine()) return null;
   const old = lines(text).filter((p) => !gone(p));
   const was = new Set(old.map(lc)), now = new Set(paths.map(lc));
   const diff = { added: paths.filter((p) => !was.has(lc(p))).length, removed: old.filter((p) => !now.has(lc(p))).length };
   const changed = paths.join('\n') !== old.join('\n');
   if (changed) {
-    // (Asked again in its turn: a hand save before it wins.)
-    if (!(await savePlaylist(path, paths.join('\n') + '\n', mine))) return null;
+    await savePlaylist(path, paths.join('\n') + '\n');
     // Open in the editor with nothing changed by hand: it shows the new lines.
     const d = app.draft;
-    if (d.path === path && d.smart && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
+    if (d.path === path && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
   }
   // (When it was last written, or looked at by hand: the row's "updated".)
-  if ((changed || fresh) && mine()) { s.at = Date.now() / 1000 | 0; await write(); }
+  // (The line as the map has it now: a load since has replaced `s`.)
+  if ((changed || fresh) && mine()) { get(path).at = Date.now() / 1000 | 0; await write(); }
   return diff;
 }
 
