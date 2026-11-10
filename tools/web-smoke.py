@@ -4926,6 +4926,9 @@ def mock_pass(browser) -> None:
         check((r["prepared"], r["total"]) == (5, 5), f"add: /api/cache {r['prepared']} of {r['total']}")
         no_leaks(page, "library (add)")
         shot(page, "library-add", "laptop")
+        # Deleted behind the page's back: a still or clip the Library asks for
+        # before it lists Consoles again gets a 404, as it would after a PC edit.
+        expected.append(gif_paths[1])
         req = urllib.request.Request(base + "/api/files" + gif_paths[1].replace(" ", "%20"), method="DELETE")
         urllib.request.urlopen(req, timeout=30).read()
         gone = not (overlay / cache_path(gif_paths[1]).lstrip("/")).exists()
