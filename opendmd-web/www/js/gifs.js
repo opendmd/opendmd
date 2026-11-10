@@ -36,11 +36,11 @@ export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
   return path;
 }
 
-// One write of a playlist at a time (per path, as the card's FAT names
-// them: case-blind): `fn` starts once the write before it has answered,
-// so the last asked is the one the card keeps.
+// One write (or delete) of a playlist at a time, per path (as the card's
+// FAT names them: case-blind): `fn` starts once the one before it has
+// answered, so the last asked is what the card keeps.
 const turns = new Map();
-export function inTurn(path, fn) {
+function inTurn(path, fn) {
   const k = path.toLowerCase(), run = (turns.get(k) || Promise.resolve()).then(fn);
   const tail = run.catch(() => {});
   turns.set(k, tail);
@@ -48,18 +48,15 @@ export function inTurn(path, fn) {
   return run;
 }
 
-// `ok()`, asked when its turn comes: false writes nothing (false back).
-export async function savePlaylist(path, text, ok) {
-  const done = await inTurn(path, async () => {
-    if (ok && !ok()) return false;
+export async function savePlaylist(path, text) {
+  await inTurn(path, async () => {
     if (path.startsWith('/sets/')) await app.src.saveSet(path.slice(6).replace(/\.txt$/, ''), text);
     else await app.src.writeFile(path, text);
     app.texts.set(path, text);
-    return true;
   });
-  if (done && path === app.activePath) await app.refreshStatus().catch(() => {});
-  return done;
+  if (path === app.activePath) await app.refreshStatus().catch(() => {});
 }
+export const deletePlaylist = (path) => inTurn(path, () => app.src.deleteFile(path));
 
 // (The card's FAT names files case-insensitively.)
 const lc = (p) => p.toLowerCase();

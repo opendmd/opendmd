@@ -35,7 +35,7 @@ export async function mount(el) {
     goEd();
   }
 
-  let ctok = 0, ltok = 0;
+  let ctok = 0, ltok = 0, otok = 0;
   async function loadSets() {
     // Each load lists the card afresh and only the latest asked is shown: the
     // load a config change started before a Delete must not land after the
@@ -103,15 +103,15 @@ export async function mount(el) {
     // there to edit, and to save: the playlist open already, above all),
     // the editor wins and this open is dropped. (Not for a smart playlist
     // written again from its search meanwhile: saved and smartPaths move
-    // together.)
-    const d0 = app.draft, saved0 = d0.saved;
+    // together.) So is one another open asked for since: the last one wins.
+    const t = ++otok, d0 = app.draft, saved0 = d0.saved;
     const edited = () => app.draft !== d0 || dirty(d0) || (d0.saved !== saved0 && d0.saved !== d0.smartPaths);
     try {
       const text = await app.text(p.path, true);
       if (text == null) throw new Error('not served by this source');
       const paths = lines(text).filter((p) => !gone(p));
       const smart = (await smartMod()).get(p.path);
-      if (edited()) return;
+      if (t !== otok || edited()) return;
       app.draft = { paths, name: p.root ? '' : p.value, path: p.path, saved: paths.join('\n'), smart, smartPaths: paths.join('\n') };
       (await editor()).opened();
       for (const r of setsList.children) r.classList.toggle('cur', r.dataset.path === p.path);
@@ -138,7 +138,10 @@ export async function mount(el) {
     try {
       await (await smartMod()).idle();
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
-      await app.src.deleteFile(path);
+      // (After any write of it still under way: a refresh's would bring it
+      // back. A listing or count under way is dropped: it would read it gone.)
+      ltok++; ctok++;
+      await (await import('./gifs.js')).deletePlaylist(path);
       app.texts.delete(path);
       await (await smartMod()).drop(path);
       toast(`deleted "${set}"`, 'ok');
@@ -159,8 +162,8 @@ export async function mount(el) {
     if (text == null) throw new Error('not served by this source');
     const ov = await new Overrides().load(p.path);
     if (!ov.ok) throw new Error('its favourites could not be read');
-    await app.src.saveSet(n, text);
-    app.texts.set(to, text);
+    const g = await import('./gifs.js');
+    await g.savePlaylist(to, text);
     const meta = app.wasm.renderOverrides([...ov.map.values()]);
     if (meta) await app.src.writeFile(fileFor(to), meta);
     await (await smartMod()).copy(p.path, to, move);
@@ -170,7 +173,8 @@ export async function mount(el) {
       const s = await app.src.schedule();
       if (s.rules?.some((r) => r.set === p.value)) await app.src.putSchedule({ ...s, rules: s.rules.map((r) => (r.set === p.value ? { ...r, set: n } : r)) });
     }
-    await app.src.deleteFile(p.path);
+    ltok++; ctok++;
+    await g.deletePlaylist(p.path);
     // (Even one that says nothing any more, such as earlier firmware's lines only.)
     await app.src.deleteFile(fileFor(p.path)).catch((e) => { if (e.status !== 404 && e.name !== 'NotFoundError') throw e; });
     app.texts.delete(p.path);
