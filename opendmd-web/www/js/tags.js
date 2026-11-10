@@ -34,7 +34,6 @@ class Store {
     this.size = bytes(text);
     this.ops = [];
     this.ok = true;
-    emit('tags');
     return this;
   }
 
@@ -97,7 +96,7 @@ let mine = null, key;
 export async function tags() {
   if (!mine || key !== app.cardKey) {
     key = app.cardKey;
-    mine = art().then((m) => new Store(m).load()).then((s) => (app.tags = s), (e) => { mine = null; throw e; });
+    mine = art().then((m) => new Store(m).load()).then((s) => { app.tags = s; emit('tags'); return s; }, (e) => { mine = null; throw e; });
   }
   return mine;
 }
