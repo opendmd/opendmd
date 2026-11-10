@@ -1682,7 +1682,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 # (the wide one, or the phone's), and the one frame round every still
                 # panel and screenshot; headings in the display face, once it has loaded.
                 proof = page.eval_on_selector_all(".hero .ctas ~ .proof li b", "els => els.map(e => e.textContent.trim())")
-                check(len(proof) == 3 and all(re.search(r"\d", n) for n in proof), f"home ({size}): three numbers under the hero's buttons {proof}")
+                check(len(proof) == 2 and all(re.search(r"\d", n) for n in proof), f"home ({size}): two numbers under the hero's buttons {proof}")
                 scene = page.evaluate("getComputedStyle(document.querySelector('.hero')).backgroundImage")
                 want_scene = "den-phone.webp" if size == "phone" else "den.webp"
                 loaded = page.evaluate("fetch(%r).then(r => r.ok && r.headers.get('content-type'))" % want_scene)
