@@ -30,8 +30,7 @@
 //! playlists by the web app ([`crate::query`]).
 
 use crate::manifest::{Entry, KEYWORD_FLAGS, MULTI_PLATFORMS, PLATFORMS, SEASONS};
-use crate::sidecar;
-use std::collections::BTreeMap;
+use crate::sidecar::{self, path_cmp};
 
 /// At most this many tags per GIF; the rest are dropped.
 pub const MAX_TAGS: usize = 16;
@@ -83,7 +82,7 @@ impl TagLine {
     fn normalise(&mut self) {
         self.rating = self.rating.filter(|r| (1..=5).contains(r));
         let mut tags: Vec<String> = self.tags.iter().filter_map(|t| clean_tag(t)).collect();
-        tags.sort();
+        sidecar::sort_by(&mut tags, |a, b| a < b);
         tags.dedup();
         tags.truncate(MAX_TAGS);
         self.tags = tags;
@@ -114,7 +113,7 @@ fn parse_line(raw: &str) -> Option<TagLine> {
 /// Every line of a `.tags` file that says something; a later line for the
 /// same path (case-insensitively) replaces an earlier one.
 pub fn parse_tags(text: &str) -> Vec<TagLine> {
-    TagSet::from_text(text).lines.into_values().collect()
+    TagSet::from_text(text).lines
 }
 
 /// The canonical text of `lines` (see the module docs).
@@ -126,10 +125,10 @@ pub fn render_tags(lines: &[TagLine]) -> String {
     set.render()
 }
 
-/// The whole file, held by lowercased path.
+/// The whole file: its lines sorted by path (case-insensitively).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TagSet {
-    lines: BTreeMap<String, TagLine>,
+    lines: Vec<TagLine>,
 }
 
 impl TagSet {
@@ -140,9 +139,25 @@ impl TagSet {
     pub fn from_text(text: &str) -> Self {
         let mut set = TagSet::new();
         for line in text.split('\n').filter_map(parse_line) {
-            set.lines.insert(line.path.to_ascii_lowercase(), line);
+            set.put(line);
         }
         set
+    }
+
+    fn find(&self, path: &str) -> Result<usize, usize> {
+        self.lines.binary_search_by(|l| path_cmp(&l.path, path))
+    }
+
+    /// A line in its place, replacing one for the same path.
+    fn put(&mut self, line: TagLine) {
+        match self.find(&line.path) {
+            Ok(i) => self.lines[i] = line,
+            Err(i) => self.lines.insert(i, line),
+        }
+    }
+
+    fn take(&mut self, path: &str) -> Option<TagLine> {
+        self.find(path).ok().map(|i| self.lines.remove(i))
     }
 
     pub fn len(&self) -> usize {
@@ -154,7 +169,7 @@ impl TagSet {
     }
 
     pub fn get(&self, path: &str) -> Option<&TagLine> {
-        self.lines.get(&path.to_ascii_lowercase())
+        self.find(path).ok().map(|i| &self.lines[i])
     }
 
     /// Replace what is said about `path` (tags cleaned; ones that are not
@@ -166,11 +181,10 @@ impl TagSet {
             tags: tags.to_vec(),
         };
         line.normalise();
-        let key = path.to_ascii_lowercase();
         if line.is_empty() || path.is_empty() {
-            self.lines.remove(&key);
+            self.take(path);
         } else {
-            self.lines.insert(key, line);
+            self.put(line);
         }
     }
 
@@ -178,47 +192,46 @@ impl TagSet {
     /// the tags are merged and the moved GIF's rating wins (if it has one).
     /// False if `from` had nothing.
     pub fn rename(&mut self, from: &str, to: &str) -> bool {
-        let Some(mut line) = self.lines.remove(&from.to_ascii_lowercase()) else {
+        let Some(mut line) = self.take(from) else {
             return false;
         };
-        if let Some(old) = self.lines.remove(&to.to_ascii_lowercase()) {
+        if let Some(old) = self.take(to) {
             line.rating = line.rating.or(old.rating);
             line.tags.extend(old.tags);
         }
         line.path = to.to_string();
         line.normalise();
-        self.lines.insert(to.to_ascii_lowercase(), line);
+        self.put(line);
         true
     }
 
     /// A GIF deleted: its line goes. False if it had none.
     pub fn drop_path(&mut self, path: &str) -> bool {
-        self.lines.remove(&path.to_ascii_lowercase()).is_some()
+        self.take(path).is_some()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &TagLine> {
-        self.lines.values()
+        self.lines.iter()
     }
 
     /// Every tag in use with the number of GIFs that have it, most first
     /// (then by name).
     pub fn tag_counts(&self) -> Vec<(String, usize)> {
-        let mut n: BTreeMap<&str, usize> = BTreeMap::new();
-        for l in self.lines.values() {
-            for t in &l.tags {
-                *n.entry(t).or_default() += 1;
+        let mut out: Vec<(String, usize)> = Vec::new();
+        for t in self.lines.iter().flat_map(|l| &l.tags) {
+            match out.iter_mut().find(|(u, _)| u == t) {
+                Some((_, n)) => *n += 1,
+                None => out.push((t.clone(), 1)),
             }
         }
-        let mut out: Vec<(String, usize)> =
-            n.into_iter().map(|(t, c)| (t.to_string(), c)).collect();
-        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        sidecar::sort_by(&mut out, |a, b| a.1 > b.1 || (a.1 == b.1 && a.0 < b.0));
         out
     }
 
     /// The canonical file.
     pub fn render(&self) -> String {
         let mut out = String::with_capacity(self.lines.len() * 64);
-        for l in self.lines.values() {
+        for l in &self.lines {
             out.push_str(&l.path);
             if let Some(r) = l.rating {
                 out.push_str("\tr=");

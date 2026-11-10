@@ -14,10 +14,13 @@
 //! the core's `tween` — the analysis a Library preview shows, the tweened
 //! frames its Preview plays and the smoothed copy — in steps the page
 //! yields between, byte-identical to `opendmd-pack`'s.
+//! And the user's tags and stars, the search and smart playlists' lists
+//! ([`tags`]).
 
 pub mod anim;
 pub mod encode;
 pub mod pipeline;
+pub mod tags;
 
 #[cfg(test)]
 mod tests;

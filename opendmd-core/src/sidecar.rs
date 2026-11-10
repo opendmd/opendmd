@@ -81,6 +81,24 @@ pub fn path_key(path: &str) -> u64 {
     h
 }
 
+/// An insertion sort: the lists here are short or nearly sorted, and the
+/// web app's wasm would otherwise carry a library sort per type (~4 KB each).
+pub(crate) fn sort_by<T>(v: &mut [T], mut less: impl FnMut(&T, &T) -> bool) {
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 && less(&v[j], &v[j - 1]) {
+            v.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
+/// Paths compared as FAT does: ASCII case-insensitively.
+pub fn path_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let low = |c: u8| c.to_ascii_lowercase();
+    a.bytes().map(low).cmp(b.bytes().map(low))
+}
+
 /// One line of a sidecar, its fields as they were (for a file whose fields
 /// the caller interprets: the web app's `/sets/.smart`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,11 +153,10 @@ pub fn render(lines: &[Line]) -> String {
         .iter()
         .filter(|l| !l.fields.is_empty() && !l.path.is_empty())
         .collect();
-    sorted.sort_by(|a, b| {
-        a.path
-            .to_ascii_lowercase()
-            .cmp(&b.path.to_ascii_lowercase())
+    sort_by(&mut sorted, |a, b| {
+        path_cmp(&a.path, &b.path)
             .then_with(|| a.path.cmp(&b.path))
+            .is_lt()
     });
     sorted.dedup_by(|b, a| a.path.eq_ignore_ascii_case(&b.path));
     let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");

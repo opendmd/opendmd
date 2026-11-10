@@ -2,11 +2,15 @@
 // (#sets/edit: on a phone it replaces the list, with a ‹ back; on a laptop
 // the right column), js/pledit.js, imported the first time a playlist
 // opens. Play PUT /api/config {set}; Delete DELETE /api/files/sets/…;
-// Rename and Duplicate write the playlist (and its overrides) anew.
+// Rename and Duplicate write the playlist (and its overrides, and a smart
+// playlist's search: js/smart.js) anew. Smart playlists are written again
+// from their searches when the view is shown (at most once a minute).
 
 import { app, SET_NAME, SET_NAME_RULE } from './state.js';
 import { actions, closeMenu, Overrides, fileFor } from './overrides.js';
 import { h, clear, emit, on, toast, lines, note, isSys, byNice, gone } from './util.js';
+
+const smartMod = () => import('./smart.js');
 
 export async function mount(el) {
   const setsList = h('div.list', { id: 'sets-list' });
@@ -36,18 +40,20 @@ export async function mount(el) {
     // Each load lists the card afresh and only the latest asked is shown: the
     // load a config change started before a Delete must not land after the
     // one the Delete started, and bring the deleted row back.
-    const t = ++ltok, got = await app.playlists(true);
+    const t = ++ltok, got = await app.playlists(true), sm = await smartMod();
+    await sm.load(true).catch(() => {});
     if (t !== ltok) return;
     lists = got;
     known = lists.map((p) => p.path);
     const active = app.activeSet;
     const rows = lists.sort((a, b) => a.root - b.root || byNice(a.label, b.label)).map((p) => {
-      const isActive = app.device && p.value === active, n = h('span.n');
+      const isActive = app.device && p.value === active, n = h('span.n'), sp = sm.get(p.path);
       return [p, n, h('div' + (ed() && p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
         h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
-          p.label, !p.value && h('span.tag', 'Default'), isActive && h('span.tag.act', 'Playing'), n),
+          p.label, !p.value && h('span.tag', 'Default'), sp && h('span.tag.smart', { title: 'Built from a search: ' + sm.summary(sp) }, 'Smart'), isActive && h('span.tag.act', 'Playing'), n),
         h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
+          sp && [{ 'data-do': 'refresh' }, 'Refresh', () => refreshOne(p)],
           !p.root && [{ 'data-do': 'rename' }, 'Rename…', () => rename(p)],
           [{ 'data-do': 'duplicate' }, 'Duplicate', () => duplicate(p)],
           !p.root && [{ 'data-do': 'delete' }, 'Delete…', () => del(p), '.danger']], p.label) }, '…'))];
@@ -73,13 +79,31 @@ export async function mount(el) {
     }
   }
 
+  async function refreshOne(p) {
+    try {
+      const r = await (await smartMod()).refresh(p.path, true);
+      toast(r && (r.added || r.removed) ? `“${p.label}”: +${r.added} −${r.removed}` : `“${p.label}” is up to date`, 'ok');
+    } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
+    loadSets();
+  }
+  // Every smart playlist from its search, quietly (on show, once a minute).
+  let auto = 0;
+  async function refreshAll() {
+    if (performance.now() - auto < 60000) return;
+    auto = performance.now();
+    const sm = await smartMod();
+    if (!(await sm.load()).size) return;
+    if (await sm.refreshAll(undefined, false, true).catch(() => 0)) loadSets();
+  }
+
   async function open(p) {
     if (edi && !(await edi.guard())) return;
     try {
       const text = await app.text(p.path, true);
       if (text == null) throw new Error('not served by this source');
       const paths = lines(text).filter((p) => !gone(p));
-      app.draft = { paths, name: p.root ? '' : p.value, path: p.path, saved: paths.join('\n') };
+      const smart = (await smartMod()).get(p.path);
+      app.draft = { paths, name: p.root ? '' : p.value, path: p.path, saved: paths.join('\n'), smart, smartPaths: paths.join('\n') };
       (await editor()).opened();
       for (const r of setsList.children) r.classList.toggle('cur', r.dataset.path === p.path);
       goEd();
@@ -103,9 +127,11 @@ export async function mount(el) {
     const isActive = app.device && app.activeSet === set;
     if (!confirm(isActive ? `"${p.label}" is playing. Switch the display back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
     try {
+      await (await smartMod()).idle();
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
       await app.src.deleteFile(path);
       app.texts.delete(path);
+      await (await smartMod()).drop(path);
       toast(`deleted "${set}"`, 'ok');
       loadSets();
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
@@ -119,6 +145,7 @@ export async function mount(el) {
   const taken = (n) => known.some((k) => lc(k) === lc(`/sets/${n}.txt`));
   const free = (n) => { let i = 2; while (taken(`${n} ${i}`)) i++; return `${n} ${i}`; };
   async function copyTo(p, n, move) {
+    if (move) await (await smartMod()).idle();
     const to = `/sets/${n}.txt`, text = await app.text(p.path, true);
     if (text == null) throw new Error('not served by this source');
     const ov = await new Overrides().load(p.path);
@@ -127,6 +154,7 @@ export async function mount(el) {
     app.texts.set(to, text);
     const meta = app.wasm.renderOverrides([...ov.map.values()]);
     if (meta) await app.src.writeFile(fileFor(to), meta);
+    await (await smartMod()).copy(p.path, to, move);
     if (!move) return;
     if (app.device && app.activeSet === p.value) { await app.src.putConfig({ set: n }); await app.refreshStatus(); await app.refreshConfig(); }
     if (app.src.schedule) {
@@ -139,7 +167,7 @@ export async function mount(el) {
     app.texts.delete(p.path);
     // Open in the editor: it follows, its overrides read from the new name.
     const d = app.draft;
-    if (d.path === p.path) { d.path = to; d.name = n; emit('draft'); }
+    if (d.path === p.path) { d.path = to; d.name = n; d.smart = (await smartMod()).get(to); emit('draft'); }
   }
   async function rename(p) {
     const n = (prompt(`Rename “${p.label}” to`, p.value) || '').trim().replace(/\.txt$/, '');
@@ -166,7 +194,7 @@ export async function mount(el) {
 
   await loadSets();
   return {
-    show() { edi?.show(); if (app.device) app.refreshStatus().catch(() => {}); },
+    show() { edi?.show(); if (app.device) app.refreshStatus().catch(() => {}); refreshAll(); },
     // Another view: the editor's changes are asked about on the way.
     hide() { if (ed()) edi?.left(); },
     async sub(sub) {

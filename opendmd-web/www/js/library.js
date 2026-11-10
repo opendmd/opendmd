@@ -229,6 +229,7 @@ export async function mount(el) {
     addMsg.textContent = `${added.length} of ${plan.length} added to ${where}`;
     if (!addErr.firstChild) setTimeout(() => { addCard.hidden = true; }, 6000);
     if (added.length) {
+      import('./smart.js').then((m) => m.refreshAll()).catch(() => {}); // smart playlists that now find them
       await reveal(added[0]);
       await offerPlaylist(added);
     }

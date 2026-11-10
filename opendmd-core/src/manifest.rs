@@ -136,6 +136,13 @@ impl Entry {
                 flags: Vec::new(),
             };
         }
+        Entry::from_gif_path(path)
+    }
+
+    /// [`Entry::from_path`] for a path known to name a file on the card (no
+    /// `@` virtual file, no Formula): what the search parses, without the
+    /// virtual files' titles (and the bundled Formulas they read).
+    pub fn from_gif_path(path: &str) -> Entry {
         let category = category_of(path);
         let stem = stem_of(path);
         let mut entry = parse_stem(stem);

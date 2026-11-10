@@ -1140,6 +1140,115 @@ def send_from_library(page: Page, base: str, what: str) -> None:
     check(cur == path, f"{what}: Send to panel -> /api/status plays {path} (got {cur})")
 
 
+def put_bytes(url: str, body: bytes) -> dict:
+    req = urllib.request.Request(url, data=body, method="PUT")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def delete_path(base: str, path: str) -> None:
+    try:
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files" + urllib.parse.quote(path), method="DELETE"), timeout=30).close()
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+
+
+def wait_file(f: Path, ok, timeout_s: float = 15) -> str:
+    """A card file's text once `ok(text)` holds (or the last read)."""
+    deadline = time.time() + timeout_s
+    t = ""
+    while time.time() < deadline:
+        t = f.read_text() if f.exists() else ""
+        if ok(t):
+            return t
+        time.sleep(0.1)
+    return t
+
+
+def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Smart playlists (js/smart.js, js/plbuild.js), in a fresh browser: a
+    dot-file in /sets/ is a plain file (no playlist install); + New
+    playlist, Add by filter over every GIF on the card with the words
+    `title:smokesmart` and Keep this search: only Replace, the editor says
+    it is built from a search; saved, the playlist holds the one GIF and
+    /sets/.smart its search, the row says Smart; Edit search brings the
+    words back, and words it cannot read say why; a second GIF added
+    behind its back, the row's Refresh finds it (+1); Rename and Duplicate
+    take the search along; edited by hand and saved, it stops being smart;
+    Delete takes its line."""
+    sets = overlay / "sets"
+    r = put_text(base + "/api/files/sets/.probe", "x\n")
+    check(r.get("path") == "/sets/.probe" and r.get("bytes") == 2 and "entries" not in r,
+          f"smart: a dot-file in /sets/ is written as a plain file, not installed as a playlist ({r})")
+    delete_path(base, "/sets/.probe")
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    a, b = "/gifs/Consoles/MD_Smokesmart_01.gif", "/gifs/Consoles/MD_Smokesmart_02.gif"
+    put_bytes(base + "/api/files" + a, src)
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#sets")
+    page.wait_for_selector("#sets-list [data-path='/filelist.txt']", timeout=20000)
+    page.click("#sets-new")
+    open_builder(page)
+    page.select_option("#b-base", "")
+    page.fill("#b-words", "title:smokesmart")
+    page.check("#b-keep")
+    page.wait_for_function("document.querySelector('#b-use').textContent === 'Replace with 1 GIF'", timeout=60000)
+    check(page.is_disabled("#b-append"), "smart: Keep this search leaves Replace only")
+    page.click("#b-use")
+    page.wait_for_selector("#builder", state="detached", timeout=5000)
+    page.wait_for_function("!document.querySelector('#set-smart').hidden && /smokesmart/.test(document.querySelector('#set-smart').textContent)", timeout=5000)
+    check(True, f"smart: the editor says it is built from a search ({page.inner_text('#set-smart')!r})")
+    page.fill("#set-name", "smart-a")
+    page.click("#set-save")
+    page.wait_for_selector("#sets-list [data-path='/sets/smart-a.txt'] .tag.smart", timeout=30000)
+    sm = wait_file(sets / ".smart", lambda t: "smart-a" in t)
+    check((sets / "smart-a.txt").read_text() == a + "\n" and re.fullmatch(r"/sets/smart-a\.txt\tq=title:smokesmart\tat=\d+\n", sm) is not None,
+          f"smart: saved, the playlist holds the GIF and /sets/.smart its search ({sm!r})")
+    check(page.inner_text("#sets-list [data-path='/sets/smart-a.txt'] .tag.smart") == "Smart", "smart: the row says Smart")
+    page.click("#set-smart-edit")
+    page.wait_for_selector("#builder", timeout=5000)
+    check(page.input_value("#b-words") == "title:smokesmart" and page.is_checked("#b-keep") and page.input_value("#b-base") == "",
+          "smart: Edit search brings its words back, kept, over every GIF")
+    page.fill("#b-words", "title:smokesmart rating>=9")
+    page.wait_for_function("document.querySelector('#b-count').textContent.includes('1 to 5')", timeout=10000)
+    check(page.is_disabled("#b-use"), f"smart: words it cannot read say why ({page.inner_text('#b-count')!r})")
+    page.keyboard.press("Escape")
+    put_bytes(base + "/api/files" + b, src)
+    sets_do(page, "/sets/smart-a.txt", "refresh")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((t) => /smart-a.*[+−]/.test(t.textContent))", timeout=60000)
+    t = page.eval_on_selector_all("#toasts .toast", "els => els.map((e) => e.textContent).filter((x) => x.includes('smart-a')).at(-1)")
+    got = wait_file(sets / "smart-a.txt", lambda t: b in t)
+    check(got == a + "\n" + b + "\n" and "+1 −0" in t, f"smart: Refresh finds a GIF added since ({got!r}, '{t}')")
+    page.evaluate("() => { window.prompt = () => 'smart-b'; }")
+    sets_do(page, "/sets/smart-a.txt", "rename")
+    page.wait_for_selector("#sets-list [data-path='/sets/smart-b.txt'] .tag.smart", timeout=30000)
+    sm = wait_file(sets / ".smart", lambda t: "smart-b" in t and "smart-a" not in t)
+    check("/sets/smart-b.txt\tq=title:smokesmart" in sm and "smart-a" not in sm, f"smart: Rename takes the search along ({sm!r})")
+    sets_do(page, "/sets/smart-b.txt", "duplicate")
+    page.wait_for_selector("#sets-list [data-path='/sets/smart-b 2.txt'] .tag.smart", timeout=30000)
+    check("/sets/smart-b 2.txt\tq=" in (sets / ".smart").read_text(), "smart: Duplicate is smart too")
+    page.click("#sets-list [data-path='/sets/smart-b.txt'] button.pl")
+    page.wait_for_selector("#set-entries .vrow[data-path]", timeout=10000)
+    check(page.is_visible("#set-smart"), "smart: opened, the editor shows its search")
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    page.click("#set-save")
+    page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=10000)
+    page.wait_for_selector("#sets-list [data-path='/sets/smart-b.txt'] .tag.smart", state="detached", timeout=10000)
+    sm = wait_file(sets / ".smart", lambda t: "smart-b.txt" not in t)
+    check((sets / "smart-b.txt").read_text() == b + "\n" and "smart-b.txt" not in sm
+          and page.locator("#sets-list [data-path='/sets/smart-b.txt'] .tag.smart").count() == 0,
+          f"smart: edited by hand and saved, it is an ordinary playlist ({sm!r})")
+    no_leaks(page, "smart playlists")
+    sets_do(page, "/sets/smart-b 2.txt", "delete")
+    page.wait_for_selector("#sets-list [data-path='/sets/smart-b 2.txt']", state="detached", timeout=30000)
+    sm = wait_file(sets / ".smart", lambda t: "smart-b 2" not in t)
+    check("smart-b 2" not in sm, f"smart: Delete takes its line ({sm!r})")
+    page.context.close()
+    for p in ("/sets/smart-b.txt", a, b):
+        delete_path(base, p)
+
+
 def root_manifest_rows(page: Page) -> list[str]:
     return page.eval_on_selector_all("#sets-list [data-path^='/filelist']", "els => els.map(e => e.dataset.path)")
 
@@ -1180,7 +1289,7 @@ def details_do(page: Page, item: str) -> None:
 # cache the user never has to know the format or layout of, and per-GIF
 # overrides are "favourite"/"hide"/"play longer"/"loop N times" -- never
 # their weight, file format ('.meta') or raw field syntax ('w=').
-LEAK = re.compile(r"odm|bucket|weight|\.meta|w=|never", re.I)
+LEAK = re.compile(r"odm|bucket|weight|\.meta|w=|never|query|sidecar|\.tags|\.smart", re.I)
 
 # Names of playlists the user made are their content, not UI copy (a test panel's
 # card has bench sets called "odm" and "odmb"); filled in by device_pass.
@@ -1195,7 +1304,7 @@ def no_leaks(page: Page, where: str) -> None:
         text = re.sub(rf"(?<![\w.]){re.escape(n)}(?![\w.])", "", text)
     hits = sorted({m.group(0) for m in LEAK.finditer(text)})
     lines = [l for l in text.split("\n") if LEAK.search(l)][:3]
-    check(not hits, f"{where}: no 'odm'/'bucket'/'weight'/'.meta'/'w='/'never' in visible text {lines if hits else ''}")
+    check(not hits, f"{where}: no 'odm'/'bucket'/'weight'/'.meta'/'w='/'never'/'query'/'sidecar'/'.tags'/'.smart' in visible text {lines if hits else ''}")
 
 
 def facets(page: Page, sel: str, attr: str) -> list:
@@ -4298,6 +4407,7 @@ def mock_pass(browser) -> None:
         editor_checks(browser, base, overlay, errors)
         target_checks(browser, base, overlay, errors)
         rename_checks(browser, base, overlay, errors)
+        smart_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)

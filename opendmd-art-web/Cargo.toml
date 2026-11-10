@@ -18,7 +18,9 @@ crate-type = ["cdylib", "rlib"]
 # in the main module, which is at its size budget), and `tween` — Smooth
 # motion's analyser and tweener, which only the browser and opendmd-pack
 # run. The pixel work below uses none of the core.
-opendmd-core = { path = "../opendmd-core", features = ["tween", "names"] }
+# `tags`: the user's tags and stars, the search and smart playlists
+# (src/tags.rs), the main module having no room for them.
+opendmd-core = { path = "../opendmd-core", features = ["tween", "names", "tags"] }
 js-sys = "0.3"          # the prepared copy's {copy, stats} object
 gif = "0.13"            # the encoder: one global palette, every frame whole
 wasm-bindgen = "0.2"

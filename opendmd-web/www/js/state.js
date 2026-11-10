@@ -133,11 +133,25 @@ export const app = {
     const sets = root.some((f) => f.dir && f.name === 'sets') ? await listOr('/sets') : [];
     const roots = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !OBSOLETE.test(f.name) && !/\.(idx|part|tmp|bak|meta)$/.test(f.name))
       .map((f) => f.name).sort((a, b) => (a === 'filelist.txt' ? -1 : b === 'filelist.txt' ? 1 : a.localeCompare(b)));
+    this.setNames = new Set(sets.map((f) => f.name));
     const names = sets.filter((f) => !f.dir && /\.txt$/.test(f.name)).map((f) => f.name.replace(/\.txt$/, '')).sort();
     return [
       ...roots.map((n) => ({ path: '/' + n, value: n === 'filelist.txt' ? '' : n, label: playlistLabel(n), root: true })),
       ...names.map((n) => ({ path: `/sets/${n}.txt`, value: n, label: playlistLabel(n), root: false })),
     ];
+  },
+
+  // One of the web app's own lists in /sets (`.smooth`, `.tags`, `.smart`):
+  // '' when the last listing of /sets has no such file, so nothing is
+  // asked for that would only be a 404.
+  async sideText(path) {
+    if (!this.setNames) await this.playlists();
+    return this.setNames.has(base(path)) ? (await this.src.readText(path)) || '' : '';
+  },
+  // ... and written: the listing knows it is there now.
+  async writeSide(path, text) {
+    await this.src.writeFile(path, text);
+    (this.setNames ??= new Set()).add(base(path));
   },
 
   // (A device, or the demo's player: js/demo.js.)
@@ -160,6 +174,7 @@ export const app = {
     const now = this.cardKey;
     if (was && now && was !== now) {
       this.texts.clear();
+      this.setNames = null;
       this.selection.clear();
       emit('card', now);
     }

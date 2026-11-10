@@ -9,7 +9,9 @@ absent (CI): nothing third-party, every GIF drawn here.
     DMD_CARD_ROOT=OUT_DIR make web-smoke
 
 The layout is the real card's (gifs/<Category>/, filelist.txt, .hall, .xmas,
-an obsolete filelist.odm.txt, logos/boot.gif, cache/), and the names are the
+an obsolete filelist.odm.txt, logos/boot.gif, cache/) with a sets/ of the
+web app's own (two GIFs tagged and rated in .tags, the smart playlist
+zz-smart built from them, .smart), and the names are the
 ones web-smoke looks for: Mario titles among the SNES rows of Consoles,
 SNES_Mega_Man_X_08_sephirot68, SNES_Super_Metroid_01..04, a small
 SNES_Asterix01, MD_ and SNES_ lines for the playlist builder, Other's
@@ -283,6 +285,13 @@ def build(out: Path) -> None:
     (out / "filelist.txt").write_text("".join(p + "\n" for p in listed))
     (out / "filelist.hall").write_text("".join(p + "\n" for p in hall))
     (out / "filelist.xmas").write_text("".join(p + "\n" for p in xmas))
+    # The user's tags and stars (/sets/.tags) and a smart playlist built
+    # from them (/sets/.smart, the playlist as the web app writes it).
+    tagged = ["/gifs/Consoles/SNES_Super_Metroid_01.gif", "/gifs/Consoles/SNES_Super_Metroid_02.gif"]
+    (out / "sets").mkdir(parents=True, exist_ok=True)
+    (out / "sets" / ".tags").write_text(f"{tagged[0]}\tr=5\tt=ci\n{tagged[1]}\tr=4\tt=ci,metroid\n")
+    (out / "sets" / ".smart").write_text("/sets/zz-smart.txt\tq=tag:ci\tat=1762732800\n")
+    (out / "sets" / "zz-smart.txt").write_text("".join(p + "\n" for p in tagged))
     # The retired pre-rendered format's playlist: ignored, never listed.
     (out / "filelist.odm.txt").write_text("/odm/Consoles/00/SNES_Asterix01.odm\n")
     print(f"{out}: {sum(1 for _ in gifs.rglob('*.gif'))} GIFs, {len(listed)} in filelist.txt")
