@@ -417,16 +417,25 @@ impl Query {
         })
     }
 
-    /// The paths among `paths` that pass, with `tags` the card's
-    /// `/sets/.tags`; shuffled (the scheduler's splitmix64, so a seed means
-    /// the same order everywhere) and cut to the limit as asked.
+    /// Does the playlist line `path` pass? Only GIFs do: a title card or a
+    /// Formula is never found.
+    pub fn matches_path(&self, path: &str, tags: Option<&TagSet>) -> bool {
+        !path.starts_with('@')
+            && crate::synth::formula_file(path).is_none()
+            && self.matches(&Entry::from_gif_path(path), tags.and_then(|t| t.get(path)))
+    }
+
+    /// The paths among `paths` that pass ([`Query::matches_path`]), with
+    /// `tags` the card's `/sets/.tags`; shuffled (the scheduler's
+    /// splitmix64, so a seed means the same order everywhere) and cut to the
+    /// limit as asked.
     pub fn run<'a>(
         &self,
         paths: impl Iterator<Item = &'a str>,
         tags: Option<&TagSet>,
     ) -> Vec<String> {
         let mut out: Vec<String> = paths
-            .filter(|p| self.matches(&Entry::from_path(p), tags.and_then(|t| t.get(p))))
+            .filter(|p| self.matches_path(p, tags))
             .map(str::to_string)
             .collect();
         if self.shuffle {
@@ -660,6 +669,8 @@ mod tests {
         "/gifs/Arcade/ARCADE_Bubble_Bobble_02.gif",
         "/gifs/Spectrum_Slide/Jet_Set_Willy_01.gif",
         "/gifs/NEW 2021/7.gif",
+        "@formula:plasma",
+        "/formulas/mine.psi?a=1",
     ];
 
     fn run(s: &str, tags: &TagSet) -> Vec<String> {
@@ -670,7 +681,7 @@ mod tests {
     fn evaluates_the_name() {
         let none = TagSet::new();
         let n = |s: &str| run(s, &none).len();
-        assert_eq!(n(""), 6);
+        assert_eq!(n(""), 6, "GIFs only: never a Formula line");
         assert_eq!(n("platform:md"), 2);
         assert_eq!(n("platform:\"mega drive\" -is:logo"), 1);
         assert_eq!(n("platform:spectrum"), 1, "the folder lends it");
@@ -722,10 +733,11 @@ mod tests {
         assert_eq!(a, run("shuffle seed:9", &none), "same seed, same order");
         let mut sorted = a.clone();
         sorted.sort();
-        let mut all: Vec<String> = PATHS.iter().map(|s| s.to_string()).collect();
+        let mut all: Vec<String> = PATHS[..6].iter().map(|s| s.to_string()).collect();
         all.sort();
         assert_eq!(sorted, all);
         assert_eq!(run("shuffle seed:9 limit:2", &none), a[..2]);
         assert_eq!(run("limit:2", &none), PATHS[..2]);
+        assert_eq!(run("limit:99", &none).len(), 6);
     }
 }

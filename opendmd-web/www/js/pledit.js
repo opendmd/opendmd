@@ -4,39 +4,30 @@
 // a row's Move items, ✕, Select and Arrange), **Add GIFs** — the card's
 // folders as a tree (js/tree.js): tick GIFs or whole folders, or add
 // everything a search shows; beside the entries on a laptop, in their
-// place on a phone —, Add by filter (the core's Filter, a sheet), Save PUT
+// place on a phone —, Add by filter (js/plbuild.js: a search, a sheet; a
+// smart playlist when the search is kept, js/smart.js), Save PUT
 // /api/sets/<name>, play PUT /api/config. Changes not saved are asked
 // about on the way out (`guard`); the ones that take many GIFs at once
 // have an Undo in their toast.
 
 import { app, playlistLabel, platName, dirty, SET_NAME, SET_NAME_RULE } from './state.js';
-import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from './overrides.js';
+import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
-import { h, clear, emit, on, store, toast, label, note, niceName, isSys, byNice, FLAGS, isFormula, drawn } from './util.js';
-
-const picks = (box, k) => [...box.querySelectorAll('.on')].map((c) => c.dataset[k]);
+import { h, clear, emit, on, store, toast, label, note, isFormula, drawn } from './util.js';
 
 // ctx: {el (the view), closeEd(), activate(p), loadSets(), known() (playlist paths), lists() (playlists)}
 export function editor(se, ctx) {
   const { el } = ctx;
-  const tog = (e) => { e.currentTarget.classList.toggle('on'); count(); };
-  const bSeedL = h('label', { hidden: true }, 'Seed');
-  const baseSel = h('select', { id: 'b-base', onchange: () => platChips() });
-  const bPlats = h('div.chips', { id: 'b-plats' });
-  const bPlat = h('input', { type: 'text', id: 'b-platforms', placeholder: 'MD,SNES', hidden: true });
-  const bCats = h('div.chips', { id: 'b-cats' });
-  const bTitle = h('input', { type: 'text', id: 'b-title', placeholder: 'mario, sonic' });
-  const bFlags = h('div.chips', { id: 'b-flags' }, Object.entries(FLAGS).map(([k, n]) => h('button.chip', { 'data-flag': k, onclick: tog }, n)));
-  const bShuffle = h('input', { type: 'checkbox', id: 'b-shuffle', onchange: () => { bSeedL.hidden = !bShuffle.checked; } });
-  const bSeed = h('input', { type: 'number', id: 'b-seed', value: 1, min: 0, style: 'width:90px' });
-  const bLimit = h('input', { type: 'number', id: 'b-limit', placeholder: 'all', min: 1, style: 'width:90px' });
-  const bCount = h('span.cap.bad', { id: 'b-count' });
-  const bAdd = h('button.pri', { id: 'b-append', onclick: () => build(true) }), bUse = h('button', { id: 'b-use', onclick: () => build(false) });
   const name = h('input', { type: 'text', id: 'set-name', placeholder: 'e.g. consoles', value: app.draft.name });
   const nameL = h('span'), nameRow = h('label.stack', { id: 'set-name-row', style: 'margin-bottom:12px' }, nameL, name);
   const title = h('h2.grow', { id: 'set-title' });
+  // A smart playlist (js/smart.js): its search, Edit search, Refresh now.
+  const smartCap = h('span.grow');
+  const smartRow = h('div.row.cap', { id: 'set-smart', hidden: true }, smartCap,
+    h('button.sm', { id: 'set-smart-edit', onclick: (e) => openBuilder(e.currentTarget, app.draft.smart) }, 'Edit search'),
+    h('button.sm', { id: 'set-smart-refresh', onclick: refreshNow }, 'Refresh now'));
   const saveB = h('button.pri', { id: 'set-save', onclick: () => save(false) }), playB = app.device && h('button', { id: 'set-save-activate', onclick: () => save(true) });
   const empty = h('div', { id: 'set-empty' },
     h('p.cap', 'Nothing in it yet. + Add GIFs picks them from your folders; Add by filter takes every GIF that matches.'),
@@ -171,25 +162,33 @@ export function editor(se, ctx) {
     toast(`${fresh.length.toLocaleString()} added${n > fresh.length ? ` · ${(n - fresh.length).toLocaleString()} already in it` : ''}`, 'ok');
   }
 
-  const builder = h('div.menu.wide', { id: 'builder', role: 'dialog', 'aria-label': 'Add by filter' }, h('div.mh', h('b', 'Add GIFs by filter')),
-    h('div.form',
-      h('label.stack', 'Take GIFs from', baseSel),
-      h('label.stack', 'Title has any of', bTitle)),
-    h('div.lbl', 'Platforms'), bPlats, bPlat,
-    h('div.lbl', 'Categories'), bCats,
-    h('div.lbl', 'Leave out'), bFlags,
-    h('div.row', { style: 'margin-top:16px' }, h('label', bShuffle, 'Shuffle'), bSeedL, h('label', 'At most', bLimit)), bCount,
-    h('div.row', { style: 'margin-top:12px' }, bAdd, bUse));
-  bSeedL.append(bSeed);
-  function openBuilder(b) {
-    initBuilder();
-    const r = b.getBoundingClientRect();
-    popup(builder, r.right - 440, r.bottom + 4);
+  // The sheet (js/plbuild.js) on first use; what it builds lands here.
+  let bq = null;
+  async function openBuilder(b, smart) {
+    bq ??= import('./plbuild.js').then((m) => m.builder({ lists: ctx.lists, known: ctx.known, done: built }));
+    (await bq)(b, smart);
+  }
+  function built(paths, append, smart) {
+    const d = app.draft, msg = `${paths.length.toLocaleString()} GIFs ${append ? 'added' : 'in the list'}`;
+    if (append) { d.paths.push(...paths); picked.clear(); refresh(); toast(msg, 'ok'); }
+    else undoable(() => { d.paths = paths; }, msg); // the same playlist, new contents
+    if (smart) { d.smart = smart; d.smartPaths = paths.join('\n'); }
+    header();
+  }
+  async function refreshNow() {
+    const d = app.draft;
+    if (!d.path || dirty(d)) { toast('save the playlist first', 'bad'); return; }
+    try {
+      const r = await (await import('./smart.js')).refresh(d.path, true);
+      if (r) { d.smartPaths = d.paths.join('\n'); d.smart = (await import('./smart.js')).get(d.path); }
+      header();
+      toast(r && (r.added || r.removed) ? `+${r.added} −${r.removed}` : 'Up to date', 'ok');
+    } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
   }
 
   se.append(h('div.card', { id: 'set-editor' },
     h('div.row', { style: 'margin-bottom:8px' }, h('button.sm.back', { id: 'set-back', onclick: ctx.closeEd }, '‹ Playlists'), title, eCount),
-    nameRow,
+    smartRow, nameRow,
     h('div.edpanes',
       h('div', { id: 'set-ent-pane' },
         h('div.row', { style: 'margin-bottom:8px' }, h('div.grow', { style: 'min-width:140px' }, eSearch),
@@ -212,6 +211,8 @@ export function editor(se, ctx) {
     name.value = root ? (d.copyName ??= freeName(playlistLabel(d.path))) : d.name;
     saveB.textContent = root ? 'Save as new' : 'Save';
     if (playB) playB.textContent = root ? 'Save as new & play' : 'Save & play';
+    smartRow.hidden = !d.smart;
+    if (d.smart) import('./smart.js').then((m) => { smartCap.textContent = 'Built from a search: ' + m.summary(d.smart); });
   }
   // A playlist (or a new one) is in app.draft: show it.
   function opened() {
@@ -219,59 +220,6 @@ export function editor(se, ctx) {
     picked.clear();
     refresh();
   }
-
-  // The builder reads the base playlist and /gifs only once it is first opened.
-  let built = false;
-  function initBuilder() {
-    const keep = baseSel.value, known = ctx.known();
-    clear(baseSel, ctx.lists().map((p) => h('option', { value: p.path }, p.label)));
-    baseSel.value = keep && known.includes(keep) ? keep : '/filelist.txt';
-    if (built) return;
-    built = true;
-    categories();
-    platChips();
-  }
-  async function categories() {
-    let dirs = [];
-    try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch { /* none */ }
-    clear(bCats, dirs.map((d) => h('button.chip' + (isSys(d) ? '.sys' : ''), { 'data-cat': d, onclick: tog }, niceName(d))));
-  }
-  async function platChips() {
-    const text = await app.text(baseSel.value).catch(() => null), n = new Map(), keep = picks(bPlats, 'platform');
-    if (text) for (const e of app.wasm.parseManifest(text)) if (e.platform) n.set(e.platform, (n.get(e.platform) || 0) + 1);
-    bPlat.hidden = !!n.size;
-    clear(bPlats, [...n].sort((a, b) => b[1] - a[1]).map(([p, c]) => h('button.chip' + (keep.includes(p) ? '.on' : ''), { 'data-platform': p, onclick: tog }, p, h('small', c.toLocaleString()))));
-    count();
-  }
-  const spec = () => ({
-    platforms: bPlat.hidden ? picks(bPlats, 'platform') : bPlat.value, titles: bTitle.value, exclude_flags: picks(bFlags, 'flag'),
-    categories: picks(bCats, 'cat'),
-    shuffle: bShuffle.checked, seed: +bSeed.value || 0, ...(+bLimit.value > 0 ? { limit: +bLimit.value } : {}),
-  });
-  async function run() {
-    const text = await app.text(baseSel.value);
-    if (text == null) throw new Error(`${baseSel.value} is not served by this source`);
-    return app.wasm.filterManifest(text, JSON.stringify(spec()));
-  }
-  async function count() {
-    try {
-      const n = (await run()).length, t = n.toLocaleString() + (n == 1 ? ' GIF' : ' GIFs');
-      bAdd.textContent = 'Add ' + t;
-      bUse.textContent = 'Replace with ' + t;
-      bAdd.disabled = bUse.disabled = !n;
-      bCount.textContent = '';
-    } catch (e) { bCount.textContent = e.message; }
-  }
-  async function build(append) {
-    try {
-      const paths = await run(), msg = `${paths.length.toLocaleString()} GIFs ${append ? 'added' : 'in the list'}`;
-      closeMenu();
-      if (append) { app.draft.paths.push(...paths); picked.clear(); refresh(); toast(msg, 'ok'); }
-      else undoable(() => { app.draft.paths = paths; }, msg); // the same playlist, new contents
-      header();
-    } catch (e) { toast(e.message, 'bad'); }
-  }
-  for (const i of [baseSel, bPlat, bTitle, bShuffle, bSeed, bLimit]) i.addEventListener('change', count);
 
   function refresh() {
     const q = app.wasm.normalizeTitle(eSearch.value);
@@ -350,9 +298,13 @@ export function editor(se, ctx) {
     if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return false; }
     const path = `/sets/${n}.txt`;
     if (ctx.known().includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return false;
+    // Changed by hand, a smart playlist stops following its search.
+    const d = app.draft, hand = d.smart && d.paths.join('\n') !== d.smartPaths;
+    if (hand && !confirm('This playlist is built from a search; saving your changes by hand stops that. Save it as it is now?')) return false;
     try {
-      const d = app.draft, body = d.paths.join('\n'), text = body + '\n';
+      const body = d.paths.join('\n'), text = body + '\n', sm = d.smart && (await import('./smart.js'));
       await app.src.saveSet(n, text);
+      if (hand) { d.smart = null; await sm.drop(path); } else if (d.smart) { await sm.put(path, d.smart.q, d.smart.from); d.smart = sm.get(path); d.smartPaths = body; }
       d.name = n;
       d.saved = body;
       app.texts.set(path, text);

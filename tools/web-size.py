@@ -449,6 +449,24 @@ TREE = {"js/tree.js", "js/thumbs.js", "tree.css"}
 # The playlist editor (#sets/edit), imported the first time a playlist opens.
 EDITOR_GZ_BUDGET = 6 * 1024
 EDITOR = {"js/pledit.js"}
+# The playlist editor's "Add by filter" sheet (js/plbuild.js, branch tags,
+# 2026-11-10: the search it builds, the tag chips and stars, "Keep this
+# search"; imported when it first opens, so the editor's line shrank by the
+# sheet), and smart playlists (js/smart.js: /sets/.smart, a playlist written
+# again from its search; imported by Playlists and the sheet), and the
+# user's tags and stars (js/tags.js: /sets/.tags held in the wasm's TagBook,
+# the Library's rows, Details and the bulk Tag/Rate sheets; imported with the
+# Library), and the references a move, rename or delete rewrites (js/refs.js:
+# playlists, their favourites, tags, Smooth motion; the bulk Move and Rename
+# dialogs; imported when first used): a line each.
+PLBUILD_GZ_BUDGET = 4 * 1024
+PLBUILD = {"js/plbuild.js"}
+SMART_GZ_BUDGET = 3 * 1024
+SMART = {"js/smart.js"}
+TAGS_GZ_BUDGET = 6 * 1024
+TAGS = {"js/tags.js"}
+REFS_GZ_BUDGET = 4 * 1024
+REFS = {"js/refs.js"}
 # The error codes of the Formulas editor's messages (`js/psierr.js`: the
 # compiler's sentence fragments for each code, generated from
 # opendmd-psi/src/errors.rs, and the link to the language reference's
@@ -622,6 +640,14 @@ def main() -> int:
             kind = "tree"
         elif rel in EDITOR:
             kind = "editor"
+        elif rel in PLBUILD:
+            kind = "plbuild"
+        elif rel in SMART:
+            kind = "smart"
+        elif rel in TAGS:
+            kind = "tags"
+        elif rel in REFS:
+            kind = "refs"
         elif rel in PSIERR:
             kind = "psierr"
         elif rel in FHIST:
@@ -724,7 +750,7 @@ def main() -> int:
                          ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fsubmit", FSUBMIT_GZ_BUDGET),
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
-                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
+                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("plbuild", PLBUILD_GZ_BUDGET), ("smart", SMART_GZ_BUDGET), ("tags", TAGS_GZ_BUDGET), ("refs", REFS_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
                          ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
