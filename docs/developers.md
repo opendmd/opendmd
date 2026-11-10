@@ -28,6 +28,7 @@ make web && make web-mock ROOT=/path/to/card   # the web app against a fake devi
 make web-smoke               # headless Chromium through every view
 make blocklist-check         # no API path, asset or site URL may match EasyPrivacy/EasyList (ad blockers); lists cached in target/blocklists
 make font                    # the headings' pixel font (Silkscreen): subset it again
+make site-font site-scene    # the site's heading face (Fraunces) and the home page's pixel-art scene, made again
 make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 ```
