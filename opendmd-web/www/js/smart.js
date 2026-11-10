@@ -49,10 +49,12 @@ export async function drop(path) {
 // A playlist letting go of its search while `fn` runs (saved by hand,
 // deleted, renamed away): a refresh already under way writes nothing to
 // it, the playlist nor its line, even before its line is dropped.
-const leaving = new Set();
+// (Counted: a rename by way of another name lets go of one path twice.)
+const leaving = new Map();
 export async function letGo(path, fn) {
-  leaving.add(lc(path));
-  try { return await fn(); } finally { leaving.delete(lc(path)); }
+  const k = lc(path);
+  leaving.set(k, (leaving.get(k) || 0) + 1);
+  try { return await fn(); } finally { const n = leaving.get(k) - 1; if (n) leaving.set(k, n); else leaving.delete(k); }
 }
 // The editor saving a smart playlist changed by hand (`save` writes it):
 // it stops being smart.
