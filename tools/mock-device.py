@@ -145,6 +145,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `--root`'s (same paths, as a card copied twice would be). `sd.card_id`
   is otherwise a hash of `--root`, and a `POST /api/card/format` gives a new
   one. web-smoke's card-swap check uses it.
+- **`GET /mock/fail-move?after=N`** (mock only): after N more moves that
+  work, the next `POST /api/files/move` is a 409 (as when its target
+  appeared meanwhile), then moves work again; `after=-1` turns it off.
+  web-smoke's bulk move checks a batch that stops halfway with it.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
   (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
@@ -3396,6 +3400,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/card"), {"GET": self.h_mock_card}),
                 (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
+                (m_exact("/mock/fail-move"), {"GET": self.h_mock_fail_move}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
@@ -5074,6 +5079,12 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             srel, drel = src.lstrip("/"), dst.lstrip("/")
             with ctx.lock:
+                fail = getattr(ctx, "fail_move", -1)
+                if fail >= 0:
+                    ctx.fail_move = fail - 1
+                    if fail == 0:
+                        self.send_error_json(409, f"{dst} already exists")
+                        return
                 if ctx.fs.read_path(srel) is None:
                     self.send_error_json(404, src)
                     return
@@ -5127,6 +5138,17 @@ def make_handler(ctx: Context, quiet: bool):
             if v is not None:
                 ctx.www_legacy = v == "1"
             self.send_json(200, {"legacy": getattr(ctx, "www_legacy", False)})
+
+        def h_mock_fail_move(self, path):
+            # GET /mock/fail-move?after=N (mock only): after N more moves
+            # that work, the next POST /api/files/move is a 409, as when the
+            # target appeared meanwhile (a PC, another browser); then moves
+            # work again. `after=-1` turns it off.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            n = query_param(q, "after")
+            if n is not None:
+                ctx.fail_move = int(n)
+            self.send_json(200, {"after": getattr(ctx, "fail_move", -1)})
 
         def h_mock_stale_names(self, path):
             # GET /mock/stale-names?hide=<card path> (mock only): names
