@@ -1,6 +1,9 @@
 // Library: the GIFs on the player as a tree of folders (js/tree.js), and
 // Details for the one picked (finding new art on the web is Create Art's,
-// js/studio.js). See "The Library's layout" in CLAUDE.md.
+// js/studio.js). See "The Library's layout" in CLAUDE.md. The user's tags
+// and stars (js/tags.js) show on the rows and in Details, and Select's
+// More ▾ tags, rates, moves, renames or deletes many GIFs at once
+// (js/tags.js, js/refs.js).
 
 import { app, platName } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
@@ -41,13 +44,18 @@ export async function mount(el) {
   const selCount = h('b');
   // Into a playlist picked from a menu; the selection clears once it is in
   // (and Select ends with a new playlist, off in the editor).
+  const moreSel = h('button', { id: 'lib-sel-more', 'aria-haspopup': 'menu', onclick: (e) => bulkMenu(e.currentTarget) }, 'More ▾');
   const toSetBtn = h('button.pri', { id: 'lib-to-set', 'aria-haspopup': 'menu', onclick: (e) => targetMenu(e.currentTarget, [...app.selection], (fresh) => { if (fresh) selMode(false); else { app.selection.clear(); sync(); } }) });
   const selbar = h('div.selbar.row', { hidden: true, id: 'lib-selbar' },
     h('span.grow', selCount, ' selected'),
     h('button', { id: 'lib-all', onclick: selectAll }, 'Select all shown'),
     h('button', { id: 'lib-none', onclick: () => { app.selection.clear(); sync(); } }, 'None'),
-    toSetBtn,
+    toSetBtn, moreSel,
     h('button', { id: 'lib-sel-done', onclick: () => selMode(false) }, 'Done'));
+  // The user's tags (js/tags.js), once the card has any or Details asks.
+  let tg = null;
+  const tagsMod = () => import('./tags.js').then(async (m) => { await m.tags(); tg = m; return m; });
+  on('tags', () => { tree.refresh(); stars(); });
 
   const ov = new Overrides();
   ov.onChange = () => tree.refresh();
@@ -63,7 +71,7 @@ export async function mount(el) {
     onTick: () => sync(),
     onError: (m) => toast(m, 'bad'),
     extra(it) {
-      return [glyphs(ov.get(it.path)), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
+      return [glyphs(ov.get(it.path)), tg && tg.bits(app.tags.get(it.path)), platName(it.e.platform) && h('span.tag', { title: it.e.platform }, platName(it.e.platform)), moreButton(ov, it.path)];
     },
     onUpdate: counted,
   });
@@ -78,9 +86,11 @@ export async function mount(el) {
   const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
+  const tagBox = h('div', { id: 'lib-d-tags' });
   const gifOnly = [meta, editArt, moreBtn];
   const body = h('div', { id: 'lib-d-body', hidden: true },
     h('div.dhead', h('div.grow', dTitle, meta), moreBtn),
+    tagBox,
     h('div.row.acts', sendBtn, plBtn),
     h('div.row.acts', editArt), smoothBox);
   const side = h('div.side', { id: 'lib-side' },
@@ -89,7 +99,21 @@ export async function mount(el) {
       canvas, cap, body));
 
   // On a phone the chips scroll sideways: fade an edge while more is off that side.
-  const r2 = h('div.lib-r2', { id: 'lib-r2' }, chips);
+  // ★ 4+: one chip beside the platforms once something is rated.
+  const starChip = h('button.chip', { id: 'lib-star-chip', hidden: true, onclick: () => {
+    const q = search.value.trim(), on = /(^|\s)rating>=4(\s|$)/.test(q);
+    search.value = on ? q.replace(/(^|\s)rating>=4(?=\s|$)/, '').trim() : (q + ' rating>=4').trim();
+    apply();
+  } }, '★ 4+');
+  const stars = () => {
+    starChip.hidden = !app.tags || ![...app.tags.book.paths()].some((p) => app.tags.get(p).r);
+    starChip.classList.toggle('on', /(^|\s)rating>=4(\s|$)/.test(search.value));
+  };
+  const goneMsg = h('span.grow');
+  const goneBox = h('div.lib-web', { id: 'lib-gone', hidden: true }, goneMsg,
+    h('button.txt', { id: 'lib-gone-move', onclick: () => strays(true) }, 'Move their tags'),
+    h('button.txt', { id: 'lib-gone-forget', onclick: () => strays(false) }, 'Forget them'));
+  const r2 = h('div.lib-r2', { id: 'lib-r2' }, starChip, chips);
   const edge = () => {
     r2.classList.toggle('more', r2.scrollLeft + r2.clientWidth < r2.scrollWidth - 2);
     r2.classList.toggle('less', r2.scrollLeft > 2);
@@ -103,7 +127,7 @@ export async function mount(el) {
       h('div.card.libhead',
         h('div.lib-q', search), count, fold, selBtn, addBtn, addInput,
         r2, addCard),
-      webHint, tree.el, selbar),
+      webHint, goneBox, tree.el, selbar),
     side);
   el.append(grid);
 
@@ -119,6 +143,8 @@ export async function mount(el) {
     const e = it.e, gif = it.path[0] != '@';
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
+    tagBox.hidden = !gif;
+    if (gif) (tg ? Promise.resolve(tg) : tagsMod()).then((m) => { if (current === it) m.detail(tagBox, it.path, (t) => { search.value = 'tag:' + (/[\s,:]/.test(t) ? `"${t}"` : t); apply(); }); }).catch(() => {});
     const a = authorOf(e), sp = (id, t) => t && h('span', { id }, t);
     clear(meta, [sp('lib-d-platform', platName(e.platform)), sp('lib-d-category', e.category && niceName(e.category)),
       a && ['by ', sp('lib-d-author', a)], ...e.flags.filter(isFlag).map(flagName)].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
@@ -171,7 +197,7 @@ export async function mount(el) {
     if (n) selecting = true;
     selCount.textContent = n;
     selbar.hidden = !selecting;
-    toSetBtn.disabled = !n;
+    toSetBtn.disabled = moreSel.disabled = !n;
     toSetBtn.textContent = `Add ${n ? n.toLocaleString() + ' ' : ''}to playlist ▾`;
     tree.refresh();
   }
@@ -187,12 +213,44 @@ export async function mount(el) {
   }
   function counted(st) {
     const text = search.value.trim();
-    count.textContent = st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`;
+    count.textContent = st.err || (st.busy ? (st.text ? 'Searching…' : 'Loading…') : `${st.shown.toLocaleString()} of ${st.pool.toLocaleString()}${st.bad ? ' · some folders couldn’t be read: type again to retry' : ''}`);
+    count.classList.toggle('bad', !!st.err);
+    stars();
+    // Every folder listed (a search): tags kept for GIFs no longer here.
+    if (!st.busy && st.text && !st.bad && tg && lostKey !== (lostKey = `${st.pool}|${app.tags.size}`)) {
+      const all = tree.real().flatMap((c) => (tree.items(c) || []).map((x) => x.path));
+      lost = tg.strays(all);
+      const moved = lost.filter((x) => x.to).length;
+      goneMsg.textContent = `${lost.length.toLocaleString()} tagged GIF${lost.length > 1 ? 's are' : ' is'} no longer on the card${moved ? ` (${moved.toLocaleString()} found in another folder)` : ''}.`;
+      goneBox.hidden = !lost.length;
+      goneBox.querySelector('#lib-gone-move').hidden = !moved;
+    }
     grid.classList.toggle('noplat', chipRow(chips, st.plats, plats, 'data-platform', apply) < 2);
     grid.classList.toggle('lq', !!text);
     webQ.textContent = text;
     webHint.hidden = !text || st.busy || st.matched > 0;
     tree.el.hidden = !webHint.hidden; // no empty box under the hint
+  }
+
+  // Tags of GIFs gone from the card: onto the one GIF elsewhere with the
+  // same name (`move`), or forgotten.
+  let lost = [], lostKey = '';
+  async function strays(move) {
+    const pairs = lost.map((x) => ({ from: x.path, to: move ? x.to : null })).filter((x) => !move || x.to);
+    await app.tags.relink(pairs);
+    toast(move ? `Tags of ${pairs.length.toLocaleString()} GIFs moved to where they are now` : `Tags of ${pairs.length.toLocaleString()} GIFs forgotten`, 'ok');
+    goneBox.hidden = true;
+    apply();
+  }
+
+  // Select's More ▾: Tag…, Rate… (js/tags.js); Move to folder…, Rename…,
+  // Delete… (js/refs.js).
+  function bulkMenu(btn) {
+    const paths = [...app.selection].filter((p) => p.startsWith('/gifs/')), done = () => { tree.refresh(); };
+    if (!paths.length) { toast('select some GIFs first', 'bad'); return; }
+    actions(btn, 'lib-bulk', [
+      ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
+      ['lib-bulk-rate', 'Rate…', () => tagsMod().then((m) => m.bulkRate(btn, paths, done))]], `${paths.length.toLocaleString()} GIFs`);
   }
 
   async function reveal(path) {
@@ -255,6 +313,7 @@ export async function mount(el) {
 
   async function playlists() {
     const lists = await app.playlists().catch(() => []);
+    if (!tg && app.setNames?.has('.tags')) tagsMod().then(() => tree.refresh()).catch(() => {});
     const has = (p) => p && lists.some((x) => x.path === p);
     const want = [ov.path, store.get('lib.ov'), app.activePath].find(has) || lists[0]?.path || '/filelist.txt';
     await ov.load(want); // each time: Now's ☆ or the Playlists editor may have changed it

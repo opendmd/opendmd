@@ -4,13 +4,16 @@
 // the open folders' GIF rows (`.vrow`), so only what is in view exists
 // (Consoles' 3,781 rows are ~21 elements). A search filters every folder
 // (the matches' folders open, each with its count); platform chips narrow
-// it. Ticks (Select mode, the Add pane) work on GIFs and whole folders.
+// it. Words like `tag:boss`, `platform:md`, `rating>=4` make it the
+// Library's full search (opendmd_core::query, in the art module: loaded
+// when first typed), the user's tags and stars from js/tags.js. Ticks (Select mode, the Add pane) work on GIFs and whole folders.
 // Keys: ↑/↓, Home/End, PgUp/PgDn, → opens or steps in, ← closes or steps
 // out, Enter, Space ticks. Each folder is listed once a session, shared by
 // every tree. Imported by library.js and pledit.js; its own size line with
 // thumbs.js and tree.css (loaded here).
 
 import { app, listOr } from './state.js';
+import { art } from './artmod.js';
 import { VList } from './vlist.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
 import { h, clear, on, store, label, niceName, isSys, byNice } from './util.js';
@@ -27,6 +30,18 @@ const counts = () => {
   return countsOf;
 };
 const cmp = (a, b) => a.norm.localeCompare(b.norm) || (a.e.variant ?? 0) - (b.e.variant ?? 0);
+
+// The search's words beyond a title's (`tag:`, `rating>=4`, …): only
+// whether to read them in Rust; what they mean is opendmd_core::query's.
+const KEYED = /(^|\s)-?((platform|folder|tag|is|title|by):|rating[<>=:]|unrated(\s|$))/i;
+let A = null, empty = null, waiting = false;
+// The art module and the tags, then `again()`.
+function needs(tags, again) {
+  if (waiting || (A && (!tags || app.tags))) return;
+  waiting = true;
+  art().then((m) => { A = m; return tags && import('./tags.js').then((t) => t.tags()); })
+    .catch(() => {}).finally(() => { waiting = false; again(); });
+}
 
 // A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
 export function listCat(c) {
@@ -144,7 +159,30 @@ export class Tree {
 
   match() {
     const q = app.wasm.normalizeTitle(this.q), qn = this.q.trim().toLowerCase(), ps = this.plats;
-    return [!!qn, (it) => !qn || it.norm.includes(q) || (it.lname || '').includes(qn), (it) => !ps.size || ps.has(it.e.platform)];
+    const okP = (it) => !ps.size || ps.has(it.e.platform);
+    this.err = '';
+    if (KEYED.test(qn)) {
+      const s = this.search();
+      if (s === null) return [true, () => false, okP];
+      if (s?.keyed) {
+        if (s.usesTags && !app.tags) needs(true, () => this.update());
+        const book = app.tags?.book || (empty ??= new A.TagBook(''));
+        return [true, (it) => s.test(it.path, book), okP];
+      }
+    }
+    return [!!qn, (it) => !qn || it.norm.includes(q) || (it.lname || '').includes(qn), okP];
+  }
+  // The search for the box's words (one parse per change), null while the
+  // module loads; undefined if it cannot be read (`err` says why).
+  search() {
+    const q = this.q.trim();
+    if (!A) { needs(false, () => this.update()); return null; }
+    if (this.sq?.q !== q) {
+      this.sq?.s?.free();
+      try { this.sq = { q, s: new A.Search(q) }; } catch (e) { this.sq = { q, err: e.message || String(e) }; }
+    }
+    this.err = this.sq.err || '';
+    return this.sq.s;
   }
   // One pass: the rows; every match (`res`); the platforms' counts.
   update() {
@@ -190,7 +228,7 @@ export class Tree {
       const i = rows.findIndex((r) => (r.path || 'd' + r.cat) === key);
       this.focusRow(i >= 0 ? i : Math.min(a._i, rows.length - 1));
     }
-    this.o.onUpdate?.({ shown: res.length, pool, matched, plats: pc, busy: (text && this.gathering) || rows.some((r) => r.ld), bad: this.bad, text });
+    this.o.onUpdate?.({ shown: res.length, pool, matched, plats: pc, busy: (text && (this.gathering || waiting)) || rows.some((r) => r.ld), bad: this.bad, text, err: this.err });
   }
 
   render(r, it, i) {
