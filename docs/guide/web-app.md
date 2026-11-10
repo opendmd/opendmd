@@ -70,8 +70,24 @@ as they were.
 With a keyboard, ↑ and ↓ move, → opens a folder or steps into it, ← closes
 it or steps back out, and Enter opens a folder or a GIF.
 
+**Search** also takes words that ask for more than a title:
+
+| Type | To find |
+|---|---|
+| `tag:boss` | GIFs you tagged "boss" (`tag:"boss fight"` for two words) |
+| `rating>=4`, `rating:5`, `unrated` | GIFs by their stars |
+| `platform:snes`, `platform:"mega drive"` | a platform |
+| `folder:consoles` | a folder |
+| `is:logo`, `is:intro`, `is:slide` | what the name says it is |
+| `by:pixelkid42` | an author |
+| `-tag:boss`, `-is:logo` | leave those out |
+
+Mix them with plain words: `mario platform:snes rating>=4`. Commas mean
+"or": `platform:md,snes`. Once you have rated something, a **★ 4+** chip
+beside the platforms does `rating>=4` for you.
+
 Click a GIF to open its details, with a preview and its title, platform,
-category and author. From there:
+category and author, your stars and your tags. From there:
 
 - **Send to panel** plays it now; afterwards the playlist carries on.
 - **Add to playlist…** puts it in one of your playlists: the one playing
@@ -83,13 +99,43 @@ category and author. From there:
 - **Delete…** removes it from the card and from every playlist, after
   asking first.
 
+### Tags and stars
+
+Tags and stars are yours: words and ratings you give GIFs to find them
+again. In a GIF's details, tap a star to rate it (tap the same star again
+to clear it) and type a tag under the stars, then Enter; ✕ takes one off.
+Tap a tag to see every GIF that has it. A GIF in the list shows its stars
+and first two tags. What a GIF's name already says (its platform, folder
+and so on) isn't a tag: change those with **Edit details…**.
+
+Stars are not favourites: a favourite plays more often in one playlist,
+while stars are for searching and for smart playlists.
+
+If you move or delete GIFs on your computer, the Library notices tags
+left for GIFs that aren't on the card any more after a search: **Move
+their tags** puts them on a GIF of the same name in another folder, and
+**Forget them** drops them.
+
 ### Several at once
 
 Press **Select**, or long-press a GIF on a phone, and tick boxes appear. A
 tap picks a GIF, and a folder's box picks every GIF in it, and **None**
 unpicks them all. **Add 3 to playlist ▾** asks which of your playlists
 they go in (the one playing first) or starts a new one; GIFs already in it
-aren't added twice. **Done** leaves Select.
+aren't added twice. **More ▾** has:
+
+- **Tag…**: add a tag to all of them, or take one off. A tag only some of
+  them have shows "–"; tap it to give it to all, again to take it off all.
+- **Rate…**: the same stars for all of them.
+- **Move to folder…**: into one of your folders or a new one. Each keeps
+  its name unless one there has it, when it takes the next number.
+- **Rename…**: a new title, platform or author for all of them, with a
+  preview of the names first.
+- **Delete…**: off the card, after asking.
+
+Playlists, favourites, tags and Smooth motion follow the GIFs you move,
+rename or delete, and every change of tags or stars can be undone from its
+message. **Done** leaves Select.
 
 ### Adding GIFs
 
@@ -135,6 +181,22 @@ goes back. Fill it in any of these ways:
   playlist…**.
 
 A GIF already in the playlist has a ✓ and isn't added twice.
+
+### Smart playlists
+
+A smart playlist is built from a search and keeps up with it. In **Add by
+filter…**, pick what you want (platforms, folders, tags, stars, or more
+search words like `rating>=4 -tag:boss`), choose **Every GIF on the card**
+or a playlist to take them from, tick **Keep this search** and press
+**Replace with 25 GIFs**, then save. The list says **Smart**.
+
+The web app writes the playlist again when its search finds something
+new: when you change tags or stars, add GIFs, or press **Refresh** in the
+playlist's **…** menu (or **Refresh now** in the editor). **Edit search**
+changes it. The panel plays it like any other playlist, so it stays as it
+was last written until you next open the web app. If you change a smart
+playlist by hand and save it, it becomes an ordinary playlist (you're
+asked first).
 
 ### Editing a playlist
 

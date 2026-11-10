@@ -360,6 +360,63 @@ the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 
+## Tags, stars and the search
+
+**Tags and stars** are the user's own words about a GIF, kept for the
+whole card in `/sets/.tags` (`opendmd_core::tags`: a line per GIF,
+`path\tr=4\tt=boss,co-op`, sorted by path; `docs/card.md`). Details has
+five stars and the GIF's tags (typed in, cleaned by the core: lowercase,
+1–24 letters, digits, spaces and `_ . + ' -`, 16 at most); a row shows
+`★4` and up to two tags; Select › More ▾ has **Tag…** and **Rate…** for
+the selection, each one write with an Undo. What a GIF's name says
+(platform, folder, Logo/Intro/…, author) are its *details*, never called
+tags (`tags::details`, which also lends a folder's platform to a name
+without one: `Spectrum_Slide/` → `SPECTRUM`, and `slide`/`story`/`short`
+from a folder's last word). The file is read once per card and written
+whole after a change, one write at a time; a size that differs from the
+last read or write (another browser, a PC) is read again first and the
+page's changes applied over it.
+
+**The search** (`opendmd_core::query`): the Library's box takes free
+words (a title or file name, as before) and terms — `platform:md,snes`,
+`folder:consoles`, `tag:boss`, `is:logo`, `title:"donkey kong"`,
+`by:pixelkid42`, `rating>=4` (`>`, `>=`, `<`, `<=`, `:`), `unrated`, `-`
+before any of them — AND-ed, a term's commas OR-ed; `shuffle`, `seed:N`
+and `limit:N` for a smart playlist. Only a GIF is ever found (never a
+title card or a Formula). Plain words stay the tree's own fast match;
+words with terms are read by the art module's `Search` (loaded when first
+typed), which also says why it cannot read some ("a rating is a number of
+stars from 1 to 5"). `opendmd-pack tags check <card> --search "…"` runs a
+search off the device.
+
+**Smart playlists** (`js/smart.js`): the playlist editor's **Add by
+filter…** (`js/plbuild.js`) builds a search from its chips (platforms,
+folders, what to leave out, tags, stars) and more words, over a playlist
+or every GIF on the card; with **Keep this search**, the playlist is
+smart. The display never reads a search: the playlist is an ordinary
+`/sets/<name>.txt`, written again by the web app whenever its search finds
+something else — when it is saved, on **Refresh** (the row's menu, the
+editor's **Refresh now**), after a change of tags or stars, after Add GIFs,
+and when Playlists is shown for those whose GIFs the page has already
+read — and the search is a line of `/sets/.smart`
+(`path\tq=…\tfrom=…\tat=…`). Rename, Duplicate and Delete keep it in
+step; saved after a change by hand, the playlist stops being smart (asked
+first). So the schedule, Follow, `opendmd-pack` and a card read on a PC
+see a playlist like any other; it is as fresh as the last visit of a
+browser, and the row's title says when it was last updated.
+
+**Many GIFs at once** (`js/refs.js`, `js/details.js`): Select › More ▾
+**Move to folder…**, **Rename…** (a title, platform or author for all;
+a preview of the names) and **Delete…** go one GIF at a time (each move
+or delete a directory scan the panel shares the card for: past 50 the
+app warns), stopping at the first that fails, and then rewrite what names
+them: every playlist (one read, at most one write each) and its
+favourites, the tags, Smooth motion's list for a deleted GIF (the device
+renames a moved one's line itself, with the prepared copy), the smart
+playlists, and a folder left empty goes. A GIF keeps its name where it is
+free; otherwise it takes the next free number, and no two in a batch are
+alike. Edit details and Delete go the same way.
+
 ## Favourites and schedules
 
 **Favourites and schedules.** Right-click a GIF in the Library or a
@@ -419,7 +476,9 @@ used; the Library's folder tree with the thumbnails (`js/tree.js`,
 `js/thumbs.js`, `tree.css`) at most 13 KB and the playlist editor
 (`js/pledit.js`) at most 6 KB, loaded with the Library and when a playlist
 first opens (12.1 KB of 13 and 5.9 KB of 6 on 2026-10-26, which took the JS and CSS
-line from 59.6 to 53.7 KB). Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
+line from 59.6 to 53.7 KB); Add by filter (`js/plbuild.js`, 4 KB), smart
+playlists (`js/smart.js`, 3 KB), tags and stars (`js/tags.js`, 6 KB) and
+the references a move rewrites (`js/refs.js`, 4 KB) a line each. Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
 lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
 player sends those in preference.

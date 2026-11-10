@@ -34,8 +34,9 @@ filelist.xmas
 - `filelist.hall` and `filelist.xmas` are the Halloween and
   Christmas playlists, if your card has them.
 
-Playlists you make in the web app are saved on the card too, so they move
-with it.
+Playlists you make in the web app are saved on the card too, in `sets/`,
+so they move with it, and so are your tags and stars and the searches of
+your smart playlists.
 
 ## The settings file
 

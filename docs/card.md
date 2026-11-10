@@ -81,9 +81,40 @@ pre-rendered `.odm` copies: the player ignores it (and says so once at
 boot); remove it with `DELETE /api/files/odm?recursive=1`, repeated until
 the reply says `"done":true` (see [`docs/deploying.md`](deploying.md)).
 
+## The web app's lists in sets/
+
+Beside the playlists (`/sets/<name>.txt` and their overrides,
+`<name>.meta`), the web app keeps three lists of its own in `/sets/`, each
+a plain file (a dot-file there is never a playlist: the player does not
+read them, and writes go straight to the card):
+
+- `/sets/.smooth`: the GIFs with Smooth motion on, a path a line.
+- `/sets/.tags`: the user's tags and stars, one line per GIF — its path as
+  playlists name it, then tab-separated fields:
+
+  ```
+  /gifs/Arcade/ARCADE_Bubble_Bobble_02.gif\tt=co-op
+  /gifs/Consoles/SNES_Plok_08.gif\tr=4\tt=boss,platformer
+  ```
+
+  (`\t` a tab.) `r=1`..`5` is the stars (no field: unrated), `t=` the tags, each
+  lowercase, 1–24 letters, digits, spaces and `_ . + ' -`, at most 16. The
+  web app writes it sorted by path (compared without case, as FAT does),
+  `r` before `t` and the tags sorted, so the same tags are the same bytes;
+  it reads tolerantly (BOM, CRLF, `#` comments, unknown fields skipped, a
+  later line for a path wins). A line whose GIF is gone (moved or deleted
+  on a PC) is kept until the Library's **Move their tags** or **Forget
+  them**; `opendmd-pack tags check <card>` lists them.
+- `/sets/.smart`: a smart playlist's search, one line per playlist:
+  `/sets/<name>.txt\tq=<search>\tfrom=<playlist>\tat=<unix time>`
+  (`from` left out: every GIF on the card; `at`: when it was last
+  written). The playlist itself is an ordinary `/sets/<name>.txt`.
+
 ## Tag grammar
 
-Filenames encode tags as `PLATFORM_Title_Words_NN[_FLAG].gif`. It is a
+Filenames encode tags as `PLATFORM_Title_Words_NN[_FLAG].gif` (what the
+web app calls a GIF's *details*; its *tags* are the user's own, in
+`/sets/.tags`). It is a
 convention rather than a format, so parsing is best-effort and derived from the
 real ~10k-file card. Tokens are split on `_`:
 
