@@ -9,8 +9,13 @@
      GIF of the site's art ({{art:NAME}}, its address) with a look over it (data-look),
      how long it plays (data-ms), the panel's transition that brings it in (data-in,
      kind:ms), and its caption.
+     The hero's numbers (.proof) are measured ones the docs state: the install
+     (docs/guide/install.md), an update over WiFi (docs/guide/updating.md, docs/ota.md
+     "Timing") and the panel's refresh (docs/deploying.md, `refresh_hz`). Its scene is
+     site/theme/den.webp (tools/site-scene.py), laid behind it by site.css.
      The five bands after the hero are in the owner's order: control, RePlayOS,
-     playlists, brightness and colour, night mode. Formulas are named only under
+     playlists, brightness and colour, night mode; each screenshot and each still
+     panel sits in the site's one frame (.frame). Formulas are named only under
      Explore more. -->
 <section class="hero">
 <div class="hero-text">
@@ -20,8 +25,12 @@
 your SD card, and adds a web app for your phone or computer: skip and pause, build playlists, set
 the brightness and colour, and dim the panel at night by itself.</p>
 <p class="ctas"><a class="cta" href="install/">Install OpenDMD</a><a class="cta alt" href="demo/">Try the demo</a></p>
+<ul class="proof">
+<li><b>~4 min</b>to install, from your browser</li>
+<li><b>~1 min</b>to update over WiFi</li>
+<li><b>100 Hz</b>the panel's refresh</li>
+</ul>
 <ul class="ticks">
-<li>Installs from your browser in about four minutes</li>
 <li>Your SD card and its GIFs work as they are</li>
 <li>Free, and you can go back to DMDoS any time</li>
 </ul>
@@ -45,7 +54,7 @@ GIFs on the panel: tap one to see it again.</p>
 <p>On a computer, Space pauses and the arrow keys skip and go back.
 <a href="guide/web-app.html">A tour of the web app</a></p>
 </div>
-<figure class="shot phone"><img src="docs/images/phone-now.png" alt="Now on a phone: the panel's GIF, Skip, Pause, Previous and Replay, the brightness, and Recently played" width="390" height="700" loading="lazy" decoding="async">
+<figure class="shot phone"><span class="frame"><img src="docs/images/phone-now.png" alt="Now on a phone: the panel's GIF, Skip, Pause, Previous and Replay, the brightness, and Recently played" width="390" height="700" loading="lazy" decoding="async"></span>
 <figcaption>Now, on a phone.</figcaption></figure>
 </section>
 
@@ -58,7 +67,7 @@ coming up most. In the menus it plays a playlist you pick.</p>
 <p>Nothing is installed on the box: turn on its NET CONTROL, then type its address and code into
 Settings. When the box is off, the display plays as usual. <a href="guide/replayos.html">Set it up</a></p>
 </div>
-<figure class="shot"><img src="docs/images/now-follow.png" alt="Now while following RePlayOS: the panel plays a GIF of the game on the box, and the line under the title names the console and the game" width="1080" height="516" loading="lazy" decoding="async">
+<figure class="shot"><span class="frame"><img src="docs/images/now-follow.png" alt="Now while following RePlayOS: the panel plays a GIF of the game on the box, and the line under the title names the console and the game" width="1080" height="516" loading="lazy" decoding="async"></span>
 <figcaption>Now, while a game plays on the box.</figcaption></figure>
 </section>
 
@@ -70,7 +79,7 @@ first. Or fill one by platform, category and words in the title.</p>
 <p>Reorder, rename and duplicate playlists, mark favourites to play more often, and switch the
 panel to another in a few seconds. <a href="guide/web-app.html#playlists">More about playlists</a></p>
 </div>
-<figure class="shot"><img src="docs/images/library.png" alt="The Library with two GIFs ticked, and the menu to add them to a playlist: the one playing first, then the others, then New playlist" width="670" height="524" loading="lazy" decoding="async">
+<figure class="shot"><span class="frame"><img src="docs/images/library.png" alt="The Library with two GIFs ticked, and the menu to add them to a playlist: the one playing first, then the others, then New playlist" width="670" height="524" loading="lazy" decoding="async"></span>
 <figcaption>Two GIFs ticked in the Library, on their way to a playlist.</figcaption></figure>
 </section>
 
@@ -83,7 +92,7 @@ power supply can give.</p>
 green, blue or white. Add a soft phosphor glow, and choose how the panel moves from one GIF to the
 next. <a href="guide/web-app.html#panel">The Panel settings</a></p>
 </div>
-<figure class="shot"><img src="docs/images/settings-look.png" alt="Settings, Panel: brightness, maximum brightness, colour set to amber, and phosphor glow" width="844" height="455" loading="lazy" decoding="async">
+<figure class="shot"><span class="frame"><img src="docs/images/settings-look.png" alt="Settings, Panel: brightness, maximum brightness, colour set to amber, and phosphor glow" width="844" height="455" loading="lazy" decoding="async"></span>
 <figcaption>Settings › Panel, with amber and a short glow.</figcaption></figure>
 </section>
 
@@ -97,17 +106,17 @@ Now when you want it back.</p>
 year if you like. If your card has the Halloween or Christmas playlist, one press adds a rule that
 plays it in its season. <a href="guide/web-app.html#schedule">The schedule</a></p>
 </div>
-<figure class="shot"><img src="docs/images/settings-schedule.png" alt="Settings, Schedule: a Christmas rule from 1 to 26 December, a weekday evening rule, and night mode dimming the panel from sunset to sunrise" width="844" height="381" loading="lazy" decoding="async">
+<figure class="shot"><span class="frame"><img src="docs/images/settings-schedule.png" alt="Settings, Schedule: a Christmas rule from 1 to 26 December, a weekday evening rule, and night mode dimming the panel from sunset to sunrise" width="844" height="381" loading="lazy" decoding="async"></span>
 <figcaption>A Christmas rule, weekday evenings, and night mode by the sun.</figcaption></figure>
 </section>
 
 <section class="band" aria-labelledby="start">
 <h2 id="start">Get started</h2>
 <div class="doors two">
-<a class="door" href="install/">{{led:boot:}}<h3>Install</h3>
+<a class="door" href="install/"><span class="frame">{{led:boot:}}</span><h3>Install</h3>
 <p>Plug the display's board into a computer, click Install, and pick your WiFi. It takes about
 four minutes in Chrome, Edge, Opera or Firefox 151+.</p><span class="go">Install OpenDMD →</span></a>
-<a class="door" href="guide/">{{led:kenney-run:}}<h3>Using it</h3>
+<a class="door" href="guide/"><span class="frame">{{led:kenney-run:}}</span><h3>Using it</h3>
 <p>The web app view by view, playlists, Follow RePlayOS, the SD card, updates, and what to do when
 something isn't right.</p><span class="go">Read the guide →</span></a>
 </div>
@@ -138,7 +147,7 @@ its HTTP API.</p><span class="go">For developers →</span></a>
 </div>
 </section>
 
-<section class="band" aria-labelledby="dmdos">
+<section class="band aside" aria-labelledby="dmdos">
 <h2 id="dmdos">OpenDMD and DMDoS</h2>
 <p>DMDoS is a community project from Spain. The display, its board by
 <a href="https://mortaca.com">MORTACA</a>, the build guide and the GIF pack all come from

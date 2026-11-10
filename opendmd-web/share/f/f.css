@@ -12,8 +12,8 @@ body>.banner{border:0;border-radius:0;margin:0}
 @media (prefers-color-scheme:dark){.fpage{--bad:#e55;--ok:#6c6}}
 .fpage main{max-width:1000px;padding-top:28px}
 .fpage main>*{max-width:none}
-.fpage h1{font-size:24px;overflow-wrap:anywhere;margin:0 0 12px}
-.fpage h2{font-size:16px;margin:0 0 12px;padding:0;border:0}
+.fpage h1{font-size:32px;overflow-wrap:anywhere;margin:0 0 12px}
+.fpage h2{font-size:20px;margin:0 0 12px;padding:0;border:0}
 #f-about{margin:-6px 0 14px;color:var(--mut);overflow-wrap:anywhere;font-size:17px}
 .fpage .card{padding:14px;margin:0 0 14px}
 .cap{color:var(--mut);font-size:13px;margin:8px 0 0}
@@ -29,7 +29,7 @@ body>.banner{border:0;border-radius:0;margin:0}
 #f-ed code,.menu code{background:none;padding:0;border-radius:0;font-size:13px}
 #f-ed p.cap,#f-ed .card p.cap{font-size:13px;margin:8px 0 0;color:var(--mut)}
 #f-ed p.cap.bad{color:var(--bad)}
-.menu h3{font-size:16px;margin:16px 0 8px;padding:0;border:0}
+.menu h3{font-size:20px;margin:16px 0 8px;padding:0;border:0}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
 .fpage main button,.fpage main .btn,.fpage main input[type=text],.fpage main select{font:inherit;font-size:15px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 14px}
 .fpage main button,.fpage main .btn{cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
@@ -47,7 +47,7 @@ body>.banner{border:0;border-radius:0;margin:0}
 .file{display:flex;align-items:center;gap:4px;font:14px ui-monospace,Menlo,monospace;color:var(--mut)}.fpage .file input{flex:1;min-width:0;font:inherit;color:var(--fg)}
 .psi-file{margin:10px 0 12px;font-size:13px;max-height:16em}
 @media (max-width:600px){
-  .fpage h1{font-size:16px}
+  .fpage h1{font-size:26px}
   .sub .grid{grid-template-columns:minmax(0,1fr)}
   .sub .grid label{margin-top:6px}
   .acts>*{flex:1 1 auto;justify-content:center}

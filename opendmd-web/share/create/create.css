@@ -13,12 +13,12 @@ body>.banner{border:0;border-radius:0;margin:0}
 @media (prefers-color-scheme:dark){.cpage{--bad:#e55;--ok:#6c6}}
 .cpage main{max-width:1100px;padding-top:28px}
 .cpage main>*{max-width:none}
-.cpage h1{font-size:24px;margin:0 0 8px}
+.cpage h1{font-size:32px;margin:0 0 8px}
 .cpage .lead{margin:0 0 4px;color:var(--mut);font-size:17px}
 /* The page has the heading and the line about it. */
 #c-ed .st-box>h2,#c-ed .st-box>p{display:none}
 #c-ed .st-grid{margin-top:16px}
-#c-ed h2{font-size:16px;margin:0 0 12px;padding:0;border:0}
+#c-ed h2{font-size:20px;margin:0 0 12px;padding:0;border:0}
 .cpage .card{padding:14px}
 .cap{color:var(--mut);font-size:13px;margin:8px 0 0}
 .bad{color:var(--bad)}
@@ -50,7 +50,7 @@ body>.banner{border:0;border-radius:0;margin:0}
   .cpage main .st-anchor button{height:36px}
 }
 @media (max-width:600px){
-  .cpage h1{font-size:20px}
+  .cpage h1{font-size:26px}
   .cpage main input,.cpage main select{font-size:16px}
 }
 #c-ed #st-seen{font-size:13px}

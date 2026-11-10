@@ -151,7 +151,10 @@ make emu-build emu-smoke          # the firmware in an emulator (esp32sim): corr
   (contact sheets from card GIFs, ROM screenshots, console logos, title
   cards) or lists of the pack's files. Test fixtures are generated in code;
   example names in docs use made-up author handles.
-- The only bundled third-party asset is the Silkscreen font (OFL).
+- The only bundled third-party assets are two fonts, both OFL: Silkscreen
+  (the web app and the site) and Fraunces (the site's headings,
+  `site/fonts/`). The home page's scene (`site/theme/den*.webp`) is our own,
+  drawn by `tools/site-scene.py`.
   Third-party notices are generated (`make notices`, checked by
   `fw-release` and CI); after a dependency or IDF bump, regenerate and read
   the diff.

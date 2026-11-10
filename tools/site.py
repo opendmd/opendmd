@@ -99,7 +99,8 @@
 Every page has the same chrome, from site/theme/: page.html around it,
 header.html (the wordmark and the top bar: Guide, Gallery, Create Art, Demo, For
 developers and Install; a Menu button on a phone), footer.html, and
-site.css (light and dark follow the system). A page in a SECTION (the guide,
+site.css (light and dark follow the system; headings in Fraunces,
+site/fonts/, labels in Silkscreen). A page in a SECTION (the guide,
 the developers' pages) also gets that section's menu: down the side on a
 wide screen, a folded list above the page on a phone. /f/ and /create/ get the same
 header and footer (app_page), around their own f.css and create.css.
@@ -393,6 +394,12 @@ FILES = {
     # The headings' pixel font (tools/font-subset.py), self-hosted, and its licence.
     "opendmd-web/www/fonts/silkscreen.woff2": "fonts/silkscreen.woff2",
     "opendmd-web/www/fonts/OFL.txt": "fonts/OFL.txt",
+    # The headings' display face (tools/site-font.py), the site's alone, and its licence.
+    "site/fonts/fraunces.woff2": "fonts/fraunces.woff2",
+    "site/fonts/OFL-Fraunces.txt": "fonts/OFL-Fraunces.txt",
+    # The home page's scene, the den its panel hangs in (tools/site-scene.py draws it).
+    "site/theme/den.webp": "den.webp",
+    "site/theme/den-phone.webp": "den-phone.webp",
     # The third-party notices (tools/notices.py, `make notices`).
     "licenses/THIRD-PARTY-LICENSES-firmware.txt": "licenses/THIRD-PARTY-LICENSES-firmware.txt",
     "licenses/THIRD-PARTY-LICENSES-web.txt": "licenses/THIRD-PARTY-LICENSES-web.txt",
@@ -465,8 +472,10 @@ with each licence's full text:
   board (the firmware, its bootloader and the updater): Espressif's ESP-IDF (Apache 2.0, with
   FreeRTOS, lwIP, Mbed TLS, wpa_supplicant, FatFs and the C library), the HUB75 display
   driver, and the Rust crates.
-- **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and the
-  headings' font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
+- **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and its
+  pixel font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
+- **This site** uses Silkscreen too, and sets its headings in Fraunces
+  ([SIL Open Font License 1.1](../fonts/OFL-Fraunces.txt)).
 - **[The installer](THIRD-PARTY-LICENSES-installer.txt)** uses
   [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0), served from this site
   with what it bundles (esptool-js, Lit, Material Web, pako).

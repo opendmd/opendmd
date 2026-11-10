@@ -1678,6 +1678,20 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 art = page.eval_on_selector_all(".hero img, .door img", "els => els.filter(i => i.getAttribute('src').startsWith('art/')).length")
                 check(art == 3 and page.inner_text("h1").strip() != "" and not page.query_selector(".tiles"),
                       f"home ({size}): a heading, the panel and the two doors' pictures ({art} pieces of art), no grid of tiles")
+                # The hero's three measured numbers under its buttons, its scene behind it
+                # (the wide one, or the phone's), and the one frame round every still
+                # panel and screenshot; headings in the display face, once it has loaded.
+                proof = page.eval_on_selector_all(".hero .ctas ~ .proof li b", "els => els.map(e => e.textContent.trim())")
+                check(len(proof) == 3 and all(re.search(r"\d", n) for n in proof), f"home ({size}): three numbers under the hero's buttons {proof}")
+                scene = page.evaluate("getComputedStyle(document.querySelector('.hero')).backgroundImage")
+                want_scene = "den-phone.webp" if size == "phone" else "den.webp"
+                loaded = page.evaluate("fetch(%r).then(r => r.ok && r.headers.get('content-type'))" % want_scene)
+                check(want_scene in scene and loaded == "image/webp", f"home ({size}): the hero's scene is {want_scene} ({loaded})")
+                framed = page.evaluate("[document.querySelectorAll('section.focus figure > .frame > img').length, document.querySelectorAll('.door > .frame > .led').length]")
+                check(framed == [5, 2], f"home ({size}): every screenshot and still panel in the frame {framed}")
+                wait_js(page, "document.fonts.check('600 40px Fraunces') && document.fonts.check('16px Silkscreen')")
+                faces = page.evaluate("['.hero h1', 'section.focus h2', '.hero .chip'].map(s => getComputedStyle(document.querySelector(s)).fontFamily.split(',')[0])")
+                check(faces == ["Fraunces", "Fraunces", "Silkscreen"], f"home ({size}): headings in Fraunces, the label in Silkscreen {faces}")
                 # The five focus bands, in the owner's order, each words beside a
                 # screenshot of the web app that has loaded (they load lazily: each
                 # scrolled to): side by side on a laptop, every other one swapped,

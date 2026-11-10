@@ -1,17 +1,26 @@
 /* opendmd.dev: one stylesheet for every page tools/site.py writes (and /f/, which adds its own
-   f.css). Light and dark follow the system. The LED pictures are panels: black in both themes. */
+   f.css). Light and dark follow the system. The LED pictures are panels: black in both themes.
+   Three faces: Fraunces (--display) for headings and the big numbers, the system sans for
+   everything read, Silkscreen (--pixel) only for small labels. One accent, --acc, kept for
+   Install and the other primary actions; --ink is the links' colour; headings are --head, the
+   text's own. One frame, .frame: a panel's black bezel with three LEDs on its chin, round every
+   panel and every screenshot of the web app. */
 :root{color-scheme:light dark;
 --bg:#f7f5f0;--bg2:#fff;--bg3:#efebe3;--line:#e0dacd;--fg:#1c1d20;--mut:#5b5e66;
---acc:#f7a531;--on-acc:#141414;--ink:#9c4f00;--head:#9c4f00;
+--acc:#f7a531;--on-acc:#141414;--ink:#9c4f00;--head:#1c1d20;
 --pink:#c92a62;--cyan:#0a7ea3;--green:#1b8a4b;--violet:#6447c8;
 --code:#efebe3;--pre:#fbfaf7;--glow:rgba(247,165,49,.14);
 --shadow:0 1px 2px rgba(40,30,10,.05),0 6px 20px rgba(40,30,10,.06);
---r:12px;--max:1180px;--text:760px}
+--r:12px;--max:1180px;--text:760px;
+--display:Fraunces,"Iowan Old Style","Palatino Linotype",Georgia,serif;--pixel:Silkscreen,ui-monospace,Menlo,monospace;
+--den:#10121b;--den-fg:#f1ebdd;--den-mut:#b9b6c6}
 @media (prefers-color-scheme:dark){:root{
 --bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
---ink:#f7a531;--head:#f7a531;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;
+--ink:#f7a531;--head:#ecebe7;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;
 --code:#1e2025;--pre:#15171b;--glow:rgba(247,165,49,.16);--shadow:none}}
 @font-face{font-family:Silkscreen;src:url(fonts/silkscreen.woff2) format("woff2");font-display:swap}
+/* One cut (tools/site-font.py): the weight is declared so nothing is emboldened by the browser */
+@font-face{font-family:Fraunces;src:url(fonts/fraunces.woff2) format("woff2");font-weight:400 700;font-display:swap}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -28,8 +37,13 @@ background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/ca
 .led::after{content:"";position:absolute;inset:0;pointer-events:none;
 background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
 background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
-/* A panel: the LEDs in a black bezel */
-.bezel{display:block;padding:12px;border-radius:14px;background:#000;box-shadow:0 0 0 1px #26282d,0 18px 50px rgba(0,0,0,.28),0 0 70px var(--glow)}
+/* The frame: a panel's black bezel, three LEDs on its chin (the first one lit). .bezel is the
+   hero's, which plays; .frame goes round a still panel or a screenshot of the web app. */
+.bezel,.frame{position:relative;display:block;padding:12px 12px 28px;border-radius:16px;background:#050506;line-height:0;
+box-shadow:0 0 0 1px #26282d,inset 0 0 0 1px #000,inset 0 1px 0 1px #1c1d22,0 18px 44px rgba(0,0,0,.26)}
+.bezel::before,.frame::before{content:"";position:absolute;left:18px;bottom:11px;width:6px;height:6px;border-radius:50%;
+background:#e8e1cf;box-shadow:0 0 6px rgba(232,225,207,.7),12px 0 0 #2a2c33,24px 0 0 #2a2c33}
+.frame>img,.frame>.led{border-radius:4px;box-shadow:none}
 
 /* The page: the top bar, a side menu (the guide's, the developers'), the page, the footer */
 .top{position:relative;z-index:5;background:var(--bg2);border-bottom:1px solid var(--line)}
@@ -39,7 +53,7 @@ background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 .topnav{display:flex;align-items:center;gap:2px;margin-left:auto}
 .topnav a,.mnav a{padding:8px 12px;border-radius:8px;color:var(--fg);text-decoration:none;font-weight:600;font-size:15px;line-height:1.3}
 .topnav a:hover,.mnav a:hover{background:var(--bg3)}
-.topnav a.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--acc);border-radius:8px 8px 0 0}
+.topnav a.on{box-shadow:inset 0 -2px 0 currentColor;border-radius:8px 8px 0 0}
 .topnav a.go{margin-left:10px;background:var(--acc);color:var(--on-acc);box-shadow:none;border-radius:8px}
 .topnav a.go:hover{filter:brightness(1.06)}
 .mnav{display:none;margin-left:auto}
@@ -49,7 +63,7 @@ background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 .mnav[open] summary{background:var(--bg3)}
 .mnav nav{position:absolute;left:0;right:0;top:100%;display:grid;gap:2px;padding:10px 16px 16px;background:var(--bg2);border-bottom:1px solid var(--line);box-shadow:0 16px 30px rgba(0,0,0,.18)}
 .mnav nav a{font-size:17px;padding:11px 12px}
-.mnav nav a.on{background:var(--bg3);box-shadow:inset 3px 0 0 var(--acc)}
+.mnav nav a.on{background:var(--bg3);box-shadow:inset 3px 0 0 var(--fg)}
 .mnav nav a.go{margin-top:6px;text-align:center;background:var(--acc);color:var(--on-acc)}
 
 .wrap{flex:1;width:100%;max-width:var(--max);margin:0 auto;padding:0 24px}
@@ -57,29 +71,28 @@ background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 main{padding:40px 0 72px;min-width:0}
 main>*{max-width:var(--text)}
 .side{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:40px 0 24px}
-.side-h{margin:0 10px 8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.side-h{margin:0 10px 8px;font:400 16px/1.3 var(--pixel);color:var(--mut)}
 .side a,.subnav a{display:block;padding:6px 10px;border-radius:8px;color:var(--mut);text-decoration:none;font-size:15px;line-height:1.35}
 .side a:hover,.subnav a:hover{color:var(--fg);background:var(--bg3)}
-.side a.on,.subnav a.on{color:var(--fg);background:var(--bg3);font-weight:600;box-shadow:inset 3px 0 0 var(--acc)}
+.side a.on,.subnav a.on{color:var(--fg);background:var(--bg3);font-weight:600;box-shadow:inset 3px 0 0 var(--fg)}
 .side .gap,.subnav .gap{margin-top:12px}
 .subnav{display:none}
 
 .foot{margin-top:auto;background:var(--bg2);border-top:1px solid var(--line);color:var(--mut);font-size:14px}
 .foot .in{max-width:var(--max);margin:0 auto;padding:32px 24px 36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px 32px}
-.foot h2{margin:0 0 6px;padding:0;border:0;font:700 12px/1.4 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--fg)}
+.foot h2{margin:0 0 6px;padding:0;border:0;font:400 16px/1.4 var(--pixel);letter-spacing:0;color:var(--fg)}
 .foot ul{list-style:none;margin:0;padding:0}
 .foot li{margin:3px 0}
 .foot a{color:var(--mut)}.foot a:hover{color:var(--fg)}
 .foot .note{grid-column:1/-1;margin:8px 0 0;padding-top:16px;border-top:1px solid var(--line);line-height:1.55}
 
-/* Text. Headings: Silkscreen, a pixel font on an 8 px grid, crisp only at 16/24/32 px, weight 400,
-   no fractional letter-spacing; geometricPrecision keeps FreeType's hinting off its edges */
-h1,h2,h3{font-family:Silkscreen,system-ui,sans-serif;font-weight:400;line-height:1.25;text-wrap:balance;
-overflow-wrap:break-word;text-rendering:geometricPrecision}
-h1,h2{color:var(--head)}
-h1{font-size:32px;margin:0 0 16px}
-h2{font-size:24px;margin:48px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
-h3{font-size:16px;margin:28px 0 8px}
+/* Text. Headings: Fraunces, in the text's own colour. Silkscreen (--pixel) is a pixel font on an
+   8 px grid, for small labels only: crisp at 16 px (and 8), weight 400, no letter-spacing */
+h1,h2,h3{font-family:var(--display);font-weight:600;line-height:1.14;letter-spacing:-.012em;text-wrap:balance;
+overflow-wrap:break-word;color:var(--head)}
+h1{font-size:44px;margin:0 0 18px}
+h2{font-size:30px;margin:52px 0 12px;padding-top:18px;border-top:1px solid var(--line)}
+h3{font-size:22px;margin:30px 0 8px}
 h4{margin:24px 0 6px;font-size:17px}
 h1 .headerlink{display:none}
 h2 .headerlink,h3 .headerlink,h4 .headerlink{opacity:0;margin-left:6px;text-decoration:none;color:var(--mut)}
@@ -92,7 +105,7 @@ table{border-collapse:collapse;display:block;overflow:auto;margin:16px 0;font-si
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
 th{background:var(--bg3)}
 img{max-width:100%;height:auto;border-radius:8px}
-blockquote{margin:20px 0;padding:12px 18px;border:1px solid var(--line);border-left:4px solid var(--cyan);border-radius:10px;background:var(--bg2);color:var(--fg)}
+blockquote{margin:20px 0;padding:12px 18px;border:1px solid var(--line);border-left:4px solid var(--mut);border-radius:10px;background:var(--bg2);color:var(--fg)}
 blockquote>:first-child{margin-top:0}blockquote>:last-child{margin-bottom:0}
 blockquote ul{padding-left:20px}
 hr{border:0;border-top:1px solid var(--line)}
@@ -103,61 +116,106 @@ li{margin:3px 0}
 .cta:hover{filter:brightness(1.06)}
 .cta.alt{background:var(--bg2);color:var(--fg);box-shadow:inset 0 0 0 1.5px var(--line)}
 .cta.alt:hover{box-shadow:inset 0 0 0 1.5px var(--acc);filter:none}
-.chip{display:inline-block;font-size:13px;font-weight:600;color:var(--cyan);border:1px solid currentColor;border-radius:999px;padding:2px 11px;margin:0 0 16px;text-decoration:none}
+.chip{display:inline-block;font:400 16px/1.3 var(--pixel);color:var(--mut);margin:0 0 16px;text-decoration:none}
+.chip:hover{color:var(--fg)}
 
 /* The installer */
 .install{margin:12px 0 28px;padding:22px;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
-background:linear-gradient(135deg,rgba(247,165,49,.13),rgba(255,79,139,.06) 60%,transparent),var(--bg2)}
+background:var(--bg2)}
 .install .boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
 .install .board h3{margin:0 0 4px}
 .install .board p{margin:0 0 14px;color:var(--mut)}
-.install button{font:inherit;font-weight:700;padding:12px 28px;border-radius:9px;border:0;background:var(--acc);color:var(--on-acc);cursor:pointer;box-shadow:0 0 22px rgba(247,165,49,.35)}
+.install button{font:inherit;font-weight:700;padding:12px 28px;border-radius:9px;border:0;background:var(--acc);color:var(--on-acc);cursor:pointer}
 .install .ver{color:var(--mut);font-size:14px;margin:16px 0 0}
 
-/* The home page */
-.home main{padding-top:24px}
+/* The home page: the hero runs the full width, every band after it too (a band keeps its words
+   inside --max with its own side padding, so a tinted one can colour the whole row) */
+.home .wrap{max-width:none;padding:0}
+.home main{padding:0 0 88px;counter-reset:band}
 .home main>*{max-width:none}
-.home h2{border:0;padding:0;margin:0 0 10px}
-.hero{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:56px;align-items:center;padding:28px 0 8px}
-.hero h1{color:var(--fg);margin:0 0 18px}
-.hero .lead{margin:0 0 20px;max-width:600px}
-.hero .ctas{margin:0 0 16px}
-.ticks{list-style:none;margin:0;padding:0;color:var(--mut);font-size:15px}
-.ticks li{position:relative;padding-left:24px;margin:4px 0}
-.ticks li::before{content:"";position:absolute;left:4px;top:.45em;width:6px;height:10px;border:solid var(--green);border-width:0 2px 2px 0;transform:rotate(45deg)}
-.hero-panel .cap{margin:10px 2px 0;font-size:13px;color:var(--mut);text-align:center}
+.home main h2{border:0;padding:0;margin:0 0 14px;font-size:38px}
+/* The top bar joins the den */
+.home .top{background:#07080c;border-bottom-color:#1b1f31}
+.home .topnav a,.home .mnav summary{color:var(--den-fg)}
+.home .topnav a:hover{background:#1b1f31}
+.home .topnav a.go{color:var(--on-acc)}.home .topnav a.go:hover{background:var(--acc)}
+.home .mnav summary{border-color:#2e3454}.home .mnav[open] summary{background:#1b1f31}
+/* The hero: the panel hangs on the den's wall (den.webp, tools/site-scene.py: dark in both themes,
+   its middle bare), the words under it. The panel comes first whatever the width. */
+.hero{position:relative;isolation:isolate;display:flex;flex-direction:column;align-items:center;text-align:center;
+padding:48px 24px clamp(170px,14.5vw,250px);color:var(--den-fg);background:var(--den) url(den.webp) center bottom/cover no-repeat}
+/* A shade behind the words, so they read where the room's things come close */
+.hero::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+background:radial-gradient(ellipse 35% 44% at 50% 54%,rgba(7,8,12,.88),rgba(7,8,12,.62) 55%,rgba(7,8,12,0) 100%)}
+.hero-text{display:flex;flex-direction:column;align-items:center;width:100%;max-width:820px}
+.hero .chip{color:var(--den-mut);margin:0 0 14px}.hero .chip:hover{color:var(--den-fg)}
+.hero h1{color:var(--den-fg);margin:0 0 16px;font-size:clamp(40px,4.8vw,66px);line-height:1.02;letter-spacing:-.02em}
+.hero .lead{margin:0 0 20px;max-width:740px;color:#d9d5cb}
+.hero .ctas{margin:0 0 26px}
+.hero .cta{margin:6px;padding:13px 26px;font-size:18px}
+.hero .cta.alt{background:rgba(7,8,12,.55);color:var(--den-fg);box-shadow:inset 0 0 0 1.5px #575b8c}
+.hero .cta.alt:hover{box-shadow:inset 0 0 0 1.5px var(--den-fg)}
+.hero :focus-visible{outline-color:#fff}
+/* What was measured, in the display face, under a row of LEDs */
+.proof{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 40px;width:100%;max-width:720px;margin:0 0 20px;padding:26px 0 0;list-style:none;
+background:radial-gradient(circle,rgba(232,225,207,.34) 1.2px,transparent 1.8px) 0 0/8px 8px repeat-x}
+.proof li{margin:0;font-size:14px;line-height:1.4;color:var(--den-mut)}
+.proof b{display:block;margin:0 0 4px;font:600 clamp(34px,4vw,50px)/1 var(--display);letter-spacing:-.02em;color:var(--den-fg);white-space:nowrap}
+.ticks{list-style:none;display:flex;flex-wrap:wrap;justify-content:center;gap:4px 28px;margin:0;padding:0;color:var(--den-mut);font-size:15px}
+.ticks li{position:relative;padding-left:22px;margin:0}
+.ticks li::before{content:"";position:absolute;left:4px;top:.4em;width:6px;height:10px;border:solid var(--den-fg);border-width:0 2px 2px 0;transform:rotate(45deg)}
+.hero-panel{order:-1;position:relative;width:100%;max-width:880px;margin:0 0 28px}
+/* The two cords it hangs by, up to the top bar */
+.hero-panel::before,.hero-panel::after{content:"";position:absolute;bottom:100%;left:14%;width:3px;height:48px;background:#2e3454;box-shadow:3px 0 0 #07080c}
+.hero-panel::after{left:auto;right:14%}
+.hero-panel .bezel{padding:14px 14px 30px;box-shadow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 110px rgba(247,165,49,.13),0 0 46px rgba(87,91,140,.3)}
+.hero-panel .cap{margin:12px 2px 0;min-height:1lh;font-size:14px;line-height:1.5;color:var(--den-mut)}
 /* The hero's show (hero.js): a click pauses it; captions change, so two lines are kept on a phone */
-.hero-panel .bezel[data-live]{position:relative;cursor:pointer}
-.hero-panel .bezel[data-live]:focus-visible{outline:2px solid var(--green);outline-offset:3px}
-.hero-panel .bezel[data-paused]::after{content:"";position:absolute;top:16px;right:16px;width:4px;height:12px;border:solid rgba(255,255,255,.55);border-width:0 4px;pointer-events:none}
-.band{margin:72px 0 0}
+.hero-panel .bezel[data-live]{cursor:pointer}
+.hero-panel .bezel[data-live]:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.hero-panel .bezel[data-paused]::after{content:"";position:absolute;top:18px;right:18px;width:4px;height:12px;border:solid rgba(255,255,255,.55);border-width:0 4px;pointer-events:none}
+
+.band{margin:0;padding:84px max(24px,calc(50% - var(--max) / 2)) 0}
 .band>p{max-width:var(--text)}
 .intro{color:var(--mut);margin:0 0 18px;max-width:var(--text)}
-.doors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:20px 0 0}
-.door{display:flex;flex-direction:column;padding:12px 12px 18px;background:var(--bg2);border:1px solid var(--line);border-radius:14px;color:var(--fg);text-decoration:none;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
-.door:hover{border-color:var(--acc);transform:translateY(-2px)}
-.door .led{border-radius:8px;overflow:hidden}
-.door h3{margin:16px 6px 6px;color:var(--head)}
-.door p{margin:0 6px 12px;font-size:15px;color:var(--mut);flex:1}
+.doors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:24px 0 0}
+.door{display:flex;flex-direction:column;padding:14px 14px 20px;background:var(--bg2);border:1px solid var(--line);border-radius:18px;color:var(--fg);text-decoration:none;box-shadow:var(--shadow);transition:border-color .15s,transform .15s}
+.door:hover{border-color:var(--fg);transform:translateY(-2px)}
+.door .frame{padding:10px 10px 24px;box-shadow:0 0 0 1px #26282d}
+.door .frame::before{left:15px;bottom:9px}
+.door h3{margin:18px 6px 6px;font-size:28px}
+.door p{margin:0 6px 14px;font-size:16px;color:var(--mut);flex:1}
 .door .go{margin:0 6px;font-weight:700;color:var(--ink)}
 .split{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:48px;align-items:start}
 .shot{margin:0}
-.shot img{display:block;border-radius:12px;box-shadow:0 0 0 1px var(--line),0 18px 40px rgba(0,0,0,.2)}
-.shot figcaption{margin:10px 2px 0;font-size:13px;color:var(--mut)}
-.shot.phone{max-width:300px;justify-self:center}
-.need{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:18px 0 8px;padding:0;list-style:none;counter-reset:need}
-.need li{margin:0;padding:16px 18px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;font-size:15px}
-.need li strong{display:block;font-size:16px;margin-bottom:2px}
+.shot img{display:block;width:100%}
+.shot figcaption{margin:12px 4px 0;font-size:14px;color:var(--mut)}
+.shot.phone{max-width:320px;justify-self:center}
+.shot.phone .frame{padding:12px 12px 30px;border-radius:26px}
+.shot.phone .frame>img{border-radius:14px}
+.need{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 40px;margin:26px 0 14px;padding:0;list-style:none}
+.need li{margin:0;padding:18px 0 0;border-top:2px solid var(--fg);font-size:16px}
+.need li strong{display:block;margin-bottom:6px;font:600 24px/1.2 var(--display);letter-spacing:-.01em}
 
-/* The landing page's focus bands: words beside a screenshot, the sides swapped on every
-   other one (.rev); one column on a narrow screen, the words first */
-.split.focus{grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);align-items:center}
-.split.focus.rev{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+/* The landing page's focus bands: words beside a screenshot of the web app in its frame, the
+   sides swapped on every other one (.rev); one column on a narrow screen, the words first.
+   They are numbered in the pixel face, and they do not all weigh the same: the first is the
+   loudest, the swapped ones sit on a tinted row with the picture given more room. */
+.split.focus{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:64px;align-items:center;padding-top:104px;padding-bottom:104px;counter-increment:band}
+.split.focus.rev{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);background:var(--bg2);border-block:1px solid var(--line)}
 .split.focus.rev>figure{order:-1}
-.split.focus p{max-width:var(--text)}
+.split.focus h2{font-size:44px;margin:0 0 18px}
+.split.focus h2::before{content:"0" counter(band);display:block;margin:0 0 18px;font:400 16px/1 var(--pixel);letter-spacing:0;color:var(--mut)}
+.hero+.split.focus h2{font-size:60px;letter-spacing:-.02em}
+.split.focus p{max-width:560px;font-size:18px}
+.split.focus:not(.rev)+.band:not(.focus){padding-top:0}
 /* Two doors (Get started), and doors of words alone (Explore more) */
 .doors.two{grid-template-columns:repeat(2,minmax(0,1fr))}
-.doors.more .door{padding-top:4px}
+.doors.more .door{padding-top:6px}
+.doors.more .door h3{font-size:24px}
+/* The last word: where OpenDMD stands beside DMDoS, quieter */
+.band.aside{color:var(--mut);font-size:16px}
+.band.aside h2{font-size:24px;color:var(--fg)}
 .tiles-note{font-size:14px;color:var(--mut)}
 
 /* The formula gallery */
@@ -166,7 +224,7 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 .gallery main>p{max-width:var(--text)}
 .ftile{display:flex;flex-direction:column;margin:0;padding:10px 12px 12px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
 .ftile .fpic{display:block;padding:6px;margin:0 0 4px;background:#000;border-radius:8px}
-.ftile h3{margin:8px 0 2px;overflow-wrap:anywhere}
+.ftile h3{margin:8px 0 2px;font-size:20px;overflow-wrap:anywhere}
 .ftile p{margin:0;font-size:14px;overflow-wrap:anywhere}
 .ftile .fdesc{flex:1}
 .ftile .fby{color:var(--mut);font-size:13px;margin:6px 0 4px}
@@ -192,17 +250,13 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 
 /* Cards: feature lists, the hardware page */
 ul.features{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:18px 0}
-ul.features li{margin:0;padding:14px 16px;background:var(--bg2);border:1px solid var(--line);border-top:3px solid var(--c,var(--acc));border-radius:12px;font-size:15px;box-shadow:var(--shadow)}
+ul.features li{margin:0;padding:14px 16px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;font-size:15px;box-shadow:var(--shadow)}
 ul.features li>strong:first-child{display:block;color:var(--fg);font-size:16px;margin-bottom:2px}
-.features li:nth-child(5n+2),.cards .card:nth-child(5n+2){--c:var(--pink)}
-.features li:nth-child(5n+3),.cards .card:nth-child(5n+3){--c:var(--cyan)}
-.features li:nth-child(5n+4),.cards .card:nth-child(5n+4){--c:var(--green)}
-.features li:nth-child(5n+5),.cards .card:nth-child(5n+5){--c:var(--violet)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:24px 0}
-.card{padding:18px 20px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;--c:var(--acc);box-shadow:var(--shadow)}
+.card{padding:18px 20px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
 .card h3{display:flex;align-items:center;gap:10px;margin:0 0 10px}
-.card .num{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#000;color:var(--c);
-font:800 15px ui-monospace,Menlo,Consolas,monospace;box-shadow:0 0 0 2px var(--c),0 0 14px var(--c)}
+.card .num{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:var(--fg);color:var(--bg);
+font:400 16px/1 var(--pixel);letter-spacing:0}
 .card p{margin:0 0 10px;font-size:15px}
 .card p.where{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--line);font-size:14px;color:var(--mut)}
 .card p.where strong{color:var(--fg)}
@@ -211,7 +265,7 @@ font:800 15px ui-monospace,Menlo,Consolas,monospace;box-shadow:0 0 0 2px var(--c
 ol.steps{list-style:none;padding:0;margin:18px 0;counter-reset:step}
 ol.steps>li{counter-increment:step;position:relative;margin:12px 0;padding:14px 18px 14px 66px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
 ol.steps>li::before{content:counter(step);position:absolute;left:16px;top:13px;width:34px;height:34px;display:grid;place-items:center;
-border-radius:50%;background:var(--acc);color:var(--on-acc);font-weight:800;box-shadow:0 0 16px rgba(247,165,49,.4)}
+border-radius:50%;background:var(--fg);color:var(--bg);font:400 16px/1 var(--pixel)}
 ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
 
 p.vers{font-size:14px;color:var(--mut)}
@@ -242,22 +296,26 @@ h3[id^=E]:target{color:var(--ink)}
 tr[id^=n-]:target{background:var(--glow)}
 .badge{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--pink);border-radius:6px;font-size:12px;font-weight:400;color:var(--pink);vertical-align:middle}
 main.cheat .psi-err>:not(h3){display:none}
-main.cheat .psi-err h3{margin:0;padding:2px 0;font-size:14px;font-weight:400;cursor:pointer}
+main.cheat .psi-err h3{margin:0;padding:2px 0;font:400 14px/1.5 system-ui,sans-serif;letter-spacing:0;cursor:pointer}
 main.cheat .psi-err h3:hover{color:var(--ink)}
 main.cheat td:nth-child(3),main.cheat th:nth-child(3),main.cheat .psi-live{display:none}
 main.cheat table{font-size:14px;margin:8px 0}
 main.cheat td{padding:3px 8px}
 
+@media (max-width:1180px){
+  /* The room's things come in under the words: a broader, deeper shade */
+  .hero::before{background:radial-gradient(ellipse 58% 46% at 50% 56%,rgba(7,8,12,.93),rgba(7,8,12,.78) 60%,rgba(7,8,12,0) 100%)}
+}
 @media (max-width:980px){
   .wrap.sided{grid-template-columns:180px minmax(0,1fr);gap:32px}
-  .hero{gap:32px}
-  .split,.split.focus,.split.focus.rev{grid-template-columns:minmax(0,1fr);gap:28px}
+  .split,.split.focus,.split.focus.rev{grid-template-columns:minmax(0,1fr);gap:32px}
+  .split.focus{padding-top:72px;padding-bottom:72px}
+  .split.focus .shot:not(.phone){max-width:720px}
   .split.focus.rev>figure{order:0}
   .topnav a{padding:8px 9px}
 }
 @media (max-width:820px){
   body{font-size:16px}
-  .hero-panel{order:-1}
   .hero-panel .cap{min-height:2lh}
   .top .bar{padding:8px 16px}
   .brand .led{width:105px}
@@ -273,13 +331,28 @@ main.cheat td{padding:3px 8px}
   /* The reference's grammar and psi transcript wrap rather than scroll sideways */
   main:has(#what-each-does) pre code.language-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
   main{padding:24px 0 56px}
-  h1{font-size:24px}
-  h2{font-size:24px;margin-top:40px}
+  h1{font-size:34px}
+  h2{font-size:26px;margin-top:40px}
+  h3{font-size:20px}
   main>h1+p,.lead{font-size:17px}
-  .hero{grid-template-columns:minmax(0,1fr);gap:28px;padding:12px 0 0}
-  .hero h1{font-size:24px}
-  .hero .ctas .cta{display:block;text-align:center;margin:0 0 10px}
-  .band{margin-top:52px}
+  .home main{padding-bottom:56px}
+  .home main h2{font-size:32px}
+  .hero{padding:40px 16px clamp(190px,30vw,250px)}
+  .hero-panel{margin-bottom:22px}
+  .hero-panel::before,.hero-panel::after{height:40px}
+  .hero-panel .bezel{padding:9px 9px 22px;border-radius:12px}
+  .hero-panel .bezel::before{left:13px;bottom:8px}
+  .hero .ctas{display:grid;width:100%;max-width:420px;gap:10px;margin-bottom:26px}
+  .hero .ctas .cta{display:block;text-align:center;margin:0}
+  .proof{gap:8px 14px}
+  .proof li{font-size:13px}
+  .ticks{flex-direction:column;align-items:center}
+  .band{padding:56px 16px 0}
+  .split.focus{padding-top:56px;padding-bottom:56px}
+  .split.focus h2{font-size:36px}
+  .hero+.split.focus h2{font-size:42px}
+  .split.focus p{font-size:17px}
+  .need{gap:22px}
   .doors,.doors.two,.need{grid-template-columns:minmax(0,1fr)}
   .install{padding:16px}
   .install button{width:100%}
@@ -289,6 +362,9 @@ main.cheat td{padding:3px 8px}
   .foot .in{grid-template-columns:repeat(2,minmax(0,1fr));padding:24px 16px 28px}
 }
 @media (max-width:600px){
+  /* The hero on a phone: the foot of the den under the words (den-phone.webp), flat wall above */
+  .hero{padding-bottom:calc(74vw + 8px);background:var(--den) url(den-phone.webp) center bottom/100% auto no-repeat}
+  .hero::before{display:none}
   table.psi-ex-t thead{display:none}
   table.psi-ex-t tbody,table.psi-ex-t tr,table.psi-ex-t td{display:block}
   table.psi-ex-t tr{border:1px solid var(--line);border-radius:8px;margin:0 0 10px;padding:4px 0}
@@ -305,11 +381,11 @@ main.cheat td{padding:3px 8px}
 .us-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:0 0 18px}
 .us-tile{padding:16px 18px 14px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);min-width:0}
 .us-tile p{margin:0}
-.us-num{font:400 clamp(30px,6vw,44px)/1.05 Silkscreen,system-ui,sans-serif;color:var(--head);letter-spacing:.02em;overflow-wrap:anywhere}
+.us-num{font:600 clamp(32px,6vw,48px)/1.05 var(--display);color:var(--head);letter-spacing:-.01em;overflow-wrap:anywhere}
 .us-label{margin-top:8px!important;font-weight:650;font-size:16px}
 .us-sub{font-size:14px;color:var(--mut)}
 .us-panel{margin:0 0 18px;padding:18px 20px 16px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);min-width:0}
-.us-panel h2{margin:0 0 4px;font-size:19px;border:0;padding:0}
+.us-panel h2{margin:0 0 4px;font-size:22px;border:0;padding:0}
 .us-about{margin:0 0 12px;font-size:14px;color:var(--mut)}
 .us-chart{position:relative;margin:16px 0 0;padding:0 0 22px 34px}
 .us-grid{position:absolute;inset:0 0 22px 34px;pointer-events:none}
