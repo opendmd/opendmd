@@ -33,7 +33,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 IMAGES = ROOT / "docs/images"
 CREATE = ROOT / "opendmd-web/share/create"
-ORANGE, BLACK, INK, UNLIT = "#f7a531", "#0d0e11", "#ecebe7", "#24262b"
+ORANGE, BLACK, INK, UNLIT = "#ffb902", "#0d0e11", "#ecebe7", "#24262b"
 O = ["####", "#..#", "#..#", "#..#", "####"]
 D = ["###.", "#..#", "#..#", "#..#", "###."]
 U = 36  # one pixel of the letters, in the 500-unit square
