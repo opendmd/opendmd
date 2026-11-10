@@ -62,7 +62,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   crash-safety ordering from `files.rs`, kept here for fidelity even though
   the mock cannot crash mid-write.
 - **`is_manifest_path`**: only `filelist.*` directly at the card root, or any
-  file directly inside `sets/` (not nested), and never `.idx`/`.tmp`/`.part`.
+  file directly inside `sets/` (not nested) whose name does not start with a
+  dot (`.smooth`, `.tags`, `.smart` are plain files), and never
+  `.idx`/`.tmp`/`.part`.
 - **A new `set` is checked before anything is saved** (it must open), then
   the settings are saved, then the playlist is rebuilt for a changed
   `set`/`platforms`/`shuffle`. A rebuild that still fails (`set` = "" on a
@@ -1003,7 +1005,7 @@ def is_manifest_path(rel: str) -> bool:
     parts = rel.split("/")
     if len(parts) == 1 and parts[0].startswith("filelist."):
         return True
-    if len(parts) == 2 and parts[0] == SETS_DIR:
+    if len(parts) == 2 and parts[0] == SETS_DIR and not parts[1].startswith("."):
         return True
     return False
 

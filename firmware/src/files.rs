@@ -400,9 +400,11 @@ pub fn index_path(manifest: &str) -> String {
 }
 
 /// Is `path` (filesystem, `/sdcard/...`) something the player could use as a
-/// manifest — the card's `filelist.*` or anything in `sets/`? Only these have
-/// an `.idx` sidecar worth looking for; checking every upload would cost a
-/// directory scan per GIF, and FAT directories here run to 3,781 entries.
+/// manifest — the card's `filelist.*` or anything in `sets/` whose name does
+/// not start with a dot? Only these have an `.idx` sidecar worth looking for;
+/// checking every upload would cost a directory scan per GIF, and FAT
+/// directories here run to 3,781 entries. A dot-file in `sets/` (the web
+/// app's `.smooth`, `.tags`, `.smart`) is a plain file: never a playlist.
 pub fn is_manifest_path(path: &str) -> bool {
     if path.ends_with(".idx")
         || path.ends_with(".tmp")
@@ -415,7 +417,7 @@ pub fn is_manifest_path(path: &str) -> bool {
     let in_root = p.parent().is_some_and(|d| d == Path::new(config::SD_MOUNT));
     let in_sets = p.parent().is_some_and(|d| d == Path::new(config::SETS_DIR));
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    (in_root && name.starts_with("filelist.")) || in_sets
+    (in_root && name.starts_with("filelist.")) || (in_sets && !name.starts_with('.'))
 }
 
 /// Is `path` (filesystem) a playlist's overrides file — `/filelist*.meta`

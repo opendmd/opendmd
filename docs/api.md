@@ -598,8 +598,10 @@ Reply: `{"ok":true,"path":"/…","bytes":N}`.
 `?new=1`: create only. `409` if the file is there (nothing written); a
 failed upload leaves no file.
 
-A playlist (`/filelist.*`, `/sets/*`) is installed as by
-`PUT /api/sets/<name>`, with its reply; an overrides file (`.meta`)
+A playlist (`/filelist.*`, `/sets/*` but for a name starting with a dot)
+is installed as by `PUT /api/sets/<name>`, with its reply; a dot-file in
+`/sets/` (the web app's lists: `.smooth`, `.tags`, `.smart`) is a plain
+file, written whether or not anything is playing; an overrides file (`.meta`)
 rebuilds its playlist if in play. With a GIF, upload its prepared copy
 too, or forget the old one. The compiled file of the Formula that
 `look_formula` names (`/formulas/<stem>.psb`) rebuilds the look at once.
