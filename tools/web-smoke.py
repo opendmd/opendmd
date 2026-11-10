@@ -1249,6 +1249,73 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
         delete_path(base, p)
 
 
+def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Smart playlists, the hard cases: a refresh over a folder that cannot
+    be read (the mock's 500) says so and leaves the playlist as it was;
+    /sets/.smart written behind the page's back (another browser) keeps its
+    line when the page saves a smart playlist of its own; a smart playlist
+    open in the editor and written again behind it (a GIF tagged) saves
+    with no question and stays smart."""
+    sets = overlay / "sets"
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    a, b = "/gifs/Consoles/MD_Smokefold_01.gif", "/gifs/Arcade/MD_Smokefold_02.gif"
+    for p in (a, b):
+        put_bytes(base + "/api/files" + p, src)
+    smart0 = (sets / ".smart").read_text() if (sets / ".smart").exists() else ((CARD / "sets" / ".smart").read_text() if (CARD / "sets" / ".smart").exists() else "")
+    tags0 = (sets / ".tags").read_text() if (sets / ".tags").exists() else None
+    put_text(base + "/api/sets/sm-f", a + "\n" + b + "\n")
+    put_text(base + "/api/files/sets/.smart", smart0 + "/sets/sm-f.txt\tq=title:smokefold\tat=1762732800\n")
+    page = new_page(browser, "laptop", errors)
+    asked: list[str] = []
+    page.on("dialog", lambda d: asked.append(d.message))
+    page.goto(base + "/#sets")
+    page.wait_for_selector("#sets-list [data-path='/sets/sm-f.txt'] .tag.smart", timeout=30000)
+    expected.append("dir=%2Fgifs%2FArcade")
+    get_json(base + "/mock/fail-list?dir=/gifs/Arcade&n=1")
+    sets_do(page, "/sets/sm-f.txt", "refresh")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.includes('couldn’t be read'))", timeout=60000)
+    expected.remove("dir=%2Fgifs%2FArcade")
+    sm = (sets / ".smart").read_text()
+    check((sets / "sm-f.txt").read_text() == a + "\n" + b + "\n" and "/sets/sm-f.txt\tq=title:smokefold\tat=1762732800" in sm,
+          "smart: a refresh over a folder that cannot be read says so, the playlist and its date as they were")
+    # Another browser's line, written after this page read the file.
+    put_text(base + "/api/sets/sm-x", a + "\n")
+    put_text(base + "/api/files/sets/.smart", sm + "/sets/sm-x.txt\tq=title:smokefold limit:1\tat=1762732800\n")
+    page.evaluate("p => import('./js/tags.js').then(async (m) => (await m.tags()).set(p, 0, ['smokefold']))", a)
+    wait_tags(overlay, lambda t: "smokefold" in t.get(a, ""))
+    page.click("#sets-new")
+    open_builder(page)
+    page.select_option("#b-base", "")
+    page.fill("#b-words", "tag:smokefold")
+    page.check("#b-keep")
+    page.wait_for_function("document.querySelector('#b-use').textContent === 'Replace with 1 GIF'", timeout=60000)
+    page.click("#b-use")
+    page.wait_for_selector("#builder", state="detached", timeout=5000)
+    page.fill("#set-name", "sm-g")
+    page.click("#set-save")
+    page.wait_for_selector("#sets-list [data-path='/sets/sm-g.txt'] .tag.smart", timeout=30000)
+    sm = wait_file(sets / ".smart", lambda t: "sm-g" in t)
+    check("/sets/sm-x.txt\tq=" in sm and "/sets/sm-g.txt\tq=tag:smokefold" in sm and "/sets/sm-f.txt" in sm,
+          f"smart: a line another browser wrote is kept when this one saves ({sm!r})")
+    # Open in the editor, written again behind it: Save asks nothing, stays smart.
+    page.evaluate("p => import('./js/tags.js').then(async (m) => (await m.tags()).set(p, 0, ['smokefold']))", b)
+    page.wait_for_function("document.querySelector('#set-count').textContent.startsWith('2 GIFs')", timeout=60000)
+    n = len(asked)
+    page.click("#set-save")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith('Saved “sm-g”'))", timeout=20000)
+    sm = wait_file(sets / ".smart", lambda t: "sm-g" in t)
+    check(len(asked) == n and "/sets/sm-g.txt\tq=tag:smokefold" in sm and sorted((sets / "sm-g.txt").read_text().split()) == sorted([a, b]),
+          f"smart: open in the editor and written again behind it, Save asks nothing and it stays smart ({asked[n:]}, {sm!r})")
+    page.context.close()
+    for p in ("/sets/sm-f.txt", "/sets/sm-x.txt", "/sets/sm-g.txt", a, b):
+        delete_path(base, p)
+    put_text(base + "/api/files/sets/.smart", smart0) if smart0 else delete_path(base, "/sets/.smart")
+    if tags0 is None:
+        delete_path(base, "/sets/.tags")
+    else:
+        put_text(base + "/api/files/sets/.tags", tags0)
+
+
 def tag_lines(overlay: Path) -> dict[str, str]:
     """/sets/.tags as the mock has it: path -> its fields."""
     f = overlay / "sets" / ".tags"
@@ -4648,6 +4715,7 @@ def mock_pass(browser) -> None:
         target_checks(browser, base, overlay, errors)
         rename_checks(browser, base, overlay, errors)
         smart_checks(browser, base, overlay, errors)
+        smart_more_checks(browser, base, overlay, errors)
         tags_checks(browser, base, overlay, errors)
         relink_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until

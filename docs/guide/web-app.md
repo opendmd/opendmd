@@ -134,8 +134,7 @@ aren't added twice. **More ▾** has:
 - **Delete…**: off the card, after asking.
 
 Playlists, favourites, tags and Smooth motion follow the GIFs you move,
-rename or delete, and every change of tags or stars can be undone from its
-message. **Done** leaves Select.
+rename or delete. **Tag…** and **Rate…** can be undone from their message. **Done** leaves Select.
 
 ### Adding GIFs
 

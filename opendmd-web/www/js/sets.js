@@ -50,7 +50,7 @@ export async function mount(el) {
       const isActive = app.device && p.value === active, n = h('span.n'), sp = sm.get(p.path);
       return [p, n, h('div' + (ed() && p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
         h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
-          p.label, !p.value && h('span.tag', 'Default'), sp && h('span.tag.smart', { title: 'Built from a search: ' + sm.summary(sp) }, 'Smart'), isActive && h('span.tag.act', 'Playing'), n),
+          p.label, !p.value && h('span.tag', 'Default'), sp && h('span.tag.smart', { title: 'Built from a search' }, 'Smart'), isActive && h('span.tag.act', 'Playing'), n),
         h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Play', () => activate(p), '', app.building],
           sp && [{ 'data-do': 'refresh' }, 'Refresh', () => refreshOne(p)],
@@ -63,6 +63,7 @@ export async function mount(el) {
       h('p.cap', 'No playlists of your own yet. Start one here, or pick GIFs in the Library and add them to a new playlist.'),
       h('div.row', h('button.pri', { id: 'sets-empty-new', onclick: newList }, '+ New playlist'), h('button', { id: 'sets-empty-lib', onclick: () => app.go('library') }, 'Go to the Library')));
     clear(setsList, rows.map((r) => r[2]), none);
+    for (const t of setsList.querySelectorAll('.tag.smart')) { const s = sm.get(t.closest('[data-path]').dataset.path); if (s) sm.summary(s).then((x) => { t.title = 'Built from a search: ' + x; }); }
     counts(rows);
   }
   async function counts(rows) {
