@@ -170,7 +170,8 @@ export async function mount(el) {
     app.texts.delete(p.path);
   }
   async function copyRest(p, n, to, move, sm) {
-    const text = await app.text(p.path, true);
+    // (After a refresh's write of it still under way.)
+    const text = await (await import('./gifs.js')).readPlaylist(p.path);
     if (text == null) throw new Error('not served by this source');
     const ov = await new Overrides().load(p.path);
     if (!ov.ok) throw new Error('its favourites could not be read');
