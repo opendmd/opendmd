@@ -23,6 +23,12 @@ Users see **GIFs, Formulas and playlists**, nothing else.
   256 colours gets no copy and plays as it is.
 - Playlists (`filelist.txt`, `/sets/*.txt`) name GIF paths, and Formulas
   by reference (`@formula:<stem>`, `/formulas/<stem>.psi`).
+- **Tags and stars** are the user's own (`/sets/.tags`, `opendmd_core::tags`);
+  what a name says (platform, folder, Logo…, author) is a GIF's *details*,
+  never called a tag. A **smart playlist** is an ordinary `/sets/<name>.txt`
+  the web app writes again from its search (`/sets/.smart`,
+  `opendmd_core::query`); the player never reads a search. A dot-file in
+  `/sets/` is a plain file, never a playlist.
 - Formulas are user effects written in **Psi** (`docs/psi-spec.md`,
   `docs/psi-for-models.md`), compiled and run on the player.
 - **The UI never shows** "odm", "ODM", "bucket", paths, `@` items,
