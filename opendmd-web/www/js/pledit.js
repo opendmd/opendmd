@@ -16,6 +16,7 @@ import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
 import { h, clear, emit, on, store, toast, label, note, isFormula, drawn } from './util.js';
+import { inTurn } from './gifs.js';
 
 // ctx: {el (the view), closeEd(), activate(p), loadSets(), known() (playlist paths), lists() (playlists)}
 export function editor(se, ctx) {
@@ -303,7 +304,8 @@ export function editor(se, ctx) {
     if (hand && !confirm('This playlist is built from a search; saving your changes by hand stops that. Save it as it is now?')) return false;
     try {
       const body = d.paths.join('\n'), text = body + '\n', sm = d.smart && (await import('./smart.js'));
-      if (hand) await sm.handSave(path, () => app.src.saveSet(n, text)); else await app.src.saveSet(n, text);
+      const put = () => inTurn(path, () => app.src.saveSet(n, text));
+      if (hand) await sm.handSave(path, put); else await put();
       if (hand) d.smart = null; else if (d.smart) { await sm.put(path, d.smart.q, d.smart.from); d.smart = sm.get(path); d.smartPaths = body; }
       d.name = n;
       d.saved = body;

@@ -1302,7 +1302,8 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     /sets/.smart written behind the page's back (another browser) keeps its
     line when the page saves a smart playlist of its own; a smart playlist
     open in the editor and written again behind it (a GIF tagged) saves
-    with no question and stays smart."""
+    with no question and stays smart; a hand save started while a
+    refresh's write of the playlist is unanswered goes after it and wins."""
     sets = overlay / "sets"
     src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
     a, b = "/gifs/Consoles/MD_Smokefold_01.gif", "/gifs/Arcade/MD_Smokefold_02.gif"
@@ -1353,8 +1354,47 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     sm = wait_file(sets / ".smart", lambda t: "sm-g" in t)
     check(len(asked) == n and "/sets/sm-g.txt\tq=tag:smokefold" in sm and sorted((sets / "sm-g.txt").read_text().split()) == sorted([a, b]),
           f"smart: open in the editor and written again behind it, Save asks nothing and it stays smart ({asked[n:]}, {sm!r})")
+    # A refresh's write of the playlist still unanswered when a hand save
+    # of it starts: the hand save goes after it, and is what the card keeps.
+    c = "/gifs/Consoles/MD_Smokefold_03.gif"
+    put_text(base + "/api/sets/sm-h", a + "\n" + b + "\n")
+    put_text(base + "/api/files/sets/.smart", sm + "/sets/sm-h.txt\tq=title:smokefold\tat=1762732800\n")
+    put_bytes(base + "/api/files" + c, src)
+    page.goto(base + "/#sets")
+    page.reload()
+    page.wait_for_selector("#sets-list [data-path='/sets/sm-h.txt'] .tag.smart", timeout=30000)
+    page.click("#sets-list [data-path='/sets/sm-h.txt'] button.pl")
+    page.wait_for_function("document.querySelector('#set-title')?.textContent === 'sm-h' && document.querySelector('#set-smart')?.hidden === false"
+                           " && document.querySelectorAll('#set-entries .vrow[data-path]:not([hidden])').length === 2", timeout=10000)
+    held: list = []
+    puts: list = []
+    def hold(r) -> None:
+        if r.request.method == "PUT" and urllib.parse.unquote(r.request.url).endswith("/api/sets/sm-h"):
+            puts.append(r.request.post_data)
+            if not held:
+                held.append(r)
+                return
+        r.continue_()
+    page.route("**/api/sets/sm-h*", hold)
+    sets_do(page, "/sets/sm-h.txt", "refresh")
+    deadline = time.time() + 30
+    while not held and time.time() < deadline:
+        page.wait_for_timeout(50)
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    page.click("#set-save")
+    page.wait_for_timeout(1000)  # (a hand save not waiting its turn is on its way by now)
+    early = len(puts)
+    for r in held:
+        r.continue_()
+    page.unroute("**/api/sets/sm-h*")
+    page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=20000)
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((t) => /“sm-h”(:| is up to date)/.test(t.textContent))", timeout=20000)
+    sm = wait_file(sets / ".smart", lambda t: "sm-h" not in t)
+    got = (sets / "sm-h.txt").read_text()
+    check(len(held) == 1 and early == 1 and got == b + "\n" and "sm-h" not in sm,
+          f"smart: a hand save waits for a refresh's write of the playlist still under way, and the card keeps it ({early} PUT while held, {got!r})")
     page.context.close()
-    for p in ("/sets/sm-f.txt", "/sets/sm-x.txt", "/sets/sm-g.txt", a, b):
+    for p in ("/sets/sm-f.txt", "/sets/sm-x.txt", "/sets/sm-g.txt", "/sets/sm-h.txt", a, b, c):
         delete_path(base, p)
     put_text(base + "/api/files/sets/.smart", smart0) if smart0 else delete_path(base, "/sets/.smart")
     if tags0 is None:
