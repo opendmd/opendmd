@@ -75,6 +75,8 @@ ART = [
      "A title card reading GAME OVER, thanks for playing", "Title card"),
 ]
 WORDMARK = "@boot?len=card"
+# The warm white the panel lights "Open" in, and how it is drawn here.
+PANEL_WHITE, PANEL_WHITE_SHOWN = (255, 214, 150), (236, 235, 231)
 # Recordings of something that plays once rather than loops (name: its
 # length, then how much longer its last frame is held, in ms): the start-up
 # show, whose last line, the address, would otherwise be gone in half a second.
@@ -215,6 +217,12 @@ def main() -> None:
         # (200 ms in: before the card's first glint, at 1.5 s.)
         im = shot(a.sim, card, WORDMARK, 200, Path(tmp) / "w.png")
     x0, y0, x1, y1 = im.getbbox()
+    # "Open" is lit in the panel's warm white (opendmd-core text::TITLE_COLOUR),
+    # which the LEDs, driven without gamma correction, show as white; drawn on
+    # a screen the same numbers read as cream. So the picture uses the mark's
+    # off-white for it (tools/logo.py INK), as the panel looks.
+    im = im.convert("RGB")
+    im.putdata([PANEL_WHITE_SHOWN if p == PANEL_WHITE else p for p in (im.get_flattened_data() if hasattr(im, "get_flattened_data") else im.getdata())])
     im.crop((x0 - 1, y0 - 1, x1 + 1, y1 + 1)).quantize(8, dither=Image.Dither.NONE).save(out / "wordmark.png")
     w, h = Image.open(out / "wordmark.png").size
 
