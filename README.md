@@ -1,4 +1,4 @@
-<h1 align="center"><img src="docs/images/wordmark.png" width="440" alt="OpenDMD"></h1>
+<h1 align="center"><img src="docs/images/logo.svg" width="112" align="middle" alt=""> <img src="docs/images/wordmark.png" width="440" align="middle" alt="OpenDMD"></h1>
 
 <p align="center">New open firmware and a web app for the DMDoS LED dot-matrix display.</p>
 
