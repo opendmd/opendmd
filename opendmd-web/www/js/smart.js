@@ -46,6 +46,14 @@ export async function drop(path) {
   await load(true);
   if (map.delete(lc(path))) await write();
 }
+// The editor saving a smart playlist changed by hand (`save` writes it):
+// it stops being smart, and a refresh already under way does not write
+// the search's list back over it.
+const byHand = new Set();
+export async function handSave(path, save) {
+  byHand.add(lc(path));
+  try { await save(); await drop(path); } finally { byHand.delete(lc(path)); }
+}
 // A playlist renamed (`move`) or duplicated: its search goes with it.
 export async function copy(from, to, move) {
   await load(true);
@@ -91,7 +99,8 @@ export async function refresh(path, fresh) {
   const s = get(path);
   if (!s) return null;
   const paths = await find(s.q, s.from, fresh), text = await app.text(path, true);
-  if (text == null) return null; // (deleted meanwhile: not written back)
+  // (Deleted meanwhile, or saved by hand, its search dropped: not written back.)
+  if (text == null || byHand.has(lc(path)) || !get(path)) return null;
   const old = lines(text).filter((p) => !gone(p));
   const was = new Set(old.map(lc)), now = new Set(paths.map(lc));
   const diff = { added: paths.filter((p) => !was.has(lc(p))).length, removed: old.filter((p) => !now.has(lc(p))).length };
@@ -100,7 +109,7 @@ export async function refresh(path, fresh) {
     await savePlaylist(path, paths.join('\n') + '\n');
     // Open in the editor with nothing changed by hand: it shows the new lines.
     const d = app.draft;
-    if (d.path === path && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
+    if (d.path === path && d.smart && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
   }
   // (When it was last written, or looked at by hand: the row's "updated".)
   if (changed || fresh) { s.at = Date.now() / 1000 | 0; await write(); }

@@ -1175,8 +1175,10 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     /sets/.smart its search, the row says Smart; Edit search brings the
     words back, and words it cannot read say why; a second GIF added
     behind its back, the row's Refresh finds it (+1); Rename and Duplicate
-    take the search along; edited by hand and saved, it stops being smart;
-    Delete takes its line."""
+    take the search along; opened again (it is in the editor already), a
+    row taken out while it is read stays out; edited by hand and saved, it
+    stops being smart; a refresh under way meanwhile does not write the
+    search back over it; Delete takes its line."""
     sets = overlay / "sets"
     r = put_text(base + "/api/files/sets/.probe", "x\n")
     check(r.get("path") == "/sets/.probe" and r.get("bytes") == 2 and "entries" not in r,
@@ -1228,10 +1230,27 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     sets_do(page, "/sets/smart-b.txt", "duplicate")
     page.wait_for_selector("#sets-list [data-path='/sets/smart-b 2.txt'] .tag.smart", timeout=30000)
     check("/sets/smart-b 2.txt\tq=" in (sets / ".smart").read_text(), "smart: Duplicate is smart too")
+    # The editor has smart-b already (the rename took it along): opened
+    # again, its rows stay there to edit while the card is read. A row
+    # taken out meanwhile is kept, not put back by the read landing (CI
+    # 33e72b6: the open replaced the editor's playlist, the ✕ lost, Save
+    # kept it smart). The read is held until the ✕ is in.
+    held: list = []
+    is_b = lambda r: r.request.method == "GET" and urllib.parse.unquote(r.request.url).endswith("/sets/smart-b.txt")
+    page.route("**/sets/smart-b.txt*", lambda r: held.append(r) if is_b(r) else r.continue_())
     page.click("#sets-list [data-path='/sets/smart-b.txt'] button.pl")
-    page.wait_for_selector("#set-entries .vrow[data-path]", timeout=10000)
-    check(page.is_visible("#set-smart"), "smart: opened, the editor shows its search")
+    page.wait_for_function("document.querySelector('#set-title').textContent === 'smart-b'", timeout=10000)
+    deadline = time.time() + 20
+    while not held and time.time() < deadline:
+        page.wait_for_timeout(50)
+    check(page.is_visible("#set-smart") and len(held) == 1, f"smart: opened, the editor shows its search ({len(held)} read held)")
     page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    for r in held:
+        r.continue_()
+    page.unroute("**/sets/smart-b.txt*")
+    page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.has('/sets/smart-b.txt'))", timeout=10000)
+    rows = page.eval_on_selector_all("#set-entries .vrow[data-path]:not([hidden])", "els => els.map((e) => e.dataset.path)")
+    check(rows == [b], f"smart: opened again, a row taken out while it is read stays out ({rows})")
     page.click("#set-save")
     page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=10000)
     page.wait_for_selector("#sets-list [data-path='/sets/smart-b.txt'] .tag.smart", state="detached", timeout=10000)
@@ -1240,6 +1259,34 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
           and page.locator("#sets-list [data-path='/sets/smart-b.txt'] .tag.smart").count() == 0,
           f"smart: edited by hand and saved, it is an ordinary playlist ({sm!r})")
     no_leaks(page, "smart playlists")
+    # A refresh under way while the playlist is changed by hand and saved
+    # does not write the search's list back over it: its read of the
+    # playlist is held until the hand save is in.
+    c, pb = "/gifs/Consoles/MD_Smokesmart_03.gif", "/sets/smart-b 2.txt"
+    put_bytes(base + "/api/files" + c, src)
+    page.click(f"#sets-list [data-path='{pb}'] button.pl")
+    page.wait_for_function("document.querySelector('#set-title').textContent === 'smart-b 2' && !document.querySelector('#set-smart').hidden"
+                           " && document.querySelectorAll('#set-entries .vrow[data-path]:not([hidden])').length === 2", timeout=10000)
+    page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.size)", timeout=10000)
+    held = []
+    is_pb = lambda r: r.request.method == "GET" and urllib.parse.unquote(r.request.url).endswith(pb)
+    page.route("**/sets/smart-b*", lambda r: held.append(r) if is_pb(r) else r.continue_())
+    sets_do(page, pb, "refresh")
+    deadline = time.time() + 30
+    while not held and time.time() < deadline:
+        page.wait_for_timeout(50)
+    page.click("#set-entries .vrow:not([hidden]) >> nth=0 >> button.rm")
+    page.click("#set-save")
+    page.wait_for_function("document.querySelector('#set-smart').hidden", timeout=10000)
+    wait_file(sets / ".smart", lambda t: "smart-b 2" not in t)
+    for r in held:
+        r.continue_()
+    page.unroute("**/sets/smart-b*")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((t) => /“smart-b 2”(:| is up to date)/.test(t.textContent))", timeout=20000)
+    got = (sets / "smart-b 2.txt").read_text()
+    check(len(held) == 1 and got == b + "\n" and "smart-b 2" not in (sets / ".smart").read_text(),
+          f"smart: a refresh under way does not write the search back over a hand save ({len(held)} read held, {got!r})")
+    delete_path(base, c)
     sets_do(page, "/sets/smart-b 2.txt", "delete")
     page.wait_for_selector("#sets-list [data-path='/sets/smart-b 2.txt']", state="detached", timeout=30000)
     sm = wait_file(sets / ".smart", lambda t: "smart-b 2" not in t)

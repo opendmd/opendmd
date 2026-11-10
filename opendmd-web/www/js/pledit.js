@@ -303,8 +303,8 @@ export function editor(se, ctx) {
     if (hand && !confirm('This playlist is built from a search; saving your changes by hand stops that. Save it as it is now?')) return false;
     try {
       const body = d.paths.join('\n'), text = body + '\n', sm = d.smart && (await import('./smart.js'));
-      await app.src.saveSet(n, text);
-      if (hand) { d.smart = null; await sm.drop(path); } else if (d.smart) { await sm.put(path, d.smart.q, d.smart.from); d.smart = sm.get(path); d.smartPaths = body; }
+      if (hand) await sm.handSave(path, () => app.src.saveSet(n, text)); else await app.src.saveSet(n, text);
+      if (hand) d.smart = null; else if (d.smart) { await sm.put(path, d.smart.q, d.smart.from); d.smart = sm.get(path); d.smartPaths = body; }
       d.name = n;
       d.saved = body;
       app.texts.set(path, text);
