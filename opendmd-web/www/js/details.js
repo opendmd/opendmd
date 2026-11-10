@@ -13,24 +13,27 @@
 //   string. Resolves to [{file, category, name}] for Library's upload.
 // - editDialog(path, opts): the same fields for a GIF on the card; saving a
 //   change renames it (renameGif).
-// - renameGif(from, to): POST /api/files/move — the device moves the GIF,
-//   its prepared copy, its Smooth motion line and its failure line — then
-//   every playlist that names it and every playlist's overrides.
-// - removeGif(path, name): after asking, the GIF (the device takes its copy),
-//   its playlist lines, overrides and Smooth motion line.
+// - renameGif(from, to), removeGif(path, name): js/refs.js's relink — the
+//   device moves the GIF, its prepared copy, its Smooth motion line and its
+//   failure line (or deletes it), then every playlist that names it, every
+//   playlist's overrides, the user's tags and smart playlists follow.
+// - bulkMove(paths, opts), bulkRename(paths, opts), bulkDelete(paths): the
+//   Library's Select › More ▾, for many GIFs at once: each name picked as
+//   one GIF's is (the next free number where it lands, none alike).
 //
 // The name is built by the core (`NameFields`, through the art module's
 // `buildName`: the main module has no room for it, and these dialogs load
 // the art module anyway to prepare what they add), which refuses anything
 // that would not read back as the same fields. The number is the next free
 // one for that platform and title in the category. The copy says title,
-// platform, category, author — never tag, bucket or a copy's path.
+// platform, category, author — the name's details. "Tag" is only ever the
+// user's own (js/tags.js), never a part of the name; never bucket or a
+// copy's path.
 
-import { app, setValue } from './state.js';
+import { app } from './state.js';
 import { art } from './artmod.js';
-import { fileFor } from './overrides.js';
-import { authorOf, savePlaylist } from './gifs.js';
-import { h, clear, toast, base, dir, enc, label, niceName, byNice } from './util.js';
+import { authorOf } from './gifs.js';
+import { h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {
   title: 'Give it a title',
@@ -221,7 +224,8 @@ function readsBack(f) {
 // — the one it had when `keep` (a GIF being edited) has the same platform,
 // title and category —, or, with no platform, the title suffixed until
 // the name is free; never one in `taken`. {path} or {why} (the reason, in
-// words). Add GIFs, Edit details and the Studio's Save all name through it.
+// words). Add GIFs, Edit details, the bulk Move and Rename and the Studio's
+// Save all name through it.
 export function pickName(m, f, l, keep, taken = new Set()) {
   f = { ...f };
   const unchanged = keep && f.category === keep.category && f.platform === keep.platform && app.wasm.normalizeTitle(f.title) === app.wasm.normalizeTitle(keep.title);
@@ -271,77 +275,120 @@ export async function editDialog(path, opts) {
 
 // --- Renaming and deleting ----------------------------------------------------
 
-// Rewrite every playlist line, and every playlist's overrides, through
-// `map(path) -> path | null` (null drops it).
-async function rewrite(map) {
-  for (const pl of await app.playlists().catch(() => [])) {
-    const text = await app.text(pl.path, true).catch(() => null);
-    if (text) {
-      let hit = false;
-      const out = text.split('\n').map((l) => {
-        const p = l.trim();
-        if (!p) return l;
-        const n = map(p);
-        if (n === p) return l;
-        hit = true;
-        return n;
-      }).filter((l) => l !== null);
-      if (hit) await savePlaylist(pl.path, out.join('\n'));
-    }
-    const list = app.device ? (await app.src.overrides(setValue(pl.path)).catch(() => null))?.overrides || [] : [];
-    const next = list.map((o) => ({ ...o, path: map(o.path) })).filter((o) => o.path);
-    if (next.length !== list.length || next.some((o, i) => o.path !== list[i].path)) {
-      const meta = app.wasm.renderOverrides(next);
-      if (meta) await app.src.writeFile(fileFor(pl.path), meta); else await app.src.deleteFile(fileFor(pl.path));
-    }
-  }
-}
+const refs = () => import('./refs.js');
 
-const same = (a) => (p) => lc(p) === lc(a);
-
+// One GIF renamed: its references follow. Throws if the move failed.
 export async function renameGif(from, to) {
-  await app.src.move(from, to);
-  await rewrite((p) => (same(from)(p) ? to : p));
-  // What the app holds by path follows too.
-  for (const s of [app.draft.paths]) s.forEach((p, i) => { if (same(from)(p)) s[i] = to; });
-  if (app.selection.delete(from)) app.selection.add(to);
-  await dropEmpty(from);
+  const { failed } = await (await refs()).relink([{ from, to }]);
+  if (failed) throw failed.error;
 }
 
 export async function removeGif(path, name) {
   if (!confirm(`Delete “${name}” from the card? It is taken out of every playlist too. This can’t be undone.`)) return false;
-  try {
-    await app.src.deleteFile(path);
-    // The device's DELETE takes the prepared copy with it; this is a no-op
-    // then, and the cleanup on a device that did not.
-    await app.src.forget(path).catch(() => {});
-    await rewrite((p) => (same(path)(p) ? null : p));
-    await unsmooth(path);
-    app.draft.paths = app.draft.paths.filter((p) => !same(path)(p));
-    app.selection.delete(path);
-    await dropEmpty(path);
-    toast(`deleted “${name}”`, 'ok');
-    return true;
-  } catch (e) { toast(`deleting “${name}”: ${e.message}`, 'bad'); return false; }
+  const { failed } = await (await refs()).relink([{ from: path, to: null }]);
+  if (failed) { toast(`deleting “${name}”: ${failed.error.message}`, 'bad'); return false; }
+  toast(`deleted “${name}”`, 'ok');
+  return true;
 }
 
-// Smooth motion's list (js/smooth.js) loses a deleted GIF's line. Read only
-// when it is there: a missing list is a 404.
-async function unsmooth(path) {
-  const has = async (d, n) => (await app.src.list(d).catch(() => [])).some((f) => f.name === n);
-  if (!(await has('/', 'sets')) || !(await has('/sets', '.smooth'))) return;
-  const text = (await app.src.readText('/sets/.smooth')) || '';
-  const keep = text.split('\n').map((l) => l.trim()).filter((l) => l && !same(path)(l));
-  if (keep.length !== text.split('\n').filter((l) => l.trim()).length) await app.src.writeFile('/sets/.smooth', keep.map((p) => p + '\n').join(''));
+// Many at once, in order, the toast saying how far it got: "Moved 3 GIFs",
+// or "Moved 1 of 3: “X” couldn't be moved (why)" when one fails (those
+// done stay done, their references rewritten).
+async function batch(pairs, verb, done) {
+  if (pairs.length > 50 && !confirm(`This ${verb === 'Deleted' ? 'deletes' : 'renames'} ${pairs.length.toLocaleString()} GIFs, one at a time; the panel may pause for a moment now and then.`)) return [];
+  toast(`${verb === 'Deleted' ? 'Deleting' : verb === 'Moved' ? 'Moving' : 'Renaming'} ${pairs.length.toLocaleString()} GIFs…`);
+  const r = await (await refs()).relink(pairs);
+  const n = r.done.length.toLocaleString();
+  if (r.failed) toast(`${verb} ${n} of ${pairs.length.toLocaleString()}: “${label(app.wasm.parsePath(r.failed.from))}” couldn’t be ${verb === 'Deleted' ? 'deleted' : 'moved'} (${r.failed.error.message})`, 'bad');
+  else toast(`${verb} ${n} GIF${r.done.length === 1 ? '' : 's'}${done || ''}`, 'ok');
+  return r.done;
 }
 
-// A category left empty goes (its folder, and its prepared copies' folder).
-async function dropEmpty(path) {
-  const d = dir(path);
-  if (!/^\/gifs\/[^/]+$/.test(d) || (await app.src.list(d).catch(() => [{}])).length) return;
-  try {
-    await app.src.deleteFile(d);
-    const c = base(d);
-    if ((await app.src.list('/cache').catch(() => [])).some((f) => f.dir && f.name === c)) await app.src.json('DELETE', `/api/files${enc('/cache/' + c)}?recursive=1`);
-  } catch { /* an older device keeps the empty folder */ }
+// The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
+// against where each lands: [{from, to | null, why}] (`to` null: unchanged).
+async function names(m, paths, opts, fields) {
+  const listing = listings(opts.categories), taken = new Set(), out = [];
+  for (const from of paths) {
+    const f = m.nameFields(from), g = fields(f, from);
+    if (g === f) { out.push({ from, to: null }); continue; }
+    const l = await listing(g.category);
+    // Into another folder with its name free there: the same name.
+    const same = g.title === f.title && g.platform === f.platform && g.author === f.author && `/gifs/${g.category}/${base(from)}`;
+    if (same && !l.names.has(lc(base(from))) && !taken.has(lc(same))) { taken.add(lc(same)); out.push({ from, to: same }); continue; }
+    const { path, why } = pickName(m, g, l, { ...f, path: from }, taken);
+    if (path) taken.add(lc(path));
+    out.push({ from, to: path && path !== from ? path : null, why });
+  }
+  return out;
+}
+
+// Move to folder…: a folder of the card's, or a new one.
+export async function bulkMove(paths, opts) {
+  const m = await art();
+  const sel = h('select', { id: 'bm-folder' }, opts.categories.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New folder…'));
+  const ok = await sheet(`Move ${paths.length.toLocaleString()} GIFs`, 'Into which folder? A name taken there gets the next free number.', h('label.stack', 'Folder', sel), 'Move');
+  if (!ok) return [];
+  let c = sel.value;
+  if (c === '\n') c = (prompt('Name of the new folder') || '').trim();
+  if (!c || /[/"*:<>?\\|]/.test(c)) { if (c) toast(WHY.category, 'bad'); return []; }
+  const plan = (await names(m, paths, { ...opts, categories: opts.categories }, (f) => (f.category === c ? f : { ...f, category: c }))).filter((x) => x.to);
+  const bad = plan.find((x) => x.why);
+  if (bad) { toast(bad.why, 'bad'); return []; }
+  return batch(plan, 'Moved', ` to ${niceName(c)}`);
+}
+
+// Rename…: a title, platform or author for all of them; each keeps what is
+// left blank. A preview of the names first (50 at most shown).
+export async function bulkRename(paths, opts) {
+  const m = await art();
+  if (!styled) { document.head.append(h('style', CSS)); styled = true; }
+  const title = h('input', { type: 'text', id: 'br-title', placeholder: 'keep each' });
+  const plat = h('select', { id: 'br-plat' }, h('option', { value: '' }, 'Keep each'), h('option', { value: '-' }, 'None'), m.platforms().map((p) => h('option', { value: p }, m.consoleName(p) ? `${p} · ${m.consoleName(p)}` : p)));
+  const author = h('input', { type: 'text', id: 'br-author', placeholder: 'keep each; - for none' });
+  const list = h('div.cap.mono', { id: 'br-list' });
+  let plan = [];
+  const okBtn = h('button.pri', { id: 'br-ok', disabled: true, onclick: () => done(true) }, 'Rename');
+  const el = h('div.dlg', { id: 'br', role: 'dialog', 'aria-modal': 'true' }, h('div.card', h('h2', `Rename ${paths.length.toLocaleString()} GIFs`),
+    h('p.muted', 'What you fill in is given to all of them; the rest of each name stays. Playlists that have them are updated.'),
+    h('div.form', h('label.stack', 'Title', title), h('label.stack', 'Platform', plat), h('label.stack', 'Author', author)), list,
+    h('div.row.dl-foot', h('button', { id: 'br-cancel', onclick: () => done(false) }, 'Cancel'), okBtn)));
+  let done;
+  const result = new Promise((res) => { done = (v) => { el.remove(); res(v); }; });
+  const fields = (f) => {
+    const t = title.value.trim(), a = author.value.trim(), p = plat.value;
+    if (!t && !a && !p) return f;
+    return { ...f, title: t || f.title, platform: p === '-' ? null : p || f.platform, author: a === '-' ? null : a || f.author };
+  };
+  let seq = 0;
+  const refresh = async () => {
+    const k = ++seq, got = await names(m, paths, opts, fields);
+    if (k !== seq) return;
+    plan = got;
+    const bad = got.find((x) => x.why), moving = got.filter((x) => x.to);
+    clear(list, bad ? h('div.bad', bad.why) : moving.slice(0, 50).map((x) => h('div.br-row', `${base(x.from)} → ${base(x.to)}`)),
+      !bad && moving.length > 50 && h('div', `and ${(moving.length - 50).toLocaleString()} more`));
+    okBtn.disabled = !!bad || !moving.length;
+  };
+  for (const x of [title, author]) x.addEventListener('input', refresh);
+  plat.onchange = refresh;
+  document.body.append(el);
+  title.focus();
+  if (!(await result)) return [];
+  return batch(plan.filter((x) => x.to), 'Renamed');
+}
+
+export async function bulkDelete(paths) {
+  if (!confirm(`Delete ${paths.length.toLocaleString()} GIFs from the card? They are taken out of every playlist too. This can’t be undone.`)) return [];
+  return batch(paths.map((from) => ({ from, to: null })), 'Deleted');
+}
+
+// A small sheet: a heading, a sentence, a control, OK / Cancel; true on OK.
+function sheet(head, intro, body, ok) {
+  if (!styled) { document.head.append(h('style', CSS)); styled = true; }
+  return new Promise((res) => {
+    const done = (v) => { el.remove(); res(v); };
+    const el = h('div.dlg', { id: 'bm', role: 'dialog', 'aria-modal': 'true' }, h('div.card', h('h2', head), h('p.muted', intro), body,
+      h('div.row.dl-foot', h('button', { id: 'bm-cancel', onclick: () => done(false) }, 'Cancel'), h('button.pri', { id: 'bm-ok', onclick: () => done(true) }, ok))));
+    document.body.append(el);
+  });
 }

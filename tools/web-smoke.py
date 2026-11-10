@@ -1379,6 +1379,111 @@ def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
         put_text(base + "/api/files/sets/.tags", orig)
 
 
+def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Many GIFs moved, renamed and deleted at once (Select › More ▾:
+    js/details.js's bulk dialogs, js/refs.js), in a fresh browser: three
+    GIFs in two folders, in a playlist with a favourite, a tag and a Smooth
+    motion line, moved into a new folder: the files there, the folder left
+    empty gone, the playlist, the favourite, the tag and the Smooth motion
+    line all naming the new paths; renamed to one title where one GIF has
+    it already: numbered on from it, none alike; a move that fails halfway
+    (the mock's 409): a toast naming the GIF, the ones moved before it
+    rewritten, nothing named that is not on the card; deleted: gone, and
+    out of the playlist and the tags."""
+    sets = overlay / "sets"
+    src = (CARD / card_gifs()[0].lstrip("/")).read_bytes()
+    g = ["/gifs/Consoles/MD_Relink_Smoke_01.gif", "/gifs/Consoles/MD_Relink_Smoke_02.gif", "/gifs/Relink_Src/MD_Relink_Smoke_03.gif"]
+    for p in g:
+        put_bytes(base + "/api/files" + p, src)
+    put_text(base + "/api/sets/rl-a", "\n".join(g) + "\n")
+    put_text(base + "/api/files/sets/rl-a.meta", render_meta_line(g[1], {"w": 3}) + "\n")
+    smooth0 = (sets / ".smooth").read_text() if (sets / ".smooth").exists() else None
+    put_text(base + "/api/files/sets/.smooth", (smooth0 or "") + g[2] + "\n")
+    tags0 = tag_lines(overlay)
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library")
+    page.wait_for_selector("#lib-select", timeout=20000)
+    page.wait_for_function("document.querySelector('#lib-to-set').textContent !== ''", timeout=20000)
+    page.evaluate("([p, r, t]) => import('./js/tags.js').then(async (m) => (await m.tags()).set(p, r, t))", [g[0], 3, ["relink"]])
+    wait_tags(overlay, lambda t: g[0] in t)
+
+    def select(paths):
+        page.evaluate("ps => import('./js/state.js').then(m => { m.app.selection.clear(); ps.forEach((p) => m.app.selection.add(p)); })", paths)
+        if not page.is_visible("#lib-selbar"):
+            page.click("#lib-select")
+        page.wait_for_function(f"document.querySelector('#lib-to-set').textContent.startsWith('Add {len(paths)} ')", timeout=10000)
+
+    def bulk(item):
+        page.click("#lib-sel-more")
+        page.click(item)
+
+    def toast_has(prefix):
+        page.wait_for_function("p => [...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith(p))", arg=prefix, timeout=60000)
+        return page.eval_on_selector_all("#toasts .toast", "(els, p) => els.map((e) => e.textContent).filter((x) => x.startsWith(p)).at(-1)", prefix)
+
+    select(g)
+    page.evaluate("() => { window.prompt = () => 'Relink Smoke'; }")
+    bulk("#lib-bulk-move")
+    page.wait_for_selector("#bm-folder", timeout=20000)
+    page.select_option("#bm-folder", "\n")
+    page.click("#bm-ok")
+    t = toast_has("Moved 3 GIFs")
+    moved = [f"/gifs/Relink Smoke/{p.rsplit('/', 1)[1]}" for p in g]
+    meta = (sets / "rl-a.meta").read_text() if (sets / "rl-a.meta").exists() else ""
+    check(all((overlay / p.lstrip("/")).exists() for p in moved) and not any((overlay / p.lstrip("/")).exists() for p in g),
+          f"relink: Move to folder… puts the three in the new folder ('{t}')")
+    check(not (overlay / "gifs" / "Relink_Src").exists(), "relink: the folder left empty goes")
+    sm = (sets / ".smooth").read_text()
+    tl = wait_tags(overlay, lambda t: moved[0] in t)
+    check((sets / "rl-a.txt").read_text() == "\n".join(moved) + "\n" and meta == render_meta_line(moved[1], {"w": 3}) + "\n"
+          and tl.get(moved[0]) == "r=3\tt=relink" and g[0] not in tl and moved[2] in sm and g[2] not in sm,
+          f"relink: the playlist, its favourite, the tag and Smooth motion follow ({meta!r}, {tl.get(moved[0])!r})")
+    # Renamed to one title, one GIF in the folder having it already.
+    put_bytes(base + "/api/files/gifs/Relink%20Smoke/MD_Relink_Same_01.gif", src)
+    select(moved)
+    bulk("#lib-bulk-rename")
+    page.wait_for_selector("#br-title", timeout=20000)
+    page.fill("#br-title", "Relink Same")
+    page.wait_for_function("document.querySelectorAll('#br-list .br-row').length === 3 && !document.querySelector('#br-ok').disabled", timeout=20000)
+    rows = page.eval_on_selector_all("#br-list .br-row", "els => els.map((e) => e.textContent)")
+    page.click("#br-ok")
+    toast_has("Renamed 3 GIFs")
+    same = [f"/gifs/Relink Smoke/MD_Relink_Same_{i:02d}.gif" for i in (2, 3, 4)]
+    check(all((overlay / p.lstrip("/")).exists() for p in same) and (sets / "rl-a.txt").read_text() == "\n".join(same) + "\n",
+          f"relink: Rename… to a title one GIF has numbers on from it, none alike ({rows})")
+    # A move that fails halfway.
+    expected.append("/api/files/move")
+    get_json(base + "/mock/fail-move?after=1")
+    select(same)
+    bulk("#lib-bulk-move")
+    page.wait_for_selector("#bm-folder", timeout=20000)
+    page.select_option("#bm-folder", "Consoles")
+    page.click("#bm-ok")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.bad')].some((e) => e.textContent.startsWith('Moved 1 of 3'))", timeout=60000)
+    bad = page.eval_on_selector_all("#toasts .toast.bad", "els => els.map((e) => e.textContent).filter((x) => x.startsWith('Moved 1 of 3')).at(-1)")
+    get_json(base + "/mock/fail-move?after=-1")
+    expected.remove("/api/files/move")
+    lines = (sets / "rl-a.txt").read_text().split("\n")[:-1]
+    check("Relink Same 03" in bad and lines[0] == "/gifs/Consoles/MD_Relink_Same_02.gif"
+          and all((overlay / p.lstrip("/")).exists() for p in lines),
+          f"relink: a move failing halfway names the GIF, the ones moved are rewritten, nothing dangles ('{bad}', {lines})")
+    select(lines)
+    bulk("#lib-bulk-del")
+    toast_has("Deleted 3 GIFs")
+    tl = wait_tags(overlay, lambda t: not any("Relink" in p for p in t))
+    check(not any((overlay / p.lstrip("/")).exists() for p in lines) and (sets / "rl-a.txt").read_text().strip() == ""
+          and not any("Relink" in p for p in tl), "relink: Delete… takes them off the card, out of the playlist and the tags")
+    no_leaks(page, "library bulk")
+    page.context.close()
+    for p in ("/sets/rl-a.txt", "/gifs/Relink Smoke/MD_Relink_Same_01.gif"):
+        delete_path(base, p)
+    if smooth0 is None:
+        delete_path(base, "/sets/.smooth")
+    else:
+        put_text(base + "/api/files/sets/.smooth", smooth0)
+    check(tag_lines(overlay) == tags0, "relink: the tags as they were")
+
+
 def root_manifest_rows(page: Page) -> list[str]:
     return page.eval_on_selector_all("#sets-list [data-path^='/filelist']", "els => els.map(e => e.dataset.path)")
 
@@ -4539,6 +4644,7 @@ def mock_pass(browser) -> None:
         rename_checks(browser, base, overlay, errors)
         smart_checks(browser, base, overlay, errors)
         tags_checks(browser, base, overlay, errors)
+        relink_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)

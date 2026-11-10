@@ -250,7 +250,25 @@ export async function mount(el) {
     if (!paths.length) { toast('select some GIFs first', 'bad'); return; }
     actions(btn, 'lib-bulk', [
       ['lib-bulk-tag', 'Tag…', () => tagsMod().then((m) => m.bulkTag(btn, paths, done))],
-      ['lib-bulk-rate', 'Rate…', () => tagsMod().then((m) => m.bulkRate(btn, paths, done))]], `${paths.length.toLocaleString()} GIFs`);
+      ['lib-bulk-rate', 'Rate…', () => tagsMod().then((m) => m.bulkRate(btn, paths, done))],
+      app.device && ['lib-bulk-move', 'Move to folder…', () => bulk('bulkMove', paths)],
+      app.device && ['lib-bulk-rename', 'Rename…', () => bulk('bulkRename', paths)],
+      app.device && ['lib-bulk-del', 'Delete…', () => bulk('bulkDelete', paths), '.danger']], `${paths.length.toLocaleString()} GIFs`);
+  }
+  async function bulk(fn, paths) {
+    const done = await (await import('./details.js'))[fn](paths, opts());
+    if (!done.length) return;
+    if (current && done.some((x) => x.from === current.path)) {
+      current = null;
+      tree.cur = '';
+      body.hidden = true;
+      side.classList.remove('open');
+      pv.clear();
+      cap.textContent = 'Pick a GIF to see it here';
+    }
+    await ov.load(ov.path);
+    await tree.load();
+    sync();
   }
 
   async function reveal(path) {
