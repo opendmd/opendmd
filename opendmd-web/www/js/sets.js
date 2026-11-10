@@ -6,7 +6,7 @@
 // playlist's search: js/smart.js) anew. Smart playlists are written again
 // from their searches when the view is shown (at most once a minute).
 
-import { app, SET_NAME, SET_NAME_RULE } from './state.js';
+import { app, dirty, SET_NAME, SET_NAME_RULE } from './state.js';
 import { actions, closeMenu, Overrides, fileFor } from './overrides.js';
 import { h, clear, emit, on, toast, lines, note, isSys, byNice, gone } from './util.js';
 
@@ -99,11 +99,19 @@ export async function mount(el) {
 
   async function open(p) {
     if (edi && !(await edi.guard())) return;
+    // Changed in the editor while the playlist is read (its rows are still
+    // there to edit, and to save: the playlist open already, above all),
+    // the editor wins and this open is dropped. (Not for a smart playlist
+    // written again from its search meanwhile: saved and smartPaths move
+    // together.)
+    const d0 = app.draft, saved0 = d0.saved;
+    const edited = () => app.draft !== d0 || dirty(d0) || (d0.saved !== saved0 && d0.saved !== d0.smartPaths);
     try {
       const text = await app.text(p.path, true);
       if (text == null) throw new Error('not served by this source');
       const paths = lines(text).filter((p) => !gone(p));
       const smart = (await smartMod()).get(p.path);
+      if (edited()) return;
       app.draft = { paths, name: p.root ? '' : p.value, path: p.path, saved: paths.join('\n'), smart, smartPaths: paths.join('\n') };
       (await editor()).opened();
       for (const r of setsList.children) r.classList.toggle('cur', r.dataset.path === p.path);
