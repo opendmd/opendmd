@@ -420,7 +420,7 @@ function needs(e: Tile): string {
 function tile(e: Tile, pic: string): string {
   const [lic, url] = LICENCE_LINKS[e.licence];
   const badges = ([
-    ["look", "It can be the panel's look: drawn over every GIF (Settings › Look)", !!e.look],
+    ["look", "It can be the panel's look: drawn over every GIF (Settings › Panel)", !!e.look],
     ["on the panel", "The web app comes with it: in Formulas, under Bundled", e.bundle],
   ] as const).filter(([, , on]) => on).map(([b, why]) => `<span class="fbadge" title="${esc(why)}">${esc(b)}</span>`).join("");
   const h = esc(shareHash(e));
