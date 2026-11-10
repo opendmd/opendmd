@@ -106,7 +106,7 @@ export async function mount(el) {
     apply();
   } }, '★ 4+');
   const stars = () => {
-    starChip.hidden = !app.tags || ![...app.tags.book.paths()].some((p) => app.tags.get(p).r);
+    starChip.hidden = !app.tags?.book.rated;
     starChip.classList.toggle('on', /(^|\s)rating>=4(\s|$)/.test(search.value));
   };
   const goneMsg = h('span.grow');

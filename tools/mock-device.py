@@ -149,6 +149,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   work, the next `POST /api/files/move` is a 404 (as when the GIF went
   meanwhile), then moves work again; `after=-1` turns it off.
   web-smoke's bulk move checks a batch that stops halfway with it.
+- **`GET /mock/fail-list?dir=<card dir>&n=N`** (mock only): the next N
+  listings of that directory are a 500 (a card read error). web-smoke's
+  smart playlist checks refresh over a folder that cannot be read.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
   (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
@@ -3401,6 +3404,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (m_exact("/mock/fail-move"), {"GET": self.h_mock_fail_move}),
+                (m_exact("/mock/fail-list"), {"GET": self.h_mock_fail_list}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
@@ -5142,6 +5146,17 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.www_legacy = v == "1"
             self.send_json(200, {"legacy": getattr(ctx, "www_legacy", False)})
 
+        def h_mock_fail_list(self, path):
+            # GET /mock/fail-list?dir=<card dir>&n=N (mock only): the next N
+            # listings of that directory are a 500 (a card read error).
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            d, n = query_param(q, "dir"), query_param(q, "n")
+            if not hasattr(ctx, "fail_list"):
+                ctx.fail_list = {}
+            if d is not None:
+                ctx.fail_list[d.rstrip("/")] = int(n or 1)
+            self.send_json(200, {"dirs": ctx.fail_list})
+
         def h_mock_fail_move(self, path):
             # GET /mock/fail-move?after=N (mock only): after N more moves
             # that work, the next POST /api/files/move is a 404, as when the
@@ -5173,6 +5188,11 @@ def make_handler(ctx: Context, quiet: bool):
             rel = card_path(dir_param)
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
+                return
+            fl = getattr(ctx, "fail_list", {})
+            if fl.get(dir_param.rstrip("/"), 0) > 0:  # injected (GET /mock/fail-list)
+                fl[dir_param.rstrip("/")] -= 1
+                self.send_error_json(500, "card read failed (injected)")
                 return
             sizes_raw = query_param(query, "sizes")
             sizes = sizes_raw in ("1", "true")

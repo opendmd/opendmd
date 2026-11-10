@@ -35,18 +35,20 @@ export const get = (p) => map?.get(lc(p)) || null;
 
 const write = async () => app.writeSide(FILE, (await mod()).renderSidecar([...map.values()].map((s) => ({ path: s.path, f: { q: s.q, from: s.from, at: String(s.at) } }))));
 
+// Each change is made to the file as it is now (another browser may have
+// written it since).
 export async function put(path, q, from = '') {
-  await load();
+  await load(true);
   map.set(lc(path), { path, q, from, at: Date.now() / 1000 | 0 });
   await write();
 }
 export async function drop(path) {
-  await load();
+  await load(true);
   if (map.delete(lc(path))) await write();
 }
 // A playlist renamed (`move`) or duplicated: its search goes with it.
 export async function copy(from, to, move) {
-  await load();
+  await load(true);
   const s = map.get(lc(from));
   if (!s) return;
   if (move) map.delete(lc(from));
@@ -63,7 +65,10 @@ export async function everyGif(fresh) {
   const out = [];
   for (const c of [...dirs.filter((d) => !isSys(d)), ...dirs.filter(isSys)]) {
     if (fresh) forget(c);
-    for (const it of (await listCat(c)) || []) out.push(it.path);
+    const l = await listCat(c);
+    // (A folder that could not be read: no playlist written without its GIFs.)
+    if (!l) throw new Error('a folder couldn’t be read: try again');
+    for (const it of l) out.push(it.path);
   }
   listed = true;
   return out.join('\n');
@@ -95,7 +100,7 @@ export async function refresh(path, fresh) {
     await savePlaylist(path, paths.join('\n') + '\n');
     // Open in the editor with nothing changed by hand: it shows the new lines.
     const d = app.draft;
-    if (d.path === path && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = paths.join('\n'); emit('draft'); }
+    if (d.path === path && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
   }
   // (When it was last written, or looked at by hand: the row's "updated".)
   if (changed || fresh) { s.at = Date.now() / 1000 | 0; await write(); }
@@ -130,8 +135,8 @@ export async function refreshAll(which = () => true, fresh, cheap) {
 
 // What a smart playlist's line says, for a row or the editor's header:
 // "Mega Drive · ★ 4+ · updated 10 Nov" (once `load` or `find` has run).
-export function summary(s) {
+export async function summary(s) {
   let d = '';
-  try { const w = new A.Search(s.q); d = w.describe(); w.free(); } catch (e) { d = e.message || String(e); }
+  try { const w = new (await mod()).Search(s.q); d = w.describe(); w.free(); } catch (e) { d = e.message || String(e); }
   return d + (s.at ? ' · updated ' + new Date(s.at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
 }

@@ -95,6 +95,12 @@ impl TagBook {
             .collect()
     }
 
+    /// Is any GIF rated?
+    #[wasm_bindgen(getter)]
+    pub fn rated(&self) -> bool {
+        self.set.iter().any(|l| l.rating.is_some())
+    }
+
     /// Every path a line names.
     pub fn paths(&self) -> Array {
         self.set

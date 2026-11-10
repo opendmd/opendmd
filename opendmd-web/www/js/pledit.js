@@ -212,7 +212,7 @@ export function editor(se, ctx) {
     saveB.textContent = root ? 'Save as new' : 'Save';
     if (playB) playB.textContent = root ? 'Save as new & play' : 'Save & play';
     smartRow.hidden = !d.smart;
-    if (d.smart) import('./smart.js').then((m) => { smartCap.textContent = 'Built from a search: ' + m.summary(d.smart); });
+    if (d.smart) import('./smart.js').then((m) => m.summary(d.smart)).then((t) => { smartCap.textContent = 'Built from a search: ' + t; });
   }
   // A playlist (or a new one) is in app.draft: show it.
   function opened() {
