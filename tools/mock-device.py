@@ -146,8 +146,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   is otherwise a hash of `--root`, and a `POST /api/card/format` gives a new
   one. web-smoke's card-swap check uses it.
 - **`GET /mock/fail-move?after=N`** (mock only): after N more moves that
-  work, the next `POST /api/files/move` is a 409 (as when its target
-  appeared meanwhile), then moves work again; `after=-1` turns it off.
+  work, the next `POST /api/files/move` is a 404 (as when the GIF went
+  meanwhile), then moves work again; `after=-1` turns it off.
   web-smoke's bulk move checks a batch that stops halfway with it.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
@@ -3578,9 +3578,12 @@ def make_handler(ctx: Context, quiet: bool):
 
         def serve_card(self, fpath_rel: str, rel_full: str) -> None:
             rel, io = fpath_rel, ctx.io
+            # (Counted: GIFs and copies, as /mock/io says; a playlist or one
+            # of the web app's lists in /sets is not.)
+            n = 1 if rel_full.startswith(("/gifs/", "/cache/")) else 0
             with ctx.lock:
-                io["gets"] += 1
-                io["inflight"] += 1
+                io["gets"] += n
+                io["inflight"] += n
                 io["max"] = max(io["max"], io["inflight"])
             try:
                 fpath = ctx.fs.read_path(rel)
@@ -3595,7 +3598,7 @@ def make_handler(ctx: Context, quiet: bool):
                 self.stream_paced(fpath, rel, io)
             finally:
                 with ctx.lock:
-                    io["inflight"] -= 1
+                    io["inflight"] -= n
 
         # -- JSON API handlers -----------------------------------------------
 
@@ -5083,7 +5086,7 @@ def make_handler(ctx: Context, quiet: bool):
                 if fail >= 0:
                     ctx.fail_move = fail - 1
                     if fail == 0:
-                        self.send_error_json(409, f"{dst} already exists")
+                        self.send_error_json(404, src)
                         return
                 if ctx.fs.read_path(srel) is None:
                     self.send_error_json(404, src)
@@ -5141,9 +5144,9 @@ def make_handler(ctx: Context, quiet: bool):
 
         def h_mock_fail_move(self, path):
             # GET /mock/fail-move?after=N (mock only): after N more moves
-            # that work, the next POST /api/files/move is a 409, as when the
-            # target appeared meanwhile (a PC, another browser); then moves
-            # work again. `after=-1` turns it off.
+            # that work, the next POST /api/files/move is a 404, as when the
+            # GIF went meanwhile (a PC, another browser); then moves work
+            # again. `after=-1` turns it off.
             q = self.path.partition("?")[2] if "?" in self.path else None
             n = query_param(q, "after")
             if n is not None:
