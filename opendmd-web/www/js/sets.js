@@ -139,14 +139,14 @@ export async function mount(el) {
       await (await smartMod()).idle();
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
       // (After any write of it still under way: a refresh's would bring it
-      // back. A listing or count under way is dropped: it would read it gone.)
+      // back; one still reading it writes nothing. A listing or count under
+      // way is dropped: it would read it gone.)
       ltok++; ctok++;
-      await (await import('./gifs.js')).deletePlaylist(path);
-      app.texts.delete(path);
-      await (await smartMod()).drop(path);
+      const sm = await smartMod(), g = await import('./gifs.js');
+      await sm.letGo(path, async () => { await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
       toast(`deleted "${set}"`, 'ok');
-      loadSets();
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
+    loadSets();
   }
 
   // Rename and Duplicate (no request renames a playlist): its lines and its
@@ -162,12 +162,16 @@ export async function mount(el) {
     if (text == null) throw new Error('not served by this source');
     const ov = await new Overrides().load(p.path);
     if (!ov.ok) throw new Error('its favourites could not be read');
-    const g = await import('./gifs.js');
+    const g = await import('./gifs.js'), sm = await smartMod();
     await g.savePlaylist(to, text);
     const meta = app.wasm.renderOverrides([...ov.map.values()]);
     if (meta) await app.src.writeFile(fileFor(to), meta);
-    await (await smartMod()).copy(p.path, to, move);
-    if (!move) return;
+    if (!move) { await sm.copy(p.path, to); return; }
+    // (Renamed away: a refresh of the old name under way writes nothing.)
+    await sm.letGo(p.path, () => moveRest(p, n, to, g, sm));
+  }
+  async function moveRest(p, n, to, g, sm) {
+    await sm.copy(p.path, to, true);
     if (app.device && app.activeSet === p.value) { await app.src.putConfig({ set: n }); await app.refreshStatus(); await app.refreshConfig(); }
     if (app.src.schedule) {
       const s = await app.src.schedule();

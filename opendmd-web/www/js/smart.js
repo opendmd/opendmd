@@ -46,14 +46,17 @@ export async function drop(path) {
   await load(true);
   if (map.delete(lc(path))) await write();
 }
-// The editor saving a smart playlist changed by hand (`save` writes it):
-// it stops being smart, and a refresh already under way does not write
-// the search's list back over it.
-const byHand = new Set();
-export async function handSave(path, save) {
-  byHand.add(lc(path));
-  try { await save(); await drop(path); } finally { byHand.delete(lc(path)); }
+// A playlist letting go of its search while `fn` runs (saved by hand,
+// deleted, renamed away): a refresh already under way writes nothing to
+// it, the playlist nor its line, even before its line is dropped.
+const leaving = new Set();
+export async function letGo(path, fn) {
+  leaving.add(lc(path));
+  try { return await fn(); } finally { leaving.delete(lc(path)); }
 }
+// The editor saving a smart playlist changed by hand (`save` writes it):
+// it stops being smart.
+export const handSave = (path, save) => letGo(path, async () => { await save(); await drop(path); });
 // A playlist renamed (`move`) or duplicated: its search goes with it.
 export async function copy(from, to, move) {
   await load(true);
@@ -99,9 +102,9 @@ export async function refresh(path, fresh) {
   const s = get(path);
   if (!s) return null;
   const paths = await find(s.q, s.from, fresh), text = await app.text(path, true);
-  // Still this search's playlist: not deleted, saved by hand or given
-  // another search meanwhile (asked again after each wait).
-  const mine = () => { const c = get(path); return !byHand.has(lc(path)) && !!c && c.q === s.q && c.from === s.from; };
+  // Still this search's playlist: not deleted, renamed, saved by hand or
+  // given another search meanwhile (asked again after each wait).
+  const mine = () => { const c = get(path); return !leaving.has(lc(path)) && !!c && c.q === s.q && c.from === s.from; };
   if (text == null || !mine()) return null;
   const old = lines(text).filter((p) => !gone(p));
   const was = new Set(old.map(lc)), now = new Set(paths.map(lc));
@@ -111,7 +114,7 @@ export async function refresh(path, fresh) {
     await savePlaylist(path, paths.join('\n') + '\n');
     // Open in the editor with nothing changed by hand: it shows the new lines.
     const d = app.draft;
-    if (d.path === path && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
+    if (d.path === path && mine() && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
   }
   // (When it was last written, or looked at by hand: the row's "updated".)
   // (The line as the map has it now: a load since has replaced `s`.)
