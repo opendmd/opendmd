@@ -11,7 +11,7 @@
 
 import { app, setValue } from './state.js';
 import { fileFor } from './overrides.js';
-import { savePlaylist } from './gifs.js';
+import { savePlaylist, nextName } from './gifs.js';
 import { emit, base, dir, enc } from './util.js';
 
 const lc = (s) => s.toLowerCase();
@@ -62,14 +62,22 @@ async function dropEmpty(path) {
   } catch { /* an older device keeps the empty folder */ }
 }
 
-// -> {done: [{from, to}], failed: {from, to, error} | null}. `step(n)`
+// -> {done: [{from, to}], failed: {from, to, error} | null} (`to` as it
+// was written: a name taken meanwhile gets the next number). `step(n)`
 // after each one done.
 export async function relink(pairs, step) {
   const done = [];
   let failed = null;
   for (const p of pairs) {
     try {
-      if (p.to) await app.src.move(p.from, p.to);
+      // A name taken since it was picked (a names list gone stale): the
+      // next number, as Add GIFs does.
+      if (p.to) for (let k = 0; ; k++) {
+        try { await app.src.move(p.from, p.to); break; } catch (e) {
+          if (e.status !== 409 || k >= 20) throw e;
+          p.to = dir(p.to) + '/' + nextName(base(p.to));
+        }
+      }
       else {
         await app.src.deleteFile(p.from);
         // (The device's DELETE takes the prepared copy; this is the cleanup on one that did not.)

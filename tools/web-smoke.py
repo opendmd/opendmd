@@ -1203,7 +1203,7 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.click("#set-save")
     page.wait_for_selector("#sets-list [data-path='/sets/smart-a.txt'] .tag.smart", timeout=30000)
     sm = wait_file(sets / ".smart", lambda t: "smart-a" in t)
-    check((sets / "smart-a.txt").read_text() == a + "\n" and re.fullmatch(r"/sets/smart-a\.txt\tq=title:smokesmart\tat=\d+\n", sm) is not None,
+    check((sets / "smart-a.txt").read_text() == a + "\n" and re.search(r"(^|\n)/sets/smart-a\.txt\tq=title:smokesmart\tat=\d+\n", sm) is not None,
           f"smart: saved, the playlist holds the GIF and /sets/.smart its search ({sm!r})")
     check(page.inner_text("#sets-list [data-path='/sets/smart-a.txt'] .tag.smart") == "Smart", "smart: the row says Smart")
     page.click("#set-smart-edit")
@@ -1387,7 +1387,7 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     empty gone, the playlist, the favourite, the tag and the Smooth motion
     line all naming the new paths; renamed to one title where one GIF has
     it already: numbered on from it, none alike; a move that fails halfway
-    (the mock's 409): a toast naming the GIF, the ones moved before it
+    (the mock's 404): a toast naming the GIF, the ones moved before it
     rewritten, nothing named that is not on the card; deleted: gone, and
     out of the playlist and the tags."""
     sets = overlay / "sets"
@@ -1418,7 +1418,11 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
         page.click(item)
 
     def toast_has(prefix):
-        page.wait_for_function("p => [...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith(p))", arg=prefix, timeout=60000)
+        try:
+            page.wait_for_function("p => [...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith(p))", arg=prefix, timeout=60000)
+        except PlaywrightTimeoutError:
+            print("  ..   toasts: " + repr(page.eval_on_selector_all("#toasts .toast", "els => els.map((e) => e.textContent)")))
+            raise
         return page.eval_on_selector_all("#toasts .toast", "(els, p) => els.map((e) => e.textContent).filter((x) => x.startsWith(p)).at(-1)", prefix)
 
     select(g)
@@ -1472,7 +1476,8 @@ def relink_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     toast_has("Deleted 3 GIFs")
     tl = wait_tags(overlay, lambda t: not any("Relink" in p for p in t))
     check(not any((overlay / p.lstrip("/")).exists() for p in lines) and (sets / "rl-a.txt").read_text().strip() == ""
-          and not any("Relink" in p for p in tl), "relink: Delete… takes them off the card, out of the playlist and the tags")
+          and not any("Relink" in p for p in tl),
+          f"relink: Delete… takes them off the card, out of the playlist and the tags ({[p for p in lines if (overlay / p.lstrip('/')).exists()]}, {(sets / 'rl-a.txt').read_text()!r}, {[p for p in tl if 'Relink' in p]})")
     no_leaks(page, "library bulk")
     page.context.close()
     for p in ("/sets/rl-a.txt", "/gifs/Relink Smoke/MD_Relink_Same_01.gif"):

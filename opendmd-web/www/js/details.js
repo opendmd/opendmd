@@ -30,7 +30,7 @@
 // user's own (js/tags.js), never a part of the name; never bucket or a
 // copy's path.
 
-import { app } from './state.js';
+import { app, listOr } from './state.js';
 import { art } from './artmod.js';
 import { authorOf } from './gifs.js';
 import { h, clear, toast, base, enc, label, niceName, byNice } from './util.js';
@@ -82,12 +82,14 @@ export function guess(name) {
 
 // Per category: its file names (lowercased) and, per platform + title, the
 // highest number in use. Listed once per dialog.
-export function listings(known) {
+// `exact`: listed in full, not from the device's names file (which can
+// miss a GIF added since): for moves, where a name met costs a retry.
+export function listings(known, exact) {
   const got = new Map();
   return (c) => {
     if (!got.has(c)) {
       // A new category has nothing in it (and listing it would be a 404).
-      got.set(c, (known.includes(c) ? (app.src.names || app.src.list).call(app.src, `/gifs/${c}`).catch(() => []) : Promise.resolve([])).then((files) => {
+      got.set(c, (known.includes(c) ? ((!exact && app.src.names) || app.src.list).call(app.src, `/gifs/${c}`).catch(() => []) : Promise.resolve([])).then((files) => {
         const names = new Set(), max = new Map();
         for (const f of files) {
           if (f.dir) continue;
@@ -307,7 +309,9 @@ async function batch(pairs, verb, done) {
 // The names `fields(f)` gives each of `paths` (`nameFields`' shape), picked
 // against where each lands: [{from, to | null, why}] (`to` null: unchanged).
 async function names(m, paths, opts, fields) {
-  const listing = listings(opts.categories), taken = new Set(), out = [];
+  // (The card's folders as they are now: one may be new since the Library listed them.)
+  const known = (await listOr('/gifs').catch(() => [])).filter((d) => d.dir).map((d) => d.name);
+  const listing = listings(known, true), taken = new Set(), out = [];
   for (const from of paths) {
     const f = m.nameFields(from), g = fields(f, from);
     if (g === f) { out.push({ from, to: null }); continue; }
