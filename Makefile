@@ -132,7 +132,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -352,6 +352,12 @@ site-font:
 	uv run tools/site-font.py
 site-scene:
 	uv run tools/site-scene.py
+
+# The OpenDMD mark and what is made from it (tools/logo.py): docs/images/
+# logo.*, avatar-*, social-preview.png and Create Art's app icons, all
+# committed. Only needed to change the mark.
+logo:
+	uv run tools/logo.py
 
 # The third-party licence notices (tools/notices.py; licenses/ holds the
 # config and the two committed files). Both are generated from what is

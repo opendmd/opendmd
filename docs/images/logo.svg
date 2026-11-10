@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+<title>OpenDMD</title>
+<rect x="0" y="0" width="500" height="500" rx="90" fill="#0d0e11"/>
+<rect x="88" y="131.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="124" y="131.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="160" y="131.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="196" y="131.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="88" y="167.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="196" y="167.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="88" y="203.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="196" y="203.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="88" y="239.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="196" y="239.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="88" y="275.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="124" y="275.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="160" y="275.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="196" y="275.92" width="36.5" height="36.5" fill="#ecebe7"/>
+<rect x="268" y="131.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="304" y="131.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="340" y="131.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="268" y="167.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="376" y="167.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="268" y="203.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="376" y="203.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="268" y="239.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="376" y="239.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="268" y="275.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="304" y="275.92" width="36.5" height="36.5" fill="#ffb902"/>
+<rect x="340" y="275.92" width="36.5" height="36.5" fill="#ffb902"/>
+<circle cx="106" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="142" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="178" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="214" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="250" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="286" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="322" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="358" cy="355.12" r="12.96" fill="#ffb902"/>
+<circle cx="394" cy="355.12" r="12.96" fill="#ffb902"/>
+</svg>
