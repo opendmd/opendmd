@@ -83,8 +83,10 @@ export async function mount(el) {
   async function refreshOne(p) {
     try {
       const r = await (await smartMod()).refresh(p.path, true);
-      toast(r && (r.added || r.removed) ? `“${p.label}”: +${r.added} −${r.removed}` : `“${p.label}” is up to date`, 'ok');
+      // (None: let go of meanwhile, deleted, renamed or saved by hand.)
+      if (r) toast(r.added || r.removed ? `“${p.label}”: +${r.added} −${r.removed}` : `“${p.label}” is up to date`, 'ok');
     } catch (e) { toast(`refresh: ${e.message || e}`, 'bad'); }
+    emit('refreshed', p.path);
     loadSets();
   }
   // Every smart playlist from its search, quietly (on show, once a minute).
@@ -143,7 +145,9 @@ export async function mount(el) {
       // way is dropped: it would read it gone.)
       ltok++; ctok++;
       const sm = await smartMod(), g = await import('./gifs.js');
+      // (Its text forgotten again after: a refresh's read answered meanwhile keeps it.)
       await sm.letGo(path, async () => { await g.deletePlaylist(path); app.texts.delete(path); await sm.drop(path); });
+      app.texts.delete(path);
       toast(`deleted "${set}"`, 'ok');
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
     loadSets();
@@ -157,21 +161,25 @@ export async function mount(el) {
   const taken = (n) => known.some((k) => lc(k) === lc(`/sets/${n}.txt`));
   const free = (n) => { let i = 2; while (taken(`${n} ${i}`)) i++; return `${n} ${i}`; };
   async function copyTo(p, n, move) {
-    if (move) await (await smartMod()).idle();
-    const to = `/sets/${n}.txt`, text = await app.text(p.path, true);
+    const to = `/sets/${n}.txt`, sm = await smartMod();
+    if (!move) return copyRest(p, n, to, false, sm);
+    await sm.idle();
+    // Renamed away: a refresh of the old name (or of the new one, the same
+    // file in a rename of case alone) under way writes nothing.
+    await sm.letGo(p.path, () => sm.letGo(to, () => copyRest(p, n, to, true, sm)));
+    app.texts.delete(p.path);
+  }
+  async function copyRest(p, n, to, move, sm) {
+    const text = await app.text(p.path, true);
     if (text == null) throw new Error('not served by this source');
     const ov = await new Overrides().load(p.path);
     if (!ov.ok) throw new Error('its favourites could not be read');
-    const g = await import('./gifs.js'), sm = await smartMod();
+    const g = await import('./gifs.js');
     await g.savePlaylist(to, text);
     const meta = app.wasm.renderOverrides([...ov.map.values()]);
     if (meta) await app.src.writeFile(fileFor(to), meta);
-    if (!move) { await sm.copy(p.path, to); return; }
-    // (Renamed away: a refresh of the old name under way writes nothing.)
-    await sm.letGo(p.path, () => moveRest(p, n, to, g, sm));
-  }
-  async function moveRest(p, n, to, g, sm) {
-    await sm.copy(p.path, to, true);
+    await sm.copy(p.path, to, move);
+    if (!move) return;
     if (app.device && app.activeSet === p.value) { await app.src.putConfig({ set: n }); await app.refreshStatus(); await app.refreshConfig(); }
     if (app.src.schedule) {
       const s = await app.src.schedule();
@@ -184,7 +192,7 @@ export async function mount(el) {
     app.texts.delete(p.path);
     // Open in the editor: it follows, its overrides read from the new name.
     const d = app.draft;
-    if (d.path === p.path) { d.path = to; d.name = n; d.smart = (await smartMod()).get(to); emit('draft'); }
+    if (d.path === p.path) { d.path = to; d.name = n; d.smart = sm.get(to); emit('draft'); }
   }
   async function rename(p) {
     const n = (prompt(`Rename “${p.label}” to`, p.value) || '').trim().replace(/\.txt$/, '');

@@ -1268,6 +1268,7 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     page.wait_for_function("document.querySelector('#set-title').textContent === 'smart-b 2' && !document.querySelector('#set-smart').hidden"
                            " && document.querySelectorAll('#set-entries .vrow[data-path]:not([hidden])').length === 2", timeout=10000)
     page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.size)", timeout=10000)
+    page.evaluate("import('./js/util.js').then((m) => { window.__refreshed = []; m.on('refreshed', (p) => window.__refreshed.push(p)); })")
     held = []
     is_pb = lambda r: r.request.method == "GET" and urllib.parse.unquote(r.request.url).endswith(pb)
     page.route("**/sets/smart-b*", lambda r: held.append(r) if is_pb(r) else r.continue_())
@@ -1282,7 +1283,7 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     for r in held:
         r.continue_()
     page.unroute("**/sets/smart-b*")
-    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((t) => /“smart-b 2”(:| is up to date)/.test(t.textContent))", timeout=20000)
+    page.wait_for_function("window.__refreshed.includes('/sets/smart-b 2.txt')", timeout=20000)
     got = (sets / "smart-b 2.txt").read_text()
     check(len(held) == 1 and got == b + "\n" and "smart-b 2" not in (sets / ".smart").read_text(),
           f"smart: a refresh under way does not write the search back over a hand save ({len(held)} read held, {got!r})")
@@ -1373,6 +1374,8 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
     # Every toast shown, kept (one lasts 4 s: a slow page may miss it).
     page.evaluate("""() => { window.__toasts = []; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes)
       if (n.classList?.contains('toast')) window.__toasts.push(n); }).observe(document.body, { childList: true, subtree: true }); }""")
+    # And every row Refresh finished (a refresh let go of meanwhile says nothing).
+    page.evaluate("import('./js/util.js').then((m) => { window.__refreshed = []; m.on('refreshed', (p) => window.__refreshed.push(p)); })")
     smart_line = lambda n: re.search(rf"(^|\n)/sets/{n}\.txt\t[^\n]*", (sets / ".smart").read_text())
     is_req = lambda r, method, end: r.request.method == method and urllib.parse.unquote(r.request.url).split("?")[0].endswith(end)
     answered: list[str] = []
@@ -1422,7 +1425,7 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
         page.wait_for_function("import('./js/state.js').then((m) => !m.app.tq.size)", timeout=10000)
 
     def refreshed(n: str) -> None:
-        page.wait_for_function(f"window.__toasts.some((t) => /“{n}”(:| is up to date)/.test(t.textContent))", timeout=30000)
+        page.wait_for_function(f"window.__refreshed.includes('/sets/{n}.txt')", timeout=30000)
 
     try:
         # A refresh's write still unanswered when a hand save starts: the hand
@@ -1550,6 +1553,9 @@ def smart_more_checks(browser, base: str, overlay: Path, errors: list[str]) -> N
         page.wait_for_timeout(1000)
         check(len(held) == 1 and not back and not (sets / "sm-r.txt").exists() and not smart_line("sm-r"),
               f"smart: a refresh still reading a playlist when it is deleted writes nothing ({back}, {(sets / 'sm-r.txt').exists()}, {bool(smart_line('sm-r'))})")
+        said = page.evaluate("window.__toasts.map((t) => t.textContent).filter((t) => t.includes('“sm-r”'))")
+        kept = page.evaluate("import('./js/state.js').then((m) => m.app.texts.has('/sets/sm-r.txt'))")
+        check(not said and not kept, f"smart: that refresh says nothing, and the deleted playlist's text is not kept ({said}, kept {kept})")
     finally:
         release_all()
     page.context.close()
