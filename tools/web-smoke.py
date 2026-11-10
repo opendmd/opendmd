@@ -1249,6 +1249,136 @@ def smart_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
         delete_path(base, p)
 
 
+def tag_lines(overlay: Path) -> dict[str, str]:
+    """/sets/.tags as the mock has it: path -> its fields."""
+    f = overlay / "sets" / ".tags"
+    if not f.exists():
+        f = CARD / "sets" / ".tags"
+    text = f.read_text() if f.exists() else ""
+    return {l.split("\t", 1)[0]: l.split("\t", 1)[1] for l in text.split("\n") if "\t" in l}
+
+
+def wait_tags(overlay: Path, ok, timeout_s: float = 15) -> dict[str, str]:
+    deadline = time.time() + timeout_s
+    t = tag_lines(overlay)
+    while time.time() < deadline and not ok(t):
+        time.sleep(0.1)
+        t = tag_lines(overlay)
+    return t
+
+
+def tags_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """The user's tags and stars (js/tags.js, /sets/.tags), in a fresh
+    browser: Details' stars (a tap on the one set clears it) and a tag
+    typed in, each a line of /sets/.tags; the tag's chip searches
+    `tag:"smoke tag"` (1 GIF); Now's line has them; the ★ 4+ chip;
+    words it cannot read say why; two GIFs selected, More ▾ Tag… adds one
+    to both (their rows show it), the toast's Undo takes it off again,
+    Rate… gives both two stars; tags kept for GIFs no longer on the card
+    are noticed after a full search: Move their tags puts them on the GIF
+    of the same name elsewhere, Forget them drops the rest; on a phone the
+    stars are 36 px targets."""
+    sets = overlay / "sets"
+    before = tag_lines(overlay)
+    orig = (CARD / "sets" / ".tags").read_text() if (CARD / "sets" / ".tags").exists() else None
+    g = [p for p in card_gifs() if p.startswith("/gifs/Consoles/SNES_") and "Metroid" not in p and p not in before][:2]
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#library")
+    lib_row(page, g[0])
+    page.wait_for_selector("#lib-d-stars .star", timeout=60000)
+    page.click("#lib-d-stars [data-n='4']")
+    t = wait_tags(overlay, lambda t: t.get(g[0]) == "r=4")
+    check(t.get(g[0]) == "r=4" and page.get_attribute("#lib-d-stars [data-n='4']", "aria-checked") == "true",
+          f"tags: four stars in Details -> /sets/.tags has '{g[0]}\\tr=4' ({t.get(g[0])!r})")
+    page.click("#lib-d-stars [data-n='4']")
+    t = wait_tags(overlay, lambda t: g[0] not in t)
+    check(g[0] not in t, "tags: a tap on the stars set clears them (the line goes)")
+    page.click("#lib-d-stars [data-n='4']")
+    page.fill("#lib-d-tag", "Smoke  Tag")
+    page.press("#lib-d-tag", "Enter")
+    t = wait_tags(overlay, lambda t: t.get(g[0]) == "r=4\tt=smoke tag")
+    check(t.get(g[0]) == "r=4\tt=smoke tag" and page.locator("#lib-d-utags [data-tag='smoke tag']").count() == 1,
+          f"tags: a tag typed in, kept lowercased and tidied ({t.get(g[0])!r})")
+    page.click("#lib-d-utags [data-tag='smoke tag'] button.txt")
+    wait_counted(page)
+    check(page.input_value("#lib-search") == 'tag:"smoke tag"' and lib_count(page)[0] == 1,
+          f"tags: its chip searches for it ({page.input_value('#lib-search')!r}, {page.inner_text('#lib-count')})")
+    check(page.locator(f"#lib-list .vrow[data-path={json.dumps(g[0])}] .ut").inner_text().replace("\n", " ") == "★4 smoke tag",
+          f"tags: the row shows its stars and tag ({page.locator('#lib-list .vrow .ut').first.inner_text()!r})")
+    page.evaluate("p => import('./js/state.js').then(m => m.app.play(p))", g[0])
+    goto_view(page, "now")
+    page.wait_for_function("(t => t.includes('smoke tag') && t.endsWith('★4'))(document.querySelector('#now-tags').textContent)", timeout=20000)
+    check(True, f"now: the line has the tags and stars ({page.inner_text('#now-tags')!r})")
+    goto_view(page, "library")
+    page.fill("#lib-search", "")
+    page.wait_for_selector("#lib-star-chip:not([hidden])", timeout=10000)
+    page.click("#lib-star-chip")
+    wait_counted(page)
+    rated = sum(1 for p, f in tag_lines(overlay).items()
+                if re.search(r"(^|\t)r=[45]", f) and ((CARD / p.lstrip("/")).exists() or (overlay / p.lstrip("/")).exists()))
+    check(page.input_value("#lib-search") == "rating>=4" and lib_count(page)[0] == rated,
+          f"tags: the ★ 4+ chip searches rating>=4 ({page.inner_text('#lib-count')}, want {rated})")
+    page.fill("#lib-search", "rating>=9")
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes('1 to 5')", timeout=10000)
+    check(True, f"tags: words it cannot read say why ({page.inner_text('#lib-count')!r})")
+    page.fill("#lib-search", "")
+    wait_counted(page)
+    page.evaluate("ps => import('./js/state.js').then(m => ps.forEach((p) => m.app.selection.add(p)))", g)
+    page.click("#lib-select")
+    page.click("#lib-sel-more")
+    page.click("#lib-bulk-tag")
+    page.wait_for_selector("#bulk-tag", timeout=20000)
+    check(page.inner_text("#bulk-tags").strip() == "– smoke tag", f"tags: Tag… shows a tag on some of them as such ({page.inner_text('#bulk-tags')!r})")
+    page.fill("#bulk-tag-new", "pair")
+    page.click("#bulk-tag-ok")
+    t = wait_tags(overlay, lambda t: all("pair" in t.get(p, "") for p in g))
+    check(t.get(g[0]) == "r=4\tt=pair,smoke tag" and t.get(g[1]) == "t=pair", f"tags: Tag… adds it to both, in one write ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast')].some((e) => e.textContent.startsWith('Tagged 2 GIFs'))", timeout=10000)
+    page.fill("#lib-search", "tag:pair")
+    wait_counted(page)
+    rows = page.eval_on_selector_all("#lib-list .vrow[data-path] .ut", "els => els.map((e) => e.textContent)")
+    check(lib_count(page)[0] == 2 and len(rows) == 2 and all("pair" in r for r in rows), f"tags: both rows show it ({rows})")
+    page.click("#toasts .toast:has-text('Tagged 2 GIFs') button")
+    t = wait_tags(overlay, lambda t: all("pair" not in t.get(p, "") for p in g))
+    check(t.get(g[0]) == "r=4\tt=smoke tag" and g[1] not in t, f"tags: the toast's Undo puts them back ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    page.click("#lib-sel-more")
+    page.click("#lib-bulk-rate")
+    page.click("#bulk-rate [data-n='2']")
+    t = wait_tags(overlay, lambda t: all(t.get(p, "").startswith("r=2") for p in g))
+    check(t.get(g[0]) == "r=2\tt=smoke tag" and t.get(g[1]) == "r=2", f"tags: Rate… gives both two stars ({t.get(g[0])!r}, {t.get(g[1])!r})")
+    page.click("#lib-sel-done")
+    no_leaks(page, "library tags")
+    # Tags of GIFs not on the card (a card edited on a PC).
+    name1 = g[1].rsplit("/", 1)[1]
+    stray, gone = "/gifs/Other/" + name1, "/gifs/Consoles/SNES_Gone_Smoke_01.gif"
+    page.evaluate("([a, b]) => import('./js/tags.js').then(async (m) => { const s = await m.tags(); await s.set(a, 5, ['moved']); await s.set(b, 3, []); })", [stray, gone])
+    wait_tags(overlay, lambda t: stray in t and gone in t)
+    page.fill("#lib-search", "rating>=1")
+    page.wait_for_selector("#lib-gone:not([hidden])", timeout=60000)
+    msg = page.inner_text("#lib-gone")
+    check(msg.startswith("2 tagged GIFs are no longer on the card (1 found in another folder)."), f"tags: tags of GIFs gone are noticed ({msg!r})")
+    page.click("#lib-gone-move")
+    t = wait_tags(overlay, lambda t: stray not in t)
+    check(t.get(g[1]) == "r=5\tt=moved" and gone in t, f"tags: Move their tags onto the GIF of that name ({t.get(g[1])!r})")
+    page.fill("#lib-search", "rating>=2")
+    page.wait_for_selector("#lib-gone:not([hidden])", timeout=60000)
+    page.click("#lib-gone-forget")
+    t = wait_tags(overlay, lambda t: gone not in t)
+    check(gone not in t and page.is_hidden("#lib-gone"), "tags: Forget them drops the rest")
+    page.context.close()
+    phone = new_page(browser, "phone", errors)
+    phone.goto(base + "/#library")
+    lib_row(phone, g[0])
+    phone.wait_for_selector("#lib-d-stars .star", timeout=60000)
+    boxes = phone.eval_on_selector_all("#lib-d-stars .star", "els => els.map((e) => { const r = e.getBoundingClientRect(); return [r.width, r.height]; })")
+    check(len(boxes) == 5 and all(w >= 36 and hh >= 36 for w, hh in boxes), f"phone: the stars are 36 px targets ({boxes})")
+    phone.context.close()
+    if orig is None:
+        delete_path(base, "/sets/.tags")
+    else:
+        put_text(base + "/api/files/sets/.tags", orig)
+
+
 def root_manifest_rows(page: Page) -> list[str]:
     return page.eval_on_selector_all("#sets-list [data-path^='/filelist']", "els => els.map(e => e.dataset.path)")
 
@@ -4408,6 +4538,7 @@ def mock_pass(browser) -> None:
         target_checks(browser, base, overlay, errors)
         rename_checks(browser, base, overlay, errors)
         smart_checks(browser, base, overlay, errors)
+        tags_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)

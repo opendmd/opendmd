@@ -33,12 +33,14 @@ const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
 // and flags by name and the author, each once (no "Arcade · Arcade", no
 // "Kenney · by kenney"; OTHER is no platform); "Formula" for one, nothing
 // for a title card.
+let tagsAsked = false;
 const squash = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+// Then the user's own: its tags and stars (js/tags.js, once read).
 function tags(p, e) {
   if (drawn(p)) return isFormula(p) ? 'Formula' : '';
-  const by = e.flags.find((f) => !isFlag(f)), seen = new Set();
-  return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by]
-    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).join(' · ');
+  const by = e.flags.find((f) => !isFlag(f)), seen = new Set(), u = app.tags?.get(p);
+  return [platName(e.platform), e.category && niceName(e.category), ...e.flags.filter(isFlag).map(flagName), by, ...(u?.t || [])]
+    .filter((t) => t && !seen.has(squash(t)) && seen.add(squash(t))).map((t) => (t === by ? 'by ' + by : t)).concat(u?.r ? ['★' + u.r] : []).join(' · ');
 }
 
 // ★: the GIF on screen a favourite in the playlist playing (not a title card or a Formula).
@@ -262,6 +264,7 @@ function mountDevice(el) {
     title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
     tagsEl.textContent = np.path ? tags(np.path, e) : '';
+    if (!app.tags && !tagsAsked && app.setNames?.has('.tags')) { tagsAsked = true; import('./tags.js').then((m) => m.tags()).catch(() => {}); }
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
     followEl.hidden = !fl;
