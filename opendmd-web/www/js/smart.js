@@ -49,7 +49,9 @@ export async function drop(path) {
 // A playlist letting go of its search while `fn` runs (saved by hand,
 // deleted, renamed away): a refresh already under way writes nothing to
 // it, the playlist nor its line, even before its line is dropped.
-// (Counted: a rename by way of another name lets go of one path twice.)
+// (Counted: two holders of one path at once, a hand save during a delete
+// say, do not clear each other. A rename of case alone holds it twice in
+// turn, not at once.)
 const leaving = new Map();
 export async function letGo(path, fn) {
   const k = lc(path);
@@ -107,7 +109,8 @@ export async function refresh(path, fresh) {
   // Still this search's playlist: not deleted, renamed, saved by hand or
   // given another search meanwhile (asked again after each wait).
   const mine = () => { const c = get(path); return !leaving.has(lc(path)) && !!c && c.q === s.q && c.from === s.from; };
-  if (text == null || !mine()) return null;
+  // (Let go of meanwhile: its text, read late, is not kept.)
+  if (text == null || !mine()) { app.texts.delete(path); return null; }
   const old = lines(text).filter((p) => !gone(p));
   const was = new Set(old.map(lc)), now = new Set(paths.map(lc));
   const diff = { added: paths.filter((p) => !was.has(lc(p))).length, removed: old.filter((p) => !now.has(lc(p))).length };

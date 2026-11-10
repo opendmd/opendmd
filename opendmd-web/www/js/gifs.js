@@ -57,6 +57,8 @@ export async function savePlaylist(path, text) {
   if (path === app.activePath) await app.refreshStatus().catch(() => {});
 }
 export const deletePlaylist = (path) => inTurn(path, () => app.src.deleteFile(path));
+// Read after any write of it still under way.
+export const readPlaylist = (path) => inTurn(path, () => app.text(path, true));
 
 // (The card's FAT names files case-insensitively.)
 const lc = (p) => p.toLowerCase();
