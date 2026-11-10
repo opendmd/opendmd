@@ -36,6 +36,10 @@ tween = []
 # feature because its mere presence moved the main wasm module's inlining
 # (+150-250 B gz there, where there is ~1 KB left) though it never calls it.
 names = []
+# Tags, ratings and the search (src/tags.rs, src/query.rs): the web app's
+# Library and smart playlists, and opendmd-pack. The player never reads
+# them (smart playlists are written out as ordinary playlists).
+tags = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
