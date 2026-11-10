@@ -1,14 +1,15 @@
 //! The startup sequence ("boot show") and the status card.
 //!
 //! Both are built on the wordmark: "OpenDMD" in the panel's big font (the
-//! 5x7 font at twice its size: 68 x 14 px),
-//! amber (`ffaa00`) on black, centred across the panel.
+//! 5x7 font at twice its size: 68 x 14 px) in two colours, "Open" warm
+//! white (`ffd696`) and "DMD" amber (`ffaa00`), on black, centred across
+//! the panel.
 //!
 //! **The show** plays on the panel from the moment it lights until the
 //! first GIF can take over. The name powers on as a dot-matrix display
 //! does: its dots light in a sweep from left to right, each with a little
 //! jitter, and each warms up like a phosphor (a dull ember, a brief hot
-//! peak, then settling to amber); a single glint sweeps across it once
+//! peak, then settling to its colour); a single glint sweeps across it once
 //! every dot has settled; and a status line fades in underneath in the
 //! small font: the version first, then the most useful thing there is to
 //! say (the WiFi network to join in setup mode, a card problem in plain
@@ -303,14 +304,20 @@ const CARD_Y: i32 = 2;
 const SHOW_LINE_Y: i32 = 23;
 const CARD_LINE_Y: [i32; 2] = [18, 25];
 
-/// The wordmark's amber, as on the site.
+/// The wordmark's amber ("DMD"), as on the site.
 const AMBER: Rgb = Rgb::new(255, 170, 0);
-/// A dot's warm-up: a dull ember, a hot peak, amber; and the faint glow of
-/// the full show's cold filament.
+/// The wordmark's warm white ("Open"): the card's title white
+/// (`text::TITLE_COLOUR`), the O of the mark beside the amber D.
+const WHITE: Rgb = text::TITLE_COLOUR;
+/// How many of the name's letters are "Open", in [`WHITE`].
+const OPEN: i32 = 4;
+/// A dot's warm-up: a dull ember, a hot peak (each part's own), its
+/// colour; and the faint glow of the full show's cold filament.
 const EMBER: Rgb = Rgb::new(120, 30, 0);
 const HOT: Rgb = Rgb::new(255, 214, 130);
 const COLD: Rgb = Rgb::new(44, 10, 0);
-/// The glint's light, at most `GLINT_K` / 256 over the amber.
+/// The glint's light, at most `GLINT_K` / 256 over the name's colour; also
+/// "Open"'s hot peak, hotter than its white as `HOT` is than the amber.
 const GLINT: Rgb = Rgb::new(255, 244, 210);
 const GLINT_K: u32 = 200;
 /// The text: the status line and the card's second line, amber
@@ -323,6 +330,16 @@ const PROBLEM: Rgb = text::TITLE_COLOUR;
 fn dot(u: i32, v: i32) -> bool {
     let rows = Font::Normal.rows(LOGO[(u / 5) as usize] as char);
     rows[v as usize] & (0x80 >> (u % 5)) != 0
+}
+
+/// Font column `u`'s colour and warm-up peak: "Open" warm white, "DMD"
+/// amber.
+fn part(u: i32) -> (Rgb, Rgb) {
+    if u / Font::Normal.advance() as i32 >= OPEN {
+        (AMBER, HOT)
+    } else {
+        (WHITE, GLINT)
+    }
 }
 
 /// Draw the name with its top on row `y0`, each lit panel pixel `(x, y)`
@@ -345,14 +362,16 @@ fn mix(a: Rgb, b: Rgb, k: u32) -> Rgb {
     Rgb::new(m(a.r, b.r), m(a.g, b.g), m(a.b, b.b))
 }
 
-/// A dot `age` ms into its warm-up of `w`: from a dull ember up to a hot
-/// peak at a third of the way, then cooling to amber.
-fn warm(age: u32, w: u32) -> Rgb {
+/// A dot of font column `u`, `age` ms into its warm-up of `w`: from a dull
+/// ember up to its part's hot peak at a third of the way, then cooling to
+/// its part's colour.
+fn warm(u: i32, age: u32, w: u32) -> Rgb {
+    let (colour, hot) = part(u);
     let k = ramp(age, 0, w);
     if k < 85 {
-        mix(EMBER, HOT, k * 3)
+        mix(EMBER, hot, k * 3)
     } else {
-        mix(HOT, AMBER, (k - 85) * 256 / 171)
+        mix(hot, colour, (k - 85) * 256 / 171)
     }
 }
 
@@ -369,7 +388,7 @@ fn glint(p: u32, x: i32, y: i32, y0: i32) -> u32 {
     (4u32.saturating_sub(d)) * GLINT_K / 4
 }
 
-/// The amber name with the glint `p` ms into its pass.
+/// The name's colour `c` with the glint `p` ms into its pass.
 fn glinting(c: Rgb, p: u32, x: i32, y: i32, y0: i32) -> Rgb {
     match glint(p, x, y, y0) {
         0 => c,
@@ -436,8 +455,8 @@ pub fn show(canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) {
         let at = b.on + col * b.sweep / last + fx::hash(key ^ 0xb007) % b.jitter;
         match t.checked_sub(at) {
             None => cold,
-            Some(age) if age < b.warm => warm(age, b.warm),
-            Some(_) => glinting(AMBER, p, x, y, SHOW_Y),
+            Some(age) if age < b.warm => warm(u, age, b.warm),
+            Some(_) => glinting(part(u).0, p, x, y, SHOW_Y),
         }
     });
     if t >= b.status {
@@ -624,7 +643,7 @@ pub fn card(canvas: &mut Canvas, t: u32, info: &Info, from_show: Option<(ShowLen
     let e = 256 - (256 - arrive) * (256 - arrive) / 256;
     let y0 = SHOW_Y - ((SHOW_Y - CARD_Y) as u32 * e).div_ceil(256) as i32;
     let p = (t + 4_096 - 1_500) % 4_096;
-    logo(canvas, y0, |x, y, _, _| glinting(AMBER, p, x, y, y0));
+    logo(canvas, y0, |x, y, u, _| glinting(part(u).0, p, x, y, y0));
     // The lines coming up over the second half.
     let k = ramp(arrive, 128, 256);
     let (first, second) = info.card_lines();
@@ -783,11 +802,18 @@ mod tests {
     }
 
     /// The name's panel pixels: what `text::draw_text_with` draws in the
-    /// big font with its top-left at `(LOGO_X, y0)`.
-    fn wordmark(y0: i32) -> Canvas {
+    /// big font with its top-left at `(x0, y0)`, "Open" warm white and
+    /// "DMD" amber.
+    fn wordmark_at(x0: i32, y0: i32) -> Canvas {
         let mut c = Canvas::new();
-        text::draw_text_with(&mut c, LOGO_X, y0, "OpenDMD", AMBER, Font::Normal, 2);
+        text::draw_text_with(&mut c, x0, y0, "Open", WHITE, Font::Normal, 2);
+        let dx = 4 * Font::Normal.advance() as i32 * 2;
+        text::draw_text_with(&mut c, x0 + dx, y0, "DMD", AMBER, Font::Normal, 2);
         c
+    }
+
+    fn wordmark(y0: i32) -> Canvas {
+        wordmark_at(LOGO_X, y0)
     }
 
     /// `c`'s rows `y0..y0 + LOGO_H` only (the name's band).
@@ -927,7 +953,7 @@ mod tests {
                 .iter()
                 .zip(&settled)
                 .filter(|(a, b)| a != b)
-                .inspect(|(a, b)| assert!(a.b > b.b && **b == AMBER))
+                .inspect(|(a, b)| assert!(a.b > b.b && (**b == AMBER || **b == WHITE)))
                 .count();
             assert!(lighter > 20, "{len:?}: {lighter} glinting");
         }
@@ -935,16 +961,51 @@ mod tests {
 
     #[test]
     fn the_wordmark_is_what_text_draws() {
-        // "OpenDMD" in the big font, amber, centred: the same pixels as
-        // the card's name, moved (the site's wordmark is cut from the card).
-        let mut site = Canvas::new();
+        // "OpenDMD" in the big font, two colours, centred: the same pixels
+        // as the card's name, moved (the site's wordmark is cut from the
+        // card).
         let y = (HEIGHT as i32 - LOGO_H) / 2;
         let w = text::text_width(Font::Normal, "OpenDMD", 2) as i32;
-        text::draw_text_with(&mut site, (WIDTH as i32 - w) / 2, y, "OpenDMD", AMBER, Font::Normal, 2);
+        let site = wordmark_at((WIDTH as i32 - w) / 2, y);
         let mut c = Canvas::new();
         card(&mut c, 0, &Info::default(), None);
         assert_eq!(band(&site, y), band(&c, CARD_Y));
         assert_eq!(lit(&site), lit(&c));
+    }
+
+    #[test]
+    fn open_is_warm_white_and_dmd_amber() {
+        // The settled name (show and card) in exactly two colours: every
+        // lit pixel left of the D warm white, from the D on amber.
+        assert_eq!(WHITE, Rgb::new(255, 214, 150));
+        let split = LOGO_X + OPEN * Font::Normal.advance() as i32 * SCALE;
+        let mut show_c = Canvas::new();
+        show(&mut show_c, ShowLength::Short, SHORT.glint + 1_000, &INFO);
+        let mut card_c = Canvas::new();
+        card(&mut card_c, 0, &INFO, None);
+        for (c, y0) in [(&show_c, SHOW_Y), (&card_c, CARD_Y)] {
+            let (mut white, mut amber) = (0, 0);
+            for y in y0..y0 + LOGO_H {
+                for x in 0..WIDTH as i32 {
+                    match c.get(x as usize, y as usize) {
+                        Rgb::BLACK => {}
+                        p if x < split => {
+                            assert_eq!(p, WHITE, "({x}, {y})");
+                            white += 1;
+                        }
+                        p => {
+                            assert_eq!(p, AMBER, "({x}, {y})");
+                            amber += 1;
+                        }
+                    }
+                }
+            }
+            assert!(white > 50 && amber > 50, "{white} white, {amber} amber");
+        }
+        // Each part warms up through its own hot peak, bluer than its colour.
+        assert_eq!(warm(0, 300, 300), WHITE);
+        assert_eq!(warm(OPEN * 5, 300, 300), AMBER);
+        assert!(warm(0, 100, 300).b > WHITE.b && warm(OPEN * 5, 100, 300).b > AMBER.b);
     }
 
     #[test]
