@@ -100,19 +100,21 @@ export async function refresh(path, fresh) {
   if (!s) return null;
   const paths = await find(s.q, s.from, fresh), text = await app.text(path, true);
   // (Deleted meanwhile, or saved by hand, its search dropped: not written back.)
-  if (text == null || byHand.has(lc(path)) || !get(path)) return null;
+  const mine = () => !byHand.has(lc(path)) && !!get(path);
+  if (text == null || !mine()) return null;
   const old = lines(text).filter((p) => !gone(p));
   const was = new Set(old.map(lc)), now = new Set(paths.map(lc));
   const diff = { added: paths.filter((p) => !was.has(lc(p))).length, removed: old.filter((p) => !now.has(lc(p))).length };
   const changed = paths.join('\n') !== old.join('\n');
   if (changed) {
-    await savePlaylist(path, paths.join('\n') + '\n');
+    // (Asked again in its turn: a hand save before it wins.)
+    if (!(await savePlaylist(path, paths.join('\n') + '\n', mine))) return null;
     // Open in the editor with nothing changed by hand: it shows the new lines.
     const d = app.draft;
     if (d.path === path && d.smart && d.paths.join('\n') === d.saved) { d.paths = paths; d.saved = d.smartPaths = paths.join('\n'); emit('draft'); }
   }
   // (When it was last written, or looked at by hand: the row's "updated".)
-  if (changed || fresh) { s.at = Date.now() / 1000 | 0; await write(); }
+  if ((changed || fresh) && mine()) { s.at = Date.now() / 1000 | 0; await write(); }
   return diff;
 }
 
