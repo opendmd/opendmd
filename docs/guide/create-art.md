@@ -47,7 +47,8 @@ Create Art finds the GIF or video on it.
 On the website, **Your own** has links that search other sites for pixel
 art with your words: Tenor, Klipy, GIPHY, animated Google and Bing
 images, DuckDuckGo, Reddit's r/PixelArt, Tumblr, DeviantArt and Imgur. Each
-opens in a new tab. When you find one, bring it back:
+opens in a new tab. To draw your own, it also links to Pixilart's editor: make
+the canvas 128 × 32, download the drawing as a GIF and drop it on Create Art. When you find one, bring it back:
 
 - On a computer, right-click the GIF and pick **Copy Image Address**
   (or **Copy Image**), then paste it into Create Art; or drag the GIF onto

@@ -821,6 +821,9 @@ def create_elsewhere(browser, base: str, site: Path, errors: list[str], shots: P
     check(not bad and set(attrs) == {"_blank noopener noreferrer"}, f"/create/ elsewhere: each a new tab with “pixel art” and the words {bad} {set(attrs)}")
     hint = page.inner_text("#c-elsewhere")
     check("Bring it back: paste its link or the picture here, or drag it onto this page." in hint, "/create/ elsewhere: the hint on bringing a GIF back")
+    px = page.eval_on_selector("#c-pixilart", "a => [a.href, a.target, a.rel]")
+    check(px == ["https://www.pixilart.com/draw", "_blank", "noopener noreferrer"] and "make the canvas 128 × 32" in hint,
+          f"/create/ elsewhere: Pixilart to draw your own, in a new tab {px}")
     bm = page.get_attribute("#c-bm", "href") or ""
     check(bm == f"javascript:void(open('{base}/create/?url='+encodeURIComponent(location.href)))",
           f"/create/ elsewhere: the bookmarklet opens the page it is pressed on in Create Art ({bm[:90]})")

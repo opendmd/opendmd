@@ -161,5 +161,7 @@ function elsewhere() {
   $('st-own').append(h('div', { id: 'c-elsewhere' },
     h('div.lbl', 'Search for pixel art on'), h('div.row', h('div.grow', words)), h('div.chips', { id: 'c-chips' }, links),
     h('p.cap', 'Each opens in a new tab. Found one? Bring it back: paste its link or the picture here, or drag it onto this page.'),
-    h('p.cap', 'On a computer, drag ', bm, ' to your bookmarks bar: pressed on a page with a GIF, it opens that page here.')));
+    h('p.cap', 'On a computer, drag ', bm, ' to your bookmarks bar: pressed on a page with a GIF, it opens that page here.'),
+    h('p.cap', 'Or draw your own at ', h('a', { id: 'c-pixilart', href: 'https://www.pixilart.com/draw', target: '_blank', rel: 'noopener noreferrer' }, 'Pixilart'),
+      ': make the canvas 128 × 32, then download it as a GIF and drop it here.')));
 }
