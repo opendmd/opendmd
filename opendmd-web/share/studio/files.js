@@ -18,7 +18,8 @@
 import { FORMAT, LICENCES, CAPS, envelope, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
 import { builtin, isStarter, starter } from './palettes.js';
 
-export const LIMITS = { bytes: 16 << 20, records: 4096 + 64, pictures: 32768 };
+// Per file; and for one opening (files picked together): 64 MB and four files' records in all.
+export const LIMITS = { bytes: 16 << 20, records: 4096 + 64, pictures: 32768, dangling: 4096, openBytes: 64 << 20, openRecords: 4 * (4096 + 64) };
 const LS = 'odmd.studio.author';
 const EXT = { pack: '.dmdpack' };
 let S = null;
@@ -223,6 +224,10 @@ export async function read(file) {
     const x = by.get(m.id);
     if (!x || x.rev !== m.rev) no(`The pack names a record the file doesn’t hold (${m.id}): nothing was taken from it.`);
   }
+  // Packs it carries may name records elsewhere, up to a point.
+  let dangling = 0;
+  for (const r of by.values()) if (r.type === 'pack') for (const m of r.body.members) if (!by.has(m.id)) dangling++;
+  if (dangling > LIMITS.dangling) no(`Packs in that file name ${dangling.toLocaleString('en')} records it doesn’t hold: a file names ${LIMITS.dangling.toLocaleString('en')} at most.`);
   const seen = new Set(), walk = (r, path) => {
     if (r.type !== 'pack') return;
     if (path.has(r.id)) no('A pack in the file holds itself: nothing was taken from it.');
@@ -258,14 +263,20 @@ const ORDER = ['palette', 'font', 'stamp', 'template', 'piece', 'pack'];
 export async function open(files) {
   files = Array.isArray(files) ? files : [files];
   let p;
-  const was = S.root.dataset.saved, text = $('s-saved').textContent, all = new Map(), roots = [];
+  const was = S.root.dataset.saved, text = $('s-saved').textContent, all = new Map(), roots = [], fileOf = new Map();
   try {
-    for (const f of files) {
+    const bytes = files.reduce((n, f) => n + f.size, 0);
+    let total = 0;
+    if (bytes > LIMITS.openBytes) throw new Error(`Those files are ${(bytes / 1048576).toFixed(0)} MB together: open ${LIMITS.openBytes >> 20} MB at most at once.`);
+    for (const [i, f] of files.entries()) {
       const got = await read(f);
+      total += got.records.length;
+      if (total > LIMITS.openRecords) throw new Error(`Those files hold more than ${LIMITS.openRecords.toLocaleString('en')} records together: open fewer at once.`);
       for (const r of got.records) {
         const o = all.get(r.id);
         if (o && o.hash !== r.hash) throw new Error('Two of the files hold one record two ways: nothing was taken from them.');
         all.set(r.id, r);
+        if (!fileOf.has(r.id)) fileOf.set(r.id, i);
       }
       roots.push(got.root);
     }
@@ -300,20 +311,24 @@ export async function open(files) {
   const what = el('p', 's-cap', `${named}: ${n('new')} new, ${n('update')} newer, ${n('copy')} as copies, ${n('older')} older, ${n('same') + n('starter')} already here.`);
   return new Promise((done) => {
     const d = sheet('Open a file', [what, ul], [
-      button('Add', true, async () => { d.onclose = null; d.close(); done(await add(p, roots, skip, ul)); }),
+      button('Add', true, async () => { d.onclose = null; d.close(); done(await add(p, roots, skip, ul, fileOf)); }),
       button('Cancel', false, () => { d.close(); })]);
     d.onclose = () => { S.root.dataset.opened = 'cancelled'; done(null); };
     S.root.dataset.opened = 'asked';
   });
 }
-async function add(p, roots, skip, ul) {
+async function add(p, roots, skip, ul, fileOf = new Map()) {
   const ticked = new Set([...ul.querySelectorAll('input[type=checkbox]')].filter((c) => c.checked).map((c) => c.dataset.id));
   for (const x of p) if (x.how === 'older' && ticked.has(x.r.id)) x.how = 'copy';
   const go = p.filter((x) => (x.how === 'new' || x.how === 'copy' || (x.how === 'update' && ticked.has(x.r.id))) && !skip.has(x.r.id));
   // Copies take new ids, random; what in this opening points at them points
   // at the copies. Nothing outside it is ever pointed anywhere else.
   const ids = new Map(go.filter((x) => x.how === 'copy').map((x) => [x.r.id, newId(x.r.type)]));
-  const to = (id) => ids.get(id) || id;
+  // A reference follows a copy only from the copy's own file (or when the
+  // copied id is not one this profile has): a file picked beside mine never
+  // turns my records' references to its copies.
+  const have = new Set(p.filter((x) => x.have).map((x) => x.r.id));
+  const to = (id, from) => (ids.has(id) && (fileOf.get(id) === fileOf.get(from) || !have.has(id)) ? ids.get(id) : id);
   let n = 0, err = '', first = null, t0 = performance.now();
   const roots_ = new Set(roots.map((r) => r.id));
   for (const type of ORDER) {
@@ -321,8 +336,8 @@ async function add(p, roots, skip, ul) {
       // (A word on screen and a breath for the page every 50 ms: a big file takes a while.)
       if (performance.now() - t0 > 50) { S.status('saving', `Adding… ${n} of ${go.length}`); await new Promise((ok) => setTimeout(ok)); t0 = performance.now(); }
       const { ver, ...r0 } = x.r, body = { ...r0.body };
-      if (typeof body.palette === 'string') body.palette = to(body.palette);
-      if (Array.isArray(body.members)) body.members = body.members.map((m) => ({ ...m, id: to(m.id) }));
+      if (typeof body.palette === 'string') body.palette = to(body.palette, r0.id);
+      if (Array.isArray(body.members)) body.members = body.members.map((m) => ({ ...m, id: to(m.id, r0.id) }));
       // (author.account is for real accounts: never taken from a file.)
       let r = { ...r0, body, author: { name: r0.author.name, account: null } };
       if (x.how === 'copy') r = { ...r, id: ids.get(r0.id), rev: 1, created: now(), from: [{ id: r0.id, rev: r0.rev, hash: r0.hash, name: r0.name, author: r0.author, licence: r0.licence }, ...r0.from].slice(0, CAPS.from) };
