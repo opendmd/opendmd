@@ -746,6 +746,11 @@ pub struct Engine {
     current: Option<Playing>,
     paused_since: Option<Duration>,
     started_count: u64,
+    /// The start (`ordinal`) the web app last put on screen
+    /// ([`note_sent`](Self::note_sent), or a retune in place): a live edit
+    /// changes only that one.
+    #[cfg(feature = "psi")]
+    sent: Option<u64>,
     skip_requested: bool,
     compositor: Compositor,
     /// Something is on display: a new file transitions from it rather than
@@ -844,6 +849,8 @@ impl Engine {
             current: None,
             paused_since: None,
             started_count: 0,
+            #[cfg(feature = "psi")]
+            sent: None,
             skip_requested: false,
             compositor: Compositor::default(),
             shown: false,
@@ -1123,11 +1130,20 @@ impl Engine {
         Ok(())
     }
 
-    /// A formula on screen takes `path`'s formula in place (a live edit from
-    /// the web app: no transition, its clock and memory kept) with a fresh
-    /// dwell, as [`play_now`](Self::play_now) would give it. `None` if what
-    /// is on screen or `path` is not a formula (the caller plays it as
-    /// usual); `Some(Err)` if it does not compile — what is on screen
+    /// A formula on screen takes `path`'s formula in place (no transition,
+    /// its clock and memory kept) with a fresh dwell, as
+    /// [`play_now`](Self::play_now) would give it. `how`: a live edit from
+    /// the web app ([`Retune::Edit`](crate::fx_psi::Retune::Edit), the
+    /// governor's level goes on) or another Formula played over it
+    /// ([`Retune::Play`](crate::fx_psi::Retune::Play), its own estimate's
+    /// level, as after a GIF):
+    /// [`Governor::retune`](crate::fx_psi::Governor::retune). `None` if
+    /// what is on screen or `path` is not a formula (the caller plays it as
+    /// usual), or for a live edit when what is on screen is not the start
+    /// the web app sent ([`note_sent`](Self::note_sent)): the playlist
+    /// moved on, maybe to another Formula, which an edit must not retune
+    /// (it would keep that one's governor level; the caller answers 409);
+    /// `Some(Err)` if it does not compile — what is on screen
     /// carries on. `ov` bends the fresh dwell as in
     /// [`play_now_with`](Self::play_now_with) (a kept Formula stays kept).
     ///
@@ -1146,17 +1162,26 @@ impl Engine {
         path: &str,
         now: Duration,
         ov: Option<Override>,
+        how: crate::fx_psi::Retune,
     ) -> Option<io::Result<()>> {
         let at = self.paused_since.unwrap_or(now);
         let p = self.current.as_mut()?;
-        let r = p.gif.synth_mut()?.retune(path)?;
+        if how == crate::fx_psi::Retune::Edit && self.sent != Some(p.ordinal) {
+            return None;
+        }
+        let r = p.gif.synth_mut()?.retune(path, how)?;
         if let Err(e) = &r {
             if crate::fx_psi::is_no_memory(e) {
                 log::info!("formula: no room to compile beside the one on screen: letting it go, then again");
-                return Some(self.play_now_with(path, now, ov));
+                let r = self.play_now_with(path, now, ov);
+                if r.is_ok() {
+                    self.note_sent();
+                }
+                return Some(r);
             }
         }
         if r.is_ok() {
+            self.sent = Some(p.ordinal);
             // The new formula's own name (`&name=`), as `play_now` would
             // report it: `now_playing.title` follows what is on the panel.
             p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title).into();
@@ -1170,6 +1195,18 @@ impl Engine {
             self.ahead.let_go();
         }
         Some(r)
+    }
+
+    /// What is on screen now is what the web app sent (a play that was not
+    /// a live edit, `/api/play` or Show on panel): the start later live
+    /// edits may change ([`retune`](Self::retune) with
+    /// [`Retune::Edit`](crate::fx_psi::Retune::Edit)). Anything that starts
+    /// after it (the playlist, Next, a follow) is not.
+    pub fn note_sent(&mut self) {
+        #[cfg(feature = "psi")]
+        {
+            self.sent = self.current.as_ref().map(|p| p.ordinal);
+        }
     }
 
     /// Finish the current GIF at the next tick.
@@ -1948,18 +1985,19 @@ mod tests {
         e.tick(Duration::ZERO, &mut c).unwrap();
         let a = crate::fx_psi::path("rgb(a, x, 0)", "a=0.5");
         let b = crate::fx_psi::path("rgb(a, y, 0)", "a=1");
-        assert!(e.retune(&a, Duration::ZERO, None).is_none(), "a GIF on screen");
+        assert!(e.retune(&a, Duration::ZERO, None, crate::fx_psi::Retune::Edit).is_none(), "a GIF on screen");
         e.play_now(&a, Duration::from_millis(100)).unwrap();
+        e.note_sent();
         let mut t = 100;
         while t < 9_000 {
             e.tick(Duration::from_millis(t), &mut c).unwrap();
             t += 20;
         }
         assert!(!e.is_transitioning());
-        e.retune(&b, Duration::from_millis(t), None).unwrap().unwrap();
+        e.retune(&b, Duration::from_millis(t), None, crate::fx_psi::Retune::Edit).unwrap().unwrap();
         assert!(!e.is_transitioning());
         let bad = crate::fx_psi::path("gray(nope)", "");
-        assert!(e.retune(&bad, Duration::from_millis(t), None).unwrap().is_err());
+        assert!(e.retune(&bad, Duration::from_millis(t), None, crate::fx_psi::Retune::Edit).unwrap().is_err());
         // The fresh dwell: still on at t + 9 s (past the first one's 10 s).
         let end = t + 9_000;
         while t < end {
@@ -2013,10 +2051,11 @@ mod tests {
         let b = crate::fx_psi::path("rgb(t, 0, 0)", "");
         let mut t = 0;
         e.play_now_with(&a, Duration::ZERO, FormulaKeep::Minute.dwell()).unwrap();
+        e.note_sent();
         let (frames, stayed) = run(&mut e, &mut t, 30_000, &a);
         assert!(stayed && frames > 100, "{frames}");
         let keep = FormulaKeep::Minute.dwell();
-        e.retune(&b, Duration::from_millis(t), keep).unwrap().unwrap();
+        e.retune(&b, Duration::from_millis(t), keep, crate::fx_psi::Retune::Edit).unwrap().unwrap();
         let (frames, stayed) = run(&mut e, &mut t, 89_000, &b);
         assert!(stayed && frames > 100, "kept through the live edit: {frames}");
         run(&mut e, &mut t, 92_000, "");
@@ -2151,7 +2190,7 @@ mod tests {
         let ordinal = e.now_playing().unwrap().ordinal;
         let mut t = 140;
         for (path, name) in [(&tunnel, "Tunnel"), (&star, "Starfield"), (&plain, "Formula"), (&tunnel, "Tunnel")] {
-            e.retune(path, Duration::from_millis(t), None).unwrap().unwrap();
+            e.retune(path, Duration::from_millis(t), None, crate::fx_psi::Retune::Play).unwrap().unwrap();
             e.tick(Duration::from_millis(t + 20), &mut c).unwrap();
             let np = e.now_playing().unwrap();
             assert_eq!((np.path.as_str(), np.title.as_str()), (path.as_str(), name));
@@ -2159,8 +2198,142 @@ mod tests {
             t += 40;
         }
         let bad = crate::fx_psi::path("gray(nope)", "name=Broken");
-        assert!(e.retune(&bad, Duration::from_millis(t), None).unwrap().is_err());
+        assert!(e.retune(&bad, Duration::from_millis(t), None, crate::fx_psi::Retune::Play).unwrap().is_err());
         assert_eq!(e.now_playing().unwrap().title, "Tunnel");
+    }
+
+    /// `/api/play` of a light Formula over a heavy one on screen starts
+    /// from the light one's own estimate (every refresh), and a heavy one
+    /// over a light one slow; a live edit keeps the level on screen and
+    /// speeds up a level per `Governor::CALM` frames. (1.1.0-beta.2: the
+    /// light one kept the heavy one's level 3, every 8th refresh.)
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_played_over_a_formula_takes_its_own_rate() {
+        use crate::fx_psi::Retune;
+        let gif = "/gifs/Consoles/NES_A_01.gif";
+        let mut e = engine_with(
+            &[(gif, one_pixel_gif(255, 0, 0))],
+            gif,
+            DwellPolicy {
+                min: Duration::from_secs(60),
+                max: Duration::from_secs(60),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        let noises = (1..=9)
+            .map(|k| format!("noise(x*{k}, y*{}, t*{k})", 10 - k))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let heavy = crate::fx_psi::path(
+            &format!("smooth\nloop 4\ngray(({noises}) / 9)"),
+            "name=Heavy",
+        );
+        let light =
+            crate::fx_psi::path("smooth\nloop 1\ngray(abs(x - phase) < 0.02)", "name=Light");
+        // The formula on screen's governor: (frame time asked, its frame
+        // time now) in ms.
+        fn rate(e: &mut Engine) -> (u32, u32) {
+            let p = e.current.as_mut().unwrap();
+            let Some(crate::fx::Fx::Psi(b)) = p.gif.synth_mut().unwrap().fx_mut() else {
+                panic!("not a formula");
+            };
+            let ms = b.delay().as_millis() as u32;
+            (ms, b.governor().delay_ms(ms))
+        }
+        let mut t = 100;
+        let mut run = |e: &mut Engine, t: &mut u64, ms: u64| {
+            let end = *t + ms;
+            while *t < end {
+                *t += 10;
+                e.tick(Duration::from_millis(*t), &mut c).unwrap();
+            }
+        };
+        // Heavy on screen, light played over it: its own rate at once.
+        e.play_now(&heavy, Duration::from_millis(t)).unwrap();
+        e.note_sent();
+        run(&mut e, &mut t, 1_000);
+        assert_eq!(rate(&mut e), (20, 160), "heavy: held to 8 frames");
+        e.retune(&light, Duration::from_millis(t), None, Retune::Play)
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "Light");
+        assert_eq!(rate(&mut e), (10, 10), "light over heavy: every refresh");
+        run(&mut e, &mut t, 200);
+        assert_eq!(rate(&mut e), (10, 10));
+        // Heavy played over light: slow from its first frame.
+        e.retune(&heavy, Duration::from_millis(t), None, Retune::Play)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rate(&mut e), (20, 160), "heavy over light: slow at once");
+        // A live edit of the heavy one to a light one: the level goes on.
+        e.retune(&light, Duration::from_millis(t), None, Retune::Edit)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rate(&mut e), (10, 80), "a live edit keeps the level");
+        // (Its steps up after, a level per CALM calm frames, are
+        // `fx_psi::tests::a_live_edit_keeps_the_governors_level`'s.)
+    }
+
+    /// A live edit that comes after the playlist moved on to another
+    /// Formula (an `@formula` line) changes nothing: `None`, which the
+    /// firmware answers 409. (It retuned that Formula in place, keeping its
+    /// governor level: a light edit over a heavy playlist Formula kept its
+    /// slow rate.) Another Formula played over it is still in place.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_live_edit_after_the_playlist_moved_on_changes_nothing() {
+        use crate::fx_psi::Retune;
+        let noises = (1..=9)
+            .map(|k| format!("noise(x*{k}, y*{}, t*{k})", 10 - k))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let heavy = crate::fx_psi::path(&format!("smooth\nloop 4\ngray(({noises}) / 9)"), "name=Heavy");
+        let light = crate::fx_psi::path("smooth\nloop 1\ngray(abs(x - phase) < 0.02)", "name=Light");
+        let edit = crate::fx_psi::path("smooth\nloop 1\ngray(abs(y - phase) < 0.02)", "name=Edited");
+        let mut e = engine_with(
+            &[],
+            &format!("{heavy}\n"),
+            DwellPolicy {
+                min: Duration::from_secs(1),
+                max: Duration::from_secs(1),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        let mut t = 0;
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        // The web app's Formula on screen: its live edits change it.
+        e.play_now(&light, Duration::from_millis(100)).unwrap();
+        e.note_sent();
+        let sent = e.now_playing().unwrap().ordinal;
+        e.retune(&edit, Duration::from_millis(120), None, Retune::Edit)
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "Edited");
+        // Its turn over, the playlist's heavy Formula comes on.
+        while e.now_playing().is_none_or(|p| p.ordinal == sent) && t < 10_000 {
+            t += 20;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+        }
+        let np = e.now_playing().unwrap();
+        assert_eq!(np.title, "Heavy", "the playlist moved on ({t} ms)");
+        let on = np.ordinal;
+        // A late live edit: refused, the heavy one stays as it was.
+        assert!(e.retune(&light, Duration::from_millis(t), None, Retune::Edit).is_none());
+        let np = e.now_playing().unwrap();
+        assert_eq!((np.title.as_str(), np.ordinal), ("Heavy", on));
+        // Played over it (not an edit): in place, and live edits follow.
+        e.retune(&light, Duration::from_millis(t), None, Retune::Play)
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.now_playing().unwrap().ordinal, on);
+        e.retune(&edit, Duration::from_millis(t), None, Retune::Edit)
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "Edited");
     }
 
     /// A formula sent over a formula when the heap can't hold its compile
@@ -2197,7 +2370,7 @@ mod tests {
 
         // In place it is refused; after the one on screen goes, it compiles.
         crate::fx_psi::refuse_loads(1);
-        e.retune(&road, Duration::from_millis(t), keep)
+        e.retune(&road, Duration::from_millis(t), keep, crate::fx_psi::Retune::Play)
             .unwrap()
             .unwrap();
         let np = e.now_playing().unwrap();
@@ -2225,7 +2398,7 @@ mod tests {
         // Refused before and after: the error, nothing on screen, then the playlist.
         crate::fx_psi::refuse_loads(u32::MAX);
         let err = e
-            .retune(&gate, Duration::from_millis(t), keep)
+            .retune(&gate, Duration::from_millis(t), keep, crate::fx_psi::Retune::Play)
             .unwrap()
             .unwrap_err();
         crate::fx_psi::refuse_loads(0);
@@ -2241,7 +2414,7 @@ mod tests {
         let on = e.now_playing().unwrap().ordinal;
         let bad = crate::fx_psi::path("gray(nope)", "");
         let err = e
-            .retune(&bad, Duration::from_millis(t + 40), None)
+            .retune(&bad, Duration::from_millis(t + 40), None, crate::fx_psi::Retune::Play)
             .unwrap()
             .unwrap_err();
         assert!(!crate::fx_psi::is_no_memory(&err));

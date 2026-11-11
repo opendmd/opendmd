@@ -1805,7 +1805,7 @@ fn swap(root: &str, canvas: &mut Canvas) {
             Some(b) => {
                 let h = heap();
                 let now = run(&mut e, canvas, 0);
-                let r = e.retune(ROAD, now, keep);
+                let r = e.retune(ROAD, now, keep, fx_psi::Retune::Play);
                 let r = match r {
                     None => "NOT a retune".to_string(),
                     Some(Ok(())) if road_on(&e) => "played".to_string(),
@@ -1837,7 +1837,7 @@ fn swap(root: &str, canvas: &mut Canvas) {
             Some(b) => {
                 let h = heap();
                 let now = run(&mut e, canvas, 0);
-                let r = e.retune(ROAD, now, keep);
+                let r = e.retune(ROAD, now, keep, fx_psi::Retune::Play);
                 let gone = e.now_playing().is_none();
                 drop(b);
                 run(&mut e, canvas, 600);
@@ -1923,7 +1923,7 @@ fn swap_card(root: &str, canvas: &mut Canvas) {
     // As main.rs's `PlayNow` sends it.
     let play = |e: &mut Engine, canvas: &mut Canvas, path: &str, now: Duration| -> std::io::Result<()> {
         crate::room_for_formula(Some(&mut *e), canvas);
-        match e.retune(path, now, keep) {
+        match e.retune(path, now, keep, opendmd_core::fx_psi::Retune::Play) {
             Some(r) => r,
             None => e.play_now_with(path, now, keep),
         }

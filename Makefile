@@ -1244,12 +1244,19 @@ EMU_API_LONG_PSB = $(EMU_DIR)/api/long.psb
 # look's rebuild when its .psb is written, and its end when the .psi goes.
 EMU_API_LOOK ?= $(WEB)/formulas/vignette.psi
 EMU_API_LOOK_PSB = $(EMU_DIR)/api/look.psb
+# The governor step's Formulas (heavy and light `smooth`), base64url: Formula over Formula.
+EMU_API_HEAVY_PSB = $(EMU_DIR)/api/gov-heavy.psb.b64
+EMU_API_LIGHT_PSB = $(EMU_DIR)/api/gov-light.psb.b64
 emu-api-psb:
 	@mkdir -p $(EMU_DIR)/api
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_FORMULA)) --base64 > $(EMU_API_PSB).$$$$ \
 	  && mv $(EMU_API_PSB).$$$$ $(EMU_API_PSB)
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LONG)) -o $(EMU_API_LONG_PSB)
 	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath $(EMU_API_LOOK)) -o $(EMU_API_LOOK_PSB)
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/gov-heavy.psi) --base64 > $(EMU_API_HEAVY_PSB).$$$$ \
+	  && mv $(EMU_API_HEAVY_PSB).$$$$ $(EMU_API_HEAVY_PSB)
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- build $(abspath tools/emu/gov-light.psi) --base64 > $(EMU_API_LIGHT_PSB).$$$$ \
+	  && mv $(EMU_API_LIGHT_PSB).$$$$ $(EMU_API_LIGHT_PSB)
 # The pack it pushes is this build's, signed (PUT /api/www takes no other).
 EMU_API_WWW = $(EMU_DIR)/api/www.pack
 # Boot C's updater: one from before the panel and table v4 (OLD_UPDATER_TAG's
@@ -1271,7 +1278,7 @@ emu-api: emu-build emu-card emu-api-psb emu-old-updater
 	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(EMU_API_WWW) --key $(FW_SIGN_KEY)
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py api --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) \
-	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --look $(EMU_API_LOOK) --look-psb $(EMU_API_LOOK_PSB) --formula $(EMU_API_FORMULA) --old-updater $(EMU_OLD_UPDATER) $(EMU_ARGS)
+	  --www-pack $(EMU_API_WWW) --bundle $(EMU_API_BUNDLE) --psb $(EMU_API_PSB) --long-psb $(EMU_API_LONG_PSB) --look $(EMU_API_LOOK) --look-psb $(EMU_API_LOOK_PSB) --heavy-psb $(EMU_API_HEAVY_PSB) --light-psb $(EMU_API_LIGHT_PSB) --formula $(EMU_API_FORMULA) --old-updater $(EMU_OLD_UPDATER) $(EMU_ARGS)
 # The same with a test board's heap: an `emu-ballast` image keeps ~45 KB free
 # while playing (a test board, 2026-11-03). EMU_RIG_OK.
 EMU_RIGTIGHT_IMAGE = $(EMU_DIR)/rigtight/dist/opendmd-$(FW_VERSION)-4mb-full.bin

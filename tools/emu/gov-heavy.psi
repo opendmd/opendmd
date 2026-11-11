@@ -1,0 +1,6 @@
+-- The emulator lane's heavy Formula (api_lane.py `governor`): `smooth`
+-- with 9 moving noises, ~35 ms a frame by the estimate, so the governor
+-- opens it held to several frames.
+smooth
+loop 4
+gray((noise(x*1, y*9, t*1) + noise(x*2, y*8, t*2) + noise(x*3, y*7, t*3) + noise(x*4, y*6, t*4) + noise(x*5, y*5, t*5) + noise(x*6, y*4, t*6) + noise(x*7, y*3, t*7) + noise(x*8, y*2, t*8) + noise(x*9, y*1, t*9)) / 9)
