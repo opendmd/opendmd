@@ -4045,10 +4045,13 @@ def studio_read_live(browser, base: str, site: Path, errors: list[str]) -> None:
     page.context.close()
 
 
-S_STATE = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const out = {};
+S_STATE = """async () => { const m = await import('/studio/store.js');
+    // (meta read raw first: LocalStore.open lets old notes go, which would hide one written now)
+    const raw = await new Promise((ok) => { const r = indexedDB.open('opendmd-studio'); r.onsuccess = () => { const db = r.result; const q = db.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => { db.close(); ok(q.result); }; }; });
+    const s = await m.LocalStore.open(); const out = {};
     for (const t of ['palette', 'piece', 'pack']) for (const h of (await s.list({ type: t })).items) { const r = await s.get(h.id); const v = { id: r.id, palette: r.body.palette, members: r.body.members && r.body.members.map((x) => x.id), hex: r.body.colours && r.type === 'palette' ? r.body.colours[0].hex : undefined }; out[r.name] ??= v; out[r.id] = v; }
-    const meta = await new Promise((ok) => { const q = s.db.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => ok(q.result); }); s.db.close();
-    return { recs: out, notes: meta.filter((x) => String(x.k).startsWith('n:')).length }; }"""
+    s.db.close();
+    return { recs: out, notes: raw.filter((x) => String(x.k).startsWith('n:')).length }; }"""
 
 
 def pick_files(page: Page, files: list[tuple[str, str]]) -> None:
