@@ -43,7 +43,8 @@ async function make(S, fit) {
   const n = fit ? Math.min(table.length, 256) : table.length;
   return { gif, n, name: fileName(S.nameNow() + (fit && table.length > 256 ? ' 256' : '')) };
 }
-const fileName = (stem) => (stem.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
+// A file name of 120 characters at most, as the panel's app takes it (js/importgif.js).
+const fileName = (stem) => (stem.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_').slice(0, 116) || 'drawing') + '.gif';
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`;
 
 export async function download(S, fit) {
@@ -77,13 +78,13 @@ export async function download(S, fit) {
 // MAX_GIF). The GIF is made when the sheet opens, so one too big is said
 // before any window opens; Send opens the window in the click.
 const READY = 'opendmd-import-ready', IMPORT = 'opendmd-import', MAX_GIF = 4 * 1024 * 1024;
-const SHEET = `<form method="dialog" class="s-sheet"><div class="s-hd"><h2>Send to panel</h2><span class="s-sp"></span><button class="s-pill" value="close" formnovalidate>Close</button></div>
+const SHEET = `<form class="s-sheet" id="s-p-form"><div class="s-hd"><h2>Send to panel</h2><span class="s-sp"></span><button class="s-pill" type="button" id="s-p-close">Close</button></div>
 <p class="s-cap" id="s-p-what">Making the GIF…</p>
-<label class="s-f">Title <input class="s-in" id="s-p-title" maxlength="80" autocomplete="off"></label>
+<label class="s-f">Title <input class="s-in" id="s-p-title" maxlength="80" autocomplete="off" autofocus></label>
 <label class="s-f">Platform <input class="s-in" id="s-p-platform" maxlength="16" autocomplete="off" spellcheck="false" placeholder="like SNES"></label>
 <label class="s-f">Made by <input class="s-in" id="s-p-author" maxlength="40" autocomplete="off" spellcheck="false" placeholder="letters and digits"></label>
-<label class="s-f s-chk"><input type="checkbox" id="s-p-logo"> A logo</label>
-<div class="s-row"><button class="s-cta" id="s-p-send" type="button" disabled>Send</button></div>
+<label class="s-chk"><input type="checkbox" id="s-p-logo"> It is a logo</label>
+<div class="s-row"><button class="s-cta" id="s-p-send" type="submit" disabled>Send</button></div>
 <p class="s-cap s-bad" id="s-p-err" hidden></p></form>
 <p class="s-cap" id="s-p-where" hidden>Your panel: <b id="s-p-where-addr"></b> · <button class="s-pill" id="s-p-change" type="button">Change</button></p>
 <form id="s-p-ask" hidden><label for="s-p-addr">Your panel’s address</label>
@@ -102,8 +103,11 @@ export async function send(S) {
     dlg.innerHTML = SHEET;
     document.body.append(dlg);
     for (const l of dlg.querySelectorAll('.s-f')) l.style.cssText = 'display:grid;gap:4px;margin-top:10px;font-size:14px';
+    dlg.querySelector('.s-chk').style.cssText = 'display:flex;align-items:center;gap:8px;min-height:40px;margin-top:10px;font-size:14px';
+    document.getElementById('s-p-close').onclick = () => dlg.close();
     const { ask } = P.addressForm('s-p', (a) => go(S, P, a), 'GIF');
-    document.getElementById('s-p-send').onclick = () => { const a = P.addr(); if (a) go(S, P, a); else ask(); };
+    // Send is the sheet's default: Enter in a field sends (when the GIF is ready), it never closes the sheet.
+    document.getElementById('s-p-form').onsubmit = (e) => { e.preventDefault(); if (!made) return; const a = P.addr(); if (a) go(S, P, a); else ask(); };
   }
   // The naming fields: an import's (its `from` entry), else the piece's name.
   const ext = (S.rec?.from || []).find((f) => f && f.external === true && (f.title || f.platform || f.author || f.logo)) || {};
@@ -137,11 +141,13 @@ function go(S, P, a) {
   const err = document.getElementById('s-p-err'), v = (id) => document.getElementById(id).value.trim();
   if (!made) return;
   const buf = made.gif.slice().buffer; // (a copy: the one sent is transferred)
-  const data = { type: IMPORT, gif: buf, name: fileName(v('s-p-title') || S.nameNow()), title: v('s-p-title').slice(0, 80),
+  const title = v('s-p-title').slice(0, 80);
+  const data = { type: IMPORT, gif: buf, name: fileName(title || S.nameNow()), title,
     platform: v('s-p-platform').replace(/[^A-Za-z0-9]/g, '').slice(0, 16), author: v('s-p-author').replace(/[^A-Za-z0-9]/g, '').slice(0, 40),
     logo: document.getElementById('s-p-logo').checked };
   const ok = P.handOff(a, 'import', READY, { data, transfer: [buf] });
   err.hidden = ok;
   err.textContent = ok ? '' : 'Your browser didn’t open the panel’s web app: allow pop-ups for this site, then press Send again, or download the GIF.';
-  if (ok) S.status(S.kept ? 'kept' : 'new', `Sent to ${a}`);
+  // (The panel's app says nothing back once it has the GIF: what is known is that its page opened.)
+  if (ok) S.status(S.kept ? 'kept' : 'new', `Opened ${a}: add the GIF there`);
 }
