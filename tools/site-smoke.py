@@ -3607,8 +3607,10 @@ def studio_files_hostile(browser, base: str, site: Path, errors: list[str]) -> N
              or "call stack" in v["said"] or not v["said"].rstrip().endswith(".")}
     slow = {k: v["ms"] for k, v in r["out"].items() if v["ms"] > 5000}
     polluted = page.evaluate("({}).polluted !== undefined")
-    check(not taken and r["stored"] == 0 and not slow and not polluted and page.evaluate("1 + 1") == 2 and "carries what a record doesn’t" in r["out"]["__proto__ and constructor keys"]["said"],
-          f"/studio/ files hostile: {len(cases)} files that lie (__proto__ and constructor keys among them: not the envelope), each refused with a sentence, nothing stored, none slow, nothing polluted ({ {k: v['said'][:40] for k, v in taken.items()} }, {slow})")
+    proto = r["out"].pop("__proto__ and constructor keys")["said"]
+    taken.pop("__proto__ and constructor keys", None)
+    check(not taken and r["stored"] == 0 and not slow and not polluted and proto == "taken 1" and page.evaluate("1 + 1") == 2,
+          f"/studio/ files hostile: {len(cases) - 1} files that lie, each refused with a sentence, nothing stored, none slow; __proto__ and constructor keys dropped as not the envelope, nothing polluted ({ {k: v['said'][:40] for k, v in taken.items()} }, {slow}, {proto})")
     # A 50 MB file: refused before it is read.
     big = page.evaluate("""async () => { const f = await import('/studio/files.js'); const t = performance.now();
         try { await f.read(new File([new Uint8Array(50 << 20)], 'big.dmdart')); return 'taken'; } catch (e) { return [e.message, Math.round(performance.now() - t)]; } }""")
@@ -3734,12 +3736,13 @@ def studio_files_trust(browser, base: str, site: Path, errors: list[str]) -> Non
           f"/studio/ files trust: a stranger's newer version is offered unticked, its claim shown as the file's; left, mine stays ({rows[0]['text'][:90]})")
     file_open(page, got["same"])
     rows = file_rows(page)
+    page.check("#s-fs input[type=checkbox]")
     file_add(page)
     raw = page.evaluate(S_RAW)
     now = next(r for r in raw["records"] if r["id"] == got["id"])
     snap = [v for v in raw["revs"] if v["id"] == got["id"]]
-    check(rows[0]["box"] is True and now["hash"] == got["hsame"] and now["author"]["account"] is None and len(snap) == 1 and snap[0]["label"] == "Before the file’s version" and snap[0]["hash"] == got["mine"],
-          f"/studio/ files trust: one by the same name, ticked and taken: mine kept first as a named snapshot ({snap}), no account taken from the file ({now['author']})")
+    check(rows[0]["box"] is False and now["hash"] == got["hsame"] and now["author"]["account"] is None and len(snap) == 1 and snap[0]["label"] == "Before the file’s version" and snap[0]["hash"] == got["mine"],
+          f"/studio/ files trust: one by the same name, still offered unticked (a name proves nothing), ticked and taken: mine kept first as a named snapshot ({snap}), no account taken from the file ({now['author']})")
     page.evaluate(f"localStorage.setItem('odmd.studio.last', '{got['id']}')")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
@@ -3752,9 +3755,38 @@ def studio_files_trust(browser, base: str, site: Path, errors: list[str]) -> Non
         const top = await K.piece('Top rev', [[1, 1, 1]], { set: { rev: 2 ** 31 + 1 } }); out.rev = K.file(top, [top]); return out;""")
     said = {k: (file_open(page, v), page.inner_text("#s-err"))[1] for k, v in bad.items()}
     raw = page.evaluate(S_RAW)
-    check(all(("carries what a record doesn’t" in v) if k != "rev" else ("(rev)" in v) for k, v in said.items()) and not any(r["gone"] for r in raw["records"])
+    check(all(("only this browser’s store writes" in v) if k != "rev" else ("(rev)" in v) for k, v in said.items()) and not any(r["gone"] for r in raw["records"])
           and not any(set(r["keys"]) - {"type", "id", "rev", "hash", "name", "tags", "note", "author", "licence", "from", "created", "modified", "body", "seq"} for r in raw["records"]),
           f"/studio/ files trust: records with gone, seq, ver or label refused, and a rev past 2^31; nothing but the envelope stored { {k: v[:50] for k, v in said.items()} }")
+    # A key the envelope doesn't name (a later Studio's): dropped, the record taken.
+    fut = kev(page, "const p = await K.piece('From the future', [[1, 1, 1]]); p.signature = 'ed25519:abc'; return { id: p.id, text: K.file(p, [p]) };")
+    said = file_open(page, fut["text"])
+    file_add(page)
+    stored = next((r for r in page.evaluate(S_RAW)["records"] if r["id"] == fut["id"]), None)
+    check(said == "asked" and stored and "signature" not in stored["keys"], f"/studio/ files trust: a key the envelope doesn't name is dropped and the record taken ({stored and stored['keys']})")
+    # An update taken that renamed my piece and its licence: Restore gives back the whole record.
+    r1 = kev(page, """const mine = await K.piece('My rocket', [[1, 1, 1], [2, 2, 1], [3, 3, 1]]); mine.author = { name: 'Me', account: null }; mine.licence = 'CC-BY-4.0'; mine.tags = ['mine']; await K.put(mine);
+        const evil = await K.piece('Stolen', [[100, 20, 2]], { set: { id: mine.id, rev: 7, author: { name: 'Mallory', account: null }, licence: 'CC0-1.0', tags: ['theirs'], created: mine.created } });
+        const pal = await K.palette('My palette'); await K.put(pal); const newer = await K.palette('My palette', { set: { id: pal.id, rev: 5 } }); newer.body.colours = [{ k: 1, hex: '#ff0000' }]; newer.hash = await m.hashOf(newer.body);
+        return { id: mine.id, pal: pal.id, phash: pal.hash, text: K.file(evil, [evil]), ptext: K.file(newer, [newer]) };""")
+    file_open(page, r1["text"])
+    page.check("#s-fs input[type=checkbox]")
+    file_add(page)
+    page.evaluate(f"localStorage.setItem('odmd.studio.last', '{r1['id']}')")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    taken_ = page.evaluate(S_STORE, ["get", None])["r"]
+    page.click("#s-snaps li:has-text('Before the file’s version') [data-rev]")
+    wait_js(page, "document.getElementById('s-name').value === 'My rocket'", timeout=20000)
+    s_kept(page)
+    back = page.evaluate(S_STORE, ["get", None])["r"]
+    check(taken_["name"] == "Stolen" and (back["name"], back["author"]["name"], back["licence"], back["tags"]) == ("My rocket", "Me", "CC-BY-4.0", ["mine"]) and s_on(page) == {(1, 1), (2, 2), (3, 3)},
+          f"/studio/ files trust: Restore of Before the file's version gives back the whole record: name, author, licence, tags and pixels ({back['name']}, {back['author']['name']}, {back['licence']}, {back['tags']})")
+    file_open(page, r1["ptext"])
+    how = [x["how"] for x in file_rows(page)]
+    file_add(page)
+    pal = next(r for r in page.evaluate(S_RAW)["records"] if r["id"] == r1["pal"])
+    check(how == ["copy"] and pal["hash"] == r1["phash"], f"/studio/ files trust: a newer version of a palette comes in as a copy, mine untouched ({how})")
     page.context.close()
 
 
@@ -3847,6 +3879,54 @@ def studio_files_more(browser, base: str, site: Path, errors: list[str]) -> None
     errors[:] = [e for e in errors if "starter.dmdpack" not in e]  # (the pack made unreachable on purpose)
     check(said == "refused" and "starter pack couldn’t be loaded" in msg and card == real["name"] and lib_counts(page)["stamp"] == 35,
           f"/studio/ files more: with the starter pack unreachable no file opens ('{msg[:50]}'); the Library shows the starter record for its id ({card})")
+    page.context.close()
+
+
+def studio_backup_limits(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Back up everything always writes files Open takes: nine 256 x 16
+    pieces open again (their cels are not loose pictures); a Library past
+    16 MB is split across files, each opening, all of it back."""
+    page = s_page(browser, base, site, errors)
+    kev(page, """const z = await m.packPx(new Uint8Array(4096)); const s = await m.LocalStore.open();
+        for (let n = 0; n < 9; n++) { const frames = Array.from({ length: 256 }, (_, i) => ({ key: 'f' + i.toString(16).padStart(7, '0'), ms: 100 }));
+          const layers = Array.from({ length: 16 }, (_, i) => ({ key: 'a' + i.toString(16).padStart(7, '0'), name: 'L', moves: true, cels: Array(256).fill(z) }));
+          await s.put(m.record('piece', 'Long ' + n, { w: 128, h: 32, colours: [{ k: 1, hex: '#f7a531' }], frames, layers })); } s.db.close();""")
+    lib_open(page)
+    with page.expect_download(timeout=120000) as dl:
+        page.click("#s-lbackup")
+    data = Path(dl.value.path()).read_bytes()
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    said = file_open(page, data, dl.value.suggested_filename)
+    n = file_add(page) if said == "asked" else 0
+    check(said == "asked" and n == 9, f"/studio/ backup: nine 256 x 16 pieces back up and open again ({said}, {n} added)")
+    page.context.close()
+    # Past 16 MB: split.
+    page = s_page(browser, base, site, errors)
+    kev(page, """const s = await m.LocalStore.open(); let x = 5;
+        for (let n = 0; n < 5; n++) { const cels = []; for (let c = 0; c < 640; c++) { const a = new Uint8Array(4096); for (let i = 0; i < 4096; i++) { x = (Math.imul(x, 1103515245) + 12345) >>> 0; a[i] = 1 + (x >>> 24) % 255; } cels.push(await m.packPx(a)); }
+          const frames = Array.from({ length: 40 }, (_, i) => ({ key: 'f' + i.toString(16).padStart(7, '0'), ms: 100 }));
+          const layers = Array.from({ length: 16 }, (_, l) => ({ key: 'a' + l.toString(16).padStart(7, '0'), name: 'L', moves: true, cels: cels.slice(l * 40, l * 40 + 40) }));
+          await s.put(m.record('piece', 'Noisy ' + n, { w: 128, h: 32, colours: Array.from({ length: 255 }, (_, i) => ({ k: i + 1, hex: '#' + (0x100000 + i * 4099).toString(16) })), frames, layers })); } s.db.close();""")
+    lib_open(page)
+    got = []
+    page.on("download", lambda d: got.append(d))
+    page.click("#s-lbackup")
+    deadline = time.time() + 120
+    while time.time() < deadline and len(got) < 2:
+        page.wait_for_timeout(500)
+    page.wait_for_timeout(1500)
+    files = [(d.suggested_filename, Path(d.path()).read_bytes()) for d in got]
+    said = page.inner_text("#s-err") if page.is_visible("#s-err") else ""
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    added = 0
+    for name, data in files:
+        if file_open(page, data, name) == "asked":
+            added += file_add(page)
+    sizes = [len(b) for _, b in files]
+    check(len(files) >= 2 and all(s_ <= 16 << 20 for s_ in sizes) and added == 5 and "in 2 files" in said,
+          f"/studio/ backup: a Library past 16 MB is backed up in {len(files)} files ({[f'{x / 1e6:.1f} MB' for x in sizes]}), each opening; all {added} pieces back ('{said[:60]}')")
     page.context.close()
 
 
@@ -5682,6 +5762,7 @@ def main() -> int:
             studio_open_cost(browser, base, a.site, errors)
             studio_files_trust(browser, base, a.site, errors)
             studio_files_more(browser, base, a.site, errors)
+            studio_backup_limits(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -5745,6 +5826,7 @@ def main() -> int:
         studio_open_cost(browser, base, a.site, errors)
         studio_files_trust(browser, base, a.site, errors)
         studio_files_more(browser, base, a.site, errors)
+        studio_backup_limits(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
