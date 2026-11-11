@@ -756,7 +756,8 @@ pub fn beam_us() -> u32 {
 }
 
 /// The start of the last retune in place ([`PsiFx::retune_from`]): frame
-/// ms << 16 | asked ms, 0 once taken.
+/// ms << 16 | asked ms, 0 once taken. Main loop only: one thread retunes
+/// (firmware `retune()` clears it, retunes, takes it).
 static RETUNED: AtomicU32 = AtomicU32::new(0);
 
 /// The frame time (ms) the last retune in place started at and the one

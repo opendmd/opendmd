@@ -2246,6 +2246,7 @@ class Player:
         self.ctx = ctx
         self.boot_time = time.monotonic()
         self.ordinal = 0
+        self.sent = None  # as the firmware: no start sent since boot
         self.gifs_started = 0
         self.over: tuple[str, int] | None = None  # the editor's formula over the GIF, its ordinal
         self.sent: int | None = None  # the ordinal the last play without `live` put on screen
