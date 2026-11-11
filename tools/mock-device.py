@@ -5199,9 +5199,17 @@ def make_handler(ctx: Context, quiet: bool):
             # the file to stay (an over, a pause's resume) holds it.
             q = self.path.partition("?")[2] if "?" in self.path else None
             n = query_param(q, "s")
+            if n is not None:
+                try:
+                    v = float(n)
+                except ValueError:
+                    v = float("nan")
+                if not math.isfinite(v) or v < 0:
+                    self.send_error_json(400, "s: a number of seconds, 0 or more")
+                    return
             with ctx.lock:
                 if n is not None:
-                    ctx.dwell = float(n)
+                    ctx.dwell = v
                 self.send_json(200, {"s": ctx.dwell})
 
         def h_mock_fail_move(self, path):

@@ -7368,8 +7368,9 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
     check(t() == "t = 1.00 s" and canvas_sum(page, "#psi-ed-panel") != a1, f"formulas time: an edit while paused draws at the same t ({t()})")
     page.click("#psi-pause")
     f1 = psi_frames(page, "#psi-ed-panel")
-    # (Playing, it draws every 20 ms: four frames, however slowly they come.)
-    f = wait_frames(page, "#psi-ed-panel", f1 + 3)
+    # (Playing, it draws every 20 ms: four frames within 2 s, a slow machine's
+    # rAF included; a crawl of a frame or two a second fails.)
+    f = wait_frames(page, "#psi-ed-panel", f1 + 3, timeout=2000)
     check(f > f1 + 3 and page.get_attribute("#psi-pause", "aria-label") == "Pause", "formulas time: Play goes on")
     page.fill("#psi-src", "loop forever\ngray(frac(t/3))")
     page.wait_for_timeout(500)
@@ -10593,6 +10594,9 @@ ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 
 
 def only_pass(browser, names: list[str], repeat: int) -> None:
+    if not names or repeat < 1:
+        raise SystemExit(f"WEB_SMOKE_ONLY: nothing to run (sections {names}, WEB_SMOKE_REPEAT {repeat})")
+    print(f"PARTIAL RUN: only {names}, {repeat} times (WEB_SMOKE_ONLY): not the whole smoke")
     unknown = [n for n in names if n not in ONLY_BROWSER and n not in ONLY_PAGE]
     if unknown:
         raise SystemExit(f"WEB_SMOKE_ONLY: no section {unknown}; known: {sorted({**ONLY_BROWSER, **ONLY_PAGE})}")
@@ -10604,6 +10608,7 @@ def only_pass(browser, names: list[str], repeat: int) -> None:
     proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"]),
                              "--panel-trial", str(PANEL_TRIAL_S)])
     passed = {n: 0 for n in names}
+    expected0 = list(expected)
     try:
         for i in range(repeat):
             for n in names:
@@ -10621,6 +10626,10 @@ def only_pass(browser, names: list[str], repeat: int) -> None:
                         page.context.close()
                 except Exception as e:  # a timeout is a failed run, not the end of the loop
                     check(False, f"{n}: raised {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+                    # (What the section left open, and the console errors it expected, go with it.)
+                    for c in list(browser.contexts):
+                        c.close()
+                    expected[:] = expected0
                 report_errors(n, errors)
                 passed[n] += len(failures) == before
     finally:
@@ -10639,7 +10648,7 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=[f"--host-resolver-rules={LOCAL_RULE}"])
-        if os.environ.get("WEB_SMOKE_ONLY"):
+        if os.environ.get("WEB_SMOKE_ONLY") is not None:
             only_pass(browser, [n for n in os.environ["WEB_SMOKE_ONLY"].split(",") if n],
                       int(os.environ.get("WEB_SMOKE_REPEAT", "1")))
         elif args.www_update_only:
@@ -10654,6 +10663,11 @@ def main() -> int:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()
     mock_errors()
+    if os.environ.get("WEB_SMOKE_ONLY") is not None:
+        # (Never "all checks passed": a WEB_SMOKE_ONLY left exported must not pass a gate.)
+        print(f"\nPARTIAL RUN (WEB_SMOKE_ONLY={os.environ['WEB_SMOKE_ONLY']!r}): not the whole smoke; "
+              + (f"FAILED: {len(failures)}" if failures else "these sections' checks passed"))
+        return 1 if failures else 3
     print(f"\n{'FAILED: ' + str(len(failures)) if failures else 'all checks passed'}")
     return 1 if failures else 0
 
