@@ -272,3 +272,14 @@ fn wide_frames_of_4096_colours_then_fewer_end_exact() {
         .zip(&shots[0])
         .all(|(&c, &b)| gap(&[b], c) <= 48 * 48));
 }
+
+#[test]
+fn a_much_used_colour_beats_a_lone_one_slightly_farther() {
+    // After black (the most used), a red used 50 times 100 away and a red
+    // used once 110 away: the weight, log(1 + uses), takes the first;
+    // distance alone would take the second.
+    let counts = [(0x000000, 100), (0x640000, 50), (0x6e0000, 1)];
+    assert_eq!(spread_pick(&counts, 2), [0x000000, 0x640000]);
+    // With room for all three, all are kept.
+    assert_eq!(spread_pick(&counts, 3).len(), 3);
+}
