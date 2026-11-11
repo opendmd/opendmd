@@ -538,15 +538,21 @@ impl<'s> Parser<'s> {
         out
     }
 
-    /// Language review P1.4: a `loop` that is not a whole number of 40 ms
-    /// in a formula that moves. Every player draws whole frames of its
+    /// Language review P1.4: a `loop` that is not a whole number of the
+    /// frames it is drawn in (20 ms, or 40 with `fps 25`) in a formula that
+    /// moves. Every player draws whole frames of its
     /// grid (10, 20 or 40 ms: every refresh, the 2nd or the 4th; a saved
     /// GIF 20 or 40), and the loop is cut to them (`fx_psi`'s
     /// `loop_frames`, the web app's preview and GIF), so its length, and
     /// where `t` jumps back, differ by the rate it gets.
     fn loop_note(&self, prog: &Program) -> Option<(usize, usize, String)> {
         let ms = prog.loop_ms;
-        if ms == 0 || ms.is_multiple_of(40) || prog.inputs() & 8 == 0 {
+        // The frames it is drawn in: 20 ms (every 2nd refresh, the default,
+        // and where the panel holds a `smooth` one that is too heavy), 40
+        // with `fps 25`. (A multiple of 20 ms only cut when a heavy one is
+        // held to every 4th refresh: no note.)
+        let grid = prog.frame_ms().unwrap_or(20).max(20);
+        if ms == 0 || ms.is_multiple_of(grid) || prog.inputs() & 8 == 0 {
             return None;
         }
         // The `loop` line's number: a statement that starts `loop` and a
@@ -583,12 +589,16 @@ impl<'s> Parser<'s> {
             a,
             e,
             format!(
-                "`loop {}` is not a whole number of 0.04 s: the panel draws whole frames of 10, 20 or 40 ms \
-                 (every refresh, every 2nd or every 4th), so this loop plays for {} s to {} s by the rate it gets, \
-                 and `t` jumps back where it is cut; a multiple of 0.04 s loops the same everywhere",
+                "`loop {}` is not a whole number of the panel's frames: drawn every {} refresh it is cut to {} s, \
+                 and `t` jumps back there; {} loops without a jump at every rate",
                 sub(self.src, a, e),
-                s(ms / 40 * 40),
-                s(ms / 10 * 10)
+                if grid == 40 { "4th" } else { "2nd" },
+                s(ms / grid * grid),
+                // The 40 ms multiples either side: whole frames at every rate.
+                match ms / 40 * 40 {
+                    0 => format!("`loop {}`", s(40)),
+                    lo => format!("`loop {}` or `loop {}`", s(lo), s(lo + 40)),
+                }
             ),
         ))
     }
