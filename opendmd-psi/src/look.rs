@@ -54,7 +54,7 @@ pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
 /// `src` as a function, `fn name(x, y) { … }`, for another formula to call
 /// (the editor's `use Plasma as p`): its declarations, `loop`, `fps` and
 /// `smooth` lines left out, each `control` a name at its default (`speed =
-/// 1`), and its `phase` written out as `(t/N)` for its own `loop N` (8
+/// 1`), and its `phase` set first as `(t/N)` for its own `loop N` (8
 /// without one), so it moves as it did on its own.
 /// `None` for one that can't be a function — with layers, a draw stage,
 /// tables, sprites, palettes or functions of its own — or that doesn't
@@ -80,7 +80,15 @@ pub fn function(src: &str, name: &str) -> Option<String> {
     let mut f = String::from("fn ");
     f.push_str(name);
     f.push_str("(x, y) {\n");
-    let phase = own_phase(src);
+    // Its `phase` (`t/N` for its own loop) worked out first, before any
+    // line of its own sets `t`: the time's, as alone.
+    if let Some(n) = own_phase(src) {
+        f.push_str("  phase = (t/");
+        f.push_str(n);
+        f.push_str(")\n");
+    }
+    // (A bare `smooth` line is the rate, unless it is a value of its own.)
+    let own_smooth = sets(src, b"smooth");
     // Each statement at the top level: [start, end).
     let (mut st, mut depth, mut quote, mut i) = (0usize, 0i32, false, 0usize);
     while i <= b.len() {
@@ -104,8 +112,9 @@ pub fn function(src: &str, name: &str) -> Option<String> {
                 let line = src.get(a..i).unwrap_or("");
                 if a < i {
                     match w {
-                        _ if sets => push_line(&mut f, &phase.of(line)),
-                        "psi" | "name" | "about" | "look" | "loop" | "fps" | "smooth" => {}
+                        _ if sets => push_line(&mut f, line),
+                        "smooth" if !own_smooth => {}
+                        "psi" | "name" | "about" | "look" | "loop" | "fps" => {}
                         "control" => {
                             // `control NAME [lo..hi] [= v] …`: NAME = v (else
                             // lo, else 0; a choice's first word, 0).
@@ -141,7 +150,7 @@ pub fn function(src: &str, name: &str) -> Option<String> {
                         }
                         "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part"
                         | "use" => return None,
-                        _ => push_line(&mut f, &phase.of(line)),
+                        _ => push_line(&mut f, line),
                     }
                 }
                 st = i + 1;
@@ -160,41 +169,48 @@ pub fn function(src: &str, name: &str) -> Option<String> {
     Some(f)
 }
 
-/// What a formula's `phase` is, written out: `(t/N)` for its `loop N` (the
-/// number as written; 8 without one); nothing to write where it sets a
-/// `phase` of its own or never repeats.
-#[cfg(feature = "compiler")]
-struct Phase<'s>(Option<&'s str>);
-
+/// The loop `t` is divided by for a formula's `phase` (its `loop N` as
+/// written, 8 without one), when it reads `phase` without setting its own
+/// and repeats.
 #[cfg(feature = "compiler")]
 #[cfg_attr(target_arch = "xtensa", optimize(size))]
-fn own_phase(src: &str) -> Phase<'_> {
+fn own_phase(src: &str) -> Option<&str> {
     let b = src.as_bytes();
-    let (mut lp, mut own) = (Some("8"), false);
-    for (i, w) in words(b) {
-        let rest = |k: usize| {
-            let mut k = k;
-            while k < b.len() && matches!(b[k], b' ' | b'\t') {
-                k += 1;
-            }
-            k
-        };
-        let k = rest(i + w.len());
-        if w == b"phase" && b.get(k) == Some(&b'=') && b.get(k + 1) != Some(&b'=') {
-            own = true;
-        }
-        if w == b"control" {
-            let e = k + b[k..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
-            own |= &b[k..e] == b"phase";
-        }
+    let mut lp = Some("8");
+    let all = words(b);
+    for &(i, w) in &all {
         if w == b"loop" {
+            let k = space(b, i + w.len());
             let e = k + b[k..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'.').count();
             if e > k {
                 lp = src.get(k..e).filter(|n| *n != "forever");
             }
         }
     }
-    Phase(lp.filter(|_| !own))
+    let reads = all.iter().any(|&(_, w)| w == b"phase");
+    lp.filter(|_| reads && !sets(src, b"phase"))
+}
+
+/// Past spaces and tabs from `k`.
+#[cfg(feature = "compiler")]
+fn space(b: &[u8], mut k: usize) -> usize {
+    while k < b.len() && matches!(b[k], b' ' | b'\t') {
+        k += 1;
+    }
+    k
+}
+
+/// Whether `src` sets a value called `name` (`name = …`, or a control).
+#[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn sets(src: &str, name: &[u8]) -> bool {
+    let b = src.as_bytes();
+    let all = words(b);
+    all.iter().enumerate().any(|(n, &(i, w))| {
+        let k = space(b, i + w.len());
+        (w == name && b.get(k) == Some(&b'=') && b.get(k + 1) != Some(&b'='))
+            || (w == b"control" && all.get(n + 1).is_some_and(|&(_, v)| v == name))
+    })
 }
 
 /// The words of `b` outside comments and quotes: (where, the word).
@@ -220,31 +236,6 @@ fn words(b: &[u8]) -> alloc::vec::Vec<(usize, &[u8])> {
         i += 1;
     }
     out
-}
-
-#[cfg(feature = "compiler")]
-impl Phase<'_> {
-    /// `line` with each `phase` read in it as `(t/N)`.
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn of(&self, line: &str) -> String {
-        let Some(n) = self.0 else {
-            return String::from(line);
-        };
-        let b = line.as_bytes();
-        let mut o = String::with_capacity(line.len());
-        let mut at = 0;
-        for (i, w) in words(b) {
-            if w == b"phase" {
-                o.push_str(line.get(at..i).unwrap_or(""));
-                o.push_str("(t/");
-                o.push_str(n);
-                o.push(')');
-                at = i + w.len();
-            }
-        }
-        o.push_str(line.get(at..).unwrap_or(""));
-        o
-    }
 }
 
 #[cfg(feature = "compiler")]

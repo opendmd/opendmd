@@ -3940,15 +3940,20 @@ fn a_product_of_t_past_the_limit_is_noted() {
 #[test]
 fn header_words_in_functions_and_the_settings_sheet() {
     let f = crate::look::function("loop 4.8\nsmooth\nv = sin(phase*2)\nhsv(x + phase, 1, v)", "p").unwrap();
-    assert!(!f.contains("smooth") && !f.contains("phase"), "{f}");
-    assert!(f.contains("sin((t/4.8)*2)") && f.contains("hsv(x + (t/4.8), 1, v)"), "{f}");
+    assert!(!f.contains("smooth") && f.contains("  phase = (t/4.8)\n"), "{f}");
     // Under another loop: the same as the division written out.
     assert_eq!(psb_of(&format!("loop 9.6\n{f}\np(x, y)")), psb_of("loop 9.6\nv = sin(t/4.8*2)\nhsv(x + t/4.8, 1, v)"));
     let f = crate::look::function("v = frac(phase + moon.phase)\ngray(v)", "p").unwrap();
-    assert!(f.contains("frac((t/8) + moon.phase)"), "{f}");
-    // Its own `phase`: as written.
+    assert!(f.contains("phase = (t/8)"), "{f}");
+    // Its own `t` set later: `phase` is still the time's.
+    let f = crate::look::function("loop 4\nt = x*3\ngray(frac(phase + t))", "p").unwrap();
+    assert_eq!(psb_of(&format!("loop 2\n{f}\np(x, y)")), psb_of("loop 2\nph = t/4\ntt = x*3\ngray(frac(ph + tt))"));
+    // Its own `phase`: as written, nothing put in.
     let f = crate::look::function("phase = x\ngray(phase)", "p").unwrap();
-    assert!(f.contains("phase = x") && f.contains("gray(phase)"), "{f}");
+    assert!(!f.contains("(t/"), "{f}");
+    // Its own `smooth`, a bare colour line: kept.
+    let f = crate::look::function("smooth = x*0.5\nsmooth", "p").unwrap();
+    assert_eq!(psb_of(&format!("{f}\np(x, y)")), psb_of("v = x*0.5\nv"));
     // The settings sheet: a declaration after `loop` and `smooth` is found
     // (replaced, not put in again).
     let src = "loop 4\nsmooth\nname \"A\"\ngray(frac(x + phase))";
