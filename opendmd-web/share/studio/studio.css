@@ -154,7 +154,6 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   .s-doc{order:-3}.s-stage{order:-2}.s-strip{order:-1}
   .s-pill,.s-in,.s-name input,.s-tray .s-seg button,.s-chin .s-seg button{min-height:40px}
   .s-tray .s-seg button,.s-chin .s-seg button,.s-addf{min-width:40px}
-  .s-pill{height:40px}
   .s-cta,#s-pal{min-height:40px}
   .s-title{align-items:stretch}
   .s-tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line)}

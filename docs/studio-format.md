@@ -27,7 +27,7 @@ Records point at each other by `id`, never by name or position.
 
 ## A piece
 
-`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever), `frames` (each `{ms}`),
+`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever; its GIF says N plays as a loop count of N - 1, which browsers keep: the panel's player loops a GIF for as long as its playlist keeps it on, whatever its loop count), `frames` (each `{ms}`; the Studio writes tens of ms, as a GIF keeps hundredths of a second),
 `layers` (each `{name, moves, cels}`: a layer that moves has a cel a frame,
 one held still has one), `palette` and, since S1, `colours` and `keys`.
 
