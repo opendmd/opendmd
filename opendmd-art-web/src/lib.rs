@@ -484,38 +484,6 @@ pub fn console_name(platform: &str) -> String {
     opendmd_core::follow::console_name(platform).into()
 }
 
-/// The site's pixel editor's GIF (/studio/, [`encode::indexed`]): frames
-/// of 128x32 palette indices (`Uint8Array`, back to back) over exactly
-/// `palette` (`Uint32Array` of `0xRRGGBB`), one delay each (ms), played
-/// `plays` times (0: forever). Throws with why on a bad call.
-#[wasm_bindgen(js_name = encodeIndexed)]
-pub fn encode_indexed(
-    palette: &[u32],
-    frames: &[u8],
-    delays_ms: &[u32],
-    plays: u32,
-) -> Result<Vec<u8>, JsError> {
-    encode::indexed(palette, frames, delays_ms, plays).map_err(JsError::new)
-}
-
-/// The site's pixel editor's GIF past 256 colours (/studio/,
-/// [`encode::wide`]): frames of 128x32 colours (`Uint32Array` of
-/// `0xRRGGBB`, back to back), one delay each (ms), played `plays` times
-/// (0: forever), each frame a whole picture over its 256 most used colours
-/// and then the corrections, so no colour is lost and nothing wipes. Throws with why on a bad call.
-/// The same frames fitted to their 256 most used colours (every other as
-/// its nearest), over one table ([`encode::fitted`]): lossy, but the panel
-/// can prepare it and smooth it. Throws with why on a bad call.
-#[wasm_bindgen(js_name = encodeFitted)]
-pub fn encode_fitted(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, JsError> {
-    encode::fitted(frames, delays_ms, plays).map_err(JsError::new)
-}
-
-#[wasm_bindgen(js_name = encodeWide)]
-pub fn encode_wide(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, JsError> {
-    encode::wide(frames, delays_ms, plays).map_err(JsError::new)
-}
-
 /// GIF bytes -> its prepared copy with the core's recoder in the prepared
 /// format (the one `opendmd-pack` and the device run, so the output is
 /// byte-identical). Returns `{copy: Uint8Array, stats: {width, height,

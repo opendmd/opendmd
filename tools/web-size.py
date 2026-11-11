@@ -433,8 +433,9 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # page, script, style, the record store and the starter palettes; site-only,
 # never packed): a line of its own, <= 20 KB (2026-11-11, branch studio-s0:
 # the S0 spike, 17.4 KB gz as written here, comments and all; the site serves
-# it minified). Its GIF writer is the demo's pkg-art (the art wasm line),
-# fetched at the first download, not with the page.
+# it minified). Its GIF writer was the demo's pkg-art until S2 (now
+# pkg-studio, the studio wasm line below), fetched at the first download,
+# not with the page.
 # 32 KB since S1 (2026-11-11, branch studio-s1, under the budget authority:
 # ~30.2 KB gz as written): the line, rectangle, ellipse, dither, selection
 # and picker tools with their live previews (tools.js), brushes, the piece's
@@ -449,7 +450,14 @@ STUDIO_PAGE_GZ_BUDGET = 32 * 1024
 # content, not code, and counts against neither.
 STUDIO_LAZY_GZ_BUDGET = 5 * 1024
 STUDIO_LAZY = {"colour.js"}
-STUDIO_PAGE_USES = ("pkg-art/", "js/wasm.js", "js/build.js", "js/artmod.js", "fonts/silkscreen.woff2")
+STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
+# The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
+# indexed, wide and fitted encoders over the gif crate; site-only, left out
+# of the pack by opendmd-pack www.rs SITE_ONLY): a line of its own, <= 40 KB
+# (2026-11-11, branch studio-encoders, under the budget authority). They
+# were in pkg-art (S1), which also ships in the device's www pack and had
+# ~0.5 KB of its 150 KB left; moved out, pkg-art is back under it with room.
+STUDIO_WASM_GZ_BUDGET = 40 * 1024
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,
@@ -611,6 +619,8 @@ def main() -> int:
             kind = "psi wasm"
         elif rel.startswith("pkg-psi-lang/"):
             kind = "psi lang"
+        elif rel.startswith("pkg-studio/"):
+            kind = "studio wasm"
         elif rel in FCOST:
             kind = "fcost"
         elif rel in FORMULAS:
@@ -793,7 +803,7 @@ def main() -> int:
                          ("fconds", FCONDS_GZ_BUDGET), ("location", LOCATION_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET), ("plbuild", PLBUILD_GZ_BUDGET), ("smart", SMART_GZ_BUDGET), ("tags", TAGS_GZ_BUDGET), ("refs", REFS_GZ_BUDGET), ("psierr", PSIERR_GZ_BUDGET), ("fhist", FHIST_GZ_BUDGET), ("fhint", FHINT_GZ_BUDGET),
-                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
+                         ("fcost", FCOST_GZ_BUDGET), ("psi lang", PSI_LANG_GZ_BUDGET), ("studio wasm", STUDIO_WASM_GZ_BUDGET), ("fsprite", FSPRITE_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

@@ -84,8 +84,9 @@ pub fn collect(dir: &Path, skip: &[&Path]) -> Result<Vec<PackFile>> {
 
 /// The site's own files, published with its demo, never packed: the web
 /// demo's player, the editor's What costs most and Tidy up, and their wasm
-/// module (a folder: everything under it).
-pub const SITE_ONLY: &[&str] = &["js/demo.js", "js/fcost.js", "pkg-psi-lang/"];
+/// module, and the Studio's GIF writers (opendmd.dev/studio/) (a folder:
+/// everything under it).
+pub const SITE_ONLY: &[&str] = &["js/demo.js", "js/fcost.js", "pkg-psi-lang/", "pkg-studio/"];
 
 pub fn pack(
     dir: &Path,
@@ -210,6 +211,10 @@ mod tests {
         fs::create_dir_all(dir.join("pkg-psi-lang")).unwrap();
         fs::write(dir.join("pkg-psi-lang/l.wasm"), "lang").unwrap();
         fs::write(dir.join("pkg-psi-lang/l.wasm.gz"), "gz lang").unwrap();
+        // The site's Studio's wasm.
+        fs::create_dir_all(dir.join("pkg-studio")).unwrap();
+        fs::write(dir.join("pkg-studio/s.wasm"), "studio").unwrap();
+        fs::write(dir.join("pkg-studio/s.wasm.gz"), "gz studio").unwrap();
         fs::write(dir.join("version.txt"), "v9-test\n").unwrap();
         fs::write(dir.join(".hidden"), "no").unwrap();
         let out = dir.join("out.pack");
