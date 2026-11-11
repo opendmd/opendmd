@@ -4767,6 +4767,38 @@ def key_checks(browser, page: Page, base: str) -> None:
         expected.remove("/api/")
 
 
+def now_sync_checks(page: Page, base: str) -> None:
+    """Now's preview in step with the mock: after loading, a skip, a pause
+    (the frame held) and a resume; then every sync for 8 s."""
+    wait_lit(page, "#now-panel", "now")
+    # In step with the mock's clock: a first sync, then two polls.
+    st = wait_sync(page, 3)
+    check(abs(float(st.get("drift", 1e9))) < 60, f"now: preview in step after two polls (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms, {st.get('path')})")
+    check(page.eval_on_selector("#now-cap", "e => e.textContent") == "", "now: no caption once in step")
+    # A skip on the device (not through the UI): the preview loads the
+    # new file and is in step with it.
+    post_json(base + "/api/skip", {})
+    st = wait_sync(page, 3, not_path=st.get("path"))
+    now_path = get_json(base + "/api/status")["now_playing"]["path"]
+    check(st.get("path") == now_path and abs(float(st.get("drift", 1e9))) < 60,
+          f"now: a skip re-syncs to the new file (drift {st.get('drift')} ms, {st.get('path')})")
+    # Paused on the device: the preview pauses and holds its frame.
+    post_json(base + "/api/pause", {})
+    page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'true'", timeout=5000)
+    page.wait_for_timeout(300)
+    a = canvas_sum(page, "#now-panel")
+    page.wait_for_timeout(1200)
+    check(a == canvas_sum(page, "#now-panel"), "now: pausing the mock pauses the preview (frame held 1.2 s)")
+    post_json(base + "/api/pause", {})
+    page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'false'", timeout=5000)
+    k = int(sync_state(page)["k"])
+    st = wait_sync(page, k + 2)
+    check(abs(float(st.get("drift", 1e9))) < 60, f"now: resumed, still in step (drift {st.get('drift')} ms)")
+    drifts, rtts = drift_stats(page, 8)
+    print("  " + summarise("mock drift over 8 s", drifts, rtts))
+    check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
@@ -4806,33 +4838,7 @@ def mock_pass(browser) -> None:
               f"settings: Device's status reads late frames '{late_b}', the raw count beside it, the threshold in the tooltip")
         goto_view(page, "now")
         check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
-        wait_lit(page, "#now-panel", "now")
-        # In step with the mock's clock: a first sync, then two polls.
-        st = wait_sync(page, 3)
-        check(abs(float(st.get("drift", 1e9))) < 60, f"now: preview in step after two polls (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms, {st.get('path')})")
-        check(page.eval_on_selector("#now-cap", "e => e.textContent") == "", "now: no caption once in step")
-        # A skip on the device (not through the UI): the preview loads the
-        # new file and is in step with it.
-        post_json(base + "/api/skip", {})
-        st = wait_sync(page, 3, not_path=st.get("path"))
-        now_path = get_json(base + "/api/status")["now_playing"]["path"]
-        check(st.get("path") == now_path and abs(float(st.get("drift", 1e9))) < 60,
-              f"now: a skip re-syncs to the new file (drift {st.get('drift')} ms, {st.get('path')})")
-        # Paused on the device: the preview pauses and holds its frame.
-        post_json(base + "/api/pause", {})
-        page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'true'", timeout=5000)
-        page.wait_for_timeout(300)
-        a = canvas_sum(page, "#now-panel")
-        page.wait_for_timeout(1200)
-        check(a == canvas_sum(page, "#now-panel"), "now: pausing the mock pauses the preview (frame held 1.2 s)")
-        post_json(base + "/api/pause", {})
-        page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'false'", timeout=5000)
-        k = int(sync_state(page)["k"])
-        st = wait_sync(page, k + 2)
-        check(abs(float(st.get("drift", 1e9))) < 60, f"now: resumed, still in step (drift {st.get('drift')} ms)")
-        drifts, rtts = drift_stats(page, 8)
-        print("  " + summarise("mock drift over 8 s", drifts, rtts))
-        check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+        now_sync_checks(page, base)
         events_checks(page, base)
         transition_checks(page, base)
         look_checks(page, base, True)
@@ -7173,6 +7179,25 @@ def psi_frames(page: Page, sel: str) -> int:
     return int(page.get_attribute(sel, "data-frames") or 0)
 
 
+def painted(page: Page) -> None:
+    """Until the page has painted a frame since now: the Formula previews draw
+    in a requestAnimationFrame callback (js/formulas.js `loop`), so a change
+    made now (a pause, a step, a drag) is on the canvas once two have run."""
+    page.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+
+def wait_frames(page: Page, sel: str, n: int, timeout: int = 10000) -> int:
+    """Until the preview `sel` has drawn more than `n` frames (data-frames);
+    then one more painted frame, so a second draw would be counted too. (None
+    in time: the count as it is, for the check to fail on.)"""
+    try:
+        page.wait_for_function("([s, n]) => +document.querySelector(s).dataset.frames > n", arg=[sel, n], timeout=timeout)
+    except PlaywrightTimeoutError:
+        return psi_frames(page, sel)
+    painted(page)
+    return psi_frames(page, sel)
+
+
 def canvas_light(page: Page, sel: str) -> float:
     """How light a canvas is: its mean of R, G and B, 0..255."""
     return page.evaluate("""(sel) => {
@@ -7245,8 +7270,10 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
     formula_editor(page, "loop 2\ngray(frac(t/2))")
     page.wait_for_function("+document.querySelector('#psi-ed-panel').dataset.frames > 5", timeout=10000)
     t = lambda: page.inner_text("#psi-t-now")
+    # (The time row changes at once; the canvas at the next animation frame:
+    # each step below waits for the frame it draws, never a fixed time.)
     page.click("#psi-pause")
-    page.wait_for_timeout(150)
+    painted(page)
     f0, a0, t0 = psi_frames(page, "#psi-ed-panel"), canvas_sum(page, "#psi-ed-panel"), t()
     page.wait_for_timeout(500)
     check(psi_frames(page, "#psi-ed-panel") == f0 and canvas_sum(page, "#psi-ed-panel") == a0 and t() == t0
@@ -7254,26 +7281,28 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
           f"formulas time: paused, the frame holds ({t0}, {f0} frames; 100 frames to drag through)")
     page.focus("#psi-ed-panel")
     page.keyboard.press(".")
-    page.wait_for_timeout(200)
+    f = wait_frames(page, "#psi-ed-panel", f0)
     s0 = float(t0.split()[2])
     t1 = t()
-    check(psi_frames(page, "#psi-ed-panel") == f0 + 1 and abs(float(t1.split()[2]) - (s0 + 0.02) % 2) < 1e-6 and canvas_sum(page, "#psi-ed-panel") != a0,
-          f"formulas time: . steps one frame on ({t0} -> {t1})")
+    check(f == f0 + 1 and abs(float(t1.split()[2]) - (s0 + 0.02) % 2) < 1e-6 and canvas_sum(page, "#psi-ed-panel") != a0,
+          f"formulas time: . steps one frame on ({t0} -> {t1}; {f0} -> {f} frames)")
     page.keyboard.press(",")
     page.keyboard.press(",")
-    page.wait_for_timeout(200)
     check(abs(float(t().split()[2]) - (s0 - 0.02) % 2) < 1e-6, f"formulas time: , steps back ({t()})")
     set_range(page, "#psi-t", 50)
-    a1 = canvas_sum(page, "#psi-ed-panel")
+    painted(page)
+    a1, f1 = canvas_sum(page, "#psi-ed-panel"), psi_frames(page, "#psi-ed-panel")
     check(t() == "t = 1.00 s" and page.get_attribute("#psi-pause", "aria-label") == "Play", f"formulas time: dragged to the middle ({t()})")
-    # An edit while held keeps the time: the new text drawn at the same moment.
+    # An edit while held keeps the time: the new text drawn at the same moment
+    # (once compiled, 150 ms after the typing: the frame it draws).
     page.fill("#psi-src", "loop 2\ngray(frac(t/2) + 0.1)")
-    page.wait_for_timeout(500)
+    wait_frames(page, "#psi-ed-panel", f1)
     check(t() == "t = 1.00 s" and canvas_sum(page, "#psi-ed-panel") != a1, f"formulas time: an edit while paused draws at the same t ({t()})")
     page.click("#psi-pause")
     f1 = psi_frames(page, "#psi-ed-panel")
-    page.wait_for_timeout(400)
-    check(psi_frames(page, "#psi-ed-panel") > f1 + 3 and page.get_attribute("#psi-pause", "aria-label") == "Pause", "formulas time: Play goes on")
+    # (Playing, it draws every 20 ms: four frames, however slowly they come.)
+    f = wait_frames(page, "#psi-ed-panel", f1 + 3)
+    check(f > f1 + 3 and page.get_attribute("#psi-pause", "aria-label") == "Pause", "formulas time: Play goes on")
     page.fill("#psi-src", "loop forever\ngray(frac(t/3))")
     page.wait_for_timeout(500)
     check(page.get_attribute("#psi-t", "max") == "499", f"formulas time: loop forever drags through its first 10 s ({page.get_attribute('#psi-t', 'max')} frames)")
@@ -10425,6 +10454,51 @@ def www_update_pass(browser) -> None:
     check(not errors, f"www update: zero console/page errors {errors[:3]}")
 
 
+# Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
+# WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
+# A section that takes a page gets a fresh one on Now.
+ONLY_BROWSER = {"thumbs": thumbs_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks}
+ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
+
+
+def only_pass(browser, names: list[str], repeat: int) -> None:
+    unknown = [n for n in names if n not in ONLY_BROWSER and n not in ONLY_PAGE]
+    if unknown:
+        raise SystemExit(f"WEB_SMOKE_ONLY: no section {unknown}; known: {sorted({**ONLY_BROWSER, **ONLY_PAGE})}")
+    overlay = OUT / "overlay-only"
+    shutil.rmtree(overlay, ignore_errors=True)
+    overlay.mkdir(parents=True)
+    ota_tmp = tempfile.TemporaryDirectory(prefix="web-smoke-ota-")
+    ota = ota_bundles(Path(ota_tmp.name))
+    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"]),
+                             "--panel-trial", str(PANEL_TRIAL_S)])
+    passed = {n: 0 for n in names}
+    try:
+        for i in range(repeat):
+            for n in names:
+                print(f"\n== {n} run {i + 1} of {repeat}")
+                errors: list[str] = []
+                before = len(failures)
+                try:
+                    if n in ONLY_BROWSER:
+                        ONLY_BROWSER[n](browser, base, errors)
+                    else:
+                        page = new_page(browser, "laptop", errors)
+                        page.goto(base + "/")
+                        page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+                        ONLY_PAGE[n](page, base, errors) if n == "follow" else ONLY_PAGE[n](page, base)
+                        page.context.close()
+                except Exception as e:  # a timeout is a failed run, not the end of the loop
+                    check(False, f"{n}: raised {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+                report_errors(n, errors)
+                passed[n] += len(failures) == before
+    finally:
+        proc.terminate()
+        ota_tmp.cleanup()
+    for n in names:
+        print(f"ONLY {n}: {passed[n]} of {repeat} runs passed")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", help="also run the read-mostly pass against this device URL")
@@ -10434,7 +10508,10 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=[f"--host-resolver-rules={LOCAL_RULE}"])
-        if args.www_update_only:
+        if os.environ.get("WEB_SMOKE_ONLY"):
+            only_pass(browser, [n for n in os.environ["WEB_SMOKE_ONLY"].split(",") if n],
+                      int(os.environ.get("WEB_SMOKE_REPEAT", "1")))
+        elif args.www_update_only:
             www_update_pass(browser)
         elif not args.device_only:
             mock_pass(browser)
