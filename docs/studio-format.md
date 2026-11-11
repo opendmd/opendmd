@@ -27,7 +27,7 @@ Records point at each other by `id`, never by name or position.
 
 ## A piece
 
-`body`: `w` 128, `h` 32, `plays` (0 forever), `frames` (each `{ms}`),
+`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever), `frames` (each `{ms}`),
 `layers` (each `{name, moves, cels}`: a layer that moves has a cel a frame,
 one held still has one), `palette` and, since S1, `colours` and `keys`.
 
@@ -56,9 +56,16 @@ one held still has one), `palette` and, since S1, `colours` and `keys`.
   1 MiB for any other record.
 
 **An optional field at its default is absent.** A writer never writes
-`hide: false`, `keys: 1` or an empty `note`: the same content would then
-hash two ways. `check()` refuses a `hide` that is not `true`; readers take
-`keys: 1` as one byte a pixel, as with no `keys`.
+`hide: false`, `keys: 1`, `plays: 0` or an empty `note`, and lists a
+piece's or a palette's colours by rising key: the same content would
+otherwise hash two ways. `check()` refuses `hide` that is not `true`,
+`keys: 1`, an empty `note` and colours out of key order. It still takes
+`plays: 0`, which every piece written before S2 carries; the Studio reads
+it as no `plays` when the piece opens, so such a piece's hash changes once,
+at its next save, and never again.
+
+A pixel whose key the piece has no colour for is off, as it is shown: the
+Studio reads it as 0 when the cel is first read.
 
 **Reading pixels is bounded.** A pixel field is never inflated past what it
 can hold: a whole panel, two bytes a pixel, at most (a piece's cel: its own
@@ -121,7 +128,11 @@ what), `journal` and `meta`.
   too), and keeps its own work as a copy if the pixels moved.
 - **The undo journal** is the browser's alone: never in a record, a file or
   a sync, so its shape may change freely; a journal of another shape is
-  dropped when the piece opens (the piece itself is untouched). A pixel
+  dropped when the piece opens (the piece itself is untouched), and so is
+  one that does not lead to a valid piece. A step written at or below the
+  step the stored record stands at clears the record's `hash` in `meta`
+  until the next save, so a journal whose earlier steps were replaced is
+  never replayed over that record. A pixel
   step names its cel by layer and frame key and carries the indices and the
   keys before and after; a step that changes the piece's colours carries
   what it added and took out (`c: {add, del}`); a snapshot restored is one
