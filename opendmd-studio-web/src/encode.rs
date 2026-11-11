@@ -172,10 +172,21 @@ fn nearest(table: &[u32], c: u32) -> usize {
     best.0
 }
 
+/// A picture over 256 of its colours ([`fit_counts`]).
+struct Fitted {
+    /// Its colours by use ([`by_use`]).
+    counts: Vec<(u32, u32)>,
+    table: Vec<u32>,
+    /// `table` as a [`lookup`].
+    own: Vec<u64>,
+    /// Each pixel's index into `table`.
+    idx: Vec<u8>,
+}
+
 /// `px` over 256 of its colours ([`spread_pick`]; all of them, exactly,
-/// when they fit): its colours by use, the table and each pixel's index,
-/// every other colour drawn as its nearest there (found once a colour).
-fn fit_counts(px: &[u32]) -> (Vec<(u32, u32)>, Vec<u32>, Vec<u8>) {
+/// when they fit), every other colour drawn as its nearest there (found
+/// once a colour).
+fn fit_counts(px: &[u32]) -> Fitted {
     let counts = by_use(px);
     let table = spread_pick(&counts, 256);
     let own = lookup(table.iter().enumerate().map(|(i, &c)| (c, i)));
@@ -189,13 +200,18 @@ fn fit_counts(px: &[u32]) -> (Vec<(u32, u32)>, Vec<u32>, Vec<u8>) {
         .iter()
         .map(|&c| find(&map, c).expect("every colour mapped"))
         .collect();
-    (counts, table, idx)
+    Fitted {
+        counts,
+        table,
+        own,
+        idx,
+    }
 }
 
 /// `px` over 256 of its colours: the table and each pixel's index.
 pub fn fit(px: &[u32]) -> (Vec<u32>, Vec<u8>) {
-    let (_, table, idx) = fit_counts(px);
-    (table, idx)
+    let f = fit_counts(px);
+    (f.table, f.idx)
 }
 
 fn check_rgb(frames: &[u32], delays_ms: &[u32]) -> Result<(), &'static str> {
@@ -237,8 +253,12 @@ pub fn wide(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, &'
     // No global table (the encoder writes a 2-entry black one): every frame has its own.
     let mut enc = begin(&[], plays);
     for (f, &d) in frames.as_chunks::<{ W * H }>().0.iter().zip(delays_ms) {
-        let (counts, table, idx) = fit_counts(f);
-        let own = lookup(table.iter().enumerate().map(|(i, &c)| (c, i)));
+        let Fitted {
+            counts,
+            table,
+            own,
+            idx,
+        } = fit_counts(f);
         let order: Vec<u32> = counts
             .iter()
             .map(|c| c.0)
