@@ -48,8 +48,9 @@ function T(fn, d) {
 // to (whole frames of it) and a saved GIF's frames. Over a GIF it is the GIF's: a look doesn't follow its line.
 const D = 20;
 const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
-// The refreshes a second of a connected panel's scan (its status), else none (js/psikit.js `tier`).
-const HZ = () => (app.device && app.status?.refresh_hz) || 0;
+// The refreshes a second of a connected panel's scan (its status: the refresh measured off the scan, else the
+// driver's figure), else none (js/psikit.js `tier`).
+const HZ = () => (app.device && (app.status?.refresh_us > 0 ? 1e6 / app.status.refresh_us : app.status?.refresh_hz)) || 0;
 // How often the preview draws, ms: as the panel does (opendmd-core scan.rs beam_frames), a refresh (~8 ms; the
 // panel's own when it reports one) or 2 or 4 of them, the most that fit the grid; the times quantised from now,
 // as the panel's `t` is its clock's at the refresh (fx_psi: ms % the loop), so far as the monitor's frames allow.
@@ -212,8 +213,8 @@ function loop(now) {
     on = true;
     // (A formula that never repeats, loop 0: its time since the preview began.
     // `hold`: paused there, ms; the editor's time row.)
-    // (The loop as the panel plays it: whole frames of its grid.)
-    const g = v.d || D, p = v.over ? g : period(g), lp = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)) * g, e = v.hold ?? now - v.t0, k = Math.floor(e / p), ms = v.hold ?? Math.floor(k * p) % lp;
+    // (The loop as the panel plays it racing its scan: `t` wrapped at exactly its length.)
+    const g = v.d || D, p = v.over ? g : period(g), lp = v.loopMs === 0 ? Infinity : v.loopMs || 8000, e = v.hold ?? now - v.t0, k = Math.floor(e / p), ms = v.hold ?? Math.floor(k * p) % lp;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : v.hold ?? Math.floor(ms / p);
     if (key === v.i && !v.dirty && !v.f.w?.on) continue;
@@ -395,7 +396,10 @@ function sent() {
       res(f);
     }
     addEventListener('message', on);
-    for (const f of from) o.postMessage({ type: READY }, f);
+    // (`feat`: this app's compiler level, a number that only grows (`opendmd_psi::Info::level`): none or 0
+    // OpenDMD 1.0's, 1 OpenDMD 1.1's (the built-in `phase`, a `smooth` line, the header in any order). The site sends a Formula only
+    // to an app whose level is at least the one it needs, and asks for the panel's update otherwise.)
+    for (const f of from) o.postMessage({ type: READY, feat: 1 }, f);
   });
 }
 
@@ -586,8 +590,8 @@ function editor() {
 
   // The draft kept in this browser (the web app's; the site's page tells its own of each change).
   const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
-  // (The steps are the preview's own, a refresh or two or four; the loop whole frames of its grid, as played.)
-  const grain = () => (pv.over ? pv.d || D : period(pv.d || D)), len = () => (pv.loopMs === 0 ? FOREVER : Math.max(1, Math.floor((pv.loopMs || 8000) / (pv.d || D))) * (pv.d || D)), elapsed = () => pv.hold ?? performance.now() - pv.t0;
+  // (The steps are the preview's own, a refresh or two or four, through the loop's whole length, as played.)
+  const grain = () => (pv.over ? pv.d || D : period(pv.d || D)), len = () => (pv.loopMs === 0 ? FOREVER : pv.loopMs || 8000), elapsed = () => pv.hold ?? performance.now() - pv.t0;
   // The step shown: the one held at (`pv.hi`, kept as an index: a refresh
   // that doesn't divide 1000, 117 Hz, makes the steps fractional ms, and
   // floored ms read back as an index land on the one before), else the

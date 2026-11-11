@@ -312,7 +312,7 @@ pub fn run(args: Vec<String>) -> i32 {
                 "refused: the panel won't play it: ~{:.1} ms a frame without the JIT and the still cache, over its {} ms{} (it must be able to draw it that way); make it lighter",
                 vm as f64 / 1000.0,
                 limit / 1000,
-                if prog.over() { " for a look" } else if grid == 10 { " drawn every refresh" } else { "" }
+                if prog.over() { " for a look" } else { "" }
             );
             true
         }
@@ -350,7 +350,13 @@ pub fn run(args: Vec<String>) -> i32 {
             plain_us as f64 / 1000.0
         );
     }
-    if grid == 10 && us > 5000 {
+    if prog.opens_ms() != grid {
+        println!(
+            "every refresh: ~{:.1} ms a frame without the JIT and the still cache, over the {} ms that rate allows, so the panel opens it at every 2nd refresh",
+            plain_us as f64 / 1000.0,
+            opendmd_psi::tier_limit_us(grid) / 1000
+        );
+    } else if grid == 10 && us > 5000 {
         println!("every refresh: over its 5 ms budget, so the panel draws it every 2nd refresh or less often");
     }
     if listing {

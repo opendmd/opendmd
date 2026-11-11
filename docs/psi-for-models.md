@@ -54,8 +54,10 @@ Time `t` is the frame's time, in seconds into the loop. Which instants are
 drawn depends on the display (the panel's refresh, the rate it holds the
 formula to; the browser's preview and a saved GIF have their own), so
 write motion as a function of `t`, never as a count of frames. The loop
-plays as whole frames: one that is not a whole number of 40 ms may be cut
-short by up to 40 ms on the panel (`psi check` notes it). `loop N` is also
+wraps at exactly its length on the panel racing its scan (from OpenDMD
+1.1); a saved GIF, and the panel when it can't follow its scan (a `rate`
+layer, the glow), play whole 20 ms frames (40 with `fps 25`), so a loop
+off that grid comes out up to a frame short there (`psi check` notes it). `loop N` is also
 the least time the formula plays for in a playlist, and the length of a GIF
 saved from it. **`phase`** is where the frame is in the loop, 0 to 1:
 exactly `t / N` (the same steps, the same frames), so write `sin(phase)`,
@@ -765,7 +767,7 @@ of the VM's), and where its kernel takes the formula `psi check`, the
 editor's light / medium / heavy and the gallery's 10 ms count the JIT's
 estimate, the VM's shown beside it as "without the JIT" (`psi check` says
 when the JIT refuses one, and why: then the VM's counts). **The panel's
-refusals count the VM's**: 40 ms (32 drawn every refresh, `smooth`) and 12 ms for a look,
+refusals count the VM's**: 40 ms (a `smooth` one past 32 ms is drawn every 2nd refresh instead) and 12 ms for a look,
 by the plain VM estimate with no still cache, because the panel may have
 to draw any formula that way (the JIT off, short of memory, or failing
 its self-check; the cache refused). A formula can rate light with the

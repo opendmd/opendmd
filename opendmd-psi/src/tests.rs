@@ -3892,7 +3892,7 @@ fn notes_of(src: &str) -> alloc::vec::Vec<alloc::string::String> {
 #[cfg(feature = "syntax")]
 #[test]
 fn a_loop_off_the_frame_grid_is_noted() {
-    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("is not a whole number of the panel's frames"));
+    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("ms frames: a GIF saved from it"));
     assert!(has("loop 4.85\ngray(frac(x + t/4.85))"));
     assert!(has("name \"N\"\nloop 0.33\ngray(frac(x + phase))"));
     assert!(has("smooth\nloop 4.85\ngray(frac(x + phase))"));
@@ -3905,9 +3905,9 @@ fn a_loop_off_the_frame_grid_is_noted() {
     assert!(!has("loop 4.85\ngray(x)"));
     assert!(!has("loop forever\ngray(frac(x + t/4.85))"));
     let n = notes_of("loop 4.85\ngray(frac(x + t/4.85))");
-    let m = n.iter().find(|m| m.contains("panel's frames")).unwrap();
-    assert!(m.contains("every 2nd refresh it is cut to 4.84 s") && m.contains("`loop 4.84` or `loop 4.88`"), "{m}");
-    assert!(!m.contains("0.04") && !m.contains(" ms"), "{m}");
+    let m = n.iter().find(|m| m.contains("ms frames")).unwrap();
+    assert!(m.contains("a GIF saved from it is cut to 4.84 s") && m.contains("`loop 4.84` or `loop 4.88`"), "{m}");
+    assert!(!m.contains("0.04"), "{m}");
 }
 
 /// P1.5: a product of `t` that passes the number's end within the loop is
@@ -3978,4 +3978,20 @@ fn phase_as_a_parameter_or_a_counter_is_that() {
         psb_of("scene s when y > 0.5 { phase = 0.5 }\ngray(phase)"),
         psb_of("scene s when y > 0.5 { p = 0.5 }\ngray(p)")
     );
+}
+
+/// Phase 2 B1: a `smooth` Formula past the 32 ms every refresh allows is
+/// opened every 2nd refresh (20 ms) rather than refused; the refusal is
+/// 40 ms at every rate.
+#[test]
+fn a_fast_formula_too_heavy_for_its_rate_opens_at_the_default() {
+    use crate::program::{opens_ms, panel_limit_us, tier_limit_us};
+    assert_eq!([tier_limit_us(10), tier_limit_us(20), tier_limit_us(40)], [32_000, 40_000, 40_000]);
+    assert_eq!([panel_limit_us(0), panel_limit_us(10), panel_limit_us(20), panel_limit_us(40)], [40_000; 4]);
+    assert_eq!([opens_ms(10, 31_000), opens_ms(10, 33_000), opens_ms(0, 33_000), opens_ms(40, 39_000)], [10, 20, 20, 40]);
+    let heavy = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<alloc::vec::Vec<_>>().join(" + ");
+    let p = compile(&format!("smooth\ngray({heavy})")).unwrap();
+    assert!((32_001..=40_000).contains(&p.esp32_us()), "{}", p.esp32_us());
+    assert_eq!((p.opens_ms(), p.panel_refusal(false)), (20, None));
+    assert_eq!(compile("smooth\ngray(x)").unwrap().opens_ms(), 10);
 }

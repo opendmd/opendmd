@@ -5515,7 +5515,7 @@ def psi_refused_note(page: Page) -> None:
     page.fill("#psi-src", f"loop 4\ng = {waves}\npal(rainbow, frac(g/40))")
     page.wait_for_timeout(500)
     note, cap = page.inner_text("#psi-heavy"), page.inner_text("#psi-ed-cap")
-    check(page.is_visible("#psi-heavy") and note.startswith("Too heavy for the panel: drawn the slow way, it would take about 44 ms a frame, and the panel allows 40 (32 drawn every refresh; 12 over GIFs). Simplify it")
+    check(page.is_visible("#psi-heavy") and note.startswith("Too heavy for the panel: drawn the slow way, it would take about 44 ms a frame, and the panel allows 40 (12 over GIFs). Simplify it")
           and "too heavy for the panel" in cap and "bad" in (page.get_attribute("#psi-heavy", "class") or ""),
           f"formulas: one the panel refuses by the VM's figure says so ('{note}'; '{cap}')")
     page.fill("#psi-src", "loop 4\ngray(x)")
@@ -7304,6 +7304,23 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
         n = int(page.get_attribute("#psi-t", "max")) + 1
         want = [(i0 + d) % n for d in (1, 2, 3, 2, 1)]
         check(n == 117 and seen == want, f"formulas time at 117 Hz: . and , step one each ({i0} -> {seen}, want {want}; {n} steps)")
+        page.context.close()
+        # The refresh measured off the scan wins over the driver's figure.
+        get_json(base + "/mock/refresh?hz=100&us=8000")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        formula_editor(page, "smooth\nloop 2\ngray(frac(t/2))")
+        page.wait_for_timeout(500)
+        cap = page.inner_text("#psi-ed-cap")
+        check("Every refresh (about 125 a second on your panel)" in cap, f"formulas: the caption counts the measured refresh, 8,000 us ({cap!r})")
+        # A `smooth` one past the 32 ms every refresh allows: opened every 2nd
+        # refresh, and started slower still (the governor), said so.
+        noises = " + ".join(f"noise(x*{k}, y, t)" for k in range(9))
+        page.fill("#psi-src", f"smooth\nloop 2\ngray({noises})")
+        page.wait_for_timeout(600)
+        cap = page.inner_text("#psi-ed-cap")
+        check(cap.startswith("Loops every 2 s · Every 2nd refresh (about 63 a second on your panel): too heavy to draw every refresh, so the panel starts it at every")
+              and "faster once it can" in cap, f"formulas: a smooth one too heavy for every refresh, said as the panel plays it ({cap!r})")
         page.context.close()
     finally:
         get_json(base + "/mock/refresh?hz=100")

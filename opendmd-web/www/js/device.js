@@ -151,7 +151,7 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
       fact('Free memory', `${bytes(s.heap.free)} · lowest ${bytes(s.heap.floor)}`, s.heap.floor < 20000),
       [h('dt', 'Late frames'), h('dd', { id: 'st-late', title: m?.threshold_ms === undefined ? '' : `Frames ${m.threshold_ms} ms or more late. GIF changes: the new GIF's first frame, its transition and its first ${m.window_ms / 1000} s` }, late(m, s.deadline_misses))],
       fact('Late frames, any size', `${s.deadline_misses.toLocaleString()} · worst ${s.worst_lateness_ms} ms`),
-      fact('Refresh', s.refresh_hz + ' Hz'),
+      fact('Refresh', s.refresh_hz + ' Hz' + (s.refresh_us > 0 ? `, ${(1e6 / s.refresh_us).toFixed(1)} measured` : '')),
       fact('GIFs started', s.gifs_started.toLocaleString()));
     const mm = s.mdns && s.mdns !== s.hostname;
     clear(about, fact('Address', [`${mm ? s.mdns : s.hostname}.local · ${s.ip}`, mm && h('div.bad', { id: 'st-mdns' }, `“${s.hostname}” is taken; this display is at ${s.mdns}.local. Give it its own name.`)]), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'),
