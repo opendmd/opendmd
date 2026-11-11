@@ -82,10 +82,11 @@ const listOf = (body) => body.colours || (builtin(body.palette) || mine.get(body
 const mapOf = (list) => new Map(list.map((c) => [c.k, toInt(c.hex)]));
 function keyOf(c) { for (const [k, v] of cols) if (v === c) return k; return 0; }
 // A new colour's key: the lowest no colour has, none picked but not yet
-// drawn has, and no step that can be undone names.
+// drawn has, and no step in the journal names, undone or not: a step can be
+// redone while a paste floats, and its key must still be its colour's.
 function freeKey() {
   const used = new Set([...cols.keys(), ...pending.keys()]);
-  for (let n = 0; n < cur; n++) for (const c of steps[n].cb || []) used.add(c.k);
+  for (const s of steps) for (const c of [...(s.cb || []), ...(s.ca || [])]) used.add(c.k);
   for (let k = 1; k < 65536; k++) if (!used.has(k)) return k;
   return 0;
 }

@@ -1221,6 +1221,25 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
         p2 = int(s_data(page)["pending"])
         check(p1 > p0 and p2 == p0 and not s_data(page)["sel"] and not s_on(page),
               f"/studio/ tools: a paste's new colours let go when it is {'undone' if let_go == 'Control+z' else 'deleted'} ({p0}, {p1}, {p2})")
+    # Undone steps keep their colours' keys: a paste's new colour never takes one, so a step redone while the
+    # paste floats keeps its colour when the paste is put down.
+    s_new(page)
+    page.keyboard.press("b")
+    page.keyboard.press("1")
+    sws = page.locator('#s-set .s-sw:not([data-hex="#f7a531"])')
+    hex_a = sws.nth(0).get_attribute("data-hex")
+    sws.nth(0).click()
+    page.mouse.click(*s_at(page, 3, 3))
+    sws.nth(1).click()
+    page.mouse.click(*s_at(page, 5, 3))
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+v")
+    page.keyboard.press("Control+Shift+z")
+    page.keyboard.press("Enter")
+    got = "#%02x%02x%02x" % s_pixels(page)[3 * 128 + 3]
+    check(got == hex_a and s_data(page)["steps"].startswith("2/"),
+          f"/studio/ tools: a step redone while a paste floats keeps its colour when the paste is put down ({got}, {hex_a}, {s_data(page)['steps']})")
     check(not page.evaluate("window.__csp || []"), f"/studio/ tools: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 
