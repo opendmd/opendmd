@@ -396,7 +396,9 @@ function sent() {
       res(f);
     }
     addEventListener('message', on);
-    for (const f of from) o.postMessage({ type: READY }, f);
+    // (`feat`: what this app's compiler knows past OpenDMD 1.0: 1, `phase` and `smooth`. The site
+    // asks an older panel to update before sending one that uses them.)
+    for (const f of from) o.postMessage({ type: READY, feat: 1 }, f);
   });
 }
 

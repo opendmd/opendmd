@@ -14,7 +14,7 @@ hsv(x + t/4, 1, 1)
 
 As `t` goes from 0 to 4, `t/4` goes from 0 to 1. That moves the hue once round the whole colour wheel, so when the loop starts again the colours are exactly where they began, and there is no jump.
 
-`t/4` in a 4-second loop has a name of its own, `phase`: where the frame is in the loop, from 0 at its start to 1 at its end, whatever the loop's length. `hsv(x + phase, 1, 1)` draws the same frames as `hsv(x + t/4, 1, 1)` here, and keeps going round once a loop if you change `loop 4` to `loop 6`. `phase` doesn't exist in `loop forever`, which has no loop.
+`t/4` in a 4-second loop has a name of its own, `phase`: where the frame is in the loop, from 0 at its start to 1 at its end, whatever the loop's length. `hsv(x + phase, 1, 1)` draws the same frames as `hsv(x + t/4, 1, 1)` here, and keeps going round once a loop if you change `loop 4` to `loop 6`. `phase` doesn't exist in `loop forever`, which has no loop. `phase` and `smooth` (below) are new in OpenDMD 1.1: if your panel says the name is unknown, update it (Settings › Update).
 
 ## Waves
 
