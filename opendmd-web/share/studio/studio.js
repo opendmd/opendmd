@@ -7,13 +7,20 @@
 // palettes, the panel's seam and a grid, the LED view (the site's own .led
 // look), undo (500 steps, this visit), drafts kept by store.js (the record
 // envelope; LocalStore on IndexedDB) and saved as you go.
-import { LocalStore, Conflict, record, newId, packPx, unpackPx } from './store.js';
-import { STARTER, DEFAULT, builtin } from './palettes.js';
+import { LocalStore, Conflict, CAPS, record, newId, packPx, unpackPx } from './store.js';
+import { STARTER, DEFAULT, builtin, ready } from './palettes.js';
 
 const W = 128, H = 32, N = W * H;
 const STEPS = 500;
 const ZOOMS = [2, 3, 4, 6, 8, 12, 16, 24, 32];
 const LS = 'odmd.studio.';
+// A still's time, as the web app's (opendmd-art-web pipeline.rs STILL_MS).
+const STILL_MS = 5000;
+// localStorage may be refused (a private window, a full disk): settings are then forgotten.
+const ls = {
+  get: (k) => { try { return localStorage.getItem(LS + k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(LS + k, v); } catch { /* not kept */ } },
+};
 const $ = (id) => document.getElementById(id);
 const root = $('studio'), cv = $('s-canvas'), ctx = cv.getContext('2d'), work = $('s-work'), scroll = $('s-scroll');
 
@@ -23,7 +30,9 @@ let px = new Uint8Array(N); // layer 1, frame 1: palette keys (0: off)
 let pal = builtin(DEFAULT), rgb = new Uint32Array(256);
 let key = 1, tool = 'pencil', zoom = 0, ledView = false;
 let undo = [], redo = [], stroke = null;
-let lastHash = null, timer = 0, saving = null, again = false;
+let lastHash = null, timer = 0;
+let kept = false;        // in the store (a new piece is not, until it is drawn on or named)
+let chain = Promise.resolve(), queued = null;
 
 // Pixel icons (12 x 12), drawn as SVG.
 const ICONS = {
@@ -126,6 +135,7 @@ function end(extra = {}) {
   undo.push({ i, b: Uint8Array.from(s.values()), a: Uint8Array.from(i, (j) => px[j]), ...extra });
   if (undo.length > STEPS) undo.shift();
   redo = [];
+  kept = true;
   buttons();
   queueSave();
 }
@@ -176,7 +186,7 @@ function buttons() {
 
 // Pointers: one draws; a second one cancels the stroke and pans (zoomed in).
 const down = new Map();
-let last = null, pan = null;
+let last = null, pan = null, filling = null;
 function at(e) {
   const r = cv.getBoundingClientRect();
   return [Math.floor((e.clientX - r.left) / r.width * W), Math.floor((e.clientY - r.top) / r.height * H)];
@@ -187,6 +197,7 @@ cv.addEventListener('pointerdown', (e) => {
   cv.setPointerCapture(e.pointerId);
   down.set(e.pointerId, e);
   if (down.size === 2) {
+    filling = null; // a fill waits for its finger to lift: a second one means a pan
     if (stroke) {
       for (const [i, b] of stroke) px[i] = b;
       stroke = null;
@@ -201,14 +212,10 @@ cv.addEventListener('pointerdown', (e) => {
   if (!inside(p)) return;
   if (e.button === 2 || e.altKey) { pick(px[p[1] * W + p[0]]); return; }
   if (e.button !== 0) return;
+  if (tool === 'fill') { filling = p; return; }
   begin();
-  if (tool === 'fill') {
-    fill(p[0], p[1], key);
-    end();
-  } else {
-    line(p[0], p[1], p[0], p[1], tool === 'eraser' ? 0 : key);
-    last = p;
-  }
+  line(p[0], p[1], p[0], p[1], tool === 'eraser' ? 0 : key);
+  last = p;
   paint();
 });
 cv.addEventListener('pointermove', (e) => {
@@ -230,7 +237,14 @@ cv.addEventListener('pointermove', (e) => {
 const up = (e) => {
   down.delete(e.pointerId);
   if (!down.size) pan = null;
-  if (stroke && tool !== 'fill') end();
+  if (filling && !down.size && e.type === 'pointerup') {
+    begin();
+    fill(filling[0], filling[1], key);
+    end();
+    paint();
+  }
+  if (!down.size) filling = null;
+  if (stroke) end();
   stroke = null;
   last = null;
 };
@@ -282,75 +296,103 @@ function view(led) {
   work.classList.toggle('led', led);
   toggle('s-v-px', !led);
   toggle('s-v-led', led);
-  localStorage.setItem(LS + 'view', led ? 'led' : 'px');
+  ls.set('view', led ? 'led' : 'px');
 }
 
 // --- keeping it: autosave into the store ---
 function status(what, text) {
   root.dataset.saved = what;
-  $('s-saved').textContent = text || { kept: 'Kept in this browser', saving: 'Saving…', none: 'Not kept: this browser won’t keep drafts here' }[what];
+  $('s-saved').textContent = text || { kept: 'Kept in this browser', saving: 'Saving…', none: 'Not kept: this browser won’t keep drafts here',
+    new: 'Not kept yet: draw something' }[what];
 }
 function queueSave() {
   clearTimeout(timer);
+  if (!store || !kept) return;
   timer = setTimeout(save, 400);
-  if (store) status('saving');
+  status('saving');
 }
-async function save() {
+// Every write goes through one chain, one at a time, so a save, a download's
+// snapshot and the next save never overlap; one that fails says so and the
+// chain goes on.
+function run(job) {
+  const p = chain.then(job);
+  chain = p.catch(() => {});
+  return p;
+}
+function save() {
   clearTimeout(timer);
-  if (!store || !rec) return;
-  if (saving) { again = true; return saving; }
-  saving = (async () => {
+  queued ??= run(() => { queued = null; return saveNow(); });
+  return queued;
+}
+async function saveNow() {
+  if (!store || !rec || !kept) return;
+  try {
     const cel = await packPx(px);
     const body = { ...rec.body, layers: rec.body.layers.map((l, n) => (n ? l : { ...l, cels: [cel, ...l.cels.slice(1)] })) };
-    const next = { ...rec, name: $('s-name').value.trim() || 'Untitled', body };
-    try {
-      const h = await store.put(next, { baseRev: lastHash ? rec.rev : null, baseHash: lastHash });
-      rec = { ...next, hash: h.hash, modified: h.modified };
-      lastHash = h.hash;
-      localStorage.setItem(LS + 'last', rec.id);
-      status('kept');
-    } catch (e) {
-      if (!(e instanceof Conflict)) { status('failed', `Not kept: ${e.message}`); return; }
-      // Changed in another tab: this one's work is kept as a copy that says where it came from.
-      const was = e.head;
-      rec = { ...next, id: newId('piece'), rev: 1, name: `${next.name} (copy)`,
-        from: [{ id: was.id, rev: was.rev, name: was.name || '', author: was.author || { name: '', account: null }, licence: was.licence ?? null }] };
-      lastHash = null;
-      $('s-name').value = rec.name;
-      const h = await store.put(rec, {});
-      rec.hash = lastHash = h.hash;
-      root.dataset.id = rec.id;
-      localStorage.setItem(LS + 'last', rec.id);
-      status('kept', 'Changed in another tab: yours is kept as a copy');
+    let next = { ...rec, name: $('s-name').value.trim().slice(0, CAPS.name) || 'Untitled', body };
+    let note = null;
+    for (let tries = 0; ; tries++) {
+      try {
+        const h = await store.put(next, { baseRev: lastHash ? next.rev : null, baseHash: lastHash });
+        rec = { ...next, hash: h.hash, modified: h.modified };
+        lastHash = h.hash;
+        break;
+      } catch (e) {
+        if (!(e instanceof Conflict)) throw e;
+        const was = e.head;
+        // Only its rev moved (a download froze it, here or in another tab): go on from there.
+        if (!was.gone && was.hash === lastHash && tries < 3) { next = { ...next, rev: was.rev }; continue; }
+        // Its pixels changed in another tab: this one's work is kept as a copy that says where it came from.
+        next = { ...next, id: newId('piece'), rev: 1, name: `${next.name.slice(0, CAPS.name - 7).trimEnd()} (copy)`,
+          from: [{ id: was.id, rev: was.rev, hash: was.hash || '', name: was.name || '', author: was.author || { name: '', account: null },
+            licence: was.licence ?? null }] };
+        lastHash = null;
+        $('s-name').value = next.name;
+        root.dataset.id = next.id;
+        note = 'Changed in another tab: yours is kept as a copy';
+      }
     }
+    ls.set('last', rec.id);
+    root.dataset.rev = rec.rev;
+    status('kept', note);
     await drafts();
-  })();
-  await saving;
-  saving = null;
-  if (again) { again = false; await save(); }
+  } catch (e) {
+    status('failed', `Not kept: ${e.message || e}`);
+  }
 }
 
 async function open(r) {
+  const keys = await unpackPx(r.body.layers[0].cels[0], N); // throws on a draft that does not read
   rec = r;
-  px = await unpackPx(r.body.layers[0].cels[0], N);
+  px = keys;
+  kept = true;
   lastHash = r.hash;
   undo = []; redo = [];
   buttons();
   $('s-name').value = r.name;
   usePalette(builtin(r.body.palette) || builtin(DEFAULT));
   paint();
-  localStorage.setItem(LS + 'last', r.id);
+  ls.set('last', r.id);
   root.dataset.id = r.id;
+  root.dataset.rev = r.rev;
   status('kept');
 }
 async function fresh() {
-  const r = record('piece', 'Untitled', { w: W, h: H, palette: pal?.id || DEFAULT, plays: 0, frames: [{ ms: 1000 }],
+  const r = record('piece', 'Untitled', { w: W, h: H, palette: pal?.id || DEFAULT, plays: 0, frames: [{ ms: STILL_MS }],
     layers: [{ name: 'Drawing', moves: false, cels: [await packPx(new Uint8Array(N))] }] });
   await open({ ...r, hash: '' });
   lastHash = null;
-  if (store) await save();
-  else status('none');
+  kept = false; // stored at its first stroke (or name)
+  status(store ? 'new' : 'none');
   $('s-name').select();
+}
+// A draft that will not open: said, and a new piece instead.
+async function tryOpen(r) {
+  try { await open(r); return true; } catch (e) {
+    $('s-err').hidden = false;
+    $('s-err').textContent = `“${r.name}” could not be opened: ${e.message || e}`;
+    return false;
+  }
 }
 
 // The drafts, newest first, each drawn as LEDs.
@@ -362,6 +404,7 @@ async function drafts() {
   const ul = $('s-list');
   if (!store) { ul.replaceChildren(); return; }
   const { items } = await store.list({ type: 'piece' });
+  if (rec && !kept) items.unshift({ id: rec.id, name: $('s-name').value || rec.name, modified: rec.modified });
   const lis = await Promise.all(items.map(async (h) => {
     const r = h.id === rec?.id ? { ...rec, body: rec.body } : await store.get(h.id);
     const li = document.createElement('li');
@@ -378,7 +421,7 @@ async function drafts() {
     t.className = 's-meta';
     t.innerHTML = '<b></b><small></small>';
     t.firstChild.textContent = h.name;
-    t.lastChild.textContent = h.id === rec?.id ? 'Open now' : `Edited ${ago(h.modified)}`;
+    t.lastChild.textContent = h.id === rec?.id ? (kept ? 'Open now' : 'Open now, not kept yet') : `Edited ${ago(h.modified)}`;
     b.append(led, t);
     const del = document.createElement('button');
     del.className = 's-del';
@@ -386,7 +429,8 @@ async function drafts() {
     del.title = `Delete ${h.name}`;
     del.setAttribute('aria-label', `Delete ${h.name}`);
     del.textContent = '×';
-    li.append(b, del);
+    li.append(b);
+    if (h.id !== rec?.id || kept) li.append(del);
     try {
       const keys = h.id === rec?.id ? px : await unpackPx(r.body.layers[0].cels[0], N);
       const p = builtin(r.body.palette) || builtin(DEFAULT), m = new Uint32Array(256);
@@ -406,26 +450,29 @@ async function download() {
   const b = $('s-gif');
   b.disabled = true;
   try {
-    await save();
     art ??= import('../demo/js/artmod.js').then((m) => m.art());
     const m = await art;
+    // What is downloaded is what is frozen: this rev, saved and snapshotted in the chain.
+    const shot = px.slice(), piece = rec;
+    await run(async () => {
+      if (!store || !kept) return;
+      clearTimeout(timer);
+      await saveNow();
+      if (root.dataset.saved === 'failed') return;
+      const h = await store.snapshot(rec.id);
+      rec = { ...rec, rev: h.rev };
+      root.dataset.rev = h.rev;
+    });
     // The GIF's table: only the colours used, off first, the same colour once.
     const table = [], index = new Map(), of = new Uint8Array(256);
-    for (const k of [...new Set(px)].sort((a, c) => a - c)) {
+    for (const k of [...new Set(shot)].sort((a, c) => a - c)) {
       const c = k ? rgb[k] : 0;
       if (!index.has(c)) { index.set(c, table.length); table.push(c); }
       of[k] = index.get(c);
     }
-    const frame = Uint8Array.from(px, (k) => of[k]);
-    const gif = m.encodeIndexed(Uint32Array.from(table), frame, Uint32Array.from(rec.body.frames, (f) => f.ms), rec.body.plays);
-    if (store) {
-      // A download freezes this version (rev) of the draft; drawing on starts the next.
-      await store.snapshot(rec.id);
-      const cur = await store.get(rec.id);
-      rec = { ...rec, rev: cur.rev };
-      root.dataset.rev = cur.rev;
-    }
-    const name = (rec.name.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
+    const frame = Uint8Array.from(shot, (k) => of[k]);
+    const gif = m.encodeIndexed(Uint32Array.from(table), frame, Uint32Array.from(piece.body.frames, (f) => f.ms), piece.body.plays);
+    const name = ($('s-name').value.trim().replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([gif], { type: 'image/gif' }));
     a.download = name;
@@ -434,7 +481,9 @@ async function download() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
     root.dataset.gif = gif.length;
-    status('kept', `Downloaded ${name}: ${table.length} colour${table.length === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
+    $('s-err').hidden = true;
+    $('s-err').textContent = '';
+    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${table.length} colour${table.length === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
   } catch (e) {
     $('s-err').hidden = false;
     $('s-err').textContent = `The GIF could not be made: ${e.message || e}`;
@@ -457,18 +506,18 @@ async function main() {
   $('s-new').addEventListener('click', async () => { await save(); await fresh(); await drafts(); });
   $('s-list').addEventListener('click', async (e) => {
     const o = e.target.closest('.s-open'), d = e.target.closest('.s-del');
-    if (o && o.dataset.id !== rec.id) { await save(); const r = await store.get(o.dataset.id); if (r) await open(r); await drafts(); }
+    if (o && o.dataset.id !== rec.id) { await save(); const r = await store.get(o.dataset.id); if (r) await tryOpen(r); await drafts(); }
     if (d && confirm(`Delete ${d.title.slice(7)}? It can’t be brought back.`)) {
       await store.remove(d.dataset.id);
       if (d.dataset.id === rec.id) {
         const { items } = await store.list({ type: 'piece' });
         const r = items.length && await store.get(items[0].id);
-        if (r) await open(r); else await fresh();
+        if (!r || !await tryOpen(r)) await fresh();
       }
       await drafts();
     }
   });
-  $('s-name').addEventListener('input', queueSave);
+  $('s-name').addEventListener('input', () => { kept = true; queueSave(); });
   $('s-v-px').addEventListener('click', () => view(false));
   $('s-v-led').addEventListener('click', () => view(true));
   $('s-g-grid').addEventListener('click', () => { const on = !$('s-g-grid').classList.contains('on'); toggle('s-g-grid', on); $('s-grid').hidden = !on; });
@@ -484,16 +533,28 @@ async function main() {
     else if (!e.ctrlKey && !e.metaKey && !e.altKey && { b: 1, e: 1, g: 1 }[k]) useTool({ b: 'pencil', e: 'eraser', g: 'fill' }[k]);
   });
   addEventListener('pagehide', () => { if (root.dataset.saved === 'saving') save(); });
-  view(localStorage.getItem(LS + 'view') === 'led');
+  view(ls.get('view') === 'led');
+  // A phone opens close up (about 8x), panned with two fingers.
+  if (matchMedia('(pointer: coarse)').matches || innerWidth < 600) {
+    zoom = ZOOMS.indexOf(8) + 1;
+    $('s-touch').hidden = false;
+  }
   layout();
-  try { store = await LocalStore.open(); } catch { store = null; }
+  await ready;
+  try {
+    store = await LocalStore.open(undefined, () => status('failed', 'Not kept: the Studio was opened anew in another tab. Reload this one'));
+  } catch (e) {
+    store = null;
+    $('s-err').hidden = false;
+    $('s-err').textContent = `Drafts can’t be kept here: ${e.message || e}`;
+  }
   let r = null;
   if (store) {
-    const lastId = localStorage.getItem(LS + 'last');
+    const lastId = ls.get('last');
     r = lastId && await store.get(lastId);
     if (!r) { const { items } = await store.list({ type: 'piece' }); r = items.length && await store.get(items[0].id); }
   }
-  if (r) await open(r); else await fresh();
+  if (!r || !await tryOpen(r)) await fresh();
   await drafts();
   root.removeAttribute('aria-busy');
 }

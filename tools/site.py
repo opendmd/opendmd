@@ -551,12 +551,12 @@ CSP = {
                                "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
     + "; connect-src 'self' https:",
-    # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
-    # update check (util.js SITE).
     # The Studio's page: its GIF writer is the demo's art module (pkg-art,
     # same-origin), so 'wasm-unsafe-eval'; it fetches nothing else and uploads
     # nothing (drafts stay in IndexedDB), so no connect-src beyond 'self'.
     "studio": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
+    # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
+    # update check (util.js SITE).
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
                              "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")

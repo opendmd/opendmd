@@ -22,6 +22,7 @@ border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(13em,70vw)}
 .s-saved{display:flex;align-items:center;gap:7px;color:var(--mut);font-size:13px}
 .s-saved::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--green)}
 [data-saved=saving] .s-saved::before{background:var(--acc)}
+[data-saved=new] .s-saved::before{background:var(--mut)}
 [data-saved=failed] .s-saved::before,[data-saved=none] .s-saved::before{background:var(--pink)}
 .s-ib{display:grid;place-items:center;width:40px;height:40px;border:0;border-radius:8px;background:none;color:var(--mut)}
 .s-ib:hover:not(:disabled){background:var(--bg3);color:var(--fg)}
@@ -33,6 +34,7 @@ border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(13em,70vw)}
 /* The stage: the panel in its bezel, the ruler with the seam between its two halves */
 .s-stage{border-radius:var(--r);background:var(--bg3);padding:16px 0 18px}
 @media (prefers-color-scheme:dark){.s-stage{background:var(--den) radial-gradient(ellipse 60% 90% at 50% 40%,#1a1e33,transparent 75%)}}
+.s-touch{margin:0 0 8px;text-align:center;color:var(--mut);font:400 8px/1 var(--pixel)}
 .s-scroll{display:flex;flex-direction:column;overflow:auto;padding:0 13px 4px}
 .s-scroll>*{flex:none;margin-inline:auto}
 .s-ruler{position:relative;height:18px;margin-bottom:6px;color:var(--mut);font:400 8px/1 var(--pixel);

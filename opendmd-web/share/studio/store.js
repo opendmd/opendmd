@@ -2,12 +2,14 @@
 //
 // Everything the Studio makes is a record with the same envelope: a stable
 // random id (never a name, a position or a counter), `rev` (rises only at a
-// snapshot or an export, never on an autosave), `hash` (SHA-256 of the
-// canonical body), name, tags, created, modified, `author` ({name, account};
-// account stays null until there are accounts), `licence` (null: not chosen,
-// which is not a licence) and `from` (what it was made from: {id, rev, name,
-// author, licence}, or {external: true, note}). Records point at each other
-// by id. Pixels are palette keys, deflated, in base64.
+// snapshot or an export, never on an autosave), `hash` (hashOf: SHA-256 of
+// the canonical body, pixels uncompressed), name, tags, an optional one-line
+// `note`, created, modified, `author` ({name, account}; account is null until
+// there are accounts, then a string), `licence` (null: not chosen, which is
+// not a licence) and `from` (what it was made from: {id, rev, hash, name,
+// author, licence}, or {external: true, note}; only `external === true` is
+// external). Records point at each other by id. Pixels are palette keys,
+// zlib-deflated (CompressionStream 'deflate'), in base64.
 //
 // The app talks to the Store interface and nothing else:
 //   get(id, rev?)            the record (at a frozen revision), or null
@@ -15,7 +17,8 @@
 //   put(rec, {baseRev, baseHash})   refused (Conflict) when the stored record
 //                            moved on: another rev, or another tab's content
 //   snapshot(id)             freeze the record as it is (into revs) and move
-//                            it on to the next rev; nothing new if unchanged
+//                            it on to the next rev; nothing new if unchanged.
+//                            Returns the head it goes on with
 //   remove(id)               leaves a tombstone
 //   revs(id)                 its frozen revisions, oldest first
 //   usedBy(id)               the records that point at it
@@ -29,7 +32,8 @@ export const FORMAT = 'opendmd-studio/1';
 export const TYPES = { piece: 'pc', palette: 'pl', stamp: 'st', font: 'ft', shade: 'sh', template: 'tp', pack: 'pk' };
 export const LICENCES = ['CC0-1.0', 'CC-BY-4.0'];
 // Caps, set now so nothing grows without bound.
-export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, name: 120, tags: 32, from: 64 };
+export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, name: 120, note: 200, tags: 32, from: 64 };
+const VERSION = 1; // the IndexedDB schema (LocalStore.open's steps)
 const ID = /^(pc|pl|st|ft|sh|tp|pk)_[0-9a-f]{32}$/;
 
 export class Conflict extends Error {
@@ -60,14 +64,40 @@ export function record(type, name, body, { author = '', licence = null, from = [
     licence, from, created: t, modified: t, body };
 }
 
-// The body as canonical JSON (keys sorted, no spaces): what the hash covers.
+// Canonical JSON (keys sorted, no spaces, UTF-8): what the hash covers.
+// Only JSON's own values, and integers for numbers, so any language can
+// write the same text (Python: json.dumps(v, sort_keys=True,
+// separators=(',', ':'), ensure_ascii=False)); anything else is refused.
 export function canon(v) {
+  if (v === null || typeof v === 'boolean' || typeof v === 'string') return JSON.stringify(v);
+  if (typeof v === 'number') {
+    if (!Number.isSafeInteger(v)) throw new Error(`canon: ${v} is not an integer`);
+    return String(v);
+  }
   if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
-  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;
-  return JSON.stringify(v);
+  if (typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;
+  }
+  throw new Error(`canon: ${v === undefined ? 'undefined' : typeof v} is not JSON`);
+}
+// The hash: the body with every pixel field (each string in a `cels` array,
+// each `px` string, anywhere in it) replaced by its pixels uncompressed, as
+// lowercase hex; then canon, then SHA-256, as 'sha256-' + lowercase hex. The
+// compressed bytes differ between browsers; the pixels do not.
+export async function pixelForm(v) {
+  if (Array.isArray(v)) return Promise.all(v.map(pixelForm));
+  if (!v || typeof v !== 'object') return v;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (k === 'cels' && Array.isArray(x)) out[k] = await Promise.all(x.map(async (c) => (typeof c === 'string' ? hex(await inflate(c)) : pixelForm(c))));
+    else if (k === 'px' && typeof x === 'string') out[k] = hex(await inflate(x));
+    else out[k] = await pixelForm(x);
+  }
+  return out;
 }
 export async function hashOf(body) {
-  return 'sha256-' + hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canon(body)))));
+  const text = canon(await pixelForm(body));
+  return 'sha256-' + hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))));
 }
 
 // Pixels: palette keys, zlib-deflated, base64.
@@ -80,9 +110,9 @@ export async function packPx(keys) {
   for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
   return btoa(s);
 }
+const inflate = (b64) => through(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), new DecompressionStream('deflate'));
 export async function unpackPx(b64, n) {
-  const z = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  const px = await through(z, new DecompressionStream('deflate'));
+  const px = await inflate(b64);
   if (px.length !== n) throw new Error('a picture of the wrong size');
   return px;
 }
@@ -104,16 +134,19 @@ export function check(rec) {
   if (!Number.isInteger(rec.rev) || rec.rev < 1) bad('rev');
   if (typeof rec.name !== 'string' || rec.name.length > CAPS.name) bad('name');
   if (!Array.isArray(rec.tags) || rec.tags.length > CAPS.tags || rec.tags.some((t) => typeof t !== 'string')) bad('tags');
-  if (!rec.author || typeof rec.author.name !== 'string' || rec.author.name.length > 80 || rec.author.account !== null) bad('author');
+  if (!rec.author || typeof rec.author.name !== 'string' || rec.author.name.length > 80
+    || (rec.author.account !== null && typeof rec.author.account !== 'string')) bad('author');
+  if (rec.note !== undefined && (typeof rec.note !== 'string' || rec.note.length > CAPS.note)) bad('note');
   if (rec.licence !== null && !LICENCES.includes(rec.licence)) bad('licence');
-  if (!Array.isArray(rec.from) || rec.from.length > CAPS.from) bad('from');
+  if (!Array.isArray(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !f || typeof f !== 'object')) bad('from');
   const b = rec.body;
   if (!b || typeof b !== 'object') bad('body');
   if (rec.type === 'piece') {
     if (b.w !== 128 || b.h !== 32) bad('size');
     if (!Array.isArray(b.frames) || !b.frames.length || b.frames.length > CAPS.frames) bad('frames');
     if (!Array.isArray(b.layers) || !b.layers.length || b.layers.length > CAPS.layers) bad('layers');
-    if (b.layers.some((l) => !Array.isArray(l.cels) || l.cels.length !== b.frames.length)) bad('cels');
+    // A layer that moves has a cel a frame; one held still, one cel.
+    if (b.layers.some((l) => !Array.isArray(l.cels) || l.cels.length !== (l.moves ? b.frames.length : 1))) bad('cels');
   }
   if (JSON.stringify(rec).length > CAPS.bytes) bad('too big');
 }
@@ -125,17 +158,31 @@ const req = (r) => new Promise((ok, no) => { r.onsuccess = () => ok(r.result); r
 const done = (tx) => new Promise((ok, no) => { tx.oncomplete = ok; tx.onerror = tx.onabort = () => no(tx.error); });
 
 export class LocalStore {
-  static async open(name = 'opendmd-studio') {
-    const r = indexedDB.open(name, 1);
-    r.onupgradeneeded = () => {
+  // `closed` is called if a newer Studio (in another tab) needs the database:
+  // this one lets go, and every call after that fails.
+  static async open(name = 'opendmd-studio', closed = () => {}) {
+    const r = indexedDB.open(name, VERSION);
+    r.onupgradeneeded = (e) => {
       const db = r.result;
-      db.createObjectStore('records', { keyPath: 'id' }).createIndex('seq', 'seq');
-      db.createObjectStore('revs', { keyPath: ['id', 'rev'] });
-      db.createObjectStore('journal', { autoIncrement: true }).createIndex('id', 'id');
-      db.createObjectStore('refs', { keyPath: ['to', 'from'] }).createIndex('from', 'from');
-      db.createObjectStore('meta', { keyPath: 'k' });
+      // One step a version, from whatever this browser has.
+      switch (e.oldVersion) {
+        case 0:
+          db.createObjectStore('records', { keyPath: 'id' }).createIndex('seq', 'seq');
+          db.createObjectStore('revs', { keyPath: ['id', 'rev'] });
+          db.createObjectStore('journal', { autoIncrement: true }).createIndex('id', 'id');
+          db.createObjectStore('refs', { keyPath: ['to', 'from'] }).createIndex('from', 'from');
+          db.createObjectStore('meta', { keyPath: 'k' });
+        // falls through to the next version's step, when there is one
+        default:
+      }
     };
-    return new LocalStore(await req(r));
+    const db = await new Promise((ok, no) => {
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+      r.onblocked = () => no(new Error('an older Studio is open in another tab: close it, then reload'));
+    });
+    db.onversionchange = () => { db.close(); closed(); };
+    return new LocalStore(db);
   }
   constructor(db) { this.db = db; }
 
@@ -178,12 +225,12 @@ export class LocalStore {
     const cur = await req(recs.get(id));
     if (!cur || cur.gone) { tx.abort(); throw new Error('no such record'); }
     const last = cur.rev > 1 ? await req(revs.get([id, cur.rev - 1])) : null;
-    if (last && last.hash === cur.hash) { await done(tx); return head(strip(last)); }
-    const frozen = strip(cur);
-    revs.put(frozen);
-    recs.put({ ...cur, rev: cur.rev + 1, seq: await this.#seq(tx) });
+    if (last && last.hash === cur.hash) { await done(tx); return head(strip(cur)); }
+    revs.put(strip(cur));
+    const next = { ...cur, rev: cur.rev + 1, seq: await this.#seq(tx) };
+    recs.put(next);
     await done(tx);
-    return head(frozen);
+    return head(strip(next)); // the record as it goes on (the frozen one: get(id, rev - 1))
   }
 
   async remove(id) {

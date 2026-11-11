@@ -4,12 +4,12 @@
 // (studio-starter/), as records of this same shape. Key 0 is never a colour here: it is
 // "off", the LED dark (and, in a stamp, see-through), so every palette's
 // keys start at 1. Editing one (later) makes a copy whose `from` names it.
-import { builtinId } from './store.js';
+import { builtinId, hashOf } from './store.js';
 
 const T = '2026-11-11T00:00:00Z';
 function pal(n, name, source, list) {
   const colours = list.map(([hex, nm], i) => ({ k: i + 1, hex: '#' + hex, ...(nm ? { name: nm } : {}) }));
-  return { type: 'palette', id: builtinId('palette', n), rev: 1, hash: '', name, tags: ['starter'],
+  return { type: 'palette', id: builtinId('palette', n), rev: 1, hash: '', name, tags: [],
     author: { name: 'OpenDMD', account: null }, licence: 'CC0-1.0', from: [], created: T, modified: T,
     body: { colours, source } };
 }
@@ -21,5 +21,7 @@ const DEN = pal(1, 'Den 16', 'OpenDMD', [
 
 export const STARTER = [DEN];
 export const DEFAULT = DEN.id;
+// Their hashes, as any record's (store.js hashOf); site-smoke pins Den 16's.
+export const ready = Promise.all(STARTER.map(async (p) => { p.hash = await hashOf(p.body); }));
 const BY = new Map(STARTER.map((p) => [p.id, p]));
 export const builtin = (id) => BY.get(id) || null;
