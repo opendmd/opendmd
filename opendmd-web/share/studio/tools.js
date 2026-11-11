@@ -95,5 +95,15 @@ export function flood(px, w, h, x, y) {
   return out;
 }
 
-// The dither fill's pattern: a checkerboard, (0, 0) lit.
-export const checker = (x, y) => ((x + y) & 1) === 0;
+// Shade: which pixels of a fill or a filled shape are set, by where they
+// are on the panel (anchored at its (0, 0), not at the shape, so two shaded
+// areas side by side line up); the others are left as they were. Light: x
+// and y both even (1 in 4). Half: x + y even (every other). Heavy: all but x
+// and y both odd (3 in 4).
+export const SHADES = ['solid', 'light', 'half', 'heavy'];
+export const shade = {
+  solid: () => true,
+  light: (x, y) => !(x & 1) && !(y & 1),
+  half: (x, y) => !((x + y) & 1),
+  heavy: (x, y) => !(x & 1 && y & 1),
+};

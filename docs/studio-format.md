@@ -27,9 +27,15 @@ Records point at each other by `id`, never by name or position.
 
 ## A piece
 
-`body`: `w` 128, `h` 32, `plays` (0 forever), `frames` (each `{ms}`),
+`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever), `frames` (each `{ms}`),
 `layers` (each `{name, moves, cels}`: a layer that moves has a cel a frame,
 one held still has one), `palette` and, since S1, `colours` and `keys`.
+
+- **Layers and frames.** `layers[0]` is the bottom. A pixel shows the
+  topmost shown layer's key that is not 0; 0 in every layer is off. A layer
+  with `hide: true` is not shown, and is in no GIF, link or send: what is
+  seen is what is sent. A frame's `ms` is a whole number from 20 to 60,000;
+  a layer's `name` is 60 characters at most; `moves` is `true` or `false`.
 
 - **Its colours are its own.** `colours` lists `{k, hex}`: keys from 1, each
   once, `#rrggbb` in lower case, no colour twice. Key 0 is off, the LED dark.
@@ -46,7 +52,26 @@ one held still has one), `palette` and, since S1, `colours` and `keys`.
 - Layers and frames carry `key`, eight hex digits, made when the layer or
   frame is, so what points at one (later) survives reordering. The key is
   part of the body, so it is in the hash. Pieces written before S1 have none.
-- Caps: 256 frames, 16 layers, 4,096 colours, 1 MiB of JSON per record.
+- Caps: 256 frames, 16 layers, 4,096 colours; 4 MiB of JSON for a piece,
+  1 MiB for any other record.
+
+**An optional field at its default is absent.** A writer never writes
+`hide: false`, `keys: 1`, `plays: 0` or an empty `note`, and lists a
+piece's or a palette's colours by rising key: the same content would
+otherwise hash two ways. `check()` refuses `hide` that is not `true`,
+`keys: 1`, an empty `note` and colours out of key order. It still takes
+`plays: 0`, which every piece written before S2 carries; the Studio reads
+it as no `plays` when the piece opens, so such a piece's hash changes once,
+at its next save, and never again.
+
+A pixel whose key the piece has no colour for is off, as it is shown: the
+Studio reads it as 0 when the cel is first read.
+
+**Reading pixels is bounded.** A pixel field is never inflated past what it
+can hold: a whole panel, two bytes a pixel, at most (a piece's cel: its own
+size exactly). Text too long to deflate from that much is refused unread,
+and a stream that gives more is dropped at one byte past it, so a small
+file cannot hold a picture that inflates to gigabytes.
 
 A palette's body is `{colours, source}`, with the same `colours` shape.
 
@@ -102,7 +127,17 @@ what), `journal` and `meta`.
   rev or name moved (taking the other tab's name unless it was renamed here
   too), and keeps its own work as a copy if the pixels moved.
 - **The undo journal** is the browser's alone: never in a record, a file or
-  a sync. Steps are numbered back to back per piece (500 at most); `meta`
+  a sync, so its shape may change freely; a journal of another shape is
+  dropped when the piece opens (the piece itself is untouched), and so is
+  one that does not lead to a valid piece. A step written at or below the
+  step the stored record stands at clears the record's `hash` in `meta`
+  until the next save, so a journal whose earlier steps were replaced is
+  never replayed over that record. A pixel
+  step names its cel by layer and frame key and carries the indices and the
+  keys before and after; a step that changes the piece's colours carries
+  what it added and took out (`c: {add, del}`); a snapshot restored is one
+  step holding both bodies. Steps are numbered back to back per piece (500
+  at most, or about 8 MB); `meta`
   holds `cur` (the last step done) and `at` with `hash` (the step the stored
   record stands at, and its hash). Opening a piece replays (or unwinds) the
   steps from `at` to `cur`; if the record was written without them (another

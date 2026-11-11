@@ -39,8 +39,13 @@
 export const FORMAT = 'opendmd-studio/1';
 export const TYPES = { piece: 'pc', palette: 'pl', stamp: 'st', font: 'ft', shade: 'sh', template: 'tp', pack: 'pk' };
 export const LICENCES = ['CC0-1.0', 'CC-BY-4.0'];
-// Caps, set now so nothing grows without bound.
-export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096 };
+// Caps, set now so nothing grows without bound. `bytes` is any record's
+// JSON, `piece` a piece's (a 256-frame import of noisy video is ~1.4 MB; the
+// panel's own GIF limit is 4 MB); `layerName` a layer's name.
+export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096,
+  layerName: 60, msMin: 20, msMax: 60000 };
+// The most bytes any pixel field holds uncompressed: a whole panel, two bytes a pixel.
+export const PX_MAX = 128 * 32 * 2;
 const VERSION = 2; // the IndexedDB schema (LocalStore.open's steps)
 const ID = /^(pc|pl|st|ft|sh|tp|pk)_[0-9a-f]{32}$/;
 
@@ -58,6 +63,7 @@ export function newId(type) {
   for (let i = 5; i >= 0; i--) { r[i] = t % 256; t = Math.floor(t / 256); }
   r[6] = 0x70 | (r[6] & 0x0f);
   r[8] = 0x80 | (r[8] & 0x3f);
+  if (!Object.hasOwn(TYPES, type)) throw new Error(`no type ${type}`);
   return `${TYPES[type]}_${hex(r)}`;
 }
 // The built-in resources' fixed ids: time zero, which no new id has.
@@ -96,29 +102,47 @@ export function canon(v) {
 // compressed bytes differ between browsers; the pixels do not. A two-byte
 // piece's cels are its bytes as stored (high byte first), so the rule is the
 // same and every one-byte hash is what it was; `keys: 2` is in the body.
-const raw = new Map(); // cel string -> its hex: an unchanged cel is inflated once
+// cel string -> its hex: an unchanged cel is inflated once. It holds as many
+// as the open piece has cels (memo(n)), so an autosave after one stroke
+// inflates one cel, not all of them.
+const raw = new Map();
+let rawCap = 64;
+// It only grows (to PX_FIELDS at most): a small piece opened beside a big one must not empty it.
+export const memo = (n) => { rawCap = Math.min(PX_FIELDS, Math.max(rawCap, n)); };
 async function rawHex(c) {
   let h = raw.get(c);
   if (h === undefined) {
-    h = hex(await inflate(c));
-    if (raw.size > 64) raw.delete(raw.keys().next().value);
+    h = hex(await inflate(c, PX_MAX));
+    if (raw.size >= rawCap) raw.delete(raw.keys().next().value);
     raw.set(c, h);
   }
   return h;
 }
-export async function pixelForm(v) {
-  if (Array.isArray(v)) return Promise.all(v.map(pixelForm));
+// One field at a time (never all at once), and at most PX_FIELDS of them in
+// a body: a piece's 256 frames x 16 layers of cels, and some to spare. `want`:
+// the bytes a piece's cel holds, refused if it holds other than that.
+export const PX_FIELDS = 4096 + 256;
+export async function pixelForm(v, want = 0, seen = { n: 0 }) {
+  const px = async (c, n) => {
+    if (++seen.n > PX_FIELDS) throw new Error('too many pictures');
+    const h = await rawHex(c);
+    if (n && h.length !== 2 * n) throw new Error('a picture of the wrong size');
+    return h;
+  };
+  if (Array.isArray(v)) { const out = []; for (const x of v) out.push(await pixelForm(x, want, seen)); return out; }
   if (!v || typeof v !== 'object') return v;
-  const out = {};
+  const out = [];
   for (const [k, x] of Object.entries(v)) {
-    if (k === 'cels' && Array.isArray(x)) out[k] = await Promise.all(x.map((c) => (typeof c === 'string' ? rawHex(c) : pixelForm(c))));
-    else if (k === 'px' && typeof x === 'string') out[k] = await rawHex(x);
-    else out[k] = await pixelForm(x);
+    if (k === 'cels' && Array.isArray(x)) { const cs = []; for (const c of x) cs.push(typeof c === 'string' ? await px(c, want) : await pixelForm(c, want, seen)); out.push([k, cs]); }
+    else if (k === 'px' && typeof x === 'string') out.push([k, await px(x, 0)]);
+    else out.push([k, await pixelForm(x, want, seen)]);
   }
-  return out;
+  return Object.fromEntries(out); // an own "__proto__" stays a key, as it is in the JSON
 }
-export async function hashOf(body) {
-  const text = canon(await pixelForm(body));
+// `want`: for a piece, the bytes each cel holds (128 x 32, one or two a pixel).
+export async function hashOf(body, want = 0) {
+  memo(Array.isArray(body?.layers) ? body.layers.reduce((n, l) => n + (Array.isArray(l?.cels) ? l.cels.length : 0), 0) : 0);
+  const text = canon(await pixelForm(body, want));
   return 'sha256-' + hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))));
 }
 
@@ -140,56 +164,122 @@ export async function packPx(keys, wide = false) {
   for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
   return btoa(s);
 }
-const inflate = (b64) => through(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), new DecompressionStream('deflate'));
+// Inflating is bounded, before and while, never after: a pixel field whose
+// text is longer than `max` bytes could deflate to (at worst a little over
+// max: stored blocks) is refused unread, and the stream is read only until it
+// gives one byte past `max`, then dropped. Its input goes in 1 KiB at a time,
+// paced by the reads, so a few KiB that inflate to gigabytes never get far
+// (deflate's best ratio is about 1032 to 1). `inflated`: what the last call
+// read from the stream and what it kept (the checks read it).
+export const inflated = { read: 0, kept: 0 };
+const b64Max = (max) => Math.ceil((max + Math.ceil(max / 16000) * 5 + 64) / 3) * 4;
+export async function inflate(b64, max) {
+  inflated.read = inflated.kept = 0;
+  if (typeof b64 !== 'string' || b64.length > b64Max(max)) throw new Error('a picture of the wrong size');
+  let z;
+  try { z = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); } catch { throw new Error('a picture that does not read'); }
+  const ds = new DecompressionStream('deflate'), w = ds.writable.getWriter(), r = ds.readable.getReader();
+  const feed = (async () => { for (let o = 0; o < z.length; o += 1024) await w.write(z.subarray(o, o + 1024)); await w.close(); })();
+  feed.catch(() => {}); // its failure is the reader's too
+  const out = new Uint8Array(max + 1);
+  let n = 0;
+  for (;;) {
+    let got;
+    try { got = await r.read(); } catch { throw new Error('a picture that does not read'); }
+    if (got.done) break;
+    inflated.read += got.value.length;
+    const take = Math.min(got.value.length, max + 1 - n);
+    out.set(got.value.subarray(0, take), n);
+    n += take;
+    if (n > max) {
+      inflated.kept = n;
+      r.cancel().catch(() => {});
+      throw new Error('a picture of the wrong size');
+    }
+  }
+  inflated.kept = n;
+  return out.subarray(0, n);
+}
 // n keys: a Uint8Array, or (wide) a Uint16Array.
 export async function unpackPx(b64, n, wide = false) {
-  const px = await inflate(b64);
-  if (px.length !== n * (wide ? 2 : 1)) throw new Error('a picture of the wrong size');
+  const want = n * (wide ? 2 : 1), px = await inflate(b64, want);
+  if (px.length !== want) throw new Error('a picture of the wrong size');
   return wide ? Uint16Array.from({ length: n }, (_, i) => (px[2 * i] << 8) | px[2 * i + 1]) : px;
 }
 
 // What a record's body points at (by id): its palette, its stamps.
 export function refsOf(rec) {
-  const b = rec.body || {}, out = new Set();
+  const b = obj(rec.body) ? rec.body : {}, out = new Set(), list = (a) => (Array.isArray(a) ? a : []);
   if (typeof b.palette === 'string') out.add(b.palette);
-  for (const l of b.layers || []) for (const s of l.stamps || []) if (typeof s.ref === 'string') out.add(s.ref);
-  for (const m of b.members || []) if (typeof m.id === 'string') out.add(m.id);
+  for (const l of list(b.layers)) for (const s of list(l?.stamps)) if (typeof s?.ref === 'string') out.add(s.ref);
+  for (const m of list(b.members)) if (typeof m?.id === 'string') out.add(m.id);
   out.delete(rec.id);
   return [...out];
 }
 
-// The envelope and the caps; throws with what is wrong.
+// The envelope and the caps; throws with what is wrong. Anything may come in
+// here (a file, a link, another tab): it never trusts a shape it has not
+// looked at, and refuses rather than throws a TypeError.
+const obj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// An array with no holes (`some` and `every` skip them).
+const arr = (a) => Array.isArray(a) && Object.keys(a).length >= a.length;
+const KEY = /^[0-9a-f]{8}$/;
 export function check(rec) {
   const bad = (why) => { throw new Error(`not a record: ${why}`); };
-  if (!TYPES[rec.type] || !ID.test(rec.id) || rec.id.slice(0, 2) !== TYPES[rec.type]) bad('type or id');
-  if (!Number.isInteger(rec.rev) || rec.rev < 1) bad('rev');
+  if (!obj(rec)) bad('not an object');
+  if (typeof rec.type !== 'string' || !Object.hasOwn(TYPES, rec.type) || typeof rec.id !== 'string' || !ID.test(rec.id)
+    || rec.id.slice(0, 2) !== TYPES[rec.type]) bad('type or id');
+  if (!Number.isSafeInteger(rec.rev) || rec.rev < 1) bad('rev');
+  if (typeof rec.created !== 'string' || typeof rec.modified !== 'string') bad('dates');
   if (typeof rec.name !== 'string' || rec.name.length > CAPS.name) bad('name');
-  if (!Array.isArray(rec.tags) || rec.tags.length > CAPS.tags || rec.tags.some((t) => typeof t !== 'string')) bad('tags');
-  if (!rec.author || typeof rec.author.name !== 'string' || rec.author.name.length > 80
+  if (!arr(rec.tags) || rec.tags.length > CAPS.tags || rec.tags.some((t) => typeof t !== 'string')) bad('tags');
+  if (!obj(rec.author) || typeof rec.author.name !== 'string' || rec.author.name.length > 80
     || (rec.author.account !== null && typeof rec.author.account !== 'string')) bad('author');
-  if (rec.note !== undefined && (typeof rec.note !== 'string' || rec.note.length > CAPS.note)) bad('note');
+  if (rec.note !== undefined && (typeof rec.note !== 'string' || !rec.note || rec.note.length > CAPS.note)) bad('note');
   if (rec.licence !== null && !LICENCES.includes(rec.licence)) bad('licence');
   // An entry naming a record says which content it was: its hash too.
-  if (!Array.isArray(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !f || typeof f !== 'object'
-    || (f.id !== undefined && (typeof f.id !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
-  const b = rec.body;
-  if (!b || typeof b !== 'object') bad('body');
-  if (rec.type === 'piece') {
+  if (!arr(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !obj(f)
+    || (f.id !== undefined && (typeof f.id !== 'string' || typeof f.hash !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
+  checkBody(rec.type, rec.body);
+  if (JSON.stringify(rec).length > (rec.type === 'piece' ? CAPS.piece : CAPS.bytes)) bad('too big');
+}
+// A body of this type, alone (doc.js checks a journal's bodies with it).
+export function checkBody(type, b) {
+  const bad = (why) => { throw new Error(`not a record: ${why}`); };
+  if (!obj(b)) bad('body');
+  if (b.members !== undefined && (!arr(b.members) || b.members.some((m) => !obj(m) || typeof m.id !== 'string'))) bad('members');
+  if (type === 'palette' && !arr(b.colours)) bad('colours');
+  if (b.palette !== undefined && typeof b.palette !== 'string') bad('palette');
+  if (type === 'piece') {
     if (b.w !== 128 || b.h !== 32) bad('size');
-    if (!Array.isArray(b.frames) || !b.frames.length || b.frames.length > CAPS.frames) bad('frames');
-    if (!Array.isArray(b.layers) || !b.layers.length || b.layers.length > CAPS.layers) bad('layers');
-    // A layer that moves has a cel a frame; one held still, one cel.
-    if (b.layers.some((l) => !Array.isArray(l.cels) || l.cels.length !== (l.moves ? b.frames.length : 1))) bad('cels');
-    if (b.keys !== undefined && b.keys !== 1 && b.keys !== 2) bad('keys');
+    // plays 0 (forever) is written as no plays; S0 and S1 drafts carry it,
+    // and doc.js drops it when one opens (docs/studio-format.md).
+    if (b.plays !== undefined && (!Number.isInteger(b.plays) || b.plays < 0 || b.plays > 65535)) bad('plays');
+    const fs = b.frames, ls = b.layers;
+    if (!arr(fs) || !fs.length || fs.length > CAPS.frames) bad('frames');
+    if (!arr(ls) || !ls.length || ls.length > CAPS.layers) bad('layers');
+    // Frame and layer keys (S1 on; none before): eight hex digits, each once in the piece.
+    const keys = new Set();
+    const keyed = (k) => k === undefined || (typeof k === 'string' && KEY.test(k) && keys.size < keys.add(k).size);
+    if (fs.some((f) => !obj(f) || !keyed(f.key) || !Number.isInteger(f.ms) || f.ms < CAPS.msMin || f.ms > CAPS.msMax)) bad('frames');
+    // A layer that moves has a cel a frame; one held still, one cel. An
+    // optional field at its default is absent (docs/studio-format.md): a
+    // hidden layer says `hide: true`, a shown one says nothing.
+    if (ls.some((l) => !obj(l) || !keyed(l.key) || typeof l.name !== 'string' || l.name.length > CAPS.layerName
+      || typeof l.moves !== 'boolean' || (l.hide !== undefined && l.hide !== true)
+      || (l.stamps !== undefined && (!arr(l.stamps) || l.stamps.some((x) => !obj(x) || typeof x.ref !== 'string'))))) bad('layers');
+    if (ls.some((l) => !arr(l.cels) || l.cels.length !== (l.moves ? fs.length : 1) || l.cels.some((c) => typeof c !== 'string'))) bad('cels');
+    if (b.keys !== undefined && b.keys !== 2) bad('keys'); // one byte a pixel is no `keys`
   }
-  // Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb, each colour once.
-  const cs = rec.type === 'piece' || rec.type === 'palette' ? b.colours : undefined;
+  // Colours: keys 1 to 255 (65535 in a two-byte piece), rising (so each once),
+  // #rrggbb, each colour once.
+  const cs = type === 'piece' || type === 'palette' ? b.colours : undefined;
   if (cs !== undefined) {
-    const top = rec.type === 'piece' && b.keys !== 2 ? 255 : 65535, seen = new Set(), hexes = new Set();
-    if (!Array.isArray(cs) || cs.length > CAPS.colours || cs.some((c) => !c || !Number.isInteger(c.k) || c.k < 1 || c.k > top
-      || seen.size === seen.add(c.k).size || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
+    const top = type === 'piece' && b.keys !== 2 ? 255 : 65535, hexes = new Set();
+    let last = 0;
+    if (!arr(cs) || cs.length > CAPS.colours || cs.some((c) => !obj(c) || !Number.isInteger(c.k) || c.k <= last || c.k > top || !(last = c.k)
+      || typeof c.hex !== 'string' || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
   }
-  if (JSON.stringify(rec).length > CAPS.bytes) bad('too big');
 }
 
 const head = (rec) => { const { body, ...h } = rec; return h; };
@@ -240,8 +330,8 @@ export class LocalStore {
   async list({ type, tag, text } = {}) {
     const all = await req(this.db.transaction('records').objectStore('records').getAll());
     const t = text?.toLowerCase();
-    const items = all.filter((r) => !r.gone && (!type || r.type === type) && (!tag || r.tags.includes(tag))
-      && (!t || r.name.toLowerCase().includes(t))).map((r) => head(strip(r)))
+    const items = all.filter((r) => !r.gone && (!type || r.type === type) && (!tag || (Array.isArray(r.tags) && r.tags.includes(tag)))
+      && (!t || String(r.name).toLowerCase().includes(t))).map((r) => head(strip(r)))
       .sort((a, b) => (a.modified < b.modified ? 1 : a.modified > b.modified ? -1 : 0));
     return { items, next: null };
   }
@@ -249,8 +339,13 @@ export class LocalStore {
   // `at`: where the undo journal stands in what is written (LocalStore's own).
   async put(rec, { base = null, at } = {}) {
     const { ver, ...clean } = rec;
-    const out = { ...clean, hash: await hashOf(rec.body), modified: now() };
+    // Checked before it is hashed (hashing inflates every picture), its refs
+    // before anything is written.
+    const out = { ...clean, hash: '', modified: now() };
     check(out);
+    out.hash = await hashOf(out.body, out.type === 'piece' ? 4096 * (out.body.keys === 2 ? 2 : 1) : 0);
+    check(out);
+    const refs = refsOf(out);
     const tx = this.db.transaction(['records', 'refs', 'meta'], 'readwrite');
     const recs = tx.objectStore('records');
     const was = await req(recs.get(out.id));
@@ -260,7 +355,7 @@ export class LocalStore {
     }
     out.seq = await this.#seq(tx);
     recs.put(out);
-    this.#refs(tx, out);
+    this.#refs(tx, out.id, refs);
     if (at !== undefined) this.#j(tx, out.id, { at, hash: out.hash });
     await done(tx);
     return head(strip(out));
@@ -288,7 +383,7 @@ export class LocalStore {
     if (cur && !cur.gone) {
       recs.put({ id, type: cur.type, rev: cur.rev, gone: true, modified: now(), seq: await this.#seq(tx) });
       tx.objectStore('revs').delete(IDBKeyRange.bound([id, 0], [id, Infinity]));
-      this.#refs(tx, { id, body: {} });
+      this.#refs(tx, id, []);
     }
     await done(tx);
     await this.forget(id);
@@ -315,7 +410,10 @@ export class LocalStore {
       j.put({ ...step, id });
       if (low > 0) j.delete(IDBKeyRange.bound([id, 0], [id, low], false, true));
     }
-    this.#j(tx, id, { cur });
+    // A new step at or below where the stored record stands: the journal no
+    // longer leads from that record (the steps it was made of are gone), so
+    // until the next put it is not that record's.
+    this.#j(tx, id, { cur }, (m) => (step && step.n <= m.at ? { hash: null } : {}));
     await done(tx);
   }
   async forget(id) {
@@ -324,9 +422,9 @@ export class LocalStore {
     tx.objectStore('meta').delete('j:' + id);
     await done(tx);
   }
-  #j(tx, id, set) {
+  #j(tx, id, set, more = () => ({})) {
     const meta = tx.objectStore('meta'), r = meta.get('j:' + id);
-    r.onsuccess = () => meta.put({ ...(r.result || { cur: 0, at: 0 }), ...set, k: 'j:' + id });
+    r.onsuccess = () => { const m = r.result || { cur: 0, at: 0 }; meta.put({ ...m, ...set, ...more(m), k: 'j:' + id }); };
   }
 
   async revs(id) {
@@ -354,14 +452,12 @@ export class LocalStore {
     return n;
   }
 
-  #refs(tx, rec) {
+  #refs(tx, id, want) {
     const refs = tx.objectStore('refs');
-    const idx = refs.index('from');
-    const c = idx.openKeyCursor(IDBKeyRange.only(rec.id));
-    const want = refsOf(rec);
+    const c = refs.index('from').openKeyCursor(IDBKeyRange.only(id));
     c.onsuccess = () => {
       const k = c.result;
-      if (k) { refs.delete(k.primaryKey); k.continue(); } else for (const to of want) refs.put({ to, from: rec.id });
+      if (k) { refs.delete(k.primaryKey); k.continue(); } else for (const to of want) refs.put({ to, from: id });
     };
   }
 }

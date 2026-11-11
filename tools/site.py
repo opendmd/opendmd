@@ -50,8 +50,9 @@
                web app (`#import`, postMessage); `?q=&platform=` searches
                at once
 - /studio/     the Studio: a pixel editor for the panel, 128x32
-               (opendmd-web/share/studio/: studio.js, store.js — the record
-               envelope and LocalStore on IndexedDB — and the starter
+               (opendmd-web/share/studio/: studio.js, doc.js — the piece as a
+               model —, store.js — the record envelope and LocalStore on
+               IndexedDB —, out.js at the first download, and the starter
                palettes, from studio-starter/starter.dmdpack, copied
                beside it): drafts kept in the browser, nothing uploaded, the
                GIF written by the Studio's own wasm module (the demo's

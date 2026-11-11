@@ -41,12 +41,12 @@
 <button class="s-tool" id="s-t-line" data-tool="line" data-i="line" title="Line (L) · Shift: straight or 45°" aria-label="Line" aria-pressed="false"><i>L</i></button>
 <button class="s-tool" id="s-t-rect" data-tool="rect" data-i="rect" title="Rectangle (R) · Shift+R filled · Shift while drawing: a square" aria-label="Rectangle" aria-pressed="false"><i>R</i></button>
 <button class="s-tool" id="s-t-ellipse" data-tool="ellipse" data-i="ellipse" title="Ellipse (O) · Shift+O filled · Shift while drawing: a circle" aria-label="Ellipse" aria-pressed="false"><i>O</i></button>
-<button class="s-tool" id="s-t-fill" data-tool="fill" data-i="fill" title="Fill (G)" aria-label="Fill" aria-pressed="false"><i>G</i></button>
-<button class="s-tool" id="s-t-dither" data-tool="dither" data-i="dither" title="Dither fill (D): every other pixel" aria-label="Dither fill" aria-pressed="false"><i>D</i></button>
+<button class="s-tool" id="s-t-fill" data-tool="fill" data-i="fill" title="Fill (G) · D: its shade" aria-label="Fill" aria-pressed="false"><i>G</i></button>
 <button class="s-tool" id="s-t-select" data-tool="select" data-i="select" title="Select (M) · drag inside to move · Ctrl+C, Ctrl+X, Ctrl+V · Shift+H, Shift+V flip · Delete" aria-label="Select" aria-pressed="false"><i>M</i></button>
 <button class="s-tool" id="s-t-pick" data-tool="pick" data-i="pick" title="Pick a colour (I) · or right-click, Alt-click" aria-label="Pick a colour" aria-pressed="false"><i>I</i></button>
 </span>
 <span class="s-seg s-fillmode" id="s-fillmode" role="group" aria-label="Shape" hidden><button data-fill="0" aria-pressed="true" title="Edge (R, O)">Edge</button><button data-fill="1" aria-pressed="false" title="Filled (Shift+R, Shift+O)">Filled</button></span>
+<span class="s-seg s-shade" id="s-shade" role="group" aria-label="Shade" hidden><button data-shade="solid" aria-pressed="true" title="Solid: every pixel (D cycles the shades)">Solid</button><button data-shade="light" aria-pressed="false" title="Light: 1 pixel in 4 (D)">Light</button><button data-shade="half" aria-pressed="false" title="Half: every other pixel (D)">Half</button><button data-shade="heavy" aria-pressed="false" title="Heavy: 3 pixels in 4 (D)">Heavy</button></span>
 <span class="s-seg s-size" role="group" aria-label="Brush size"><button data-size="1" class="on" aria-pressed="true" title="Brush 1 (1)">1</button><button data-size="2" aria-pressed="false" title="Brush 2 (2)">2</button><button data-size="3" aria-pressed="false" title="Brush 3 (3)">3</button></span>
 <span class="s-sp"></span>
 <span class="s-seg s-zoom" role="group" aria-label="Zoom"><button id="s-z-out" aria-label="Zoom out" title="Zoom out (-)">−</button><b id="s-z">FIT</b><button id="s-z-in" aria-label="Zoom in" title="Zoom in (+)">+</button></span>

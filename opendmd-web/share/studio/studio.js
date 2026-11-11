@@ -3,22 +3,27 @@
 // uploaded; the page fetches nothing but its own files and, at the first
 // download, the demo's art module (its GIF writer).
 //
-// S1: one frame, one layer. Tools (tools.js): pencil, eraser, line, rectangle
-// and ellipse (edge or filled), fill, dither fill, a selection to move, copy,
-// flip and delete, a colour picker tool; brushes 1 to 3; each shape seen as
-// it is dragged and kept when the pointer lifts. Colours: the piece's own
-// (body.colours, any 24-bit colour; past 255 the pixels take two bytes),
-// drawn from swatch sets (Den 16, the starter palettes, the user's own).
-// Undo (500 steps) is a journal kept in the store, so it survives a reload;
-// snapshots are named revisions. The picker and the palette tools load
-// when first opened (colour.js). An importer (Create Art's GIF and picture
-// conversion, later) adds a piece through `piece()` below, the one way in.
-import { LocalStore, Conflict, CAPS, record, newId, packPx, unpackPx } from './store.js';
+// The piece itself, with no DOM, is doc.js: its layers and frames, what is
+// shown, its colours and the undo steps; this file draws it and keeps it.
+// A piece of any number of layers and frames opens and shows as it is; the
+// controls draw on one cel (the top layer, the first frame) until the frame
+// strip and the layer rows come (frames.js). Tools (tools.js): pencil,
+// eraser, line, rectangle and ellipse (edge or filled), fill, a shade for
+// fills and filled shapes (solid, light, half, heavy), a selection to move,
+// copy, flip and delete, a colour picker tool; brushes 1 to 3; each shape
+// seen as it is dragged and kept when the pointer lifts. Colours: the
+// piece's own (body.colours, any 24-bit colour; past 255 the pixels take two
+// bytes), drawn from swatch sets (Den 16, the starter palettes, the user's
+// own). Undo (doc.js: 500 steps) is a journal kept in the store, so it
+// survives a reload; snapshots are named revisions. The picker and the
+// palette tools load when first opened (colour.js), the GIF at the first
+// download (out.js). An importer (Create Art's GIF and picture conversion,
+// later) adds a piece through `piece()` below, the one way in.
+import { LocalStore, Conflict, CAPS, record, newId, packPx, check } from './store.js';
 import { DEFAULT, builtin, ready, starter, isStarter } from './palettes.js';
+import { Doc, W, H, N, hexOf, toInt } from './doc.js';
 import * as T from './tools.js';
 
-const W = 128, H = 32, N = W * H;
-const STEPS = 500;
 const ZOOMS = [2, 3, 4, 6, 8, 12, 16, 24, 32];
 const LS = 'odmd.studio.';
 // A still's time, as the web app's (opendmd-art-web pipeline.rs STILL_MS).
@@ -36,16 +41,14 @@ const coarse = matchMedia('(pointer: coarse)').matches;
 
 let store = null;
 let rec = null;            // the piece's record (its pixels packed only when saved)
-let px = new Uint16Array(N); // layer 1, frame 1: colour keys (0: off)
-let cols = new Map();      // the piece's own colours: key -> 0xRRGGBB
-let pending = new Map();   // colours picked, not drawn with yet: key -> 0xRRGGBB
+let D = new Doc({ w: W, h: H, frames: [{ ms: STILL_MS }], layers: [{ name: '', moves: false, cels: [''] }] }); // the piece (doc.js)
+D.layers[0].cels[0].px = new Uint16Array(N);
 let swatch = builtin(DEFAULT); // the swatch set shown (body.palette)
 const mine = new Map();    // the user's own palettes, by id
 let starters = [];         // the starter palettes, once fetched
-let key = 0, tool = 'pencil', prev = 'pencil', size = 1, zoom = 0, ledView = false;
+let tool = 'pencil', prev = 'pencil', size = 1, zoom = 0, ledView = false, shade = 'solid', busy = false;
 const filled = { rect: false, ellipse: false };
-let steps = [], cur = 0, low = 1; // the journal: steps[i] is step low + i; the first `cur` are done
-let stroke = null, sel = null, clip = null, drag = null;
+let sel = null, clip = null, drag = null;
 let lastHash = null, timer = 0, nameDirty = false;
 let kept = false;          // in the store (a new piece is not, until it is drawn on or named)
 let journaled = false, unlock = null, closed = '', persisted = null;
@@ -56,7 +59,6 @@ const ICONS = {
   pencil: '.........##.|........#..#|.......#..#.|......#..#..|.....#..#...|....#..#....|...#..#.....|..#..#......|.#..#.......|.###........|.##.........|............',
   eraser: '............|......####..|.....#...##.|....#...#.#.|...#...#..#.|..#...#..#..|.#####..#...|.#...#.#....|.#...##.....|.#####......|............|............',
   fill: '.....#......|....#.#.....|...#...#....|..#.....#...|.#########..|.#########.#|..#######..#|...#####..##|....###...##|.....#.....#|............|............',
-  dither: '............|.#.#.#.#.#..|..#.#.#.#.#.|.#.#.#.#.#..|..#.#.#.#.#.|.#.#.#.#.#..|..#.#.#.#.#.|.#.#.#.#.#..|..#.#.#.#.#.|.#.#.#.#.#..|............|............',
   line: '............|..........#.|.........#..|........#...|.......#....|......#.....|.....#......|....#.......|...#........|..#.........|.#..........|............',
   rect: '............|............|.##########.|.#........#.|.#........#.|.#........#.|.#........#.|.#........#.|.#........#.|.##########.|............|............',
   rectf: '............|............|.##########.|.##########.|.##########.|.##########.|.##########.|.##########.|.##########.|.##########.|............|............',
@@ -74,53 +76,23 @@ function icon(e, name) {
   e.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 12 12" width="24" height="24" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true">${s}</svg>`);
 }
 
-// --- colours: the piece's own ---
-const hexOf = (n) => '#' + n.toString(16).padStart(6, '0');
-const toInt = (h) => parseInt(h.slice(1), 16);
-const colourList = () => [...cols].sort((a, b) => a[0] - b[0]).map(([k, c]) => ({ k, hex: hexOf(c) }));
+// --- colours: the piece's own (doc.js) ---
 const listOf = (body) => body.colours || (builtin(body.palette) || mine.get(body.palette) || builtin(DEFAULT)).body.colours;
-const mapOf = (list) => new Map(list.map((c) => [c.k, toInt(c.hex)]));
-function keyOf(c) { for (const [k, v] of cols) if (v === c) return k; return 0; }
-// A new colour's key: the lowest no colour has, none picked but not yet
-// drawn has, and no step in the journal names, undone or not: a step can be
-// redone while a paste floats, and its key must still be its colour's.
-function freeKey() {
-  const used = new Set([...cols.keys(), ...pending.keys()]);
-  for (const s of steps) for (const c of [...(s.cb || []), ...(s.ca || [])]) used.add(c.k);
-  for (let k = 1; k < 65536; k++) if (!used.has(k)) return k;
-  return 0;
-}
-// A colour picked (a swatch, the picker, a paste): its key, the piece's if
-// it has the colour; else a new one, pending: it joins the piece's colours
-// in the step that first draws with it, so a pick is never a step of its own.
-function keyFor(c) {
-  let k = keyOf(c);
-  if (k) return k;
-  for (const [pk, pc] of pending) if (pc === c) return pk;
-  if (cols.size + pending.size >= CAPS.colours || !(k = freeKey())) { say(`A piece holds ${CAPS.colours} colours at most`); return 0; }
-  pending.set(k, c);
-  return k;
-}
-const rgbOf = (k) => cols.get(k) ?? pending.get(k) ?? 0;
-// Pending colours no longer wanted (not `keep`, not in a paste being placed) are let go.
-function letGo(keep) {
-  const held = new Set(sel?.fl || []);
-  for (const pk of [...pending.keys()]) if (pk !== keep && !held.has(pk)) pending.delete(pk);
-}
+const capSaid = () => say(`A piece holds ${CAPS.colours} colours at most`);
+function keyFor(c) { const k = D.keyFor(c); if (!k) capSaid(); return k; }
 function pickColour(c) {
-  letGo(0);
-  const k = keyFor(c);
-  if (k) { swatches(); pick(k); }
+  const k = D.pickColour(c);
+  if (k) { swatches(); pick(k); } else capSaid();
 }
 function pick(k) {
-  key = cols.has(k) || pending.has(k) ? k : 0;
+  const key = D.pick(k);
   for (const b of $('s-sw').children) {
     const on = +b.dataset.k === key;
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on);
   }
   root.dataset.key = key;
-  root.dataset.colour = key ? hexOf(rgbOf(key)) : 'off';
+  root.dataset.colour = key ? hexOf(D.rgbOf(key)) : 'off';
 }
 function swatch1(k, hex, name) {
   const b = el('button', 's-sw' + (k === 0 ? ' off' : ''));
@@ -132,18 +104,19 @@ function swatch1(k, hex, name) {
 }
 // The piece's colours, off first; then the one picked, if it is not drawn yet.
 function swatches() {
-  const sw = $('s-sw'), list = colourList(), more = key && pending.has(key) ? [swatch1(key, hexOf(pending.get(key)))] : [];
+  const sw = $('s-sw'), list = D.colourList(), key = D.key, more = key && D.pending.has(key) ? [swatch1(key, hexOf(D.pending.get(key)))] : [];
   for (const b of more) { b.classList.add('new'); b.title += ' · joins this piece when you draw with it'; }
   sw.replaceChildren(swatch1(0, '#000000'), ...list.map((c) => swatch1(c.k, c.hex)), ...more);
   sw.classList.toggle('many', list.length > 23);
-  root.dataset.pending = pending.size; // colours picked or pasted, not drawn with yet
+  root.dataset.pending = D.pending.size; // colours picked or pasted, not drawn with yet
   pick(key);
 }
 // The swatch set shown, and what it is.
+// A palette that is not one (no colours) is never taken in: `swatch` moves only once it has shown.
 function useSwatches(p) {
-  swatch = p;
   const set = $('s-set');
   set.replaceChildren(...p.body.colours.map((c) => swatch1(null, c.hex, c.name)));
+  swatch = p;
   set.classList.toggle('many', p.body.colours.length > 24);
   $('s-pal').value = p.id;
   $('s-pal-about').textContent = `${p.body.colours.length} colours · ${builtin(p.id) ? `${p.body.source || 'OpenDMD'} · read-only` : 'yours'}`;
@@ -163,13 +136,14 @@ function menu() {
 }
 
 // --- drawing ---
-// What is shown: the pixels, and a selection being moved over them.
+// What is shown: the layers composited, and a selection being moved over
+// the cel drawn on (under any layer above it).
 function view() {
-  if (!sel?.fl) return px;
-  const v = px.slice();
+  if (!sel?.fl) return D.composite();
+  const v = D.px.slice();
   if (sel.cut) T.rect(sel.ox, sel.oy, sel.ox + sel.w - 1, sel.oy + sel.h - 1, true, (x, y) => { v[y * W + x] = 0; });
   floatOnto((i, k) => { v[i] = k; });
-  return v;
+  return D.composite(D.F, v);
 }
 function floatOnto(put) {
   for (let j = 0; j < sel.h; j++) {
@@ -183,7 +157,7 @@ function paint() {
   const v = view(), img = ctx.createImageData(W, H), d = img.data, rgbs = new Set();
   let off = false;
   for (let i = 0; i < N; i++) {
-    const c = v[i] ? rgbOf(v[i]) : 0;
+    const c = v[i] ? D.rgbOf(v[i]) : 0;
     if (v[i]) rgbs.add(c); else off = true;
     d[i * 4] = c >> 16; d[i * 4 + 1] = (c >> 8) & 255; d[i * 4 + 2] = c & 255; d[i * 4 + 3] = 255;
   }
@@ -199,23 +173,19 @@ function paint() {
   root.dataset.table = table;
   outline();
 }
-function begin() { stroke = new Map(); }
-function set(i, k) {
-  if (px[i] === k) return;
-  if (!stroke.has(i)) stroke.set(i, px[i]);
-  px[i] = k;
-}
-const plot = (k) => (x, y) => { if (x >= 0 && x < W && y >= 0 && y < H) set(y * W + x, k); };
+const plot = (k) => (x, y) => { if (x >= 0 && x < W && y >= 0 && y < H) D.set(y * W + x, k); };
+// Fills and filled shapes set only the pixels the shade picks.
+const shaded = (put) => (x, y) => { if (T.shade[shade](x, y)) put(x, y); };
 // A shape seen while it is dragged: what it drew last undone, then drawn again.
 function again(draw) {
-  if (stroke) for (const [i, b] of stroke) px[i] = b;
-  begin();
+  D.revert();
+  D.begin();
   draw();
   paint();
 }
 // A second finger, or the pointer lost: nothing is made.
 function cancel() {
-  if (stroke) { for (const [i, b] of stroke) px[i] = b; stroke = null; }
+  D.revert();
   if (drag?.was) Object.assign(sel, drag.was);
   if (drag?.marquee) sel = null;
   drag = null;
@@ -223,59 +193,39 @@ function cancel() {
   paint();
 }
 // A stroke made: one step, with any picked colour it is the first to draw in.
-function end(more = {}) {
-  const s = stroke;
-  stroke = null;
-  if (!s || (!s.size && !more.ca)) return;
-  const i = Int32Array.from(s.keys()), a = Uint16Array.from(i, (j) => px[j]);
-  const join = [...new Set(a)].filter((k) => pending.has(k));
-  if (join.length && !more.ca) {
-    const cb = colourList();
-    for (const k of join) { cols.set(k, pending.get(k)); pending.delete(k); }
-    more = { ...more, cb, ca: colourList() };
-    swatches();
-  }
-  push({ i, b: Uint16Array.from(s.values()), a, ...more });
+function end() {
+  const r = D.end();
+  if (!r) return;
+  if (r.step.c) swatches();
+  after(r);
 }
-// A step done: kept in the journal (and the store's), the redo steps dropped.
-function push(s) {
-  steps.length = cur;
-  s.n = low + cur;
-  steps.push(s);
-  cur++;
-  let cut = 0;
-  if (steps.length > STEPS) { steps.shift(); cur--; low++; cut = low; }
+// A step done (doc.js push): kept in the journal (and the store's).
+function after(r) {
   kept = true;
-  jot({ step: s, cur: low + cur - 1, low: cut });
+  jot({ step: r.step, cur: r.cur, low: r.low });
   buttons();
   queueSave();
-}
-function apply(s, fwd) {
-  if (s.i) { const v = fwd ? s.a : s.b; for (let n = 0; n < s.i.length; n++) px[s.i[n]] = v[n]; }
-  if (s.ca) {
-    const was = cols;
-    cols = mapOf(fwd ? s.ca : s.cb);
-    // The colour picked, undone out of the piece, stays picked.
-    if (key && !cols.has(key) && was.has(key)) pending.set(key, was.get(key));
-    if (cols.has(key)) pending.delete(key);
-    swatches();
-  }
 }
 function undo(fwd) {
-  if (stroke || drag) return; // not during a stroke
-  if (!fwd && sel?.fl) { sel = null; letGo(key); swatches(); showSel(); paint(); return; } // a selection being moved (or a paste): put back, its new colours let go
-  if (fwd ? cur >= steps.length : !cur) return;
-  apply(steps[fwd ? cur : cur - 1], fwd);
-  cur += fwd ? 1 : -1;
-  jot({ cur: low + cur - 1 });
-  buttons();
-  paint();
-  queueSave();
+  if (D.stroke || drag || busy) return; // not during a stroke
+  if (!fwd && sel?.fl) { sel = null; D.letGo(D.key); swatches(); showSel(); paint(); return; } // a selection being moved (or a paste): put back, its new colours let go
+  const c0 = D.cur, s = D.steps[fwd ? D.cur : D.cur - 1], w = D.step(fwd);
+  const fin = () => {
+    if (s.c || s.body) swatches();
+    jot({ cur: D.low + D.cur - 1 });
+    buttons();
+    paint();
+    queueSave();
+  };
+  if (w) {
+    busy = true;
+    w.then(fin, (e) => say(`That step can’t be ${fwd ? 'redone' : 'undone'}: ${e.message || e}`)).finally(() => { busy = false; });
+  } else if (D.cur !== c0) fin();
 }
 function buttons() {
-  $('s-undo').disabled = !cur;
-  $('s-redo').disabled = cur >= steps.length;
-  root.dataset.steps = `${cur}/${steps.length}`;
+  $('s-undo').disabled = !D.cur;
+  $('s-redo').disabled = D.cur >= D.steps.length;
+  root.dataset.steps = `${D.cur}/${D.steps.length}`;
 }
 function jot(o) {
   if (!journaled || !store || !kept || closed) return;
@@ -287,7 +237,7 @@ function jot(o) {
 function showSel() {
   $('s-selbar').hidden = tool !== 'select';
   root.dataset.sel = sel ? `${sel.x},${sel.y},${sel.w},${sel.h}${sel.fl ? ',float' : ''}` : '';
-  root.dataset.pending = pending.size;
+  root.dataset.pending = D.pending.size;
   outline();
 }
 function outline() {
@@ -300,15 +250,15 @@ function outline() {
 function lift() {
   if (sel.fl) return;
   sel.fl = new Uint16Array(sel.w * sel.h);
-  for (let j = 0; j < sel.h; j++) for (let i = 0; i < sel.w; i++) sel.fl[j * sel.w + i] = px[(sel.y + j) * W + sel.x + i];
+  for (let j = 0; j < sel.h; j++) for (let i = 0; i < sel.w; i++) sel.fl[j * sel.w + i] = D.px[(sel.y + j) * W + sel.x + i];
   Object.assign(sel, { cut: true, ox: sel.x, oy: sel.y });
 }
 // The floating pixels put down (one step; off in them is see-through); the box stays, on the panel.
 function drop() {
   if (!sel?.fl) return;
-  begin();
+  D.begin();
   if (sel.cut) T.rect(sel.ox, sel.oy, sel.ox + sel.w - 1, sel.oy + sel.h - 1, true, plot(0));
-  floatOnto(set);
+  floatOnto((i, k) => D.set(i, k));
   end();
   const x = Math.max(0, sel.x), y = Math.max(0, sel.y), w = Math.min(W, sel.x + sel.w) - x, h = Math.min(H, sel.y + sel.h) - y;
   sel = w > 0 && h > 0 ? { x, y, w, h } : null;
@@ -319,8 +269,11 @@ function act(a) {
     if (!clip) return;
     if (tool !== 'select') useTool('select');
     drop();
-    // Its colours join the piece in the step that puts it down; it lands in the middle of what is in view.
-    const fl = Uint16Array.from(clip.c, (c) => (c ? keyFor(c - 1) : 0));
+    // Its colours join the piece in the step that puts it down, their keys
+    // given out at once; it lands in the middle of what is in view.
+    const cs = [...new Set(clip.c)].filter((c) => c), ks = D.keysFor(cs.map((c) => c - 1)), to = new Map(cs.map((c, n) => [c, ks[n]]));
+    if (D.full) capSaid();
+    const fl = Uint16Array.from(clip.c, (c) => (c ? to.get(c) : 0));
     const r = scroll.getBoundingClientRect(), c = cv.getBoundingClientRect(), s = c.width / W;
     const mx = (Math.max(r.left, c.left) + Math.min(r.right, c.right)) / 2, my = (Math.max(r.top, c.top, 0) + Math.min(r.bottom, c.bottom, innerHeight)) / 2;
     const x = Math.round((mx - c.left) / s - clip.w / 2), y = Math.round((my - c.top) / s - clip.h / 2);
@@ -328,15 +281,15 @@ function act(a) {
   } else if (a === 'done') done();
   else if (sel) {
     if (a === 'copy' || a === 'cut') {
-      const keys = sel.fl || Uint16Array.from({ length: sel.w * sel.h }, (_, n) => px[(sel.y + Math.floor(n / sel.w)) * W + sel.x + n % sel.w]);
-      clip = { w: sel.w, h: sel.h, c: Uint32Array.from(keys, (k) => (k ? rgbOf(k) + 1 : 0)) }; // colours, so it pastes into any piece
+      const keys = sel.fl || Uint16Array.from({ length: sel.w * sel.h }, (_, n) => D.px[(sel.y + Math.floor(n / sel.w)) * W + sel.x + n % sel.w]);
+      clip = { w: sel.w, h: sel.h, c: Uint32Array.from(keys, (k) => (k ? D.rgbOf(k) + 1 : 0)) }; // colours, so it pastes into any piece
     }
     if (a === 'cut' || a === 'del') {
       // A box lifted from the panel: its place cleared. A paste not put down yet: gone.
       if (sel.fl) sel = sel.cut ? { x: sel.ox, y: sel.oy, w: sel.w, h: sel.h } : null;
-      if (sel) { begin(); T.rect(sel.x, sel.y, sel.x + sel.w - 1, sel.y + sel.h - 1, true, plot(0)); end(); }
+      if (sel) { D.begin(); T.rect(sel.x, sel.y, sel.x + sel.w - 1, sel.y + sel.h - 1, true, plot(0)); end(); }
       sel = null;
-      letGo(key);
+      D.letGo(D.key);
       swatches();
     }
     if (a === 'fliph' || a === 'flipv') {
@@ -362,14 +315,14 @@ const clamp = ([x, y]) => [Math.max(0, Math.min(W - 1, x)), Math.max(0, Math.min
 const brushed = () => /pencil|eraser|line/.test(tool);
 // The shape tools as the drag says: from its start to `q`, Shift held or not.
 function shape(q, shift) {
-  const [x0, y0] = drag.p, k = key;
+  const [x0, y0] = drag.p, k = D.key;
   let [x1, y1] = q;
   if (shift) [x1, y1] = tool === 'line' ? T.snap(x0, y0, x1, y1) : T.square(x0, y0, x1, y1);
   drag.q = q;
   const f = tool === 'rect' ? T.rect : T.ellipse;
   again(() => {
     if (tool === 'line') T.line(x0, y0, x1, y1, T.brush(size, plot(k)));
-    else if (filled[tool]) f(x0, y0, x1, y1, true, plot(k));
+    else if (filled[tool]) f(x0, y0, x1, y1, true, shaded(plot(k)));
     else f(x0, y0, x1, y1, false, T.brush(size, plot(k)));
   });
 }
@@ -393,7 +346,7 @@ cv.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
-  if (tool === 'fill' || tool === 'dither') { drag = { p, fill: true }; return; }
+  if (tool === 'fill') { drag = { p, fill: true }; return; }
   if (tool === 'select') {
     if (within(p)) { lift(); drag = { p, was: { x: sel.x, y: sel.y } }; } else { drop(); sel = { x: p[0], y: p[1], w: 1, h: 1 }; drag = { p, marquee: true }; }
     showSel();
@@ -402,8 +355,8 @@ cv.addEventListener('pointerdown', (e) => {
   }
   drag = { p, q: p };
   if (brushed() && tool !== 'line') {
-    begin();
-    T.brush(size, plot(tool === 'eraser' ? 0 : key))(p[0], p[1]);
+    D.begin();
+    T.brush(size, plot(tool === 'eraser' ? 0 : D.key))(p[0], p[1]);
     paint();
   } else shape(p, e.shiftKey);
 });
@@ -423,8 +376,8 @@ cv.addEventListener('pointermove', (e) => {
     showSel();
     paint();
   } else if (tool === 'pencil' || tool === 'eraser') {
-    if (!stroke) return;
-    T.line(drag.q[0], drag.q[1], p[0], p[1], T.brush(size, plot(tool === 'eraser' ? 0 : key)));
+    if (!D.stroke) return;
+    T.line(drag.q[0], drag.q[1], p[0], p[1], T.brush(size, plot(tool === 'eraser' ? 0 : D.key)));
     drag.q = p;
     paint();
   } else shape(q, e.shiftKey);
@@ -435,16 +388,16 @@ const up = (e) => {
   if (!down.size) pan = null;
   if (drag && !down.size && e.type === 'pointerup') {
     if (drag.fill) {
-      begin();
-      const [x, y] = drag.p, k = key, dot = tool === 'dither';
-      for (const i of T.flood(px, W, H, x, y)) if (!dot || T.checker(i % W, (i / W) | 0)) set(i, k);
+      D.begin();
+      const [x, y] = drag.p, k = D.key, on = T.shade[shade];
+      for (const i of T.flood(D.px, W, H, x, y)) if (on(i % W, (i / W) | 0)) D.set(i, k);
     }
     end();
     if (drag.marquee && sel?.w === 1 && sel.h === 1) sel = null; // a click: nothing selected
     drag = null;
     showSel();
     paint();
-  } else if (!down.size && (drag || stroke)) cancel();
+  } else if (!down.size && (drag || D.stroke)) cancel();
 };
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
@@ -489,10 +442,16 @@ function useTool(t, fill) {
     if (d in filled) icon(b, d + (filled[d] ? 'f' : ''));
   }
   root.dataset.tool = t + (filled[t] ? '-filled' : '');
-  // Edge or filled, for a shape (a phone has no Shift).
+  // Edge or filled, for a shape (a phone has no Shift); the shade, for a fill or a filled shape.
   $('s-fillmode').hidden = !(t in filled);
   for (const b of $('s-fillmode').children) { const on = +b.dataset.fill === +!!filled[t]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+  $('s-shade').hidden = !(t === 'fill' || filled[t]);
   showSel();
+}
+function useShade(sh) {
+  shade = sh;
+  for (const b of $('s-shade').children) { const on = b.dataset.shade === sh; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+  root.dataset.shade = sh;
 }
 function useSize(n) {
   size = n;
@@ -567,19 +526,13 @@ function save() {
 }
 const nameNow = () => $('s-name').value.trim().slice(0, CAPS.name) || 'Untitled';
 const stamp = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-// What a piece is made of, as the store keeps it: a download's `shot`, or now.
-async function bodyOf(shot) {
-  const list = shot ? shot.colours : colourList(), wide = list.some((c) => c.k > 255);
-  const cel = await packPx(shot ? shot.px : px, wide);
-  const { keys, ...b } = rec.body;
-  return { ...b, ...(wide ? { keys: 2 } : {}), palette: swatch.id, colours: list,
-    layers: b.layers.map((l, n) => (n ? l : { ...l, cels: [cel, ...l.cels.slice(1)] })) };
-}
+// What a piece is made of, as the store keeps it: a download's `shot` (doc.js snap), or now.
 async function saveNow(shot) {
   if (!store || !rec || !kept || closed) return;
   try {
-    let at = shot ? shot.at : low + cur - 1, note = null; // where the journal is as these pixels are taken
-    let next = { ...rec, name: nameNow(), body: await bodyOf(shot) };
+    const sn = shot || D.snap();
+    let at = sn.at, note = null; // where the journal is as these pixels are taken
+    let next = { ...rec, name: nameNow(), body: await D.packed(sn, { palette: swatch.id }) };
     for (let tries = 0; ; tries++) {
       try {
         const h = await store.put(next, { base: rec.ver ?? null, at: journaled ? at : undefined });
@@ -605,7 +558,7 @@ async function saveNow(shot) {
             licence: was.licence ?? null }] : [] };
         rec = { ...rec, ver: null };
         lastHash = null;
-        steps = []; cur = 0; low = 1; at = 0; buttons(); // the copy starts a history of its own
+        D.steps = []; D.cur = 0; D.low = 1; at = 0; buttons(); // the copy starts a history of its own
         await lock(next.id);
         $('s-name').value = next.name;
         root.dataset.id = next.id;
@@ -646,34 +599,29 @@ async function lock(id) {
   root.dataset.journal = journaled ? 'yes' : 'no';
 }
 
-// A stored record opened, and its journal replayed: from where the record
-// stands (`at`) to where undo was (`cur`).
+// A stored record opened, and its journal replayed (doc.js open): from where
+// the record stands (`at`) to where undo was (`cur`). A journal that is not
+// this record's, or of another shape (an earlier Studio's), is dropped.
 async function open(r) {
-  const b = r.body, keys = await unpackPx(b.layers[0].cels[0], N, b.keys === 2); // throws on a draft that does not read
+  check(r); // a record written past check() (another tab, an older Studio, a hand) is not opened
+  await Doc.open(r, listOf, null); // throws on a draft that does not read, before the open one's lock is let go
+  await lock(r.id);
+  const j = journaled && store && r.hash ? await store.steps(r.id) : null;
+  const d = await Doc.open(r, listOf, j);
   sel = null;
+  D = d;
+  D.held = () => sel?.fl;
   showSel();
   rec = r;
-  px = Uint16Array.from(keys);
-  cols = mapOf(listOf(b));
-  pending = new Map();
-  useSwatches(builtin(b.palette) || mine.get(b.palette) || builtin(DEFAULT));
+  useSwatches(builtin(r.body.palette) || mine.get(r.body.palette) || builtin(DEFAULT));
   kept = true;
   lastHash = r.hash;
   nameDirty = false;
-  steps = []; cur = 0; low = 1;
-  await lock(r.id);
-  if (journaled && store && r.hash) {
-    const j = await store.steps(r.id), lo = j.list[0]?.n, hi = lo + j.list.length - 1, ok = (n) => n >= lo - 1 && n <= hi;
-    if (j.list.length && j.hash === r.hash && j.list.every((s, n) => s.n === lo + n) && ok(j.at) && ok(j.cur)) {
-      steps = j.list; low = lo; cur = j.cur - lo + 1;
-      for (let n = j.at + 1; n <= j.cur; n++) apply(steps[n - lo], true);
-      for (let n = j.at; n > j.cur; n--) apply(steps[n - lo], false);
-      if (j.at !== j.cur) queueSave();
-    } else if (j.list.length) await run(() => store.forget(r.id)); // written elsewhere since: no longer this record's
-  }
+  if (D.said === 'dropped') await run(() => store.forget(r.id)); // written elsewhere since, or an older shape: no longer this record's
+  if (D.said === 'moved') queueSave();
   buttons();
   $('s-name').value = r.name;
-  key = keyOf(AMBER) || keyFor(AMBER);
+  D.key = D.keyOf(AMBER) || keyFor(AMBER);
   swatches();
   paint();
   ls.set('last', r.id);
@@ -683,13 +631,20 @@ async function open(r) {
   await snaps();
 }
 // A new piece, with no colours until it is drawn on: the one way a piece
-// comes in (an importer, later, hands over its pixels, colours and `from`
-// here). Its layers and frames get stable keys as they are made.
+// comes in (an importer, a template, a file, a link). `spec` is a whole
+// piece, {name, tags, plays, frames: [{ms}], layers: [{name, moves, hide,
+// cels: [keys…]}], colours, from}, keys as Uint8Array or Uint16Array, or the
+// one-cel form {name, keys, colours, from}. Its layers and frames get stable
+// keys as they are made; it is checked (store.js check) before it opens.
 const k8 = () => [...crypto.getRandomValues(new Uint8Array(4))].map((x) => x.toString(16).padStart(2, '0')).join('');
-export async function piece({ name = 'Untitled', keys = new Uint8Array(N), colours = [], from = [] } = {}) {
+export async function piece({ name = 'Untitled', tags = [], plays, keys = new Uint8Array(N), colours = [], from = [],
+  frames = [{ ms: STILL_MS }], layers = [{ name: 'Drawing', moves: false, cels: [keys] }] } = {}) {
   const wide = colours.some((c) => c.k > 255);
-  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays: 0, colours, ...(wide ? { keys: 2 } : {}), frames: [{ key: k8(), ms: STILL_MS }],
-    layers: [{ key: k8(), name: 'Drawing', moves: false, cels: [await packPx(keys, wide)] }] }, { from });
+  const r = record('piece', name, { w: W, h: H, palette: swatch.id, ...(plays ? { plays } : {}), colours, ...(wide ? { keys: 2 } : {}),
+    frames: frames.map((f) => ({ key: k8(), ms: f.ms ?? STILL_MS })),
+    layers: await Promise.all(layers.map(async (l) => ({ key: k8(), name: l.name ?? '', moves: !!l.moves, ...(l.hide ? { hide: true } : {}),
+      cels: await Promise.all(l.cels.map((c) => packPx(c, wide))) }))) }, { from, tags });
+  check(r);
   await open({ ...r, hash: '' });
   lastHash = null;
   kept = false; // stored at its first stroke (or name)
@@ -703,7 +658,7 @@ async function fresh() {
 // A draft that will not open: said, and a new piece instead.
 async function tryOpen(r) {
   try { await open(r); return true; } catch {
-    say(`“${r.name}” can’t be opened: its picture is damaged. It stays in Drafts; this is a new piece.`);
+    say(`“${typeof r.name === 'string' ? r.name : 'A draft'}” can’t be opened: its picture is damaged. It stays in Drafts; this is a new piece.`);
     return false;
   }
 }
@@ -725,7 +680,7 @@ function one() {
   li.querySelector('b').textContent = nameNow();
   li.querySelector('small').textContent = 'Open now';
   li.querySelector('.s-del').hidden = false;
-  thumb(li.querySelector('canvas'), px, cols);
+  thumb(li.querySelector('canvas'), D.composite(), D.cols);
   root.dataset.drawn = (+root.dataset.drawn || 0) + 1;
 }
 async function drafts() {
@@ -734,6 +689,7 @@ async function drafts() {
   const { items } = await store.list({ type: 'piece' });
   if (rec && !kept) items.unshift({ id: rec.id, name: nameNow(), modified: rec.modified });
   const lis = await Promise.all(items.map(async (h) => {
+    if (typeof h.name !== 'string') h = { ...h, name: 'Untitled' }; // a record that is not one: listed, never trusted
     const li = el('li', h.id === rec?.id ? 'on' : ''), b = el('button', 's-open'), led = el('span', 'led'), c = el('canvas'), t = el('span', 's-meta');
     const open = h.id === rec?.id, del = el('button', 's-del', '×');
     b.dataset.id = del.dataset.id = h.id;
@@ -746,8 +702,8 @@ async function drafts() {
     del.hidden = open && !kept;
     li.append(b, del);
     try {
-      if (open) thumb(c, px, cols);
-      else { const r = await store.get(h.id); thumb(c, await unpackPx(r.body.layers[0].cels[0], N, r.body.keys === 2), mapOf(listOf(r.body))); }
+      if (open) thumb(c, D.composite(), D.cols);
+      else { const d = new Doc((await store.get(h.id)).body, listOf); await d.load(0); thumb(c, d.composite(0), d.cols); }
     } catch { /* a draft that does not read: listed, not drawn */ }
     return li;
   }));
@@ -783,75 +739,35 @@ function freeze(label, shot) {
 async function restore(rev) {
   const r = await store.get(rec.id, rev);
   if (!r) return;
-  const keys = await unpackPx(r.body.layers[0].cels[0], N, r.body.keys === 2);
   done();
   await freeze(`Before restoring ${r.label || `version ${rev}`}`.slice(0, CAPS.name));
-  const cb = colourList(), ca = listOf(r.body).map(({ k, hex }) => ({ k, hex }));
-  begin();
-  for (let i = 0; i < N; i++) set(i, keys[i]);
-  cols = mapOf(ca);
-  end({ cb, ca });
+  try {
+    after(await D.restore(r.body, { palette: swatch.id }));
+  } catch (e) {
+    say(`That snapshot can’t be restored: ${e.message || e}`);
+  }
   swatches();
   paint();
   await snaps();
 }
 
-// --- the GIF ---
-// The GIF writers: the site's own wasm module (pkg-studio, opendmd-studio-web; never on the panel), loaded at the first download.
-let writer = null;
-const gifWriter = () => (writer ??= import('../demo/js/wasm.js').then((w) => w.load('pkg-studio')).then(([m]) => m)
-  .catch((e) => { writer = null; throw e; }));
-// fit: 256 colours picked for spread, the rest as their nearest (a GIF the panel can prepare and smooth).
+// --- the GIF: out.js, loaded at the first download ---
+let outMod = null;
 async function download(fit) {
-  const b = $(fit ? 's-fit' : 's-gif');
-  b.disabled = true;
-  try {
-    const m = await gifWriter();
-    done();
-    // What is downloaded is what is frozen: these pixels, saved and snapshotted in the chain, then read back.
-    const shot = { px: px.slice(), colours: colourList(), at: low + cur - 1 };
-    const h = await freeze('', shot), frozen = h && await store.get(rec.id, h.rev - 1);
-    const body = frozen?.body || { ...rec.body, colours: shot.colours };
-    const keys = frozen ? await unpackPx(body.layers[0].cels[0], N, body.keys === 2) : shot.px, cm = mapOf(listOf(body));
-    // The GIF's table: only the colours used, off first, the same colour once.
-    const table = [], index = new Map(), of = new Map();
-    for (const k of [...new Set(keys)].sort((a, c) => a - c)) {
-      const c = k ? cm.get(k) ?? 0 : 0;
-      if (!index.has(c)) { index.set(c, table.length); table.push(c); }
-      of.set(k, index.get(c));
-    }
-    const delays = Uint32Array.from(body.frames, (f) => f.ms);
-    // Past 256 colours: a whole picture over 256 of them picked for spread, then the rest exactly (or, fitted, only that picture).
-    const rgb = () => Uint32Array.from(keys, (k) => (k ? cm.get(k) ?? 0 : 0));
-    const gif = table.length <= 256 ? m.encodeIndexed(Uint32Array.from(table), Uint8Array.from(keys, (k) => of.get(k)), delays, body.plays)
-      : fit ? m.encodeFitted(rgb(), delays, body.plays) : m.encodeWide(rgb(), delays, body.plays);
-    const stem = nameNow() + (fit && table.length > 256 ? ' 256' : '');
-    const name = (stem.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
-    const a = el('a');
-    a.href = URL.createObjectURL(new Blob([gif], { type: 'image/gif' }));
-    a.download = name;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-    root.dataset.gif = gif.length;
-    say('');
-    const n = fit ? Math.min(table.length, 256) : table.length;
-    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${n} colour${n === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
-    await snaps();
-  } catch (e) {
-    say(`The GIF could not be made: ${e.message || e}`);
-  } finally {
-    b.disabled = false;
-  }
+  outMod ??= import('./out.js');
+  try { await (await outMod).download(studio, fit); } catch (e) { outMod = null; say(`The GIF could not be made: ${e.message || e}`); }
 }
 
 // --- the colour picker and the palette tools: colour.js, loaded when first opened ---
 let colourMod = null;
 const studio = {
-  get store() { return store; }, run, mine, say, swatch: () => swatch, colours: colourList, current: () => (key ? rgbOf(key) : null),
+  get store() { return store; }, run, mine, say, swatch: () => swatch, colours: () => D.colourList(), current: () => (D.key ? D.rgbOf(D.key) : null),
   pickColour, piece: () => rec && kept && lastHash ? { id: rec.id, rev: rec.rev, hash: lastHash, name: nameNow() } : null,
   use(p) { if (p) { useSwatches(p); queueSave(); } menu(); },
+  // for out.js
+  get doc() { return D; }, get rec() { return rec; }, get kept() { return kept; }, get saved() { return root.dataset.saved; },
+  root, listOf, done, freeze, snaps, status, nameNow,
+  newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
 };
 async function colourTools(which, b) {
   colourMod ??= import('./colour.js');
@@ -860,12 +776,11 @@ async function colourTools(which, b) {
   b.setAttribute('aria-expanded', !host.hidden);
   if (!host.hidden) m[which](host, studio);
 }
-function unused() {
+async function unused() {
   done();
-  const used = new Set(px), cb = colourList(), ca = cb.filter((c) => used.has(c.k));
-  if (ca.length === cb.length) return;
-  cols = mapOf(ca);
-  push({ cb, ca });
+  const r = await D.unused();
+  if (!r) return;
+  after(r);
   swatches();
   paint();
 }
@@ -887,6 +802,7 @@ async function main() {
   $('s-gif').addEventListener('click', () => download(false));
   $('s-fit').addEventListener('click', () => download(true));
   $('s-fillmode').addEventListener('click', (e) => { const b = e.target.closest('[data-fill]'); if (b) useTool(tool, b.dataset.fill === '1'); });
+  $('s-shade').addEventListener('click', (e) => { const b = e.target.closest('[data-shade]'); if (b) useShade(b.dataset.shade); });
   $('s-snap').addEventListener('click', async () => {
     const n = $('s-snapname');
     if (!kept) { say('Draw something first: a snapshot keeps a piece as it is.'); return; }
@@ -918,7 +834,7 @@ async function main() {
   $('s-z-in').addEventListener('click', () => zoomBy(1));
   $('s-z-out').addEventListener('click', () => zoomBy(-1));
   new ResizeObserver(layout).observe(scroll);
-  const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', d: 'dither', m: 'select', i: 'pick' };
+  const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick' };
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
   document.addEventListener('keydown', (e) => {
@@ -931,6 +847,7 @@ async function main() {
     else if (mod || e.altKey || drag) { if (k === 'shift' && shapes()) shape(drag.q, true); }
     else if (e.shiftKey && (k === 'h' || k === 'v') && sel) act(k === 'h' ? 'fliph' : 'flipv');
     else if (TOOLS[k]) useTool(TOOLS[k], TOOLS[k] in filled ? e.shiftKey : undefined);
+    else if (k === 'd') useShade(T.SHADES[(T.SHADES.indexOf(shade) + 1) % T.SHADES.length]); // D cycles the shade
     else if (k === '1' || k === '2' || k === '3') useSize(+k);
     else if ((k === 'delete' || k === 'backspace') && sel) { e.preventDefault(); act('del'); }
     else if ((k === 'enter' || k === 'escape') && sel) act('done');
@@ -949,6 +866,7 @@ async function main() {
   layout();
   useTool('pencil');
   useSize(1);
+  useShade('solid');
   await ready;
   try {
     store = await LocalStore.open(undefined, () => { closed = 'Not kept: the Studio was opened anew in another tab. Reload this one to go on'; status('failed'); });
@@ -956,7 +874,7 @@ async function main() {
     store = null;
     say(`Drafts can’t be kept here: ${e.message || e}`);
   }
-  if (store) for (const h of (await store.list({ type: 'palette' })).items) { const p = await store.get(h.id); if (p) mine.set(p.id, p); }
+  if (store) for (const h of (await store.list({ type: 'palette' })).items) { const p = await store.get(h.id); try { check(p); mine.set(p.id, p); } catch { /* not a palette: left out */ } }
   useSwatches(swatch);
   menu();
   let r = null;

@@ -8,7 +8,7 @@
   "from": [],
   "body": {
     "w": 128, "h": 32, "palette": "panel-16", "plays": 0,
-    "frames": [{"ms": 0}],
+    "frames": [{"ms": 5000}],
     "layers": [
       {"name": "Bezel", "moves": false,
        "cels": [

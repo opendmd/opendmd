@@ -71,6 +71,19 @@ build URL serves. There the art index must also carry
   schema's upgrade not blocked by an open tab; on a phone, 8x with the
   two-finger hint, a tap draws, fill then a second finger fills nothing, no
   sideways scroll, both themes;
+- /studio/ S2 model (studio-s2-doc): a first visit fetches the seven
+  first-paint files, the site's stylesheet, fonts and wordmark and the
+  starter pack, nothing else; colour.js and out.js (with pkg-studio) only
+  at their triggers; a piece of three shown layers and a hidden one over
+  four frames opens as its composite, saves back with the same hash with
+  the cels not drawn on as stored, and downloads frame by frame without
+  the hidden layer; a whole piece handed in through piece(); an S1
+  journal dropped at open; Shade (Light, Half, Heavy anchored to the
+  panel, for fills and filled shapes, D cycling); one colour under one key
+  after draw, undo, re-pick, redo, draw (and with a paste floating);
+  doc.js under 2,000 random operations, and a 4,000-colour paste from one
+  key allocator; the hostile-input list (deflate bombs and broken cels,
+  records and journals that lie); web-size failing a stray studio/ file;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -1049,9 +1062,11 @@ def s_blur(page: Page) -> None:
 def s_new(page: Page) -> None:
     """A new, empty piece (the one before it kept)."""
     n = page.locator("#s-list li").count()
+    was = s_data(page).get("id", "")
     page.click("#s-new")
     wait_js(page, f"document.querySelectorAll('#s-list li').length === {n + (1 if s_data(page)['saved'] != 'new' else 0)} && "
-                  "document.getElementById('studio').dataset.saved === 'new'")
+                  f"document.getElementById('studio').dataset.saved === 'new' && document.getElementById('studio').dataset.id !== '{was}' "
+                  "&& !document.getElementById('studio').hasAttribute('aria-busy')")
     s_blur(page)
     page.mouse.move(0, 0)
 
@@ -1070,9 +1085,11 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     page = s_page(browser, base, site, errors)
     s_blur(page)
     tips = page.eval_on_selector_all(".s-tool", "els => els.map(e => [e.dataset.tool, e.title])")
-    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "dither": "(D)", "select": "(M)", "pick": "(I)"}
+    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "select": "(M)", "pick": "(I)"}
+    shades = page.eval_on_selector_all("#s-shade [data-shade]", "els => els.map(e => [e.dataset.shade, e.title])")
     check(sorted(t for t, _ in tips) == sorted(keys) and all(keys[t] in title for t, title in tips)
-          and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123"),
+          and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123")
+          and [n for n, _ in shades] == ["solid", "light", "half", "heavy"] and all("(D" in t for _, t in shades),
           f"/studio/ tools: every tool and brush size shows its shortcut in its tooltip ({[t for t, _ in tips]})")
     # Line: Bresenham, the drag's two ends.
     page.keyboard.press("l")
@@ -1147,13 +1164,17 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     check(two == {(10, 10), (11, 10), (10, 11), (11, 11)} and three == {(x, y) for x in (29, 30, 31) for y in (9, 10, 11)}
           and thick == {(x, y) for x in range(49, 62) for y in (9, 10, 11)},
           f"/studio/ tools: 2 and 3 make the pencil and the line 2 and 3 pixels wide ({len(two)}, {len(three)}, {len(thick)})")
-    # Dither fill: every other pixel of the region.
+    # Shade Half (D twice from Solid) on a fill: every other pixel of the region.
     s_new(page)
+    page.keyboard.press("g")
+    page.keyboard.press("d")
     page.keyboard.press("d")
     page.mouse.click(*s_at(page, 64, 16))
     got = s_on(page)
-    check(got == {(x, y) for x in range(128) for y in range(32) if (x + y) % 2 == 0}, f"/studio/ tools: D, the dither fill, a checkerboard ({len(got)} lit)")
+    check(got == {(x, y) for x in range(128) for y in range(32) if (x + y) % 2 == 0} and s_data(page).get("shade") == "half",
+          f"/studio/ tools: G then D, D: a fill at Half shade, a checkerboard ({len(got)} lit)")
     page.keyboard.press("Control+z")
+    page.click("#s-shade [data-shade=solid]")
     # The eyedropper: I, then back to the tool before it.
     page.keyboard.press("b")
     page.click('#s-set .s-sw[data-hex="#33d1ff"]')
@@ -1433,10 +1454,12 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     check(a == {(1, 1), (2, 1)} and st == "2/3" and b == {(1, 1), (2, 1), (3, 1)} and c == {(1, 1)},
           f"/studio/ journal: undo and redo survive a reload ({sorted(a)}, steps {st})")
     # A step the record never saw (the tab closed first): replayed from the journal, and saved.
+    # (Journal v2: a pixel step names its cel by layer and frame key.)
     s_kept(page)
     page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
-        const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1;
-        await s.jot(id, { step: { n, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n }); s.db.close(); }""")
+        const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1, r = await s.get(id);
+        await s.jot(id, { step: { n, l: r.body.layers[0].key, f: r.body.frames[0].key, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n });
+        s.db.close(); }""")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
     s_kept(page)
@@ -1673,6 +1696,755 @@ def studio_phone(browser, base: str, site: Path, errors: list[str]) -> None:
           f"/studio/ (phone): two fingers pinch the zoom, out and in ({z0} -> {z1} -> {z2}), drawing nothing, no sideways scroll")
     check(not page.evaluate("window.__csp || []"), f"/studio/ (phone): no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
+
+
+# --- the Studio, S2 branch 1 (studio-s2-doc): the model, the split, the review items ---
+# What a first visit to /studio/ fetches, and nothing else: the seven
+# first-paint files, the site's stylesheet, fonts and wordmark, the starter pack.
+S_FIRST = {"/studio/", "/studio/studio.css", "/studio/studio.js", "/studio/doc.js", "/studio/store.js", "/studio/palettes.js",
+           "/studio/tools.js", "/studio/starter.dmdpack", "/site.css", "/fonts/fraunces.woff2", "/fonts/silkscreen.woff2", "/art/wordmark.png"}
+
+
+def s_paths(page: Page) -> set[str]:
+    return {urllib.parse.urlsplit(u).path for u in page.asked}
+
+
+def studio_fetches(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A first visit fetches first paint and nothing else; each lazy module only at its trigger."""
+    page = s_page(browser, base, site, errors)
+    wait_js(page, "document.getElementById('studio').dataset.starter !== undefined", timeout=20000)
+    page.wait_for_timeout(300)
+    got = s_paths(page)
+    check(got == S_FIRST, f"/studio/ fetches: a first visit asks for first paint and nothing else (extra {sorted(got - S_FIRST)}, missing {sorted(S_FIRST - got)})")
+    page.mouse.click(*s_at(page, 4, 4))
+    s_kept(page)
+    page.click("#s-add")
+    wait_js(page, "!document.getElementById('s-picker').hidden && document.getElementById('s-picker').firstChild !== null")
+    now = s_paths(page)
+    check("/studio/colour.js" not in got and "/studio/colour.js" in now and "/studio/out.js" not in now
+          and not any(p.startswith("/demo/") for p in now),
+          "/studio/ fetches: colour.js only when New colour… opens; out.js and the GIF writer not before a download")
+    with page.expect_download(timeout=60000):
+        page.click("#s-gif")
+    after = s_paths(page)
+    check("/studio/out.js" in after and any("pkg-studio" in p for p in after) and not any("pkg-art" in p for p in after),
+          "/studio/ fetches: out.js and pkg-studio at the first download")
+    page.context.close()
+
+
+# A piece of three shown layers and a hidden fourth over four frames, colours
+# k1..k4; the Python twin of what the page must show.
+S_LAYERED = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+    // Cels as stored deflate blocks (zlib, level 0), not as this browser would
+    // pack them: one packed again shows as a different string, the same hash.
+    const stored = (a) => { const z = new Uint8Array(2 + 5 + a.length + 4); let s1 = 1, s2 = 0;
+      z.set([0x78, 0x01, 0x01, a.length & 255, a.length >> 8, ~a.length & 255, (~a.length >> 8) & 255]); z.set(a, 7);
+      for (const x of a) { s1 = (s1 + x) % 65521; s2 = (s2 + s1) % 65521; }
+      z.set([s2 >> 8, s2 & 255, s1 >> 8, s1 & 255], 7 + a.length);
+      let t = ''; for (const x of z) t += String.fromCharCode(x); return btoa(t); };
+    const cel = async (f) => { const a = new Uint8Array(4096); for (let i = 0; i < 4096; i++) a[i] = f(i % 128, (i / 128) | 0); return stored(a); };
+    const rocket = await Promise.all([0, 1, 2, 3].map((n) => cel((x, y) => (x >= 10 * n && x < 10 * n + 10 && y < 10 ? 2 : 0))));
+    const body = { w: 128, h: 32, palette: 'pl_00000000000070008000000000000001',
+      colours: [{ k: 1, hex: '#102030' }, { k: 2, hex: '#405060' }, { k: 3, hex: '#708090' }, { k: 4, hex: '#a0b0c0' }],
+      frames: ['f0000001', 'f0000002', 'f0000003', 'f0000004'].map((key) => ({ key, ms: 150 })),
+      layers: [
+        { key: 'a0000001', name: 'Sky', moves: false, cels: [await cel((x) => (x < 64 ? 1 : 0))] },
+        { key: 'a0000002', name: 'Rocket', moves: true, cels: rocket },
+        { key: 'a0000003', name: 'Ground', moves: false, cels: [await cel((x, y) => (y === 31 && x < 100 ? 3 : 0))] },
+        { key: 'a0000004', name: 'Ghost', moves: false, hide: true, cels: [await cel((x) => (x === 127 || x === 5 ? 4 : 0))] }] };
+    const h = await s.put(m.record('piece', 'Layered', body));
+    s.db.close();
+    localStorage.setItem('odmd.studio.last', h.id);
+    return h; }"""
+
+
+def py_layered(f: int) -> list[tuple]:
+    c = {0: (0, 0, 0), 1: (0x10, 0x20, 0x30), 2: (0x40, 0x50, 0x60), 3: (0x70, 0x80, 0x90)}
+    out = []
+    for y in range(32):
+        for x in range(128):
+            k = 1 if x < 64 else 0
+            if 10 * f <= x < 10 * f + 10 and y < 10:
+                k = 2
+            if y == 31 and x < 100:
+                k = 3
+            out.append(c[k])
+    return out
+
+
+def studio_layers(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A many-layer, many-frame piece put straight into the store: shown as
+    composited, saved back with the same hash, downloaded frame by frame
+    with its hidden layer left out; an S1 journal dropped at open."""
+    page = s_page(browser, base, site, errors)
+    h = page.evaluate(S_LAYERED)
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    shown = s_pixels(page)
+    check(s_data(page).get("id") == h["id"] and shown == py_layered(0),
+          f"/studio/ layers: three layers and a hidden fourth open as their composite on frame 1 ({sum(a != b for a, b in zip(shown, py_layered(0)))} pixels off)")
+    before = page.evaluate(S_STORE, ["get", None])["r"]
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 90, 20))
+    s_kept(page)
+    drawn = page.evaluate(S_STORE, ["get", None])["r"]
+    page.keyboard.press("Control+z")
+    s_kept(page)
+    back = page.evaluate(S_STORE, ["get", None])["r"]
+    # Ground (layers[2], the top shown layer) was drawn on and packed again; the others are as stored.
+    same = [back["body"]["layers"][n]["cels"] == before["body"]["layers"][n]["cels"] for n in (0, 1, 3)]
+    check(drawn["hash"] != h["hash"] and back["hash"] == h["hash"] == s_hash(back["body"]) and all(same)
+          and back["body"]["layers"][3].get("hide") is True and "hide" not in back["body"]["layers"][0],
+          f"/studio/ layers: drawn on and undone, it saves back with the same hash; the cels not drawn on are written as they were, not packed again {same}")
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#s-gif")
+    im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+    frames, delays = [], []
+    try:
+        while True:
+            frames.append(list(im.convert("RGB").getdata()))
+            delays.append(im.info.get("duration"))
+            im.seek(im.tell() + 1)
+    except EOFError:
+        pass
+    check(len(frames) == 4 and all(frames[f] == py_layered(f) for f in range(4)) and delays == [150] * 4,
+          f"/studio/ layers: its GIF has every frame composited, the hidden layer left out ({len(frames)} frames, {delays})")
+    # A whole piece handed in (studio.newPiece, piece()): its layers, frames, tags and from as given; a bad one refused.
+    whole = page.evaluate("""async () => { const m = await import('/studio/studio.js');
+        const cel = (k) => { const a = new Uint8Array(4096); a.fill(k, 0, 128); return a; };
+        await m.piece({ name: 'Whole', tags: ['imported'], plays: 2, colours: [{ k: 1, hex: '#102030' }, { k: 2, hex: '#405060' }],
+          from: [{ external: true, note: 'Game art: Example', title: 'Example', platform: 'SNES' }], frames: [{ ms: 100 }, { ms: 200 }],
+          layers: [{ name: 'Back', moves: true, cels: [cel(1), cel(2)] }, { name: 'Hid', moves: false, hide: true, cels: [cel(2)] }] });
+        let bad; try { await m.piece({ frames: [{ ms: 0 }] }); bad = 'taken'; } catch (e) { bad = e.message; }
+        return bad; }""")
+    page.mouse.click(*s_at(page, 64, 20))
+    s_kept(page)
+    w = page.evaluate(S_STORE, ["get", None])["r"]
+    wb = w["body"]
+    check(w["name"] == "Whole" and w["tags"] == ["imported"] and w["from"][0].get("platform") == "SNES" and wb["plays"] == 2
+          and [f["ms"] for f in wb["frames"]] == [100, 200] and [(l["name"], l["moves"], l.get("hide"), len(l["cels"])) for l in wb["layers"]] == [("Back", True, None, 2), ("Hid", False, True, 1)]
+          and all(re.fullmatch(r"[0-9a-f]{8}", x["key"]) for x in wb["frames"] + wb["layers"]) and "not a record" in whole,
+          f"/studio/ layers: a whole piece handed in keeps its layers, frames, tags and from; one that lies is refused ({whole})")
+    page.context.close()
+
+
+def studio_old_journal(browser, base: str, site: Path, errors: list[str]) -> None:
+    """An S1 draft with an S1 journal (whole colour lists, no cel named): its
+    pixels as stored, its undo history dropped once, the record untouched."""
+    page = s_page(browser, base, site, errors)
+    old = page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const px = new Uint8Array(4096); px[3] = 1;
+        const body = { w: 128, h: 32, plays: 0, palette: 'pl_00000000000070008000000000000001', colours: [{ k: 1, hex: '#f7a531' }],
+          frames: [{ key: '0000000a', ms: 5000 }], layers: [{ key: '0000000b', name: 'Drawing', moves: false, cels: [await m.packPx(px)] }] };
+        const h = await s.put(m.record('piece', 'S1 draft', body), { at: 0 });
+        await s.jot(h.id, { step: { n: 1, i: Int32Array.of(9), b: Uint16Array.of(0), a: Uint16Array.of(2),
+          cb: [{ k: 1, hex: '#f7a531' }], ca: [{ k: 1, hex: '#f7a531' }, { k: 2, hex: '#33d1ff' }] }, cur: 1 });
+        s.db.close(); localStorage.setItem('odmd.studio.last', h.id); return h; }""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.wait_for_timeout(300)
+    left = page.evaluate("""async (id) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const j = await s.steps(id), r = await s.get(id); s.db.close(); return [j.list.length, r.hash]; }""", old["id"])
+    check(s_data(page)["id"] == old["id"] and s_on(page) == {(3, 0)} and s_steps(page) == "0/0" and left == [0, old["hash"]],
+          f"/studio/ layers: an S1 draft with an S1 journal opens with its pixels as stored and no undo history ({sorted(s_on(page))}, steps {s_steps(page)}, {left[0]} steps left)")
+    # Drawn on, it is written in the form the rule asks: its plays 0 (forever) as no plays.
+    page.mouse.click(*s_at(page, 30, 30))
+    s_kept(page)
+    b = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    check("plays" not in b and "keys" not in b, f"/studio/ layers: an S1 draft's plays 0 is written as no plays at its next save ({sorted(b)})")
+    page.context.close()
+
+
+def studio_shade(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Shade: Solid, Light, Half, Heavy, for Fill and the filled shapes, anchored to the panel."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    want = {"light": lambda x, y: x % 2 == 0 and y % 2 == 0, "half": lambda x, y: (x + y) % 2 == 0,
+            "heavy": lambda x, y: not (x % 2 and y % 2), "solid": lambda x, y: True}
+    page.keyboard.press("g")
+    counts = {}
+    for name in ("light", "half", "heavy", "solid"):
+        page.click(f"#s-shade [data-shade={name}]")
+        page.mouse.click(*s_at(page, 64, 16))
+        got = s_on(page)
+        counts[name] = (len(got), got == {(x, y) for x in range(128) for y in range(32) if want[name](x, y)})
+        page.keyboard.press("Control+z")
+    check(counts == {"light": (1024, True), "half": (2048, True), "heavy": (3072, True), "solid": (4096, True)},
+          f"/studio/ shade: Light, Half, Heavy and Solid fill 1,024, 2,048, 3,072 and 4,096 of 4,096, as patterns of the panel {counts}")
+    # Two filled rectangles side by side continue one pattern (anchored at the panel's 0, 0, not each shape's).
+    page.click("#s-shade [data-shade=half]")
+    page.keyboard.press("Shift+R")
+    s_drag(page, (11, 5), (19, 14))
+    s_drag(page, (20, 5), (30, 14))
+    got = s_on(page)
+    check(got == {(x, y) for x in range(11, 31) for y in range(5, 15) if (x + y) % 2 == 0},
+          f"/studio/ shade: two filled rectangles at Half, side by side, continue one pattern ({len(got)} lit)")
+    s_new(page)
+    page.click("#s-shade [data-shade=light]")
+    page.keyboard.press("Shift+O")
+    s_drag(page, (3, 3), (21, 17))
+    lit = s_on(page)
+    page.keyboard.press("o")  # the edge: every pixel, whatever the shade
+    s_drag(page, (40, 3), (58, 17))
+    edge = s_on(page) - lit
+    check(lit and all(x % 2 == 0 and y % 2 == 0 for x, y in lit) and lit <= py_ellipse(3, 3, 21, 17, True) and edge == py_ellipse(40, 3, 58, 17),
+          f"/studio/ shade: a filled ellipse takes the shade, an edge does not ({len(lit)}, {len(edge)})")
+    seen = []
+    page.keyboard.press("g")
+    page.click("#s-shade [data-shade=solid]")
+    for _ in range(4):
+        page.keyboard.press("d")
+        seen.append(s_data(page).get("shade"))
+    vis = {}
+    for k in ("b", "g", "r", "Shift+R", "o", "Shift+O", "m"):
+        page.keyboard.press(k)
+        vis[k] = page.is_visible("#s-shade")
+    check(seen == ["light", "half", "heavy", "solid"] and vis == {"b": False, "g": True, "r": False, "Shift+R": True, "o": False, "Shift+O": True, "m": False},
+          f"/studio/ shade: D cycles the four ({seen}); shown only for Fill and the filled shapes {vis}")
+    page.context.close()
+
+
+def s_colours_ok(page: Page) -> tuple[bool, list]:
+    cs = page.evaluate(S_STORE, ["get", None])["r"]["body"]["colours"]
+    return len({c["hex"] for c in cs}) == len(cs) and len({c["k"] for c in cs}) == len(cs), cs
+
+
+def studio_two_keys(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Draw, undo, re-pick, redo, draw (and the same with a paste floating):
+    one colour, one key; the draft goes on saving."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    cyan = '#s-set .s-sw[data-hex="#33d1ff"]'
+    page.click(cyan)
+    page.mouse.click(*s_at(page, 1, 1))
+    s_kept(page)
+    page.keyboard.press("Control+z")
+    s_kept(page)
+    page.click(cyan)
+    page.keyboard.press("Control+Shift+z")
+    page.mouse.click(*s_at(page, 2, 2))
+    s_kept(page)
+    ok, cs = s_colours_ok(page)
+    check(ok and s_data(page)["saved"] == "kept" and [c["hex"] for c in cs].count("#33d1ff") == 1 and s_px(page, 1, 1) == s_px(page, 2, 2) == (0x33, 0xd1, 0xff),
+          f"/studio/ two keys: draw, undo, re-pick, redo, draw: one colour under one key, still saving ({cs}, {s_data(page)['saved']})")
+    # The same with a paste floating over the redo.
+    s_new(page)
+    page.click(cyan)
+    page.mouse.click(*s_at(page, 1, 1))
+    page.keyboard.press("m")
+    s_drag(page, (0, 0), (2, 2))
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Enter")
+    page.keyboard.press("b")
+    s_kept(page)
+    page.keyboard.press("Control+z")
+    page.click('#s-set .s-sw[data-hex="#ff4f8b"]')
+    page.click(cyan)
+    page.keyboard.press("Control+v")
+    page.keyboard.press("Control+Shift+z")
+    page.keyboard.press("Enter")
+    page.keyboard.press("b")
+    page.mouse.click(*s_at(page, 30, 20))
+    s_kept(page)
+    ok, cs = s_colours_ok(page)
+    check(ok and s_data(page)["saved"] == "kept" and [c["hex"] for c in cs] == ["#33d1ff"] and len(s_on(page)) == 3,
+          f"/studio/ two keys: the same with a paste floating over the redo: one colour, one key, still saving ({cs}, {len(s_on(page))} lit)")
+    page.context.close()
+
+
+# doc.js driven with no page controls: random draws, undos, redos, picks and
+# pastes; after each, no colour twice and no key twice; now and then the
+# journal replayed from the last record saved gives the same pixels and colours.
+S_MODEL = """async ([seed, ops]) => { const { Doc, N } = await import('/studio/doc.js'); const m = await import('/studio/store.js');
+    let r = seed >>> 0;
+    const rnd = (n) => { r = (r + 0x6d2b79f5) >>> 0; let t = Math.imul(r ^ (r >>> 15), 1 | r); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) % n; };
+    const body = { w: 128, h: 32, plays: 0, colours: [], frames: [{ key: '00000001', ms: 100 }],
+      layers: [{ key: '00000002', name: 'a', moves: false, cels: [await m.packPx(new Uint8Array(N))] }] };
+    const d = new Doc(body); await d.load();
+    let float = null; d.held = () => float;
+    const pal = [0x112233, 0x445566, 0x778899, 0xaabbcc, 0xddeeff, 0x010203, 0xf7a531];
+    let saved = { body, at: 0 }, replays = 0;
+    const bad = [];
+    const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    const save = async () => { saved = { body: await d.packed(d.snap()), at: d.low + d.cur - 1 }; };
+    for (let op = 0; op < ops; op++) {
+      const t = rnd(7);
+      try {
+        if (t === 0 || t === 1) {
+          if (float && rnd(2)) { d.begin(); const at = rnd(N - 8); float.forEach((k, j) => { if (k) d.set(at + j, k); }); float = null; }
+          else { if (!d.key) d.pickColour(pal[rnd(pal.length)]); d.begin(); for (let n = 0, c = 1 + rnd(12); n < c; n++) d.set(rnd(N), rnd(6) ? d.key : 0); }
+          const w = d.end();
+          if (w && (rnd(3) || saved.at >= w.step.n || saved.at < d.low - 1)) await save();
+        } else if (t === 2) { if (float) { float = null; d.letGo(d.key); } else await d.step(false); }
+        else if (t === 3) await d.step(true);
+        else if (t === 4) d.pickColour(pal[rnd(pal.length)]);
+        else if (t === 5) float = Uint16Array.from(d.keysFor(Array.from({ length: 1 + rnd(5) }, () => (rnd(4) ? pal[rnd(pal.length)] : 0x100000 + rnd(9)))));
+        else if (t === 6) { const w = await d.unused(); if (w) await save(); }
+      } catch (e) { bad.push(`${op}: ${e.message}`); }
+      const l = d.colourList(), vals = new Set(d.cols.values());
+      if (new Set(l.map((c) => c.hex)).size !== l.length || [...d.pending].some(([k, c]) => d.cols.has(k) || vals.has(c))) bad.push(`${op}: colours`);
+      if (op % 10 === 9 && !d.stroke) {
+        const e = await Doc.open({ hash: 'h', body: saved.body }, undefined, { list: d.steps, cur: d.low + d.cur - 1, at: saved.at, hash: 'h' });
+        if (e.said === 'dropped' || !same(e.px, d.px) || JSON.stringify(e.colourList()) !== JSON.stringify(d.colourList())) bad.push(`${op}: replay ${e.said}`);
+        replays++;
+      }
+    }
+    return { bad: bad.slice(0, 5), nbad: bad.length, replays, steps: d.steps.length, colours: d.cols.size };
+}"""
+
+S_PASTE4000 = """async () => { const { Doc, N } = await import('/studio/doc.js'); const m = await import('/studio/store.js');
+    const d = new Doc({ w: 128, h: 32, plays: 0, colours: [], frames: [{ key: '00000001', ms: 100 }],
+      layers: [{ key: '00000002', name: 'a', moves: false, cels: [await m.packPx(new Uint8Array(N))] }] });
+    await d.load();
+    for (let n = 0; n < 520; n++) { d.pickColour(0x200000 + (n % 90)); d.begin(); d.set(n, d.key); d.end(); }
+    const list = Array.from({ length: 4000 }, (_, n) => 0x400000 + n);
+    d.stats.usedBuilds = 0;
+    const t = performance.now(), ks = d.keysFor(list), ms = performance.now() - t;
+    return { steps: d.steps.length, builds: d.stats.usedBuilds, ms, distinct: new Set(ks).size, zero: ks.filter((k) => !k).length, pending: d.pending.size, cols: d.cols.size };
+}"""
+
+
+def studio_model(browser, base: str, site: Path, errors: list[str]) -> None:
+    """doc.js alone: 2,000 random operations keep the colours unique and the
+    journal replayable; a paste of 4,000 new colours over a full journal
+    gives out keys from one allocator."""
+    page = s_page(browser, base, site, errors)
+    res = [page.evaluate(S_MODEL, [seed, 2000 if seed == 1 else 700]) for seed in (1, 2, 3)]
+    check(all(x["nbad"] == 0 and x["replays"] >= 70 for x in res),
+          f"/studio/ model: 2,000 random draws, undos, redos, picks, pastes and removals (and two more runs of 700): colours unique after each, the journal replayed to the same pixels {res}")
+    p = page.evaluate(S_PASTE4000)
+    check(p["steps"] == 500 and p["builds"] == 1 and p["ms"] < 100 and p["distinct"] == 4000 and p["zero"] == 0 and p["pending"] == 4000,
+          f"/studio/ model: 4,000 new colours pasted over a 500-step journal: keys from one build of the used set, in {p['ms']:.1f} ms {p}")
+    page.context.close()
+
+
+# Hostile input for the bounded inflate: every DecompressionStream the page
+# makes counted by what it gives (whoever reads it), then cels that lie.
+S_BOMBS = """async () => { const m = await import('/studio/store.js');
+    const Real = DecompressionStream; let given = 0;
+    window.DecompressionStream = class { constructor(f) { const d = new Real(f); this.writable = d.writable;
+      this.readable = d.readable.pipeThrough(new TransformStream({ transform(c, k) { given += c.length; k.enqueue(c); } })); } };
+    const zeros = (n) => m.packPx(new Uint8Array(n));
+    const b64 = (u) => { let s = ''; for (const x of u) s += String.fromCharCode(x); return btoa(s); };
+    const raw = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+    const out = {};
+    const run = async (name, cel, n, wide) => {
+      given = 0; const t = performance.now(); let said;
+      try { const px = await m.unpackPx(cel, n, wide); said = `taken ${px.length}`; } catch (e) { said = e instanceof Error && !(e instanceof TypeError) ? e.message : `threw ${e}`; }
+      await new Promise((ok) => setTimeout(ok, 50));
+      out[name] = { said, given, kept: m.inflated?.kept ?? -1, ms: Math.round(performance.now() - t) };
+    };
+    const good = await zeros(4096), z = raw(good);
+    await run('ok', good, 4096);
+    await run('bomb 100 MB', await zeros(100 << 20), 4096);
+    await run('bomb 4 MiB, under the text cap', await zeros(4 << 20), 4096);
+    await run('bomb 8 MiB two-byte', await zeros(8 << 20), 4096, true);
+    await run('one byte short', await zeros(4095), 4096);
+    await run('one byte long', await zeros(4097), 4096);
+    await run('one-byte cel read as two', good, 4096, true);
+    await run('truncated', b64(z.subarray(0, z.length - 3)), 4096);
+    const f = z.slice(); f[2] ^= 0xff; await run('bit-flipped', b64(f), 4096);
+    await run('not base64', '!!not base64!!', 4096);
+    await run('empty', '', 4096);
+    await run('not a string', 12345, 4096);
+    await run('raw deflate, no zlib header', b64(z.subarray(2)), 4096);
+    // The hash's pixel form is bounded too: a put of a piece whose cel is a bomb.
+    given = 0;
+    const s = await m.LocalStore.open();
+    const body = { w: 128, h: 32, plays: 0, frames: [{ ms: 100 }], layers: [{ name: 'a', moves: false, cels: [await zeros(4 << 20)] }] };
+    try { await s.put(m.record('piece', 'bomb', body)); out.put = { said: 'taken', given }; } catch (e) { out.put = { said: e.message, given }; }
+    s.db.close();
+    window.DecompressionStream = Real;
+    return out;
+}"""
+
+S_OPEN_BOMB = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+    const bomb = await m.packPx(new Uint8Array(4 << 20)), id = m.newId('piece');
+    const rec = { ...m.record('piece', 'Bomb', { w: 128, h: 32, plays: 0, frames: [{ ms: 100 }], layers: [{ name: 'a', moves: false, cels: [bomb] }] }), id, hash: 'sha256-' + '0'.repeat(64), seq: 999999 };
+    const tx = s.db.transaction('records', 'readwrite'); tx.objectStore('records').put(rec);
+    await new Promise((ok) => { tx.oncomplete = ok; });
+    s.db.close(); localStorage.setItem('odmd.studio.last', id); return id; }"""
+
+
+def studio_bombs(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The hostile-input list, part 1: deflate bombs and broken cels."""
+    page = s_page(browser, base, site, errors)
+    b = page.evaluate(S_BOMBS)
+    wrong = lambda x: x["said"] in ("a picture of the wrong size", "a picture that does not read")
+    check(b["ok"]["said"] == "taken 4096", f"/studio/ hostile: a good cel reads {b['ok']}")
+    check(wrong(b["bomb 100 MB"]) and b["bomb 100 MB"]["given"] == 0,
+          f"/studio/ hostile: a cel that inflates to 100 MB is refused before a byte is inflated (its text is longer than a cel's can be) {b['bomb 100 MB']}")
+    bb = b["bomb 4 MiB, under the text cap"]
+    check(wrong(bb) and bb["kept"] <= 4097 and bb["given"] <= 256 * 1024,
+          f"/studio/ hostile: a cel that inflates to 4 MiB from text short enough to pass is refused at 4,097 bytes kept, the stream dropped after {bb['given']:,} B (one browser chunk) {bb}")
+    bw = b["bomb 8 MiB two-byte"]
+    check(wrong(bw) and bw["kept"] <= 8193 and bw["given"] <= 256 * 1024, f"/studio/ hostile: the same for a two-byte cel {bw}")
+    rest = {k: v["said"] for k, v in b.items() if k not in ("ok", "bomb 100 MB", "bomb 4 MiB, under the text cap", "bomb 8 MiB two-byte", "put")}
+    check(all(wrong(b[k]) for k in rest), f"/studio/ hostile: broken cels refused with a sentence, never a TypeError {rest}")
+    check(b["put"]["said"] != "taken" and b["put"]["given"] <= 256 * 1024, f"/studio/ hostile: a put whose cel is a bomb is refused, its hash bounded too {b['put']}")
+    # A stored draft whose cel is a bomb (written past check()): said, and a new piece opens.
+    page.evaluate(S_OPEN_BOMB)
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    check(page.is_visible("#s-err") and "damaged" in page.inner_text("#s-err") and s_data(page)["saved"] == "new",
+          f"/studio/ hostile: a stored draft whose cel is a bomb is said to be damaged, and a new piece opens ('{page.inner_text('#s-err')[:50]}')")
+    page.context.close()
+
+
+def studio_records(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Records that lie: each refused by check() with a sentence; the good ones taken."""
+    page = s_page(browser, base, site, errors)
+    r = page.evaluate("""async () => { const m = await import('/studio/store.js');
+        const cel = await m.packPx(new Uint8Array(4096));
+        const base = () => ({ ...m.record('piece', 'x', { w: 128, h: 32, plays: 0, palette: 'pl_x', colours: [{ k: 1, hex: '#123456' }],
+          frames: [{ key: '0000000f', ms: 100 }], layers: [{ key: '000000aa', name: 'a', moves: false, cels: [cel] }] }) });
+        const L = (o) => (r) => { Object.assign(r.body.layers[0], o); };
+        const F = (o) => (r) => { Object.assign(r.body.frames[0], o); };
+        const cases = {
+          'hide false': L({ hide: false }), 'hide "yes"': L({ hide: 'yes' }), 'moves "no"': L({ moves: 'no' }),
+          'a layer key twice': (r) => { r.body.layers.push({ ...r.body.layers[0] }); },
+          'a layer key the same as a frame key': L({ key: '0000000f' }),
+          'a key in capitals': L({ key: '000000AA' }), 'a key of seven digits': F({ key: '0000000' }), 'a key that is a number': F({ key: 15 }),
+          'ms 0': F({ ms: 0 }), 'ms 1.5': F({ ms: 1.5 }), 'ms 19': F({ ms: 19 }), 'ms 60001': F({ ms: 60001 }), 'ms "100"': F({ ms: '100' }), 'no ms': (r) => { delete r.body.frames[0].ms; },
+          'a layer name of 61': L({ name: 'n'.repeat(61) }), 'a layer name that is not a string': L({ name: 5 }),
+          'a cel that is a number': L({ cels: [5] }), 'two cels on a held layer': L({ cels: [cel, cel] }),
+          'a layer that is null': (r) => { r.body.layers = [null]; }, 'a frame that is null': (r) => { r.body.frames = [null]; },
+          'no frames': (r) => { r.body.frames = []; }, '257 frames': (r) => { r.body.frames = Array.from({ length: 257 }, () => ({ ms: 100 })); },
+          '17 layers': (r) => { r.body.layers = Array.from({ length: 17 }, () => ({ name: 'a', moves: false, cels: [cel] })); },
+          'plays -1': (r) => { r.body.plays = -1; }, 'plays 1.5': (r) => { r.body.plays = 1.5; }, 'keys 3': (r) => { r.body.keys = 3; },
+          'a 5 MiB piece': L({ cels: ['A'.repeat(5 << 20)] }), 'body null': (r) => { r.body = null; }, 'body an array': (r) => { r.body = []; },
+          'a colour twice': (r) => { r.body.colours.push({ k: 2, hex: '#123456' }); }, 'colour key 0': (r) => { r.body.colours[0].k = 0; },
+          'colour key 256 in a one-byte piece': (r) => { r.body.colours[0].k = 256; }, 'a colour in capitals': (r) => { r.body.colours[0].hex = '#ABCDEF'; },
+          'a colour that is null': (r) => { r.body.colours = [null]; },
+          'type constructor': (r) => { r.type = 'constructor'; }, 'type __proto__': (r) => { r.type = '__proto__'; }, 'another type\\'s id': (r) => { r.id = 'pl' + r.id.slice(2); },
+          'from naming a record without its hash': (r) => { r.from = [{ id: 'pc_' + '1'.repeat(32) }]; }, 'from of 65': (r) => { r.from = Array.from({ length: 65 }, () => ({ external: true, note: '' })); },
+          'a licence outside the list': (r) => { r.licence = 'MIT'; }, 'author null': (r) => { r.author = null; }, 'tags a string': (r) => { r.tags = 'x'; },
+          'a note of 201': (r) => { r.note = 'n'.repeat(201); }, 'rev 0': (r) => { r.rev = 0; }, 'the record null': () => null, 'the record a string': () => 'piece',
+          // review round (Fable): refs of the wrong shape, palettes with no colours, holes, the written form
+          'layer stamps 5': L({ stamps: 5 }), 'layer stamps [null]': L({ stamps: [null] }), 'layer stamps {}': L({ stamps: {} }), 'a stamp with no ref': L({ stamps: [{}] }),
+          'members 5': (r) => { r.body.members = 5; }, 'members [null]': (r) => { r.body.members = [null]; },
+          'a palette with no colours': () => ({ ...m.record('palette', 'p', {}) }), 'a palette whose colours are a string': () => ({ ...m.record('palette', 'p', { colours: 'red' }) }),
+          'keys 1 (written as no keys)': (r) => { r.body.keys = 1; }, 'colours out of key order': (r) => { r.body.colours = [{ k: 9, hex: '#000009' }, { k: 2, hex: '#000002' }]; },
+          'an empty note': (r) => { r.note = ''; }, 'frames with a hole': (r) => { r.body.frames = new Array(1); }, 'cels with a hole': L({ cels: new Array(1) }),
+          'layers with a hole': (r) => { r.body.layers = new Array(1); }, 'colours with a hole': (r) => { r.body.colours = new Array(2); }, 'tags with a hole': (r) => { r.tags = new Array(2); },
+          'from with a hole': (r) => { r.from = new Array(2); }, 'rev 1e308': (r) => { r.rev = 1e308; }, 'created an object': (r) => { r.created = {}; }, 'palette a number': (r) => { r.body.palette = 5; },
+        };
+        const out = {};
+        for (const [name, f] of Object.entries(cases)) {
+          const r = base(), r2 = f(r);
+          try { m.check(r2 === undefined ? r : r2); out[name] = 'taken'; } catch (e) { out[name] = e instanceof TypeError ? 'TypeError ' + e.message : e.message.startsWith('not a record:') ? 'refused' : e.message; }
+        }
+        const good = {};
+        const ok = (name, f) => { const r = base(); f(r); try { m.check(r); good[name] = 'taken'; } catch (e) { good[name] = e.message; } };
+        ok('as made', () => {});
+        ok('hide true', L({ hide: true }));
+        ok('a 2 MiB piece (the cap is 4 MiB)', L({ cels: ['A'.repeat(2 << 20)] }));
+        ok('no keys (pre-S1)', (r) => { delete r.body.frames[0].key; delete r.body.layers[0].key; });
+        ok('an external from with the importer\\'s keys', (r) => { r.from = [{ external: true, note: 'Game art: Example', title: 'Example', platform: 'SNES', author: 'someone', logo: true }]; });
+        ok('plays 0, as S0 and S1 drafts carry it', (r) => { r.body.plays = 0; });
+        ok('stamps as references', L({ stamps: [{ ref: 'st_' + '1'.repeat(32) }] }));
+        ok('a from naming a record with its hash and more', (r) => { r.from = [{ id: 'st_' + '1'.repeat(32), rev: 2, hash: 'sha256-' + 'a'.repeat(64), name: 'Star', author: { name: '', account: null }, licence: null }]; });
+        const big = { type: 'palette', id: m.newId('palette'), rev: 1, hash: '', name: 'p', tags: [], author: { name: '', account: null }, licence: null, from: [],
+          created: '2026-11-11T00:00:00Z', modified: '2026-11-11T00:00:00Z', body: { colours: [], source: 'x'.repeat(2 << 20) } };
+        try { m.check(big); out['a 2 MiB palette (other records stay at 1 MiB)'] = 'taken'; } catch (e) { out['a 2 MiB palette (other records stay at 1 MiB)'] = 'refused'; }
+        // A record parsed from text with __proto__ and constructor keys pollutes nothing.
+        const text = JSON.stringify(base()).replace('{"type"', '{"__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":1}},"type"');
+        let parsed; try { m.check(JSON.parse(text)); parsed = 'taken'; } catch (e) { parsed = e.message; }
+        // put(): what check() refuses is refused before any picture is inflated, and nothing is stored;
+        // a cel of the wrong length is refused (the length is known as it is hashed).
+        const s = await m.LocalStore.open('smoke-put-' + Math.random().toString(36).slice(2));
+        const Real = DecompressionStream; let streams = 0;
+        window.DecompressionStream = function (f) { streams++; return new Real(f); };
+        const puts = {};
+        const tryPut = async (name, f) => { const r = base(); f(r); streams = 0; let said;
+          try { await s.put(r); said = 'taken'; } catch (e) { said = e.message; } puts[name] = { said, streams, stored: !!(await s.get(r.id)) }; };
+        await tryPut('stamps 5', L({ stamps: 5 }));
+        await tryPut('257 frames of distinct cels', (r) => { r.body.frames = Array.from({ length: 257 }, () => ({ ms: 100 })); r.body.layers[0].moves = true; r.body.layers[0].cels = Array(257).fill(cel); });
+        { const r = base(); r.body.layers[0].cels = [await m.packPx(new Uint8Array(4095))]; streams = 0; let said;
+          try { await s.put(r); said = 'taken'; } catch (e) { said = e.message; } puts['a cel of 4,095 bytes'] = { said, streams, stored: !!(await s.get(r.id)) }; }
+        { const many = []; const a = new Uint8Array(64); for (let i = 0; i < 4400; i++) { a[0] = i & 255; a[1] = i >> 8; many.push({ px: await m.packPx(a) }); }
+          const r = base(); r.body.extra = many; streams = 0; const t = performance.now(); let said;
+          try { await s.put(r); said = 'taken'; } catch (e) { said = e.message; } puts['4,400 pictures in an unknown field'] = { said, streams, stored: !!(await s.get(r.id)), ms: Math.round(performance.now() - t) }; }
+        window.DecompressionStream = Real;
+        s.db.close();
+        const pb = base().body, pp = JSON.parse(JSON.stringify(pb).replace('{', '{"__proto__":5,'));
+        let proto; try { proto = (await m.hashOf(pb)) !== (await m.hashOf(pp)) ? 'two hashes' : 'one hash'; } catch (e) { proto = e.message; }
+        return { out, good, parsed, puts, proto, polluted: ({}).polluted !== undefined || Object.prototype.polluted !== undefined };
+    }""")
+    refused = {k: v for k, v in r["out"].items() if v != "refused"}
+    check(not refused, f"/studio/ hostile: {len(r['out'])} records that lie, each refused by check() with a sentence ({refused or 'all refused'})")
+    pu = r["puts"]
+    check(pu["stamps 5"]["said"].startswith("not a record") and pu["stamps 5"]["streams"] == 0 and not pu["stamps 5"]["stored"]
+          and pu["257 frames of distinct cels"]["said"].startswith("not a record") and pu["257 frames of distinct cels"]["streams"] == 0
+          and pu["a cel of 4,095 bytes"]["said"] == "a picture of the wrong size" and not pu["a cel of 4,095 bytes"]["stored"]
+          and pu["4,400 pictures in an unknown field"]["said"] == "too many pictures" and pu["4,400 pictures in an unknown field"]["streams"] <= 4352
+          and not any(v["stored"] for v in pu.values()) and r["proto"] == "two hashes",
+          f"/studio/ hostile: put() checks before it hashes (nothing inflated for what check() refuses), refuses a cel of the wrong length and more pictures than a piece holds, stores none of them; an own __proto__ is a key like any {pu} {r['proto']}")
+    check(all(v == "taken" for v in r["good"].values()) and not r["polluted"],
+          f"/studio/ hostile: the good ones taken (hide true, a 2 MiB piece, no keys, an external from with title, platform, author and logo, a from with its hash); nothing polluted {r['good']} {r['parsed']}")
+    page.context.close()
+
+
+def studio_journals(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Journals that lie: each dropped at open, the piece as its record says."""
+    page = s_page(browser, base, site, errors)
+    j = page.evaluate("""async () => { const { Doc, N } = await import('/studio/doc.js'); const m = await import('/studio/store.js');
+        const px = new Uint8Array(N); px[7] = 1;
+        const rec = { hash: 'h', body: { w: 128, h: 32, plays: 0, colours: [{ k: 1, hex: '#123456' }], frames: [{ key: '0000000f', ms: 100 }],
+          layers: [{ key: '000000aa', name: 'a', moves: false, cels: [await m.packPx(px)] }] } };
+        const step = (o = {}) => ({ n: 1, l: '000000aa', f: '0000000f', i: Int32Array.of(9), b: Uint16Array.of(0), a: Uint16Array.of(1), ...o });
+        const cases = {
+          'an index past the panel': [step({ i: Int32Array.of(4096) })], 'a negative index': [step({ i: Int32Array.of(-1) })],
+          'indices as a plain array': [step({ i: [9] })], 'keys as a plain array': [step({ a: [1] })], 'lengths that differ': [step({ b: Uint16Array.of(0, 0) })],
+          'a layer it does not have': [step({ l: '000000ab' })], 'a frame it does not have': [step({ f: '0000000e' })],
+          'a colour delta with a bad colour': [step({ c: { add: [{ k: 2, hex: 'red' }], del: [] } })], 'a colour delta of key 0': [step({ c: { add: [{ k: 0, hex: '#000000' }], del: [] } })],
+          'a colour delta with no del': [step({ c: { add: [] } })], 'S1 colour lists': [{ n: 1, cb: [], ca: [{ k: 2, hex: '#00ff00' }] }],
+          'a body step with a short cel list': [{ n: 1, body: { b: rec.body, a: { ...rec.body, layers: [{ name: 'a', moves: true, cels: [] }] } } }],
+          'a body step that is null': [{ n: 1, body: null }], 'steps not back to back': [step(), step({ n: 3 })], 'a step that is null': [null],
+          'a step n that is a string': [step({ n: '1' })],
+          'a colour delta listing a colour twice': [step({ a: Uint16Array.of(2), c: { add: [{ k: 2, hex: '#123456' }], del: [] } })],
+          'a pixel of a key with no colour': [step({ a: Uint16Array.of(9999) })],
+          'a body step to ms 0': [{ n: 1, body: { b: rec.body, a: { ...rec.body, frames: [{ key: '0000000f', ms: 0 }] } } }],
+          'a body step to w 999': [{ n: 1, body: { b: rec.body, a: { ...rec.body, w: 999 } } }],
+          'a body step to hide false': [{ n: 1, body: { b: rec.body, a: { ...rec.body, layers: [{ ...rec.body.layers[0], hide: false }] } } }],
+          'a body step to a colour twice': [{ n: 1, body: { b: rec.body, a: { ...rec.body, colours: [{ k: 1, hex: '#123456' }, { k: 2, hex: '#123456' }] } } }], 'a step with a cel that does not read': [{ n: 1, body: { b: rec.body, a: { ...rec.body, layers: [{ name: 'a', moves: false, cels: ['!!'] }] } } }],
+        };
+        const out = {};
+        for (const [name, list] of Object.entries(cases)) {
+          try { const d = await Doc.open(rec, undefined, { list, cur: list.length, at: 0, hash: 'h' }); out[name] = d.said === 'dropped' && d.px[7] === 1 && d.px[9] === 0 && !d.steps.length ? 'dropped' : `kept (${d.said})`; }
+          catch (e) { out[name] = 'threw ' + e.message; }
+        }
+        for (const [name, j] of Object.entries({ 'at past the steps': { at: 5, cur: 1 }, 'cur past the steps': { at: 0, cur: 5 }, 'another record\\'s hash': { at: 0, cur: 1, hash: 'x' } })) {
+          const d = await Doc.open(rec, undefined, { list: [step()], hash: 'h', ...j });
+          out[name] = d.said === 'dropped' && !d.steps.length ? 'dropped' : `kept (${d.said})`;
+        }
+        const d = await Doc.open(rec, undefined, { list: [step()], cur: 1, at: 0, hash: 'h' });
+        return { out, good: d.said === 'moved' && d.px[9] === 1 };
+    }""")
+    kept = {k: v for k, v in j["out"].items() if v != "dropped"}
+    check(not kept and j["good"], f"/studio/ hostile: {len(j['out'])} journals that lie, each dropped at open with the piece as stored; a good one replayed ({kept or 'all dropped'})")
+    check(not page.evaluate("window.__csp || []"), "/studio/ hostile: no CSP violation")
+    page.context.close()
+
+
+# --- the review round (Fable's red team on studio-s2-doc): each reproduction a check ---
+S_REC = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const d = document.getElementById('studio').dataset;
+    const r = await s.get(d.id); const j = await s.steps(d.id); s.db.close(); if (!r) return null;
+    const px = await m.unpackPx(r.body.layers[0].cels[0], 4096, r.body.keys === 2), on = {};
+    px.forEach((k, i) => { if (k) on[`${i % 128},${(i / 128) | 0}`] = k; });
+    return { saved: d.saved, colours: r.body.colours, on, body: r.body, hash: r.hash, j: { n: j.list.length, cur: j.cur, at: j.at, hash: j.hash } }; }"""
+
+
+def s_canvas(page: Page) -> dict:
+    return page.evaluate("""() => { const c = document.getElementById('s-canvas').getContext('2d').getImageData(0, 0, 128, 32).data, on = {};
+        for (let i = 0; i < 4096; i++) if (c[i * 4] || c[i * 4 + 1] || c[i * 4 + 2]) on[`${i % 128},${(i / 128) | 0}`] = '#' + [c[i * 4], c[i * 4 + 1], c[i * 4 + 2]].map((x) => x.toString(16).padStart(2, '0')).join(''); return on; }""")
+
+
+def studio_paste_redo(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A redo under a floating paste never takes away a colour the paste holds
+    (Remove unused redone; a snapshot restore redone): no pixel without a colour."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    page.mouse.click(*s_at(page, 10, 10))
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    page.mouse.click(*s_at(page, 12, 10))
+    page.keyboard.press("m")
+    s_drag(page, (12, 10), (13, 11))
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Delete")
+    s_kept(page)
+    page.click("#s-unused")
+    page.wait_for_timeout(300)
+    s_kept(page)
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+v")
+    page.keyboard.press("Control+y")
+    under = s_canvas(page)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    s_kept(page)
+    r = page.evaluate(S_REC)
+    listed = {c["k"] for c in r["colours"]}
+    orphans = {xy: k for xy, k in r["on"].items() if k not in listed}
+    check(not orphans and "#33d1ff" in under.values() and r["saved"] == "kept" and "#33d1ff" in s_canvas(page).values(),
+          f"/studio/ review: Remove unused redone under a floating paste keeps the paste's colour; put down, no pixel without a colour ({orphans}, {r['colours']})")
+    d = page.evaluate("""async () => { const { Doc, N } = await import('/studio/doc.js'); const m = await import('/studio/store.js');
+        const px = new Uint8Array(N); px[0] = 1; px[1] = 2;
+        const z = await m.packPx(px), z1 = await m.packPx(Uint8Array.from(px, (k) => (k === 1 ? 1 : 0)));
+        const body = (cels, colours) => ({ w: 128, h: 32, colours, frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'L', moves: false, cels }] });
+        const A = { k: 1, hex: '#102030' }, C = { k: 2, hex: '#33d1ff' };
+        const d = await Doc.open({ hash: 'h', body: body([z], [A, C]) }, undefined, null);
+        let fl = null; d.held = () => fl;
+        await d.restore(body([z1], [A]));            // C out of the piece
+        await d.step(false);                          // undone: C back
+        fl = Uint16Array.from(d.keysFor([0x33d1ff])); // a paste of C, under its key
+        const w = d.step(true); if (w) await w;       // the restore redone, the paste floating
+        const held = d.rgbOf(fl[0]);
+        d.begin(); d.set(100, fl[0]); fl = null; d.end();
+        return { held: held.toString(16), cols: d.colourList(), px100: d.px[100] }; }""")
+    check(d["held"] == "33d1ff" and {"k": d["px100"], "hex": "#33d1ff"} in d["cols"],
+          f"/studio/ review: a snapshot restore redone under a floating paste keeps the paste's colour {d}")
+    page.context.close()
+
+
+def studio_keyless_restore(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A snapshot with no layer or frame keys (written before keys) restored,
+    drawn on, undone twice, redone twice: the same keys each way."""
+    page = s_page(browser, base, site, errors)
+    out = page.evaluate("""async () => { const m = await import('/studio/store.js'), { Doc, N } = await import('/studio/doc.js');
+        const z = await m.packPx(new Uint8Array(N));
+        const keyed = { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }], frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'L', moves: false, cels: [z] }] };
+        const keyless = { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }], frames: [{ ms: 100 }], layers: [{ name: 'L', moves: false, cels: [z] }] };
+        const d = await Doc.open({ hash: 'h', body: keyed }, (b) => b.colours, null); d.key = 1;
+        await d.restore(keyless); d.begin(); d.set(5, 1); d.end();
+        const log = [];
+        for (const fwd of [false, false, true, true]) { try { const w = d.step(fwd); if (w) await w; log.push('ok'); } catch (e) { log.push(e.message); } }
+        return { log, steps: `${d.cur}/${d.steps.length}`, px5: d.px[5] }; }""")
+    check(out["log"] == ["ok"] * 4 and out["steps"] == "2/2" and out["px5"] == 1,
+          f"/studio/ review: a keyless snapshot restored, drawn on, undone twice and redone twice {out}")
+    page.context.close()
+
+
+def studio_bad_palette(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A palette with no colours is refused; one already stored (written past
+    check()) is left out, and a piece that names it still opens and saves."""
+    page = s_page(browser, base, site, errors)
+    said = page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const p = m.record('palette', 'Empty', {}); let e; try { await s.put(p); e = 'taken'; } catch (x) { e = x.message; }
+        const q = { ...m.record('palette', 'Empty too', {}), hash: 'sha256-' + '0'.repeat(64), seq: 999998 };
+        await new Promise((ok) => { const tx = s.db.transaction('records', 'readwrite'); tx.objectStore('records').put(q); tx.oncomplete = ok; });
+        const px = new Uint8Array(4096); px[3] = 1;
+        const h = await s.put(m.record('piece', 'Names it', { w: 128, h: 32, palette: q.id, colours: [{ k: 1, hex: '#f7a531' }],
+          frames: [{ key: '0000000a', ms: 5000 }], layers: [{ key: '0000000b', name: 'D', moves: false, cels: [await m.packPx(px)] }] }));
+        s.db.close(); localStorage.setItem('odmd.studio.last', h.id); return [e, h.id]; }""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.mouse.click(*s_at(page, 20, 20))
+    s_kept(page)
+    opts = page.eval_on_selector_all("#s-pal option", "els => els.map(e => e.textContent)")
+    check(said[0] == "not a record: colours" and s_data(page)["id"] == said[1] and s_on(page) == {(3, 0), (20, 20)}
+          and "Empty too" not in opts and page.is_hidden("#s-err"),
+          f"/studio/ review: a palette with no colours is refused ({said[0]}); one stored anyway is left out, and the piece naming it opens and saves")
+    page.context.close()
+
+
+def studio_orphan_keys(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A two-byte piece of 255 colours or fewer holding a key no colour has
+    (300): it opens with that pixel off, saves one byte a pixel, downloads."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const k = new Uint16Array(4096); k[5] = 300; k[6] = 1;
+        const h = await s.put(m.record('piece', 'Orphan key', { w: 128, h: 32, keys: 2, colours: [{ k: 1, hex: '#f7a531' }],
+          frames: [{ key: '0000000a', ms: 5000 }], layers: [{ key: '0000000b', name: 'D', moves: false, cels: [await m.packPx(k, true)] }] }));
+        s.db.close(); localStorage.setItem('odmd.studio.last', h.id); }""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.mouse.click(*s_at(page, 40, 10))
+    s_kept(page)
+    r = page.evaluate(S_REC)
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#s-gif")
+    im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+    check(r["saved"] == "kept" and "keys" not in r["body"] and r["on"] == {"6,0": 1, "40,10": 1} and im.size == (128, 32),
+          f"/studio/ review: a key with no colour (300) in a two-byte piece of one colour opens as off, saves one byte a pixel and downloads ({r['on']}, keys {r['body'].get('keys')})")
+    # Not back through the cache of read cels: a snapshot restored and undone, then a new colour (the lowest free key);
+    # and a snapshot whose own cel has a key with no colour.
+    o = page.evaluate("""async () => { const m = await import('/studio/store.js'), { Doc, N } = await import('/studio/doc.js');
+        const a = new Uint8Array(N); a[5] = 2; a[6] = 1;
+        const body = { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }], frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'L', moves: false, cels: [await m.packPx(a)] }] };
+        const blank = { ...body, layers: [{ ...body.layers[0], cels: [await m.packPx(new Uint8Array(N))] }] };
+        const d = await Doc.open({ hash: 'h', body }, (b) => b.colours, null);
+        const opened = d.px[5];
+        await d.restore(blank); const w = d.step(false); if (w) await w;
+        const undone = d.px[5];
+        const k = d.pickColour(0xff0000); d.begin(); d.set(100, k); d.end();
+        const d2 = await Doc.open({ hash: 'h', body: blank }, (b) => b.colours, null);
+        await d2.restore(body);
+        return { opened, undone, newKey: k, after: d.px[5], restored: d2.px[5] }; }""")
+    check(o["opened"] == 0 and o["undone"] == 0 and o["after"] == 0 and o["restored"] == 0,
+          f"/studio/ review: a key with no colour stays off through a restore and its undo, a new colour after it, and a restored snapshot of its own {o}")
+    page.context.close()
+
+
+def studio_lost_steps(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Undo, new strokes, and the tab killed inside the autosave's wait: the
+    reopened draft is what was stored, and redo makes no picture that never was."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: errors.append(f"[studio] pageerror: {e}"))
+    page.add_init_script("document.addEventListener('visibilitychange', (e) => e.stopImmediatePropagation(), true)")
+    page.goto(f"{base}/studio/")
+    page.wait_for_selector(S_READY, timeout=30000)
+    s_blur(page)
+    for x in (10, 20, 30):
+        page.mouse.click(*s_at(page, x, 5))
+    s_kept(page)
+    stored = set(page.evaluate(S_REC)["on"])
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    page.mouse.click(*s_at(page, 50, 20))
+    page.mouse.click(*s_at(page, 60, 20))
+    page.wait_for_timeout(120)  # the journal written, the save (400 ms on) not yet
+    j = page.evaluate(S_REC)["j"]
+    page.close()
+    page = ctx.new_page()
+    page.goto(f"{base}/studio/")
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.wait_for_timeout(500)
+    s_blur(page)
+    opened = set(s_canvas(page))
+    seen = [opened]
+    for k in ("Control+z", "Control+z", "Control+z", "Control+y", "Control+y", "Control+y"):
+        page.keyboard.press(k)
+        page.wait_for_timeout(100)
+        seen.append(set(s_canvas(page)))
+    lived = [{"10,5", "20,5", "30,5"}, {"10,5", "20,5"}, {"10,5"}, set(), {"10,5", "50,20"}, {"10,5", "50,20", "60,20"}]
+    check(j["hash"] is None and opened == stored and all(v in lived for v in seen),
+          f"/studio/ review: steps written below where the stored record stands mark its journal not that record's; reopened, the draft is as stored and undo and redo show only pictures that were ({j}, {[sorted(v) for v in seen]})")
+    ctx.close()
+
+
+def studio_garbage_drafts(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Records in the store that are not records (written past check()): the
+    drafts list draws, the Studio starts, markup in a name stays text."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const z = await m.packPx(new Uint8Array(4096));
+        const body = () => ({ w: 128, h: 32, colours: [{ k: 1, hex: '#f7a531' }], frames: [{ key: '0000000a', ms: 5000 }], layers: [{ key: '0000000b', name: 'D', moves: false, cels: [z] }] });
+        const env = (o) => ({ ...m.record('piece', 'G', body()), hash: 'sha256-' + '0'.repeat(64), seq: 1, ...o });
+        const recs = [env({ body: null }), env({ body: { frames: 5, layers: 'x' } }), env({ name: { toString: 5 }, modified: {} }), env({ name: undefined, tags: undefined, modified: undefined }),
+          env({ body: { ...body(), colours: 'red' } }), env({ modified: '9999-99-99', name: '<img src=x onerror="window.__xss=1">' })];
+        await new Promise((ok) => { const tx = s.db.transaction('records', 'readwrite'); for (const r of recs) tx.objectStore('records').put(r); tx.oncomplete = ok; });
+        s.db.close(); localStorage.setItem('odmd.studio.last', recs[2].id); }""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.wait_for_timeout(300)
+    n = page.eval_on_selector_all("#s-list li", "els => els.length")
+    page.mouse.click(*s_at(page, 4, 4))
+    s_kept(page)
+    check(n >= 6 and not page.evaluate("window.__xss || 0") and s_data(page)["saved"] == "kept",
+          f"/studio/ review: records that are not records are listed (never trusted), the Studio starts and saves, a name's markup stays text ({n} listed)")
+    page.context.close()
+
+
+def studio_starter_times(site: Path) -> None:
+    """Every starter template's frames last 20 to 60,000 ms (a still 5,000), as check() asks of a piece."""
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    times = {r["name"]: [f["ms"] for f in r["body"]["frames"]] for r in pack["records"] if r["type"] == "template"}
+    check(times and all(20 <= ms <= 60000 for t in times.values() for ms in t),
+          f"/studio/ review: the starter templates' frame times are 20 to 60,000 ms {times}")
+
+
+def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
+    """web-size fails on a file in studio/ that is on no budget line."""
+    with tempfile.TemporaryDirectory() as t:
+        share = Path(t) / "share"
+        shutil.copytree(ROOT / "opendmd-web/share", share)
+        clean = subprocess.run(["uv", "run", str(web_size), str(ROOT / "opendmd-web/www-dist"), "--share", str(share)], capture_output=True, text=True)
+        (share / "studio/stray.js").write_text("export const x = 1;\n")
+        stray = subprocess.run(["uv", "run", str(web_size), str(ROOT / "opendmd-web/www-dist"), "--share", str(share)], capture_output=True, text=True)
+    check(clean.returncode == 0 and stray.returncode != 0 and "UNLISTED studio/stray.js" in stray.stdout,
+          f"/studio/ budget: web-size passes the tree and fails a stray studio/stray.js ({clean.returncode}, {stray.returncode})")
 
 
 def create_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
@@ -3456,6 +4228,23 @@ def main() -> int:
             studio_rename_tabs(browser, base, a.site, errors)
             studio_edges(browser, base, a.site, errors)
             studio_phone(browser, base, a.site, errors)
+            studio_fetches(browser, base, a.site, errors)
+            studio_layers(browser, base, a.site, errors)
+            studio_old_journal(browser, base, a.site, errors)
+            studio_shade(browser, base, a.site, errors)
+            studio_two_keys(browser, base, a.site, errors)
+            studio_model(browser, base, a.site, errors)
+            studio_bombs(browser, base, a.site, errors)
+            studio_records(browser, base, a.site, errors)
+            studio_journals(browser, base, a.site, errors)
+            studio_budget(a.site)
+            studio_paste_redo(browser, base, a.site, errors)
+            studio_keyless_restore(browser, base, a.site, errors)
+            studio_bad_palette(browser, base, a.site, errors)
+            studio_orphan_keys(browser, base, a.site, errors)
+            studio_lost_steps(browser, base, a.site, errors)
+            studio_garbage_drafts(browser, base, a.site, errors)
+            studio_starter_times(a.site)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -3480,6 +4269,23 @@ def main() -> int:
         studio_rename_tabs(browser, base, a.site, errors)
         studio_edges(browser, base, a.site, errors)
         studio_phone(browser, base, a.site, errors)
+        studio_fetches(browser, base, a.site, errors)
+        studio_layers(browser, base, a.site, errors)
+        studio_old_journal(browser, base, a.site, errors)
+        studio_shade(browser, base, a.site, errors)
+        studio_two_keys(browser, base, a.site, errors)
+        studio_model(browser, base, a.site, errors)
+        studio_bombs(browser, base, a.site, errors)
+        studio_records(browser, base, a.site, errors)
+        studio_journals(browser, base, a.site, errors)
+        studio_budget(a.site)
+        studio_paste_redo(browser, base, a.site, errors)
+        studio_keyless_restore(browser, base, a.site, errors)
+        studio_bad_palette(browser, base, a.site, errors)
+        studio_orphan_keys(browser, base, a.site, errors)
+        studio_lost_steps(browser, base, a.site, errors)
+        studio_garbage_drafts(browser, base, a.site, errors)
+        studio_starter_times(a.site)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
