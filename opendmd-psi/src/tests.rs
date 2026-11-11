@@ -3946,3 +3946,18 @@ fn header_words_in_functions_and_the_settings_sheet() {
     assert!(compile(&got).is_ok(), "{got}");
     assert_eq!(got.matches("name").count(), 1);
 }
+
+/// `phase` as a function's value or a draw loop's counter is that (they
+/// were names before `phase` was a built-in).
+#[test]
+fn phase_as_a_parameter_or_a_counter_is_that() {
+    assert_eq!(psb_of("fn f(phase) = phase*2\ngray(f(x))"), psb_of("fn f(v) = v*2\ngray(f(x))"));
+    assert_eq!(
+        psb_of("draw { for phase < 4 { dot(phase*8, 3) } }\ngray(ink)"),
+        psb_of("draw { for k < 4 { dot(k*8, 3) } }\ngray(ink)")
+    );
+    assert_eq!(
+        psb_of("scene s when y > 0.5 { phase = 0.5 }\ngray(phase)"),
+        psb_of("scene s when y > 0.5 { p = 0.5 }\ngray(p)")
+    );
+}
