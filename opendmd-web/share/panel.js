@@ -69,8 +69,8 @@ export function handOff(a, hash, ready, msg) {
   const on = (e) => {
     if (e.source !== w || e.origin !== panel || e.data?.type !== ready) return;
     removeEventListener('message', on);
-    // (`msg` may be a function of what the app said: null sends nothing.)
-    Promise.resolve(typeof msg == 'function' ? msg(e.data) : msg).then((m) => m && w.postMessage(m.data, panel, m.transfer || []));
+    // (`msg` may be a function of what the app said and its window: null sends nothing.)
+    Promise.resolve(typeof msg == 'function' ? msg(e.data, w) : msg).then((m) => m && w.postMessage(m.data, panel, m.transfer || []));
   };
   addEventListener('message', on);
   setTimeout(() => removeEventListener('message', on), 120000);

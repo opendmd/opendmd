@@ -7313,6 +7313,14 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
         page.wait_for_timeout(500)
         cap = page.inner_text("#psi-ed-cap")
         check("Every refresh (about 125 a second on your panel)" in cap, f"formulas: the caption counts the measured refresh, 8,000 us ({cap!r})")
+        # A `smooth` one past the 32 ms every refresh allows: opened every 2nd
+        # refresh, and started slower still (the governor), said so.
+        noises = " + ".join(f"noise(x*{k}, y, t)" for k in range(9))
+        page.fill("#psi-src", f"smooth\nloop 2\ngray({noises})")
+        page.wait_for_timeout(600)
+        cap = page.inner_text("#psi-ed-cap")
+        check(cap.startswith("Loops every 2 s · Every 2nd refresh (about 63 a second on your panel): too heavy to draw every refresh, so the panel starts it at every")
+              and "faster once it can" in cap, f"formulas: a smooth one too heavy for every refresh, said as the panel plays it ({cap!r})")
         page.context.close()
     finally:
         get_json(base + "/mock/refresh?hz=100")

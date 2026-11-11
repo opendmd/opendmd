@@ -115,8 +115,6 @@ async function start() {
   }
   changed();
   const say = (t) => { $('f-cap').hidden = !t; $('f-cap').textContent = t || ''; };
-  // `phase` read, or `smooth` alone on its line (OpenDMD 1.1's words), unless the formula sets its own.
-  const NEW = (s) => /(?<![\w.])phase\b|(^|;)[ \t]*smooth[ \t]*(;|$)/m.test(s) && !/(^|;)[ \t]*(phase|smooth)[ \t]*=[^=]/m.test(s);
   const OLD = 'Your panel’s web app is older than OpenDMD 1.1, and doesn’t know phase or smooth: update the panel (its Settings › Update), then press Open on my panel again.';
 
   // Open on my panel: the address asked once, then remembered (../panel.js).
@@ -130,8 +128,11 @@ async function start() {
     if (ref?.gallery && x.src === orig) { location.href = `http://${a}/#gallery=${ref.gallery}${v ? '&' + v : ''}`; return; }
     // Its app says it is ready (once it has loaded): the Formula, to that window only.
     const data = { type: REMIX, name: x.ctl?.name || x.name || '', src: x.src, a: x.a, b: x.b, c: x.c };
-    // A panel's app from before OpenDMD 1.1 (no `feat`) can't compile `phase` or `smooth`: asked to update instead.
-    const send = (r) => (!r.feat && NEW(x.src.replace(/(--|\/\/).*/g, '')) ? (say(OLD), null) : { data });
+    // The compiler level it needs (this site's compiler says: pkg-psi info()[18], 1 for the built-in `phase` or
+    // a `smooth` line) against the panel's app's (`feat`, none before OpenDMD 1.1): short, its window closed (we
+    // opened it) and an update asked for here, instead of a refusal there.
+    const need = ed.P.compile(x.src) ? ed.P.info()[18] || 0 : 0;
+    const send = (r, w) => ((r.feat || 0) >= need ? { data } : (w.close(), say(OLD), null));
     if (!handOff(a, 'remix', READY, send)) say('Your browser didn’t open the display’s web app: allow pop-ups for opendmd.dev, then press Open on my panel again.');
   }
   const { ask } = addressForm('f', go, 'formula');

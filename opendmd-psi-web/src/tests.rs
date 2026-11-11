@@ -38,7 +38,8 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
-    assert_eq!(i.len(), 18);
+    assert_eq!(i.len(), 19);
+    assert_eq!(i[18], 0, "nothing of OpenDMD 1.1's");
     assert_eq!(i[17], 20, "opens at the default 20 ms");
     assert_eq!(i[15], 1, "the JIT takes it");
     assert_eq!(i[16], opendmd_psi::PANEL_MAX_US, "the panel's limit: 40 ms at 50 fps");
@@ -54,6 +55,26 @@ fn formulas() {
     let heavy = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
     assert!(compile(&format!("smooth\ngray({heavy})")));
     assert_eq!(info()[17], 20, "past 32 ms: opens every 2nd refresh");
+    // The compiler level it needs: 1 for the built-in `phase` or a `smooth`
+    // line, 0 for a formula of its own names (strings, controls, a
+    // function's value, a counter, a value called `phase` or `smooth`).
+    for (src, want) in [
+        ("loop 4\ngray(phase)", 1),
+        ("smooth\ngray(x)", 1),
+        ("loop 2; smooth; gray(x)", 1),
+        ("fps 100\ngray(x)", 0),
+        ("name \"phase\"\ngray(x)", 0),
+        ("control phase 0..1 = 0.5\ngray(phase)", 0),
+        ("fn f(phase) = phase*2\ngray(f(x))", 0),
+        ("draw { for phase < 4 { dot(phase*8, 3) } }\ngray(ink)", 0),
+        ("phase = x\ngray(phase)", 0),
+        ("smooth = x\nsmooth", 0),
+        ("gray(moon.phase)", 0),
+        ("-- phase and smooth\ngray(x)", 0),
+    ] {
+        assert!(compile(src), "{src}");
+        assert_eq!(info()[18], want, "{src}");
+    }
     assert!(compile("look\nlayer multiply { gray(x) }"));
     assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 

@@ -485,24 +485,32 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     page.context.close()
 
     # `phase` or `smooth` to a panel from before 1.1 (its app says no `feat`):
-    # not sent, and the page asks for an update; to a 1.1 one, sent.
-    for stub, new in ((PANEL_STUB, False), (PANEL_STUB_11, True)):
+    # not sent, its window closed and the page asks for an update; to a 1.1
+    # one, sent. A 1.0 Formula whose own names say phase or smooth goes to
+    # either (the site's compiler tells the built-ins from them).
+    for stub, src, ok in (
+        (PANEL_STUB, "smooth\nloop 2\ngray(frac(x + phase))", False),
+        (PANEL_STUB_11, "smooth\nloop 2\ngray(frac(x + phase))", True),
+        (PANEL_STUB, 'name "phase smooth"\ncontrol phase 0..1 = 0.5\nfn f(smooth) = smooth*2\ndraw { for k < 4 { dot(k*8, 3) } }\ngray(f(phase)*ink)', True),
+        (PANEL_STUB, "draw { for phase < 4 { dot(phase*8, 3) } }\nsmooth = ink\nsmooth", True),
+    ):
         page = new_page(browser, "laptop", errors)
         seen = []
         panel_route(page.context, seen, stub)
-        open_text(page, base, "smooth\nloop 2\ngray(frac(x + phase))", "New words")
+        open_text(page, base, src, "New words")
         page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
         with page.context.expect_page() as info:
             page.click("#f-open")
         popup = info.value
-        if new:
+        if ok:
             got = sent(popup)
-            check("phase" in got["data"].get("src", "") and page.is_hidden("#f-cap"), "/f/: phase and smooth go to a 1.1 panel")
+            check(got["data"].get("src", "").startswith(src.split("\n")[0]) and page.is_hidden("#f-cap"),
+                  f"/f/: sent to the panel ({'1.1' if stub is PANEL_STUB_11 else 'before 1.1'}): {src.splitlines()[0]!r}")
         else:
             page.wait_for_function("!document.querySelector('#f-cap').hidden", timeout=20000)
-            popup.wait_for_timeout(500)
-            check(popup.title() == "waiting" and "older than OpenDMD 1.1" in page.inner_text("#f-cap"),
-                  f"/f/: phase and smooth to an older panel: not sent, update it ({popup.title()!r}, {page.inner_text('#f-cap')!r})")
+            popup.wait_for_event("close", timeout=5000) if not popup.is_closed() else None
+            check(popup.is_closed() and "older than OpenDMD 1.1" in page.inner_text("#f-cap"),
+                  f"/f/: phase and smooth to an older panel: its window closed, update it ({page.inner_text('#f-cap')!r})")
         page.context.close()
 
     # A long formula: GitHub can't take it in an address, so the file is copied.
