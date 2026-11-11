@@ -42,7 +42,8 @@ export const LICENCES = ['CC0-1.0', 'CC-BY-4.0'];
 // Caps, set now so nothing grows without bound. `bytes` is any record's
 // JSON, `piece` a piece's (a 256-frame import of noisy video is ~1.4 MB; the
 // panel's own GIF limit is 4 MB); `layerName` a layer's name.
-export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096, members: 4096, stampFrames: 64,
+// rev: a rev that can always rise (2^31, far short of 2^53).
+export const CAPS = { rev: 2 ** 31, frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096, members: 4096, stampFrames: 64,
   layerName: 60, msMin: 20, msMax: 60000 };
 // The most bytes any pixel field holds uncompressed: a whole panel, two bytes a pixel.
 export const PX_MAX = 128 * 32 * 2;
@@ -229,7 +230,8 @@ export function check(rec) {
   if (!obj(rec)) bad('not an object');
   if (typeof rec.type !== 'string' || !Object.hasOwn(TYPES, rec.type) || typeof rec.id !== 'string' || !ID.test(rec.id)
     || rec.id.slice(0, 2) !== TYPES[rec.type]) bad('type or id');
-  if (!Number.isSafeInteger(rec.rev) || rec.rev < 1) bad('rev');
+  if (!Number.isInteger(rec.rev) || rec.rev < 1 || rec.rev > CAPS.rev) bad('rev');
+  if ('gone' in rec || 'seq' in rec || 'label' in rec) bad('the store’s own keys');
   if (typeof rec.created !== 'string' || typeof rec.modified !== 'string') bad('dates');
   if (typeof rec.name !== 'string' || rec.name.length > CAPS.name) bad('name');
   if (!arr(rec.tags) || rec.tags.length > CAPS.tags || rec.tags.some((t) => typeof t !== 'string')) bad('tags');
@@ -308,6 +310,10 @@ export function checkBody(type, b) {
   }
 }
 
+// A record's envelope as the format names it, and nothing else.
+export const ENVELOPE = ['type', 'id', 'rev', 'hash', 'name', 'tags', 'note', 'author', 'licence', 'from', 'created', 'modified', 'body'];
+export const envelope = (r) => Object.fromEntries(ENVELOPE.filter((k) => r[k] !== undefined).map((k) => [k, r[k]]));
+
 const head = (rec) => { const { body, ...h } = rec; return h; };
 
 // --- IndexedDB ---
@@ -364,10 +370,10 @@ export class LocalStore {
 
   // `at`: where the undo journal stands in what is written (LocalStore's own).
   async put(rec, { base = null, at } = {}) {
-    const { ver, ...clean } = rec;
-    // Checked before it is hashed (hashing inflates every picture), its refs
-    // before anything is written.
-    const out = { ...clean, hash: '', modified: now() };
+    // Only the envelope the format names is written (never `gone`, `seq` or
+    // a `label` from what was handed in). Checked before it is hashed
+    // (hashing inflates every picture), its refs before anything is written.
+    const out = { ...envelope(rec), hash: '', modified: now() };
     check(out);
     out.hash = await hashOf(out.body, out.type === 'piece' ? 4096 * (out.body.keys === 2 ? 2 : 1) : 0);
     check(out);
