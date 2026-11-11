@@ -3780,7 +3780,7 @@ def studio_files_more(browser, base: str, site: Path, errors: list[str]) -> None
     summary = page.inner_text("#s-fs .s-cap")
     file_add(page)
     edited = next(r for r in page.evaluate(S_ALL) if r["id"] == ids["Edited since"])
-    check(sorted(r["how"] for r in rows) == ["older", "same"] and next(r for r in rows if r["how"] == "older")["box"] is False and "1 older, 1 already here" in summary
+    check(sorted(r["how"] for r in rows) == ["older", "same"] and next(r for r in rows if r["how"] == "older")["box"] is False and ": 0 new, 0 newer, 0 as copies, 1 older, 1 already here." in summary
           and edited["rev"] == 2, f"/studio/ files more: a backup over a library that moved on: the older one skipped unless ticked, the backup pack not counted ('{summary}')")
     pal = kev(page, "const p = await K.palette('From a file'); return { id: p.id, text: K.file(p, [p]) };")
     file_open(page, pal["text"])
