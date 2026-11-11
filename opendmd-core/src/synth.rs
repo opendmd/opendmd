@@ -766,18 +766,20 @@ impl<R: Read> SynthSource<R> {
     }
 
     /// A formula on screen takes `path`'s formula in place, keeping its
-    /// clock and memory (a live edit: no transition, no restart). `None` if
-    /// this or `path` is not a formula; `Some(Err)` (`InvalidInput`, the
-    /// compiler's sentence) if it does not compile.
+    /// clock and memory (no transition, no restart): a live edit or
+    /// another Formula played over it, as `how` says (what the governor
+    /// keeps: [`crate::fx_psi::Governor::retune`]). `None` if this or
+    /// `path` is not a formula; `Some(Err)` (`InvalidInput`, the compiler's
+    /// sentence) if it does not compile.
     #[cfg(feature = "psi")]
-    pub fn retune(&mut self, path: &str) -> Option<io::Result<()>> {
+    pub fn retune(&mut self, path: &str, how: crate::fx_psi::Retune) -> Option<io::Result<()>> {
         let Spec::Fx(crate::fx::Fx::Psi(cur)) = &mut self.spec else {
             return None;
         };
         if !is_formula(path) {
             return None;
         }
-        Some(cur.retune_from(&path[FORMULA.len()..]).map_err(crate::fx_psi::io_error))
+        Some(cur.retune_from(&path[FORMULA.len()..], how).map_err(crate::fx_psi::io_error))
     }
 
     /// Start again from the first frame without reopening: a loop. A

@@ -352,10 +352,17 @@ mod with_psi {
                 return Err(PlayError::NoPlaylist);
             };
             let short = |e: &opendmd_core::psi::Error| e.msg == opendmd_core::psi::NO_MEMORY;
+            // A live edit keeps the governor's level; another Formula sent
+            // over the same GIF starts from its own estimate's.
+            let how = if live {
+                opendmd_core::fx_psi::Retune::Edit
+            } else {
+                opendmd_core::fx_psi::Retune::Play
+            };
             // Retuned in place (`None`), or built anew: at once (`Some(false)`)
             // or after the live edit was short of memory (`Some(true)`).
             let fresh = match &mut self.over {
-                Some((l, at)) if *at == ordinal => match l.retune(path) {
+                Some((l, at)) if *at == ordinal => match l.retune(path, how) {
                     Err(e) if short(&e) => Some(true),
                     r => {
                         r.map_err(|e| PlayError::BadFormula(e.msg))?;

@@ -222,6 +222,21 @@ pub fn still_held() -> u32 {
 /// 50 fps) still keeps it under 40 % of the main core.
 pub const MAX_EST_US: u32 = psi::PANEL_MAX_US;
 
+/// How another program takes the place of the one a Formula plays
+/// ([`PsiFx::retune_from`], [`FormulaLook::retune`]): what its
+/// [`Governor`] keeps ([`Governor::retune`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retune {
+    /// A live edit of the Formula on screen (the editor's changes,
+    /// `live=1` / `"live":true`): the level goes on, slower where the new
+    /// estimate says so.
+    Edit,
+    /// A different Formula played over the one on screen (`/api/play`,
+    /// "Show on panel"): it starts from its own estimate's level, slower
+    /// or faster, as it would after a GIF.
+    Play,
+}
+
 /// Keeps a formula inside the effect budget (CLAUDE.md, "Live effects":
 /// ≤ 5 ms a frame at 100 fps, else ≤ 40 % of the frame — 8 ms at 50 fps)
 /// by holding each frame for 1, 2, 4 or 8 of its frame times. Fed each
@@ -266,18 +281,32 @@ impl Governor {
         self.skip = Self::SKIP;
     }
 
-    /// Another program in place (a live edit, or a Formula played over the
-    /// one on screen): `start`, its own governor, where it starts slower;
-    /// else the level goes on (a heavier formula starts at least as slow as
-    /// its estimate says) but the mean is the new program's estimate (the
-    /// old one's mean was another program's frames). The raced frames' record (late frames
-    /// and the every-2nd-refresh hold they bring) always starts again: it
-    /// was the old program's against the scan. Kept, a hold one heavy
-    /// Formula earned held every Formula played over it to half its frame
-    /// rate for ~4,096 frames (on a test board after Endless road: Scanlines
-    /// at 1.6 ms a frame on 32 ms frames).
-    pub fn retune(&mut self, start: Governor) {
-        if start.level > self.level {
+    /// Another program in place: `start`, its own governor
+    /// ([`Governor::new`] from its estimate), and `how` it came.
+    ///
+    /// - [`Retune::Edit`], a live edit of the Formula on screen: the level
+    ///   goes on (the frames measured are evidence for the edited program
+    ///   too), but where `start` is slower it starts there (a heavier
+    ///   formula starts at least as slow as its estimate says); it speeds up
+    ///   after [`Governor::CALM`] calm frames as ever.
+    /// - [`Retune::Play`], a different Formula played over the one on
+    ///   screen: `start` entire, slower or faster. The old level described
+    ///   another program's frames: kept, a light Formula (~1-2 ms a frame)
+    ///   played over a `smooth` one with 9 noises (~35.5 ms, level 3)
+    ///   kept its level, raced at every 8th refresh, then one level faster per
+    ///   [`Governor::CALM`] frames: seconds at a fraction of its rate, often
+    ///   its whole turn (1.1.0-beta.2), where after a GIF it opens at every
+    ///   refresh.
+    ///
+    /// Either way the mean is the new program's estimate (the old one's
+    /// mean was another program's frames), and the raced frames' record
+    /// (late frames and the every-2nd-refresh hold they bring) starts
+    /// again: it was the old program's against the scan. Kept, a hold one
+    /// heavy Formula earned held every Formula played over it to half its
+    /// frame rate for ~4,096 frames (on a test board after Endless road:
+    /// Scanlines at 1.6 ms a frame on 32 ms frames).
+    pub fn retune(&mut self, start: Governor, how: Retune) {
+        if how == Retune::Play || start.level > self.level {
             *self = start;
         }
         self.avg_us = start.avg_us;
@@ -1150,12 +1179,14 @@ impl PsiFx {
     }
 
     /// Take another query's formula, sliders and frame rate in place (a
-    /// live edit on the panel, or `/api/play` of a Formula over this one):
-    /// the clock, the working memory and the governor stay — a heavier
-    /// formula starts at least as slow as its estimate says — but not the
-    /// raced frames' hold ([`Governor::retune`]). Only a program's worth
-    /// (3.4 KB) is allocated, and only while loading.
-    pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
+    /// live edit on the panel, [`Retune::Edit`], or `/api/play` of another
+    /// Formula over this one, [`Retune::Play`]): the clock and the working
+    /// memory stay. The governor's level goes on for an edit (a heavier
+    /// formula starting at least as slow as its estimate says) and starts
+    /// from the new estimate for a play; the raced frames' hold never stays
+    /// ([`Governor::retune`]). Only a program's worth (3.4 KB) is
+    /// allocated, and only while loading.
+    pub fn retune_from(&mut self, q: &str, how: Retune) -> Result<(), psi::Error> {
         let q = resolve(q)?;
         let (prog, est, delay) = compile(&q)?;
         clock_check(&prog)?;
@@ -1190,12 +1221,28 @@ impl PsiFx {
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
-        self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()));
+        self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()), how);
+        // (The emulator lane reads the start from this line.)
+        log::info!(
+            "formula: {} in place: {} ms frames (asked {})",
+            match how {
+                Retune::Edit => "edited",
+                Retune::Play => "played",
+            },
+            self.gov.delay_ms(self.ms()),
+            self.ms()
+        );
         Ok(())
     }
 
     fn ms(&self) -> u32 {
         u32::from(self.delay_ms.max(crate::fx::floor()))
+    }
+
+    /// Tests: its governor (the level a retune left, and so on).
+    #[cfg(test)]
+    pub(crate) fn governor(&self) -> &Governor {
+        &self.gov
     }
 
     /// The nominal frame time (the governor may hold frames longer).
@@ -1937,7 +1984,7 @@ impl FormulaLook {
             jit: jit::Jit::default(),
         };
         look.inputs.seed = next_seed();
-        look.set(q, est);
+        look.set(q, est, Retune::Play);
         Ok(look)
     }
 
@@ -1979,12 +2026,12 @@ impl FormulaLook {
         q.delay_ms.unwrap_or(20)
     }
 
-    fn set(&mut self, q: &Query, est: u32) {
+    fn set(&mut self, q: &Query, est: u32, how: Retune) {
         self.delay_ms = Self::delay(q);
         [self.inputs.a, self.inputs.b, self.inputs.c] = self.prog.meta().values(q.sliders);
         let est = if jit_built() { est.min(self.prog.esp32_us_jit()) } else { est };
         let g = Governor::new(est, self.ms());
-        if g.level > self.gov.level || self.t0.is_none() {
+        if g.level > self.gov.level || self.t0.is_none() || how == Retune::Play {
             self.gov = g;
         }
         self.gov.edited();
@@ -2021,9 +2068,12 @@ impl FormulaLook {
         LOOK_STATS[2].store(0, Ordering::Relaxed);
     }
 
-    /// Another formula in place (a live edit from the editor): the clock,
-    /// the buffers and the governor stay. On an error nothing changes.
-    pub fn retune(&mut self, path: &str) -> Result<(), psi::Error> {
+    /// Another formula in place (a live edit from the editor,
+    /// [`Retune::Edit`], or another Formula sent over the same GIF,
+    /// [`Retune::Play`]): the clock and the buffers stay; the governor's
+    /// level goes on for an edit (slower where the new estimate says) and
+    /// starts from the new estimate for a play. On an error nothing changes.
+    pub fn retune(&mut self, path: &str, how: Retune) -> Result<(), psi::Error> {
         let q = resolve(Self::query_of(path))?;
         let (prog, est) = Self::compile(&q)?;
         self.prog = prog;
@@ -2044,7 +2094,7 @@ impl FormulaLook {
                 .map_or(0, |_| std::mem::size_of::<psi::Ink>());
             LOOK_STATS[2].store((Self::BUFFER_BYTES + ink) as u32, Ordering::Relaxed);
         }
-        self.set(&q, est);
+        self.set(&q, est, how);
         Ok(())
     }
 
@@ -2809,8 +2859,8 @@ mod tests {
         // As a path too (what a playlist's `@formula…` line opens), and in
         // place (`retune_from`): the playing formula stays.
         let mut fx = PsiFx::from_bytes(&plain, "").unwrap();
-        assert_eq!(fx.retune_from(&path("gray(second/60)")[Q..]).err().map(|e| e.msg), Some(NEEDS_TIME.to_string()));
-        assert!(fx.retune_from(&path("gray(y)")[Q..]).is_ok());
+        assert_eq!(fx.retune_from(&path("gray(second/60)")[Q..], Retune::Edit).err().map(|e| e.msg), Some(NEEDS_TIME.to_string()));
+        assert!(fx.retune_from(&path("gray(y)")[Q..], Retune::Edit).is_ok());
         assert!(Fx::parse(&path("gray(hour/24)")).is_none());
         // A look of it likewise.
         let look = psi::build("look screen 40\ngray(minute/60)").unwrap();
@@ -2871,7 +2921,7 @@ mod tests {
         assert_eq!(played, 3000);
         // A live edit: the time goes on.
         let Fx::Psi(b) = &mut fx;
-        b.retune_from(&path("loop forever\ngray(frac(t/10))")[crate::synth::FORMULA.len() + 1..])
+        b.retune_from(&path("loop forever\ngray(frac(t/10))")[crate::synth::FORMULA.len() + 1..], Retune::Edit)
             .unwrap();
         fx.frame(Duration::ZERO, &mut c);
         assert_eq!(
@@ -3022,7 +3072,7 @@ mod tests {
         assert!(!fx.gov.note_late(true, NEAR));
         assert!(fx.gov.note_late(true, NEAR));
         assert_eq!(fx.gov.beam_frames(1), 2, "the road held");
-        fx.retune_from(&super::path(SCAN, "")[Q..]).unwrap();
+        fx.retune_from(&super::path(SCAN, "")[Q..], Retune::Play).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (20, 20));
         assert_eq!(fx.gov.beam_frames(2), 2, "every 2nd refresh: its 50 fps, not 25");
         // One late frame after the retune is not two in a window.
@@ -3030,8 +3080,120 @@ mod tests {
         assert_eq!(fx.gov.beam_frames(2), 2);
         // Heavier: its own start (about 9 ms, two noises: 40 ms frames).
         let heavy = "loop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
-        fx.retune_from(&super::path(heavy, "")[Q..]).unwrap();
+        fx.retune_from(&super::path(heavy, "")[Q..], Retune::Play).unwrap();
         assert_eq!(fx.gov.delay_ms(fx.ms()), 40);
+    }
+
+    /// The bug (1.1.0-beta.2, on a test panel): a light `smooth` Formula
+    /// (~1-2 ms a frame) played with `/api/play` over a heavy one on screen
+    /// (`smooth`, 9 noises, ~35.5 ms: level 3) kept level 3, every 8th
+    /// refresh, then sped up one level per [`Governor::CALM`] frames:
+    /// seconds at a fraction of its rate. Played over another Formula it
+    /// starts from its own estimate, as after a GIF, both ways.
+    #[test]
+    fn a_formula_played_over_another_starts_from_its_own_estimate() {
+        let heavy = Governor::new(35_500, 10);
+        let light = Governor::new(1_500, 10);
+        assert_eq!((heavy.delay_ms(10), heavy.beam_frames(1)), (80, 8));
+        assert_eq!((light.delay_ms(10), light.beam_frames(1)), (10, 1));
+        // Heavy, then light played over it: every refresh at once.
+        let mut g = heavy;
+        g.retune(light, Retune::Play);
+        assert_eq!((g.delay_ms(10), g.beam_frames(1)), (10, 1));
+        assert_eq!(g, light, "its own start entire");
+        // Light, then heavy: slow from its first frame.
+        let mut g = light;
+        g.retune(heavy, Retune::Play);
+        assert_eq!((g.delay_ms(10), g.beam_frames(1)), (80, 8));
+        // A step between: 40 ms frames on screen, a 6 ms one played over
+        // it takes its own 20, not the old level's 40.
+        let mut g = Governor::new(9_000, 10);
+        assert_eq!(g.delay_ms(10), 40);
+        g.retune(Governor::new(6_000, 10), Retune::Play);
+        assert_eq!(g.delay_ms(10), 20);
+    }
+
+    /// A live edit is the same Formula's frames: the level goes on (slower
+    /// at once where the new estimate says so) and speeds up a level per
+    /// [`Governor::CALM`] calm frames, as before.
+    #[test]
+    fn a_live_edit_keeps_the_governors_level() {
+        let heavy = Governor::new(35_500, 10);
+        let light = Governor::new(1_500, 10);
+        let mut g = heavy;
+        g.retune(light, Retune::Edit);
+        assert_eq!(
+            (g.delay_ms(10), g.beam_frames(1)),
+            (80, 8),
+            "the level goes on"
+        );
+        assert_eq!(g.avg_us(), 1_500, "the mean is the new estimate's");
+        // Its cold frames left out, then one level per CALM calm frames.
+        for _ in 0..Governor::SKIP {
+            assert!(!g.observe(1_500, 10));
+        }
+        for level in (0..Governor::MAX_LEVEL).rev() {
+            for k in 1..=Governor::CALM {
+                let changed = g.observe(1_500, 10);
+                assert_eq!(changed, k == Governor::CALM, "level {level}, frame {k}");
+            }
+            assert_eq!(g.delay_ms(10), 10 << level);
+        }
+        // Edited heavier: slower at once.
+        let mut g = light;
+        g.retune(heavy, Retune::Edit);
+        assert_eq!(g.delay_ms(10), 80);
+    }
+
+    /// The same through [`PsiFx::retune_from`]: a heavy `smooth` Formula
+    /// (9 moving noises) on screen, a light `smooth` one played over it
+    /// races every refresh at once; the other way round, slow at once; a
+    /// live edit of the heavy one to the light one keeps the heavy one's
+    /// level.
+    #[test]
+    fn a_light_formula_played_over_a_heavy_one_races_every_refresh() {
+        let noises = (1..=9)
+            .map(|k| format!("noise(x*{k}, y*{}, t*{k})", 10 - k))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let heavy = format!("smooth\nloop 4\ngray(({noises}) / 9)");
+        let light = "smooth\nloop 1\ngray(abs(x - phase) < 0.02)";
+        let open = |src: &str| PsiFx::from_query(&super::path(src, "")[Q..]).unwrap();
+        // (Its frame time asked, the governor's, and the refreshes a raced
+        // picture is held for on a test panel's 8 ms refresh: `refreshes`.)
+        const CYCLE: u32 = 8_000;
+        let level = |fx: &PsiFx| {
+            let unit = crate::scan::beam_frames(fx.ms() * 1000, CYCLE);
+            (
+                fx.ms(),
+                fx.governor().delay_ms(fx.ms()),
+                fx.governor().beam_frames(unit),
+            )
+        };
+        let est = open(&heavy).governor().avg_us();
+        assert!(est > Governor::budget_us(80), "heavy: {est} us");
+        // (Past 32 ms a `smooth` one asks every 2nd refresh: 20 ms frames,
+        // held to 8 of them, every 16th refresh, as on the panel.)
+        assert_eq!(level(&open(&heavy)), (20, 160, 16));
+        assert_eq!(level(&open(light)), (10, 10, 1));
+        // Played over: its own start.
+        let mut fx = open(&heavy);
+        fx.retune_from(&super::path(light, "")[Q..], Retune::Play)
+            .unwrap();
+        assert_eq!(level(&fx), (10, 10, 1), "every refresh, as after a GIF");
+        let mut fx = open(light);
+        fx.retune_from(&super::path(&heavy, "")[Q..], Retune::Play)
+            .unwrap();
+        assert_eq!(level(&fx), (20, 160, 16), "slow from its first frame");
+        // A live edit of the heavy one to the light one: the level goes on.
+        let mut fx = open(&heavy);
+        fx.retune_from(&super::path(light, "")[Q..], Retune::Edit)
+            .unwrap();
+        assert_eq!(
+            level(&fx),
+            (10, 80, 8),
+            "the level goes on: every 8th refresh"
+        );
     }
 
     thread_local! {
@@ -3184,7 +3346,7 @@ mod tests {
                 run(&mut fx, 0);
                 from = 60;
                 let Fx::Psi(b) = &mut fx;
-                b.retune_from(&super::path(STARS, "")[Q..]).unwrap();
+                b.retune_from(&super::path(STARS, "")[Q..], Retune::Play).unwrap();
             }
             COLD.with(|c| c.set(3));
             run(&mut fx, from);
@@ -3487,7 +3649,7 @@ mod tests {
         let mut fx = PsiFx::from_query(rest).unwrap();
         // A live edit: in place, from the bytes held now.
         crate::synth::set_sent(Some(psi::build("gray(px / 128)").unwrap()));
-        fx.retune_from(rest).unwrap();
+        fx.retune_from(rest, Retune::Edit).unwrap();
         assert!(crate::synth::title(crate::synth::SENT).is_some());
         assert!(
             crate::synth::is_sent("@formula:~sent?a=1")
@@ -3660,7 +3822,7 @@ mod tests {
         for _ in 0..10 {
             src.next_frame(&mut c).unwrap();
         }
-        src.retune(&b).unwrap().unwrap();
+        src.retune(&b, Retune::Edit).unwrap().unwrap();
         src.next_frame(&mut c).unwrap();
         // Frame 11 of the loop (t = 200 ms) of the new formula.
         let prog = psi::compile("rgb(b, y, t / 4)").unwrap();
@@ -3679,17 +3841,17 @@ mod tests {
         );
         assert!(c.as_bytes() == want.as_slice());
         let e = src
-            .retune(&super::path("gray(tme)", ""))
+            .retune(&super::path("gray(tme)", ""), Retune::Edit)
             .unwrap()
             .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), psi::psb::NOT_PSB);
-        assert!(src.retune("@power-on").is_none());
-        assert!(src.retune("@formulas").is_none());
+        assert!(src.retune("@power-on", Retune::Edit).is_none());
+        assert!(src.retune("@formulas", Retune::Edit).is_none());
         let mut clock =
             crate::synth::SynthSource::new(crate::synth::open("@power-on").unwrap()).unwrap();
         assert!(
-            clock.retune(&b).is_none(),
+            clock.retune(&b, Retune::Edit).is_none(),
             "a formula only replaces a formula"
         );
     }
@@ -4038,10 +4200,10 @@ mod tests {
         look.apply(ms(3000), &mut under, 0);
         assert!(look.held.as_ref().unwrap().out.as_bytes() == over(F, 0, &under).as_slice());
         // A live edit: the buffers and the clock stay, drawn at once.
-        look.retune(&super::path(
-            "loop 2\nlayer multiply { gray(1 - t/4) }",
-            "fps=25",
-        ))
+        look.retune(
+            &super::path("loop 2\nlayer multiply { gray(1 - t/4) }", "fps=25"),
+            Retune::Edit,
+        )
         .unwrap();
         assert!(look.is_held());
         assert_eq!(look.due(), Some(Duration::ZERO));
@@ -4049,7 +4211,7 @@ mod tests {
         let out = look.apply(ms(3010), &mut under, 0);
         assert!(out.as_bytes() == want.as_slice());
         // A bad edit changes nothing.
-        assert!(look.retune(&super::path("gray(tme)", "")).is_err());
+        assert!(look.retune(&super::path("gray(tme)", ""), Retune::Edit).is_err());
         assert!(look.is_animated());
     }
 
@@ -4084,7 +4246,7 @@ mod tests {
             panic!()
         };
         assert_eq!(fx.inputs.a, 0);
-        fx.retune_from(&super::path(src, "")[Q..]).unwrap();
+        fx.retune_from(&super::path(src, "")[Q..], Retune::Edit).unwrap();
         assert_eq!(fx.inputs.a, 5 << 15);
         // And a look.
         let look = FormulaLook::from_path(&super::path(
@@ -4266,6 +4428,24 @@ mod tests {
         );
     }
 
+    /// Over a GIF too: another Formula sent over the same GIF starts from
+    /// its own estimate, a live edit keeps the look's level.
+    #[test]
+    fn a_look_sent_over_a_look_starts_from_its_own_estimate() {
+        let heavy = "loop 4\nlayer add { gray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2), 0.2) }";
+        let light = "loop 4\nlayer add { gray(t/4, 0.2) }";
+        let open = |src: &str| FormulaLook::from_path(&super::path(src, "")).unwrap();
+        assert_eq!(open(heavy).gov.delay_ms(20), 40, "heavy: from its estimate");
+        assert_eq!(open(light).gov.delay_ms(20), 20);
+        for (how, want) in [(Retune::Play, 20), (Retune::Edit, 40)] {
+            let mut look = open(heavy);
+            // (Drawing: a look not yet drawn takes any start.)
+            look.t0 = Some(Duration::ZERO);
+            look.retune(&super::path(light, ""), how).unwrap();
+            assert_eq!(look.gov.delay_ms(20), want, "{how:?}");
+        }
+    }
+
     #[test]
     fn a_new_files_open_does_not_steer_the_look() {
         let ms = Duration::from_millis;
@@ -4406,10 +4586,10 @@ mod tests {
         assert!(p.ink.is_some());
         // To one that doesn't draw: the canvas goes; back: it comes again.
         let q = |src: &str| super::path(src, "")[Q..].to_string();
-        p.retune_from(&q("gray(x)")).unwrap();
+        p.retune_from(&q("gray(x)"), Retune::Edit).unwrap();
         assert!(p.ink.is_none());
         let src = "draw { dot(10, 10) }\ngray(ink)";
-        p.retune_from(&q(src)).unwrap();
+        p.retune_from(&q(src), Retune::Edit).unwrap();
         assert!(p.ink.is_some());
         fx.frame(Duration::from_millis(0), &mut c);
         assert_eq!(c.as_bytes(), drawn(src, 0).as_slice());
@@ -4432,10 +4612,10 @@ mod tests {
         assert_eq!(out.as_bytes(), over_prog(&psi::look::compose(STARS, "screen", 60).unwrap(), 0, &under).as_slice());
         // Retuned to a look that doesn't draw: the canvas goes.
         let plain = as_look("gray(x)", "screen", 40);
-        look.retune(&super::path(&plain, "")).unwrap();
+        look.retune(&super::path(&plain, ""), Retune::Edit).unwrap();
         assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES);
         assert!(look.held.as_ref().unwrap().ink.is_none());
-        look.retune(&super::path(&src, "")).unwrap();
+        look.retune(&super::path(&src, ""), Retune::Edit).unwrap();
         assert!(look.held.as_ref().unwrap().ink.is_some());
     }
 
@@ -4556,7 +4736,7 @@ mod tests {
         // A live edit to another formula with one value keeps the lanes and
         // draws the new one (the cache checks whose values it holds).
         let other = "loop 2\nd = 1/len(px - 60, (15.5 - py)*3)\ngray(frac(d*8 - t/2))";
-        fx.retune_from(&path(other)[Q..]).unwrap();
+        fx.retune_from(&path(other)[Q..], Retune::Edit).unwrap();
         assert!(fx.still.is_held());
         fx.frame(Duration::from_millis(100), &mut c);
         let mut out = vec![0u8; PIXELS * 3];
@@ -4576,11 +4756,11 @@ mod tests {
         // lanes stay, the values are kept again, never drawn stale.
         let ta = "loop 4\ntable T = 0.1, 0.5, 0.9, 0.3\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
         let tb = "loop 4\ntable T = 0.9, 0.2, 0.1, 0.6\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
-        fx.retune_from(&path(ta)[Q..]).unwrap();
+        fx.retune_from(&path(ta)[Q..], Retune::Edit).unwrap();
         fx.frame(Duration::from_millis(120), &mut c);
         fx.frame(Duration::from_millis(140), &mut c);
         assert!(fx.still.is_held());
-        fx.retune_from(&path(tb)[Q..]).unwrap();
+        fx.retune_from(&path(tb)[Q..], Retune::Edit).unwrap();
         assert!(fx.still.is_held());
         fx.frame(Duration::from_millis(160), &mut c);
         let inputs = psi::Inputs {
@@ -4599,7 +4779,7 @@ mod tests {
             "a table-only edit drew stale values"
         );
         // One without values lets them go.
-        fx.retune_from(&path("gray(x)")[Q..]).unwrap();
+        fx.retune_from(&path("gray(x)")[Q..], Retune::Edit).unwrap();
         assert!(!fx.still.is_held());
         set_still_gate(None);
         drop(fx);

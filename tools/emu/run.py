@@ -150,6 +150,8 @@ def main():
     ap.add_argument("--old-updater", type=Path, help="api: an updater from before the panel and table v4 (a release's): boot C, where it refuses the bundle")
     ap.add_argument("--psb", type=Path, help="api: a compiled Formula, base64url (`psi build --base64`)")
     ap.add_argument("--long-psb", type=Path, help="api: a long Formula compiled (`psi build -o`), past any path: shown with POST /api/play/formula")
+    ap.add_argument("--heavy-psb", type=Path, help="api: a heavy `smooth` Formula, base64url: the governor step's (tools/emu/gov-heavy.psi)")
+    ap.add_argument("--light-psb", type=Path, help="api: a light `smooth` Formula, base64url: the governor step's (tools/emu/gov-light.psi)")
     ap.add_argument("--look", type=Path, help="api: a Formula that can be a look (its source), saved to the card and set as look_formula")
     ap.add_argument("--look-psb", type=Path, help="api: that look compiled (`psi build -o`)")
     ap.add_argument("--connections", type=int, choices=[1, 2, 5], default=5,
