@@ -6354,17 +6354,25 @@ impl<'s> Parser<'s> {
         let mut seen = [0usize; 3];
         let mut controls = 0usize;
         let mut first = true;
+        // A `loop`, `fps` or `smooth` line read before this declaration.
+        let mut timed = false;
         loop {
             // (`loop`, `fps` and `smooth` lines among the declarations, in
             // any order.)
             let t = self.peek();
             if self.time_line(t, b)? {
                 first = false;
+                timed = true;
                 self.skip_newlines();
                 continue;
             }
             if !self.is_declaration() {
                 break;
+            }
+            // (A declaration below a `loop`, `fps` or `smooth` line: OpenDMD
+            // 1.0's compiler refused it, E951.)
+            if timed {
+                self.level = self.level.max(1);
             }
             let t = self.next();
             #[cfg(feature = "syntax")]
@@ -6743,8 +6751,10 @@ pub struct Info {
     /// picture, its last line).
     pub layers: usize,
     /// The compiler it needs, by what it uses: 0 any (OpenDMD 1.0's), 1
-    /// OpenDMD 1.1's (the built-in `phase`, a `smooth` line). A level only
-    /// grows; a panel's web app says its own (`feat`, js/formulas.js).
+    /// OpenDMD 1.1's (the built-in `phase`, a `smooth` line, or a
+    /// declaration below a `loop`, `fps` or `smooth` line in the header,
+    /// which 1.0 refused). A level only grows; a panel's web app says its
+    /// own (`feat`, js/formulas.js).
     pub level: u8,
 }
 

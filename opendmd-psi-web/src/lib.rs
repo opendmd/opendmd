@@ -292,7 +292,8 @@ pub fn error_at() -> Vec<u32> {
 /// would make of it), the frame time it opens at on the panel in ms
 /// (`Program::opens_ms`: [10]'s, or 20 for a `smooth` one past the 32 ms
 /// every refresh allows), the compiler level it needs (`Info::level`: 0
-/// any, 1 OpenDMD 1.1's: the built-in `phase`, a `smooth` line)]`; empty
+/// any, 1 OpenDMD 1.1's: the built-in `phase`, a `smooth` line, a
+/// declaration below a `loop`, `fps` or `smooth` line)]`; empty
 /// before anything compiled.
 #[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {

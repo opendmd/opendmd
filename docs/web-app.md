@@ -536,7 +536,8 @@ has the bundled ones, else fetches `opendmd.dev/formulas/src/<slug>.psi`,
 CORS `*`), or, once changed, a window on `http://<address>/#remix` that
 says it is ready to the page that opened it (`{type, feat}`: `feat` its
 compiler's level, a number that only grows, `opendmd_psi::Info::level`;
-none before OpenDMD 1.1, 1 from it: the built-in `phase` and `smooth`) and
+none before OpenDMD 1.1, 1 from it: the built-in `phase` and `smooth`, and
+the header's lines in any order) and
 gets `{name, src, a, b, c}` back by `postMessage` (accepted only from
 `https://opendmd.dev`, or the app's own origin for the demo). The page
 compiles the Formula first and sends it only to an app whose level is at

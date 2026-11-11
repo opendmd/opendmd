@@ -397,7 +397,7 @@ function sent() {
     }
     addEventListener('message', on);
     // (`feat`: this app's compiler level, a number that only grows (`opendmd_psi::Info::level`): none or 0
-    // OpenDMD 1.0's, 1 OpenDMD 1.1's (the built-in `phase`, a `smooth` line). The site sends a Formula only
+    // OpenDMD 1.0's, 1 OpenDMD 1.1's (the built-in `phase`, a `smooth` line, the header in any order). The site sends a Formula only
     // to an app whose level is at least the one it needs, and asks for the panel's update otherwise.)
     for (const f of from) o.postMessage({ type: READY, feat: 1 }, f);
   });
