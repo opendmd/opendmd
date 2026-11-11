@@ -3887,21 +3887,27 @@ fn notes_of(src: &str) -> alloc::vec::Vec<alloc::string::String> {
     n.0
 }
 
-/// P1.4: a note where the loop is not a whole number of 40 ms in a
-/// formula that moves (the players cut it to whole frames of 10, 20 or 40).
+/// P1.4: a note where the loop is not a whole number of the frames the
+/// formula is drawn in (20 ms; 40 with `fps 25`), in one that moves.
 #[cfg(feature = "syntax")]
 #[test]
-fn a_loop_off_the_40_ms_grid_is_noted() {
-    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("is not a whole number of 0.04 s"));
+fn a_loop_off_the_frame_grid_is_noted() {
+    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("is not a whole number of the panel's frames"));
     assert!(has("loop 4.85\ngray(frac(x + t/4.85))"));
     assert!(has("name \"N\"\nloop 0.33\ngray(frac(x + phase))"));
-    assert!(!has("loop 4.8\ngray(frac(x + t/4.8))"));
-    assert!(!has("loop 2\ngray(frac(x + t/2))"));
+    assert!(has("smooth\nloop 4.85\ngray(frac(x + phase))"));
+    // Whole 20 ms frames: exact by default and every refresh (cut only when
+    // a heavy one is held to every 4th), unless it asks for every 4th.
+    for lp in ["4.8", "2", "1.5", "2.5", "0.5"] {
+        assert!(!has(&format!("loop {lp}\ngray(frac(x + phase))")), "loop {lp}");
+    }
+    assert!(has("fps 25\nloop 2.5\ngray(frac(x + phase))"));
     assert!(!has("loop 4.85\ngray(x)"));
     assert!(!has("loop forever\ngray(frac(x + t/4.85))"));
     let n = notes_of("loop 4.85\ngray(frac(x + t/4.85))");
-    let m = n.iter().find(|m| m.contains("0.04 s")).unwrap();
-    assert!(m.contains("4.84 s to 4.85 s"), "{m}");
+    let m = n.iter().find(|m| m.contains("panel's frames")).unwrap();
+    assert!(m.contains("every 2nd refresh it is cut to 4.84 s") && m.contains("`loop 4.84` or `loop 4.88`"), "{m}");
+    assert!(!m.contains("0.04") && !m.contains(" ms"), "{m}");
 }
 
 /// P1.5: a product of `t` that passes the number's end within the loop is
