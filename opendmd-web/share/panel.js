@@ -37,7 +37,8 @@ export function addressForm(p, go, what) {
     // A host name or IPv4 address (an IPv6 one in brackets), maybe a port;
     // `http://` and a trailing slash typed with it are fine.
     const a = $('addr').value.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-    const okAddr = /^(\[[0-9a-f:.]+\]|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:\d{1,5})?$/i.test(a);
+    // (And one a URL can be made of: a port past 65535 is not, and would fail only at the hand-off.)
+    const okAddr = /^(\[[0-9a-f:.]+\]|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:\d{1,5})?$/i.test(a) && url(a);
     const err = $('addr-err');
     err.hidden = okAddr;
     err.textContent = okAddr ? '' : 'That doesn’t look like an address: a name like opendmd.local, or numbers like 192.168.1.50.';
@@ -60,11 +61,15 @@ export function addressForm(p, go, what) {
   return { ask };
 }
 
+const url = (a) => { try { return new URL(`http://${a}/`); } catch { return null; } };
+
 // Open the panel's app at `#<hash>` in a new window (call it in a click: a
 // pop-up), and when that window says `ready`, post it `msg` (a promise of
 // {data, transfer}) to its origin alone. False if no window opened.
 export function handOff(a, hash, ready, msg) {
-  const panel = new URL(`http://${a}/`).origin, w = window.open(`http://${a}/#${hash}`, '_blank');
+  const u = url(a);
+  if (!u) return false;
+  const panel = u.origin, w = window.open(`${u.origin}/#${hash}`, '_blank');
   if (!w) return false;
   const on = (e) => {
     if (e.source !== w || e.origin !== panel || e.data?.type !== ready) return;

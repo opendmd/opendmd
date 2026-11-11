@@ -23,6 +23,13 @@
 //   {n, c}                  only colours (Remove unused)
 //   {n, body: {b, a}}       the whole piece before and after (a snapshot
 //                           restored): bodies as stored, cels packed
+//   {n, t: {b, a, z}}       its structure before and after (frames and
+//                           layers added, removed, moved, retimed, renamed,
+//                           shown or hidden, held or moving; plays): `b` and
+//                           `a` are skeletons ({plays, frames, layers} with
+//                           no cels), `z` the packed cels only one side has,
+//                           by cel id ([z, two bytes a key]): a layer's key,
+//                           and `/` and the frame's for a layer that moves
 // `c` is a colour delta, {add: [{k, hex}], del: [{k, hex}]}: what the step
 // put into the piece's colours and took out of them.
 import { CAPS, packPx, unpackPx, memo, checkBody } from './store.js';
@@ -49,8 +56,15 @@ function size(s) {
   if (s.i) n += s.i.length * 8;
   if (s.c) n += (s.c.add.length + s.c.del.length) * 24;
   if (s.body) n += JSON.stringify(s.body).length * 2;
+  if (s.t) n += JSON.stringify(s.t).length * 2;
   return n;
 }
+// A skeleton is a piece's structure: checked as a body would be, with empty cels.
+const okSkel = (k) => obj(k) && Array.isArray(k.frames) && Array.isArray(k.layers) && k.layers.every(obj) && okBody({ w: W, h: H,
+  ...(k.plays ? { plays: k.plays } : {}), frames: k.frames, layers: k.layers.map((l) => ({ ...l, cels: Array(l.moves ? k.frames.length : 1).fill('') })) });
+const stable = (v) => JSON.stringify(v, (k, x) => (obj(x) ? Object.fromEntries(Object.keys(x).sort().map((y) => [y, x[y]])) : x));
+const big = (px) => px.some((k) => k > 255);
+const cid = (l, f) => (l.moves ? `${l.key}/${f.key}` : l.key);
 const okColours = (l) => Array.isArray(l) && l.length <= CAPS.colours && l.every((c) => obj(c) && Number.isInteger(c.k) && c.k > 0 && c.k < 65536
   && typeof c.hex === 'string' && HEX.test(c.hex));
 const okBody = (b) => { try { checkBody('piece', b); return true; } catch { return false; } };
@@ -119,9 +133,15 @@ export class Doc {
     if (!rec.hash || j.hash !== rec.hash || !j.list.every((s, n) => s.n === lo + n) || !ok(j.at) || !ok(j.cur)) return 'dropped';
     this.steps = j.list; this.low = lo; this.cur = j.at - lo + 1;
     try {
+      // Every cel the journal holds reads, as the width it says, whether it comes into view or not.
+      for (const st of j.list) {
+        if (st.t) for (const [z, w] of Object.values(st.t.z)) await unpackPx(z, N, w);
+        if (st.body) for (const b of [st.body.a, st.body.b]) for (const l of b.layers) for (const z of l.cels) await unpackPx(z, N, b.keys === 2);
+      }
       while (this.cur < j.cur - lo + 1) await this.step(true);
       while (this.cur > j.cur - lo + 1) await this.step(false);
       // What the journal led to must be a piece too: a journal can lie.
+      await this.load();
       checkBody('piece', await this.packed(this.snap()));
       if (!this.#sound()) throw new Error('a key with no colour');
     } catch {
@@ -143,9 +163,12 @@ export class Doc {
   valid(s) {
     if (!obj(s) || !Number.isInteger(s.n)) return false;
     if (s.body !== undefined) return obj(s.body) && okBody(s.body.b) && okBody(s.body.a) && s.i === undefined && s.c === undefined;
+    if (s.t !== undefined) return obj(s.t) && okSkel(s.t.b) && okSkel(s.t.a) && obj(s.t.z) && s.i === undefined && s.c === undefined
+      && Object.values(s.t.z).every((e) => Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'boolean');
     if (s.c !== undefined && !(obj(s.c) && okColours(s.c.add) && okColours(s.c.del))) return false;
     if (s.i === undefined) return s.c !== undefined && s.l === undefined;
-    return typeof s.l === 'string' && typeof s.f === 'string' && this.layers.some((l) => l.key === s.l) && this.frames.some((f) => f.key === s.f)
+    // (Whether the piece has that cel is known only as the steps before it are applied.)
+    return typeof s.l === 'string' && typeof s.f === 'string'
       && s.i instanceof Int32Array && s.b instanceof Uint16Array && s.a instanceof Uint16Array && s.i.length === s.b.length
       && s.i.length === s.a.length && s.i.every((x) => x >= 0 && x < N);
   }
@@ -319,11 +342,13 @@ export class Doc {
   step(fwd) {
     if (fwd ? this.cur >= this.steps.length : !this.cur) return null;
     const s = this.steps[fwd ? this.cur : this.cur - 1];
-    const go = () => { this.#apply(s, fwd); this.cur += fwd ? 1 : -1; };
+    const go = () => { this.#apply(s, fwd); this.cur += fwd ? 1 : -1; return this.#shown(); };
     const wait = this.#needs(s, fwd);
-    if (!wait) { go(); return null; }
+    if (!wait) return go();
     return wait.then(go);
   }
+  // null if every cel the frame drawn on shows is read, else the promise of reading them.
+  #shown() { return this.layers.every((l, n) => this.celAt(n, this.F).px) ? null : this.load(); }
   // What has to be read before step `s` can be applied: null if nothing.
   #needs(s, fwd) {
     if (s.body) {
@@ -336,9 +361,16 @@ export class Doc {
     if (!s.i) return null;
     const l = this.layers.findIndex((x) => x.key === s.l), f = this.frames.findIndex((x) => x.key === s.f);
     if (l < 0 || f < 0) return Promise.reject(new Error('a step for a cel this piece does not have'));
+    this.L = l; this.F = f; // undone or redone where it was drawn: in view
     return this.celAt(l, f).px ? null : this.load(f);
   }
   #apply(s, fwd) {
+    if (s.t) {
+      // A structure step leads from the piece as it stands, or it is not this piece's.
+      if (stable(this.skel()) !== stable(fwd ? s.t.b : s.t.a)) throw new Error('a step for another piece');
+      this.#reshape(fwd ? s.t.a : s.t.b, s.t.z);
+      return;
+    }
     if (s.body) {
       const was = this.cols;
       this.#take(fwd ? s.body.a : s.body.b);
@@ -367,6 +399,59 @@ export class Doc {
     held.add(this.key);
     if (this.stroke) for (const i of this.stroke.keys()) held.add(this.px[i]);
     for (const [k, c] of was) if (k && held.has(k) && !this.cols.has(k)) this.pending.set(k, c);
+  }
+
+  // --- structure (frames.js makes the changes; here they are applied and undone) ---
+  skel() {
+    return { plays: this.rest.plays || 0, frames: this.frames.map((f) => ({ ...f })), layers: this.layers.map(({ cels, ...l }) => ({ ...l })) };
+  }
+  // The piece given the structure `a` (a skeleton), as one step. `made`: the
+  // keys of each cel `a` has and the piece has not (by cel id); the cels it
+  // has and `a` has not are kept, packed, in the step. Returns what the
+  // journal is told.
+  async shape(a, made = {}) {
+    if (!okSkel(a)) throw new Error('not a piece');
+    const b = this.skel(), wide = this.colourList().some((c) => c.k > 255), z = {}, have = this.#cels(), want = new Set();
+    for (const l of a.layers) for (const f of l.moves ? a.frames : [null]) want.add(f ? cid(l, f) : l.key);
+    for (const id of want) {
+      if (have.has(id)) continue;
+      if (!made[id]) throw new Error(`no cel ${id}`);
+      const w = wide || big(made[id]), zz = await packPx(made[id], w);
+      this.#remember(zz, made[id]);
+      z[id] = [zz, w];
+    }
+    for (const [id, c] of have) {
+      if (want.has(id)) continue;
+      // (Packed as wide as its keys need: a 256th colour may have been drawn since it was packed.)
+      if (c.v !== c.zv && c.px) { const w = c.zw || big(c.px); c.z = await packPx(c.px, w); c.zw = w; c.zv = c.v; }
+      z[id] = [c.z, c.zw];
+    }
+    const s = { t: { b, a, z } };
+    this.#reshape(a, z);
+    await this.load();
+    return this.push(s);
+  }
+  #cels() {
+    const have = new Map();
+    for (const l of this.layers) l.cels.forEach((c, i) => have.set(l.moves ? `${l.key}/${this.frames[i].key}` : l.key, c));
+    return have;
+  }
+  #reshape(k, z) {
+    const have = this.#cels(), lk = this.layers[this.L]?.key, fk = this.frames[this.F]?.key;
+    const frames = k.frames.map((f) => ({ ...f }));
+    const layers = k.layers.map((l) => ({ ...l, cels: (l.moves ? frames : [null]).map((f) => {
+      const id = f ? cid(l, f) : l.key, c = have.get(id), e = z[id];
+      if (c) return c;
+      if (!e) throw new Error('a step for a cel this piece does not have');
+      return new Cel(e[0], e[1], this.#cached(e[0]));
+    }) }));
+    this.frames = frames;
+    this.layers = layers;
+    const { plays, ...rest } = this.rest;
+    this.rest = k.plays ? { ...rest, plays: k.plays } : rest;
+    const l = layers.findIndex((x) => x.key === lk), f = frames.findIndex((x) => x.key === fk);
+    this.L = l >= 0 ? l : Math.min(this.L, layers.length - 1);
+    this.F = f >= 0 ? f : Math.min(this.F, frames.length - 1);
   }
 
   // --- keeping it ---

@@ -27,7 +27,7 @@ Records point at each other by `id`, never by name or position.
 
 ## A piece
 
-`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever), `frames` (each `{ms}`),
+`body`: `w` 128, `h` 32, `plays` (how many times it plays; absent: forever; its GIF says N plays as a loop count of N - 1, which browsers keep: the panel's player loops a GIF for as long as its playlist keeps it on, whatever its loop count), `frames` (each `{ms}`; the Studio writes tens of ms, as a GIF keeps hundredths of a second),
 `layers` (each `{name, moves, cels}`: a layer that moves has a cel a frame,
 one held still has one), `palette` and, since S1, `colours` and `keys`.
 
@@ -136,7 +136,11 @@ what), `journal` and `meta`.
   step names its cel by layer and frame key and carries the indices and the
   keys before and after; a step that changes the piece's colours carries
   what it added and took out (`c: {add, del}`); a snapshot restored is one
-  step holding both bodies. Steps are numbered back to back per piece (500
+  step holding both bodies; a change of structure (a frame or layer added,
+  removed or moved, a frame's time, the plays, a layer renamed, hidden,
+  held still or made to move) is one step holding the structure before and
+  after and only the cels one side has, so the cels both keep are not
+  copied. Steps are numbered back to back per piece (500
   at most, or about 8 MB); `meta`
   holds `cur` (the last step done) and `at` with `hash` (the step the stored
   record stands at, and its hash). Opening a piece replays (or unwinds) the

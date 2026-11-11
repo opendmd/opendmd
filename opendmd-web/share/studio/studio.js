@@ -166,7 +166,9 @@ function paint() {
   used.delete(0);
   // The GIF's colours: those drawn, and off (black) if any pixel is.
   const n = used.size, table = rgbs.size + (off && !rgbs.has(0) ? 1 : 0);
-  $('s-kind').textContent = `STILL · 128×32 · ${n} COLOUR${n === 1 ? '' : 'S'}`;
+  const nf = D.frames.length, plays = D.rest.plays, t = D.frames.reduce((a, f) => a + f.ms, 0) / 1000;
+  $('s-kind').textContent = `${nf > 1 ? `${plays ? `${plays}×` : 'LOOP'} · ${nf} FRAMES · ${+t.toFixed(2)} S` : 'STILL'} · 128×32 · ${n} COLOUR${n === 1 ? '' : 'S'}`;
+  fx.painted?.();
   $('s-used').textContent = `Colours used: ${n}`;
   $('s-many').hidden = table <= 256;
   root.dataset.used = n;
@@ -205,17 +207,22 @@ function after(r) {
   jot({ step: r.step, cur: r.cur, low: r.low });
   buttons();
   queueSave();
+  fx.changed?.(r.step);
 }
 function undo(fwd) {
   if (D.stroke || drag || busy) return; // not during a stroke
   if (!fwd && sel?.fl) { sel = null; D.letGo(D.key); swatches(); showSel(); paint(); return; } // a selection being moved (or a paste): put back, its new colours let go
-  const c0 = D.cur, s = D.steps[fwd ? D.cur : D.cur - 1], w = D.step(fwd);
+  fx.stop?.();
+  const c0 = D.cur, s = D.steps[fwd ? D.cur : D.cur - 1];
+  let w;
+  try { w = D.step(fwd); } catch (e) { say(`That step can’t be ${fwd ? 'redone' : 'undone'}: ${e.message || e}`); return; }
   const fin = () => {
     if (s.c || s.body) swatches();
     jot({ cur: D.low + D.cur - 1 });
     buttons();
     paint();
     queueSave();
+    if (s.t || s.body || D.frames.length > 1 || D.layers.length > 1) frames().then(() => fx.changed?.(s), () => {}); else fx.changed?.(s);
   };
   if (w) {
     busy = true;
@@ -267,6 +274,7 @@ function done() { drop(); sel = null; showSel(); paint(); }
 function act(a) {
   if (a === 'paste') {
     if (!clip) return;
+    fx.stop?.();
     if (tool !== 'select') useTool('select');
     drop();
     // Its colours join the piece in the step that puts it down, their keys
@@ -329,6 +337,7 @@ function shape(q, shift) {
 const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2, d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1 });
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
 cv.addEventListener('pointerdown', (e) => {
+  fx.stop?.(); // drawing stops Play
   cv.setPointerCapture(e.pointerId);
   down.set(e.pointerId, e);
   if (down.size === 2) {
@@ -628,6 +637,9 @@ async function open(r) {
   root.dataset.id = r.id;
   root.dataset.rev = r.rev;
   if (root.dataset.saved !== 'saving') status('kept');
+  // More than one frame or layer: the strip and the layer rows (frames.js).
+  if (D.frames.length > 1 || D.layers.length > 1) await frames().catch(() => {});
+  fx.opened?.();
   await snaps();
 }
 // A new piece, with no colours until it is drawn on: the one way a piece
@@ -751,12 +763,19 @@ async function restore(rev) {
   await snaps();
 }
 
-// --- the GIF: out.js, loaded at the first download ---
+// --- the GIF and Send to panel: out.js, loaded at the first download or send ---
 let outMod = null;
-async function download(fit) {
+async function out(what, ...a) {
   outMod ??= import('./out.js');
-  try { await (await outMod).download(studio, fit); } catch (e) { outMod = null; say(`The GIF could not be made: ${e.message || e}`); }
+  try { await (await outMod)[what](studio, ...a); } catch (e) { outMod = null; say(`The GIF could not be made: ${e.message || e}`); }
 }
+const download = (fit) => out('download', fit);
+
+// --- the frames strip and the layer rows: frames.js, loaded once a piece has more than one of either, or one is added ---
+const fx = {}; // what frames.js hooks in: painted(), changed(step), opened(), stop()
+let framesMod = null;
+const frames = () => (framesMod ??= import('./frames.js').then((m) => { m.mount(studio); return m; }).catch((e) => { framesMod = null; say(`The frames could not load: ${e.message || e}`); throw e; }));
+const withFrames = (f) => () => { if (D.stroke || drag) return; done(); frames().then(f, () => {}); };
 
 // --- the colour picker and the palette tools: colour.js, loaded when first opened ---
 let colourMod = null;
@@ -767,6 +786,8 @@ const studio = {
   // for out.js
   get doc() { return D; }, get rec() { return rec; }, get kept() { return kept; }, get saved() { return root.dataset.saved; },
   root, listOf, done, freeze, snaps, status, nameNow,
+  // for frames.js
+  fx, after, paint, buttons, showSel, get sel() { return sel; }, get dragging() { return !!drag; },
   newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
 };
 async function colourTools(which, b) {
@@ -800,6 +821,17 @@ async function main() {
   $('s-undo').addEventListener('click', () => undo(false));
   $('s-redo').addEventListener('click', () => undo(true));
   $('s-gif').addEventListener('click', () => download(false));
+  $('s-send').addEventListener('click', () => { done(); out('send'); });
+  $('s-addf').addEventListener('click', withFrames((m) => m.addFrame()));
+  $('s-addl').addEventListener('click', withFrames((m) => m.addLayer()));
+  // A phone's bench is tabs: Colours, Layers, Piece.
+  root.dataset.tab = 'colours';
+  $('s-tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tab]');
+    if (!b) return;
+    root.dataset.tab = b.dataset.tab;
+    for (const t of $('s-tabs').children) t.setAttribute('aria-selected', t === b);
+  });
   $('s-fit').addEventListener('click', () => download(true));
   $('s-fillmode').addEventListener('click', (e) => { const b = e.target.closest('[data-fill]'); if (b) useTool(tool, b.dataset.fill === '1'); });
   $('s-shade').addEventListener('click', (e) => { const b = e.target.closest('[data-shade]'); if (b) useShade(b.dataset.shade); });
@@ -838,7 +870,8 @@ async function main() {
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
   document.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, select, textarea')) return;
+    // Not in a field, nor behind an open sheet (Send to panel): the piece there is the one going out.
+    if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
@@ -851,6 +884,9 @@ async function main() {
     else if (k === '1' || k === '2' || k === '3') useSize(+k);
     else if ((k === 'delete' || k === 'backspace') && sel) { e.preventDefault(); act('del'); }
     else if ((k === 'enter' || k === 'escape') && sel) act('done');
+    else if (k === ',' || k === '.') fx.step?.(k === '.' ? 1 : -1); // the frame before, after
+    else if (k === ' ') { e.preventDefault(); if (D.frames.length > 1) frames().then((m) => m.toggle(), () => {}); }
+    else if (k === 'n') withFrames((m) => m.addFrame())();
     else if (k === '+' || k === '=') zoomBy(1);
     else if (k === '-') zoomBy(-1);
   });
