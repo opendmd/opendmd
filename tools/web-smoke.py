@@ -7284,6 +7284,29 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
     check(len(sizes) == 4 and all(w >= 44 and h >= 44 for w, h in sizes) and page.evaluate("document.documentElement.scrollWidth <= innerWidth"),
           f"formulas time (phone): every control at least 44 px, no sideways scroll ({sizes})")
     page.context.close()
+    # A panel whose refresh doesn't divide 1000 (117 Hz: a step of 2 refreshes
+    # is 17.09… ms): . and , step exactly one step each, never stick or skip.
+    get_json(base + "/mock/refresh?hz=117")
+    try:
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        formula_editor(page, "loop 2\ngray(frac(t/2))")
+        page.wait_for_function("+document.querySelector('#psi-ed-panel').dataset.frames > 5", timeout=10000)
+        page.click("#psi-pause")
+        page.wait_for_timeout(150)
+        idx = lambda: int(page.input_value("#psi-t"))
+        page.focus("#psi-ed-panel")
+        i0, seen = idx(), []
+        for key in ".", ".", ".", ",", ",":
+            page.keyboard.press(key)
+            page.wait_for_timeout(120)
+            seen.append(idx())
+        n = int(page.get_attribute("#psi-t", "max")) + 1
+        want = [(i0 + d) % n for d in (1, 2, 3, 2, 1)]
+        check(n == 117 and seen == want, f"formulas time at 117 Hz: . and , step one each ({i0} -> {seen}, want {want}; {n} steps)")
+        page.context.close()
+    finally:
+        get_json(base + "/mock/refresh?hz=100")
 
 
 def formulas_versions_checks(browser, base: str, errors: list[str]) -> None:

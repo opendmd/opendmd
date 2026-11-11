@@ -532,7 +532,7 @@ function editor() {
   const canvas = h('canvas.panel', { id: 'psi-ed-panel', tabIndex: 0, 'aria-label': 'Preview (, and . step a frame)' });
   // The preview's time: paused (pv.hold, ms), a frame back or on, or dragged
   // through: the loop, or the first 10 s of one that goes on.
-  const tr = h('input', { type: 'range', id: 'psi-t', min: 0, max: 0, value: 0, 'aria-label': 'Time', oninput: () => seek(+tr.value * grain()) });
+  const tr = h('input', { type: 'range', id: 'psi-t', min: 0, max: 0, value: 0, 'aria-label': 'Time', oninput: () => seek(Math.floor(+tr.value * grain()), +tr.value) });
   const tnow = h('span.mono', { id: 'psi-t-now' });
   const pz = h('button.sm', { id: 'psi-pause', onclick: () => seek(pv.hold == null ? elapsed() : null) });
   const stp = (k) => h('button.sm', { id: k < 0 ? 'psi-t-back' : 'psi-t-on', 'aria-label': k < 0 ? 'A frame back' : 'A frame on', title: k < 0 ? 'A frame back (,)' : 'A frame on (.)', onclick: () => step(k) }, k < 0 ? '‹' : '›');
@@ -588,22 +588,29 @@ function editor() {
   const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
   // (The steps are the preview's own, a refresh or two or four; the loop whole frames of its grid, as played.)
   const grain = () => (pv.over ? pv.d || D : period(pv.d || D)), len = () => (pv.loopMs === 0 ? FOREVER : Math.max(1, Math.floor((pv.loopMs || 8000) / (pv.d || D))) * (pv.d || D)), elapsed = () => pv.hold ?? performance.now() - pv.t0;
-  // Held at `ms`, or (null) playing on from where it was held.
-  function seek(ms) {
+  // The step shown: the one held at (`pv.hi`, kept as an index: a refresh
+  // that doesn't divide 1000, 117 Hz, makes the steps fractional ms, and
+  // floored ms read back as an index land on the one before), else the
+  // step the time is in.
+  const shownStep = () => (pv.hold != null && pv.hi != null ? pv.hi : Math.floor(elapsed() / grain()));
+  // Held at `ms` (step `i` when known), or (null) playing on from where it was held.
+  function seek(ms, i = null) {
     if (ms == null) { pv.t0 = performance.now() - pv.hold; pv.hold = null; } else pv.hold = Math.max(0, ms);
+    pv.hi = ms == null ? null : i;
     pv.dirty = true;
     kick();
     tick();
   }
   function step(k) {
     const g = grain(), n = Math.max(1, Math.floor(len() / g));
-    let i = Math.floor(elapsed() / g) + k;
+    let i = shownStep() + k;
     if (pv.loopMs !== 0) i = (i % n + n) % n;
-    seek(Math.floor(Math.max(0, i) * g));
+    i = Math.max(0, i);
+    seek(Math.floor(i * g), i);
   }
   let shown = '';
   function tick() {
-    const g = grain(), n = Math.max(1, Math.floor(len() / g)), k = Math.floor(elapsed() / g), i = pv.loopMs === 0 ? k : k % n, held = pv.hold != null;
+    const g = grain(), n = Math.max(1, Math.floor(len() / g)), k = shownStep(), i = pv.loopMs === 0 ? k : k % n, held = pv.hold != null;
     // (Only what changed: it runs every frame.)
     if (shown === (shown = `${n} ${i} ${g} ${held}`)) return;
     tr.max = n - 1;
@@ -1028,7 +1035,7 @@ function editor() {
       W?.reset();
       paint();
       if (!pv) { pv = view(canvas); pv.tick = tick; }
-      pv.hold = null;
+      pv.hold = pv.hi = null;
       compile();
       tick();
       scrubbable();

@@ -145,6 +145,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `--root`'s (same paths, as a card copied twice would be). `sd.card_id`
   is otherwise a hash of `--root`, and a `POST /api/card/format` gives a new
   one. web-smoke's card-swap check uses it.
+- **`GET /mock/refresh?hz=N`** (mock only): the panel refresh
+  `/api/status` reports as `refresh_hz` (100 until set); web-smoke's
+  Formulas time row checks a refresh that doesn't divide 1000 (117 Hz).
 - **`GET /mock/fail-move?after=N`** (mock only): after N more moves that
   work, the next `POST /api/files/move` is a 404 (as when the GIF went
   meanwhile), then moves work again; `after=-1` turns it off.
@@ -3404,6 +3407,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/events"), {"GET": self.h_mock_events}),
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (m_exact("/mock/fail-move"), {"GET": self.h_mock_fail_move}),
+                (m_exact("/mock/refresh"), {"GET": self.h_mock_refresh}),
                 (m_exact("/mock/fail-list"), {"GET": self.h_mock_fail_list}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
@@ -3648,7 +3652,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "www_version": ctx.www_pushed or www_version(ctx.www_root),
                     "www": {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged},
                     "heap": {"free": free, "floor": floor, "idf_min": idf_min, "transitions_cut": 0},
-                    "refresh_hz": 100,
+                    "refresh_hz": getattr(ctx, "refresh_hz", 100),
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,
                     "misses": player.misses_json(),
@@ -5156,6 +5160,14 @@ def make_handler(ctx: Context, quiet: bool):
             if d is not None:
                 ctx.fail_list[d.rstrip("/")] = int(n or 1)
             self.send_json(200, {"dirs": ctx.fail_list})
+
+        def h_mock_refresh(self, path):
+            # GET /mock/refresh?hz=N (mock only): `refresh_hz` in /api/status.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            n = query_param(q, "hz")
+            if n is not None:
+                ctx.refresh_hz = int(n)
+            self.send_json(200, {"hz": getattr(ctx, "refresh_hz", 100)})
 
         def h_mock_fail_move(self, path):
             # GET /mock/fail-move?after=N (mock only): after N more moves
