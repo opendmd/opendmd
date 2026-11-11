@@ -3563,6 +3563,7 @@ def studio_files_hostile(browser, base: str, site: Path, errors: list[str]) -> N
         r["hash"] = s_hash(r["body"])
         return r
     bomb = base64.b64encode(zlib.compress(bytes(4 << 20))).decode()
+    z64 = lambda n: base64.b64encode(zlib.compress(bytes([1]) * n)).decode()
     stamp = lambda px, **kw: {**copy.deepcopy(good), "type": "stamp", "id": "st_" + good["id"][3:], "body": {"w": 2, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": px}]}, **kw}
     pack_of = lambda pid, members, **kw: {**copy.deepcopy(good), "type": "pack", "id": pid, "name": "P", "body": {"members": members}, **kw}
     pa, pb = "pk_" + "a" * 32, "pk_" + "b" * 32
@@ -3588,17 +3589,20 @@ def studio_files_hostile(browser, base: str, site: Path, errors: list[str]) -> N
         "a licence outside the list": F([mut(lambda r: r.__setitem__("licence", "MIT"))]),
         "a root the file lacks": F([good], "pc_" + "c" * 32),
         "JSON nested 200,000 deep": deep,
-        "a stamp 0 wide": F([stamp("eJxjYAAAAAQAAQ==", body={"w": 0, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}]})]),
-        "a stamp 33 high": F([stamp("x", body={"w": 2, "h": 33, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}]})]),
-        "a stamp of 65 frames": F([stamp("x", body={"w": 2, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}] * 65})]),
-        "a stamp with no colours": F([stamp("x", body={"w": 2, "h": 2, "frames": [{"px": "x"}]})]),
-        "a font atlas past a panel": F([{**copy.deepcopy(good), "type": "font", "id": "ft_" + good["id"][3:], "body": {"cell": {"w": 5, "h": 7}, "line": 8, "first": 32, "count": 1, "adv": [6], "atlas": {"cols": 1, "w": 1024, "h": 1024, "px": "x"}}}]),
-        "a template guide off the panel": F([{**copy.deepcopy(good), "type": "template", "id": "tp_" + good["id"][3:], "body": {**copy.deepcopy(good["body"]), "guides": [{"kind": "safe", "name": "g", "x": 120, "y": 0, "w": 20, "h": 4}]}}]),
-        "a pack naming one member twice": F([pack_of(pa, [{"id": good["id"], "rev": 1}, {"id": good["id"], "rev": 1}], hash="sha256-" + "0" * 64), good], pa),
+        # (each with pixels that read and a hash that is right: only check() can refuse them)
+        "a stamp 0 wide": F([rehash(stamp("", body={"w": 0, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": z64(0)}]}))]),
+        "a stamp 33 high": F([rehash(stamp("", body={"w": 2, "h": 33, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": z64(66)}]}))]),
+        "a stamp of 65 frames": F([rehash(stamp("", body={"w": 2, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": z64(4)}] * 65}))]),
+        "a stamp with no colours": F([rehash(stamp("", body={"w": 2, "h": 2, "frames": [{"px": z64(4)}]}))]),
+        "a font atlas past a panel": F([rehash({**copy.deepcopy(good), "type": "font", "id": "ft_" + good["id"][3:], "body": {"cell": {"w": 5, "h": 7}, "line": 8, "first": 32, "count": 1, "adv": [6], "atlas": {"cols": 1, "w": 100, "h": 100, "px": z64(4)}}})]),
+        "a template guide off the panel": F([rehash({**copy.deepcopy(good), "type": "template", "id": "tp_" + good["id"][3:], "body": {**copy.deepcopy(good["body"]), "guides": [{"kind": "safe", "name": "g", "x": 120, "y": 0, "w": 20, "h": 4}]}})]),
+        "a pack naming one member twice": F([rehash(pack_of(pa, [{"id": good["id"], "rev": 1}, {"id": good["id"], "rev": 1}])), good], pa),
         "__proto__ and constructor keys": F([good]).replace('{"type"', '{"__proto__": {"polluted": 1}, "constructor": {"prototype": {"polluted": 1}}, "type"', 1),
     }
     r = page.evaluate(S_FILES, [cases])
-    taken = {k: v for k, v in r["out"].items() if v["said"].startswith("taken") or "not a record" in v["said"] or "TypeError" in v["said"]}
+    # Refused with one of files.js's own sentences: never a crash's words.
+    taken = {k: v for k, v in r["out"].items() if v["said"].startswith("taken") or "not a record" in v["said"] or "TypeError" in v["said"]
+             or "call stack" in v["said"] or not v["said"].rstrip().endswith(".")}
     slow = {k: v["ms"] for k, v in r["out"].items() if v["ms"] > 5000}
     polluted = page.evaluate("({}).polluted !== undefined")
     check(set(taken) == {"__proto__ and constructor keys"} and r["stored"] == 0 and not slow and not polluted and page.evaluate("1 + 1") == 2,
