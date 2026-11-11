@@ -623,7 +623,10 @@ Error codes are only ever added, and a retired code is not used again.
   file, played from the compiled `.psb` the web app writes beside it. A
   formula sent to show at once goes compiled, on one line
   (`@formula?psb=…`, base64url). That line is 6,144 bytes at most, or
-  2,048 for a look set that way. The panel does not compile formulas.
+  2,048 for a look set that way. The panel compiles only the `.psi`
+  files on its card whose `.psb` is missing, older or of another ABI (a
+  card filled on a computer, or after an update), in the background once
+  the card is mounted; everything else it plays already compiled.
 - **In the gallery** a formula is a file of two comment lines (`--
   author: …` and `-- licence: CC0-1.0` or `CC-BY-4.0`) followed by the formula. The
   formula is at most 32,768 bytes and 4,500 bytes once compiled; the

@@ -201,7 +201,8 @@ KB. Comments cost nothing. The details are in the gallery's
 Art](create-art.md), titled with its name. It saves frames of 20 ms (50
 a second), or of 40 ms for a loop longer than about 5 seconds, and at most
 240 frames. A GIF can't hold faster frames, so a `smooth` Formula saves at
-20 ms too.
+20 ms too. A Formula drawn every 4th refresh (`fps 25`, from before
+`smooth`) saves 40 ms frames.
 
 In Create Art you can add text, trim it or change its speed, then save it
 to your card. It plays on the panel like any other GIF and goes in
