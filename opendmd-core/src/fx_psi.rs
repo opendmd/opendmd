@@ -1200,13 +1200,25 @@ impl PsiFx {
         Duration::from_millis(u64::from(self.ms()))
     }
 
-    /// The loop as played: its frames on the nominal grid.
+    /// The loop as played: raced, exactly its `loop` (`t` the refresh's
+    /// time in it: [`loop_ms_at`]); else its frames on the nominal grid
+    /// (and a `loop forever` one's passes).
     pub fn loop_time(&self) -> Duration {
-        Duration::from_millis(u64::from(self.loop_frames() * self.ms()))
+        match self.prog.loop_ms() {
+            lp if self.racing && lp > 0 => Duration::from_millis(u64::from(lp)),
+            _ => Duration::from_millis(u64::from(self.loop_frames() * self.ms())),
+        }
     }
 
     pub fn program(&self) -> &psi::Prog {
         &self.prog
+    }
+
+    /// The last frame's `t`, ms into the loop, and whether it was raced
+    /// (tests).
+    #[cfg(test)]
+    fn last_t(&self) -> (u32, bool) {
+        (((i64::from(self.inputs.t) * 1000 + 32_768) >> 16) as u32, self.racing)
     }
 }
 
@@ -3112,6 +3124,7 @@ mod tests {
         }
         a_rate_formula_is_not_raced_and_keeps_its_grid();
         starfields_grid_does_not_depend_on_what_played_before();
+        raced_loops_wrap_at_their_length_through_the_engine();
         arm_beam(false);
         set_beam(None);
         set_clock(None);
@@ -3702,6 +3715,63 @@ mod tests {
         assert_eq!(look_retry(&e), None, "{}", e.msg);
         let e = FormulaLook::from_path(&super::path("gray(x)", "")).expect_err("covers the GIF");
         assert_eq!(look_retry(&e), None, "{}", e.msg);
+    }
+
+    /// Phase 2 B2 through the engine's loop (`SynthSource`'s frames and
+    /// its rewind): raced, `loop 4.85` draws `t` in its last 10 ms
+    /// (4,840-4,850, past the 20 ms grid's 242 frames) and wraps at 4,850,
+    /// the time past it carried into the next loop; an on-grid `loop 4`
+    /// carries its remainder too (it restarted up to a frame late). A grid
+    /// frame (not raced: the first, a JIT trial, a `rate` one) in that last
+    /// partial frame draws `t` = 0, once.
+    /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`: the
+    /// hooks are the process's.)
+    fn raced_loops_wrap_at_their_length_through_the_engine() {
+        arm_beam(true);
+        for (lp, src) in [(4_850u32, "loop 4.85\ngray(frac(x + t/4.85))"), (4_000, "loop 4\ngray(frac(x + t/4))")] {
+            let p = path(src);
+            let mut s = crate::synth::SynthSource::new(crate::synth::open(&p).unwrap()).unwrap();
+            let mut c = Canvas::new();
+            let (mut ts, mut wraps, mut clock_us) = (Vec::new(), 0, 0u64);
+            while wraps < 2 {
+                TOLD.with(|t| t.borrow_mut().clear());
+                STARTS.with(|n| n.set(0));
+                match s.next_frame(&mut c).unwrap() {
+                    Some(d) => {
+                        let Some(Fx::Psi(fx)) = s.fx_mut() else { unreachable!() };
+                        ts.push((fx.last_t(), clock_us));
+                        clock_us += d.as_micros() as u64;
+                    }
+                    None => {
+                        wraps += 1;
+                        s.rewind();
+                    }
+                }
+                c.dirty_mut().clear();
+            }
+            // Every raced frame's `t` is the clock's time mod the loop (to
+            // the ms), across both wraps: nothing dropped at the rewind.
+            let raced: Vec<_> = ts.iter().skip(1).filter(|((_, r), _)| *r).collect();
+            assert!(raced.len() >= 450, "{src}: {} raced", raced.len());
+            for &&((t, _), us) in &raced {
+                let want = (us / 1000) as u32 % lp;
+                assert!(t.abs_diff(want) <= 1, "{src}: t {t} ms at {us} us, want {want}");
+            }
+            if lp == 4_850 {
+                assert!(raced.iter().any(|((t, _), _)| (4_840..4_850).contains(t)), "{src}: no t in its last 10 ms");
+            }
+            // The wrap: the first `t` after it is under a frame (2 refreshes).
+            let after: Vec<_> = raced.windows(2).filter(|w| w[1].0 .0 < w[0].0 .0).map(|w| w[1].0 .0).collect();
+            assert!(!after.is_empty() && after.iter().all(|&t| t < 16), "{src}: after the wraps {after:?}");
+        }
+        // A grid frame in the last partial grid frame: t = 0 (once).
+        let mut fx = match Fx::parse(&path("loop 4.85\ngray(frac(x + t/4.85))")).unwrap() {
+            Fx::Psi(f) => f,
+        };
+        arm_beam(false);
+        let mut c = Canvas::new();
+        fx.frame(Duration::from_millis(4_845), &mut c);
+        assert_eq!(fx.last_t(), (0, false));
     }
 
     /// Phase 2 B2: raced, `t` wraps at exactly the loop's length (not at
