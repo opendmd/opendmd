@@ -501,8 +501,16 @@ pub fn encode_indexed(
 /// The site's pixel editor's GIF past 256 colours (/studio/,
 /// [`encode::wide`]): frames of 128x32 colours (`Uint32Array` of
 /// `0xRRGGBB`, back to back), one delay each (ms), played `plays` times
-/// (0: forever), each frame in bands of rows with tables of their own, so
-/// no colour is lost. Throws with why on a bad call.
+/// (0: forever), each frame a whole picture over its 256 most used colours
+/// and then the corrections, so no colour is lost and nothing wipes. Throws with why on a bad call.
+/// The same frames fitted to their 256 most used colours (every other as
+/// its nearest), over one table ([`encode::fitted`]): lossy, but the panel
+/// can prepare it and smooth it. Throws with why on a bad call.
+#[wasm_bindgen(js_name = encodeFitted)]
+pub fn encode_fitted(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, JsError> {
+    encode::fitted(frames, delays_ms, plays).map_err(JsError::new)
+}
+
 #[wasm_bindgen(js_name = encodeWide)]
 pub fn encode_wide(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, JsError> {
     encode::wide(frames, delays_ms, plays).map_err(JsError::new)
