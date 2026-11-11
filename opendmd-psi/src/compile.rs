@@ -2709,6 +2709,7 @@ impl<'s> Parser<'s> {
             .map(|e| e.0)
             .chain(CONSTS.iter().map(|e| e.0))
             .chain(LATER)
+            .chain(SUGAR.iter().map(|e| e.0))
             .chain(
                 self.locals
                     .iter()
@@ -2781,6 +2782,8 @@ impl<'s> Parser<'s> {
                 t,
                 "`seed` is for formulas that go on without repeating (`loop forever`): a new one each time it plays",
             ));
+        } else if name == "phase" && self.lookup_local(name).is_none() {
+            return self.phase(t);
         } else if let Some(id) = self.lookup_value(name) {
             return id;
         }
@@ -2861,6 +2864,26 @@ impl<'s> Parser<'s> {
         };
         self.dag
             .key(crate::world::input_byte(k.id, what), (t.start, close.end))
+    }
+
+    /// `phase`, the position in the loop from 0 to 1: `t / LOOP`, the loop
+    /// as its line writes it (8 without one), made as `t / 8` written out
+    /// would be, so the steps are those (E908 in `loop forever`, which has
+    /// no loop). A formula's own `phase` is that ([`Self::name`]).
+    #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn phase(&mut self, t: Token) -> Result<Id, Error> {
+        if self.dag.forever {
+            // E908.
+            return self.err(
+                t,
+                "`phase` is the position in the loop, and `loop forever` has none: use frac(t/k), a place that comes round every k seconds",
+            );
+        }
+        let at = (t.start, t.end);
+        let time = self.input(Input::T)?;
+        let lp = self.dag.constant(self.env.loop_v, at)?;
+        self.dag.op(code::DIV, [time, lp, 0], at)
     }
 
     /// E903: `seed` in a formula that loops, unless the formula set its
@@ -3840,28 +3863,93 @@ impl<'s> Parser<'s> {
             )
     }
 
-    /// `fps N` (E801): the frame time it asks for, ms. The panel's frame
-    /// grids are 10, 20 and 40 ms.
+    /// `smooth` at the cursor: the word alone on its line (every refresh,
+    /// as `fps 100`). Not a keyword: a formula's own value, function or
+    /// table called `smooth` is that (`smooth` alone was an unknown name
+    /// before, so nothing that compiled reads otherwise).
+    #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn is_smooth(&self) -> bool {
+        let t = self.peek();
+        t.tok == Tok::Name
+            && self.text(t) == "smooth"
+            && matches!(
+                self.toks[self.pos + 1].get().tok,
+                Tok::Newline | Tok::RBrace | Tok::Eof
+            )
+            && self.lookup_local("smooth").is_none()
+            && self.func_named("smooth").is_none()
+            && !self.reads_table("smooth")
+    }
+
+    /// `fps N` (E801) or `smooth`: the frame time it asks for, ms. The
+    /// panel's frame grids are 10, 20 and 40 ms (every refresh, every 2nd,
+    /// every 4th); `smooth` is 10, the byte `fps 100` writes.
     #[inline(never)]
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fps_line(&mut self) -> Result<u8, Error> {
         let kw = self.next();
+        if self.text(kw) == "smooth" {
+            self.end_of_statement()?;
+            return Ok(10);
+        }
         let n = self.peek();
         let ms = match n.tok {
             Tok::Num(v) if v == 25 * ONE => 40,
             Tok::Num(v) if v == 50 * ONE => 20,
             Tok::Num(v) if v == 100 * ONE => 10,
-            Tok::Num(_) => return self.err(n, "`fps` is 25, 50 or 100 frames a second"),
+            Tok::Num(_) => return self.err(n, "`fps` is 25, 50 or 100 (every refresh is 100: or write `smooth`)"),
             _ => {
                 return self.err(
                     kw,
-                    "`fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`",
+                    "`fps` takes 25, 50 or 100, e.g. `fps 100` (or write `smooth` for every refresh)",
                 )
             }
         };
         self.next();
         self.end_of_statement()?;
         Ok(ms)
+    }
+
+    /// A `loop`, `fps` or `smooth` line at `t` (the cursor): read into
+    /// `b`, `true`; anything else, `false` and nothing read. In the header
+    /// (any order among the declarations) and below it.
+    #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn time_line(&mut self, t: Token, b: &mut Body) -> Result<bool, Error> {
+        if self.keyword() == "loop" {
+            self.next();
+            if b.loop_v.is_some() {
+                return self.err(t, "`loop` is already set");
+            }
+            let n = self.next();
+            let v = match n.tok {
+                Tok::Num(v) => v,
+                // E907 (none: it is the line's own).
+                Tok::Name if self.text(n) == "forever" => FOREVER,
+                _ => {
+                    return self.err(
+                        n,
+                        "`loop` takes a number of seconds, e.g. `loop 8`, or `forever` for one that goes on without repeating",
+                    )
+                }
+            };
+            if v != FOREVER && !(ONE / 10..=3600 * ONE).contains(&v) {
+                return self.err(n, "the loop must be between 0.1 and 3600 seconds");
+            }
+            b.loop_v = Some(v);
+            self.end_of_statement()?;
+            return Ok(true);
+        }
+        if self.is_fps() || self.is_smooth() {
+            let ms = self.fps_line()?;
+            if b.fps.replace(ms).is_some() {
+                // E803.
+                return self.err(t, "the rate is already set: keep one `smooth` or `fps` line");
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// The word starting the statement at the cursor, if it is a keyword
@@ -4116,10 +4204,11 @@ impl<'s> Parser<'s> {
                 "part" => {
                     return self.err(t, "there are no parts: write a function, `fn p(x, y) { … }`, and call it, `p(x*2, y)`")
                 }
-                _ if self.is_fps() => {
+                // E802.
+                _ if self.is_fps() || self.is_smooth() => {
                     return self.err(
                         t,
-                        "`fps` is the whole formula's: put it on a line of its own, outside the layers",
+                        "the rate (`smooth` or `fps`) is the whole formula's: put it on a line of its own, outside the layers",
                     )
                 }
                 _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
@@ -6118,7 +6207,7 @@ impl<'s> Parser<'s> {
         };
         let mut last: Option<Token> = None;
         self.skip_newlines();
-        self.header(end == Tok::Eof)?;
+        self.header(end == Tok::Eof, &mut b)?;
         loop {
             let t = self.peek();
             if t.tok == end {
@@ -6135,37 +6224,12 @@ impl<'s> Parser<'s> {
                     },
                 ));
             }
+            if self.time_line(t, &mut b)? {
+                self.skip_newlines();
+                continue;
+            }
             match self.keyword() {
                 "fn" => self.fn_def(t)?,
-                "loop" => {
-                    self.next();
-                    if b.loop_v.is_some() {
-                        return self.err(t, "`loop` is already set");
-                    }
-                    let n = self.next();
-                    let v = match n.tok {
-                        Tok::Num(v) => v,
-                        // E907 (none: it is the line's own).
-                        Tok::Name if self.text(n) == "forever" => FOREVER,
-                        _ => {
-                            return self.err(
-                                n,
-                                "`loop` takes a number of seconds, e.g. `loop 8`, or `forever` for one that goes on without repeating",
-                            )
-                        }
-                    };
-                    if v != FOREVER && !(ONE / 10..=3600 * ONE).contains(&v) {
-                        return self.err(n, "the loop must be between 0.1 and 3600 seconds");
-                    }
-                    b.loop_v = Some(v);
-                    self.end_of_statement()?;
-                }
-                _ if self.is_fps() => {
-                    let ms = self.fps_line()?;
-                    if b.fps.replace(ms).is_some() {
-                        return self.err(t, "`fps` is already set");
-                    }
-                }
                 _ if self.text(t) == "frame" && self.toks[self.pos + 1].get().tok == Tok::LBrace => return self.err(t, "there are no `frame { }` blocks: a value is worked out once a frame by itself when it reads only the time, the clock and the controls; write its lines without the block"),
                 "layer" => {
                     let (cs, ct, rate) = self.layer(t)?;
@@ -6273,7 +6337,7 @@ impl<'s> Parser<'s> {
         }
         self.fail_at(
             t,
-            format!("`{w}` goes at the top of the formula, before its other lines"),
+            format!("`{w}` goes in the formula's header, at its top among the `name`, `about`, `control`, `look`, `loop` and `smooth` lines, before its other lines"),
         )
     }
 
@@ -6281,12 +6345,23 @@ impl<'s> Parser<'s> {
     /// checked, and — for the formula's own — kept in [`Decls`].
     #[inline(never)]
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
-    fn header(&mut self, host: bool) -> Result<(), Error> {
+    fn header(&mut self, host: bool, b: &mut Body) -> Result<(), Error> {
         // Where each of `name`, `about` and `look` was set (0: not yet).
         let mut seen = [0usize; 3];
         let mut controls = 0usize;
         let mut first = true;
-        while self.is_declaration() {
+        loop {
+            // (`loop`, `fps` and `smooth` lines among the declarations, in
+            // any order.)
+            let t = self.peek();
+            if self.time_line(t, b)? {
+                first = false;
+                self.skip_newlines();
+                continue;
+            }
+            if !self.is_declaration() {
+                break;
+            }
             let t = self.next();
             #[cfg(feature = "syntax")]
             self.decls_seen.push((t.start, t.end));

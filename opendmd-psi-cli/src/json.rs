@@ -45,6 +45,10 @@ pub fn builtins() -> String {
         ),
         ("values_added_later", names(&builtins::LATER)),
         (
+            "values_written_out",
+            list(builtins::SUGAR.iter(), |(n, d)| format!("{{\"name\": {}, \"means\": {}}}", s(n), s(d))),
+        ),
+        (
             "constants",
             list(builtins::CONSTS.iter(), |(n, v)| format!("{{\"name\": {}, \"value\": {}}}", s(n), v >> 16)),
         ),

@@ -198,10 +198,10 @@ KB. Comments cost nothing. The details are in the gallery's
 ## Saving as a GIF
 
 **Save as GIF…** draws one loop of the Formula and opens it in [Create
-Art](create-art.md), titled with its name. It saves at 50 frames a second,
-or 25 for a loop longer than about 5 seconds or a Formula with `fps 25`,
-and at most 240 frames. GIFs can't play 100 frames a second, so `fps 100`
-saves at 50.
+Art](create-art.md), titled with its name. It saves frames of 20 ms (50
+a second), or of 40 ms for a loop longer than about 5 seconds, and at most
+240 frames. A GIF can't hold faster frames, so a `smooth` Formula saves at
+20 ms too.
 
 In Create Art you can add text, trim it or change its speed, then save it
 to your card. It plays on the panel like any other GIF and goes in

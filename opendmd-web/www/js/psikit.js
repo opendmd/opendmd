@@ -189,7 +189,7 @@ export const TOO_HEAVY = (i) => `Too heavy for the panel: drawn the slow way, it
 // its numbers (`toks`) and colours (`cols`) are.
 // (`line`, `dot` and `ink` only in a formula with a draw block: before it
 // they were names a formula could set, and may still be; `fps` only before a
-// number, as `fps 100`; `forever` only after `loop`; `rate` only after `layer`. A sprite block's rows
+// number, as `fps 100`; `smooth` only alone on its line; `forever` only after `loop`; `rate` only after `layer`. A sprite block's rows
 // are its picture, `.p`, never numbers to drag.)
 // psi-builtins: highlighter (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
 const WORDS = /^(loop|layer|part|draw|for|table|fn|line|dot|pset|rect|rectfill|circ|circfill|trifill|cls|spr|print|ink)$/, DRAWS = /^(line|dot|pset|rect|rectfill|circ|circfill|trifill|cls|spr|print|ink)$/, DECLS = /^(psi|name|about|control|look)$/;
@@ -207,7 +207,7 @@ export function marks(s, bad) {
   }
   const inPic = (i) => pic.some(([a, e]) => i >= a && i < e);
   for (const m of s.matchAll(/(--|\/\/).*|"[^"\n]*"?|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+(?:\.(?!\.)\d*)?|(?<!\.)\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '"' ? 's' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || DECLS.test(m[0]) && /(^|;)[ \t]*$/.test(s.slice(0, m.index).split('\n').pop()) && !/^[ \t]*[=(.[]/.test(s.slice(m.index + m[0].length)) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6)) || m[0] == 'palette' && /^[ \t]+\w+[ \t]*=/.test(s.slice(m.index + 7)) || m[0] == 'rate' && /\blayer[ \t]+(\w+[ \t]+)?$/.test(s.slice(0, m.index))) ? 'w' : '';
+    const k = m[1] ? 'c' : m[0][0] == '"' ? 's' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || DECLS.test(m[0]) && /(^|;)[ \t]*$/.test(s.slice(0, m.index).split('\n').pop()) && !/^[ \t]*[=(.[]/.test(s.slice(m.index + m[0].length)) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'smooth' && /(^|;)[ \t]*$/.test(s.slice(0, m.index).split('\n').pop()) && /^[ \t]*(;|--|\/\/|\n|$)/.test(s.slice(m.index + 6)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6)) || m[0] == 'palette' && /^[ \t]+\w+[ \t]*=/.test(s.slice(m.index + 7)) || m[0] == 'rate' && /\blayer[ \t]+(\w+[ \t]+)?$/.test(s.slice(0, m.index))) ? 'w' : '';
     let a = m.index;
     if (inPic(a)) continue;
     // A character in quotes ('A') is a number, but not one to drag.

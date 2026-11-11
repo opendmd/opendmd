@@ -1,7 +1,7 @@
 # Psi in brief (for models)
 
 Psi draws a 128 × 32 LED panel, a frame every 2nd refresh of its scan
-(every refresh with `fps 100`; a refresh is about 8 ms). A **formula** is a
+(every refresh with `smooth`; a refresh is about 8 ms). A **formula** is a
 few lines of maths worked out for every pixel; its **last line is the
 colour**. The full reference is `docs/psi-for-models.md`; this card is
 what you need for most formulas. Check with `psi check FILE`.
@@ -14,11 +14,12 @@ what you need for most formulas. Check with `psi check FILE`.
   the middle, `angle` its angle in turns. `w`, `h` = 128, 32.
 - `t`: the frame's time, seconds into the loop (which instants are drawn
   is the display's: write motion of `t`, never per frame). `loop 8` (the
-  default) repeats every 8 s, and is the least time it plays; make
-  motion repeat with it: `sin(t/8)`, `frac(t/4)`. `loop forever` never
+  default) repeats every 8 s, and is the least time it plays. `phase` is
+  where the frame is in the loop, 0 to 1 (`t/8` exactly): make motion
+  repeat with it: `sin(phase)`, `frac(phase*2)`. `loop forever` never
   repeats (then `seed` is new each play).
 - **Angles and waves are turns, not radians**: `sin(v)` goes round once as
-  `v` goes 0 → 1. No pi: `sin(x)` is one wave across, `sin(t/8)` one a loop.
+  `v` goes 0 → 1. No pi: `sin(x)` is one wave across, `sin(phase)` one a loop.
   `sin cos tri saw sqr` are −1..1 waves.
 - The clock: `hour`, `minute`, `second`. Sliders: `a`, `b`, `c` (or names
   from `control` lines).
@@ -47,8 +48,8 @@ what you need for most formulas. Check with `psi check FILE`.
 ```psi
 loop 8
 -- plasma: three waves, hue turning with time
-v = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(r*2 - t/8)
-hsv(v/6 + t/8, 0.9, 1)
+v = sin(x*2 + phase) + sin(y*1.5 - t/4) + sin(r*2 - phase)
+hsv(v/6 + phase, 0.9, 1)
 ```
 
 ## Functions
@@ -123,10 +124,11 @@ under(px + floor(sin(t*2)*2), py) * v
 
 - `layer [over|add|multiply|screen|max|min] { … colour }` stack bottom to top.
 - **The header comes first**: `name "Sunset"`, `about "…"`, `look`,
-  `control speed 0..4 = 1 "Speed"` (a slider, read as `speed`), in any
-  order, before every other line (`loop`, `fps`, tables, names, `draw`):
-  anything else first and `name` is error E951. Comments may go anywhere.
-- `fps 100`: drawn every refresh, for fast motion (light formulas only); `layer rate 4 { … }` a
+  `control speed 0..4 = 1 "Speed"` (a slider, read as `speed`), `loop 8`,
+  `smooth`, in any order, before every other line (tables, names,
+  `draw`): a declaration after any of those is error E951. Comments may
+  go anywhere.
+- `smooth`: drawn every refresh, for fast motion (light formulas only); `layer rate 4 { … }` a
   slow bottom layer redrawn every 4th frame.
 - `table T = 0.2, 0.9, 0.5` numbers, read as `T[k]`.
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
@@ -144,7 +146,7 @@ under(px + floor(sin(t*2)*2), py) * v
 ```psi
 name "Dusk"
 loop 8
-mix(#102040, #ff8040, y + sin(t/8)*0.1)
+mix(#102040, #ff8040, y + sin(phase)*0.1)
 ```
 
 ## Cost: keep it light
@@ -158,7 +160,7 @@ the pixel; painted filled shapes by the pixels they cover. Prefer `draw`
 for scenes (objects, sprites, text) and per-pixel maths for fields
 (plasma, fire, sky). Two habits keep a shader light:
 
-- Lift what doesn't need the pixel out of it: `s = sin(t/8)` (once a
+- Lift what doesn't need the pixel out of it: `s = sin(phase)` (once a
   frame) and `row = noise(y*4, t, 0)` (once a row), then use `s` and
   `row` in the per-pixel lines.
 - One `noise` a pixel, not three or four: layer it with cheap waves

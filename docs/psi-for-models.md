@@ -31,8 +31,8 @@ right. Aim for **≤ 8 ms** (light or medium).
 
 A formula is evaluated **for every pixel, every frame**. The panel draws
 a frame every 2nd refresh of its scan (a refresh is about 8 ms: 100 to 125
-a second, by panel), every refresh with `fps 100` when the formula is light
-enough, every 4th with `fps 25`, and fewer when frames take too long. It is a few lines of arithmetic ending in a colour. Per pixel there
+a second, by panel), every refresh with `smooth` when the formula is light
+enough, and fewer when frames take too long. It is a few lines of arithmetic ending in a colour. Per pixel there
 are no loops, arrays, strings, recursion or state between frames: each frame
 is a pure function of the pixel's position, the time, the clock, three
 sliders, and (optionally) the picture under it. For things that are not "each
@@ -55,8 +55,12 @@ drawn depends on the display (the panel's refresh, the rate it holds the
 formula to; the browser's preview and a saved GIF have their own), so
 write motion as a function of `t`, never as a count of frames. The loop
 plays as whole frames: one that is not a whole number of 40 ms may be cut
-short by up to 40 ms on the panel. `loop N` is also the least time the
-formula plays for in a playlist, and the length of a GIF saved from it.
+short by up to 40 ms on the panel (`psi check` notes it). `loop N` is also
+the least time the formula plays for in a playlist, and the length of a GIF
+saved from it. **`phase`** is where the frame is in the loop, 0 to 1:
+exactly `t / N` (the same steps, the same frames), so write `sin(phase)`,
+`frac(phase*2)`, `hsv(x + phase, 1, 1)` for motion that comes round once
+(or k times) a loop, and the loop's length can change without other edits.
 With `loop forever` there is no loop: `t` is the seconds since the formula
 started, growing without end (section 11).
 
@@ -72,7 +76,8 @@ decl      = "psi" NUMBER                      -- the language version, first lin
           | "look" [ BLEND ] [ NUMBER ]       -- it may be the panel's look: blend (over), amount 0..100 (100)
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
-          | "fps" NUMBER                      -- 100, 50 or 25: every refresh, every 2nd (the default) or every 4th; once
+          | "smooth"                          -- drawn every refresh, not every 2nd: once (a formula's own `smooth` aside)
+          | "fps" NUMBER                      -- the older spelling: 100 (smooth), 50 (the default) or 25 (every 4th)
           | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] ["rate" NUMBER] "{" { assign | fn } colourline "}"   -- rate 2..200; fn: a "fn" line as below
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
@@ -123,10 +128,10 @@ NAME      = [A-Za-z_][A-Za-z0-9_]*
 comment   = "--" or "//" to the end of the line
 ```
 
-The declarations (`decl`) come first, before every other line; each once
-(`control` up to three times). `loop` and `fps` may come anywhere among
-the formula's own lines, outside layers (by habit, just after the
-declarations). Section 4 says what they do.
+The **header** comes first: the declarations (`decl`), each once
+(`control` up to three times), and `loop` and `smooth`, in any order among
+themselves, before every other line (a declaration below another line is
+E951). `loop` and `smooth` may also come later, outside layers. Section 4 says what they do.
 
 `and`/`or` bind looser than comparisons, `not` looser than comparisons too
 (`not x < 0.5` is `not (x < 0.5)`). An expression continues onto the next
@@ -155,6 +160,7 @@ computer.
 | `x`, `y` | 0..1 across (left→right) and down (top→bottom) | pixel / row |
 | `px`, `py` | column 0..127 from the left, row 0..31 from the top (whole numbers) | pixel / row |
 | `i` | pixel number 0..4095 from the top left: `py·128 + px` | pixel |
+| `phase` | where the frame is in the loop, 0 to 1: `t / N` for `loop N` (8 without one), the same steps; not in `loop forever` (E908) | frame |
 | `t` | the frame's time, seconds into the loop (which instants are drawn is the display's); with `loop forever`, since the formula started, growing without end (section 11) | frame |
 | `seed` | `loop forever` only: 0..1, the same for a whole play, a new one each time it plays (section 11) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
@@ -248,10 +254,11 @@ gray(smoothstep(0.8, 1, k) * (r < 0.45))
   of the language. Never needed: a formula without it is version 1.
 
 ```psi error
--- error: `name` goes at the top of the formula, before its other lines
+-- error: `name` goes in the formula's header
 loop 4
+v = x
 name "Late"
-gray(x)
+gray(v)
 ```
 
 ```psi error
@@ -362,12 +369,12 @@ formula's own they name (E933). The cost: the turn is a row step (a 32-entry cop
 ~20 µs a frame), the pixel pays `frac(v)` and a palette look-up; with `v`
 the pixel's position alone (no `t`, no slider) the still cache keeps
 `frac(v)` and a frame is ~0.6-0.9 ms — the idiom for plasma, rings,
-water, fire at `fps 100`. Write the motion into `s`, not `v`; keep `s` a
+water, fire drawn every refresh (`smooth`). Write the motion into `s`, not `v`; keep `s` a
 whole number of turns over the loop.
 
 ```psi
 loop 8
-fps 100
+smooth
 palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
 wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
 cycle(glow, wave/6, t/8)
@@ -461,7 +468,7 @@ over `s`; add `min(255, d + s)`; multiply `d·s/255`; screen `d + s − d·s/255
 max; min. Then coverage moves `d` towards that result. A layer has its own
 names (two layers may both set `v`); it
 sees names set before it outside the layers, but may not set them again.
-`loop` and `fps` go outside layers. Layers do not nest. A layer under an
+`loop` and `smooth` go outside layers. Layers do not nest. A layer under an
 opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
 
 **Slow layers: `layer [blend] rate N { … }`** (N 2..200). The bottom
@@ -494,7 +501,7 @@ can be a look: a **`look screen 40`** line at its top (section 4) says how it
 goes on — the compiler puts the formula's colour on with that blend and
 coverage (`opendmd_psi::compile_look`), so a model never writes that
 itself. A formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
-`fps` line is not used over a GIF.
+`smooth` line is not used over a GIF.
 
 **Moving the picture: `under(x, y)`.** In a colour expression (the last
 line, like `#f80`), `under(x, y)` is the picture under the formula at pixel
@@ -651,7 +658,6 @@ nearest pixel.
 name "Night drive"
 about "A red car on a road at dusk, the lane marks rushing past"
 loop 2
-fps 50
 sprite car {
   key . 0, R #d22, W #9cf, K #111
   ..RRRR..
@@ -708,7 +714,7 @@ Divided, it is an error (write `t/3 + x/3`); so is anything else: `t*x`, `sqrt(t
 
 ```psi
 loop forever
-fps 100
+smooth
 u = t*0.15 + seed*1000   -- a distance, in noise cells: grows without end
 ahead = noise(u + y*0.5, 0, 0)     -- per row: the track a little further on
 glow = smoothstep(0, 5, t)         -- a fade-in over the first five seconds
@@ -729,7 +735,7 @@ Without an envelope or a blend at a loop's seam, a drive here has none.
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
 | `noise` of a growing value with a part per pixel or per row | 4 different growing values | four different ones at most |
-| `fps` | 100, 50 or 25 (every refresh, every 2nd, every 4th) | `fps` is 25, 50 or 100 frames a second |
+| `smooth` / `fps` | `smooth` (every refresh); `fps` 100, 50 or 25, the older spelling | `fps` is 25, 50 or 100 |
 | functions read again (each call, the calls inside it included) | 65,536 tokens in all | calls its functions too many times |
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
@@ -759,7 +765,7 @@ of the VM's), and where its kernel takes the formula `psi check`, the
 editor's light / medium / heavy and the gallery's 10 ms count the JIT's
 estimate, the VM's shown beside it as "without the JIT" (`psi check` says
 when the JIT refuses one, and why: then the VM's counts). **The panel's
-refusals count the VM's**: 40 ms (32 at `fps 100`) and 12 ms for a look,
+refusals count the VM's**: 40 ms (32 drawn every refresh, `smooth`) and 12 ms for a look,
 by the plain VM estimate with no still cache, because the panel may have
 to draw any formula that way (the JIT off, short of memory, or failing
 its self-check; the cache refused). A formula can rate light with the
@@ -870,7 +876,7 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
 - **noise at a whole z** (`noise(x, y, 0)`, any whole constant third
   value) is ~470 ns, half the 855 of a moving one.
 
-Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (drawn every 4th refresh or less often; `fps 100` needs ≤ 5 ms
+Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (drawn every 4th refresh or less often; `smooth` needs ≤ 5 ms
 for every refresh, else it is drawn every 2nd; the panel refuses past 40 ms on the VM, 12 ms for a look, and the worked
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
@@ -914,14 +920,17 @@ rgb(lit, wave*0.3 + lit*0.5, wave)
 
 - **Without end**: `loop forever`; move by `t*k` inside `frac`, `sin`,
   `noise`; start somewhere else each play with `+ seed*1000` (section 11).
-- **Fast motion**: `fps 100` (a line of its own, like `loop`) draws every
-  refresh (about 100 to 125 a second, by panel) instead of every 2nd, for
-  things that move several pixels a frame (streaks, wireframes): smoother,
-  if the formula is light (≤ 5 ms; heavier ones are drawn every 2nd
-  refresh). It never changes the speed: `t` is the frame's time either
-  way. Most formulas need no `fps` line.
-- **Seamless loops**: with `loop N`, move things by `t/N` (or `t*k/N`, k
-  whole) inside periodic functions (`sin`, `frac`, `tri`, hue).
+- **Fast motion**: `smooth` (a line of its own in the header, like `loop`)
+  draws every refresh (about 100 to 125 a second, by panel) instead of
+  every 2nd, for things that move several pixels a frame (streaks,
+  wireframes): smoother, if the formula is light (≤ 5 ms; heavier ones are
+  drawn every 2nd refresh). It never changes the speed: `t` is the frame's
+  time either way. Most formulas need no `smooth` line. (`fps 100` is the
+  older spelling of it, still read.)
+- **Seamless loops**: with `loop N`, move things by `phase` (or
+  `phase*k`, k whole) inside periodic functions (`sin`, `frac`, `tri`,
+  hue); `phase` is `t/N` exactly. A product of `t` that passes 32,767
+  within the loop holds still from there (`psi check` notes it).
 - **Circles**: `r` (or `len(px - 63.5, py - 15.5)` in pixels); a disc
   `step(r, 0.3)`; soft edge in pixels: `smoothstep(rad + 0.5, rad - 0.5, d)`.
   A circle about another point: `len(cx - 1, cy)`. Spokes and sweeps:
@@ -1598,7 +1607,7 @@ these streaks estimated 6.0; the one before the eye test measured 4.4 ms).
 
 ```psi example=starfield-drawn
 loop 2.4
-fps 100
+smooth
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
 -- each a streak from where it was a moment ago
 -- a: streak length
@@ -1628,7 +1637,7 @@ the last line's: one edit.
 
 ```psi example=wire-cube
 loop 4.8
-fps 100
+smooth
 -- Wireframe cube: turning about two axes and swinging across; the near
 -- edges brighter. The colour is the last line's #40c0ff
 -- a: size
@@ -1656,7 +1665,7 @@ The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
 as tall as wide) and a place round the walls (`atan2`), a checker turning
 and travelling, the palette cycling, lit by depth in eight steps with a
 light going round. `near` and `round` depend on the pixel alone, so they
-are the still cache's: ~4.6 ms a frame with it (`fps 100`; a test board
+are the still cache's: ~4.6 ms a frame with it (`smooth`; a test board
 measured 4.0 ms as an effect, p90 4.1), ~14.4 without (a look, or the panel
 short of memory: then the panel holds it at a slower rate). The twist is a number in the source, not a slider, so
 that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
@@ -1664,7 +1673,7 @@ the fade one `min` and the black middle a comparison.
 
 ```psi example=tunnel
 loop 4.8
-fps 100
+smooth
 -- Tunnel: the time warp. Each loop the walls turn once, travel two
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
@@ -1697,7 +1706,7 @@ rest), so a pixel adds, floors and looks up; the noise under it is
 ½ and 1; the formula reads `pick(floor(a*2 + 0.5), …)`). ~6.0 ms (every 2nd refresh).
 The floor (the native's `floor=1`) is its own example, **Rotozoom floor**:
 each row's scale by its distance (a per-row value, so the column parts are
-gone), one layer, `pal(fire, …) * fog`, ~4.3 ms at `fps 100`.
+gone), one layer, `pal(fire, …) * fog`, ~4.3 ms drawn every refresh (`smooth`).
 
 ```psi example=rotozoom
 loop 9.6

@@ -278,6 +278,7 @@ impl<'s> Parser<'s> {
             }
         }
         notes.extend(self.saturation_notes(prog));
+        notes.extend(self.loop_note(prog));
         // Draw loops run as lanes: costed for 128 turns a lane.
         prog.mark_lane_loops();
         for (k, (count, lanes)) in prog.draw_loops().into_iter().enumerate() {
@@ -383,8 +384,20 @@ impl<'s> Parser<'s> {
         let known = |v: Iv| v.0 > i64::from(i32::MIN) && v.1 < i64::from(i32::MAX);
         let mut iv = alloc::vec![FULL_IV; n];
         let mut raw = alloc::vec![false; n];
+        // Whether each value is made from `t` (P1.5: a product of it that
+        // passes the end within the loop holds still from there, whatever
+        // it goes into).
+        let mut of_t = alloc::vec![false; n];
         for i in 0..n {
             let m = &dag.nodes[i];
+            of_t[i] = match m.code {
+                K_INPUT => key_byte(m).is_none() && m.val == i32::from(S_T),
+                c if c >= K_CONST => false,
+                c => {
+                    let ar = code::arity(c);
+                    [m.a, m.b, m.c].iter().take(ar).any(|&x| of_t[x as usize])
+                }
+            };
             iv[i] = match m.code {
                 K_CONST => Iv::point(m.val),
                 K_INPUT => match key_byte(m) {
@@ -438,12 +451,18 @@ impl<'s> Parser<'s> {
             if out.len() >= 3 {
                 break;
             }
-            let Some(user) = (0..n).find(|&j| {
+            let timed = of_t[i] && dag.nodes[i].code == code::MUL;
+            let user = (0..n).find(|&j| {
                 let m = &dag.nodes[j];
                 m.code < K_CONST && cares(m.code) && reads(dag, j).any(|x| x as usize == i)
-            }) else {
+            });
+            if user.is_none() && !timed {
                 continue;
-            };
+            }
+            // (A product of a product of `t`: the first one said it.)
+            if timed && reads(dag, i).any(|x| raw[x as usize] && of_t[x as usize]) {
+                continue;
+            }
             let Some(&(_, a, b)) = dag.made.iter().find(|m| m.0 as usize == i) else {
                 continue;
             };
@@ -455,6 +474,30 @@ impl<'s> Parser<'s> {
                 _ => mul_iv(x, y),
             };
             let reach = (exact.1.max(-exact.0) >> 16).max(32768);
+            if timed {
+                let named = self
+                    .locals
+                    .iter()
+                    .rposition(|l| l.id as usize == i && !l.counter)
+                    .map_or_else(|| "this product of `t`".to_string(), |k| format!("`{}`, a product of `t`,", self.locals[k].name));
+                let s = |v: u32| {
+                    let t = format!("{}.{:02}", v / 1000, v % 1000 / 10);
+                    t.trim_end_matches('0').trim_end_matches('.').to_string()
+                };
+                out.push((
+                    a,
+                    b,
+                    format!(
+                        "{named} passes 32,767 before the loop ends (about {} by t = {} s): from there it is held \
+                         at the end and stops moving. Scale it down (divide first, or a smaller factor), or wrap \
+                         `t` first, as frac(t/k)",
+                        group(reach),
+                        s(prog.loop_ms)
+                    ),
+                ));
+                continue;
+            }
+            let Some(user) = user else { continue };
             let what = match dag.nodes[user].code {
                 code::MUL => "*",
                 code::DIV => "/",
@@ -486,6 +529,61 @@ impl<'s> Parser<'s> {
             ));
         }
         out
+    }
+
+    /// Language review P1.4: a `loop` that is not a whole number of 40 ms
+    /// in a formula that moves. Every player draws whole frames of its
+    /// grid (10, 20 or 40 ms: every refresh, the 2nd or the 4th; a saved
+    /// GIF 20 or 40), and the loop is cut to them (`fx_psi`'s
+    /// `loop_frames`, the web app's preview and GIF), so its length, and
+    /// where `t` jumps back, differ by the rate it gets.
+    fn loop_note(&self, prog: &Program) -> Option<(usize, usize, String)> {
+        let ms = prog.loop_ms;
+        if ms == 0 || ms % 40 == 0 || prog.inputs() & 8 == 0 {
+            return None;
+        }
+        // The `loop` line's number: a statement that starts `loop` and a
+        // number (the tokens are gone by now; comments skipped).
+        let b = self.src.as_bytes();
+        let (mut i, mut start, mut at) = (0, true, None);
+        while i < b.len() {
+            let c = b[i];
+            if (c == b'-' || c == b'/') && b.get(i + 1) == Some(&c) {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if start && b[i..].starts_with(b"loop") && b.get(i + 4).is_some_and(|c| *c == b' ' || *c == b'\t') {
+                let a = i + 4 + b[i + 4..].iter().take_while(|c| **c == b' ' || **c == b'\t').count();
+                let e = a + b[a..].iter().take_while(|c| c.is_ascii_digit() || **c == b'.').count();
+                if e > a {
+                    at = Some((a, e));
+                    break;
+                }
+            }
+            if !c.is_ascii_whitespace() || c == b'\n' {
+                start = matches!(c, b'\n' | b';');
+            }
+            i += 1;
+        }
+        let (a, e) = at?;
+        let s = |v: u32| {
+            let t = format!("{}.{:03}", v / 1000, v % 1000);
+            t.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        Some((
+            a,
+            e,
+            format!(
+                "`loop {}` is not a whole number of 0.04 s: the panel draws whole frames of 10, 20 or 40 ms \
+                 (every refresh, every 2nd or every 4th), so this loop plays for {} s to {} s by the rate it gets, \
+                 and `t` jumps back where it is cut; a multiple of 0.04 s loops the same everywhere",
+                sub(self.src, a, e),
+                s(ms / 40 * 40),
+                s(ms / 10 * 10)
+            ),
+        ))
     }
 
     /// Radians in a wave (`sin(x*6.28)`, a habit from other languages):

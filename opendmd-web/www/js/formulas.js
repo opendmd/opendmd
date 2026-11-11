@@ -311,10 +311,10 @@ function toGif(f) {
 
 // --- The tab: the gallery, the details, the editor
 const STARTER = `-- x: 0-1 across, y: 0-1 down
--- t: seconds. Drag numbers!
+-- phase: 0-1 through the loop. Drag numbers!
 loop 8
-v = sin(x*2 - t/8)
-hsv(x/2 + t/8, 1, v/2 + 0.5)
+v = sin(x*2 - phase)
+hsv(x/2 + phase, 1, v/2 + 0.5)
 `;
 let B = null; // the built elements and state
 let EX = [];
