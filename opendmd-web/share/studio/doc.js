@@ -100,7 +100,7 @@ export class Doc {
   static async open(rec, coloursOf, j) {
     const fresh = async () => {
       const d = new Doc(rec.body, coloursOf);
-      d.L = d.layers.length - 1; // drawn on: the top layer (no layer controls yet)
+      d.L = Math.max(0, d.layers.findLastIndex((l) => !l.hide)); // drawn on: the top shown layer (no layer controls yet)
       await d.load();
       return d;
     };
@@ -110,8 +110,9 @@ export class Doc {
     return d;
   }
   async #replay(j, rec) {
+    if (!j.list.every((s) => this.valid(s))) return 'dropped';
     const lo = j.list[0].n, hi = lo + j.list.length - 1, ok = (n) => Number.isInteger(n) && n >= lo - 1 && n <= hi;
-    if (!rec.hash || j.hash !== rec.hash || !j.list.every((s, n) => s.n === lo + n && this.valid(s)) || !ok(j.at) || !ok(j.cur)) return 'dropped';
+    if (!rec.hash || j.hash !== rec.hash || !j.list.every((s, n) => s.n === lo + n) || !ok(j.at) || !ok(j.cur)) return 'dropped';
     this.steps = j.list; this.low = lo; this.cur = j.at - lo + 1;
     try {
       while (this.cur < j.cur - lo + 1) await this.step(true);

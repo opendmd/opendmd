@@ -19,7 +19,7 @@
 // palette tools load when first opened (colour.js), the GIF at the first
 // download (out.js). An importer (Create Art's GIF and picture conversion,
 // later) adds a piece through `piece()` below, the one way in.
-import { LocalStore, Conflict, CAPS, record, newId, packPx } from './store.js';
+import { LocalStore, Conflict, CAPS, record, newId, packPx, check } from './store.js';
 import { DEFAULT, builtin, ready, starter, isStarter } from './palettes.js';
 import { Doc, W, H, N, hexOf, toInt } from './doc.js';
 import * as T from './tools.js';
@@ -628,13 +628,20 @@ async function open(r) {
   await snaps();
 }
 // A new piece, with no colours until it is drawn on: the one way a piece
-// comes in (an importer, later, hands over its pixels, colours and `from`
-// here). Its layers and frames get stable keys as they are made.
+// comes in (an importer, a template, a file, a link). `spec` is a whole
+// piece, {name, tags, plays, frames: [{ms}], layers: [{name, moves, hide,
+// cels: [keys…]}], colours, from}, keys as Uint8Array or Uint16Array, or the
+// one-cel form {name, keys, colours, from}. Its layers and frames get stable
+// keys as they are made; it is checked (store.js check) before it opens.
 const k8 = () => [...crypto.getRandomValues(new Uint8Array(4))].map((x) => x.toString(16).padStart(2, '0')).join('');
-export async function piece({ name = 'Untitled', keys = new Uint8Array(N), colours = [], from = [] } = {}) {
+export async function piece({ name = 'Untitled', tags = [], plays = 0, keys = new Uint8Array(N), colours = [], from = [],
+  frames = [{ ms: STILL_MS }], layers = [{ name: 'Drawing', moves: false, cels: [keys] }] } = {}) {
   const wide = colours.some((c) => c.k > 255);
-  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays: 0, colours, ...(wide ? { keys: 2 } : {}), frames: [{ key: k8(), ms: STILL_MS }],
-    layers: [{ key: k8(), name: 'Drawing', moves: false, cels: [await packPx(keys, wide)] }] }, { from });
+  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays, colours, ...(wide ? { keys: 2 } : {}),
+    frames: frames.map((f) => ({ key: k8(), ms: f.ms ?? STILL_MS })),
+    layers: await Promise.all(layers.map(async (l) => ({ key: k8(), name: l.name ?? '', moves: !!l.moves, ...(l.hide ? { hide: true } : {}),
+      cels: await Promise.all(l.cels.map((c) => packPx(c, wide))) }))) }, { from, tags });
+  check(r);
   await open({ ...r, hash: '' });
   lastHash = null;
   kept = false; // stored at its first stroke (or name)
@@ -756,6 +763,7 @@ const studio = {
   // for out.js
   get doc() { return D; }, get rec() { return rec; }, get kept() { return kept; }, get saved() { return root.dataset.saved; },
   root, listOf, done, freeze, snaps, status, nameNow,
+  newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
 };
 async function colourTools(which, b) {
   colourMod ??= import('./colour.js');
