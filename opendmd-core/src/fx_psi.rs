@@ -3775,9 +3775,7 @@ mod tests {
             assert!(!after.is_empty() && after.iter().all(|&t| t < 16), "{src}: after the wraps {after:?}");
         }
         // A grid frame in the last partial grid frame: t = 0 (once).
-        let mut fx = match Fx::parse(&path("loop 4.85\ngray(frac(x + t/4.85))")).unwrap() {
-            Fx::Psi(f) => f,
-        };
+        let Fx::Psi(mut fx) = Fx::parse(&path("loop 4.85\ngray(frac(x + t/4.85))")).unwrap();
         arm_beam(false);
         let mut c = Canvas::new();
         fx.frame(Duration::from_millis(4_845), &mut c);
