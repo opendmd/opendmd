@@ -230,8 +230,10 @@ the editor.
 
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
-refuses a formula past 40 ms a frame by the plain VM estimate (32 ms for
-one drawn every refresh, `smooth`), or past 12 ms for a look drawn over every GIF. That is
+refuses a formula past 40 ms a frame by the plain VM estimate, or past
+12 ms for a look drawn over every GIF. A `smooth` one past 32 ms, the most
+it can keep every refresh, is drawn every 2nd refresh instead (from
+OpenDMD 1.1; earlier panels refuse it). That is
 the VM's figure with no still cache even where the JIT or the cache would
 draw it faster, because the panel may have to draw it that way (the JIT
 switched off, short of memory, or failing its self-check). The light,

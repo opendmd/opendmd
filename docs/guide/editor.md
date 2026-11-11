@@ -22,7 +22,8 @@ as far as your screen's own refresh allows.
 The rating counts how fast the panel usually draws the Formula. The panel
 also needs to be able to draw it the slow way, when it can't use its
 faster path, and refuses a Formula that would take more than about 40 ms a
-frame that way (32 ms for one drawn every refresh). Such a Formula is rated
+frame that way. (A `smooth` one past 32 ms is drawn every 2nd refresh
+instead, and the line under the preview says so.) Such a Formula is rated
 **too heavy**, and a line under the preview says so, even when it would
 usually be light.
 

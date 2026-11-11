@@ -283,9 +283,11 @@ pub fn error_at() -> Vec<u32> {
 /// takes it (`Program::jit_takes`: then [11] and [13] are the tier and what
 /// the gallery's limit counts, [14] and [6] the "without the JIT" figures;
 /// 0: the VM draws it, [14] and [6] are), the panel's limit for it in µs
-/// (`Program::panel_limit_us`: 40 ms, 32 at `fps 100`, 12 for one drawn
-/// over a GIF; the panel refuses it when [6], the VM's figure, is over it,
-/// whatever the JIT would make of it)]`; empty before anything compiled.
+/// (`Program::panel_limit_us`: 40 ms, 12 for one drawn over a GIF; the
+/// panel refuses it when [6], the VM's figure, is over it, whatever the JIT
+/// would make of it), the frame time it opens at on the panel in ms
+/// (`Program::opens_ms`: [10]'s, or 20 for a `smooth` one past the 32 ms
+/// every refresh allows)]`; empty before anything compiled.
 #[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -312,6 +314,7 @@ pub fn info() -> Vec<u32> {
         p.esp32_us_still(),
         u32::from(p.jit_takes()),
         p.panel_limit_us(p.inputs() & 32 != 0),
+        p.opens_ms(),
     ]
 }
 
