@@ -449,6 +449,14 @@ export class LocalStore {
     this.#j(tx, id, { cur }, (m) => (step && step.n <= m.at ? { hash: null } : {}));
     await done(tx);
   }
+  // A small note of this browser's own, kept in meta by key (`v` given: set).
+  async note(k, v) {
+    const tx = this.db.transaction('meta', v === undefined ? 'readonly' : 'readwrite'), meta = tx.objectStore('meta');
+    if (v === undefined) return (await req(meta.get('n:' + k)))?.v;
+    meta.put({ k: 'n:' + k, v });
+    await done(tx);
+    return v;
+  }
   async forget(id) {
     const tx = this.db.transaction(['journal', 'meta'], 'readwrite');
     tx.objectStore('journal').delete(IDBKeyRange.bound([id, 0], [id, Infinity]));

@@ -759,9 +759,9 @@ async function snaps() {
   const list = store && kept && rec ? (await store.revs(rec.id)).reverse() : [];
   $('s-snaps').replaceChildren(...list.map((h) => {
     const li = el('li'), t = el('span', 's-meta'), b = el('button', 's-pill', 'Restore');
-    t.append(el('b', '', h.label || 'Downloaded'), el('small', '', `${ago(h.modified)} · version ${h.rev}`));
+    t.append(el('b', '', h.label || 'Downloaded'), el('small', '', `${ago(h.modified)} · version ${h.rev} · Restore brings back this version, name and all`));
     b.dataset.rev = h.rev;
-    b.title = 'Restore it: what is here now is kept as a snapshot first';
+    b.title = 'Brings back this version, name and all: what is here now is kept as a snapshot first';
     li.append(t, b);
     return li;
   }));

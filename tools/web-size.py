@@ -476,8 +476,9 @@ STUDIO_LAZY = {
     "colour": (6 * 1024, ("colour.js",)),        # New colour…, Palettes…
     "frames": (7 * 1024, ("frames.js", "frames.css")),  # more than one frame or layer, Add frame, Add layer, Play
     "out": (5 * 1024, ("out.js",)),              # Download, Send to panel, Share: flatten, the GIF table
-    # files 8 KB (was 5; branch 3): every foreign record checked and hashed, packs walked for cycles, the merge shown before anything is stored.
-    "files": (8 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
+    # files 10 KB (was 5, then 8; branch 3 and its reviews): every foreign record checked and hashed, packs walked for
+    # cycles, the merge shown before anything is stored, backups split to open, copies found across the files of one opening.
+    "files": (10 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
     "library": (10 * 1024, ("library.js", "library.css")),  # Library (10 KB, was 8: branch 3's detail, duplicate, templates)
     "stamps": (5 * 1024, ("stamps.js",)),        # the Stamp tool, Save as stamp (5 KB, was 4: the ghost and the two sets)
     "link": (4 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
