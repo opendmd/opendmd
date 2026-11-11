@@ -56,6 +56,7 @@ let chain = Promise.resolve(), queued = null;
 
 // Pixel icons (12 x 12), drawn as SVG.
 const ICONS = {
+  stamp: '............|....####....|....####....|.....##.....|.....##.....|..########..|.##########.|.##########.|............|.##########.|............|............',
   pencil: '.........##.|........#..#|.......#..#.|......#..#..|.....#..#...|....#..#....|...#..#.....|..#..#......|.#..#.......|.###........|.##.........|............',
   eraser: '............|......####..|.....#...##.|....#...#.#.|...#...#..#.|..#...#..#..|.#####..#...|.#...#.#....|.#...##.....|.#####......|............|............',
   fill: '.....#......|....#.#.....|...#...#....|..#.....#...|.#########..|.#########.#|..#######..#|...#####..##|....###...##|.....#.....#|............|............',
@@ -272,6 +273,7 @@ function drop() {
 }
 function done() { drop(); sel = null; showSel(); paint(); }
 function act(a) {
+  if (a === 'stamp') { if (sel) stamps().then((m) => m.saveSel(), () => {}); return; }
   if (a === 'paste') {
     if (!clip) return;
     fx.stop?.();
@@ -355,6 +357,7 @@ cv.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  if (tool === 'stamp') { fx.place?.(p); return; } // stamps.js: one step
   if (tool === 'fill') { drag = { p, fill: true }; return; }
   if (tool === 'select') {
     if (within(p)) { lift(); drag = { p, was: { x: sel.x, y: sel.y } }; } else { drop(); sel = { x: p[0], y: p[1], w: 1, h: 1 }; drag = { p, marquee: true }; }
@@ -418,6 +421,7 @@ function hover([x, y]) {
   c.hidden = false;
   c.style.cssText = `left:${(x - lo) * s}px;top:${(y - lo) * s}px;width:${n * s}px;height:${n * s}px`;
   $('s-xy').innerHTML = `X <b>${x}</b> Y <b>${y}</b>`;
+  fx.hover?.([x, y]);
 }
 // Two fingers: their middle pans, their spread zooms (what is under them stays put).
 function pinch() {
@@ -440,6 +444,8 @@ function pinch() {
 
 function useTool(t, fill) {
   if (t !== 'select' && sel) done();
+  if (tool === 'stamp' && t !== 'stamp') fx.unstamp?.();
+  if (t === 'stamp') stamps().then((m) => m.tool(), () => {});
   if (t !== 'pick') prev = t;
   if (fill !== undefined) filled[t] = fill;
   else if (t === tool && t in filled) filled[t] = !filled[t]; // the shape's button again: edge <-> filled
@@ -724,7 +730,32 @@ async function drafts() {
 }
 
 // --- snapshots: named revisions (store.snapshot), restored as one undo step ---
+// What the piece says about itself: who made it, its licence, what it was made from.
+function prov() {
+  const r = rec, from = (r?.from || []).map((f) => (f.external ? f.note || 'an imported picture' : f.name || 'a record')).filter(Boolean);
+  $('s-prov').textContent = r ? `Made by ${r.author?.name || '—'} · Licence ${r.licence === 'CC0-1.0' ? 'CC0' : r.licence === 'CC-BY-4.0' ? 'CC BY 4.0' : 'not chosen'}`
+    + (from.length ? ` · Made from ${from.slice(0, 3).join(', ')}${from.length > 3 ? ` and ${from.length - 3} more` : ''}` : '') : '';
+}
+// A record deleted (here or from the Library); the open piece's place taken by the newest other, or a new one.
+async function forget(id) {
+  if (id === rec.id) { clearTimeout(timer); kept = false; }
+  await run(() => store.remove(id));
+  if (id === rec.id) {
+    const { items } = await store.list({ type: 'piece' });
+    const r = items.length && await store.get(items[0].id);
+    if (!r || !await tryOpen(r)) await fresh();
+  }
+  await drafts();
+}
+// Another record opened in the editor (from the Library, a file).
+async function openRec(r) {
+  done();
+  await save();
+  if (!await tryOpen(r)) await fresh();
+  await drafts();
+}
 async function snaps() {
+  prov();
   const list = store && kept && rec ? (await store.revs(rec.id)).reverse() : [];
   $('s-snaps').replaceChildren(...list.map((h) => {
     const li = el('li'), t = el('span', 's-meta'), b = el('button', 's-pill', 'Restore');
@@ -775,6 +806,18 @@ const download = (fit) => out('download', fit);
 const fx = {}; // what frames.js hooks in: painted(), changed(step), opened(), stop()
 let framesMod = null;
 const frames = () => (framesMod ??= import('./frames.js').then((m) => { m.mount(studio); return m; }).catch((e) => { framesMod = null; say(`The frames could not load: ${e.message || e}`); throw e; }));
+let stampsMod = null, libMod = null, filesMod = null;
+const lazy = (get, set, name) => () => (get() ?? set(import(`./${name}.js`).then((m) => { m.mount?.(studio); return m; })
+  .catch((e) => { set(null); say(`That could not load: ${e.message || e}`); throw e; })));
+const stamps = lazy(() => stampsMod, (v) => (stampsMod = v), 'stamps');
+const library = lazy(() => libMod, (v) => (libMod = v), 'library');
+const files = lazy(() => filesMod, (v) => (filesMod = v), 'files');
+// The Library is a view of this page (#library): the editor comes back when it is left.
+function route() {
+  const lib = location.hash === '#library';
+  if (lib) { done(); library().then((m) => m.show(), () => {}); } else fx.unlib?.();
+  root.dataset.view = lib ? 'library' : 'editor';
+}
 const withFrames = (f) => () => { if (D.stroke || drag) return; done(); frames().then(f, () => {}); };
 
 // --- the colour picker and the palette tools: colour.js, loaded when first opened ---
@@ -789,6 +832,25 @@ const studio = {
   // for frames.js
   fx, after, paint, buttons, showSel, get sel() { return sel; }, get dragging() { return !!drag; },
   newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
+  // for stamps.js, library.js and files.js
+  forget, fresh, useSwatches, menu, files, stamps,
+  // The open piece's name, tags or note changed from the Library: through the editor, which saves it.
+  setHead(o) { if ('name' in o) { $('s-name').value = o.name; nameDirty = true; } rec = { ...rec, ...o }; kept = true; queueSave(); },
+  get tool() { return tool; }, useTool, swatches, keep() { kept = true; queueSave(); }, openRec, drafts, save,
+  get journaled() { return journaled; }, jot, starters: () => starters, builtin,
+  // What the piece was made from gains `e` (once: the same id and hash, or note); false at the cap.
+  addFrom(e) {
+    const f = rec.from || [];
+    if (f.some((x) => (e.id ? x.id === e.id && x.hash === e.hash : x.external && x.note === e.note))) return true;
+    if (f.length >= CAPS.from) { say(`A piece names ${CAPS.from} things it was made from at most, and this one is full: this can’t be added to it.`); return false; }
+    rec = { ...rec, from: [...f, e] };
+    kept = true;
+    queueSave();
+    prov();
+    return true;
+  },
+  // Made by and licence, as an export sets them.
+  meta({ author, licence }) { rec = { ...rec, author: { name: author, account: rec.author?.account ?? null }, licence }; kept = true; queueSave(); prov(); },
 };
 async function colourTools(which, b) {
   colourMod ??= import('./colour.js');
@@ -822,6 +884,11 @@ async function main() {
   $('s-redo').addEventListener('click', () => undo(true));
   $('s-gif').addEventListener('click', () => download(false));
   $('s-send').addEventListener('click', () => { done(); out('send'); });
+  $('s-libb').addEventListener('click', () => { location.hash = '#library'; });
+  addEventListener('hashchange', route);
+  $('s-stampsb').addEventListener('click', () => stamps().then((m) => m.show(), () => {}));
+  $('s-savef').addEventListener('click', () => { done(); files().then((m) => m.saveOpen(), () => {}); });
+  $('s-openf').addEventListener('click', () => files().then((m) => m.pick(), () => {}));
   $('s-addf').addEventListener('click', withFrames((m) => m.addFrame()));
   $('s-addl').addEventListener('click', withFrames((m) => m.addLayer()));
   // A phone's bench is tabs: Colours, Layers, Piece.
@@ -830,6 +897,7 @@ async function main() {
     const b = e.target.closest('[data-tab]');
     if (!b) return;
     root.dataset.tab = b.dataset.tab;
+    if (b.dataset.tab === 'stamps') stamps().then((m) => m.show(), () => {});
     for (const t of $('s-tabs').children) t.setAttribute('aria-selected', t === b);
   });
   $('s-fit').addEventListener('click', () => download(true));
@@ -846,17 +914,7 @@ async function main() {
   $('s-list').addEventListener('click', async (e) => {
     const o = e.target.closest('.s-open'), d = e.target.closest('.s-del');
     if (o && o.dataset.id !== rec.id) { done(); await save(); const r = await store.get(o.dataset.id); if (r && !await tryOpen(r)) await fresh(); await drafts(); }
-    if (d && confirm(`Delete ${d.title.slice(7)}? It can’t be brought back.`)) {
-      const id = d.dataset.id;
-      if (id === rec.id) { clearTimeout(timer); kept = false; }
-      await run(() => store.remove(id));
-      if (id === rec.id) {
-        const { items } = await store.list({ type: 'piece' });
-        const r = items.length && await store.get(items[0].id);
-        if (!r || !await tryOpen(r)) await fresh();
-      }
-      await drafts();
-    }
+    if (d && confirm(`Delete ${d.title.slice(7)}? It can’t be brought back.`)) await forget(d.dataset.id);
   });
   $('s-name').addEventListener('input', () => { kept = true; nameDirty = true; queueSave(); });
   $('s-v-px').addEventListener('click', () => viewLeds(false));
@@ -866,7 +924,7 @@ async function main() {
   $('s-z-in').addEventListener('click', () => zoomBy(1));
   $('s-z-out').addEventListener('click', () => zoomBy(-1));
   new ResizeObserver(layout).observe(scroll);
-  const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick' };
+  const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick', s: 'stamp' };
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
   document.addEventListener('keydown', (e) => {
@@ -884,6 +942,7 @@ async function main() {
     else if (k === '1' || k === '2' || k === '3') useSize(+k);
     else if ((k === 'delete' || k === 'backspace') && sel) { e.preventDefault(); act('del'); }
     else if ((k === 'enter' || k === 'escape') && sel) act('done');
+    else if (k === 'escape' && tool === 'stamp') useTool('pencil');
     else if (k === ',' || k === '.') fx.step?.(k === '.' ? 1 : -1); // the frame before, after
     else if (k === ' ') { e.preventDefault(); if (D.frames.length > 1) frames().then((m) => m.toggle(), () => {}); }
     else if (k === 'n') withFrames((m) => m.addFrame())();
@@ -922,6 +981,7 @@ async function main() {
   if (!r || !await tryOpen(r)) await fresh();
   await drafts();
   root.removeAttribute('aria-busy');
+  route();
   // The starter palettes, once the page is up; read-only, as the starter pack lists them.
   starter().then((list) => {
     starters = list;

@@ -22,6 +22,7 @@
 <span class="s-sp"></span>
 <button class="s-ib" id="s-undo" title="Undo (Ctrl+Z)" aria-label="Undo" data-i="undo" disabled></button>
 <button class="s-ib" id="s-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" data-i="redo" disabled></button>
+<button class="s-pill" id="s-libb" title="Everything kept in this browser: drafts, stamps, palettes, fonts, templates">Library</button>
 <button class="s-pill" id="s-gif">Download GIF</button>
 <button class="s-cta" id="s-send">Send to panel</button>
 </div>
@@ -45,6 +46,7 @@
 <button class="s-tool" id="s-t-fill" data-tool="fill" data-i="fill" title="Fill (G) · D: its shade" aria-label="Fill" aria-pressed="false"><i>G</i></button>
 <button class="s-tool" id="s-t-select" data-tool="select" data-i="select" title="Select (M) · drag inside to move · Ctrl+C, Ctrl+X, Ctrl+V · Shift+H, Shift+V flip · Delete" aria-label="Select" aria-pressed="false"><i>M</i></button>
 <button class="s-tool" id="s-t-pick" data-tool="pick" data-i="pick" title="Pick a colour (I) · or right-click, Alt-click" aria-label="Pick a colour" aria-pressed="false"><i>I</i></button>
+<button class="s-tool" id="s-t-stamp" data-tool="stamp" data-i="stamp" title="Stamp (S) · pick one under Stamps, then click to place it" aria-label="Stamp" aria-pressed="false"><i>S</i></button>
 </span>
 <span class="s-seg s-fillmode" id="s-fillmode" role="group" aria-label="Shape" hidden><button data-fill="0" aria-pressed="true" title="Edge (R, O)">Edge</button><button data-fill="1" aria-pressed="false" title="Filled (Shift+R, Shift+O)">Filled</button></span>
 <span class="s-seg s-shade" id="s-shade" role="group" aria-label="Shade" hidden><button data-shade="solid" aria-pressed="true" title="Solid: every pixel (D cycles the shades)">Solid</button><button data-shade="light" aria-pressed="false" title="Light: 1 pixel in 4 (D)">Light</button><button data-shade="half" aria-pressed="false" title="Half: every other pixel (D)">Half</button><button data-shade="heavy" aria-pressed="false" title="Heavy: 3 pixels in 4 (D)">Heavy</button></span>
@@ -54,10 +56,10 @@
 <span class="s-seg" role="group" aria-label="Guides"><button id="s-g-grid" class="on" aria-pressed="true">Grid</button><button id="s-g-seam" class="on" aria-pressed="true">Seam</button></span>
 </div>
 <div class="s-selbar" id="s-selbar" hidden>
-<button class="s-pill" data-act="copy" title="Copy (Ctrl+C)">Copy</button><button class="s-pill" data-act="cut" title="Cut (Ctrl+X)">Cut</button><button class="s-pill" data-act="paste" title="Paste (Ctrl+V)">Paste</button><button class="s-pill" data-act="fliph" title="Flip left to right (Shift+H)">Flip ↔</button><button class="s-pill" data-act="flipv" title="Flip top to bottom (Shift+V)">Flip ↕</button><button class="s-pill" data-act="del" title="Delete (Delete)">Delete</button><button class="s-pill" data-act="done" title="Done (Enter)">Done</button>
+<button class="s-pill" data-act="copy" title="Copy (Ctrl+C)">Copy</button><button class="s-pill" data-act="cut" title="Cut (Ctrl+X)">Cut</button><button class="s-pill" data-act="paste" title="Paste (Ctrl+V)">Paste</button><button class="s-pill" data-act="fliph" title="Flip left to right (Shift+H)">Flip ↔</button><button class="s-pill" data-act="flipv" title="Flip top to bottom (Shift+V)">Flip ↕</button><button class="s-pill" data-act="del" title="Delete (Delete)">Delete</button><button class="s-pill" data-act="stamp" title="Keep this box as a stamp of your own">Save as stamp</button><button class="s-pill" data-act="done" title="Done (Enter)">Done</button>
 </div>
 <div class="s-strip" id="s-strip"><div class="s-cells" id="s-cells" aria-label="Frames"><button class="s-cell on" data-f="0" aria-current="true"><b>1</b></button></div><button class="s-pill s-addf" id="s-addf" title="New frame after this one (N)" aria-label="New frame">+</button></div>
-<div class="s-tabs" id="s-tabs" role="tablist"><button role="tab" data-tab="colours" aria-selected="true">Colours</button><button role="tab" data-tab="layers" aria-selected="false">Layers</button><button role="tab" data-tab="piece" aria-selected="false">Piece</button></div>
+<div class="s-tabs" id="s-tabs" role="tablist"><button role="tab" data-tab="colours" aria-selected="true">Colours</button><button role="tab" data-tab="layers" aria-selected="false">Layers</button><button role="tab" data-tab="stamps" aria-selected="false">Stamps</button><button role="tab" data-tab="piece" aria-selected="false">Piece</button></div>
 <div class="s-bench">
 <section class="s-colours" data-tab="colours" aria-labelledby="s-colours-h">
 <div class="s-hd"><h2 id="s-colours-h">Colours</h2><span class="s-sp"></span><span class="s-used" id="s-used"></span></div>
@@ -75,8 +77,16 @@
 <ul class="s-list" id="s-lrows"></ul>
 <p class="s-cap">A layer held still is drawn once and shows on every frame; one that moves has a picture for each frame.</p>
 </section>
+<section class="s-stamps" data-tab="stamps" aria-labelledby="s-stamps-h">
+<div class="s-hd"><h2 id="s-stamps-h">Stamps</h2><span class="s-sp"></span><button class="s-pill" id="s-stampsb">Show stamps</button></div>
+<div id="s-stampsx"></div>
+<p class="s-cap">Pick one, then click the panel to place it. Select a box › Save as stamp makes your own.</p>
+</section>
 <section class="s-drafts" data-tab="piece" aria-labelledby="s-drafts-h">
-<div class="s-hd"><h2 id="s-drafts-h">Drafts</h2><span class="s-sp"></span><button class="s-pill s-pri" id="s-new">New piece</button></div>
+<div class="s-hd"><h2 id="s-drafts-h">This piece</h2><span class="s-sp"></span><button class="s-pill s-pri" id="s-new">New piece</button></div>
+<div class="s-row"><button class="s-pill" id="s-savef">Save as file</button><button class="s-pill" id="s-openf">Open a file…</button></div>
+<p class="s-cap" id="s-prov"></p>
+<div class="s-hd s-hd2"><h3>Drafts</h3></div>
 <ul class="s-list" id="s-list"></ul>
 <p class="s-cap">Drafts are kept in this browser on this device, and nothing is uploaded. Download a GIF to keep a copy, then add it to your panel in its web app.</p>
 <p class="s-cap s-warn" id="s-loose" hidden>This browser may clear drafts if it runs low on space. Download a GIF to keep a copy.</p>

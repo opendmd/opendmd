@@ -64,7 +64,7 @@ linear-gradient(90deg,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient
 .s-chin b{font-weight:400;color:var(--fg)}
 .s-chin button{background:none;border:0;padding:4px 6px 3px;border-radius:3px}
 .s-chin .s-seg{display:flex;gap:2px}
-.s-chin .on{background:var(--acc);color:#141414!important}
+.s-chin .on{background:var(--bg3);color:var(--fg)!important;box-shadow:inset 0 0 0 1px var(--line)}
 
 /* The tray of tools under the panel */
 .s-tray{display:flex;align-items:center;gap:8px 6px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
@@ -93,7 +93,8 @@ linear-gradient(90deg,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient
 .s-cell.on{border-color:var(--fg);color:var(--fg)}
 .s-tabs{display:none}
 /* The bench: colours, layers, drafts */
-.s-bench{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px 32px;padding-top:18px}
+.s-bench{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"c l p" "c s p";align-items:start;gap:20px 32px;padding-top:18px}
+.s-colours{grid-area:c;grid-row:1/span 2}.s-layers{grid-area:l}.s-stamps{grid-area:s}.s-drafts{grid-area:p;grid-row:1/span 2}
 .s-hd{display:flex;align-items:center;gap:10px;margin:0 0 12px;min-height:36px}
 .s-hd h2{margin:0;padding:0;border:0;font:600 22px/1 var(--display);letter-spacing:-.012em}
 .s-hd2{margin:22px 0 10px;min-height:34px;flex-wrap:wrap}
@@ -159,6 +160,7 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   .s-tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line)}
   .s-tabs button{flex:1;height:44px;border:0;background:none;color:var(--mut)}
   .s-tabs [aria-selected=true]{color:var(--fg);font-weight:600;box-shadow:inset 0 -2px 0 var(--acc)}
-  #studio:not([data-tab=colours]) .s-colours,#studio:not([data-tab=layers]) .s-layers,#studio:not([data-tab=piece]) .s-drafts{display:none}
+  .s-bench{grid-template-areas:none}.s-bench>section{grid-area:auto}
+  #studio:not([data-tab=colours]) .s-colours,#studio:not([data-tab=layers]) .s-layers,#studio:not([data-tab=stamps]) .s-stamps,#studio:not([data-tab=piece]) .s-drafts{display:none}
   .s-pal.many{grid-template-columns:repeat(11,minmax(0,1fr))}
 }
