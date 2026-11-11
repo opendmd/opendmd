@@ -95,8 +95,10 @@ card. `opendmd-core/src/synth.rs` parses them.
 - `@card:<title>|<subtitle>` is a title card.
 - `@formula?psb=…` is a compiled Psi Formula (`docs/psi-for-models.md`).
   `opendmd-psi` compiles it in the browser, or `psi build` does; the same
-  code runs it in the firmware, the simulator and the browser, and the
-  firmware never compiles. Formulas draw everything, the clock included.
+  code runs it in the firmware, the simulator and the browser. The firmware
+  compiles only its card's `.psi` files that lack a current `.psb`
+  (`firmware/src/card_formulas.rs`). Formulas draw everything, the clock
+  included.
 
 Their options and limits are in the [HTTP API](api.md#virtual-files). To
 see one without a board, run `make sim ARGS="--play '@boot?len=full'"`.
