@@ -25,7 +25,7 @@
 //                           restored): bodies as stored, cels packed
 // `c` is a colour delta, {add: [{k, hex}], del: [{k, hex}]}: what the step
 // put into the piece's colours and took out of them.
-import { CAPS, packPx, unpackPx, memo } from './store.js';
+import { CAPS, packPx, unpackPx, memo, checkBody } from './store.js';
 
 export const W = 128, H = 32, N = W * H;
 // The journal's cap: 500 steps or about 8 MB, whichever comes first.
@@ -53,10 +53,12 @@ function size(s) {
 }
 const okColours = (l) => Array.isArray(l) && l.length <= CAPS.colours && l.every((c) => obj(c) && Number.isInteger(c.k) && c.k > 0 && c.k < 65536
   && typeof c.hex === 'string' && HEX.test(c.hex));
-const okBody = (b) => obj(b) && Array.isArray(b.frames) && b.frames.length > 0 && b.frames.length <= CAPS.frames
-  && b.frames.every(obj) && Array.isArray(b.layers) && b.layers.length > 0 && b.layers.length <= CAPS.layers
-  && b.layers.every((l) => obj(l) && Array.isArray(l.cels) && l.cels.length === (l.moves ? b.frames.length : 1) && l.cels.every((c) => typeof c === 'string'))
-  && (b.colours === undefined || okColours(b.colours));
+const okBody = (b) => { try { checkBody('piece', b); return true; } catch { return false; } };
+// Give every frame and layer of a body a key, once (a body written before keys).
+const keyed = (b) => {
+  const seen = new Set(), key = (k) => { let x = typeof k === 'string' ? k : ''; while (!x || seen.has(x)) x = k8(); seen.add(x); return x; };
+  return { ...b, frames: b.frames.map((f) => ({ ...f, key: key(f.key) })), layers: b.layers.map((l) => ({ ...l, key: key(l.key) })) };
+};
 
 export class Doc {
   // `body`: a piece's body as stored. `coloursOf(body)`: its colours, or its
@@ -77,12 +79,13 @@ export class Doc {
 
   // The body's structure and colours taken in; its cels packed, not read yet.
   #take(body) {
-    const { frames, layers, colours, keys, ...rest } = body, wide = keys === 2, seen = new Set();
-    const key = (k) => { let x = typeof k === 'string' ? k : ''; while (!x || seen.has(x)) x = k8(); seen.add(x); return x; };
-    this.rest = rest;
-    this.frames = frames.map((f) => ({ ...f, key: key(f.key) }));
-    this.layers = layers.map((l) => ({ ...l, key: key(l.key), cels: l.cels.map((z) => new Cel(z, wide, this.#cached(z))) }));
-    this.cols = new Map(this.coloursOf(body).map((c) => [c.k, toInt(c.hex)]));
+    // Taken in the form it is written in: plays 0 as no plays, `keys: 1` as
+    // none, the colours by key (an optional field at its default is absent).
+    const { frames, layers, colours, keys, plays, ...rest } = keyed(body), wide = keys === 2;
+    this.rest = plays ? { ...rest, plays } : rest;
+    this.frames = frames;
+    this.layers = layers.map((l) => ({ ...l, cels: l.cels.map((z) => new Cel(z, wide, this.#cached(z))) }));
+    this.cols = new Map((this.coloursOf(body) || []).map((c) => [c.k, toInt(c.hex)]));
     this.L = Math.min(this.L, this.layers.length - 1);
     this.F = Math.min(this.F, this.frames.length - 1);
     memo(this.layers.reduce((n, l) => n + l.cels.length, 0) + 8);
@@ -117,10 +120,23 @@ export class Doc {
     try {
       while (this.cur < j.cur - lo + 1) await this.step(true);
       while (this.cur > j.cur - lo + 1) await this.step(false);
+      // What the journal led to must be a piece too: a journal can lie.
+      checkBody('piece', await this.packed(this.snap()));
+      if (!this.#sound()) throw new Error('a key with no colour');
     } catch {
       return 'damaged';
     }
     return j.at !== j.cur ? 'moved' : 'kept';
+  }
+  // Every key a cel read so far holds is one of the piece's colours.
+  #sound() {
+    for (const l of this.layers) for (const c of l.cels) if (c.px) for (const k of c.px) if (k && !this.cols.has(k)) return false;
+    return true;
+  }
+  // A cel just read: a key the piece has no colour for is off (as it shows).
+  #clean(px) {
+    for (let i = 0; i < px.length; i++) if (px[i] && !this.cols.has(px[i])) px[i] = 0;
+    return px;
   }
   // A journal step of this shape, naming cels this piece has.
   valid(s) {
@@ -139,7 +155,7 @@ export class Doc {
   async load(f = this.F) {
     await Promise.all(this.layers.map(async (l, n) => {
       const c = this.celAt(n, f);
-      if (!c.px) { c.px = Uint16Array.from(await unpackPx(c.z, N, c.zw)); this.#remember(c.z, c.px); }
+      if (!c.px) { c.px = Uint16Array.from(await unpackPx(c.z, N, c.zw)); this.#remember(c.z, c.px); this.#clean(c.px); }
     }));
   }
   async loadAll() { for (let f = 0; f < this.frames.length; f++) await this.load(f); }
@@ -342,10 +358,14 @@ export class Doc {
       this.reconcile();
     }
   }
-  // The colour picked, undone out of the piece, stays picked.
+  // A colour taken out of the piece by an undo or a redo stays pending if
+  // something still holds its key: the colour picked, a paste floating, a
+  // stroke in progress.
   #kept(was) {
-    const k = this.key;
-    if (k && !this.cols.has(k) && was.has(k)) this.pending.set(k, was.get(k));
+    const held = new Set(this.held() || []);
+    held.add(this.key);
+    if (this.stroke) for (const i of this.stroke.keys()) held.add(this.px[i]);
+    for (const [k, c] of was) if (k && held.has(k) && !this.cols.has(k)) this.pending.set(k, c);
   }
 
   // --- keeping it ---
@@ -365,7 +385,7 @@ export class Doc {
       const out = [];
       for (const { c, v, px } of cels) {
         if (!px && c.zw === wide) { out.push(c.z); continue; }
-        const keys = px || (c.v === v && c.px) || Uint16Array.from(await unpackPx(c.z, N, c.zw));
+        const keys = px || (c.v === v && c.px) || this.#clean(Uint16Array.from(await unpackPx(c.z, N, c.zw)));
         const z = await packPx(keys, wide);
         if (c.v === v) { c.z = z; c.zw = wide; c.zv = v; this.#remember(z, keys); }
         out.push(z);
@@ -378,7 +398,8 @@ export class Doc {
   // the journal is told.
   async restore(body, more = {}) {
     const b = await this.packed(this.snap(), more), was = this.cols;
-    const s = { body: { b, a: body } };
+    const s = { body: { b, a: keyed(body) } }; // keyed once, here: a redo finds the same keys
+    body = s.body.a;
     await this.#needs(s, true);
     this.#take(body);
     this.#kept(was);
