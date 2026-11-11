@@ -26,7 +26,7 @@ runs against the same server (--base).
 - _headers: one CSP on every response, the right one per path; nosniff;
   no COOP/COEP; CORS * on install/, art-index/, formulas/src/; release.json and beta.json for 60 s,
   the version-named release files immutable, the web app's files and the
-  pages and scripts on them (demo/, f/, create/, dev/psi/, psiled.js, …)
+  pages and scripts on them (demo/, f/, create/, studio/, dev/psi/, psiled.js, …)
   no-cache, the rest 600 s;
 - www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (against
   opendmd.dev only; skipped under cf dev and against a workers.dev URL);
@@ -376,6 +376,9 @@ def headers(base: str, site: Path) -> None:
         "/create/": ("connect-src 'self' https:", None, None, "no-cache"),
         # (and a video from a blob: address: video in)
         "/create/create.js": ("media-src 'self' blob:", None, None, "no-cache"),
+        # The Studio: the demo's art module (wasm), nothing fetched from anywhere else.
+        "/studio/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
+        "/studio/store.js": (None, None, None, "no-cache"),
         # The Psi reference's live examples: wasm, and no connect-src beyond the docs'.
         "/dev/psi/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
         "/dev/psi/errors/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "no-cache"),
@@ -600,7 +603,7 @@ def csp_in_browser(base: str) -> None:
     from playwright.sync_api import sync_playwright
     paths = ["/", "/guide/", "/guide/web-app", "/install/", "/formulas/", "/licenses/", "/dev/", "/dev/api", "/dev/psi/",
              "/no/such/page", "/demo/",
-             "/f/#gallery=fire", "/create/", "/stats"]
+             "/f/#gallery=fire", "/create/", "/studio/", "/stats"]
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         for path in paths:
@@ -617,6 +620,8 @@ def csp_in_browser(base: str) -> None:
                 page.wait_for_timeout(1500)
             elif path == "/create/":
                 page.wait_for_selector("#create:not([aria-busy]) #studio", timeout=20000)
+            elif path == "/studio/":
+                page.wait_for_selector("article#studio:not([aria-busy])", timeout=20000)
             elif path == "/install/":
                 # (polled with evaluate: wait_for_function evals, which the CSP refuses)
                 for _ in range(200):

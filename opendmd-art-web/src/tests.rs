@@ -651,3 +651,38 @@ fn build_name_in_the_browser_is_the_cores() {
     assert!(crate::platforms().includes(&"VIRTUAL_BOY".into(), 0));
     assert!(!crate::platforms().includes(&"NINTENDO_DS".into(), 0));
 }
+
+#[test]
+fn indexed_frames_keep_their_palette_exactly() {
+    use crate::encode::indexed;
+    let pal = [0x000000, 0x0f380f, 0x306230, 0x8bac0f, 0x9bbc0f];
+    let mut frames = vec![0u8; 2 * W * H];
+    frames[5 * W + 7] = 4;
+    frames[W * H + 31 * W + 127] = 2;
+    let gif = indexed(&pal, &frames, &[120, 240], 0).unwrap();
+    let mut opts = gif::DecodeOptions::new();
+    opts.set_color_output(gif::ColorOutput::Indexed);
+    let mut dec = opts.read_info(gif.as_slice()).unwrap();
+    assert_eq!((dec.width(), dec.height()), (W as u16, H as u16));
+    let table: Vec<u32> = dec
+        .global_palette()
+        .unwrap()
+        .chunks(3)
+        .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
+        .collect();
+    // (The table is padded to a power of two with black.)
+    assert_eq!(table[..pal.len()], pal);
+    let mut got = Vec::new();
+    while let Some(f) = dec.read_next_frame().unwrap() {
+        got.push((f.buffer.to_vec(), f.delay));
+    }
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0], (frames[..W * H].to_vec(), 12));
+    assert_eq!(got[1], (frames[W * H..].to_vec(), 24));
+    // One colour still makes a valid file; bad calls are refused.
+    assert!(indexed(&[0], &vec![0; W * H], &[100], 1).is_ok());
+    assert!(indexed(&[], &vec![0; W * H], &[100], 0).is_err());
+    assert!(indexed(&pal, &vec![0; W * H - 1], &[100], 0).is_err());
+    assert!(indexed(&pal, &vec![5; W * H], &[100], 0).is_err());
+    assert!(indexed(&[0; 257], &vec![0; W * H], &[100], 0).is_err());
+}
