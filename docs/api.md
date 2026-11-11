@@ -1080,10 +1080,11 @@ Paths beginning with `@` are drawn, not read from the card: for
 never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
 the web app's pkg-psi `program(src)` makes, or `psi build`), `a=`, `b=`,
 `c=` (sliders), `fps=50|100|25` (default:
-the formula's `fps` line, else 50; as a look over the GIF the line is not
-used). A heavy one is shown at fewer frames a second; one estimated over
-40 ms a frame on the VM (32 ms at `fps=100`), with no JIT and no still
-cache, is a `400` (`this formula is too heavy for the panel …`), however
+the formula's rate line, `smooth` or `fps`, else 50; as a look over the
+GIF the line is not used). A heavy one is drawn less often; one asking for
+`fps=100` (or `smooth`) estimated over 32 ms a frame on the VM opens at
+`fps=50` instead (OpenDMD 1.1; a `400` before); one estimated over 40 ms,
+with no JIT and no still cache, is a `400` (`this formula is too heavy for the panel …`), however
 fast the JIT would draw it; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms` (the frame
 time it opened at: its rate's, or 20 for a `smooth` one too heavy for
