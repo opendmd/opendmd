@@ -5439,6 +5439,7 @@ def mock_pass(browser) -> None:
         views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.querySelector('span').textContent)")
         check(views == ["Now", "Library", "Playlists", "Formulas", "Create Art", "Settings"] and page.locator("#view-convert").count() == 0,
               f"nav: six views, Playlists third, Formulas before Create Art, no Convert ({views})")
+        follow_code_save_checks(browser, base, errors)
         follow_checks(page, base, errors)
         font_checks(page, base, "laptop")
         phone_pass(browser, base, errors)
@@ -9208,6 +9209,61 @@ def smooth_timings(page: Page) -> None:
               f"({r['bytes']:,} -> {r['copy']:,} B)")
 
 
+def follow_code_save_checks(browser, base: str, errors: list[str]) -> None:
+    """When the NET CONTROL code goes: never half-typed with the address's
+    save (the field still focused), and, once the field is left, with the
+    next save that works when its own failed (Follow on with no address:
+    the code's save refused, then the address typed)."""
+    c0 = get_json(base + "/api/config")
+    page = new_page(browser, "laptop", errors)
+    puts: list[dict] = []
+    page.on("request", lambda r: r.method == "PUT" and urllib.parse.urlparse(r.url).path == "/api/config"
+            and puts.append(json.loads(r.post_data or "{}")))
+    tick = lambda: page.evaluate("+(document.querySelector('#fo .tick')?.dataset.n || 0)")  # noqa: E731
+    try:
+        put_json(base + "/api/config", {"follow": False, "follow_host": ""})
+        page.goto(base + "/#settings/replay")
+        page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=20000)
+        # The address's save while a code is being typed (the field focused):
+        # the address goes, the code stays in the field, unsent.
+        page.click("#fo-code")
+        page.keyboard.type("12")
+        n0 = tick()
+        page.evaluate("""() => { const h = document.querySelector('#fo-host'); h.value = 'replay.invalid';
+            h.dispatchEvent(new Event('input', { bubbles: true })); }""")
+        page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=n0, timeout=10000)
+        c = get_json(base + "/api/config")
+        check(page.evaluate("document.activeElement?.id") == "fo-code" and page.input_value("#fo-code") == "12"
+              and puts and "follow_code" not in puts[-1] and c["follow_host"] == "replay.invalid" and not c["follow_code_set"],
+              f"follow: the address's save leaves a code still being typed in the field, unsent ({puts[-1:]}, code set {c['follow_code_set']})")
+        # Follow on with no address: refused; the code, typed and left, refused
+        # with it; the address typed: that save takes the code.
+        page.fill("#fo-code", "")
+        page.fill("#fo-host", "")
+        page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=tick(), timeout=10000)
+        page.check("#fo-on")
+        page.wait_for_selector("#fo .tick.bad", timeout=10000)
+        page.click("#fo-code")
+        page.keyboard.type("4321")
+        page.keyboard.press("Tab")
+        page.wait_for_timeout(300)
+        refused = page.inner_text("#fo .tick")
+        sent0 = len(puts)
+        n0 = tick()
+        page.click("#fo-host")
+        page.keyboard.type("replay.invalid")
+        page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=n0, timeout=10000)
+        c = wait_config(base, lambda c: c["follow_code_set"])
+        check("address first" in refused and any(x.get("follow_code") == "4321" for x in puts[sent0:]) and c["follow_code_set"]
+              and c["follow_host"] == "replay.invalid" and page.input_value("#fo-code") == "",
+              f"follow: a code whose own save failed goes with the next save that works ('{refused}'; {puts[sent0:]}, code set {c['follow_code_set']})")
+    finally:
+        page.context.close()
+        put_json(base + "/api/config", {"follow": c0["follow"], "follow_host": "", "attract_set": c0.get("attract_set")})
+        if c0["follow_host"]:
+            put_json(base + "/api/config", {"follow_host": c0["follow_host"]})
+
+
 def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     """Settings' "Follow RePlayOS" card and the Now line, against a fake
     RePlayOS (tools/mock-replay.py, started and stopped here)."""
@@ -10532,7 +10588,7 @@ def www_update_pass(browser) -> None:
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
-ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks}
+ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks, "follow_code_save": follow_code_save_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 
 
