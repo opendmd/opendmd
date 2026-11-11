@@ -755,6 +755,21 @@ pub fn beam_us() -> u32 {
     BEAM_US.load(Ordering::Relaxed)
 }
 
+/// The start of the last retune in place ([`PsiFx::retune_from`]): frame
+/// ms << 16 | asked ms, 0 once taken. Main loop only: one thread retunes
+/// (firmware `retune()` clears it, retunes, takes it).
+static RETUNED: AtomicU32 = AtomicU32::new(0);
+
+/// The frame time (ms) the last retune in place started at and the one
+/// asked, once: the firmware's `play now` line (the emulator lane reads
+/// it there). `None` when no retune went in place since the last take.
+pub fn take_retuned() -> Option<(u32, u32)> {
+    match RETUNED.swap(0, Ordering::Relaxed) {
+        0 => None,
+        v => Some((v >> 16, v & 0xffff)),
+    }
+}
+
 /// Whether `prog` reads a built-in input (`daylight`, `since(night)` …).
 fn reads_world(prog: &psi::Prog) -> bool {
     prog.inputs() & 128 != 0
@@ -1222,16 +1237,7 @@ impl PsiFx {
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
         self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()), how);
-        // (The emulator lane reads the start from this line.)
-        log::info!(
-            "formula: {} in place: {} ms frames (asked {})",
-            match how {
-                Retune::Edit => "edited",
-                Retune::Play => "played",
-            },
-            self.gov.delay_ms(self.ms()),
-            self.ms()
-        );
+        RETUNED.store(self.gov.delay_ms(self.ms()) << 16 | self.ms(), Ordering::Relaxed);
         Ok(())
     }
 

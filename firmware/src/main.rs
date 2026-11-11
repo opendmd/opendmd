@@ -983,6 +983,8 @@ fn main() -> Result<()> {
                     if psb.is_some() {
                         opendmd_core::synth::set_sent(psb);
                     }
+                    // A Formula in place: (the frame ms it starts at, asked).
+                    let mut in_place = None;
                     let outcome = if over {
                         // Drawn over the file on screen, not played: its
                         // ordinal ends it (`Looks::started`); drawn at once.
@@ -1027,6 +1029,7 @@ fn main() -> Result<()> {
                                 // No new start (the ordinal stays), but
                                 // status names the formula now on the panel:
                                 // its path and its title (`&name=`).
+                                let r = r.map(|rate| in_place = rate);
                                 if r.is_ok() {
                                     let np = engine.as_ref().and_then(|e| e.now_playing());
                                     if let (Ok(mut s), Some(np)) = (status.lock(), np) {
@@ -1064,7 +1067,16 @@ fn main() -> Result<()> {
                     let what = if over { "over the GIF" } else { "play now" };
                     match &outcome {
                         Ok(()) if over => log::debug!("{what}: {}", short(&path)),
-                        Ok(()) => log::info!("{what}: {}", short(&path)),
+                        // In place: the rate it starts at (the emulator
+                        // lane reads it from this line).
+                        Ok(()) => match in_place {
+                            Some((ms, asked)) => log::info!(
+                                "{what}: {} in place{}: {ms} ms frames (asked {asked})",
+                                short(&path),
+                                if live { ", live" } else { "" }
+                            ),
+                            None => log::info!("{what}: {}", short(&path)),
+                        },
                         Err(e) => log::warn!("{what}: {}: {e:?}", short(&path)),
                     }
                     let _ = reply.send(outcome);
@@ -2987,7 +2999,9 @@ fn play_error(path: &str, err: std::io::Error) -> PlayError {
 /// A formula over the formula on screen: in place (`Engine::retune`).
 /// `live`: a live edit of it (the governor's level goes on), else another
 /// Formula played over it (it starts from its own estimate's level:
-/// `fx_psi::Governor::retune`). `None` when either is not a formula.
+/// `fx_psi::Governor::retune`). `None` when either is not a formula; else
+/// the frame time it starts at and the one asked (ms), `None` when it was
+/// played from nothing instead (no room to compile beside it).
 #[cfg(feature = "psi")]
 fn retune(
     engine: Option<&mut Engine>,
@@ -2995,10 +3009,14 @@ fn retune(
     live: bool,
     now: Duration,
     keep: Option<overrides::Override>,
-) -> Option<Result<(), PlayError>> {
+) -> Option<Result<Option<(u32, u32)>, PlayError>> {
     use opendmd_core::fx_psi::Retune;
     let how = if live { Retune::Edit } else { Retune::Play };
-    Some(engine?.retune(path, now, keep, how)?.map_err(|e| play_error(path, e)))
+    let e = engine?;
+    // (Not one a probe left: none, if this one was played from nothing.)
+    opendmd_core::fx_psi::take_retuned();
+    let r = e.retune(path, now, keep, how)?;
+    Some(r.map(|()| opendmd_core::fx_psi::take_retuned()).map_err(|e| play_error(path, e)))
 }
 
 #[cfg(not(feature = "psi"))]
@@ -3008,7 +3026,7 @@ fn retune(
     _: bool,
     _: Duration,
     _: Option<overrides::Override>,
-) -> Option<Result<(), PlayError>> {
+) -> Option<Result<Option<(u32, u32)>, PlayError>> {
     None
 }
 

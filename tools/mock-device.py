@@ -255,9 +255,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
   (default 8); not compiled here (any `src` plays). A formula over the
   formula on screen replaces it in place (no new ordinal, a fresh dwell);
-  `"live":true` does only that and is a 409 when no formula is on screen
-  (400 with any other path); status names the new formula, as the
-  firmware does. Over 2,048 B a formula's path is a 413.
+  `"live":true` does only that and is a 409 when no formula is on screen,
+  or when it is not the one the last play without `live` put there (the
+  playlist, Next or Previous moved on, maybe to another Formula: the
+  firmware's `Engine::retune`; 400 with any other path); status names the
+  new formula, as the firmware does. Over 2,048 B a formula's path is a 413.
   `"over":true` draws the formula over the file on screen instead (the
   firmware's Formula look from the editor): `{"ok":true,"path":..,"over":true}`,
   until the ordinal changes; `""` takes it off; `live` with none on is a
@@ -2244,8 +2246,10 @@ class Player:
         self.ctx = ctx
         self.boot_time = time.monotonic()
         self.ordinal = 0
+        self.sent = None  # as the firmware: no start sent since boot
         self.gifs_started = 0
         self.over: tuple[str, int] | None = None  # the editor's formula over the GIF, its ordinal
+        self.sent: int | None = None  # the ordinal the last play without `live` put on screen
         self.paused = False        # the manual toggle (POST /api/pause)
         self.scheduled_off = False  # night mode "off" (Schedule.evaluate)
         self.virtual_hold = False  # Follow RePlayOS's power-on/logo/title sequence in progress
@@ -2373,6 +2377,12 @@ class Player:
         if source is None:
             return None
         return {"source": source, "held": 20480, "frame_us": 0, "frame_ms": 0}
+
+    def retunes(self, live: bool) -> bool:
+        """Engine::retune: a formula sent now goes in place, over the
+        formula on screen; a live edit only over the one the last play
+        without `live` put there (Engine::note_sent)."""
+        return (self.current() or "").startswith("@formula") and (not live or self.sent == self.ordinal)
 
     def retune(self, path: str):
         """Engine::retune: a formula over the formula on screen, in place
@@ -4481,13 +4491,16 @@ def make_handler(ctx: Context, quiet: bool):
                     if not ctx.player.playlist:
                         self.send_error_json(503, "no playlist is running")
                         return
-                    if formula and (ctx.player.current() or "").startswith("@formula"):
+                    live = req.get("live") is True
+                    if formula and ctx.player.retunes(live):
                         ctx.player.retune(p)
-                    elif req.get("live") is True:
+                    elif live:
                         self.send_error_json(409, "no formula is on the panel now")
                         return
                     else:
                         ctx.player.play_now(p)
+                    if not live:
+                        ctx.player.sent = ctx.player.ordinal
                 self.send_json(200, {"ok": True, "path": p})
                 return
             psi_file = bool(FORMULA_FILE_RE.match(p))
@@ -4511,6 +4524,7 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(415, f"{p}: not a GIF file")
                     return
                 ctx.player.play_now(p)
+                ctx.player.sent = ctx.player.ordinal
             self.send_json(200, {"ok": True, "path": p})
 
         def h_play_formula(self, path):
@@ -4555,7 +4569,7 @@ def make_handler(ctx: Context, quiet: bool):
                     ctx.player.over = (p, ctx.player.ordinal)
                     self.send_json(200, {"ok": True, "path": p, "over": True})
                     return
-                if (ctx.player.current() or "").startswith("@formula"):
+                if ctx.player.retunes(live):
                     SENT_PSB[0] = body
                     ctx.player.retune(p)
                 elif live:
@@ -4564,6 +4578,8 @@ def make_handler(ctx: Context, quiet: bool):
                 else:
                     SENT_PSB[0] = body
                     ctx.player.play_now(p)
+                if not live:
+                    ctx.player.sent = ctx.player.ordinal
             self.send_json(200, {"ok": True, "path": p})
 
         def formula_file_title(self, p: str) -> str:
