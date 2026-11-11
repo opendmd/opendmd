@@ -589,10 +589,11 @@ impl<'s> Parser<'s> {
             a,
             e,
             format!(
-                "`loop {}` is not a whole number of the panel's frames: drawn every {} refresh it is cut to {} s, \
-                 and `t` jumps back there; {} loops without a jump at every rate",
+                "`loop {}` is not a whole number of {} ms frames: a GIF saved from it is cut to {} s, as is the \
+                 panel's loop when it can't follow its scan (a `rate` layer, the glow), and `t` jumps back there; \
+                 {} loops without a jump everywhere",
                 sub(self.src, a, e),
-                if grid == 40 { "4th" } else { "2nd" },
+                grid,
                 s(ms / grid * grid),
                 // The 40 ms multiples either side: whole frames at every rate.
                 match ms / 40 * 40 {

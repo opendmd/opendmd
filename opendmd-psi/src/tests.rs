@@ -3892,7 +3892,7 @@ fn notes_of(src: &str) -> alloc::vec::Vec<alloc::string::String> {
 #[cfg(feature = "syntax")]
 #[test]
 fn a_loop_off_the_frame_grid_is_noted() {
-    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("is not a whole number of the panel's frames"));
+    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("ms frames: a GIF saved from it"));
     assert!(has("loop 4.85\ngray(frac(x + t/4.85))"));
     assert!(has("name \"N\"\nloop 0.33\ngray(frac(x + phase))"));
     assert!(has("smooth\nloop 4.85\ngray(frac(x + phase))"));
@@ -3905,9 +3905,9 @@ fn a_loop_off_the_frame_grid_is_noted() {
     assert!(!has("loop 4.85\ngray(x)"));
     assert!(!has("loop forever\ngray(frac(x + t/4.85))"));
     let n = notes_of("loop 4.85\ngray(frac(x + t/4.85))");
-    let m = n.iter().find(|m| m.contains("panel's frames")).unwrap();
-    assert!(m.contains("every 2nd refresh it is cut to 4.84 s") && m.contains("`loop 4.84` or `loop 4.88`"), "{m}");
-    assert!(!m.contains("0.04") && !m.contains(" ms"), "{m}");
+    let m = n.iter().find(|m| m.contains("ms frames")).unwrap();
+    assert!(m.contains("a GIF saved from it is cut to 4.84 s") && m.contains("`loop 4.84` or `loop 4.88`"), "{m}");
+    assert!(!m.contains("0.04"), "{m}");
 }
 
 /// P1.5: a product of `t` that passes the number's end within the loop is

@@ -976,6 +976,20 @@ fn compile(q: &Query) -> Result<(ProgBox, u32, u8), psi::Error> {
     Ok((prog, est, delay))
 }
 
+/// The ms into its loop a frame at `ms` (the clock) draws `t` at. Raced,
+/// the refresh's own time wrapped at exactly the loop's length (`loop
+/// 4.85` at 4,850 ms, as the browser's preview does; a `loop forever`
+/// one's passes, its `t` unread); else the frame of the grid at or before
+/// it, the loop `n` whole frames of `grid` ms (held frames skip some,
+/// never draw between them).
+fn loop_ms_at(ms: u32, raced: bool, loop_ms: u32, n: u32, grid: u32) -> u32 {
+    match (raced, loop_ms) {
+        (true, 0) => ms % (n * grid),
+        (true, lp) => ms % lp,
+        (false, _) => ms / grid % n * grid,
+    }
+}
+
 /// What the governor starts from: the estimate with the still cache when
 /// the formula has values for one and the gate would let it take it now
 /// (it is taken on the first frame, which the governor leaves out), else
@@ -1373,7 +1387,7 @@ impl PsiFx {
             && clock().is_some()
             && !self.trialing()
             && beam_hooks().is_some();
-        let i = if self.racing { ms % (n * grid) } else { ms / grid % n * grid };
+        let i = loop_ms_at(ms, self.racing, self.prog.loop_ms(), n, grid);
         self.inputs.t = psi::Inputs::at_ms(i);
         // (One that never repeats: its own time since it opened.)
         self.inputs.tw = psi::Inputs::wide_ms(self.played_ms);
@@ -3688,6 +3702,19 @@ mod tests {
         assert_eq!(look_retry(&e), None, "{}", e.msg);
         let e = FormulaLook::from_path(&super::path("gray(x)", "")).expect_err("covers the GIF");
         assert_eq!(look_retry(&e), None, "{}", e.msg);
+    }
+
+    /// Phase 2 B2: raced, `t` wraps at exactly the loop's length (not at
+    /// the whole frames of its grid under it); on the grid, at its frames.
+    #[test]
+    fn raced_t_wraps_at_the_loop() {
+        // `loop 4.85` at 20 ms: 242 frames, 4,840 ms of grid.
+        assert_eq!(loop_ms_at(4_845, true, 4_850, 242, 20), 4_845);
+        assert_eq!(loop_ms_at(4_851, true, 4_850, 242, 20), 1);
+        assert_eq!(loop_ms_at(4_845, false, 4_850, 242, 20), 0);
+        assert_eq!(loop_ms_at(4_839, false, 4_850, 242, 20), 4_820);
+        // A loop forever one: its passes (its `t` is not read).
+        assert_eq!(loop_ms_at(1_005, true, 0, 50, 20), 5);
     }
 
     #[test]

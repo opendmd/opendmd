@@ -187,8 +187,11 @@ the editor.
   (`smooth`), and fewer when frames take too long;
   the browser's preview draws at about the same times, and a saved GIF at
   20 or 40 ms. So motion is a function of `t`, never a count of frames.
-  The loop plays as whole frames: one that is not a whole number of 40 ms
-  may be cut short by up to 40 ms. `loop N` is also the least time the
+  On the panel, racing its scan, `t` wraps at exactly the loop's length
+  (from OpenDMD 1.1), as in the preview; a saved GIF, and the panel when it
+  can't follow its scan (a `rate` layer, the glow), play whole 20 ms (or
+  40 ms) frames, so a loop that isn't a whole number of them comes out up
+  to a frame short there. `loop N` is also the least time the
   formula plays for in a playlist, and the length of a GIF saved from it.
   `phase` is where the frame is in the loop, 0 to 1: `t` divided by the
   loop's length as its line writes it, the very division, so `sin(phase)`
