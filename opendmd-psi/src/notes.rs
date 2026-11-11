@@ -451,7 +451,14 @@ impl<'s> Parser<'s> {
             if out.len() >= 3 {
                 break;
             }
-            let timed = of_t[i] && dag.nodes[i].code == code::MUL;
+            // (A product of `t` that only a `min` or a `clamp` reads is a
+            // ramp held at its end on purpose.)
+            let held = {
+                let mut by = (0..n).filter(|&j| dag.nodes[j].code < K_CONST && reads(dag, j).any(|x| x as usize == i));
+                let first = by.next();
+                first.is_some() && first.into_iter().chain(by).all(|j| matches!(dag.nodes[j].code, code::MIN | code::CLAMP))
+            };
+            let timed = of_t[i] && dag.nodes[i].code == code::MUL && !held;
             let user = (0..n).find(|&j| {
                 let m = &dag.nodes[j];
                 m.code < K_CONST && cares(m.code) && reads(dag, j).any(|x| x as usize == i)
@@ -488,9 +495,9 @@ impl<'s> Parser<'s> {
                     a,
                     b,
                     format!(
-                        "{named} passes 32,767 before the loop ends (about {} by t = {} s): from there it is held \
-                         at the end and stops moving. Scale it down (divide first, or a smaller factor), or wrap \
-                         `t` first, as frac(t/k)",
+                        "{named} may pass 32,767 before the loop ends (up to about {} by t = {} s, reckoned from \
+                         each factor's range): past it, it is held at the end and stops moving. Scale it down \
+                         (divide first, or a smaller factor), or wrap `t` first, as frac(t/k)",
                         group(reach),
                         s(prog.loop_ms)
                     ),

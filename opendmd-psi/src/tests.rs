@@ -3917,6 +3917,13 @@ fn a_product_of_t_past_the_limit_is_noted() {
     assert!(!has("loop 8\ngray(frac(t*1000))"));
     assert!(!has("gray(x*30000)"));
     assert!(!has("loop forever\ngray(frac(t*5000))"));
+    // A ramp held at its end by a min or a clamp is meant: no note.
+    assert!(!has("loop 8\ngray(min(t*5000, 1))"));
+    assert!(!has("loop 8\nv = clamp(t*5000, 0, 1)\ngray(v)"));
+    // The factors' ranges are taken apart (t and 1 - t/8 both at their
+    // ends), so the note says "may".
+    let n = notes_of("loop 8\nv = t*(1 - t/8)*5000\ngray(frac(v))");
+    assert!(n.iter().any(|m| m.contains("may pass 32,767")), "{n:?}");
 }
 
 /// The editor's `use … as p` (`look::function`) leaves `smooth` out with
