@@ -218,7 +218,9 @@ function mountDevice(el) {
     // The panel's position runs a little slower than its clock (10 ms
     // sleep ticks); measure how much from its own reports, over >= 2 s.
     const key = `${np.ordinal} ${np.path} ${s.paused}`;
-    if (base?.key !== key) base = { key, t: s.t_ms, e: np.elapsed_ms };
+    // (Its position going back with the same ordinal: a Formula retuned in
+    // place, started over; measured afresh, never as a slow panel.)
+    if (base?.key !== key || np.elapsed_ms < base.e) base = { key, t: s.t_ms, e: np.elapsed_ms };
     const span = s.t_ms - base.t;
     const rate = span >= 2000 ? Math.min(1.1, Math.max(0.5, (np.elapsed_ms - base.e) / span)) : 1;
     last = { path: np.path, elapsed: np.elapsed_ms, t: s.t_ms, frame: np.frame, rate };
