@@ -671,6 +671,9 @@ def s_lit(page: Page) -> int:
 
 
 def s_at(page: Page, x: int, y: int) -> tuple[float, float]:
+    # The panel in the window (a click further down the page may have scrolled it away).
+    page.evaluate("""() => { const r = document.getElementById('s-canvas').getBoundingClientRect();
+        if (r.top < 0 || r.bottom > innerHeight) scrollBy(0, r.top - 80); }""")
     b = page.locator("#s-canvas").bounding_box()
     return b["x"] + (x + .5) * b["width"] / 128, b["y"] + (y + .5) * b["height"] / 32
 
@@ -690,7 +693,8 @@ S_STORE = """async ([what, arg]) => { const m = await import('/studio/store.js')
     const id = arg || document.getElementById('studio').dataset.id;
     if (what === 'get') { const r = await s.get(id); return { r, again: r && await m.hashOf(r.body) }; }
     if (what === 'revs') return s.revs(id);
-    if (what === 'stale') { const r = await s.get(id); try { await s.put(r, { baseRev: r.rev + 5 }); return 'taken'; } catch (e) { return e.name; } }
+    if (what === 'stale') { const r = await s.get(id); try { await s.put(r, { base: 'stale' }); return 'taken'; } catch (e) { return e.name; } }
+    if (what === 'unversioned') { const r = await s.get(id); try { await s.put(r); return 'taken'; } catch (e) { return e.name; } }
     if (what === 'used') return (await s.usedBy(arg)).map((h) => h.id);
     if (what === 'hash') return m.hashOf(arg);
     if (what === 'canon') { try { m.canon(arg === 'undefined' ? { a: undefined } : { a: 1.5 }); return 'taken'; } catch (e) { return 'refused'; } }
@@ -709,18 +713,24 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(s_data(page)["saved"] == "new" and page.evaluate(S_STORE, ["list", None]) == [] and s_lit(page) == 0
           and page.locator("#s-list li").count() == 1,
           f"/studio/: a new piece is empty and not stored until it is drawn on ('{s_data(page)['saidSaved']}')")
+    check(s_data(page).get("colour") == "#f7a531", f"/studio/: a new piece's colour is Amber, the bright one ({s_data(page).get('colour')})")
     # Draw: a pixel, a line, undo and redo, the eraser, fill.
-    page.click('.s-sw[data-k="9"]')
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
     page.mouse.click(*s_at(page, 10, 5))
     check(s_px(page, 10, 5) == AMBER and s_lit(page) == 1, f"/studio/: the pencil draws a pixel in the colour picked {s_px(page, 10, 5)}")
+    kind = page.inner_text("#s-kind")
+    check(kind.endswith("· 1 COLOUR") and page.inner_text("#s-used") == "Colours used: 1"
+          and page.evaluate("(() => { const a = document.getElementById('s-name').getBoundingClientRect(), b = document.getElementById('s-kind').getBoundingClientRect(); return Math.abs(a.top + a.height / 2 - (b.top + b.height / 2)) < a.height / 2 && b.left > a.left; })()"),
+          f"/studio/: the size label beside the name counts the colours drawn, not off ({kind!r}, {page.inner_text('#s-used')!r})")
     s_kept(page)
     got = page.evaluate(S_STORE, ["get", None])
     r = got["r"] or {}
     envelope = {k: r.get(k) for k in ("type", "rev", "tags", "author", "licence", "from")}
     check(re.fullmatch(r"pc_[0-9a-f]{32}", r.get("id", "")) and envelope == {"type": "piece", "rev": 1, "tags": [], "author": {"name": "", "account": None},
                                                                           "licence": None, "from": []}
-          and r["body"]["w"] == 128 and r["body"]["h"] == 32 and r["body"]["frames"] == [{"ms": 5000}]
-          and len(r["body"]["layers"][0]["cels"]) == 1 and r.get("created", "").endswith("Z"),
+          and r["body"]["w"] == 128 and r["body"]["h"] == 32 and [f["ms"] for f in r["body"]["frames"]] == [5000]
+          and len(r["body"]["layers"][0]["cels"]) == 1 and r.get("created", "").endswith("Z")
+          and r["body"].get("colours") == [{"k": 1, "hex": "#f7a531"}] and "keys" not in r["body"],
           f"/studio/: kept at its first stroke, its record envelope ({r.get('id')}, {envelope}, a still of 5000 ms)")
     check(r.get("hash") == got["again"] == s_hash(r["body"]), f"/studio/: its hash is the hash rule's, worked out here too ({r.get('hash', '')[:20]}…)")
     # The hash is of the pixels, not of how they were compressed: Python's zlib at level 9 and level 1 agree with the page.
@@ -769,14 +779,14 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(s_lit(page) == 11 and s_px(page, 25, 10) == (0, 0, 0) and page.get_attribute("#s-t-eraser", "aria-pressed") == "true",
           "/studio/: E, the eraser, turns a pixel off")
     page.keyboard.press("g")
-    page.click('.s-sw[data-k="2"]')
+    page.click('#s-set .s-sw[data-hex="#161d52"]')
     page.mouse.click(*s_at(page, 100, 20))
     filled = s_lit(page)
     check(filled == 128 * 32 and s_px(page, 25, 10) == NAVY and s_px(page, 10, 5) == AMBER, f"/studio/: G, fill, fills the dark around the drawing ({filled})")
     page.click("#s-undo")
     check(s_lit(page) == 11, "/studio/: fill undone in one step")
     page.mouse.click(*s_at(page, 10, 5), button="right")
-    check(page.get_attribute(".s-sw.on", "data-k") == "9", "/studio/: a right-click picks the colour under it")
+    check(s_data(page)["colour"] == "#f7a531", "/studio/: a right-click picks the colour under it")
     # The LED view: the site's .led look; still drawn on.
     page.click("#s-v-led")
     mask = page.evaluate("getComputedStyle(document.getElementById('s-work'), '::after').backgroundImage")
@@ -826,7 +836,8 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(len(items) == 1 and [v["rev"] for v in page.evaluate(S_STORE, ["revs", None])] == [1, 2] and now["rev"] == 3
           and "copy" not in page.inner_text("#s-saved"),
           f"/studio/: a stroke, a download and a stroke at once: one draft, rev 2 frozen, going on as rev 3 ({[i['name'] for i in items]})")
-    check(page.evaluate(S_STORE, ["stale", None]) == "Conflict", "/studio/: the store refuses a write on a stale rev")
+    check(page.evaluate(S_STORE, ["stale", None]) == "Conflict" and page.evaluate(S_STORE, ["unversioned", None]) == "Conflict",
+          "/studio/: the store refuses a write on a stale version, and one that names none when the record exists")
     # Drafts: a new piece, opening the first again, deleting the new one.
     page.click("#s-new")
     wait_js(page, "document.querySelectorAll('#s-list li').length === 2")
@@ -856,7 +867,8 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
         s.db.close(); }""")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
-    check(page.is_visible("#s-err") and "could not be opened" in page.inner_text("#s-err") and s_data(page)["saved"] == "new",
+    check(page.is_visible("#s-err") and "can’t be opened: its picture is damaged" in page.inner_text("#s-err") and s_data(page)["saved"] == "new"
+          and not re.search(r"header|Error|DOMException|incorrect", page.inner_text("#s-err")),
           f"/studio/: a draft that will not read is said, and a new piece opens ('{page.inner_text('#s-err')[:60]}')")
     page.context.close()
     # A browser that refuses localStorage still starts, draws and keeps the draft.
@@ -921,29 +933,714 @@ def studio_tabs(browser, base: str, site: Path, errors: list[str]) -> None:
     items = b.evaluate(S_STORE, ["list", None])
     check(len(items) == 1 and s_data(b)["rev"] == "2" and "copy" not in s_data(b)["saidSaved"],
           f"/studio/ two tabs: a download in one does not fork the other (it goes on at rev {s_data(b)['rev']}, {len(items)} draft)")
+    a.wait_for_timeout(1100)  # dates are to the second: the copy's is its own
     a.mouse.click(*s_at(a, 60, 3))
     s_kept(a)
     items = a.evaluate(S_STORE, ["list", None])
     copy = next((i for i in items if i["name"].endswith("(copy)")), {})
     orig = s_data(b)["id"]
     f = (copy.get("from") or [{}])[0]
+    first = next((i for i in items if i["id"] == orig), {})
     check(len(items) == 2 and f.get("id") == orig and re.fullmatch(r"sha256-[0-9a-f]{64}", f.get("hash", "")) and len(copy["name"]) <= 120
-          and "another tab" in s_data(a)["saidSaved"],
-          f"/studio/ two tabs: the later change kept as a copy made from the draft (its hash too), the name cut to fit "
+          and "another tab" in s_data(a)["saidSaved"] and copy.get("created") and copy["created"] != first.get("created"),
+          f"/studio/ two tabs: the later change kept as a copy made from the draft (its hash too), made now, the name cut to fit "
           f"({len(copy.get('name', ''))} characters, '{s_data(a)['saidSaved']}')")
     a.mouse.click(*s_at(a, 61, 3))
     s_kept(a)
     check(s_data(a)["saved"] == "kept", "/studio/ two tabs: saving goes on after the copy")
     # A newer schema opened elsewhere: the open tabs let go; their next save says so.
-    up = b.evaluate("""() => new Promise((ok) => { const r = indexedDB.open('opendmd-studio', 2);
+    up = b.evaluate("""() => new Promise((ok) => { const r = indexedDB.open('opendmd-studio', 99);
         r.onsuccess = () => { r.result.close(); ok('opened'); }; r.onblocked = () => ok('blocked'); r.onerror = () => ok('error'); })""")
     a.mouse.click(*s_at(a, 62, 3))
     wait_js(a, "document.getElementById('studio').dataset.saved === 'failed'")
     a.mouse.click(*s_at(a, 63, 3))
     wait_js(a, "document.getElementById('studio').dataset.saved === 'failed'")
-    check(up == "opened" and s_data(a)["saidSaved"].startswith("Not kept"),
+    check(up == "opened" and s_data(a)["saidSaved"].startswith("Not kept") and "Reload this one" in s_data(a)["saidSaved"],
           f"/studio/: a newer Studio's upgrade is not blocked by an open tab ({up}), which then says '{s_data(a)['saidSaved'][:50]}…' each time")
     ctx.close()
+
+
+# --- the Studio, S1: its tools, its colours, its journal, snapshots, touch ---
+def py_line(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+    """Bresenham's line, both ends, written again here (studio/tools.js line)."""
+    out, dx, dy = [], abs(x1 - x0), -abs(y1 - y0)
+    sx, sy, e = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1), abs(x1 - x0) - abs(y1 - y0)
+    while True:
+        out.append((x0, y0))
+        if (x0, y0) == (x1, y1):
+            return out
+        e2 = 2 * e
+        if e2 >= dy:
+            e += dy
+            x0 += sx
+        if e2 <= dx:
+            e += dx
+            y0 += sy
+
+
+def py_ellipse(x0: int, y0: int, x1: int, y1: int, filled: bool = False) -> set[tuple[int, int]]:
+    """Zingl's plotEllipseRect, written again here from the paper (studio/tools.js ellipse)."""
+    pts: set[tuple[int, int]] = set()
+    a, b = abs(x1 - x0), abs(y1 - y0)
+    b1 = b & 1
+    dx, dy = 4 * (1 - a) * b * b, 4 * (b1 + 1) * a * a
+    err = dx + dy + b1 * a * a
+    if x0 > x1:
+        x0, x1 = x1, x1 + a
+    y0 = min(y0, y1) + ((b + 1) >> 1)
+    y1 = y0 - b1
+    a, b1 = 8 * a * a, 8 * b * b
+    while True:
+        pts |= {(x1, y0), (x0, y0), (x0, y1), (x1, y1)}
+        e2 = 2 * err
+        if e2 <= dy:
+            y0, y1, dy = y0 + 1, y1 - 1, dy + a
+            err += dy
+        if e2 >= dx or 2 * err > dy:
+            x0, x1, dx = x0 + 1, x1 - 1, dx + b1
+            err += dx
+        if x0 > x1:
+            break
+    while y0 - y1 <= b:
+        pts |= {(x0 - 1, y0), (x1 + 1, y0), (x0 - 1, y1), (x1 + 1, y1)}
+        y0, y1 = y0 + 1, y1 - 1
+    if filled:
+        rows: dict[int, tuple[int, int]] = {}
+        for x, y in pts:
+            lo, hi = rows.get(y, (x, x))
+            rows[y] = (min(lo, x), max(hi, x))
+        pts = {(x, y) for y, (lo, hi) in rows.items() for x in range(lo, hi + 1)}
+    return pts
+
+
+def py_rect(x0: int, y0: int, x1: int, y1: int, filled: bool = False) -> set[tuple[int, int]]:
+    return {(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1) if filled or x in (x0, x1) or y in (y0, y1)}
+
+
+def s_pixels(page: Page) -> list[tuple]:
+    d = page.evaluate("[...document.getElementById('s-canvas').getContext('2d').getImageData(0, 0, 128, 32).data]")
+    return [tuple(d[i:i + 3]) for i in range(0, len(d), 4)]
+
+
+def s_on(page: Page) -> set[tuple[int, int]]:
+    """The lit pixels, as (x, y)."""
+    return {(i % 128, i // 128) for i, c in enumerate(s_pixels(page)) if sum(c)}
+
+
+def s_drag(page: Page, a: tuple[int, int], b: tuple[int, int], shift: bool = False, release: bool = True) -> None:
+    page.mouse.move(*s_at(page, *a))
+    page.mouse.down()
+    if shift:
+        page.keyboard.down("Shift")
+    page.mouse.move(*s_at(page, (a[0] + b[0]) // 2, (a[1] + b[1]) // 2), steps=2)
+    page.mouse.move(*s_at(page, *b), steps=2)
+    if release:
+        page.mouse.up()
+        if shift:
+            page.keyboard.up("Shift")
+
+
+def s_blur(page: Page) -> None:
+    """Keys to the page, not the name field (a new piece's name is selected)."""
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+
+
+def s_new(page: Page) -> None:
+    """A new, empty piece (the one before it kept)."""
+    n = page.locator("#s-list li").count()
+    page.click("#s-new")
+    wait_js(page, f"document.querySelectorAll('#s-list li').length === {n + (1 if s_data(page)['saved'] != 'new' else 0)} && "
+                  "document.getElementById('studio').dataset.saved === 'new'")
+    s_blur(page)
+    page.mouse.move(0, 0)
+
+
+def s_steps(page: Page) -> str:
+    return s_data(page).get("steps", "")
+
+
+S_TOOLS = """async ([w]) => { const T = await import('/studio/tools.js'); const out = []; const p = (x, y) => out.push([x, y]);
+    if (w === 'b1') T.brush(1, p)(5, 5); if (w === 'b2') T.brush(2, p)(5, 5); if (w === 'b3') T.brush(3, p)(5, 5);
+    return out; }"""
+
+
+def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Every S1 tool, by its shortcut, against the pixels worked out here."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    tips = page.eval_on_selector_all(".s-tool", "els => els.map(e => [e.dataset.tool, e.title])")
+    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "dither": "(D)", "select": "(M)", "pick": "(I)"}
+    check(sorted(t for t, _ in tips) == sorted(keys) and all(keys[t] in title for t, title in tips)
+          and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123"),
+          f"/studio/ tools: every tool and brush size shows its shortcut in its tooltip ({[t for t, _ in tips]})")
+    # Line: Bresenham, the drag's two ends.
+    page.keyboard.press("l")
+    s_drag(page, (2, 2), (17, 9))
+    check(s_on(page) == set(py_line(2, 2, 17, 9)), f"/studio/ tools: L, a line, Bresenham's pixels exactly ({len(s_on(page))})")
+    # Shift: flat, upright, or 45 degrees.
+    s_new(page)
+    page.keyboard.press("l")
+    s_drag(page, (20, 20), (32, 23), shift=True)
+    flat = s_on(page)
+    s_drag(page, (40, 5), (46, 10), shift=True)
+    diag = s_on(page) - flat
+    s_drag(page, (60, 2), (62, 20), shift=True)
+    up = s_on(page) - flat - diag
+    check(flat == {(x, 20) for x in range(20, 33)} and diag == {(40 + i, 5 + i) for i in range(7)} and up == {(60, y) for y in range(2, 21)},
+          f"/studio/ tools: Shift snaps a line flat, to 45° and upright ({len(flat)}, {len(diag)}, {len(up)})")
+    # Rectangles and ellipses, edge and filled.
+    s_new(page)
+    page.keyboard.press("r")
+    s_drag(page, (2, 2), (12, 9))
+    page.keyboard.press("Shift+R")
+    s_drag(page, (20, 2), (25, 6))
+    page.keyboard.press("o")
+    s_drag(page, (40, 2), (54, 12))
+    page.keyboard.press("Shift+O")
+    s_drag(page, (70, 3), (90, 30))
+    want = py_rect(2, 2, 12, 9) | py_rect(20, 2, 25, 6, True) | py_ellipse(40, 2, 54, 12) | py_ellipse(70, 3, 90, 30, True)
+    got = s_on(page)
+    check(got == want, f"/studio/ tools: R and Shift+R, O and Shift+O: rectangles and ellipses, edge and filled, exactly ({len(got)} of {len(want)}, "
+                       f"{sorted(got ^ want)[:6]})")
+    check(py_ellipse(0, 0, 4, 4) == {(1, 0), (2, 0), (3, 0), (0, 1), (4, 1), (0, 2), (4, 2), (0, 3), (4, 3), (1, 4), (2, 4), (3, 4)}
+          and py_ellipse(0, 0, 6, 3) == {(x, 0) for x in range(1, 6)} | {(x, 3) for x in range(1, 6)} | {(0, 1), (6, 1), (0, 2), (6, 2)},
+          "/studio/ tools: the ellipse rule worked out here draws a 5x5 circle and a 7x4 ellipse as drawn by hand")
+    page.keyboard.press("Shift+R")
+    s_drag(page, (100, 20), (110, 25), shift=True)
+    sq = s_on(page) - got
+    check(sq == py_rect(100, 20, 105, 25, True) or sq == py_rect(100, 20, 110, 30, True),
+          f"/studio/ tools: Shift while drawing a rectangle makes it a square ({len(sq)} pixels)")
+    # A shape is seen while it is dragged, and kept only when the button lifts.
+    s_new(page)
+    page.keyboard.press("o")
+    before = s_steps(page)
+    s_drag(page, (10, 5), (30, 20), release=False)
+    seen, mid_steps = s_on(page), s_steps(page)
+    page.mouse.up()
+    check(seen == py_ellipse(10, 5, 30, 20) and mid_steps == before and s_steps(page) != before,
+          f"/studio/ tools: the ellipse is seen while dragged ({len(seen)} lit, steps {before} -> {mid_steps}), a step once let go ({s_steps(page)})")
+    # Ctrl+Z is ignored during a stroke.
+    page.keyboard.press("b")
+    n0 = len(s_on(page))
+    page.mouse.move(*s_at(page, 60, 28))
+    page.mouse.down()
+    page.mouse.move(*s_at(page, 66, 28), steps=3)
+    page.keyboard.press("Control+z")
+    page.mouse.move(*s_at(page, 70, 28), steps=2)
+    page.mouse.up()
+    check(len(s_on(page)) == n0 + 11 and (60, 28) in s_on(page), f"/studio/ tools: Ctrl+Z during a stroke is ignored ({len(s_on(page)) - n0} drawn)")
+    # Brushes 1, 2 and 3.
+    s_new(page)
+    page.keyboard.press("2")
+    page.mouse.click(*s_at(page, 10, 10))
+    two = s_on(page)
+    page.keyboard.press("3")
+    page.mouse.click(*s_at(page, 30, 10))
+    three = s_on(page) - two
+    page.keyboard.press("1")
+    page.keyboard.press("l")
+    page.keyboard.press("3")
+    s_drag(page, (50, 10), (60, 10))
+    thick = s_on(page) - two - three
+    page.keyboard.press("1")
+    check(two == {(10, 10), (11, 10), (10, 11), (11, 11)} and three == {(x, y) for x in (29, 30, 31) for y in (9, 10, 11)}
+          and thick == {(x, y) for x in range(49, 62) for y in (9, 10, 11)},
+          f"/studio/ tools: 2 and 3 make the pencil and the line 2 and 3 pixels wide ({len(two)}, {len(three)}, {len(thick)})")
+    # Dither fill: every other pixel of the region.
+    s_new(page)
+    page.keyboard.press("d")
+    page.mouse.click(*s_at(page, 64, 16))
+    got = s_on(page)
+    check(got == {(x, y) for x in range(128) for y in range(32) if (x + y) % 2 == 0}, f"/studio/ tools: D, the dither fill, a checkerboard ({len(got)} lit)")
+    page.keyboard.press("Control+z")
+    # The eyedropper: I, then back to the tool before it.
+    page.keyboard.press("b")
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    page.mouse.click(*s_at(page, 3, 3))
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.keyboard.press("i")
+    page.mouse.click(*s_at(page, 3, 3))
+    check(s_data(page)["colour"] == "#33d1ff" and s_data(page)["tool"] == "pencil", f"/studio/ tools: I picks the colour under it, then the pencil again ({s_data(page)['colour']}, {s_data(page)['tool']})")
+    # The selection: move, flip, copy and paste, delete; each one undo step.
+    s_new(page)
+    page.keyboard.press("Shift+R")
+    s_drag(page, (2, 2), (5, 4))
+    page.keyboard.press("b")
+    page.mouse.click(*s_at(page, 5, 5))
+    shape0 = py_rect(2, 2, 5, 4, True) | {(5, 5)}
+    page.keyboard.press("m")
+    s_drag(page, (2, 2), (5, 5))
+    check(s_data(page)["sel"] == "2,2,4,4" and page.is_visible("#s-sel") and page.is_visible("#s-selbar"), f"/studio/ tools: M selects a box ({s_data(page)['sel']})")
+    st = s_steps(page)
+    s_drag(page, (3, 3), (13, 3))
+    floating = s_on(page)
+    page.keyboard.press("Enter")
+    moved = {(x + 10, y) for x, y in shape0}
+    check(floating == moved and s_on(page) == moved and s_steps(page) != st, f"/studio/ tools: dragged inside, the box's pixels move; Enter puts them down ({len(s_on(page))})")
+    page.keyboard.press("Control+z")
+    back = s_on(page)
+    page.keyboard.press("Control+Shift+z")
+    check(back == shape0 and s_on(page) == moved, "/studio/ tools: the move undone and redone in one step")
+    s_drag(page, (12, 2), (15, 5))
+    page.keyboard.press("Shift+H")
+    page.keyboard.press("Enter")
+    flipped = {(12 + 15 - x, y) for x, y in moved}
+    check(s_on(page) == flipped, f"/studio/ tools: Shift+H flips the box left to right ({len(s_on(page))})")
+    s_drag(page, (12, 2), (15, 5))
+    page.keyboard.press("Shift+V")
+    page.keyboard.press("Enter")
+    vflip = {(x, 2 + 5 - y) for x, y in flipped}
+    check(s_on(page) == vflip, "/studio/ tools: Shift+V flips it top to bottom")
+    s_drag(page, (12, 2), (15, 5))
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Control+v")
+    px0, py0, *_ = (int(v) for v in s_data(page)["sel"].split(",")[:4])
+    s_drag(page, (px0 + 1, py0 + 1), (33, 13))
+    page.keyboard.press("Enter")
+    two = vflip | {(x + 20, y + 10) for x, y in vflip}
+    check(s_on(page) == two, f"/studio/ tools: Ctrl+C, Ctrl+V and a drag: a copy beside it ({len(s_on(page))})")
+    s_drag(page, (12, 2), (15, 5))
+    page.keyboard.press("Delete")
+    check(s_on(page) == two - vflip and not s_data(page)["sel"], "/studio/ tools: Delete clears the box")
+    page.click("#s-selbar [data-act=paste]")
+    at = [int(v) for v in s_data(page)["sel"].split(",")[:4]]
+    page.click("#s-selbar [data-act=done]")
+    # It lands in the middle of what is in view (the whole panel here): 4 x 4 about (64, 16).
+    check(at == [62, 14, 4, 4] and s_on(page) == (two - vflip) | {(x - 12 + 62, y - 2 + 14) for x, y in vflip},
+          f"/studio/ tools: the selection bar's Paste lands in the middle of the view, and Done puts it down ({at})")
+    check(not page.evaluate("window.__csp || []"), f"/studio/ tools: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
+
+
+S_WIDE = """async ([n]) => { const m = await import('/studio/studio.js');
+    const keys = new Uint16Array(4096), colours = [];
+    for (let k = 1; k <= n; k++) colours.push({ k, hex: '#' + (k * 4093).toString(16).padStart(6, '0') });
+    for (let i = 0; i < 4096; i++) keys[i] = (i % n) + 1;
+    await m.piece({ name: 'Wide', keys, colours }); }"""
+
+
+def studio_colours(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """The colour model: any colour joins the piece; swatch sets; palettes of
+    one's own and Lospec's; past 256 colours, two-byte keys and a warning."""
+    import base64
+    import zlib
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    wait_js(page, "document.getElementById('studio').dataset.starter !== undefined", timeout=20000)
+    opts = page.eval_on_selector_all("#s-pal optgroup[label=Starter] option", "els => els.map(e => e.value)")
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    root = next(r for r in pack["records"] if r["id"] == pack["root"])
+    members = {m["id"] for m in root["body"]["members"]}
+    starter_pals = [r["id"] for r in pack["records"] if r["type"] == "palette"]
+    check(s_data(page)["starter"] == "16" and sorted(opts) == sorted(starter_pals) and set(opts) <= members
+          and not any(re.fullmatch(r"pl_0{12}7000\w+", o) for o in opts),
+          f"/studio/ colours: the starter palettes in the menu, by the pack's member ids ({len(opts)})")
+    # A colour from another swatch set joins the piece.
+    gb = next(r for r in pack["records"] if r["type"] == "palette" and r["name"].startswith("Game Boy DMG"))
+    page.select_option("#s-pal", gb["id"])
+    page.click(f'#s-set .s-sw[data-hex="{gb["body"]["colours"][0]["hex"]}"]')
+    n = page.locator("#s-sw .s-sw").count()
+    steps0 = s_steps(page)
+    check(s_data(page)["colour"] == gb["body"]["colours"][0]["hex"] and n == 2 and page.locator("#s-sw .s-sw.on.new").get_attribute("aria-label") == gb["body"]["colours"][0]["hex"]
+          and steps0 == "0/0" and s_data(page)["saved"] == "new",
+          f"/studio/ colours: a swatch from {gb['name']} is picked, shown as not drawn yet: no step, nothing kept ({n - 1} swatch and off, steps {steps0})")
+    page.click("#s-pals")
+    page.wait_for_selector("#s-palx .s-pill")
+    ro = page.inner_text("#s-palx")
+    check("read-only" in ro and page.locator("#s-palx [data-a=rename]").count() == 0 and page.locator("#s-palx [data-a=delete]").count() == 0,
+          "/studio/ colours: a starter palette is read-only (no Rename, no Delete)")
+    page.click("#s-pals")
+    # The picker: any colour, by hex; it joins the piece.
+    page.click("#s-add")
+    page.wait_for_selector("#s-picker .s-hex")
+    page.fill("#s-picker .s-hex", "#123456")
+    page.click("#s-picker [data-a=add]")
+    page.keyboard.press("b")
+    page.mouse.click(*s_at(page, 7, 7))
+    s_kept(page)
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    check(s_data(page)["colour"] == "#123456" and s_px(page, 7, 7) == (0x12, 0x34, 0x56) and r["body"]["colours"] == [{"k": 1, "hex": "#123456"}]
+          and r["body"]["palette"] == gb["id"] and s_steps(page) == "1/1",
+          f"/studio/ colours: the picker's #123456 joins the piece's colours in the stroke that draws with it, one step ({r['body']['colours']}, {s_steps(page)})")
+    page.mouse.move(*s_at(page, 64, 16))
+    page.click("#s-picker .s-sv")
+    hexv = page.input_value("#s-picker .s-hex")
+    check(re.fullmatch(r"#[0-9a-f]{6}", hexv) is not None and page.get_attribute("#s-picker", "data-colour") == hexv,
+          f"/studio/ colours: the saturation and value square sets a colour ({hexv})")
+    page.click("#s-add")
+    # Remove unused: only what is drawn stays; undone in one step. Then a colour added, and two undos.
+    labels = lambda: page.eval_on_selector_all("#s-sw .s-sw", "els => els.map(e => e.getAttribute('aria-label'))")
+    page.select_option("#s-pal", "pl_00000000000070008000000000000001")
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    page.mouse.click(*s_at(page, 9, 9))
+    page.keyboard.press("e")
+    page.mouse.click(*s_at(page, 9, 9))
+    page.keyboard.press("b")
+    two = labels()
+    page.click("#s-unused")
+    after = labels()
+    page.keyboard.press("Control+z")
+    back = labels()
+    page.click("#s-unused")
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 8, 8))
+    added = [l for l in labels() if l not in ("Off", "#123456")]
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    check(two == ["Off", "#123456", "#33d1ff"] and after == ["Off", "#123456"] and back == two and added == ["#f7a531"]
+          and labels()[:3] == two and s_px(page, 8, 8) == (0, 0, 0) and s_px(page, 7, 7) == (0x12, 0x34, 0x56),
+          f"/studio/ colours: Remove unused keeps what is drawn and is undone; removed, a colour added, two undos: as it was ({after}, {labels()})")
+    # The piece's colours as a palette of one's own; renamed; deleted.
+    page.click("#s-pals")
+    page.wait_for_selector("#s-palx [data-a=save]")
+    page.click("#s-palx [data-a=save]")
+    wait_js(page, "document.querySelector('#s-pal optgroup[label=Yours] option') !== null")
+    pid = page.input_value("#s-pal")
+    page.fill('#s-palx input[aria-label="Palette name"]', "My greens")
+    page.click("#s-palx [data-a=rename]")
+    wait_js(page, "document.querySelector('#s-pal option:checked').textContent === 'My greens'")
+    stored = page.evaluate("""async ([id]) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const r = await s.get(id); s.db.close(); return r; }""", [pid])
+    check(stored and stored["name"] == "My greens" and len(stored["body"]["colours"]) == 2 and stored["from"][0]["id"] == r["id"]
+          and re.fullmatch(r"sha256-[0-9a-f]{64}", stored["from"][0]["hash"]) is not None,
+          f"/studio/ colours: the piece's colours saved as a palette, made from the piece, renamed ({stored and stored['name']})")
+    page.once("dialog", lambda d: d.accept())
+    page.click("#s-palx [data-a=delete]")
+    wait_js(page, "document.querySelector('#s-pal optgroup[label=Yours]') === null")
+    check(page.input_value("#s-pal").startswith("pl_000000000000"), "/studio/ colours: a palette of one's own deleted; the swatches go back to Den 16")
+    # Lospec: pasted hex lines, and a .gpl file; nothing fetched.
+    page.fill("#s-palx .s-paste", "#ff0000\nff8800\n00ff00\nnot a colour\nff0000")
+    page.fill("#s-palx input[placeholder=Name]", "Pasted")
+    page.click("#s-palx [data-a=import]")
+    wait_js(page, "document.querySelector('#s-pal option:checked').textContent === 'Pasted'")
+    hexes = page.eval_on_selector_all("#s-set .s-sw", "els => els.map(e => e.dataset.hex)")
+    gpl = tempfile.NamedTemporaryFile("w", suffix=".gpl", delete=False)
+    gpl.write("GIMP Palette\nName: Sunset Four\nColumns: 4\n# a comment\n255 136  0\tOrange\n 34  17 51 Plum\n0 0 0\n255 255 255\n")
+    gpl.close()
+    page.set_input_files("#s-palx input[type=file]", gpl.name)
+    wait_js(page, "document.querySelector('#s-palx .s-paste').value.length > 0")
+    page.fill("#s-palx input[placeholder=Name]", "")
+    page.click("#s-palx [data-a=import]")
+    wait_js(page, "document.querySelector('#s-pal option:checked').textContent === 'Sunset Four'")
+    hexes2 = page.eval_on_selector_all("#s-set .s-sw", "els => els.map(e => e.dataset.hex)")
+    os.unlink(gpl.name)
+    check(hexes == ["#ff0000", "#ff8800", "#00ff00"] and hexes2 == ["#ff8800", "#221133", "#000000", "#ffffff"],
+          f"/studio/ colours: Lospec hex lines pasted, and a .gpl file, make palettes ({hexes}, {hexes2})")
+    # Past 256 colours: two bytes a pixel, the warning, the hash, the GIF exact.
+    page.evaluate(S_WIDE, [300])
+    wait_js(page, "document.getElementById('s-name').value === 'Wide'")
+    warn = page.is_visible("#s-many")
+    page.keyboard.press("b")
+    page.click('.s-sw[data-k="1"]')
+    page.mouse.click(*s_at(page, 1, 0))
+    s_kept(page)
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    want = [(i % 300) + 1 for i in range(4096)]
+    want[1] = 1
+    raw = b"".join(k.to_bytes(2, "big") for k in want)
+    mine = {**r["body"], "layers": [{**r["body"]["layers"][0], "cels": [base64.b64encode(zlib.compress(raw, 6)).decode()]}]}
+    check(warn and s_data(page)["table"] == "300" and "slower way" in page.inner_text("#s-many") and r["body"].get("keys") == 2
+          and zlib.decompress(base64.b64decode(r["body"]["layers"][0]["cels"][0])) == raw and len(r["body"]["colours"]) == 300
+          and r["hash"] == s_hash(mine) == s_hash(r["body"]),
+          f"/studio/ colours: past 255, two bytes a pixel (high first), its hash worked out here from the pixels alone, "
+          f"and the warning past 256 ({s_data(page)['table']} colours, keys {r['body'].get('keys')})")
+    colour = {c["k"]: tuple(bytes.fromhex(c["hex"][1:])) for c in r["body"]["colours"]}
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#s-gif")
+    im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+    frames, total = 0, 0
+    try:
+        while True:
+            total += im.info.get("duration", 0)
+            frames += 1
+            im.seek(im.tell() + 1)
+    except EOFError:
+        pass
+    shown = list(im.convert("RGB").getdata())
+    check(shown == [colour[k] for k in want] and frames > 1 and total == 5000,
+          f"/studio/ colours: its GIF keeps all 300 colours exactly: the whole picture, then {frames - 1} correction(s), {total} ms in all")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    check(s_pixels(page) == [colour[k] for k in want], "/studio/ colours: a two-byte piece opens again as drawn")
+    # A one-byte draft written before S1 (no colours of its own, keys 9) still opens, in its palette's colours.
+    cel = base64.b64encode(zlib.compress(bytes([9]) * 4096)).decode()
+    old = {"w": 128, "h": 32, "palette": "pl_00000000000070008000000000000001", "plays": 0, "frames": [{"ms": 5000}],
+           "layers": [{"name": "Drawing", "moves": False, "cels": [cel]}]}
+    check(page.evaluate(S_STORE, ["put", {"rec": {"name": "Old draft", "body": old}}]) == "taken", "/studio/ colours: an S0 draft is still a valid record")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.click("#s-list li:has-text('Old draft') .s-open")
+    wait_js(page, "document.getElementById('s-name').value === 'Old draft'")
+    check(set(s_pixels(page)) == {AMBER}, "/studio/ colours: an S0 draft opens in its palette's colours")
+    check(not page.evaluate("window.__csp || []"), f"/studio/ colours: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    off = [u for u in page.asked if not u.startswith(base) and not u.startswith(("blob:", "data:"))]
+    check(not off, f"/studio/ colours: nothing asked of another site {off[:2]}")
+    page.context.close()
+
+
+def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Undo across a reload, 500 steps; snapshots; the last save as the tab hides; persistence said."""
+    page = s_page(browser, base, site, errors)
+    for x in (1, 2, 3):
+        page.mouse.click(*s_at(page, x, 1))
+    s_kept(page)
+    check(s_data(page).get("persist") in ("yes", "no") and s_data(page)["saidSaved"] == "Kept in this browser"
+          and page.is_visible("#s-loose") == (s_data(page)["persist"] == "no"),
+          f"/studio/ journal: after the first saved stroke, it asks to be kept for good and says how it stands ({s_data(page).get('persist')}, '{s_data(page)['saidSaved']}')")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(100)
+    page.reload()  # before the autosave (at 400 ms): the journal knows the undo
+    page.wait_for_selector(S_READY, timeout=30000)
+    a = s_on(page)
+    st = s_steps(page)
+    page.keyboard.press("Control+Shift+z")
+    b = s_on(page)
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    c = s_on(page)
+    check(a == {(1, 1), (2, 1)} and st == "2/3" and b == {(1, 1), (2, 1), (3, 1)} and c == {(1, 1)},
+          f"/studio/ journal: undo and redo survive a reload ({sorted(a)}, steps {st})")
+    # A step the record never saw (the tab closed first): replayed from the journal, and saved.
+    s_kept(page)
+    page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1;
+        await s.jot(id, { step: { n, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n }); s.db.close(); }""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    s_kept(page)
+    replayed = s_on(page)
+    import base64
+    import zlib
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    px = zlib.decompress(base64.b64decode(r["body"]["layers"][0]["cels"][0]))
+    check(replayed == {(1, 1), (5, 0)} and s_px(page, 5, 0) == AMBER and px[5] == 1 and s_steps(page) == "2/2",
+          f"/studio/ journal: a step the record never saw is replayed at the reload, then saved ({sorted(replayed)}, steps {s_steps(page)})")
+    page.keyboard.press("Control+z")
+    # 500 steps at most.
+    for i in range(505):
+        page.mouse.click(*s_at(page, i % 128, 4 + i // 128))
+    s_kept(page)
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    check(s_steps(page) == "500/500" and len(s_on(page)) == 506, f"/studio/ journal: 500 steps kept, over a reload ({s_steps(page)})")
+    # The last save as the tab is hidden: at once, not after the wait.
+    page.mouse.click(*s_at(page, 100, 30))
+    page.evaluate("Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_timeout(150)
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    px = zlib.decompress(base64.b64decode(r["body"]["layers"][0]["cels"][0]))
+    check(px[30 * 128 + 100] == 1, "/studio/ journal: hidden, the tab saves at once")
+    page.evaluate("delete document.visibilityState")
+    # Snapshots: taken by name, listed, restored (what was there kept first), the restore undone.
+    s_new(page)
+    page.mouse.click(*s_at(page, 0, 0))
+    page.fill("#s-snapname", "First")
+    page.click("#s-snap")
+    wait_js(page, "document.querySelector('#s-snaps li') !== null")
+    page.mouse.click(*s_at(page, 1, 0))
+    s_kept(page)
+    page.click("#s-snaps li:has-text('First') [data-rev]")
+    wait_js(page, "document.querySelectorAll('#s-snaps li').length === 2")
+    restored = s_on(page)
+    labels = page.eval_on_selector_all("#s-snaps li b", "els => els.map(e => e.textContent)")
+    page.keyboard.press("Control+z")
+    check(restored == {(0, 0)} and labels == ["Before restoring First", "First"] and s_on(page) == {(0, 0), (1, 0)},
+          f"/studio/ journal: a snapshot taken, restored (what was there kept first {labels}), and the restore undone")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    check(page.eval_on_selector_all("#s-snaps li b", "els => els.map(e => e.textContent)") == ["Before restoring First", "First"],
+          "/studio/ journal: snapshots listed after a reload")
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    keys = [r["body"]["frames"][0].get("key"), r["body"]["layers"][0].get("key")]
+    page.mouse.click(*s_at(page, 5, 5))
+    s_kept(page)
+    r2 = page.evaluate(S_STORE, ["get", None])["r"]
+    check(all(re.fullmatch(r"[0-9a-f]{8}", k or "") for k in keys) and keys == [r2["body"]["frames"][0].get("key"), r2["body"]["layers"][0].get("key")],
+          f"/studio/ journal: frames and layers carry stable keys ({keys})")
+    check(int(s_data(page).get("drawn", "0")) >= 1, "/studio/ journal: after a save only the open draft is drawn again")
+    page.context.close()
+
+
+def studio_rename_tabs(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A rename in one tab is not lost to a stroke in another (the store's version)."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    a = s_page(browser, base, site, errors, ctx=ctx)
+    a.mouse.click(*s_at(a, 3, 3))
+    s_kept(a)
+    b = s_page(browser, base, site, errors, ctx=ctx)
+    a.fill("#s-name", "Renamed in A")
+    s_kept(a)
+    b.mouse.click(*s_at(b, 9, 9))
+    s_kept(b)
+    r = b.evaluate(S_STORE, ["get", None])["r"]
+    items = b.evaluate(S_STORE, ["list", None])
+    check(len(items) == 1 and r["name"] == "Renamed in A" and b.input_value("#s-name") == "Renamed in A" and s_data(a)["journal"] != s_data(b)["journal"],
+          f"/studio/ two tabs: a rename in one survives a stroke in the other ('{r['name']}', {len(items)} draft; the journal kept by one tab)")
+    ctx.close()
+
+
+S_PIECE = """async ([n, off]) => { const m = await import('/studio/studio.js');
+    const keys = new Uint16Array(4096), colours = [];
+    for (let k = 1; k <= n; k++) colours.push({ k, hex: '#' + (k * 4093).toString(16).padStart(6, '0') });
+    for (let i = 0; i < 4096; i++) keys[i] = i < off ? 0 : ((i - off) % n) + 1;
+    await m.piece({ name: `${n} colours`, keys, colours }); }"""
+
+
+def studio_edges(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The edges: the panel's right edge, 255/256 keys, 256/257 colours, a
+    float with holes, another tab's pixels under a journal."""
+    import base64
+    import zlib
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    # A fill reaching x = 127; a selection put down against the right edge.
+    page.keyboard.press("l")
+    s_drag(page, (120, 0), (120, 31))
+    page.keyboard.press("g")
+    page.mouse.click(*s_at(page, 125, 5))
+    check(s_on(page) == {(x, y) for x in range(120, 128) for y in range(32)}, "/studio/ edges: a fill reaches the right edge, and no further")
+    s_new(page)
+    page.keyboard.press("Shift+R")
+    s_drag(page, (118, 4), (122, 6))
+    page.keyboard.press("m")
+    s_drag(page, (118, 4), (122, 6))
+    s_drag(page, (119, 5), (126, 5))
+    page.keyboard.press("Enter")
+    check(s_on(page) == {(x, y) for x in range(125, 128) for y in range(4, 7)}, f"/studio/ edges: a selection put down past the right edge is cut there ({sorted(s_on(page))[:4]})")
+    # A float with holes put down over a drawing: its off pixels let it show through.
+    s_new(page)
+    page.click('#s-set .s-sw[data-hex="#161d52"]')
+    page.keyboard.press("Shift+R")
+    s_drag(page, (40, 0), (60, 20))
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.keyboard.press("r")
+    s_drag(page, (2, 2), (6, 6))
+    page.keyboard.press("m")
+    s_drag(page, (2, 2), (6, 6))
+    s_drag(page, (3, 3), (46, 6))
+    page.keyboard.press("Enter")
+    px = s_pixels(page)
+    ring = py_rect(45, 5, 49, 9)
+    check(all(px[y * 128 + x] == AMBER for x, y in ring) and all(px[y * 128 + x] == NAVY for x in range(46, 49) for y in range(6, 9))
+          and not any(sum(px[y * 128 + x]) for x in range(2, 7) for y in range(2, 7)),
+          "/studio/ edges: a box with holes put down over a drawing: the drawing shows through the holes")
+    # Keys: 255 colours stay one byte a pixel; the 256th makes two.
+    page.evaluate(S_PIECE, [255, 0])
+    wait_js(page, "document.getElementById('s-name').value === '255 colours'")
+    page.keyboard.press("b")
+    page.click('#s-sw .s-sw[data-k="3"]')
+    page.mouse.click(*s_at(page, 0, 0))
+    s_kept(page)
+    one = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 1, 0))
+    s_kept(page)
+    two = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    raw = zlib.decompress(base64.b64decode(two["layers"][0]["cels"][0]))
+    check("keys" not in one and len(zlib.decompress(base64.b64decode(one["layers"][0]["cels"][0]))) == 4096 and two.get("keys") == 2
+          and len(raw) == 8192 and raw[2:4] == (256).to_bytes(2, "big") and {"k": 256, "hex": "#f7a531"} in two["colours"],
+          f"/studio/ edges: 255 colours, one byte a pixel; the 256th (key 256), two ({one.get('keys')}, {two.get('keys')})")
+    # 256 colours: no warning, one table; 257: the warning, the exact GIF, and the fitted one.
+    results = {}
+    for n in (256, 257):
+        page.evaluate(S_PIECE, [n, 0])
+        wait_js(page, f"document.getElementById('s-name').value === '{n} colours'")
+        page.keyboard.press("b")
+        page.click('#s-sw .s-sw[data-k="2"]')
+        page.mouse.click(*s_at(page, 0, 0))
+        s_kept(page)
+        warn = page.is_visible("#s-many")
+        with page.expect_download(timeout=60000) as dl:
+            page.click("#s-gif")
+        im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+        results[n] = (warn, getattr(im, "n_frames", 1), s_data(page)["table"])
+        if n == 257:
+            rgb_want = s_pixels(page)
+            frames = []
+            try:
+                while True:
+                    frames.append(list(im.convert("RGB").getdata()))
+                    im.seek(im.tell() + 1)
+            except EOFError:
+                pass
+            with page.expect_download(timeout=60000) as dl:
+                page.click("#s-fit")
+            fim = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+            fitted = (getattr(fim, "n_frames", 1), len(fim.convert("RGB").getcolors(4096)), dl.value.suggested_filename)
+    check(results[256] == (False, 1, "256") and results[257][0] and results[257][1] == 2 and results[257][2] == "257",
+          f"/studio/ edges: 256 colours, no warning and one GIF frame; 257, the warning and a second, exact one {results}")
+    check(not any(sum(c) == 0 for c in frames[0]) and frames[-1] == rgb_want,
+          "/studio/ edges: past 256, the GIF's first frame is the whole picture (nothing black), its last exact")
+    check(fitted[0] == 1 and fitted[1] == 256 and fitted[2] == "257_colours_256.gif",
+          f"/studio/ edges: Download fitted to 256 colours: one frame of 256 colours {fitted}")
+    # Edge or filled without Shift (for a phone): the shape's segment control.
+    page.keyboard.press("r")
+    vis = page.is_visible("#s-fillmode")
+    page.click("#s-fillmode [data-fill='1']")
+    filled = s_data(page)["tool"]
+    page.keyboard.press("b")
+    check(vis and filled == "rect-filled" and page.is_hidden("#s-fillmode"), f"/studio/ edges: Edge and Filled beside the brushes for a shape ({filled})")
+    page.context.close()
+    # Another tab changes the pixels; the tab keeping the journal reloads: the journal is let go, the pixels are the other tab's.
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    a = s_page(browser, base, site, errors, ctx=ctx)
+    for x in (1, 2):
+        a.mouse.click(*s_at(a, x, 1))
+    s_kept(a)
+    b = s_page(browser, base, site, errors, ctx=ctx)
+    b.mouse.click(*s_at(b, 9, 9))
+    s_kept(b)
+    a.reload()
+    a.wait_for_selector(S_READY, timeout=30000)
+    check(s_on(a) == {(1, 1), (2, 1), (9, 9)} and s_steps(a) == "0/0" and s_data(a)["journal"] == "yes",
+          f"/studio/ edges: pixels changed in another tab, the journaled tab reloads: its journal let go, the pixels as stored ({s_steps(a)})")
+    ctx.close()
+
+
+def studio_phone(browser, base: str, site: Path, errors: list[str]) -> None:
+    """On a phone: pinch zooms on the same two fingers; the view switch and
+    X/Y stay in sight zoomed; a shape cancelled by a second finger; the
+    name not selected on a new piece."""
+    page = s_page(browser, base, site, errors, "phone", "dark")
+    cdp = page.context.new_cdp_session(page)
+    pt = lambda x, y, i: {"x": x, "y": y, "id": i}
+    vis = page.evaluate("""() => ['s-v-led', 's-xy'].every((id) => { const r = document.getElementById(id).getBoundingClientRect();
+        return r.width > 0 && r.left >= 0 && r.right <= innerWidth; })""")
+    check(vis and page.inner_text("#s-z") == "8×", "/studio/ (phone): zoomed, PIXELS/LEDS and X/Y stay in sight")
+    s_new(page)
+    sel = page.evaluate("(() => { const e = document.getElementById('s-name'); return document.activeElement === e && e.selectionEnd > e.selectionStart; })()")
+    check(not sel, "/studio/ (phone): a new piece's name is not selected (no keyboard over the panel)")
+    # A line, then a second finger: nothing drawn.
+    page.click(".s-tool[data-tool=line]")
+    (x1, y1), (x2, y2) = s_at(page, 3, 10), s_at(page, 12, 10)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(x1, y1, 1)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [pt(x2, y2, 1)]})
+    page.wait_for_timeout(50)
+    seen = len(s_on(page))
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(x2, y2, 1), pt(x2 + 40, y2, 2)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    page.wait_for_timeout(100)
+    check(seen == 10 and not s_on(page) and s_steps(page) == "0/0", f"/studio/ (phone): a line seen as it is dragged ({seen}), gone when a second finger lands")
+    # Pinch out: zoom in about the fingers; pinch in: back to fit.
+    z0 = page.inner_text("#s-z")
+    cx, cy = 195, s_at(page, 8, 16)[1]
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(cx - 30, cy, 1)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(cx - 30, cy, 1), pt(cx + 30, cy, 2)]})
+    for d in range(30, 130, 10):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [pt(cx - d, cy, 1), pt(cx + d, cy, 2)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    z1 = page.inner_text("#s-z")
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(cx - 150, cy, 1)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [pt(cx - 150, cy, 1), pt(cx + 150, cy, 2)]})
+    for d in range(150, 5, -10):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [pt(cx - d, cy, 1), pt(cx + d, cy, 2)]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    z2 = page.inner_text("#s-z")
+    wide = page.evaluate("document.documentElement.scrollWidth - innerWidth")
+    check(z0 == "8×" and z1 not in ("8×", "FIT") and int(z1.rstrip("×")) > 8 and z2 == "FIT" and not s_on(page) and wide <= 0,
+          f"/studio/ (phone): two fingers pinch the zoom, out and in ({z0} -> {z1} -> {z2}), drawing nothing, no sideways scroll")
+    check(not page.evaluate("window.__csp || []"), f"/studio/ (phone): no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
 
 
 def create_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
@@ -2708,6 +3405,7 @@ def main() -> int:
     ap.add_argument("--beta-dist", type=Path, help="the beta make site published beside it (BETA_DIST), if any")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
     ap.add_argument("--base", help="fetch the site from here (e.g. cf dev's http://127.0.0.1:8787) instead of serving SITE")
+    ap.add_argument("--only", choices=["studio"], help="run only these checks (the Studio's), e.g. against an older build")
     a = ap.parse_args()
     (a.shots or ROOT / "target/site-smoke").mkdir(parents=True, exist_ok=True)
     base = a.base.rstrip("/") if a.base else serve(a.site)
@@ -2716,6 +3414,18 @@ def main() -> int:
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        if a.only == "studio":
+            print("the Studio (/studio/)")
+            studio_page(browser, base, a.site, errors, a.shots)
+            studio_tabs(browser, base, a.site, errors)
+            studio_tools(browser, base, a.site, errors)
+            studio_colours(browser, base, a.site, errors, a.shots)
+            studio_journal(browser, base, a.site, errors)
+            studio_rename_tabs(browser, base, a.site, errors)
+            studio_edges(browser, base, a.site, errors)
+            studio_phone(browser, base, a.site, errors)
+            browser.close()
+            return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
         structure(browser, base, a.site, errors)
         print("the home page's hero show")
@@ -2732,6 +3442,12 @@ def main() -> int:
         print("the Studio (/studio/)")
         studio_page(browser, base, a.site, errors, a.shots)
         studio_tabs(browser, base, a.site, errors)
+        studio_tools(browser, base, a.site, errors)
+        studio_colours(browser, base, a.site, errors, a.shots)
+        studio_journal(browser, base, a.site, errors)
+        studio_rename_tabs(browser, base, a.site, errors)
+        studio_edges(browser, base, a.site, errors)
+        studio_phone(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
@@ -2763,6 +3479,10 @@ def main() -> int:
         if a.shots:
             screenshots(browser, base, errors, a.shots)
         browser.close()
+    return finish(errors)
+
+
+def finish(errors: list[str]) -> int:
     for e in errors:
         print(f"  FAIL {e}")
     failures.extend(errors)
