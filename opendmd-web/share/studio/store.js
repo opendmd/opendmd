@@ -42,7 +42,7 @@ export const LICENCES = ['CC0-1.0', 'CC-BY-4.0'];
 // Caps, set now so nothing grows without bound. `bytes` is any record's
 // JSON, `piece` a piece's (a 256-frame import of noisy video is ~1.4 MB; the
 // panel's own GIF limit is 4 MB); `layerName` a layer's name.
-export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096,
+export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096, members: 4096, stampFrames: 64,
   layerName: 60, msMin: 20, msMax: 60000 };
 // The most bytes any pixel field holds uncompressed: a whole panel, two bytes a pixel.
 export const PX_MAX = 128 * 32 * 2;
@@ -241,16 +241,43 @@ export function check(rec) {
   if (!arr(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !obj(f)
     || (f.id !== undefined && (typeof f.id !== 'string' || typeof f.hash !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
   checkBody(rec.type, rec.body);
+  if (rec.type === 'pack' && rec.body.members.some((m) => m.id === rec.id)) bad('members');
   if (JSON.stringify(rec).length > (rec.type === 'piece' ? CAPS.piece : CAPS.bytes)) bad('too big');
 }
 // A body of this type, alone (doc.js checks a journal's bodies with it).
 export function checkBody(type, b) {
   const bad = (why) => { throw new Error(`not a record: ${why}`); };
   if (!obj(b)) bad('body');
-  if (b.members !== undefined && (!arr(b.members) || b.members.some((m) => !obj(m) || typeof m.id !== 'string'))) bad('members');
+  const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+  // A pack lists its members by id and rev, each once.
+  const ids = new Set();
+  if ((type === 'pack' || b.members !== undefined) && (!arr(b.members) || b.members.length > CAPS.members
+    || b.members.some((m) => !obj(m) || typeof m.id !== 'string' || !ID.test(m.id) || !int(m.rev, 1, Number.MAX_SAFE_INTEGER) || ids.size === ids.add(m.id).size))) bad('members');
   if (type === 'palette' && !arr(b.colours)) bad('colours');
   if (b.palette !== undefined && typeof b.palette !== 'string') bad('palette');
-  if (type === 'piece') {
+  if (b.keys !== undefined && b.keys !== 2) bad('keys'); // one byte a pixel is no `keys`
+  // A stamp: w x h (on the panel), its frames' pixels (a time each, or none), its colours or its palette's.
+  if (type === 'stamp') {
+    if (!int(b.w, 1, 128) || !int(b.h, 1, 32)) bad('size');
+    if (!arr(b.frames) || !b.frames.length || b.frames.length > CAPS.stampFrames
+      || b.frames.some((f) => !obj(f) || typeof f.px !== 'string' || (f.ms !== undefined && !int(f.ms, CAPS.msMin, CAPS.msMax)))) bad('frames');
+    if (b.colours === undefined && typeof b.palette !== 'string') bad('colours');
+  }
+  // A font: cells, an advance a glyph, an atlas of glyphs one bit a pixel (key 1).
+  if (type === 'font') {
+    const c = b.cell, a = b.atlas;
+    if (!obj(c) || !int(c.w, 1, 16) || !int(c.h, 1, 16) || !int(b.line, 1, 32) || !int(b.first, 0, 255) || !int(b.count, 1, 256)
+      || !arr(b.adv) || b.adv.length !== b.count || b.adv.some((x) => !int(x, 0, 32))
+      || !obj(a) || !int(a.cols, 1, 64) || !int(a.w, 1, 1024) || !int(a.h, 1, 1024) || a.w * a.h > PX_MAX || typeof a.px !== 'string') bad('font');
+  }
+  // A template is a piece to start from: the same structure, its colours its palette's, guides where to draw.
+  if (type === 'template') {
+    if (typeof b.palette !== 'string' && b.colours === undefined) bad('colours');
+    if (b.guides !== undefined && (!arr(b.guides) || b.guides.length > 32 || b.guides.some((g) => !obj(g) || !['safe', 'text', 'art'].includes(g.kind)
+      || typeof g.name !== 'string' || g.name.length > CAPS.layerName || !int(g.x, 0, 127) || !int(g.y, 0, 31) || !int(g.w, 1, 128 - g.x) || !int(g.h, 1, 32 - g.y)
+      || (g.kind === 'text' && (typeof g.font !== 'string' || !['left', 'center', 'right'].includes(g.align) || typeof g.sample !== 'string' || g.sample.length > 120))))) bad('guides');
+  }
+  if (type === 'piece' || type === 'template') {
     if (b.w !== 128 || b.h !== 32) bad('size');
     // plays 0 (forever) is written as no plays; S0 and S1 drafts carry it,
     // and doc.js drops it when one opens (docs/studio-format.md).
@@ -269,13 +296,12 @@ export function checkBody(type, b) {
       || typeof l.moves !== 'boolean' || (l.hide !== undefined && l.hide !== true)
       || (l.stamps !== undefined && (!arr(l.stamps) || l.stamps.some((x) => !obj(x) || typeof x.ref !== 'string'))))) bad('layers');
     if (ls.some((l) => !arr(l.cels) || l.cels.length !== (l.moves ? fs.length : 1) || l.cels.some((c) => typeof c !== 'string'))) bad('cels');
-    if (b.keys !== undefined && b.keys !== 2) bad('keys'); // one byte a pixel is no `keys`
   }
   // Colours: keys 1 to 255 (65535 in a two-byte piece), rising (so each once),
   // #rrggbb, each colour once.
-  const cs = type === 'piece' || type === 'palette' ? b.colours : undefined;
+  const cs = type === 'palette' || type === 'piece' || type === 'stamp' || type === 'template' ? b.colours : undefined;
   if (cs !== undefined) {
-    const top = type === 'piece' && b.keys !== 2 ? 255 : 65535, hexes = new Set();
+    const top = type !== 'palette' && b.keys !== 2 ? 255 : 65535, hexes = new Set();
     let last = 0;
     if (!arr(cs) || cs.length > CAPS.colours || cs.some((c) => !obj(c) || !Number.isInteger(c.k) || c.k <= last || c.k > top || !(last = c.k)
       || typeof c.hex !== 'string' || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
