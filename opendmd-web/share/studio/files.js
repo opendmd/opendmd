@@ -224,10 +224,6 @@ export async function read(file) {
     const x = by.get(m.id);
     if (!x || x.rev !== m.rev) no(`The pack names a record the file doesn’t hold (${m.id}): nothing was taken from it.`);
   }
-  // Packs it carries may name records elsewhere, up to a point.
-  let dangling = 0;
-  for (const r of by.values()) if (r.type === 'pack') for (const m of r.body.members) if (!by.has(m.id)) dangling++;
-  if (dangling > LIMITS.dangling) no(`Packs in that file name ${dangling.toLocaleString('en')} records it doesn’t hold: a file names ${LIMITS.dangling.toLocaleString('en')} at most.`);
   const seen = new Set(), walk = (r, path) => {
     if (r.type !== 'pack') return;
     if (path.has(r.id)) no('A pack in the file holds itself: nothing was taken from it.');
@@ -280,6 +276,16 @@ export async function open(files) {
       }
       roots.push(got.root);
     }
+    // Packs may name records elsewhere, up to a point: a member is missing
+    // only if no file of this opening holds it and this browser doesn't either
+    // (a split backup's parts hold each other's).
+    let dangling = 0;
+    for (const r of all.values()) if (r.type === 'pack') for (const m of r.body.members) {
+      if (all.has(m.id)) continue;
+      if (S.store && await S.store.get(m.id)) continue;
+      if (++dangling > LIMITS.dangling) break;
+    }
+    if (dangling > LIMITS.dangling) throw new Error(`Packs in ${files.length > 1 ? 'those files' : 'that file'} name more than ${LIMITS.dangling.toLocaleString('en')} records neither they nor this browser hold: ${LIMITS.dangling.toLocaleString('en')} at most.`);
     p = await plan([...all.values()]);
   } catch (e) { S.say(e.message); S.status(was, text); S.root.dataset.opened = 'refused'; return null; }
   S.status(was, text);
@@ -324,11 +330,9 @@ async function add(p, roots, skip, ul, fileOf = new Map()) {
   // Copies take new ids, random; what in this opening points at them points
   // at the copies. Nothing outside it is ever pointed anywhere else.
   const ids = new Map(go.filter((x) => x.how === 'copy').map((x) => [x.r.id, newId(x.r.type)]));
-  // A reference follows a copy only from the copy's own file (or when the
-  // copied id is not one this profile has): a file picked beside mine never
-  // turns my records' references to its copies.
-  const have = new Set(p.filter((x) => x.have).map((x) => x.r.id));
-  const to = (id, from) => (ids.has(id) && (fileOf.get(id) === fileOf.get(from) || !have.has(id)) ? ids.get(id) : id);
+  // A reference follows a copy only from the copy's own file: a file picked
+  // beside mine never turns my records' references to its copies.
+  const to = (id, from) => (ids.has(id) && fileOf.get(id) === fileOf.get(from) ? ids.get(id) : id);
   let n = 0, err = '', first = null, t0 = performance.now();
   const roots_ = new Set(roots.map((r) => r.id));
   for (const type of ORDER) {

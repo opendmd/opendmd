@@ -136,8 +136,10 @@ picked together link up whichever holds which. Nothing is remembered
 between openings.
 
 **One opening** (files picked together) takes 64 MB and 16,640 records at
-most in all. The packs a file carries may name 4,096 records it doesn't
-hold, and the store keeps "what uses what" rows only for records it has.
+most in all. The packs it carries may name 4,096 records that neither its
+files nor this browser hold. The store keeps "what uses what" rows only
+for records it has; the Library's Used in also reads every pack that
+names a record, so one that came first still counts.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole

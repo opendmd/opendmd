@@ -129,13 +129,25 @@ async function render() {
 }
 
 // --- a record's detail ---
+// What uses a record: the store's rows, and every pack here that names it
+// (its rows were written at the pack's save, which may have been before the record came).
+async function usedIn(id) {
+  if (!S.store) return [];
+  const out = new Map((await S.store.usedBy(id)).map((h) => [h.id, h]));
+  for (const h of (await S.store.list({ type: 'pack' })).items) {
+    if (out.has(h.id)) continue;
+    const p = await S.store.get(h.id);
+    if (p?.body.members.some((m) => m.id === id)) out.set(h.id, p);
+  }
+  return [...out.values()];
+}
 const find = (id) => Object.values(all).flat().find((r) => r.id === id);
 async function detail(id) {
   open = id;
   const r = find(id), d = $('s-ldet');
   if (!r) { d.hidden = true; return; }
   const own = !ro(r), from = (r.from || []).map((f) => (f.external ? f.note || 'an imported picture' : `${f.name || f.id} (version ${f.rev})`));
-  const used = S.store && own ? await S.store.usedBy(id) : [];
+  const used = own ? await usedIn(id) : [];
   const revs = S.store && own ? await S.store.revs(id) : [];
   const head = el('div', 's-hd');
   if (own) {
@@ -193,7 +205,7 @@ async function act(e) {
   if (a === 'file') (await S.files()).save(id);
   if (a === 'dup') await duplicate(r);
   if (a === 'del') {
-    const used = S.store ? await S.store.usedBy(id) : [];
+    const used = await usedIn(id);
     const said = used.length ? `${r.name} is used in ${used.map((u) => u.name).join(', ')}: they keep what they have, but no longer point at it. Delete it? It can’t be brought back.` : `Delete ${r.name}? It can’t be brought back.`;
     if (!confirm(said)) return;
     await S.forget(id);
