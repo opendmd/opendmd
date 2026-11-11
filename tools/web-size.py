@@ -89,7 +89,7 @@ The Formula page on the site (`--share opendmd-web/share`: `f/`'s page,
 script and style, gzipped here since `make web` does not compress them;
 never packed) has a line of its own, <= 8 KB (Create Art's page, `create/`,
 another, <= 5 KB, on the Studio's lines; the Studio's own page, `studio/`,
-the site's pixel editor, another, <= 20 KB); it is the web app's editor on
+the site's pixel editor, another, <= 32 KB, and what it loads later, <= 5 KB); it is the web app's editor on
 the demo's files (the main wasm, js/formulas.js and its imports, pkg-psi,
 app.css and formulas.css), which are counted in their own lines and printed
 as the page's first-visit total for information. js/psikit.js (where a
@@ -435,7 +435,20 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # the S0 spike, 17.4 KB gz as written here, comments and all; the site serves
 # it minified). Its GIF writer is the demo's pkg-art (the art wasm line),
 # fetched at the first download, not with the page.
-STUDIO_PAGE_GZ_BUDGET = 20 * 1024
+# 32 KB since S1 (2026-11-11, branch studio-s1, under the budget authority:
+# ~30.2 KB gz as written): the line, rectangle, ellipse, dither, selection
+# and picker tools with their live previews (tools.js), brushes, the piece's
+# own colours with two-byte keys, the undo journal kept across reloads,
+# snapshots, the tab-safe store version, pinch zoom. What can wait is a line
+# of its own below; the site serves both minified (about half this).
+STUDIO_PAGE_GZ_BUDGET = 32 * 1024
+# What the Studio's page imports only when it is first used (colour.js: the
+# colour picker, the palette tools, the Lospec import): <= 5 KB (2026-11-11,
+# S1: ~3.8 KB gz). The starter pack the page fetches once it is up
+# (studio-starter/starter.dmdpack, copied beside it by tools/site.py) is
+# content, not code, and counts against neither.
+STUDIO_LAZY_GZ_BUDGET = 5 * 1024
+STUDIO_LAZY = {"colour.js"}
 STUDIO_PAGE_USES = ("pkg-art/", "js/wasm.js", "js/build.js", "js/artmod.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
@@ -689,6 +702,7 @@ def main() -> int:
         hero = (0, 0)
         craw = cgz = 0
         sp_raw = sp_gz = 0
+        sl_raw = sl_gz = 0
         video = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
@@ -717,6 +731,10 @@ def main() -> int:
             if p.relative_to(share).parts[0] == "create" and p.name == VIDEO_JS:
                 video = (len(b), g)
                 continue
+            if p.relative_to(share).parts[0] == "studio" and p.name in STUDIO_LAZY:
+                sl_raw += len(b)
+                sl_gz += g
+                continue
             if p.relative_to(share).parts[0] == "studio":
                 sp_raw += len(b)
                 sp_gz += g
@@ -743,6 +761,9 @@ def main() -> int:
         print(f"{'studio pg':<10} raw {sp_raw:>9,}           gz {sp_gz:>9,} / {STUDIO_PAGE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(with the GIF writer, at the first download: {sp_gz + demo_gz(STUDIO_PAGE_USES):,} B gz)")
         ok &= 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET
+        verdict = "ok" if 0 < sl_gz <= STUDIO_LAZY_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'studio lz':<10} raw {sl_raw:>9,}           gz {sl_gz:>9,} / {STUDIO_LAZY_GZ_BUDGET // 1024} KB {verdict:<10}(the picker and palette tools, when first opened)")
+        ok &= 0 < sl_gz <= STUDIO_LAZY_GZ_BUDGET
         verdict = "ok" if 0 < video[1] <= VIDEO_GZ_BUDGET else "OVER BUDGET"
         print(f"{'video':<10} raw {video[0]:>9,}           gz {video[1]:>9,} / {VIDEO_GZ_BUDGET // 1024} KB {verdict}")
         ok &= 0 < video[1] <= VIDEO_GZ_BUDGET
