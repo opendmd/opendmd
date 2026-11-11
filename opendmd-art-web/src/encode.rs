@@ -1,6 +1,7 @@
 //! The GIF writer: one global palette (so the prepared copy keeps exactly
 //! these colours and never re-quantises), every frame whole, no
-//! transparency. Delays are in hundredths of a second in the file; the
+//! transparency; or, for a picture past 256 colours ([`wide`]), each frame
+//! in bands of rows with a table of their own. Delays are in hundredths of a second in the file; the
 //! pipeline's are multiples of 10 ms. A still loops forever; an animation
 //! from the timeline plays forever or a number of times ([`begin`]).
 
@@ -81,6 +82,77 @@ pub fn indexed(
     let mut enc = begin(palette, plays);
     for (f, &d) in frames.as_chunks::<{ W * H }>().0.iter().zip(delays_ms) {
         frame(&mut enc, f, d);
+    }
+    Ok(finish(enc))
+}
+
+/// Frames past 256 colours, exactly (the site's pixel editor, /studio/): a
+/// 128x32 GIF of `delays_ms.len()` frames of `W * H` colours (`0xRRGGBB`,
+/// back to back in `frames`), played `plays` times ([`begin`]). A GIF frame
+/// holds 256 colours at most, so each frame is written as bands of whole
+/// rows, each band as many rows as fit 256 colours (a row has 128 at most),
+/// with a table of its own; every band but the last is shown 20 ms (the
+/// shortest delay players keep) and the last the rest of the frame's time.
+/// Nothing is quantised: the panel plays such a GIF exactly, as it is
+/// (`docs/cache-format.md`, "Exact or absent").
+pub fn wide(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, &'static str> {
+    if delays_ms.is_empty() || frames.len() != delays_ms.len() * W * H {
+        return Err("frames of 128 x 32 colours, one delay each");
+    }
+    if frames.iter().any(|&c| c > 0xff_ffff) {
+        return Err("colours as 0xRRGGBB");
+    }
+    // No global table (the encoder writes a 2-entry black one): every band has its own.
+    let mut enc = begin(&[], plays);
+    for (f, &d) in frames.as_chunks::<{ W * H }>().0.iter().zip(delays_ms) {
+        let mut bands = Vec::new();
+        let mut y = 0;
+        while y < H {
+            let mut set: Vec<u32> = Vec::new();
+            let mut y1 = y;
+            while y1 < H {
+                let mut s = set.clone();
+                s.extend_from_slice(&f[y1 * W..(y1 + 1) * W]);
+                s.sort_unstable();
+                s.dedup();
+                if s.len() > 256 {
+                    break;
+                }
+                set = s;
+                y1 += 1;
+            }
+            bands.push((y, y1, set));
+            y = y1;
+        }
+        let total = (d.saturating_add(5) / 10).clamp(2, u16::MAX as u32) as u16;
+        let n = bands.len();
+        for (b, (y0, y1, set)) in bands.into_iter().enumerate() {
+            let idx: Vec<u8> = f[y0 * W..y1 * W]
+                .iter()
+                .map(|c| set.binary_search(c).unwrap_or(0) as u8)
+                .collect();
+            let mut pal: Vec<u8> = set
+                .iter()
+                .flat_map(|&c| [(c >> 16) as u8, (c >> 8) as u8, c as u8])
+                .collect();
+            pal.resize(pal.len().max(6), 0);
+            let delay = if b + 1 < n {
+                2
+            } else {
+                total.saturating_sub(2 * (n as u16 - 1)).max(2)
+            };
+            let frame = Frame {
+                top: y0 as u16,
+                width: W as u16,
+                height: (y1 - y0) as u16,
+                buffer: Cow::Owned(idx),
+                palette: Some(pal),
+                delay,
+                dispose: gif::DisposalMethod::Keep,
+                ..Frame::default()
+            };
+            enc.write_frame(&frame).expect("gif frame");
+        }
     }
     Ok(finish(enc))
 }

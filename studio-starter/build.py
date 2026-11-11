@@ -40,7 +40,7 @@ MAX_STAMP = 128
 # The Studio's own rules (opendmd-web/share/studio/store.js: TYPES, LICENCES,
 # CAPS, check): every built record must pass them, whatever else we ask.
 LICENCES = ["CC0-1.0", "CC-BY-4.0"]
-CAPS = {"frames": 256, "layers": 16, "bytes": 1 << 20, "name": 120, "note": 200, "tags": 32, "from": 64}
+CAPS = {"frames": 256, "layers": 16, "bytes": 1 << 20, "name": 120, "note": 200, "tags": 32, "from": 64, "colours": 4096}
 ID = re.compile(r"(pc|pl|st|ft|sh|tp|pk)_[0-9a-f]{32}")
 PANEL = (128, 32)
 ASCII = [chr(c) for c in range(32, 127)]
@@ -146,8 +146,11 @@ def store_check(rec):
         bad("note")
     if rec["licence"] is not None and rec["licence"] not in LICENCES:
         bad("licence")
+    # An entry naming a record says which content it was: its hash too.
     if not isinstance(rec["from"], list) or len(rec["from"]) > CAPS["from"] or any(
-            not isinstance(f, dict) for f in rec["from"]):
+            not isinstance(f, dict) or ("id" in f and (not isinstance(f["id"], str)
+                                                      or not re.fullmatch(r"sha256-[0-9a-f]{64}", str(f.get("hash", "")))))
+            for f in rec["from"]):
         bad("from")
     b = rec["body"]
     if not isinstance(b, dict):
@@ -162,6 +165,16 @@ def store_check(rec):
         if any(not isinstance(l.get("cels"), list)
                or len(l["cels"]) != (len(b["frames"]) if l.get("moves") else 1) for l in b["layers"]):
             bad("cels")
+    if rec["type"] == "piece" and "keys" in b and b["keys"] not in (1, 2):
+        bad("keys")
+    # Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb.
+    if rec["type"] in ("piece", "palette") and "colours" in b:
+        top, cs = (65535 if rec["type"] == "palette" or b.get("keys") == 2 else 255), b["colours"]
+        ks = [c.get("k") for c in cs] if isinstance(cs, list) and all(isinstance(c, dict) for c in cs) else None
+        if ks is None or len(cs) > CAPS["colours"] or len(set(ks)) != len(ks) or any(
+                type(k) is not int or not 1 <= k <= top for k in ks) or any(
+                not isinstance(c.get("hex"), str) or not re.fullmatch(r"#[0-9a-f]{6}", c["hex"]) for c in cs):
+            bad("colours")
     # JSON.stringify(rec).length counts UTF-16 units; the same text here.
     text = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
     if len(text.encode("utf-16-le")) // 2 > CAPS["bytes"]:

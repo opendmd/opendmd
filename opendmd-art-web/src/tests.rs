@@ -686,3 +686,44 @@ fn indexed_frames_keep_their_palette_exactly() {
     assert!(indexed(&pal, &vec![5; W * H], &[100], 0).is_err());
     assert!(indexed(&[0; 257], &vec![0; W * H], &[100], 0).is_err());
 }
+
+#[test]
+fn wide_frames_keep_every_colour_and_the_player_plays_them_as_they_are() {
+    use crate::encode::wide;
+    use opendmd_core::canvas::Canvas;
+    use opendmd_core::gifslim::{recode_gif, GifSlim, ORIGINAL_REASON, PREPARED};
+    // 4096 pixels, 1024 colours: a band of rows holds 256 at most.
+    let px: Vec<u32> = (0..W * H)
+        .map(|i| ((i % 1024) as u32) * 0x3fff % 0xff_ffff)
+        .collect();
+    let mut want = px.clone();
+    want.sort_unstable();
+    want.dedup();
+    assert_eq!(want.len(), 1024);
+    let gif = wide(&px, &[5000], 0).unwrap();
+    // The player's own decoder: every band composited, the picture exact.
+    let mut dec = GifSlim::new(std::io::Cursor::new(gif.as_slice())).unwrap();
+    let mut canvas = Canvas::new();
+    let mut total = std::time::Duration::ZERO;
+    let mut bands = 0;
+    while let Some(d) = dec.next_frame(&mut canvas).unwrap() {
+        total += d;
+        bands += 1;
+    }
+    let rgb = dec.screen(&canvas);
+    let got: Vec<u32> = rgb
+        .chunks(3)
+        .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
+        .collect();
+    assert_eq!(got, px);
+    assert!(bands >= 4, "{bands} bands");
+    // The frame's time is kept whole: 20 ms a band, the last the rest.
+    assert_eq!(total, std::time::Duration::from_millis(5000));
+    // No prepared copy: only a lossy one could be made, so the GIF plays as it is.
+    let err = recode_gif(gif.as_slice(), &mut Vec::new(), &PREPARED).unwrap_err();
+    assert!(err.to_string().contains(ORIGINAL_REASON), "{err}");
+    // Bad calls are refused.
+    assert!(wide(&px[1..], &[100], 0).is_err());
+    assert!(wide(&vec![0x0100_0000; W * H], &[100], 0).is_err());
+    assert!(wide(&px, &[], 0).is_err());
+}

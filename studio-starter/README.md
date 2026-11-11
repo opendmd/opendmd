@@ -118,8 +118,11 @@ What the build adds to each source record:
   uncompressed, as lowercase hex; write that as canonical JSON (keys sorted,
   no spaces, UTF-8, non-ASCII characters not escaped, integers only);
   `sha256-` plus the SHA-256 of the text. So the hash is of the pixels, not
-  of how they happen to be compressed. Every build first tests the rule
-  against the Studio's pinned hash of its built-in palette.
+  of how they happen to be compressed. (A Studio piece past 255 colours
+  stores two bytes a pixel, high byte first, and says `keys: 2`; the rule is
+  the same, so these one-byte hashes never change: `docs/studio-format.md`.)
+  Every build first tests the rule against the Studio's pinned hash of its
+  built-in palette.
 - `created`, `modified`: one fixed date, so the build repeats byte for byte.
 
 and what it changes in the body:

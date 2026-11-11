@@ -498,6 +498,16 @@ pub fn encode_indexed(
     encode::indexed(palette, frames, delays_ms, plays).map_err(JsError::new)
 }
 
+/// The site's pixel editor's GIF past 256 colours (/studio/,
+/// [`encode::wide`]): frames of 128x32 colours (`Uint32Array` of
+/// `0xRRGGBB`, back to back), one delay each (ms), played `plays` times
+/// (0: forever), each frame in bands of rows with tables of their own, so
+/// no colour is lost. Throws with why on a bad call.
+#[wasm_bindgen(js_name = encodeWide)]
+pub fn encode_wide(frames: &[u32], delays_ms: &[u32], plays: u32) -> Result<Vec<u8>, JsError> {
+    encode::wide(frames, delays_ms, plays).map_err(JsError::new)
+}
+
 /// GIF bytes -> its prepared copy with the core's recoder in the prepared
 /// format (the one `opendmd-pack` and the device run, so the output is
 /// byte-identical). Returns `{copy: Uint8Array, stats: {width, height,

@@ -52,7 +52,8 @@
 - /studio/     the Studio: a pixel editor for the panel, 128x32
                (opendmd-web/share/studio/: studio.js, store.js — the record
                envelope and LocalStore on IndexedDB — and the starter
-               palettes): drafts kept in the browser, nothing uploaded, the
+               palettes, from studio-starter/starter.dmdpack, copied
+               beside it): drafts kept in the browser, nothing uploaded, the
                GIF written by the demo's art module (pkg-art
                `encodeIndexed`). Not in the menus yet
 - /panel.js    the panel's address and the window hand-off, shared by /f/
@@ -1191,6 +1192,9 @@ def main() -> None:
     art = json.loads((a.art / "art.json").read_text())
     for page in APP_PAGES:
         app_page(out, page, art["wordmark"])
+    # The Studio's starter palettes (and, later, its stamps and fonts): the starter pack as
+    # built (studio-starter/), beside the page, fetched once the page is up.
+    shutil.copyfile(ROOT / "studio-starter/starter.dmdpack", out / "studio/starter.dmdpack")
     # Their way to a panel (the address, the hand-off), shared.
     share_copy(ROOT / "opendmd-web/share/panel.js", out / "panel.js")
     # The Psi pages' script is one of them (the pages themselves are docs, written below).

@@ -16,8 +16,8 @@
 <main id="main">
 <article id="studio" aria-busy="true">
 <div class="s-doc">
-<label class="s-name"><span class="s-hide">Name</span><input id="s-name" type="text" maxlength="120" autocomplete="off" spellcheck="false" value="Untitled"></label>
-<span class="s-kind" id="s-kind">STILL · 128×32</span>
+<span class="s-title"><label class="s-name"><span class="s-hide">Name</span><input id="s-name" type="text" maxlength="120" autocomplete="off" spellcheck="false" value="Untitled"></label>
+<span class="s-kind" id="s-kind">STILL · 128×32</span></span>
 <span class="s-saved" id="s-saved" role="status">Kept in this browser</span>
 <span class="s-sp"></span>
 <button class="s-ib" id="s-undo" title="Undo (Ctrl+Z)" aria-label="Undo" data-i="undo" disabled></button>
@@ -25,36 +25,54 @@
 <button class="s-cta" id="s-gif">Download GIF</button>
 </div>
 <div class="s-stage">
-<p class="s-touch" id="s-touch" hidden>Two fingers move the picture</p>
+<p class="s-touch" id="s-touch" hidden>Two fingers move and zoom the picture</p>
 <div class="s-scroll" id="s-scroll">
-<div class="s-ruler" id="s-ruler" aria-hidden="true"><span style="left:0">0</span><span style="left:25%">32</span><span class="seam" style="left:50%">SEAM · 64</span><span style="left:75%">96</span><span style="left:100%">128</span></div>
+<div class="s-ruler" id="s-ruler" aria-hidden="true"><span class="r0">0</span><span class="r1">32</span><span class="seam r2">SEAM · 64</span><span class="r3">96</span><span class="r4">128</span></div>
 <div class="s-bezel">
-<div class="s-work" id="s-work"><canvas id="s-canvas" width="128" height="32" aria-label="The drawing, 128 by 32 pixels"></canvas><div class="s-grid" id="s-grid"></div><div class="s-seam" id="s-seam"></div><div class="s-cursor" id="s-cursor" hidden></div></div>
+<div class="s-work" id="s-work"><canvas id="s-canvas" width="128" height="32" aria-label="The drawing, 128 by 32 pixels"></canvas><div class="s-grid" id="s-grid"></div><div class="s-seam" id="s-seam"></div><div class="s-sel" id="s-sel" hidden></div><div class="s-cursor" id="s-cursor" hidden></div></div>
+</div>
+</div>
 <div class="s-chin"><span class="s-seg" role="group" aria-label="View"><button id="s-v-px" class="on" aria-pressed="true">PIXELS</button><button id="s-v-led" aria-pressed="false">LEDS</button></span><span class="s-sp"></span><span id="s-xy">X <b>–</b> Y <b>–</b></span></div>
-</div>
-</div>
 </div>
 <div class="s-tray">
 <span class="s-tools" role="group" aria-label="Tools">
 <button class="s-tool on" id="s-t-pencil" data-tool="pencil" data-i="pencil" title="Pencil (B)" aria-label="Pencil" aria-pressed="true"><i>B</i></button>
 <button class="s-tool" id="s-t-eraser" data-tool="eraser" data-i="eraser" title="Eraser (E)" aria-label="Eraser" aria-pressed="false"><i>E</i></button>
+<button class="s-tool" id="s-t-line" data-tool="line" data-i="line" title="Line (L) · Shift: straight or 45°" aria-label="Line" aria-pressed="false"><i>L</i></button>
+<button class="s-tool" id="s-t-rect" data-tool="rect" data-i="rect" title="Rectangle (R) · Shift+R filled · Shift while drawing: a square" aria-label="Rectangle" aria-pressed="false"><i>R</i></button>
+<button class="s-tool" id="s-t-ellipse" data-tool="ellipse" data-i="ellipse" title="Ellipse (O) · Shift+O filled · Shift while drawing: a circle" aria-label="Ellipse" aria-pressed="false"><i>O</i></button>
 <button class="s-tool" id="s-t-fill" data-tool="fill" data-i="fill" title="Fill (G)" aria-label="Fill" aria-pressed="false"><i>G</i></button>
+<button class="s-tool" id="s-t-dither" data-tool="dither" data-i="dither" title="Dither fill (D): every other pixel" aria-label="Dither fill" aria-pressed="false"><i>D</i></button>
+<button class="s-tool" id="s-t-select" data-tool="select" data-i="select" title="Select (M) · drag inside to move · Ctrl+C, Ctrl+X, Ctrl+V · Shift+H, Shift+V flip · Delete" aria-label="Select" aria-pressed="false"><i>M</i></button>
+<button class="s-tool" id="s-t-pick" data-tool="pick" data-i="pick" title="Pick a colour (I) · or right-click, Alt-click" aria-label="Pick a colour" aria-pressed="false"><i>I</i></button>
 </span>
-<span class="s-hint">Right-click or Alt-click picks a colour</span>
+<span class="s-seg s-size" role="group" aria-label="Brush size"><button data-size="1" class="on" aria-pressed="true" title="Brush 1 (1)">1</button><button data-size="2" aria-pressed="false" title="Brush 2 (2)">2</button><button data-size="3" aria-pressed="false" title="Brush 3 (3)">3</button></span>
 <span class="s-sp"></span>
-<span class="s-seg s-zoom" role="group" aria-label="Zoom"><button id="s-z-out" aria-label="Zoom out">−</button><b id="s-z">FIT</b><button id="s-z-in" aria-label="Zoom in">+</button></span>
+<span class="s-seg s-zoom" role="group" aria-label="Zoom"><button id="s-z-out" aria-label="Zoom out" title="Zoom out (-)">−</button><b id="s-z">FIT</b><button id="s-z-in" aria-label="Zoom in" title="Zoom in (+)">+</button></span>
 <span class="s-seg" role="group" aria-label="Guides"><button id="s-g-grid" class="on" aria-pressed="true">Grid</button><button id="s-g-seam" class="on" aria-pressed="true">Seam</button></span>
+</div>
+<div class="s-selbar" id="s-selbar" hidden>
+<button class="s-pill" data-act="copy" title="Copy (Ctrl+C)">Copy</button><button class="s-pill" data-act="cut" title="Cut (Ctrl+X)">Cut</button><button class="s-pill" data-act="paste" title="Paste (Ctrl+V)">Paste</button><button class="s-pill" data-act="fliph" title="Flip left to right (Shift+H)">Flip ↔</button><button class="s-pill" data-act="flipv" title="Flip top to bottom (Shift+V)">Flip ↕</button><button class="s-pill" data-act="del" title="Delete (Delete)">Delete</button><button class="s-pill" data-act="done" title="Done (Enter)">Done</button>
 </div>
 <div class="s-bench">
 <section class="s-colours" aria-labelledby="s-colours-h">
-<div class="s-hd"><h2 id="s-colours-h">Colours</h2><span class="s-sp"></span><label class="s-hide" for="s-pal">Palette</label><select id="s-pal"></select></div>
-<div class="s-pal" id="s-sw" role="radiogroup" aria-label="Colour"></div>
+<div class="s-hd"><h2 id="s-colours-h">Colours</h2><span class="s-sp"></span><span class="s-used" id="s-used"></span></div>
+<div class="s-pal" id="s-sw" role="radiogroup" aria-label="This piece’s colours"></div>
+<p class="s-cap s-warn" id="s-many" hidden>Past 256 colours: the panel still shows every one exactly, but plays this GIF the slower way and without Smooth motion.</p>
+<div class="s-row"><button class="s-pill" id="s-add" title="Any colour: it joins this piece’s colours">New colour…</button><button class="s-pill" id="s-unused">Remove unused</button></div>
+<div id="s-picker" hidden></div>
+<div class="s-hd s-hd2"><h3>Swatches</h3><span class="s-sp"></span><label class="s-hide" for="s-pal">Swatches</label><select id="s-pal"></select><button class="s-pill" id="s-pals" aria-expanded="false">Palettes…</button></div>
+<div class="s-pal" id="s-set" aria-label="Swatches: a colour picked here joins this piece"></div>
 <p class="s-cap" id="s-pal-about"></p>
+<div id="s-palx" hidden></div>
 </section>
 <section class="s-drafts" aria-labelledby="s-drafts-h">
 <div class="s-hd"><h2 id="s-drafts-h">Drafts</h2><span class="s-sp"></span><button class="s-pill s-pri" id="s-new">New piece</button></div>
 <ul class="s-list" id="s-list"></ul>
 <p class="s-cap">Drafts are kept in this browser on this device, and nothing is uploaded. Download a GIF to keep a copy, then add it to your panel in its web app.</p>
+<div class="s-hd s-hd2"><h3>Snapshots</h3><span class="s-sp"></span><label class="s-hide" for="s-snapname">Snapshot name</label><input id="s-snapname" class="s-in" type="text" maxlength="120" placeholder="Name" autocomplete="off"><button class="s-pill" id="s-snap">Take snapshot</button></div>
+<ul class="s-list s-snaps" id="s-snaps"></ul>
+<p class="s-cap" id="s-snaps-none">A snapshot keeps this piece as it is now, to come back to. Each download keeps one too.</p>
 </section>
 </div>
 <p class="s-cap s-bad" id="s-err" hidden></p>
