@@ -1004,7 +1004,9 @@ fn main() -> Result<()> {
                         // ~6 ms in a bucket, ~330 ms in `gifs/Consoles`),
                         // then the file takes the screen at the next tick
                         // under the usual dwell. A formula over a formula
-                        // is a live edit, in place; one the heap can't
+                        // goes in place (a live edit with `live`, its
+                        // governor's level kept; else at its own rate,
+                        // `fx_psi::Retune`); one the heap can't
                         // compile beside it lets it go and is played from
                         // nothing (`Engine::retune`).
                         // A Formula stays as long as `formula_keep` says
@@ -1020,7 +1022,7 @@ fn main() -> Result<()> {
                         if formula {
                             room_for_formula(engine.as_mut(), &mut canvas);
                         }
-                        let r = match retune(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()) {
+                        let r = match retune(engine.as_mut(), &path, live, epoch.elapsed(), keep.dwell()) {
                             Some(r) => {
                                 // No new start (the ordinal stays), but
                                 // status names the formula now on the panel:
@@ -2973,19 +2975,30 @@ fn play_error(path: &str, err: std::io::Error) -> PlayError {
 }
 
 /// A formula over the formula on screen: in place (`Engine::retune`).
-/// `None` when either is not a formula.
+/// `live`: a live edit of it (the governor's level goes on), else another
+/// Formula played over it (it starts from its own estimate's level:
+/// `fx_psi::Governor::retune`). `None` when either is not a formula.
 #[cfg(feature = "psi")]
 fn retune(
     engine: Option<&mut Engine>,
     path: &str,
+    live: bool,
     now: Duration,
     keep: Option<overrides::Override>,
 ) -> Option<Result<(), PlayError>> {
-    Some(engine?.retune(path, now, keep)?.map_err(|e| play_error(path, e)))
+    use opendmd_core::fx_psi::Retune;
+    let how = if live { Retune::Edit } else { Retune::Play };
+    Some(engine?.retune(path, now, keep, how)?.map_err(|e| play_error(path, e)))
 }
 
 #[cfg(not(feature = "psi"))]
-fn retune(_: Option<&mut Engine>, _: &str, _: Duration, _: Option<overrides::Override>) -> Option<Result<(), PlayError>> {
+fn retune(
+    _: Option<&mut Engine>,
+    _: &str,
+    _: bool,
+    _: Duration,
+    _: Option<overrides::Override>,
+) -> Option<Result<(), PlayError>> {
     None
 }
 
