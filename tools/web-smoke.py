@@ -9243,22 +9243,30 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         check("answered ·" in t, f"follow: Test with the right code -> '{t}'")
 
         # A code typed while an earlier one is saving stays in the field
-        # (the save clears only the code it sent).
+        # (the save clears only the code it sent). Held: only the save that
+        # sends "first". (The Tests above leave saves of their own: the code
+        # field's change as Test took the focus, and the address's, 400 ms
+        # after it was typed. A "4321" one of those, held here instead, would
+        # clear the "4321" typed below, rightly: it is the code it sent.)
+        # Saves run one at a time, so once "first" is held the earlier ones
+        # are done and ticked; the count is read then.
         held: list = []
-        page.route("**/api/config", lambda r: held.append(r) if r.request.method == "PUT" else r.continue_())
-        n0 = page.evaluate("+(document.querySelector('#fo .tick')?.dataset.n || 0)")
+        sends = lambda r: r.request.method == "PUT" and (json.loads(r.request.post_data or "{}").get("follow_code") == "first")  # noqa: E731
+        passed: list = []
+        page.route("**/api/config", lambda r: held.append(r) if sends(r) else (r.request.method == "PUT" and passed.append(r.request.post_data), r.continue_()))
         page.fill("#fo-code", "first")
         page.dispatch_event("#fo-code", "change")
         deadline = time.time() + 10
         while not held and time.time() < deadline:
             page.wait_for_timeout(50)
+        n0 = page.evaluate("+(document.querySelector('#fo .tick')?.dataset.n || 0)")
         page.fill("#fo-code", "4321")
         for r in held:
             r.continue_()
         page.unroute("**/api/config")
         page.wait_for_function("n => +(document.querySelector('#fo .tick')?.dataset.n || 0) > n", arg=n0, timeout=10000)
         kept = page.input_value("#fo-code")
-        check(bool(held) and kept == "4321", f"follow: a code typed while one saves stays in the field ('{kept}')")
+        check(bool(held) and kept == "4321", f"follow: a code typed while one saves stays in the field ('{kept}'; {len(held)} held, other saves sent meanwhile {passed[:2]})")
 
         # Saved as changed: follow on, host, code 4321 (when the field is
         # left), attract = the current playlist.
