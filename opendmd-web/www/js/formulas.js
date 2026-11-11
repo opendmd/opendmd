@@ -48,8 +48,9 @@ function T(fn, d) {
 // to (whole frames of it) and a saved GIF's frames. Over a GIF it is the GIF's: a look doesn't follow its line.
 const D = 20;
 const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
-// The refreshes a second of a connected panel's scan (its status), else none (js/psikit.js `tier`).
-const HZ = () => (app.device && app.status?.refresh_hz) || 0;
+// The refreshes a second of a connected panel's scan (its status: the refresh measured off the scan, else the
+// driver's figure), else none (js/psikit.js `tier`).
+const HZ = () => (app.device && (app.status?.refresh_us > 0 ? 1e6 / app.status.refresh_us : app.status?.refresh_hz)) || 0;
 // How often the preview draws, ms: as the panel does (opendmd-core scan.rs beam_frames), a refresh (~8 ms; the
 // panel's own when it reports one) or 2 or 4 of them, the most that fit the grid; the times quantised from now,
 // as the panel's `t` is its clock's at the refresh (fx_psi: ms % the loop), so far as the monitor's frames allow.
