@@ -46,6 +46,7 @@
 <button class="s-tool" id="s-t-select" data-tool="select" data-i="select" title="Select (M) · drag inside to move · Ctrl+C, Ctrl+X, Ctrl+V · Shift+H, Shift+V flip · Delete" aria-label="Select" aria-pressed="false"><i>M</i></button>
 <button class="s-tool" id="s-t-pick" data-tool="pick" data-i="pick" title="Pick a colour (I) · or right-click, Alt-click" aria-label="Pick a colour" aria-pressed="false"><i>I</i></button>
 </span>
+<span class="s-seg s-fillmode" id="s-fillmode" role="group" aria-label="Shape" hidden><button data-fill="0" aria-pressed="true" title="Edge (R, O)">Edge</button><button data-fill="1" aria-pressed="false" title="Filled (Shift+R, Shift+O)">Filled</button></span>
 <span class="s-seg s-size" role="group" aria-label="Brush size"><button data-size="1" class="on" aria-pressed="true" title="Brush 1 (1)">1</button><button data-size="2" aria-pressed="false" title="Brush 2 (2)">2</button><button data-size="3" aria-pressed="false" title="Brush 3 (3)">3</button></span>
 <span class="s-sp"></span>
 <span class="s-seg s-zoom" role="group" aria-label="Zoom"><button id="s-z-out" aria-label="Zoom out" title="Zoom out (-)">−</button><b id="s-z">FIT</b><button id="s-z-in" aria-label="Zoom in" title="Zoom in (+)">+</button></span>
@@ -58,7 +59,7 @@
 <section class="s-colours" aria-labelledby="s-colours-h">
 <div class="s-hd"><h2 id="s-colours-h">Colours</h2><span class="s-sp"></span><span class="s-used" id="s-used"></span></div>
 <div class="s-pal" id="s-sw" role="radiogroup" aria-label="This piece’s colours"></div>
-<p class="s-cap s-warn" id="s-many" hidden>Past 256 colours: the panel still shows every one exactly, but plays this GIF the slower way and without Smooth motion.</p>
+<p class="s-cap s-warn" id="s-many" hidden>Past 256 colours: the panel still shows every one exactly, but plays this GIF the slower way and without Smooth motion. <button class="s-pill" id="s-fit" title="Download a GIF of the 256 colours used most, each other colour as its nearest: the panel plays it the quick way, with Smooth motion. The piece keeps all its colours.">Download fitted to 256 colours</button></p>
 <div class="s-row"><button class="s-pill" id="s-add" title="Any colour: it joins this piece’s colours">New colour…</button><button class="s-pill" id="s-unused">Remove unused</button></div>
 <div id="s-picker" hidden></div>
 <div class="s-hd s-hd2"><h3>Swatches</h3><span class="s-sp"></span><label class="s-hide" for="s-pal">Swatches</label><select id="s-pal"></select><button class="s-pill" id="s-pals" aria-expanded="false">Palettes…</button></div>
@@ -70,6 +71,7 @@
 <div class="s-hd"><h2 id="s-drafts-h">Drafts</h2><span class="s-sp"></span><button class="s-pill s-pri" id="s-new">New piece</button></div>
 <ul class="s-list" id="s-list"></ul>
 <p class="s-cap">Drafts are kept in this browser on this device, and nothing is uploaded. Download a GIF to keep a copy, then add it to your panel in its web app.</p>
+<p class="s-cap s-warn" id="s-loose" hidden>This browser may clear drafts if it runs low on space. Download a GIF to keep a copy.</p>
 <div class="s-hd s-hd2"><h3>Snapshots</h3><span class="s-sp"></span><label class="s-hide" for="s-snapname">Snapshot name</label><input id="s-snapname" class="s-in" type="text" maxlength="120" placeholder="Name" autocomplete="off"><button class="s-pill" id="s-snap">Take snapshot</button></div>
 <ul class="s-list s-snaps" id="s-snaps"></ul>
 <p class="s-cap" id="s-snaps-none">A snapshot keeps this piece as it is now, to come back to. Each download keeps one too.</p>

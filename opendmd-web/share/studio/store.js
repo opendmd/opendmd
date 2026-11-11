@@ -182,12 +182,12 @@ export function check(rec) {
     if (b.layers.some((l) => !Array.isArray(l.cels) || l.cels.length !== (l.moves ? b.frames.length : 1))) bad('cels');
     if (b.keys !== undefined && b.keys !== 1 && b.keys !== 2) bad('keys');
   }
-  // Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb.
+  // Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb, each colour once.
   const cs = rec.type === 'piece' || rec.type === 'palette' ? b.colours : undefined;
   if (cs !== undefined) {
-    const top = rec.type === 'piece' && b.keys !== 2 ? 255 : 65535, seen = new Set();
+    const top = rec.type === 'piece' && b.keys !== 2 ? 255 : 65535, seen = new Set(), hexes = new Set();
     if (!Array.isArray(cs) || cs.length > CAPS.colours || cs.some((c) => !c || !Number.isInteger(c.k) || c.k < 1 || c.k > top
-      || seen.size === seen.add(c.k).size || !/^#[0-9a-f]{6}$/.test(c.hex))) bad('colours');
+      || seen.size === seen.add(c.k).size || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
   }
   if (JSON.stringify(rec).length > CAPS.bytes) bad('too big');
 }

@@ -32,8 +32,9 @@ Records point at each other by `id`, never by name or position.
 one held still has one), `palette` and, since S1, `colours` and `keys`.
 
 - **Its colours are its own.** `colours` lists `{k, hex}`: keys from 1, each
-  once, `#rrggbb` in lower case. Key 0 is off, the LED dark. Any colour picked
-  joins the piece; a piece written before S1 has no `colours`, and its
+  once, `#rrggbb` in lower case, no colour twice. Key 0 is off, the LED dark.
+  A new piece has none; a colour picked joins the piece in the step that
+  first draws with it. A piece written before S1 has no `colours`, and its
   colours are its palette's.
 - `palette` is the swatch set it was drawn from (Den 16, a starter palette,
   one of the user's), by id. A palette is a set to draw from, never a limit.
@@ -42,11 +43,23 @@ one held still has one), `palette` and, since S1, `colours` and `keys`.
   cel is two bytes a pixel, **high byte first**. Without `keys` (or with
   `keys: 1`) a piece is one byte a pixel, as every piece before S1 is, so
   those stay valid unchanged.
-- Layers and frames carry `key`, eight hex digits, so what points at one
-  (later) survives reordering.
+- Layers and frames carry `key`, eight hex digits, made when the layer or
+  frame is, so what points at one (later) survives reordering. The key is
+  part of the body, so it is in the hash. Pieces written before S1 have none.
 - Caps: 256 frames, 16 layers, 4,096 colours, 1 MiB of JSON per record.
 
 A palette's body is `{colours, source}`, with the same `colours` shape.
+
+**Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
+Past 256, each frame is written as a base and corrections: first the whole
+picture over its 256 most used colours, each other colour drawn as its
+nearest there (so a player that starts the GIF, or loops it, never shows a
+pixel unpainted), then only the pixels not yet exact, 255 more colours at a
+time, the rest transparent, 20 ms each; the last holds the rest of the
+frame's time. A frame shorter than 20 ms for each of those GIF frames lasts
+20 ms each instead. Nothing is lost, and the panel plays it as it is, with no
+quick-start copy and no Smooth motion; "Download fitted to 256 colours"
+writes only the base, which the panel can prepare and smooth.
 
 ## The hash
 

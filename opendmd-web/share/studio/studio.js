@@ -38,6 +38,7 @@ let store = null;
 let rec = null;            // the piece's record (its pixels packed only when saved)
 let px = new Uint16Array(N); // layer 1, frame 1: colour keys (0: off)
 let cols = new Map();      // the piece's own colours: key -> 0xRRGGBB
+let pending = new Map();   // colours picked, not drawn with yet: key -> 0xRRGGBB
 let swatch = builtin(DEFAULT); // the swatch set shown (body.palette)
 const mine = new Map();    // the user's own palettes, by id
 let starters = [];         // the starter palettes, once fetched
@@ -80,34 +81,42 @@ const colourList = () => [...cols].sort((a, b) => a[0] - b[0]).map(([k, c]) => (
 const listOf = (body) => body.colours || (builtin(body.palette) || mine.get(body.palette) || builtin(DEFAULT)).body.colours;
 const mapOf = (list) => new Map(list.map((c) => [c.k, toInt(c.hex)]));
 function keyOf(c) { for (const [k, v] of cols) if (v === c) return k; return 0; }
-// A new colour's key: the lowest no colour has and no step that can be undone names.
+// A new colour's key: the lowest no colour has, none picked but not yet
+// drawn has, and no step that can be undone names.
 function freeKey() {
-  const used = new Set(cols.keys());
+  const used = new Set([...cols.keys(), ...pending.keys()]);
   for (let n = 0; n < cur; n++) for (const c of steps[n].cb || []) used.add(c.k);
   for (let k = 1; k < 65536; k++) if (!used.has(k)) return k;
   return 0;
 }
-// Any colour picked joins the piece (an undo step of its own); its key.
-function addColour(c) {
+// A colour picked (a swatch, the picker, a paste): its key, the piece's if
+// it has the colour; else a new one, pending: it joins the piece's colours
+// in the step that first draws with it, so a pick is never a step of its own.
+function keyFor(c) {
   let k = keyOf(c);
   if (k) return k;
-  if (cols.size >= CAPS.colours || !(k = freeKey())) { say(`A piece holds ${CAPS.colours} colours at most`); return 0; }
-  const cb = colourList();
-  cols.set(k, c);
-  push({ cb, ca: colourList() });
-  swatches();
+  for (const [pk, pc] of pending) if (pc === c) return pk;
+  if (cols.size + pending.size >= CAPS.colours || !(k = freeKey())) { say(`A piece holds ${CAPS.colours} colours at most`); return 0; }
+  pending.set(k, c);
   return k;
 }
-function pickColour(c) { const k = addColour(c); if (k) pick(k); }
+const rgbOf = (k) => cols.get(k) ?? pending.get(k) ?? 0;
+function pickColour(c) {
+  // Pending colours no longer wanted (not the one picked, not in a paste being placed) are let go.
+  const held = new Set(sel?.fl || []);
+  for (const pk of [...pending.keys()]) if (!held.has(pk)) pending.delete(pk);
+  const k = keyFor(c);
+  if (k) { swatches(); pick(k); }
+}
 function pick(k) {
-  key = cols.has(k) ? k : 0;
+  key = cols.has(k) || pending.has(k) ? k : 0;
   for (const b of $('s-sw').children) {
     const on = +b.dataset.k === key;
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on);
   }
   root.dataset.key = key;
-  root.dataset.colour = key ? hexOf(cols.get(key)) : 'off';
+  root.dataset.colour = key ? hexOf(rgbOf(key)) : 'off';
 }
 function swatch1(k, hex, name) {
   const b = el('button', 's-sw' + (k === 0 ? ' off' : ''));
@@ -117,10 +126,11 @@ function swatch1(k, hex, name) {
   b.setAttribute('aria-label', k === 0 ? 'Off' : name || hex);
   return b;
 }
-// The piece's colours, off first.
+// The piece's colours, off first; then the one picked, if it is not drawn yet.
 function swatches() {
-  const sw = $('s-sw'), list = colourList();
-  sw.replaceChildren(swatch1(0, '#000000'), ...list.map((c) => swatch1(c.k, c.hex)));
+  const sw = $('s-sw'), list = colourList(), more = key && pending.has(key) ? [swatch1(key, hexOf(pending.get(key)))] : [];
+  for (const b of more) { b.classList.add('new'); b.title += ' · joins this piece when you draw with it'; }
+  sw.replaceChildren(swatch1(0, '#000000'), ...list.map((c) => swatch1(c.k, c.hex)), ...more);
   sw.classList.toggle('many', list.length > 23);
   pick(key);
 }
@@ -168,7 +178,7 @@ function paint() {
   const v = view(), img = ctx.createImageData(W, H), d = img.data, rgbs = new Set();
   let off = false;
   for (let i = 0; i < N; i++) {
-    const c = v[i] ? cols.get(v[i]) ?? 0 : 0;
+    const c = v[i] ? rgbOf(v[i]) : 0;
     if (v[i]) rgbs.add(c); else off = true;
     d[i * 4] = c >> 16; d[i * 4 + 1] = (c >> 8) & 255; d[i * 4 + 2] = c & 255; d[i * 4 + 3] = 255;
   }
@@ -207,12 +217,20 @@ function cancel() {
   showSel();
   paint();
 }
+// A stroke made: one step, with any picked colour it is the first to draw in.
 function end(more = {}) {
   const s = stroke;
   stroke = null;
   if (!s || (!s.size && !more.ca)) return;
-  const i = Int32Array.from(s.keys());
-  push({ i, b: Uint16Array.from(s.values()), a: Uint16Array.from(i, (j) => px[j]), ...more });
+  const i = Int32Array.from(s.keys()), a = Uint16Array.from(i, (j) => px[j]);
+  const join = [...new Set(a)].filter((k) => pending.has(k));
+  if (join.length && !more.ca) {
+    const cb = colourList();
+    for (const k of join) { cols.set(k, pending.get(k)); pending.delete(k); }
+    more = { ...more, cb, ca: colourList() };
+    swatches();
+  }
+  push({ i, b: Uint16Array.from(s.values()), a, ...more });
 }
 // A step done: kept in the journal (and the store's), the redo steps dropped.
 function push(s) {
@@ -222,14 +240,21 @@ function push(s) {
   cur++;
   let cut = 0;
   if (steps.length > STEPS) { steps.shift(); cur--; low++; cut = low; }
-  if (s.i) kept = true; // a colour alone does not keep a new piece
+  kept = true;
   jot({ step: s, cur: low + cur - 1, low: cut });
   buttons();
   queueSave();
 }
 function apply(s, fwd) {
   if (s.i) { const v = fwd ? s.a : s.b; for (let n = 0; n < s.i.length; n++) px[s.i[n]] = v[n]; }
-  if (s.ca) { cols = mapOf(fwd ? s.ca : s.cb); swatches(); }
+  if (s.ca) {
+    const was = cols;
+    cols = mapOf(fwd ? s.ca : s.cb);
+    // The colour picked, undone out of the piece, stays picked.
+    if (key && !cols.has(key) && was.has(key)) pending.set(key, was.get(key));
+    if (cols.has(key)) pending.delete(key);
+    swatches();
+  }
 }
 function undo(fwd) {
   if (stroke || drag) return; // not during a stroke
@@ -288,13 +313,17 @@ function act(a) {
     if (!clip) return;
     if (tool !== 'select') useTool('select');
     drop();
-    const fl = Uint16Array.from(clip.c, (c) => (c ? addColour(c - 1) : 0));
-    sel = { x: sel ? sel.x : 0, y: sel ? sel.y : 0, w: clip.w, h: clip.h, fl, cut: false };
+    // Its colours join the piece in the step that puts it down; it lands in the middle of what is in view.
+    const fl = Uint16Array.from(clip.c, (c) => (c ? keyFor(c - 1) : 0));
+    const r = scroll.getBoundingClientRect(), c = cv.getBoundingClientRect(), s = c.width / W;
+    const mx = (Math.max(r.left, c.left) + Math.min(r.right, c.right)) / 2, my = (Math.max(r.top, c.top, 0) + Math.min(r.bottom, c.bottom, innerHeight)) / 2;
+    const x = Math.round((mx - c.left) / s - clip.w / 2), y = Math.round((my - c.top) / s - clip.h / 2);
+    sel = { x: Math.max(0, Math.min(W - clip.w, x)), y: Math.max(0, Math.min(H - clip.h, y)), w: clip.w, h: clip.h, fl, cut: false };
   } else if (a === 'done') done();
   else if (sel) {
     if (a === 'copy' || a === 'cut') {
       const keys = sel.fl || Uint16Array.from({ length: sel.w * sel.h }, (_, n) => px[(sel.y + Math.floor(n / sel.w)) * W + sel.x + n % sel.w]);
-      clip = { w: sel.w, h: sel.h, c: Uint32Array.from(keys, (k) => (k ? (cols.get(k) ?? 0) + 1 : 0)) }; // colours, so it pastes into any piece
+      clip = { w: sel.w, h: sel.h, c: Uint32Array.from(keys, (k) => (k ? rgbOf(k) + 1 : 0)) }; // colours, so it pastes into any piece
     }
     if (a === 'cut' || a === 'del') {
       // A box lifted from the panel: its place cleared. A paste not put down yet: gone.
@@ -351,7 +380,7 @@ cv.addEventListener('pointerdown', (e) => {
   const p = at(e);
   if (!inside(p)) return;
   if (e.button === 2 || e.altKey || tool === 'pick') {
-    pick(px[p[1] * W + p[0]]);
+    pick(view()[p[1] * W + p[0]]); // what is shown: a selection being moved too
     if (tool === 'pick' && e.button === 0) useTool(prev);
     return;
   }
@@ -452,6 +481,9 @@ function useTool(t, fill) {
     if (d in filled) icon(b, d + (filled[d] ? 'f' : ''));
   }
   root.dataset.tool = t + (filled[t] ? '-filled' : '');
+  // Edge or filled, for a shape (a phone has no Shift).
+  $('s-fillmode').hidden = !(t in filled);
+  for (const b of $('s-fillmode').children) { const on = +b.dataset.fill === +!!filled[t]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
   showSel();
 }
 function useSize(n) {
@@ -503,9 +535,7 @@ const TEXT = { saving: 'Saving…', none: 'Not kept: this browser won’t keep d
 function status(what, text) {
   if (closed) { what = 'failed'; text = closed; } // a newer Studio took the drafts: said until a reload
   root.dataset.saved = what;
-  const s = $('s-saved'), loose = what === 'kept' && persisted === false;
-  s.textContent = text || (what === 'kept' ? `Kept in this browser${loose ? ', unless it runs short of space' : ''}` : TEXT[what]);
-  s.title = loose ? 'The browser may clear what sites keep when space runs short: download a GIF to keep a copy' : '';
+  $('s-saved').textContent = text || (what === 'kept' ? 'Kept in this browser' : TEXT[what]);
 }
 function say(text) { $('s-err').hidden = !text; $('s-err').textContent = text || ''; }
 function queueSave() {
@@ -540,8 +570,8 @@ async function bodyOf(shot) {
 async function saveNow(shot) {
   if (!store || !rec || !kept || closed) return;
   try {
-    let next = { ...rec, name: nameNow(), body: await bodyOf(shot) }, note = null;
-    const at = shot ? shot.at : low + cur - 1;
+    let at = shot ? shot.at : low + cur - 1, note = null; // where the journal is as these pixels are taken
+    let next = { ...rec, name: nameNow(), body: await bodyOf(shot) };
     for (let tries = 0; ; tries++) {
       try {
         const h = await store.put(next, { base: rec.ver ?? null, at: journaled ? at : undefined });
@@ -567,7 +597,7 @@ async function saveNow(shot) {
             licence: was.licence ?? null }] : [] };
         rec = { ...rec, ver: null };
         lastHash = null;
-        steps = []; cur = 0; low = 1; buttons(); // the copy starts a history of its own
+        steps = []; cur = 0; low = 1; at = 0; buttons(); // the copy starts a history of its own
         await lock(next.id);
         $('s-name').value = next.name;
         root.dataset.id = next.id;
@@ -588,6 +618,8 @@ async function keep() {
   if (persisted !== null || !navigator.storage?.persist) return;
   persisted = await navigator.storage.persisted() || await navigator.storage.persist();
   root.dataset.persist = persisted ? 'yes' : 'no';
+  // Refused: said once, in this browser.
+  if (!persisted && !ls.get('loose')) { $('s-loose').hidden = false; ls.set('loose', '1'); }
 }
 // A piece open in one tab keeps its journal (navigator.locks); a second tab
 // on it still draws and saves, with this visit's undo only.
@@ -612,11 +644,10 @@ async function open(r) {
   const b = r.body, keys = await unpackPx(b.layers[0].cels[0], N, b.keys === 2); // throws on a draft that does not read
   sel = null;
   showSel();
-  // Layers and frames get stable keys, for what will point at them.
-  const k8 = () => [...crypto.getRandomValues(new Uint8Array(4))].map((x) => x.toString(16).padStart(2, '0')).join('');
-  rec = { ...r, body: { ...b, frames: b.frames.map((f) => ({ key: k8(), ...f })), layers: b.layers.map((l) => ({ key: k8(), ...l })) } };
+  rec = r;
   px = Uint16Array.from(keys);
   cols = mapOf(listOf(b));
+  pending = new Map();
   useSwatches(builtin(b.palette) || mine.get(b.palette) || builtin(DEFAULT));
   kept = true;
   lastHash = r.hash;
@@ -634,8 +665,8 @@ async function open(r) {
   }
   buttons();
   $('s-name').value = r.name;
+  key = keyOf(AMBER) || keyFor(AMBER);
   swatches();
-  pick(keyOf(AMBER) || colourList()[0]?.k || 0);
   paint();
   ls.set('last', r.id);
   root.dataset.id = r.id;
@@ -643,12 +674,14 @@ async function open(r) {
   if (root.dataset.saved !== 'saving') status('kept');
   await snaps();
 }
-// A new piece, from the swatch set's colours: the one way a piece comes in
-// (an importer, later, hands over its pixels, colours and `from` here).
-export async function piece({ name = 'Untitled', keys = new Uint8Array(N), colours = swatch.body.colours.map(({ k, hex }) => ({ k, hex })), from = [] } = {}) {
+// A new piece, with no colours until it is drawn on: the one way a piece
+// comes in (an importer, later, hands over its pixels, colours and `from`
+// here). Its layers and frames get stable keys as they are made.
+const k8 = () => [...crypto.getRandomValues(new Uint8Array(4))].map((x) => x.toString(16).padStart(2, '0')).join('');
+export async function piece({ name = 'Untitled', keys = new Uint8Array(N), colours = [], from = [] } = {}) {
   const wide = colours.some((c) => c.k > 255);
-  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays: 0, colours, ...(wide ? { keys: 2 } : {}), frames: [{ ms: STILL_MS }],
-    layers: [{ name: 'Drawing', moves: false, cels: [await packPx(keys, wide)] }] }, { from });
+  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays: 0, colours, ...(wide ? { keys: 2 } : {}), frames: [{ key: k8(), ms: STILL_MS }],
+    layers: [{ key: k8(), name: 'Drawing', moves: false, cels: [await packPx(keys, wide)] }] }, { from });
   await open({ ...r, hash: '' });
   lastHash = null;
   kept = false; // stored at its first stroke (or name)
@@ -757,8 +790,9 @@ async function restore(rev) {
 
 // --- the GIF ---
 let art = null;
-async function download() {
-  const b = $('s-gif');
+// fit: the 256 colours used most, the rest as their nearest (a GIF the panel can prepare and smooth).
+async function download(fit) {
+  const b = $(fit ? 's-fit' : 's-gif');
   b.disabled = true;
   try {
     art ??= import('../demo/js/artmod.js').then((m) => m.art());
@@ -778,9 +812,12 @@ async function download() {
     }
     const delays = Uint32Array.from(body.frames, (f) => f.ms);
     // Past 256 colours: bands with tables of their own, every colour kept.
+    // Past 256 colours: a whole picture of the 256 used most, then the rest exactly (or, fitted, only the first).
+    const rgb = () => Uint32Array.from(keys, (k) => (k ? cm.get(k) ?? 0 : 0));
     const gif = table.length <= 256 ? m.encodeIndexed(Uint32Array.from(table), Uint8Array.from(keys, (k) => of.get(k)), delays, body.plays)
-      : m.encodeWide(Uint32Array.from(keys, (k) => (k ? cm.get(k) ?? 0 : 0)), delays, body.plays);
-    const name = (nameNow().replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
+      : fit ? m.encodeFitted(rgb(), delays, body.plays) : m.encodeWide(rgb(), delays, body.plays);
+    const stem = nameNow() + (fit && table.length > 256 ? ' 256' : '');
+    const name = (stem.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '_') || 'drawing') + '.gif';
     const a = el('a');
     a.href = URL.createObjectURL(new Blob([gif], { type: 'image/gif' }));
     a.download = name;
@@ -790,7 +827,7 @@ async function download() {
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
     root.dataset.gif = gif.length;
     say('');
-    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${table.length} colour${table.length === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
+    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${Math.min(table.length, fit ? 256 : Infinity)} colour${table.length === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
     await snaps();
   } catch (e) {
     say(`The GIF could not be made: ${e.message || e}`);
@@ -802,7 +839,7 @@ async function download() {
 // --- the colour picker and the palette tools: colour.js, loaded when first opened ---
 let colourMod = null;
 const studio = {
-  get store() { return store; }, run, mine, say, swatch: () => swatch, colours: colourList, current: () => (key ? cols.get(key) : null),
+  get store() { return store; }, run, mine, say, swatch: () => swatch, colours: colourList, current: () => (key ? rgbOf(key) : null),
   pickColour, piece: () => rec && kept && lastHash ? { id: rec.id, rev: rec.rev, hash: lastHash, name: nameNow() } : null,
   use(p) { if (p) { useSwatches(p); queueSave(); } menu(); },
 };
@@ -837,7 +874,9 @@ async function main() {
   $('s-selbar').addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) act(b.dataset.act); });
   $('s-undo').addEventListener('click', () => undo(false));
   $('s-redo').addEventListener('click', () => undo(true));
-  $('s-gif').addEventListener('click', download);
+  $('s-gif').addEventListener('click', () => download(false));
+  $('s-fit').addEventListener('click', () => download(true));
+  $('s-fillmode').addEventListener('click', (e) => { const b = e.target.closest('[data-fill]'); if (b) useTool(tool, b.dataset.fill === '1'); });
   $('s-snap').addEventListener('click', async () => {
     const n = $('s-snapname');
     if (!kept) { say('Draw something first: a snapshot keeps a piece as it is.'); return; }

@@ -167,13 +167,14 @@ def store_check(rec):
             bad("cels")
     if rec["type"] == "piece" and "keys" in b and b["keys"] not in (1, 2):
         bad("keys")
-    # Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb.
+    # Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb, each colour once.
     if rec["type"] in ("piece", "palette") and "colours" in b:
         top, cs = (65535 if rec["type"] == "palette" or b.get("keys") == 2 else 255), b["colours"]
         ks = [c.get("k") for c in cs] if isinstance(cs, list) and all(isinstance(c, dict) for c in cs) else None
         if ks is None or len(cs) > CAPS["colours"] or len(set(ks)) != len(ks) or any(
                 type(k) is not int or not 1 <= k <= top for k in ks) or any(
-                not isinstance(c.get("hex"), str) or not re.fullmatch(r"#[0-9a-f]{6}", c["hex"]) for c in cs):
+                not isinstance(c.get("hex"), str) or not re.fullmatch(r"#[0-9a-f]{6}", c["hex"]) for c in cs) or len(
+                {c["hex"] for c in cs}) != len(cs):
             bad("colours")
     # JSON.stringify(rec).length counts UTF-16 units; the same text here.
     text = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)

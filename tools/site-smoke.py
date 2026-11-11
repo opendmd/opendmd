@@ -715,7 +715,7 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
           f"/studio/: a new piece is empty and not stored until it is drawn on ('{s_data(page)['saidSaved']}')")
     check(s_data(page).get("colour") == "#f7a531", f"/studio/: a new piece's colour is Amber, the bright one ({s_data(page).get('colour')})")
     # Draw: a pixel, a line, undo and redo, the eraser, fill.
-    page.click('.s-sw[data-k="9"]')
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
     page.mouse.click(*s_at(page, 10, 5))
     check(s_px(page, 10, 5) == AMBER and s_lit(page) == 1, f"/studio/: the pencil draws a pixel in the colour picked {s_px(page, 10, 5)}")
     kind = page.inner_text("#s-kind")
@@ -730,7 +730,7 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
                                                                           "licence": None, "from": []}
           and r["body"]["w"] == 128 and r["body"]["h"] == 32 and [f["ms"] for f in r["body"]["frames"]] == [5000]
           and len(r["body"]["layers"][0]["cels"]) == 1 and r.get("created", "").endswith("Z")
-          and r["body"].get("colours") == [{"k": i + 1, "hex": "#" + h} for i, (h, _) in enumerate(DEN16)] and "keys" not in r["body"],
+          and r["body"].get("colours") == [{"k": 1, "hex": "#f7a531"}] and "keys" not in r["body"],
           f"/studio/: kept at its first stroke, its record envelope ({r.get('id')}, {envelope}, a still of 5000 ms)")
     check(r.get("hash") == got["again"] == s_hash(r["body"]), f"/studio/: its hash is the hash rule's, worked out here too ({r.get('hash', '')[:20]}…)")
     # The hash is of the pixels, not of how they were compressed: Python's zlib at level 9 and level 1 agree with the page.
@@ -779,14 +779,14 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(s_lit(page) == 11 and s_px(page, 25, 10) == (0, 0, 0) and page.get_attribute("#s-t-eraser", "aria-pressed") == "true",
           "/studio/: E, the eraser, turns a pixel off")
     page.keyboard.press("g")
-    page.click('.s-sw[data-k="2"]')
+    page.click('#s-set .s-sw[data-hex="#161d52"]')
     page.mouse.click(*s_at(page, 100, 20))
     filled = s_lit(page)
     check(filled == 128 * 32 and s_px(page, 25, 10) == NAVY and s_px(page, 10, 5) == AMBER, f"/studio/: G, fill, fills the dark around the drawing ({filled})")
     page.click("#s-undo")
     check(s_lit(page) == 11, "/studio/: fill undone in one step")
     page.mouse.click(*s_at(page, 10, 5), button="right")
-    check(page.get_attribute(".s-sw.on", "data-k") == "9", "/studio/: a right-click picks the colour under it")
+    check(s_data(page)["colour"] == "#f7a531", "/studio/: a right-click picks the colour under it")
     # The LED view: the site's .led look; still drawn on.
     page.click("#s-v-led")
     mask = page.evaluate("getComputedStyle(document.getElementById('s-work'), '::after').backgroundImage")
@@ -1155,9 +1155,9 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     page.keyboard.press("Control+z")
     # The eyedropper: I, then back to the tool before it.
     page.keyboard.press("b")
-    page.click('.s-sw[data-k="5"]')
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
     page.mouse.click(*s_at(page, 3, 3))
-    page.click('.s-sw[data-k="9"]')
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
     page.keyboard.press("i")
     page.mouse.click(*s_at(page, 3, 3))
     check(s_data(page)["colour"] == "#33d1ff" and s_data(page)["tool"] == "pencil", f"/studio/ tools: I picks the colour under it, then the pencil again ({s_data(page)['colour']}, {s_data(page)['tool']})")
@@ -1194,7 +1194,8 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     s_drag(page, (12, 2), (15, 5))
     page.keyboard.press("Control+c")
     page.keyboard.press("Control+v")
-    s_drag(page, (13, 3), (33, 13))
+    px0, py0, *_ = (int(v) for v in s_data(page)["sel"].split(",")[:4])
+    s_drag(page, (px0 + 1, py0 + 1), (33, 13))
     page.keyboard.press("Enter")
     two = vflip | {(x + 20, y + 10) for x, y in vflip}
     check(s_on(page) == two, f"/studio/ tools: Ctrl+C, Ctrl+V and a drag: a copy beside it ({len(s_on(page))})")
@@ -1202,8 +1203,11 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     page.keyboard.press("Delete")
     check(s_on(page) == two - vflip and not s_data(page)["sel"], "/studio/ tools: Delete clears the box")
     page.click("#s-selbar [data-act=paste]")
+    at = [int(v) for v in s_data(page)["sel"].split(",")[:4]]
     page.click("#s-selbar [data-act=done]")
-    check(s_on(page) == (two - vflip) | {(x - 12, y - 2) for x, y in vflip}, "/studio/ tools: the selection bar's Paste (at the top left, with nothing selected) and Done")
+    # It lands in the middle of what is in view (the whole panel here): 4 x 4 about (64, 16).
+    check(at == [62, 14, 4, 4] and s_on(page) == (two - vflip) | {(x - 12 + 62, y - 2 + 14) for x, y in vflip},
+          f"/studio/ tools: the selection bar's Paste lands in the middle of the view, and Done puts it down ({at})")
     check(not page.evaluate("window.__csp || []"), f"/studio/ tools: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 
@@ -1236,8 +1240,10 @@ def studio_colours(browser, base: str, site: Path, errors: list[str], shots: Pat
     page.select_option("#s-pal", gb["id"])
     page.click(f'#s-set .s-sw[data-hex="{gb["body"]["colours"][0]["hex"]}"]')
     n = page.locator("#s-sw .s-sw").count()
-    check(s_data(page)["colour"] == gb["body"]["colours"][0]["hex"] and n == 17 and page.locator("#s-sw .s-sw.on").get_attribute("aria-label") == gb["body"]["colours"][0]["hex"],
-          f"/studio/ colours: a swatch from {gb['name']} joins this piece's colours ({n - 1} colours and off)")
+    steps0 = s_steps(page)
+    check(s_data(page)["colour"] == gb["body"]["colours"][0]["hex"] and n == 2 and page.locator("#s-sw .s-sw.on.new").get_attribute("aria-label") == gb["body"]["colours"][0]["hex"]
+          and steps0 == "0/0" and s_data(page)["saved"] == "new",
+          f"/studio/ colours: a swatch from {gb['name']} is picked, shown as not drawn yet: no step, nothing kept ({n - 1} swatch and off, steps {steps0})")
     page.click("#s-pals")
     page.wait_for_selector("#s-palx .s-pill")
     ro = page.inner_text("#s-palx")
@@ -1253,19 +1259,37 @@ def studio_colours(browser, base: str, site: Path, errors: list[str], shots: Pat
     page.mouse.click(*s_at(page, 7, 7))
     s_kept(page)
     r = page.evaluate(S_STORE, ["get", None])["r"]
-    check(s_data(page)["colour"] == "#123456" and s_px(page, 7, 7) == (0x12, 0x34, 0x56) and {"k": 17, "hex": "#123456"} in r["body"]["colours"]
-          and r["body"]["palette"] == gb["id"], f"/studio/ colours: the picker's #123456 joins the piece's colours and draws ({len(r['body']['colours'])} colours)")
+    check(s_data(page)["colour"] == "#123456" and s_px(page, 7, 7) == (0x12, 0x34, 0x56) and r["body"]["colours"] == [{"k": 1, "hex": "#123456"}]
+          and r["body"]["palette"] == gb["id"] and s_steps(page) == "1/1",
+          f"/studio/ colours: the picker's #123456 joins the piece's colours in the stroke that draws with it, one step ({r['body']['colours']}, {s_steps(page)})")
     page.mouse.move(*s_at(page, 64, 16))
     page.click("#s-picker .s-sv")
     hexv = page.input_value("#s-picker .s-hex")
     check(re.fullmatch(r"#[0-9a-f]{6}", hexv) is not None and page.get_attribute("#s-picker", "data-colour") == hexv,
           f"/studio/ colours: the saturation and value square sets a colour ({hexv})")
     page.click("#s-add")
-    # Remove unused: only what is drawn stays; undone in one step.
+    # Remove unused: only what is drawn stays; undone in one step. Then a colour added, and two undos.
+    labels = lambda: page.eval_on_selector_all("#s-sw .s-sw", "els => els.map(e => e.getAttribute('aria-label'))")
+    page.select_option("#s-pal", "pl_00000000000070008000000000000001")
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    page.mouse.click(*s_at(page, 9, 9))
+    page.keyboard.press("e")
+    page.mouse.click(*s_at(page, 9, 9))
+    page.keyboard.press("b")
+    two = labels()
     page.click("#s-unused")
-    after = page.locator("#s-sw .s-sw").count()
+    after = labels()
     page.keyboard.press("Control+z")
-    check(after == 2 and page.locator("#s-sw .s-sw").count() == 18, f"/studio/ colours: Remove unused keeps the colours drawn, and is undone ({after - 1}, then 17)")
+    back = labels()
+    page.click("#s-unused")
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 8, 8))
+    added = [l for l in labels() if l not in ("Off", "#123456")]
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    check(two == ["Off", "#123456", "#33d1ff"] and after == ["Off", "#123456"] and back == two and added == ["#f7a531"]
+          and labels()[:3] == two and s_px(page, 8, 8) == (0, 0, 0) and s_px(page, 7, 7) == (0x12, 0x34, 0x56),
+          f"/studio/ colours: Remove unused keeps what is drawn and is undone; removed, a colour added, two undos: as it was ({after}, {labels()})")
     # The piece's colours as a palette of one's own; renamed; deleted.
     page.click("#s-pals")
     page.wait_for_selector("#s-palx [data-a=save]")
@@ -1277,7 +1301,7 @@ def studio_colours(browser, base: str, site: Path, errors: list[str], shots: Pat
     wait_js(page, "document.querySelector('#s-pal option:checked').textContent === 'My greens'")
     stored = page.evaluate("""async ([id]) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
         const r = await s.get(id); s.db.close(); return r; }""", [pid])
-    check(stored and stored["name"] == "My greens" and len(stored["body"]["colours"]) == 17 and stored["from"][0]["id"] == r["id"]
+    check(stored and stored["name"] == "My greens" and len(stored["body"]["colours"]) == 2 and stored["from"][0]["id"] == r["id"]
           and re.fullmatch(r"sha256-[0-9a-f]{64}", stored["from"][0]["hash"]) is not None,
           f"/studio/ colours: the piece's colours saved as a palette, made from the piece, renamed ({stored and stored['name']})")
     page.once("dialog", lambda d: d.accept())
@@ -1334,7 +1358,7 @@ def studio_colours(browser, base: str, site: Path, errors: list[str], shots: Pat
         pass
     shown = list(im.convert("RGB").getdata())
     check(shown == [colour[k] for k in want] and frames > 1 and total == 5000,
-          f"/studio/ colours: its GIF keeps all 300 colours exactly, in {frames} bands with their own tables, {total} ms in all")
+          f"/studio/ colours: its GIF keeps all 300 colours exactly: the whole picture, then {frames - 1} correction(s), {total} ms in all")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
     check(s_pixels(page) == [colour[k] for k in want], "/studio/ colours: a two-byte piece opens again as drawn")
@@ -1360,7 +1384,8 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     for x in (1, 2, 3):
         page.mouse.click(*s_at(page, x, 1))
     s_kept(page)
-    check(s_data(page).get("persist") in ("yes", "no") and (s_data(page)["persist"] == "yes") == (", unless" not in s_data(page)["saidSaved"]),
+    check(s_data(page).get("persist") in ("yes", "no") and s_data(page)["saidSaved"] == "Kept in this browser"
+          and page.is_visible("#s-loose") == (s_data(page)["persist"] == "no"),
           f"/studio/ journal: after the first saved stroke, it asks to be kept for good and says how it stands ({s_data(page).get('persist')}, '{s_data(page)['saidSaved']}')")
     page.keyboard.press("Control+z")
     page.wait_for_timeout(100)
@@ -1379,7 +1404,7 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     s_kept(page)
     page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
         const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1;
-        await s.jot(id, { step: { n, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(5) }, cur: n }); s.db.close(); }""")
+        await s.jot(id, { step: { n, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n }); s.db.close(); }""")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
     s_kept(page)
@@ -1388,7 +1413,7 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     import zlib
     r = page.evaluate(S_STORE, ["get", None])["r"]
     px = zlib.decompress(base64.b64decode(r["body"]["layers"][0]["cels"][0]))
-    check(replayed == {(1, 1), (5, 0)} and s_px(page, 5, 0) == (0x33, 0xd1, 0xff) and px[5] == 5 and s_steps(page) == "2/2",
+    check(replayed == {(1, 1), (5, 0)} and s_px(page, 5, 0) == AMBER and px[5] == 1 and s_steps(page) == "2/2",
           f"/studio/ journal: a step the record never saw is replayed at the reload, then saved ({sorted(replayed)}, steps {s_steps(page)})")
     page.keyboard.press("Control+z")
     # 500 steps at most.
@@ -1404,7 +1429,7 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     page.wait_for_timeout(150)
     r = page.evaluate(S_STORE, ["get", None])["r"]
     px = zlib.decompress(base64.b64decode(r["body"]["layers"][0]["cels"][0]))
-    check(px[30 * 128 + 100] == 9, "/studio/ journal: hidden, the tab saves at once")
+    check(px[30 * 128 + 100] == 1, "/studio/ journal: hidden, the tab saves at once")
     page.evaluate("delete document.visibilityState")
     # Snapshots: taken by name, listed, restored (what was there kept first), the restore undone.
     s_new(page)
@@ -1451,6 +1476,124 @@ def studio_rename_tabs(browser, base: str, site: Path, errors: list[str]) -> Non
     items = b.evaluate(S_STORE, ["list", None])
     check(len(items) == 1 and r["name"] == "Renamed in A" and b.input_value("#s-name") == "Renamed in A" and s_data(a)["journal"] != s_data(b)["journal"],
           f"/studio/ two tabs: a rename in one survives a stroke in the other ('{r['name']}', {len(items)} draft; the journal kept by one tab)")
+    ctx.close()
+
+
+S_PIECE = """async ([n, off]) => { const m = await import('/studio/studio.js');
+    const keys = new Uint16Array(4096), colours = [];
+    for (let k = 1; k <= n; k++) colours.push({ k, hex: '#' + (k * 4093).toString(16).padStart(6, '0') });
+    for (let i = 0; i < 4096; i++) keys[i] = i < off ? 0 : ((i - off) % n) + 1;
+    await m.piece({ name: `${n} colours`, keys, colours }); }"""
+
+
+def studio_edges(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The edges: the panel's right edge, 255/256 keys, 256/257 colours, a
+    float with holes, another tab's pixels under a journal."""
+    import base64
+    import zlib
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    # A fill reaching x = 127; a selection put down against the right edge.
+    page.keyboard.press("l")
+    s_drag(page, (120, 0), (120, 31))
+    page.keyboard.press("g")
+    page.mouse.click(*s_at(page, 125, 5))
+    check(s_on(page) == {(x, y) for x in range(120, 128) for y in range(32)}, "/studio/ edges: a fill reaches the right edge, and no further")
+    s_new(page)
+    page.keyboard.press("Shift+R")
+    s_drag(page, (118, 4), (122, 6))
+    page.keyboard.press("m")
+    s_drag(page, (118, 4), (122, 6))
+    s_drag(page, (119, 5), (126, 5))
+    page.keyboard.press("Enter")
+    check(s_on(page) == {(x, y) for x in range(125, 128) for y in range(4, 7)}, f"/studio/ edges: a selection put down past the right edge is cut there ({sorted(s_on(page))[:4]})")
+    # A float with holes put down over a drawing: its off pixels let it show through.
+    s_new(page)
+    page.click('#s-set .s-sw[data-hex="#161d52"]')
+    page.keyboard.press("Shift+R")
+    s_drag(page, (40, 0), (60, 20))
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.keyboard.press("r")
+    s_drag(page, (2, 2), (6, 6))
+    page.keyboard.press("m")
+    s_drag(page, (2, 2), (6, 6))
+    s_drag(page, (3, 3), (46, 6))
+    page.keyboard.press("Enter")
+    px = s_pixels(page)
+    ring = py_rect(45, 5, 49, 9)
+    check(all(px[y * 128 + x] == AMBER for x, y in ring) and all(px[y * 128 + x] == NAVY for x in range(46, 49) for y in range(6, 9))
+          and not any(sum(px[y * 128 + x]) for x in range(2, 7) for y in range(2, 7)),
+          "/studio/ edges: a box with holes put down over a drawing: the drawing shows through the holes")
+    # Keys: 255 colours stay one byte a pixel; the 256th makes two.
+    page.evaluate(S_PIECE, [255, 0])
+    wait_js(page, "document.getElementById('s-name').value === '255 colours'")
+    page.keyboard.press("b")
+    page.click('#s-sw .s-sw[data-k="3"]')
+    page.mouse.click(*s_at(page, 0, 0))
+    s_kept(page)
+    one = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 1, 0))
+    s_kept(page)
+    two = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    raw = zlib.decompress(base64.b64decode(two["layers"][0]["cels"][0]))
+    check("keys" not in one and len(zlib.decompress(base64.b64decode(one["layers"][0]["cels"][0]))) == 4096 and two.get("keys") == 2
+          and len(raw) == 8192 and raw[2:4] == (256).to_bytes(2, "big") and {"k": 256, "hex": "#f7a531"} in two["colours"],
+          f"/studio/ edges: 255 colours, one byte a pixel; the 256th (key 256), two ({one.get('keys')}, {two.get('keys')})")
+    # 256 colours: no warning, one table; 257: the warning, the exact GIF, and the fitted one.
+    results = {}
+    for n in (256, 257):
+        page.evaluate(S_PIECE, [n, 0])
+        wait_js(page, f"document.getElementById('s-name').value === '{n} colours'")
+        page.keyboard.press("b")
+        page.click('#s-sw .s-sw[data-k="2"]')
+        page.mouse.click(*s_at(page, 0, 0))
+        s_kept(page)
+        warn = page.is_visible("#s-many")
+        with page.expect_download(timeout=60000) as dl:
+            page.click("#s-gif")
+        im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+        results[n] = (warn, getattr(im, "n_frames", 1), s_data(page)["table"])
+        if n == 257:
+            rgb_want = s_pixels(page)
+            frames = []
+            try:
+                while True:
+                    frames.append(list(im.convert("RGB").getdata()))
+                    im.seek(im.tell() + 1)
+            except EOFError:
+                pass
+            with page.expect_download(timeout=60000) as dl:
+                page.click("#s-fit")
+            fim = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+            fitted = (getattr(fim, "n_frames", 1), len(fim.convert("RGB").getcolors(4096)), dl.value.suggested_filename)
+    check(results[256] == (False, 1, "256") and results[257][0] and results[257][1] == 2 and results[257][2] == "257",
+          f"/studio/ edges: 256 colours, no warning and one GIF frame; 257, the warning and a second, exact one {results}")
+    check(not any(sum(c) == 0 for c in frames[0]) and frames[-1] == rgb_want,
+          "/studio/ edges: past 256, the GIF's first frame is the whole picture (nothing black), its last exact")
+    check(fitted[0] == 1 and fitted[1] == 256 and fitted[2] == "257_colours_256.gif",
+          f"/studio/ edges: Download fitted to 256 colours: one frame of 256 colours {fitted}")
+    # Edge or filled without Shift (for a phone): the shape's segment control.
+    page.keyboard.press("r")
+    vis = page.is_visible("#s-fillmode")
+    page.click("#s-fillmode [data-fill='1']")
+    filled = s_data(page)["tool"]
+    page.keyboard.press("b")
+    check(vis and filled == "rect-filled" and page.is_hidden("#s-fillmode"), f"/studio/ edges: Edge and Filled beside the brushes for a shape ({filled})")
+    page.context.close()
+    # Another tab changes the pixels; the tab keeping the journal reloads: the journal is let go, the pixels are the other tab's.
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    a = s_page(browser, base, site, errors, ctx=ctx)
+    for x in (1, 2):
+        a.mouse.click(*s_at(a, x, 1))
+    s_kept(a)
+    b = s_page(browser, base, site, errors, ctx=ctx)
+    b.mouse.click(*s_at(b, 9, 9))
+    s_kept(b)
+    a.reload()
+    a.wait_for_selector(S_READY, timeout=30000)
+    check(s_on(a) == {(1, 1), (2, 1), (9, 9)} and s_steps(a) == "0/0" and s_data(a)["journal"] == "yes",
+          f"/studio/ edges: pixels changed in another tab, the journaled tab reloads: its journal let go, the pixels as stored ({s_steps(a)})")
     ctx.close()
 
 
@@ -3279,6 +3422,7 @@ def main() -> int:
             studio_colours(browser, base, a.site, errors, a.shots)
             studio_journal(browser, base, a.site, errors)
             studio_rename_tabs(browser, base, a.site, errors)
+            studio_edges(browser, base, a.site, errors)
             studio_phone(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
@@ -3302,6 +3446,7 @@ def main() -> int:
         studio_colours(browser, base, a.site, errors, a.shots)
         studio_journal(browser, base, a.site, errors)
         studio_rename_tabs(browser, base, a.site, errors)
+        studio_edges(browser, base, a.site, errors)
         studio_phone(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
