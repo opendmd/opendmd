@@ -538,7 +538,9 @@ function editor() {
   // through: the loop, or the first 10 s of one that goes on.
   const tr = h('input', { type: 'range', id: 'psi-t', min: 0, max: 0, value: 0, 'aria-label': 'Time', oninput: () => seek(Math.floor(+tr.value * grain()), +tr.value) });
   const tnow = h('span.mono', { id: 'psi-t-now' });
-  const pz = h('button.sm', { id: 'psi-pause', onclick: () => seek(pv.hold == null ? elapsed() : null) });
+  // (Paused on the step on screen, as `,` and `.` step: a hold between two
+  // steps would draw a picture the panel never shows, and the next `.` could look like nothing.)
+  const pz = h('button.sm', { id: 'psi-pause', onclick: () => (pv.hold == null ? step(0) : seek(null)) });
   const stp = (k) => h('button.sm', { id: k < 0 ? 'psi-t-back' : 'psi-t-on', 'aria-label': k < 0 ? 'A frame back' : 'A frame on', title: k < 0 ? 'A frame back (,)' : 'A frame on (.)', onclick: () => step(k) }, k < 0 ? '‹' : '›');
   const trow = h('div.psi-time', pz, stp(-1), tr, stp(1), tnow);
   const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true }, HEAVY);
