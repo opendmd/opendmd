@@ -936,9 +936,12 @@ fn tier_limit(delay_ms: u8) -> u32 {
 
 /// The frame time a Formula of `est` µs asking for `delay_ms` opens at:
 /// that, or 20 (every 2nd refresh) when it is too heavy to keep a faster
-/// one but not that (`psi::opens_ms`): played, not refused.
+/// one but not that (`psi::opens_ms`): played, not refused. By the rate
+/// it asks, not the glow's floor ([`grid`]): one opened under the glow
+/// keeps a rate it can keep once the glow is off.
 fn opens_at(delay_ms: u8, est: u32) -> u8 {
-    if delay_ms < 20 && est > tier_limit(delay_ms) {
+    let asked = MAX_EST_US.min(Governor::slowest_budget_us(u32::from(delay_ms)));
+    if delay_ms < 20 && est > asked {
         20
     } else {
         delay_ms
@@ -3424,6 +3427,13 @@ mod tests {
             let fx = PsiFx::from_query(&super::path(&mid, opts)[Q..]).unwrap();
             assert_eq!(fx.ms(), 20, "{opts:?}");
         }
+        // The same under the glow (its 20 ms floor): it opens at 20 by its
+        // own rate, so it keeps it when the glow goes off.
+        crate::fx::set_frame_floor(20);
+        let fx = PsiFx::from_query(&super::path(&mid, "")[Q..]).unwrap();
+        assert_eq!(fx.delay_ms, 20, "under the glow");
+        crate::fx::set_frame_floor(0);
+        assert_eq!(fx.ms(), 20, "the glow off");
         let big = (0..12)
             .map(|k| format!("noise(x*{k}, y, t)"))
             .collect::<Vec<_>>()

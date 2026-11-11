@@ -2275,6 +2275,8 @@ struct Parser<'s> {
     /// the compiler's deepest path, and the firmware holds that stack),
     /// and only once there is one.
     decl: Option<alloc::boxed::Box<Decls>>,
+    /// The language level it needs ([`Info::level`]).
+    level: u8,
     /// The language service's: the names read (where, and the definition's
     /// place), the declarations (the word's place, the line's end), and
     /// whom to tell ([`crate::syntax`]).
@@ -2881,6 +2883,7 @@ impl<'s> Parser<'s> {
             );
         }
         let at = (t.start, t.end);
+        self.level = self.level.max(1);
         let time = self.input(Input::T)?;
         let lp = self.dag.constant(self.env.loop_v, at)?;
         self.dag.op(code::DIV, [time, lp, 0], at)
@@ -3890,6 +3893,7 @@ impl<'s> Parser<'s> {
     fn fps_line(&mut self) -> Result<u8, Error> {
         let kw = self.next();
         if self.text(kw) == "smooth" {
+            self.level = self.level.max(1);
             self.end_of_statement()?;
             return Ok(10);
         }
@@ -6738,6 +6742,10 @@ pub struct Info {
     /// `layer` blocks written in the formula's own lines (0: it is one
     /// picture, its last line).
     pub layers: usize,
+    /// The compiler it needs, by what it uses: 0 any (OpenDMD 1.0's), 1
+    /// OpenDMD 1.1's (the built-in `phase`, a `smooth` line). A level only
+    /// grows; a panel's web app says its own (`feat`, js/formulas.js).
+    pub level: u8,
 }
 
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
@@ -7009,6 +7017,7 @@ fn compile_inner<'s>(
         loops: 0,
         turns: 0,
         decl: None,
+        level: 0,
         #[cfg(feature = "syntax")]
         reads: Vec::new(),
         #[cfg(feature = "syntax")]
@@ -7315,6 +7324,7 @@ fn finish(
     Ok(Info {
         frame_values,
         layers: body.blocks,
+        level: p.level,
     })
 }
 

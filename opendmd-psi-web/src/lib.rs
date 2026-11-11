@@ -72,6 +72,8 @@ struct State {
     at: [u32; 2],
     /// A `loop forever` formula's `seed` ([`set_seed`]).
     seed: i32,
+    /// The compiler level the last formula compiled needs (`Info::level`).
+    level: u8,
     /// The built-in inputs the preview draws with ([`world_set`]):
     /// [`World::default`] until the editor's controls say otherwise.
     world: World,
@@ -111,6 +113,7 @@ fn state() -> &'static mut State {
         err_len: 0,
         at: [0; 2],
         seed: 0,
+        level: 0,
         world: World::default(),
     })
 }
@@ -152,8 +155,9 @@ pub fn abi() -> u8 {
 fn build(src: &str) -> bool {
     let s = state();
     match compile_into(src, &mut s.next) {
-        Ok(_) => {
+        Ok(i) => {
             core::mem::swap(&mut s.prog, &mut s.next);
+            s.level = i.level;
             s.ok = true;
             s.err_len = 0;
             true
@@ -287,7 +291,9 @@ pub fn error_at() -> Vec<u32> {
 /// panel refuses it when [6], the VM's figure, is over it, whatever the JIT
 /// would make of it), the frame time it opens at on the panel in ms
 /// (`Program::opens_ms`: [10]'s, or 20 for a `smooth` one past the 32 ms
-/// every refresh allows)]`; empty before anything compiled.
+/// every refresh allows), the compiler level it needs (`Info::level`: 0
+/// any, 1 OpenDMD 1.1's: the built-in `phase`, a `smooth` line)]`; empty
+/// before anything compiled.
 #[cfg_attr(not(feature = "lang"), wasm_bindgen)]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -315,6 +321,7 @@ pub fn info() -> Vec<u32> {
         u32::from(p.jit_takes()),
         p.panel_limit_us(p.inputs() & 32 != 0),
         p.opens_ms(),
+        u32::from(s.level),
     ]
 }
 
