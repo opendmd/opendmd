@@ -62,6 +62,7 @@ function size(s) {
 // A skeleton is a piece's structure: checked as a body would be, with empty cels.
 const okSkel = (k) => obj(k) && Array.isArray(k.frames) && Array.isArray(k.layers) && k.layers.every(obj) && okBody({ w: W, h: H,
   ...(k.plays ? { plays: k.plays } : {}), frames: k.frames, layers: k.layers.map((l) => ({ ...l, cels: Array(l.moves ? k.frames.length : 1).fill('') })) });
+const stable = (v) => JSON.stringify(v, (k, x) => (obj(x) ? Object.fromEntries(Object.keys(x).sort().map((y) => [y, x[y]])) : x));
 const cid = (l, f) => (l.moves ? `${l.key}/${f.key}` : l.key);
 const okColours = (l) => Array.isArray(l) && l.length <= CAPS.colours && l.every((c) => obj(c) && Number.isInteger(c.k) && c.k > 0 && c.k < 65536
   && typeof c.hex === 'string' && HEX.test(c.hex));
@@ -358,7 +359,12 @@ export class Doc {
     return this.celAt(l, f).px ? null : this.load(f);
   }
   #apply(s, fwd) {
-    if (s.t) { this.#reshape(fwd ? s.t.a : s.t.b, s.t.z); return; }
+    if (s.t) {
+      // A structure step leads from the piece as it stands, or it is not this piece's.
+      if (stable(this.skel()) !== stable(fwd ? s.t.b : s.t.a)) throw new Error('a step for another piece');
+      this.#reshape(fwd ? s.t.a : s.t.b, s.t.z);
+      return;
+    }
     if (s.body) {
       const was = this.cols;
       this.#take(fwd ? s.body.a : s.body.b);
