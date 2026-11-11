@@ -2492,6 +2492,22 @@ def studio_frames(browser, base: str, site: Path, errors: list[str]) -> None:
     page.click("#s-playb")
     check(frozenset({(1, 1)}) in seen and frozenset({(5, 5)}) in seen and playing == "yes" and not s_data(page).get("playing"),
           f"/studio/ frames: Play shows the frames in turn, and stops ({[sorted(x) for x in seen]})")
+    # Onion skin: the frame before, faint, under this one, where this one is off.
+    s_cell(page, 1)
+    page.click("#s-onionb")
+    page.wait_for_timeout(200)
+    skin = page.evaluate("""() => { const c = document.getElementById('s-onion'), d = c.getContext('2d').getImageData(0, 0, 128, 32).data, on = [];
+        for (let i = 0; i < 4096; i++) if (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) on.push([i % 128, (i / 128) | 0]); return [!c.hidden, on]; }""")
+    onion_px = """() => { const c = document.getElementById('s-onion'), d = c.getContext('2d').getImageData(0, 0, 128, 32).data, on = [];
+        for (let i = 0; i < 4096; i++) if (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) on.push([i % 128, (i / 128) | 0]); return on; }"""
+    page.mouse.click(*s_at(page, 1, 1))  # this frame lit where the one before is: the skin is not drawn there
+    page.wait_for_timeout(200)
+    covered = page.evaluate(onion_px)
+    page.keyboard.press("Control+z")
+    page.click("#s-onionb")
+    page.wait_for_timeout(100)
+    check(skin[0] and skin[1] == [[1, 1]] and covered == [] and page.is_hidden("#s-onion") and s_on(page) == {(5, 5)},
+          f"/studio/ frames: onion skin shows the frame before, faint, only where this one is off, and goes ({skin}, {covered})")
     # A held layer, drawn once, shows on every frame; the moving one only on its own.
     s_cell(page, 1)
     page.click("#s-addl")
@@ -2933,6 +2949,10 @@ def studio_shape_journals(browser, base: str, site: Path, errors: list[str]) -> 
           'a cel in z that does not read': t(lay2, { '000000ab': ['!!', false] }), 'a cel in z of the wrong size': t(lay2, { '000000ab': [await m.packPx(new Uint8Array(100)), false] }),
           'a cel in z that is a bomb': t(lay2, { '000000ab': [await m.packPx(new Uint8Array(4 << 20)), false] }),
           'a before that is not the piece': t(lay2, { '000000ab': [blank, false] }, { ...b, layers: [{ key: '000000ac', name: 'q', moves: false }] }),
+          'a frame of ms 0 on the way, then back': [{ n: 1, t: { b, a: { ...b, frames: [{ key: '0000000f', ms: 0 }] }, z: {} } }, { n: 2, t: { b: { ...b, frames: [{ key: '0000000f', ms: 0 }] }, a: b, z: {} } }],
+          '17 layers on the way, then back': [{ n: 1, t: { b, a: { ...b, layers: Array.from({ length: 17 }, (_, i) => ({ key: i ? (0x20000000 + i).toString(16) : '000000aa', name: 'x', moves: false })) },
+            z: Object.fromEntries(Array.from({ length: 16 }, (_, i) => [(0x20000001 + i).toString(16), [blank, false]])) } },
+            { n: 2, t: { b: { ...b, layers: Array.from({ length: 17 }, (_, i) => ({ key: i ? (0x20000000 + i).toString(16) : '000000aa', name: 'x', moves: false })) }, a: b, z: {} } }],
           'a t step with pixels too': [{ n: 1, t: { b, a: lay2, z: { '000000ab': [blank, false] } }, i: Int32Array.of(1), b: Uint16Array.of(0), a: Uint16Array.of(1) }],
           'a pixel step on a layer a lying t step made': [...t(lay2, {}), { n: 2, l: '000000ab', f: '0000000f', i: Int32Array.of(1), b: Uint16Array.of(0), a: Uint16Array.of(1) }],
         };
