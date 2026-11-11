@@ -136,7 +136,11 @@ what), `journal` and `meta`.
   step names its cel by layer and frame key and carries the indices and the
   keys before and after; a step that changes the piece's colours carries
   what it added and took out (`c: {add, del}`); a snapshot restored is one
-  step holding both bodies. Steps are numbered back to back per piece (500
+  step holding both bodies; a change of structure (a frame or layer added,
+  removed or moved, a frame's time, the plays, a layer renamed, hidden,
+  held still or made to move) is one step holding the structure before and
+  after and only the cels one side has, so the cels both keep are not
+  copied. Steps are numbered back to back per piece (500
   at most, or about 8 MB); `meta`
   holds `cur` (the last step done) and `at` with `hash` (the step the stored
   record stands at, and its hash). Opening a piece replays (or unwinds) the
