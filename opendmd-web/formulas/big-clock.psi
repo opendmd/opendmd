@@ -16,7 +16,7 @@ k = floor(q/32)             -- which digit: one every 32 px (0 1, then 2 3)
 n = pick(k, h1, h2, m1, m2) -- and its value
 col = floor(q%32/8)         -- the font's column, 0 to 2 (then the gap)
 row = floor(py/6)           -- its row from the top, 0 to 4 (5: below)
-bar = py == 31           -- the bottom row is the seconds bar
+bar = py == 31              -- the bottom row is the seconds bar
 lit = bar ? px < end : digit(n, col, row, bold)
 -- a rainbow drifting through the digits, tilted by row; the bar is white
 hue = (31 - py)/64 + hour/24 + t/10
