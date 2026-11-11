@@ -1,0 +1,116 @@
+/* The Studio's page (/studio/): on the site's site.css (its colours, light and dark, its header
+   and footer). The panel itself stays black in both themes, in its bezel; the LED view is the
+   site's own .led look (a dot mask over the picture, blended "lighten"). */
+html,body.spage{height:auto}
+.spage main{padding-top:20px}
+.spage main>*{max-width:none}
+#studio{font-size:15px;line-height:1.45}
+:where(#studio) button{font:inherit;color:inherit;cursor:pointer}
+:where(#studio) button:disabled{cursor:default}
+.s-hide{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.s-sp{flex:1}
+.s-cap{color:var(--mut);font-size:13px;margin:10px 0 0}
+.s-bad{color:var(--pink)}
+
+/* The piece's own bar: its name, what it is, whether it is kept; undo, redo, the GIF */
+.s-doc{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:0 0 14px}
+.s-name input{font:600 28px/1.15 var(--display);letter-spacing:-.012em;color:var(--head);background:none;border:1px solid transparent;
+border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(13em,70vw)}
+.s-name input:hover{border-color:var(--line)}
+.s-name input:focus{border-color:var(--cyan);outline:0;background:var(--bg2)}
+.s-kind{font:400 8px/1 var(--pixel);color:var(--mut);padding-top:2px}
+.s-saved{display:flex;align-items:center;gap:7px;color:var(--mut);font-size:13px}
+.s-saved::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--green)}
+[data-saved=saving] .s-saved::before{background:var(--acc)}
+[data-saved=failed] .s-saved::before,[data-saved=none] .s-saved::before{background:var(--pink)}
+.s-ib{display:grid;place-items:center;width:40px;height:40px;border:0;border-radius:8px;background:none;color:var(--mut)}
+.s-ib:hover:not(:disabled){background:var(--bg3);color:var(--fg)}
+.s-ib:disabled{opacity:.35}
+.s-cta{padding:9px 18px;border:0;border-radius:9px;background:var(--acc);color:var(--on-acc)!important;font-weight:700!important;white-space:nowrap}
+.s-cta:hover:not(:disabled){filter:brightness(1.06)}
+.s-cta:disabled{opacity:.6}
+
+/* The stage: the panel in its bezel, the ruler with the seam between its two halves */
+.s-stage{border-radius:var(--r);background:var(--bg3);padding:16px 0 18px}
+@media (prefers-color-scheme:dark){.s-stage{background:var(--den) radial-gradient(ellipse 60% 90% at 50% 40%,#1a1e33,transparent 75%)}}
+.s-scroll{display:flex;flex-direction:column;overflow:auto;padding:0 13px 4px}
+.s-scroll>*{flex:none;margin-inline:auto}
+.s-ruler{position:relative;height:18px;margin-bottom:6px;color:var(--mut);font:400 8px/1 var(--pixel);
+background:linear-gradient(90deg,currentColor 1px,transparent 1px) 0 100%/12.5% 6px repeat-x}
+.s-ruler span{position:absolute;bottom:9px;transform:translateX(-50%);white-space:nowrap}
+.s-ruler .seam{color:var(--ink)}
+.s-bezel{position:relative;padding:12px 12px 30px;border-radius:16px;background:#050506;
+box-shadow:0 0 0 1px #26282d,inset 0 0 0 1px #000,0 18px 44px rgba(0,0,0,.26)}
+.s-bezel::before{content:"";position:absolute;left:18px;bottom:12px;width:6px;height:6px;border-radius:50%;
+background:#e8e1cf;box-shadow:0 0 6px rgba(232,225,207,.7),12px 0 0 #2a2c33,24px 0 0 #2a2c33}
+.s-work{position:relative;background:#000;overflow:hidden;touch-action:none;cursor:crosshair;border-radius:2px}
+.s-work canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+.s-grid{position:absolute;inset:0;pointer-events:none;
+background-image:linear-gradient(90deg,rgba(255,255,255,.07) 1px,transparent 1px),linear-gradient(rgba(255,255,255,.07) 1px,transparent 1px),
+linear-gradient(90deg,rgba(255,255,255,.16) 1px,transparent 1px),linear-gradient(rgba(255,255,255,.16) 1px,transparent 1px)}
+.s-grid.dense{background-image:linear-gradient(90deg,transparent 0,transparent 0),linear-gradient(transparent 0,transparent 0),
+linear-gradient(90deg,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient(rgba(255,255,255,.14) 1px,transparent 1px)}
+.s-seam{position:absolute;left:50%;top:0;bottom:0;border-left:1px dashed rgba(247,165,49,.8);pointer-events:none}
+.s-cursor{position:absolute;pointer-events:none;box-shadow:0 0 0 1px #fff,0 0 0 2px #000}
+.s-work.led .s-grid,.s-work.led .s-seam,.s-work.led .s-cursor{display:none}
+.s-chin{position:absolute;left:60px;right:14px;bottom:7px;display:flex;align-items:center;gap:12px;color:#7a7d90;font:400 8px/1 var(--pixel)}
+.s-chin b{font-weight:400;color:#c9c6d6}
+.s-chin button{background:none;border:0;padding:4px 6px 3px;border-radius:3px;color:#9a9db0!important}
+.s-chin .s-seg{display:flex;gap:2px}
+.s-chin .on{background:var(--acc);color:#141414!important}
+
+/* The tray of tools under the panel */
+.s-tray{display:flex;align-items:center;gap:8px 6px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
+.s-tools{display:flex;gap:4px}
+.s-tool{position:relative;display:grid;place-items:center;width:46px;height:46px;border:0;border-radius:10px;background:none;color:var(--mut)}
+.s-tool:hover{background:var(--bg3)}
+.s-tool i{position:absolute;right:4px;bottom:3px;font:400 8px/1 var(--pixel);font-style:normal;opacity:.7}
+.s-tool.on,.s-tool.on:hover{background:var(--fg);color:var(--bg)}
+.s-hint{margin-left:8px;color:var(--mut);font-size:13px}
+.s-tray .s-seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.s-tray .s-seg button{min-width:34px;height:34px;padding:0 12px;border:0;background:none;font-size:14px;color:var(--mut)}
+.s-tray .s-seg button+button{border-left:1px solid var(--line)}
+.s-tray .s-zoom{align-items:center}
+.s-tray .s-zoom button{font-size:18px;min-width:38px}
+.s-tray .s-zoom button:disabled{opacity:.35}
+.s-tray .s-zoom b{min-width:3.4em;padding-top:2px;text-align:center;font:400 8px/1 var(--pixel);color:var(--mut)}
+.s-tray .s-seg .on{background:var(--bg3);color:var(--fg);font-weight:600}
+
+/* The bench: colours, drafts */
+.s-bench{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px 40px;padding-top:18px}
+.s-hd{display:flex;align-items:center;gap:10px;margin:0 0 12px;min-height:36px}
+.s-hd h2{margin:0;padding:0;border:0;font:600 22px/1 var(--display);letter-spacing:-.012em}
+#s-pal{font:inherit;font-size:14px;color:var(--fg);background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;max-width:60%}
+.s-pal{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px}
+.s-pal.many{grid-template-columns:repeat(16,minmax(0,1fr));gap:3px}
+.s-sw{aspect-ratio:1;min-width:0;padding:0;border:0;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(127,127,127,.4)}
+.s-sw.off{background-image:linear-gradient(135deg,transparent 45%,#55585f 45%,#55585f 55%,transparent 55%)!important}
+.s-sw.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--fg)}
+.s-pal.many .s-sw{border-radius:3px}
+.s-pal.many .s-sw.on{box-shadow:0 0 0 1px var(--bg),0 0 0 3px var(--fg)}
+.s-pill{height:34px;padding:0 13px;border:1px solid var(--line);border-radius:8px;background:none;font-size:14px;white-space:nowrap}
+.s-pill.s-pri{border-color:transparent;background:var(--acc);color:var(--on-acc)!important;font-weight:700}
+.s-list{display:grid;gap:4px;margin:0;padding:0;list-style:none}
+.s-list li{display:flex;align-items:center;gap:6px;padding:4px;border-radius:10px}
+.s-list li.on{background:var(--bg3);box-shadow:inset 3px 0 0 var(--fg)}
+.s-open{flex:1;display:flex;align-items:center;gap:12px;min-width:0;padding:2px 4px;border:0;background:none;text-align:left}
+.s-open .led{flex:none;width:128px;border-radius:3px;overflow:hidden}
+.s-meta{min-width:0}
+.s-meta b{display:block;overflow:hidden;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.s-meta small{color:var(--mut);font-size:13px}
+.s-del{flex:none;width:34px;height:34px;border:0;border-radius:8px;background:none;color:var(--mut);font-size:20px!important;line-height:1}
+.s-del:hover{background:var(--bg2);color:var(--pink)}
+
+@media (max-width:820px){
+  .spage main{padding-top:12px}
+  .s-name{flex:1 0 100%}
+  .s-name input{font-size:24px;width:100%}
+  .s-kind,.s-saved{order:1}
+  .s-doc .s-sp{order:0}
+  .s-stage{margin:0 -16px;border-radius:0;padding:12px 0 14px}
+  .s-scroll{padding:0 8px 4px}
+  .s-chin{left:52px;gap:8px}
+  .s-hint{display:none}
+  .s-bench{grid-template-columns:minmax(0,1fr)}
+  .s-pal.many{grid-template-columns:repeat(11,minmax(0,1fr))}
+}

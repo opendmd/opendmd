@@ -49,6 +49,12 @@
                downloads the GIF, Send to my panel hands it to the panel's
                web app (`#import`, postMessage); `?q=&platform=` searches
                at once
+- /studio/     the Studio: a pixel editor for the panel, 128x32
+               (opendmd-web/share/studio/: studio.js, store.js — the record
+               envelope and LocalStore on IndexedDB — and the starter
+               palettes): drafts kept in the browser, nothing uploaded, the
+               GIF written by the demo's art module (pkg-art
+               `encodeIndexed`). Not in the menus yet
 - /panel.js    the panel's address and the window hand-off, shared by /f/
                and /create/ (opendmd-web/share/panel.js)
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
@@ -102,8 +108,8 @@ developers and Install; a Menu button on a phone), footer.html, and
 site.css (light and dark follow the system; headings in Fraunces,
 site/fonts/, labels in Silkscreen). A page in a SECTION (the guide,
 the developers' pages) also gets that section's menu: down the side on a
-wide screen, a folded list above the page on a phone. /f/ and /create/ get the same
-header and footer (app_page), around their own f.css and create.css.
+wide screen, a folded list above the page on a phone. /f/, /create/ and /studio/ get the same
+header and footer (app_page), around their own f.css, create.css and studio.css.
 
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
 `site:features`, `site:steps` and `site:cards` ... `site:cards-end` style
@@ -547,6 +553,10 @@ CSP = {
     + "; connect-src 'self' https:",
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
     # update check (util.js SITE).
+    # The Studio's page: its GIF writer is the demo's art module (pkg-art,
+    # same-origin), so 'wasm-unsafe-eval'; it fetches nothing else and uploads
+    # nothing (drafts stay in IndexedDB), so no connect-src beyond 'self'.
+    "studio": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
                              "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
@@ -562,7 +572,7 @@ CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release
 # minutes, so a deploy is never half old: an earlier js/build.js beside a
 # later app.js would ask for an earlier wasm module (js/wasm.js).
 CACHE_APP = "no-cache"
-APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/dev/psi/*", "/panel.js",
+APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/studio/*", "/dev/psi/*", "/panel.js",
              *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "psiref.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
 CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
@@ -576,7 +586,7 @@ def headers_file() -> str:
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
-    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/create/*", "create"), ("/studio/*", "studio"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
     # The guide's Psi pages (PSI_PAGES outside /dev/psi/): at their address and as .html.
     for p in PSI_PAGES:
@@ -1029,11 +1039,14 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
 
 # The site's pages made of the web app's own parts, on the demo's files: a
 # Formula's page (opendmd-web/share/f/: the editor) and Create Art's
-# (opendmd-web/share/create/: the Studio). The site's header and footer
-# around each, the site's styles under its own stylesheet; its body class.
+# (opendmd-web/share/create/: the web app's Studio), and the Studio's own
+# page (opendmd-web/share/studio/: the pixel editor, the site's alone). The
+# site's header and footer around each, the site's styles under its own
+# stylesheet; its body class.
 F_PAGE = "f/index.html"
 CREATE_PAGE = "create/index.html"
-APP_PAGES = {F_PAGE: ("f.css", "fpage"), CREATE_PAGE: ("create.css", "cpage")}
+STUDIO_PAGE = "studio/index.html"
+APP_PAGES = {F_PAGE: ("f.css", "fpage"), CREATE_PAGE: ("create.css", "cpage"), STUDIO_PAGE: ("studio.css", "spage")}
 
 
 def app_page(out: Path, page: str, wm: dict) -> None:

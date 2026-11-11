@@ -54,6 +54,17 @@ build URL serves. There the art index must also carry
   links (new tab, "pixel art" and the words), the bookmarklet, the manifest
   and the service worker (scope /create/; a shared GIF and a shared link
   through the share target's POST; nothing else answered by it);
+- /studio/ (the Studio, the pixel editor), under its _headers CSP with no
+  violation, nothing asked of another site and the GIF writer (pkg-art)
+  fetched only at the first download: a new draft's record envelope (id,
+  rev, hash of the canonical body, author, licence not chosen, from); a
+  pixel drawn, a line dragged, undo and redo (buttons and keys), the
+  eraser, fill and right-click picking a colour; the LED view drawn on;
+  renamed and kept over a reload; Download GIF a valid 128x32 GIF with
+  exactly the colours drawn, freezing that rev; New piece, opening and deleting
+  drafts; a stale rev refused; two tabs on one draft (the second's work
+  kept as a copy that says where it came from); a tap on a phone, zoomed
+  in with no sideways scroll, in both themes;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -589,6 +600,199 @@ def c_download(page: Page) -> Image.Image:
     im = Image.open(io.BytesIO(Path(d.path()).read_bytes()))
     im.filename_suggested = d.suggested_filename
     return im
+
+
+# The Studio (/studio/): its canvas is the piece at 1:1 (128 x 32), so a
+# pixel is read off it directly.
+S_READY = "#studio:not([aria-busy])"
+AMBER, NAVY = (247, 165, 49), (22, 29, 82)  # Den 16's keys 9 and 2 (studio/palettes.js)
+
+
+def s_page(browser, base: str, site: Path, errors: list[str], size: str = "laptop", scheme: str | None = None, ctx=None) -> Page:
+    """/studio/ under its _headers CSP, ready; its requests in page.asked."""
+    if ctx is None:
+        page = new_page(browser, size, errors, scheme=scheme)
+    else:
+        page = ctx.new_page()
+        page.on("pageerror", lambda e: errors.append(f"[studio] pageerror: {e}"))
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/studio/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/studio/*")}))(r.fetch()))
+    page.asked = []
+    page.on("request", lambda r: page.asked.append(r.url))
+    page.goto(f"{base}/studio/")
+    page.wait_for_selector(S_READY, timeout=30000)
+    return page
+
+
+def s_px(page: Page, x: int, y: int) -> tuple:
+    return tuple(page.evaluate("([x, y]) => [...document.getElementById('s-canvas').getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3)]", [x, y]))
+
+
+def s_lit(page: Page) -> int:
+    return page.evaluate("""() => { const d = document.getElementById('s-canvas').getContext('2d').getImageData(0, 0, 128, 32).data;
+        let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 0) n++; return n; }""")
+
+
+def s_at(page: Page, x: int, y: int) -> tuple[float, float]:
+    b = page.locator("#s-canvas").bounding_box()
+    return b["x"] + (x + .5) * b["width"] / 128, b["y"] + (y + .5) * b["height"] / 32
+
+
+def s_kept(page: Page) -> None:
+    wait_js(page, "document.getElementById('studio').dataset.saved === 'kept'", timeout=10000)
+
+
+S_STORE = """async ([what, arg]) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+    const { items } = await s.list({ type: 'piece' });
+    if (what === 'list') return items;
+    const id = arg || document.getElementById('studio').dataset.id;
+    if (what === 'get') { const r = await s.get(id); return { r, again: r && await m.hashOf(r.body) }; }
+    if (what === 'revs') return s.revs(id);
+    if (what === 'stale') { const r = await s.get(id); try { await s.put(r, { baseRev: r.rev + 5 }); return 'taken'; } catch (e) { return e.name; } }
+    if (what === 'used') return (await s.usedBy(arg)).map((h) => h.id);
+}"""
+
+
+def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """/studio/ on a laptop, then a phone: draw, keep, download."""
+    page = s_page(browser, base, site, errors)
+    s_kept(page)
+    got = page.evaluate(S_STORE, ["get", None])
+    r = got["r"] or {}
+    envelope = {k: r.get(k) for k in ("type", "rev", "tags", "author", "licence", "from")}
+    check(re.fullmatch(r"pc_[0-9a-f]{32}", r.get("id", "")) and re.fullmatch(r"sha256-[0-9a-f]{64}", r.get("hash", ""))
+          and r.get("hash") == got["again"] and envelope == {"type": "piece", "rev": 1, "tags": [], "author": {"name": "", "account": None},
+                                                            "licence": None, "from": []}
+          and r["body"]["w"] == 128 and r["body"]["h"] == 32 and len(r["body"]["layers"][0]["cels"]) == len(r["body"]["frames"]) == 1
+          and r.get("created", "").endswith("Z"),
+          f"/studio/: a new draft kept at once, its record envelope ({r.get('id')}, {envelope}, the hash of its body)")
+    check(s_lit(page) == 0 and page.locator("#s-list li").count() == 1, "/studio/: the new piece is empty, the only draft")
+    check(re.fullmatch(r"pl_0{12}7000\w+", r["body"]["palette"]) is not None and page.evaluate(S_STORE, ["used", r["body"]["palette"]]) == [r["id"]],
+          f"/studio/: the piece points at its palette by id, and the store knows it is used there ({r['body']['palette']})")
+    # Draw: a pixel, a line, undo and redo, the eraser, fill.
+    page.click('.s-sw[data-k="9"]')
+    page.mouse.click(*s_at(page, 10, 5))
+    check(s_px(page, 10, 5) == AMBER and s_lit(page) == 1, f"/studio/: the pencil draws a pixel in the colour picked {s_px(page, 10, 5)}")
+    page.mouse.move(*s_at(page, 20, 10))
+    page.mouse.down()
+    page.mouse.move(*s_at(page, 25, 10), steps=3)
+    page.mouse.move(*s_at(page, 30, 10), steps=3)
+    page.mouse.up()
+    row = [s_px(page, x, 10) == AMBER for x in range(20, 31)]
+    check(all(row) and s_lit(page) == 12, f"/studio/: a drag draws a line with no gaps ({s_lit(page)} lit)")
+    page.click("#s-undo")
+    one = s_lit(page)
+    page.click("#s-redo")
+    check(one == 1 and s_lit(page) == 12, f"/studio/: Undo and Redo ({one}, {s_lit(page)})")
+    page.keyboard.press("Control+z")
+    one = s_lit(page)
+    page.keyboard.press("Control+Shift+z")
+    check(one == 1 and s_lit(page) == 12, "/studio/: Ctrl+Z and Ctrl+Shift+Z")
+    page.keyboard.press("e")
+    page.mouse.click(*s_at(page, 25, 10))
+    check(s_lit(page) == 11 and s_px(page, 25, 10) == (0, 0, 0) and page.get_attribute("#s-t-eraser", "aria-pressed") == "true",
+          "/studio/: E, the eraser, turns a pixel off")
+    page.keyboard.press("g")
+    page.click('.s-sw[data-k="2"]')
+    page.mouse.click(*s_at(page, 100, 20))
+    filled = s_lit(page)
+    check(filled == 128 * 32 and s_px(page, 25, 10) == NAVY and s_px(page, 10, 5) == AMBER, f"/studio/: G, fill, fills the dark around the drawing ({filled})")
+    page.click("#s-undo")
+    check(s_lit(page) == 11, "/studio/: fill undone in one step")
+    page.mouse.click(*s_at(page, 10, 5), button="right")
+    check(page.get_attribute(".s-sw.on", "data-k") == "9", "/studio/: a right-click picks the colour under it")
+    # The LED view: the site's .led look; still drawn on.
+    page.click("#s-v-led")
+    mask = page.evaluate("getComputedStyle(document.getElementById('s-work'), '::after').backgroundImage")
+    page.keyboard.press("b")
+    page.mouse.click(*s_at(page, 64, 16))
+    check("radial-gradient" in mask and s_px(page, 64, 16) == AMBER, "/studio/: LEDS shows the panel's dots and still draws")
+    page.click("#s-v-px")
+    # Kept over a reload, renamed.
+    page.fill("#s-name", "Test card")
+    s_kept(page)
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    check(s_px(page, 10, 5) == AMBER and s_px(page, 64, 16) == AMBER and s_lit(page) == 12 and page.input_value("#s-name") == "Test card"
+          and page.inner_text("#s-list li.on").startswith("Test card"),
+          f"/studio/: the draft is kept over a reload, with its name ({s_lit(page)} lit, {page.input_value('#s-name')!r})")
+    check(not any("pkg-art" in u for u in page.asked), "/studio/: the GIF writer not fetched before a download")
+    # Download GIF: a 128x32 GIF with exactly the colours drawn; that rev frozen.
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#s-gif")
+    im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
+    rgbim = im.convert("RGB")
+    colours = sorted(c for _, c in rgbim.getcolors())
+    check(im.format == "GIF" and im.size == (128, 32) and getattr(im, "n_frames", 1) == 1 and rgbim.getpixel((10, 5)) == AMBER
+          and rgbim.getpixel((0, 0)) == (0, 0, 0) and colours == [(0, 0, 0), AMBER] and dl.value.suggested_filename == "Test_card.gif",
+          f"/studio/: Download GIF -> {dl.value.suggested_filename}, {im.format} {im.size}, {getattr(im, 'n_frames', 1)} frame, colours {colours}")
+    s_kept(page)
+    revs = page.evaluate(S_STORE, ["revs", None])
+    now = page.evaluate(S_STORE, ["get", None])["r"]
+    check([v["rev"] for v in revs] == [1] and now["rev"] == 2 and revs[0]["hash"] == now["hash"],
+          f"/studio/: the download froze rev 1, the draft goes on as rev 2 ({[v['rev'] for v in revs]}, {now['rev']})")
+    with page.expect_download(timeout=60000):
+        page.click("#s-gif")
+    check([v["rev"] for v in page.evaluate(S_STORE, ["revs", None])] == [1], "/studio/: downloading again unchanged freezes nothing new")
+    check(page.evaluate(S_STORE, ["stale", None]) == "Conflict", "/studio/: the store refuses a write on a stale rev")
+    # Drafts: a new piece, opening the first again, deleting the new one.
+    page.click("#s-new")
+    wait_js(page, "document.querySelectorAll('#s-list li').length === 2")
+    check(s_lit(page) == 0 and page.input_value("#s-name") == "Untitled", "/studio/: New piece, an empty draft beside the first")
+    page.click("#s-list li:not(.on) .s-open")
+    wait_js(page, "document.getElementById('s-name').value === 'Test card'")
+    check(s_px(page, 10, 5) == AMBER, "/studio/: a draft opens from the list")
+    page.once("dialog", lambda d: d.accept())
+    page.click("#s-list li:not(.on) .s-del")
+    wait_js(page, "document.querySelectorAll('#s-list li').length === 1")
+    check(len(page.evaluate(S_STORE, ["list", None])) == 1, "/studio/: a draft deleted (after asking)")
+    hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(page.inner_text("body"))})
+    check(not hit, f"/studio/: none of the words users never see {hit}")
+    off = [u for u in page.asked if not u.startswith(base) and not u.startswith(("blob:", "data:"))]
+    check(not off and any("pkg-art" in u for u in page.asked), f"/studio/: nothing asked of another site, the GIF writer same-origin {off[:2]}")
+    check(not page.evaluate("window.__csp || []"), f"/studio/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    if shots:
+        page.screenshot(path=str(shots / "studio-laptop.png"), full_page=True)
+    page.context.close()
+    # A phone: a tap draws; zoomed in, the panel scrolls in its own box, never the page.
+    for scheme in ("light", "dark"):
+        page = s_page(browser, base, site, errors, "phone", scheme)
+        page.touchscreen.tap(*s_at(page, 64, 16))
+        lit = s_lit(page)
+        wide = page.evaluate("document.documentElement.scrollWidth - innerWidth")
+        page.click("#s-z-in")
+        page.click("#s-z-in")
+        inner = page.evaluate("[document.getElementById('s-work').offsetWidth, document.getElementById('s-scroll').clientWidth]")
+        wide2 = page.evaluate("document.documentElement.scrollWidth - innerWidth")
+        bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
+        check(lit == 1 and wide <= 0 and wide2 <= 0 and inner[0] > inner[1] and (lum > 600 if scheme == "light" else lum < 120),
+              f"/studio/ (phone, {scheme}): a tap draws ({lit}), zoomed in the panel scrolls in its box {inner}, no sideways scroll ({wide}, {wide2} px), the theme ({bg})")
+        check(not page.evaluate("window.__csp || []"), f"/studio/ (phone, {scheme}): no CSP violation")
+        page.context.close()
+
+
+def studio_tabs(browser, base: str, site: Path, errors: list[str]) -> None:
+    """One draft open in two tabs: the second to save after the first
+    keeps its work as a copy, its `from` naming the draft."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    a = s_page(browser, base, site, errors, ctx=ctx)
+    s_kept(a)
+    b = s_page(browser, base, site, errors, ctx=ctx)
+    check(a.evaluate("document.getElementById('studio').dataset.id") == b.evaluate("document.getElementById('studio').dataset.id"),
+          "/studio/ two tabs: both open the same draft")
+    a.mouse.click(*s_at(a, 3, 3))
+    s_kept(a)
+    b.mouse.click(*s_at(b, 120, 30))
+    s_kept(b)
+    items = b.evaluate(S_STORE, ["list", None])
+    copy = next((i for i in items if i["name"].endswith("(copy)")), {})
+    orig = a.evaluate("document.getElementById('studio').dataset.id")
+    check(len(items) == 2 and copy.get("from", [{}])[0].get("id") == orig and "another tab" in b.inner_text("#s-saved"),
+          f"/studio/ two tabs: the later save kept as a copy made from the draft ({[i['name'] for i in items]}, '{b.inner_text('#s-saved')}')")
+    ctx.close()
 
 
 def create_page(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
@@ -1590,7 +1794,7 @@ def gallery_sort(browser, base: str, errors: list[str]) -> None:
 # The site's structure (the design pass): the pages every visitor sees.
 KEY_PAGES = {  # shot name: path
     "home": "/", "install": "/install/", "guide": "/guide/", "guide-web-app": "/guide/web-app.html",
-    "formulas": "/formulas/", "create": "/create/", "dev": "/dev/", "dev-psi": "/dev/psi/", "dev-psi-errors": "/dev/psi/errors/", "licences": "/licenses/",
+    "formulas": "/formulas/", "create": "/create/", "studio": "/studio/", "dev": "/dev/", "dev-psi": "/dev/psi/", "dev-psi-errors": "/dev/psi/errors/", "licences": "/licenses/",
 }
 TOP_LABELS = ["Guide", "Gallery", "Create Art", "Demo", "For developers", "Install"]
 # Words users never see (CLAUDE.md, "Product model"); "pack" only as the DMDoS GIF pack's name.
@@ -1623,8 +1827,9 @@ def reachable(site: Path) -> None:
                 todo.append(nxt)
     moved = {ln.split()[0].lstrip("/") for ln in (site / "_redirects").read_text().splitlines() if ln.strip()}
     pages = {p.relative_to(site).as_posix() for p in site.rglob("*.html")}
-    # /stats is public but unlinked on purpose.
-    unlinked = {"404.html", "stats.html"}
+    # /stats is public but unlinked on purpose; /studio/ until the owner
+    # says where its link goes.
+    unlinked = {"404.html", "stats.html", "studio/index.html"}
     want = {p for p in pages if not p.startswith("demo/") and p not in unlinked and p not in moved}
     missing = sorted(want - seen)
     check(not missing and len(want) > 15, f"every page reachable from the home page by its links ({len(want)} pages){': ' + ', '.join(missing[:8]) if missing else ''}")
@@ -1642,7 +1847,7 @@ def reachable(site: Path) -> None:
 
 
 def csp_pattern(path: str) -> str:
-    for pat in ("/install/*", "/f/*", "/create/*", "/dev/psi/*", "/formulas/*"):
+    for pat in ("/install/*", "/f/*", "/create/*", "/studio/*", "/dev/psi/*", "/formulas/*"):
         if path.startswith(pat[:-1]):
             return pat
     return "/*"
@@ -1680,7 +1885,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
                 lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
                 check(lum > 600 if scheme == "light" else lum < 120, f"{what}: the {scheme} theme ({bg})")
-                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create"):
+                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create", "studio"):
                     text = page.inner_text("body")
                     hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
                     check(not hit, f"{name}: none of the words users never see {hit}")
@@ -2373,6 +2578,9 @@ def main() -> int:
         create_links(browser, base, a.site, errors)
         create_video(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
         create_elsewhere(browser, base, a.site, errors, a.shots or ROOT / "target/site-smoke")
+        print("the Studio (/studio/)")
+        studio_page(browser, base, a.site, errors, a.shots)
+        studio_tabs(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)

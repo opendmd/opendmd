@@ -196,7 +196,7 @@ def site_paths(site_dir):
             if f.is_file():
                 rel = f.relative_to(ROOT / sub).as_posix()
                 paths.add("/" + (rel[:-3] + "/" if rel.endswith(".md") else rel))
-    paths |= {"/guide/", "/install/", "/create/", "/demo/", "/dev/api/", "/formulas/", "/install/release.json", "/install/beta.json", "/art-index/v1/NES.json"}
+    paths |= {"/guide/", "/install/", "/create/", "/studio/", "/demo/", "/dev/api/", "/formulas/", "/install/release.json", "/install/beta.json", "/art-index/v1/NES.json"}
     return sorted(paths), "site sources (no built site; run make site for the full file list)"
 
 
