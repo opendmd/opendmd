@@ -539,7 +539,7 @@ impl<'s> Parser<'s> {
     /// where `t` jumps back, differ by the rate it gets.
     fn loop_note(&self, prog: &Program) -> Option<(usize, usize, String)> {
         let ms = prog.loop_ms;
-        if ms == 0 || ms % 40 == 0 || prog.inputs() & 8 == 0 {
+        if ms == 0 || ms.is_multiple_of(40) || prog.inputs() & 8 == 0 {
             return None;
         }
         // The `loop` line's number: a statement that starts `loop` and a

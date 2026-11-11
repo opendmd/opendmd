@@ -589,9 +589,7 @@ fn every_built_in_has_a_cheat_sheet_row() {
         assert!(has(name), "no cheat-sheet row for `{name}`");
     }
     // The words of the header that are keywords in one place only.
-    for name in ["smooth"] {
-        assert!(has(name), "no cheat-sheet row for `{name}`");
-    }
+    assert!(has("smooth"), "no cheat-sheet row for `smooth`");
     for name in builtins::DECLARATIONS {
         // (`psi 1` is never written by the editor: unversioned is 1.)
         assert!(
