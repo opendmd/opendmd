@@ -177,7 +177,8 @@ export function tier(i, hz) {
   const s = nth(n);
   return `${s[0].toUpperCase()}${s.slice(1)} (${per})${held ? `: heavy enough that the panel holds it to ${nth(2 * n)}` : ''}`;
 }
-export const about = (i, hz) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && (i[5] & 32 ? i[10] && 'Its rate line is unused over a GIF' : tier(i, hz)), i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
+// (`look`: it has a look line, and as the panel's look follows the GIF's frames.)
+export const about = (i, hz, look) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && (i[5] & 32 ? i[10] && 'Its rate line is unused over a GIF' : tier(i, hz) + (look && i[10] ? '; as a look, over GIFs, its rate line is unused' : '')), i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
 export const TIP = (i) => `${i[0]} steps, about ${ms(est(i))} ms a frame on the panel${vmEst(i) > est(i) ? `, ${ms(vmEst(i))} the slow way` : ''} (light: under 5 ms; medium: under 8)${refused(i) ? `; too heavy for the panel: ${ms(i[6])} ms the slow way, over its ${i[16] / 1000}` : ''}`;
 // The editor's sentence for one the panel refuses (docs/guide/editor.md: its faster path, the slow way).
 export const TOO_HEAVY = (i) => `Too heavy for the panel: drawn the slow way, it would take about ${Math.ceil(i[6] / 1000)} ms a frame, and the panel allows ${i[16] / 1000}${i[5] & 32 ? ' over GIFs' : i[10] == 10 ? ' drawn every refresh' : ' (32 drawn every refresh; 12 over GIFs)'}`;
