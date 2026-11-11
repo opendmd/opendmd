@@ -1087,7 +1087,7 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     page = s_page(browser, base, site, errors)
     s_blur(page)
     tips = page.eval_on_selector_all(".s-tool", "els => els.map(e => [e.dataset.tool, e.title])")
-    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "select": "(M)", "pick": "(I)"}
+    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "select": "(M)", "pick": "(I)", "stamp": "(S)"}
     shades = page.eval_on_selector_all("#s-shade [data-shade]", "els => els.map(e => [e.dataset.shade, e.title])")
     check(sorted(t for t, _ in tips) == sorted(keys) and all(keys[t] in title for t, title in tips)
           and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123")
@@ -2830,11 +2830,11 @@ def studio_phone_frames(browser, base: str, site: Path, errors: list[str]) -> No
     """On a phone: the bench as tabs, the strip scrolling sideways, a layer moved by Move up."""
     page = s_page(browser, base, site, errors, "phone")
     tabs = page.eval_on_selector_all("#s-tabs [data-tab]", "els => els.map(e => e.textContent)")
-    vis = lambda: [page.is_visible(s) for s in (".s-colours", ".s-layers", ".s-drafts")]
+    vis = lambda: [page.is_visible(s) for s in (".s-colours", ".s-layers", ".s-stamps", ".s-drafts")]
     first = vis()
     page.click("#s-tabs [data-tab=layers]")
     second = vis()
-    check(tabs == ["Colours", "Layers", "Piece"] and first == [True, False, False] and second == [False, True, False],
+    check(tabs == ["Colours", "Layers", "Stamps", "Piece"] and first == [True, False, False, False] and second == [False, True, False, False],
           f"/studio/ (phone): the bench is tabs {tabs}, one shown at a time ({first}, {second})")
     page.evaluate(S_WHOLE, [{"name": "Strip", "frames": [100] * 8, "colours": 2, "layers": [
         {"name": "Bottom", "moves": False, "box": [0, 0, 8, 8], "k": 1}, {"name": "Top", "moves": True, "box": [0, 0, 8, 8], "k": 2}]}])
