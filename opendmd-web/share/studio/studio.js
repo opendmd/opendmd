@@ -112,10 +112,11 @@ function swatches() {
   pick(key);
 }
 // The swatch set shown, and what it is.
+// A palette that is not one (no colours) is never taken in: `swatch` moves only once it has shown.
 function useSwatches(p) {
-  swatch = p;
   const set = $('s-set');
   set.replaceChildren(...p.body.colours.map((c) => swatch1(null, c.hex, c.name)));
+  swatch = p;
   set.classList.toggle('many', p.body.colours.length > 24);
   $('s-pal').value = p.id;
   $('s-pal-about').textContent = `${p.body.colours.length} colours · ${builtin(p.id) ? `${p.body.source || 'OpenDMD'} · read-only` : 'yours'}`;
@@ -602,9 +603,11 @@ async function lock(id) {
 // the record stands (`at`) to where undo was (`cur`). A journal that is not
 // this record's, or of another shape (an earlier Studio's), is dropped.
 async function open(r) {
+  check(r); // a record written past check() (another tab, an older Studio, a hand) is not opened
+  await Doc.open(r, listOf, null); // throws on a draft that does not read, before the open one's lock is let go
   await lock(r.id);
   const j = journaled && store && r.hash ? await store.steps(r.id) : null;
-  const d = await Doc.open(r, listOf, j); // throws on a draft that does not read
+  const d = await Doc.open(r, listOf, j);
   sel = null;
   D = d;
   D.held = () => sel?.fl;
@@ -634,10 +637,10 @@ async function open(r) {
 // one-cel form {name, keys, colours, from}. Its layers and frames get stable
 // keys as they are made; it is checked (store.js check) before it opens.
 const k8 = () => [...crypto.getRandomValues(new Uint8Array(4))].map((x) => x.toString(16).padStart(2, '0')).join('');
-export async function piece({ name = 'Untitled', tags = [], plays = 0, keys = new Uint8Array(N), colours = [], from = [],
+export async function piece({ name = 'Untitled', tags = [], plays, keys = new Uint8Array(N), colours = [], from = [],
   frames = [{ ms: STILL_MS }], layers = [{ name: 'Drawing', moves: false, cels: [keys] }] } = {}) {
   const wide = colours.some((c) => c.k > 255);
-  const r = record('piece', name, { w: W, h: H, palette: swatch.id, plays, colours, ...(wide ? { keys: 2 } : {}),
+  const r = record('piece', name, { w: W, h: H, palette: swatch.id, ...(plays ? { plays } : {}), colours, ...(wide ? { keys: 2 } : {}),
     frames: frames.map((f) => ({ key: k8(), ms: f.ms ?? STILL_MS })),
     layers: await Promise.all(layers.map(async (l) => ({ key: k8(), name: l.name ?? '', moves: !!l.moves, ...(l.hide ? { hide: true } : {}),
       cels: await Promise.all(l.cels.map((c) => packPx(c, wide))) }))) }, { from, tags });
@@ -655,7 +658,7 @@ async function fresh() {
 // A draft that will not open: said, and a new piece instead.
 async function tryOpen(r) {
   try { await open(r); return true; } catch {
-    say(`“${r.name}” can’t be opened: its picture is damaged. It stays in Drafts; this is a new piece.`);
+    say(`“${typeof r.name === 'string' ? r.name : 'A draft'}” can’t be opened: its picture is damaged. It stays in Drafts; this is a new piece.`);
     return false;
   }
 }
@@ -686,6 +689,7 @@ async function drafts() {
   const { items } = await store.list({ type: 'piece' });
   if (rec && !kept) items.unshift({ id: rec.id, name: nameNow(), modified: rec.modified });
   const lis = await Promise.all(items.map(async (h) => {
+    if (typeof h.name !== 'string') h = { ...h, name: 'Untitled' }; // a record that is not one: listed, never trusted
     const li = el('li', h.id === rec?.id ? 'on' : ''), b = el('button', 's-open'), led = el('span', 'led'), c = el('canvas'), t = el('span', 's-meta');
     const open = h.id === rec?.id, del = el('button', 's-del', '×');
     b.dataset.id = del.dataset.id = h.id;
@@ -870,7 +874,7 @@ async function main() {
     store = null;
     say(`Drafts can’t be kept here: ${e.message || e}`);
   }
-  if (store) for (const h of (await store.list({ type: 'palette' })).items) { const p = await store.get(h.id); if (p) mine.set(p.id, p); }
+  if (store) for (const h of (await store.list({ type: 'palette' })).items) { const p = await store.get(h.id); try { check(p); mine.set(p.id, p); } catch { /* not a palette: left out */ } }
   useSwatches(swatch);
   menu();
   let r = null;
