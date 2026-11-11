@@ -4186,6 +4186,13 @@ def studio_open_limits2(browser, base: str, site: Path, errors: list[str]) -> No
         for (let i = 0; i < 4300; i++) { a[i % 64] = 1; const r = m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }); await s.put(r); ids.push({ id: r.id, rev: 1 }); }
         for (let k = 0; k < 3; k++) await s.put(m.record('pack', 'Given ' + k, { members: ids.slice(k * 1400, k * 1400 + 2000) }));
         s.db.close();""")
+    # A file whose packs name 6,000 of the stamps this browser holds: none of them missing.
+    held = kev(page, """const s = await m.LocalStore.open(); const ids = (await s.list({ type: 'stamp' })).items.map((h) => ({ id: h.id, rev: h.rev })); s.db.close();
+        const packs = []; for (let k = 0; k < 3; k++) { const p = m.record('pack', 'Names yours ' + k, { members: ids.slice(k * 1400, k * 1400 + 2000) }); p.hash = await m.hashOf(p.body); packs.push(p); }
+        const root = await K.stamp('Carrier'); return K.file(root, [root, ...packs]);""")
+    held_said = file_open(page, held, "names-yours.dmdpack")
+    if held_said == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
     files = backup_files(page, 10000)
     page.context.close()
     page = s_page(browser, base, site, errors)
@@ -4205,8 +4212,8 @@ def studio_open_limits2(browser, base: str, site: Path, errors: list[str]) -> No
         wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=180000)
     live = page.evaluate(S_LIVE)
     shutil.rmtree(tmp, ignore_errors=True)
-    check(len(files) == 2 and said == "asked" and live["stamp"] == 4300 and live["pack"] == 3,
-          f"/studio/ open limits: a split backup whose given packs name 6,000 stamps across its parts opens again, picked together ({len(files)} files, {said}, {live})")
+    check(held_said == "asked" and len(files) == 2 and said == "asked" and live["stamp"] == 4300 and live["pack"] == 3,
+          f"/studio/ open limits: a file whose packs name 6,000 stamps held here opens ({held_said}); a split backup whose given packs name 6,000 stamps across its parts opens again, picked together ({len(files)} files, {said}, {live})")
     page.context.close()
     # Used in: a pack that came before the record it names.
     page = s_page(browser, base, site, errors)
