@@ -1222,6 +1222,16 @@ impl PsiFx {
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
         self.gov.retune(Governor::new(start_estimate(&self.prog, est), self.ms()), how);
+        // (The emulator lane reads the start from this line.)
+        log::info!(
+            "formula: {} in place: {} ms frames (asked {})",
+            match how {
+                Retune::Edit => "edited",
+                Retune::Play => "played",
+            },
+            self.gov.delay_ms(self.ms()),
+            self.ms()
+        );
         Ok(())
     }
 

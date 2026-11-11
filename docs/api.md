@@ -76,7 +76,8 @@ Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
 `/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?psb=…`) or
 a virtual file (see "Virtual files"). `"live":true`: only replace a formula on screen (`409` if
-none is; `400` for any other path). `"over":true` with a formula: draw it
+none is, or if it is not the one the last play without `"live"` put there:
+the playlist has moved on, maybe to another Formula; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
 it changes that formula (`409` once the playlist has moved on); `"path":""`
@@ -95,11 +96,11 @@ A Formula played over the Formula on screen takes its place without a
 transition, its clock going on. It starts at its own rate, from its cost
 estimate, as it would after a GIF: a light one over a heavy one runs at
 its full rate at once (every refresh for a `smooth` one), a heavy one over
-a light one is slowed from its first frame. A live edit (`"live":true`) is the same Formula's frames: it
-keeps the rate the display has measured, slower at once if the edit's
-estimate says so, faster a step at a time (each after ~100 frames
-inside the faster rate's budget). The same holds for a formula drawn
-`"over"` a GIF and sent again over the same GIF.
+a light one is slowed from its first frame. A live edit (`"live":true`)
+is the same Formula's frames: it keeps the rate the display has measured,
+slower at once if the edit's estimate says so, faster a step at a time
+(each after ~100 frames inside the faster rate's budget). The same holds
+for a formula drawn `"over"` a GIF and sent again over the same GIF.
 
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 

@@ -1037,10 +1037,20 @@ fn main() -> Result<()> {
                                 r
                             }
                             None if engine.is_none() => Err(PlayError::NoPlaylist),
+                            // (Not a Formula on screen, or not the one sent.)
                             None if live => Err(PlayError::MovedOn),
                             None => play_now(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()),
                         };
                         if r.is_ok() {
+                            // What this play put on screen is the one later
+                            // live edits change; once anything else starts
+                            // (the playlist, even another Formula) they are
+                            // `MovedOn`, 409 (`Engine::retune`).
+                            if !live {
+                                if let Some(e) = engine.as_mut() {
+                                    e.note_sent();
+                                }
+                            }
                             let ordinal = engine.as_ref().and_then(|e| e.now_playing()).map(|p| p.ordinal);
                             status.lock().unwrap().kept = keep.secs().zip(ordinal).map(|(secs, o)| (o, secs));
                         }

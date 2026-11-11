@@ -25,6 +25,10 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               POST /api/play/formula, played as `@formula:~sent` by its name line, live
               edits ~200 ms apart in place (the same start), off Recently played; 413 past
               16 KB, 415 not octet-stream, 409 a live edit once the panel moved on
+  governor    (--heavy-psb, --light-psb) a light `smooth` Formula played over a heavy one
+              starts at its own rate (`formula: played in place: N ms frames (asked N)`), a
+              heavy one over it slow; a live edit keeps the level on screen (slower than
+              asked); a live edit once Previous put a card Formula back on screen is a 409
   www         PUT /api/www with the web app's pack; GET / and a wasm at its ?v= address:
               no-cache, the pack's CRC as ETag, 304 for If-None-Match naming it, 200 for another
   events      GET /api/events (events.rs): two listeners get events (the heap with 0, 1 and 2),
@@ -480,6 +484,12 @@ class Lane:
                 self.files(api)
                 self.sent(emu, api)
                 return
+            if os.environ.get("EMU_API_ONLY") == "governor":
+                # (A diagnostic shortcut: Formula over Formula alone, then stop.)
+                self.files(api)
+                self.play(emu, api)
+                self.governor(emu, api)
+                return
             if os.environ.get("EMU_API_ONLY") == "look":
                 # (A diagnostic shortcut: the look's Formula alone, then stop.)
                 self.look(emu, api)
@@ -506,6 +516,8 @@ class Lane:
                 self.look(emu, api)
             if getattr(self.a, "long_psb", None):
                 self.sent(emu, api)
+            if getattr(self.a, "heavy_psb", None) and getattr(self.a, "light_psb", None):
+                self.governor(emu, api)
             self.www(api)
             self.events(emu, api)
             if self.a.connections > 1:
@@ -873,6 +885,59 @@ class Lane:
         self.ok("sent", f"a {len(long)} B compiled Formula ({len(long) * 4 // 3} B as a path) shown by its bytes as {name(long)!r}, "
                 f"10 live edits in place (the same start), not in Recently played; 413, 415, 400; 409 once moved on; "
                 f"the JIT on after the show, the edits ({made} kernel made) and a=30: {first}, {after}, {wide}")
+
+    def governor(self, emu, api):
+        """Formula over Formula (Governor::retune): /api/play of another Formula starts from its
+        own estimate; a live edit keeps the level; a live edit of a Formula the web app did not
+        put there (Previous) is a 409. The emulator's timing is not real: the start each retune
+        logs is what is checked, before any frame is timed."""
+        heavy = "@formula?psb=" + self.a.heavy_psb.read_text().strip()
+        light = "@formula?psb=" + self.a.light_psb.read_text().strip()
+        gif = "/gifs/EmuApi/emu-a.gif"
+        rx = re.compile(r"formula: (played|edited) in place: (\d+) ms frames \(asked (\d+)\)")
+        on = lambda s: s["now_playing"]["path"]
+        def retuned(body, what):
+            mark = emu.mark()
+            api.json("POST", "/api/play", body)
+            _, m = emu.wait_for(rx, 30, mark, f"the retune's start ({what})")
+            return m.group(1), int(m.group(2)), int(m.group(3))
+        # (Kept until changed: its turn must not end between the steps.)
+        api.json("PUT", "/api/config", {"formula_keep": "hold"})
+        api.json("POST", "/api/play", {"path": gif})
+        self.wait_status(api, lambda s: on(s) == gif, 30, "the GIF before")
+        api.json("POST", "/api/play", {"path": heavy})
+        self.wait_status(api, lambda s: on(s).startswith("@formula")
+                         and (s["now_playing"].get("formula") or {}).get("frame_ms", 0) > 0, 60, "the heavy Formula playing")
+        ordinal = api.status()["now_playing"]["ordinal"]
+        how, ms, asked = retuned({"path": light}, "light over heavy")
+        self.expect(how == "played" and ms == asked, "governor", f"light over heavy: {how}, {ms} ms frames (asked {asked})")
+        self.expect(api.status()["now_playing"]["ordinal"] == ordinal, "governor", "light over heavy: not in place")
+        light_ms = ms
+        how, ms, asked = retuned({"path": heavy}, "heavy over light")
+        self.expect(how == "played" and ms > asked, "governor", f"heavy over light: {how}, {ms} ms frames (asked {asked})")
+        heavy_ms, held = ms, ms // asked
+        # (The level: frames held, `ms` over `asked`; the edit asks the light one's 10 ms.)
+        how, ms, asked = retuned({"path": light, "live": True}, "a live edit of the heavy one")
+        self.expect(how == "edited" and ms // asked == held and ms > asked, "governor",
+                    f"a live edit of the heavy one (each frame held {held}) to the light one: {how}, {ms} ms frames (asked {asked})")
+        # Moved on to a Formula the web app did not send: the card's Formula (`play`'s) played,
+        # then a GIF, then Previous brings the Formula back (a new start, from Recently
+        # played; inline Formulas are not kept there). A live edit is refused.
+        card = "/formulas/emu-api.psi"
+        api.json("POST", "/api/play", {"path": card})
+        self.wait_status(api, lambda s: on(s).startswith(card), 60, "the card's Formula")
+        api.json("POST", "/api/play", {"path": gif})
+        self.wait_status(api, lambda s: on(s) == gif, 30, "the GIF after")
+        api.json("POST", "/api/skip?back=1")
+        st = self.wait_status(api, lambda s: on(s).startswith(card), 60, "Previous: the card's Formula again")
+        back = st["now_playing"]["ordinal"]
+        mark = emu.mark()
+        api.call("POST", "/api/play", {"path": light, "live": True}, want=(409,))
+        self.expect(not emu.find(rx, mark), "governor", "a live edit after Previous retuned the Formula on screen")
+        self.expect(api.status()["now_playing"]["ordinal"] == back, "governor", "the 409 moved the panel on")
+        api.json("PUT", "/api/config", {"formula_keep": "turn"})
+        self.ok("governor", f"light over heavy at its own rate ({light_ms} ms frames), heavy over light slow ({heavy_ms}), "
+                f"a live edit kept the level; a live edit after Previous put a Formula back: 409")
 
     def www(self, api):
         pack = self.a.www_pack.read_bytes()
@@ -1763,7 +1828,7 @@ def run(a, sim, rom, fail_rx) -> int:
     timer.start()
     try:
         lane.run_a()
-        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events"):
+        if os.environ.get("EMU_API_ONLY") not in ("bursts", "sent", "stalled", "events", "governor"):
             lane.card_checks()
             lane.run_b()
             if getattr(a, "old_updater", None):
