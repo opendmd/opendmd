@@ -3930,6 +3930,126 @@ def studio_backup_limits(browser, base: str, site: Path, errors: list[str]) -> N
     page.context.close()
 
 
+def backup_files(page: Page, wait: int = 8000) -> list[tuple[str, bytes]]:
+    lib_open(page)
+    got = []
+    page.on("download", lambda d: got.append(d))
+    page.click("#s-lbackup")
+    page.wait_for_timeout(wait)
+    return [(d.suggested_filename, Path(d.path()).read_bytes()) for d in got]
+
+
+S_LIVE = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const out = {};
+    for (const t of ['palette', 'stamp', 'piece', 'pack']) out[t] = (await s.list({ type: t })).items.length; s.db.close(); return out; }"""
+
+
+def studio_backup_parts(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A backup past the member cap: each part's pack within 4,096 members,
+    both parts restoring in either order; a backup holding a pack given me
+    whose member I have since frozen restores; a piece in one file and its
+    palette, a copy, in another (a backup's parts, and files picked
+    together) point at each other in either order; the snapshot list says
+    Restore brings back the name too."""
+    page = s_page(browser, base, site, errors)
+    kev(page, """const s = await m.LocalStore.open(); const a = new Uint8Array(64);
+        for (let i = 0; i < 4200; i++) { a[i % 64] = 1; await s.put(m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] })); }
+        s.db.close();""")
+    files = backup_files(page)
+    page.context.close()
+    members = [len(next(r for r in json.loads(b)["records"] if r["id"] == json.loads(b)["root"])["body"]["members"]) for _, b in files]
+    results = []
+    for order in (files, files[::-1]):
+        page = s_page(browser, base, site, errors)
+        for name, data in order:
+            if file_open(page, data, name) == "asked":
+                file_add(page)
+        results.append(page.evaluate(S_LIVE)["stamp"])
+        page.context.close()
+    check(len(files) == 2 and max(members) <= 4096 and results == [4200, 4200],
+          f"/studio/ backup parts: 4,200 stamps in {len(files)} files of {members} members, restoring in either order {results}")
+    # A pack given me, a member frozen since (its rev moved on), then backed up: it restores.
+    page = s_page(browser, base, site, errors)
+    given = kev(page, """const st = await K.stamp('In a pack'); const p = await K.pack('Given', [st]); return K.file(p, [p, st]);""")
+    file_open(page, given, "given.dmdpack")
+    file_add(page)
+    page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const h = (await s.list({ type: 'stamp' })).items[0]; await s.snapshot(h.id, 'moved on'); s.db.close(); }""")
+    files = backup_files(page, 3000)
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    said = file_open(page, files[0][1], files[0][0])
+    n = file_add(page) if said == "asked" else 0
+    check(said == "asked" and n == 2, f"/studio/ backup parts: a backup holding a pack given me, a member of it moved on since, restores ({said}, {n})")
+    page.context.close()
+    # A piece in one file, its palette (arriving as a copy) in the other: either order.
+    out = []
+    for mode in ("backup", "picked"):
+        for first in ("palette", "piece"):
+            page = s_page(browser, base, site, errors)
+            f = kev(page, """const mine = await K.palette('My palette'); await K.put(mine);
+                const theirs = await K.palette('My palette', { set: { id: mine.id, rev: 1 } }); theirs.body.colours = [{ k: 1, hex: '#00ff00' }]; theirs.hash = await m.hashOf(theirs.body);
+                const q = await K.piece('Drawn from it', [[1, 1, 1]], { body: { palette: mine.id } });
+                const tags = A === 'backup' ? ['backup', 'backup:00112233445566ff'] : [];
+                const pa = await K.pack('Part A', [theirs], { env: { tags } }), pb = await K.pack('Part B', [q], { env: { tags } });
+                return { pal: mine.id, piece: q.id, a: K.file(pa, [pa, theirs]), b: K.file(pb, [pb, q]) };""", mode)
+            order = [("a.dmdpack", f["a"]), ("b.dmdpack", f["b"])]
+            if first == "piece":
+                order.reverse()
+            if mode == "backup":
+                for name, data in order:
+                    file_open(page, data, name)
+                    file_add(page)
+            else:
+                with page.expect_file_chooser(timeout=20000) as fc:
+                    page.click("#s-openf")
+                fc.value.set_files([{"name": n_, "mimeType": "application/json", "buffer": d.encode()} for n_, d in order])
+                # (One sheet after another: the next file's may be up before a poll sees the last one added.)
+                for k in range(len(order)):
+                    wait_js(page, "document.getElementById('studio').dataset.opened === 'asked'", timeout=30000)
+                    page.evaluate("document.getElementById('studio').dataset.opened = 'adding'")
+                    page.click("#s-fs[open] button:has-text('Add')")
+                    wait_js(page, "document.getElementById('studio').dataset.opened !== 'adding'", timeout=30000)
+                wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=30000)
+            recs = page.evaluate("""async (ids) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+                const q = await s.get(ids[1]); const p = q && await s.get(q.body.palette); const mine = await s.get(ids[0]); s.db.close();
+                return { points: q && q.body.palette, copy: p && p.id !== ids[0] && p.body.colours[0].hex, mine: mine && mine.body.colours[0].hex }; }""", [f["pal"], f["piece"]])
+            out.append((mode, first, recs["copy"] == "#00ff00" and recs["mine"] == "#102030"))
+            page.context.close()
+    check(all(ok for *_, ok in out), f"/studio/ backup parts: a piece and its palette's copy in two files point at each other, either order, as a backup's parts and as files picked together {out}")
+    # The snapshot list says what Restore brings back.
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    page.mouse.click(*s_at(page, 1, 1))
+    page.fill("#s-snapname", "One")
+    page.click("#s-snap")
+    wait_js(page, "document.querySelector('#s-snaps li') !== null")
+    line = page.inner_text("#s-snaps li")
+    check("name and all" in line, f"/studio/ backup parts: the snapshot list says Restore brings back the version, name and all ('{line[:80]}')")
+    page.context.close()
+
+
+def studio_read_live(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Pictures in places the count left out (cels under a stamp's layers)
+    are counted; a file of heavy records is read with the page live."""
+    page = s_page(browser, base, site, errors)
+    hid = page.evaluate("""async () => { const f = await import('/studio/files.js'), m = await import('/studio/store.js');
+        const r = m.record('stamp', 'Hidden', { w: 2, h: 2, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: 'eJxjYAAAAAQAAQ==' }], layers: [{ cels: Array(40000).fill('eJxjYAAAAAQAAQ==') }] });
+        try { await f.read(new File([JSON.stringify({ format: m.FORMAT, root: r.id, records: [r] })], 'h.dmdpack')); return 'taken'; } catch (e) { return e.message; } }""")
+    heavy = kev(page, """const recs = []; const a = new Uint8Array(64);
+        for (let i = 0; i < 300; i++) { const junk = []; for (let j = 0; j < 100; j++) { a[0] = j; a[1] = i & 255; junk.push({ px: await m.packPx(a) }); }
+          const r = m.record('stamp', 'Heavy ' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(new Uint8Array(64)) }], extra: junk }); r.hash = await m.hashOf(r.body); recs.push(r); }
+        const pk = await K.pack('Heavy', recs); return K.file(pk, [pk, ...recs]);""")
+    page.evaluate("window.__beats = 0; window.__t = setInterval(() => __beats++, 50)")
+    t = time.time()
+    file_open(page, heavy, "heavy.dmdpack")
+    dt = time.time() - t
+    beats = page.evaluate("__beats")
+    page.click("#s-fs[open] button:has-text('Cancel')")
+    check(hid.startswith("That file holds more than 32,768 pictures") and beats > dt * 10,
+          f"/studio/ read live: pictures under a stamp's layers counted ('{hid[:50]}'); 300 heavy records read with the page live ({beats} beats in {dt:.1f} s)")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -5763,6 +5883,8 @@ def main() -> int:
             studio_files_trust(browser, base, a.site, errors)
             studio_files_more(browser, base, a.site, errors)
             studio_backup_limits(browser, base, a.site, errors)
+            studio_backup_parts(browser, base, a.site, errors)
+            studio_read_live(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -5827,6 +5949,8 @@ def main() -> int:
         studio_files_trust(browser, base, a.site, errors)
         studio_files_more(browser, base, a.site, errors)
         studio_backup_limits(browser, base, a.site, errors)
+        studio_backup_parts(browser, base, a.site, errors)
+        studio_read_live(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
