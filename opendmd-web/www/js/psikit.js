@@ -160,13 +160,27 @@ export const est = (i) => (i[15] === 0 ? (i[5] & 32 ? i[6] : i[14] ?? i[6]) : i[
 // The same without the JIT (the VM's), shown beside it.
 const vmEst = (i) => (i[5] & 32 ? i[6] : i[14] ?? i[6]);
 // The panel refuses it: its own figure, the VM's with no still cache (i[6]), over its limit (i[16]: 40 ms,
-// 32 at fps 100, 12 over a GIF), whatever the JIT makes of it (the panel may draw any Formula on the VM).
+// 32 drawn every refresh, 12 over a GIF), whatever the JIT makes of it (the panel may draw any Formula on the VM).
 export const refused = (i) => i[6] > i[16];
 const ms = (us) => (us / 1000).toFixed(1);
-export const about = (i) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
+// How often the panel draws it (opendmd-core scan.rs beam_frames): the most refreshes, 1, 2 or 4, that fit the frame
+// time its rate line asks (i[10]: 10, 20 or 40 ms; 20 without one), at `hz` when a connected panel reports its scan,
+// else every refresh / 2nd / 4th. Said in words, with the refreshes a second, and when its estimate is past what the
+// governor gives that (fx_psi beam_budget_us, Governor::budget_us): held to every 2nd as many.
+const nth = (n) => `every ${n > 1 ? n + (n == 2 ? 'nd ' : 'th ') : ''}refresh`;
+export function tier(i, hz) {
+  const g = (i[10] || 20) * 1000, c = hz > 0 ? 1e6 / hz : 0;
+  let n = c ? 1 : g / 10000;
+  while (c && 2 * n * c <= g && n < 4) n *= 2;
+  const per = c ? `about ${Math.round(hz / n)} a second on your panel` : `about ${Math.round(100 / n)}–${Math.round(125 / n)} a second, by panel`;
+  const held = est(i) > (c ? (n == 1 ? c - 1500 : n * c / 2) : g <= 10000 ? 5000 : g * 0.4);
+  const s = nth(n);
+  return `${s[0].toUpperCase()}${s.slice(1)} (${per})${held ? `: heavy enough that the panel holds it to ${nth(2 * n)}` : ''}`;
+}
+export const about = (i, hz) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && (i[5] & 32 ? i[10] && 'Its rate line is unused over a GIF' : tier(i, hz)), i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${refused(i) ? 'too heavy' : cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
 export const TIP = (i) => `${i[0]} steps, about ${ms(est(i))} ms a frame on the panel${vmEst(i) > est(i) ? `, ${ms(vmEst(i))} the slow way` : ''} (light: under 5 ms; medium: under 8)${refused(i) ? `; too heavy for the panel: ${ms(i[6])} ms the slow way, over its ${i[16] / 1000}` : ''}`;
 // The editor's sentence for one the panel refuses (docs/guide/editor.md: its faster path, the slow way).
-export const TOO_HEAVY = (i) => `Too heavy for the panel: drawn the slow way, it would take about ${Math.ceil(i[6] / 1000)} ms a frame, and the panel allows ${i[16] / 1000}${i[5] & 32 ? ' over GIFs' : i[10] == 10 ? ' at 100 frames a second' : ' (32 at 100 frames a second; 12 over GIFs)'}`;
+export const TOO_HEAVY = (i) => `Too heavy for the panel: drawn the slow way, it would take about ${Math.ceil(i[6] / 1000)} ms a frame, and the panel allows ${i[16] / 1000}${i[5] & 32 ? ' over GIFs' : i[10] == 10 ? ' drawn every refresh' : ' (32 drawn every refresh; 12 over GIFs)'}`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
 // comments `.c`, colours `.k` with `--k` their colour, for a swatch, the

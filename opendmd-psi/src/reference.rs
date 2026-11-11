@@ -257,7 +257,7 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 801,
-        why: "The panel shows 25, 50 or 100 frames a second; nothing in between.",
+        why: "The panel draws a Formula every refresh of its scan (`fps 100`), every 2nd (`fps 50`, the default) or every 4th (`fps 25`); nothing in between.",
         before: "fps 60\ngray(x)",
         after: "fps 50\ngray(x)",
     },

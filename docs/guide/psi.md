@@ -93,11 +93,11 @@ gray(level[floor(x*4)])
 
 `t` counts seconds from the start of the loop, and starts again from 0 when the loop ends. The loop is 8 seconds unless a `loop` line near the top says otherwise. In `loop forever`, `t` goes on growing, and Psi asks you to wrap it with `frac`, `%`, `sin`, `noise` or a comparison before it reaches a colour. `hour`, `minute` and `second` come from the display's clock.
 
-When the display can't work frames out in time, it shows fewer of them, so a heavy Formula moves less smoothly.
+`t` is the time of the frame being drawn. Which moments get drawn depends on the display, so a Formula says where things are at a time, never how far they move in a frame. The loop plays as whole frames: a loop that isn't a whole number of 0.04 seconds can come out up to 0.04 seconds short. The loop is also the least time a Formula plays for in a playlist, and the length of a GIF saved from it.
 
-## Frame rates
+## How often it is drawn
 
-A Formula plays at 50 frames a second unless it has `fps 25`, `fps 50` or `fps 100`. The display measures how long each frame takes. When frames take too long, it shows each one for two, four or eight frame times. When they get faster again, it speeds back up. A rate of 100 only holds for a light Formula, and only with **Phosphor glow** off.
+The display draws its picture each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh, or every refresh with `fps 100`. The display measures how long each frame takes. When frames take too long, it draws every 4th or 8th refresh instead, and when they get faster again it speeds back up, never past what the Formula asked for. Every refresh only holds for a light Formula, and only with **Phosphor glow** off. The browser's preview draws at about the same moments.
 
 ## Layers
 
@@ -192,7 +192,7 @@ A `control` line at the top gives the Formula a slider or a row of buttons:
 - `control size 0..1 = 0.5 "Size"` is a slider: its name, its range, where it starts and its label;
 - `control mode = calm, wild` is a row of buttons, and `mode` reads 0 for the first, 1 for the next.
 
-A Formula has three controls at most. They also answer to `a`, `b` and `c`, in the order they are written. `a` read without a `control` line is 0 on the display. The examples on these pages play at the controls' starting values.
+A Formula has three controls at most. They also answer to `a`, `b` and `c`, in the order they are written. `a` read without a `control` line is a slider from 0 to 1 that starts at 0, so it reads 0 on the display unless a link sets it. The examples on these pages play at the controls' starting values.
 
 ## Over a GIF
 
@@ -206,7 +206,7 @@ mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), 0.8)
 
 The `look` line says the Formula can be the panel's look, drawn over every GIF. Its card in the web app then offers **Set as the panel’s look**. `look screen 40` would put it on with the screen blend, covering 40 %. A Formula with layers takes `look` or `look over N` only.
 
-The display won't use a look that hides the GIF completely. Over a GIF, a look doesn't follow its own `fps` line, and the limit on how heavy it can be is stricter than for a Formula playing alone.
+The display won't use a look that hides the GIF completely. Over a GIF, a look is drawn with the GIF's frames, not at its own `fps` line's rate, and the limit on how heavy it can be is stricter than for a Formula playing alone.
 
 ## The world around it
 
@@ -224,7 +224,7 @@ mix(#081030, #70b0ff, daylight) * (1 - y*0.5)
 
 ## What costs
 
-The editor rates a Formula under its picture as "light for the panel" (under 5 ms a frame), "medium for the panel" (under 8 ms) or "heavy for the panel". Light Formulas can run at 100 frames a second, medium ones at 50, and a heavy one is slowed down. A Formula that is far too heavy isn't played at all, and one with more than 768 steps doesn't compile.
+The editor rates a Formula under its picture as "light for the panel" (under 5 ms a frame), "medium for the panel" (under 8 ms) or "heavy for the panel". Light Formulas can be drawn every refresh, medium ones every 2nd, and a heavy one less often. A Formula that is far too heavy isn't played at all, and one with more than 768 steps doesn't compile.
 
 Nearly all the cost is in the work done for every pixel. A step there runs 4,096 times a frame, a step once a row runs 32 times, and a step once a frame runs once. So the biggest saving is to move work out of the pixel. Work out what you can from `t` alone, or from `y` alone, and give it a name. The editor's warning names the costliest steps: "noise, len, sqrt, atan2 and dividing by a changing value".
 

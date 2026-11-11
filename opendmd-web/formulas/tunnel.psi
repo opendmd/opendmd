@@ -8,7 +8,7 @@ fps 100
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
 dx = px - 63.5
-dy = (15.5 - (31 - py)) * 2
+dy = (py - 15.5) * 2
 -- how far each pixel is from the black middle: 0 there (where the
 -- tunnel is deeper than 16), ~15 at the edges
 -- (this and `round` depend on the pixel alone: worked out once, kept)

@@ -18,9 +18,9 @@ cu = t/0.6
 cv = t/1.2                      -- the glide, in cells
 amp = pick(wobble, 3, 4.5, 0)/8 -- the wobble, in texels
 dx = px - 64
-dy = 15 - (31 - py)
+dy = py - 16
 -- the wobble: rows slide sideways, columns up and down, on travelling waves
-wob = sin((31 - (31 - py))/32 + t/3.2) * amp
+wob = sin(py/32 + t/3.2) * amp
 col = sin(px*0.0234375 - t/4.8) * amp
 -- where each pixel is on the checker: its column's part plus its row's
 u = (cu + cs*sc*dx) + (wob - sn*sc*dy)

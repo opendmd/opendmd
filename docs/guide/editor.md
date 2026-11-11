@@ -12,14 +12,17 @@ and press **Remix** for a bundled one or **Edit** for one of yours.
 
 The preview is at the top, and on a phone it stays in view while you
 scroll. The line under it says how long the loop is, or that the Formula
-follows the clock, and how hard it is for the panel: **light**, **medium**
+follows the clock, how often the panel draws it (every refresh, every 2nd
+or every 4th, with about how many a second: your panel's own figure when
+one is connected), and how hard it is for the panel: **light**, **medium**
 or **heavy**. Hover over that line to see the estimate in milliseconds a
-frame.
+frame. The preview draws its frames at about the moments the panel would,
+as far as your screen's own refresh allows.
 
 The rating counts how fast the panel usually draws the Formula. The panel
 also needs to be able to draw it the slow way, when it can't use its
 faster path, and refuses a Formula that would take more than about 40 ms a
-frame that way (32 ms at 100 frames a second). Such a Formula is rated
+frame that way (32 ms for one drawn every refresh). Such a Formula is rated
 **too heavy**, and a line under the preview says so, even when it would
 usually be light.
 

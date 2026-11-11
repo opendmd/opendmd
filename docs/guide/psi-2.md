@@ -4,7 +4,7 @@ On the first page every picture stood still. To make one move, the colour line r
 
 ## Time and the loop
 
-`t` is the number of seconds since the loop began. A `loop 4` line near the top makes the loop 4 seconds long, so `t` counts from 0 to 4 and then starts again. Without a `loop` line the loop is 8 seconds. It can be anything from 0.1 to 3,600 seconds.
+`t` is the time of the frame being drawn, in seconds since the loop began. A `loop 4` line near the top makes the loop 4 seconds long, so `t` counts from 0 to 4 and then starts again. Without a `loop` line the loop is 8 seconds. It can be anything from 0.1 to 3,600 seconds. In a playlist the loop is also the least time the Formula plays for, and a GIF saved from it is one loop long.
 
 ```psi
 name "Slide"
@@ -73,9 +73,9 @@ gray(frac(x - t*speed/4))
 
 This reads as a control called `speed`, going from 0 to 2, starting at 1, with the label "Speed". `frac` keeps only the part after the decimal point, so the grey climbs from 0 to 1 and drops back, and the ramp slides along as `t` grows. The examples on these pages play with each slider at its starting value. Open one in the editor to move the slider. A Formula can have three controls.
 
-## Frames a second
+## How often it is drawn
 
-The display shows a Formula at 50 frames a second unless it asks for another rate. `fps 25`, `fps 50` and `fps 100` are the choices.
+The display draws its picture again each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh unless it asks for another rate. `fps 100` asks for every refresh.
 
 ```psi
 name "Fast sweep"
@@ -84,9 +84,9 @@ loop 1
 gray(abs(x - frac(t)) < 0.02)
 ```
 
-At 100 frames a second a fast line looks smoother. The display only keeps that rate for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Panel) the display holds Formulas to 50.
+Drawn every refresh, a fast line looks smoother. It moves at the same speed either way, because `t` is always the time of the frame being drawn: a faster rate only draws more of the moments in between. The display keeps every refresh only for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Panel) it draws Formulas every 2nd refresh.
 
-The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". A heavy one moves less smoothly on the display, because the display shows fewer frames. A Formula that is far too heavy isn't played at all. The page [How Psi thinks](psi.md) explains what makes a Formula heavy.
+The editor rates each Formula under the picture as "light for the panel", "medium for the panel" or "heavy for the panel". A heavy one moves less smoothly on the display, because the display draws it less often: every 4th refresh, or fewer. A Formula that is far too heavy isn't played at all. The page [How Psi thinks](psi.md) explains what makes a Formula heavy.
 
 ## Never the same twice
 

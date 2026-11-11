@@ -950,7 +950,7 @@ Use it alone as the last line, or make its last line `#…` or `rgb(…)` so it 
 
 > `fps` is 25, 50 or 100 frames a second
 
-The panel shows 25, 50 or 100 frames a second; nothing in between.
+The panel draws a Formula every refresh of its scan (`fps 100`), every 2nd (`fps 50`, the default) or every 4th (`fps 25`); nothing in between.
 
 Write `fps 25`, `fps 50` or `fps 100`.
 

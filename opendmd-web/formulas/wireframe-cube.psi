@@ -33,7 +33,7 @@ draw {
     zc = z1*ca - x1*sa
     yc = y1*cb - zc*sb
     zd = y1*sb + zc*cb
-    line(mid + xa*36/(zb + 128), 31 - (16 + ya*36/(zb + 128)), mid + xc*36/(zd + 128), 31 - (16 + yc*36/(zd + 128)),
+    line(mid + xa*36/(zb + 128), 15 - ya*36/(zb + 128), mid + xc*36/(zd + 128), 15 - yc*36/(zd + 128),
       clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))
   }
 }
