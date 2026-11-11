@@ -3918,3 +3918,31 @@ fn a_product_of_t_past_the_limit_is_noted() {
     assert!(!has("gray(x*30000)"));
     assert!(!has("loop forever\ngray(frac(t*5000))"));
 }
+
+/// The editor's `use … as p` (`look::function`) leaves `smooth` out with
+/// the other header lines and writes the formula's own `phase` out as
+/// `(t/N)` for its loop, so it moves as it did alone, under another loop
+/// too; the settings sheet's edits (`look::declare`) find the declarations
+/// among `loop` and `smooth` lines, in any order.
+#[test]
+fn header_words_in_functions_and_the_settings_sheet() {
+    let f = crate::look::function("loop 4.8\nsmooth\nv = sin(phase*2)\nhsv(x + phase, 1, v)", "p").unwrap();
+    assert!(!f.contains("smooth") && !f.contains("phase"), "{f}");
+    assert!(f.contains("sin((t/4.8)*2)") && f.contains("hsv(x + (t/4.8), 1, v)"), "{f}");
+    // Under another loop: the same as the division written out.
+    assert_eq!(psb_of(&format!("loop 9.6\n{f}\np(x, y)")), psb_of("loop 9.6\nv = sin(t/4.8*2)\nhsv(x + t/4.8, 1, v)"));
+    let f = crate::look::function("v = frac(phase + moon.phase)\ngray(v)", "p").unwrap();
+    assert!(f.contains("frac((t/8) + moon.phase)"), "{f}");
+    // Its own `phase`: as written.
+    let f = crate::look::function("phase = x\ngray(phase)", "p").unwrap();
+    assert!(f.contains("phase = x") && f.contains("gray(phase)"), "{f}");
+    // The settings sheet: a declaration after `loop` and `smooth` is found
+    // (replaced, not put in again).
+    let src = "loop 4\nsmooth\nname \"A\"\ngray(frac(x + phase))";
+    let got = crate::look::declare(src, "name", 0, "name \"B\"");
+    assert_eq!(got, "loop 4\nsmooth\nname \"B\"\ngray(frac(x + phase))");
+    assert!(compile(&got).is_ok());
+    let got = crate::look::declare(src, "about", 0, "about \"C\"");
+    assert!(compile(&got).is_ok(), "{got}");
+    assert_eq!(got.matches("name").count(), 1);
+}

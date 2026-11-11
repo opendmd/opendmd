@@ -52,8 +52,10 @@ pub fn program(src: &str, prog: &mut Program) -> Result<(), Error> {
 }
 
 /// `src` as a function, `fn name(x, y) { … }`, for another formula to call
-/// (the editor's `use Plasma as p`): its declarations, `loop` and `fps`
-/// lines left out, each `control` a name at its default (`speed = 1`).
+/// (the editor's `use Plasma as p`): its declarations, `loop`, `fps` and
+/// `smooth` lines left out, each `control` a name at its default (`speed =
+/// 1`), and its `phase` written out as `(t/N)` for its own `loop N` (8
+/// without one), so it moves as it did on its own.
 /// `None` for one that can't be a function — with layers, a draw stage,
 /// tables, sprites, palettes or functions of its own — or that doesn't
 /// compile as one. (Bytes, no `str` patterns or `trim`: each brought ~1 KB
@@ -78,6 +80,7 @@ pub fn function(src: &str, name: &str) -> Option<String> {
     let mut f = String::from("fn ");
     f.push_str(name);
     f.push_str("(x, y) {\n");
+    let phase = own_phase(src);
     // Each statement at the top level: [start, end).
     let (mut st, mut depth, mut quote, mut i) = (0usize, 0i32, false, 0usize);
     while i <= b.len() {
@@ -101,8 +104,8 @@ pub fn function(src: &str, name: &str) -> Option<String> {
                 let line = src.get(a..i).unwrap_or("");
                 if a < i {
                     match w {
-                        _ if sets => push_line(&mut f, line),
-                        "psi" | "name" | "about" | "look" | "loop" | "fps" => {}
+                        _ if sets => push_line(&mut f, &phase.of(line)),
+                        "psi" | "name" | "about" | "look" | "loop" | "fps" | "smooth" => {}
                         "control" => {
                             // `control NAME [lo..hi] [= v] …`: NAME = v (else
                             // lo, else 0; a choice's first word, 0).
@@ -138,7 +141,7 @@ pub fn function(src: &str, name: &str) -> Option<String> {
                         }
                         "layer" | "draw" | "fn" | "table" | "sprite" | "palette" | "part"
                         | "use" => return None,
-                        _ => push_line(&mut f, line),
+                        _ => push_line(&mut f, &phase.of(line)),
                     }
                 }
                 st = i + 1;
@@ -155,6 +158,93 @@ pub fn function(src: &str, name: &str) -> Option<String> {
     let mut p = alloc::boxed::Box::<Program>::default();
     crate::compile_into(&check, &mut p).ok()?;
     Some(f)
+}
+
+/// What a formula's `phase` is, written out: `(t/N)` for its `loop N` (the
+/// number as written; 8 without one); nothing to write where it sets a
+/// `phase` of its own or never repeats.
+#[cfg(feature = "compiler")]
+struct Phase<'s>(Option<&'s str>);
+
+#[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn own_phase(src: &str) -> Phase<'_> {
+    let b = src.as_bytes();
+    let (mut lp, mut own) = (Some("8"), false);
+    for (i, w) in words(b) {
+        let rest = |k: usize| {
+            let mut k = k;
+            while k < b.len() && matches!(b[k], b' ' | b'\t') {
+                k += 1;
+            }
+            k
+        };
+        let k = rest(i + w.len());
+        if w == b"phase" && b.get(k) == Some(&b'=') && b.get(k + 1) != Some(&b'=') {
+            own = true;
+        }
+        if w == b"control" {
+            let e = k + b[k..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+            own |= &b[k..e] == b"phase";
+        }
+        if w == b"loop" {
+            let e = k + b[k..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'.').count();
+            if e > k {
+                lp = src.get(k..e).filter(|n| *n != "forever");
+            }
+        }
+    }
+    Phase(lp.filter(|_| !own))
+}
+
+/// The words of `b` outside comments and quotes: (where, the word).
+#[cfg(feature = "compiler")]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn words(b: &[u8]) -> alloc::vec::Vec<(usize, &[u8])> {
+    let (mut out, mut i, mut quote) = (alloc::vec::Vec::new(), 0, false);
+    while i < b.len() {
+        let c = b[i];
+        if !quote && matches!(c, b'-' | b'/') && b.get(i + 1) == Some(&c) {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        quote ^= c == b'"';
+        if !quote && (c.is_ascii_alphabetic() || c == b'_') && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'.')) {
+            let e = i + b[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+            out.push((i, &b[i..e]));
+            i = e;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+#[cfg(feature = "compiler")]
+impl Phase<'_> {
+    /// `line` with each `phase` read in it as `(t/N)`.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn of(&self, line: &str) -> String {
+        let Some(n) = self.0 else {
+            return String::from(line);
+        };
+        let b = line.as_bytes();
+        let mut o = String::with_capacity(line.len());
+        let mut at = 0;
+        for (i, w) in words(b) {
+            if w == b"phase" {
+                o.push_str(line.get(at..i).unwrap_or(""));
+                o.push_str("(t/");
+                o.push_str(n);
+                o.push(')');
+                at = i + w.len();
+            }
+        }
+        o.push_str(line.get(at..).unwrap_or(""));
+        o
+    }
 }
 
 #[cfg(feature = "compiler")]
@@ -247,6 +337,12 @@ pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
         let next = (end + 1).min(b.len());
         if e == i && end > i && matches!(b[i], b'-' | b'/') && b.get(i + 1) == Some(&b[i]) {
             // A comment alone.
+            at = next;
+            continue;
+        }
+        // (`loop`, `fps` and `smooth` lines are the header's too, in any
+        // order among the declarations.)
+        if matches!(w, "loop" | "fps" | "smooth") && b.get(k) != Some(&b'=') {
             at = next;
             continue;
         }
