@@ -1,0 +1,22 @@
+{
+  "type": "stamp",
+  "name": "Bullet",
+  "tags": ["player", "effect"],
+  "note": "A shot, travelling up.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 3, "h": 6, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".2.",
+        ".2.",
+        "272",
+        "272",
+        ".7.",
+        ".6."
+      ]}
+    ]
+  }
+}

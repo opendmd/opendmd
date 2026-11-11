@@ -1,0 +1,29 @@
+{
+  "type": "palette",
+  "name": "ZX Spectrum",
+  "tags": ["hardware", "computer", "15-colour"],
+  "note": "The ZX Spectrum's eight colours at normal and bright intensity, in hardware order (bright black is the same black, so fifteen in all).",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "One bit each for green, red and blue plus a brightness bit. Normal intensity at 0xD8 (85 % of full, the voltage ratio Wikipedia's ZX Spectrum graphic modes page gives), values as in Lospec's 'ZX Spectrum' palette (lospec.com/palette-list/zx-spectrum). Real machines differ by model; some emulators use 0xD7."}],
+  "body": {
+    "source": "ZX Spectrum",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#0000d8", "name": "Blue"},
+      {"k": 3, "hex": "#d80000", "name": "Red"},
+      {"k": 4, "hex": "#d800d8", "name": "Magenta"},
+      {"k": 5, "hex": "#00d800", "name": "Green"},
+      {"k": 6, "hex": "#00d8d8", "name": "Cyan"},
+      {"k": 7, "hex": "#d8d800", "name": "Yellow"},
+      {"k": 8, "hex": "#d8d8d8", "name": "White"},
+      {"k": 9, "hex": "#0000ff", "name": "Bright blue"},
+      {"k": 10, "hex": "#ff0000", "name": "Bright red"},
+      {"k": 11, "hex": "#ff00ff", "name": "Bright magenta"},
+      {"k": 12, "hex": "#00ff00", "name": "Bright green"},
+      {"k": 13, "hex": "#00ffff", "name": "Bright cyan"},
+      {"k": 14, "hex": "#ffff00", "name": "Bright yellow"},
+      {"k": 15, "hex": "#ffffff", "name": "Bright white"}
+    ]
+  }
+}

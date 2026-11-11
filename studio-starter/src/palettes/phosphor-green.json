@@ -1,0 +1,20 @@
+{
+  "type": "palette",
+  "name": "Phosphor Green",
+  "tags": ["original", "led", "crt", "mono"],
+  "note": "Our own: a six-step green monochrome ramp in the manner of a green-screen CRT, with wide steps for LED panels.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "source": "OpenDMD",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Off"},
+      {"k": 2, "hex": "#003c10", "name": "Trace"},
+      {"k": 3, "hex": "#007a22", "name": "Dim"},
+      {"k": 4, "hex": "#00c038", "name": "Mid"},
+      {"k": 5, "hex": "#30ff50", "name": "Green"},
+      {"k": 6, "hex": "#b0ffb8", "name": "Hot"}
+    ]
+  }
+}

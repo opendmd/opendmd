@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Hand",
+  "tags": ["hud", "pointer"],
+  "note": "A pointing hand.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 8, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "..2.....",
+        "..2.....",
+        "..222...",
+        "..22222.",
+        "2.222222",
+        "22222222",
+        ".2222222",
+        "..22222."
+      ]}
+    ]
+  }
+}

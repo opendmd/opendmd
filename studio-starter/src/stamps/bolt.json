@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Bolt",
+  "tags": ["pickup", "power-up"],
+  "note": "A lightning bolt.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 5, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "...77",
+        "..77.",
+        ".77..",
+        "77777",
+        "..77.",
+        ".77..",
+        "77...",
+        "7...."
+      ]}
+    ]
+  }
+}

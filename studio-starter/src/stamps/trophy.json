@@ -1,0 +1,26 @@
+{
+  "type": "stamp",
+  "name": "Trophy",
+  "tags": ["pickup", "hud"],
+  "note": "A winner's cup.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 9, "h": 10, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "7.77777.7",
+        "7.72777.7",
+        "7.72777.7",
+        ".7777777.",
+        "..77777..",
+        "...777...",
+        "....7....",
+        "....7....",
+        "..66666..",
+        ".6666666."
+      ]}
+    ]
+  }
+}

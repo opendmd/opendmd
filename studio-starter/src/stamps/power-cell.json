@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Power cell",
+  "tags": ["pickup", "power-up"],
+  "note": "A power-up of our own: a charged cell with a bolt on it.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "..333..",
+        ".88888.",
+        ".88878.",
+        ".88778.",
+        ".87778.",
+        ".87788.",
+        ".87888.",
+        ".99999."
+      ]}
+    ]
+  }
+}

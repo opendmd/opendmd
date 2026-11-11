@@ -1,0 +1,23 @@
+{
+  "type": "stamp",
+  "name": "1UP",
+  "tags": ["lettering", "hud"],
+  "note": "Player-one lettering in the Arcade 5x7 font.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 17, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "..5...5...5.5555.",
+        ".55...5...5.5...5",
+        "..5...5...5.5...5",
+        "..5...5...5.5555.",
+        "..5...5...5.5....",
+        "..5...5...5.5....",
+        "55555..555..5...."
+      ]}
+    ]
+  }
+}

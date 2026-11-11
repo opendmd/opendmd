@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Potion",
+  "tags": ["pickup"],
+  "note": "A corked flask.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "..fff..",
+        "..3.3..",
+        "..3.3..",
+        ".3ddd3.",
+        "3d2ddd3",
+        "3ddddd3",
+        "3ddddd3",
+        ".33333."
+      ]}
+    ]
+  }
+}

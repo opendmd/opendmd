@@ -1,0 +1,30 @@
+{
+  "type": "palette",
+  "name": "C64 (Pepto)",
+  "tags": ["hardware", "computer", "16-colour"],
+  "note": "The Commodore 64's sixteen colours in hardware order, as calculated by Philip 'Pepto' Timmermann in 2001. Muted, like the real machine.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Pepto's 2001 calculation from measured VIC-II luma and chroma (pepto.de/projects/colorvic/2001). Key = colour number + 1."}],
+  "body": {
+    "source": "Commodore 64",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#ffffff", "name": "White"},
+      {"k": 3, "hex": "#68372b", "name": "Red"},
+      {"k": 4, "hex": "#70a4b2", "name": "Cyan"},
+      {"k": 5, "hex": "#6f3d86", "name": "Purple"},
+      {"k": 6, "hex": "#588d43", "name": "Green"},
+      {"k": 7, "hex": "#352879", "name": "Blue"},
+      {"k": 8, "hex": "#b8c76f", "name": "Yellow"},
+      {"k": 9, "hex": "#6f4f25", "name": "Orange"},
+      {"k": 10, "hex": "#433900", "name": "Brown"},
+      {"k": 11, "hex": "#9a6759", "name": "Light red"},
+      {"k": 12, "hex": "#444444", "name": "Dark grey"},
+      {"k": 13, "hex": "#6c6c6c", "name": "Grey"},
+      {"k": 14, "hex": "#9ad284", "name": "Light green"},
+      {"k": 15, "hex": "#6c5eb5", "name": "Light blue"},
+      {"k": 16, "hex": "#959595", "name": "Light grey"}
+    ]
+  }
+}

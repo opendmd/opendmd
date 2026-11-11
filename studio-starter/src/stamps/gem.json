@@ -1,0 +1,21 @@
+{
+  "type": "stamp",
+  "name": "Gem",
+  "tags": ["pickup"],
+  "note": "A cut gem.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 5, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".2aaab.",
+        "2a2aabb",
+        ".aaabb.",
+        "..abb..",
+        "...b..."
+      ]}
+    ]
+  }
+}

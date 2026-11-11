@@ -1,0 +1,22 @@
+{
+  "type": "stamp",
+  "name": "Crown",
+  "tags": ["pickup", "hud"],
+  "note": "A crown for the high score.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 9, "h": 6, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "7...7...7",
+        "7..777..7",
+        "77.777.77",
+        "777777777",
+        "7757a7577",
+        "777777777"
+      ]}
+    ]
+  }
+}

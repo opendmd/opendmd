@@ -1,0 +1,18 @@
+{
+  "type": "palette",
+  "name": "CGA Mode 4, Palette 0",
+  "tags": ["hardware", "pc", "4-colour"],
+  "note": "CGA 320x200 graphics, palette 0 at high intensity: black, green, red, yellow.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Colours 0, 10, 12 and 14 of the RGBI sixteen (Wikipedia, Color Graphics Adapter); the background (first) colour is selectable on the hardware."}],
+  "body": {
+    "source": "IBM CGA",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#55ff55", "name": "Light green"},
+      {"k": 3, "hex": "#ff5555", "name": "Light red"},
+      {"k": 4, "hex": "#ffff55", "name": "Yellow"}
+    ]
+  }
+}

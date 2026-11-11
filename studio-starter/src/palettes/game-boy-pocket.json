@@ -1,0 +1,18 @@
+{
+  "type": "palette",
+  "name": "Game Boy Pocket",
+  "tags": ["hardware", "handheld", "4-colour"],
+  "note": "The four shades of the Game Boy Pocket's grey LCD, darkest first.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Our own rendering, with no published source for the values: the Pocket's LCD shows true grey rather than green (Wikipedia, List of video game console palettes), so these are its four 2-bit shades spread evenly from black to white."}],
+  "body": {
+    "source": "Game Boy Pocket",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Darkest"},
+      {"k": 2, "hex": "#555555", "name": "Dark"},
+      {"k": 3, "hex": "#aaaaaa", "name": "Light"},
+      {"k": 4, "hex": "#ffffff", "name": "Lightest"}
+    ]
+  }
+}

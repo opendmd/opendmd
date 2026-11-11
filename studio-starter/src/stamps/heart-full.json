@@ -1,0 +1,22 @@
+{
+  "type": "stamp",
+  "name": "Heart, full",
+  "tags": ["hud", "life"],
+  "note": "A full life.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 6, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".55.55.",
+        "5255555",
+        "5555555",
+        ".55555.",
+        "..555..",
+        "...5..."
+      ]}
+    ]
+  }
+}

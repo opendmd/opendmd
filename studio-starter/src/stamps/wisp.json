@@ -1,0 +1,34 @@
+{
+  "type": "stamp",
+  "name": "Wisp",
+  "tags": ["enemy", "animated"],
+  "note": "A ghost-like blob of our own shape: a teardrop flame with a curl, blinking in two frames.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 8, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"ms": 900, "rows": [
+        "....a...",
+        "...aa..a",
+        "..aaaa.a",
+        ".a2aa2aa",
+        ".aaaaaa.",
+        ".aa11aa.",
+        "..aaaa..",
+        "...aa..."
+      ]},
+      {"ms": 120, "rows": [
+        "....a...",
+        "...aa..a",
+        "..aaaa.a",
+        ".aaaaaaa",
+        ".aaaaaa.",
+        ".aa11aa.",
+        "..aaaa..",
+        "...aa..."
+      ]}
+    ]
+  }
+}

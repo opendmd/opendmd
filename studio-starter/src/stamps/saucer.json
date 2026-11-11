@@ -1,0 +1,30 @@
+{
+  "type": "stamp",
+  "name": "Saucer",
+  "tags": ["alien", "enemy", "animated"],
+  "note": "A domed saucer with running lights, two frames. Our own design.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 12, "h": 6, "palette": "panel-16",
+    "frames": [
+      {"ms": 250, "rows": [
+        "....aaaa....",
+        "...a2aaaa...",
+        "..aaaaaaaa..",
+        "333333333333",
+        ".7335337335.",
+        "...33..33..."
+      ]},
+      {"ms": 250, "rows": [
+        "....aaaa....",
+        "...a2aaaa...",
+        "..aaaaaaaa..",
+        "333333333333",
+        ".5337335337.",
+        "...33..33..."
+      ]}
+    ]
+  }
+}

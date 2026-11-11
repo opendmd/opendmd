@@ -1,0 +1,29 @@
+{
+  "type": "palette",
+  "name": "MSX / TMS9918",
+  "tags": ["hardware", "computer", "console", "15-colour"],
+  "note": "The fifteen colours of the TMS9918 video chip (MSX, ColecoVision, SG-1000, TI-99/4A). The chip's colour 0 is see-through, so the key here is the hardware colour number.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Converted from the chip's datasheet luminance and colour-difference levels for a CRT (gamma 1.6), values as tabulated on Wikipedia's TMS9918 page."}],
+  "body": {
+    "source": "TMS9918",
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#0aad1e", "name": "Medium green"},
+      {"k": 3, "hex": "#34c84c", "name": "Light green"},
+      {"k": 4, "hex": "#2b2de3", "name": "Dark blue"},
+      {"k": 5, "hex": "#514bfb", "name": "Light blue"},
+      {"k": 6, "hex": "#bd2925", "name": "Dark red"},
+      {"k": 7, "hex": "#1ee2ef", "name": "Cyan"},
+      {"k": 8, "hex": "#fb2c2b", "name": "Medium red"},
+      {"k": 9, "hex": "#ff5f4c", "name": "Light red"},
+      {"k": 10, "hex": "#bda22b", "name": "Dark yellow"},
+      {"k": 11, "hex": "#d7b454", "name": "Light yellow"},
+      {"k": 12, "hex": "#0a8c18", "name": "Dark green"},
+      {"k": 13, "hex": "#af329a", "name": "Magenta"},
+      {"k": 14, "hex": "#b2b2b2", "name": "Grey"},
+      {"k": 15, "hex": "#ffffff", "name": "White"}
+    ]
+  }
+}
