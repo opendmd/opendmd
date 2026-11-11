@@ -1070,9 +1070,11 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     page = s_page(browser, base, site, errors)
     s_blur(page)
     tips = page.eval_on_selector_all(".s-tool", "els => els.map(e => [e.dataset.tool, e.title])")
-    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "dither": "(D)", "select": "(M)", "pick": "(I)"}
+    keys = {"pencil": "(B)", "eraser": "(E)", "line": "(L)", "rect": "(R)", "ellipse": "(O)", "fill": "(G)", "select": "(M)", "pick": "(I)"}
+    shades = page.eval_on_selector_all("#s-shade [data-shade]", "els => els.map(e => [e.dataset.shade, e.title])")
     check(sorted(t for t, _ in tips) == sorted(keys) and all(keys[t] in title for t, title in tips)
-          and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123"),
+          and all(f"({n})" in page.get_attribute(f'.s-size [data-size="{n}"]', "title") for n in "123")
+          and [n for n, _ in shades] == ["solid", "light", "half", "heavy"] and all("(D" in t for _, t in shades),
           f"/studio/ tools: every tool and brush size shows its shortcut in its tooltip ({[t for t, _ in tips]})")
     # Line: Bresenham, the drag's two ends.
     page.keyboard.press("l")
@@ -1147,13 +1149,17 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     check(two == {(10, 10), (11, 10), (10, 11), (11, 11)} and three == {(x, y) for x in (29, 30, 31) for y in (9, 10, 11)}
           and thick == {(x, y) for x in range(49, 62) for y in (9, 10, 11)},
           f"/studio/ tools: 2 and 3 make the pencil and the line 2 and 3 pixels wide ({len(two)}, {len(three)}, {len(thick)})")
-    # Dither fill: every other pixel of the region.
+    # Shade Half (D twice from Solid) on a fill: every other pixel of the region.
     s_new(page)
+    page.keyboard.press("g")
+    page.keyboard.press("d")
     page.keyboard.press("d")
     page.mouse.click(*s_at(page, 64, 16))
     got = s_on(page)
-    check(got == {(x, y) for x in range(128) for y in range(32) if (x + y) % 2 == 0}, f"/studio/ tools: D, the dither fill, a checkerboard ({len(got)} lit)")
+    check(got == {(x, y) for x in range(128) for y in range(32) if (x + y) % 2 == 0} and s_data(page).get("shade") == "half",
+          f"/studio/ tools: G then D, D: a fill at Half shade, a checkerboard ({len(got)} lit)")
     page.keyboard.press("Control+z")
+    page.click("#s-shade [data-shade=solid]")
     # The eyedropper: I, then back to the tool before it.
     page.keyboard.press("b")
     page.click('#s-set .s-sw[data-hex="#33d1ff"]')
@@ -1433,10 +1439,12 @@ def studio_journal(browser, base: str, site: Path, errors: list[str]) -> None:
     check(a == {(1, 1), (2, 1)} and st == "2/3" and b == {(1, 1), (2, 1), (3, 1)} and c == {(1, 1)},
           f"/studio/ journal: undo and redo survive a reload ({sorted(a)}, steps {st})")
     # A step the record never saw (the tab closed first): replayed from the journal, and saved.
+    # (Journal v2: a pixel step names its cel by layer and frame key.)
     s_kept(page)
     page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
-        const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1;
-        await s.jot(id, { step: { n, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n }); s.db.close(); }""")
+        const id = document.getElementById('studio').dataset.id, j = await s.steps(id), n = j.cur + 1, r = await s.get(id);
+        await s.jot(id, { step: { n, l: r.body.layers[0].key, f: r.body.frames[0].key, i: Int32Array.of(5), b: Uint16Array.of(0), a: Uint16Array.of(1) }, cur: n });
+        s.db.close(); }""")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
     s_kept(page)
