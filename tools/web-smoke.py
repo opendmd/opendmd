@@ -7305,6 +7305,15 @@ def formulas_time_checks(browser, base: str, errors: list[str]) -> None:
         want = [(i0 + d) % n for d in (1, 2, 3, 2, 1)]
         check(n == 117 and seen == want, f"formulas time at 117 Hz: . and , step one each ({i0} -> {seen}, want {want}; {n} steps)")
         page.context.close()
+        # The refresh measured off the scan wins over the driver's figure.
+        get_json(base + "/mock/refresh?hz=100&us=8000")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        formula_editor(page, "smooth\nloop 2\ngray(frac(t/2))")
+        page.wait_for_timeout(500)
+        cap = page.inner_text("#psi-ed-cap")
+        check("Every refresh (about 125 a second on your panel)" in cap, f"formulas: the caption counts the measured refresh, 8,000 us ({cap!r})")
+        page.context.close()
     finally:
         get_json(base + "/mock/refresh?hz=100")
 

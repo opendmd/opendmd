@@ -2940,8 +2940,9 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     );
     let _ = write!(
         out,
-        r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":"#,
+        r#""refresh_hz":{},"refresh_us":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":"#,
         s.refresh_hz,
+        crate::panel::refresh_us(),
         s.deadline_misses,
         s.worst_lateness_ms,
     );
@@ -3034,10 +3035,11 @@ fn psi_abi() -> String {
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
-/// "beam_us","compile_us","still","jit"}` while a formula plays: its mean render time, the
+/// "beam_us","refreshes","compile_us","still","jit"}` while a formula plays: its mean render time, the
 /// frame time its governor holds it to (`fx_psi::Governor`), the one it
-/// asked for, its raced frame time (µs on the refresh grid; 0 when its
-/// frames are not raced), the last formula compile's time, the heap its still cache
+/// opened at, its raced frame time (µs on the refresh grid; 0 when its
+/// frames are not raced) and the refreshes that is (its tier: 1, 2, 4 …;
+/// 0 not raced), the last formula compile's time, the heap its still cache
 /// holds (B, 0 none), and the JIT: `{"on":true,"bytes":N}` while a kernel
 /// draws its pixel stage, else `{"on":false,"why":"…"}`; empty otherwise.
 #[cfg(feature = "psi")]
@@ -3048,10 +3050,16 @@ fn formula_json(path: &str) -> String {
     }
     let still = opendmd_core::fx_psi::still_held();
     let beam = opendmd_core::fx_psi::beam_us();
+    // Its tier: the refreshes each raced frame is held for (1 every
+    // refresh, 2 every 2nd …; 0 not raced).
+    let refreshes = match crate::panel::refresh_us() {
+        0 => 0,
+        r => (beam + r / 2) / r,
+    };
     let jit = jit_json();
     let (rt, rn) = opendmd_core::fx_psi::render_totals();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit},"render_us_total":{rt},"renders":{rn}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"refreshes":{refreshes},"compile_us":{compile_us},"still":{still},"jit":{jit},"render_us_total":{rt},"renders":{rn}}}"#
     )
 }
 
