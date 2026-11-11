@@ -149,6 +149,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `/api/status` reports as `refresh_hz` (100 until set) and `refresh_us`
   (its period, or `&us=N`: a measured refresh unlike the driver's); web-smoke's
   Formulas time row checks a refresh that doesn't divide 1000 (117 Hz).
+- **`GET /mock/dwell?s=N`** (mock only): `--dwell` from now on, the file
+  on screen included; web-smoke holds the file with it where a check is
+  about one file (Now's resume, a Formula shown over the panel's GIF), so
+  the playlist moving on can't end what is being measured.
 - **`GET /mock/fail-move?after=N`** (mock only): after N more moves that
   work, the next `POST /api/files/move` is a 404 (as when the GIF went
   meanwhile), then moves work again; `after=-1` turns it off.
@@ -3419,6 +3423,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/stale-names"), {"GET": self.h_mock_stale_names}),
                 (m_exact("/mock/fail-move"), {"GET": self.h_mock_fail_move}),
                 (m_exact("/mock/refresh"), {"GET": self.h_mock_refresh}),
+                (m_exact("/mock/dwell"), {"GET": self.h_mock_dwell}),
                 (m_exact("/mock/fail-list"), {"GET": self.h_mock_fail_list}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
@@ -5187,6 +5192,17 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.refresh_hz = int(n)
             ctx.refresh_us = int(us) if us else None
             self.send_json(200, {"hz": getattr(ctx, "refresh_hz", 100), "us": ctx.refresh_us})
+
+        def h_mock_dwell(self, path):
+            # GET /mock/dwell?s=N (mock only): the playlist's cadence (--dwell)
+            # from now on, the file on screen included: a check that needs
+            # the file to stay (an over, a pause's resume) holds it.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            n = query_param(q, "s")
+            with ctx.lock:
+                if n is not None:
+                    ctx.dwell = float(n)
+                self.send_json(200, {"s": ctx.dwell})
 
         def h_mock_fail_move(self, path):
             # GET /mock/fail-move?after=N (mock only): after N more moves
