@@ -1062,9 +1062,11 @@ def s_blur(page: Page) -> None:
 def s_new(page: Page) -> None:
     """A new, empty piece (the one before it kept)."""
     n = page.locator("#s-list li").count()
+    was = s_data(page).get("id", "")
     page.click("#s-new")
     wait_js(page, f"document.querySelectorAll('#s-list li').length === {n + (1 if s_data(page)['saved'] != 'new' else 0)} && "
-                  "document.getElementById('studio').dataset.saved === 'new'")
+                  f"document.getElementById('studio').dataset.saved === 'new' && document.getElementById('studio').dataset.id !== '{was}' "
+                  "&& !document.getElementById('studio').hasAttribute('aria-busy')")
     s_blur(page)
     page.mouse.move(0, 0)
 
@@ -2345,6 +2347,22 @@ def studio_orphan_keys(browser, base: str, site: Path, errors: list[str]) -> Non
     im = Image.open(io.BytesIO(Path(dl.value.path()).read_bytes()))
     check(r["saved"] == "kept" and "keys" not in r["body"] and r["on"] == {"6,0": 1, "40,10": 1} and im.size == (128, 32),
           f"/studio/ review: a key with no colour (300) in a two-byte piece of one colour opens as off, saves one byte a pixel and downloads ({r['on']}, keys {r['body'].get('keys')})")
+    # Not back through the cache of read cels: a snapshot restored and undone, then a new colour (the lowest free key);
+    # and a snapshot whose own cel has a key with no colour.
+    o = page.evaluate("""async () => { const m = await import('/studio/store.js'), { Doc, N } = await import('/studio/doc.js');
+        const a = new Uint8Array(N); a[5] = 2; a[6] = 1;
+        const body = { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }], frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'L', moves: false, cels: [await m.packPx(a)] }] };
+        const blank = { ...body, layers: [{ ...body.layers[0], cels: [await m.packPx(new Uint8Array(N))] }] };
+        const d = await Doc.open({ hash: 'h', body }, (b) => b.colours, null);
+        const opened = d.px[5];
+        await d.restore(blank); const w = d.step(false); if (w) await w;
+        const undone = d.px[5];
+        const k = d.pickColour(0xff0000); d.begin(); d.set(100, k); d.end();
+        const d2 = await Doc.open({ hash: 'h', body: blank }, (b) => b.colours, null);
+        await d2.restore(body);
+        return { opened, undone, newKey: k, after: d.px[5], restored: d2.px[5] }; }""")
+    check(o["opened"] == 0 and o["undone"] == 0 and o["after"] == 0 and o["restored"] == 0,
+          f"/studio/ review: a key with no colour stays off through a restore and its undo, a new colour after it, and a restored snapshot of its own {o}")
     page.context.close()
 
 
