@@ -392,9 +392,16 @@ export class LocalStore {
       tx.abort();
       throw new Conflict(head(strip(was)));
     }
+    // (Rows only for what is here: a pack naming thousands of absent records writes none for them.)
+    const here = [];
+    for (const id of refs) {
+      if (id === out.body?.palette) { here.push(id); continue; } // (a palette may be built in or the starter pack's: its one row is kept)
+      const x = await req(recs.get(id));
+      if (x && !x.gone) here.push(id);
+    }
     out.seq = await this.#seq(tx);
     recs.put(out);
-    this.#refs(tx, out.id, refs);
+    this.#refs(tx, out.id, here);
     if (at !== undefined) this.#j(tx, out.id, { at, hash: out.hash });
     await done(tx);
     return head(strip(out));
