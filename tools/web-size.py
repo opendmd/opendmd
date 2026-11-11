@@ -442,14 +442,34 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # own colours with two-byte keys, the undo journal kept across reloads,
 # snapshots, the tab-safe store version, pinch zoom. What can wait is a line
 # of its own below; the site serves both minified (about half this).
-STUDIO_PAGE_GZ_BUDGET = 32 * 1024
-# What the Studio's page imports only when it is first used (colour.js: the
-# colour picker, the palette tools, the Lospec import): <= 5 KB (2026-11-11,
-# S1: ~3.8 KB gz). The starter pack the page fetches once it is up
+# 40 KB since S2 (2026-11-11, branch studio-s2-doc, under the budget
+# authority, as the S2 plan has it): first paint is only what a one-layer
+# still needs plus the model that opens and shows any piece (doc.js: cels by
+# layer and frame, the composite, the colour keys, the undo steps), the
+# seven files of STUDIO_FIRST; the GIF went out to out.js.
+STUDIO_PAGE_GZ_BUDGET = 40 * 1024
+STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
+# What the Studio's page imports only when it is first used: a line each
+# (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
+# studio/ is first paint or on one of these lines; one on neither fails the
+# build, so nothing joins the page uncounted. A line whose files are not
+# written yet prints as such and passes. colour.js (the picker, the palette
+# tools, the Lospec import) was the one lazy line, 5 KB, in S1 (~3.8 KB gz).
+# The starter pack the page fetches once it is up
 # (studio-starter/starter.dmdpack, copied beside it by tools/site.py) is
-# content, not code, and counts against neither.
-STUDIO_LAZY_GZ_BUDGET = 5 * 1024
-STUDIO_LAZY = {"colour.js"}
+# content, not code, and counts against none of them.
+STUDIO_LAZY = {
+    "colour": (6 * 1024, ("colour.js",)),        # New colour…, Palettes…
+    "frames": (7 * 1024, ("frames.js",)),        # more than one frame or layer, Add frame, Add layer, Play
+    "out": (5 * 1024, ("out.js",)),              # Download, Send to panel, Share: flatten, the GIF table
+    "files": (5 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
+    "library": (8 * 1024, ("library.js", "library.css")),  # Library
+    "stamps": (4 * 1024, ("stamps.js",)),        # the Stamp tool, Save as stamp
+    "link": (4 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
+    "paste": (2 * 1024, ("paste.js",)),          # a paste that carries an image
+}
+# First paint and every lazy line together.
+STUDIO_ALL_GZ_BUDGET = 84 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
@@ -713,7 +733,10 @@ def main() -> int:
         hero = (0, 0)
         craw = cgz = 0
         sp_raw = sp_gz = 0
-        sl_raw = sl_gz = 0
+        sp_seen: set[str] = set()
+        lazy = {name: [0, 0, []] for name in STUDIO_LAZY}
+        lazy_of = {f: name for name, (_, fs) in STUDIO_LAZY.items() for f in fs}
+        stray: list[str] = []
         video = (0, 0)
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             if q_ref(p, share):
@@ -742,13 +765,19 @@ def main() -> int:
             if p.relative_to(share).parts[0] == "create" and p.name == VIDEO_JS:
                 video = (len(b), g)
                 continue
-            if p.relative_to(share).parts[0] == "studio" and p.name in STUDIO_LAZY:
-                sl_raw += len(b)
-                sl_gz += g
-                continue
             if p.relative_to(share).parts[0] == "studio":
-                sp_raw += len(b)
-                sp_gz += g
+                sub = "/".join(p.relative_to(share).parts[1:])
+                if sub in STUDIO_FIRST:
+                    sp_raw += len(b)
+                    sp_gz += g
+                    sp_seen.add(sub)
+                elif sub in lazy_of:
+                    t = lazy[lazy_of[sub]]
+                    t[0] += len(b)
+                    t[1] += g
+                    t[2].append(sub)
+                else:
+                    stray.append(sub)
                 continue
             if p.relative_to(share).parts[0] == "create":
                 craw += len(b)
@@ -768,13 +797,26 @@ def main() -> int:
         print(f"{'create':<10} raw {craw:>9,}           gz {cgz:>9,} / {CREATE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {cgz + demo_gz(CREATE_USES):,} B gz)")
         ok &= cgz <= CREATE_GZ_BUDGET
-        verdict = "ok" if 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET else "OVER BUDGET"
+        missing = [f for f in STUDIO_FIRST if f not in sp_seen]
+        verdict = "ok" if 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET and not missing else "OVER BUDGET" if not missing else "MISSING"
         print(f"{'studio pg':<10} raw {sp_raw:>9,}           gz {sp_gz:>9,} / {STUDIO_PAGE_GZ_BUDGET // 1024} KB {verdict:<10}"
-              f"(with the GIF writer, at the first download: {sp_gz + demo_gz(STUDIO_PAGE_USES):,} B gz)")
-        ok &= 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET
-        verdict = "ok" if 0 < sl_gz <= STUDIO_LAZY_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'studio lz':<10} raw {sl_raw:>9,}           gz {sl_gz:>9,} / {STUDIO_LAZY_GZ_BUDGET // 1024} KB {verdict:<10}(the picker and palette tools, when first opened)")
-        ok &= 0 < sl_gz <= STUDIO_LAZY_GZ_BUDGET
+              f"(first paint, {len(sp_seen)} files{'; missing ' + ', '.join(missing) if missing else ''}; with the GIF writer and out.js,"
+              f" at the first download: {sp_gz + lazy['out'][1] + demo_gz(STUDIO_PAGE_USES):,} B gz)")
+        ok &= 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET and not missing
+        all_gz = sp_gz
+        for name, (budget, fs) in STUDIO_LAZY.items():
+            raw_, gz_, got = lazy[name]
+            all_gz += gz_
+            verdict = "ok" if gz_ <= budget else "OVER BUDGET"
+            print(f"{'studio ' + name:<14} raw {raw_:>9,}       gz {gz_:>9,} / {budget // 1024} KB {verdict:<10}"
+                  f"({', '.join(got) if got else ', '.join(fs) + ': not written yet'})")
+            ok &= gz_ <= budget
+        verdict = "ok" if all_gz <= STUDIO_ALL_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'studio all':<10} raw {'':>9}           gz {all_gz:>9,} / {STUDIO_ALL_GZ_BUDGET // 1024} KB {verdict:<10}(first paint and every lazy line)")
+        ok &= all_gz <= STUDIO_ALL_GZ_BUDGET
+        for f in stray:
+            print(f"studio UNLISTED studio/{f}: every file in studio/ is first paint (STUDIO_FIRST) or on a lazy line (STUDIO_LAZY) in tools/web-size.py")
+        ok &= not stray
         verdict = "ok" if 0 < video[1] <= VIDEO_GZ_BUDGET else "OVER BUDGET"
         print(f"{'video':<10} raw {video[0]:>9,}           gz {video[1]:>9,} / {VIDEO_GZ_BUDGET // 1024} KB {verdict}")
         ok &= 0 < video[1] <= VIDEO_GZ_BUDGET
