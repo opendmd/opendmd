@@ -1,0 +1,5 @@
+-- The emulator lane's light Formula (api_lane.py `governor`): `smooth`,
+-- ~1 ms a frame, every refresh from its first frame.
+smooth
+loop 1
+gray(abs(x - phase) < 0.02)
