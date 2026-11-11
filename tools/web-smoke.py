@@ -4822,7 +4822,24 @@ def now_sync_checks(page: Page, base: str) -> None:
     now_path = get_json(base + "/api/status")["now_playing"]["path"]
     check(st.get("path") == now_path and abs(float(st.get("drift", 1e9))) < 60,
           f"now: a skip re-syncs to the new file (drift {st.get('drift')} ms, {st.get('path')})")
-    # Paused on the device: the preview pauses and holds its frame.
+    # Paused on the device: the preview pauses and holds its frame. The file
+    # is held meanwhile (the mock's 4 s dwell): its resume is what is
+    # measured, two syncs after it, and the next file's first sync (the jump
+    # from free-running into step, often 100 ms or more) is not that.
+    dwell = get_json(base + "/mock/dwell")["s"]
+    get_json(base + "/mock/dwell?s=600")
+    try:
+        pause_resume_checks(page, base)
+    finally:
+        get_json(base + f"/mock/dwell?s={dwell}")
+    drifts, rtts = drift_stats(page, 8)
+    print("  " + summarise("mock drift over 8 s", drifts, rtts))
+    check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+
+
+def pause_resume_checks(page: Page, base: str) -> None:
+    """Paused on the device, the preview holds its frame; resumed, two syncs
+    of the same file later it is in step."""
     post_json(base + "/api/pause", {})
     page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'true'", timeout=5000)
     page.wait_for_timeout(300)
@@ -4831,12 +4848,11 @@ def now_sync_checks(page: Page, base: str) -> None:
     check(a == canvas_sum(page, "#now-panel"), "now: pausing the mock pauses the preview (frame held 1.2 s)")
     post_json(base + "/api/pause", {})
     page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'false'", timeout=5000)
-    k = int(sync_state(page)["k"])
+    st0 = sync_state(page)
+    k = int(st0["k"])
     st = wait_sync(page, k + 2)
-    check(abs(float(st.get("drift", 1e9))) < 60, f"now: resumed, still in step (drift {st.get('drift')} ms)")
-    drifts, rtts = drift_stats(page, 8)
-    print("  " + summarise("mock drift over 8 s", drifts, rtts))
-    check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+    check(abs(float(st.get("drift", 1e9))) < 60 and st.get("path") == st0.get("path") and int(st.get("k", 0)) >= k + 2,
+          f"now: resumed, still in step (drift {st.get('drift')} ms; sync {st.get('k')} of {st.get('path')}, from sync {k} of {st0.get('path')})")
 
 
 def mock_pass(browser) -> None:
@@ -6978,20 +6994,30 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(700)
     s2 = canvas_sum(page, "#psi-panel")
     check(s1 != s0, f"formulas over: a GIF from the playlist ('{first}') is under it now ({s0} -> {s1}, then {s2})")
-    # On the (mock) panel: over its GIF, then off again.
-    clear_toasts(page)
-    page.click("#psi-show")
-    t = last_toast(page, "ok")
-    fl = get_json(base + "/api/status")["formula_look"]
-    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1].get("size", 0) > 6
-          and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
-          f"formulas over: shown over the panel's GIF ('{t}', {fl})")
-    clear_toasts(page)
-    page.click("#psi-show")
-    t = last_toast(page, "ok")
-    check(t == "Taken off the panel" and plays[-1] == {"path": "", "live": False, "over": True}
-          and get_json(base + "/api/status")["formula_look"] is None and page.inner_text("#psi-show") == "Show over the panel’s GIF",
-          f"formulas over: pressed again, it comes off ('{t}', {plays[-1]})")
+    # On the panel: over its GIF, then off again. (Over the GIF until the
+    # playlist moves on, as on the firmware: the mock's 4 s dwell ending
+    # between the play and the status read took it off, `formula_look`
+    # None. The file is held while this is checked; the ordinal says so.)
+    dwell = get_json(base + "/mock/dwell")["s"]
+    get_json(base + "/mock/dwell?s=600")
+    try:
+        ord0 = get_json(base + "/api/status")["now_playing"]["ordinal"]
+        clear_toasts(page)
+        page.click("#psi-show")
+        t = last_toast(page, "ok")
+        st = get_json(base + "/api/status")
+        fl = st["formula_look"]
+        check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1].get("size", 0) > 6
+              and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
+              f"formulas over: shown over the panel's GIF ('{t}', {fl}; ordinal {ord0} -> {st['now_playing']['ordinal']})")
+        clear_toasts(page)
+        page.click("#psi-show")
+        t = last_toast(page, "ok")
+        check(t == "Taken off the panel" and plays[-1] == {"path": "", "live": False, "over": True}
+              and get_json(base + "/api/status")["formula_look"] is None and page.inner_text("#psi-show") == "Show over the panel’s GIF",
+              f"formulas over: pressed again, it comes off ('{t}', {plays[-1]})")
+    finally:
+        get_json(base + f"/mock/dwell?s={dwell}")
     # Kept as the look (its own `look` line: over, 100 %); Settings › Panel
     # lists it; None clears it. A Formula without the line has no button.
     clear_toasts(page)
