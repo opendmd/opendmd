@@ -54,8 +54,9 @@
                envelope and LocalStore on IndexedDB — and the starter
                palettes, from studio-starter/starter.dmdpack, copied
                beside it): drafts kept in the browser, nothing uploaded, the
-               GIF written by the demo's art module (pkg-art
-               `encodeIndexed`). Not in the menus yet
+               GIF written by the Studio's own wasm module (the demo's
+               pkg-studio, opendmd-studio-web; never on the panel). Not in
+               the menus yet
 - /panel.js    the panel's address and the window hand-off, shared by /f/
                and /create/ (opendmd-web/share/panel.js)
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
@@ -552,8 +553,8 @@ CSP = {
                                "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
     + "; connect-src 'self' https:",
-    # The Studio's page: its GIF writer is the demo's art module (pkg-art,
-    # same-origin), so 'wasm-unsafe-eval'; it fetches nothing else and uploads
+    # The Studio's page: its GIF writer is a wasm module (the demo's
+    # pkg-studio, same-origin), so 'wasm-unsafe-eval'; it fetches nothing else and uploads
     # nothing (drafts stay in IndexedDB), so no connect-src beyond 'self'.
     "studio": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the

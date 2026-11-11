@@ -514,6 +514,11 @@ text out as `psi fmt` does, as one edit the browser's undo takes back. The
 module is the whole compiler (~121 KB gzipped), so it loads only for a
 heavy Formula or one of the two buttons.
 
+The site's Studio (`/studio/`, the pixel editor) writes its GIFs with a
+wasm module of its own, `pkg-studio/` (`opendmd-studio-web`), loaded at
+its first download; like `pkg-psi-lang/` it is published with the demo
+and never in the www pack.
+
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
 (`tools/demo-card.py`). `make site` builds the whole public site into

@@ -1,4 +1,4 @@
-// The wasm modules (pkg/, pkg-psi/, pkg-art/) at addresses that change with
+// The wasm modules (pkg/, pkg-psi/, pkg-art/; the site's pkg-psi-lang/, pkg-studio/) at addresses that change with
 // every build: `?v=<build id>` (js/build.js, written by `make web`: a hash
 // of the three folders). wasm-pack's file names carry no hash, so without
 // it a browser that kept a module from an earlier build would run it with
@@ -7,7 +7,7 @@
 // every fetch of its wasm goes through here; js/web.js is the main one's.
 import { V } from './build.js';
 
-const NAMES = { pkg: 'opendmd_web', 'pkg-psi': 'opendmd_psi_web', 'pkg-art': 'opendmd_art_web', 'pkg-psi-lang': 'opendmd_psi_web' };
+const NAMES = { pkg: 'opendmd_web', 'pkg-psi': 'opendmd_psi_web', 'pkg-art': 'opendmd_art_web', 'pkg-psi-lang': 'opendmd_psi_web', 'pkg-studio': 'opendmd_studio_web' };
 
 // `path` (from the app's root) at this build's address; `tag` first, for
 // another instance of the same module (`look`, `demo`, a slot number).

@@ -55,7 +55,7 @@ build URL serves. There the art index must also carry
   and the service worker (scope /create/; a shared GIF and a shared link
   through the share target's POST; nothing else answered by it);
 - /studio/ (the Studio, the pixel editor), under its _headers CSP with no
-  violation, nothing asked of another site and the GIF writer (pkg-art)
+  violation, nothing asked of another site and the GIF writer (pkg-studio)
   fetched only at the first download: a new piece not stored until drawn
   on; its record envelope and its hash (the hash rule worked out again
   here: the same pixels compressed two ways hash the same; Den 16's pinned;
@@ -802,7 +802,7 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(s_px(page, 10, 5) == AMBER and s_px(page, 64, 16) == AMBER and s_lit(page) == 12 and page.input_value("#s-name") == "Test card"
           and page.inner_text("#s-list li.on").startswith("Test card"),
           f"/studio/: the draft is kept over a reload, with its name ({s_lit(page)} lit, {page.input_value('#s-name')!r})")
-    check(not any("pkg-art" in u for u in page.asked), "/studio/: the GIF writer not fetched before a download")
+    check(not any("pkg-studio" in u or "pkg-art" in u for u in page.asked), "/studio/: the GIF writer not fetched before a download")
     # Download GIF: a 128x32 GIF with exactly the colours drawn; that rev frozen; an old error cleared.
     page.evaluate("() => { const e = document.getElementById('s-err'); e.hidden = false; e.textContent = 'an earlier error'; }")
     with page.expect_download(timeout=60000) as dl:
@@ -855,7 +855,8 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(page.inner_text("body"))})
     check(not hit, f"/studio/: none of the words users never see {hit}")
     off = [u for u in page.asked if not u.startswith(base) and not u.startswith(("blob:", "data:"))]
-    check(not off and any("pkg-art" in u for u in page.asked), f"/studio/: nothing asked of another site, the GIF writer same-origin {off[:2]}")
+    check(not off and any("pkg-studio" in u for u in page.asked) and not any("pkg-art" in u for u in page.asked),
+          f"/studio/: nothing asked of another site, the GIF writer (pkg-studio, not the art module) same-origin {off[:2]}")
     check(not page.evaluate("window.__csp || []"), f"/studio/: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     if shots:
         page.screenshot(path=str(shots / "studio-laptop.png"), full_page=True)
@@ -1208,6 +1209,18 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     # It lands in the middle of what is in view (the whole panel here): 4 x 4 about (64, 16).
     check(at == [62, 14, 4, 4] and s_on(page) == (two - vflip) | {(x - 12 + 62, y - 2 + 14) for x, y in vflip},
           f"/studio/ tools: the selection bar's Paste lands in the middle of the view, and Done puts it down ({at})")
+    # A paste into a piece without its colours: they wait to join it; the paste undone or deleted, they are let go
+    # (another colour picked first: the paste's amber is the new piece's picked colour, which stays picked).
+    s_new(page)
+    page.click('#s-set .s-sw:not([data-hex="#f7a531"])')
+    p0 = int(s_data(page)["pending"])
+    for let_go in ("Control+z", "Delete"):
+        page.keyboard.press("Control+v")
+        p1 = int(s_data(page)["pending"])
+        page.keyboard.press(let_go)
+        p2 = int(s_data(page)["pending"])
+        check(p1 > p0 and p2 == p0 and not s_data(page)["sel"] and not s_on(page),
+              f"/studio/ tools: a paste's new colours let go when it is {'undone' if let_go == 'Control+z' else 'deleted'} ({p0}, {p1}, {p2})")
     check(not page.evaluate("window.__csp || []"), f"/studio/ tools: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 

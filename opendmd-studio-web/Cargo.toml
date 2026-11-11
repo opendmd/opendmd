@@ -1,0 +1,31 @@
+[package]
+name = "opendmd-studio-web"
+version = "1.1.0-beta.2"
+edition = "2021"
+description = "The site's Studio (opendmd.dev/studio/): its GIF writers, compiled to wasm. Site-only: never in the device's www pack."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/opendmd/opendmd"
+publish = false
+
+[lib]
+# cdylib is what wasm-pack links; rlib for `cargo test` and `wasm-pack test --node`.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+gif = "0.13"            # the encoder
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+# The player's decoder (gifslim) and the recoder: the tests play the GIFs
+# as the panel does and check which get a prepared copy.
+opendmd-core = { path = "../opendmd-core" }
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# The vendored gif 0.13.3 (see third_party/gif/README-OPENDMD.md); a patch is
+# per-lockfile, so every crate repeats it.
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

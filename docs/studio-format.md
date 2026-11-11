@@ -52,14 +52,19 @@ A palette's body is `{colours, source}`, with the same `colours` shape.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole
-picture over its 256 most used colours, each other colour drawn as its
-nearest there (so a player that starts the GIF, or loops it, never shows a
-pixel unpainted), then only the pixels not yet exact, 255 more colours at a
-time, the rest transparent, 20 ms each; the last holds the rest of the
+picture over 256 of its colours, each other colour drawn as its nearest
+there (so a player that starts the GIF, or loops it, never shows a pixel
+unpainted), then only the pixels not yet exact, 255 more colours at a
+time (the most used first), the rest transparent, 20 ms each; the last holds the rest of the
 frame's time. A frame shorter than 20 ms for each of those GIF frames lasts
 20 ms each instead. Nothing is lost, and the panel plays it as it is, with no
 quick-start copy and no Smooth motion; "Download fitted to 256 colours"
-writes only the base, which the panel can prepare and smooth.
+writes only the base, which the panel can prepare and smooth. The 256 are
+picked for spread, as Create Art picks a picture's colours: the most used
+first, then again and again whichever colour is furthest from all those
+picked so far, weighted by log(1 + its uses), so a rare colour far from the
+rest is kept and a crowd of near-twins is not. The GIF writers are
+`opendmd-studio-web`.
 
 ## The hash
 
