@@ -3427,6 +3427,10 @@ def studio_files(browser, base: str, site: Path, errors: list[str]) -> None:
     file_open(page, newer)
     rows2 = page.eval_on_selector_all("#s-fs li", "els => els.map((e) => e.dataset.how)")
     page.click("#s-fs[open] button:has-text('Cancel')")
+    page.wait_for_timeout(300)
+    kept = next(x for x in page.evaluate(S_ALL) if x["id"] == fr["id"])
+    check((kept["rev"], kept["hash"]) == (fr["rev"], fr["hash"]) and s_data(page)["opened"] == "cancelled",
+          "/studio/ files: a file shown and cancelled stores nothing")
     other = json.loads(json.dumps(newer))
     next(x for x in other["records"] if x["id"] == f["root"])["rev"] = 1
     file_open(page, other)
@@ -3584,6 +3588,13 @@ def studio_files_hostile(browser, base: str, site: Path, errors: list[str]) -> N
         "a licence outside the list": F([mut(lambda r: r.__setitem__("licence", "MIT"))]),
         "a root the file lacks": F([good], "pc_" + "c" * 32),
         "JSON nested 200,000 deep": deep,
+        "a stamp 0 wide": F([stamp("eJxjYAAAAAQAAQ==", body={"w": 0, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}]})]),
+        "a stamp 33 high": F([stamp("x", body={"w": 2, "h": 33, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}]})]),
+        "a stamp of 65 frames": F([stamp("x", body={"w": 2, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": "x"}] * 65})]),
+        "a stamp with no colours": F([stamp("x", body={"w": 2, "h": 2, "frames": [{"px": "x"}]})]),
+        "a font atlas past a panel": F([{**copy.deepcopy(good), "type": "font", "id": "ft_" + good["id"][3:], "body": {"cell": {"w": 5, "h": 7}, "line": 8, "first": 32, "count": 1, "adv": [6], "atlas": {"cols": 1, "w": 1024, "h": 1024, "px": "x"}}}]),
+        "a template guide off the panel": F([{**copy.deepcopy(good), "type": "template", "id": "tp_" + good["id"][3:], "body": {**copy.deepcopy(good["body"]), "guides": [{"kind": "safe", "name": "g", "x": 120, "y": 0, "w": 20, "h": 4}]}}]),
+        "a pack naming one member twice": F([pack_of(pa, [{"id": good["id"], "rev": 1}, {"id": good["id"], "rev": 1}], hash="sha256-" + "0" * 64), good], pa),
         "__proto__ and constructor keys": F([good]).replace('{"type"', '{"__proto__": {"polluted": 1}, "constructor": {"prototype": {"polluted": 1}}, "type"', 1),
     }
     r = page.evaluate(S_FILES, [cases])
