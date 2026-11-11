@@ -1063,6 +1063,8 @@ def s_new(page: Page) -> None:
     """A new, empty piece (the one before it kept)."""
     n = page.locator("#s-list li").count()
     was = s_data(page).get("id", "")
+    if page.is_hidden("#s-new") and page.is_visible("#s-tabs"):
+        page.click("#s-tabs [data-tab=piece]")  # a phone: New piece is under the Piece tab
     page.click("#s-new")
     wait_js(page, f"document.querySelectorAll('#s-list li').length === {n + (1 if s_data(page)['saved'] != 'new' else 0)} && "
                   f"document.getElementById('studio').dataset.saved === 'new' && document.getElementById('studio').dataset.id !== '{was}' "
