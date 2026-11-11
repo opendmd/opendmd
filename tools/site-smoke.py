@@ -3925,7 +3925,7 @@ def studio_backup_limits(browser, base: str, site: Path, errors: list[str]) -> N
         if file_open(page, data, name) == "asked":
             added += file_add(page)
     sizes = [len(b) for _, b in files]
-    check(len(files) >= 2 and all(s_ <= 16 << 20 for s_ in sizes) and added == 5 and "in 2 files" in said,
+    check(len(files) >= 2 and all(s_ <= 16 << 20 for s_ in sizes) and added == 5 and "in 2 files: open them together (pick all 2 at once)" in said,
           f"/studio/ backup: a Library past 16 MB is backed up in {len(files)} files ({[f'{x / 1e6:.1f} MB' for x in sizes]}), each opening; all {added} pieces back ('{said[:60]}')")
     page.context.close()
 
@@ -3960,9 +3960,12 @@ def studio_backup_parts(browser, base: str, site: Path, errors: list[str]) -> No
     results = []
     for order in (files, files[::-1]):
         page = s_page(browser, base, site, errors)
-        for name, data in order:
-            if file_open(page, data, name) == "asked":
-                file_add(page)
+        with page.expect_file_chooser(timeout=20000) as fc:
+            page.click("#s-openf")
+        fc.value.set_files([{"name": n_, "mimeType": "application/json", "buffer": d} for n_, d in order])
+        wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=120000)
+        page.click("#s-fs[open] button:has-text('Add')")
+        wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=120000)
         results.append(page.evaluate(S_LIVE)["stamp"])
         page.context.close()
     check(len(files) == 2 and max(members) <= 4096 and results == [4200, 4200],
@@ -3989,26 +3992,18 @@ def studio_backup_parts(browser, base: str, site: Path, errors: list[str]) -> No
             f = kev(page, """const mine = await K.palette('My palette'); await K.put(mine);
                 const theirs = await K.palette('My palette', { set: { id: mine.id, rev: 1 } }); theirs.body.colours = [{ k: 1, hex: '#00ff00' }]; theirs.hash = await m.hashOf(theirs.body);
                 const q = await K.piece('Drawn from it', [[1, 1, 1]], { body: { palette: mine.id } });
-                const tags = A === 'backup' ? ['backup', 'backup:00112233445566ff'] : [];
+                const tags = A === 'backup' ? ['backup'] : [];
                 const pa = await K.pack('Part A', [theirs], { env: { tags } }), pb = await K.pack('Part B', [q], { env: { tags } });
                 return { pal: mine.id, piece: q.id, a: K.file(pa, [pa, theirs]), b: K.file(pb, [pb, q]) };""", mode)
             order = [("a.dmdpack", f["a"]), ("b.dmdpack", f["b"])]
             if first == "piece":
                 order.reverse()
-            if mode == "backup":
-                for name, data in order:
-                    file_open(page, data, name)
-                    file_add(page)
-            else:
+            if True:  # (a backup's parts, or two files, picked together: one opening)
                 with page.expect_file_chooser(timeout=20000) as fc:
                     page.click("#s-openf")
                 fc.value.set_files([{"name": n_, "mimeType": "application/json", "buffer": d.encode()} for n_, d in order])
-                # (One sheet after another: the next file's may be up before a poll sees the last one added.)
-                for k in range(len(order)):
-                    wait_js(page, "document.getElementById('studio').dataset.opened === 'asked'", timeout=30000)
-                    page.evaluate("document.getElementById('studio').dataset.opened = 'adding'")
-                    page.click("#s-fs[open] button:has-text('Add')")
-                    wait_js(page, "document.getElementById('studio').dataset.opened !== 'adding'", timeout=30000)
+                wait_js(page, "document.getElementById('studio').dataset.opened === 'asked'", timeout=30000)
+                page.click("#s-fs[open] button:has-text('Add')")
                 wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=30000)
             recs = page.evaluate("""async (ids) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
                 const q = await s.get(ids[1]); const p = q && await s.get(q.body.palette); const mine = await s.get(ids[0]); s.db.close();
@@ -4047,6 +4042,71 @@ def studio_read_live(browser, base: str, site: Path, errors: list[str]) -> None:
     page.click("#s-fs[open] button:has-text('Cancel')")
     check(hid.startswith("That file holds more than 32,768 pictures") and beats > dt * 10,
           f"/studio/ read live: pictures under a stamp's layers counted ('{hid[:50]}'); 40 heavy records (800 pictures each) read with the page live ({beats} beats in {dt:.1f} s)")
+    page.context.close()
+
+
+S_STATE = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const out = {};
+    for (const t of ['palette', 'piece', 'pack']) for (const h of (await s.list({ type: t })).items) { const r = await s.get(h.id); const v = { id: r.id, palette: r.body.palette, members: r.body.members && r.body.members.map((x) => x.id), hex: r.body.colours && r.type === 'palette' ? r.body.colours[0].hex : undefined }; out[r.name] ??= v; out[r.id] = v; }
+    const meta = await new Promise((ok) => { const q = s.db.transaction('meta').objectStore('meta').getAll(); q.onsuccess = () => ok(q.result); }); s.db.close();
+    return { recs: out, notes: meta.filter((x) => String(x.k).startsWith('n:')).length }; }"""
+
+
+def pick_files(page: Page, files: list[tuple[str, str]]) -> None:
+    page.evaluate("delete document.getElementById('studio').dataset.opened")
+    with page.expect_file_chooser(timeout=20000) as fc:
+        page.click("#s-openf")
+    fc.value.set_files([{"name": n, "mimeType": "application/json", "buffer": d.encode()} for n, d in files])
+    wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=60000)
+    page.click("#s-fs[open] button:has-text('Add')")
+    wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=120000)
+
+
+def studio_files_attacks(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The repointing attacks: a stranger's file dressed as part of my
+    backup, opened after I restored it, repoints nothing of mine; a record
+    planted beforehand under an id a copy might take is never adopted;
+    nothing is noted in the store between openings; a big Add shows its
+    progress."""
+    PARTS = """const P = await K.palette('My palette'); const piece = await K.piece('Drawn from it', [[1, 1, 1]], { body: { palette: P.id } }); const given = await K.pack('A pack I keep', [P]);
+        const b1 = await K.pack('Backup (1 of 2)', [P], { env: { tags: ['backup'] } }), b2 = await K.pack('Backup (2 of 2)', [piece, given], { env: { tags: ['backup'] } });
+        const part1 = K.file(b1, [b1, P]), part2 = K.file(b2, [b2, piece, given]);"""
+    page = s_page(browser, base, site, errors)
+    got = kev(page, PARTS + """const evil = await K.palette('My palette'); evil.id = P.id; evil.body.colours = [{ k: 1, hex: '#ff0000' }]; evil.hash = await m.hashOf(evil.body);
+        const eb = await K.pack('Free stamps!', [evil], { env: { tags: ['backup'] } }); return { P: P.id, part1, part2, evil: K.file(eb, [eb, evil]) };""")
+    pick_files(page, [("b2.dmdpack", got["part2"]), ("b1.dmdpack", got["part1"])])
+    mine = page.evaluate(S_STATE)["recs"]
+    pick_files(page, [("free.dmdpack", got["evil"])])
+    after = page.evaluate(S_STATE)
+    a = after["recs"]
+    check(mine["Drawn from it"]["palette"] == got["P"] and a["Drawn from it"]["palette"] == got["P"] and a["A pack I keep"]["members"] == [got["P"]]
+          and a[got["P"]]["hex"] == "#102030",
+          f"/studio/ files attacks: my backup restored (parts picked together), then a stranger's file dressed as part of it: my piece and my pack still point at my palette ({a['Drawn from it']['palette'][-6:]})")
+    page.context.close()
+    # A record planted beforehand under an id a copy might take, then my backup over a profile that holds a different palette under its id.
+    import hashlib
+    page = s_page(browser, base, site, errors)
+    got = kev(page, PARTS + """const other = await K.palette('Not mine'); other.id = P.id; other.body.colours = [{ k: 1, hex: '#00ff00' }]; other.hash = await m.hashOf(other.body); await K.put(other);
+        return { P: P.id, part1, part2 };""")
+    planted = "pl_" + hashlib.sha256(f"{got['P']}|backup:00112233445566ff".encode()).digest()[:16].hex()
+    plant = kev(page, "const e = await K.palette('Planted'); e.id = A; e.body.colours = [{ k: 1, hex: '#ff0000' }]; e.hash = await m.hashOf(e.body); return K.file(e, [e]);", planted)
+    pick_files(page, [("planted.dmdart", plant)])
+    pick_files(page, [("b1.dmdpack", got["part1"]), ("b2.dmdpack", got["part2"])])
+    st = page.evaluate(S_STATE)
+    r = st["recs"]
+    copy = next((v for k, v in r.items() if v["id"] not in (got["P"], planted) and v.get("hex") == "#102030"), None)
+    check(copy and r["Drawn from it"]["palette"] == copy["id"] and r["A pack I keep"]["members"] == [copy["id"]] and planted not in (r["Drawn from it"]["palette"], *r["A pack I keep"]["members"])
+          and st["notes"] == 0, f"/studio/ files attacks: a record planted under an id a copy might take is never adopted; my backup's palette comes in as a copy, and my piece and pack point at it; nothing noted in the store")
+    page.context.close()
+    # A big Add: progress said, nothing noted.
+    page = s_page(browser, base, site, errors)
+    big = kev(page, """const recs = []; const a = new Uint8Array(64);
+        for (let i = 0; i < 1500; i++) { a[i % 64] = 1; const r = m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }); r.hash = await m.hashOf(r.body); recs.push(r); }
+        const pk = await K.pack('Many', recs); return K.file(pk, [pk, ...recs]);""")
+    page.evaluate("window.__said = new Set(); window.__t = setInterval(() => __said.add(document.getElementById('s-saved').textContent), 30)")
+    pick_files(page, [("many.dmdpack", big)])
+    said = page.evaluate("[...__said]")
+    st = page.evaluate(S_STATE)
+    check(any(x.startswith("Adding…") for x in said) and st["notes"] == 0, f"/studio/ files attacks: a big Add says its progress ({[x for x in said if x.startswith('Adding')][:1]}), nothing noted in the store")
     page.context.close()
 
 
@@ -5885,6 +5945,7 @@ def main() -> int:
             studio_backup_limits(browser, base, a.site, errors)
             studio_backup_parts(browser, base, a.site, errors)
             studio_read_live(browser, base, a.site, errors)
+            studio_files_attacks(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -5951,6 +6012,7 @@ def main() -> int:
         studio_backup_limits(browser, base, a.site, errors)
         studio_backup_parts(browser, base, a.site, errors)
         studio_read_live(browser, base, a.site, errors)
+        studio_files_attacks(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
