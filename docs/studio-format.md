@@ -103,11 +103,29 @@ Opening one trusts nothing in it: 16 MB and 4,160 records at most, every
 record through `check()` and its hash worked out again, each id once, the
 root in the file, a pack's members all in it at their revs and no pack
 holding itself however far round. Then it is shown, and nothing is stored
-until the user says Add. By id: the same hash is skipped; a higher rev is
-an update (offered); other content comes in as a copy with a new id whose
-`from` names the file's record, and what in the file points at it points at
-the copy; a starter record is never replaced. A record deleted here comes
-back when a file holds it again.
+until the user says Add. By id: the same hash is skipped; a piece at a
+higher rev is offered, never ticked, as an update, and taken it first
+freezes the user's own as a snapshot named "Before the file's version",
+which restores the whole record (pixels, name, tags, note, author, licence,
+`from`); any other record at a higher rev, or other content at the same rev,
+comes in as a copy with a new id whose `from` names the file's record (and
+what in the file points at it points at the copy); one at a lower rev is
+skipped unless ticked (then a copy); a starter record is never replaced,
+and no file opens until the starter pack has loaded. A record deleted here
+comes back when a file holds it again.
+
+**The envelope.** A record is its envelope keys (`type`, `id`, `rev`,
+`hash`, `name`, `tags`, `note`, `author`, `licence`, `from`, `created`,
+`modified`) and `body`. A key in a file that the envelope doesn't name (a
+later Studio's) is dropped as the file is read; the store's own keys
+(`gone`, `seq`, `ver`, `label`) refuse the file; the store writes the
+envelope and nothing else. `author.account` never comes in from a file. A
+`rev` is at most 2^31.
+
+**Limits** for a file: 16 MB, 4,160 records, and 32,768 pictures outside
+the places a record already caps (a piece's or template's cels, a stamp's
+frames, a font's atlas). Back up everything writes as many files as it
+takes for each to open again.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole

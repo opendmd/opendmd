@@ -786,6 +786,13 @@ async function restore(rev) {
   await freeze(`Before restoring ${r.label || `version ${rev}`}`.slice(0, CAPS.name));
   try {
     after(await D.restore(r.body, { palette: swatch.id }));
+    // The whole record as it was then: its name, tags, note, who made it, its licence, what it was made from.
+    const { name, tags, note, author, licence, from } = r;
+    rec = { ...rec, name, tags, note, author, licence, from };
+    $('s-name').value = name;
+    nameDirty = true;
+    prov();
+    queueSave();
   } catch (e) {
     say(`That snapshot can’t be restored: ${e.message || e}`);
   }

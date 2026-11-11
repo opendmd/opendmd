@@ -15,7 +15,7 @@
 // skipped; a higher rev is offered as an update; the same id with other
 // content comes in as a copy whose `from` names the file's record; a
 // starter record is never replaced.
-import { FORMAT, LICENCES, CAPS, ENVELOPE, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
+import { FORMAT, LICENCES, CAPS, envelope, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
 import { builtin, isStarter, starter } from './palettes.js';
 
 export const LIMITS = { bytes: 16 << 20, records: 4096 + 64, pictures: 32768 };
@@ -141,11 +141,22 @@ export async function backup() {
   for (const type of ['palette', 'stamp', 'font', 'template', 'piece', 'pack']) {
     for (const h of (await S.store.list({ type })).items) { if (!mineId(h.id)) continue; const r = await S.store.get(h.id); if (r) { const { ver, ...c } = r; all.push(c); } }
   }
-  const day = now().slice(0, 10);
-  const pack = record('pack', `Backup, ${day}`, { members: all.map((r) => ({ id: r.id, rev: r.rev })) }, { tags: ['backup'] });
-  pack.hash = await hashOf(pack.body);
-  write(`OpenDMD_Studio_backup_${day}.dmdpack`, pack.id, [pack, ...all]);
-  S.say('');
+  // As many files as it takes for each to open again: within the size and the record count Open takes.
+  const day = now().slice(0, 10), parts = [[]], room = LIMITS.bytes - (256 << 10);
+  let size = 0;
+  for (const r of all) {
+    const n = JSON.stringify(r).length + 2;
+    if (parts.at(-1).length && (size + n > room || parts.at(-1).length >= LIMITS.records - 1)) { parts.push([]); size = 0; }
+    parts.at(-1).push(r);
+    size += n;
+  }
+  for (const [i, part] of parts.entries()) {
+    const of = parts.length > 1 ? ` (${i + 1} of ${parts.length})` : '';
+    const pack = record('pack', `Backup, ${day}${of}`, { members: part.map((r) => ({ id: r.id, rev: r.rev })) }, { tags: ['backup'] });
+    pack.hash = await hashOf(pack.body);
+    write(`OpenDMD_Studio_backup_${day}${parts.length > 1 ? `_${i + 1}_of_${parts.length}` : ''}.dmdpack`, pack.id, [pack, ...part]);
+  }
+  S.say(parts.length > 1 ? `Your Library is backed up in ${parts.length} files: open each of them to bring it all back.` : '');
 }
 
 // --- opening a file ---
@@ -164,17 +175,30 @@ export async function read(file) {
   try { f = JSON.parse(await file.text()); } catch { no('That isn’t a Studio file: it doesn’t read as one.'); }
   if (!f || typeof f !== 'object' || Array.isArray(f) || f.format !== FORMAT || typeof f.root !== 'string' || !Array.isArray(f.records)) no('That isn’t a Studio file (.dmdart or .dmdpack).');
   if (!f.records.length || f.records.length > LIMITS.records) no(`That file holds ${f.records.length} records: a Studio file holds 1 to ${LIMITS.records}.`);
-  // How many pictures it holds, before any is read: each cel and px string anywhere.
+  // How many pictures it holds outside the places check() caps per record
+  // (a piece's or template's cels, a stamp's frames, a font's atlas): those
+  // anywhere else, counted before any is read.
   let pics = 0;
+  const loose = (r) => {
+    const b = r?.body;
+    if (!b || typeof b !== 'object') return b;
+    const o = { ...b };
+    if (Array.isArray(b.layers)) o.layers = b.layers.map((l) => (l && typeof l === 'object' ? (({ cels, ...x }) => x)(l) : l));
+    if (r.type === 'stamp' && Array.isArray(b.frames)) o.frames = b.frames.map((f) => (f && typeof f === 'object' ? (({ px, ...x }) => x)(f) : f));
+    if (r.type === 'font' && b.atlas && typeof b.atlas === 'object') o.atlas = (({ px, ...x }) => x)(b.atlas);
+    return o;
+  };
   const count = (v, d = 0) => { if (d > 64 || pics > LIMITS.pictures) return; if (Array.isArray(v)) v.forEach((x) => count(x, d + 1)); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { if (k === 'px' && typeof x === 'string') pics++; else if (k === 'cels' && Array.isArray(x)) pics += x.length; else count(x, d + 1); } };
-  for (const r of f.records) count(r?.body);
+  for (const r of f.records) count(loose(r));
   if (pics > LIMITS.pictures) no(`That file holds more than ${LIMITS.pictures.toLocaleString('en')} pictures: more than a Studio file holds.`);
   const by = new Map(), all = f.records.length;
-  for (const [i, r] of f.records.entries()) {
+  for (const [i, r0] of f.records.entries()) {
     // (A word on screen and a breath for the page every few records: a big file takes a while.)
     if (i % 16 === 15) { S?.status('saving', `Reading the file… ${i + 1} of ${all}`); await new Promise((ok) => setTimeout(ok)); }
-    const odd = r && typeof r === 'object' ? Object.keys(r).filter((k) => !ENVELOPE.includes(k)) : [];
-    if (odd.length) no(`A record in it carries what a record doesn’t (${odd.slice(0, 3).join(', ')}): nothing was taken from the file.`);
+    // The store's own keys are refused; any other key the envelope doesn't name (a later Studio's) is dropped.
+    const own = r0 && typeof r0 === 'object' ? ['gone', 'seq', 'ver', 'label'].filter((k) => Object.hasOwn(r0, k)) : [];
+    if (own.length) no(`A record in it carries what only this browser’s store writes (${own.join(', ')}): nothing was taken from the file.`);
+    const r = r0 && typeof r0 === 'object' && !Array.isArray(r0) ? envelope(r0) : r0;
     try { check(r); } catch (e) { no(`A record in it isn’t one (${e.message.replace('not a record: ', '')}): nothing was taken from the file.`); }
     if (by.has(r.id)) no('The file names one record twice: nothing was taken from it.');
     let h = '';
@@ -206,7 +230,7 @@ export async function read(file) {
   return { root, records: [...by.values()] };
 }
 // How each record would come in: new, same (skipped), update (offered), copy, starter (never replaced).
-// A newer one is offered ticked only when the file says the same person made it; an older one, unticked (ticked: kept as a copy).
+// A newer one and an older one are offered unticked (an older one ticked comes in as a copy).
 async function plan(records) {
   // (Which ids are the starter pack's must be known first: without it a file could take one.)
   try { await starter(); } catch { throw new Error('The starter pack couldn’t be loaded, so this file can’t be checked against it: try again once this page can reach the site.'); }
@@ -215,8 +239,9 @@ async function plan(records) {
     const st = builtin(r.id);
     if (st || isBuiltin(r.id) || isStarter(r.id)) { out.push({ r, how: st && st.hash === r.hash ? 'same' : 'starter' }); continue; }
     const have = S.store ? await S.store.get(r.id) : null;
-    const how = !have ? 'new' : have.hash === r.hash ? 'same' : r.rev > have.rev ? 'update' : r.rev < have.rev ? 'older' : 'copy';
-    out.push({ r, have, how, tick: how === 'update' ? (r.author?.name || '') === (have.author?.name || '') : false });
+    // A newer version replaces in place only a piece (whose snapshot gives everything back); any other record comes in as a copy.
+    const how = !have ? 'new' : have.hash === r.hash ? 'same' : r.rev > have.rev ? (r.type === 'piece' ? 'update' : 'copy') : r.rev < have.rev ? 'older' : 'copy';
+    out.push({ r, have, how, tick: false }); // (never ticked for you: a name in a file proves nothing)
   }
   return out;
 }
