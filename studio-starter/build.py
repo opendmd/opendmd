@@ -390,13 +390,13 @@ def sample_grid(lib):
     for i, s in enumerate(("heart-full", "heart-full", "heart-half", "heart-empty")):
         g.stamp(lib, s, 96 + i * 8, 1)
     row = (("alien-jelly", 2, 11), ("alien-stalker", 14, 11), ("alien-fang", 25, 12),
-           ("saucer", 38, 12), ("wisp", 54, 11), ("explosion", 66, 10), ("gem", 78, 13),
+           ("saucer", 38, 12), ("wisp", 54, 11), ("explosion", 70, 10), ("gem", 80, 13),
            ("key", 89, 11), ("potion", 97, 11), ("power-cap", 107, 11), ("star", 119, 12))
     for s, x, y in row:
         g.stamp(lib, s, x, y, 1 if s == "explosion" else 0)
     g.stamp(lib, "text-insert-coin", 2, 24)
-    g.stamp(lib, "bullet", 69, 18)
-    g.stamp(lib, "ship", 66, 24)
+    g.stamp(lib, "bullet", 73, 18)
+    g.stamp(lib, "ship", 70, 24)
     g.stamp(lib, "arrow-left", 98, 24)
     g.stamp(lib, "arrow-right", 110, 24)
     g.stamp(lib, "cursor", 121, 23)
