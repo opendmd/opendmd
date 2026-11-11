@@ -1,0 +1,17 @@
+{
+  "type": "palette",
+  "name": "CGA Mode 4, Palette 1",
+  "tags": ["hardware", "pc", "4-colour"],
+  "note": "CGA 320x200 graphics, palette 1 at high intensity: black, cyan, magenta, white.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Colours 0, 11, 13 and 15 of the RGBI sixteen; the background (first) colour is selectable on the hardware."}],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#55ffff", "name": "Light cyan"},
+      {"k": 3, "hex": "#ff55ff", "name": "Light magenta"},
+      {"k": 4, "hex": "#ffffff", "name": "White"}
+    ]
+  }
+}

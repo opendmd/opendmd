@@ -1,0 +1,23 @@
+{
+  "type": "stamp",
+  "name": "Gamepad",
+  "tags": ["hardware", "icon"],
+  "note": "A generic two-button pad.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 16, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".33333333333333.",
+        "3331333333337733",
+        "3311133333337733",
+        "3331333335533333",
+        "3333333335533333",
+        "3333........3333",
+        ".33..........33."
+      ]}
+    ]
+  }
+}

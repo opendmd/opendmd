@@ -1,0 +1,34 @@
+{
+  "type": "stamp",
+  "name": "Alien: Jelly",
+  "tags": ["alien", "enemy", "animated"],
+  "note": "A one-eyed jelly of our own design, two frames.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 8, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"ms": 400, "rows": [
+        "..dddd..",
+        ".dddddd.",
+        "ddd22ddd",
+        "ddd21ddd",
+        "dddddddd",
+        ".d.dd.d.",
+        "d..dd..d",
+        "d.d..d.d"
+      ]},
+      {"ms": 400, "rows": [
+        "..dddd..",
+        ".dddddd.",
+        "ddd22ddd",
+        "ddd12ddd",
+        "dddddddd",
+        ".d.dd.d.",
+        ".d.dd.d.",
+        "..d..d.."
+      ]}
+    ]
+  }
+}

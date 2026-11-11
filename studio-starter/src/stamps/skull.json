@@ -1,0 +1,23 @@
+{
+  "type": "stamp",
+  "name": "Skull",
+  "tags": ["hud", "effect"],
+  "note": "A skull for a lost game.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".22222.",
+        "2222222",
+        "2112112",
+        "2112112",
+        "2221222",
+        ".22222.",
+        ".2.2.2."
+      ]}
+    ]
+  }
+}

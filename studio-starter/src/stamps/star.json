@@ -1,0 +1,32 @@
+{
+  "type": "stamp",
+  "name": "Star",
+  "tags": ["pickup", "animated"],
+  "note": "A star that twinkles, two frames.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"ms": 600, "rows": [
+        "...7...",
+        "..777..",
+        "7777777",
+        ".77777.",
+        ".77677.",
+        ".76.67.",
+        "76...67"
+      ]},
+      {"ms": 150, "rows": [
+        "...2...",
+        "..727..",
+        "2777772",
+        ".77277.",
+        ".77677.",
+        ".76.67.",
+        "26...62"
+      ]}
+    ]
+  }
+}

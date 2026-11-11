@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Key",
+  "tags": ["pickup"],
+  "note": "A door key.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 5, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".777.",
+        "7...7",
+        "7...7",
+        ".777.",
+        "..7..",
+        "..76.",
+        "..7..",
+        "..76."
+      ]}
+    ]
+  }
+}

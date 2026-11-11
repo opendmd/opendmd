@@ -1,0 +1,29 @@
+{
+  "type": "palette",
+  "name": "CGA / EGA 16",
+  "tags": ["hardware", "pc", "16-colour"],
+  "note": "The sixteen RGBI colours of the IBM CGA, also the EGA's default sixteen, in hardware order.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "IBM's RGBI scheme: each channel is 0xAA when on, plus 0x55 with the intensity bit; colour 6 has its green halved by the monitor, giving brown. Key = colour number + 1."}],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#0000aa", "name": "Blue"},
+      {"k": 3, "hex": "#00aa00", "name": "Green"},
+      {"k": 4, "hex": "#00aaaa", "name": "Cyan"},
+      {"k": 5, "hex": "#aa0000", "name": "Red"},
+      {"k": 6, "hex": "#aa00aa", "name": "Magenta"},
+      {"k": 7, "hex": "#aa5500", "name": "Brown"},
+      {"k": 8, "hex": "#aaaaaa", "name": "Light grey"},
+      {"k": 9, "hex": "#555555", "name": "Dark grey"},
+      {"k": 10, "hex": "#5555ff", "name": "Light blue"},
+      {"k": 11, "hex": "#55ff55", "name": "Light green"},
+      {"k": 12, "hex": "#55ffff", "name": "Light cyan"},
+      {"k": 13, "hex": "#ff5555", "name": "Light red"},
+      {"k": 14, "hex": "#ff55ff", "name": "Light magenta"},
+      {"k": 15, "hex": "#ffff55", "name": "Yellow"},
+      {"k": 16, "hex": "#ffffff", "name": "White"}
+    ]
+  }
+}

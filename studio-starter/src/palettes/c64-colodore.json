@@ -1,0 +1,29 @@
+{
+  "type": "palette",
+  "name": "C64 (Colodore)",
+  "tags": ["hardware", "computer", "16-colour"],
+  "note": "The Commodore 64's sixteen colours in hardware order, from Pepto's later 'Colodore' model. Brighter and more saturated than the 2001 set, so it suits LEDs better.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "Pepto's Colodore model (pepto.de/projects/colorvic) at its default settings (brightness 50, contrast 100, saturation 50), values as listed by Lospec. Key = colour number + 1."}],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#ffffff", "name": "White"},
+      {"k": 3, "hex": "#813338", "name": "Red"},
+      {"k": 4, "hex": "#75cec8", "name": "Cyan"},
+      {"k": 5, "hex": "#8e3c97", "name": "Purple"},
+      {"k": 6, "hex": "#56ac4d", "name": "Green"},
+      {"k": 7, "hex": "#2e2c9b", "name": "Blue"},
+      {"k": 8, "hex": "#edf171", "name": "Yellow"},
+      {"k": 9, "hex": "#8e5029", "name": "Orange"},
+      {"k": 10, "hex": "#553800", "name": "Brown"},
+      {"k": 11, "hex": "#c46c71", "name": "Light red"},
+      {"k": 12, "hex": "#4a4a4a", "name": "Dark grey"},
+      {"k": 13, "hex": "#7b7b7b", "name": "Grey"},
+      {"k": 14, "hex": "#a9ff9f", "name": "Light green"},
+      {"k": 15, "hex": "#706deb", "name": "Light blue"},
+      {"k": 16, "hex": "#b2b2b2", "name": "Light grey"}
+    ]
+  }
+}

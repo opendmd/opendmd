@@ -1,0 +1,17 @@
+{
+  "type": "palette",
+  "name": "Game Boy DMG",
+  "tags": ["hardware", "handheld", "4-colour"],
+  "note": "The four shades of the original Game Boy's greenish LCD, darkest first.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [{"external": false, "note": "The widely used emulator convention for the DMG's four shades. The real screen is a reflective LCD with no fixed RGB values; this is an approximation, not a measurement."}],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#0f380f", "name": "Darkest"},
+      {"k": 2, "hex": "#306230", "name": "Dark"},
+      {"k": 3, "hex": "#8bac0f", "name": "Light"},
+      {"k": 4, "hex": "#9bbc0f", "name": "Lightest"}
+    ]
+  }
+}

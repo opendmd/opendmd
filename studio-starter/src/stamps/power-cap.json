@@ -1,0 +1,24 @@
+{
+  "type": "stamp",
+  "name": "Power cap",
+  "tags": ["pickup", "power-up"],
+  "note": "A generic mushroom-like power-up of our own: green cap, yellow band, plain stem.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 8, "h": 8, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "..8888..",
+        ".882888.",
+        "88888888",
+        "77877877",
+        ".999999.",
+        "..3223..",
+        "..3223..",
+        "...33..."
+      ]}
+    ]
+  }
+}

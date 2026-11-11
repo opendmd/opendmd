@@ -1,0 +1,32 @@
+{
+  "type": "stamp",
+  "name": "Alien: Fang",
+  "tags": ["alien", "enemy", "animated"],
+  "note": "A horned crescent with teeth, two frames. Our own design.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 9, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"ms": 400, "rows": [
+        "5.......5",
+        "55.....55",
+        "555555555",
+        "551555155",
+        "555555555",
+        ".5252525.",
+        "..5...5.."
+      ]},
+      {"ms": 400, "rows": [
+        ".5.....5.",
+        "55.....55",
+        "555555555",
+        "551555155",
+        "555555555",
+        ".5252525.",
+        ".5.....5."
+      ]}
+    ]
+  }
+}

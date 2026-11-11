@@ -1,0 +1,28 @@
+{
+  "type": "palette",
+  "name": "Panel 16",
+  "tags": ["original", "led", "starter"],
+  "note": "Our own general-purpose set for LED panels: fifteen colours plus see-through, every one bright enough to read on a HUB75 panel. The starter stamps and templates use it.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#ffffff", "name": "White"},
+      {"k": 3, "hex": "#a8b0c0", "name": "Silver"},
+      {"k": 4, "hex": "#505868", "name": "Steel"},
+      {"k": 5, "hex": "#ff2030", "name": "Red"},
+      {"k": 6, "hex": "#ff8000", "name": "Orange"},
+      {"k": 7, "hex": "#ffd800", "name": "Yellow"},
+      {"k": 8, "hex": "#20e040", "name": "Green"},
+      {"k": 9, "hex": "#008838", "name": "Pine"},
+      {"k": 10, "hex": "#00d8ff", "name": "Cyan"},
+      {"k": 11, "hex": "#2060ff", "name": "Blue"},
+      {"k": 12, "hex": "#102080", "name": "Navy"},
+      {"k": 13, "hex": "#ff30c0", "name": "Magenta"},
+      {"k": 14, "hex": "#8030ff", "name": "Violet"},
+      {"k": 15, "hex": "#a04810", "name": "Rust"}
+    ]
+  }
+}

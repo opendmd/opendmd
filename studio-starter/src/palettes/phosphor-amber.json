@@ -1,0 +1,19 @@
+{
+  "type": "palette",
+  "name": "Phosphor Amber",
+  "tags": ["original", "led", "crt", "mono"],
+  "note": "Our own: a six-step amber monochrome ramp in the manner of an amber CRT, with wide steps so the dark end survives a panel's low-brightness crush.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Off"},
+      {"k": 2, "hex": "#4a2400", "name": "Ember"},
+      {"k": 3, "hex": "#8f4a00", "name": "Dim"},
+      {"k": 4, "hex": "#d07800", "name": "Mid"},
+      {"k": 5, "hex": "#ffb000", "name": "Amber"},
+      {"k": 6, "hex": "#ffe090", "name": "Hot"}
+    ]
+  }
+}

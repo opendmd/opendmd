@@ -1,0 +1,22 @@
+{
+  "type": "stamp",
+  "name": "Heart, empty",
+  "tags": ["hud", "life"],
+  "note": "A lost life.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 6, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        ".44.44.",
+        "4..4..4",
+        "4.....4",
+        ".4...4.",
+        "..4.4..",
+        "...4..."
+      ]}
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "type": "stamp",
+  "name": "Cartridge",
+  "tags": ["hardware", "icon"],
+  "note": "A generic game cartridge.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 10, "h": 10, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "4444444444",
+        "4333333334",
+        "43aaaaaa34",
+        "43a2222a34",
+        "43aaaaaa34",
+        "4333333334",
+        "4344444434",
+        "4333333334",
+        "4444444444",
+        ".47474747."
+      ]}
+    ]
+  }
+}

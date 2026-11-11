@@ -1,0 +1,23 @@
+{
+  "type": "stamp",
+  "name": "Arrow, up",
+  "tags": ["arrow", "hud"],
+  "note": "A block arrow pointing up.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "w": 7, "h": 7, "palette": "panel-16",
+    "frames": [
+      {"rows": [
+        "...2...",
+        "..222..",
+        ".22222.",
+        "2222222",
+        "..222..",
+        "..222..",
+        "..222.."
+      ]}
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "type": "palette",
+  "name": "Neon Arcade",
+  "tags": ["original", "led", "neon"],
+  "note": "Our own: saturated sign-tube colours on black, spaced widely in hue so neighbours stay distinct on LEDs.",
+  "author": {"name": "OpenDMD", "account": null},
+  "licence": "CC0-1.0",
+  "from": [],
+  "body": {
+    "colours": [
+      {"k": 1, "hex": "#000000", "name": "Black"},
+      {"k": 2, "hex": "#ffffff", "name": "White"},
+      {"k": 3, "hex": "#ff2079", "name": "Hot pink"},
+      {"k": 4, "hex": "#e000ff", "name": "Magenta"},
+      {"k": 5, "hex": "#7a2cff", "name": "Violet"},
+      {"k": 6, "hex": "#1e50ff", "name": "Electric blue"},
+      {"k": 7, "hex": "#00e5ff", "name": "Cyan"},
+      {"k": 8, "hex": "#00ffa0", "name": "Mint"},
+      {"k": 9, "hex": "#b4ff00", "name": "Lime"},
+      {"k": 10, "hex": "#ffe600", "name": "Yellow"},
+      {"k": 11, "hex": "#ff7a00", "name": "Orange"},
+      {"k": 12, "hex": "#ff1030", "name": "Red"}
+    ]
+  }
+}
