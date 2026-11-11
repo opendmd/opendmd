@@ -101,10 +101,13 @@ function keyFor(c) {
   return k;
 }
 const rgbOf = (k) => cols.get(k) ?? pending.get(k) ?? 0;
-function pickColour(c) {
-  // Pending colours no longer wanted (not the one picked, not in a paste being placed) are let go.
+// Pending colours no longer wanted (not `keep`, not in a paste being placed) are let go.
+function letGo(keep) {
   const held = new Set(sel?.fl || []);
-  for (const pk of [...pending.keys()]) if (!held.has(pk)) pending.delete(pk);
+  for (const pk of [...pending.keys()]) if (pk !== keep && !held.has(pk)) pending.delete(pk);
+}
+function pickColour(c) {
+  letGo(0);
   const k = keyFor(c);
   if (k) { swatches(); pick(k); }
 }
@@ -132,6 +135,7 @@ function swatches() {
   for (const b of more) { b.classList.add('new'); b.title += ' · joins this piece when you draw with it'; }
   sw.replaceChildren(swatch1(0, '#000000'), ...list.map((c) => swatch1(c.k, c.hex)), ...more);
   sw.classList.toggle('many', list.length > 23);
+  root.dataset.pending = pending.size; // colours picked or pasted, not drawn with yet
   pick(key);
 }
 // The swatch set shown, and what it is.
@@ -258,7 +262,7 @@ function apply(s, fwd) {
 }
 function undo(fwd) {
   if (stroke || drag) return; // not during a stroke
-  if (!fwd && sel?.fl) { sel = null; showSel(); paint(); return; } // a selection being moved: put back
+  if (!fwd && sel?.fl) { sel = null; letGo(key); swatches(); showSel(); paint(); return; } // a selection being moved (or a paste): put back, its new colours let go
   if (fwd ? cur >= steps.length : !cur) return;
   apply(steps[fwd ? cur : cur - 1], fwd);
   cur += fwd ? 1 : -1;
@@ -282,6 +286,7 @@ function jot(o) {
 function showSel() {
   $('s-selbar').hidden = tool !== 'select';
   root.dataset.sel = sel ? `${sel.x},${sel.y},${sel.w},${sel.h}${sel.fl ? ',float' : ''}` : '';
+  root.dataset.pending = pending.size;
   outline();
 }
 function outline() {
@@ -330,6 +335,8 @@ function act(a) {
       if (sel.fl) sel = sel.cut ? { x: sel.ox, y: sel.oy, w: sel.w, h: sel.h } : null;
       if (sel) { begin(); T.rect(sel.x, sel.y, sel.x + sel.w - 1, sel.y + sel.h - 1, true, plot(0)); end(); }
       sel = null;
+      letGo(key);
+      swatches();
     }
     if (a === 'fliph' || a === 'flipv') {
       lift();
@@ -793,7 +800,7 @@ async function restore(rev) {
 let writer = null;
 const gifWriter = () => (writer ??= import('../demo/js/wasm.js').then((w) => w.load('pkg-studio')).then(([m]) => m)
   .catch((e) => { writer = null; throw e; }));
-// fit: the 256 colours used most, the rest as their nearest (a GIF the panel can prepare and smooth).
+// fit: 256 colours picked for spread, the rest as their nearest (a GIF the panel can prepare and smooth).
 async function download(fit) {
   const b = $(fit ? 's-fit' : 's-gif');
   b.disabled = true;
@@ -813,8 +820,7 @@ async function download(fit) {
       of.set(k, index.get(c));
     }
     const delays = Uint32Array.from(body.frames, (f) => f.ms);
-    // Past 256 colours: bands with tables of their own, every colour kept.
-    // Past 256 colours: a whole picture of the 256 used most, then the rest exactly (or, fitted, only the first).
+    // Past 256 colours: a whole picture over 256 of them picked for spread, then the rest exactly (or, fitted, only that picture).
     const rgb = () => Uint32Array.from(keys, (k) => (k ? cm.get(k) ?? 0 : 0));
     const gif = table.length <= 256 ? m.encodeIndexed(Uint32Array.from(table), Uint8Array.from(keys, (k) => of.get(k)), delays, body.plays)
       : fit ? m.encodeFitted(rgb(), delays, body.plays) : m.encodeWide(rgb(), delays, body.plays);
@@ -829,7 +835,8 @@ async function download(fit) {
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
     root.dataset.gif = gif.length;
     say('');
-    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${Math.min(table.length, fit ? 256 : Infinity)} colour${table.length === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
+    const n = fit ? Math.min(table.length, 256) : table.length;
+    if (root.dataset.saved !== 'failed') status(kept ? 'kept' : 'new', `Downloaded ${name}: ${n} colour${n === 1 ? '' : 's'}, ${(gif.length / 1024).toFixed(1)} KB`);
     await snaps();
   } catch (e) {
     say(`The GIF could not be made: ${e.message || e}`);

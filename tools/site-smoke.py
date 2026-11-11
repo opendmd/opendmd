@@ -1209,6 +1209,18 @@ def studio_tools(browser, base: str, site: Path, errors: list[str]) -> None:
     # It lands in the middle of what is in view (the whole panel here): 4 x 4 about (64, 16).
     check(at == [62, 14, 4, 4] and s_on(page) == (two - vflip) | {(x - 12 + 62, y - 2 + 14) for x, y in vflip},
           f"/studio/ tools: the selection bar's Paste lands in the middle of the view, and Done puts it down ({at})")
+    # A paste into a piece without its colours: they wait to join it; the paste undone or deleted, they are let go
+    # (another colour picked first: the paste's amber is the new piece's picked colour, which stays picked).
+    s_new(page)
+    page.click('#s-set .s-sw:not([data-hex="#f7a531"])')
+    p0 = int(s_data(page)["pending"])
+    for let_go in ("Control+z", "Delete"):
+        page.keyboard.press("Control+v")
+        p1 = int(s_data(page)["pending"])
+        page.keyboard.press(let_go)
+        p2 = int(s_data(page)["pending"])
+        check(p1 > p0 and p2 == p0 and not s_data(page)["sel"] and not s_on(page),
+              f"/studio/ tools: a paste's new colours let go when it is {'undone' if let_go == 'Control+z' else 'deleted'} ({p0}, {p1}, {p2})")
     check(not page.evaluate("window.__csp || []"), f"/studio/ tools: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
     page.context.close()
 
