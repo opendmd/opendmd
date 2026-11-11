@@ -54,8 +54,10 @@ Time `t` is the frame's time, in seconds into the loop. Which instants are
 drawn depends on the display (the panel's refresh, the rate it holds the
 formula to; the browser's preview and a saved GIF have their own), so
 write motion as a function of `t`, never as a count of frames. The loop
-plays as whole frames: one that is not a whole number of 40 ms may be cut
-short by up to 40 ms on the panel (`psi check` notes it). `loop N` is also
+wraps at exactly its length on the panel racing its scan (from OpenDMD
+1.1); a saved GIF, and the panel when it can't follow its scan (a `rate`
+layer, the glow), play whole 20 ms frames (40 with `fps 25`), so a loop
+off that grid comes out up to a frame short there (`psi check` notes it). `loop N` is also
 the least time the formula plays for in a playlist, and the length of a GIF
 saved from it. **`phase`** is where the frame is in the loop, 0 to 1:
 exactly `t / N` (the same steps, the same frames), so write `sin(phase)`,

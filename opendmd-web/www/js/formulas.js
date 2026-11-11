@@ -212,8 +212,8 @@ function loop(now) {
     on = true;
     // (A formula that never repeats, loop 0: its time since the preview began.
     // `hold`: paused there, ms; the editor's time row.)
-    // (The loop as the panel plays it: whole frames of its grid.)
-    const g = v.d || D, p = v.over ? g : period(g), lp = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)) * g, e = v.hold ?? now - v.t0, k = Math.floor(e / p), ms = v.hold ?? Math.floor(k * p) % lp;
+    // (The loop as the panel plays it racing its scan: `t` wrapped at exactly its length.)
+    const g = v.d || D, p = v.over ? g : period(g), lp = v.loopMs === 0 ? Infinity : v.loopMs || 8000, e = v.hold ?? now - v.t0, k = Math.floor(e / p), ms = v.hold ?? Math.floor(k * p) % lp;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : v.hold ?? Math.floor(ms / p);
     if (key === v.i && !v.dirty && !v.f.w?.on) continue;
@@ -586,8 +586,8 @@ function editor() {
 
   // The draft kept in this browser (the web app's; the site's page tells its own of each change).
   const stash = PAGE ? () => PAGE.changed?.() : debounce(() => store.set('psi.draft', B.draft), 300);
-  // (The steps are the preview's own, a refresh or two or four; the loop whole frames of its grid, as played.)
-  const grain = () => (pv.over ? pv.d || D : period(pv.d || D)), len = () => (pv.loopMs === 0 ? FOREVER : Math.max(1, Math.floor((pv.loopMs || 8000) / (pv.d || D))) * (pv.d || D)), elapsed = () => pv.hold ?? performance.now() - pv.t0;
+  // (The steps are the preview's own, a refresh or two or four, through the loop's whole length, as played.)
+  const grain = () => (pv.over ? pv.d || D : period(pv.d || D)), len = () => (pv.loopMs === 0 ? FOREVER : pv.loopMs || 8000), elapsed = () => pv.hold ?? performance.now() - pv.t0;
   // The step shown: the one held at (`pv.hi`, kept as an index: a refresh
   // that doesn't divide 1000, 117 Hz, makes the steps fractional ms, and
   // floored ms read back as an index land on the one before), else the
