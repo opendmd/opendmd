@@ -93,7 +93,7 @@ gray(level[floor(x*4)])
 
 `t` counts seconds from the start of the loop, and starts again from 0 when the loop ends. The loop is 8 seconds unless a `loop` line near the top says otherwise. `phase` is where the frame is in the loop, from 0 to 1: exactly `t` divided by the loop's length, so `sin(phase)` goes round once a loop whatever its length. In `loop forever`, `t` goes on growing, and Psi asks you to wrap it with `frac`, `%`, `sin`, `noise` or a comparison before it reaches a colour. `hour`, `minute` and `second` come from the display's clock.
 
-`t` is the time of the frame being drawn. Which moments get drawn depends on the display, so a Formula says where things are at a time, never how far they move in a frame. The loop plays as whole frames: a loop that isn't a whole number of 0.04 seconds can come out up to 0.04 seconds short. The loop is also the least time a Formula plays for in a playlist, and the length of a GIF saved from it.
+`t` is the time of the frame being drawn. Which moments get drawn depends on the display, so a Formula says where things are at a time, never how far they move in a frame. On the panel `t` starts again exactly when the loop ends. A GIF saved from it plays whole frames of 0.02 seconds, so there a loop that isn't a whole number of them comes out up to a frame short. The loop is also the least time a Formula plays for in a playlist, and the length of a GIF saved from it.
 
 ## How often it is drawn
 

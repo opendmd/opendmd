@@ -161,6 +161,14 @@ mod counters {
     pub static SYNC_ON: AtomicU32 = AtomicU32::new(0);
 }
 
+/// The panel's refresh as measured off its scan at start-up (the shim's
+/// row-pair time × the 16 pairs: what racing Formulas lock onto), µs; 0
+/// when it could not be measured. `/api/status` `refresh_us`, beside the
+/// driver's nominal `refresh_hz`.
+pub fn refresh_us() -> u32 {
+    counters::ROW_US.load(Relaxed) * opendmd_core::scan::PAIRS as u32
+}
+
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",

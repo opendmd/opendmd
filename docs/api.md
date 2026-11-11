@@ -261,7 +261,7 @@ Sent chunked (`Transfer-Encoding: chunked`), written out as it is made; a client
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
 | `heap` | `{free, floor, idf_min, transitions_cut}`: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds `main_stack`, the main task's stack bytes never used, and `pushed`, pixels pushed to the panel) |
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
-| `refresh_hz` | panel refresh rate |
+| `refresh_hz`, `refresh_us` | the panel's refresh rate as its driver works it out (Hz), and the refresh measured off its scan at start-up (µs a refresh; 0 when it could not be measured): the one raced Formulas follow, so 8,547 is about 117 a second |
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the worst since boot, ms |
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`); `recent` the last 8 late frames (newest last), each `{late_ms, cause, open, read, decode, blit, log, other, wake, transitioning, advance_us, step_us, at_s, card_wait_us, card_xfer_us, kind}`: its cause (as above), each step's µs, whether a transition was running, the engine tick split into the file's advance (`advance_us`: opens, decoding, the outgoing file's drop at a switch) and the dissolve's step (`step_us`), seconds since boot, the frame's card reads split into µs waiting for the card (another task's transfer ahead) and µs transferring (`card_wait_us`, `card_xfer_us`), the decoder of the file on screen (`kind`: `slim`, `gif`, `synth`, which a Formula is too, `gone`, or `none`), and its opens by step (`open_index_us` through the FAT index, `open_path_us` by path behind FatFs's volume lock, `open_builder_us` waiting for the cache builder to let go of its heap, `open_catalog_us` the playlist's lookup of the next file; a diagnostic), `net` what the network side was doing (a bit mask: 1 an upload in hand, 2 a transfer sharing the card in flight, so nothing opened ahead and the cache builder stopped, 4 the read-ahead ring held) and `heap` the free heap at the miss; `transfer` the late frames while a transfer was in flight, by cause as `by_cause`, with `switches`, the file changes made meanwhile (each opened in its own frame) |
 | `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
@@ -1080,14 +1080,18 @@ Paths beginning with `@` are drawn, not read from the card: for
 never compiles. `psb=<the compiled Formula, base64url, no padding>` (what
 the web app's pkg-psi `program(src)` makes, or `psi build`), `a=`, `b=`,
 `c=` (sliders), `fps=50|100|25` (default:
-the formula's `fps` line, else 50; as a look over the GIF the line is not
-used). A heavy one is shown at fewer frames a second; one estimated over
-40 ms a frame on the VM (32 ms at `fps=100`), with no JIT and no still
-cache, is a `400` (`this formula is too heavy for the panel …`), however
+the formula's rate line, `smooth` or `fps`, else 50; as a look over the
+GIF the line is not used). A heavy one is drawn less often; one asking for
+`fps=100` (or `smooth`) estimated over 32 ms a frame on the VM opens at
+`fps=50` instead (OpenDMD 1.1; a `400` before); one estimated over 40 ms,
+with no JIT and no still cache, is a `400` (`this formula is too heavy for the panel …`), however
 fast the JIT would draw it; status
-`now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms`,
+`now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms` (the frame
+time it opened at: its rate's, or 20 for a `smooth` one too heavy for
+every refresh),
 `beam_us` (the raced frame time on the panel's refresh, µs; 0 while
-its frames are not raced, see `scan.beam`),
+its frames are not raced, see `scan.beam`), `refreshes` (that in
+refreshes, its tier: 1 every refresh, 2 every 2nd, 4 …; 0 not raced),
 `compile_us` (the load's time, µs), `still` (the still cache's bytes) and `jit`:
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
 its pixel stage, else `{"on":false,"why":"…"}` (e.g. `off (setting)`,

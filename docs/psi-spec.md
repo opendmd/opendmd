@@ -60,7 +60,7 @@ the editor.
 | `x, y` | where the pixel is: x 0 at the left to 1 at the right, y 0 at the top to 1 at the bottom | <code class="psi-ex">rgb(x, y, 0.5)</code> |
 | `px, py` | the pixel’s column 0–127 from the left and row 0–31 from the top | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
 | `t` | seconds into the loop | <code class="psi-ex">loop 4; hsv(x + t/4, 1, 1)</code> |
-| `phase` | where the frame is in the loop, 0 to 1: t / the loop’s length | <code class="psi-ex">loop 4; hsv(x + phase, 1, 1)</code> |
+| `phase` | where the frame is in the loop, 0 to 1: t / the loop’s length (OpenDMD 1.1: update a panel that says it is unknown) | <code class="psi-ex">loop 4; hsv(x + phase, 1, 1)</code> |
 | `hour, minute, second` | the time of day | <code class="psi-ex">band = floor(y&#42;3); hsv(band/3, 0.8, x &lt; pick(band, second/60, minute/60, hour/24))</code> |
 | `a, b, c` | the controls, in the order the control lines declare them (undeclared: a slider 0 to 1 at 0); any built-in name may be set as your own | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
 | `w, h` | 128 and 32 | <code class="psi-ex">gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)</code> |
@@ -103,7 +103,7 @@ the editor.
 | `;` | a new line, on the same line | <code class="psi-ex">u = x; v = y; rgb(u, v, 0.5)</code> |
 | `loop 8` | the loop’s length in seconds, and the least time it plays | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
 | `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
-| `smooth` | drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only | <code class="psi-ex">smooth; loop 1; gray(abs(x - phase) &lt; 0.02)</code> |
+| `smooth` | drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only (OpenDMD 1.1; before, fps 100) | <code class="psi-ex">smooth; loop 1; gray(abs(x - phase) &lt; 0.02)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
 | `layer rate 4 { … }` | a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
 | `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
@@ -187,15 +187,22 @@ the editor.
   (`smooth`), and fewer when frames take too long;
   the browser's preview draws at about the same times, and a saved GIF at
   20 or 40 ms. So motion is a function of `t`, never a count of frames.
-  The loop plays as whole frames: one that is not a whole number of 40 ms
-  may be cut short by up to 40 ms. `loop N` is also the least time the
+  On the panel, racing its scan, `t` wraps at exactly the loop's length
+  (from OpenDMD 1.1), as in the preview; a saved GIF, and the panel when it
+  can't follow its scan (a `rate` layer, the glow), play whole 20 ms (or
+  40 ms) frames, so a loop that isn't a whole number of them comes out up
+  to a frame short there (such a frame, the first of a play among them,
+  that falls in the loop's last part frame draws `t` at 0). The time past
+  the loop's end carries into the next, so `t` keeps the clock's pace
+  across the wrap. `loop N` is also the least time the
   formula plays for in a playlist, and the length of a GIF saved from it.
   `phase` is where the frame is in the loop, 0 to 1: `t` divided by the
   loop's length as its line writes it, the very division, so `sin(phase)`
   and `sin(t/8)` in an 8-second loop draw the same frames, and a change of
   the loop's length needs no other edit. With `loop forever`, `t` is
   seconds since the formula started and grows without end (and there is no
-  `phase`: E908).
+  `phase`: E908). `phase` and `smooth` are OpenDMD 1.1's: a panel before
+  it says the name is unknown, and needs an update.
 - **Built-in inputs** (`daylight`, `sun.alt`, `moon.phase`, `season`,
   `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`,
   `replay.game`) are read by name. Each is the same for every pixel of a
@@ -230,8 +237,10 @@ the editor.
 
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
-refuses a formula past 40 ms a frame by the plain VM estimate (32 ms for
-one drawn every refresh, `smooth`), or past 12 ms for a look drawn over every GIF. That is
+refuses a formula past 40 ms a frame by the plain VM estimate, or past
+12 ms for a look drawn over every GIF. A `smooth` one past 32 ms, the most
+it can keep every refresh, is drawn every 2nd refresh instead (from
+OpenDMD 1.1; earlier panels refuse it). That is
 the VM's figure with no still cache even where the JIT or the cache would
 draw it faster, because the panel may have to draw it that way (the JIT
 switched off, short of memory, or failing its self-check). The light,

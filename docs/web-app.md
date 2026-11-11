@@ -534,9 +534,15 @@ storage). **Open on my panel** opens the player's app in its editor:
 `http://<address>/#gallery=<slug>` for a gallery Formula as it is (the app
 has the bundled ones, else fetches `opendmd.dev/formulas/src/<slug>.psi`,
 CORS `*`), or, once changed, a window on `http://<address>/#remix` that
-says it is ready to the page that opened it and gets `{name, src, a, b, c}`
-back by `postMessage` (accepted only from `https://opendmd.dev`, or the
-app's own origin for the demo). The app saves it under Your formulas as it
+says it is ready to the page that opened it (`{type, feat}`: `feat` its
+compiler's level, a number that only grows, `opendmd_psi::Info::level`;
+none before OpenDMD 1.1, 1 from it: the built-in `phase` and `smooth`, and
+the header's lines in any order) and
+gets `{name, src, a, b, c}` back by `postMessage` (accepted only from
+`https://opendmd.dev`, or the app's own origin for the demo). The page
+compiles the Formula first and sends it only to an app whose level is at
+least the one it needs; otherwise it closes the window and asks for the
+panel's update. The app saves it under Your formulas as it
 arrives (`js/fstore.js`: on the panel's card, else in the browser; a
 bundled one needs nothing, the same text is not saved twice, one that
 doesn't compile is kept as an unsaved draft), then opens it in the

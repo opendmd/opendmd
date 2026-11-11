@@ -38,7 +38,9 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
-    assert_eq!(i.len(), 17);
+    assert_eq!(i.len(), 19);
+    assert_eq!(i[18], 0, "nothing of OpenDMD 1.1's");
+    assert_eq!(i[17], 20, "opens at the default 20 ms");
     assert_eq!(i[15], 1, "the JIT takes it");
     assert_eq!(i[16], opendmd_psi::PANEL_MAX_US, "the panel's limit: 40 ms at 50 fps");
     assert!(i[14] > 0 && i[14] <= i[6], "the still estimate: never more than the VM's");
@@ -49,7 +51,38 @@ fn formulas() {
         (4000, 10),
         "`fps 100`: a 10 ms grid"
     );
-    assert_eq!(info()[16], 32_000, "`fps 100`: the panel's limit is 32 ms");
+    assert_eq!((info()[16], info()[17]), (40_000, 10), "`fps 100`: refused past 40 ms, opens every refresh");
+    let heavy = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
+    assert!(compile(&format!("smooth\ngray({heavy})")));
+    assert_eq!(info()[17], 20, "past 32 ms: opens every 2nd refresh");
+    // The compiler level it needs: 1 for the built-in `phase` or a `smooth`
+    // line, 0 for a formula of its own names (strings, controls, a
+    // function's value, a counter, a value called `phase` or `smooth`).
+    for (src, want) in [
+        ("loop 4\ngray(phase)", 1),
+        ("smooth\ngray(x)", 1),
+        ("loop 2; smooth; gray(x)", 1),
+        ("fps 100\ngray(x)", 0),
+        ("name \"phase\"\ngray(x)", 0),
+        ("control phase 0..1 = 0.5\ngray(phase)", 0),
+        ("fn f(phase) = phase*2\ngray(f(x))", 0),
+        ("draw { for phase < 4 { dot(phase*8, 3) } }\ngray(ink)", 0),
+        ("phase = x\ngray(phase)", 0),
+        ("smooth = x\nsmooth", 0),
+        ("gray(moon.phase)", 0),
+        ("-- phase and smooth\ngray(x)", 0),
+        // The header in any order: a declaration below a `loop` line,
+        // refused by OpenDMD 1.0 (E951).
+        ("loop 2\nname \"X\"\ngray(x)", 1),
+        ("name \"X\"\nloop 2\ncontrol k 0..1 = 0.5\ngray(k)", 1),
+        ("fps 100\nlook\ngray(x)", 1),
+        ("name \"X\"\ncontrol k 0..1 = 0.5\nloop 2\nfps 100\ngray(k)", 0),
+    ] {
+        assert!(compile(src), "{src}");
+        assert_eq!(info()[18], want, "{src}");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    the_examples_need_1_1_only_for_phase_and_smooth();
     assert!(compile("look\nlayer multiply { gray(x) }"));
     assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 
@@ -676,4 +709,26 @@ fn the_web_apps_path_is_the_players() {
         assert_eq!(g, &want);
         assert_eq!(opendmd_psi::psb::from_base64(&want.as_bytes()[13..want.len() - 6]).as_ref(), Some(b));
     }
+}
+
+/// Every bundled and gallery Formula needs OpenDMD 1.1's compiler
+/// (`Info::level` 1, pkg-psi `info()[18]`) exactly when it reads the
+/// built-in `phase` or has a `smooth` line: none needs it for its header's
+/// order alone (the 1.0 panels that refuse that never meet one).
+/// (Called from `formulas`: the module's state is one, and tests run in
+/// threads.)
+#[cfg(not(target_arch = "wasm32"))]
+fn the_examples_need_1_1_only_for_phase_and_smooth() {
+    let mut new = Vec::new();
+    for e in crate::examples() {
+        assert!(compile(&e.src), "{}", e.slug);
+        let code: Vec<&str> = e.src.lines().map(|l| l.split("--").next().unwrap_or("").trim()).collect();
+        let uses = code.contains(&"smooth")
+            || code.iter().any(|l| l.match_indices("phase").any(|(k, _)| !l[..k].ends_with('.')));
+        assert_eq!(info()[18], u32::from(uses), "{}", e.slug);
+        if uses {
+            new.push(e.slug.clone());
+        }
+    }
+    assert_eq!(new.len(), 23, "{new:?}");
 }
