@@ -4176,6 +4176,58 @@ def studio_open_limits(browser, base: str, site: Path, errors: list[str]) -> Non
     page.context.close()
 
 
+def studio_open_limits2(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The Studio's own split backup, with packs I was given naming
+    thousands of my stamps across its parts, opens again when its parts
+    are picked together; Used in names a pack that arrived before the
+    record it names."""
+    page = s_page(browser, base, site, errors)
+    kev(page, """const s = await m.LocalStore.open(); const a = new Uint8Array(64); const ids = [];
+        for (let i = 0; i < 4300; i++) { a[i % 64] = 1; const r = m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }); await s.put(r); ids.push({ id: r.id, rev: 1 }); }
+        for (let k = 0; k < 3; k++) await s.put(m.record('pack', 'Given ' + k, { members: ids.slice(k * 1400, k * 1400 + 2000) }));
+        s.db.close();""")
+    files = backup_files(page, 10000)
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    tmp = Path(tempfile.mkdtemp(prefix="site-smoke-parts-"))
+    paths = []
+    for n_, d in files:
+        (tmp / n_).write_bytes(d)
+        paths.append(str(tmp / n_))
+    page.evaluate("delete document.getElementById('studio').dataset.opened")
+    with page.expect_file_chooser(timeout=20000) as fc:
+        page.click("#s-openf")
+    fc.value.set_files(paths)
+    wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=120000)
+    said = s_data(page)["opened"]
+    if said == "asked":
+        page.click("#s-fs[open] button:has-text('Add')")
+        wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=180000)
+    live = page.evaluate(S_LIVE)
+    shutil.rmtree(tmp, ignore_errors=True)
+    check(len(files) == 2 and said == "asked" and live["stamp"] == 4300 and live["pack"] == 3,
+          f"/studio/ open limits: a split backup whose given packs name 6,000 stamps across its parts opens again, picked together ({len(files)} files, {said}, {live})")
+    page.context.close()
+    # Used in: a pack that came before the record it names.
+    page = s_page(browser, base, site, errors)
+    f = kev(page, """const st = await K.stamp('Late stamp'); const pk = await K.pack('Came first', [st]); const carrier = await K.stamp('Carrier');
+        // (the pack carried as a record, its member absent; the file's root a stamp of its own)
+        return { pk_only: K.file(carrier, [carrier, pk]), st_only: K.file(st, [st]) };""")
+    pk_only, st_only = f["pk_only"], f["st_only"]
+    said1 = file_open(page, pk_only, "pack.dmdpack")
+    msg1 = page.inner_text("#s-err") if said1 == "refused" else ""
+    if said1 == "asked":
+        file_add(page)
+    file_open(page, st_only, "stamp.dmdart")
+    file_add(page)
+    lib_open(page)
+    lib_kind(page, "stamp")
+    lib_detail(page, "Late stamp")
+    used = page.evaluate("[...document.querySelectorAll('#s-ldet dt')].find((d) => d.textContent === 'Used in')?.nextElementSibling?.textContent || ''")
+    check("Came first" in used, f"/studio/ open limits: Used in names a pack that arrived before the record it names ({said1} {msg1[:40]}; '{used[:60]}')")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -6013,6 +6065,7 @@ def main() -> int:
             studio_read_live(browser, base, a.site, errors)
             studio_files_attacks(browser, base, a.site, errors)
             studio_open_limits(browser, base, a.site, errors)
+            studio_open_limits2(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -6081,6 +6134,7 @@ def main() -> int:
         studio_read_live(browser, base, a.site, errors)
         studio_files_attacks(browser, base, a.site, errors)
         studio_open_limits(browser, base, a.site, errors)
+        studio_open_limits2(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
