@@ -452,7 +452,7 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # layers (doc.js applying and undoing structure steps, which a journal can
 # replay before frames.js is in; the strip's one cell and "+", the Layers
 # section, the phone's tabs, Send to panel's button, the kind line) at
-# ~42.3 KB gz as written. The frames code itself is lazy (frames.js).
+# 42,405 B gz as written. The frames code itself is lazy (frames.js).
 STUDIO_PAGE_GZ_BUDGET = 42 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
