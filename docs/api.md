@@ -91,6 +91,16 @@ something else plays (another `/api/play`, `/api/skip` or Previous, a
 playlist change). A live edit keeps it kept. While it is kept, `/api/status`
 `now_playing.kept_s` says for how long (`0`: until changed).
 
+A Formula played over the Formula on screen takes its place without a
+transition, its clock going on. It starts at its own rate, from its cost
+estimate, as it would after a GIF: a light one over a heavy one runs at
+its full rate at once (every refresh for a `smooth` one), a heavy one over
+a light one is slowed from its first frame. A live edit (`"live":true`) is the same Formula's frames: it
+keeps the rate the display has measured, slower at once if the edit's
+estimate says so, faster a step at a time (each after ~100 frames
+inside the faster rate's budget). The same holds for a formula drawn
+`"over"` a GIF and sent again over the same GIF.
+
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
 Errors: `400` neither card-absolute nor a Formula, or a bad formula (`path must be card-absolute and stay on the card, or a Formula (@formula…)`);
