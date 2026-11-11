@@ -15,6 +15,7 @@ make web-mock ROOT=~/scratch/dmdos-card # a fake device on :8080 (OVERLAY=dir ke
 make web-mock PROXY=http://192.168.1.69    # this build, same-origin against a real device
 make web-serve                             # plain static server: local mode
 make web-smoke                             # headless Chromium through every view (DEVICE=http://… adds a real-device pass)
+WEB_SMOKE_ONLY=thumbs,follow WEB_SMOKE_REPEAT=20 uv run tools/web-smoke.py   # single sections, looped (after make web), for a flaky check
 make www-push HOST=opendmd.local           # write the pack into the player's flash over WiFi
 ```
 
