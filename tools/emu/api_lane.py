@@ -44,7 +44,7 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
   load x3     uploads read back, settings saves, saves into a big folder, listings and status
               reads (display-stress's loads), each on its own connection at once by default
               (--connections 2: status polls beside the rest; 1: one at a time), then 60 s quiet:
-              the heap census (`emu-census`) of the last quiet spell against the first's
+              the heap census (`emu-census`) of the last quiet spell against the earlier ones'
   cache       a recursive delete under /cache while the FAT index builds (the corruption
               hazard fixed in fatidx-heap): the build dropped, rebuilt, not stale
   ota         GET /api/firmware (layout v4); bundles for table v3, with a bad signature, a bad image: 422
@@ -74,9 +74,16 @@ from pathlib import Path
 PORT = 8080  # in the lane's own network namespace: never taken by another run
 WIFI = "ssid=demo,chan=6,psk=demo-password"
 # A quiet spell's census meets the playing GIF's phases (its levels step by 5-10 KB: ~196, 201,
-# 209, 211, 221 KB in the census image), and its least is compared: 30 s (~4 samples) missed the
-# lowest phase in one spell of three and failed a flat heap by 5 KB; 60 s takes ~8.
-LOAD_S, QUIET_S = 30, 60
+# 209, 211, 221 KB in the census image; ~204, 209, 219, 229 KB in later ones), and its least is
+# compared: 30 s (~4 samples) missed the lowest phase in one spell of three and failed a flat heap
+# by 5 KB; 60 s takes ~8, and the lowest phase is only ~1 sample in 6 or 7, so 60 s still missed it
+# in about one run in four (203468 -> 223120 B, a flat heap). So the last spell goes on, up to
+# QUIET_MORE_S more, until its least is back within LEAK_BLOCKS / LEAK_BYTES of the earlier
+# spells' least: a flat heap meets its lowest phase again (within ~200 B of where it was), a leak
+# never does, and fails once the time is up (a sample is ~20 s of device time; ~48 at the most).
+# The reference is the least of every earlier spell (never above the first spell's, which was the
+# reference before: no leak passes now that failed then).
+LOAD_S, QUIET_S, QUIET_MORE_S = 30, 60, 300
 BURST_ROUNDS = [2, 2, 2, 5, 5, 5]
 ROUNDS = max(2, int(os.environ.get("EMU_API_ROUNDS", "3")))
 # RX_BUFFERS (found by this lane, 2026-11-03; fixed in net-wedge): two uploads at once got the
@@ -1323,15 +1330,26 @@ class Lane:
             counts = self.load(api, k)
             self.ok(f"load {k + 1}/{ROUNDS}", ", ".join(f"{n} {v}" for n, v in counts.items()))
             start = emu.mark()
+            spell = lambda: [(int(m[1]), int(m[2])) for _, m in emu.find(CENSUS, start)]  # noqa: E731
             end = time.time() + QUIET_S
             while time.time() < end:
                 emu.check()
                 time.sleep(1)
-            quiet.append([(int(m[1]), int(m[2])) for _, m in emu.find(CENSUS, start)])
+            if k == ROUNDS - 1 and all(quiet):
+                # The last: on until it meets its lowest phase again (see QUIET_MORE_S).
+                b0, y0 = min(c[0] for s in quiet for c in s), min(c[1] for s in quiet for c in s)
+                flat = lambda c: c and min(x[0] for x in c) - b0 <= LEAK_BLOCKS and min(x[1] for x in c) - y0 <= LEAK_BYTES  # noqa: E731
+                end = time.time() + QUIET_MORE_S
+                while not flat(spell()) and time.time() < end:
+                    emu.check()
+                    if emu.done:  # (no more census lines will come: say so, not "the heap grew")
+                        raise LaneFail(f"boot {emu.label}: the emulator stopped (exit {emu.p.returncode}) in the last quiet spell")
+                    time.sleep(1)
+            quiet.append(spell())
         self.expect(all(quiet), "census", f"census lines per quiet spell {[len(c) for c in quiet]}: is this an emu-census image?")
-        b0, y0 = min(c[0] for c in quiet[0]), min(c[1] for c in quiet[0])
+        b0, y0 = min(c[0] for s in quiet[:-1] for c in s), min(c[1] for s in quiet[:-1] for c in s)
         b1, y1 = min(c[0] for c in quiet[-1]), min(c[1] for c in quiet[-1])
-        mids = ", ".join(f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B" for s in quiet)
+        mids = ", ".join(f"{min(c[0] for c in s)} blocks / {min(c[1] for c in s)} B ({len(s)} samples)" for s in quiet)
         self.expect(b1 - b0 <= LEAK_BLOCKS and y1 - y0 <= LEAK_BYTES, "census",
                     f"the heap grew across the load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")
         self.ok("census", f"flat across {ROUNDS} load rounds: least blocks {b0} -> {b1}, allocated {y0} -> {y1} B (each quiet spell: {mids})")

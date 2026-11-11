@@ -538,7 +538,11 @@ function editor() {
   // through: the loop, or the first 10 s of one that goes on.
   const tr = h('input', { type: 'range', id: 'psi-t', min: 0, max: 0, value: 0, 'aria-label': 'Time', oninput: () => seek(Math.floor(+tr.value * grain()), +tr.value) });
   const tnow = h('span.mono', { id: 'psi-t-now' });
-  const pz = h('button.sm', { id: 'psi-pause', onclick: () => seek(pv.hold == null ? elapsed() : null) });
+  // (Paused on the step on screen, as `,` and `.` step: a hold between two
+  // steps would draw a picture the panel never shows, and the next `.` could
+  // look like nothing. Unwrapped: over a GIF, past the first loop, a wrapped
+  // step would put the GIF underneath back to its first time round.)
+  const pz = h('button.sm', { id: 'psi-pause', onclick: () => { if (pv.hold != null) { seek(null); return; } const k = Math.floor(elapsed() / grain()); seek(Math.floor(k * grain()), k); } });
   const stp = (k) => h('button.sm', { id: k < 0 ? 'psi-t-back' : 'psi-t-on', 'aria-label': k < 0 ? 'A frame back' : 'A frame on', title: k < 0 ? 'A frame back (,)' : 'A frame on (.)', onclick: () => step(k) }, k < 0 ? '‹' : '›');
   const trow = h('div.psi-time', pz, stp(-1), tr, stp(1), tnow);
   const cap = h('div.cap', { id: 'psi-ed-cap' }), heavy = h('p.cap', { id: 'psi-heavy', hidden: true }, HEAVY);
@@ -608,7 +612,8 @@ function editor() {
   function step(k) {
     const g = grain(), n = Math.max(1, Math.floor(len() / g));
     let i = shownStep() + k;
-    if (pv.loopMs !== 0) i = (i % n + n) % n;
+    // (Over a GIF, unwrapped: the GIF under it has a length of its own.)
+    if (pv.loopMs !== 0 && !pv.over) i = (i % n + n) % n;
     i = Math.max(0, i);
     seek(Math.floor(i * g), i);
   }

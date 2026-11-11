@@ -89,8 +89,9 @@ export class PanelPreview {
   setPaused(v) { this.p.setPaused(v); }
   get paused() { return this.p.paused; }
   // The panel was `elapsed` ms into this file at local time `at`
-  // (performance.now()); returns the drift before correction (NaN: nothing loaded).
-  syncTo(elapsed, at) { return this.p.syncTo(elapsed, at); }
+  // (performance.now()), its position advancing `rate` ms per ms (left out:
+  // 1, until Now has measured it); returns the drift before correction (NaN: nothing loaded).
+  syncTo(elapsed, at, rate) { return this.p.syncTo(elapsed, at, rate); }
   get synced() { return this.p.synced; }
   setDwell(min, max) { this.p.setDwell(min, max); }
   apply() { this.p.setLook(look.gamma, look.gain, look.bloom, look.flat); }

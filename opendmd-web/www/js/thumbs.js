@@ -255,6 +255,12 @@ function seen(cv) {
   const l = cv.closest('.vlist'), r = cv.getBoundingClientRect(), b = l?.getBoundingClientRect();
   return b && r.bottom > b.top && r.top < b.bottom;
 }
+// A read to try again: for each canvas showing its path now, not drawn (a
+// row drawn again while it was out has a new one), else the one it had.
+function again(q) {
+  const cvs = [...document.querySelectorAll('canvas.th')].filter((c) => c._p === q.path && live(c) && !c.dataset.done);
+  return cvs.length ? cvs.map((cv) => ({ cv, path: q.path })) : [q];
+}
 function pump() {
   clearTimeout(timer);
   const wait = pausedTo - performance.now();
@@ -271,7 +277,8 @@ function pump() {
     (q.run ? q.run() : stillOf(q)).catch((e) => {
       if (was !== epoch) return; // the old card's
       // Busy: everything waits Retry-After, this row first again after.
-      if (e?.status === 503) { pausedTo = performance.now() + e.after * 1000; if (!q.run) queue.unshift(q); return; }
+      // (The row's canvas now: one made while this was out waited for it.)
+      if (e?.status === 503) { pausedTo = performance.now() + e.after * 1000; if (!q.run) queue.unshift(...again(q)); return; }
       if (q.run) return;
       // Neither file there: kept as nothing. Anything else may pass.
       if (e?.status === 404) { show(q.path, null); put({ k: q.path, size: 0, still: null }); return; }

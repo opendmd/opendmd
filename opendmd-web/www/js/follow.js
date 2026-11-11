@@ -57,10 +57,14 @@ export function followCard() {
   // Saved as it changes: the switch and the playlist at once, the address
   // when typing settles, the code when the field is left (then cleared).
   const head = h('h3', 'Follow RePlayOS'), run = saver(head);
-  const save = () => {
+  // (The code goes with its own field's change, and with any other save
+  // once the field is left: one whose own save failed (no address yet) goes
+  // with the next. Never while it is being typed: the address's save, as
+  // typing settles, would send it half-typed, and clear it.)
+  const save = (withCode) => {
     const a = attract.value;
     const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: a == '*' ? null : a };
-    if (code.value) patch.follow_code = code.value;
+    if (code.value && (withCode === true || document.activeElement !== code)) patch.follow_code = code.value;
     // The saved code goes only to the saved address: a new one forgets it.
     const moved = !code.value && app.config?.follow_code_set && patch.follow_host.toLowerCase() !== (app.config.follow_host || '').trim().toLowerCase();
     return run(async () => {
@@ -72,8 +76,9 @@ export function followCard() {
       if (moved) { result.className = 'muted'; result.textContent = 'New address: type its NET CONTROL code again.'; }
     });
   };
-  on_.onchange = attract.onchange = code.onchange = save;
-  host.oninput = debounce(save, 400);
+  on_.onchange = attract.onchange = () => save(false);
+  code.onchange = () => save(true);
+  host.oninput = debounce(() => save(false), 400);
 
   async function test() {
     result.className = 'muted';
