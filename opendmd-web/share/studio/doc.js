@@ -84,13 +84,14 @@ export class Doc {
     const { frames, layers, colours, keys, plays, ...rest } = keyed(body), wide = keys === 2;
     this.rest = plays ? { ...rest, plays } : rest;
     this.frames = frames;
-    this.layers = layers.map((l) => ({ ...l, cels: l.cels.map((z) => new Cel(z, wide, this.#cached(z))) }));
     this.cols = new Map((this.coloursOf(body) || []).map((c) => [c.k, toInt(c.hex)]));
+    // The colours first: a cel from the cache is cleaned against them too.
+    this.layers = layers.map((l) => ({ ...l, cels: l.cels.map((z) => new Cel(z, wide, this.#cached(z))) }));
     this.L = Math.min(this.L, this.layers.length - 1);
     this.F = Math.min(this.F, this.frames.length - 1);
     memo(this.layers.reduce((n, l) => n + l.cels.length, 0) + 8);
   }
-  #cached(z) { const p = this.unz.get(z); return p ? p.slice() : null; }
+  #cached(z) { const p = this.unz.get(z); return p ? this.#clean(p.slice()) : null; }
   #remember(z, px) {
     if (this.unz.size > Math.max(64, 2 * this.layers.reduce((n, l) => n + l.cels.length, 0))) this.unz.delete(this.unz.keys().next().value);
     this.unz.set(z, px.slice());
@@ -155,7 +156,7 @@ export class Doc {
   async load(f = this.F) {
     await Promise.all(this.layers.map(async (l, n) => {
       const c = this.celAt(n, f);
-      if (!c.px) { c.px = Uint16Array.from(await unpackPx(c.z, N, c.zw)); this.#remember(c.z, c.px); this.#clean(c.px); }
+      if (!c.px) { c.px = Uint16Array.from(await unpackPx(c.z, N, c.zw)); this.#clean(c.px); this.#remember(c.z, c.px); }
     }));
   }
   async loadAll() { for (let f = 0; f < this.frames.length; f++) await this.load(f); }
