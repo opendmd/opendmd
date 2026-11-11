@@ -1342,6 +1342,8 @@ class Lane:
                 end = time.time() + QUIET_MORE_S
                 while not flat(spell()) and time.time() < end:
                     emu.check()
+                    if emu.done:  # (no more census lines will come: say so, not "the heap grew")
+                        raise LaneFail(f"boot {emu.label}: the emulator stopped (exit {emu.p.returncode}) in the last quiet spell")
                     time.sleep(1)
             quiet.append(spell())
         self.expect(all(quiet), "census", f"census lines per quiet spell {[len(c) for c in quiet]}: is this an emu-census image?")
