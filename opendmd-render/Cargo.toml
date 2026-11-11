@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-render"
-version = "1.1.0-beta.1"
+version = "1.1.0-beta.2"
 edition = "2021"
 description = "Shared LED-panel renderer for OpenDMD: draws a 128x32 canvas as a P4 HUB75 panel."
 license = "MIT OR Apache-2.0"
