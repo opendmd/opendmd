@@ -71,6 +71,12 @@ fn formulas() {
         ("smooth = x\nsmooth", 0),
         ("gray(moon.phase)", 0),
         ("-- phase and smooth\ngray(x)", 0),
+        // The header in any order: a declaration below a `loop` line,
+        // refused by OpenDMD 1.0 (E951).
+        ("loop 2\nname \"X\"\ngray(x)", 1),
+        ("name \"X\"\nloop 2\ncontrol k 0..1 = 0.5\ngray(k)", 1),
+        ("fps 100\nlook\ngray(x)", 1),
+        ("name \"X\"\ncontrol k 0..1 = 0.5\nloop 2\nfps 100\ngray(k)", 0),
     ] {
         assert!(compile(src), "{src}");
         assert_eq!(info()[18], want, "{src}");
@@ -701,4 +707,25 @@ fn the_web_apps_path_is_the_players() {
         assert_eq!(g, &want);
         assert_eq!(opendmd_psi::psb::from_base64(&want.as_bytes()[13..want.len() - 6]).as_ref(), Some(b));
     }
+}
+
+/// Every bundled and gallery Formula needs OpenDMD 1.1's compiler
+/// (`Info::level` 1, pkg-psi `info()[18]`) exactly when it reads the
+/// built-in `phase` or has a `smooth` line: none needs it for its header's
+/// order alone (the 1.0 panels that refuse that never meet one).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_examples_need_1_1_only_for_phase_and_smooth() {
+    let mut new = Vec::new();
+    for e in crate::examples() {
+        assert!(compile(&e.src), "{}", e.slug);
+        let code: Vec<&str> = e.src.lines().map(|l| l.split("--").next().unwrap_or("").trim()).collect();
+        let uses = code.iter().any(|l| *l == "smooth")
+            || code.iter().any(|l| l.match_indices("phase").any(|(k, _)| !l[..k].ends_with('.')));
+        assert_eq!(info()[18], u32::from(uses), "{}", e.slug);
+        if uses {
+            new.push(e.slug.clone());
+        }
+    }
+    assert_eq!(new.len(), 23, "{new:?}");
 }

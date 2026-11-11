@@ -508,7 +508,10 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
                   f"/f/: sent to the panel ({'1.1' if stub is PANEL_STUB_11 else 'before 1.1'}): {src.splitlines()[0]!r}")
         else:
             page.wait_for_function("!document.querySelector('#f-cap').hidden", timeout=20000)
-            popup.wait_for_event("close", timeout=5000) if not popup.is_closed() else None
+            for _ in range(50):
+                if popup.is_closed():
+                    break
+                page.wait_for_timeout(100)
             check(popup.is_closed() and "older than OpenDMD 1.1" in page.inner_text("#f-cap"),
                   f"/f/: phase and smooth to an older panel: its window closed, update it ({page.inner_text('#f-cap')!r})")
         page.context.close()
