@@ -443,7 +443,7 @@ function build(root) {
     const i = info(f.src), c = ctlOf(f);
     title.textContent = nameOf(f);
     desc.textContent = c?.about || f.desc || '';
-    cap.textContent = i.length ? about(i, HZ()) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
+    cap.textContent = i.length ? about(i, HZ(), !!c?.look) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
     cap.title = i.length ? TIP(i) : '';
     sliders(sl, f, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
@@ -678,7 +678,7 @@ function editor() {
       bad = null;
       err.textContent = '';
       const i = info(f.src);
-      cap.textContent = about(i, HZ());
+      cap.textContent = about(i, HZ(), !!ctlOf(f)?.look);
       cap.title = TIP(i);
       heavy.hidden = est(i) <= 8000 && !refused(i);
       heavy.textContent = refused(i) ? TOO_HEAVY(i) + '. Simplify it: noise, len, sqrt, atan2 and dividing by a changing value cost the most' : HEAVY;
