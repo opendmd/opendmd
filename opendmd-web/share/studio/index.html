@@ -22,7 +22,8 @@
 <span class="s-sp"></span>
 <button class="s-ib" id="s-undo" title="Undo (Ctrl+Z)" aria-label="Undo" data-i="undo" disabled></button>
 <button class="s-ib" id="s-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" data-i="redo" disabled></button>
-<button class="s-cta" id="s-gif">Download GIF</button>
+<button class="s-pill" id="s-gif">Download GIF</button>
+<button class="s-cta" id="s-send">Send to panel</button>
 </div>
 <div class="s-stage">
 <p class="s-touch" id="s-touch" hidden>Two fingers move and zoom the picture</p>
@@ -55,8 +56,10 @@
 <div class="s-selbar" id="s-selbar" hidden>
 <button class="s-pill" data-act="copy" title="Copy (Ctrl+C)">Copy</button><button class="s-pill" data-act="cut" title="Cut (Ctrl+X)">Cut</button><button class="s-pill" data-act="paste" title="Paste (Ctrl+V)">Paste</button><button class="s-pill" data-act="fliph" title="Flip left to right (Shift+H)">Flip ↔</button><button class="s-pill" data-act="flipv" title="Flip top to bottom (Shift+V)">Flip ↕</button><button class="s-pill" data-act="del" title="Delete (Delete)">Delete</button><button class="s-pill" data-act="done" title="Done (Enter)">Done</button>
 </div>
+<div class="s-strip" id="s-strip"><div class="s-cells" id="s-cells" aria-label="Frames"><button class="s-cell on" data-f="0" aria-current="true"><b>1</b></button></div><button class="s-pill s-addf" id="s-addf" title="New frame after this one (N)" aria-label="New frame">+</button></div>
+<div class="s-tabs" id="s-tabs" role="tablist"><button role="tab" data-tab="colours" aria-selected="true">Colours</button><button role="tab" data-tab="layers" aria-selected="false">Layers</button><button role="tab" data-tab="piece" aria-selected="false">Piece</button></div>
 <div class="s-bench">
-<section class="s-colours" aria-labelledby="s-colours-h">
+<section class="s-colours" data-tab="colours" aria-labelledby="s-colours-h">
 <div class="s-hd"><h2 id="s-colours-h">Colours</h2><span class="s-sp"></span><span class="s-used" id="s-used"></span></div>
 <div class="s-pal" id="s-sw" role="radiogroup" aria-label="This piece’s colours"></div>
 <p class="s-cap s-warn" id="s-many" hidden>Past 256 colours: the panel still shows every one exactly, but plays this GIF the slower way and without Smooth motion. <button class="s-pill" id="s-fit" title="Download a GIF of the 256 colours used most, each other colour as its nearest: the panel plays it the quick way, with Smooth motion. The piece keeps all its colours.">Download fitted to 256 colours</button></p>
@@ -67,7 +70,12 @@
 <p class="s-cap" id="s-pal-about"></p>
 <div id="s-palx" hidden></div>
 </section>
-<section class="s-drafts" aria-labelledby="s-drafts-h">
+<section class="s-layers" data-tab="layers" aria-labelledby="s-layers-h">
+<div class="s-hd"><h2 id="s-layers-h">Layers</h2><span class="s-sp"></span><button class="s-pill" id="s-addl">Add layer</button></div>
+<ul class="s-list" id="s-lrows"></ul>
+<p class="s-cap">A layer held still is drawn once and shows on every frame; one that moves has a picture for each frame.</p>
+</section>
+<section class="s-drafts" data-tab="piece" aria-labelledby="s-drafts-h">
 <div class="s-hd"><h2 id="s-drafts-h">Drafts</h2><span class="s-sp"></span><button class="s-pill s-pri" id="s-new">New piece</button></div>
 <ul class="s-list" id="s-list"></ul>
 <p class="s-cap">Drafts are kept in this browser on this device, and nothing is uploaded. Download a GIF to keep a copy, then add it to your panel in its web app.</p>
