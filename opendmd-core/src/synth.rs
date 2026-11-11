@@ -780,10 +780,29 @@ impl<R: Read> SynthSource<R> {
         Some(cur.retune_from(&path[FORMULA.len()..]).map_err(crate::fx_psi::io_error))
     }
 
-    /// Start again from the first frame without reopening: a loop.
+    /// Start again from the first frame without reopening: a loop. A
+    /// Formula's time past its loop's end (the last frame's delay ran over
+    /// it) is carried into the next, so its `t` keeps the clock's pace
+    /// across the wrap; never more than a loop (`elapsed` stays bounded,
+    /// raced and grid frames alike).
     pub fn rewind(&mut self) {
         self.frames = 0;
-        self.elapsed = Duration::ZERO;
+        self.elapsed = match &mut self.spec {
+            Spec::Fx(f) => {
+                let lp = f.loop_time();
+                self.elapsed.checked_sub(lp).filter(|r| *r < lp).unwrap_or(Duration::ZERO)
+            }
+            _ => Duration::ZERO,
+        };
+    }
+
+    /// The effect it plays (tests).
+    #[cfg(all(test, feature = "psi"))]
+    pub(crate) fn fx_mut(&mut self) -> Option<&mut crate::fx::Fx> {
+        match &mut self.spec {
+            Spec::Fx(f) => Some(f),
+            _ => None,
+        }
     }
 
     pub fn into_inner(self) -> R {
