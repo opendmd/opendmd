@@ -133,10 +133,14 @@ export class Doc {
     if (!rec.hash || j.hash !== rec.hash || !j.list.every((s, n) => s.n === lo + n) || !ok(j.at) || !ok(j.cur)) return 'dropped';
     this.steps = j.list; this.low = lo; this.cur = j.at - lo + 1;
     try {
-      // Every cel the journal holds reads, as the width it says, whether it comes into view or not.
+      // Every cel the journal holds reads, as the width it says, whether it
+      // comes into view or not: each one once (snapshot steps of a big piece
+      // share most of theirs with each other and with the record).
+      const seen = new Set(rec.body.layers.flatMap((l) => l.cels.map((z) => `${z}|${rec.body.keys === 2}`)));
+      const read = async (z, w) => { const k = `${z}|${w}`; if (!seen.has(k)) { seen.add(k); await unpackPx(z, N, w); } };
       for (const st of j.list) {
-        if (st.t) for (const [z, w] of Object.values(st.t.z)) await unpackPx(z, N, w);
-        if (st.body) for (const b of [st.body.a, st.body.b]) for (const l of b.layers) for (const z of l.cels) await unpackPx(z, N, b.keys === 2);
+        if (st.t) for (const [z, w] of Object.values(st.t.z)) await read(z, w);
+        if (st.body) for (const b of [st.body.a, st.body.b]) for (const l of b.layers) for (const z of l.cels) await read(z, b.keys === 2);
       }
       while (this.cur < j.cur - lo + 1) await this.step(true);
       while (this.cur > j.cur - lo + 1) await this.step(false);

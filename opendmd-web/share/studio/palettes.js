@@ -29,10 +29,13 @@ export const ready = Promise.all(STARTER.map(async (p) => { p.hash = await hashO
 const BY = new Map(STARTER.map((p) => [p.id, p]));
 export const builtin = (id) => BY.get(id) || null;
 
-// The starter pack's palettes, fetched once (after the page is up): each
-// checked and its hash worked out again; one that is not right is left out.
+// The starter pack, fetched once (after the page is up): every record (its
+// palettes, stamps, fonts, templates and the pack itself) checked and its
+// hash worked out again; one that is not right is left out. `starter()`
+// gives its palettes; `starterAll` holds every record that loaded.
 let members = new Set(), starting = null;
-export const isStarter = (id) => members.has(id);
+export const starterAll = [];
+export const isStarter = (id) => members.has(id) || (starterAll.length > 0 && starterAll[0].id === id);
 export function starter() {
   starting ??= fetch(new URL('starter.dmdpack', import.meta.url)).then((r) => {
     if (!r.ok) throw new Error(`starter palettes: HTTP ${r.status}`);
@@ -42,9 +45,16 @@ export function starter() {
     if (!pack) throw new Error('starter palettes: not a pack');
     members = new Set(pack.body.members.map((m) => m.id));
     const out = [];
-    for (const p of b.records) {
-      if (p.type !== 'palette' || !members.has(p.id)) continue;
-      try { check(p); if (await hashOf(p.body) === p.hash) { out.push(p); BY.set(p.id, p); } } catch { /* left out */ }
+    starterAll.length = 0;
+    for (const p of [pack, ...b.records.filter((x) => x !== pack)]) {
+      if (p !== pack && !members.has(p.id)) continue;
+      try {
+        check(p);
+        if (await hashOf(p.body) !== p.hash) continue;
+        starterAll.push(p);
+        BY.set(p.id, p);
+        if (p.type === 'palette') out.push(p);
+      } catch { /* left out */ }
     }
     return out;
   }).catch((e) => { starting = null; throw e; });
