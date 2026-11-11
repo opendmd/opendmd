@@ -23,6 +23,8 @@ export function mount(studio) {
   const css = el('link');
   css.rel = 'stylesheet';
   css.href = new URL('frames.css', import.meta.url).href;
+  // (The strip's controls shown once their styles are in: no flash of a long unstyled row.)
+  css.onload = css.onerror = () => { bar.hidden = false; S.root.dataset.frames = 'yes'; };
   document.head.append(css);
   const on = el('canvas');
   on.id = 's-onion';
@@ -30,15 +32,18 @@ export function mount(studio) {
   $('s-canvas').after(on);
   // Play, onion skin, this frame's time and the plays, before the cells.
   const bar = el('div', 's-play');
+  bar.hidden = true;
   bar.innerHTML = '<button class="s-pill s-pri" id="s-playb" title="Play (Space)">Play</button>'
-    + '<button class="s-pill" id="s-onionb" aria-pressed="false" title="The frame before, faint, under this one">Onion skin</button>'
-    + '<label class="s-time">Frame time <input id="s-ms" class="s-in" type="number" min="20" max="60000" step="10"> ms</label>'
+    + '<button class="s-pill" id="s-onionb" aria-pressed="false" title="A ghost of the frame before, over this one">Onion skin</button>'
+    + '<button class="s-pill s-fmorebtn" id="s-fmore-b" aria-expanded="false" aria-controls="s-fmore">Frame…</button>'
+    + '<span class="s-fmore" id="s-fmore"><label class="s-time">Frame time <input id="s-ms" class="s-in" type="number" min="20" max="60000" step="10"> ms</label>'
     + '<button class="s-pill" id="s-msall" title="Every frame takes this frame’s time">All frames</button>'
-    + '<label class="s-time">Plays <input id="s-plays" class="s-in" type="number" min="0" max="65535" title="0: forever"></label>'
+    + '<label class="s-time" title="How many times it plays where a GIF’s loop count is kept, as in a browser; 0: forever. On the panel it plays for as long as its playlist keeps it on">Plays <input id="s-plays" class="s-in" type="number" min="0" max="65535"></label>'
     + '<span class="s-fmenu"><button class="s-pill" data-fa="dup" title="Duplicate this frame">Duplicate</button><button class="s-pill" data-fa="left" title="Move this frame earlier">◀</button>'
-    + '<button class="s-pill" data-fa="right" title="Move this frame later">▶</button><button class="s-pill" data-fa="del" title="Delete this frame">Delete</button></span>';
+    + '<button class="s-pill" data-fa="right" title="Move this frame later">▶</button><button class="s-pill" data-fa="del" title="Delete this frame">Delete</button></span></span>';
   $('s-strip').prepend(bar);
   $('s-playb').onclick = toggle;
+  $('s-fmore-b').onclick = () => { const o = $('s-fmore').classList.toggle('open'); $('s-fmore-b').setAttribute('aria-expanded', o); };
   $('s-onionb').onclick = () => { onion = !onion; $('s-onionb').setAttribute('aria-pressed', onion); $('s-onionb').classList.toggle('on', onion); S.paint(); };
   $('s-ms').onchange = () => retime(+$('s-ms').value, false);
   $('s-msall').onclick = () => retime(+$('s-ms').value, true);
@@ -51,7 +56,6 @@ export function mount(studio) {
   $('s-lrows').onclick = layerAct;
   $('s-lrows').onchange = (e) => { const i = e.target.closest('[data-l]'); if (i && e.target.matches('input')) rename(+i.dataset.l, e.target.value); };
   Object.assign(S.fx, { painted, changed: () => render(), opened: () => { stop(); render(); }, stop, step: (d) => show(D().F + d) });
-  S.root.dataset.frames = 'yes';
   render();
 }
 
@@ -105,15 +109,25 @@ function render() {
   S.root.dataset.active = d.L;
 }
 // After each paint: the onion skin, and this frame's thumbnail and the active layer's.
+// The onion skin: a ghost of the frame before, over this one, where it
+// differs: the layer drawn on if it moves (what an animator steps), else
+// the whole picture. Off pixels are see-through.
 function painted() {
   const d = D(), on = $('s-onion');
   if (!on) return;
   on.hidden = !onion || d.frames.length < 2 || playing;
   if (!on.hidden) {
-    const p = (d.F + d.frames.length - 1) % d.frames.length, here = d.composite();
+    const p = (d.F + d.frames.length - 1) % d.frames.length, own = d.layers[d.L].moves;
     d.load(p).then(() => {
-      const prev = d.composite(p), cols = new Map(d.cols), keys = Uint16Array.from(prev, (k, i) => (here[i] ? 0 : k));
-      thumb(on, keys, cols);
+      const here = own ? d.px : d.composite(), prev = own ? d.celAt(d.L, p).px : d.composite(p);
+      const g = on.getContext('2d'), img = g.createImageData(W, H);
+      for (let i = 0; i < N; i++) {
+        const k = prev[i];
+        if (!k || k === here[i]) continue;
+        const v = d.cols.get(k) ?? 0;
+        img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], i * 4);
+      }
+      g.putImageData(img, 0, 0);
     }).catch(() => {});
   }
   const c = $('s-cells').children[d.F]?.querySelector('canvas');
@@ -121,9 +135,11 @@ function painted() {
   const r = $('s-lrows').querySelector(`[data-l="${d.L}"] canvas`);
   if (r) thumb(r, d.px, d.cols);
 }
+// A stroke or a drag in progress (a second finger on the strip): nothing moves under it.
+const busy = () => !!(D().stroke || S.dragging);
 async function show(f) {
   const d = D();
-  if (f < 0 || f >= d.frames.length || S.sel?.fl) return;
+  if (f < 0 || f >= d.frames.length || S.sel?.fl || busy()) return;
   d.F = f;
   await d.load();
   S.showSel();
@@ -135,7 +151,7 @@ async function show(f) {
 function toggle() { if (playing) stop(); else play(); }
 function play() {
   const d = D();
-  if (d.frames.length < 2) return;
+  if (d.frames.length < 2 || busy() || S.sel?.fl) return; // not over a stroke, nor while a paste floats
   S.done();
   const n = ++playing, start = d.F;
   plays = 0;
@@ -166,6 +182,7 @@ function stop() {
 // --- changes: each one step ---
 let chain = Promise.resolve();
 function change(f) {
+  if (busy()) return chain;
   stop();
   S.done();
   chain = chain.then(async () => {
@@ -218,10 +235,12 @@ function moveFrame(by) {
     return d.shape(a);
   });
 }
+// A GIF keeps times in hundredths of a second: a frame's time is held to tens of ms.
 function retime(ms, all) {
   return change(async () => {
     const d = D(), a = d.skel();
-    if (!Number.isInteger(ms) || ms < CAPS.msMin || ms > CAPS.msMax) { render(); return no(`A frame lasts ${CAPS.msMin} to ${CAPS.msMax.toLocaleString('en')} ms.`); }
+    if (!Number.isFinite(ms) || ms < CAPS.msMin || ms > CAPS.msMax) { render(); return no(`A frame lasts ${CAPS.msMin} to ${CAPS.msMax.toLocaleString('en')} ms.`); }
+    ms = Math.round(ms / 10) * 10;
     S.say('');
     for (const [i, fr] of a.frames.entries()) if (all || i === d.F) fr.ms = ms;
     if (a.frames.every((fr, i) => fr.ms === d.frames[i].ms)) return null;
@@ -304,7 +323,7 @@ function rename(at, name) {
 }
 function layerAct(e) {
   const li = e.target.closest('[data-l]'), a = e.target.closest('[data-la]')?.dataset.la;
-  if (!li) return;
+  if (!li || busy()) return;
   const at = +li.dataset.l;
   if (!a) { if (!e.target.matches('input') && !S.sel?.fl) { D().L = at; render(); } return; }
   ({ hide: () => toggleHide(at), moves: () => toggleMoves(at), up: () => moveLayer(at, 1), down: () => moveLayer(at, -1),

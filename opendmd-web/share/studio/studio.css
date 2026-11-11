@@ -14,7 +14,7 @@ html,body.spage{height:auto}
 
 /* The piece's own bar: its name, what it is, whether it is kept; undo, redo, the GIF */
 .s-doc{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:0 0 14px}
-.s-title{display:flex;align-items:center;gap:6px 14px;min-width:0}
+.s-title{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0}
 .s-name input{font:600 28px/1.15 var(--display);letter-spacing:-.012em;color:var(--head);background:none;border:1px solid transparent;
 border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(13em,70vw)}
 .s-name input:hover{border-color:var(--line)}
@@ -149,6 +149,14 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   .s-tray>.s-tools{flex:1 0 100%}
   .s-hint{display:none}
   .s-bench{grid-template-columns:minmax(0,1fr)}
+  /* The frames right under the panel; every control a finger's height */
+  #studio{display:flex;flex-direction:column}
+  .s-doc{order:-3}.s-stage{order:-2}.s-strip{order:-1}
+  .s-pill,.s-in,.s-name input,.s-tray .s-seg button,.s-chin .s-seg button{min-height:40px}
+  .s-tray .s-seg button,.s-chin .s-seg button,.s-addf{min-width:40px}
+  .s-pill{height:40px}
+  .s-cta,#s-pal{min-height:40px}
+  .s-title{align-items:stretch}
   .s-tabs{display:flex;position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line)}
   .s-tabs button{flex:1;height:44px;border:0;background:none;color:var(--mut)}
   .s-tabs [aria-selected=true]{color:var(--fg);font-weight:600;box-shadow:inset 0 -2px 0 var(--acc)}

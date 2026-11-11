@@ -274,6 +274,7 @@ function done() { drop(); sel = null; showSel(); paint(); }
 function act(a) {
   if (a === 'paste') {
     if (!clip) return;
+    fx.stop?.();
     if (tool !== 'select') useTool('select');
     drop();
     // Its colours join the piece in the step that puts it down, their keys
@@ -774,7 +775,7 @@ const download = (fit) => out('download', fit);
 const fx = {}; // what frames.js hooks in: painted(), changed(step), opened(), stop()
 let framesMod = null;
 const frames = () => (framesMod ??= import('./frames.js').then((m) => { m.mount(studio); return m; }).catch((e) => { framesMod = null; say(`The frames could not load: ${e.message || e}`); throw e; }));
-const withFrames = (f) => () => { done(); frames().then(f, () => {}); };
+const withFrames = (f) => () => { if (D.stroke || drag) return; done(); frames().then(f, () => {}); };
 
 // --- the colour picker and the palette tools: colour.js, loaded when first opened ---
 let colourMod = null;
@@ -786,7 +787,7 @@ const studio = {
   get doc() { return D; }, get rec() { return rec; }, get kept() { return kept; }, get saved() { return root.dataset.saved; },
   root, listOf, done, freeze, snaps, status, nameNow,
   // for frames.js
-  fx, after, paint, buttons, showSel, get sel() { return sel; },
+  fx, after, paint, buttons, showSel, get sel() { return sel; }, get dragging() { return !!drag; },
   newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
 };
 async function colourTools(which, b) {
@@ -869,7 +870,8 @@ async function main() {
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
   document.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, select, textarea')) return;
+    // Not in a field, nor behind an open sheet (Send to panel): the piece there is the one going out.
+    if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
