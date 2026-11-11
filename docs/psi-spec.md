@@ -191,7 +191,10 @@ the editor.
   (from OpenDMD 1.1), as in the preview; a saved GIF, and the panel when it
   can't follow its scan (a `rate` layer, the glow), play whole 20 ms (or
   40 ms) frames, so a loop that isn't a whole number of them comes out up
-  to a frame short there. `loop N` is also the least time the
+  to a frame short there (such a frame, the first of a play among them,
+  that falls in the loop's last part frame draws `t` at 0). The time past
+  the loop's end carries into the next, so `t` keeps the clock's pace
+  across the wrap. `loop N` is also the least time the
   formula plays for in a playlist, and the length of a GIF saved from it.
   `phase` is where the frame is in the loop, 0 to 1: `t` divided by the
   loop's length as its line writes it, the very division, so `sin(phase)`
