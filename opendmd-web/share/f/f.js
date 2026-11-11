@@ -93,7 +93,7 @@ async function start() {
   const open = btn('f-open', 'Open on my panel', 'pri'), copyCode = btn('f-copy-code', 'Copy code'), submit = btn('f-submit', 'Submit to the gallery…');
   const ed = await editorPage($('f-ed'), { ...got, ...(ref?.f || {}) }, {
     acts: [open, copyCode, submit], key,
-    note: 'Open on my panel saves it on your own display, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery.',
+    note: 'Open on my panel saves it on your own display, under Your formulas, and opens it there, where you can change it, show it and add it to a playlist. To share it, submit it to the gallery. A Formula with phase or smooth needs OpenDMD 1.1 on the panel: if it says the name is unknown, update the panel.',
     changed: () => { clearTimeout(changed.t); changed.t = setTimeout(changed, 150); },
   });
   let subForm = null;
@@ -115,6 +115,9 @@ async function start() {
   }
   changed();
   const say = (t) => { $('f-cap').hidden = !t; $('f-cap').textContent = t || ''; };
+  // `phase` read, or `smooth` alone on its line (OpenDMD 1.1's words), unless the formula sets its own.
+  const NEW = (s) => /(?<![\w.])phase\b|(^|;)[ \t]*smooth[ \t]*(;|$)/m.test(s) && !/(^|;)[ \t]*(phase|smooth)[ \t]*=[^=]/m.test(s);
+  const OLD = 'Your panel’s web app is older than OpenDMD 1.1, and doesn’t know phase or smooth: update the panel (its Settings › Update), then press Open on my panel again.';
 
   // Open on my panel: the address asked once, then remembered (../panel.js).
   // (Called in the click or the form's submit: a window may open.)
@@ -127,7 +130,9 @@ async function start() {
     if (ref?.gallery && x.src === orig) { location.href = `http://${a}/#gallery=${ref.gallery}${v ? '&' + v : ''}`; return; }
     // Its app says it is ready (once it has loaded): the Formula, to that window only.
     const data = { type: REMIX, name: x.ctl?.name || x.name || '', src: x.src, a: x.a, b: x.b, c: x.c };
-    if (!handOff(a, 'remix', READY, { data })) say('Your browser didn’t open the display’s web app: allow pop-ups for opendmd.dev, then press Open on my panel again.');
+    // A panel's app from before OpenDMD 1.1 (no `feat`) can't compile `phase` or `smooth`: asked to update instead.
+    const send = (r) => (!r.feat && NEW(x.src.replace(/(--|\/\/).*/g, '')) ? (say(OLD), null) : { data });
+    if (!handOff(a, 'remix', READY, send)) say('Your browser didn’t open the display’s web app: allow pop-ups for opendmd.dev, then press Open on my panel again.');
   }
   const { ask } = addressForm('f', go, 'formula');
   open.onclick = () => { if (addr()) go(addr()); else ask(); };

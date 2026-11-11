@@ -279,8 +279,12 @@ PANEL_STUB = ("<!doctype html><title>waiting</title><script>addEventListener('me
               "if (opener) opener.postMessage({type: 'opendmd-remix-ready'}, '*');</script>")
 
 
-def panel_route(ctx, seen: list[str]) -> None:
-    ctx.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=PANEL_STUB, content_type="text/html")))
+def panel_route(ctx, seen: list[str], stub: str = None) -> None:
+    ctx.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body=stub or PANEL_STUB, content_type="text/html")))
+
+
+# A panel's app from OpenDMD 1.1 on: it says what its compiler knows (`feat`).
+PANEL_STUB_11 = PANEL_STUB.replace("{type: 'opendmd-remix-ready'}", "{type: 'opendmd-remix-ready', feat: 1}")
 
 
 def sent(popup: Page) -> dict:
@@ -479,6 +483,27 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     check(page.inner_text("#psi-ed-sl > div > span") == "shape" and got["data"].get("a") == 1,
           f"/f/: a choice's buttons, ring -> a=1 sent to the panel ({got['data'].get('a')})")
     page.context.close()
+
+    # `phase` or `smooth` to a panel from before 1.1 (its app says no `feat`):
+    # not sent, and the page asks for an update; to a 1.1 one, sent.
+    for stub, new in ((PANEL_STUB, False), (PANEL_STUB_11, True)):
+        page = new_page(browser, "laptop", errors)
+        seen = []
+        panel_route(page.context, seen, stub)
+        open_text(page, base, "smooth\nloop 2\ngray(frac(x + phase))", "New words")
+        page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+        with page.context.expect_page() as info:
+            page.click("#f-open")
+        popup = info.value
+        if new:
+            got = sent(popup)
+            check("phase" in got["data"].get("src", "") and page.is_hidden("#f-cap"), "/f/: phase and smooth go to a 1.1 panel")
+        else:
+            page.wait_for_function("!document.querySelector('#f-cap').hidden", timeout=20000)
+            popup.wait_for_timeout(500)
+            check(popup.title() == "waiting" and "older than OpenDMD 1.1" in page.inner_text("#f-cap"),
+                  f"/f/: phase and smooth to an older panel: not sent, update it ({popup.title()!r}, {page.inner_text('#f-cap')!r})")
+        page.context.close()
 
     # A long formula: GitHub can't take it in an address, so the file is copied.
     page = new_page(browser, "laptop", errors)
