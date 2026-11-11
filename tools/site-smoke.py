@@ -4036,7 +4036,7 @@ def studio_read_live(browser, base: str, site: Path, errors: list[str]) -> None:
         const r = m.record('stamp', 'Hidden', { w: 2, h: 2, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: 'eJxjYAAAAAQAAQ==' }], layers: [{ cels: Array(40000).fill('eJxjYAAAAAQAAQ==') }] });
         try { await f.read(new File([JSON.stringify({ format: m.FORMAT, root: r.id, records: [r] })], 'h.dmdpack')); return 'taken'; } catch (e) { return e.message; } }""")
     heavy = kev(page, """const recs = []; const a = new Uint8Array(64);
-        for (let i = 0; i < 300; i++) { const junk = []; for (let j = 0; j < 100; j++) { a[0] = j; a[1] = i & 255; junk.push({ px: await m.packPx(a) }); }
+        for (let i = 0; i < 40; i++) { const junk = []; for (let j = 0; j < 800; j++) { a[0] = j & 255; a[1] = j >> 8; a[2] = i; junk.push({ px: await m.packPx(a) }); }
           const r = m.record('stamp', 'Heavy ' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(new Uint8Array(64)) }], extra: junk }); r.hash = await m.hashOf(r.body); recs.push(r); }
         const pk = await K.pack('Heavy', recs); return K.file(pk, [pk, ...recs]);""")
     page.evaluate("window.__beats = 0; window.__t = setInterval(() => __beats++, 50)")
@@ -4046,7 +4046,7 @@ def studio_read_live(browser, base: str, site: Path, errors: list[str]) -> None:
     beats = page.evaluate("__beats")
     page.click("#s-fs[open] button:has-text('Cancel')")
     check(hid.startswith("That file holds more than 32,768 pictures") and beats > dt * 10,
-          f"/studio/ read live: pictures under a stamp's layers counted ('{hid[:50]}'); 300 heavy records read with the page live ({beats} beats in {dt:.1f} s)")
+          f"/studio/ read live: pictures under a stamp's layers counted ('{hid[:50]}'); 40 heavy records (800 pictures each) read with the page live ({beats} beats in {dt:.1f} s)")
     page.context.close()
 
 
