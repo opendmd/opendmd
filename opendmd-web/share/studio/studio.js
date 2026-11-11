@@ -960,15 +960,20 @@ async function main() {
   document.addEventListener('paste', pasted);
   addEventListener('blur', () => { clipNew = false; }); // (something else may be copied now)
   // A drop: Studio files to files.js; a picture, GIF or video, or a link, to Import.
-  document.addEventListener('dragover', (e) => { if (!document.querySelector('dialog[open]')) e.preventDefault(); });
+  // (Never left to the browser, which would open the file in place of the Studio.)
+  document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => {
-    if (document.querySelector('dialog[open]')) return;
     e.preventDefault();
-    const fs = [...e.dataTransfer.files], ours = fs.filter((f) => /\.(dmdart|dmdpack)$/i.test(f.name));
+    const fs = [...e.dataTransfer.files], ours = fs.filter((f) => /\.(dmdart|dmdpack)$/i.test(f.name)), rest = fs.filter((f) => !ours.includes(f));
     const u = (e.dataTransfer.getData('text/uri-list') || '').split('\n')[0].trim();
-    if (ours.length) files().then((m) => m.open(ours), () => {});
-    else if (fs.length) imp().then((m) => m.bring(fs[0], 'Your file'), () => {});
-    else if (/^https:\/\//i.test(u)) imp().then((m) => { history.pushState({ imp: 1 }, '', '#import'); m.show(new URLSearchParams({ url: u })); }, () => {});
+    // On the open Import sheet: a picture or video into it; any other sheet takes no drop.
+    if (document.querySelector('dialog[open]')) { if (rest.length && /open|ready/.test(root.dataset.import)) imp().then((m) => m.bring(rest[0], 'Your file'), () => {}); return; }
+    if (root.dataset.view === 'library') { history.replaceState(null, '', location.pathname + location.search); route(); } // (to the editor first)
+    if (ours.length) {
+      files().then((m) => m.open(ours), () => {});
+      if (rest.length) say(`${rest.length === 1 ? 'The picture' : 'The pictures'} dropped with ${ours.length === 1 ? 'that file' : 'those files'} ${rest.length === 1 ? 'was' : 'were'} left: drop ${rest.length === 1 ? 'it' : 'one'} on its own to import it.`);
+    } else if (rest.length) imp().then((m) => m.bring(rest[0], 'Your file'), () => {});
+    else if (/^https:\/\//i.test(u)) imp().then((m) => { history.pushState({ imp: 1 }, '', '#import'); m.show(new URLSearchParams({ url: u }), true); }, () => {});
   });
   $('s-stampsb').addEventListener('click', () => stamps().then((m) => m.show(), () => {}));
   $('s-savef').addEventListener('click', () => { done(); files().then((m) => m.saveOpen(), () => {}); });

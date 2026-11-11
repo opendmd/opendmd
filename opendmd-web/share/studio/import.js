@@ -4,8 +4,12 @@
 // frame (`/create/?in=studio`), so the Studio's own CSP never changes and
 // none of the converter is fetched until the sheet first opens.
 //
-// The frame says it is ready, then gets what the Studio holds (a dropped or
-// pasted file; an address, a search or a shared file go in its address).
+// Each opening is a fresh frame, removed when the sheet closes (one frame
+// navigated twice would put its own entries in the page's history, and Back
+// would step the frame). It says it is ready, then gets what the Studio
+// holds: a dropped or pasted file, or an address (a search or a shared file
+// go in its address). An address that came in a link (#import?url=) is
+// shown and fetched only once "Fetch it" is pressed.
 // Use in the Studio posts the frames of what Download GIF would write. Every
 // message is checked here: from this frame's window, this origin and this
 // opening's nonce, after its ready; and its shape, sizes, frame count,
@@ -34,8 +38,10 @@ function build() {
 #s-imp[open]{display:flex;flex-direction:column}#s-imp::backdrop{background:rgba(0,0,0,.6)}
 #s-imp .s-hd{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 16px;border-bottom:1px solid var(--line)}
 #s-imp .s-hd h2{margin:0;font-size:18px}#s-imp label{display:inline-flex;align-items:center;gap:6px;font-size:14px;min-height:36px}
-#s-imp-say{margin:6px 16px}#s-imp iframe{flex:1;width:100%;border:0;background:var(--bg)}
-@media (max-width:700px){#s-imp{width:100vw;height:100dvh;border:0;border-radius:0;margin:0}}`);
+#s-imp-say{margin:6px 16px}#s-imp iframe{flex:1;width:100%;border:0;background:var(--bg)}#s-imp-url{margin:6px 16px;word-break:break-all}
+@media (max-width:700px){#s-imp{width:100vw;height:100dvh;border:0;border-radius:0;margin:0}
+#s-imp .s-hd{gap:0 10px;padding:6px 12px}#s-imp .s-hd h2{font-size:16px}#s-imp .s-sp{display:none}#s-imp-x{order:2;margin-left:auto}
+#s-imp .s-imp-as{order:3;flex:1 0 100%;display:flex;gap:12px}#s-imp label{min-height:32px;font-size:13px}}`);
   d = el('dialog');
   d.id = 's-imp';
   d.setAttribute('aria-label', 'Import');
@@ -56,14 +62,15 @@ function build() {
   const say = el('p', 's-cap s-bad');
   say.id = 's-imp-say';
   say.setAttribute('role', 'status');
-  fr = el('iframe');
-  fr.id = 's-imp-f';
-  fr.title = 'Find or bring a picture, a GIF or a video, and make it fit the panel';
-  d.append(css, hd, say, fr);
+  const ask = el('p', 's-cap');
+  ask.id = 's-imp-url';
+  ask.hidden = true;
+  d.append(css, hd, say, ask);
   // Closed (Close, Escape, Back): the converter is let go, so nothing it was doing can land later.
   d.onclose = () => {
     if (d.open) return; // (opened again before this close was told)
-    fr.src = 'about:blank';
+    fr?.remove();
+    fr = null;
     k = '';
     ready = false;
     held = null;
@@ -78,22 +85,43 @@ function build() {
 const say = (t) => { const p = $('s-imp-say'); p.hidden = !t; p.textContent = t || ''; };
 
 // The sheet opened, from `#import?…` (route): an https address, a search, a shared file.
-export function show(q = new URLSearchParams()) {
+// `asked`: the address is one the user just gave here (a paste, a drop), not a link's.
+export function show(q = new URLSearchParams(), asked = false) {
   build();
   k = [...crypto.getRandomValues(new Uint8Array(12))].map((x) => x.toString(16).padStart(2, '0')).join('');
   ready = false;
+  held = null;
   const p = new URLSearchParams({ in: 'studio', k });
   const u = (q.get('url') || '').trim();
   let why = '';
+  const box = $('s-imp-url');
+  box.hidden = true;
   if (u) {
     let ok = false;
     try { ok = new URL(u).protocol === 'https:'; } catch { /* not an address */ }
-    if (ok) p.set('url', u); else why = 'Only an https:// address can be imported: that one was left out.';
+    if (!ok) why = 'Only an https:// address can be imported: that one was left out.';
+    else if (asked) held = { url: u };
+    else {
+      // From a link: nothing is fetched until it is asked for.
+      const fetchBtn = el('button', 's-pill s-pri', 'Fetch it');
+      fetchBtn.type = 'button';
+      fetchBtn.id = 's-imp-fetch';
+      const me = k;
+      fetchBtn.onclick = () => { if (k !== me) return; box.hidden = true; give({ url: u }); };
+      box.replaceChildren('Import the picture at ', el('b', '', u), '? ', fetchBtn);
+      box.hidden = false;
+    }
   }
   const words = (q.get('q') || '').trim().slice(0, 100);
   if (words) { p.set('q', words); if (q.get('platform')) p.set('platform', q.get('platform').slice(0, 16)); }
   if (q.get('shared')) p.set('shared', '1');
+  // A fresh frame for each opening, its address set before it is in the page.
+  fr?.remove();
+  fr = el('iframe');
+  fr.id = 's-imp-f';
+  fr.title = 'Find or bring a picture, a GIF or a video, and make it fit the panel';
   fr.src = `../create/?${p}`;
+  d.append(fr);
   say(why);
   for (const r of d.querySelectorAll('input[name=s-imp-as]')) r.checked = r.value === 'new';
   if (!d.open) d.showModal();
@@ -101,25 +129,33 @@ export function show(q = new URLSearchParams()) {
 }
 // A file for Import (dropped on the Studio, a paste too big to place): the sheet opens with it.
 export function bring(file, label = 'Your file') {
+  if (d?.open && k) { give({ file, label }); return; } // (dropped on the open sheet: into this opening)
   if (!location.hash.startsWith('#import')) history.pushState({ imp: 1 }, '', '#import');
   show();
   held = { file, label };
 }
+// Something for the frame: now if it is ready, else at its ready.
+function give(x) {
+  if (ready && fr) fr.contentWindow.postMessage({ type: IN, k, ...x }, location.origin);
+  else held = x;
+}
 export function close() { if (d?.open) d.close(); }
 
 function on(e) {
-  if (!d?.open || !k || e.source !== fr.contentWindow || e.origin !== location.origin) return;
+  if (!d?.open || !k || !fr || e.source !== fr.contentWindow || e.origin !== location.origin) return;
   const m = e.data;
   if (!plain(m) || m.k !== k) return;
   if (m.type === READY) {
     ready = true;
     S.root.dataset.import = 'ready';
-    if (held) { fr.contentWindow.postMessage({ type: IN, k, file: held.file, label: held.label }, location.origin); held = null; }
+    if (held) { fr.contentWindow.postMessage({ type: IN, k, ...held }, location.origin); held = null; }
     return;
   }
   if (m.type !== FRAMES || !ready || busy) return;
   busy = true;
-  take(m).then(() => {
+  const me = k;
+  take(m, () => d.open && k === me).then((done) => {
+    if (!done) return;
     d.close();
     S.say(m.total > m.n ? `That had ${m.total.toLocaleString('en')} frames: the first ${m.n} are kept (a piece has ${CAPS.frames} at most). Import’s timeline trims it to the part you want.` : '');
   }, (err) => refuse(err.message || String(err))).finally(() => { busy = false; });
@@ -161,7 +197,8 @@ function read(m) {
   return { ms, cels, colours: [...keys.keys()] };
 }
 
-async function take(m) {
+// `now()`: this opening is still the one open (else nothing is made: false).
+async function take(m, now) {
   const { ms, cels, colours } = read(m);
   const n = cels.length;
   const entry = { external: true, note: m.note || 'Imported', ...(m.title ? { title: m.title } : {}), ...(m.platform ? { platform: m.platform } : {}),
@@ -169,14 +206,16 @@ async function take(m) {
   const as = d.querySelector('input[name=s-imp-as]:checked')?.value;
   if (as !== 'layer') {
     await S.save();
+    if (!now()) return false;
     try {
       await S.newPiece({ name: (m.title || 'Imported').slice(0, CAPS.name), plays: m.plays, frames: ms.map((t) => ({ ms: t })),
         layers: [{ name: 'Imported', moves: n > 1, cels: n > 1 ? cels : [cels[0]] }], colours: colours.map((c, i) => ({ k: i + 1, hex: hexOf(c) })), from: [entry] });
     } catch (e) { throw new Error(/too big/.test(e.message) ? 'it is too big for a piece (4 MB at most): trim it in the timeline, or use fewer colours' : e.message); }
     S.keep();
+    await S.save(); // (kept before anything else: a reload right after has it)
     await S.drafts();
     S.root.dataset.imported = `piece:${n}`;
-    return;
+    return true;
   }
   // A new layer on top of this piece, one undo step: a still held, an
   // animation moving (a one-frame piece takes its frames and times; one that
@@ -207,7 +246,10 @@ async function take(m) {
   const body = { ...rest, ...(wide ? { keys: 2 } : {}), colours: all, frames, layers, ...(grow && m.plays ? { plays: m.plays } : {}) };
   try { checkBody('piece', body); } catch (e) { D.letGo(D.key); throw new Error(e.message); }
   if (JSON.stringify(body).length > CAPS.piece - (64 << 10)) { D.letGo(D.key); throw new Error('the piece would be too big (4 MB at most): trim it in the timeline first'); }
+  if (!now()) { D.letGo(D.key); return false; }
   await S.replace(body);
   S.addFrom(entry);
+  await S.save();
   S.root.dataset.imported = `layer:${n}`;
+  return true;
 }

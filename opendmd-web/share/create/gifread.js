@@ -40,6 +40,7 @@ export function read(b) {
     if (c !== 0x2c) bad('damaged');
     const x0 = u16(p), y0 = u16(p + 2), fw = u16(p + 4), fh = u16(p + 6), f = b[p + 8];
     p += 9;
+    if (!fw || !fh || fw * fh > W * H) bad('a frame bigger than the picture');
     const ct = f & 0x80 ? table(f) : gct;
     if (!ct) bad('no colour table');
     const min = b[p++];
@@ -61,7 +62,8 @@ export function read(b) {
       }
     });
     total++;
-    if (out.length < MAX) { out.push(cv.slice()); ms.push(gce.delay ? Math.max(20, gce.delay * 10) : 100); }
+    // (A delay of 0 or 1 hundredths plays at 100 ms, as browsers play it.)
+    if (out.length < MAX) { out.push(cv.slice()); ms.push(gce.delay > 1 ? gce.delay * 10 : 100); }
     if (gce.disp === 2) for (let y = y0; y < Math.min(H, y0 + fh); y++) cv.fill(0, (y * W + x0) * 4, (y * W + Math.min(W, x0 + fw)) * 4);
     else if (keep) cv.set(keep);
     gce = { disp: 0, delay: 0, tr: -1 };
@@ -72,7 +74,7 @@ export function read(b) {
   return { n: out.length, total, ms, plays, px };
 }
 
-// The image data's codes to `n` indices (a short frame is padded with 0).
+// The image data's codes to exactly `n` indices: data that ends first is refused.
 function lzw(parts, min, n) {
   const out = new Uint8Array(n), clear = 1 << min, eoi = clear + 1;
   const pre = new Int32Array(4096), suf = new Uint8Array(4096), len = new Int32Array(4096);
@@ -93,7 +95,7 @@ function lzw(parts, min, n) {
       acc >>>= size;
       bits -= size;
       if (code === clear) { size = min + 1; next = eoi + 1; old = -1; continue; }
-      if (code === eoi) return out;
+      if (code === eoi) { if (o < n) bad('cut short'); return out; }
       if (o >= n) return out;
       if (old === -1) { if (code >= clear) bad('damaged'); put(code); old = code; continue; }
       if (code > next || (code === next && next >= 4096)) bad('damaged');
@@ -103,5 +105,6 @@ function lzw(parts, min, n) {
       old = code;
     }
   }
+  if (o < n) bad('cut short');
   return out;
 }

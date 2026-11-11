@@ -42,7 +42,9 @@ export function size(b) {
 
 // A pasted (or picked) image file: placed, offered to Import, or refused.
 export async function paste(file) {
-  const b = new Uint8Array(await file.slice(0, 256 << 10).arrayBuffer()), z = size(b);
+  let b = new Uint8Array(await file.slice(0, 256 << 10).arrayBuffer()), z = size(b);
+  // (A JPEG's size comes after its metadata, which may be long: read on, up to 4 MB.)
+  if (!z && b[0] === 0xff && b[1] === 0xd8 && file.size > b.length) z = size((b = new Uint8Array(await file.slice(0, 4 << 20).arrayBuffer())));
   if (!z || !z.w || !z.h) { S.say('That isn’t a picture the Studio can read: paste a PNG, GIF, JPEG, WebP or BMP.'); return 'refused'; }
   if (z.w * z.h > MOST) { S.say(`That picture is ${z.w.toLocaleString('en')} × ${z.h.toLocaleString('en')}: too big to bring in.`); return 'refused'; }
   if (z.w > W || z.h > H) {
@@ -75,6 +77,6 @@ export async function paste(file) {
 export function address(u) {
   S.offer('That’s an address.', 'Import from this address', () => S.imp().then((m) => {
     history.pushState({ imp: 1 }, '', '#import');
-    m.show(new URLSearchParams({ url: u }));
+    m.show(new URLSearchParams({ url: u }), true);
   }));
 }

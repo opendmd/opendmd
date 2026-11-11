@@ -138,7 +138,12 @@ async function start() {
   await st.show();
   elsewhere();
   const link = (q.get('url') || '').trim();
-  if (/^https?:\/\//i.test(link)) st.open(link.replace(/^http:/i, 'https:'));
+  // (Framed, an address in the page's own address came from a link: shown, fetched only when asked.)
+  if (/^https?:\/\//i.test(link) && framed) {
+    const u = link.replace(/^http:/i, 'https:');
+    $('c-cap').hidden = false;
+    $('c-cap').replaceChildren('Import the picture at ', h('b', u), '? ', h('button.pri', { id: 'c-fetch', onclick: () => { $('c-cap').hidden = true; st.open(u); } }, 'Fetch it'));
+  } else if (/^https?:\/\//i.test(link)) st.open(link.replace(/^http:/i, 'https:'));
   else if (q.get('shared')) shared(st);
   if (framed) { inStudio(st, send); return; }
   navigator.serviceWorker?.register('sw.js').catch(() => {});
@@ -163,28 +168,35 @@ async function start() {
 // --- inside the Studio's Import ---
 function inStudio(st, use) {
   const k = Q.get('k') || '', to = (m, t) => parent.postMessage({ ...m, k }, location.origin, t || []);
-  // A file the Studio holds (dropped on it, pasted): from the Studio's window alone.
+  // A file the Studio holds (dropped on it, pasted), or an address it was
+  // asked to fetch: from the Studio's window alone.
   addEventListener('message', (e) => {
-    if (e.source !== parent || e.origin !== location.origin || e.data?.type !== IN || e.data.k !== k || !(e.data.file instanceof Blob)) return;
-    st.load(e.data.file, { label: e.data.label === 'Pasted' ? 'Pasted' : 'Your file' });
+    if (e.source !== parent || e.origin !== location.origin || e.data?.type !== IN || e.data.k !== k) return;
+    if (e.data.file instanceof Blob) st.load(e.data.file, { label: e.data.label === 'Pasted' ? 'Pasted' : 'Your file' });
+    else if (typeof e.data.url === 'string' && /^https:\/\//i.test(e.data.url)) st.open(e.data.url);
   });
   use.onclick = async () => {
     say('');
     if (!$('studio').classList.contains('has')) { say('Pick a picture, a GIF or a video first.'); return; }
-    // No title: one for the file name the converter needs, none for the Studio.
-    const t = $('st-title'), named = !!t.value.trim();
-    if (!named) { t.value = 'Imported'; t.dispatchEvent(new Event('input')); }
-    for (let i = 0; i < 40 && !st.ready(); i++) await new Promise((ok) => setTimeout(ok, 50));
+    // The Studio needs no file name: the converter's out() does, so a plain
+    // one stands in while the GIF is written (any title, author and platform,
+    // or none, are sent as they were typed).
+    const t = $('st-title'), a = $('st-author'), was = [t.value, a.value];
+    const set = (tv, av) => { t.value = tv; a.value = av; t.dispatchEvent(new Event('input')); };
     use.disabled = true;
     try {
+      set('Imported', '');
+      for (let i = 0; i < 60 && !st.ready(); i++) await new Promise((ok) => setTimeout(ok, 50));
       const o = await st.out();
-      if (!o) { say('Give it a title first.'); return; }
+      if (!o) { say('The GIF could not be made: try again.'); return; }
       const { read } = await import('./gifread.js'), g = read(o.gif);
-      to({ type: FRAMES, w: 128, h: 32, n: g.n, total: g.total, ms: g.ms, plays: g.plays, px: g.px.buffer,
-        title: named ? o.title : '', platform: o.platform, author: o.author, logo: o.logo, note: from() }, [g.px.buffer]);
+      // (Times as the Studio keeps them: 20 ms to a minute.)
+      const ms = g.ms.map((x) => Math.min(60000, Math.max(20, Math.round(x / 10) * 10)));
+      to({ type: FRAMES, w: 128, h: 32, n: g.n, total: g.total, ms, plays: g.plays, px: g.px.buffer,
+        title: was[0].trim().slice(0, 120), platform: o.platform, author: was[1].trim().slice(0, 80), logo: o.logo, note: from() }, [g.px.buffer]);
     } catch (e) { say(e.message || String(e)); } finally {
       use.disabled = false;
-      if (!named) { t.value = ''; t.dispatchEvent(new Event('input')); }
+      set(...was);
     }
   };
   to({ type: S_READY });
