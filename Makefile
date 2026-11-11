@@ -275,6 +275,7 @@ check-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(ART) for $(WASM_TARGET)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	@echo "==> Checking $(STUDIO) for $(WASM_TARGET)"
 	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
@@ -304,8 +305,8 @@ check-wasm:
 # (gitignored) is the two committed third-party notices, firmware's then the
 # web app's (licenses/, `make notices`), served as text from the pack:
 # Settings -> Device -> About links it. www/js/build.js (gitignored) is
-# the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/ and
-# pkg-psi/) that js/wasm.js puts on every wasm module's address, so a
+# the build id (tools/www-build-id.py: a hash of pkg/, pkg-art/, pkg-psi/
+# and the site's pkg-psi-lang/ and pkg-studio/) that js/wasm.js puts on every wasm module's address, so a
 # browser never runs an earlier build's module (opendmd-notes docs/notes/web-app.md
 # "Module addresses").
 #
@@ -336,7 +337,7 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi-lang/package.json $(WEB_WWW)/pkg-psi-lang/*.d.ts $(WEB_WWW)/pkg-psi-lang/README.md $(WEB_WWW)/pkg-psi-lang/.gitignore
 	rm -f $(WEB_WWW)/pkg-studio/package.json $(WEB_WWW)/pkg-studio/*.d.ts $(WEB_WWW)/pkg-studio/README.md $(WEB_WWW)/pkg-studio/.gitignore
-	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
+	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the five folders.
 	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
 	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json

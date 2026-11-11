@@ -453,11 +453,12 @@ STUDIO_LAZY = {"colour.js"}
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
-# of the pack by opendmd-pack www.rs SITE_ONLY): a line of its own, <= 40 KB
-# (2026-11-11, branch studio-encoders, under the budget authority). They
-# were in pkg-art (S1), which also ships in the device's www pack and had
-# ~0.5 KB of its 150 KB left; moved out, pkg-art is back under it with room.
-STUDIO_WASM_GZ_BUDGET = 40 * 1024
+# of the pack by opendmd-pack www.rs SITE_ONLY): a line of its own, <= 32 KB
+# (2026-11-11, branch studio-encoders, under the budget authority: 29,253 B
+# gz; 40 KB at first, lowered in studio-enc-tidy). They were in pkg-art
+# (S1), which also ships in the device's www pack and had ~0.5 KB of its
+# 150 KB left; moved out, pkg-art is at 147,638 B gz, 2.4 KB under it.
+STUDIO_WASM_GZ_BUDGET = 32 * 1024
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,

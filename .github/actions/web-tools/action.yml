@@ -32,6 +32,7 @@ runs:
           opendmd-sim
           opendmd-web
           opendmd-art-web
+          opendmd-studio-web
           opendmd-pack
 
     - name: Cache wasm-pack and its downloads
@@ -41,7 +42,7 @@ runs:
         path: |
           ~/.cargo/bin/wasm-pack
           ~/.cache/.wasm-pack
-        key: wasm-pack-${{ runner.os }}-${{ inputs.wasm-pack }}-${{ hashFiles('opendmd-web/Cargo.lock', 'opendmd-art-web/Cargo.lock') }}
+        key: wasm-pack-${{ runner.os }}-${{ inputs.wasm-pack }}-${{ hashFiles('opendmd-web/Cargo.lock', 'opendmd-art-web/Cargo.lock', 'opendmd-studio-web/Cargo.lock') }}
         restore-keys: wasm-pack-${{ runner.os }}-${{ inputs.wasm-pack }}-
 
     - name: Install wasm-pack
