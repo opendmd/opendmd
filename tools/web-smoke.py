@@ -2105,6 +2105,46 @@ def thumbs_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def thumbs_redrawn_checks(browser, base: str, errors: list[str]) -> None:
+    """A row drawn again (its canvas made anew: a scroll away and back, a
+    refresh of the list) while its thumbnail's read is out, and that read
+    answered 503 (the device busy): the row's new canvas is still drawn once
+    Retry-After is up. (It was left blank for good: the read kept only the
+    old canvas to try again, gone from the page, and the new one, made while
+    the read was out, waited for it to come.)"""
+    page = new_page(browser, "laptop", errors)
+    held: list = []
+    first: list[str] = []
+
+    def hold(r):
+        if not first:
+            first.append(urllib.parse.urlparse(r.request.url).path)
+            held.append(r)
+        else:
+            r.continue_()
+    get_json(base + "/mock/io?reset=1&kbps=0")
+    page.route(re.compile(r"/(cache|gifs)/Computers/"), hold)
+    page.goto(base + "/#library")
+    pick_cat(page, "Computers")
+    deadline = time.time() + 20
+    while not held and time.time() < deadline:
+        page.wait_for_timeout(50)
+    # Every canvas made anew, the held read still out.
+    page.evaluate(f"{TREE}.vl.refresh()")
+    if held:
+        held[0].fulfill(status=503, headers={"Retry-After": "1"}, body="busy")
+    page.unroute(re.compile(r"/(cache|gifs)/Computers/"))
+    try:
+        rows = drawn(page, 15000)
+        ok = True
+    except RuntimeError as e:
+        rows, ok = [], False
+        print("  " + str(e))
+    check(bool(held) and ok,
+          f"thumbnails: a row drawn again while its read is out, the read a 503: drawn after Retry-After ({first[:1]}, {len(rows)} rows drawn)")
+    page.context.close()
+
+
 def card_swap_checks(browser, base: str, errors: list[str]) -> None:
     """Card identity (`sd.card_id`): what the browser keeps is per card.
     With Consoles' thumbnails drawn, the mock swaps the card (`GET
@@ -4968,6 +5008,7 @@ def mock_pass(browser) -> None:
         tree_checks(browser, base, errors)
         listing_queue_checks(browser, base, errors)
         thumbs_checks(browser, base, errors)
+        thumbs_redrawn_checks(browser, base, errors)
         card_swap_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
         target_checks(browser, base, overlay, errors)
@@ -10457,7 +10498,7 @@ def www_update_pass(browser) -> None:
 # Single sections, for stress-running a check (WEB_SMOKE_ONLY=a,b and
 # WEB_SMOKE_REPEAT=N): each against one mock started as mock_pass starts it.
 # A section that takes a page gets a fresh one on Now.
-ONLY_BROWSER = {"thumbs": thumbs_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks}
+ONLY_BROWSER = {"thumbs": thumbs_checks, "thumbs_redrawn": thumbs_redrawn_checks, "card_swap": card_swap_checks, "formulas_time": formulas_time_checks, "formulas_over": formulas_over_checks}
 ONLY_PAGE = {"now_sync": now_sync_checks, "follow": follow_checks}
 
 
