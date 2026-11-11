@@ -7,6 +7,7 @@
   "licence": "CC0-1.0",
   "from": [],
   "body": {
+    "source": "OpenDMD",
     "colours": [
       {"k": 1, "hex": "#000000", "name": "Off"},
       {"k": 2, "hex": "#4a2400", "name": "Ember"},

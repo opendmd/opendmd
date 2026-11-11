@@ -5,8 +5,9 @@
   "note": "The sixteen RGBI colours of the IBM CGA, also the EGA's default sixteen, in hardware order.",
   "author": {"name": "OpenDMD", "account": null},
   "licence": "CC0-1.0",
-  "from": [{"external": false, "note": "IBM's RGBI scheme: each channel is 0xAA when on, plus 0x55 with the intensity bit; colour 6 has its green halved by the monitor, giving brown. Key = colour number + 1."}],
+  "from": [{"external": false, "note": "IBM's RGBI scheme as tabulated on Wikipedia's Color Graphics Adapter page: two thirds per channel when on, plus one third with the intensity bit; the monitor reduces colour 6's green, giving brown. Wikipedia's Enhanced Graphics Adapter page lists the same sixteen as the EGA default. Key = colour number + 1."}],
   "body": {
+    "source": "IBM CGA and EGA",
     "colours": [
       {"k": 1, "hex": "#000000", "name": "Black"},
       {"k": 2, "hex": "#0000aa", "name": "Blue"},

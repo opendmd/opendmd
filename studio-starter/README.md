@@ -72,7 +72,9 @@ fields the build works out (`id`, `rev`, `hash`) and without dates:
   green, `9` pine, `a` cyan, `b` blue, `c` navy, `d` magenta, `e` violet,
   `f` rust).
 - **Palettes**: `body.colours` is a list of `{"k": key, "hex": "#rrggbb",
-  "name": ...}`. Keys start at 1; 0 always means see-through.
+  "name": ...}`. Keys start at 1; 0 always means see-through. `body.source`
+  is a short label for where the colours are from (the machine, or
+  `OpenDMD`).
 - **Stamps**: `w`, `h`, `palette`, and `frames`, each with `rows` and
   optionally `ms`. Frames with times are an animation; frames without are a
   set to pick from (the digit stamps: frame *n* is the digit *n*).
@@ -83,7 +85,7 @@ fields the build works out (`id`, `rev`, `hash`) and without dates:
   `layers` with one cel per frame for a layer that `moves`, else one) plus
   `guides`: rectangles of kind `safe` (keep the picture inside), `art` (put a
   picture or stamps here) or `text` (with `font`, `align` and a `sample`).
-- `note` is one line saying what the record is or where it comes from.
+- `note` is one line (200 characters at most) saying what the record is.
 - `from` is empty for our own work. A hardware palette carries one entry,
   `{"external": false, "note": "..."}`, naming the source of its values:
   `external` is false because a colour table is a fact about a machine, not
@@ -92,7 +94,9 @@ fields the build works out (`id`, `rev`, `hash`) and without dates:
 The build refuses a record with a wrong size, a pixel whose key is not in its
 palette, a font missing any of ASCII 32 to 126 (or with two identical
 glyphs), a guide off the panel or too small for its sample, an unknown
-reference, or any author or licence but the pack's own.
+reference, or any author or licence but the pack's own. Every built record
+must also pass the Studio's own `check()` (ids, caps on names, notes, tags,
+frames, layers and size), which `build.py` repeats rule for rule.
 
 ## The pack file
 
@@ -104,12 +108,18 @@ before the stamps and templates that use them.
 
 What the build adds to each source record:
 
-- `id`: the kind's prefix (`pl`, `st`, `fn`, `tp`, `pk`), `_`, and the first
+- `id`: the kind's prefix (`pl`, `st`, `ft`, `tp`, `pk`), `_`, and the first
   32 hex digits of SHA-256 of `opendmd-studio-starter:<kind>/<slug>`. Fixed
   for as long as the slug is, so a Studio can recognise starter records.
 - `rev`: 1.
-- `hash`: `sha256-` plus the SHA-256 of the body as canonical JSON (keys
-  sorted, no spaces, UTF-8, non-ASCII characters not escaped).
+- `hash`: the Studio's hash rule (`hashOf` in
+  `opendmd-web/share/studio/store.js`). Take the body; replace every pixel
+  field (each `px` string, each string in a `cels` list) with its pixels
+  uncompressed, as lowercase hex; write that as canonical JSON (keys sorted,
+  no spaces, UTF-8, non-ASCII characters not escaped, integers only);
+  `sha256-` plus the SHA-256 of the text. So the hash is of the pixels, not
+  of how they happen to be compressed. Every build first tests the rule
+  against the Studio's pinned hash of its built-in palette.
 - `created`, `modified`: one fixed date, so the build repeats byte for byte.
 
 and what it changes in the body:
@@ -133,13 +143,13 @@ video or had a passive LCD), the palette says so in its `from` note.
 | Palette | Source |
 |---|---|
 | NES (RGB PPU) | The 2C03 RGB picture chip's documented 3-bit levels per channel (NESdev wiki, "PPU palettes"), each scaled `level * 255 / 7`; the 50 distinct colours. The home console's 2C02 makes composite video and has no exact RGB values. |
-| Game Boy DMG | The usual emulator convention for the four shades (`#0f380f` to `#9bbc0f`): an approximation of a reflective LCD. |
-| Game Boy Pocket | Four evenly spaced greys: an approximation. |
+| Game Boy DMG | The four greens most often published for it (`#0f380f` to `#9bbc0f`; for example designpieces.com's Game Boy palette page): a convention, not a measurement of a reflective LCD. |
+| Game Boy Pocket | Four evenly spaced greys, our own rendering: the Pocket's LCD is true grey (Wikipedia, "List of video game console palettes"), but we found no published values. |
 | C64 (Pepto) | Philip "Pepto" Timmermann's 2001 calculation from measured VIC-II levels (pepto.de/projects/colorvic/2001). |
 | C64 (Colodore) | Pepto's later Colodore model at its default settings. |
-| ZX Spectrum | One bit per channel plus a brightness bit; normal intensity drawn at `0xD7`, a common convention. |
-| CGA / EGA 16, CGA Mode 4 palettes | IBM's RGBI scheme (`0xAA` per channel, `+0x55` with intensity, colour 6 brown). |
-| EGA 64 | Two bits per channel, in the card's colour-number order. |
+| ZX Spectrum | One bit per channel plus a brightness bit; normal intensity at `0xD8` (85 %), as in Lospec's "ZX Spectrum" palette. Some emulators use `0xD7`. |
+| CGA / EGA 16, CGA Mode 4 palettes | IBM's RGBI scheme (`0xAA` per channel, `+0x55` with intensity, colour 6 brown), as tabulated on Wikipedia's "Color Graphics Adapter" page. |
+| EGA 64 | Two bits per channel, in the card's rgbRGB colour-number order (Wikipedia, "Enhanced Graphics Adapter"). |
 | MSX / TMS9918 | Converted from the chip's datasheet levels for a CRT, as tabulated on Wikipedia's TMS9918 page. |
 | Atari 2600 (NTSC) | Our own model of the TIA's 16 hues by 8 brightness levels (the formula is in `from`): not a measurement. |
 

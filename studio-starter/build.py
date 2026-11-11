@@ -27,7 +27,7 @@ SRC = HERE / "src"
 FORMAT = "opendmd-studio/1"
 ID_NAMESPACE = "opendmd-studio-starter"
 STAMP = "2026-11-11T00:00:00Z"  # created/modified of every record: fixed, so builds repeat
-PREFIX = {"piece": "pc", "palette": "pl", "stamp": "st", "font": "fn",
+PREFIX = {"piece": "pc", "palette": "pl", "stamp": "st", "font": "ft",
           "shade": "sh", "template": "tp", "pack": "pk"}
 KINDS = ["palette", "font", "stamp", "template"]  # bundle order: referenced before referencing
 AUTHOR = {"name": "OpenDMD", "account": None}
@@ -37,6 +37,11 @@ PACK = {"slug": "starter", "name": "OpenDMD Starter", "tags": ["starter", "retro
                 "four templates to start from. All of it is ours and dedicated to the "
                 "public domain (CC0)."}
 MAX_STAMP = 128
+# The Studio's own rules (opendmd-web/share/studio/store.js: TYPES, LICENCES,
+# CAPS, check): every built record must pass them, whatever else we ask.
+LICENCES = ["CC0-1.0", "CC-BY-4.0"]
+CAPS = {"frames": 256, "layers": 16, "bytes": 1 << 20, "name": 120, "note": 200, "tags": 32, "from": 64}
+ID = re.compile(r"(pc|pl|st|ft|sh|tp|pk)_[0-9a-f]{32}")
 PANEL = (128, 32)
 ASCII = [chr(c) for c in range(32, 127)]
 ATLAS_COLS = 16
@@ -57,8 +62,110 @@ def record_id(kind, slug):
     return f"{PREFIX[kind]}_{h[:32]}"
 
 
-def canonical(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+def canonical(v):
+    """Canonical JSON as store.js canon writes it; nothing but JSON's own
+    values, and integers for numbers."""
+    def ok(x):
+        if x is None or isinstance(x, (bool, str)):
+            return
+        if isinstance(x, int):
+            need(abs(x) <= 2 ** 53 - 1, f"canonical: {x} is not a safe integer")
+        elif isinstance(x, list):
+            for y in x:
+                ok(y)
+        elif isinstance(x, dict):
+            for k, y in x.items():
+                need(isinstance(k, str), "canonical: a key that is not a string")
+                ok(y)
+        else:
+            raise Bad(f"canonical: {type(x).__name__} is not allowed")
+    ok(v)
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def pixel_form(v):
+    """The body with each pixel field (a string in a `cels` array, a `px`
+    string, at any depth) as its uncompressed bytes in lowercase hex."""
+    raw = lambda b64: zlib.decompress(base64.b64decode(b64)).hex()
+    if isinstance(v, list):
+        return [pixel_form(x) for x in v]
+    if isinstance(v, dict):
+        return {k: ([raw(c) if isinstance(c, str) else pixel_form(c) for c in x]
+                    if k == "cels" and isinstance(x, list)
+                    else raw(x) if k == "px" and isinstance(x, str) else pixel_form(x))
+                for k, x in v.items()}
+    return v
+
+
+def hash_of(body):
+    """store.js hashOf: of the pixels, not of how they were compressed."""
+    return "sha256-" + hashlib.sha256(canonical(pixel_form(body))).hexdigest()
+
+
+def selftest():
+    """The hash rule against the Studio's pinned value (Den 16, the app's
+    built-in palette: tools/site-smoke.py DEN16_HASH), and its properties."""
+    den = [("0a0e2a", "Night"), ("161d52", "Navy"), ("2e3a8c", "Indigo"), ("6447c8", "Violet"),
+           ("33d1ff", "Cyan"), ("8a4f1d", "Bark"), ("14532d", "Pine"), ("2f9e4f", "Moss"),
+           ("f7a531", "Amber"), ("e8601c", "Ember"), ("c92a2a", "Barn"), ("ff4f8b", "Pink"),
+           ("f1ebdd", "Cream"), ("7c7f8a", "Ash"), ("ffffff", "White")]
+    body = {"colours": [{"k": i + 1, "hex": "#" + h, "name": n} for i, (h, n) in enumerate(den)],
+            "source": "OpenDMD"}
+    want = "sha256-05593132e346e421b3cdad1e1e32b54222bd7c2aba338e2a32cb7507878c2e00"
+    need(hash_of(body) == want, f"hash rule: Den 16 hashes to {hash_of(body)}, expected {want}")
+    keys = bytes((i * 7) % 16 for i in range(4096))
+    two = [{"frames": [{"px": base64.b64encode(zlib.compress(keys, lv)).decode()}],
+            "layers": [{"name": "\u00e9", "cels": [base64.b64encode(zlib.compress(keys, lv)).decode()]}]}
+           for lv in (9, 1)]
+    need(two[0] != two[1] and hash_of(two[0]) == hash_of(two[1]),
+         "hash rule: the same pixels compressed two ways must hash the same")
+    try:
+        canonical({"a": 0.5})
+    except Bad:
+        return
+    raise Bad("hash rule: a float was not refused")
+
+
+def store_check(rec):
+    """store.js check(), rule for rule (templates held to a piece's rules too)."""
+    bad = lambda why: (_ for _ in ()).throw(Bad(f"{rec.get('name')!r} is not a record: {why}"))
+    if rec["type"] not in PREFIX or not ID.fullmatch(rec["id"]) or rec["id"][:2] != PREFIX[rec["type"]]:
+        bad("type or id")
+    if type(rec["rev"]) is not int or rec["rev"] < 1:
+        bad("rev")
+    if not isinstance(rec["name"], str) or len(rec["name"]) > CAPS["name"]:
+        bad("name")
+    if not isinstance(rec["tags"], list) or len(rec["tags"]) > CAPS["tags"] or any(
+            not isinstance(t, str) for t in rec["tags"]):
+        bad("tags")
+    a = rec["author"]
+    if not isinstance(a, dict) or not isinstance(a.get("name"), str) or len(a["name"]) > 80 or not (
+            a.get("account", 0) is None or isinstance(a.get("account"), str)):
+        bad("author")
+    if "note" in rec and (not isinstance(rec["note"], str) or len(rec["note"]) > CAPS["note"]):
+        bad("note")
+    if rec["licence"] is not None and rec["licence"] not in LICENCES:
+        bad("licence")
+    if not isinstance(rec["from"], list) or len(rec["from"]) > CAPS["from"] or any(
+            not isinstance(f, dict) for f in rec["from"]):
+        bad("from")
+    b = rec["body"]
+    if not isinstance(b, dict):
+        bad("body")
+    if rec["type"] in ("piece", "template"):
+        if (b.get("w"), b.get("h")) != PANEL:
+            bad("size")
+        if not isinstance(b.get("frames"), list) or not 1 <= len(b["frames"]) <= CAPS["frames"]:
+            bad("frames")
+        if not isinstance(b.get("layers"), list) or not 1 <= len(b["layers"]) <= CAPS["layers"]:
+            bad("layers")
+        if any(not isinstance(l.get("cels"), list)
+               or len(l["cels"]) != (len(b["frames"]) if l.get("moves") else 1) for l in b["layers"]):
+            bad("cels")
+    # JSON.stringify(rec).length counts UTF-16 units; the same text here.
+    text = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
+    if len(text.encode("utf-16-le")) // 2 > CAPS["bytes"]:
+        bad("too big")
 
 
 def pack_px(rows):
@@ -94,11 +201,11 @@ def load():
                 need(re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", slug), "file name is not a slug")
                 src = json.loads(path.read_text(encoding="utf-8"))
                 need(src.get("type") == kind, f"type is {src.get('type')!r}, expected {kind!r}")
-                need(isinstance(src.get("name"), str) and 0 < len(src["name"]) <= 40, "name")
+                need(isinstance(src.get("name"), str) and 0 < len(src["name"]) <= 40, "name")  # ours; the Studio allows 120
                 tags = src.get("tags")
-                need(isinstance(tags, list) and tags and all(
+                need(isinstance(tags, list) and 0 < len(tags) <= CAPS["tags"] and all(
                     re.fullmatch(r"[a-z0-9][a-z0-9-]*", t) for t in tags), "tags")
-                need(isinstance(src.get("note"), str) and src["note"], "note")
+                need(isinstance(src.get("note"), str) and 0 < len(src["note"]) <= CAPS["note"], "note")
                 need(src.get("author") == AUTHOR, "author")
                 need(src.get("licence") == LICENCE, "licence")
                 frm = src.get("from")
@@ -127,7 +234,8 @@ def palette_keys(recs, slug):
 
 def body_palette(recs, slug, b):
     cols = b.get("colours")
-    need(set(b) == {"colours"} and isinstance(cols, list) and 2 <= len(cols) <= 255, "colours")
+    need(set(b) == {"colours", "source"} and isinstance(cols, list) and 2 <= len(cols) <= 255, "colours")
+    need(isinstance(b["source"], str) and 0 < len(b["source"]) <= 40, "source")
     seen = set()
     for c in cols:
         need(set(c) <= {"k", "hex", "name"} and isinstance(c.get("k"), int) and 1 <= c["k"] <= 255,
@@ -135,7 +243,7 @@ def body_palette(recs, slug, b):
         need(c["k"] not in seen, f"key {c['k']} twice")
         seen.add(c["k"])
         need(re.fullmatch(r"#[0-9a-f]{6}", c.get("hex", "")), f"hex {c.get('hex')!r}")
-    return {"colours": cols}
+    return {"colours": cols, "source": b["source"]}
 
 
 def body_stamp(recs, slug, b):
@@ -199,10 +307,10 @@ def body_template(recs, slug, b):
     keys = palette_keys(recs, b["palette"])
     need(max(keys) < len(KEYCHARS), "palette has keys the row characters cannot name")
     n = len(b["frames"])
-    need(1 <= n <= 256 and all(set(f) == {"ms"} and isinstance(f["ms"], int) for f in b["frames"]),
+    need(1 <= n <= CAPS["frames"] and all(set(f) == {"ms"} and isinstance(f["ms"], int) for f in b["frames"]),
          "frames")
     need(all(f["ms"] >= 20 for f in b["frames"]) if n > 1 else True, "frame times")
-    need(1 <= len(b["layers"]) <= 16, "layers")
+    need(1 <= len(b["layers"]) <= CAPS["layers"], "layers")
     layers = []
     for layer in b["layers"]:
         need(set(layer) == {"name", "moves", "cels"}, "layer fields")
@@ -254,12 +362,14 @@ def build(recs):
     members = [{"id": r["id"], "rev": r["rev"]} for r in out]
     pack = envelope("pack", PACK["slug"], PACK["name"], PACK["tags"], PACK["note"], [],
                     {"members": members})
+    for r in out + [pack]:
+        store_check(r)
     return {"format": FORMAT, "root": pack["id"], "records": out + [pack]}
 
 
 def envelope(kind, slug, name, tags, note, frm, body):
     return {"type": kind, "id": record_id(kind, slug), "rev": 1,
-            "hash": "sha256-" + hashlib.sha256(canonical(body)).hexdigest(),
+            "hash": hash_of(body),
             "name": name, "tags": tags, "note": note, "author": AUTHOR, "licence": LICENCE,
             "from": frm, "created": STAMP, "modified": STAMP, "body": body}
 
@@ -391,7 +501,7 @@ def sample_grid(lib):
         g.stamp(lib, s, 96 + i * 8, 1)
     row = (("alien-jelly", 2, 11), ("alien-stalker", 14, 11), ("alien-fang", 25, 12),
            ("saucer", 38, 12), ("wisp", 54, 11), ("explosion", 70, 10), ("gem", 80, 13),
-           ("key", 89, 11), ("potion", 97, 11), ("power-cap", 107, 11), ("star", 119, 12))
+           ("key", 89, 11), ("potion", 97, 11), ("power-cell", 107, 11), ("star", 119, 12))
     for s, x, y in row:
         g.stamp(lib, s, x, y, 1 if s == "explosion" else 0)
     g.stamp(lib, "text-insert-coin", 2, 24)
@@ -520,6 +630,7 @@ def main():
     ap.add_argument("--sheets", type=Path, metavar="DIR", help="draw starter-sheet.png and starter-sample.png here")
     a = ap.parse_args()
     try:
+        selftest()
         recs = load()
         bundle = build(recs)
     except Bad as e:

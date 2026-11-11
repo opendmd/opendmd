@@ -5,8 +5,9 @@
   "note": "The four shades of the original Game Boy's greenish LCD, darkest first.",
   "author": {"name": "OpenDMD", "account": null},
   "licence": "CC0-1.0",
-  "from": [{"external": false, "note": "The widely used emulator convention for the DMG's four shades. The real screen is a reflective LCD with no fixed RGB values; this is an approximation, not a measurement."}],
+  "from": [{"external": false, "note": "The four greens most often published for the original Game Boy (for example designpieces.com/palette/game-boy-original-color-palette-hex-and-rgb). A convention, not a measurement: the real screen is a reflective LCD with no fixed RGB values."}],
   "body": {
+    "source": "Game Boy",
     "colours": [
       {"k": 1, "hex": "#0f380f", "name": "Darkest"},
       {"k": 2, "hex": "#306230", "name": "Dark"},

@@ -5,8 +5,9 @@
   "note": "All sixty-four colours an EGA card can show (sixteen at a time), in hardware order.",
   "author": {"name": "OpenDMD", "account": null},
   "licence": "CC0-1.0",
-  "from": [{"external": false, "note": "Two bits per channel (0x00, 0x55, 0xAA, 0xFF). Colour number bits, high to low: r g b R G B, capitals worth 0xAA and small letters 0x55. Key = colour number + 1."}],
+  "from": [{"external": false, "note": "Two bits per channel (0x00, 0x55, 0xAA, 0xFF), generated from the card's rgbRGB bit order as described on Wikipedia's Enhanced Graphics Adapter page: colour number bits, high to low, r g b R G B, capitals worth 0xAA and small letters 0x55. Key = colour number + 1."}],
   "body": {
+    "source": "IBM EGA",
     "colours": [
       {"k": 1, "hex": "#000000", "name": "0"},
       {"k": 2, "hex": "#0000aa", "name": "1"},
