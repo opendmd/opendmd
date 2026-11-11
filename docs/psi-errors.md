@@ -948,11 +948,11 @@ Use it alone as the last line, or make its last line `#…` or `rgb(…)` so it 
 
 <h3 id="E801">E801 · a bad <code>fps</code></h3>
 
-> `fps` is 25, 50 or 100 frames a second
+> `fps` is 25, 50 or 100 (every refresh is 100: or write `smooth`)
 
-The panel draws a Formula every refresh of its scan (`fps 100`), every 2nd (`fps 50`, the default) or every 4th (`fps 25`); nothing in between.
+The panel draws a Formula every refresh of its scan (`smooth`, or `fps 100`), every 2nd (the default, `fps 50`) or every 4th (`fps 25`); nothing in between.
 
-Write `fps 25`, `fps 50` or `fps 100`.
+Write `smooth` for every refresh, or `fps 100`, `fps 50` or `fps 25`.
 
 Before:
 
@@ -964,21 +964,21 @@ gray(x)
 After:
 
 ```psi
-fps 50
+smooth
 gray(x)
 ```
 
-<h3 id="E802">E802 · <code>fps</code> inside a layer</h3>
+<h3 id="E802">E802 · <code>smooth</code> or <code>fps</code> inside a layer</h3>
 
-> `fps` is the whole formula's: put it on a line of its own, outside the layers
+> the rate (`smooth` or `fps`) is the whole formula's: put it on a line of its own, outside the layers
 
-Move the `fps` line out of the layer.
+Move the `smooth` or `fps` line out of the layer.
 
-<h3 id="E803">E803 · <code>fps</code> set twice</h3>
+<h3 id="E803">E803 · the rate set twice</h3>
 
-> `fps` is already set
+> the rate is already set: keep one `smooth` or `fps` line
 
-Keep one `fps` line.
+Keep one `smooth` or `fps` line.
 
 ## Growing values, sprites, palettes, slow layers and declarations (E9xx)
 
@@ -1057,6 +1057,28 @@ Use frac(t\*k)\*128, t % n or min(t, k) as the place.
 > a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t\*k) + x or sin(t\*k + x)
 
 Add the pixel's part inside frac, a wave or noise: frac(t\*k) + x, sin(t\*k + x).
+
+<h3 id="E908">E908 · <code>phase</code> in <code>loop forever</code></h3>
+
+> `phase` is the position in the loop, and `loop forever` has none: use frac(t/k), a place that comes round every k seconds
+
+`phase` is `t` divided by the loop's length, and a `loop forever` formula has no length to divide by.
+
+Give the formula a `loop N` line, or write frac(t/k) with a period k of your own.
+
+Before:
+
+```psi-bad
+loop forever
+gray(frac(x + phase))
+```
+
+After:
+
+```psi
+loop forever
+gray(frac(x + t/8))
+```
 
 <h3 id="E910">E910 · a sprite's key too long</h3>
 
@@ -1279,26 +1301,28 @@ Leave the blend and the coverage off the bottom `rate` layer.
 
 <h3 id="E951">E951 · a declaration below other lines</h3>
 
-> `…` goes at the top of the formula, before its other lines
+> `…` goes in the formula's header, at its top among the `name`, `about`, `control`, `look`, `loop` and `smooth` lines, before its other lines
 
-Declarations (`name`, `about`, `control`, `look`) say what the formula is, so they come first, before anything it works out.
+The header (`name`, `about`, `control`, `look`, `loop`, `smooth`, in any order) says what the formula is, so it comes first, before anything it works out.
 
-Move it to the top.
+Move it up into the header, the lines at the top (any order there).
 
 Before:
 
 ```psi-bad
 loop 4
+v = x
 name "Late"
-gray(x)
+gray(v)
 ```
 
 After:
 
 ```psi
-name "Late"
 loop 4
-gray(x)
+name "Late"
+v = x
+gray(v)
 ```
 
 <h3 id="E952">E952 · a declaration twice</h3>

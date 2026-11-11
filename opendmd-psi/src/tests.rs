@@ -332,18 +332,18 @@ fn fps_line() {
     for (src, want, line, col) in [
         (
             "fps 60\ngray(x)",
-            "`fps` is 25, 50 or 100 frames a second",
+            "`fps` is 25, 50 or 100 (every refresh is 100: or write `smooth`)",
             1,
             5,
         ),
         ("fps 100.5\ngray(x)", "`fps` is 25, 50 or 100", 1, 5),
         (
             "fps\ngray(x)",
-            "`fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`",
+            "`fps` takes 25, 50 or 100, e.g. `fps 100` (or write `smooth` for every refresh)",
             1,
             1,
         ),
-        ("fps 100\nfps 50\ngray(x)", "`fps` is already set", 2, 1),
+        ("fps 100\nfps 50\ngray(x)", "the rate is already set", 2, 1),
         (
             "fps 100 fast\ngray(x)",
             "expected the end of the line",
@@ -352,7 +352,7 @@ fn fps_line() {
         ),
         (
             "layer { fps 100\ngray(x) }",
-            "`fps` is the whole formula's",
+            "the rate (`smooth` or `fps`) is the whole formula's",
             1,
             9,
         ),
@@ -3768,7 +3768,8 @@ fn saturation_is_noted_where_it_matters() {
     };
     let has = |src: &str| notes(src).iter().any(|m| m.contains("can pass ±32,768"));
     assert!(has("j = px\ngray(frac(127.5*j*j/2500/1000))"));
-    assert!(has("loop 3600\nv = t*t\ngray(frac(v))"));
+    // (A product of `t`: its own note, P1.5.)
+    assert!(notes("loop 3600\nv = t*t\ngray(frac(v))").iter().any(|m| m.contains("before the loop ends")));
     assert!(!has("gray(x*30000)"));
     assert!(!has("gray(px*px*px > 5)"));
     assert!(!has("gray(frac(px*py*0.1))"));
@@ -3785,4 +3786,135 @@ fn an_undeclared_slot_is_held_to_0_1() {
     assert_eq!(m.values([Some(30 * one), Some(-one), None]), [one, 0, 0]);
     let p = crate::compile("control k 0..40 = 2\ngray(k / 40)").unwrap();
     assert_eq!(p.meta().value(0, Some(30 * one)), 30 * one);
+}
+
+/// The compiled bytes of a formula (what the panel loads).
+fn psb_of(src: &str) -> alloc::vec::Vec<u8> {
+    let p = compile(src).unwrap_or_else(|e| panic!("{src:?}: {}", e.render(src)));
+    crate::psb::encode("", &p, None)
+}
+
+/// Language review P1.1: `phase` is `t / LOOP` as the loop line writes it
+/// (8 without one): the very program the division written out makes, so
+/// the frames are those. The formula's own `phase` wins; its own `t` does
+/// not move it; `loop forever` has no loop (E908).
+#[test]
+fn phase_is_t_over_the_loop() {
+    for (a, b) in [
+        ("loop 4.8\nhsv(x + phase, 1, 1)", "loop 4.8\nhsv(x + t/4.8, 1, 1)"),
+        ("hsv(x + phase, 1, 1)", "hsv(x + t/8, 1, 1)"),
+        (
+            "loop 9.6\nv = sin(phase) + cos(phase*2) + sin(px*0.02 - phase)\ngray(v/3)",
+            "loop 9.6\nv = sin(t/9.6) + cos(t/9.6*2) + sin(px*0.02 - t/9.6)\ngray(v/3)",
+        ),
+        (
+            "loop 2\ndraw { line(phase*127, 0, phase*127, 31) }\ngray(ink)",
+            "loop 2\ndraw { line(t/2*127, 0, t/2*127, 31) }\ngray(ink)",
+        ),
+        // The loop line below its first use, read ahead as `t`'s is.
+        ("v = frac(phase + x)\nloop 3\ngray(v)", "v = frac(t/3 + x)\nloop 3\ngray(v)"),
+        ("loop 4\nt = 1\ngray(phase)", "loop 4\ngray(t/4)"),
+        ("loop 4\nlayer { gray(phase) }\nlayer add { rgb(phase, 0, 0) }", "loop 4\nlayer { gray(t/4) }\nlayer add { rgb(t/4, 0, 0) }"),
+    ] {
+        assert_eq!(psb_of(a), psb_of(b), "{a:?} against {b:?}");
+    }
+    // A formula's own names win (the name rule).
+    assert_eq!(psb_of("loop 4\nphase = 0.25\ngray(phase)"), psb_of("loop 4\ngray(0.25)"));
+    assert_eq!(psb_of("control phase 0..1 = 0.5\ngray(phase)"), psb_of("control k 0..1 = 0.5\ngray(k)"));
+    assert!(compile("fn phase(v) = v*2\ngray(phase(x))").is_ok());
+    assert!(compile("table phase = 0.25, 0.75\ngray(phase[floor(x*2)])").is_ok());
+    let e = compile("loop forever\ngray(frac(phase))").unwrap_err();
+    assert!(e.msg.contains("`phase` is the position in the loop"), "{}", e.msg);
+    assert_eq!(e.start, "loop forever\ngray(frac(".len());
+}
+
+/// P1.2: `smooth` alone on its line is `fps 100`, the same byte (10 ms);
+/// `fps 100`, `50` and `25` keep theirs. A formula's own `smooth` is that.
+#[test]
+fn smooth_is_every_refresh() {
+    assert_eq!(psb_of("smooth\nloop 2\ngray(frac(x - t/2))"), psb_of("fps 100\nloop 2\ngray(frac(x - t/2))"));
+    assert_eq!(compile("smooth\ngray(x)").unwrap().frame_ms(), Some(10));
+    assert_eq!(compile("loop 2; smooth; gray(frac(x - t/2))").unwrap().frame_ms(), Some(10));
+    for (line, ms) in [("fps 100", 10), ("fps 50", 20), ("fps 25", 40)] {
+        assert_eq!(compile(&format!("{line}\ngray(x)")).unwrap().frame_ms(), Some(ms), "{line}");
+    }
+    assert_eq!(compile("gray(x)").unwrap().frame_ms(), None);
+    // The formula's own.
+    assert_eq!(psb_of("smooth = x\nsmooth"), psb_of("v = x\nv"));
+    assert_eq!(compile("smooth = x\nsmooth").unwrap().frame_ms(), None);
+    assert_eq!(compile("control smooth 0..1 = 0.3\ngray(smooth)").unwrap().frame_ms(), None);
+    // Twice (E803), or in a layer (E802).
+    for src in ["smooth\nsmooth\ngray(x)", "smooth\nfps 100\ngray(x)", "fps 50\nsmooth\ngray(x)"] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains("the rate is already set"), "{src:?}: {}", e.msg);
+    }
+    let e = compile("layer {\n  smooth\n  gray(x)\n}").unwrap_err();
+    assert!(e.msg.contains("is the whole formula's"), "{}", e.msg);
+}
+
+/// P1.3: the header's lines (`name`, `about`, `control`, `look`, `loop`,
+/// `fps`, `smooth`) in any order; a declaration below the formula's other
+/// lines is still E951, and `psi 1` still the first line (E604).
+#[test]
+fn the_header_lines_go_in_any_order() {
+    let want = psb_of("name \"N\"\nabout \"A\"\ncontrol k 0..1 = 0.5\nlook screen 40\nloop 4\nsmooth\ngray(frac(x + t/4)*k)");
+    for src in [
+        "loop 4\nsmooth\nname \"N\"\nabout \"A\"\ncontrol k 0..1 = 0.5\nlook screen 40\ngray(frac(x + t/4)*k)",
+        "smooth\nname \"N\"\nloop 4\nabout \"A\"\nlook screen 40\ncontrol k 0..1 = 0.5\ngray(frac(x + t/4)*k)",
+        "fps 100\nlook screen 40\nloop 4\n-- a comment\n\nname \"N\"\ncontrol k 0..1 = 0.5\nabout \"A\"\ngray(frac(x + t/4)*k)",
+    ] {
+        assert_eq!(psb_of(src), want, "{src:?}");
+    }
+    let e = compile("loop 4\nv = x\nname \"Late\"\ngray(v)").unwrap_err();
+    assert!(e.msg.contains("goes in the formula's header"), "{}", e.msg);
+    let e = compile("loop 4\npsi 1\ngray(x)").unwrap_err();
+    assert!(e.msg.contains("goes on the formula's first line"), "{}", e.msg);
+    // `loop` and the rate may still come below the header, as before.
+    assert!(compile("name \"N\"\nv = x\nloop 4\nsmooth\ngray(frac(v + t/4))").is_ok());
+}
+
+#[cfg(feature = "syntax")]
+fn notes_of(src: &str) -> alloc::vec::Vec<alloc::string::String> {
+    struct N(alloc::vec::Vec<alloc::string::String>);
+    impl crate::syntax::Sink for N {
+        fn note(&mut self, _: (usize, usize), text: &str) {
+            self.0.push(text.into());
+        }
+    }
+    let mut n = N(alloc::vec::Vec::new());
+    let mut p = Program::default();
+    crate::syntax::compile_observed(src, &mut p, &mut n).unwrap();
+    n.0
+}
+
+/// P1.4: a note where the loop is not a whole number of 40 ms in a
+/// formula that moves (the players cut it to whole frames of 10, 20 or 40).
+#[cfg(feature = "syntax")]
+#[test]
+fn a_loop_off_the_40_ms_grid_is_noted() {
+    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("is not a whole number of 0.04 s"));
+    assert!(has("loop 4.85\ngray(frac(x + t/4.85))"));
+    assert!(has("name \"N\"\nloop 0.33\ngray(frac(x + phase))"));
+    assert!(!has("loop 4.8\ngray(frac(x + t/4.8))"));
+    assert!(!has("loop 2\ngray(frac(x + t/2))"));
+    assert!(!has("loop 4.85\ngray(x)"));
+    assert!(!has("loop forever\ngray(frac(x + t/4.85))"));
+    let n = notes_of("loop 4.85\ngray(frac(x + t/4.85))");
+    let m = n.iter().find(|m| m.contains("0.04 s")).unwrap();
+    assert!(m.contains("4.84 s to 4.85 s"), "{m}");
+}
+
+/// P1.5: a product of `t` that passes the number's end within the loop is
+/// noted wherever it goes (it holds still from there: a compare or a colour
+/// stops moving), with the time it gets there.
+#[cfg(feature = "syntax")]
+#[test]
+fn a_product_of_t_past_the_limit_is_noted() {
+    let has = |src: &str| notes_of(src).iter().any(|m| m.contains("before the loop ends"));
+    assert!(has("loop 60\ngray(t*t*10 > px)"));
+    assert!(has("loop 8\nv = t*5000\ngray(frac(v))"));
+    assert!(has("loop 8\nv = px*t*40\ngray(v > 1000)"));
+    assert!(!has("loop 8\ngray(frac(t*1000))"));
+    assert!(!has("gray(x*30000)"));
+    assert!(!has("loop forever\ngray(frac(t*5000))"));
 }

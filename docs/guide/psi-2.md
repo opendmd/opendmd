@@ -14,6 +14,8 @@ hsv(x + t/4, 1, 1)
 
 As `t` goes from 0 to 4, `t/4` goes from 0 to 1. That moves the hue once round the whole colour wheel, so when the loop starts again the colours are exactly where they began, and there is no jump.
 
+`t/4` in a 4-second loop has a name of its own, `phase`: where the frame is in the loop, from 0 at its start to 1 at its end, whatever the loop's length. `hsv(x + phase, 1, 1)` draws the same frames as `hsv(x + t/4, 1, 1)` here, and keeps going round once a loop if you change `loop 4` to `loop 6`. `phase` doesn't exist in `loop forever`, which has no loop.
+
 ## Waves
 
 `sin(v)` makes a smooth wave between −1 and 1. Psi measures it in turns: the wave goes round once as `v` goes from 0 to 1. There is no pi to multiply by.
@@ -75,13 +77,13 @@ This reads as a control called `speed`, going from 0 to 2, starting at 1, with t
 
 ## How often it is drawn
 
-The display draws its picture again each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh unless it asks for another rate. `fps 100` asks for every refresh.
+The display draws its picture again each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh unless it asks for every one, with a `smooth` line at the top.
 
 ```psi
 name "Fast sweep"
-fps 100
+smooth
 loop 1
-gray(abs(x - frac(t)) < 0.02)
+gray(abs(x - phase) < 0.02)
 ```
 
 Drawn every refresh, a fast line looks smoother. It moves at the same speed either way, because `t` is always the time of the frame being drawn: a faster rate only draws more of the moments in between. The display keeps every refresh only for a Formula that is light for the panel, and with **Phosphor glow** on (Settings › Panel) it draws Formulas every 2nd refresh.

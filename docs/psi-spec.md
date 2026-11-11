@@ -18,7 +18,7 @@ On the site, the search box filters the built-ins (press `/`), and
 <!-- psi-builtins: names (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins) -->
 | kind | names |
 | --- | --- |
-| values | `x`, `y`, `px`, `py`, `i`, `t`, `hour`, `minute`, `second`, `a`, `b`, `c`, `ur`, `ug`, `ub`, `ul`, `ink`, `seed` |
+| values | `x`, `y`, `px`, `py`, `i`, `t`, `hour`, `minute`, `second`, `a`, `b`, `c`, `ur`, `ug`, `ub`, `ul`, `ink`, `seed`, `phase` |
 | values about the middle | `cx`, `cy`, `r`, `angle` |
 | built-in inputs (values from the panel) | `daylight`, `sun.alt`, `moon.phase`, `season`, `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`, `replay.game` |
 | their events | `since(KEY)`, `was(KEY)` |
@@ -31,7 +31,7 @@ On the site, the search box filters the built-ins (press `/`), and
 | keywords | `loop`, `layer`, `part`, `use`, `draw`, `for`, `table`, `fn` |
 | drawing | `line`, `dot`, `pset`, `rect`, `rectfill`, `circ`, `circfill`, `trifill`, `cls`, `spr`, `print` |
 | declarations | `psi`, `name`, `about`, `control`, `look` |
-| words that are keywords in one place only | `fps`, `forever`, `sprite`, `palette`, `key`, `rate` |
+| words that are keywords in one place only | `fps`, `smooth`, `forever`, `sprite`, `palette`, `key`, `rate` |
 | words of the draw stage and scenes (names elsewhere) | `if`, `else`, `when`, `scene`, `tween` |
 | the picture under | `under`, `under(x, y)` |
 | the built-in inputs' groups (not names) | `sun`, `moon`, `replay` |
@@ -60,6 +60,7 @@ the editor.
 | `x, y` | where the pixel is: x 0 at the left to 1 at the right, y 0 at the top to 1 at the bottom | <code class="psi-ex">rgb(x, y, 0.5)</code> |
 | `px, py` | the pixel’s column 0–127 from the left and row 0–31 from the top | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
 | `t` | seconds into the loop | <code class="psi-ex">loop 4; hsv(x + t/4, 1, 1)</code> |
+| `phase` | where the frame is in the loop, 0 to 1: t / the loop’s length | <code class="psi-ex">loop 4; hsv(x + phase, 1, 1)</code> |
 | `hour, minute, second` | the time of day | <code class="psi-ex">band = floor(y&#42;3); hsv(band/3, 0.8, x &lt; pick(band, second/60, minute/60, hour/24))</code> |
 | `a, b, c` | the controls, in the order the control lines declare them (undeclared: a slider 0 to 1 at 0); any built-in name may be set as your own | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
 | `w, h` | 128 and 32 | <code class="psi-ex">gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)</code> |
@@ -102,7 +103,7 @@ the editor.
 | `;` | a new line, on the same line | <code class="psi-ex">u = x; v = y; rgb(u, v, 0.5)</code> |
 | `loop 8` | the loop’s length in seconds, and the least time it plays | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
 | `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
-| `fps 100` | drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
+| `smooth` | drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only | <code class="psi-ex">smooth; loop 1; gray(abs(x - phase) &lt; 0.02)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
 | `layer rate 4 { … }` | a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
 | `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
@@ -183,14 +184,18 @@ the editor.
   when left out). Which instants get drawn is the display's: the panel
   draws a frame on its scan's refresh (about 8 ms; 100 to 125 a second, by
   panel), every 2nd refresh unless the formula asks for every refresh
-  (`fps 100`) or every 4th (`fps 25`), and fewer when frames take too long;
+  (`smooth`), and fewer when frames take too long;
   the browser's preview draws at about the same times, and a saved GIF at
   20 or 40 ms. So motion is a function of `t`, never a count of frames.
   The loop plays as whole frames: one that is not a whole number of 40 ms
   may be cut short by up to 40 ms. `loop N` is also the least time the
   formula plays for in a playlist, and the length of a GIF saved from it.
-  With `loop forever`, `t` is seconds since the formula started and grows
-  without end.
+  `phase` is where the frame is in the loop, 0 to 1: `t` divided by the
+  loop's length as its line writes it, the very division, so `sin(phase)`
+  and `sin(t/8)` in an 8-second loop draw the same frames, and a change of
+  the loop's length needs no other edit. With `loop forever`, `t` is
+  seconds since the formula started and grows without end (and there is no
+  `phase`: E908).
 - **Built-in inputs** (`daylight`, `sun.alt`, `moon.phase`, `season`,
   `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`,
   `replay.game`) are read by name. Each is the same for every pixel of a
@@ -226,7 +231,7 @@ the editor.
 A formula's cost is an estimate in milliseconds a frame. Up to 5 ms is
 **light**, up to 8 ms **medium**, and past that **heavy**. The panel
 refuses a formula past 40 ms a frame by the plain VM estimate (32 ms for
-one at `fps 100`), or past 12 ms for a look drawn over every GIF. That is
+one drawn every refresh, `smooth`), or past 12 ms for a look drawn over every GIF. That is
 the VM's figure with no still cache even where the JIT or the cache would
 draw it faster, because the panel may have to draw it that way (the JIT
 switched off, short of memory, or failing its self-check). The light,
@@ -261,7 +266,7 @@ table msg = 'H', 'E', 'L', 'L', 'O', ' ', 'P', 'A', 'N', 'E', 'L', ' '
 u = floor(px/2 + t*12)
 k = floor(u/6) % 12
 row = floor((py - 9)/2)
-hsv(x/2 + t/6, 0.6, glyph(msg[k], u % 6, row))
+hsv(x/2 + phase, 0.6, glyph(msg[k], u % 6, row))
 ```
 
 ### A palette cycle
@@ -339,7 +344,7 @@ layer rate 4 {
 }
 -- the layer above is drawn every frame
 layer {
-  rgb(1, 0.8, 0.3, len((x - frac(t/8))*4, cy) < 0.12)
+  rgb(1, 0.8, 0.3, len((x - phase)*4, cy) < 0.12)
 }
 ```
 
@@ -355,11 +360,11 @@ version.
 name "Warp stars"
 about "64 stars streaking out from the middle: lines drawn once a frame"
 loop 2
-fps 100
+smooth
 draw {
   for k < 64 {
     dir = hash(k, 1)         -- its direction, in turns
-    near = frac(t/2 + hash(k, 2)) -- 0 far away, 1 here
+    near = frac(phase + hash(k, 2)) -- 0 far away, 1 here
     d = near*near*80         -- how far out it is, in pixels
     tail = d*0.8             -- where it was a moment ago
     line(64 + cos(dir)*tail, 16 + sin(dir)*tail*0.4, 64 + cos(dir)*d, 16 + sin(dir)*d*0.4, 0, near)
@@ -458,7 +463,8 @@ decl      = "psi" NUMBER                      -- the language version, first lin
           | "look" [ BLEND ] [ NUMBER ]       -- it may be the panel's look: blend (over), amount 0..100 (100)
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
-          | "fps" NUMBER                      -- 100, 50 or 25: every refresh, every 2nd (the default) or every 4th; once
+          | "smooth"                          -- drawn every refresh, not every 2nd: once (a formula's own `smooth` aside)
+          | "fps" NUMBER                      -- the older spelling: 100 (smooth), 50 (the default) or 25 (every 4th)
           | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] ["rate" NUMBER] "{" { assign | fn } colourline "}"   -- rate 2..200; fn: a "fn" line as below
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
@@ -510,9 +516,11 @@ comment   = "--" or "//" to the end of the line
 ```
 
 
-The declarations (`decl`) come first, before every other line, each once
-(`control` up to three times). `loop` and `fps` may come anywhere among the
-formula's own lines, outside layers. The colour line is the last line of the
+The **header** comes first: the declarations (`decl`), each once
+(`control` up to three times), and the `loop` and `smooth` (or `fps`)
+lines, in any order among themselves, before every other line (a
+declaration below another line is E951). `loop` and `smooth` may also come
+later among the formula's own lines, outside layers. The colour line is the last line of the
 formula, of a function and of a layer. With layers, every colour line is
 inside a layer.
 
@@ -560,7 +568,7 @@ Error codes are only ever added, and a retired code is not used again.
 
 - **Syntax and acceptance.** The keywords, the palette names and the
   dotted inputs' groups (`sun`, `moon`, `replay`) are not names; the name
-  rule ("Every name"); declarations first; `psi N` on the first line only;
+  rule ("Every name"); the header first (its lines in any order); `psi N` on the first line only;
   `{` on the line that opens it; `;` as a separator; `--` and `//`
   comments; a line going on after an operator or `,`; literal counts for
   `for`, `ink(n)` and `look`; comparisons don't chain; the colour grammar
@@ -586,7 +594,8 @@ Error codes are only ever added, and a retired code is not used again.
 - **Inputs.** `x` and `y` across and down, `cx cy r angle` as defined,
   `angle` clockwise with a quarter down, `t` the frame's time in seconds
   (which instants are drawn is the display's, not the language's), `loop`
-  8 when left out, `fps` 25, 50 or 100 only, the
+  8 when left out, `phase` as `t` over it, `smooth` as `fps 100` and
+  `fps` 25, 50 or 100 only, the
   controls' ranges and defaults, each built-in input's range and default,
   `since`'s 32766 for a change and 32767 for never, `hour minute second`
   whole.
@@ -630,7 +639,7 @@ from the source with `cargo install --path opendmd-psi-cli`, or with
 $ psi check storm-front.psi --out -
 ok: 39 of 768 steps (per frame 11, draw 0, per row 5, per pixel 23), 2 layers, 3 of 12 registers, 38 of 241 values
 name: Storm front
-never repeats (loop forever) at 50 fps; reads t
+never repeats (loop forever), drawn every 2nd refresh; reads t
 panel: ~5.5 ms a frame with the JIT, ~6.8 without: medium (light ≤ 5 ms, medium ≤ 8 ms; the panel takes ≤ 40 ms on the VM, a look ≤ 12)
 JIT: yes, ~5.5 ms a frame compiled (what the tier and the gallery's limit count; ~6.8 ms without the JIT)
 length: 563 B as written (32,768 at most), 355 B compiled (489 B as a path, @formula?psb=…: 6,144 to show it, 2,048 for an inline look); compiled 355 B of the gallery's 4,500

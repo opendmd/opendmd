@@ -91,13 +91,13 @@ gray(level[floor(x*4)])
 
 ## Time and loops
 
-`t` counts seconds from the start of the loop, and starts again from 0 when the loop ends. The loop is 8 seconds unless a `loop` line near the top says otherwise. In `loop forever`, `t` goes on growing, and Psi asks you to wrap it with `frac`, `%`, `sin`, `noise` or a comparison before it reaches a colour. `hour`, `minute` and `second` come from the display's clock.
+`t` counts seconds from the start of the loop, and starts again from 0 when the loop ends. The loop is 8 seconds unless a `loop` line near the top says otherwise. `phase` is where the frame is in the loop, from 0 to 1: exactly `t` divided by the loop's length, so `sin(phase)` goes round once a loop whatever its length. In `loop forever`, `t` goes on growing, and Psi asks you to wrap it with `frac`, `%`, `sin`, `noise` or a comparison before it reaches a colour. `hour`, `minute` and `second` come from the display's clock.
 
 `t` is the time of the frame being drawn. Which moments get drawn depends on the display, so a Formula says where things are at a time, never how far they move in a frame. The loop plays as whole frames: a loop that isn't a whole number of 0.04 seconds can come out up to 0.04 seconds short. The loop is also the least time a Formula plays for in a playlist, and the length of a GIF saved from it.
 
 ## How often it is drawn
 
-The display draws its picture each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh, or every refresh with `fps 100`. The display measures how long each frame takes. When frames take too long, it draws every 4th or 8th refresh instead, and when they get faster again it speeds back up, never past what the Formula asked for. Every refresh only holds for a light Formula, and only with **Phosphor glow** off. The browser's preview draws at about the same moments.
+The display draws its picture each time its scan comes round, a *refresh*: about 100 to 125 times a second, depending on the panel. A Formula is drawn every 2nd refresh, or every refresh with a `smooth` line at the top (Formulas written before it say `fps 100`, which means the same). The display measures how long each frame takes. When frames take too long, it draws every 4th or 8th refresh instead, and when they get faster again it speeds back up, never past what the Formula asked for. Every refresh only holds for a light Formula, and only with **Phosphor glow** off. The browser's preview draws at about the same moments.
 
 ## Layers
 
@@ -206,7 +206,7 @@ mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), 0.8)
 
 The `look` line says the Formula can be the panel's look, drawn over every GIF. Its card in the web app then offers **Set as the panel’s look**. `look screen 40` would put it on with the screen blend, covering 40 %. A Formula with layers takes `look` or `look over N` only.
 
-The display won't use a look that hides the GIF completely. Over a GIF, a look is drawn with the GIF's frames, not at its own `fps` line's rate, and the limit on how heavy it can be is stricter than for a Formula playing alone.
+The display won't use a look that hides the GIF completely. Over a GIF, a look is drawn with the GIF's frames, not at the rate its `smooth` line asks, and the limit on how heavy it can be is stricter than for a Formula playing alone.
 
 ## The world around it
 

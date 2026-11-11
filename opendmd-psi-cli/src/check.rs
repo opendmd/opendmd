@@ -252,9 +252,15 @@ pub fn run(args: Vec<String>) -> i32 {
     } else {
         format!("loop {} s", prog.loop_ms() as f64 / 1000.0)
     };
+    // (The panel draws it every refresh, every 2nd or every 4th: about 8 ms
+    // each, 100 to 125 a second by panel; opendmd-core scan.rs beam_frames.)
     println!(
-        "{lp} at {} fps; reads {}",
-        1000 / grid,
+        "{lp}, drawn {}; reads {}",
+        match grid {
+            10 => "every refresh (smooth)",
+            40 => "every 4th refresh",
+            _ => "every 2nd refresh",
+        },
         if reads.is_empty() {
             "nothing (a still picture)".into()
         } else {
@@ -306,7 +312,7 @@ pub fn run(args: Vec<String>) -> i32 {
                 "refused: the panel won't play it: ~{:.1} ms a frame without the JIT and the still cache, over its {} ms{} (it must be able to draw it that way); make it lighter",
                 vm as f64 / 1000.0,
                 limit / 1000,
-                if prog.over() { " for a look" } else if grid == 10 { " at fps 100" } else { "" }
+                if prog.over() { " for a look" } else if grid == 10 { " drawn every refresh" } else { "" }
             );
             true
         }
@@ -345,7 +351,7 @@ pub fn run(args: Vec<String>) -> i32 {
         );
     }
     if grid == 10 && us > 5000 {
-        println!("fps 100: over its 5 ms budget, so the panel plays it at 50 fps or fewer");
+        println!("every refresh: over its 5 ms budget, so the panel draws it every 2nd refresh or less often");
     }
     if listing {
         print!("{}", prog.listing());

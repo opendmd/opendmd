@@ -29,7 +29,7 @@ fn tmp(name: &str, text: &str) -> std::path::PathBuf {
 fn check_says_what_a_formula_costs() {
     let (code, out, _) = psi(&["check", "-", "--out", "-"], "loop 4\nv = sin(x*3 + t/4)\nhsv(v, 1, 1)\n");
     assert_eq!(code, 0, "{out}");
-    for line in ["ok: ", "panel: ~", "JIT: yes", "length: ", " B compiled", "loop 4 s at 50 fps; reads t"] {
+    for line in ["ok: ", "panel: ~", "JIT: yes", "length: ", " B compiled", "loop 4 s, drawn every 2nd refresh; reads t"] {
         assert!(out.contains(line), "no `{line}` in:\n{out}");
     }
 }
