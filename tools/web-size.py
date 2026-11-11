@@ -492,7 +492,10 @@ FHIST = {"js/fhist.js"}
 # every visit to the view loads and which the cheat sheet's rows left
 # (23,297 B gz after, from 25,959). Measured 6,598 B gz: ~3.4 KB the
 # cheat sheet's rows, the rest the names and the list.
-FHINT_GZ_BUDGET = 7 * 1024
+# 8 KB (2026-11-11, Claude, under the owner's budget authority; branch
+# psi-tidy): `phase` and `smooth` rows and names took it to 7,065 B gz,
+# 103 B of headroom left.
+FHINT_GZ_BUDGET = 8 * 1024
 FHINT = {"js/fhint.js"}
 # The site editor's What costs most and Tidy up (2026-11-07, branch
 # editor-cost): js/fcost.js (imported by js/formulas.js only on the site's
