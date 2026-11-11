@@ -447,7 +447,13 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # still needs plus the model that opens and shows any piece (doc.js: cels by
 # layer and frame, the composite, the colour keys, the undo steps), the
 # seven files of STUDIO_FIRST; the GIF went out to out.js.
-STUDIO_PAGE_GZ_BUDGET = 40 * 1024
+# 42 KB since S2 branch 2 (2026-11-11, studio-s2-frames, under the budget
+# authority the coordinator passed on): the first-paint wiring for frames and
+# layers (doc.js applying and undoing structure steps, which a journal can
+# replay before frames.js is in; the strip's one cell and "+", the Layers
+# section, the phone's tabs, Send to panel's button, the kind line) at
+# ~42.3 KB gz as written. The frames code itself is lazy (frames.js).
+STUDIO_PAGE_GZ_BUDGET = 42 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
 # (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
@@ -460,7 +466,7 @@ STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "
 # content, not code, and counts against none of them.
 STUDIO_LAZY = {
     "colour": (6 * 1024, ("colour.js",)),        # New colour…, Palettes…
-    "frames": (7 * 1024, ("frames.js",)),        # more than one frame or layer, Add frame, Add layer, Play
+    "frames": (7 * 1024, ("frames.js", "frames.css")),  # more than one frame or layer, Add frame, Add layer, Play
     "out": (5 * 1024, ("out.js",)),              # Download, Send to panel, Share: flatten, the GIF table
     "files": (5 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
     "library": (8 * 1024, ("library.js", "library.css")),  # Library
