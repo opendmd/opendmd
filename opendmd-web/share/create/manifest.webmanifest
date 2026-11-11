@@ -20,7 +20,7 @@
       "title": "title",
       "text": "text",
       "url": "url",
-      "files": [{ "name": "media", "accept": ["image/gif", "image/*", "video/mp4", "video/webm", ".gif", ".mp4", ".webm"] }]
+      "files": [{ "name": "media", "accept": ["image/gif", "image/*", "video/*", ".gif", ".mp4", ".webm", ".mov", ".m4v"] }]
     }
   }
 }

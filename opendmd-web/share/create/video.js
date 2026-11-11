@@ -8,7 +8,12 @@
 // and handed on as RGB with how long it shows: at most FPS a second, for
 // the first MAX_S seconds. A 128x32 panel needs no more, and the timeline
 // trims, deletes and changes the speed after. Without the callback (an
-// older browser) the video is stepped by seeking instead.
+// older browser) the video is stepped by seeking instead. `start` (seconds)
+// reads from there instead of the beginning ("Start at", create.js).
+//
+// Any video this browser plays (the file picker and the share target take
+// video/*): one it can't, one with no picture and one that stalls each end
+// in a sentence, never a page left waiting.
 
 export const FPS = 20; // at most 20 frames a second (50 ms each)
 export const MAX_S = 10; // the first 10 seconds
@@ -24,8 +29,8 @@ const once = (v, ev, why) => new Promise((res, rej) => {
 
 // `put(rgb, ms, {w, h, ow, oh})` for each frame (the first call starts the
 // animation); `alive()` false stops it (null); `progress(t, of)` in seconds.
-// {ow, oh, cut, secs}, or throws an Error saying why in plain words.
-export async function frames(blob, { put, alive = () => true, progress }) {
+// {ow, oh, cut, secs, dur}, or throws an Error saying why in plain words.
+export async function frames(blob, { put, alive = () => true, progress, start = 0 }) {
   const v = document.createElement('video');
   Object.assign(v, { muted: true, playsInline: true, preload: 'auto' });
   const src = URL.createObjectURL(blob);
@@ -43,7 +48,10 @@ export async function frames(blob, { put, alive = () => true, progress }) {
     }
     const ow = v.videoWidth, oh = v.videoHeight;
     if (!ow || !oh) throw new Error('That video has no picture');
-    const len = Math.min(dur > 0 && Number.isFinite(dur) ? dur : MAX_S, MAX_S);
+    const known = dur > 0 && Number.isFinite(dur);
+    const s0 = known ? Math.max(0, Math.min(start, dur - 0.05)) : 0;
+    const len = Math.min(known ? dur - s0 : MAX_S, MAX_S);
+    if (s0) { v.currentTime = s0; await once(v, 'seeked', cant); }
     const k = Math.min(1, LONG / Math.max(ow, oh), Math.sqrt(BUDGET / (Math.ceil(len * FPS) * 3 * ow * oh)));
     const w = Math.max(1, Math.round(ow * k)), h = Math.max(1, Math.round(oh * k));
     const info = { w, h, ow, oh };
@@ -52,7 +60,7 @@ export async function frames(blob, { put, alive = () => true, progress }) {
     g.imageSmoothingQuality = 'high';
     // A frame is handed on when the next one arrives (its delay is the gap).
     let held = null, at = 0, next = 0, seen = 0;
-    const grab = (t) => {
+    const grab = (t) => { // (t: seconds from s0)
       g.drawImage(v, 0, 0, w, h);
       const d = g.getImageData(0, 0, w, h).data, rgb = new Uint8Array(w * h * 3);
       for (let i = 0, j = 0; i < d.length; i += 4, j += 3) { rgb[j] = d[i]; rgb[j + 1] = d[i + 1]; rgb[j + 2] = d[i + 2]; }
@@ -70,8 +78,9 @@ export async function frames(blob, { put, alive = () => true, progress }) {
         const watch = setInterval(() => { if (!alive() || performance.now() - last > 5000) done(); }, 250);
         const on = (_now, m) => {
           last = performance.now();
-          if (!alive() || m.mediaTime >= len) return done();
-          if (m.mediaTime + 0.002 >= next) grab(m.mediaTime);
+          const t = m.mediaTime - s0;
+          if (!alive() || t >= len) return done();
+          if (t + 0.002 >= next) grab(t);
           v.requestVideoFrameCallback(on);
         };
         v.requestVideoFrameCallback(on);
@@ -80,17 +89,17 @@ export async function frames(blob, { put, alive = () => true, progress }) {
       });
     } else {
       for (let t = 0; t < len && alive(); t += 1 / FPS) {
-        v.currentTime = t;
+        v.currentTime = s0 + t;
         await once(v, 'seeked', cant);
         grab(t);
       }
     }
     if (!alive()) return null;
     if (!held) throw new Error('No pictures could be read from that video');
-    const end = Math.min(len, dur > 0 && Number.isFinite(dur) ? dur : seen + 1 / FPS);
+    const end = Math.min(len, known ? dur - s0 : seen + 1 / FPS);
     const stalled = seen + 1 < end;
     put(held, ms(stalled ? 1 / FPS : Math.max(1 / FPS, end - at)), info);
-    return { ow, oh, cut: dur > len + 0.05 || stalled, secs: stalled ? seen : end };
+    return { ow, oh, cut: s0 > 0 || dur > s0 + len + 0.05 || stalled, secs: stalled ? seen : end, dur: known ? dur : 0 };
   } finally {
     v.removeAttribute('src');
     v.load();

@@ -74,7 +74,7 @@ let art = null; // the wasm module
 // mounts it too, with `o`: `css: false` (its own stylesheet imports the
 // Studio's), `acts` (buttons beside Save), `relay` (an address the browser
 // may not fetch, through the site), `video` (the site's video reader, a
-// module: MP4 and WebM become frames) — and reads what Save would write
+// module: any video the browser plays becomes frames) — and reads what Save would write
 // through `ready()` and `out()`.
 export async function mount(root, o = {}) {
   [art] = await Promise.all([artModule(), o.css !== false && css(), o.css !== false && style()]);
@@ -104,7 +104,7 @@ function build(root, o) {
 
   // --- 1 Find: the web (find.js' sources, in their order) or your own picture.
   const SRC = [...sources.map((x) => [x.id, x.label]), ['own', 'Your own']];
-  const file = h('input', { type: 'file', accept: o.video ? 'image/*,video/mp4,video/webm' : 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
+  const file = h('input', { type: 'file', accept: o.video ? 'image/*,video/*' : 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
   const url = h('input', { type: 'text', id: id('url'), inputMode: 'url', placeholder: 'Picture address (https://…)' });
   const msg = h('span.cap', { id: id('msg'), 'aria-live': 'polite' });
   const seen = h('a', { id: id('seen'), target: '_blank', rel: 'noopener', hidden: true }, 'Seen on…');
