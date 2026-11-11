@@ -733,8 +733,8 @@ def studio_page(browser, base: str, site: Path, errors: list[str], shots: Path |
     check(s_px(page, 10, 5) == AMBER and s_lit(page) == 1, f"/studio/: the pencil draws a pixel in the colour picked {s_px(page, 10, 5)}")
     kind = page.inner_text("#s-kind")
     check(kind.endswith("· 1 COLOUR") and page.inner_text("#s-used") == "Colours used: 1"
-          and page.evaluate("(() => { const a = document.getElementById('s-name').getBoundingClientRect(), b = document.getElementById('s-kind').getBoundingClientRect(); return Math.abs(a.top + a.height / 2 - (b.top + b.height / 2)) < a.height / 2 && b.left > a.left; })()"),
-          f"/studio/: the size label beside the name counts the colours drawn, not off ({kind!r}, {page.inner_text('#s-used')!r})")
+          and page.evaluate("(() => { const a = document.getElementById('s-name').getBoundingClientRect(), b = document.getElementById('s-kind').getBoundingClientRect(); return b.top >= a.bottom - 2 && Math.abs(b.left - a.left) < 12; })()"),
+          f"/studio/: the kind line under the name counts the colours drawn, not off ({kind!r}, {page.inner_text('#s-used')!r})")
     s_kept(page)
     got = page.evaluate(S_STORE, ["get", None])
     r = got["r"] or {}
@@ -2573,7 +2573,7 @@ S_WHOLE = """async ([spec]) => { const m = await import('/studio/studio.js');
     const layers = spec.layers.map((l) => ({ name: l.name, moves: l.moves, hide: l.hide, cels: (l.moves ? spec.frames : [0]).map((_, f) => cel((x, y, i) => {
       if (l.noise) { const r = rnd(i * 7919 + f * 104729 + 1)(); return 1 + (r % spec.colours); }
       return l.box && x >= l.box[0] + 10 * f * (l.moves ? 1 : 0) && x < l.box[0] + l.box[2] + 10 * f * (l.moves ? 1 : 0) && y >= l.box[1] && y < l.box[1] + l.box[3] ? l.k : 0; })) }));
-    const colours = Array.from({ length: spec.colours }, (_, i) => ({ k: i + 1, hex: '#' + ((i * 2654435761) % 16777216 >>> 0).toString(16).padStart(6, '0') }));
+    const colours = Array.from({ length: spec.colours }, (_, i) => ({ k: i + 1, hex: '#' + (((i + 1) * 2654435761) % 16777216 >>> 0).toString(16).padStart(6, '0') }));
     await m.piece({ name: spec.name, frames: spec.frames.map((ms) => ({ ms })), layers, colours, from: spec.from || [] }); }"""
 
 
@@ -3007,6 +3007,249 @@ def studio_shape_journals(browser, base: str, site: Path, errors: list[str]) -> 
         }
         return { bad: bad.slice(0, 4), n: bad.length, replays, frames: d.frames.length, layers: d.layers.length, steps: d.steps.length }; }""", [seed, 600]) for seed in (7, 23)]
     check(all(f["n"] == 0 and f["replays"] >= 20 for f in fs), f"/studio/ frames hostile: 2 x 600 random structure changes, draws, undos and redos against doc.js: none fails, the journal replays to the same piece {fs}")
+    page.context.close()
+
+
+# --- the review round on branch 2 (Fable): each reproduction a check ---
+S_STORED_FRAMES = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const id = document.getElementById('studio').dataset.id;
+    const r = await s.get(id); s.db.close(); const b = r.body, N = 4096, out = [];
+    for (let f = 0; f < b.frames.length; f++) { const px = new Uint16Array(N);
+      for (const l of b.layers) { if (l.hide) continue; const k = await m.unpackPx(l.cels[l.moves ? f : 0], N, b.keys === 2); for (let i = 0; i < N; i++) if (k[i]) px[i] = k[i]; }
+      const on = []; px.forEach((k, i) => { if (k) on.push(i); }); out.push(on.join(',')); }
+    return out; }"""
+
+
+def s_shown_frames(page: Page) -> list[str]:
+    out = []
+    n = int(s_frame(page).split("/")[1])
+    for f in range(n):
+        s_cell(page, f)
+        out.append(",".join(str(y * 128 + x) for x, y in sorted(s_on(page), key=lambda p: (p[1], p[0]))))
+    return out
+
+
+def studio_midstroke(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A stroke in progress (the pointer down) is never split by the strip,
+    the frame actions, the layer rows or Play: each is ignored until it
+    ends, and what is drawn is what is kept."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate(S_WHOLE, [{"name": "Mid", "frames": [100, 100], "colours": 2, "layers": [
+        {"name": "Back", "moves": False, "box": [0, 0, 4, 4], "k": 1}, {"name": "Front", "moves": True, "box": [60, 20, 4, 4], "k": 2}]}])
+    wait_js(page, "document.getElementById('s-name').value === 'Mid' && document.getElementById('studio').dataset.frames === 'yes'")
+    s_blur(page)
+    results = {}
+    for name, js in (("+", "document.getElementById('s-addf').click()"), ("a frame's cell", "document.querySelector('#s-cells [data-f=\"1\"]').click()"),
+                     ("Delete frame", "document.querySelector('.s-fmenu [data-fa=del]').click()"), ("a layer row", "document.querySelector('#s-lrows li:last-child').click()"),
+                     ("Delete layer", "document.querySelector('#s-lrows li [data-la=dell]').click()"), ("Play", "document.getElementById('s-playb').click()"),
+                     ("N", None)):
+        s0 = s_steps(page)
+        f0, l0 = s_frame(page), s_data(page).get("layers")
+        page.mouse.move(*s_at(page, 10, 10))
+        page.mouse.down()
+        page.mouse.move(*s_at(page, 20, 10), steps=4)
+        if js:
+            page.evaluate(js)
+        else:
+            page.keyboard.press("n")
+        page.wait_for_timeout(150)
+        page.mouse.move(*s_at(page, 30, 12), steps=4)
+        page.mouse.up()
+        s_kept(page)
+        page.wait_for_timeout(200)
+        n0 = int(s0.split("/")[0])
+        results[name] = (s_steps(page) == f"{n0 + 1}/{n0 + 1}", s_frame(page) == f0, s_data(page).get("layers") == l0, not s_data(page).get("playing"))
+        page.keyboard.press("Control+z")
+        s_kept(page)
+    stored, shown = page.evaluate(S_STORED_FRAMES), s_shown_frames(page)
+    check(all(all(v) for v in results.values()) and stored == shown,
+          f"/studio/ review: with a stroke in progress, +, a cell, Delete frame, a layer row, Delete layer, Play and N do nothing; the stroke is one step and kept as drawn {results} {stored == shown or (stored, shown)}")
+    page.context.close()
+
+
+def studio_wide_shape(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A structure change straight after the 256th colour is drawn (before the autosave)."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate("""async () => { const m = await import('/studio/studio.js'); const N = 4096, z = () => new Uint8Array(N);
+        await m.piece({ name: 'Edge', frames: [{ ms: 100 }, { ms: 100 }, { ms: 100 }], colours: Array.from({ length: 254 }, (_, i) => ({ k: i + 1, hex: '#' + (0x100000 + i * 257).toString(16) })),
+          layers: [{ name: 'A', moves: true, cels: [z(), z(), z()] }] }); }""")
+    wait_js(page, "document.getElementById('s-name').value === 'Edge' && document.getElementById('studio').dataset.frames === 'yes'")
+    s_blur(page)
+    page.click('#s-set .s-sw[data-hex="#f7a531"]')
+    page.mouse.click(*s_at(page, 50, 5))
+    s_kept(page)
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    page.mouse.click(*s_at(page, 60, 5))
+    page.evaluate("document.querySelector('.s-fmenu [data-fa=del]').click()")
+    page.wait_for_timeout(400)
+    err = page.inner_text("#s-err") if page.is_visible("#s-err") else ""
+    s_kept(page)
+    r = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    page.keyboard.press("Control+z")
+    s_kept(page)
+    back = page.evaluate(S_STORE, ["get", None])["r"]["body"]
+    s_cell(page, 0)
+    check(not err and len(r["frames"]) == 2 and r.get("keys") == 2 and len(r["colours"]) == 256 and len(back["frames"]) == 3 and s_on(page) == {(50, 5), (60, 5)},
+          f"/studio/ review: a frame deleted straight after the 256th colour is drawn: done, two bytes a pixel, and undone ('{err}', {len(r['frames'])} frames, keys {r.get('keys')})")
+    page.context.close()
+
+
+def studio_onion_bg(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Onion skin over a background: the moving layer's frame before shows,
+    see-through where it is off, and the picture under it is not dimmed."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate(S_WHOLE, [{"name": "Onion", "frames": [100, 100], "colours": 2, "layers": [
+        {"name": "Sky", "moves": False, "box": [0, 0, 128, 32], "k": 1}, {"name": "Rocket", "moves": True, "box": [20, 10, 6, 4], "k": 2}]}])
+    wait_js(page, "document.getElementById('s-name').value === 'Onion' && document.getElementById('studio').dataset.frames === 'yes'")
+    s_cell(page, 1)
+    page.click("#s-onionb")
+    page.wait_for_timeout(300)
+    o = page.evaluate("""() => { const c = document.getElementById('s-onion'), d = c.getContext('2d').getImageData(0, 0, 128, 32).data, on = [];
+        let clear = 0; for (let i = 0; i < 4096; i++) { if (d[i * 4 + 3]) on.push(i); else clear++; } return { on, clear, op: +getComputedStyle(c).opacity }; }""")
+    want = [y * 128 + x for y in range(10, 14) for x in range(20, 26)]
+    check(sorted(o["on"]) == want and o["clear"] == 4096 - len(want) and 0 < o["op"] < 1,
+          f"/studio/ review: onion skin over a background shows the frame before's moving layer, see-through elsewhere ({len(o['on'])} lit, {o['clear']} clear)")
+    page.context.close()
+
+
+def studio_send_sheet(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The Send sheet is modal for the keys too: N and Ctrl+Z do nothing
+    behind it; Enter in a field sends and leaves it open. A port past 65535
+    is refused and not kept. A long title is cut, the file name too. The
+    status says the panel's page opened, not that it was sent."""
+    page = s_page(browser, base, site, errors)
+    port = free_port()
+    send_stub(page, port)
+    page.evaluate(S_WHOLE, [{"name": "T" * 110, "frames": [100, 100], "colours": 2, "layers": [{"name": "A", "moves": True, "box": [0, 0, 4, 4], "k": 2}],
+                             "from": [{"external": True, "note": "x", "title": "Q" * 300}]}])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    page.mouse.click(*s_at(page, 60, 20))
+    s_kept(page)
+    f0, st0 = s_frame(page), s_steps(page)
+    page.click("#s-send")
+    page.wait_for_selector("#s-p[open] #s-p-send:not([disabled])", timeout=60000)
+    focus = page.evaluate("document.activeElement.id")
+    page.focus("#s-p-send")
+    for k in ("n", "Control+z", ",", "."):
+        page.keyboard.press(k)
+    page.wait_for_timeout(300)
+    behind = (s_frame(page), s_steps(page), s_data(page).get("playing"), focus)
+    page.focus("#s-p-title")
+    page.keyboard.press("Enter")
+    page.fill("#s-p-addr", f"127.0.0.1:99999")
+    page.click("#s-p-go")
+    big_port = (page.inner_text("#s-p-addr-err"), page.evaluate("localStorage.getItem('odmd.display')"))
+    page.fill("#s-p-addr", f"127.0.0.1:{port}")
+    with page.context.expect_page() as info:
+        page.press("#s-p-addr", "Enter")
+    d = sent(info.value)["data"]
+    info.value.close()
+    page.focus("#s-p-title")
+    with page.context.expect_page() as info:
+        page.keyboard.press("Enter")
+    d2 = sent(info.value)["data"]
+    info.value.close()
+    still = page.evaluate("document.getElementById('s-p').open")
+    said = page.inner_text("#s-saved")
+    import re as _re
+    check(behind == (f0, st0, None, "s-p-title"), f"/studio/ review: the Send sheet opens on its title; behind it, N, Ctrl+Z, , and . do nothing ({behind})")
+    check("doesn’t look like an address" in big_port[0] and big_port[1] is None,
+          f"/studio/ review: a port past 65535 is refused and not kept ({big_port})")
+    check(still and d2["type"] == "opendmd-import" and len(d["title"]) == 80 and len(d["name"]) <= 120 and _re.fullmatch(r"[^/\\\x00-\x1f]+\.gif", d["name"], _re.I)
+          and said.startswith(f"Opened 127.0.0.1:{port}"),
+          f"/studio/ review: Enter in a field sends and the sheet stays; a 300-letter title cut to 80, the file name to {len(d['name'])}; the status says the page opened ('{said}')")
+    page.context.close()
+
+
+def studio_journal_z(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A structure journal holding a cel that does not read, for a frame not in view: dropped at open."""
+    page = s_page(browser, base, site, errors)
+    r = page.evaluate("""async () => { const { Doc, N } = await import('/studio/doc.js'); const m = await import('/studio/store.js');
+        const z = await m.packPx(new Uint8Array(N));
+        const rec = { hash: 'h', body: { w: 128, h: 32, colours: [{ k: 1, hex: '#123456' }], frames: [{ key: '0000000f', ms: 100 }],
+          layers: [{ key: '000000aa', name: 'a', moves: true, cels: [z] }] } };
+        const b = { plays: 0, frames: [{ key: '0000000f', ms: 100 }], layers: [{ key: '000000aa', name: 'a', moves: true }] };
+        const a = { ...b, frames: [...b.frames, { key: '0000000e', ms: 100 }] };
+        const out = {};
+        for (const [name, cel] of [['does not read', '!!'], ['is a bomb', await m.packPx(new Uint8Array(4 << 20))], ['is the wrong size', await m.packPx(new Uint8Array(9))], ['is fine', z]]) {
+          const d = await Doc.open(rec, undefined, { list: [{ n: 1, t: { b, a, z: { '000000aa/0000000e': [cel, false] } } }], cur: 1, at: 0, hash: 'h' });
+          out[name] = [d.said, d.frames.length, d.F];
+        }
+        return out; }""")
+    check(all(v[0] == "dropped" and v[1] == 1 for k, v in r.items() if k != "is fine") and r["is fine"][:2] == ["moved", 2] and r["is fine"][2] == 0,
+          f"/studio/ review: a structure step's cel for a frame not in view that does not read, is a bomb or the wrong size: the journal dropped at open {r}")
+    page.context.close()
+
+
+def studio_small_things(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Frame times held to tens of ms (a GIF counts hundredths); a paste
+    stops Play, and Play waits while a paste floats; plays N written as a
+    loop count of N - 1 (N plays where it is kept), the panel looping by its
+    playlist."""
+    page = s_page(browser, base, site, errors)
+    page.evaluate(S_WHOLE, [{"name": "Small", "frames": [100, 100], "colours": 2, "layers": [{"name": "A", "moves": True, "box": [0, 0, 4, 4], "k": 2}]}])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    s_blur(page)
+    page.fill("#s-ms", "125")
+    page.press("#s-ms", "Enter")
+    page.wait_for_timeout(300)
+    s_kept(page)
+    ms = page.evaluate(S_STORE, ["get", None])["r"]["body"]["frames"][0]["ms"]
+    s_blur(page)
+    page.keyboard.press("m")
+    s_drag(page, (0, 0), (3, 3))
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Enter")
+    page.click("#s-playb")
+    page.wait_for_timeout(150)
+    was = s_data(page).get("playing")
+    page.keyboard.press("Control+v")
+    page.wait_for_timeout(150)
+    stopped = s_data(page).get("playing")
+    page.click("#s-playb")
+    page.wait_for_timeout(150)
+    refused = s_data(page).get("playing")
+    page.keyboard.press("Enter")
+    loops = {}
+    for plays in (0, 1, 3):
+        page.fill("#s-plays", str(plays))
+        page.press("#s-plays", "Enter")
+        page.wait_for_timeout(300)
+        with page.expect_download(timeout=60000) as dl:
+            page.click("#s-gif")
+        g = Path(dl.value.path()).read_bytes()
+        i = g.find(b"NETSCAPE2.0")
+        loops[plays] = None if i < 0 else int.from_bytes(g[i + 13:i + 15], "little")
+    check(ms == 130 and was == "yes" and not stopped and not refused and loops == {0: 0, 1: None, 3: 2},
+          f"/studio/ review: 125 ms kept as 130; a paste stops Play, and Play waits while it floats ({was}, {stopped}, {refused}); plays 0, 1, 3 written as loop counts {loops}")
+    page.context.close()
+
+
+def studio_layout(browser, base: str, site: Path, errors: list[str]) -> None:
+    """At 390 px: the frames right under the panel, the frame's settings
+    folded behind Frame…, every control at least 40 px, the name the whole
+    width with the kind line under it, the logo box on one line. At 1280
+    px: Send to panel on the name's row."""
+    page = s_page(browser, base, site, errors, "phone")
+    page.evaluate(S_WHOLE, [{"name": "Night flight", "frames": [120] * 4, "colours": 2, "layers": [{"name": "A", "moves": True, "box": [0, 0, 4, 4], "k": 2}]}])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    m = page.evaluate("""() => { const r = (q) => document.querySelector(q).getBoundingClientRect();
+        const small = [...document.querySelectorAll('#studio button, #studio input, #studio select')].filter((e) => e.offsetParent && !e.classList.contains('s-sw')
+          && getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().height < 40).map((e) => (e.id || e.textContent || e.className).trim().slice(0, 12));
+        return { stage: r('.s-stage').bottom, cells: r('#s-cells').top, tray: r('.s-tray').top, ms: !!document.getElementById('s-ms').offsetParent,
+          name: r('#s-name').width, kindBelow: r('#s-kind').top >= r('#s-name').bottom - 2, small, wide: document.documentElement.scrollWidth - innerWidth }; }""")
+    page.click("#s-fmore-b")
+    shown = page.is_visible("#s-ms") and page.is_visible(".s-fmenu [data-fa=del]")
+    page.click("#s-send")
+    page.wait_for_selector("#s-p[open] #s-p-send:not([disabled])", timeout=60000)
+    chk = page.evaluate("""() => { const l = document.querySelector('#s-p .s-chk').getBoundingClientRect(), b = document.getElementById('s-p-logo').getBoundingClientRect();
+        return l.height >= 40 && l.height < 60 && b.top >= l.top && b.bottom <= l.bottom; }""")
+    check(m["stage"] <= m["cells"] < m["tray"] and not m["ms"] and shown and m["name"] >= 300 and m["kindBelow"] and not m["small"] and m["wide"] <= 0 and chk,
+          f"/studio/ review (phone): the frames under the panel, the frame's settings behind Frame…, every control 40 px or more, the name the width, the kind line under it, the logo box on one line {m}")
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    row = page.evaluate("""() => { const a = document.getElementById('s-send').getBoundingClientRect(), n = document.getElementById('s-name').getBoundingClientRect(), g = document.getElementById('s-gif').getBoundingClientRect();
+        return [Math.abs(a.top - g.top) < 4, a.top < n.bottom]; }""")
+    check(all(row), f"/studio/ review (1280 px): Send to panel on the name's row, beside Download GIF ({row})")
     page.context.close()
 
 
@@ -4827,6 +5070,13 @@ def main() -> int:
             studio_phone_frames(browser, base, a.site, errors)
             studio_frames_red(browser, base, a.site, errors)
             studio_shape_journals(browser, base, a.site, errors)
+            studio_midstroke(browser, base, a.site, errors)
+            studio_wide_shape(browser, base, a.site, errors)
+            studio_onion_bg(browser, base, a.site, errors)
+            studio_send_sheet(browser, base, a.site, errors)
+            studio_journal_z(browser, base, a.site, errors)
+            studio_small_things(browser, base, a.site, errors)
+            studio_layout(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -4875,6 +5125,13 @@ def main() -> int:
         studio_phone_frames(browser, base, a.site, errors)
         studio_frames_red(browser, base, a.site, errors)
         studio_shape_journals(browser, base, a.site, errors)
+        studio_midstroke(browser, base, a.site, errors)
+        studio_wide_shape(browser, base, a.site, errors)
+        studio_onion_bg(browser, base, a.site, errors)
+        studio_send_sheet(browser, base, a.site, errors)
+        studio_journal_z(browser, base, a.site, errors)
+        studio_small_things(browser, base, a.site, errors)
+        studio_layout(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
