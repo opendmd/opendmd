@@ -56,3 +56,31 @@ pub fn frame(enc: &mut Encoder<Vec<u8>>, idx: &[u8], delay_ms: u32) {
 pub fn finish(enc: Encoder<Vec<u8>>) -> Vec<u8> {
     enc.into_inner().expect("gif trailer")
 }
+
+/// Frames drawn as palette indices (the site's pixel editor, /studio/): a
+/// 128x32 GIF over exactly `palette` (`0xRRGGBB`, 1..=256 colours, never
+/// re-quantised), `delays_ms.len()` frames of `W * H` indices each, back
+/// to back in `frames`, played `plays` times ([`begin`]). Refuses (with
+/// why) a palette out of range, frames of the wrong length or an index past
+/// the palette, so a bad call never writes a broken file.
+pub fn indexed(
+    palette: &[u32],
+    frames: &[u8],
+    delays_ms: &[u32],
+    plays: u32,
+) -> Result<Vec<u8>, &'static str> {
+    if palette.is_empty() || palette.len() > 256 {
+        return Err("a palette of 1 to 256 colours");
+    }
+    if delays_ms.is_empty() || frames.len() != delays_ms.len() * W * H {
+        return Err("frames of 128 x 32 indices, one delay each");
+    }
+    if frames.iter().any(|&i| i as usize >= palette.len()) {
+        return Err("an index past the palette");
+    }
+    let mut enc = begin(palette, plays);
+    for (f, &d) in frames.as_chunks::<{ W * H }>().0.iter().zip(delays_ms) {
+        frame(&mut enc, f, d);
+    }
+    Ok(finish(enc))
+}
