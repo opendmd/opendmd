@@ -348,8 +348,9 @@ export function hint(o) {
     if (document.activeElement !== ta) return close();
     if (t) {
       word = typed();
-      const seen = new Set();
-      items = word.length < 2 ? [] : [...own(ta.value), ...BUILT].filter((x) => x.n.startsWith(word) && !seen.has(x.n) && seen.add(x.n))
+      // (`smooth` is a line of its own: offered only at a line's start.)
+      const seen = new Set(), head = /(^|[\n;])[ \t]*$/.test(ta.value.slice(0, c - word.length));
+      items = word.length < 2 ? [] : [...own(ta.value), ...BUILT.filter((x) => head || x.n != 'smooth')].filter((x) => x.n.startsWith(word) && !seen.has(x.n) && seen.add(x.n))
         .sort((a, b) => (b.n === word) - (a.n === word) || a.n.length - b.n.length).slice(0, 8);
       if (items.length === 1 && items[0].n === word) items = [];
       sel = 0;
