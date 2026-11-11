@@ -61,7 +61,7 @@ the editor.
 | `px, py` | the pixel’s column 0–127 from the left and row 0–31 from the top | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
 | `t` | seconds into the loop | <code class="psi-ex">loop 4; hsv(x + t/4, 1, 1)</code> |
 | `hour, minute, second` | the time of day | <code class="psi-ex">band = floor(y&#42;3); hsv(band/3, 0.8, x &lt; pick(band, second/60, minute/60, hour/24))</code> |
-| `a, b, c` | the controls, in the order the control lines declare them (0 to 1 when undeclared); any built-in name may be set as your own | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
+| `a, b, c` | the controls, in the order the control lines declare them (undeclared: a slider 0 to 1 at 0); any built-in name may be set as your own | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
 | `w, h` | 128 and 32 | <code class="psi-ex">gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)</code> |
 | `i` | the pixel’s number, 0–4095 | <code class="psi-ex">hsv(i/4096, 1, 1)</code> |
 | `cx, cy` | from the middle: −2 to 2 across, −0.5 to 0.5 down | <code class="psi-ex">rgb(abs(cx)/2, abs(cy)&#42;2, 0.3)</code> |
@@ -100,9 +100,9 @@ the editor.
 | `< <= > >= == !=` | compare: 1 or 0; and, or, not | <code class="psi-ex">rgb(x &lt; 0.5, y &gt;= 0.5, 0.2)</code> |
 | `%` | remainder: v % 1 is the fraction | <code class="psi-ex">gray((px % 16 &lt; 8) != (py % 16 &lt; 8))</code> |
 | `;` | a new line, on the same line | <code class="psi-ex">u = x; v = y; rgb(u, v, 0.5)</code> |
-| `loop 8` | the loop’s length in seconds (first line) | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
+| `loop 8` | the loop’s length in seconds, and the least time it plays | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
 | `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
-| `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
+| `fps 100` | drawn every refresh of the panel (100 to 125 a second), not every 2nd; for fast motion, a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
 | `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
 | `layer rate 4 { … }` | a slow bottom layer: a band of its rows is redrawn each frame, so every row every 4th frame, and all of it when the clock or a control it reads changes. The layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
 | `fn ring(cx, r) = abs(len(px - cx, py - 16) - r) < 1` | a function: a value worked out from its values, used as ring(64, 8). With { … } instead of = …, it holds lines that draw, called on a line of their own in draw | <code class="psi-ex">loop 4<br>fn ring(cx, r) = abs(len(px - cx, py - 15.5) - r) &lt; 1<br>fn tree(x0, s) {<br>  line(x0, 31, x0, 31 - 10&#42;s, &#35;a62)<br>  circfill(x0, 31 - 10&#42;s, 3&#42;s, &#35;2a4)<br>}<br>draw { for k &lt; 4 { tree(10 + k&#42;30, 1 + k/4) } }<br>pal(ice, (ring(64 + sin(t/4)&#42;30, 8) + ring(64, 12))&#42;0.8)</code> |
@@ -179,10 +179,18 @@ the editor.
 - **`draw { }`** runs once a frame, before the pixels. Its loops
   (`for k < n`), lines and dots go into a canvas, which the pixels read
   back as `ink`.
-- **Time.** `t` is seconds into the loop (`loop N`, 8 when left out). It is
-  always a whole number of frames (`fps 25`, `50` or `100`; 50 when left
-  out). With `loop forever`, `t` is seconds since the formula started and
-  grows without end.
+- **Time.** `t` is the frame's time, in seconds into the loop (`loop N`, 8
+  when left out). Which instants get drawn is the display's: the panel
+  draws a frame on its scan's refresh (about 8 ms; 100 to 125 a second, by
+  panel), every 2nd refresh unless the formula asks for every refresh
+  (`fps 100`) or every 4th (`fps 25`), and fewer when frames take too long;
+  the browser's preview draws at about the same times, and a saved GIF at
+  20 or 40 ms. So motion is a function of `t`, never a count of frames.
+  The loop plays as whole frames: one that is not a whole number of 40 ms
+  may be cut short by up to 40 ms. `loop N` is also the least time the
+  formula plays for in a playlist, and the length of a GIF saved from it.
+  With `loop forever`, `t` is seconds since the formula started and grows
+  without end.
 - **Built-in inputs** (`daylight`, `sun.alt`, `moon.phase`, `season`,
   `yearday`, `night`, `bright`, `replay.playing`, `replay.platform`,
   `replay.game`) are read by name. Each is the same for every pixel of a
@@ -290,7 +298,7 @@ name "Clock"
 about "A clock face with hour and minute hands"
 -- Hands on a round dial; dx, dy: pixels from the middle
 dx = px - 63.5
-dy = (31 - py) - 15.5
+dy = 15.5 - py
 hours = (hour%12 + minute/60) / 12
 mins = minute/60
 hour_hand = step(max(abs(dx*cos(hours) - dy*sin(hours)), abs(dx*sin(hours) + dy*cos(hours) - 4) - 3), 1)
@@ -450,7 +458,7 @@ decl      = "psi" NUMBER                      -- the language version, first lin
           | "look" [ BLEND ] [ NUMBER ]       -- it may be the panel's look: blend (over), amount 0..100 (100)
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
-          | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
+          | "fps" NUMBER                      -- 100, 50 or 25: every refresh, every 2nd (the default) or every 4th; once
           | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] ["rate" NUMBER] "{" { assign | fn } colourline "}"   -- rate 2..200; fn: a "fn" line as below
           | "fn" NAME "(" [ NAME { "," NAME } ] ")" "=" expr-or-colourline   -- a function (section 9)
@@ -503,7 +511,8 @@ comment   = "--" or "//" to the end of the line
 
 
 The declarations (`decl`) come first, before every other line, each once
-(`control` up to three times). The colour line is the last line of the
+(`control` up to three times). `loop` and `fps` may come anywhere among the
+formula's own lines, outside layers. The colour line is the last line of the
 formula, of a function and of a layer. With layers, every colour line is
 inside a layer.
 
@@ -575,8 +584,9 @@ Error codes are only ever added, and a retired code is not used again.
   - `rainbow` is **black at 0** and dark at 1, its hues between;
   - `ocean` is **the same table as `ice`** (one palette, two names).
 - **Inputs.** `x` and `y` across and down, `cx cy r angle` as defined,
-  `angle` clockwise with a quarter down, `t` a whole number of frames,
-  `loop` 8 and `fps` 50 when left out (and 25, 50 or 100 only), the
+  `angle` clockwise with a quarter down, `t` the frame's time in seconds
+  (which instants are drawn is the display's, not the language's), `loop`
+  8 when left out, `fps` 25, 50 or 100 only, the
   controls' ranges and defaults, each built-in input's range and default,
   `since`'s 32766 for a change and 32767 for never, `hour minute second`
   whole.

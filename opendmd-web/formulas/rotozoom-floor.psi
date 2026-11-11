@@ -15,15 +15,14 @@ cu = t/0.6
 cv = t/1.2                      -- the glide, in cells
 amp = pick(wobble, 3, 4.5, 0)/8 -- the wobble, in texels
 dx = px - 64
-ty = 31 - (31 - py)
 -- a row's distance: checker cells a pixel, smaller further down
-rs = 1 / ((ty + 2) * zoom)
-wob = sin(ty/32 + t/3.2) * amp
+rs = 1 / ((py + 2) * zoom)
+wob = sin(py/32 + t/3.2) * amp
 col = sin(px*0.0234375 - t/4.8) * amp
 -- ahead by the row's distance, across by the pixel's
 u = cs*rs*dx + (cu + wob + sn*rs*64)
 v = sn*rs*dx + col + (cv - cs*rs*64)
 cell = (floor(u) + floor(v)) % 2
 -- the far rows fade into the fog (black at the horizon)
-fog = ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1
+fog = py < 3 ? 0 : py < 6 ? 0.375 : py < 10 ? 0.625 : 1
 pal(fire, cell ? 0.78 : 0.28) * fog

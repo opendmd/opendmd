@@ -1,6 +1,7 @@
 # Psi in brief (for models)
 
-Psi draws a 128 × 32 LED panel, 50 frames a second. A **formula** is a
+Psi draws a 128 × 32 LED panel, a frame every 2nd refresh of its scan
+(every refresh with `fps 100`; a refresh is about 8 ms). A **formula** is a
 few lines of maths worked out for every pixel; its **last line is the
 colour**. The full reference is `docs/psi-for-models.md`; this card is
 what you need for most formulas. Check with `psi check FILE`.
@@ -11,7 +12,9 @@ what you need for most formulas. Check with `psi check FILE`.
   `py` 0..31 are the same in pixels; `i` = `py*128 + px`. `cx`, `cy` are
   centred (`cx` −2..2, `cy` −0.5..0.5, square units), `r` = distance from
   the middle, `angle` its angle in turns. `w`, `h` = 128, 32.
-- `t`: seconds into the loop. `loop 8` (the default) repeats every 8 s; make
+- `t`: the frame's time, seconds into the loop (which instants are drawn
+  is the display's: write motion of `t`, never per frame). `loop 8` (the
+  default) repeats every 8 s, and is the least time it plays; make
   motion repeat with it: `sin(t/8)`, `frac(t/4)`. `loop forever` never
   repeats (then `seed` is new each play).
 - **Angles and waves are turns, not radians**: `sin(v)` goes round once as
@@ -123,7 +126,7 @@ under(px + floor(sin(t*2)*2), py) * v
   `control speed 0..4 = 1 "Speed"` (a slider, read as `speed`), in any
   order, before every other line (`loop`, `fps`, tables, names, `draw`):
   anything else first and `name` is error E951. Comments may go anywhere.
-- `fps 100` for fast motion (light formulas only); `layer rate 4 { … }` a
+- `fps 100`: drawn every refresh, for fast motion (light formulas only); `layer rate 4 { … }` a
   slow bottom layer redrawn every 4th frame.
 - `table T = 0.2, 0.9, 0.5` numbers, read as `T[k]`.
 - `sprite S { key . 0, R #f00, W #fff … rows }`; in draw `spr(S, x, y)`.
