@@ -137,7 +137,14 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
-	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release
+	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release studio-starter
+
+# The Studio starter pack (studio-starter/README.md): check every record in
+# studio-starter/src/ and write studio-starter/starter.dmdpack.
+# make studio-starter ARGS="--sheets <dir>" also draws the contact sheet;
+# ARGS=--check only verifies that the committed pack is current.
+studio-starter:
+	uv run studio-starter/build.py $(ARGS)
 
 # No request URL the web app or the site makes may match EasyPrivacy or EasyList
 # (uBlock Origin / Brave blocked /api/stat?). Fetches the lists once a day into
