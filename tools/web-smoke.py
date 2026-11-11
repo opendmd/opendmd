@@ -6823,6 +6823,16 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     check(len(plays) == n0 + 1 and plays[-1][1]["live"] is True and bad == 0
           and not get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"),
           "formulas panel: after the playlist moved on, a change does not bring it back (409, no error shown)")
+    # Moved on to another Formula: Previous puts back one that no play put
+    # there (a new start); a live edit is a 409 there too, nothing changed.
+    post_json(base + "/api/play", {"path": "@formula:starfield"})
+    post_json(base + "/api/play", {"path": card_gifs()[0]})
+    post_json(base + "/api/skip?back=1", {})
+    back = get_json(base + "/api/status")["now_playing"]
+    code, _ = post_code(base + "/api/play", {"path": "@formula:old-photo", "live": True})
+    st = get_json(base + "/api/status")["now_playing"]
+    check(back["path"] == "@formula:starfield" and code == 409 and (st["path"], st["ordinal"]) == (back["path"], back["ordinal"]),
+          f"formulas panel: a live edit of a Formula Previous put back is a 409 ({back['path']}, {code}, {st['path']})")
     # A long one: Endless road V2's 22 KB of text, on the panel and followed.
     v2 = (REPO / "opendmd-web/experiments/road-v2/road-v2.psi").read_text()
     check(len(v2.encode()) >= 22_000, f"formulas panel: road-v2.psi is {len(v2.encode())} B")

@@ -26,7 +26,7 @@ Boot A (`--no-reboot`: the emulator stops at the first reset, and writes the car
               edits ~200 ms apart in place (the same start), off Recently played; 413 past
               16 KB, 415 not octet-stream, 409 a live edit once the panel moved on
   governor    (--heavy-psb, --light-psb) a light `smooth` Formula played over a heavy one
-              starts at its own rate (`formula: played in place: N ms frames (asked N)`), a
+              starts at its own rate (`play now: … in place: N ms frames (asked N)`), a
               heavy one over it slow; a live edit keeps the level on screen (slower than
               asked); a live edit once Previous put a card Formula back on screen is a 409
   www         PUT /api/www with the web app's pack; GET / and a wasm at its ?v= address:
@@ -894,13 +894,13 @@ class Lane:
         heavy = "@formula?psb=" + self.a.heavy_psb.read_text().strip()
         light = "@formula?psb=" + self.a.light_psb.read_text().strip()
         gif = "/gifs/EmuApi/emu-a.gif"
-        rx = re.compile(r"formula: (played|edited) in place: (\d+) ms frames \(asked (\d+)\)")
+        rx = re.compile(r"play now: .* in place(, live)?: (\d+) ms frames \(asked (\d+)\)")
         on = lambda s: s["now_playing"]["path"]
         def retuned(body, what):
             mark = emu.mark()
             api.json("POST", "/api/play", body)
             _, m = emu.wait_for(rx, 30, mark, f"the retune's start ({what})")
-            return m.group(1), int(m.group(2)), int(m.group(3))
+            return "edited" if m.group(1) else "played", int(m.group(2)), int(m.group(3))
         # (Kept until changed: its turn must not end between the steps.)
         api.json("PUT", "/api/config", {"formula_keep": "hold"})
         api.json("POST", "/api/play", {"path": gif})
