@@ -45,7 +45,7 @@ function thumb(s) {
   const c = el('canvas');
   c.width = s.w; c.height = s.h;
   const g = c.getContext('2d'), img = g.createImageData(s.w, s.h);
-  s.px.forEach((k, i) => { if (k) { const v = s.cols.get(k) ?? 0; img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], i * 4); } });
+  s.px.forEach((k, i) => { if (k && s.cols.has(k)) { const v = s.cols.get(k); img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], i * 4); } });
   g.putImageData(img, 0, 0);
   return c;
 }
@@ -106,7 +106,7 @@ function hover(p) {
   const [ox, oy] = origin(picked, p), g = ghost.getContext('2d'), img = g.createImageData(W, H);
   picked.px.forEach((k, i) => {
     const x = ox + (i % picked.w), y = oy + Math.floor(i / picked.w);
-    if (k && x >= 0 && x < W && y >= 0 && y < H) { const v = picked.cols.get(k) ?? 0; img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], (y * W + x) * 4); }
+    if (picked.cols.has(k) && x >= 0 && x < W && y >= 0 && y < H) { const v = picked.cols.get(k); img.data.set([v >> 16, (v >> 8) & 255, v & 255, 255], (y * W + x) * 4); }
   });
   g.putImageData(img, 0, 0);
   ghost.hidden = false;
@@ -116,17 +116,19 @@ function place(p) {
   if (!picked) { tool(); return; }
   const D = S.doc, s = picked, r = s.r;
   if (D.stroke) return;
-  if (!S.addFrom({ id: r.id, rev: r.rev, hash: r.hash, name: r.name, author: r.author, licence: r.licence })) return;
-  const used = [...new Set(s.px)].filter((k) => k), ks = D.keysFor(used.map((k) => s.cols.get(k) ?? 0)), to = new Map(used.map((k, i) => [k, ks[i]]));
+  const entry = { id: r.id, rev: r.rev, hash: r.hash, name: r.name, author: r.author, licence: r.licence };
+  if (!S.addFrom(entry, true)) return;
+  // A key the stamp has no colour for is off, as it shows.
+  const used = [...new Set(s.px)].filter((k) => k && s.cols.has(k)), ks = D.keysFor(used.map((k) => s.cols.get(k) ?? 0)), to = new Map(used.map((k, i) => [k, ks[i]]));
   if (D.full) { S.say(`A piece holds ${CAPS.colours} colours at most`); D.letGo(D.key); return; }
   const [ox, oy] = origin(s, p);
   D.begin();
   s.px.forEach((k, i) => {
     const x = ox + (i % s.w), y = oy + Math.floor(i / s.w);
-    if (k && x >= 0 && x < W && y >= 0 && y < H) D.set(y * W + x, to.get(k));
+    if (to.has(k) && x >= 0 && x < W && y >= 0 && y < H) D.set(y * W + x, to.get(k));
   });
   const step = D.end();
-  if (step) { S.swatches(); S.after(step); }
+  if (step) { S.addFrom(entry); S.swatches(); S.after(step); }
   S.paint();
   S.root.dataset.placed = (+S.root.dataset.placed || 0) + 1;
 }

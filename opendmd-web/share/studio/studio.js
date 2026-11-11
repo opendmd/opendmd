@@ -834,15 +834,19 @@ const studio = {
   newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
   // for stamps.js, library.js and files.js
   forget, fresh, useSwatches, menu, files, stamps,
+  // The open piece read again as stored (a file's version taken), its unsaved state already saved.
+  async reload(r) { clearTimeout(timer); if (!await tryOpen(r)) await fresh(); await drafts(); },
   // The open piece's name, tags or note changed from the Library: through the editor, which saves it.
   setHead(o) { if ('name' in o) { $('s-name').value = o.name; nameDirty = true; } rec = { ...rec, ...o }; kept = true; queueSave(); },
   get tool() { return tool; }, useTool, swatches, keep() { kept = true; queueSave(); }, openRec, drafts, save,
   get journaled() { return journaled; }, jot, starters: () => starters, builtin,
   // What the piece was made from gains `e` (once: the same id and hash, or note); false at the cap.
-  addFrom(e) {
+  // `dry`: only whether it could be (a stamp asks before it places, and adds once it has).
+  addFrom(e, dry = false) {
     const f = rec.from || [];
     if (f.some((x) => (e.id ? x.id === e.id && x.hash === e.hash : x.external && x.note === e.note))) return true;
     if (f.length >= CAPS.from) { say(`A piece names ${CAPS.from} things it was made from at most, and this one is full: this can’t be added to it.`); return false; }
+    if (dry) return true;
     rec = { ...rec, from: [...f, e] };
     kept = true;
     queueSave();

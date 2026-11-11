@@ -54,9 +54,10 @@ async function gather() {
   await starter().catch(() => {});
   all = {};
   for (const [t] of TYPES) {
+    // (A record of the user's with a starter record's id is never shown for it: the starter one is.)
     const mine = [];
-    if (S.store) for (const h of (await S.store.list({ type: t })).items) { const r = await S.store.get(h.id); if (r) mine.push(r); }
-    const st = starterAll.filter((r) => r.type === t && !mine.some((m) => m.id === r.id));
+    if (S.store) for (const h of (await S.store.list({ type: t })).items) { if (isStarter(h.id) || builtin(h.id)) continue; const r = await S.store.get(h.id); if (r) mine.push(r); }
+    const st = starterAll.filter((r) => r.type === t);
     all[t] = [...mine, ...(t === 'palette' ? [builtin(DEFAULT)] : []), ...st];
   }
 }
