@@ -75,9 +75,10 @@ one), then the playlist carries on.
 Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
 one by name, `@formula:<stem>`; one of yours on the card,
 `/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?psb=…`) or
-a virtual file (see "Virtual files"). `"live":true`: only replace a formula on screen (`409` if
-none is, or if it is not the one the last play without `"live"` put there:
-the playlist has moved on, maybe to another Formula; `400` for any other path). `"over":true` with a formula: draw it
+a virtual file (see "Virtual files"). `"live":true`: only replace a
+formula on screen (`409` if none is, or if it is not the one the last play
+without `"live"` put there: the playlist has moved on, maybe to another
+Formula; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
 it changes that formula (`409` once the playlist has moved on); `"path":""`
