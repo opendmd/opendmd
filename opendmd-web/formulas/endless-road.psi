@@ -4,7 +4,7 @@
 name "Endless road"
 about "OutRun through a synthwave day and night, palms passing, without end"
 loop forever
-fps 100
+smooth
 
 -- Endless road, everything on: a day going by, palms passing, the sun in
 -- its glow, headlights by night. Bends and hills come from noise along

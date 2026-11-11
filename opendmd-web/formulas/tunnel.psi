@@ -3,7 +3,7 @@
 name "Tunnel"
 about "The time warp: a checker tunnel turning, travelling and cycling its colours"
 loop 4.8
-fps 100
+smooth
 -- Tunnel: the time warp. Each loop the walls turn once, travel two
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
@@ -25,4 +25,4 @@ cell = (floor(u) + floor(v)) % 2
 fade = min(near, 10) -- 10 near, to 0 where it turns black
 side = 0.0635 + 0.0159*cos(u/16)
 light = floor(fade*fade*side + (near > 0)) / 8
-pal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light
+pal(chrono, cell ? frac(0.711 + phase) : frac(0.336 + phase)) * light

@@ -4,15 +4,15 @@ name "Wireframe cube"
 about "A turning cube of twelve lines, the near edges brighter"
 control scale = 0 "Size"
 loop 4.8
-fps 100
+smooth
 -- Wireframe cube: turning about two axes and swinging across; the near
 -- edges brighter. The colour is the last line's #40c0ff
 table V = -1, -1, -1, 1, -1, -1, 1, 1, -1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1
 table E = 0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7
-sa = sin(t/4.8)
-ca = cos(t/4.8)
-sb = sin(t/4.8 + 1/6)
-cb = cos(t/4.8 + 1/6)
+sa = sin(phase)
+ca = cos(phase)
+sb = sin(phase + 1/6)
+cb = cos(phase + 1/6)
 size = 34 + scale*28
 mid = 64 + sa*40
 draw {

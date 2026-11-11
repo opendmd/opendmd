@@ -3,7 +3,7 @@
 name "Wormhole run"
 about "A ring ship flies from Earth to Jupiter and back through a wormhole, each planet swelling from a dot"
 loop forever
-fps 100
+smooth
 
 -- Wormhole run: a ring ship seen from behind (twelve modules turning
 -- round a hub on four spokes) flies to the Earth and the Moon, then to

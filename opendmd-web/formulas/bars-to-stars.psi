@@ -18,5 +18,5 @@ fn stars() {
   #fff * (max(0, 1 - p*(14 - speed*3)) * speed / 3)
 }
 -- 0 to 1 and back over the loop, resting at each end
-k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
+k = smoothstep(0.25, 0.75, sin(phase)*0.5 + 0.5)
 mix(bars(), stars(), k)

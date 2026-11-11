@@ -4,12 +4,12 @@ name "Rotozoom floor"
 about "Mode 7 as a floor running away to a foggy horizon"
 control wobble = gentle, strong, off "Wobble"
 loop 9.6
-fps 100
+smooth
 -- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon
 -- at the top, turning once a loop and gliding, each row scaled by its
 -- distance and the far rows fogged; rows and columns wobble.
-sn = sin(t/9.6)
-cs = cos(t/9.6) -- the turn
+sn = sin(phase)
+cs = cos(phase) -- the turn
 zoom = 2        -- try 1 to 4
 cu = t/0.6
 cv = t/1.2                      -- the glide, in cells
