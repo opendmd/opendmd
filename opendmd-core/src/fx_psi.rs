@@ -927,10 +927,28 @@ fn query(query: &str) -> Query<'static> {
     q
 }
 
+/// What the [`Governor`] can keep in budget at a frame time asked (ms):
+/// [`MAX_EST_US`], and every refresh (grid 10 ms, slowest step 80 ms) 32
+/// ms (`psi::tier_limit_us`).
+fn tier_limit(delay_ms: u8) -> u32 {
+    MAX_EST_US.min(Governor::slowest_budget_us(grid(delay_ms)))
+}
+
+/// The frame time a Formula of `est` µs asking for `delay_ms` opens at:
+/// that, or 20 (every 2nd refresh) when it is too heavy to keep a faster
+/// one but not that (`psi::opens_ms`): played, not refused.
+fn opens_at(delay_ms: u8, est: u32) -> u8 {
+    if delay_ms < 20 && est > tier_limit(delay_ms) {
+        20
+    } else {
+        delay_ms
+    }
+}
+
 /// Load `q`'s program and hold it to what the [`Governor`] can keep in
-/// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
-/// slowest step 80 ms) 32 ms. The program, the estimate and the frame time
-/// asked (ms: the path's `fps=`, else the formula's `fps N`, else 20).
+/// budget ([`tier_limit`]) at the frame rate it opens at ([`opens_at`]).
+/// The program, the estimate and that frame time (ms: the path's `fps=`,
+/// else the formula's rate line, else 20; 20 for a fast one too heavy for it).
 fn compile(q: &Query) -> Result<(ProgBox, u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
     let prog = load_boxed(q.bytes(), psi::psb::Which::Play)?;
@@ -942,7 +960,8 @@ fn compile(q: &Query) -> Result<(ProgBox, u32, u8), psi::Error> {
         .delay_ms
         .or(prog.frame_ms().map(|ms| ms as u8))
         .unwrap_or(20);
-    let limit = MAX_EST_US.min(Governor::slowest_budget_us(grid(delay)));
+    let delay = opens_at(delay, est);
+    let limit = tier_limit(delay);
     if est > limit {
         return Err(psi::Error {
             start: 0,
@@ -3366,18 +3385,26 @@ mod tests {
             &mut want,
         );
         assert!(c.as_bytes() == want.as_slice());
-        // Too heavy for the governor at 100 fps (over 32 ms): refused, as
-        // with `fps=100`, unless the path asks for 50.
+        // Too heavy for the governor every refresh (over 32 ms) but not
+        // every 2nd: opened at every 2nd (20 ms), as with `fps=50`, not
+        // refused; the same `fps=100`. Past 40 ms: refused at any rate.
         let mid = (0..9)
             .map(|k| format!("noise(x*{k}, y, t)"))
             .collect::<Vec<_>>()
             .join(" + ");
-        let mid = format!("fps 100\ngray({mid})");
-        assert!(PsiFx::from_query(&super::path(&mid, "")[Q..])
+        let mid = format!("smooth\ngray({mid})");
+        for opts in ["", "fps=100", "fps=50"] {
+            let fx = PsiFx::from_query(&super::path(&mid, opts)[Q..]).unwrap();
+            assert_eq!(fx.ms(), 20, "{opts:?}");
+        }
+        let big = (0..12)
+            .map(|k| format!("noise(x*{k}, y, t)"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        assert!(PsiFx::from_query(&super::path(&format!("smooth\ngray({big})"), "")[Q..])
             .unwrap_err()
             .msg
-            .ends_with("the limit is 32 ms) — simplify it"));
-        assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[Q..]).is_ok());
+            .ends_with("the limit is 40 ms) — simplify it"));
         // Over its 5 ms budget, `fps 100` starts from the estimate: two
         // moving noises (~9.1 ms) at 40 ms frames before its first; a
         // tunnel of noise from its estimate with the still cache (~6.8 ms,
@@ -3666,7 +3693,11 @@ mod tests {
     #[test]
     fn the_panel_and_psi_refuse_by_the_same_figure() {
         for grid in [10, 20, 40] {
-            assert_eq!(MAX_EST_US.min(Governor::slowest_budget_us(grid)), psi::panel_limit_us(grid), "{grid} ms");
+            assert_eq!(MAX_EST_US.min(Governor::slowest_budget_us(grid)), psi::tier_limit_us(grid), "{grid} ms");
+            assert_eq!(tier_limit(grid as u8), psi::tier_limit_us(grid), "{grid} ms");
+            for est in [1_000, 31_000, 33_000, 39_000, 41_000] {
+                assert_eq!(u32::from(opens_at(grid as u8, est)), psi::opens_ms(grid, est), "{grid} ms, {est} us");
+            }
         }
         assert_eq!(LOOK_MAX_EST_US, psi::LOOK_MAX_US);
         let open =
@@ -3730,7 +3761,8 @@ mod tests {
                 .starts_with("this formula is too heavy for the panel (about 4"),
             "{e}"
         );
-        // 32-40 ms: fine at 50 fps, too heavy for the governor at 100.
+        // 32-40 ms: fine every 2nd refresh, too heavy for the governor
+        // every refresh: `fps=100` opens it every 2nd, not refused.
         let mid = (0..9)
             .map(|k| format!("noise(x*{k}, y, t)"))
             .collect::<Vec<_>>()
@@ -3739,11 +3771,7 @@ mod tests {
         let est = psi::compile(&mid).unwrap().esp32_us();
         assert!((32_001..=MAX_EST_US).contains(&est), "{est}");
         open(&super::path(&mid, "")).unwrap();
-        let e = open(&super::path(&mid, "fps=100")).unwrap_err();
-        assert!(
-            e.to_string().ends_with("the limit is 32 ms) — simplify it"),
-            "{e}"
-        );
+        open(&super::path(&mid, "fps=100")).unwrap();
         // An unknown live item, or a retired effect: InvalidData (a 415).
         for p in ["@fx:nonsense", "@fx:tunnel", "@fx:psi?src=gray(x)"] {
             assert_eq!(open(p).unwrap_err().kind(), ErrorKind::InvalidData);

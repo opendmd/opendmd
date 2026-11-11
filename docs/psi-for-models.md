@@ -765,7 +765,7 @@ of the VM's), and where its kernel takes the formula `psi check`, the
 editor's light / medium / heavy and the gallery's 10 ms count the JIT's
 estimate, the VM's shown beside it as "without the JIT" (`psi check` says
 when the JIT refuses one, and why: then the VM's counts). **The panel's
-refusals count the VM's**: 40 ms (32 drawn every refresh, `smooth`) and 12 ms for a look,
+refusals count the VM's**: 40 ms (a `smooth` one past 32 ms is drawn every 2nd refresh instead) and 12 ms for a look,
 by the plain VM estimate with no still cache, because the panel may have
 to draw any formula that way (the JIT off, short of memory, or failing
 its self-check; the cache refused). A formula can rate light with the

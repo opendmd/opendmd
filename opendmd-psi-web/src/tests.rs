@@ -38,7 +38,8 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
-    assert_eq!(i.len(), 17);
+    assert_eq!(i.len(), 18);
+    assert_eq!(i[17], 20, "opens at the default 20 ms");
     assert_eq!(i[15], 1, "the JIT takes it");
     assert_eq!(i[16], opendmd_psi::PANEL_MAX_US, "the panel's limit: 40 ms at 50 fps");
     assert!(i[14] > 0 && i[14] <= i[6], "the still estimate: never more than the VM's");
@@ -49,7 +50,10 @@ fn formulas() {
         (4000, 10),
         "`fps 100`: a 10 ms grid"
     );
-    assert_eq!(info()[16], 32_000, "`fps 100`: the panel's limit is 32 ms");
+    assert_eq!((info()[16], info()[17]), (40_000, 10), "`fps 100`: refused past 40 ms, opens every refresh");
+    let heavy = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
+    assert!(compile(&format!("smooth\ngray({heavy})")));
+    assert_eq!(info()[17], 20, "past 32 ms: opens every 2nd refresh");
     assert!(compile("look\nlayer multiply { gray(x) }"));
     assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 

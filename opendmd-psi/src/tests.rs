@@ -3979,3 +3979,19 @@ fn phase_as_a_parameter_or_a_counter_is_that() {
         psb_of("scene s when y > 0.5 { p = 0.5 }\ngray(p)")
     );
 }
+
+/// Phase 2 B1: a `smooth` Formula past the 32 ms every refresh allows is
+/// opened every 2nd refresh (20 ms) rather than refused; the refusal is
+/// 40 ms at every rate.
+#[test]
+fn a_fast_formula_too_heavy_for_its_rate_opens_at_the_default() {
+    use crate::program::{opens_ms, panel_limit_us, tier_limit_us};
+    assert_eq!([tier_limit_us(10), tier_limit_us(20), tier_limit_us(40)], [32_000, 40_000, 40_000]);
+    assert_eq!([panel_limit_us(0), panel_limit_us(10), panel_limit_us(20), panel_limit_us(40)], [40_000; 4]);
+    assert_eq!([opens_ms(10, 31_000), opens_ms(10, 33_000), opens_ms(0, 33_000), opens_ms(40, 39_000)], [10, 20, 20, 40]);
+    let heavy = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<alloc::vec::Vec<_>>().join(" + ");
+    let p = compile(&format!("smooth\ngray({heavy})")).unwrap();
+    assert!((32_001..=40_000).contains(&p.esp32_us()), "{}", p.esp32_us());
+    assert_eq!((p.opens_ms(), p.panel_refusal(false)), (20, None));
+    assert_eq!(compile("smooth\ngray(x)").unwrap().opens_ms(), 10);
+}
