@@ -464,9 +464,9 @@ pub const HTTP_STACK: usize = 6 * 1024 + 512;
 /// a test board, 2026-10-26; 9,664 B on 2026-10-25, before the text
 /// built-ins), more than this stack less its ~800 B of entry frames and
 /// interrupts: a deep enough formula could restart the player. With the
-/// cap at 18, ~9.2 KB (opendmd-psi's `tests/stack.rs` holds the host's
-/// figure to a budget calibrated on that probe). Taken from the heap for
-/// the compile only.
+/// cap at 18, ~9.2 KB. (`make emu-offline` checks, in the emulator, that
+/// deep formulas compiled at mount leave at least 8 KB of the compile
+/// task's stack.) Taken from the heap for the compile only.
 #[cfg(feature = "psi-probe")]
 pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// The heap a compile leaves for everyone else (the network on CPU0, the
