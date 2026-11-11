@@ -75,6 +75,40 @@ file cannot hold a picture that inflates to gigabytes.
 
 A palette's body is `{colours, source}`, with the same `colours` shape.
 
+The other bodies:
+
+- **stamp**: `w` (1 to 128), `h` (1 to 32), `frames` (1 to 64, each `{px}`
+  with `ms` on every frame or none), and its `colours` or the `palette` they
+  come from; `keys: 2` as for a piece. Placed, a stamp's pixels go flat into
+  the cel drawn on, and the piece's `from` names the stamp once.
+- **font**: `cell {w, h}`, `line`, `first`, `count`, `adv` (an advance a
+  glyph) and `atlas {cols, w, h, px}`, one key a pixel, 1 inked.
+- **template**: a piece's structure (`w`, `h`, `frames`, `layers`), its
+  `palette` or `colours`, and `guides` (`{kind: safe | text | art, name, x,
+  y, w, h}`, text ones with `font`, `align`, `sample`). A piece made from
+  one takes its layers and frames and its palette's colours as its own, and
+  its `from` names the template.
+- **pack**: `members`, each `{id, rev}`, each once, never the pack itself.
+
+## Files
+
+A file is `{format: "opendmd-studio/1", root, records}`: `.dmdart` holds a
+record (and its palette if that is the user's own), `.dmdpack` a pack and
+every member at the rev it lists; a backup is a pack tagged `backup` of
+everything in the Library, whose own record is not kept when it is opened.
+Saving a file raises the record's rev, as a download does, and writes that
+revision, with who made it and its licence as asked then.
+
+Opening one trusts nothing in it: 16 MB and 4,160 records at most, every
+record through `check()` and its hash worked out again, each id once, the
+root in the file, a pack's members all in it at their revs and no pack
+holding itself however far round. Then it is shown, and nothing is stored
+until the user says Add. By id: the same hash is skipped; a higher rev is
+an update (offered); other content comes in as a copy with a new id whose
+`from` names the file's record, and what in the file points at it points at
+the copy; a starter record is never replaced. A record deleted here comes
+back when a file holds it again.
+
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole
 picture over 256 of its colours, each other colour drawn as its nearest
@@ -123,7 +157,8 @@ what), `journal` and `meta`.
 - **Writes are versioned.** Every head carries `ver`, an opaque store
   version that any write moves on, a rename in another tab included. A put
   of a record that exists must name the `ver` it last saw, or it is refused
-  (`Conflict`). The Studio then goes on from the stored record if only its
+  (`Conflict`); a put naming no version over a record deleted here brings it
+  back. The Studio then goes on from the stored record if only its
   rev or name moved (taking the other tab's name unless it was renamed here
   too), and keeps its own work as a copy if the pixels moved.
 - **The undo journal** is the browser's alone: never in a record, a file or

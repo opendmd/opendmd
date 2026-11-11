@@ -375,7 +375,8 @@ export class LocalStore {
     const tx = this.db.transaction(['records', 'refs', 'meta'], 'readwrite');
     const recs = tx.objectStore('records');
     const was = await req(recs.get(out.id));
-    if (was && (was.gone || base !== String(was.seq))) {
+    // A write naming no version may bring back a record deleted here (a file opened again); one over a live record, or naming a stale version, is refused.
+    if (was && (was.gone ? base !== null : base !== String(was.seq))) {
       tx.abort();
       throw new Conflict(head(strip(was)));
     }
