@@ -354,7 +354,9 @@ def body_template(recs, slug, b):
             need(len(g["sample"]) * f["advance"] - 1 <= g["w"],
                  f"guide {g['name']!r}: the sample does not fit")
         guides.append(out)
-    return {"w": PANEL[0], "h": PANEL[1], "palette": pal, "plays": b["plays"],
+    # plays 0 (forever) is written as no plays (docs/studio-format.md: an optional field at its default is absent).
+    need(isinstance(b["plays"], int) and 0 <= b["plays"] <= 65535, "plays")
+    return {"w": PANEL[0], "h": PANEL[1], "palette": pal, **({"plays": b["plays"]} if b["plays"] else {}),
             "frames": b["frames"], "layers": layers, "guides": guides}
 
 
