@@ -90,6 +90,7 @@ make emu-build emu-smoke          # the firmware in an emulator (esp32sim): corr
 - **`opendmd-web/`**: the web app the device serves: a wasm module plus
   hand-written HTML/CSS/ES modules in `www/`, no framework, no bundler.
   **`opendmd-art-web/`**: the second wasm module (Create Art, Smooth motion).
+  **`opendmd-studio-web/`**: the site's Studio's GIF writers (site-only wasm).
 - **`opendmd-psi/`, `opendmd-psi-web/`, `opendmd-psi-cli/`**: Psi, the
   Formula language: compiler, VM and ESP32 JIT, its wasm module, the `psi`
   command. **`opendmd-gallery/`**: the Formula gallery checker.

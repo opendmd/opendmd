@@ -40,6 +40,7 @@ on:
       - "Makefile"
       - "opendmd-web/**"
       - "opendmd-art-web/**"
+      - "opendmd-studio-web/**"
       - "opendmd-psi/**"
       - "opendmd-psi-web/**"
       - "opendmd-core/**"

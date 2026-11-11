@@ -789,14 +789,16 @@ async function restore(rev) {
 }
 
 // --- the GIF ---
-let art = null;
+// The GIF writers: the site's own wasm module (pkg-studio, opendmd-studio-web; never on the panel), loaded at the first download.
+let writer = null;
+const gifWriter = () => (writer ??= import('../demo/js/wasm.js').then((w) => w.load('pkg-studio')).then(([m]) => m)
+  .catch((e) => { writer = null; throw e; }));
 // fit: the 256 colours used most, the rest as their nearest (a GIF the panel can prepare and smooth).
 async function download(fit) {
   const b = $(fit ? 's-fit' : 's-gif');
   b.disabled = true;
   try {
-    art ??= import('../demo/js/artmod.js').then((m) => m.art());
-    const m = await art;
+    const m = await gifWriter();
     done();
     // What is downloaded is what is frozen: these pixels, saved and snapshotted in the chain, then read back.
     const shot = { px: px.slice(), colours: colourList(), at: low + cur - 1 };
