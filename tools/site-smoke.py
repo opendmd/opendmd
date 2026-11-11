@@ -4235,6 +4235,60 @@ def studio_open_limits2(browser, base: str, site: Path, errors: list[str]) -> No
     page.context.close()
 
 
+S_REFS = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+    const n = await new Promise((ok) => { const q = s.db.transaction('refs').objectStore('refs').count(); q.onsuccess = () => ok(q.result); }); s.db.close(); return n; }"""
+
+
+def studio_held_members(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A stranger's file whose packs name thousands of this browser's own
+    stamps: the members summed over every pack of one opening are capped at
+    65,536 (each would be a row in the store), the lookups go in batches
+    with "Checking… n of m" on screen, the page stays live, and one under
+    the cap opens and adds its rows in seconds, not minutes."""
+    page = s_page(browser, base, site, errors)
+    kev(page, """const s = await m.LocalStore.open(); const a = new Uint8Array(64); const ids = [];
+        for (let i = 0; i < 4000; i++) { a[i % 64] = 1; const r = m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }); await s.put(r); ids.push({ id: r.id, rev: 1 }); }
+        s.db.close(); window.__mine = ids;""")
+    page.evaluate("""() => { window.__said = []; new MutationObserver(() => __said.push(document.getElementById('s-saved').textContent))
+        .observe(document.getElementById('s-saved'), { childList: true, characterData: true, subtree: true }); }""")
+
+    def stranger(packs: int, away: int = 0) -> str:
+        return kev(page, """const ids = [...window.__mine]; for (let i = 0; i < A.away; i++) ids.push({ id: m.newId('stamp'), rev: 1 });
+            const packs = []; for (let k = 0; k < A.packs; k++) { const p = m.record('pack', 'Names yours ' + k, { members: ids.slice(k * 7 % 64, k * 7 % 64 + 4000) }); p.hash = await m.hashOf(p.body); packs.push(p); }
+            const root = await K.stamp('Carrier'); return K.file(root, [root, ...packs]);""", {"packs": packs, "away": away})
+    big = stranger(17)  # 68,000 members in all
+    page.evaluate("window.__beats = 0; window.__iv = setInterval(() => __beats++, 100)")
+    t = time.time()
+    said = file_open(page, big, "names-yours.dmdpack")
+    dt = time.time() - t
+    msg = page.inner_text("#s-err") if said == "refused" else ""
+    check(said == "refused" and "65,536" in msg and dt < 10, f"/studio/ held members: a file whose packs name 68,000 records in all is refused at the cap ({said}, {dt:.1f} s, '{msg[:90]}')")
+    if said == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    page.evaluate("window.__said = []; window.__beats = 0")
+    ok = stranger(15, away=200)  # 60,000 members: 4,000 held here, 200 nowhere (each pack names 4,000 of the 4,200)
+    t = time.time()
+    said = file_open(page, ok, "names-yours.dmdpack")
+    dt = time.time() - t
+    seen = page.evaluate("window.__said")
+    checking = [x for x in seen if x.startswith("Checking…")]
+    if said == "asked":
+        refs0 = page.evaluate(S_REFS)
+        t2 = time.time()
+        added = file_add(page)
+        dt2 = time.time() - t2
+        refs = page.evaluate(S_REFS) - refs0
+    else:
+        added, dt2, refs = 0, 0, 0
+    beats = page.evaluate("window.__beats")
+    page.evaluate("clearInterval(__iv)")
+    check(said == "asked" and dt < 10 and checking and all(re.fullmatch(r"Checking… [\d,]+ of [\d,]+", x) for x in checking),
+          f"/studio/ held members: 15 packs naming 60,000 records open in {dt:.1f} s, 'Checking…' shown with progress ({said}, {checking[:2]})")
+    check(added == 16 and refs <= 60000 and dt2 < 60 and beats >= (dt + dt2) * 10 * 0.3,
+          f"/studio/ held members: added in {dt2:.1f} s, {refs:,} reference rows (only for what is here), the page live ({added} added, {beats} beats)")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -6010,6 +6064,7 @@ def main() -> int:
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
     ap.add_argument("--base", help="fetch the site from here (e.g. cf dev's http://127.0.0.1:8787) instead of serving SITE")
     ap.add_argument("--only", choices=["studio"], help="run only these checks (the Studio's), e.g. against an older build")
+    ap.add_argument("--fn", help="run only these check functions, by name, comma-separated (a red run against an older build)")
     a = ap.parse_args()
     (a.shots or ROOT / "target/site-smoke").mkdir(parents=True, exist_ok=True)
     base = a.base.rstrip("/") if a.base else serve(a.site)
@@ -6018,6 +6073,15 @@ def main() -> int:
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        if a.fn:
+            for name in a.fn.split(","):
+                fn = globals()[name]
+                params = list(__import__("inspect").signature(fn).parameters)
+                args = {"browser": browser, "base": base, "site": a.site, "errors": errors, "shots": a.shots or ROOT / "target/site-smoke"}
+                print(name)
+                fn(*[args[x] for x in params if x in args])
+            browser.close()
+            return finish(errors)
         if a.only == "studio":
             print("the Studio (/studio/)")
             studio_page(browser, base, a.site, errors, a.shots)
@@ -6073,6 +6137,7 @@ def main() -> int:
             studio_files_attacks(browser, base, a.site, errors)
             studio_open_limits(browser, base, a.site, errors)
             studio_open_limits2(browser, base, a.site, errors)
+            studio_held_members(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -6142,6 +6207,7 @@ def main() -> int:
         studio_files_attacks(browser, base, a.site, errors)
         studio_open_limits(browser, base, a.site, errors)
         studio_open_limits2(browser, base, a.site, errors)
+        studio_held_members(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
