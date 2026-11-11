@@ -81,6 +81,8 @@ fn formulas() {
         assert!(compile(src), "{src}");
         assert_eq!(info()[18], want, "{src}");
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    the_examples_need_1_1_only_for_phase_and_smooth();
     assert!(compile("look\nlayer multiply { gray(x) }"));
     assert_eq!(info()[16], opendmd_psi::LOOK_MAX_US, "over a GIF: the look's 12 ms");
 
@@ -713,14 +715,15 @@ fn the_web_apps_path_is_the_players() {
 /// (`Info::level` 1, pkg-psi `info()[18]`) exactly when it reads the
 /// built-in `phase` or has a `smooth` line: none needs it for its header's
 /// order alone (the 1.0 panels that refuse that never meet one).
+/// (Called from `formulas`: the module's state is one, and tests run in
+/// threads.)
 #[cfg(not(target_arch = "wasm32"))]
-#[test]
 fn the_examples_need_1_1_only_for_phase_and_smooth() {
     let mut new = Vec::new();
     for e in crate::examples() {
         assert!(compile(&e.src), "{}", e.slug);
         let code: Vec<&str> = e.src.lines().map(|l| l.split("--").next().unwrap_or("").trim()).collect();
-        let uses = code.iter().any(|l| *l == "smooth")
+        let uses = code.contains(&"smooth")
             || code.iter().any(|l| l.match_indices("phase").any(|(k, _)| !l[..k].ends_with('.')));
         assert_eq!(info()[18], u32::from(uses), "{}", e.slug);
         if uses {
