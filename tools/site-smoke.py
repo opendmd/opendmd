@@ -3253,6 +3253,420 @@ def studio_layout(browser, base: str, site: Path, errors: list[str]) -> None:
     page.context.close()
 
 
+# --- the Studio, S2 branch 3 (studio-s2-library): the Library, files, stamps, templates ---
+S_ALL = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const out = [];
+    for (const type of ['piece', 'palette', 'stamp', 'font', 'template', 'pack']) for (const h of (await s.list({ type })).items) { const r = await s.get(h.id); out.push({ id: r.id, type: r.type, rev: r.rev, hash: r.hash, name: r.name, from: r.from, author: r.author, licence: r.licence }); }
+    s.db.close(); return out; }"""
+STARTER_COUNTS = {"piece": 0, "stamp": 35, "palette": 17, "font": 2, "template": 4, "pack": 1}  # palettes: 16 and Den 16
+
+
+def lib_open(page: Page) -> None:
+    page.evaluate("location.hash = '#library'")
+    wait_js(page, "document.getElementById('studio').dataset.view === 'library' && !!document.getElementById('studio').dataset.lib", timeout=30000)
+
+
+def lib_counts(page: Page) -> dict:
+    return {k: int(v) for k, v in (x.split(":") for x in s_data(page)["lib"].split())}
+
+
+def lib_kind(page: Page, t: str) -> None:
+    page.click(f"#s-lside [data-type={t}]")
+    wait_js(page, f"document.querySelector('#s-lside .s-lt.on').dataset.type === '{t}'")
+
+
+def lib_detail(page: Page, name: str) -> None:
+    page.evaluate("(n) => [...document.querySelectorAll('#s-lgrid .s-lcard')].find((c) => c.querySelector('b').textContent === n).click()", name)
+    page.wait_for_selector("#s-ldet:not([hidden])")
+
+
+def file_save(page: Page, click, author: str | None = None, licence: str | None = None) -> dict:
+    """A Save as file sheet answered (or None for as it is), the file read back."""
+    with page.expect_download(timeout=60000) as dl:
+        click()
+        if author is not None or licence is not None or page.is_visible("#s-fs[open] #s-fs-author"):
+            page.wait_for_selector("#s-fs[open] #s-fs-author", timeout=10000)
+            if author is not None:
+                page.fill("#s-fs-author", author)
+            if licence is not None:
+                page.select_option("#s-fs-licence", licence)
+            page.click("#s-fs[open] button:has-text('Save')")
+    return {"name": dl.value.suggested_filename, "data": json.loads(Path(dl.value.path()).read_text())}
+
+
+def file_open(page: Page, data, name: str = "piece.dmdart", button: str = "#s-openf") -> str:
+    """A file given to Open a file…: bytes, or an object written as JSON. What the page says: asked, refused."""
+    buf = data if isinstance(data, (bytes, bytearray)) else json.dumps(data).encode()
+    page.evaluate("delete document.getElementById('studio').dataset.opened")
+    with page.expect_file_chooser(timeout=20000) as fc:
+        page.click(button)
+    fc.value.set_files({"name": name, "mimeType": "application/json", "buffer": buf})
+    wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=60000)
+    return s_data(page)["opened"]
+
+
+def file_add(page: Page) -> int:
+    page.click("#s-fs[open] button:has-text('Add')")
+    wait_js(page, "(document.getElementById('studio').dataset.opened || '').startsWith('added:')", timeout=60000)
+    return int(s_data(page)["opened"].split(":")[1])
+
+
+def studio_library(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The Library: the starter pack's counts beside the user's drafts;
+    search by name and by tag; library.js, files.js and stamps.js each only
+    when used; a starter record read-only, its Duplicate editable; a piece
+    from Scoreboard with the template's layers, its palette's colours and
+    from; a palette deleted saying what uses it."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    page.mouse.click(*s_at(page, 3, 3))
+    s_kept(page)
+    before = s_paths(page)
+    lib_open(page)
+    c = lib_counts(page)
+    check(all(f"/studio/{m}.js" not in before for m in ("library", "files", "stamps")) and "/studio/library.js" in s_paths(page)
+          and c == {**STARTER_COUNTS, "piece": 1}, f"/studio/ library: opened only when asked, the starter pack's counts beside one draft {c}")
+    lib_kind(page, "stamp")
+    page.fill("#s-lq", "alien")
+    page.wait_for_timeout(200)
+    by_name = int(s_data(page)["libShown"])
+    page.fill("#s-lq", "animated")
+    page.wait_for_timeout(200)
+    by_tag = int(s_data(page)["libShown"])
+    page.fill("#s-lq", "")
+    check(by_name >= 3 and by_tag >= 1 and by_name < 35, f"/studio/ library: search by name ({by_name} aliens) and by tag ({by_tag} animated)")
+    lib_kind(page, "template")
+    lib_detail(page, "Scoreboard")
+    ro = page.evaluate("() => ({ name: !!document.querySelector('#s-ldet .s-lname'), del: !!document.querySelector('#s-ldet [data-la=del]'), dup: !!document.querySelector('#s-ldet [data-la=dup]') })")
+    page.click("#s-ldet [data-la=dup]")
+    wait_js(page, "[...document.querySelectorAll('#s-lgrid .s-lcard b')].some((b) => b.textContent === 'Scoreboard copy')")
+    copy = next(r for r in page.evaluate(S_ALL) if r["name"] == "Scoreboard copy")
+    check(ro == {"name": False, "del": False, "dup": True} and copy["type"] == "template" and copy["from"][0]["name"] == "Scoreboard"
+          and page.is_visible("#s-ldet .s-lname"), f"/studio/ library: a starter record is read-only, and its Duplicate an editable copy made from it {ro}")
+    lib_detail(page, "Scoreboard")
+    page.click("#s-ldet [data-la=new]")
+    wait_js(page, "document.getElementById('studio').dataset.view === 'editor' && document.getElementById('s-name').value === 'Scoreboard'", timeout=30000)
+    s_kept(page)
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    tp = next(x for x in pack["records"] if x["name"] == "Scoreboard")
+    pal = next(x for x in pack["records"] if x["id"] == tp["body"]["palette"])
+    check([l["name"] for l in r["body"]["layers"]] == [l["name"] for l in tp["body"]["layers"]] and r["from"][0]["id"] == tp["id"] and r["from"][0]["hash"] == tp["hash"]
+          and [c["hex"] for c in r["body"]["colours"]] == [c["hex"] for c in pal["body"]["colours"]] and s_lit(page) > 50,
+          f"/studio/ library: a new piece from Scoreboard: its layers, its palette's ({pal['name']}) colours, made from it ({len(r['body']['colours'])} colours, {s_lit(page)} lit)")
+    # A palette of one's own used by a piece: deleting it says so.
+    page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const p = await s.put(m.record('palette', 'My greens', { colours: [{ k: 1, hex: '#00aa00' }], source: 'mine' }));
+        const z = await m.packPx(new Uint8Array(4096));
+        await s.put(m.record('piece', 'Uses greens', { w: 128, h: 32, palette: p.id, colours: [{ k: 1, hex: '#00aa00' }], frames: [{ key: '0000000a', ms: 5000 }], layers: [{ key: '0000000b', name: 'D', moves: false, cels: [z] }] }));
+        s.db.close(); }""")
+    lib_open(page)
+    lib_kind(page, "palette")
+    lib_detail(page, "My greens")
+    said = []
+    page.once("dialog", lambda d: (said.append(d.message), d.accept()))
+    page.click("#s-ldet [data-la=del]")
+    page.wait_for_timeout(500)
+    check(said and "Uses greens" in said[0] and not any(x["name"] == "My greens" for x in page.evaluate(S_ALL)),
+          f"/studio/ library: deleting a palette says what uses it, then deletes it ('{said[0][:60] if said else ''}')")
+    check(not page.evaluate("window.__csp || []"), "/studio/ library: no CSP violation")
+    page.context.close()
+
+
+def studio_files(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Files: Save as file asks who made it (CC BY needs a name) and raises
+    the rev; deleted and opened again, the piece is back as it was; the same
+    file twice adds nothing; a newer rev is offered as an update; the same
+    id with other pixels comes in as a copy made from it; a pack of two
+    stamps and a palette round-trips; a backup into an empty browser
+    restores every record."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    page.fill("#s-name", "Filed piece")
+    page.mouse.click(*s_at(page, 5, 5))
+    s_kept(page)
+    rev0 = s_data(page)["rev"]
+    page.click("#s-savef")
+    page.wait_for_selector("#s-fs[open] #s-fs-author", timeout=20000)
+    page.fill("#s-fs-author", "")
+    page.select_option("#s-fs-licence", "CC-BY-4.0")
+    page.click("#s-fs[open] button:has-text('Save')")
+    asked = page.inner_text("#s-fs .s-bad")
+    with page.expect_download(timeout=60000) as dl:
+        page.fill("#s-fs-author", "tester1")
+        page.click("#s-fs[open] button:has-text('Save')")
+    f = json.loads(Path(dl.value.path()).read_text())
+    fr = next(x for x in f["records"] if x["id"] == f["root"])
+    s_kept(page)
+    now = page.evaluate(S_STORE, ["get", None])["r"]
+    check("say who made it" in asked and fr["licence"] == "CC-BY-4.0" and fr["author"]["name"] == "tester1" and fr["rev"] == int(rev0) and now["rev"] == int(rev0) + 1
+          and dl.value.suggested_filename == "Filed_piece.dmdart" and f["format"] == "opendmd-studio/1",
+          f"/studio/ files: Save as file asks for a name with CC BY ('{asked}'), writes the licence and author, the rev rising by one ({fr['rev']} -> {now['rev']})")
+    # Deleted, then opened: back with the same id, rev and hash.
+    page.once("dialog", lambda d: d.accept())
+    page.click(f"#s-list .s-del[data-id='{fr['id']}']")
+    page.wait_for_timeout(500)
+    gone = not any(x["id"] == fr["id"] for x in page.evaluate(S_ALL))
+    said = file_open(page, f)
+    n = file_add(page)
+    back = next((x for x in page.evaluate(S_ALL) if x["id"] == fr["id"]), None)
+    check(gone and said == "asked" and n == 1 and back and (back["rev"], back["hash"]) == (fr["rev"], fr["hash"]) and page.input_value("#s-name") == "Filed piece",
+          f"/studio/ files: deleted and opened again, the piece is back with its id, rev and hash, and open ({back and back['rev']})")
+    # The same file again adds nothing; a newer rev is offered as an update; other pixels at the same id come in as a copy.
+    said = file_open(page, f)
+    rows = page.eval_on_selector_all("#s-fs li", "els => els.map((e) => e.dataset.how)")
+    added = file_add(page)
+    import base64
+    import zlib
+    newer = json.loads(json.dumps(f))
+    nr = next(x for x in newer["records"] if x["id"] == f["root"])
+    nr["rev"] += 5
+    px = bytearray(4096)
+    px[7] = 1
+    nr["body"]["layers"][0]["cels"][0] = base64.b64encode(zlib.compress(bytes(px))).decode()
+    nr["hash"] = s_hash(nr["body"])
+    file_open(page, newer)
+    rows2 = page.eval_on_selector_all("#s-fs li", "els => els.map((e) => e.dataset.how)")
+    page.click("#s-fs[open] button:has-text('Cancel')")
+    other = json.loads(json.dumps(newer))
+    next(x for x in other["records"] if x["id"] == f["root"])["rev"] = 1
+    file_open(page, other)
+    rows3 = page.eval_on_selector_all("#s-fs li", "els => els.map((e) => e.dataset.how)")
+    file_add(page)
+    all_ = page.evaluate(S_ALL)
+    cp = [x for x in all_ if x["type"] == "piece" and x["id"] != fr["id"] and x["from"] and x["from"][0].get("id") == fr["id"]]
+    check(rows == ["same"] and added == 0 and rows2 == ["update"] and rows3 == ["copy"] and len(cp) == 1 and cp[0]["rev"] == 1,
+          f"/studio/ files: the same file again adds nothing ({rows}); a newer rev is an update ({rows2}); other pixels at the same id come in as a copy made from it ({rows3}, {len(cp)})")
+    # A pack of two stamps and a palette, saved from the Library and opened again.
+    ids = page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+        const px = await m.packPx(Uint8Array.of(1, 0, 1, 1));
+        const p = await s.put(m.record('palette', 'Pack palette', { colours: [{ k: 1, hex: '#ff8800' }], source: 'mine' }));
+        const a = await s.put(m.record('stamp', 'Pack stamp A', { w: 2, h: 2, palette: p.id, frames: [{ px }] }));
+        const b = await s.put(m.record('stamp', 'Pack stamp B', { w: 2, h: 2, colours: [{ k: 1, hex: '#00ff88' }], frames: [{ px }] }));
+        const k = await s.put(m.record('pack', 'My pack', { members: [p, a, b].map((x) => ({ id: x.id, rev: x.rev })) }));
+        s.db.close(); return [k.id, p.id, a.id, b.id]; }""")
+    lib_open(page)
+    lib_kind(page, "pack")
+    lib_detail(page, "My pack")
+    pk = file_save(page, lambda: page.click("#s-ldet [data-la=file]"), "tester1", "CC0-1.0")
+    hashes = {x["id"]: x["hash"] for x in page.evaluate(S_ALL)}
+    page.evaluate("""async (ids) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); for (const id of ids) await s.remove(id); s.db.close(); }""", ids)
+    file_open(page, pk["data"], "My_pack.dmdpack", "#s-lopen")
+    file_add(page)
+    after = {x["id"]: x["hash"] for x in page.evaluate(S_ALL)}
+    check(pk["name"] == "My_pack.dmdpack" and len(pk["data"]["records"]) == 4 and all(after.get(i) for i in ids) and all(after[i] == hashes[i] for i in ids[1:]),
+          f"/studio/ files: a pack of two stamps and a palette saved as a file, deleted, opened again: every record back ({pk['name']}, {len(pk['data']['records'])} records)")
+    # Back up everything, into an empty browser.
+    mine = {x["id"]: x["hash"] for x in page.evaluate(S_ALL)}
+    with page.expect_download(timeout=60000) as dl:
+        page.click("#s-lbackup")
+    bk = Path(dl.value.path()).read_bytes()
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    empty = len(page.evaluate(S_ALL))
+    file_open(page, bk, dl.value.suggested_filename)
+    file_add(page)
+    got = {x["id"]: x["hash"] for x in page.evaluate(S_ALL)}
+    check(empty == 0 and all(got.get(i) == h for i, h in mine.items()) and not any(x["type"] == "pack" and x["name"].startswith("Backup") for x in page.evaluate(S_ALL)),
+          f"/studio/ files: Back up everything, opened in an empty browser, restores every record ({len(mine)} records, {sum(got.get(i) == h for i, h in mine.items())} back)")
+    page.context.close()
+
+
+def studio_stamps(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Stamps: a starter stamp placed lands its pixels and its colours in
+    one step, the piece's from naming it once however many times it is
+    placed; Save as stamp, then placed in another piece; from[] at its cap
+    refuses one more stamp with a sentence."""
+    page = s_page(browser, base, site, errors)
+    s_blur(page)
+    page.click("#s-stampsb")
+    wait_js(page, "(document.getElementById('studio').dataset.stamps || '').startsWith('starter:')", timeout=30000)
+    n = int(s_data(page)["stamps"].split(":")[1])
+    page.click("#s-sgrid .s-sbtn[data-n='0']")
+    st0 = s_steps(page)
+    page.mouse.move(*s_at(page, 20, 10))
+    page.wait_for_timeout(100)
+    ghost = page.evaluate("!document.getElementById('s-ghost').hidden")
+    page.mouse.click(*s_at(page, 20, 10))
+    page.mouse.click(*s_at(page, 60, 10))
+    s_kept(page)
+    r = page.evaluate(S_STORE, ["get", None])["r"]
+    sid = s_data(page)["stamp"]
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    sr = next(x for x in pack["records"] if x["id"] == sid)
+    named = [f for f in r["from"] if f.get("id") == sid]
+    check(n == 35 and ghost and s_steps(page) == "2/2" and len(named) == 1 and named[0]["hash"] == sr["hash"] and s_lit(page) > 4 and len(r["body"]["colours"]) >= 1,
+          f"/studio/ stamps: a starter stamp ({sr['name']}) follows the pointer and lands twice, each one step with its colours; from names it once ({len(named)}, {s_steps(page)})")
+    # Save as stamp from a selection; placed in another piece.
+    page.keyboard.press("m")
+    s_drag(page, (15, 5), (26, 15))
+    page.click("#s-selbar [data-act=stamp]")
+    wait_js(page, "!!document.getElementById('studio').dataset.savedStamp", timeout=20000)
+    mine = s_data(page)["savedStamp"]
+    page.keyboard.press("Enter")
+    s_new(page)
+    page.click("#s-tabs [data-tab=stamps]") if page.is_visible("#s-tabs") else None
+    page.evaluate("(id) => document.querySelector(`#s-sgrid .s-sbtn`) && 0", mine)
+    page.click("#s-sgrid .s-sbtn[data-n='0']")
+    page.mouse.click(*s_at(page, 100, 20))
+    s_kept(page)
+    r2 = page.evaluate(S_STORE, ["get", None])["r"]
+    check(s_data(page)["stamps"] == "mine:1" and any(f.get("id") == mine for f in r2["from"]) and s_lit(page) > 4,
+          f"/studio/ stamps: Save as stamp, then placed in another piece ({s_data(page)['stamps']}, {s_lit(page)} lit)")
+    # from[] at its cap: one more stamp refused, with a sentence.
+    page.evaluate("""async () => { const m = await import('/studio/studio.js');
+        await m.piece({ name: 'Full from', from: Array.from({ length: 64 }, (_, i) => ({ external: true, note: `n${i}` })) }); }""")
+    wait_js(page, "document.getElementById('s-name').value === 'Full from'")
+    page.keyboard.press("s")
+    page.mouse.click(*s_at(page, 64, 16))
+    page.wait_for_timeout(300)
+    err = page.inner_text("#s-err") if page.is_visible("#s-err") else ""
+    check("64 things it was made from" in err and not s_on(page), f"/studio/ stamps: from[] at its cap of 64: one more stamp refused with a sentence ('{err[:60]}')")
+    check(not page.evaluate("window.__csp || []"), "/studio/ stamps: no CSP violation")
+    page.context.close()
+
+
+S_FILES = """async ([cases]) => { const f = await import('/studio/files.js'), m = await import('/studio/store.js');
+    const s = await m.LocalStore.open(); const before = (await Promise.all(['piece','palette','stamp','font','template','pack'].map((type) => s.list({ type })))).reduce((n, x) => n + x.items.length, 0); s.db.close();
+    const out = {};
+    for (const [name, text] of Object.entries(cases)) {
+      const t = performance.now(); let said;
+      try { const r = await f.read(new File([text], name + '.dmdart')); said = 'taken ' + r.records.length; } catch (e) { said = e.message; }
+      out[name] = { said, ms: Math.round(performance.now() - t) };
+    }
+    const s2 = await m.LocalStore.open(); const after = (await Promise.all(['piece','palette','stamp','font','template','pack'].map((type) => s2.list({ type })))).reduce((n, x) => n + x.items.length, 0); s2.db.close();
+    return { out, stored: after - before }; }"""
+
+
+def studio_files_hostile(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Files are the first input from other people: the hostile-input list.
+    Each refused with a sentence, nothing stored, the page responsive."""
+    page = s_page(browser, base, site, errors)
+    page.click("#s-openf")  # files.js in (the chooser it opens is left)
+    page.wait_for_timeout(500)
+    good = page.evaluate("""async () => { const m = await import('/studio/store.js');
+        const z = await m.packPx(new Uint8Array(4096));
+        const r = m.record('piece', 'Good', { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }], frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'L', moves: false, cels: [z] }] });
+        r.hash = await m.hashOf(r.body); return r; }""")
+    import base64
+    import copy
+    import zlib
+    F = lambda recs, root=None: json.dumps({"format": "opendmd-studio/1", "root": root or recs[0]["id"], "records": recs})
+    def mut(f):
+        r = copy.deepcopy(good)
+        f(r)
+        return r
+    def rehash(r):
+        r["hash"] = s_hash(r["body"])
+        return r
+    bomb = base64.b64encode(zlib.compress(bytes(4 << 20))).decode()
+    stamp = lambda px, **kw: {**copy.deepcopy(good), "type": "stamp", "id": "st_" + good["id"][3:], "body": {"w": 2, "h": 2, "colours": [{"k": 1, "hex": "#102030"}], "frames": [{"px": px}]}, **kw}
+    pack_of = lambda pid, members, **kw: {**copy.deepcopy(good), "type": "pack", "id": pid, "name": "P", "body": {"members": members}, **kw}
+    pa, pb = "pk_" + "a" * 32, "pk_" + "b" * 32
+    pA = rehash(pack_of(pa, [{"id": pb, "rev": 1}]))
+    pB = rehash(pack_of(pb, [{"id": pa, "rev": 1}]))
+    deep = "[" * 200000 + "]" * 200000
+    cases = {
+        "not JSON": "this is not JSON {",
+        "JSON of the wrong shape": json.dumps({"hello": "world"}),
+        "the wrong format": json.dumps({"format": "opendmd-studio/2", "root": good["id"], "records": [good]}),
+        "no records": json.dumps({"format": "opendmd-studio/1", "root": good["id"], "records": []}),
+        "10,000 records": F([good] * 10000),
+        "a record over its cap": F([mut(lambda r: r["body"]["layers"][0].__setitem__("cels", ["A" * (5 << 20)]))]),
+        "a deflate bomb in a cel": F([mut(lambda r: r["body"]["layers"][0].__setitem__("cels", [bomb]))]),
+        "a deflate bomb in a stamp's px": F([stamp(bomb, hash="sha256-" + "0" * 64)]),
+        "a wrong hash": F([mut(lambda r: r.__setitem__("hash", "sha256-" + "0" * 64))]),
+        "an id of another type's prefix": F([mut(lambda r: r.__setitem__("id", "pl" + r["id"][2:]))]),
+        "two records with one id": F([good, good]),
+        "a pack naming a member the file lacks": F([rehash(pack_of(pa, [{"id": good["id"], "rev": 1}]))]),
+        "two packs holding each other": F([pA, pB], pa),
+        "a pack holding itself": F([rehash(pack_of(pa, [{"id": pa, "rev": 1}]))]),
+        "a pack of 5,000 members": F([rehash(pack_of(pa, [{"id": "pl_" + format(i, "032x"), "rev": 1} for i in range(5000)]))]),
+        "a licence outside the list": F([mut(lambda r: r.__setitem__("licence", "MIT"))]),
+        "a root the file lacks": F([good], "pc_" + "c" * 32),
+        "JSON nested 200,000 deep": deep,
+        "__proto__ and constructor keys": F([good]).replace('{"type"', '{"__proto__": {"polluted": 1}, "constructor": {"prototype": {"polluted": 1}}, "type"', 1),
+    }
+    r = page.evaluate(S_FILES, [cases])
+    taken = {k: v for k, v in r["out"].items() if v["said"].startswith("taken") or "not a record" in v["said"] or "TypeError" in v["said"]}
+    slow = {k: v["ms"] for k, v in r["out"].items() if v["ms"] > 5000}
+    polluted = page.evaluate("({}).polluted !== undefined")
+    check(set(taken) == {"__proto__ and constructor keys"} and r["stored"] == 0 and not slow and not polluted and page.evaluate("1 + 1") == 2,
+          f"/studio/ files hostile: {len(cases) - 1} files that lie, each refused with a sentence, nothing stored, none slow; __proto__ keys read as keys, nothing polluted ({ {k: v['said'][:40] for k, v in taken.items()} }, {slow})")
+    # A 50 MB file: refused before it is read.
+    big = page.evaluate("""async () => { const f = await import('/studio/files.js'); const t = performance.now();
+        try { await f.read(new File([new Uint8Array(50 << 20)], 'big.dmdart')); return 'taken'; } catch (e) { return [e.message, Math.round(performance.now() - t)]; } }""")
+    check(isinstance(big, list) and "16 MB at most" in big[0] and big[1] < 2000, f"/studio/ files hostile: a 50 MB file refused before it is read ({big})")
+    # Through the page: a refusal said, nothing asked, nothing stored; markup in a name, tag and note shown as text.
+    said = file_open(page, b"not JSON at all", "x.dmdart")
+    msg = page.inner_text("#s-err")
+    xs = copy.deepcopy(good)
+    xs["name"] = '<img src=x onerror="window.__xss=1">'
+    xs["tags"] = ['<b onmouseover="window.__xss=2">t</b>']
+    xs["note"] = "<script>window.__xss=3</script>"
+    file_open(page, {"format": "opendmd-studio/1", "root": xs["id"], "records": [xs]})
+    shown = page.inner_text("#s-fs")
+    file_add(page)
+    lib_open(page)
+    lib_detail(page, xs["name"])
+    check(said == "refused" and "isn’t a Studio file" in msg and xs["name"] in shown and not page.evaluate("window.__xss || 0")
+          and page.input_value("#s-ldet .s-lname") == xs["name"], f"/studio/ files hostile: a refusal said ('{msg[:50]}'); markup in a name, tag and note shown as text, never run")
+    # A file claiming a starter record's id with other content: the starter one untouched.
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    st = copy.deepcopy(next(x for x in pack["records"] if x["type"] == "stamp"))
+    st["name"] = "Not the starter"
+    st["body"]["frames"][0]["px"] = base64.b64encode(zlib.compress(bytes([1]) * (st["body"]["w"] * st["body"]["h"]))).decode()
+    st["hash"] = s_hash(st["body"])
+    file_open(page, {"format": "opendmd-studio/1", "root": st["id"], "records": [st]}, button="#s-lopen")
+    how = page.eval_on_selector_all("#s-fs li", "els => els.map((e) => e.dataset.how)")
+    file_add(page)
+    check(how == ["starter"] and not any(x["id"] == st["id"] for x in page.evaluate(S_ALL)),
+          f"/studio/ files hostile: a file claiming a starter record's id: left as it is, nothing stored ({how})")
+    # A piece naming a palette the file lacks: it opens on its own colours.
+    lone = copy.deepcopy(good)
+    lone["body"]["palette"] = "pl_" + "d" * 32
+    lone["id"] = "pc_" + "e" * 32
+    lone = rehash(lone)
+    file_open(page, {"format": "opendmd-studio/1", "root": lone["id"], "records": [lone]}, button="#s-lopen")
+    file_add(page)
+    wait_js(page, f"document.getElementById('studio').dataset.id === '{lone['id']}'", timeout=20000)
+    check(page.eval_on_selector_all("#s-sw .s-sw[data-k]:not(.new)", "els => els.map((e) => e.style.background)")[1:] == ["rgb(16, 32, 48)"],
+          "/studio/ files hostile: a piece naming a palette the file lacks opens on its own colours")
+    page.context.close()
+
+
+def studio_starter_bad(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A starter record that fails its hash is left out, and the rest still load."""
+    page = new_page(browser, "laptop", errors)
+    pack = json.loads((site / "studio/starter.dmdpack").read_text())
+    next(x for x in pack["records"] if x["type"] == "stamp")["hash"] = "sha256-" + "0" * 64
+    page.route("**/studio/starter.dmdpack", lambda r: r.fulfill(body=json.dumps(pack), content_type="application/json"))
+    page.goto(f"{base}/studio/")
+    page.wait_for_selector(S_READY, timeout=30000)
+    lib_open(page)
+    c = lib_counts(page)
+    check(c == {**STARTER_COUNTS, "stamp": 34}, f"/studio/ starter: a starter record failing its hash is left out, the rest load {c}")
+    page.context.close()
+
+
+def studio_open_cost(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Opening a 256 x 16 piece whose journal holds four snapshot steps: each cel read once (fast)."""
+    page = s_page(browser, base, site, errors)
+    r = page.evaluate("""async () => { const S = await import('/studio/store.js'), { Doc, N } = await import('/studio/doc.js');
+        let s = 7; const rnd = () => (s = (s * 1103515245 + 12345) >>> 0) >>> 8;
+        const frames = Array.from({ length: 256 }, (_, i) => ({ key: (0x10000000 + i).toString(16), ms: 20 })), layers = [];
+        for (let l = 0; l < 16; l++) { const cels = []; for (let f = 0; f < 256; f++) { const a = new Uint8Array(N); for (let i = 0; i < 20; i++) a[rnd() % N] = 1 + rnd() % 2; cels.push(await S.packPx(a)); }
+          layers.push({ key: (0x20000000 + l).toString(16), name: 'L', moves: true, cels }); }
+        const body = { w: 128, h: 32, colours: [{ k: 1, hex: '#102030' }, { k: 2, hex: '#405060' }], frames, layers };
+        const alt = { ...body, layers: body.layers.map((l, i) => (i ? l : { ...l, cels: [body.layers[0].cels[1], ...l.cels.slice(1)] })) };
+        const list = [1, 2, 3, 4].map((n) => ({ n, body: { b: n % 2 ? body : alt, a: n % 2 ? alt : body } }));
+        const D = DecompressionStream; let n = 0; window.DecompressionStream = function (f) { n++; return new D(f); };
+        const t = performance.now(), d = await Doc.open({ hash: 'h', body }, undefined, { list, cur: 4, at: 0, hash: 'h' });
+        window.DecompressionStream = D;
+        return { said: d.said, ms: Math.round(performance.now() - t), reads: n }; }""")
+    check(r["said"] == "moved" and r["reads"] < 200 and r["ms"] < 1500, f"/studio/ open cost: a 256 x 16 piece with four snapshot steps opens reading each cel once {r}")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -5077,6 +5491,12 @@ def main() -> int:
             studio_journal_z(browser, base, a.site, errors)
             studio_small_things(browser, base, a.site, errors)
             studio_layout(browser, base, a.site, errors)
+            studio_library(browser, base, a.site, errors)
+            studio_files(browser, base, a.site, errors)
+            studio_stamps(browser, base, a.site, errors)
+            studio_files_hostile(browser, base, a.site, errors)
+            studio_starter_bad(browser, base, a.site, errors)
+            studio_open_cost(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -5132,6 +5552,12 @@ def main() -> int:
         studio_journal_z(browser, base, a.site, errors)
         studio_small_things(browser, base, a.site, errors)
         studio_layout(browser, base, a.site, errors)
+        studio_library(browser, base, a.site, errors)
+        studio_files(browser, base, a.site, errors)
+        studio_stamps(browser, base, a.site, errors)
+        studio_files_hostile(browser, base, a.site, errors)
+        studio_starter_bad(browser, base, a.site, errors)
+        studio_open_cost(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
