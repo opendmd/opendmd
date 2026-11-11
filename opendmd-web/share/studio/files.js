@@ -150,15 +150,13 @@ export async function backup() {
     parts.at(-1).push(r);
     size += n;
   }
-  // (Its parts share a tag naming the backup: a record one part brings in as a copy is found by the others.)
-  const group = `backup:${newId('pack').slice(3, 19)}`;
   for (const [i, part] of parts.entries()) {
     const of = parts.length > 1 ? ` (${i + 1} of ${parts.length})` : '';
-    const pack = record('pack', `Backup, ${day}${of}`, { members: part.map((r) => ({ id: r.id, rev: r.rev })) }, { tags: ['backup', group] });
+    const pack = record('pack', `Backup, ${day}${of}`, { members: part.map((r) => ({ id: r.id, rev: r.rev })) }, { tags: ['backup'] });
     pack.hash = await hashOf(pack.body);
     write(`OpenDMD_Studio_backup_${day}${parts.length > 1 ? `_${i + 1}_of_${parts.length}` : ''}.dmdpack`, pack.id, [pack, ...part]);
   }
-  S.say(parts.length > 1 ? `Your Library is backed up in ${parts.length} files: open each of them to bring it all back.` : '');
+  S.say(parts.length > 1 ? `Your Library is backed up in ${parts.length} files: open them together (pick all ${parts.length} at once) to bring it all back.` : '');
 }
 
 // --- opening a file ---
@@ -167,8 +165,8 @@ export function pick() {
   i.type = 'file';
   i.multiple = true;
   i.accept = '.dmdart,.dmdpack,application/json';
-  // Several files at once are one opening: a copy one brings in is found by the others.
-  i.onchange = async () => { const scope = `pick:${newId('pack').slice(3, 19)}`; for (const f of i.files) await open(f, scope); };
+  // Several files at once are one opening: one sheet, one map of copies, so what one points at another's copy follows it.
+  i.onchange = () => { if (i.files.length) open([...i.files]); };
   i.click();
 }
 // What a file holds, checked through: {root, records}, or a sentence why not.
@@ -255,14 +253,28 @@ async function plan(records) {
 const SAID = { new: 'new', same: 'already here', update: 'a newer version (yours is kept as a snapshot)', older: 'older than yours: skipped', copy: 'comes in as a copy (yours differs)', starter: 'a starter record: left as it is' };
 const LIC = { 'CC0-1.0': 'CC0', 'CC-BY-4.0': 'CC BY 4.0' };
 const ORDER = ['palette', 'font', 'stamp', 'template', 'piece', 'pack'];
-// A file opened: read, shown, and only on Add stored.
-export async function open(file, scope = null) {
-  let got, p;
-  const was = S.root.dataset.saved, text = $('s-saved').textContent;
-  try { got = await read(file); p = await plan(got.records); } catch (e) { S.say(e.message); S.status(was, text); S.root.dataset.opened = 'refused'; return null; }
+// Files opened (one, or several picked together): each read, all of them
+// shown as one, and only on Add stored.
+export async function open(files) {
+  files = Array.isArray(files) ? files : [files];
+  let p;
+  const was = S.root.dataset.saved, text = $('s-saved').textContent, all = new Map(), roots = [];
+  try {
+    for (const f of files) {
+      const got = await read(f);
+      for (const r of got.records) {
+        const o = all.get(r.id);
+        if (o && o.hash !== r.hash) throw new Error('Two of the files hold one record two ways: nothing was taken from them.');
+        all.set(r.id, r);
+      }
+      roots.push(got.root);
+    }
+    p = await plan([...all.values()]);
+  } catch (e) { S.say(e.message); S.status(was, text); S.root.dataset.opened = 'refused'; return null; }
   S.status(was, text);
-  const backupRoot = got.root.type === 'pack' && got.root.tags.includes('backup');
-  const shown = p.filter((x) => !(backupRoot && x.r === got.root));
+  // A backup's own packs are not kept: what they hold is.
+  const skip = new Set(roots.filter((r) => r.type === 'pack' && r.tags.includes('backup')).map((r) => r.id));
+  const shown = p.filter((x) => !skip.has(x.r.id));
   const rows = shown.map((x) => {
     // What the file says of each: who made it and its licence are the file's claim.
     const li = el('li'), b = el('b', '', x.r.name || 'Untitled'), small = el('small', '', ` · ${x.r.type} · ${SAID[x.how]}`),
@@ -284,53 +296,36 @@ export async function open(file, scope = null) {
   ul.style.cssText = 'max-height:46vh;overflow:auto';
   ul.append(...rows);
   const n = (h) => shown.filter((x) => x.how === h).length;
-  const what = el('p', 's-cap', `${file.name}: ${n('new')} new, ${n('update')} newer, ${n('copy')} as copies, ${n('older')} older, ${n('same') + n('starter')} already here.`);
+  const named = files.length > 1 ? `${files.length} files` : files[0].name;
+  const what = el('p', 's-cap', `${named}: ${n('new')} new, ${n('update')} newer, ${n('copy')} as copies, ${n('older')} older, ${n('same') + n('starter')} already here.`);
   return new Promise((done) => {
     const d = sheet('Open a file', [what, ul], [
-      button('Add', true, async () => { d.onclose = null; d.close(); done(await add(p, got, backupRoot, ul, scope)); }),
+      button('Add', true, async () => { d.onclose = null; d.close(); done(await add(p, roots, skip, ul)); }),
       button('Cancel', false, () => { d.close(); })]);
     d.onclose = () => { S.root.dataset.opened = 'cancelled'; done(null); };
     S.root.dataset.opened = 'asked';
   });
 }
-// A copy's id within one opening (the parts of a backup, files picked together):
-// the same for the same record, so each file finds the copies another made.
-async function copyId(id, scope) {
-  if (!scope) return newId(TYPES_OF[id.slice(0, 2)]);
-  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${id}|${scope}`)));
-  return `${id.slice(0, 2)}_${[...d.slice(0, 16)].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
-}
-const TYPES_OF = { pc: 'piece', pl: 'palette', st: 'stamp', ft: 'font', sh: 'shade', tp: 'template', pk: 'pack' };
-const refs = (b) => [...(typeof b.palette === 'string' ? [b.palette] : []), ...(Array.isArray(b.members) ? b.members.map((m) => m.id) : [])];
-const repoint = (b, from, to) => ({ ...b, ...(b.palette === from ? { palette: to } : {}), ...(Array.isArray(b.members) ? { members: b.members.map((m) => (m.id === from ? { ...m, id: to } : m)) } : {}) });
-async function add(p, got, backupRoot, ul, scope0) {
+async function add(p, roots, skip, ul) {
   const ticked = new Set([...ul.querySelectorAll('input[type=checkbox]')].filter((c) => c.checked).map((c) => c.dataset.id));
   for (const x of p) if (x.how === 'older' && ticked.has(x.r.id)) x.how = 'copy';
-  const go = p.filter((x) => (x.how === 'new' || x.how === 'copy' || (x.how === 'update' && ticked.has(x.r.id))) && !(backupRoot && x.r === got.root));
-  const scope = (backupRoot && got.root.tags.find((t) => t.startsWith('backup:'))) || scope0;
-  // Copies take new ids; what in the file points at them points at the copies,
-  // and so does what points at a copy another file of this opening made.
-  const ids = new Map();
-  for (const x of go) if (x.how === 'copy') ids.set(x.r.id, await copyId(x.r.id, scope));
-  const inFile = new Set(got.records.map((r) => r.id));
-  if (scope) for (const x of go) for (const id of refs(x.r.body)) {
-    if (inFile.has(id) || ids.has(id)) continue;
-    const c = await copyId(id, scope);
-    if (await S.store.get(c)) ids.set(id, c);
-  }
+  const go = p.filter((x) => (x.how === 'new' || x.how === 'copy' || (x.how === 'update' && ticked.has(x.r.id))) && !skip.has(x.r.id));
+  // Copies take new ids, random; what in this opening points at them points
+  // at the copies. Nothing outside it is ever pointed anywhere else.
+  const ids = new Map(go.filter((x) => x.how === 'copy').map((x) => [x.r.id, newId(x.r.type)]));
   const to = (id) => ids.get(id) || id;
-  const note = scope ? (await S.store.note(`files:${scope}`)) || {} : null; // outside id -> the records here that point at it
-  let n = 0, err = '', first = null;
+  let n = 0, err = '', first = null, t0 = performance.now();
+  const roots_ = new Set(roots.map((r) => r.id));
   for (const type of ORDER) {
     for (const x of go.filter((y) => y.r.type === type)) {
+      // (A word on screen and a breath for the page every 50 ms: a big file takes a while.)
+      if (performance.now() - t0 > 50) { S.status('saving', `Adding… ${n} of ${go.length}`); await new Promise((ok) => setTimeout(ok)); t0 = performance.now(); }
       const { ver, ...r0 } = x.r, body = { ...r0.body };
       if (typeof body.palette === 'string') body.palette = to(body.palette);
       if (Array.isArray(body.members)) body.members = body.members.map((m) => ({ ...m, id: to(m.id) }));
       // (author.account is for real accounts: never taken from a file.)
       let r = { ...r0, body, author: { name: r0.author.name, account: null } };
       if (x.how === 'copy') r = { ...r, id: ids.get(r0.id), rev: 1, created: now(), from: [{ id: r0.id, rev: r0.rev, hash: r0.hash, name: r0.name, author: r0.author, licence: r0.licence }, ...r0.from].slice(0, CAPS.from) };
-      // (The same backup opened again: the copy it made last time is already here.)
-      if (x.how === 'copy' && scope && await S.store.get(r.id)) continue;
       try {
         let base = null;
         if (x.how === 'update') {
@@ -341,26 +336,17 @@ async function add(p, got, backupRoot, ul, scope0) {
         }
         const h = await S.run(() => S.store.put(r, { base }));
         n++;
-        if (note) {
-          for (const id of refs(r.body)) if (!inFile.has(id) && !ids.has(id)) (note[id] ||= []).push(h.id);
-          // A copy made now: what an earlier file of this opening pointed at the original points at it.
-          if (x.how === 'copy') for (const rid of note[r0.id] || []) {
-            const o = await S.store.get(rid);
-            if (o) await S.run(() => S.store.put({ ...o, body: repoint(o.body, r0.id, h.id) }, { base: o.ver })).catch(() => {});
-          }
-        }
-        if (r0.id === got.root.id) first = h.id;
+        if (roots_.has(r0.id) && r.type === 'piece' && !first) first = h.id;
         if (r.type === 'palette') { S.mine.set(h.id, { ...r, ...h }); S.menu(); }
         if (x.how === 'update' && r0.id === S.rec?.id) await S.reload(await S.store.get(r0.id));
       } catch (e) { err ||= `“${r.name}”: ${e.message || e}`; }
     }
   }
-  if (note) await S.store.note(`files:${scope}`, note);
   S.root.dataset.opened = `added:${n}`;
   S.say(err ? `Some of it could not be added: ${err}` : '');
-  S.status('kept', `Added ${n} from the file`);
+  S.status('kept', `Added ${n} from the file${roots.length > 1 ? 's' : ''}`);
   S.fx.libChanged?.();
-  if (first && got.root.type === 'piece') await S.openRec(await S.store.get(first));
+  if (first) await S.openRec(await S.store.get(first));
   else await S.drafts();
   return n;
 }

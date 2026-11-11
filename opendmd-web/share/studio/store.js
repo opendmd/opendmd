@@ -349,6 +349,12 @@ export class LocalStore {
       r.onblocked = () => no(new Error('an older Studio is open in another tab: close it, then reload'));
     });
     db.onversionchange = () => { db.close(); closed(); };
+    // (Notes an earlier test build kept in meta, n:…, are let go once.)
+    try {
+      const tx = db.transaction('meta', 'readwrite');
+      tx.objectStore('meta').delete(IDBKeyRange.bound('n:', 'n:\uffff'));
+      await done(tx);
+    } catch { /* none */ }
     return new LocalStore(db);
   }
   constructor(db) { this.db = db; }
@@ -448,14 +454,6 @@ export class LocalStore {
     // until the next put it is not that record's.
     this.#j(tx, id, { cur }, (m) => (step && step.n <= m.at ? { hash: null } : {}));
     await done(tx);
-  }
-  // A small note of this browser's own, kept in meta by key (`v` given: set).
-  async note(k, v) {
-    const tx = this.db.transaction('meta', v === undefined ? 'readonly' : 'readwrite'), meta = tx.objectStore('meta');
-    if (v === undefined) return (await req(meta.get('n:' + k)))?.v;
-    meta.put({ k: 'n:' + k, v });
-    await done(tx);
-    return v;
   }
   async forget(id) {
     const tx = this.db.transaction(['journal', 'meta'], 'readwrite');

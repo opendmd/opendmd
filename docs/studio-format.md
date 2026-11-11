@@ -125,7 +125,15 @@ envelope and nothing else. `author.account` never comes in from a file. A
 **Limits** for a file: 16 MB, 4,160 records, and 32,768 pictures outside
 the places a record already caps (a piece's or template's cels, a stamp's
 frames, a font's atlas). Back up everything writes as many files as it
-takes for each to open again.
+takes for each to open again; picked together, they are one opening.
+
+**Copies within an opening.** A copy takes a new, random id. What the
+files of one opening point at it (a piece's palette, a pack's members)
+points at the copy, whichever file holds which: the files picked together
+are read whole before anything is stored. Nothing is remembered between
+openings, so parts of a backup opened one at a time into a browser that
+already holds a different record under one of their ids may leave a
+reference naming the user's own record.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole
