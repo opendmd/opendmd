@@ -7,8 +7,8 @@ loop 9.6
 -- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing
 -- twice, gliding two checkers across and one down; under it a noise
 -- texture turning the other way twice as fast; rows and columns wobble.
-sn = sin(t/9.6)
-cs = cos(t/9.6) -- the turn
+sn = sin(phase)
+cs = cos(phase) -- the turn
 s2 = -sin(t/4.8)
 c2 = cos(t/4.8)                          -- the noise's, back twice
 zoom = 2                                 -- try 1 to 4

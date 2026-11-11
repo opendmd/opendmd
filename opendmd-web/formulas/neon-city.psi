@@ -3,7 +3,7 @@
 name "Neon city"
 about "A night drive through a neon megacity: crowding towers lined with neon, a holo screen, rain on a wet road"
 loop forever
-fps 100
+smooth
 
 -- Neon city: Endless road's pseudo-3D road, through a megacity at night.
 -- Dark towers crowd the road, tall enough to leave the top of the panel,

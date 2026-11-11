@@ -23,10 +23,10 @@ bg = tri(star - t/0.15) + 0.3
 -- ~25 px, full (opaque sprites, the line seen between them) past ~38 px
 k = clamp(star*0.28 - 1.6, 0.5, 1)
 -- palette: purple for 2.4 s, teal for 2.4 s, ~0.4 s crossfades
-mp = clamp(sin(t/4.8)*4, -1, 1)*0.5 + 0.5
+mp = clamp(sin(phase)*4, -1, 1)*0.5 + 0.5
 cr = 0.17 + mp*0.88
 cg = 1.07 - mp*1.01               -- line red, green (blue 1)
-zb = 1 + breathing*0.3*sin(t/4.8) -- the tables breathing
+zb = 1 + breathing*0.3*sin(phase) -- the tables breathing
 -- each half: start row in the tile (top down, bottom up, one band
 -- per 1.2 s), sideways offset, row-offset slant
 tv0 = t/1.2 - 1.24
