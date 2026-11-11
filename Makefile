@@ -6,6 +6,7 @@ RENDER := opendmd-render
 SIM    := opendmd-sim
 WEB    := opendmd-web
 ART    := opendmd-art-web
+STUDIO := opendmd-studio-web
 PACK   := opendmd-pack
 PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
@@ -173,6 +174,8 @@ test:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(STUDIO) (the site's Studio: its GIF writers)"
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
@@ -199,6 +202,7 @@ test:
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
@@ -271,6 +275,7 @@ check-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(ART) for $(WASM_TARGET)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features psi
@@ -285,7 +290,9 @@ check-wasm:
 # so they are not packed. The Studio's own wasm (opendmd-art-web, "Make
 # art") goes to www/pkg-art, loaded only when the Studio opens; the Formulas'
 # (opendmd-psi-web: Psi, no std, its own allocator) to www/pkg-psi, loaded
-# only when the Library's Formulas tab opens. The budgets
+# only when the Library's Formulas tab opens; the site's Studio's GIF writers
+# (opendmd-studio-web) to www/pkg-studio, site-only like pkg-psi-lang (the
+# packer leaves both out: opendmd-pack www.rs SITE_ONLY). The budgets
 # (gzipped) are enforced by tools/web-size.py; the packer refuses a pack over
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
@@ -322,10 +329,13 @@ web: $(if $(filter 0,$(WEB_MINIFY)),,webmin)
 	@# The site's language service (What costs most, Tidy up: js/fcost.js): the same crate with only observe() and
 	@# format() (`lang`), never packed (opendmd-pack www.rs SITE_ONLY).
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi-lang -- --features bare,bump,lang
+	@# The site's Studio's GIF writers (opendmd.dev/studio/, opendmd-studio-web), never packed (opendmd-pack www.rs SITE_ONLY).
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-studio
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi-lang/package.json $(WEB_WWW)/pkg-psi-lang/*.d.ts $(WEB_WWW)/pkg-psi-lang/README.md $(WEB_WWW)/pkg-psi-lang/.gitignore
+	rm -f $(WEB_WWW)/pkg-studio/package.json $(WEB_WWW)/pkg-studio/*.d.ts $(WEB_WWW)/pkg-studio/README.md $(WEB_WWW)/pkg-studio/.gitignore
 	@# js/build.js: the build id every wasm module's address carries (?v=, js/wasm.js), a hash of the three folders.
 	uv run tools/www-build-id.py $(WEB_WWW)
 	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
@@ -570,6 +580,7 @@ fmt:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -590,6 +601,9 @@ clippy:
 	@echo "==> Clippy $(ART)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
+	@echo "==> Clippy $(STUDIO)"
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(STUDIO) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(PSI) (+ core's and the simulator's psi feature)"
@@ -616,13 +630,14 @@ clean:
 	cd $(SIM) && cargo clean
 	cd $(WEB) && cargo clean
 	cd $(ART) && cargo clean
+	cd $(STUDIO) && cargo clean
 	cd $(PACK) && cargo clean
 	cd $(PSI) && cargo clean
 	cd $(PSIWEB) && cargo clean
 	cd $(GAL) && cargo clean
 	cd $(WEBMIN) && cargo clean
 	cd $(PSICLI) && cargo clean
-	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB_DIST) $(WWW_PACK) ./target
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WEB)/www/pkg-psi-lang $(WEB)/www/pkg-studio $(WEB_DIST) $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

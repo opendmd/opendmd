@@ -24,7 +24,7 @@ Where the URLs come from (so a new route is covered without editing this):
     (wildcards filled with sample names), with the query strings the web
     app's source and tools/mock-device.py use;
   - the web app's assets: every file under opendmd-web/www and the wasm
-    packages' files (pkg, pkg-art, pkg-psi);
+    packages' files (pkg, pkg-art, pkg-psi, pkg-studio);
   - the site's Worker routes: site/worker/src/index.ts (and its /formulas/
     paths), the site's pages: the built site if there is one (--site, default
     target/site), else site/pages, the theme and public-repo sources.
@@ -149,9 +149,9 @@ def web_assets():
         if f.is_file() and not f.name.endswith(".gz"):
             rels.add(f.relative_to(www).as_posix())
     # The wasm packages are built, not committed: their file names are the crates'.
-    for d, crate in (("pkg", "opendmd_web"), ("pkg-art", "opendmd_art_web"), ("pkg-psi", "opendmd_psi_web")):
+    for d, crate in (("pkg", "opendmd_web"), ("pkg-art", "opendmd_art_web"), ("pkg-psi", "opendmd_psi_web"), ("pkg-studio", "opendmd_studio_web")):
         crate_name = crate
-        toml = {"pkg": "opendmd-web", "pkg-art": "opendmd-art-web", "pkg-psi": "opendmd-psi-web"}[d]
+        toml = {"pkg": "opendmd-web", "pkg-art": "opendmd-art-web", "pkg-psi": "opendmd-psi-web", "pkg-studio": "opendmd-studio-web"}[d]
         ct = ROOT / toml / "Cargo.toml"
         if ct.exists():
             m = re.search(r'^name\s*=\s*"([^"]+)"', ct.read_text(), re.M)
