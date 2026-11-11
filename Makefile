@@ -371,8 +371,8 @@ logo:
 NOTICES_FW_TXT := licenses/THIRD-PARTY-LICENSES-firmware.txt
 NOTICES_WEB_TXT := licenses/THIRD-PARTY-LICENSES-web.txt
 NOTICES_ABOUT = --about $(CARGO_ABOUT) --about-version $(CARGO_ABOUT_VERSION)
-NOTICES_FW = bash -c 'build=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/build/project_description.json 2>/dev/null | head -1) && \
-	uv run --quiet tools/notices.py firmware $(NOTICES_ABOUT) --elf $(FW_RELEASE_BINARY) --idf-build "$$(dirname "$${build:-none/x}")" \
+NOTICES_FW = bash -c 'out=$$($(FW_RELEASE_IDF_OUT)) && \
+	uv run --quiet tools/notices.py firmware $(NOTICES_ABOUT) --elf $(FW_RELEASE_BINARY) --idf-build "$$out/build" \
 	--updater-build $(UPDATER_BUILD)/build --toolchain $(XTENSA_TOOLCHAIN) --readelf $(XTENSA_TOOLCHAIN)/bin/xtensa-esp32-elf-readelf $(1)'
 NOTICES_WEB = uv run --quiet tools/notices.py web $(NOTICES_ABOUT) $(1)
 notices:
@@ -847,6 +847,16 @@ FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
 FW_RELEASE_VTARGET := $(FW_RELEASE_TARGET_DIR)
 FW_RELEASE_BINARY := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/opendmd-firmware
 FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/bootloader.bin
+# The ESP-IDF build the release ELF was linked from (esp-idf-sys's out/), on
+# stdout: the ELF names its esp-idf-sys-<hash> dir (the IDF objects' compile
+# directories). A target dir can hold more than one (another esp-idf-sys, or
+# its build script's env changed), and the newest is not always the one
+# linked: notices.py then finds the ELF's IDF sources in no component. A shell
+# command (no single quotes: NOTICES_FW runs it inside bash -c '...').
+FW_RELEASE_IDF_OUT = h=$$(grep -aoE "esp-idf-sys-[0-9a-f]{16}" $(FW_RELEASE_BINARY) 2>/dev/null | sort -u); \
+	d=$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/$$h/out; \
+	if [ -n "$$h" ] && [ "$$(echo "$$h" | wc -l)" = 1 ] && [ -d "$$d" ]; then echo "$$d"; \
+	else echo "$(FW_RELEASE_BINARY): names no one esp-idf-sys build dir in this target ($$(echo $${h:-none})): run make fw-release" >&2; exit 1; fi
 # The fragment and its stamp live in the layout's own target dir: with a
 # private FW_RELEASE_TARGET_DIR nothing a release build writes or removes
 # (the generated sdkconfig among it) touches another checkout's build.
@@ -915,7 +925,7 @@ fw-release-variant:
 	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size.
-	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \
+	@out=$$($(FW_RELEASE_IDF_OUT)) || exit 1; cfg=$$out/sdkconfig; \
 	 want=$$(echo $(FW_FLASH_SIZE) | tr a-z A-Z); \
 	 grep -q "^CONFIG_ESPTOOLPY_FLASHSIZE=\"$$want\"" "$$cfg" || { echo "$$cfg: CONFIG_ESPTOOLPY_FLASHSIZE is not \"$$want\""; exit 1; }; \
 	 echo "sdkconfig: flash size $$want ($$cfg)"
