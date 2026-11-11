@@ -39,8 +39,13 @@
 export const FORMAT = 'opendmd-studio/1';
 export const TYPES = { piece: 'pc', palette: 'pl', stamp: 'st', font: 'ft', shade: 'sh', template: 'tp', pack: 'pk' };
 export const LICENCES = ['CC0-1.0', 'CC-BY-4.0'];
-// Caps, set now so nothing grows without bound.
-export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096 };
+// Caps, set now so nothing grows without bound. `bytes` is any record's
+// JSON, `piece` a piece's (a 256-frame import of noisy video is ~1.4 MB; the
+// panel's own GIF limit is 4 MB); `layerName` a layer's name.
+export const CAPS = { frames: 256, layers: 16, bytes: 1 << 20, piece: 4 << 20, name: 120, note: 200, tags: 32, from: 64, colours: 4096,
+  layerName: 60, msMin: 20, msMax: 60000 };
+// The most bytes any pixel field holds uncompressed: a whole panel, two bytes a pixel.
+export const PX_MAX = 128 * 32 * 2;
 const VERSION = 2; // the IndexedDB schema (LocalStore.open's steps)
 const ID = /^(pc|pl|st|ft|sh|tp|pk)_[0-9a-f]{32}$/;
 
@@ -58,6 +63,7 @@ export function newId(type) {
   for (let i = 5; i >= 0; i--) { r[i] = t % 256; t = Math.floor(t / 256); }
   r[6] = 0x70 | (r[6] & 0x0f);
   r[8] = 0x80 | (r[8] & 0x3f);
+  if (!Object.hasOwn(TYPES, type)) throw new Error(`no type ${type}`);
   return `${TYPES[type]}_${hex(r)}`;
 }
 // The built-in resources' fixed ids: time zero, which no new id has.
@@ -96,12 +102,17 @@ export function canon(v) {
 // compressed bytes differ between browsers; the pixels do not. A two-byte
 // piece's cels are its bytes as stored (high byte first), so the rule is the
 // same and every one-byte hash is what it was; `keys: 2` is in the body.
-const raw = new Map(); // cel string -> its hex: an unchanged cel is inflated once
+// cel string -> its hex: an unchanged cel is inflated once. It holds as many
+// as the open piece has cels (memo(n)), so an autosave after one stroke
+// inflates one cel, not all of them.
+const raw = new Map();
+let rawCap = 64;
+export const memo = (n) => { rawCap = Math.max(64, n); };
 async function rawHex(c) {
   let h = raw.get(c);
   if (h === undefined) {
-    h = hex(await inflate(c));
-    if (raw.size > 64) raw.delete(raw.keys().next().value);
+    h = hex(await inflate(c, PX_MAX));
+    if (raw.size >= rawCap) raw.delete(raw.keys().next().value);
     raw.set(c, h);
   }
   return h;
@@ -140,11 +151,46 @@ export async function packPx(keys, wide = false) {
   for (let i = 0; i < z.length; i += 0x8000) s += String.fromCharCode(...z.subarray(i, i + 0x8000));
   return btoa(s);
 }
-const inflate = (b64) => through(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), new DecompressionStream('deflate'));
+// Inflating is bounded, before and while, never after: a pixel field whose
+// text is longer than `max` bytes could deflate to (at worst a little over
+// max: stored blocks) is refused unread, and the stream is read only until it
+// gives one byte past `max`, then dropped. Its input goes in 1 KiB at a time,
+// paced by the reads, so a few KiB that inflate to gigabytes never get far
+// (deflate's best ratio is about 1032 to 1). `inflated`: what the last call
+// read from the stream and what it kept (the checks read it).
+export const inflated = { read: 0, kept: 0 };
+const b64Max = (max) => Math.ceil((max + Math.ceil(max / 16000) * 5 + 64) / 3) * 4;
+export async function inflate(b64, max) {
+  inflated.read = inflated.kept = 0;
+  if (typeof b64 !== 'string' || b64.length > b64Max(max)) throw new Error('a picture of the wrong size');
+  let z;
+  try { z = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); } catch { throw new Error('a picture that does not read'); }
+  const ds = new DecompressionStream('deflate'), w = ds.writable.getWriter(), r = ds.readable.getReader();
+  const feed = (async () => { for (let o = 0; o < z.length; o += 1024) await w.write(z.subarray(o, o + 1024)); await w.close(); })();
+  feed.catch(() => {}); // its failure is the reader's too
+  const out = new Uint8Array(max + 1);
+  let n = 0;
+  for (;;) {
+    let got;
+    try { got = await r.read(); } catch { throw new Error('a picture that does not read'); }
+    if (got.done) break;
+    inflated.read += got.value.length;
+    const take = Math.min(got.value.length, max + 1 - n);
+    out.set(got.value.subarray(0, take), n);
+    n += take;
+    if (n > max) {
+      inflated.kept = n;
+      r.cancel().catch(() => {});
+      throw new Error('a picture of the wrong size');
+    }
+  }
+  inflated.kept = n;
+  return out.subarray(0, n);
+}
 // n keys: a Uint8Array, or (wide) a Uint16Array.
 export async function unpackPx(b64, n, wide = false) {
-  const px = await inflate(b64);
-  if (px.length !== n * (wide ? 2 : 1)) throw new Error('a picture of the wrong size');
+  const want = n * (wide ? 2 : 1), px = await inflate(b64, want);
+  if (px.length !== want) throw new Error('a picture of the wrong size');
   return wide ? Uint16Array.from({ length: n }, (_, i) => (px[2 * i] << 8) | px[2 * i + 1]) : px;
 }
 
@@ -158,38 +204,54 @@ export function refsOf(rec) {
   return [...out];
 }
 
-// The envelope and the caps; throws with what is wrong.
+// The envelope and the caps; throws with what is wrong. Anything may come in
+// here (a file, a link, another tab): it never trusts a shape it has not
+// looked at, and refuses rather than throws a TypeError.
+const obj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const KEY = /^[0-9a-f]{8}$/;
 export function check(rec) {
   const bad = (why) => { throw new Error(`not a record: ${why}`); };
-  if (!TYPES[rec.type] || !ID.test(rec.id) || rec.id.slice(0, 2) !== TYPES[rec.type]) bad('type or id');
+  if (!obj(rec)) bad('not an object');
+  if (typeof rec.type !== 'string' || !Object.hasOwn(TYPES, rec.type) || typeof rec.id !== 'string' || !ID.test(rec.id)
+    || rec.id.slice(0, 2) !== TYPES[rec.type]) bad('type or id');
   if (!Number.isInteger(rec.rev) || rec.rev < 1) bad('rev');
   if (typeof rec.name !== 'string' || rec.name.length > CAPS.name) bad('name');
   if (!Array.isArray(rec.tags) || rec.tags.length > CAPS.tags || rec.tags.some((t) => typeof t !== 'string')) bad('tags');
-  if (!rec.author || typeof rec.author.name !== 'string' || rec.author.name.length > 80
+  if (!obj(rec.author) || typeof rec.author.name !== 'string' || rec.author.name.length > 80
     || (rec.author.account !== null && typeof rec.author.account !== 'string')) bad('author');
   if (rec.note !== undefined && (typeof rec.note !== 'string' || rec.note.length > CAPS.note)) bad('note');
   if (rec.licence !== null && !LICENCES.includes(rec.licence)) bad('licence');
   // An entry naming a record says which content it was: its hash too.
-  if (!Array.isArray(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !f || typeof f !== 'object'
-    || (f.id !== undefined && (typeof f.id !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
+  if (!Array.isArray(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !obj(f)
+    || (f.id !== undefined && (typeof f.id !== 'string' || typeof f.hash !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
   const b = rec.body;
-  if (!b || typeof b !== 'object') bad('body');
+  if (!obj(b)) bad('body');
   if (rec.type === 'piece') {
     if (b.w !== 128 || b.h !== 32) bad('size');
-    if (!Array.isArray(b.frames) || !b.frames.length || b.frames.length > CAPS.frames) bad('frames');
-    if (!Array.isArray(b.layers) || !b.layers.length || b.layers.length > CAPS.layers) bad('layers');
-    // A layer that moves has a cel a frame; one held still, one cel.
-    if (b.layers.some((l) => !Array.isArray(l.cels) || l.cels.length !== (l.moves ? b.frames.length : 1))) bad('cels');
+    if (b.plays !== undefined && (!Number.isInteger(b.plays) || b.plays < 0 || b.plays > 65535)) bad('plays');
+    const fs = b.frames, ls = b.layers;
+    if (!Array.isArray(fs) || !fs.length || fs.length > CAPS.frames) bad('frames');
+    if (!Array.isArray(ls) || !ls.length || ls.length > CAPS.layers) bad('layers');
+    // Frame and layer keys (S1 on; none before): eight hex digits, each once in the piece.
+    const keys = new Set();
+    const keyed = (k) => k === undefined || (typeof k === 'string' && KEY.test(k) && keys.size < keys.add(k).size);
+    if (fs.some((f) => !obj(f) || !keyed(f.key) || !Number.isInteger(f.ms) || f.ms < CAPS.msMin || f.ms > CAPS.msMax)) bad('frames');
+    // A layer that moves has a cel a frame; one held still, one cel. An
+    // optional field at its default is absent (docs/studio-format.md): a
+    // hidden layer says `hide: true`, a shown one says nothing.
+    if (ls.some((l) => !obj(l) || !keyed(l.key) || typeof l.name !== 'string' || l.name.length > CAPS.layerName
+      || typeof l.moves !== 'boolean' || (l.hide !== undefined && l.hide !== true))) bad('layers');
+    if (ls.some((l) => !Array.isArray(l.cels) || l.cels.length !== (l.moves ? fs.length : 1) || l.cels.some((c) => typeof c !== 'string'))) bad('cels');
     if (b.keys !== undefined && b.keys !== 1 && b.keys !== 2) bad('keys');
   }
   // Colours: keys 1 to 255 (65535 in a two-byte piece), each once, #rrggbb, each colour once.
   const cs = rec.type === 'piece' || rec.type === 'palette' ? b.colours : undefined;
   if (cs !== undefined) {
     const top = rec.type === 'piece' && b.keys !== 2 ? 255 : 65535, seen = new Set(), hexes = new Set();
-    if (!Array.isArray(cs) || cs.length > CAPS.colours || cs.some((c) => !c || !Number.isInteger(c.k) || c.k < 1 || c.k > top
-      || seen.size === seen.add(c.k).size || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
+    if (!Array.isArray(cs) || cs.length > CAPS.colours || cs.some((c) => !obj(c) || !Number.isInteger(c.k) || c.k < 1 || c.k > top
+      || seen.size === seen.add(c.k).size || typeof c.hex !== 'string' || !/^#[0-9a-f]{6}$/.test(c.hex) || hexes.size === hexes.add(c.hex).size)) bad('colours');
   }
-  if (JSON.stringify(rec).length > CAPS.bytes) bad('too big');
+  if (JSON.stringify(rec).length > (rec.type === 'piece' ? CAPS.piece : CAPS.bytes)) bad('too big');
 }
 
 const head = (rec) => { const { body, ...h } = rec; return h; };
