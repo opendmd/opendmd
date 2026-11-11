@@ -63,6 +63,7 @@ function size(s) {
 const okSkel = (k) => obj(k) && Array.isArray(k.frames) && Array.isArray(k.layers) && k.layers.every(obj) && okBody({ w: W, h: H,
   ...(k.plays ? { plays: k.plays } : {}), frames: k.frames, layers: k.layers.map((l) => ({ ...l, cels: Array(l.moves ? k.frames.length : 1).fill('') })) });
 const stable = (v) => JSON.stringify(v, (k, x) => (obj(x) ? Object.fromEntries(Object.keys(x).sort().map((y) => [y, x[y]])) : x));
+const big = (px) => px.some((k) => k > 255);
 const cid = (l, f) => (l.moves ? `${l.key}/${f.key}` : l.key);
 const okColours = (l) => Array.isArray(l) && l.length <= CAPS.colours && l.every((c) => obj(c) && Number.isInteger(c.k) && c.k > 0 && c.k < 65536
   && typeof c.hex === 'string' && HEX.test(c.hex));
@@ -132,6 +133,11 @@ export class Doc {
     if (!rec.hash || j.hash !== rec.hash || !j.list.every((s, n) => s.n === lo + n) || !ok(j.at) || !ok(j.cur)) return 'dropped';
     this.steps = j.list; this.low = lo; this.cur = j.at - lo + 1;
     try {
+      // Every cel the journal holds reads, as the width it says, whether it comes into view or not.
+      for (const st of j.list) {
+        if (st.t) for (const [z, w] of Object.values(st.t.z)) await unpackPx(z, N, w);
+        if (st.body) for (const b of [st.body.a, st.body.b]) for (const l of b.layers) for (const z of l.cels) await unpackPx(z, N, b.keys === 2);
+      }
       while (this.cur < j.cur - lo + 1) await this.step(true);
       while (this.cur > j.cur - lo + 1) await this.step(false);
       // What the journal led to must be a piece too: a journal can lie.
@@ -410,13 +416,14 @@ export class Doc {
     for (const id of want) {
       if (have.has(id)) continue;
       if (!made[id]) throw new Error(`no cel ${id}`);
-      const zz = await packPx(made[id], wide);
+      const w = wide || big(made[id]), zz = await packPx(made[id], w);
       this.#remember(zz, made[id]);
-      z[id] = [zz, wide];
+      z[id] = [zz, w];
     }
     for (const [id, c] of have) {
       if (want.has(id)) continue;
-      if (c.v !== c.zv && c.px) { c.z = await packPx(c.px, c.zw); c.zv = c.v; }
+      // (Packed as wide as its keys need: a 256th colour may have been drawn since it was packed.)
+      if (c.v !== c.zv && c.px) { const w = c.zw || big(c.px); c.z = await packPx(c.px, w); c.zw = w; c.zv = c.v; }
       z[id] = [c.z, c.zw];
     }
     const s = { t: { b, a, z } };
