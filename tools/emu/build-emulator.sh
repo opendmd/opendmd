@@ -1,5 +1,6 @@
 #!/bin/bash
-# Fetch our esp32sim fork (branch `opendmd`: upstream 9fdeb32 + the SD-SPI board) at a pinned commit, build it.
+# Fetch our esp32sim fork (branch `opendmd`: upstream a57c5e0a, merged 2026-11-12, + the SD card in SPI mode
+# via --sd/--sd-spi) at a pinned commit, build it.
 # Everything lands in $EMU_DIR (the Makefile's default: $SCRATCH/opendmd-emu-sim when SCRATCH is set,
 # else target/emu-sim); cached by the pin.
 set -euo pipefail
@@ -7,7 +8,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EMU_DIR=${EMU_DIR:-${SCRATCH:+$SCRATCH/opendmd-emu-sim}}
 EMU_DIR=${EMU_DIR:-$(cd "$HERE/../.." && pwd)/target/emu-sim}
 ESP32SIM_REPO=${ESP32SIM_REPO:-https://github.com/opendmd/esp32sim}
-ESP32SIM_COMMIT=${ESP32SIM_COMMIT:-a7ccd1bbbb2ef0021addeedac7afe422df5a3e27}
+ESP32SIM_COMMIT=${ESP32SIM_COMMIT:-a0a15f0758cab12eb005e4204d87b52ebaaf1bfb}
 SRC=$EMU_DIR/src
 BIN=$SRC/target/release/esp32sim
 STAMP=$EMU_DIR/built.stamp

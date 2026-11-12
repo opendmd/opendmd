@@ -141,13 +141,14 @@ class Lane:
         self.passes.append(line)
         print(line, flush=True)
 
-    def emu(self, label, image: Path, card: Path, seconds: int, extra=(), card_out: Path | None = None):
+    def emu(self, label, image: Path, card: Path | None, seconds: int, extra=(), card_out: Path | None = None):
         env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}
-        # what the firmware writes goes to card_out (a copy, --sd-rw), or stays in memory (--sd)
-        if card_out:
+        # what the firmware writes goes to card_out (a copy, --sd-rw), or stays in memory (--sd);
+        # no card: an empty slot (--sd-spi without --sd is refused, so neither)
+        if card and card_out:
             shutil.copyfile(card, card_out)
-        sd = ["--sd-rw", str(card_out)] if card_out else ["--sd", str(card)]
-        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", *sd, "--boot", "rom", "--rom", str(self.rom),
+        sd = ["--sd-rw", str(card_out)] if card and card_out else ["--sd", str(card)] if card else []
+        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", *(["--sd-spi", "18,23,19,5", *sd] if sd else []), "--boot", "rom", "--rom", str(self.rom),
                "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
                "--max-seconds", str(seconds), "--console", "uart0", "--no-dump", *extra]
         e = Emulator(cmd, env, self.logs / f"offline-{self.stamp}-{label}.log", self.fail_rx, label)
@@ -362,10 +363,8 @@ class Lane:
     # -- boot C: no card, NVS says off -----------------------------------------------
 
     def run_c(self):
-        empty = self.dir / "empty.img"
-        empty.write_bytes(b"")
         image = api_lane.seeded_image(self.a.image, self.dir, ssid=None, extra={"network": "off"})
-        e = self.emu("C", image, empty, 40, ("--net", "none"))
+        e = self.emu("C", image, None, 40, ("--net", "none"))
         try:
             self.booted_ours(e)
             e.wait_for(NETWORK_OFF, 300, what="the network-off line with no card")
