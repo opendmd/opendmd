@@ -34,7 +34,13 @@ fn main() {
     // also picks the partition table and the flash size): `/api/status`
     // reports it as `variant`, the boot banner prints it, and a firmware
     // update must be for the same one (`ota.rs`).
-    let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
+    // The variant and the chip go together: `s3` is the ESP32-S3's alone,
+    // the others the classic's, so a hand build for one chip can never
+    // take the other's layout (and its bundles). Unset, the chip's own.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let s3 = target.starts_with("xtensa-esp32s3-");
+    let variant = std::env::var("OPENDMD_FLASH_VARIANT")
+        .unwrap_or_else(|_| if s3 { "s3" } else { "4mb" }.into());
     let variant_name = match variant.as_str() {
         "4mb" => "DevKit (4 MB)",
         // partitions-emu.csv: esp32sim's psi-probe image, never released.
@@ -43,6 +49,10 @@ fn main() {
         "s3" => "ESP32-S3 DevKitC-1 (8 MB)",
         v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb (and emu8mb, emulator only; s3, the S3 preview)"),
     };
+    if s3 != (variant == "s3") {
+        panic!("OPENDMD_FLASH_VARIANT={variant} is not a layout for target {target}: s3 is the ESP32-S3's (xtensa-esp32s3-espidf), 4mb and emu8mb the classic ESP32's");
+    }
+    println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
 
