@@ -3,6 +3,8 @@ import s0lib
 
 
 def run_job(run, args, phase: str, resume: bool, n: int, interval_s: float, timeout_s: float):
+    # From zero: the histograms then hold this job's handshakes only.
+    s0lib.reset_probe(run)
     st = run.sample(f"{phase}:before")
     before = st.get("connect") or {}
     seq = run.panel.post("handshakes", n=n, interval_ms=int(interval_s * 1000), resume=int(resume)).get("ask")
@@ -28,13 +30,20 @@ def run_job(run, args, phase: str, resume: bool, n: int, interval_s: float, time
 
 
 def handshake_gates(run, phase, before, after, resume: bool, n: int, max_ms: int):
+    """This job's handshakes (the probe was reset as it began). The time is
+    the TLS handshake alone, from its first record to its end: not the DNS
+    lookup, the TCP connect or the WebSocket upgrade (`connect_ms`, reported,
+    is the whole attempt)."""
     h = after.get("resumed" if resume else "full") or {}
     hb = before.get("resumed" if resume else "full") or {}
     got = (h.get("n") or 0) - (hb.get("n") or 0)
     run.gate(f"{phase}: {'resumed' if resume else 'full'} handshakes done", got >= (n - 1 if resume else n),
              f"{got} of {n} (job failed {s0lib.get(after, 'job.failed')})", f">= {n - 1 if resume else n}")
-    run.gate(f"{phase}: each handshake <= {max_ms} ms", (h.get("max") or 0) <= max_ms,
+    run.gate(f"{phase}: each TLS handshake <= {max_ms} ms (this job's; DNS, TCP and upgrade not in it)",
+             None if h.get("max") is None else h["max"] <= max_ms,
              f"max {h.get('max')} p95 {h.get('p95')} p50 {h.get('p50')} ms", f"<= {max_ms}")
+    run.gate(f"{phase}: whole attempt, last (DNS + TCP + TLS + upgrade)", None, f"{after.get('connect_ms')} ms (tcp {after.get('tcp_ms')}, dns {after.get('dns_ms')}, upgrade {after.get('upgrade_ms')})",
+             "reported", required=False)
     if resume:
         missed = (after.get("resume_missed") or 0) - (before.get("resume_missed") or 0)
         run.gate(f"{phase}: resumption taken every time", missed <= 1, f"{missed} full where resumed was asked", "<= 1 (the first)")

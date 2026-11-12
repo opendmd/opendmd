@@ -106,6 +106,13 @@ class Panel:
             return r.status
 
 
+def _window(st: dict, k: int):
+    w = get(st, "net.heap_low_recent")
+    if isinstance(w, list) and len(w) > k and isinstance(w[k], dict):
+        return w[k].get("free")
+    return None
+
+
 def flatten(st: dict) -> dict:
     """The row a status read becomes."""
     row = {
@@ -119,7 +126,8 @@ def flatten(st: dict) -> dict:
         "display.wake_max_us": get(st, "display.wake_max_us"),
         "net.heap_low.free": get(st, "net.heap_low.free"),
         "net.heap_low.at": get(st, "net.heap_low.at"),
-        "net.heap_low_recent.0": (get(st, "net.heap_low_recent") or [None])[0] and get(st, "net.heap_low_recent")[0].get("free"),
+        "net.heap_low_recent.0": _window(st, 0),
+        "net.heap_low_recent.1": _window(st, 1),
         "net.lwip.time_wait": get(st, "net.lwip.time_wait"),
         "net.lwip.pcbs": get(st, "net.lwip.pcbs"),
         "playing": get(st, "now_playing.path"),
@@ -245,7 +253,16 @@ class Run:
                 rates[k] = (b - a) * 3600.0 / dur
         frees = [r["heap.free"] for r in rows if isinstance(r.get("heap.free"), int)]
         refresh = sorted(r["refresh_us"] for r in rows if isinstance(r.get("refresh_us"), (int, float)))
-        net_recent = [r["net.heap_low_recent.0"] for r in rows if isinstance(r.get("net.heap_low_recent.0"), int)]
+        net_recent = [r[k] for r in rows for k in ("net.heap_low_recent.0", "net.heap_low_recent.1") if isinstance(r.get(k), int)]
+        probe_low = [r["connect.heap.low"] for r in rows if isinstance(r.get("connect.heap.low"), int) and r["connect.heap.low"] > 0]
+        dropped = isinstance(first.get("heap.floor"), int) and isinstance(last.get("heap.floor"), int) and last["heap.floor"] < first["heap.floor"]
+        # This phase's floor: the since-boot floor if it fell during the
+        # phase (then it is a value reached in it); else the least of what
+        # was sampled in the phase: the free heap, the network side's 30 s
+        # windows, the probe's own low (reset as the phase began).
+        sampled = frees + net_recent + probe_low[-1:]
+        floor_phase = last["heap.floor"] if dropped else (min(sampled) if sampled else None)
+        largest = last.get("heap_floor_at.largest") if dropped else last.get("connect.heap.low_largest")
         return {
             "samples": len(rows),
             "duration_s": round(dur, 1),
@@ -253,8 +270,9 @@ class Run:
             "rates_per_h": {k: round(v, 3) for k, v in rates.items()},
             "floor_start": first.get("heap.floor"),
             "floor_end": last.get("heap.floor"),
-            "floor_dropped_in_phase": isinstance(first.get("heap.floor"), int) and isinstance(last.get("heap.floor"), int) and last["heap.floor"] < first["heap.floor"],
-            "largest_at_floor": last.get("heap_floor_at.largest"),
+            "floor_dropped_in_phase": dropped,
+            "floor_phase": floor_phase,
+            "largest_at_floor": largest,
             "idf_min_end": last.get("heap.idf_min"),
             "free_min_sampled": min(frees) if frees else None,
             "net_low_min_30s_windows": min(net_recent) if net_recent else None,
@@ -266,15 +284,30 @@ class Run:
         }
 
     # --- gates -------------------------------------------------------------------------
-    def gate(self, name: str, ok: bool | None, value, want: str):
-        g = {"gate": name, "pass": ok, "value": value, "want": want}
+    def gate(self, name: str, ok: bool | None, value, want: str, required: bool = True):
+        """`ok` None: not judged; a required gate not judged fails the run.
+        `required` False: reported only (a figure, not a verdict)."""
+        g = {"gate": name, "pass": ok, "value": value, "want": want, "required": required}
         self.gates.append(g)
-        verdict = "PASS" if ok else ("SKIP" if ok is None else "FAIL")
+        verdict = "PASS" if ok else (("SKIP" if not required else "MISSING") if ok is None else "FAIL")
         print(f"  {verdict:4}  {name}: {value} (want {want})", flush=True)
 
     def gate_floor(self, phase: str, stats: dict, kb: float, label: str = "heap floor"):
-        f = stats.get("floor_end")
-        self.gate(f"{phase}: {label} >= {kb:g} KB", None if f is None else f >= kb * KB, f, f">= {int(kb * KB)} B (heap.floor since boot, at the phase's end)")
+        f = stats.get("floor_phase")
+        how = "heap.floor, fallen in the phase" if stats.get("floor_dropped_in_phase") else "the phase's least sampled free heap, net 30 s windows and probe low"
+        self.gate(f"{phase}: {label} >= {kb:g} KB", None if f is None else f >= kb * KB, f, f">= {int(kb * KB)} B ({how})")
+
+    def gate_content(self, phase: str):
+        """What played: a `formula` phase must have a Formula on screen (its
+        frame time reported) in >= 90 % of the samples, a `gif` phase not."""
+        rows = [r for r in self.rows if r["phase"] == phase]
+        if not rows or phase not in ("gif", "formula"):
+            return
+        share = sum(1 for r in rows if r.get("formula_frame_us") is not None) / len(rows)
+        if phase == "formula":
+            self.gate("formula: a Formula on screen", share >= 0.9, f"{share:.0%} of samples", ">= 90 % (now_playing.formula.frame_us)")
+        else:
+            self.gate("gif: GIFs on screen", share <= 0.1, f"{share:.0%} of samples with a Formula", "<= 10 %")
 
     def gate_no_added_late(self, phase: str, stats: dict, baseline: dict | None, tolerance: int):
         """Each late-frame counter's delta against what the baseline's rate
@@ -316,13 +349,17 @@ class Run:
             "phases": self.phases,
             "gates": self.gates,
             "notes": self.notes,
-            "passed": all(g["pass"] is not False for g in self.gates) and any(g["pass"] for g in self.gates),
+            # Every gate passed, a required one not judged is a failure.
+            "passed": all(g["pass"] is True or (g["pass"] is None and not g.get("required", True)) for g in self.gates)
+            and any(g["pass"] for g in self.gates),
         }
         (self.dir / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
         fails = [g for g in self.gates if g["pass"] is False]
-        skips = [g for g in self.gates if g["pass"] is None]
+        missing = [g for g in self.gates if g["pass"] is None and g.get("required", True)]
+        skips = [g for g in self.gates if g["pass"] is None and not g.get("required", True)]
         print(f"\n{self.name}: {'PASS' if summary['passed'] else 'FAIL'} "
-              f"({len(self.gates) - len(fails) - len(skips)} passed, {len(fails)} failed, {len(skips)} not judged)  -> {self.dir}", flush=True)
+              f"({len(self.gates) - len(fails) - len(skips) - len(missing)} passed, {len(fails)} failed, "
+              f"{len(missing)} required but not judged, {len(skips)} reported only)  -> {self.dir}", flush=True)
         self._jsonl.close()
         if self._csv is not None:
             self._csv_file.close()
@@ -358,9 +395,13 @@ def load_baseline(path: str | None):
     return json.loads(Path(path).read_text())
 
 
-def start_phase(run: Run, phase: str, args):
+def start_phase(run: Run, phase: str, args, probe: bool = False):
     plays = dict(p.split("=", 1) for p in args.play if "=" in p)
+    if phase == "formula" and phase not in plays and not args.interactive:
+        sys.exit("the formula phase needs --play formula=@formula:<a raced one> (or --interactive, to set it up by hand)")
     print(f"\n== phase {phase} ==", flush=True)
+    if probe:
+        reset_probe(run)
     if args.interactive:
         input(f"  set the panel up for '{phase}' and press Enter... ")
     if phase in plays:
@@ -368,6 +409,13 @@ def start_phase(run: Run, phase: str, args):
         print(f"  played {plays[phase]} ({code})", flush=True)
     if args.settle_s > 0:
         run.sample_for(args.settle_s, phase=f"{phase}:settle")
+
+
+def reset_probe(run: "Run"):
+    """The probe's counters, histograms and lows from zero (POST reset),
+    then a second for its next turn to take it."""
+    run.panel.post("reset")
+    time.sleep(1.0)
 
 
 def need_probe(st: dict) -> dict:

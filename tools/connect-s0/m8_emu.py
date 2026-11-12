@@ -150,10 +150,11 @@ class Lane:
         self.expect("connect-probe" in (st.get("features") or []), "feature", f"features {st.get('features')}")
         self.expect(isinstance(c, dict) and c.get("state"), "telemetry", f"connect.state {c.get('state')!r}")
         self.expect(c.get("tls_in") > 0 and c.get("tls_out") > 0, "record sizes", f"in {c.get('tls_in')} out {c.get('tls_out')}")
+        self.expect(c.get("crash_boot") is False, "a clean boot: started by itself", f"crash_boot {c.get('crash_boot')}")
 
         # M8 1: before the first connection (the clock wait, 60 emulated s).
         before = None
-        if c.get("state") in ("waiting for clock", "waiting for network", "starting"):
+        if c.get("state") in ("waiting for clock", "waiting for network", "starting", "waiting: not before the hold after boot", "looking up the server"):
             before = self.pools()
             self.report["pools_before"] = before
             self.ok("pools before the first connection", json.dumps(before))
@@ -171,8 +172,10 @@ class Lane:
             if state == "open":
                 break
             time.sleep(0.3)
-        c = self.c()
+        st = self.status()
+        c = st.get("connect") or {}
         self.expect(c.get("state") == "open", "session open", f"after {c.get('attempts')} attempt(s); last_error {c.get('last_error')}")
+        self.expect(st.get("uptime_secs", 0) >= c.get("hold_s", 0), "not before the hold after boot", f"open at uptime {st.get('uptime_secs')} s, hold {c.get('hold_s')} s")
         self.expect(c.get("clock") == "build date", "clock floor (no SNTP in the namespace)", f"clock {c.get('clock')!r}; last_error {c.get('last_error')!r}")
         self.expect(c.get("root") == "emulator_test_ca", "the pinned test root found by the CA callback", f"root {c.get('root')}")
         self.expect((c.get("full") or {}).get("n", 0) >= 1, "a full handshake", f"{c.get('full')}")
@@ -196,6 +199,17 @@ class Lane:
             s = self.wait(f"pongs to {kind} pings", lambda s, p0=p0: s["connect"].get("state") == "open" and (s["connect"].get("ping") or {}).get("pongs", 0) >= p0 + 2, 600)
             self.expect(s["connect"].get("ping_mode") == kind, f"{kind} pings answered", f"ping {s['connect']['ping']} (pongs were {p0})")
         self.renewed("open again", lambda: self.post("config", ping_s=45, ping="ws"))
+
+        # The request queue: four wait, the fifth is refused (409).
+        codes = []
+        for _ in range(6):
+            try:
+                self.http("POST", "/api/debug/connect/stop", timeout=10)
+                codes.append(200)
+            except urllib.error.HTTPError as e:
+                codes.append(e.code)
+        self.expect(409 in codes and codes[0] == 200, "requests queued, then 409 busy", f"{codes}")
+        time.sleep(10)
 
         # M9.
         self.post("ed25519", n=20)
@@ -248,20 +262,40 @@ class Lane:
 
         # An untrusted chain (another root's, on :8444).
         hs = self.c()["causes"]["handshake"]
-        self.post("config", addr="10.0.2.2:8444")
+        r = self.post("config", addr="10.0.2.2:8444")
+        self.expect(r.get("token_cleared") is True and r["cfg"]["token"] == "unset", "a new address without a token clears the token", json.dumps(r))
         s = self.wait("the untrusted chain refused", lambda s: s["connect"]["causes"]["handshake"] > hs, 900)
         self.expect(self.other.upgrades == 0, "an untrusted chain: the handshake refused, nothing sent", s["connect"].get("last_error"))
-        self.renewed("open again", lambda: (self.post("config", addr="10.0.2.2:8443"), self.post("reconnect")))
+
+        # A server that says nothing: the handshake's 15 s deadline.
+        hs = self.c()["causes"]["handshake"]
+        self.post("config", addr="10.0.2.2:8445", token=TOKEN)
+        s = self.wait("the silent server given up", lambda s: s["connect"]["causes"]["handshake"] > hs, 900)
+        self.expect("no handshake within" in (s["connect"].get("last_error") or ""), "a silent server: the handshake deadline", s["connect"].get("last_error"))
+        # A server that drips a record: the reads' bound in a turn.
+        hs = self.c()["causes"]["handshake"]
+        t0 = time.time()
+        self.post("config", addr="10.0.2.2:8446", token=TOKEN)
+        s = self.wait("the dripping server given up", lambda s: s["connect"]["causes"]["handshake"] > hs, 900, every=1.0)
+        self.expect("receive failed" in (s["connect"].get("last_error") or "") or "no handshake within" in (s["connect"].get("last_error") or ""),
+                    "a dripping server: given up, not waited for", f"{s['connect'].get('last_error')} ({time.time() - t0:.0f} s wall)")
+        self.renewed("open again", lambda: (self.post("config", addr="10.0.2.2:8443", token=TOKEN), self.post("reconnect")))
 
         # The scripts, against this panel (their timing gates mean nothing here).
         for script, extra in (("m9.py", ["--n", "10"]), ("m10.py", ["--runs", "1", "--bytes", "65536"])):
-            r = subprocess.run([sys.executable, str(HERE / script), f"127.0.0.1:{PORT}", "--out", str(self.logs / "connect-s0-results"), *extra],
+            results = self.logs / "connect-s0-results"
+            r = subprocess.run([sys.executable, str(HERE / script), f"127.0.0.1:{PORT}", "--out", str(results), *extra],
                                capture_output=True, text=True, timeout=3600)
             out = r.stdout + r.stderr
             (self.logs / f"m8-{script}.log").write_text(out)
-            # Every gate the emulator can judge passes (timing ones too: the
-            # emulator's are generous); the baseline's are not judged.
-            self.expect(r.returncode == 0 and "Traceback" not in out,
+            summary = sorted(results.glob(f"{script[:-3]}-*/summary.json"))[-1]
+            gates = json.loads(summary.read_text())["gates"]
+            failed = [g["gate"] for g in gates if g["pass"] is False]
+            # With no M2 baseline here, its gates are the only required ones
+            # left unjudged (and so the script's exit is 1); every other
+            # gate the emulator can judge passes.
+            unjudged = [g["gate"] for g in gates if g["pass"] is None and g.get("required", True) and "baseline" not in str(g["value"])]
+            self.expect("Traceback" not in out and not failed and not unjudged,
                         f"{script} against the emulator", out.strip().splitlines()[-1] if out.strip() else "(no output)")
             self.wait("open", lambda s: s["connect"].get("state") == "open", 600)
 
@@ -324,6 +358,8 @@ def main():
         sys.exit("EMU_CONNECT_FAIL: cannot set up the namespace's loopback (lo up, 10.0.2.2)")
     srv = echo_server.Server("10.0.2.2:8443", a.certs, TOKEN).start()
     other = echo_server.Server("10.0.2.2:8444", a.certs, TOKEN, chain="other-chain.pem", key="other-leaf.key").start()
+    echo_server.Hostile("10.0.2.2:8445", "silent").start()
+    echo_server.Hostile("10.0.2.2:8446", "drip").start()
     logs = EMU_DIR / "logs" / f"connect-{time.strftime('%Y%m%d-%H%M%S')}"
     logs.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}

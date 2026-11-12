@@ -34,7 +34,8 @@ ap.add_argument("--upload-path", default="/connect-s0/upload.bin")
 args = ap.parse_args()
 run = s0lib.Run("m6", args)
 s0lib.need_probe(run.sample("start"))
-s0lib.wait_open(run)
+s0lib.reset_probe(run)
+run.gate("the session opened", s0lib.wait_open(run), "open", "open within 180 s")
 seconds = int(args.n * args.interval_s + 60)
 load = subprocess.Popen(["uv", "run", "--quiet", str(REPO / "tools/api-load.py"), args.ip, str(seconds), "--workers", str(args.workers)],
                         stdout=open(run.dir / "api-load.log", "w"), stderr=subprocess.STDOUT)
@@ -62,9 +63,11 @@ def uploads():
 
 t = threading.Thread(target=uploads, daemon=True)
 t.start()
+load_alive = None
 try:
     before, after = run_job(run, args, "load", False, args.n, args.interval_s, seconds * 1.5 + 120)
 finally:
+    load_alive = load.poll() is None
     stop.set()
     t.join(timeout=150)
     load.terminate()
@@ -81,6 +84,8 @@ print(f"  uploads: {up}", flush=True)
 handshake_gates(run, "load", before, after, False, args.n, 4000)
 run.gate_floor("load", stats, args.floor_kb)
 run.gate("load: no aborted streams", stats["deltas"].get("streams_aborted", 0) == 0, stats["deltas"].get("streams_aborted"), "0")
-run.gate("load: refusals (allowed)", True, f"heavy_refused +{stats['deltas'].get('net.heavy_refused')}, uploads {up}", "any")
+run.gate("load: refusals (allowed)", None, f"heavy_refused +{stats['deltas'].get('net.heavy_refused')}, uploads {up}", "any", required=False)
+run.gate("load: uploads went through", up["ok"] > 0, up, "at least one 200")
+run.gate("load: api-load ran to the end", load_alive, "still running at the end" if load_alive else f"ended early (exit {load.returncode}, see api-load.log)", "running")
 run.gate_no_restart()
 sys.exit(run.finish())

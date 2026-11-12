@@ -24,9 +24,10 @@ args = ap.parse_args()
 base = s0lib.load_baseline(args.baseline)
 run = s0lib.Run("m3", args)
 s0lib.need_probe(run.sample("start"))
-s0lib.wait_open(run)
+s0lib.reset_probe(run)
+run.gate("the session opened", s0lib.wait_open(run), "open", "open within 180 s")
 for phase in args.phases.split(","):
-    s0lib.start_phase(run, phase, args)
+    s0lib.start_phase(run, phase, args, probe=True)
     st = run.sample_for(args.minutes * 60, phase)
     run.phases[phase] = stats = run.phase_stats(phase)
     rows = [r for r in run.rows if r["phase"] == phase]
@@ -34,6 +35,7 @@ for phase in args.phases.split(","):
     reconnects = (rows[-1].get("connect.reconnects") or 0) - (rows[0].get("connect.reconnects") or 0) if rows else None
     run.gate(f"{phase}: session open throughout", not_open == 0 and reconnects == 0, f"{not_open} samples not open, {reconnects} reconnects", "0 and 0")
     run.gate_floor(phase, stats, args.floor_kb)
+    run.gate_content(phase)
     run.gate_no_added_late(phase, stats, base, args.tolerance)
     run.gate_refresh_same(phase, stats, base)
 run.gate_no_restart()

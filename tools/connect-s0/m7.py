@@ -28,6 +28,7 @@ if args.sample_s == 5.0:
     args.sample_s = 30.0
 run = s0lib.Run("m7", args)
 s0lib.need_probe(run.sample("start"))
+s0lib.reset_probe(run)
 plan = [(45, args.hours)] + [(int(s), args.step_hours) for s in args.steps.split(",") if s]
 results = {}
 try:
@@ -35,20 +36,29 @@ try:
         name = f"ping-{ping_s}s"
         print(f"\n== {name} for {hours:g} h ==", flush=True)
         run.panel.post("config", ping_s=ping_s, ping=args.ping)
-        s0lib.wait_open(run, phase=f"{name}:open")
+        opened = s0lib.wait_open(run, phase=f"{name}:open")
+        run.gate(f"{name}: the session opened", opened, "open" if opened else "not open", "open within 180 s")
         st0 = run.sample(name)
         run.sample_for(hours * 3600, name)
         st1 = run.sample(name)
         c0, c1 = st0.get("connect") or {}, st1.get("connect") or {}
+        rows = [r for r in run.rows if r["phase"] == name]
+        open_share = sum(1 for r in rows if r.get("connect.state") == "open") / max(1, len(rows))
         rec = (c1.get("reconnects") or 0) - (c0.get("reconnects") or 0)
+        attempts = (c1.get("attempts") or 0) - (c0.get("attempts") or 0)
         causes = {k: (c1.get("causes") or {}).get(k, 0) - (c0.get("causes") or {}).get(k, 0) for k in (c1.get("causes") or {})}
-        per_day = rec * 24 / max(hours, 1e-9)
-        results[name] = {"hours": hours, "reconnects": rec, "per_day": round(per_day, 2), "causes": {k: v for k, v in causes.items() if v},
+        # Attempts, not only sessions that ended: a failed attempt is a
+        # reconnect too (the first sample's session is already counted).
+        per_day = max(rec, attempts) * 24 / max(hours, 1e-9)
+        results[name] = {"hours": hours, "reconnects": rec, "attempts": attempts, "open_share": round(open_share, 4),
+                         "per_day": round(per_day, 2), "causes": {k: v for k, v in causes.items() if v},
                          "sessions_tail": c1.get("sessions"), "session_max_s": c1.get("session_max_s"),
                          "pings": (s0lib.get(c1, "ping.sent") or 0) - (s0lib.get(c0, "ping.sent") or 0),
                          "missed": (s0lib.get(c1, "ping.missed") or 0) - (s0lib.get(c0, "ping.missed") or 0),
                          "rtt_max_ms": s0lib.get(c1, "ping.rtt_max_ms")}
-        print(f"  {name}: {rec} reconnects ({per_day:.1f} a day), causes {results[name]['causes']}", flush=True)
+        print(f"  {name}: {rec} sessions ended, {attempts} attempts ({per_day:.1f} a day), open {open_share:.2%} of samples, causes {results[name]['causes']}", flush=True)
+        run.gate(f"{name}: session open in >= 99 % of samples", open_share >= 0.99, f"{open_share:.2%} of {len(rows)}", ">= 99 %",
+                 required=(ping_s == 45))
 finally:
     try:
         run.panel.post("config", ping_s=45, ping="ws")
@@ -58,6 +68,7 @@ run.phases = results
 first = results.get("ping-45s", {})
 run.gate(f"<= {args.per_day:g} reconnects a day at 45 s", first.get("per_day", 1e9) <= args.per_day, f"{first.get('per_day')} a day ({first.get('causes')})", f"<= {args.per_day:g}")
 limit = next((n for n, r in results.items() if r["per_day"] > max(args.per_day, 4 * first.get("per_day", 0) + 2)), None)
-run.gate("idle limit found", True, f"sessions start dropping at {limit}" if limit else f"no step up to {plan[-1][0]} s dropped sessions", "a figure")
+run.gate("idle limit", None, f"sessions start dropping at {limit}" if limit else f"none of the steps up to {plan[-1][0]} s dropped sessions: the limit is above it",
+         "a figure", required=False)
 run.gate_no_restart()
 sys.exit(run.finish())

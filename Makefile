@@ -135,7 +135,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
-	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
+	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release studio-starter
@@ -725,6 +725,17 @@ FW_L2_COPY ?= 0
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
 FW_CONNECT = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
+# The feature and its sdkconfig must go together: a bench build takes it in
+# FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
+# would layer the sdkconfig on a build without the code, and is refused.
+FW_CONNECT_IN_BENCH = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_FEATURES)))
+FW_CONNECT_IN_RELEASE = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)))
+FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=connect-probe is for release builds (make fw-release); a bench build takes FW_FEATURES=connect-probe"; exit 2; },true)
+FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=connect-probe is for bench builds; a release build takes FW_RELEASE_FEATURES=connect-probe"; exit 2; },true)
+# fw-clippy's connect-probe lane: a target dir of its own (keyed by the
+# fragment's inputs, so a change makes a new one), its sdkconfig the
+# feature's.
+FW_CLIPPY_CONNECT = $(CURDIR)/$(FW)/target/connect-clippy-$(shell cat $(FW)/sdkconfig.defaults $(FW)/sdkconfig.connect-probe 2>/dev/null | sha256sum | cut -c1-8)-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
@@ -754,6 +765,7 @@ FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 # version changes: it keeps the values it already has (the descriptor's
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
 	@want="$(if $(FW_DIAG),diag,normal)$(if $(FW_CONNECT),+connect-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) $(if $(FW_CONNECT),$(FW)/sdkconfig.connect-probe) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
@@ -764,6 +776,7 @@ fw-sdkconfig-flavour:
 	@$(call FW_SDKCONFIG_GUARD,$(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig)
 
 fw-build: fw-sdkconfig-flavour
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
@@ -817,6 +830,7 @@ fw-erase:
 # release build (the defaults, no .env) and none at all (no psi), so no cfg
 # branch rots.
 fw-clippy: fw-sdkconfig-flavour
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
@@ -825,6 +839,16 @@ fw-clippy: fw-sdkconfig-flavour
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
 	@echo "==> Clippy firmware, no features (FW_DISABLE=formulas: without Formulas or the JIT)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
+	@$(MAKE) --no-print-directory fw-clippy-connect FW_FEATURES=connect-probe
+
+# The connect-probe feature set (src/connect_probe.rs) with its sdkconfig,
+# in a target dir of its own (FW_CLIPPY_CONNECT), so fw-clippy's other
+# lanes keep theirs. Run by fw-clippy.
+fw-clippy-connect:
+	@mkdir -p $(FW_CLIPPY_CONNECT)
+	@$(FW_FRAGMENT) > $(FW_CLIPPY_CONNECT)/sdkconfig.fragment
+	@echo "==> Clippy firmware, connect-probe (the Connect spike's probe, with sdkconfig.connect-probe)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -939,6 +963,7 @@ fw-release: web
 
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
 fw-release-variant:
+	@$(FW_CONNECT_RELEASE_GUARD)
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
 	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
@@ -1279,7 +1304,7 @@ emu-connect-certs:
 	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect-s0/echo_server.py certs $(EMU_CONNECT_DIR)/certs; fi
 emu-image-connect: emu-connect-certs
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
-	OPENDMD_CONNECT_HOST=connect-s0.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_TOKEN=emu-s0 \
+	OPENDMD_CONNECT_HOST=connect-s0.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_TOKEN=emu-s0 OPENDMD_CONNECT_HOLD_S=90 \
 	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs/root.der \
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect-probe FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-connect: emu-build emu-card

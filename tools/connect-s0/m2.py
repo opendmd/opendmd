@@ -26,6 +26,7 @@ for phase in args.phases.split(","):
     run.sample_for(args.minutes * 60, phase)
     run.phases[phase] = stats = run.phase_stats(phase)
     print(f"  {phase}: {stats.get('deltas')}", flush=True)
+    run.gate_content(phase)
     missing = [k for k in s0lib.LATE if k not in stats.get("deltas", {})]
     run.gate(f"{phase}: telemetry complete", not missing, missing or "all late-frame counters", "every counter reported")
 run.gate("baseline build (no connect)", not isinstance(st.get("connect"), dict), "connect-probe" if isinstance(st.get("connect"), dict) else "none", "a build without connect-probe")
