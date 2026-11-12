@@ -1,0 +1,43 @@
+# opendmd-connect-s0: OpenDMD Connect spike S0's scratch echo Worker
+# (src/index.js). Throwaway: delete it after S0.
+#
+# Deploying is the maintainer's (nothing in the repo runs it):
+#   cd connect/s0-echo && npm install        # wrangler and miniflare as pinned in package.json
+#   npx wrangler login                       # or CLOUDFLARE_API_TOKEN in the environment
+#   npx wrangler deploy                      # until the secret is set, every request is a 403
+#   export S0_SECRET=$(openssl rand -hex 24)               # the panel's ?k=, kept in this shell
+#   printf %s "$S0_SECRET" | npx wrangler secret put S0_SECRET
+# (the panel takes it as OPENDMD_CONNECT_TOKEN at build time, or
+# POST /api/debug/connect/config?token=... at run time, RAM only)
+# Removing it afterwards:
+#   npx wrangler delete opendmd-connect-s0
+#
+# Local test, no account: `npm test` (Miniflare, test/echo.test.mjs).
+
+name = "opendmd-connect-s0"
+main = "src/index.js"
+compatibility_date = "2026-10-20"
+
+# Only on its own hostname: no workers.dev, no preview URLs.
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "connect-s0.opendmd.dev", custom_domain = true }]
+
+# One SQLite-backed Durable Object class (the only kind on every plan),
+# with hibernating WebSockets (src/index.js: acceptWebSocket, the ping
+# auto-response).
+[[durable_objects.bindings]]
+name = "ECHO"
+class_name = "EchoS0"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EchoS0"]
+
+# No logs of any kind: invocation logs off, and nothing is collected.
+[observability]
+enabled = false
+
+[observability.logs]
+enabled = false
+invocation_logs = false

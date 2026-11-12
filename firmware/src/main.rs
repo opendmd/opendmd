@@ -48,6 +48,8 @@ mod cardspeed;
 mod chan;
 mod clock;
 mod config;
+#[cfg(feature = "connect-core")]
+mod connect_probe;
 mod diag;
 mod dns_server;
 mod events;
