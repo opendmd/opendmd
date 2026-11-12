@@ -301,11 +301,19 @@ fn run(worker: NetWorker) {
         return;
     };
 
+    // The Connect probe (spike S0, `connect-probe` builds only): polled
+    // from this loop, on this stack (`connect_probe`).
+    #[cfg(feature = "connect-core")]
+    let mut probe = crate::connect_probe::Probe::new();
+
     // --- Steady state ------------------------------------------------------
     loop {
         // Commands from the HTTP handlers. `recv_timeout` doubles as the poll
         // interval, so a scan is never left waiting for a sleep to finish.
-        let got = rx.recv_timeout(follow.wait().min(config::WIFI_POLL_INTERVAL));
+        let wait = follow.wait().min(config::WIFI_POLL_INTERVAL);
+        #[cfg(feature = "connect-core")]
+        let wait = wait.min(probe.wait());
+        let got = rx.recv_timeout(wait);
         crate::improv::log_events();
         sync_sd_slow(&net.sd_nvs);
         if matches!(got, Ok(NetCommand::Improv(_))) {
@@ -406,6 +414,8 @@ fn run(worker: NetWorker) {
 
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
+        #[cfg(feature = "connect-core")]
+        probe.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
 
         // A cache count put off for a transfer, once it is over.
         crate::cache::tick();
