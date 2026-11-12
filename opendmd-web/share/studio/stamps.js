@@ -82,6 +82,7 @@ export async function show() {
 }
 function pick(n) {
   picked = list[n];
+  S.say('', 'info'); // (the hint to pick one: done)
   S.root.dataset.stamp = picked?.r.id || '';
   for (const b of document.querySelectorAll('#s-sgrid .s-sbtn')) b.classList.toggle('on', +b.dataset.n === n);
   if (S.tool !== 'stamp') S.useTool('stamp');

@@ -5315,7 +5315,9 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     #p= (written here, from docs/studio-format.md) shows the picture playing
     and who it says made it, stores nothing and fetches nothing but link.js
     until Open as a new piece, whose pixels and times are the link's; no
-    request carries the fragment."""
+    request carries the fragment; from names the record the link names (not
+    held here); a pack of three stamps as #k= opens as a file does, the
+    link's claims shown, stored only on Add."""
     page = s_page(browser, base, site, errors)
     got = s_paths(page)
     kev(page, """const st = []; for (const n of ['Star', 'Heart']) { const r = await K.stamp(n, 4, 4); await K.put(r); st.push(r); }
@@ -5333,7 +5335,8 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     # A loop's link, opened in a fresh profile.
     cols = [0xf7a531, 0x33d1ff, 0xff4f8b]
     frames = [[(1 + (i % 128 - f * 12 + i // 128) % 3) if 8 <= i // 128 < 24 and 0 <= i % 128 - f * 12 < 16 else 0 for i in range(4096)] for f in range(8)]
-    code = link_p(frames, [80] * 8, cols, name="Loop", author="tester", licence=1)
+    src = ("pc_" + "5a" * 16, 3, "sha256-" + "c3" * 32)
+    code = link_p(frames, [80] * 8, cols, name="Loop", author="tester", licence=1, src=src)
     page = s_page(browser, base, site, errors)
     asked = []
     page.on("request", lambda r: asked.append(r.url))
@@ -5356,17 +5359,37 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     s_kept(page)
     p = page.evaluate(I_PIECE)
     want = [[cols[v - 1] if v else 0 for v in f] for f in frames]
-    check(i_frames(p) == want and p["ms"] == [80] * 8 and l_pieces(page) == n0 + 1,
-          f"/studio/ links: Open as a new piece: its pixels and times the link's ({len(p['ms'])} frames)")
+    e = (p["from"] or [{}])[0]
+    check(i_frames(p) == want and p["ms"] == [80] * 8 and l_pieces(page) == n0 + 1 and e.get("id") == src[0] and e.get("rev") == src[1] and e.get("hash") == src[2],
+          f"/studio/ links: Open as a new piece: its pixels and times the link's, from naming its id, rev and hash ({len(p['ms'])} frames, {e.get('id', '')[:12]}, rev {e.get('rev')})")
+    page.context.close()
+    # A pack of three stamps as #k= (made in one profile, never stored there), opened in another.
+    page = s_page(browser, base, site, errors)
+    pack = kev(page, """const st = []; for (const n of ['Star', 'Heart', 'Coin']) st.push(await K.stamp(n, 4, 4, { env: { author: 'packer', licence: 'CC-BY-4.0' } }));
+        const p = await K.pack('Three', st); return K.file(p, [p, ...st]);""")
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    n0 = page.evaluate(S_LIVE)
+    said = l_goto(page, base, "#k=" + link_k(pack))
+    rows = file_rows(page)
+    title = page.inner_text("#s-fs h2")
+    before = page.evaluate(S_LIVE)
+    added = file_add(page)
+    after_ = page.evaluate(S_LIVE)
+    check(said == "pack" and title == "Open a shared link" and len(rows) == 4 and all("the link says" in r["text"] for r in rows)
+          and before == n0 and added == 4 and after_["stamp"] == n0["stamp"] + 3 and after_["pack"] == n0["pack"] + 1,
+          f"/studio/ links: a pack of three stamps as #k=, opened as a file is, the link's claims shown, stored only on Add ({added}, {after_})")
     page.context.close()
 
 
 # The Studio's notice (studio.js say): every error and message in view, pinned, never at the page's foot.
-N_SEEN = """() => { const n = document.getElementById('s-note'), e = document.getElementById('s-err');
-    if (!n || n.hidden || e.hidden) return null; const r = n.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 40), r.top + Math.min(r.height / 2, 14));
-    return { inView: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth && r.width > 0, onTop: !!hit && n.contains(hit),
-             role: n.getAttribute('role'), kind: n.dataset.kind, at: n.dataset.at, text: e.textContent, inSheet: n.parentElement.tagName === 'DIALOG' ? n.parentElement.id : '' }; }"""
+N_SEEN = """() => { const n = document.getElementById('s-note'), e = document.getElementById('s-err'), x = document.getElementById('s-note-x');
+    const said = document.getElementById('s-said')?.textContent, alarm = document.getElementById('s-alarm')?.textContent;
+    if (!n || n.hidden || e.hidden || !(said || alarm)) return null; const r = n.getBoundingClientRect(), xr = x.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 40), r.top + Math.min(r.height / 2, 14)), hx = document.elementFromPoint(xr.left + xr.width / 2, xr.top + xr.height / 2);
+    return { inView: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth && r.width > 0, onTop: !!hit && n.contains(hit) && hx === x,
+             role: alarm ? 'alert' : 'status', heard: alarm || said, kind: n.dataset.kind, at: n.dataset.at, text: e.textContent, inSheet: n.closest('dialog')?.id || '',
+             liveHidden: [...document.querySelectorAll('#s-said, #s-alarm')].some((l) => l.hidden || l.closest('[hidden]')), buttonsLive: !!document.querySelector('[aria-live] button') }; }"""
 
 
 def n_seen(page: Page, timeout: float = 30000) -> dict:
@@ -5374,13 +5397,21 @@ def n_seen(page: Page, timeout: float = 30000) -> dict:
     return page.evaluate(N_SEEN)
 
 
+def n_active(page: Page) -> str:
+    return page.evaluate("document.activeElement?.id || document.activeElement?.tagName || ''")
+
+
 def studio_notices(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
     """What the Studio says is where the user is looking, at laptop and phone
     sizes, light and dark: an import refusal (in the Import sheet), a file
     that won't open (the page scrolled to its foot first), and Send to panel's
-    blocked pop-up (under Send), each in the window and on top, said as an
-    alert; dismissed by its button and by Escape, focus back; a sheet's
-    notice goes with the sheet; news ('info') said as a status."""
+    blocked pop-up (under Send), each in the window and on top (Dismiss too),
+    heard by a live region that is never hidden (alert or status, no buttons
+    in it); Escape dismisses it first, with focus on its control or elsewhere
+    in a sheet (the sheet stays open, the tool unchanged); Dismiss is one Tab
+    from Send; after Dismiss focus goes back to the control, else the
+    sheet's Close, else the editor; a sheet's notice goes with the sheet;
+    news clears when it is done (a stamp picked)."""
     for size, scheme in (("laptop", "light"), ("laptop", "dark"), ("phone", "light"), ("phone", "dark")):
         tag = f"/studio/ notice ({size}, {scheme})"
         page = i_page(browser, base, site, errors, size=size)
@@ -5391,16 +5422,25 @@ def studio_notices(browser, base: str, site: Path, errors: list[str], shots: Pat
         i_post(fr, {"set": {"ms": [0]}})
         wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=20000)
         x = n_seen(page)
-        check(x["inView"] and x["onTop"] and x["inSheet"] == "s-imp" and x["role"] == "alert" and x["kind"] == "bad" and x["text"].startswith("That can’t be used:"),
-              f"{tag}: an import refusal is in view, on top of the sheet, an alert ({x})")
+        check(x["inView"] and x["onTop"] and x["inSheet"] == "s-imp" and x["role"] == "alert" and x["kind"] == "bad" and x["text"].startswith("That can’t be used:")
+              and x["heard"] == x["text"] and not x["liveHidden"] and not x["buttonsLive"],
+              f"{tag}: an import refusal is in view, on top of the sheet, heard as an alert ({x})")
         if shots:
             page.screenshot(path=str(shots / f"studio-notice-import-{size}-{scheme}.png"))
         clear = page.evaluate("() => { const r = document.getElementById('s-imp-x').getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.id === 's-imp-x'; }")
         check(clear, f"{tag}: the notice leaves the sheet's Close clear")
+        # Escape in the sheet, focus elsewhere in it: the notice goes, the sheet stays.
+        page.focus("#s-imp input[value=layer]")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        check(page.is_hidden("#s-note") and page.is_visible("#s-imp") and n_active(page) == "s-imp-x",
+              f"{tag}: Escape in the sheet dismisses the notice first, the sheet stays open, focus on its Close ({n_active(page)})")
+        i_post(fr, {"set": {"ms": [0]}})
+        n_seen(page)
         page.click("#s-imp-x")
         wait_js(page, "document.getElementById('s-note').hidden", timeout=5000)
         check(page.is_hidden("#s-note"), f"{tag}: the sheet's notice goes with the sheet")
-        # A file that won't open, the page scrolled to its foot.
+        # A file that won't open, the page scrolled to its foot; Escape with focus on its button.
         if page.is_visible("#s-tabs"):
             page.click("#s-tabs [data-tab=piece]")
         page.evaluate("scrollTo(0, document.body.scrollHeight)")
@@ -5412,18 +5452,30 @@ def studio_notices(browser, base: str, site: Path, errors: list[str], shots: Pat
               f"{tag}: a file that won't open is said in view, the page scrolled to its foot ({said}, {x})")
         if shots:
             page.screenshot(path=str(shots / f"studio-notice-file-{size}-{scheme}.png"))
-        page.focus("#s-note-x")
+        page.click(".s-tool[data-tool=stamp]")
+        page.evaluate("document.activeElement?.blur()")
+        file_open(page, b"not a studio file", "junk.dmdart")
+        n_seen(page)
+        page.focus("#s-openf")
         page.keyboard.press("Escape")
-        check(page.is_hidden("#s-note"), f"{tag}: Escape dismisses the notice")
-        # Info: a status, not an alert; its button dismisses it.
+        tool = page.evaluate("document.querySelector('.s-tool[aria-pressed=true]')?.dataset.tool")
+        check(page.is_hidden("#s-note") and tool == "stamp" and n_active(page) == "studio",
+              f"{tag}: Escape with focus on Open a file… dismisses the notice first (the stamp tool kept: {tool}), focus to the editor ({n_active(page)})")
+        page.click(".s-tool[data-tool=pencil]")
+        # News: a status; gone once a stamp is picked.
         page.evaluate("document.activeElement?.blur()")
         page.keyboard.press("s")
         x = n_seen(page)
         check(x["role"] == "status" and x["kind"] == "info" and x["inView"] and "Pick a stamp" in x["text"], f"{tag}: news is a status, in view ({x})")
+        if page.is_visible("#s-tabs"):
+            page.click("#s-tabs [data-tab=stamps]")
+        page.wait_for_selector("#s-stampsx [data-n]", timeout=20000)
+        page.click("#s-stampsx [data-n]")
+        check(page.is_hidden("#s-note"), f"{tag}: news clears once what it asked is done (a stamp picked)")
         page.keyboard.press("b")
-        page.click("#s-note-x")
-        check(page.is_hidden("#s-note"), f"{tag}: Dismiss hides the notice")
         # Send to panel: the pop-up blocked (the address one that is never opened: window.open answers null).
+        if page.is_visible("#s-tabs"):
+            page.click("#s-tabs [data-tab=colours]")
         page.mouse.click(*s_at(page, 4, 4))
         s_kept(page)
         page.evaluate("localStorage.setItem('odmd.display', '127.0.0.1:9'); window.open = () => null")
@@ -5435,6 +5487,18 @@ def studio_notices(browser, base: str, site: Path, errors: list[str], shots: Pat
               f"{tag}: Send to panel's blocked pop-up is said under Send, in view ({x})")
         if shots:
             page.screenshot(path=str(shots / f"studio-notice-send-{size}-{scheme}.png"))
+        page.focus("#s-p-send")
+        page.keyboard.press("Tab")
+        tab = n_active(page)
+        page.keyboard.press("Enter")
+        check(tab == "s-note-x" and page.is_hidden("#s-note") and n_active(page) == "s-p-send" and page.is_visible("#s-p"),
+              f"{tag}: Dismiss is the next Tab from Send; after it focus is back on Send, the sheet open ({tab}, {n_active(page)})")
+        page.click("#s-p-send")
+        n_seen(page)
+        page.focus("#s-p-send")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        check(page.is_hidden("#s-note") and page.is_visible("#s-p"), f"{tag}: Escape with focus on Send dismisses the notice, the sheet stays")
         page.context.close()
 
 
