@@ -2099,7 +2099,12 @@ pub fn names_self_check(root: &str) -> (usize, usize, usize) {
             ok += 1;
         } else {
             bad += 1;
-            log::warn!("names {card}: {} from the names file, {} listed", got.0, want.0);
+            log::warn!(
+                "names {card}: {} from the names file, {} listed{}",
+                got.0,
+                want.0,
+                if !matches!(read, Some(Ok(()))) { " (the names file not read through)" } else if got.0 == want.0 { " (same count, names differ)" } else { "" }
+            );
         }
     }
     (ok, bad, total)
@@ -2138,7 +2143,11 @@ pub fn readahead_self_check(root: &str) -> Option<ReadaheadCheck> {
     let list = std::io::BufReader::with_capacity(512, File::open(format!("{root}/filelist.txt")).ok()?);
     let path = list
         .lines()
-        .map_while(Result::ok)
+        .map_while(|l| {
+            // (A line that does not read, not UTF-8 or a card error, ends the
+            // list here: said, so a short pick is not silent.)
+            l.map_err(|e| log::warn!("psi-probe: read-ahead: filelist.txt stops at a line that does not read ({e})")).ok()
+        })
         .filter(|l| l.trim().starts_with("/gifs/"))
         .map(|l| format!("{root}{}", l.trim()))
         .max_by_key(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))?;
