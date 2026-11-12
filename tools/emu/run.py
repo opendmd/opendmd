@@ -137,6 +137,11 @@ NAMES = re.compile(r"psi-probe: names file: (\d+) folders match their listings, 
 READAHEAD = re.compile(r"psi-probe: read-ahead: (\d+) B read a block a frame, (the same as FatFs's|DIFFERS from FatFs's); (\d+) served from the ring|psi-probe: read-ahead: NOT CHECKED")
 RAW = re.compile(r"psi-probe: raw reads: (\d+) files match FatFs's reads, (\d+) differ, (\d+) of them through the index")
 JIT_GOLDEN = re.compile(r"psi-probe: jit2: golden frames through kernels: (\d+) match the host/wasm hashes, (\d+) differ[^;]*; (\d+) on the VM (.*?); (?:(\d+) skipped)?")
+VM_GOLDEN = re.compile(r"psi-probe: vm: golden frames: (\d+) match the host/wasm hashes, (\d+) differ; (\d+) skipped \(the probe's heap\), (\d+) not run \(heap under 40 KB\) of (\d+) cases")
+# Each golden frame skipped for the probe's heap says so: the VM's (`golden NAME[ (variant)]: skipped`)
+# and the JIT's (`jit2: golden NAME: skipped`, a compile or a kernel's build with no room).
+VM_SKIP = re.compile(r"psi-probe: golden \S+(?: \(\w+\))?: skipped")
+JIT_SKIP = re.compile(r"psi-probe: jit2: golden \S+: skipped")
 PAINT = re.compile(r"psi-probe: paint: (\d+) cases, (\d+) differ")
 SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
 PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file|read-ahead|bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
@@ -169,6 +174,7 @@ def main():
     ap.add_argument("--chip", choices=["esp32", "s3"], default="esp32", help="the classic ESP32 (default) or the ESP32-S3 preview (smoke, rig, leak, api and offline need a card: esp32 only)")
     ap.add_argument("--no-card", action="store_true", help="probe: no card attached; judge the card-free probe (always so with --chip s3)")
     ap.add_argument("--jit-skips", type=int, default=0, help="probe --no-card: golden frames the JIT may skip for the probe's heap (default 0; the classic's no-card probe skips 2)")
+    ap.add_argument("--vm-skips", type=int, default=0, help="probe: golden frames the VM may skip for the probe's heap (default 0; the classic's card probe skips 2: `big`)")
     ap.add_argument("--replay", type=Path, help="judge a console log recorded before (the lane's own log) instead of running the emulator: the judges' red checks")
     a = ap.parse_args()
     if a.chip == "s3":
@@ -381,6 +387,29 @@ def main():
         print("\n".join(l[:200] for l in lines[-15:]))
         sys.exit(1)
 
+    def golden_checks():
+        """The golden frames, VM and JIT, each held to what it may skip: (VM line, JIT line).
+        A skip is said line by line and counted in its summary: the two agree, so a skip
+        never passes as a match, and a heap stop (`not run`) fails."""
+        vg = [m for m in (VM_GOLDEN.search(l) for l in lines) if m]
+        if len(vg) != 1:
+            die(f"{len(vg)} `vm: golden frames` lines (want one)")
+        v_ok, v_bad, v_skip, v_not, v_cases = (int(vg[0][i]) for i in range(1, 6))
+        v_said = sum(1 for l in lines if VM_SKIP.search(l))
+        if v_ok == 0 or v_bad != 0 or v_not != 0 or v_skip > a.vm_skips or v_said != v_skip or v_cases == 0:
+            die(f"VM golden frames: {v_ok} match, {v_bad} differ, {v_skip} skipped ({v_said} said; at most {a.vm_skips}), {v_not} not run of {v_cases} cases")
+        kg = [m for m in (JIT_GOLDEN.search(l) for l in lines) if m]
+        if len(kg) != 1:
+            die(f"{len(kg)} `jit2: golden frames through kernels` lines (want one)")
+        k_ok, k_bad, k_vm, k_why, k_skip = int(kg[0][1]), int(kg[0][2]), int(kg[0][3]), kg[0][4], int(kg[0][5] or 0)
+        k_said = sum(1 for l in lines if JIT_SKIP.search(l))
+        if k_ok == 0 or k_bad != 0 or k_vm != 0 or k_skip > a.jit_skips or k_said != k_skip:
+            die(f"golden frames through kernels: {k_ok} match, {k_bad} differ, {k_vm} on the VM {k_why}, {k_skip} skipped ({k_said} said; at most {a.jit_skips})")
+        # The whole count is the two's.
+        if golden and golden[1] != v_ok + k_ok:
+            die(f"golden frames: {golden[1]} match, but the VM's {v_ok} and the kernels' {k_ok}")
+        return (v_ok, v_skip, v_cases), (k_ok, k_vm, k_skip)
+
     if failure:
         die(failure)
     if booted_sha is None:
@@ -458,17 +487,13 @@ def main():
             clockless = sum(1 for l in lines if re.search(r"psi-probe: bundled \S+: did not open: this Formula shows the time, and the display has no clock with WiFi off", l))
             if bundled[1] == 0 or bundled[2] != clockless or bundled[3] != "refused" or bundled[4] != "refused":
                 die(f"bundled formulas: {bundled[0]} ({clockless} refused as clock Formulas offline)")
-            # The goldens through the JIT's kernels (jit2::goldens): some
-            # matched, none differ, none fell back to the VM (the JIT gate's
-            # refusal or an emit error) and none skipped for the probe's heap
-            # (unless --jit-skips allows a few): else the golden line above
-            # could pass on the VM alone.
-            kg = [m for m in (JIT_GOLDEN.search(l) for l in lines) if m]
-            if len(kg) != 1:
-                die(f"{len(kg)} `jit2: golden frames through kernels` lines (want one)")
-            k_ok, k_bad, k_vm, k_why, k_skip = int(kg[0][1]), int(kg[0][2]), int(kg[0][3]), kg[0][4], int(kg[0][5] or 0)
-            if k_ok == 0 or k_bad != 0 or k_vm != 0 or k_skip > a.jit_skips:
-                die(f"golden frames through kernels: {k_ok} match, {k_bad} differ, {k_vm} on the VM {k_why}, {k_skip} skipped (at most {a.jit_skips})")
+            # The goldens through the VM and the JIT's kernels (vm_goldens,
+            # jit2::goldens): some matched, none differ, none fell back to the
+            # VM (the JIT gate's refusal or an emit error), none stopped for
+            # the heap, and none skipped for the probe's heap unless
+            # --vm-skips/--jit-skips allow a few: else the golden line above
+            # could pass on part of them.
+            (v_ok, v_skip, v_cases), (k_ok, k_vm, k_skip) = golden_checks()
             # The JIT spike's three kernels, each: the tiny one returned 42
             # from every block it ran from, the call one gave the direct
             # call's value, the floor one the VM's bytes.
@@ -488,7 +513,7 @@ def main():
             for l in lines:
                 if PROBE_KEYS.search(l) or re.search(r"psi-probe: jit: (tiny|call|floor) kernel|psi-probe: jit: block 0|psi-probe: jit: exec heap|psi-probe: jit2: golden frames through kernels", l):
                     print(l[:230])
-            print(f"golden: {golden[1]} match, {golden[2]} differ; through kernels: {k_ok} match, {k_vm} on the VM, {k_skip} skipped; JIT spike kernels tiny ({len(tiny)}), call, floor as the VM")
+            print(f"golden: {golden[1]} match, {golden[2]} differ; VM {v_ok} match, {v_skip} skipped of {v_cases} cases; through kernels: {k_ok} match, {k_vm} on the VM, {k_skip} skipped; JIT spike kernels tiny ({len(tiny)}), call, floor as the VM")
             print(f"EMU_PROBE_OK ({took:.0f} s wall)")
             return
         # The paint probe's image (`make emu-image-paint`): its own summary
@@ -509,6 +534,7 @@ def main():
             die("the golden-frames result line is missing")
         if golden[1] == 0 or golden[2] != 0:
             die(f"golden frames: {golden[1]} match, {golden[2]} differ")
+        (v_ok, v_skip, v_cases), (k_ok, k_vm, k_skip) = golden_checks()
         # Every bundled Formula opens through the real path, and a short heap
         # refuses Endless road (far short, and just short of what its open
         # takes) instead of aborting.
@@ -562,7 +588,7 @@ def main():
         for l in lines:
             if PROBE_KEYS.search(l):
                 print(l[:230])
-        print(f"golden: {golden[1]} match, {golden[2]} differ")
+        print(f"golden: {golden[1]} match, {golden[2]} differ; VM {v_ok} match, {v_skip} skipped of {v_cases} cases; through kernels: {k_ok} match, {k_vm} on the VM, {k_skip} skipped")
         print(f"EMU_PROBE_OK ({took:.0f} s wall)")
 
 
