@@ -153,6 +153,8 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   /* The frames right under the panel; every control a finger's height */
   #studio{display:flex;flex-direction:column}
   .s-doc{order:-3}.s-stage{order:-2}.s-strip{order:-1}
+  /* The piece bar: Download GIF and Send to panel on a row of their own */
+  #s-imp-b,#s-share{order:2}.s-doc::after{content:"";flex-basis:100%;order:3}#s-gif,#s-send{order:4}
   .s-pill,.s-in,.s-name input,.s-tray .s-seg button,.s-chin .s-seg button{min-height:40px}
   .s-tray .s-seg button,.s-chin .s-seg button,.s-addf{min-width:40px}
   .s-cta,#s-pal{min-height:40px}

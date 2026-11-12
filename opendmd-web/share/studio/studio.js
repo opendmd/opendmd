@@ -871,7 +871,7 @@ const pasteMod = lazy(() => pasteMod_, (v) => (pasteMod_ = v), 'paste');
 // it is left. Import (#import, maybe ?url=, ?q=&platform=, ?shared=1) is a sheet over the editor.
 function route() {
   // A shared link (#p=, #k=): link.js, which shows it and stores nothing by itself.
-  if (/^#[pk]=/.test(location.hash)) { done(); link().then((m) => m.show(location.hash), () => {}); root.dataset.view = 'editor'; return; }
+  if (/^#[pk]=/i.test(location.hash)) { done(); link().then((m) => m.show(location.hash), () => {}); root.dataset.view = 'editor'; return; }
   const lib = location.hash === '#library', im = /^#import(\?|$)/.test(location.hash);
   if (lib) { done(); library().then((m) => m.show(), () => {}); } else fx.unlib?.();
   if (im) { if (!/open|ready/.test(root.dataset.import)) { done(); imp().then((m) => m.show(new URLSearchParams(location.hash.slice(8))), () => {}); } } else impMod?.then((m) => m.close(), () => {});

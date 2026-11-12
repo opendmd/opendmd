@@ -5349,7 +5349,7 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     who = page.inner_text("#s-lk-who")
     code = loop.split("#p=")[1]
     others = {urllib.parse.urlsplit(u).path for u in asked} - S_FIRST - {"/studio/link.js", "/studio/"}
-    check(said == "shown" and a != b and "8 frames · by tester · licence CC0, the link says" in who and l_pieces(page) == n0 and page.evaluate("location.hash") == "",
+    check(said == "shown" and a != b and "8 frames · by “tester” · licence CC0, the link says" in who and l_pieces(page) == n0 and page.evaluate("location.hash") == "",
           f"/studio/ links: opened in a fresh profile, the picture plays, who made it as the link says, nothing stored ({said}, '{who[:60]}', {l_pieces(page) - n0})")
     check(not others and not any(code[:40] in u for u in asked) and all(urllib.parse.urlsplit(u).hostname == "127.0.0.1" for u in asked),
           f"/studio/ links: opening a link fetches nothing but link.js, and no request carries the fragment ({sorted(others)[:3]})")
@@ -5455,8 +5455,8 @@ def studio_links_red(browser, base: str, site: Path, errors: list[str]) -> None:
             check(got[0] < (3 << 20) + (256 << 10) and len(frag) <= 8003, f"/studio/ links red: {what} ({len(frag):,} characters): inflating stopped at the cap ({got[0]:,} B read)")
     # Markup as names: shown as text.
     said = l_goto(page, base, "#p=" + link_p(one, [100], [0xf7a531], name='<img src=x onerror="window.__x=1">', author="<b>me</b>"))
-    h2 = page.inner_text("#s-lk h2")
-    check(said == "shown" and h2 == '<img src=x onerror="window.__x=1">' and "by <b>me</b>" in page.inner_text("#s-lk-who") and not page.evaluate("window.__x"),
+    h2 = page.inner_text("#s-lk-name")
+    check(said == "shown" and h2 == 'Called “<img src=x onerror="window.__x=1">”' and "by “<b>me</b>”" in page.inner_text("#s-lk-who") and not page.evaluate("window.__x"),
           "/studio/ links red: a name and an author of markup, shown as text")
     page.click("#s-lk button:has-text('Close')")
     # A #p= naming my own piece, with other content: my record untouched, the new piece's from not naming it.
@@ -5548,6 +5548,142 @@ def studio_links_leftovers(browser, base: str, site: Path, errors: list[str]) ->
     got = i_use(page, fr)
     seen = page.evaluate("[...window.__seen]")
     check(got == "piece:4" and seen == ["Night sky|someone"], f"/create/ framed: Use writes the GIF without touching the title and author ({got}, {seen})")
+    page.context.close()
+
+
+def l_decode(page: Page, link: str) -> dict:
+    return page.evaluate("""async (c) => { const m = await import('/studio/link.js'); try { const x = await m.decodePiece(c); return { name: x.name, author: x.author, plays: x.spec.plays, colours: x.spec.colours.length }; } catch (e) { return { error: e.message }; } }""",
+                         link.split("#p=")[1])
+
+
+def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The links review: a name of 85 CJK characters shares and opens (cut
+    between characters at 255 bytes); a second link stops the first one's
+    playing, and after Close nothing paints; bidi and zero-width controls are
+    dropped from a link's and a file's names and authors, shown and stored,
+    the claims quoted and isolated; a link naming a record held here with
+    the same content takes from[] from the record; the preview's heading is
+    the Studio's, the name the link's quoted claim; a link arriving over
+    another sheet closes it; #P= opens as #p=; plays and more than 255
+    colours survive the Studio's own Share."""
+    page = s_page(browser, base, site, errors)
+    one = [[1 if i % 7 == 0 else 0 for i in range(4096)]]
+
+    def part(what, fn):
+        nonlocal page
+        try:
+            fn()
+        except Exception as e:  # (one finding that can't finish fails alone; the next on a fresh page)
+            check(False, f"/studio/ links review: {what} did not finish: {str(e).splitlines()[0][:120]}")
+            page.context.close()
+            page = s_page(browser, base, site, errors)
+
+    def cjk():
+        page.mouse.click(*s_at(page, 3, 3))
+        s_kept(page)
+        page.fill("#s-name", "a" + "漢" * 85)
+        s_kept(page)
+        link = l_share(page)
+        x = l_decode(page, link)
+        check(bool(link) and "error" not in x and x["name"].startswith("a漢") and len(x["name"].encode()) <= 255,
+              f"/studio/ links review: a name of 'a' and 85 CJK characters shares and opens, cut between characters ({x.get('error') or len(x['name'].encode())} bytes)")
+
+    def timers():
+        frames = [[1 if (i % 128) == f * 10 else 0 for i in range(4096)] for f in range(4)]
+        code = link_p(frames, [20] * 4, [0xf7a531])
+        page.goto("about:blank")
+        page.goto(f"{base}/studio/")
+        page.wait_for_selector(S_READY, timeout=30000)
+        page.evaluate("""() => { window.__paints = 0; const p = CanvasRenderingContext2D.prototype.putImageData;
+            CanvasRenderingContext2D.prototype.putImageData = function (...a) { if (this.canvas.closest?.('#s-lk')) __paints++; return p.apply(this, a); }; }""")
+        for _ in range(30):
+            page.evaluate("(c) => { location.hash = '#p=' + c; }", code)
+            wait_js(page, f"{L_SHOWN} === 'shown'", timeout=10000)
+            page.evaluate(f"delete {L_SHOWN.replace('.linkOpened', '.linkOpened')}")
+        page.wait_for_timeout(500)
+        page.evaluate("window.__paints = 0")
+        page.wait_for_timeout(1000)
+        live = page.evaluate("window.__paints")
+        page.click("#s-lk button:has-text('Close')")
+        page.wait_for_timeout(300)
+        page.evaluate("window.__paints = 0")
+        page.wait_for_timeout(1000)
+        after = page.evaluate("window.__paints")
+        check(live <= 60 and after == 0, f"/studio/ links review: 30 links in a row play as one (about 50 paints a second: {live}), and nothing paints after Close ({after})")
+
+    def bidi():
+        rlo = "‮evil​"
+        code = link_p(one, [100], [0xf7a531], name="Nice⁦ one", author=rlo)
+        said = l_goto(page, base, "#p=" + code)
+        who = page.inner_text("#s-lk-who")
+        bdis = page.evaluate("document.querySelectorAll('#s-lk bdi').length")
+        page.click("#s-lk-open")
+        wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+        s_kept(page)
+        p = page.evaluate(I_PIECE)
+        e = (p["from"] or [{}])[0]
+        clean = lambda t: not re.search("[؜​-‏‪-‮⁠-⁩﻿]", t or "")
+        check(said == "shown" and "by “evil”" in who and bdis == 2 and p["name"] == "Nice one" and clean(e.get("title")) and clean(e.get("author")),
+              f"/studio/ links review: a link's bidi and zero-width controls dropped, shown quoted and isolated, stored clean ('{who[:40]}', {p['name']!r}, {e})")
+        f = kev(page, "const r = await K.stamp('Pad', 4, 4, { env: { author: '\\u202e' + 'gninraw' } }); return K.file(r, [r]);")
+        file_open(page, f, "pad.dmdart")
+        claim = page.inner_text("#s-fs .s-fs-claim")
+        has_bdi = page.evaluate("!!document.querySelector('#s-fs .s-fs-claim bdi')")
+        file_add(page)
+        stored = page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const l = (await s.list({ type: 'stamp' })).items; s.db.close(); return l.map((h) => h.author.name); }""")
+        check(has_bdi and "by “gninraw”" in claim and stored == ["gninraw"], f"/studio/ links review: a file's author too: quoted, isolated, stored without its controls ('{claim[:50]}', {stored})")
+
+    def held():
+        page.mouse.click(*s_at(page, 6, 6))
+        s_kept(page)
+        page.fill("#s-name", "My own")
+        s_kept(page)
+        r = page.evaluate(S_STORE, ["get", None])["r"]
+        code = link_p(one, [100], [0xf7a531], name="Someone else's", author="liar", src=(r["id"], 99, r["hash"]))
+        l_goto(page, base, "#p=" + code)
+        h2, nm = page.inner_text("#s-lk h2"), page.inner_text("#s-lk-name")
+        page.click("#s-lk-open")
+        wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+        s_kept(page)
+        e = (page.evaluate(I_PIECE)["from"] or [{}])[0]
+        check(e.get("id") == r["id"] and e.get("name") == "My own" and e.get("rev") == r["rev"] and e.get("author", {}).get("name") != "liar",
+              f"/studio/ links review: a link naming my record with its content: from[] is my record's, not the link's ({e.get('name')}, rev {e.get('rev')})")
+        check(h2 == "A shared piece" and nm == "Called “Someone else's”", f"/studio/ links review: the heading is the Studio's, the name the link's quoted claim ({h2!r}, {nm!r})")
+
+    def over():
+        code = link_p(one, [100], [0xf7a531], name="Over")
+        page.goto("about:blank")
+        page.goto(f"{base}/studio/")
+        page.wait_for_selector(S_READY, timeout=30000)
+        page.click("#s-send")
+        page.wait_for_selector("#s-p[open]", timeout=20000)
+        page.evaluate("(c) => { location.hash = '#p=' + c; }", code)
+        wait_js(page, f"{L_SHOWN} === 'shown'", timeout=10000)
+        check(not page.is_visible("#s-p") and page.is_visible("#s-lk"), "/studio/ links review: a link arriving over another sheet closes it and shows")
+        said = l_goto(page, base, "#P=" + code)
+        check(said == "shown", f"/studio/ links review: #P= opens as #p= ({said})")
+
+    def plays_wide():
+        kev(page, """const a = new Uint16Array(4096); const cs = []; for (let i = 0; i < 300; i++) { cs.push({ k: i + 1, hex: '#' + (0x400000 + i * 197).toString(16).padStart(6, '0') }); }
+            for (let i = 0; i < 4096; i++) a[i] = i < 3000 ? 1 + (i % 300) : 0;
+            const r = m.record('piece', 'Wide', { w: 128, h: 32, keys: 2, plays: 3, colours: cs, frames: [{ key: '0000000a', ms: 100 }, { key: '0000000c', ms: 200 }],
+              layers: [{ key: '0000000b', name: 'N', moves: false, cels: [await m.packPx(a, true)] }] });
+            await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+        page.reload()
+        page.wait_for_selector(S_READY, timeout=30000)
+        want = page.evaluate(I_PIECE)
+        link = l_share(page)
+        said = l_goto(page, base, "#p=" + link.split("#p=")[1]) if link else ""
+        if said == "shown":
+            page.click("#s-lk-open")
+            wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+            s_kept(page)
+        p = page.evaluate(I_PIECE)
+        check(said == "shown" and p["plays"] == 3 and p["colours"] == 300 and i_frames(p) == i_frames(want) and p["ms"] == [100, 200],
+              f"/studio/ links review: plays and 300 colours survive the Studio's own Share ({len(link)} characters; plays {p['plays']}, {p['colours']} colours)")
+
+    for what, fn in (("a CJK name", cjk), ("timers", timers), ("bidi", bidi), ("a held record", held), ("another sheet", over), ("plays and colours", plays_wide)):
+        part(what, fn)
     page.context.close()
 
 
@@ -7420,6 +7556,7 @@ def main() -> int:
             studio_links(browser, base, a.site, errors, a.shots)
             studio_links_red(browser, base, a.site, errors)
             studio_links_leftovers(browser, base, a.site, errors)
+            studio_links_review(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -7505,6 +7642,7 @@ def main() -> int:
         studio_links(browser, base, a.site, errors, a.shots)
         studio_links_red(browser, base, a.site, errors)
         studio_links_leftovers(browser, base, a.site, errors)
+        studio_links_review(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)

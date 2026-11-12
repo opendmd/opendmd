@@ -19,12 +19,12 @@
 // file. Coming in, a longer fragment is refused before anything is decoded;
 // inflating stops at the most a link could hold; every byte is checked
 // against what came before it, and the piece against check().
-import { FORMAT, CAPS, LICENCES, inflate, record, check } from './store.js';
+import { FORMAT, CAPS, LICENCES, inflate, record, check, plain } from './store.js';
 import { W, H, N, hexOf } from './doc.js';
 
 export const LINK = 8000;
 const V = 1, MAX_RAW = 1 + 6 + CAPS.colours * 3 + CAPS.frames * 2 + CAPS.frames * N * 2 + 3 * 256 + 64, MAX_PACK = 1 << 20;
-let S = null;
+let S = null, playing = 0;
 export function mount(studio) { S = studio; }
 
 // --- bytes, deflate, base64url ---
@@ -42,7 +42,12 @@ export async function encode(name, author, licence, src, keys, cm, delays, plays
   const n = delays.length, table = [], at = new Map([[0, 0]]);
   for (const k of keys) if (!at.has(k)) { const c = cm.get(k) ?? 0, i = table.indexOf(c); at.set(k, i >= 0 ? i + 1 : table.push(c)); }
   const wide = table.length > 255, b = [];
-  const u8 = (v) => b.push(v & 255), u16 = (v) => { u8(v >> 8); u8(v); }, str = (t, cap) => { const x = utf.encode(t.slice(0, cap)).slice(0, 255); u8(x.length); b.push(...x); };
+  const u8 = (v) => b.push(v & 255), u16 = (v) => { u8(v >> 8); u8(v); }, str = (t, cap) => {
+    // 255 bytes of UTF-8 at most, cut between characters (never inside one).
+    let s = [...t.slice(0, cap)], x = utf.encode(s.join(''));
+    while (x.length > 255) { s.pop(); x = utf.encode(s.join('')); }
+    u8(x.length); b.push(...x);
+  };
   u8(V); u16(n); u16(plays); u16(table.length);
   for (const c of table) { u8(c >> 16); u8(c >> 8); u8(c); }
   for (const d of delays) u16(Math.round(d / 10));
@@ -119,7 +124,7 @@ export async function decodePiece(code) {
     for (let i = 0; i < N; i++) { const v = wide ? (px[(f * N + i) * 2] << 8) | px[(f * N + i) * 2 + 1] : px[f * N + i]; if (v > c) damaged('a pixel with no colour'); cel[i] = v; }
     cels.push(cel);
   }
-  const name = str(CAPS.name), author = str(80), li = u8();
+  const name = plain(str(CAPS.name)), author = plain(str(80)), li = u8();
   if (li > LICENCES.length) damaged('a licence that isn’t one');
   let src = null;
   if (u8()) {
@@ -137,6 +142,10 @@ export async function decodePiece(code) {
 }
 // The address's #p= or #k=, opened: a preview of the piece, or the pack as a file.
 export async function show(hash) {
+  hash = hash.slice(0, 2).toLowerCase() + hash.slice(2); // (#P= as #p=)
+  // Another sheet open: closed first, so this one is the one seen (a preview
+  // open already is shown anew in place; a pack's sheet takes its place).
+  for (const o of document.querySelectorAll(/^#p/.test(hash) ? 'dialog[open]:not(#s-lk)' : 'dialog[open]')) o.close();
   history.replaceState(null, '', location.pathname + location.search); // (a reload doesn't open it again)
   S.root.dataset.linkOpened = 'reading';
   const m = /^#([pk])=([A-Za-z0-9_-]+)$/.exec(hash);
@@ -171,31 +180,38 @@ async function preview(x) {
     d.style.cssText = 'width:min(40em,94vw);padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--bg);color:var(--fg)';
     document.body.append(d);
   }
-  const h = document.createElement('h2'), cv = document.createElement('canvas'), who = document.createElement('p'), row = document.createElement('div');
-  h.textContent = name || 'A shared piece';
-  h.style.margin = '0 0 10px';
+  clearTimeout(playing); // (a link before this one stops playing)
+  const h = document.createElement('h2'), said = document.createElement('p'), cv = document.createElement('canvas'), who = document.createElement('p'), row = document.createElement('div');
+  const q = (t) => { const b = document.createElement('bdi'); b.textContent = t; return ['“', b, '”']; };
+  // The heading is the Studio's; the name is the link's claim, quoted.
+  h.textContent = 'A shared piece';
+  h.style.margin = '0 0 4px';
+  said.id = 's-lk-name';
+  said.style.margin = '0 0 10px';
+  said.append(...(name ? ['Called ', ...q(name)] : ['It has no name.']));
   Object.assign(cv, { width: W, height: H });
   cv.style.cssText = 'width:100%;image-rendering:pixelated;background:#000;border-radius:6px';
   who.className = 's-cap';
   who.id = 's-lk-who';
-  who.textContent = `${spec.frames.length > 1 ? `${spec.frames.length} frames` : 'A still'} · by ${author || 'no one named'} · licence ${LIC[licence] || 'not chosen'}, the link says. Nothing is kept until you open it.`;
+  who.append(`${spec.frames.length > 1 ? `${spec.frames.length} frames` : 'A still'} · by `, ...(author ? q(author) : ['no one named']),
+    ` · licence ${LIC[licence] || 'not chosen'}, the link says. Nothing is kept until you open it.`);
   row.className = 's-row';
   const go = document.createElement('button'), no = document.createElement('button');
   go.className = 's-pill s-pri'; go.textContent = 'Open as a new piece'; go.id = 's-lk-open'; go.type = 'button';
   no.className = 's-pill'; no.textContent = 'Close'; no.type = 'button';
   row.append(go, no);
-  d.replaceChildren(h, cv, who, row);
+  d.replaceChildren(h, said, cv, who, row);
   // The picture playing, frame by frame, at its own times.
   const g = cv.getContext('2d'), img = g.createImageData(W, H), rgb = [0, ...spec.colours.map((c) => parseInt(c.hex.slice(1), 16))];
-  let f = 0, t = 0;
+  let f = 0;
   const draw = () => {
     const cel = spec.layers[0].cels[spec.layers[0].moves ? f : 0];
     for (let i = 0; i < N; i++) { const v = rgb[cel[i]]; img.data[i * 4] = v >> 16; img.data[i * 4 + 1] = (v >> 8) & 255; img.data[i * 4 + 2] = v & 255; img.data[i * 4 + 3] = 255; }
     g.putImageData(img, 0, 0);
-    if (spec.frames.length > 1) t = setTimeout(() => { f = (f + 1) % spec.frames.length; draw(); }, spec.frames[f].ms);
+    if (spec.frames.length > 1) playing = setTimeout(() => { f = (f + 1) % spec.frames.length; draw(); }, spec.frames[f].ms);
   };
   draw();
-  d.onclose = () => { clearTimeout(t); if (S.root.dataset.linkOpened === 'shown') S.root.dataset.linkOpened = 'closed'; };
+  d.onclose = () => { clearTimeout(playing); if (S.root.dataset.linkOpened === 'shown') S.root.dataset.linkOpened = 'closed'; };
   no.onclick = () => d.close();
   go.onclick = async () => {
     go.disabled = true;
@@ -204,7 +220,9 @@ async function preview(x) {
     let from = [{ external: true, note: 'A shared link', ...(name ? { title: name } : {}), ...(author ? { author } : {}) }];
     if (src) {
       const have = S.store && await S.store.get(src.id);
-      if (!have || have.hash === src.hash) from = [{ id: src.id, rev: src.rev, hash: src.hash, name, author: { name: author, account: null }, licence }];
+      // (Held here with that content: what this browser knows of it, not what the link says.)
+      if (have && have.hash === src.hash) from = [{ id: have.id, rev: have.rev, hash: have.hash, name: have.name, author: have.author, licence: have.licence }];
+      else if (!have) from = [{ id: src.id, rev: src.rev, hash: src.hash, name, author: { name: author, account: null }, licence }];
     }
     try {
       await S.save();

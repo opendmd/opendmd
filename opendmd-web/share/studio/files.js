@@ -15,7 +15,7 @@
 // skipped; a higher rev is offered as an update; the same id with other
 // content comes in as a copy whose `from` names the file's record; a
 // starter record is never replaced.
-import { FORMAT, LICENCES, CAPS, envelope, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
+import { FORMAT, LICENCES, CAPS, envelope, plain, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
 import { builtin, isStarter, starter } from './palettes.js';
 
 // Per file; and for one opening (files picked together): 64 MB and four
@@ -207,7 +207,12 @@ export async function read(file) {
     // The store's own keys are refused; any other key the envelope doesn't name (a later Studio's) is dropped.
     const own = r0 && typeof r0 === 'object' ? ['gone', 'seq', 'ver', 'label'].filter((k) => Object.hasOwn(r0, k)) : [];
     if (own.length) no(`A record in it carries what only this browser’s store writes (${own.join(', ')}): nothing was taken from the file.`);
-    const r = r0 && typeof r0 === 'object' && !Array.isArray(r0) ? envelope(r0) : r0;
+    let r = r0 && typeof r0 === 'object' && !Array.isArray(r0) ? envelope(r0) : r0;
+    // (Names and authors as plain text: the hash is the body's, so this changes nothing it says.)
+    if (r && typeof r === 'object') {
+      const who = (a) => (a && typeof a === 'object' && !Array.isArray(a) ? { ...a, name: plain(a.name) } : a);
+      r = { ...r, name: plain(r.name), author: who(r.author), ...(Array.isArray(r.from) ? { from: r.from.map((f) => (f && typeof f === 'object' ? { ...f, ...(typeof f.name === 'string' ? { name: plain(f.name) } : {}), ...(f.author !== undefined ? { author: typeof f.author === 'string' ? plain(f.author) : who(f.author) } : {}) } : f)) } : {}) };
+    }
     try { check(r); } catch (e) { no(`A record in it isn’t one (${e.message.replace('not a record: ', '')}): nothing was taken from the file.`); }
     if (by.has(r.id)) no('The file names one record twice: nothing was taken from it.');
     let h = '';
@@ -313,7 +318,9 @@ export async function open(files, as = '') {
   const rows = shown.map((x) => {
     // What the file says of each: who made it and its licence are the file's claim.
     const li = el('li'), b = el('b', '', x.r.name || 'Untitled'), small = el('small', '', ` · ${x.r.type} · ${SAID[x.how]}`),
-      claim = el('small', 's-fs-claim', ` · by ${x.r.author?.name || 'no one named'} · licence ${LIC[x.r.licence] || 'not chosen'}, the ${as ? 'link' : 'file'} says`);
+      claim = el('small', 's-fs-claim'), who = el('bdi', '', x.r.author?.name || '');
+    // (The claim's name in quotes and isolated, so it can't pass for the Studio's own words.)
+    claim.append(x.r.author?.name ? ' · by “' : ' · by no one named', ...(x.r.author?.name ? [who, '”'] : []), ` · licence ${LIC[x.r.licence] || 'not chosen'}, the ${as ? 'link' : 'file'} says`);
     li.append(b, small, claim);
     if (x.how === 'update' || x.how === 'older') {
       const c = el('input');
