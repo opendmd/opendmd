@@ -64,7 +64,9 @@ linear-gradient(90deg,rgba(255,255,255,.14) 1px,transparent 1px),linear-gradient
 .s-chin b{font-weight:400;color:var(--fg)}
 .s-chin button{background:none;border:0;padding:4px 6px 3px;border-radius:3px}
 .s-chin .s-seg{display:flex;gap:2px}
-.s-chin .on{background:var(--bg3);color:var(--fg)!important;box-shadow:inset 0 0 0 1px var(--line)}
+/* The view toggle: light, as the phone's tabs are (the one shown underlined in the accent) */
+.s-chin button:hover{color:var(--fg)}
+.s-chin .on{color:var(--fg)!important;text-decoration:underline 2px var(--acc);text-underline-offset:4px}
 
 /* The tray of tools under the panel */
 .s-tray{display:flex;align-items:center;gap:8px 6px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
