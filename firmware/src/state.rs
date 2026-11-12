@@ -104,10 +104,12 @@ pub fn free_heap() -> u32 {
     unsafe { esp_idf_sys::esp_get_free_heap_size() }
 }
 
-/// The S3's: internal RAM only. Its PSRAM is in the heap too, but only an
-/// explicit `MALLOC_CAP_SPIRAM` allocation takes it (sdkconfig.s3,
-/// `CONFIG_SPIRAM_USE_CAPS_ALLOC`): a `Vec` never does, so the gates that
-/// read this (transitions, the still cache, the 503s) must not count it.
+/// The S3's: internal RAM only. Its PSRAM is in the heap too
+/// (`esp_get_free_heap_size` counts it), but `malloc` never takes it
+/// (sdkconfig.s3, `CONFIG_SPIRAM_USE_CAPS_ALLOC`: a `Vec` is internal; only
+/// IDF's own caps allocations and the WiFi driver's TX cache can land
+/// there), so the gates that read this (transitions, the still cache, the
+/// 503s) must not count it.
 #[cfg(esp32s3)]
 pub fn free_heap() -> u32 {
     // SAFETY: a read-only query with a capability mask argument.
