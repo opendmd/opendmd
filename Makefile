@@ -1448,7 +1448,8 @@ emu-s3-nocard: emu-build
 	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 emu-s3-probe: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-probe &&) \
-	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-probe-last.log $(EMU_ARGS) && \
+	uv run --quiet tools/emu/probe_red.py --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) --log $(EMU_DIR)/logs/s3-probe-last.log
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe
