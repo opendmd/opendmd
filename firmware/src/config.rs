@@ -10,21 +10,71 @@ use std::time::Duration;
 // This is the library's stock ESP32 map with only A/B/C moved (23->33, 19->32,
 // 5->22) because the stock three collide with the SD card's SPI bus.
 // ---------------------------------------------------------------------------
+#[cfg(not(esp32s3))]
 pub const PIN_R1: i8 = 25;
+#[cfg(not(esp32s3))]
 pub const PIN_G1: i8 = 26;
+#[cfg(not(esp32s3))]
 pub const PIN_B1: i8 = 27;
+#[cfg(not(esp32s3))]
 pub const PIN_R2: i8 = 14;
+#[cfg(not(esp32s3))]
 pub const PIN_G2: i8 = 12;
+#[cfg(not(esp32s3))]
 pub const PIN_B2: i8 = 13;
+#[cfg(not(esp32s3))]
 pub const PIN_A: i8 = 33;
+#[cfg(not(esp32s3))]
 pub const PIN_B: i8 = 32;
+#[cfg(not(esp32s3))]
 pub const PIN_C: i8 = 22;
+#[cfg(not(esp32s3))]
 pub const PIN_D: i8 = 17;
 /// E is unused at 1/16 scan: pin 8 of the header is silent. -1 = not wired.
+#[cfg(not(esp32s3))]
 pub const PIN_E: i8 = -1;
+#[cfg(not(esp32s3))]
 pub const PIN_LAT: i8 = 4;
+#[cfg(not(esp32s3))]
 pub const PIN_OE: i8 = 15;
+#[cfg(not(esp32s3))]
 pub const PIN_CLK: i8 = 16;
+
+// The ESP32-S3 DevKitC-1 (variant `s3`, the S3 port's pin plan: the
+// hardware study's section 4, "Pin map (proposed)"): HUB75 on one header
+// row, GPIO 4-17, clear of the boot straps (0, 3, 45, 46), native USB
+// (19, 20), the octal PSRAM (35-37), the console (43, 44) and the devkit's
+// RGB LED (38 or 48). E is wired to 14 through a jumper on the outboard;
+// unused at 1/16 scan, as on the classic.
+#[cfg(esp32s3)]
+pub const PIN_R1: i8 = 4;
+#[cfg(esp32s3)]
+pub const PIN_G1: i8 = 5;
+#[cfg(esp32s3)]
+pub const PIN_B1: i8 = 6;
+#[cfg(esp32s3)]
+pub const PIN_R2: i8 = 7;
+#[cfg(esp32s3)]
+pub const PIN_G2: i8 = 8;
+#[cfg(esp32s3)]
+pub const PIN_B2: i8 = 9;
+#[cfg(esp32s3)]
+pub const PIN_A: i8 = 10;
+#[cfg(esp32s3)]
+pub const PIN_B: i8 = 11;
+#[cfg(esp32s3)]
+pub const PIN_C: i8 = 12;
+#[cfg(esp32s3)]
+pub const PIN_D: i8 = 13;
+/// E (GPIO 14 on the outboard's jumper) is unused at 1/16 scan. -1 = not wired.
+#[cfg(esp32s3)]
+pub const PIN_E: i8 = -1;
+#[cfg(esp32s3)]
+pub const PIN_CLK: i8 = 15;
+#[cfg(esp32s3)]
+pub const PIN_LAT: i8 = 16;
+#[cfg(esp32s3)]
+pub const PIN_OE: i8 = 17;
 
 // ---------------------------------------------------------------------------
 // Panel geometry. Two 64x32 modules chained into one 128x32 surface, which is
@@ -95,10 +145,28 @@ pub const SAFE_START: Duration = Duration::from_secs(30);
 // ---------------------------------------------------------------------------
 // microSD, SPI (not SDMMC) on VSPI (`SPI3`, IO_MUX pins). hardware/PINOUT.md, "microSD".
 // ---------------------------------------------------------------------------
+#[cfg(not(esp32s3))]
 pub const SD_SCK: u32 = 18;
+#[cfg(not(esp32s3))]
 pub const SD_MISO: u32 = 19;
+#[cfg(not(esp32s3))]
 pub const SD_MOSI: u32 = 23;
+#[cfg(not(esp32s3))]
 pub const SD_CS: u32 = 5;
+// The S3: SPI on the pins the 4-bit SD wiring uses (the study's map: CLK 39,
+// CMD 40, D0 41, D3 21), so one map serves an SPI-wired card and the
+// outboard: SCK = CLK, MOSI = CMD, MISO = D0, CS = D3. Through the GPIO
+// matrix (the S3's SPI3 has no IO_MUX pins), which caps a reliable SPI
+// clock below 40 MHz (the opt-in `SD_SPEED_KHZ`; 20 MHz, the default, is
+// the safe one); the 4-bit host is a later phase.
+#[cfg(esp32s3)]
+pub const SD_SCK: u32 = 39;
+#[cfg(esp32s3)]
+pub const SD_MISO: u32 = 41;
+#[cfg(esp32s3)]
+pub const SD_MOSI: u32 = 40;
+#[cfg(esp32s3)]
+pub const SD_CS: u32 = 21;
 /// Where the card is mounted. Manifest paths are card-absolute, so a manifest
 /// entry `/gifs/X.gif` opens as `/sdcard/gifs/X.gif`.
 pub const SD_MOUNT: &str = "/sdcard";

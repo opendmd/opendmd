@@ -24,11 +24,11 @@ PORT ?= /dev/ttyUSB0
 # `make fw-build FW_PROFILE=dev` when you want debug assertions.
 FW_PROFILE ?= release
 FW_PROFILE_FLAG := $(if $(filter release,$(FW_PROFILE)),--release,)
-FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
+FW_BINARY = $(FW)/target/$(FW_TRIPLE)/$(FW_PROFILE)/opendmd-firmware
 # The project's own second-stage bootloader, which esp-idf-sys copies next to
 # the ELF, flashed explicitly (--bootloader) so the board runs the one built
 # with this sdkconfig rather than espflash's bundled one.
-FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
+FW_BOOTLOADER = $(FW)/target/$(FW_TRIPLE)/$(FW_PROFILE)/bootloader.bin
 
 # The flash layout (docs/ota.md): `4mb`, table v4, for the ESP32 DevKit V1
 # (firmware/partitions.csv): otadata, the firmware in factory, the updater in
@@ -45,6 +45,7 @@ FW_VARIANT := $(or $(VARIANT),4mb)
 # updater and notices-check it runs) take it, into $(EMU_DIR), never dist/;
 # it gets no signed bundle (fw-sign.py does not know it) and no manifest.
 FW_EMU_VARIANT := emu8mb
+FW_S3_VARIANT := s3
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 ifneq ($(or $(filter-out fw-release-variant updater notices-check,$(MAKECMDGOALS)),$(if $(MAKECMDGOALS),,default)),)
 $(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: make emu-probe builds it)
@@ -52,25 +53,67 @@ endif
 ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
 $(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/)
 endif
-else ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
-$(error VARIANT=$(VARIANT): the flash layouts are $(FW_VARIANTS))
+else ifeq ($(FW_VARIANT),$(FW_S3_VARIANT))
+ifneq ($(filter fw-flash fw-release-flash fw-erase fw-ota fw-sign fw-release flasher,$(MAKECMDGOALS)),)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator only (make fw-build, emu-s3-nocard, emu-s3-probe); no install, update or release yet)
 endif
+ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
+ifneq ($(filter fw-release-variant,$(MAKECMDGOALS)),)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview, not released: give it a DIST of its own, never dist/)
+endif
+endif
+else ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
+$(error VARIANT=$(VARIANT): the flash layouts are $(FW_VARIANTS) (and $(FW_S3_VARIANT), the ESP32-S3 preview))
+endif
+# The ESP32-S3 PREVIEW, not released (S3 port phase 0): `s3`
+# (firmware/partitions-s3.csv), an 8 MB layout for the ESP32-S3-DevKitC-1
+# N8R8 and N16R8 (one image for both), the chip's own sdkconfig
+# (firmware/sdkconfig.s3), target xtensa-esp32s3-espidf. Not in
+# FW_VARIANTS, so fw-release never builds it; `make fw-build VARIANT=s3`
+# and the emu-s3-* lanes do. fw-release-variant builds it into a DIST of its
+# own with no updater, signed bundle, notices check or manifest (the release
+# phase's work), and nothing flashes, updates or releases it.
+# Variants that never reach dist/: no signed bundle or manifest.
+FW_UNRELEASED := $(filter $(FW_EMU_VARIANT) $(FW_S3_VARIANT),$(FW_VARIANT))
+# No updater (ota/updater is built for the classic ESP32): the S3 preview.
+FW_NO_UPDATER := $(filter $(FW_S3_VARIANT),$(FW_VARIANT))
+# The chip: espflash's --chip, esp-idf-sys's MCU, the Rust target.
+FW_CHIP_4mb := esp32
+FW_CHIP_emu8mb := esp32
+FW_CHIP_s3 := esp32s3
+FW_CHIP := $(FW_CHIP_$(FW_VARIANT))
+FW_TRIPLE := xtensa-$(FW_CHIP)-espidf
+# Its name in cargo's CARGO_TARGET_<triple>_RUSTFLAGS.
+FW_TRIPLE_ENV := $(subst -,_,$(shell echo $(FW_TRIPLE) | tr a-z A-Z))
+# The classic's builds name neither (firmware/.cargo/config.toml's defaults);
+# the S3's pass both.
+FW_TARGET_FLAG := $(if $(filter esp32,$(FW_CHIP)),, --target $(FW_TRIPLE))
+FW_MCU_ENV := $(if $(filter esp32,$(FW_CHIP)),,MCU=$(FW_CHIP) )
+# The chip's own sdkconfig, layered after sdkconfig.defaults (the S3's only).
+FW_CHIP_SDKCONFIG := $(if $(filter esp32,$(FW_CHIP)),,$(CURDIR)/$(FW)/sdkconfig.s3)
 FW_PARTITIONS_4mb := $(FW)/partitions.csv
 FW_PARTITIONS_emu8mb := $(FW)/partitions-emu.csv
+FW_PARTITIONS_s3 := $(FW)/partitions-s3.csv
 # The flash size espflash, the sdkconfig and the image headers say.
 FW_FLASH_SIZE_4mb := 4mb
 FW_FLASH_SIZE_emu8mb := 8mb
+FW_FLASH_SIZE_s3 := 8mb
 FW_FLASH_SIZE := $(FW_FLASH_SIZE_$(FW_VARIANT))
 FW_FLASH_BYTES_4mb := 4194304
 FW_FLASH_BYTES_emu8mb := 8388608
+FW_FLASH_BYTES_s3 := 8388608
 FW_APP_BYTES_4mb := 2883584
 FW_APP_BYTES_emu8mb := 3145728
+FW_APP_BYTES_s3 := 3670016
 UPDATER_OFFSET_4mb := 0x2E0000
 UPDATER_OFFSET_emu8mb := 0x320000
+UPDATER_OFFSET_s3 := 0x3A0000
 WWW_OFFSET_4mb := 0x340000
 WWW_OFFSET_emu8mb := 0x380000
+WWW_OFFSET_s3 := 0x400000
 WWW_BYTES_4mb := 786432
 WWW_BYTES_emu8mb := 786432
+WWW_BYTES_s3 := 1048576
 # What ESP Web Tools' manifest calls the firmware: it must equal the Improv
 # answer's name (firmware/src/improv.rs FIRMWARE_NAME).
 FW_MANIFEST_NAME_4mb := OpenDMD
@@ -107,7 +150,7 @@ ESPUP_ENV := $$HOME/.espup-env.sh
 # the generated sdkconfig (see `fw-sdkconfig-flavour`), which would otherwise
 # keep the other flavour's values for the symbols it already has.
 FW_DIAG = $(findstring diag-heap,$(FW_FEATURES))
-FW_SDKCONFIG = $(CURDIR)/$(FW)/sdkconfig.defaults;$(CURDIR)/$(FW)/target/sdkconfig.partitions$(if $(FW_DIAG),;$(CURDIR)/$(FW)/sdkconfig.diag)
+FW_SDKCONFIG = $(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(CURDIR)/$(FW)/target/sdkconfig.partitions$(if $(FW_DIAG),;$(CURDIR)/$(FW)/sdkconfig.diag)
 
 # Optional bench WiFi credentials. `firmware/.env` is gitignored (template in
 # firmware/.env.example); when it exists, OPENDMD_WIFI_SSID/PASS are exported
@@ -135,6 +178,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
+	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-nocard emu-s3-probe \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -746,18 +790,18 @@ FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag)$(if $(FW_CHIP_SDKCONFIG), $(FW_CHIP_SDKCONFIG)) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
-	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
+	   rm -f $(FW)/target/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW)/target/sdkconfig.flavour; \
 	 fi
-	@$(call FW_SDKCONFIG_GUARD,$(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig)
+	@$(call FW_SDKCONFIG_GUARD,$(FW)/target/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig)
 
 fw-build: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build$(FW_TARGET_FLAG) $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_BINARY)'
@@ -811,11 +855,11 @@ fw-clippy: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
 	@echo "==> Clippy firmware, release feature set (the defaults: formulas, jit)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets -- -D warnings'
 	@echo "==> Clippy firmware, no features (FW_DISABLE=formulas: without Formulas or the JIT)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets --no-default-features -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -868,8 +912,8 @@ FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | h
 # elsewhere it would lose the extra_components (hub75, mdns) in Cargo.toml.
 FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
 FW_RELEASE_VTARGET := $(FW_RELEASE_TARGET_DIR)
-FW_RELEASE_BINARY := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/opendmd-firmware
-FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/bootloader.bin
+FW_RELEASE_BINARY := $(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/opendmd-firmware
+FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/bootloader.bin
 # The ESP-IDF build the release ELF was linked from (esp-idf-sys's out/), on
 # stdout: the ELF names its esp-idf-sys-<hash> dir (the IDF objects' compile
 # directories). A target dir can hold more than one (another esp-idf-sys, or
@@ -877,15 +921,16 @@ FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/bootl
 # linked: notices.py then finds the ELF's IDF sources in no component. A shell
 # command (no single quotes: NOTICES_FW runs it inside bash -c '...').
 FW_RELEASE_IDF_OUT = h=$$(grep -aoE "esp-idf-sys-[0-9a-f]{16}" $(FW_RELEASE_BINARY) 2>/dev/null | sort -u); \
-	d=$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/$$h/out; \
+	d=$(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/build/$$h/out; \
 	if [ -n "$$h" ] && [ "$$(echo "$$h" | wc -l)" = 1 ] && [ -d "$$d" ]; then echo "$$d"; \
 	else echo "$(FW_RELEASE_BINARY): names no one esp-idf-sys build dir in this target ($$(echo $${h:-none})): run make fw-release" >&2; exit 1; fi
 # The fragment and its stamp live in the layout's own target dir: with a
 # private FW_RELEASE_TARGET_DIR nothing a release build writes or removes
 # (the generated sdkconfig among it) touches another checkout's build.
-FW_RELEASE_SDKCONFIG_FRAG := $(FW_RELEASE_VTARGET)/sdkconfig.release
-FW_RELEASE_SDKCONFIG_STAMP := $(FW_RELEASE_VTARGET)/sdkconfig.release.stamp
-FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
+# (The S3's have names of their own, so one target dir holds both chips.)
+FW_RELEASE_SDKCONFIG_FRAG := $(FW_RELEASE_VTARGET)/sdkconfig.release$(if $(FW_CHIP_SDKCONFIG),-$(FW_CHIP))
+FW_RELEASE_SDKCONFIG_STAMP := $(FW_RELEASE_VTARGET)/sdkconfig.release$(if $(FW_CHIP_SDKCONFIG),-$(FW_CHIP)).stamp
+FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_RELEASE_SDKCONFIG_FRAG)
 # Measurement builds only, never a public release: the release set built
 # with these cargo features (e.g. FW_RELEASE_FEATURES=probe,psi-probe
 # DIST=/somewhere/else), signed like any other so it can go to a test panel
@@ -938,15 +983,15 @@ fw-release-variant:
 	@# The generated sdkconfig keeps the values it has over changed defaults
 	@# (a new sdkconfig.defaults line or version would silently not apply):
 	@# remove it whenever the inputs change.
-	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_RELEASE_SDKCONFIG_FRAG) | sha256sum | cut -c1-16); \
+	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_CHIP_SDKCONFIG) $(FW_RELEASE_SDKCONFIG_FRAG) | sha256sum | cut -c1-16); \
 	 have=$$(cat $(FW_RELEASE_SDKCONFIG_STAMP) 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> release sdkconfig inputs changed ($(FW_VARIANT)): removing the generated sdkconfig"; \
-	   rm -f $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig; \
+	   rm -f $(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
-	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
+	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/build/esp-idf-sys-*/out/sdkconfig)
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_$(FW_TRIPLE_ENV)_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build$(FW_TARGET_FLAG) --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size.
 	@out=$$($(FW_RELEASE_IDF_OUT)) || exit 1; cfg=$$out/sdkconfig; \
 	 want=$$(echo $(FW_FLASH_SIZE) | tr a-z A-Z); \
@@ -954,14 +999,17 @@ fw-release-variant:
 	 echo "sdkconfig: flash size $$want ($$cfg)"
 	@# The updater after the firmware: on a fresh machine (CI) it is the
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
-	$(MAKE) --no-print-directory updater
+	@# (The S3 preview has none yet: its ota_0 stays erased.)
+	$(if $(FW_NO_UPDATER),@echo "$(FW_VARIANT): no updater yet (the classic's is built for the ESP32)",$(MAKE) --no-print-directory updater)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-iram.py $(FW_RELEASE_BINARY)'
 	@# The third-party notices: the committed ones must be what this build links
 	@# (a build with components off links a subset of the default build's
-	@# crates: the default build's check covers it).
-	$(if $(FW_DISABLE),@echo "notices: not checked with FW_DISABLE=$(FW_DISABLE) (a subset of the default build's crates)",$(MAKE) --no-print-directory notices-check)
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
+	@# crates: the default build's check covers it). The S3 preview links IDF
+	@# components the classic does not (esp_lcd, the PSRAM driver): its
+	@# notices are the release phase's.
+	$(if $(FW_NO_UPDATER),@echo "notices: not checked for the $(FW_VARIANT) preview",$(if $(FW_DISABLE),@echo "notices: not checked with FW_DISABLE=$(FW_DISABLE) (a subset of the default build's crates)",$(MAKE) --no-print-directory notices-check))
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip $(FW_CHIP) --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
@@ -974,8 +1022,8 @@ fw-release-variant:
 	 echo "$(WWW_PACK): $$size B signed, of the $(WWW_BYTES) B $(FW_VARIANT) www partition, $$(( $(WWW_BYTES) - size )) B spare (need $(WWW_PACK_SPARE))"; \
 	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }; \
 	 test $$(( $(WWW_BYTES) - size )) -ge $(WWW_PACK_SPARE) || { echo "the www pack leaves less than $(WWW_PACK_SPARE) B of the $(FW_VARIANT) www partition"; exit 1; }
-ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
-	@echo "$(FW_VARIANT) is emulator-only: no signed bundle"
+ifneq ($(FW_UNRELEASED),)
+	@echo "$(FW_VARIANT) is not released: no signed bundle"
 else
 	$(MAKE) --no-print-directory fw-sign
 endif
@@ -984,10 +1032,12 @@ endif
 	uv run --quiet tools/fw-sign.py sign-www $(WWW_PACK) --out $(FW_WWW_IMAGE) --key $(FW_SIGN_KEY)
 	uv run --quiet tools/fw-sign.py verify-www $(FW_WWW_IMAGE) --pub $(FW_SIGN_PUB)
 	cp $(FW_RELEASE_BOOTLOADER) $(FW_DIST_BOOTLOADER)
+ifeq ($(FW_NO_UPDATER),)
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
 	cp $(NOTICES_FW_TXT) $(NOTICES_WEB_TXT) $(DIST)/
-	@! strings $(FW_APP_IMAGE) $(DIST)/updater.bin $(FW_DIST_BOOTLOADER) | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
+endif
+	@! strings $(FW_APP_IMAGE) $(if $(FW_NO_UPDATER),,$(DIST)/updater.bin )$(FW_DIST_BOOTLOADER) | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(FW_DIST_TABLE) $(FW_PARTITIONS)'
 	@# The flash size in the image headers (byte 3's high nibble: 2 = 4 MB):
 	@# the bootloader's is what the board runs with.
@@ -1005,14 +1055,14 @@ endif
 	@# The merged image: espflash lays out bootloader, table and app padded to
 	@# the flash size with 0xFF (so otadata is erased: the bootloader boots
 	@# factory); the updater and the pack go in at their offsets on top.
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
-	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip $(FW_CHIP) --flash-size $(FW_FLASH_SIZE) --flash-freq $(FW_FLASH_FREQ)mhz --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	$(if $(FW_NO_UPDATER),@echo "$(FW_VARIANT): ota_0 left erased (no updater)",dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none)
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(OTADATA_OFFSET) / 4096 )) count=2 status=none | tr -d '\377' | wc -c)" = 0 || { echo "otadata is not erased in $(FW_FULL_IMAGE)"; exit 1; }
 	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq $(FW_FLASH_BYTES) || { echo "$(FW_FULL_IMAGE) is not $(FW_FLASH_BYTES) B"; exit 1; }
-ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
-	@echo "==> $(FW_VARIANT) (emulator-only) done: no manifest"
+ifneq ($(FW_UNRELEASED),)
+	@echo "==> $(FW_VARIANT) (not released) done: no manifest"
 else
 	@# The offline install's NVS image (FW_NVS_OFFLINE): the whole `nvs`
 	@# partition, written by IDF v5.3's nvs_partition_gen from the IDF
@@ -1362,6 +1412,44 @@ emu-image-nocard:
 emu-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
 	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
+# The ESP32-S3 preview (VARIANT=s3, S3 port phase 0) in esp32sim's S3 machine
+# (`--chip s3 --board none`, 8 MB flash, 8 MB octal PSRAM): correctness only,
+# like every emulator lane. The machine has no SD card yet (the SD-over-SPI
+# card is a classic ESP32 board), so both lanes run with none:
+# emu-s3-nocard: the nocard-test image boots, its panel driver comes up (the
+#   LCD_CAM backend; its output goes nowhere), its settings live in NVS and
+#   a change survives a restart. EMU_NOCARD_OK.
+# emu-s3-probe: the psi-probe image runs the probe's card-free sections
+#   (psi_probe::run_nocard): every bundled Formula, the JIT spike's
+#   hand-written kernels, the golden frames through the VM and through the
+#   JIT's kernels, bit-identical. EMU_PROBE_OK.
+# emu-image-s3: the plain s3 build (the release feature set), for its size.
+# Each image has a target dir of its own (a feature set's sdkconfig differs).
+EMU_S3_IMAGE = $(EMU_DIR)/s3/dist/opendmd-$(FW_VERSION)-s3-full.bin
+EMU_S3_NOCARD_IMAGE = $(EMU_DIR)/s3nocard/dist/opendmd-$(FW_VERSION)-s3-full.bin
+EMU_S3_PROBE_IMAGE = $(EMU_DIR)/s3probe/dist/opendmd-$(FW_VERSION)-s3-full.bin
+# $(1): the image's dir under EMU_DIR; $(2): its features; $(3): its spare.
+EMU_S3_BUILD = $(MAKE) --no-print-directory fw-release-variant VARIANT=s3 $(if $(2),FW_RELEASE_FEATURES=$(2) )FW_APP_SPARE=$(3) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/$(1)/target DIST=$(EMU_DIR)/$(1)/dist
+emu-image-s3:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3,,$(FW_APP_SPARE))
+emu-image-s3-nocard:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3nocard/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3nocard/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3nocard,nocard-test,32768)
+emu-image-s3-probe:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3probe/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3probe/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3probe,psi-probe,$(EMU_PROBE_SPARE))
+emu-s3-nocard: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
+	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+emu-s3-probe: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-probe &&) \
+	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-probe-last.log $(EMU_ARGS) && \
+	uv run --quiet tools/emu/probe_red.py --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) --log $(EMU_DIR)/logs/s3-probe-last.log
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe

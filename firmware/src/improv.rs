@@ -57,7 +57,10 @@ use crate::wifi::ScannedAp;
 /// it with the manifest's `name` (the Makefile's `fw-release`) to offer Update rather than Install: they must stay
 /// the same. It is the name every release has answered.
 pub const FIRMWARE_NAME: &str = "OpenDMD";
+#[cfg(not(esp32s3))]
 const CHIP: &str = "ESP32";
+#[cfg(esp32s3)]
+const CHIP: &str = "ESP32-S3";
 /// The rate ESP Web Tools opens the port at.
 const IMPROV_BAUD: u32 = 115_200;
 /// The console's own rate.
@@ -69,15 +72,30 @@ const PROVISION_STUCK: Duration = Duration::from_secs(60);
 const MAX_SCAN: usize = 16;
 
 // UART0's registers (ESP-IDF v5.3 `soc/esp32/include/soc/uart_reg.h`).
+#[cfg(not(esp32s3))]
 const UART0: usize = 0x3FF4_0000;
 /// The FIFO through the APB address: reads (IDF's `uart_ll_read_rxfifo`).
 const FIFO_APB: usize = UART0;
 /// The FIFO through the AHB address: writes (IDF's `uart_ll_write_txfifo`).
+#[cfg(not(esp32s3))]
 const FIFO_AHB: usize = 0x6000_0000;
+// The ESP32-S3's (`soc/esp32s3/include/soc/uart_reg.h`): UART0 at
+// 0x60000000, its FIFO read and written there, the same INT_RAW, INT_CLR
+// and STATUS offsets and error bits; the FIFO counts are 10 bits wide.
+#[cfg(esp32s3)]
+const UART0: usize = 0x6000_0000;
+#[cfg(esp32s3)]
+const FIFO_AHB: usize = UART0;
 const INT_RAW: usize = UART0 + 0x04;
 const INT_CLR: usize = UART0 + 0x10;
 const STATUS: usize = UART0 + 0x1C;
+#[cfg(not(esp32s3))]
 const MEM_RX_STATUS: usize = UART0 + 0x60;
+/// STATUS's TX FIFO count (bits 16 up): 8 bits wide, 10 on the S3.
+#[cfg(not(esp32s3))]
+const TX_CNT: u32 = 0xFF;
+#[cfg(esp32s3)]
+const TX_CNT: u32 = 0x3FF;
 /// Parity error, framing error, break: what a too-slow sender produces.
 const ERR_BITS: u32 = (1 << 2) | (1 << 3) | (1 << 7);
 /// Receive FIFO overflow: cleared, but not taken as a wrong baud (a fast
@@ -210,6 +228,7 @@ fn set_reg(addr: usize, v: u32) {
 /// this chip: the count register is unreliable when the FIFO is read
 /// through the APB address, so the length comes from the FIFO's read and
 /// write pointers.
+#[cfg(not(esp32s3))]
 fn rx_len() -> usize {
     let cnt = reg(STATUS) & 0xFF;
     let mem = reg(MEM_RX_STATUS);
@@ -226,6 +245,13 @@ fn rx_len() -> usize {
     }) as usize
 }
 
+/// The S3's count register is reliable (IDF's `uart_ll_get_rxfifo_len`
+/// for it reads `status.rxfifo_cnt`).
+#[cfg(esp32s3)]
+fn rx_len() -> usize {
+    (reg(STATUS) & 0x3FF) as usize
+}
+
 fn rx_byte() -> u8 {
     reg(FIFO_APB) as u8
 }
@@ -236,7 +262,7 @@ fn rx_byte() -> u8 {
 /// raw records (the only writer, so nothing interleaves).
 pub fn uart_raw(bytes: &[u8]) {
     for &b in bytes {
-        while (reg(STATUS) >> 16) & 0xFF >= TX_FIFO - 1 {
+        while (reg(STATUS) >> 16) & TX_CNT >= TX_FIFO - 1 {
             core::hint::spin_loop();
         }
         set_reg(FIFO_AHB, u32::from(b));
@@ -299,7 +325,7 @@ fn set_baud(baud: u32, event: u8) {
     // A full FIFO is 11 ms at 115200: up to 15 ms.
     // SAFETY: reads the system timer.
     let until = unsafe { sys::esp_timer_get_time() } + 15_000;
-    while (reg(STATUS) >> 16) & 0xFF != 0 && unsafe { sys::esp_timer_get_time() } < until {
+    while (reg(STATUS) >> 16) & TX_CNT != 0 && unsafe { sys::esp_timer_get_time() } < until {
         core::hint::spin_loop();
     }
     // SAFETY: a busy-wait; then UART0's clock divider, which needs no
