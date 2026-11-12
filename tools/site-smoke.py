@@ -99,7 +99,9 @@ build URL serves. There the art index must also carry
   links, Import, and hostile ones by the thousand), Made from quoted, a
   split backup's part opened alone, packs naming absent records, framed
   /create/'s drops; Import in full colour (4,096 and 600 colours pixel for
-  pixel, dark colours not turned black), Fit to 256 colours when asked;
+  pixel, dark colours not turned black), Fit to 256 colours when asked,
+  and by itself past a piece's 4,096; from[] entries that aren't text
+  refused; blank fillers and flag-smuggled tags dropped;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -5984,6 +5986,65 @@ def studio_import_colours(browser, base: str, site: Path, errors: list[str]) -> 
     plain.context.close()
 
 
+def studio_tidy_review(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The studio-tidy review: an animation past the 4,096 colours a piece
+    holds is fitted to 256 by itself and says so (never refused); a file's
+    from[] entries whose words aren't text, whose author is neither text nor
+    {name, account}, whose rev isn't a whole number or whose id isn't a
+    record id are refused; blank-looking fillers, the grapheme joiner,
+    deprecated format controls and tag characters smuggled after a flag
+    come out of names."""
+    # 20 frames of 256 colours each, none shared: 5,120 in all.
+    frames = []
+    for f in range(20):
+        im = Image.new("P", (128, 32))
+        pal = []
+        for i in range(256):
+            c = f * 256 + i
+            pal += [16 + (c % 240), 16 + (c * 7) % 240, 16 + (c // 22) % 240]
+        im.putpalette(pal)
+        im.putdata([(x + y * 5 + f) % 256 for y in range(32) for x in range(128)])
+        frames.append(im)
+    g = io.BytesIO()
+    frames[0].save(g, "GIF", save_all=True, append_images=frames[1:], duration=60, loop=0, optimize=False, disposal=1)
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "photo.gif", g.getvalue(), "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    said = page.inner_text("#s-err")
+    check(got == "piece:20" and p and p["colours"] <= 256 and "more than 4,096 colours, so it was fitted to 256" in said,
+          f"/studio/ tidy review: an animation of 5,120 colours is fitted to 256 by itself and says so ({got}, {p['colours'] if p else 0} colours, '{said[:70]}')")
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    bad = {
+        "a note that is an array": "{ external: true, note: ['\\u2069\\u202eevil'] }",
+        "a name that is an object": "{ id: 'st_' + '0'.repeat(32), rev: 1, hash: 'sha256-' + '0'.repeat(64), name: { toString: 1 } }",
+        "a rev that is text": "{ id: 'st_' + '0'.repeat(32), rev: '1\\u202e) fake', hash: 'sha256-' + '0'.repeat(64), name: 'x' }",
+        "an id that isn't one": "{ id: 'pc_\\u202e', rev: 1, hash: 'sha256-' + '0'.repeat(64), name: 'x' }",
+        "an author with no name": "{ external: true, note: 'n', author: { name: 5 } }",
+        "a platform that is a number": "{ external: true, note: 'n', platform: 9 }",
+    }
+    out = {}
+    for what, entry in bad.items():
+        f = kev(page, "const r = await K.stamp('Pad', 4, 4, { set: { from: [" + entry + "] } }); return K.file(r, [r]);")
+        out[what] = file_open(page, f, "bad-from.dmdart")
+        if out[what] == "asked":
+            page.click("#s-fs[open] button:has-text('Cancel')")
+    ok_entry = kev(page, "const r = await K.stamp('Fine', 4, 4, { set: { from: [{ external: true, note: 'n', title: 't', platform: 'SNES', author: 'a' }, { id: 'st_' + '0'.repeat(32), rev: 0, hash: 'sha256-' + '0'.repeat(64), name: 'x', author: { name: 'y', account: null } }] } }); return K.file(r, [r]);")
+    fine = file_open(page, ok_entry, "fine.dmdart")
+    check(all(v == "refused" for v in out.values()) and fine == "asked", f"/studio/ tidy review: from[] entries that aren't text where text goes are refused {out}; a right one opens ({fine})")
+    if fine == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    names = kev(page, """const m2 = await import('/studio/store.js'); const p = m2.plain;
+        return [p('\\u3164\\u3164'), p('\\u2800'), p('\\u115f\\u1160\\uffa0'), p('a\\u034fb\\u206ac'), p('\\u{1f3f4}' + [...'say hello'].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join('') + '\\u{e007f}'),
+          p('\\u{1f3f4}\\u{e0067}\\u{e0062}\\u{e0073}\\u{e0063}\\u{e0074}\\u{e007f}')];""")
+    check(names == ["", "", "", "abc", "\U0001F3F4", "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"],
+          f"/studio/ tidy review: blank fillers, the grapheme joiner, deprecated controls and a sentence smuggled after a flag dropped; Scotland's flag kept {names!r}")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -7856,6 +7917,7 @@ def main() -> int:
             studio_links_review(browser, base, a.site, errors)
             studio_tidy(browser, base, a.site, errors)
             studio_import_colours(browser, base, a.site, errors)
+            studio_tidy_review(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -7944,6 +8006,7 @@ def main() -> int:
         studio_links_review(browser, base, a.site, errors)
         studio_tidy(browser, base, a.site, errors)
         studio_import_colours(browser, base, a.site, errors)
+        studio_tidy_review(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
