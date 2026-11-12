@@ -167,6 +167,10 @@ WASM_GZ_BUDGET = 116 * 1024
 # refresh (Settings in tabs, the Playlists editor as a screen, 2026-10-22):
 # a hard ceiling — the next feature pays for itself.
 JS_CSS_GZ_BUDGET = 60 * 1024
+# exact() and pipeline::render_exact (the site's Studio's Import in full
+# colour, studio-tidy 2026-11-12, ~1.7 KB gz) are site-only code living in
+# the device's art wasm: the first candidate to gate behind a cargo feature
+# (a site-only build of pkg-art) when this line gets tight.
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
