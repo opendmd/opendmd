@@ -63,6 +63,14 @@ REQUIRED_NO_FORMULAS = [
 # With SRAM1 as IRAM (FW_SRAM1_IRAM=1, the `sram1-iram` feature): .iram0.text
 # runs past 0x400A0000, and these are placed there too.
 SRAM1_START = 0x400A0000
+# The classic's IRAM ends below this; the ESP32-S3's .iram0.text is at
+# 0x4037xxxx (one D/IRAM pool, no SRAM1 window): the S1 list is the classic's.
+CLASSIC_IRAM_END = 0x400C0000
+
+
+def in_sram1(lo, hi):
+    """.iram0.text runs into the classic's SRAM1 window (a `sram1-iram` build)."""
+    return lo < CLASSIC_IRAM_END and hi > SRAM1_START
 REQUIRED_S1 = [
     (r"^opendmd_psi::draw::run_lanes::<128>$", "the lane loops' driver (Starfield)"),
     (r"^opendmd_psi::vm::lane_draw::<128>$", "a lane loop's step"),
@@ -110,7 +118,7 @@ def main():
     # place, and no raced pairs (only Formulas race the beam).
     psi = any(n.startswith("opendmd_psi::") for _, n in syms)
     bad = []
-    required = REQUIRED + (REQUIRED_S1 if hi > SRAM1_START else []) + ([] if psi else REQUIRED_NO_FORMULAS)
+    required = REQUIRED + (REQUIRED_S1 if in_sram1(lo, hi) else []) + ([] if psi else REQUIRED_NO_FORMULAS)
     for pat, why in required:
         if not psi and ("opendmd_psi" in pat or "Formulas only" in why):
             continue
@@ -124,7 +132,7 @@ def main():
     if bad:
         print("IRAM placement: hot functions outside IRAM:\n" + "\n".join(bad))
         sys.exit(1)
-    s1 = f", {hi - SRAM1_START:,} B of it in SRAM1" if hi > SRAM1_START else ""
+    s1 = f", {hi - SRAM1_START:,} B of it in SRAM1" if in_sram1(lo, hi) else ""
     n = sum(1 for pat, why in required if psi or not ("opendmd_psi" in pat or "Formulas only" in why))
     print(f"IRAM placement: {n} hot functions in .iram0.text ({hi - lo:,} B{s1}){'' if psi else ', a build without Formulas'}")
 
