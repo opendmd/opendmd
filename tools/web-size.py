@@ -477,7 +477,11 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # the system clipboard, drops routed (Studio files to files.js, pictures and
 # videos to Import), a whole body as one step for an import's layer:
 # ~47.6 KB gz as written.
-STUDIO_PAGE_GZ_BUDGET = 50 * 1024
+# 52 KB since studio-share (2026-11-12, the coordinator's OK, site-only): the
+# one notice pinned in view (say/offer: under its control or at the top, in
+# the open sheet, Escape and Dismiss, two live regions, focus back):
+# ~50.4 KB gz as written.
+STUDIO_PAGE_GZ_BUDGET = 52 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
 # (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
@@ -513,7 +517,8 @@ IMPORT_OPEN_GZ_BUDGET = 330 * 1024
 # First paint and every lazy line together. 92 KB since S2 branch 4 (was 84;
 # import.js and paste.js, as their lines).
 # 96 KB since S2 branch 5 (studio-s2-links: link.js, the pack's Share link, ~92.7 KB).
-STUDIO_ALL_GZ_BUDGET = 96 * 1024
+# 98 KB since studio-share (2026-11-12, the notice above, ~96.2 KB).
+STUDIO_ALL_GZ_BUDGET = 98 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
