@@ -1120,7 +1120,10 @@ fn lanes_over<const N: usize>(
 /// The golden frames through the VM against the host's and wasm's hashes:
 /// plain (with `variants_too`, also without the runs and from the still
 /// cache, `variants`), over the picture, drawn (with a canvas). (matched,
-/// differing).
+/// differing). Says one `psi-probe: vm: golden frames:` line with what
+/// was skipped for the probe's heap (a compile with no room, said each) and
+/// what was not run (the heap under 40 KB), of how many cases: the lane's
+/// judge holds both to what it allows, so neither passes silently.
 #[inline(never)]
 fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
     let t = fx_psi::tables();
@@ -1130,12 +1133,15 @@ fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
     let mut under = vec![0u8; psi::W * psi::H * 3];
     psi::golden::picture(&mut under);
     let mut ink = psi::Ink::boxed();
-    let (mut ok, mut bad) = (0u32, 0u32);
+    let (mut ok, mut bad, mut skipped, mut not_run) = (0u32, 0u32, 0u32, 0u32);
+    let cases = (psi::golden::FRAMES.len() + psi::golden::OVER.len() + psi::golden::DRAWN.len()) as u32;
     let plain = psi::golden::FRAMES.iter().map(|&(n, src, ms, want)| (n, src, ms, false, want, true));
     let over = psi::golden::OVER.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, false));
     let drawn = psi::golden::DRAWN.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, false));
-    for (name, src, ms, o, want, first) in plain.chain(over).chain(drawn) {
+    for (i, (name, src, ms, o, want, first)) in plain.chain(over).chain(drawn).enumerate() {
         if heap_low("golden frames") {
+            // (Counted, not a silent stop: the judge wants none.)
+            not_run = cases - i as u32;
             break;
         }
         if let Err(e) = compile(src, &mut prog, true, true) {
@@ -1143,6 +1149,7 @@ fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
             // `jit2::goldens` does, not a difference.)
             if e.msg == psi::NO_MEMORY {
                 say!(info, "psi-probe: golden {name}: skipped, no heap to compile it here (heap {} B free, largest block {} B)", heap(), crate::state::largest_free_block());
+                skipped += 1;
                 continue;
             }
             bad += 1;
@@ -1159,14 +1166,36 @@ fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
             say!(error, "psi-probe: golden {name} at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
         }
         if variants_too && first {
-            let (o, b) = variants(name, src, ms, &mut s, &mut prog, out, want);
+            let (o, b, k) = variants(name, src, ms, &mut s, &mut prog, out, want);
             ok += o;
             bad += b;
+            skipped += k;
         }
     }
+    say!(
+        info,
+        "psi-probe: vm: golden frames: {ok} match the host/wasm hashes, {bad} differ; {skipped} skipped (the probe's heap), {not_run} not run (heap under 40 KB) of {cases} cases"
+    );
     (ok, bad)
 }
 
+/// A variant's compile: `Ok` to go on, or what it counts as: skipped (no
+/// heap for it here, said) or a difference (any other error, said).
+fn variant_compile(name: &str, what: &str, src: &str, prog: &mut psi::Program, runs: bool) -> Result<(), bool> {
+    match compile(src, prog, runs, true) {
+        Ok(_) => Ok(()),
+        Err(e) if e.msg == psi::NO_MEMORY => {
+            say!(info, "psi-probe: golden {name} ({what}): skipped, no heap to compile it here (heap {} B free, largest block {} B)", heap(), crate::state::largest_free_block());
+            Err(true)
+        }
+        Err(e) => {
+            say!(error, "psi-probe: golden {name} ({what}): does not compile: {}", e.msg);
+            Err(false)
+        }
+    }
+}
+
+/// (matched, differing, skipped for the probe's heap.)
 #[inline(never)]
 fn variants(
     name: &str,
@@ -1176,26 +1205,35 @@ fn variants(
     prog: &mut psi::Program,
     out: &mut [u8],
     want: u64,
-) -> (u32, u32) {
+) -> (u32, u32, u32) {
     let t = fx_psi::tables();
-    let (mut ok, mut bad) = (0, 0);
+    let (mut ok, mut bad, mut skipped) = (0, 0, 0);
     let mut plain = zeroed::<psi::Program>();
-    if compile(src, &mut plain, false, true).is_ok() {
-        psi::render_with::<128>(&plain, s, &psi::golden::inputs(ms), &t, out);
-        let got = psi::golden::fnv(out);
-        if got == want {
-            ok += 1;
-        } else {
-            bad += 1;
-            say!(error, "psi-probe: golden {name} (plain) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
+    match variant_compile(name, "plain", src, &mut plain, false) {
+        Ok(()) => {
+            psi::render_with::<128>(&plain, s, &psi::golden::inputs(ms), &t, out);
+            let got = psi::golden::fnv(out);
+            if got == want {
+                ok += 1;
+            } else {
+                bad += 1;
+                say!(error, "psi-probe: golden {name} (plain) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
+            }
         }
+        Err(true) => skipped += 1,
+        Err(false) => bad += 1,
     }
-    let _ = compile(src, prog, true, true);
+    drop(plain);
+    match variant_compile(name, "still", src, prog, true) {
+        Ok(()) => {}
+        Err(true) => return (ok, bad, skipped + 1),
+        Err(false) => return (ok, bad + 1, skipped),
+    }
     if prog.still_lanes() > 0 {
         let mut st = psi::Still::new();
         if !st.take(prog) {
             say!(error, "psi-probe: golden {name} (still): no heap for the cache ({} B free)", heap());
-            return (ok, bad + 1);
+            return (ok, bad + 1, skipped);
         }
         for pass in ["kept", "cached"] {
             psi::render_rows_still::<128>(prog, s, None, Some(&mut st), &psi::golden::inputs(ms), &t, None, u32::MAX, out);
@@ -1208,7 +1246,7 @@ fn variants(
             }
         }
     }
-    (ok, bad)
+    (ok, bad, skipped)
 }
 
 
