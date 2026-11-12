@@ -864,10 +864,14 @@ const library = lazy(() => libMod, (v) => (libMod = v), 'library');
 const files = lazy(() => filesMod, (v) => (filesMod = v), 'files');
 let impMod = null, pasteMod_ = null;
 const imp = lazy(() => impMod, (v) => (impMod = v), 'import');
+let linkMod = null;
+const link = lazy(() => linkMod, (v) => (linkMod = v), 'link');
 const pasteMod = lazy(() => pasteMod_, (v) => (pasteMod_ = v), 'paste');
 // The Library is a view of this page (#library): the editor comes back when
 // it is left. Import (#import, maybe ?url=, ?q=&platform=, ?shared=1) is a sheet over the editor.
 function route() {
+  // A shared link (#p=, #k=): link.js, which shows it and stores nothing by itself.
+  if (/^#[pk]=/i.test(location.hash)) { done(); link().then((m) => m.show(location.hash), () => {}); root.dataset.view = 'editor'; return; }
   const lib = location.hash === '#library', im = /^#import(\?|$)/.test(location.hash);
   if (lib) { done(); library().then((m) => m.show(), () => {}); } else fx.unlib?.();
   if (im) { if (!/open|ready/.test(root.dataset.import)) { done(); imp().then((m) => m.show(new URLSearchParams(location.hash.slice(8))), () => {}); } } else impMod?.then((m) => m.close(), () => {});
@@ -896,7 +900,7 @@ const studio = {
   get tool() { return tool; }, useTool, swatches, keep() { kept = true; queueSave(); }, openRec, drafts, save,
   get journaled() { return journaled; }, jot, starters: () => starters, builtin,
   // for import.js and paste.js
-  offer, imp, get clip() { return clip; }, paste(c) { clip = c; return act('paste'); },
+  offer, imp, link, get clip() { return clip; }, paste(c) { clip = c; return act('paste'); },
   // A whole body for this piece (an import's new layer), as one undo step.
   async replace(body) {
     done();
@@ -955,6 +959,7 @@ async function main() {
   $('s-gif').addEventListener('click', () => download(false));
   $('s-send').addEventListener('click', () => { done(); out('send'); });
   $('s-libb').addEventListener('click', () => { location.hash = '#library'; });
+  $('s-share').addEventListener('click', () => { done(); link().then((m) => m.share(), () => {}); });
   $('s-imp-b').addEventListener('click', () => { done(); history.pushState({ imp: 1 }, '', '#import'); route(); });
   addEventListener('hashchange', route);
   document.addEventListener('paste', pasted);

@@ -312,6 +312,10 @@ export function checkBody(type, b) {
 
 // A record's envelope as the format names it, and nothing else.
 export const ENVELOPE = ['type', 'id', 'rev', 'hash', 'name', 'tags', 'note', 'author', 'licence', 'from', 'created', 'modified', 'body'];
+// A name or an author from someone else (a file, a link) without the
+// controls that reorder or hide text (bidi overrides and isolates, zero-width
+// marks), so it can't scramble the Studio's own words around it.
+export const plain = (t) => (typeof t === 'string' ? t.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '') : t);
 export const envelope = (r) => Object.fromEntries(ENVELOPE.filter((k) => r[k] !== undefined).map((k) => [k, r[k]]));
 
 const head = (rec) => { const { body, ...h } = rec; return h; };

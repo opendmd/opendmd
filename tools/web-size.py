@@ -493,7 +493,8 @@ STUDIO_LAZY = {
     "files": (10 * 1024, ("files.js",)),          # Save as file, Open a file, a drop, Back up
     "library": (10 * 1024, ("library.js", "library.css")),  # Library (10 KB, was 8: branch 3's detail, duplicate, templates)
     "stamps": (5 * 1024, ("stamps.js",)),        # the Stamp tool, Save as stamp (5 KB, was 4: the ghost and the two sets)
-    "link": (4 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
+    # link 6 KB (4 in the plan; branch 5, ~5.2 KB): the #p= reader checks every byte against what came before it, the preview plays.
+    "link": (6 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
     # paste 3 KB (was 2): a picture's size read from its first bytes (PNG, GIF, JPEG, WebP, BMP) before it is decoded.
     "paste": (3 * 1024, ("paste.js",)),          # a paste that carries an image
     # import 6 KB (3 in the plan; branch 4, ~4.9 KB): the sheet and its frame, every message checked, frames to a piece or a layer.
@@ -507,7 +508,8 @@ STUDIO_LAZY = {
 IMPORT_OPEN_GZ_BUDGET = 330 * 1024
 # First paint and every lazy line together. 92 KB since S2 branch 4 (was 84;
 # import.js and paste.js, as their lines).
-STUDIO_ALL_GZ_BUDGET = 92 * 1024
+# 96 KB since S2 branch 5 (studio-s2-links: link.js, the pack's Share link, ~92.7 KB).
+STUDIO_ALL_GZ_BUDGET = 96 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
