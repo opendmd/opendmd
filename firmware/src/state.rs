@@ -41,6 +41,8 @@ pub const FEATURES: &[&str] = &[
     "formulas",
     #[cfg(feature = "jit")]
     "jit",
+    #[cfg(feature = "connect-probe")]
+    "connect-probe",
 ];
 
 /// [`FEATURES`] as a JSON array.

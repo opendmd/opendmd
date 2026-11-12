@@ -72,6 +72,30 @@ fn main() {
     // The embedded setup page, rendered then gzipped.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
 
+    // The Connect probe (`connect-probe`, spike S0) only: the build's date,
+    // its clock floor before SNTP (`SOURCE_DATE_EPOCH` if set), and an
+    // emulator image's local test CA (`OPENDMD_CONNECT_TEST_ROOT`, a DER
+    // file: `make emu-image-connect`), pinned beside the real roots.
+    println!("cargo::rustc-check-cfg=cfg(connect_test_root)");
+    println!("cargo:rerun-if-env-changed=OPENDMD_CONNECT_TEST_ROOT");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    println!("cargo:rerun-if-changed=sdkconfig.connect-probe");
+    if std::env::var_os("CARGO_FEATURE_CONNECT_PROBE").is_some() {
+        let now = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        });
+        println!("cargo:rustc-env=OPENDMD_BUILD_UNIX={now}");
+        if let Some(root) = std::env::var_os("OPENDMD_CONNECT_TEST_ROOT").filter(|v| !v.is_empty()) {
+            let root = PathBuf::from(root);
+            println!("cargo:rerun-if-changed={}", root.display());
+            std::fs::copy(&root, out_dir.join("connect-test-root.der")).expect("OPENDMD_CONNECT_TEST_ROOT");
+            println!("cargo:rustc-cfg=connect_test_root");
+        }
+    }
+
     // The bundled Formulas (`-- bundle` in opendmd-web/formulas/, then the probe's other examples), for
     // psi-probe's opens through the real path (`psi_probe::bundled`): a
     // list of (file stem, `include_str!`), so a Formula bundled later is in

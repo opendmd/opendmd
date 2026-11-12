@@ -134,7 +134,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -155,8 +155,8 @@ blocklist-check:
 	uv run tools/blocklist-check.py $(BLOCKLIST_ARGS)
 
 test:
-	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags
+	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: the Connect probe's half)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
 	@mkdir -p target
 	$${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iota/updater/main -o target/updater-panel-timing-test \
@@ -591,7 +591,7 @@ fmt:
 clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
@@ -717,6 +717,14 @@ FW_L2_COPY ?= 0
 # the frame loop's own depth, and left 268 B of the 16 KB; a
 # release build never runs them. (From the heap: the probe's heap figures
 # are 2 KB under a release build's.)
+# connect-probe builds only (OpenDMD Connect's spike S0, src/connect_probe.rs):
+# firmware/sdkconfig.connect-probe (dynamic TLS buffers, session tickets, the
+# trusted-certificate callback, one more socket) and the TLS record sizes,
+# CONNECT_TLS_IN/OUT (CONNECT.md 5.2: 4096 in, 2048 out). Every other build
+# keeps sdkconfig.defaults' TLS section as it is.
+CONNECT_TLS_IN ?= 4096
+CONNECT_TLS_OUT ?= 2048
+FW_CONNECT = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
@@ -724,6 +732,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
 	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
+	$(if $(FW_CONNECT),cat $(CURDIR)/$(FW)/sdkconfig.connect-probe; echo 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)'; echo 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy).
@@ -746,7 +755,7 @@ FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal)$(if $(FW_CONNECT),+connect-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) $(if $(FW_CONNECT),$(FW)/sdkconfig.connect-probe) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -1257,6 +1266,25 @@ emu-image-leak:
 emu-leak: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# OpenDMD Connect's spike S0 in the emulator (tools/connect-s0/m8_emu.py): M8
+# (the heap's pools and census around a TLS session) and the probe's
+# behaviour end to end, against tools/connect-s0/echo_server.py inside the
+# lane's own network namespace. The image: emu-census + connect-probe, the
+# host connect-s0.test at 10.0.2.2:8443 and a local test root
+# ($(EMU_CONNECT_DIR)/certs, made once and again after 20 days) pinned beside
+# the real ones; never a device's. EMU_CONNECT_OK.
+EMU_CONNECT_DIR = $(EMU_DIR)/connect
+EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-connect-certs:
+	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect-s0/echo_server.py certs $(EMU_CONNECT_DIR)/certs; fi
+emu-image-connect: emu-connect-certs
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	OPENDMD_CONNECT_HOST=connect-s0.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_TOKEN=emu-s0 \
+	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs/root.der \
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect-probe FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-connect: emu-build emu-card
+	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
+	uv run --quiet tools/connect-s0/m8_emu.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real

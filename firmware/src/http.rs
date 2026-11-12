@@ -1990,6 +1990,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         })?;
     }
 
+    // The Connect probe's test hooks (`connect-probe` builds only; not in
+    // docs/api.md: this build's alone).
+    #[cfg(feature = "connect-probe")]
+    crate::connect_probe::routes(&mut server)?;
+
     // --- Catch-all, registered last ---------------------------------------
     //
     // The app's own index.html links its assets relatively, so a browser asks
@@ -2965,6 +2970,9 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         stream::stack_low().map_or_else(|| "null".to_string(), |v| v.to_string()),
         net_json(),
     );
+    // The Connect probe (spike S0, `connect-probe` builds only).
+    #[cfg(feature = "connect-probe")]
+    let _ = write!(out, r#""connect":{},"#, crate::connect_probe::json());
     let _ = write!(
         out,
         r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"card_id":{},"error":{},"attempts":{},"formatting":{},"format_error":{}"#,

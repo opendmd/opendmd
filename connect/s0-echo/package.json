@@ -1,0 +1,13 @@
+{
+  "name": "opendmd-connect-s0",
+  "private": true,
+  "type": "module",
+  "description": "OpenDMD Connect spike S0: the scratch echo Worker (one Durable Object, hibernating WebSockets). Throwaway.",
+  "scripts": {
+    "test": "node --test test/echo.test.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261023.1-beta",
+    "wrangler": "4.154.0"
+  }
+}
