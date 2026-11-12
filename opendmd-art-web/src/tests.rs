@@ -651,3 +651,76 @@ fn build_name_in_the_browser_is_the_cores() {
     assert!(crate::platforms().includes(&"VIRTUAL_BOY".into(), 0));
     assert!(!crate::platforms().includes(&"NINTENDO_DS".into(), 0));
 }
+
+/// The full-colour render (the site's Studio's Import) keeps every colour:
+/// 4,096 of them, dark ones that are not black among them, where the GIF
+/// (256 at most) maps some of those dark ones to black.
+#[test]
+fn render_exact_keeps_every_colour() {
+    let mut img = Image::new(W, H);
+    for (i, p) in img.px.iter_mut().enumerate() {
+        let (x, y) = ((i % W) as u8, (i / W) as u8);
+        *p = match x {
+            0..4 => [0, 0, 0, 255],
+            4..12 => [x - 3, y / 4, 0, 255],
+            _ => [x * 2, y * 8, x.wrapping_mul(7) ^ y, 255],
+        };
+    }
+    let plan = Plan::default();
+    let (frames, delays) = render_exact(&img, &plan, None);
+    let want: Vec<u32> = img.px.iter().map(|&p| rgb_key(p)).collect();
+    let frames: Vec<Vec<u32>> = frames
+        .iter()
+        .map(|f| f.px.iter().map(|&p| rgb_key(p)).collect())
+        .collect();
+    assert_eq!((frames.len(), delays), (1, vec![STILL_MS]));
+    assert_eq!(frames[0], want);
+    assert!(frames[0]
+        .iter()
+        .enumerate()
+        .all(|(i, &c)| (c == 0) == (i % W < 4)));
+    let gif = render(&img, &plan);
+    assert_eq!(gif.palette.len(), 256);
+    let dark_black = gif
+        .rgb(0)
+        .chunks(3)
+        .enumerate()
+        .filter(|(i, c)| (4..12).contains(&(i % W)) && *c == [0, 0, 0])
+        .count();
+    assert!(
+        dark_black > 0,
+        "the 256-colour GIF maps some dark colours to black"
+    );
+    // A pan: every window in full colour, the text over each.
+    let mut wide = Image::new(W + 3, H);
+    for (i, p) in wide.px.iter_mut().enumerate() {
+        *p = [(i % 251) as u8, (i / 251) as u8, 9, 255];
+    }
+    let t = Overlay {
+        msg: "HI".into(),
+        small: false,
+        colour: 0x123456,
+        anchor: 0,
+        dx: 0,
+        dy: 0,
+        from: 0,
+        to: 0,
+    };
+    let pan = Plan {
+        motion: Motion::Pan,
+        ..Plan::default()
+    };
+    let (f, d) = render_exact(&wide, &pan, Some(&t));
+    let f: Vec<Vec<u32>> = f
+        .iter()
+        .map(|f| f.px.iter().map(|&p| rgb_key(p)).collect())
+        .collect();
+    assert_eq!((f.len(), d.len()), (4, 4));
+    let m = t.mask();
+    for (k, fr) in f.iter().enumerate() {
+        for (j, &c) in fr.iter().enumerate() {
+            let src = rgb_key(wide.px[(j / W) * wide.w + k + j % W]);
+            assert_eq!(c, if m[j] { 0x123456 } else { src });
+        }
+    }
+}
