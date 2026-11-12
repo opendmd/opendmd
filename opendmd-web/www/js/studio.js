@@ -925,14 +925,15 @@ function build(root, o) {
     // The site's page: a picture in and named, nothing being saved.
     ready: () => !!(S.studio && S.path && !S.saving),
     // The site's page: what Save would write, {gif, name, title, platform,
-    // author, logo}, or null (no picture, or the fields name nothing).
-    async out() {
+    // author, logo}, or null (no picture, or the fields name nothing; with
+    // `any`, the Studio's Import, which names nothing, only no picture).
+    async out(any) {
       const st = S.studio;
-      if (!st || !S.path || S.saving) return null;
+      if (!st || (!S.path && !any) || S.saving) return null;
       S.saving = true;
       try {
         const gif = await finish(st);
-        return gif && { gif, name: base(S.path), title: title.value.trim(), platform: splat.value, author: author.value.trim(), logo: logo.checked };
+        return gif && { gif, name: S.path ? base(S.path) : '', title: title.value.trim(), platform: splat.value, author: author.value.trim(), logo: logo.checked };
       } finally { S.saving = false; await naming(); }
     },
     async show() {

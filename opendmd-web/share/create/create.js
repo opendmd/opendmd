@@ -178,27 +178,28 @@ function inStudio(st, use) {
   use.onclick = async () => {
     say('');
     if (!$('studio').classList.contains('has')) { say('Pick a picture, a GIF or a video first.'); return; }
-    // The Studio needs no file name: the converter's out() does, so a plain
-    // one stands in while the GIF is written (any title, author and platform,
-    // or none, are sent as they were typed).
-    const t = $('st-title'), a = $('st-author'), was = [t.value, a.value];
-    const set = (tv, av) => { t.value = tv; a.value = av; t.dispatchEvent(new Event('input')); };
+    // The Studio needs no file name (out(true)): the fields go as they were typed.
     use.disabled = true;
     try {
-      set('Imported', '');
-      for (let i = 0; i < 60 && !st.ready(); i++) await new Promise((ok) => setTimeout(ok, 50));
-      const o = await st.out();
+      const o = await st.out(true);
       if (!o) { say('The GIF could not be made: try again.'); return; }
       const { read } = await import('./gifread.js'), g = read(o.gif);
       // (Times as the Studio keeps them: 20 ms to a minute.)
       const ms = g.ms.map((x) => Math.min(60000, Math.max(20, Math.round(x / 10) * 10)));
       to({ type: FRAMES, w: 128, h: 32, n: g.n, total: g.total, ms, plays: g.plays, px: g.px.buffer,
-        title: was[0].trim().slice(0, 120), platform: o.platform, author: was[1].trim().slice(0, 80), logo: o.logo, note: from() }, [g.px.buffer]);
+        title: o.title.slice(0, 120), platform: o.platform, author: o.author.slice(0, 80), logo: o.logo, note: from() }, [g.px.buffer]);
     } catch (e) { say(e.message || String(e)); } finally {
       use.disabled = false;
-      set(...was);
     }
   };
+  // A drop anywhere on the page, not only on the converter: never left to the browser.
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.target.closest?.('#studio')) return; // (the converter's own)
+    const f = [...(e.dataTransfer?.files || [])][0];
+    if (f) st.load(f, { label: 'Your file' });
+  });
   to({ type: S_READY });
 }
 // Where the picture came from, for the piece's `from`: "Game art: <title>",
