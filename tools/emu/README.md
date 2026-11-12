@@ -15,7 +15,34 @@ make emu-leak      # an emu-census image plays 70 GIFs (on to 150 while the halv
 make emu-api       # the emu-census image on WiFi, its HTTP API driven from the host over two boots -> EMU_API_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
+make emu-s3-nocard # the ESP32-S3 preview (VARIANT=s3), nocard-test image, in the S3 machine: as emu-nocard -> EMU_NOCARD_OK
+make emu-s3-probe  # the S3 psi-probe image, no card, offline: bundled Formulas, the JIT spike's kernels, every golden frame through the VM and the JIT -> EMU_PROBE_OK, then the judge's red checks -> PROBE_RED_OK
+make emu-image-s3  # the plain s3 build into $EMU_DIR/s3/dist (its size; no lane boots it)
 ```
+
+## The ESP32-S3 lanes (S3 port phase 0)
+
+`VARIANT=s3` (firmware/partitions-s3.csv, firmware/sdkconfig.s3) runs in esp32sim's S3 machine:
+`run.py --chip s3` gives `--chip s3 --board none --rom esp32s3_rev0_rom.elf --flash-mb 8 --psram-mb 8`
+(the DevKitC-1 N8R8: quad flash, octal PSRAM). Nothing is wired to the pins, so the panel driver (the
+HUB75 library's LCD_CAM backend) comes up and clocks into nothing. The S3 machine has **no SD card**:
+the SD-over-SPI card is a board of the classic ESP32's (`esp32dev-sdspi`, which watches that chip's
+SPI3), so only `nocard` and `probe --no-card` run there. A card for the S3 would need the same byte-stream
+card as an S3 board (`--board s3-sdspi`: the sdspi device behind the S3's SPI2/SPI3 model on GPIO 39-41/21,
+the pins in firmware/src/config.rs), or the P4's `--sd` SDMMC card wired into the S3's SDMMC host for
+the 4-bit phase.
+
+`run.py probe --no-card` (either chip) boots a psi-probe image with no card and NVS `network` = `off`
+(seeded as in the nocard lane: with no card the probe runs at once, and the setup AP starting beside it
+took ~90 KB of the heap the goldens need); the firmware then runs `psi_probe::run_nocard`, and the judge
+wants `psi-probe: done: no card`, every bundled Formula opened (offline, a clock Formula refuses by design),
+the JIT spike's three hand-written kernels each as the VM (tiny 42 from every block, the call's value, the
+floor's bytes), the golden line with none differing, the goldens through the JIT's kernels with some matched
+and none differing, none on the VM and none skipped for the probe's heap (`--jit-skips N` allows N: the
+classic's no-card probe skips 2), and no `N differ`. `make emu-s3-probe` then runs `probe_red.py` on its log:
+the judge replays it (`run.py --replay LOG`: no emulator) as it is, which must pass, and doctored (kernels
+skipped, kernels on the VM, the kernel goldens line or the floor kernel's missing, the tiny kernel wrong),
+each of which must fail -> PROBE_RED_OK.
 
 Files:
 

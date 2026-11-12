@@ -15,10 +15,16 @@ use tera::{Context, Tera};
 
 fn main() {
     embuild::espidf::sysenv::output();
+    // The chip's cfg (`esp32` or `esp32s3`, esp-idf-sys's MCU, which the line
+    // above passes on): the S3 port's pin map and its stubs are
+    // `#[cfg(esp32s3)]`. Declared for rustc's cfg check.
+    println!("cargo:rustc-check-cfg=cfg(esp32, esp32s3)");
 
     // The Makefile rewrites the partition path into target/sdkconfig.partitions;
     // still re-run when the table itself changes.
     println!("cargo:rerun-if-changed=partitions.csv");
+    println!("cargo:rerun-if-changed=partitions-s3.csv");
+    println!("cargo:rerun-if-changed=sdkconfig.s3");
     println!("cargo:rerun-if-changed=sdkconfig.defaults");
     println!("cargo:rerun-if-changed=components/hub75_shim/include/hub75_shim.h");
     println!("cargo:rerun-if-changed=components/hub75_shim/hub75_shim.cpp");
@@ -28,13 +34,25 @@ fn main() {
     // also picks the partition table and the flash size): `/api/status`
     // reports it as `variant`, the boot banner prints it, and a firmware
     // update must be for the same one (`ota.rs`).
-    let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
+    // The variant and the chip go together: `s3` is the ESP32-S3's alone,
+    // the others the classic's, so a hand build for one chip can never
+    // take the other's layout (and its bundles). Unset, the chip's own.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let s3 = target.starts_with("xtensa-esp32s3-");
+    let variant = std::env::var("OPENDMD_FLASH_VARIANT")
+        .unwrap_or_else(|_| if s3 { "s3" } else { "4mb" }.into());
     let variant_name = match variant.as_str() {
         "4mb" => "DevKit (4 MB)",
         // partitions-emu.csv: esp32sim's psi-probe image, never released.
         "emu8mb" => "emulator only (8 MB)",
-        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb (and emu8mb, emulator only)"),
+        // partitions-s3.csv: the ESP32-S3 DevKitC-1 preview (not released).
+        "s3" => "ESP32-S3 DevKitC-1 (8 MB)",
+        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb (and emu8mb, emulator only; s3, the S3 preview)"),
     };
+    if s3 != (variant == "s3") {
+        panic!("OPENDMD_FLASH_VARIANT={variant} is not a layout for target {target}: s3 is the ESP32-S3's (xtensa-esp32s3-espidf), 4mb and emu8mb the classic ESP32's");
+    }
+    println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
 
