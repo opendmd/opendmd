@@ -9,8 +9,10 @@
 //! retired tree can hold thousands of entries (the stock card's Consoles
 //! has ~3,800): all of them in one `Vec<(String, bool)>` was ~250 KB, an
 //! allocation the display's heap cannot make (an abort, not an error).
-//! Each batch's room is taken fallibly too: no room is an
-//! [`io::ErrorKind::OutOfMemory`] error, never an abort.
+//! The batch's array of (at most `batch`) slots is taken fallibly: no room
+//! for it is an [`io::ErrorKind::OutOfMemory`] error. The names themselves
+//! (a short `String` each, ≤ 255 characters on FAT) are ordinary
+//! allocations, bounded by the batch.
 
 use std::io;
 
@@ -79,6 +81,8 @@ fn go(
     removed: &mut u32,
     depth: u32,
 ) -> io::Result<bool> {
+    // (Only this array of slots is fallible: each name in it is a small
+    // ordinary allocation.)
     let mut names: Vec<(String, bool)> = Vec::new();
     names.try_reserve_exact(batch).map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "no heap to list the directory"))?;
     loop {
@@ -113,13 +117,14 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    /// Paths -> is a directory; counts the largest listing asked and
-    /// whether anything was removed from a directory while it was listed.
+    /// Paths -> is a directory; the largest listing given and how many
+    /// listings were asked; `fail`: a file whose removal errs.
     #[derive(Default)]
     struct Mem {
         tree: BTreeMap<String, bool>,
         largest: usize,
         lists: u32,
+        fail: Option<String>,
     }
 
     impl Mem {
@@ -146,6 +151,9 @@ mod tests {
             Ok(())
         }
         fn remove_file(&mut self, p: &str) -> io::Result<()> {
+            if self.fail.as_deref() == Some(p) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only"));
+            }
             match self.tree.remove(p) {
                 Some(false) => Ok(()),
                 _ => Err(io::ErrorKind::NotFound.into()),
@@ -225,6 +233,35 @@ mod tests {
         let (_, done) = remove_tree(&mut m, "/sd/odm", 8, &mut || false, &mut || {}).unwrap();
         assert!(!done);
         assert!(m.tree.contains_key("/sd/odm"));
+    }
+
+    #[test]
+    fn a_removal_that_fails_mid_batch_is_the_answer() {
+        let mut m = odm(100);
+        m.fail = Some("/sd/odm/Consoles/GAME_0040.odm".into());
+        let e = remove_tree(&mut m, "/sd/odm", 32, &mut || false, &mut || {}).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+        // The 40 before it went (32, then 8 of the next batch); it and the rest are there.
+        assert!(!m.tree.contains_key("/sd/odm/Consoles/GAME_0039.odm"));
+        assert!(m.tree.contains_key("/sd/odm/Consoles/GAME_0040.odm") && m.tree.contains_key("/sd/odm/Consoles/GAME_0099.odm"));
+    }
+
+    /// `MAX_DEPTH` directories nested below `dir` go; one more is left.
+    #[test]
+    fn the_depth_cap_exactly() {
+        for (levels, want_done) in [(MAX_DEPTH, true), (MAX_DEPTH + 1, false)] {
+            let mut m = Mem::default();
+            let mut p = String::from("/sd/odm");
+            m.add(&p, true);
+            for i in 0..levels {
+                p = format!("{p}/d{i}");
+                m.add(&p, true);
+            }
+            m.add(&format!("{p}/leaf.odm"), false);
+            let (_, done) = remove_tree(&mut m, "/sd/odm", 8, &mut || false, &mut || {}).unwrap();
+            assert_eq!(done, want_done, "{levels} levels");
+            assert_eq!(m.tree.is_empty(), want_done, "{levels} levels: {:?}", m.tree.keys().collect::<Vec<_>>());
+        }
     }
 
     /// The same through real files (StdFs), a batch smaller than the folder.
