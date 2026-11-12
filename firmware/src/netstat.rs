@@ -37,12 +37,12 @@ pub enum At {
     Refusal = 3,
     Upload = 4,
     /// The Connect probe's TLS reads and writes (`connect_probe::Bio`).
-    #[cfg(feature = "connect-probe")]
+    #[cfg(feature = "connect-core")]
     Connect = 5,
 }
-#[cfg(not(feature = "connect-probe"))]
+#[cfg(not(feature = "connect-core"))]
 const AT: [&str; 5] = ["worker", "request", "status", "refusal", "upload"];
-#[cfg(feature = "connect-probe")]
+#[cfg(feature = "connect-core")]
 const AT: [&str; 6] = ["worker", "request", "status", "refusal", "upload", "connect"];
 
 /// A window of [`WINDOW_S`]: the current one and the one before are shown.

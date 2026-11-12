@@ -72,10 +72,11 @@ def idle_reading(label):
 
 # The first 10 (the first one makes the ticket), then the rest.
 b0, a0 = run_job(run, args, "first-10", True, 10, args.interval_s, 10 * args.interval_s * 3 + 120)
-s0lib.wait_open(run, phase="first-10:open")
+# Both readings are of an open, idle session: else they compare nothing.
+run.gate("open after the first 10", s0lib.wait_open(run, phase="first-10:open"), "open", "open")
 free10, tls10 = idle_reading("after-10")
 b1, a1 = run_job(run, args, "rest", True, args.n - 10, args.interval_s, (args.n - 10) * args.interval_s * 2 + 300)
-s0lib.wait_open(run, phase="rest:open")
+run.gate(f"open after all {args.n}", s0lib.wait_open(run, phase="rest:open"), "open", "open")
 free_n, tls_n = idle_reading(f"after-{args.n}")
 run.phases["rest"] = run.phase_stats("rest")
 handshake_gates(run, "all", b0, a1, True, args.n, args.max_ms)

@@ -41,7 +41,9 @@ pub const FEATURES: &[&str] = &[
     "formulas",
     #[cfg(feature = "jit")]
     "jit",
-    #[cfg(feature = "connect-probe")]
+    #[cfg(feature = "connect-core")]
+    "connect-core",
+    #[cfg(feature = "connect-measure")]
     "connect-probe",
 ];
 

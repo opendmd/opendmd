@@ -43,6 +43,8 @@ try:
         st1 = run.sample(name)
         c0, c1 = st0.get("connect") or {}, st1.get("connect") or {}
         rows = [r for r in run.rows if r["phase"] == name]
+        # A failed status read counts as not open.
+        failed_reads = sum(1 for r in rows if r.get("read_failed"))
         open_share = sum(1 for r in rows if r.get("connect.state") == "open") / max(1, len(rows))
         rec = (c1.get("reconnects") or 0) - (c0.get("reconnects") or 0)
         attempts = (c1.get("attempts") or 0) - (c0.get("attempts") or 0)
@@ -57,8 +59,10 @@ try:
                          "missed": (s0lib.get(c1, "ping.missed") or 0) - (s0lib.get(c0, "ping.missed") or 0),
                          "rtt_max_ms": s0lib.get(c1, "ping.rtt_max_ms")}
         print(f"  {name}: {rec} sessions ended, {attempts} attempts ({per_day:.1f} a day), open {open_share:.2%} of samples, causes {results[name]['causes']}", flush=True)
-        run.gate(f"{name}: session open in >= 99 % of samples", open_share >= 0.99, f"{open_share:.2%} of {len(rows)}", ">= 99 %",
+        run.gate(f"{name}: session open in >= 99 % of samples", open_share >= 0.99, f"{open_share:.2%} of {len(rows)} (failed reads count as not open)", ">= 99 %",
                  required=(ping_s == 45))
+        run.gate(f"{name}: status reads answered", failed_reads / max(1, len(rows)) <= 0.01, f"{failed_reads} of {len(rows)} failed", "<= 1 %")
+        results[name]["failed_reads"] = failed_reads
 finally:
     try:
         run.panel.post("config", ping_s=45, ping="ws")

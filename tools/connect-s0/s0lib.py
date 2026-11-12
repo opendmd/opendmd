@@ -87,8 +87,19 @@ class Panel:
         return None
 
     def post(self, what: str, **params):
+        """A debug hook. A 409 (the probe's queue is full) is asked again a
+        few times, then ends the script with a plain message."""
         q = "&".join(f"{k}={urllib.request.quote(str(v))}" for k, v in params.items() if v is not None)
-        return self._req("POST", f"/api/debug/connect/{what}" + (f"?{q}" if q else ""))
+        for k in range(6):
+            try:
+                return self._req("POST", f"/api/debug/connect/{what}" + (f"?{q}" if q else ""))
+            except urllib.error.HTTPError as e:
+                if e.code != 409:
+                    raise
+                if k == 5:
+                    sys.exit(f"POST /api/debug/connect/{what}: 409, the probe's request queue stayed full (is another script running?)")
+                time.sleep(1.0 + k)
+        return {}
 
     def debug(self):
         return self._req("GET", "/api/debug/connect")
@@ -182,10 +193,11 @@ class Run:
         st = self.panel.status()
         row = {"t": round(time.time(), 3), "phase": phase, **flatten(st)}
         up = row.get("uptime_s")
+        prev = next((r["uptime_s"] for r in reversed(self.rows) if r.get("uptime_s") is not None), None)
         if up is not None:
-            if self.rows and self.rows[-1].get("uptime_s") is not None and up + 5 < self.rows[-1]["uptime_s"]:
+            if prev is not None and up + 5 < prev:
                 self.restarted = True
-                self.note(f"RESTART seen: uptime {self.rows[-1]['uptime_s']} -> {up} (restarts[0] {row.get('restarts.0.reason')})")
+                self.note(f"RESTART seen: uptime {prev} -> {up} (restarts[0] {row.get('restarts.0.reason')})")
             if self.first_uptime is None:
                 self.first_uptime = up
         self.rows.append(row)
@@ -225,6 +237,9 @@ class Run:
                 st = self.sample(phase)
             except Exception as e:  # noqa: BLE001 - a missed read is data too
                 self.note(f"status read failed at {time.strftime('%H:%M:%S')}: {e}")
+                row = {"t": round(time.time(), 3), "phase": phase, "read_failed": 1}
+                self.rows.append(row)
+                self._write_csv_row(row)
                 st = None
             if st is not None and every:
                 every(st)
@@ -239,9 +254,11 @@ class Run:
 
     # --- statistics ------------------------------------------------------------
     def phase_stats(self, phase: str) -> dict:
-        rows = [r for r in self.rows if r["phase"] == phase]
+        everything = [r for r in self.rows if r["phase"] == phase]
+        rows = [r for r in everything if not r.get("read_failed")]
+        failed_reads = len(everything) - len(rows)
         if len(rows) < 2:
-            return {"samples": len(rows)}
+            return {"samples": len(rows), "failed_reads": failed_reads}
         first, last = rows[0], rows[-1]
         dur = max(1e-9, last["t"] - first["t"])
         deltas, rates = {}, {}
@@ -265,6 +282,7 @@ class Run:
         largest = last.get("heap_floor_at.largest") if dropped else last.get("connect.heap.low_largest")
         return {
             "samples": len(rows),
+            "failed_reads": failed_reads,
             "duration_s": round(dur, 1),
             "deltas": deltas,
             "rates_per_h": {k: round(v, 3) for k, v in rates.items()},
@@ -300,7 +318,7 @@ class Run:
     def gate_content(self, phase: str):
         """What played: a `formula` phase must have a Formula on screen (its
         frame time reported) in >= 90 % of the samples, a `gif` phase not."""
-        rows = [r for r in self.rows if r["phase"] == phase]
+        rows = [r for r in self.rows if r["phase"] == phase and not r.get("read_failed")]
         if not rows or phase not in ("gif", "formula"):
             return
         share = sum(1 for r in rows if r.get("formula_frame_us") is not None) / len(rows)
@@ -413,9 +431,17 @@ def start_phase(run: Run, phase: str, args, probe: bool = False):
 
 def reset_probe(run: "Run"):
     """The probe's counters, histograms and lows from zero (POST reset),
-    then a second for its next turn to take it."""
-    run.panel.post("reset")
-    time.sleep(1.0)
+    waiting until the probe has taken that request (`connect.ask_taken`)."""
+    seq = run.panel.post("reset").get("ask")
+    end = time.time() + 20
+    while time.time() < end:
+        try:
+            if (get(run.panel.status(), "connect.ask_taken") or 0) >= (seq or 0):
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.5)
+    sys.exit(f"the probe did not take the reset (ask {seq}) within 20 s")
 
 
 def need_probe(st: dict) -> dict:
@@ -426,6 +452,14 @@ def need_probe(st: dict) -> dict:
 
 
 def wait_open(run: Run, timeout_s: float = 180.0, phase: str = "wait-open") -> bool:
+    """Wait for the session: `timeout_s`, or longer while the hold after
+    boot (`connect.hold_s`) still runs, with 120 s to spare."""
+    try:
+        st0 = run.panel.status()
+        hold_left = (get(st0, "connect.hold_s") or 0) - (st0.get("uptime_secs") or 0)
+        timeout_s = max(timeout_s, hold_left + 120)
+    except Exception:  # noqa: BLE001
+        pass
     st = run.sample_for(timeout_s, phase, until=lambda s: get(s, "connect.state") == "open")
     ok = st is not None and get(st, "connect.state") == "open"
     if not ok:

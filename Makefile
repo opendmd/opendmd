@@ -724,18 +724,25 @@ FW_L2_COPY ?= 0
 # keeps sdkconfig.defaults' TLS section as it is.
 CONNECT_TLS_IN ?= 4096
 CONNECT_TLS_OUT ?= 2048
-FW_CONNECT = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
+FW_CONNECT_FEATURES := connect-probe connect-core connect-measure
+FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
 # The feature and its sdkconfig must go together: a bench build takes it in
 # FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
 # would layer the sdkconfig on a build without the code, and is refused.
-FW_CONNECT_IN_BENCH = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_FEATURES)))
-FW_CONNECT_IN_RELEASE = $(filter connect-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)))
-FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=connect-probe is for release builds (make fw-release); a bench build takes FW_FEATURES=connect-probe"; exit 2; },true)
-FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=connect-probe is for bench builds; a release build takes FW_RELEASE_FEATURES=connect-probe"; exit 2; },true)
+FW_CONNECT_IN_BENCH = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_FEATURES)))
+FW_CONNECT_IN_RELEASE = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)))
+FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE) is for release builds (make fw-release); a bench build takes FW_FEATURES=$(FW_CONNECT_IN_RELEASE)"; exit 2; },true)
+# A Connect release build is a measurement build: never into the release's
+# own dist/ or target dir (give both: DIST=... FW_RELEASE_TARGET_DIR=...),
+# and its version says so (FW_VERSION gets -connect-s0, below).
+FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=$(FW_CONNECT_IN_BENCH) is for bench builds; a release build takes FW_RELEASE_FEATURES=$(FW_CONNECT_IN_BENCH)"; exit 2; },true) \
+	$(if $(FW_CONNECT_IN_RELEASE),$(if $(filter command line environment,$(origin DIST)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a DIST of its own (not dist/)"; exit 2; }) \
+	$(if $(filter command line environment,$(origin FW_RELEASE_TARGET_DIR)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a FW_RELEASE_TARGET_DIR of its own"; exit 2; }) \
+	&& { test "$(abspath $(DIST))" != "$(abspath dist)" || { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): DIST must not be dist/"; exit 2; }; })
 # fw-clippy's connect-probe lane: a target dir of its own (keyed by the
 # fragment's inputs, so a change makes a new one), its sdkconfig the
 # feature's.
-FW_CLIPPY_CONNECT = $(CURDIR)/$(FW)/target/connect-clippy-$(shell cat $(FW)/sdkconfig.defaults $(FW)/sdkconfig.connect-probe 2>/dev/null | sha256sum | cut -c1-8)-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)
+FW_CLIPPY_CONNECT = $(CURDIR)/$(FW)/target/connect-clippy
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
@@ -847,8 +854,16 @@ fw-clippy: fw-sdkconfig-flavour
 fw-clippy-connect:
 	@mkdir -p $(FW_CLIPPY_CONNECT)
 	@$(FW_FRAGMENT) > $(FW_CLIPPY_CONNECT)/sdkconfig.fragment
+	@# One dir: its generated sdkconfig goes whenever the inputs change.
+	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_CLIPPY_CONNECT)/sdkconfig.fragment | sha256sum | cut -c1-16); \
+	 if [ "$$want" != "$$(cat $(FW_CLIPPY_CONNECT)/sdkconfig.stamp 2>/dev/null)" ]; then \
+	   rm -f $(FW_CLIPPY_CONNECT)/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
+	   echo $$want > $(FW_CLIPPY_CONNECT)/sdkconfig.stamp; \
+	 fi
 	@echo "==> Clippy firmware, connect-probe (the Connect spike's probe, with sdkconfig.connect-probe)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
+	@echo "==> Clippy firmware, connect-core (the probe's session alone, M1's build)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-core -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -894,6 +909,11 @@ fw-clean:
 # descriptor as "<version> <var>" (checked below at offset 0x30 of the image).
 # See docs/deploying.md.
 FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+# A Connect measurement build's files and app descriptor say so
+# ("<version>-connect-s0"): they cannot be taken for the release's.
+ifneq ($(filter connect-probe connect-core connect-measure,$(subst $(comma), ,$(FW_RELEASE_FEATURES))),)
+FW_VERSION := $(FW_VERSION)-connect-s0
+endif
 # The release build wants ~1.5 GB of its own (host build scripts plus a
 # second ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier moves it.
 # CARGO_WORKSPACE_DIR is set below because embuild otherwise takes the crate
@@ -1299,7 +1319,7 @@ emu-leak: emu-build emu-card
 # ($(EMU_CONNECT_DIR)/certs, made once and again after 20 days) pinned beside
 # the real ones; never a device's. EMU_CONNECT_OK.
 EMU_CONNECT_DIR = $(EMU_DIR)/connect
-EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-connect-s0-4mb-full.bin
 emu-connect-certs:
 	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect-s0/echo_server.py certs $(EMU_CONNECT_DIR)/certs; fi
 emu-image-connect: emu-connect-certs

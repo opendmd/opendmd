@@ -94,7 +94,16 @@ jit = ["formulas", "opendmd-core/psi-jit"]
 # on whenever it is on (dynamic TLS buffers, session tickets, the
 # trusted-certificate callback, one more socket), so the build without it
 # is today's, bit for bit. `make fw-release FW_RELEASE_FEATURES=connect-probe`.
-connect-probe = ["opendmd-core/connect"]
+connect-probe = ["connect-core", "connect-measure"]
+# The probe's two halves (M1 is measured on `connect-core` alone):
+# - `connect-core`: the session itself (TLS, the WebSocket client, the
+#   pinned roots, backoff, DNS, the crash guard), starting by itself after
+#   the hold, to the build-time host;
+# - `connect-measure`: what only measuring needs (the `connect` telemetry,
+#   the /api/debug/connect hooks, M9, M10, the mbedTLS byte counters, the
+#   handshake histograms).
+connect-core = ["opendmd-core/connect"]
+connect-measure = ["connect-core"]
 # Bench test hooks that a release does without: card speed's
 # `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
 # `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a
