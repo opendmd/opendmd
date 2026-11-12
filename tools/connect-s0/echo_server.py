@@ -235,6 +235,53 @@ class Server:
             st["left"] = -1
 
 
+class Hostile:
+    """A listener that never finishes a handshake: `silent` takes the
+    connection and says nothing; `drip` answers the ClientHello with a TLS
+    record header for 4 KB and then one byte every 2 s (the probe must give
+    up within its blocking bound, not wait for the record)."""
+
+    def __init__(self, listen: str, mode: str):
+        host, port = listen.rsplit(":", 1)
+        self.addr, self.mode = (host, int(port)), mode
+        self.connections = 0
+
+    def start(self):
+        self.ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.ls.bind(self.addr)
+        self.ls.listen(4)
+        threading.Thread(target=self._accept, daemon=True).start()
+        return self
+
+    def _accept(self):
+        while True:
+            try:
+                c, _ = self.ls.accept()
+            except OSError:
+                return
+            self.connections += 1
+            threading.Thread(target=self._conn, args=(c,), daemon=True).start()
+
+    def _conn(self, c):
+        import time
+        try:
+            c.settimeout(60)
+            c.recv(4096)
+            if self.mode == "drip":
+                c.sendall(b"\x16\x03\x03\x10\x00")
+                for _ in range(60):
+                    time.sleep(2)
+                    c.sendall(b"\x00")
+            else:
+                while c.recv(4096):
+                    pass
+        except OSError:
+            pass
+        finally:
+            c.close()
+
+
 def frame(op, data):
     n = len(data)
     if n < 126:

@@ -33,9 +33,10 @@ args = ap.parse_args()
 base = s0lib.load_baseline(args.baseline)
 run = s0lib.Run("m4", args)
 s0lib.need_probe(run.sample("start"))
-s0lib.wait_open(run)
+s0lib.reset_probe(run)
+run.gate("the session opened", s0lib.wait_open(run), "open", "open within 180 s")
 for phase in args.phases.split(","):
-    s0lib.start_phase(run, phase, args)
+    s0lib.start_phase(run, phase, args, probe=True)
     before, after = run_job(run, args, phase, False, args.n, args.interval_s, args.n * args.interval_s * 1.5 + 120)
     run.phases[phase] = stats = run.phase_stats(phase)
     stats["connect_before"], stats["connect_after"] = before, after
@@ -43,6 +44,7 @@ for phase in args.phases.split(","):
     run.gate_floor(phase, stats, args.floor_kb)
     la = stats.get("largest_at_floor")
     run.gate(f"{phase}: largest block at the floor >= {args.largest_kb:g} KB", None if la is None else la >= args.largest_kb * 1024, la, f">= {int(args.largest_kb * 1024)} B")
+    run.gate_content(phase)
     run.gate_no_added_late(phase, stats, base, args.tolerance)
     for k in ["heap.transitions_cut", "sd.readahead.no_heap"]:
         rate = s0lib.get(base or {}, f"phases.{phase}.rates_per_h")

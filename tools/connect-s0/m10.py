@@ -6,7 +6,7 @@
 stream from the echo Worker to the panel in credited chunks (1,000 B, a
 window of 4) while play goes on; the panel checks every byte against the
 seed's stream and its FNV-1a against the server's, then drops them (no card
-write). Repeated --runs times. Gates: 0 added late frames against M2's
+write). Repeated --runs times (20). Gates: 0 added late frames against M2's
 baseline over the transfers; heap floor >= 26 KB; no restart; checksum ok;
 throughput reported.
 
@@ -21,7 +21,7 @@ import s0lib  # noqa: E402
 ap = s0lib.parser(__doc__)
 ap.add_argument("--phase", default="gif", help="the baseline's phase to compare with (what is playing): gif or formula")
 ap.add_argument("--play", default=None, help="POST /api/play this first (e.g. @formula:<one>)")
-ap.add_argument("--runs", type=int, default=3)
+ap.add_argument("--runs", type=int, default=20)
 ap.add_argument("--bytes", type=int, default=524288)
 ap.add_argument("--chunk", type=int, default=1000)
 ap.add_argument("--window", type=int, default=4)
@@ -33,9 +33,12 @@ if args.sample_s == 5.0:
 base = s0lib.load_baseline(args.baseline)
 run = s0lib.Run("m10", args)
 s0lib.need_probe(run.sample("start"))
+if args.phase == "formula" and not args.play:
+    sys.exit("--phase formula needs --play @formula:<a raced one>")
+s0lib.reset_probe(run)
 if args.play:
     run.panel.play(args.play)
-s0lib.wait_open(run)
+run.gate("the session opened", s0lib.wait_open(run), "open", "open within 180 s")
 done = []
 for k in range(args.runs):
     s0lib.wait_open(run, phase=f"{args.phase}:open")
@@ -51,8 +54,9 @@ run.phases[args.phase] = stats
 ok = [m for m in done if m.get("checksum_ok") is True and m.get("bytes") == args.bytes]
 run.gate("every transfer complete, checksum ok", len(ok) == args.runs, f"{len(ok)} of {args.runs}", f"{args.runs}")
 rates = [m.get("kb_s") for m in done if m.get("kb_s")]
-run.gate("throughput (reported)", True, f"{rates} KB/s", "a figure")
+run.gate("throughput (reported)", None, f"{rates} KB/s", "a figure", required=False)
 run.gate_floor(args.phase, stats, args.floor_kb)
+run.gate_content(args.phase)
 lows = [m.get("heap_low") for m in done if isinstance(m.get("heap_low"), int)]
 run.gate(f"heap low during the transfers >= {args.floor_kb:g} KB", bool(lows) and min(lows) >= args.floor_kb * 1024, min(lows) if lows else None, f">= {int(args.floor_kb * 1024)} B (sampled at each record)")
 run.gate_no_added_late(args.phase, stats, base, args.tolerance)

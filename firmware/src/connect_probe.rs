@@ -17,8 +17,27 @@
 //! own (CONNECT.md 5.5's first placement): an own task would take 8-10 KB
 //! of stack for good, which is the whole of the idle-floor gate's margin.
 //! Nothing here runs on CPU1, takes a lock the display waits on, or writes
-//! flash. The handshake's blocking parts are bounded: DNS and the TCP
-//! connect (5 s), a record's body once its first byte has arrived (10 s).
+//! flash.
+//!
+//! **How long it can hold the worker** (which meanwhile serves nothing
+//! else, `VerifyBundle` for an update included, whose handler waits 30 s):
+//! one turn does one blocking thing at most, each bounded: the TCP connect
+//! ([`CONNECT_TIMEOUT`], 5 s, a turn of its own), or socket reads and
+//! writes, which share a deadline of [`BLOCK_MAX`] (8 s) a turn (a peer
+//! that drips a record's bytes is cut off there), or a close
+//! ([`CLOSE_WAIT`]). DNS never runs on the worker: a short-lived task of
+//! its own (`connect-dns`, 5 KB of stack while it runs) asks lwIP's
+//! resolver, which can take ~7 s a server (4 tries, 1+1+2+3 s) and tries
+//! each of its servers in turn; the answer is kept an hour, and asked again
+//! after a TCP connect fails. A handshake that has not finished
+//! [`HANDSHAKE_TIMEOUT`] (15 s) after it began ends as a failure.
+//!
+//! **When it starts.** By itself after a clean boot, but not before
+//! [`HOLD_S`] (180 s, `OPENDMD_CONNECT_HOLD_S` at build time) of uptime;
+//! never by itself after a boot that came out of a crash
+//! (`restarts::this_boot_crashed`: a panic, a stack overflow, a watchdog):
+//! a crash the probe causes cannot loop and lock out an update over the
+//! LAN. Then `POST /api/debug/connect/config?enabled=1` starts it.
 //!
 //! **TLS** (mbedTLS through `esp_idf_sys`, no esp-tls), as CONNECT.md 5.2
 //! has it: `sdkconfig.connect-probe` turns on dynamic buffers (each record
@@ -29,10 +48,11 @@
 //! `ECDHE-ECDSA-AES128-GCM-SHA256`; groups P-256 then P-384. TLS 1.3 is not
 //! possible: IDF 5.3 cannot combine it with dynamic buffers.
 //!
-//! **Roots.** The pinned ECDSA roots in `firmware/connect-roots/` (Let's
-//! Encrypt ISRG Root X2, Google Trust Services GTS Root R4, SSL.com's two
-//! ECC roots: every ECDSA chain Cloudflare's universal certificates use;
-//! the one suite offered means an ECDSA chain). They stay in flash: the
+//! **Roots.** The pinned roots in `firmware/connect-roots/`: Let's Encrypt
+//! ISRG Root X1 and X2, Google Trust Services GTS Root R1 and R4, SSL.com's
+//! two ECC roots (CONNECT.md 5.2's list; the one ECDSA suite fixes the
+//! leaf's key, not the chain's: an RSA root can still sign it). They stay
+//! in flash: the
 //! callback ([`ca_cb`]) parses only the root whose subject is the
 //! chain's top issuer, when it is asked, without a copy
 //! (`parse_der_nocopy`), and mbedTLS frees it after the check.
@@ -42,6 +62,9 @@
 //! against the build date instead (a certificate that ended before it is
 //! refused; "not yet valid" is ignored), and `connect.clock` says
 //! `"build date"`.
+//!
+//! **Pings**: one every `ping_s` (45 s); two in a row unanswered end the
+//! session, 2 x `ping_s` after the first of them.
 //!
 //! **Test hooks**: `GET /api/debug/connect`, `POST /api/debug/connect/<what>`
 //! ([`routes`]). Not in `docs/api.md`: they exist only in this build.
@@ -104,6 +127,10 @@ const BUILD_UNIX: &str = env!("OPENDMD_BUILD_UNIX");
 static ROOTS: &[(&str, &[u8])] = &[
     ("isrg_root_x2", include_bytes!("../connect-roots/isrg_root_x2.der")),
     ("gts_root_r4", include_bytes!("../connect-roots/gts_root_r4.der")),
+    // RSA roots: the one suite fixes the leaf's key (ECDSA), not the
+    // chain's, which an RSA root may sign.
+    ("isrg_root_x1", include_bytes!("../connect-roots/isrg_root_x1.der")),
+    ("gts_root_r1", include_bytes!("../connect-roots/gts_root_r1.der")),
     ("ssl_com_tls_ecc_2022", include_bytes!("../connect-roots/ssl_com_tls_ecc_root_ca_2022.der")),
     ("ssl_com_ecc", include_bytes!("../connect-roots/ssl_com_root_certification_authority_ecc.der")),
     #[cfg(connect_test_root)]
@@ -133,8 +160,32 @@ static GROUPS: [u16; 3] = [23, 24, 0];
 /// How long one [`Probe::tick`] works before giving the worker back.
 const SLICE: Duration = Duration::from_millis(250);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// A record's body once its first byte is in; a write.
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// The socket's own timeout for one read or write call; the calls of a
+/// turn together stop at [`BLOCK_MAX`].
+const IO_TIMEOUT: Duration = Duration::from_secs(1);
+/// The most a turn's socket reads and writes may block the worker.
+const BLOCK_MAX: Duration = Duration::from_secs(8);
+/// A handshake not done this long after it began has failed.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a looked-up address is used.
+const DNS_KEEP: Duration = Duration::from_secs(3600);
+/// No attempt of its own before this much uptime (seconds).
+const HOLD_S: u64 = match option_env!("OPENDMD_CONNECT_HOLD_S") {
+    Some(v) => parse_u64(v),
+    None => 180,
+};
+
+const fn parse_u64(v: &str) -> u64 {
+    let b = v.as_bytes();
+    let mut n = 0u64;
+    let mut k = 0;
+    while k < b.len() {
+        assert!(b[k].is_ascii_digit(), "OPENDMD_CONNECT_HOLD_S: digits only");
+        n = n * 10 + (b[k] - b'0') as u64;
+        k += 1;
+    }
+    n
+}
 const UPGRADE_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOCK_WAIT: Duration = Duration::from_secs(60);
 /// How long a close waits for the server's own close (so the server's end
@@ -272,13 +323,21 @@ impl Ask {
 /// The last request and its number (each POST's `ask`; a job, M9 and M10
 /// report the number that started them as `seq`, so a script tells its own
 /// run from the one before: the probe takes a request at its next turn).
-static ASK: Mutex<Option<(u32, Ask)>> = Mutex::new(None);
+/// Up to [`ASK_MAX`] wait, taken one a turn, in order; one more is a 409.
+static ASK: Mutex<std::collections::VecDeque<(u32, Ask)>> = Mutex::new(std::collections::VecDeque::new());
 static ASK_SEQ: AtomicU32 = AtomicU32::new(0);
+const ASK_MAX: usize = 4;
+/// `post`'s error for a full queue (answered 409).
+const BUSY: &str = "busy: requests still waiting for the probe; try again in a second";
 
-fn ask(a: Ask) -> u32 {
+fn ask(a: Ask) -> Result<u32, String> {
+    let mut q = ASK.lock().unwrap_or_else(|p| p.into_inner());
+    if q.len() >= ASK_MAX {
+        return Err(BUSY.into());
+    }
     let seq = ASK_SEQ.fetch_add(1, Relaxed) + 1;
-    *ASK.lock().unwrap_or_else(|p| p.into_inner()) = Some((seq, a));
-    seq
+    q.push_back((seq, a));
+    Ok(seq)
 }
 
 // --- mbedTLS's heap, counted ---------------------------------------------------
@@ -333,7 +392,9 @@ enum Cause {
     ServerClose,
     /// TLS close_notify or TCP end without a WebSocket close.
     Eof,
-    /// Two pings unanswered.
+    /// Two pings in a row unanswered: the session ends at the ping after
+    /// the second, 2 x `ping_s` after the first (90 s at 45 s; CONNECT.md
+    /// 3.2's "two missed pongs, ~100 s").
     PongTimeout,
     /// A TLS error on an open session.
     Tls,
@@ -457,6 +518,8 @@ struct Tele {
     last_error: Option<String>,
     last_error_s: u32,
     errors: u32,
+    /// This boot came out of a crash: not started by itself.
+    crash_boot: bool,
 }
 
 impl Tele {
@@ -512,6 +575,7 @@ impl Tele {
             last_error: None,
             last_error_s: 0,
             errors: 0,
+            crash_boot: false,
         }
     }
 }
@@ -592,7 +656,7 @@ pub fn json() -> String {
     });
     format!(
         concat!(
-            r#"{{"state":"{}","since_s":{},"host":{},"tickets":{},"ping_mode":"{}","ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
+            r#"{{"state":"{}","since_s":{},"crash_boot":{},"hold_s":{},"host":{},"tickets":{},"ping_mode":"{}","ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
             r#""attempts":{},"opened":{},"full":{},"resumed":{},"resume_missed":{},"#,
             r#""dns_ms":{},"tcp_ms":{},"upgrade_ms":{},"connect_ms":{},"hs_cpu_ms":{},"hs_cpu_max_ms":{},"#,
             r#""reconnects":{},"causes":{{{}}},"gate_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
@@ -602,6 +666,8 @@ pub fn json() -> String {
         ),
         t.state,
         t.since_s,
+        t.crash_boot,
+        HOLD_S,
         json_string(&c.host),
         c.tickets,
         c.ping.as_str(),
@@ -667,6 +733,8 @@ struct Bio {
     hs_low: u32,
     rx: u64,
     tx: u64,
+    /// This turn's reads and writes block no later than this ([`BLOCK_MAX`]).
+    deadline: Instant,
 }
 
 impl Bio {
@@ -697,15 +765,20 @@ unsafe extern "C" fn bio_send(ctx: *mut c_void, buf: *const c_uchar, len: usize)
         b.tx += n as u64;
         return n as c_int;
     }
-    // A blocking socket: EAGAIN here is its send timeout.
-    ERR_NET_SEND_FAILED
+    // EAGAIN: the socket's 1 s timeout; again until the turn's deadline.
+    if would_block() && Instant::now() < b.deadline {
+        ERR_WANT_WRITE
+    } else {
+        ERR_NET_SEND_FAILED
+    }
 }
 
 /// All of `len`, or nothing yet. mbedTLS's dynamic buffers read a record's
 /// 5-byte header into a buffer on the stack (`esp_mbedtls_add_rx_buffer`),
 /// so a header split over two calls by a `WANT_READ` would lose its first
 /// part: this answers `WANT_READ` only when nothing at all has arrived, and
-/// once something has, blocks (up to [`IO_TIMEOUT`]) for the rest.
+/// once something has, blocks for the rest, up to the turn's deadline
+/// ([`BLOCK_MAX`] in all, whatever the peer drips): then the session fails.
 unsafe extern "C" fn bio_recv(ctx: *mut c_void, buf: *mut c_uchar, len: usize) -> c_int {
     // SAFETY: as in `bio_send`.
     let b = &mut *(ctx as *mut Bio);
@@ -725,12 +798,15 @@ unsafe extern "C" fn bio_recv(ctx: *mut c_void, buf: *mut c_uchar, len: usize) -
     }
     let mut got = 0usize;
     while got < len {
+        if Instant::now() >= b.deadline {
+            return ERR_NET_RECV_FAILED;
+        }
         let n = sys::lwip_recv(b.fd, buf.add(got) as *mut c_void, len - got, 0);
         if n > 0 {
             got += n as usize;
         } else if n == 0 {
             break;
-        } else {
+        } else if !would_block() {
             return ERR_NET_RECV_FAILED;
         }
     }
@@ -971,12 +1047,11 @@ impl Conn {
         unsafe { sys::poll(&mut p, 1, ms as c_int) > 0 }
     }
 
-    /// Write all of `data` through TLS (blocking, [`IO_TIMEOUT`]).
+    /// Write all of `data` through TLS (blocking, to the turn's deadline).
     fn write_all(&mut self, mut data: &[u8]) -> Result<(), End> {
         let ssl = self.ssl();
-        let until = Instant::now() + IO_TIMEOUT;
         while !data.is_empty() {
-            if Instant::now() > until {
+            if Instant::now() > self.bio.deadline {
                 return Err(End::new(Cause::Io, "write timed out"));
             }
             // SAFETY: an initialised, set-up context; a valid buffer.
@@ -1039,6 +1114,38 @@ pub struct Probe {
     /// With no connection: the next attempt waits for a time (backoff, a
     /// job's interval, the memory gate), not for the network or the clock.
     timed: bool,
+    /// The host's address and when it was looked up.
+    resolved: Option<(String, SocketAddr, Instant)>,
+    /// The server the saved session and the address are for.
+    target: (String, String),
+}
+
+/// A lookup on its own task (`connect-dns`): the host, and its answer once
+/// there (the address, or why not) with how long it took.
+struct Dns {
+    host: String,
+    answer: Option<(Result<SocketAddr, String>, u32)>,
+}
+
+static DNS: Mutex<Option<Dns>> = Mutex::new(None);
+
+fn lookup(host: String) -> Result<(), String> {
+    *DNS.lock().unwrap_or_else(|p| p.into_inner()) = Some(Dns { host: host.clone(), answer: None });
+    let job = Box::new(move || {
+        let t0 = Instant::now();
+        let r = (host.as_str(), 443)
+            .to_socket_addrs()
+            .map_err(|e| format!("{host}: {e}"))
+            .and_then(|mut a| a.find(SocketAddr::is_ipv4).ok_or_else(|| format!("{host}: no IPv4 address")));
+        let ms = t0.elapsed().as_millis() as u32;
+        if let Some(d) = DNS.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            d.answer = Some((r, ms));
+        }
+    });
+    crate::task::spawn_core0(b"connect-dns\0", 5 * 1024, 2, job).map_err(|e| {
+        *DNS.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        format!("no task for the lookup: {e}")
+    })
 }
 
 impl Probe {
@@ -1052,6 +1159,11 @@ impl Probe {
             ROOTS.len()
         );
         tele(|t| t.rust_bytes = rust_bytes());
+        if crate::restarts::this_boot_crashed() {
+            CFG.lock().unwrap_or_else(|p| p.into_inner()).enabled = false;
+            tele(|t| t.crash_boot = true);
+            error("this boot came out of a crash: not started by itself (POST /api/debug/connect/config?enabled=1 starts it)".into());
+        }
         Probe {
             conn: None,
             backoff: Backoff::default(),
@@ -1064,6 +1176,8 @@ impl Probe {
             cfg_gen: CFG_GEN.load(Relaxed),
             floor: None,
             timed: false,
+            resolved: None,
+            target: (DEFAULT_HOST.into(), DEFAULT_ADDR.into()),
         }
     }
 
@@ -1106,10 +1220,18 @@ impl Probe {
         let gen = CFG_GEN.load(Relaxed);
         if gen != self.cfg_gen {
             self.cfg_gen = gen;
-            if self.conn.is_some() {
-                self.close(Cause::Forced, "settings changed");
+            let target = (c.host.clone(), c.addr.clone());
+            if target != self.target {
+                // Another server: its ticket and address are not this one's.
+                self.session = None;
+                self.resolved = None;
+                self.target = target;
             }
             self.not_before = Instant::now();
+            if self.conn.is_some() {
+                // The next attempt in a turn of its own.
+                return self.close(Cause::Forced, "settings changed");
+            }
         }
         if !c.enabled {
             if self.conn.is_some() {
@@ -1132,10 +1254,18 @@ impl Probe {
             return;
         }
         if self.conn.is_none() {
+            if uptime_s() < HOLD_S as u32 {
+                set_state("waiting: not before the hold after boot");
+                self.timed = false;
+                return;
+            }
             self.timed = true;
-            self.maybe_connect(&c);
+            // An attempt (DNS on its own task, the TCP connect here) is a
+            // turn of its own: the handshake starts at the next.
+            return self.maybe_connect(&c);
         }
         let Some(conn) = self.conn.as_mut() else { return };
+        conn.bio.deadline = started + BLOCK_MAX;
         let result = match conn.phase {
             Phase::Handshake => step_handshake(conn, started),
             Phase::Upgrade => step_upgrade(conn, &c, started),
@@ -1189,7 +1319,7 @@ impl Probe {
     }
 
     fn take_ask(&mut self) {
-        let Some((seq, a)) = ASK.lock().unwrap_or_else(|p| p.into_inner()).take() else { return };
+        let Some((seq, a)) = ASK.lock().unwrap_or_else(|p| p.into_inner()).pop_front() else { return };
         log::info!("connect-probe: asked {}", a.name());
         match a {
             Ask::Handshakes { n, interval, resume } => {
@@ -1249,9 +1379,9 @@ impl Probe {
                 self.not_before = Instant::now();
             }
             Ask::Reset => tele(|t| {
-                let keep = (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes);
+                let keep = (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_boot);
                 *t = Tele::new();
-                (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes) = keep;
+                (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_boot) = keep;
             }),
         }
     }
@@ -1310,6 +1440,7 @@ impl Probe {
                 c.tickets
             }
         };
+        let Some(addr) = self.address(c) else { return };
         let (free, largest) = (free_heap(), largest_free_block() as u32);
         if free < c.gate_free || largest < c.gate_largest {
             set_state("waiting for memory");
@@ -1329,9 +1460,73 @@ impl Probe {
             t.heap_at_connect = free;
         });
         let session = if tickets { self.session.as_deref() } else { None };
-        match connect(c, tickets, session, self.floor, free) {
+        match connect(c, addr, tickets, session, self.floor, free) {
             Ok(conn) => self.conn = Some(conn),
-            Err(e) => self.failed(e),
+            Err(e) => {
+                if e.cause == Cause::Tcp {
+                    // Perhaps the address moved: look it up again.
+                    self.resolved = None;
+                }
+                self.failed(e)
+            }
+        }
+    }
+
+    /// The server's address: the configured one, a recent lookup, or
+    /// `None` while one runs on its own task (or failed: counted).
+    fn address(&mut self, c: &Cfg) -> Option<SocketAddr> {
+        if !c.addr.is_empty() {
+            return match c.addr.parse::<std::net::SocketAddrV4>() {
+                Ok(a) => Some(SocketAddr::V4(a)),
+                Err(_) => {
+                    self.failed(End::new(Cause::Dns, format!("bad address {}", c.addr)));
+                    None
+                }
+            };
+        }
+        if let Some((h, a, at)) = &self.resolved {
+            if *h == c.host && at.elapsed() < DNS_KEEP {
+                return Some(*a);
+            }
+        }
+        let done = {
+            let mut d = DNS.lock().unwrap_or_else(|p| p.into_inner());
+            match d.as_ref() {
+                Some(j) if j.host == c.host && j.answer.is_some() => d.take().and_then(|j| j.answer),
+                Some(j) if j.host == c.host => {
+                    drop(d);
+                    set_state("looking up the server");
+                    return None;
+                }
+                // Another host's answer, or none asked yet (a lookup for
+                // another host still running is left to finish).
+                Some(j) if j.answer.is_none() => {
+                    drop(d);
+                    set_state("looking up the server");
+                    return None;
+                }
+                _ => None,
+            }
+        };
+        match done {
+            Some((Ok(a), ms)) => {
+                tele(|t| t.dns_ms = ms);
+                self.resolved = Some((c.host.clone(), a, Instant::now()));
+                Some(a)
+            }
+            Some((Err(e), ms)) => {
+                tele(|t| t.dns_ms = ms);
+                self.failed(End::new(Cause::Dns, e));
+                None
+            }
+            None => {
+                if let Err(e) = lookup(c.host.clone()) {
+                    self.failed(End::new(Cause::Dns, e));
+                } else {
+                    set_state("looking up the server");
+                }
+                None
+            }
         }
     }
 
@@ -1467,6 +1662,7 @@ impl Probe {
     /// [`Probe::end`].
     fn close(&mut self, cause: Cause, why: &str) {
         if let Some(conn) = self.conn.as_mut() {
+            conn.bio.deadline = Instant::now() + CLOSE_WAIT + Duration::from_secs(2);
             if conn.phase == Phase::Open {
                 set_state("closing");
                 if conn.send(cx::OP_CLOSE, &cx::close_payload(1000, "")).is_ok() {
@@ -1483,6 +1679,9 @@ impl Probe {
                             break;
                         }
                     }
+                    // TLS's own end too (the server may have gone already).
+                    // SAFETY: an open context.
+                    let _ = unsafe { sys::mbedtls_ssl_close_notify(ssl) };
                 }
             }
         }
@@ -1508,18 +1707,10 @@ impl Default for Probe {
 }
 
 /// DNS, TCP, and the TLS context ready for its handshake.
-fn connect(c: &Cfg, tickets: bool, session: Option<&Session>, floor: Option<i64>, free: u32) -> Result<Box<Conn>, End> {
+/// TCP to `addr` (looked up already: [`Probe::address`]), and the TLS
+/// context ready for its handshake.
+fn connect(c: &Cfg, addr: SocketAddr, tickets: bool, session: Option<&Session>, floor: Option<i64>, free: u32) -> Result<Box<Conn>, End> {
     let t0 = Instant::now();
-    let addr: SocketAddr = if !c.addr.is_empty() {
-        SocketAddr::V4(c.addr.parse::<std::net::SocketAddrV4>().map_err(|_| End::new(Cause::Dns, format!("bad address {}", c.addr)))?)
-    } else {
-        (c.host.as_str(), 443)
-            .to_socket_addrs()
-            .map_err(|e| End::new(Cause::Dns, format!("{}: {e}", c.host)))?
-            .find(SocketAddr::is_ipv4)
-            .ok_or_else(|| End::new(Cause::Dns, format!("{}: no IPv4 address", c.host)))?
-    };
-    let dns_ms = t0.elapsed().as_millis() as u32;
     let t1 = Instant::now();
     let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| End::new(Cause::Tcp, format!("{}: {e}", addr.ip())))?;
     let tcp_ms = t1.elapsed().as_millis() as u32;
@@ -1527,7 +1718,6 @@ fn connect(c: &Cfg, tickets: bool, session: Option<&Session>, floor: Option<i64>
     let _ = tcp.set_read_timeout(Some(IO_TIMEOUT));
     let _ = tcp.set_write_timeout(Some(IO_TIMEOUT));
     tele(|t| {
-        t.dns_ms = dns_ms;
         t.tcp_ms = tcp_ms;
         t.heap_hs_low = free;
     });
@@ -1538,7 +1728,7 @@ fn connect(c: &Cfg, tickets: bool, session: Option<&Session>, floor: Option<i64>
         tcp,
         // SAFETY: zeroed mbedTLS contexts, _init'ed below before any use.
         tls: unsafe { Box::new_zeroed().assume_init() },
-        bio: Box::new(Bio { fd, hs_low: free, rx: 0, tx: 0 }),
+        bio: Box::new(Bio { fd, hs_low: free, rx: 0, tx: 0, deadline: Instant::now() + BLOCK_MAX }),
         verify: Box::new(Verify { called: false, floor, flags: 0 }),
         phase: Phase::Handshake,
         t0,
@@ -1599,6 +1789,9 @@ fn connect(c: &Cfg, tickets: bool, session: Option<&Session>, floor: Option<i64>
 fn step_handshake(conn: &mut Conn, started: Instant) -> Result<(), End> {
     let ssl = conn.ssl();
     loop {
+        if conn.hs_t0.elapsed() > HANDSHAKE_TIMEOUT {
+            return Err(End::new(Cause::Handshake, format!("no handshake within {} s", HANDSHAKE_TIMEOUT.as_secs())));
+        }
         let t = now_us();
         // SAFETY: a set-up context.
         let r = unsafe { sys::mbedtls_ssl_handshake(ssl) };
@@ -1965,6 +2158,7 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
     match what {
         "config" => {
             let mut c = cfg();
+            let (host, addr) = (c.host.clone(), c.addr.clone());
             if let Some(v) = query_param(q, "host") {
                 c.host = v;
             }
@@ -1973,6 +2167,13 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             }
             if let Some(v) = query_param(q, "path") {
                 c.path = v;
+            }
+            // The secret is the server's: another server gets it only if
+            // given in the same call.
+            let moved = c.host != host || c.addr != addr;
+            let token_cleared = moved && query_param(q, "token").is_none() && !c.token.is_empty();
+            if token_cleared {
+                c.token.clear();
             }
             if let Some(v) = query_param(q, "token") {
                 c.token = v;
@@ -1993,18 +2194,18 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             let json = c.json();
             *CFG.lock().unwrap_or_else(|p| p.into_inner()) = c;
             CFG_GEN.fetch_add(1, Relaxed);
-            Ok(format!(r#"{{"ok":true,"cfg":{json}}}"#))
+            Ok(format!(r#"{{"ok":true,"token_cleared":{token_cleared},"cfg":{json}}}"#))
         }
         "handshakes" => {
             let n = ranged(num(q, "n", 200)?, 1, 10_000, "n")? as u32;
             let ms = ranged(num(q, "interval_ms", num(q, "interval_s", 10u64)? * 1000)?, 200, 3_600_000, "interval_ms")?;
             let resume = num(q, "resume", 0u8)? != 0;
-            let seq = ask(Ask::Handshakes { n, interval: Duration::from_millis(ms), resume });
+            let seq = ask(Ask::Handshakes { n, interval: Duration::from_millis(ms), resume })?;
             Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n},"interval_ms":{ms},"resume":{resume}}}"#))
         }
         "ed25519" => {
             let n = ranged(num(q, "n", 100)?, 1, 10_000, "n")? as u32;
-            let seq = ask(Ask::Ed25519 { n });
+            let seq = ask(Ask::Ed25519 { n })?;
             Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n}}}"#))
         }
         "stream" => {
@@ -2017,19 +2218,19 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             if u64::from(window) * u64::from(chunk + 4) > u64::from(TLS_IN) {
                 return Err(format!("window x (chunk + 4) must be at most {TLS_IN} (this build's TLS input record)"));
             }
-            let seq = ask(Ask::Stream { bytes, chunk, window, seed });
+            let seq = ask(Ask::Stream { bytes, chunk, window, seed })?;
             Ok(format!(r#"{{"ok":true,"ask":{seq},"bytes":{bytes},"chunk":{chunk},"window":{window},"seed":{seed}}}"#))
         }
         "stop" => {
-            let seq = ask(Ask::Stop);
+            let seq = ask(Ask::Stop)?;
             Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         "reconnect" => {
-            let seq = ask(Ask::Reconnect);
+            let seq = ask(Ask::Reconnect)?;
             Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         "reset" => {
-            let seq = ask(Ask::Reset);
+            let seq = ask(Ask::Reset)?;
             Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         _ => Err(format!("{what}: config, handshakes, ed25519, stream, stop, reconnect or reset")),
@@ -2045,6 +2246,7 @@ pub fn routes(server: &mut Server) -> anyhow::Result<()> {
         let what = req.path().trim_start_matches("/api/debug/connect/").to_string();
         match post(&what, req.query()) {
             Ok(body) => req.json(&body),
+            Err(e) if e == BUSY => req.error(409, "409 Conflict", &e),
             Err(e) => req.bad_request(&e),
         }
     })?;

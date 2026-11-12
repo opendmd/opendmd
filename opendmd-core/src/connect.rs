@@ -112,7 +112,7 @@ pub fn upgrade_request(host: &str, path: &str, key: &str) -> String {
 }
 
 /// The most of a response's head the probe reads.
-pub const MAX_UPGRADE_HEAD: usize = 1024;
+pub const MAX_UPGRADE_HEAD: usize = 2048;
 
 /// Where the head of an HTTP response ends in `buf` (the index just past
 /// its blank line), if it does yet.
@@ -219,6 +219,8 @@ pub enum WsError {
     BadOpcode(u8),
     /// RSV bits without an extension.
     Reserved,
+    /// A 64-bit length with its top bit set (RFC 6455 5.2 forbids it).
+    BadLength,
 }
 
 impl WsError {
@@ -229,8 +231,16 @@ impl WsError {
             WsError::TextTooLong => "text message too long",
             WsError::BadOpcode(_) => "bad opcode",
             WsError::Reserved => "reserved bits set",
+            WsError::BadLength => "frame length out of range",
         }
     }
+}
+
+/// A text frame's length is one the probe takes. Compared as `u64`: a cast
+/// to `usize` first would truncate on the 32-bit ESP32 (2^32 + 5 -> 5) and
+/// let the copy into the 256-byte buffer overrun.
+fn text_len_ok(len: u64) -> bool {
+    len <= MAX_TEXT as u64
 }
 
 /// The server's frames, fed in pieces of any size.
@@ -328,6 +338,9 @@ impl Decoder {
             127 => u64::from_be_bytes(self.head[2..10].try_into().unwrap_or([0; 8])),
             n => u64::from(n),
         };
+        if len >> 63 != 0 {
+            return Err(WsError::BadLength);
+        }
         let fin = b0 & 0x80 != 0;
         let mut op = b0 & 0x0F;
         self.have = 0;
@@ -341,7 +354,7 @@ impl Decoder {
                 if self.message.is_some() {
                     return Err(WsError::BadOpcode(op));
                 }
-                if len as usize > MAX_TEXT || !fin {
+                if !text_len_ok(len) || !fin {
                     return Err(WsError::TextTooLong);
                 }
             }
@@ -832,6 +845,31 @@ mod tests {
         assert_eq!(decode(&n, 9), Err(WsError::BadOpcode(OP_BINARY)));
         // Close with no code.
         assert_eq!(decode(&server_frame(true, OP_CLOSE, b""), 1).unwrap(), vec![Ev::Close(None, vec![])]);
+    }
+
+    /// What a 32-bit target would have let through with `len as usize`.
+    #[test]
+    fn lengths_are_checked_as_u64() {
+        let wrapped = (1u64 << 32) + 5;
+        assert_eq!(wrapped as u32 as usize, 5, "what the 32-bit cast would see");
+        assert!(!text_len_ok(wrapped));
+        assert!(text_len_ok(MAX_TEXT as u64));
+        assert!(!text_len_ok(MAX_TEXT as u64 + 1));
+        // A text frame header claiming 2^32 + 5 bytes, then 5 bytes.
+        let mut f = vec![0x81, 127];
+        f.extend_from_slice(&wrapped.to_be_bytes());
+        f.extend_from_slice(b"hello");
+        assert_eq!(decode(&f, 3), Err(WsError::TextTooLong));
+        // The top bit set: refused whatever the opcode.
+        for op in [OP_BINARY, OP_TEXT, OP_PING] {
+            let mut g = vec![0x80 | op, 127];
+            g.extend_from_slice(&(1u64 << 63 | 3).to_be_bytes());
+            assert_eq!(decode(&g, 1), Err(WsError::BadLength), "op {op}");
+        }
+        // Control frames: 126 B and a 16-bit length over 125 refused.
+        let mut c = vec![0x89, 126];
+        c.extend_from_slice(&126u16.to_be_bytes());
+        assert_eq!(decode(&c, 2), Err(WsError::BadControl));
     }
 
     #[test]
