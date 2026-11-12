@@ -84,8 +84,7 @@ const SHEET = `<form class="s-sheet" id="s-p-form"><div class="s-hd"><h2>Send to
 <label class="s-f">Platform <input class="s-in" id="s-p-platform" maxlength="16" autocomplete="off" spellcheck="false" placeholder="like SNES"></label>
 <label class="s-f">Made by <input class="s-in" id="s-p-author" maxlength="40" autocomplete="off" spellcheck="false" placeholder="letters and digits"></label>
 <label class="s-chk"><input type="checkbox" id="s-p-logo"> It is a logo</label>
-<div class="s-row"><button class="s-cta" id="s-p-send" type="submit" disabled>Send</button></div>
-<p class="s-cap s-bad" id="s-p-err" hidden></p></form>
+<div class="s-row"><button class="s-cta" id="s-p-send" type="submit" disabled>Send</button></div></form>
 <p class="s-cap" id="s-p-where" hidden>Your panel: <b id="s-p-where-addr"></b> · <button class="s-pill" id="s-p-change" type="button">Change</button></p>
 <form id="s-p-ask" hidden><label for="s-p-addr">Your panel’s address</label>
 <div class="s-row"><input class="s-in" id="s-p-addr" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="opendmd.local"><button class="s-pill s-pri" id="s-p-go">Send</button></div>
@@ -116,11 +115,11 @@ export async function send(S) {
   val('s-p-platform', ext.platform);
   val('s-p-author', ext.author);
   document.getElementById('s-p-logo').checked = ext.logo === true;
-  const err = document.getElementById('s-p-err'), what = document.getElementById('s-p-what'), btn = document.getElementById('s-p-send');
-  err.hidden = true;
+  const what = document.getElementById('s-p-what'), btn = document.getElementById('s-p-send');
   btn.disabled = true;
   what.textContent = 'Making the GIF…';
   if (!dlg.open) dlg.showModal();
+  S.say(''); // (what was said before: not this sheet's)
   made = null;
   try {
     const m = await make(S, false);
@@ -132,13 +131,12 @@ export async function send(S) {
     await S.snaps();
   } catch (e) {
     what.textContent = '';
-    err.hidden = false;
-    err.textContent = e.message || String(e);
+    S.say(e.message || String(e), { at: btn });
   }
 }
 // In the click or the form's submit: the window opens at once, the GIF follows on its ready.
 function go(S, P, a) {
-  const err = document.getElementById('s-p-err'), v = (id) => document.getElementById(id).value.trim();
+  const v = (id) => document.getElementById(id).value.trim();
   if (!made) return;
   const buf = made.gif.slice().buffer; // (a copy: the one sent is transferred)
   const title = v('s-p-title').slice(0, 80);
@@ -146,8 +144,7 @@ function go(S, P, a) {
     platform: v('s-p-platform').replace(/[^A-Za-z0-9]/g, '').slice(0, 16), author: v('s-p-author').replace(/[^A-Za-z0-9]/g, '').slice(0, 40),
     logo: document.getElementById('s-p-logo').checked };
   const ok = P.handOff(a, 'import', READY, { data, transfer: [buf] });
-  err.hidden = ok;
-  err.textContent = ok ? '' : 'Your browser didn’t open the panel’s web app: allow pop-ups for this site, then press Send again, or download the GIF.';
+  S.say(ok ? '' : 'Your browser didn’t open the panel’s web app: allow pop-ups for this site, then press Send again, or download the GIF.', { at: document.getElementById('s-p-send') });
   // (The panel's app says nothing back once it has the GIF: what is known is that its page opened.)
   if (ok) S.status(S.kept ? 'kept' : 'new', `Opened ${a}: add the GIF there`);
 }

@@ -95,7 +95,7 @@ export async function pickId(id) {
 }
 // The Stamp tool chosen with nothing picked: the picker, and a word.
 export function tool() {
-  if (!picked) { show(); S.say('Pick a stamp under Stamps, then click the panel to place it.'); }
+  if (!picked) { show(); S.say('Pick a stamp under Stamps, then click the panel to place it.', 'info'); }
 }
 
 // Where a stamp lands: centred on the pixel pointed at.

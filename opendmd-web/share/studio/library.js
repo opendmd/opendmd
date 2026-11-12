@@ -184,7 +184,7 @@ async function detail(id) {
   if (r.type === 'palette') acts.append(button('Use its colours as swatches', 'swatch'));
   if (r.type === 'stamp') acts.append(button('Use this stamp', 'stamp'));
   acts.append(button('Duplicate', 'dup'), button('Save as file', 'file'));
-  if (r.type === 'pack') acts.append(button('Share link', 'link'));
+  if (r.type === 'pack' && S.sharing) acts.append(button('Share link', 'link')); // (off: studio.js SHARE)
   if (own) acts.append(button('Delete', 'del'));
   d.replaceChildren(head, facts, acts);
   d.dataset.id = id;

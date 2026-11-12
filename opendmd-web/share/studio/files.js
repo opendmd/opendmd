@@ -110,7 +110,7 @@ async function withPalette(r) {
 
 // The open piece, saved as a file: asked, then frozen (its rev rises), that revision written.
 export async function saveOpen() {
-  if (!S.store || !S.kept) { S.say('Draw something first: a file keeps a piece as it is kept.'); return; }
+  if (!S.store || !S.kept) { S.say('Draw something first: a file keeps a piece as it is kept.', 'info'); return; }
   const m = await ask(S.rec);
   if (!m) return;
   S.meta(m);
@@ -174,7 +174,7 @@ export async function backup() {
     pack.hash = await hashOf(pack.body);
     write(`OpenDMD_Studio_backup_${day}${parts.length > 1 ? `_${i + 1}_of_${parts.length}` : ''}.dmdpack`, pack.id, [pack, ...part]);
   }
-  S.say(parts.length > 1 ? `Your Library is backed up in ${parts.length} files: open them together (pick all ${parts.length} at once) to bring it all back.` : '');
+  S.say(parts.length > 1 ? `Your Library is backed up in ${parts.length} files: open them together (pick all ${parts.length} at once) to bring it all back.` : '', 'info');
 }
 
 // --- opening a file ---

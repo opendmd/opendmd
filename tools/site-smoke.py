@@ -102,6 +102,11 @@ build URL serves. There the art index must also carry
   pixel, dark colours not turned black), Fit to 256 colours when asked,
   and by itself past a piece's 4,096; from[] entries that aren't text
   refused; blank fillers and flag-smuggled tags dropped;
+- /studio/ notices (studio-share): sharing shelved (no Share button, no
+  pack's Share link; a #p= that comes in still opens); an import refusal,
+  a file that won't open and Send to panel's blocked pop-up each said in
+  the window and on top (alert, or status for news), dismissable, at
+  laptop and phone sizes, light and dark;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -2759,7 +2764,7 @@ def studio_send(browser, base: str, site: Path, errors: list[str]) -> None:
     impostor.close()
     page.evaluate("window.open = () => null")
     page.click("#s-p-send")
-    check("allow pop-ups" in page.inner_text("#s-p-err"), f"/studio/ send: a blocked pop-up is said ({page.inner_text('#s-p-err')[:50]})")
+    check("allow pop-ups" in page.inner_text("#s-err"), f"/studio/ send: a blocked pop-up is said ({page.inner_text('#s-err')[:50]})")
     page.keyboard.press("Escape")
     check(not page.evaluate("window.__csp || []"), "/studio/ send: no CSP violation")
     page.context.close()
@@ -2772,8 +2777,8 @@ def studio_send(browser, base: str, site: Path, errors: list[str]) -> None:
     page.mouse.click(*s_at(page, 0, 0))
     s_kept(page)
     page.click("#s-send")
-    page.wait_for_selector("#s-p-err:not([hidden])", timeout=240000)
-    err = page.inner_text("#s-p-err")
+    page.wait_for_selector("#s-p #s-err:not([hidden])", timeout=240000)
+    err = page.inner_text("#s-err")
     check("over the panel’s 4 MB" in err and page.is_disabled("#s-p-send") and not big_seen,
           f"/studio/ send: a GIF over 4 MB is said before any window opens ('{err[:70]}')")
     page.context.close()
@@ -4820,7 +4825,7 @@ def studio_import_red(browser, base: str, site: Path, errors: list[str]) -> None
         else:
             i_post(fr, o)
         wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=20000)
-        said = page.inner_text("#s-imp-say")
+        said = page.inner_text("#s-err")
         check(s_data(page)["imported"] == "refused" and said.startswith("That can’t be used:") and said.endswith("Nothing was changed.") and drafts() == n1,
               f"/studio/ import red: {what}: refused with a sentence, nothing made ('{said[:90]}')")
         page.click("#s-imp-x")
@@ -4847,7 +4852,7 @@ def studio_import_red(browser, base: str, site: Path, errors: list[str]) -> None
         page.evaluate("(u) => { history.pushState({ imp: 1 }, '', '#import?url=' + encodeURIComponent(u)); dispatchEvent(new HashChangeEvent('hashchange')); }", u)
         wait_js(page, "/open|ready/.test(document.getElementById('studio').dataset.import)", timeout=10000)
         src = page.get_attribute("#s-imp-f", "src") or ""
-        said = page.inner_text("#s-imp-say")
+        said = page.inner_text("#s-err")
         check("url=" not in src and said.startswith("Only an https:// address"), f"/studio/ import red: #import?url={u[:12]}… is not passed on ({src[-30:]}, '{said[:40]}')")
         page.click("#s-imp-x")
         wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
@@ -5228,7 +5233,7 @@ def studio_import_review(browser, base: str, site: Path, errors: list[str]) -> N
         i_file(fr, "many.png", i_png(128, 32, many), "image/png")
         wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
         got = i_use(page, fr, as_layer=True)
-        said = page.inner_text("#s-imp-say")
+        said = page.inner_text("#s-err")
         now = page.evaluate(I_PIECE)
         check(got == "refused" and "more than 4,096" in said and now["hash"] == was["hash"] and len(now["layers"]) == 1 and s_data(page).get("pending") == pend,
               f"/studio/ import review: as a layer, past the piece's colours: refused, nothing half-made ('{said[:80]}', pending {pend} -> {s_data(page).get('pending')})")
@@ -5299,67 +5304,46 @@ def l_goto(page: Page, base: str, frag: str) -> str:
     return s_data(page)["linkOpened"]
 
 
-def l_share(page: Page) -> str:
-    page.evaluate("delete document.getElementById('studio').dataset.link; document.getElementById('s-err').textContent = ''")
-    page.click("#s-share")
-    wait_js(page, "!!document.getElementById('studio').dataset.link || !!document.getElementById('s-err').textContent", timeout=30000)
-    return s_data(page).get("link", "")
-
-
 def l_pieces(page: Page) -> int:
     return len(page.evaluate(S_STORE, ["list", None]))
 
 
 def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
-    """Share (one button, the link copied): a still under 1,200 characters,
-    an 8-frame loop under 2,800; the link opened in a fresh profile shows the
-    picture playing and who it says made it, stores nothing and fetches
-    nothing but link.js until Open as a new piece, whose flattened pixels
-    equal the source's and whose from names the source's id, rev and hash; a
-    pack of three stamps travels as #k= and merges as a file does, the
-    link's claims shown; a piece too big for a link is told so and offered
-    the file; link.js only at Share or a #p=/#k= address; no request carries
-    the fragment."""
+    """Sharing is shelved (the owner, 2026-11-12; studio.js SHARE): no Share
+    button, no pack's Share link in the Library, link.js not with the page.
+    A link that comes in still opens: in a fresh profile an 8-frame loop's
+    #p= (written here, from docs/studio-format.md) shows the picture playing
+    and who it says made it, stores nothing and fetches nothing but link.js
+    until Open as a new piece, whose pixels and times are the link's; no
+    request carries the fragment."""
     page = s_page(browser, base, site, errors)
     got = s_paths(page)
-    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
-    for x in range(10, 50):
-        page.mouse.click(*s_at(page, x, 8 + x % 9))
-    s_kept(page)
-    page.fill("#s-name", "Wave")
-    s_kept(page)
-    still = l_share(page)
-    clip = page.evaluate("navigator.clipboard.readText()")
-    check("/studio/link.js" not in got and "#p=" in still and len(still) < 1200 and clip == still,
-          f"/studio/ links: Share copies a still's link, under 1,200 characters ({len(still)}; link.js not with the page)")
-    # An 8-frame loop.
-    kev(page, """const fr = []; const cels = [];
-        for (let f = 0; f < 8; f++) { const a = new Uint8Array(4096); for (let y = 8; y < 24; y++) for (let x = 0; x < 16; x++) a[y * 128 + x + f * 12] = 1 + (x + y) % 3; cels.push(await m.packPx(a)); fr.push({ key: '0000000' + f, ms: 80 }); }
-        const r = m.record('piece', 'Loop', { w: 128, h: 32, colours: [{ k: 1, hex: '#f7a531' }, { k: 2, hex: '#33d1ff' }, { k: 3, hex: '#ff4f8b' }], frames: fr,
-          layers: [{ key: 'a0000001', name: 'Box', moves: true, cels }] }, { author: 'tester' });
-        r.licence = 'CC0-1.0'; await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+    kev(page, """const st = []; for (const n of ['Star', 'Heart']) { const r = await K.stamp(n, 4, 4); await K.put(r); st.push(r); }
+        await K.put(await K.pack('Two', st));""")
     page.reload()
     page.wait_for_selector(S_READY, timeout=30000)
-    s_kept(page) if s_data(page).get("saved") != "kept" else None
-    loop = l_share(page)
-    src = page.evaluate(S_STORE, ["get", None])["r"]
-    want = page.evaluate(I_PIECE)
-    check("#p=" in loop and len(loop) < 2800, f"/studio/ links: an 8-frame loop under 2,800 characters ({len(loop)})")
-    if shots:
-        page.screenshot(path=str(shots / "studio-share-laptop.png"))
+    shares = page.evaluate("[...document.querySelectorAll('#studio button')].filter((b) => /share/i.test(b.textContent + b.title) && b.getClientRects().length).length")
+    lib_open(page)
+    lib_kind(page, "pack")
+    lib_detail(page, "Two")
+    in_lib = page.evaluate("[...document.querySelectorAll('#s-ldet button')].filter((b) => /share|link/i.test(b.textContent) || b.dataset.la === 'link').length")
+    check(page.locator("#s-share").count() == 0 and shares == 0 and in_lib == 0 and "/studio/link.js" not in got,
+          f"/studio/ links: no Share button and no pack's Share link (sharing shelved; {shares}, {in_lib}; link.js not with the page)")
     page.context.close()
-    # A fresh profile.
+    # A loop's link, opened in a fresh profile.
+    cols = [0xf7a531, 0x33d1ff, 0xff4f8b]
+    frames = [[(1 + (i % 128 - f * 12 + i // 128) % 3) if 8 <= i // 128 < 24 and 0 <= i % 128 - f * 12 < 16 else 0 for i in range(4096)] for f in range(8)]
+    code = link_p(frames, [80] * 8, cols, name="Loop", author="tester", licence=1)
     page = s_page(browser, base, site, errors)
     asked = []
     page.on("request", lambda r: asked.append(r.url))
     n0 = l_pieces(page)
-    said = l_goto(page, base, "#p=" + loop.split("#p=")[1])
+    said = l_goto(page, base, "#p=" + code)
     page.wait_for_timeout(400)
     a = page.evaluate("document.querySelector('#s-lk canvas').toDataURL()")
     page.wait_for_timeout(250)
     b = page.evaluate("document.querySelector('#s-lk canvas').toDataURL()")
     who = page.inner_text("#s-lk-who")
-    code = loop.split("#p=")[1]
     others = {urllib.parse.urlsplit(u).path for u in asked} - S_FIRST - {"/studio/link.js", "/studio/"}
     check(said == "shown" and a != b and "8 frames · by “tester” · licence CC0, the link says" in who and l_pieces(page) == n0 and page.evaluate("location.hash") == "",
           f"/studio/ links: opened in a fresh profile, the picture plays, who made it as the link says, nothing stored ({said}, '{who[:60]}', {l_pieces(page) - n0})")
@@ -5371,48 +5355,87 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
     s_kept(page)
     p = page.evaluate(I_PIECE)
-    e = (p["from"] or [{}])[0]
-    check(i_frames(p) == i_frames(want) and p["ms"] == [80] * 8 and e.get("id") == src["id"] and e.get("rev") == src["rev"] and e.get("hash") == src["hash"] and l_pieces(page) == n0 + 1,
-          f"/studio/ links: Open as a new piece: its pixels the source's, from naming its id, rev and hash ({e.get('id', '')[:12]}, rev {e.get('rev')})")
+    want = [[cols[v - 1] if v else 0 for v in f] for f in frames]
+    check(i_frames(p) == want and p["ms"] == [80] * 8 and l_pieces(page) == n0 + 1,
+          f"/studio/ links: Open as a new piece: its pixels and times the link's ({len(p['ms'])} frames)")
     page.context.close()
-    # A pack of three stamps as #k=.
-    page = s_page(browser, base, site, errors)
-    kev(page, """const st = []; for (const n of ['Star', 'Heart', 'Coin']) { const r = await K.stamp(n, 4, 4, { env: { author: 'packer', licence: 'CC-BY-4.0' } }); await K.put(r); st.push(r); }
-        await K.put(await K.pack('Three', st));""")
-    page.reload()
-    page.wait_for_selector(S_READY, timeout=30000)
-    lib_open(page)
-    lib_kind(page, "pack")
-    lib_detail(page, "Three")
-    page.evaluate("delete document.getElementById('studio').dataset.link")
-    page.click("#s-ldet [data-la=link]")
-    wait_js(page, "!!document.getElementById('studio').dataset.link", timeout=20000)
-    kl = s_data(page)["link"]
-    page.context.close()
-    page = s_page(browser, base, site, errors)
-    n0 = page.evaluate(S_LIVE)
-    said = l_goto(page, base, "#k=" + kl.split("#k=")[1])
-    rows = file_rows(page)
-    title = page.inner_text("#s-fs h2")
-    before = page.evaluate(S_LIVE)
-    added = file_add(page)
-    after_ = page.evaluate(S_LIVE)
-    check("#k=" in kl and len(kl) <= 8000 and said == "pack" and title == "Open a shared link" and len(rows) == 4 and all("the link says" in r["text"] for r in rows)
-          and before == n0 and added == 4 and after_["stamp"] == n0["stamp"] + 3 and after_["pack"] == n0["pack"] + 1,
-          f"/studio/ links: a pack of three stamps as #k= ({len(kl)}), opened as a file is, the link's claims shown, stored only on Add ({added}, {after_})")
-    page.context.close()
-    # Too big for a link.
-    page = s_page(browser, base, site, errors)
-    kev(page, """const cs = Array.from({ length: 200 }, (_, i) => ({ k: i + 1, hex: '#' + (0x300000 + i * 4099).toString(16).padStart(6, '0') }));
-        const cels = []; for (let f = 0; f < 3; f++) { const a = new Uint8Array(4096); for (let i = 0; i < 4096; i++) a[i] = 1 + Math.floor(Math.random() * 200); cels.push(await m.packPx(a)); }
-        const r = m.record('piece', 'Noise', { w: 128, h: 32, colours: cs, frames: ['0000000a', '0000000c', '0000000d'].map((key) => ({ key, ms: 100 })), layers: [{ key: '0000000b', name: 'N', moves: true, cels }] });
-        await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
-    page.reload()
-    page.wait_for_selector(S_READY, timeout=30000)
-    l_share(page)
-    said = page.inner_text("#s-err")
-    check(not s_data(page).get("link") and "too big for a link" in said and "Save as file" in said, f"/studio/ links: a piece too big for a link is told so and offered the file ('{said[:70]}')")
-    page.context.close()
+
+
+# The Studio's notice (studio.js say): every error and message in view, pinned, never at the page's foot.
+N_SEEN = """() => { const n = document.getElementById('s-note'), e = document.getElementById('s-err');
+    if (!n || n.hidden || e.hidden) return null; const r = n.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 40), r.top + Math.min(r.height / 2, 14));
+    return { inView: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth && r.width > 0, onTop: !!hit && n.contains(hit),
+             role: n.getAttribute('role'), kind: n.dataset.kind, at: n.dataset.at, text: e.textContent, inSheet: n.parentElement.tagName === 'DIALOG' ? n.parentElement.id : '' }; }"""
+
+
+def n_seen(page: Page, timeout: float = 30000) -> dict:
+    wait_js(page, f"!!({N_SEEN})()", timeout=timeout)
+    return page.evaluate(N_SEEN)
+
+
+def studio_notices(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """What the Studio says is where the user is looking, at laptop and phone
+    sizes, light and dark: an import refusal (in the Import sheet), a file
+    that won't open (the page scrolled to its foot first), and Send to panel's
+    blocked pop-up (under Send), each in the window and on top, said as an
+    alert; dismissed by its button and by Escape, focus back; a sheet's
+    notice goes with the sheet; news ('info') said as a status."""
+    for size, scheme in (("laptop", "light"), ("laptop", "dark"), ("phone", "light"), ("phone", "dark")):
+        tag = f"/studio/ notice ({size}, {scheme})"
+        page = i_page(browser, base, site, errors, size=size)
+        page.emulate_media(color_scheme=scheme)
+        # An import refusal, said in the open sheet.
+        fr = i_open(page)
+        page.evaluate("delete document.getElementById('studio').dataset.imported")
+        i_post(fr, {"set": {"ms": [0]}})
+        wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=20000)
+        x = n_seen(page)
+        check(x["inView"] and x["onTop"] and x["inSheet"] == "s-imp" and x["role"] == "alert" and x["kind"] == "bad" and x["text"].startswith("That can’t be used:"),
+              f"{tag}: an import refusal is in view, on top of the sheet, an alert ({x})")
+        if shots:
+            page.screenshot(path=str(shots / f"studio-notice-import-{size}-{scheme}.png"))
+        clear = page.evaluate("() => { const r = document.getElementById('s-imp-x').getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.id === 's-imp-x'; }")
+        check(clear, f"{tag}: the notice leaves the sheet's Close clear")
+        page.click("#s-imp-x")
+        wait_js(page, "document.getElementById('s-note').hidden", timeout=5000)
+        check(page.is_hidden("#s-note"), f"{tag}: the sheet's notice goes with the sheet")
+        # A file that won't open, the page scrolled to its foot.
+        if page.is_visible("#s-tabs"):
+            page.click("#s-tabs [data-tab=piece]")
+        page.evaluate("scrollTo(0, document.body.scrollHeight)")
+        said = file_open(page, b"not a studio file", "junk.dmdart")
+        page.evaluate("scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(100)
+        x = n_seen(page)
+        check(said == "refused" and x["inView"] and x["onTop"] and not x["inSheet"] and x["role"] == "alert" and "isn’t a Studio file" in x["text"],
+              f"{tag}: a file that won't open is said in view, the page scrolled to its foot ({said}, {x})")
+        if shots:
+            page.screenshot(path=str(shots / f"studio-notice-file-{size}-{scheme}.png"))
+        page.focus("#s-note-x")
+        page.keyboard.press("Escape")
+        check(page.is_hidden("#s-note"), f"{tag}: Escape dismisses the notice")
+        # Info: a status, not an alert; its button dismisses it.
+        page.evaluate("document.activeElement?.blur()")
+        page.keyboard.press("s")
+        x = n_seen(page)
+        check(x["role"] == "status" and x["kind"] == "info" and x["inView"] and "Pick a stamp" in x["text"], f"{tag}: news is a status, in view ({x})")
+        page.keyboard.press("b")
+        page.click("#s-note-x")
+        check(page.is_hidden("#s-note"), f"{tag}: Dismiss hides the notice")
+        # Send to panel: the pop-up blocked (the address one that is never opened: window.open answers null).
+        page.mouse.click(*s_at(page, 4, 4))
+        s_kept(page)
+        page.evaluate("localStorage.setItem('odmd.display', '127.0.0.1:9'); window.open = () => null")
+        page.click("#s-send")
+        page.wait_for_selector("#s-p-send:not([disabled])", timeout=120000)
+        page.click("#s-p-send")
+        x = n_seen(page)
+        check(x["inView"] and x["onTop"] and x["inSheet"] == "s-p" and x["role"] == "alert" and "allow pop-ups" in x["text"] and x["at"] == "control",
+              f"{tag}: Send to panel's blocked pop-up is said under Send, in view ({x})")
+        if shots:
+            page.screenshot(path=str(shots / f"studio-notice-send-{size}-{scheme}.png"))
+        page.context.close()
 
 
 def studio_links_red(browser, base: str, site: Path, errors: list[str]) -> None:
@@ -5563,21 +5586,15 @@ def studio_links_leftovers(browser, base: str, site: Path, errors: list[str]) ->
     page.context.close()
 
 
-def l_decode(page: Page, link: str) -> dict:
-    return page.evaluate("""async (c) => { const m = await import('/studio/link.js'); try { const x = await m.decodePiece(c); return { name: x.name, author: x.author, plays: x.spec.plays, colours: x.spec.colours.length }; } catch (e) { return { error: e.message }; } }""",
-                         link.split("#p=")[1])
-
-
 def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> None:
-    """The links review: a name of 85 CJK characters shares and opens (cut
-    between characters at 255 bytes); a second link stops the first one's
+    """The links review: a second link stops the first one's
     playing, and after Close nothing paints; bidi and zero-width controls are
     dropped from a link's and a file's names and authors, shown and stored,
     the claims quoted and isolated; a link naming a record held here with
     the same content takes from[] from the record; the preview's heading is
     the Studio's, the name the link's quoted claim; a link arriving over
-    another sheet closes it; #P= opens as #p=; plays and more than 255
-    colours survive the Studio's own Share."""
+    another sheet closes it; #P= opens as #p=. (A CJK name and 300 colours
+    through the Studio's own Share went with Share: sharing is shelved.)"""
     page = s_page(browser, base, site, errors)
     one = [[1 if i % 7 == 0 else 0 for i in range(4096)]]
 
@@ -5589,16 +5606,6 @@ def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> No
             check(False, f"/studio/ links review: {what} did not finish: {str(e).splitlines()[0][:120]}")
             page.context.close()
             page = s_page(browser, base, site, errors)
-
-    def cjk():
-        page.mouse.click(*s_at(page, 3, 3))
-        s_kept(page)
-        page.fill("#s-name", "a" + "漢" * 85)
-        s_kept(page)
-        link = l_share(page)
-        x = l_decode(page, link)
-        check(bool(link) and "error" not in x and x["name"].startswith("a漢") and len(x["name"].encode()) <= 255,
-              f"/studio/ links review: a name of 'a' and 85 CJK characters shares and opens, cut between characters ({x.get('error') or len(x['name'].encode())} bytes)")
 
     def timers():
         frames = [[1 if (i % 128) == f * 10 else 0 for i in range(4096)] for f in range(4)]
@@ -5675,26 +5682,7 @@ def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> No
         said = l_goto(page, base, "#P=" + code)
         check(said == "shown", f"/studio/ links review: #P= opens as #p= ({said})")
 
-    def plays_wide():
-        kev(page, """const a = new Uint16Array(4096); const cs = []; for (let i = 0; i < 300; i++) { cs.push({ k: i + 1, hex: '#' + (0x400000 + i * 197).toString(16).padStart(6, '0') }); }
-            for (let i = 0; i < 4096; i++) a[i] = i < 3000 ? 1 + (i % 300) : 0;
-            const r = m.record('piece', 'Wide', { w: 128, h: 32, keys: 2, plays: 3, colours: cs, frames: [{ key: '0000000a', ms: 100 }, { key: '0000000c', ms: 200 }],
-              layers: [{ key: '0000000b', name: 'N', moves: false, cels: [await m.packPx(a, true)] }] });
-            await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
-        page.reload()
-        page.wait_for_selector(S_READY, timeout=30000)
-        want = page.evaluate(I_PIECE)
-        link = l_share(page)
-        said = l_goto(page, base, "#p=" + link.split("#p=")[1]) if link else ""
-        if said == "shown":
-            page.click("#s-lk-open")
-            wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
-            s_kept(page)
-        p = page.evaluate(I_PIECE)
-        check(said == "shown" and p["plays"] == 3 and p["colours"] == 300 and i_frames(p) == i_frames(want) and p["ms"] == [100, 200],
-              f"/studio/ links review: plays and 300 colours survive the Studio's own Share ({len(link)} characters; plays {p['plays']}, {p['colours']} colours)")
-
-    for what, fn in (("a CJK name", cjk), ("timers", timers), ("bidi", bidi), ("a held record", held), ("another sheet", over), ("plays and colours", plays_wide)):
+    for what, fn in (("timers", timers), ("bidi", bidi), ("a held record", held), ("another sheet", over)):
         part(what, fn)
     page.context.close()
 
@@ -7954,6 +7942,7 @@ def main() -> int:
             studio_import_history(browser, base, a.site, errors)
             studio_import_review(browser, base, a.site, errors)
             studio_links(browser, base, a.site, errors, a.shots)
+            studio_notices(browser, base, a.site, errors, a.shots)
             studio_links_red(browser, base, a.site, errors)
             studio_links_leftovers(browser, base, a.site, errors)
             studio_links_review(browser, base, a.site, errors)
@@ -8043,6 +8032,7 @@ def main() -> int:
         studio_import_history(browser, base, a.site, errors)
         studio_import_review(browser, base, a.site, errors)
         studio_links(browser, base, a.site, errors, a.shots)
+        studio_notices(browser, base, a.site, errors, a.shots)
         studio_links_red(browser, base, a.site, errors)
         studio_links_leftovers(browser, base, a.site, errors)
         studio_links_review(browser, base, a.site, errors)
