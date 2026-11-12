@@ -365,6 +365,14 @@ export class LocalStore {
     return r && !r.gone ? strip(r) : null;
   }
 
+  // Which of these ids this browser holds (not deleted): one read-only
+  // transaction, the gets all in flight at once. A Set.
+  async held(ids) {
+    const recs = this.db.transaction('records').objectStore('records');
+    const got = await Promise.all(ids.map((id) => req(recs.get(id)).then((x) => x && !x.gone)));
+    return new Set(ids.filter((_, i) => got[i]));
+  }
+
   async list({ type, tag, text } = {}) {
     const all = await req(this.db.transaction('records').objectStore('records').getAll());
     const t = text?.toLowerCase();
@@ -393,12 +401,9 @@ export class LocalStore {
       throw new Conflict(head(strip(was)));
     }
     // (Rows only for what is here: a pack naming thousands of absent records writes none for them.)
-    const here = [];
-    for (const id of refs) {
-      if (id === out.body?.palette) { here.push(id); continue; } // (a palette may be built in or the starter pack's: its one row is kept)
-      const x = await req(recs.get(id));
-      if (x && !x.gone) here.push(id);
-    }
+    // (Asked all at once, not one after another: a pack names up to 4,096.)
+    const got = await Promise.all([...refs].map((id) => (id === out.body?.palette ? true : req(recs.get(id)).then((x) => x && !x.gone))));
+    const here = [...refs].filter((_, i) => got[i]); // (a palette may be built in or the starter pack's: its one row is kept)
     out.seq = await this.#seq(tx);
     recs.put(out);
     this.#refs(tx, out.id, here);

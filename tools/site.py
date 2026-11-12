@@ -549,10 +549,13 @@ CSP = {
     # Create Art's page: the demo's wasm (the Studio's, the panel preview's), Game art's and
     # GifCities' pictures (js/find.js), your own picture (blob:) or one from any https address
     # (the Studio fetches it: the address field), so connect-src takes https:; a video plays
-    # from a blob: address into frames (create/video.js), so media-src takes blob:.
+    # from a blob: address into frames (create/video.js), so media-src takes blob:. The
+    # Studio's Import sheet frames it (same origin, `?in=studio`), so frame-ancestors 'self':
+    # no other site may frame it.
     "create": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
                                "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    .replace("frame-ancestors 'none'", "frame-ancestors 'self'")
     + "; connect-src 'self' https:",
     # The Studio's page: its GIF writer is a wasm module (the demo's
     # pkg-studio, same-origin), so 'wasm-unsafe-eval'; it fetches nothing else and uploads

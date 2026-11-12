@@ -17,8 +17,11 @@
 // own). Undo (doc.js: 500 steps) is a journal kept in the store, so it
 // survives a reload; snapshots are named revisions. The picker and the
 // palette tools load when first opened (colour.js), the GIF at the first
-// download (out.js). An importer (Create Art's GIF and picture conversion,
-// later) adds a piece through `piece()` below, the one way in.
+// download (out.js). Import (import.js: Create Art's converter in a sheet,
+// for pictures, GIFs and videos from anywhere) adds a piece through
+// `piece()` below, the one way in, or a layer to this one; a pasted picture
+// (paste.js) floats in exactly. A drop routes by what it is: a .dmdart or
+// .dmdpack to files.js, a picture, GIF or video (or a link) to Import.
 import { LocalStore, Conflict, CAPS, record, newId, packPx, check } from './store.js';
 import { DEFAULT, builtin, ready, starter, isStarter } from './palettes.js';
 import { Doc, W, H, N, hexOf, toInt } from './doc.js';
@@ -49,6 +52,7 @@ let starters = [];         // the starter palettes, once fetched
 let tool = 'pencil', prev = 'pencil', size = 1, zoom = 0, ledView = false, shade = 'solid', busy = false;
 const filled = { rect: false, ellipse: false };
 let sel = null, clip = null, drag = null;
+let clipNew = false;       // the Studio's copy is the newest on the clipboard: made since this window last lost focus
 let lastHash = null, timer = 0, nameDirty = false;
 let kept = false;          // in the store (a new piece is not, until it is drawn on or named)
 let journaled = false, unlock = null, closed = '', persisted = null;
@@ -282,7 +286,7 @@ function act(a) {
     // Its colours join the piece in the step that puts it down, their keys
     // given out at once; it lands in the middle of what is in view.
     const cs = [...new Set(clip.c)].filter((c) => c), ks = D.keysFor(cs.map((c) => c - 1)), to = new Map(cs.map((c, n) => [c, ks[n]]));
-    if (D.full) capSaid();
+    if (D.full) { D.letGo(D.key); say(`With its colours this piece would have more than ${CAPS.colours} colours: nothing was pasted.`); return false; } // (never half a paste)
     const fl = Uint16Array.from(clip.c, (c) => (c ? to.get(c) : 0));
     const r = scroll.getBoundingClientRect(), c = cv.getBoundingClientRect(), s = c.width / W;
     const mx = (Math.max(r.left, c.left) + Math.min(r.right, c.right)) / 2, my = (Math.max(r.top, c.top, 0) + Math.min(r.bottom, c.bottom, innerHeight)) / 2;
@@ -293,6 +297,8 @@ function act(a) {
     if (a === 'copy' || a === 'cut') {
       const keys = sel.fl || Uint16Array.from({ length: sel.w * sel.h }, (_, n) => D.px[(sel.y + Math.floor(n / sel.w)) * W + sel.x + n % sel.w]);
       clip = { w: sel.w, h: sel.h, c: Uint32Array.from(keys, (k) => (k ? D.rgbOf(k) + 1 : 0)) }; // colours, so it pastes into any piece
+      clipNew = true;
+      png(clip);
     }
     if (a === 'cut' || a === 'del') {
       // A box lifted from the panel: its place cleared. A paste not put down yet: gone.
@@ -310,6 +316,36 @@ function act(a) {
   }
   showSel();
   paint();
+  return true;
+}
+// The Studio's copy on the system clipboard too, as a PNG, where the browser allows it.
+function png(c) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return;
+  const cv = new OffscreenCanvas(c.w, c.h), d = new ImageData(c.w, c.h);
+  c.c.forEach((v, i) => { if (v) d.data.set([(v - 1) >> 16, ((v - 1) >> 8) & 255, (v - 1) & 255, 255], i * 4); });
+  cv.getContext('2d').putImageData(d, 0, 0);
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': cv.convertToBlob({ type: 'image/png' }) })]).catch(() => {});
+}
+// Paste: an image on the system clipboard (paste.js), an address (Import), else the Studio's own copy.
+function pasted(e) {
+  if (e.target.closest?.('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  if (clip && clipNew) { act('paste'); return; }
+  const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')), t = e.clipboardData?.getData('text/plain')?.trim() || '';
+  if (f) pasteMod().then((m) => m.paste(f), () => {});
+  else if (/^https:\/\/\S+$/.test(t)) pasteMod().then((m) => m.address(t), () => {});
+  else act('paste');
+}
+// The Paste button: the system clipboard where the browser lets it be read, else the Studio's own copy.
+async function pasteButton() {
+  if (clip && clipNew) { act('paste'); return; }
+  try {
+    for (const it of await navigator.clipboard.read()) {
+      const type = it.types.find((x) => x.startsWith('image/'));
+      if (type) { const m = await pasteMod(); await m.paste(new File([await it.getType(type)], 'pasted', { type })); return; }
+    }
+  } catch { /* not allowed, or none: the Studio's own */ }
+  act('paste');
 }
 const within = ([x, y]) => sel && x >= sel.x && x < sel.x + sel.w && y >= sel.y && y < sel.y + sel.h;
 
@@ -520,6 +556,13 @@ function status(what, text) {
   $('s-saved').textContent = text || (what === 'kept' ? 'Kept in this browser' : TEXT[what]);
 }
 function say(text) { $('s-err').hidden = !text; $('s-err').textContent = text || ''; }
+// A sentence with one thing to do about it.
+function offer(text, label, go) {
+  say(text);
+  const b = el('button', 's-pill', label);
+  b.onclick = () => { say(''); go(); };
+  $('s-err').append(' ', b);
+}
 function queueSave() {
   clearTimeout(timer);
   if (!store || !kept || closed) return;
@@ -819,10 +862,15 @@ const lazy = (get, set, name) => () => (get() ?? set(import(`./${name}.js`).then
 const stamps = lazy(() => stampsMod, (v) => (stampsMod = v), 'stamps');
 const library = lazy(() => libMod, (v) => (libMod = v), 'library');
 const files = lazy(() => filesMod, (v) => (filesMod = v), 'files');
-// The Library is a view of this page (#library): the editor comes back when it is left.
+let impMod = null, pasteMod_ = null;
+const imp = lazy(() => impMod, (v) => (impMod = v), 'import');
+const pasteMod = lazy(() => pasteMod_, (v) => (pasteMod_ = v), 'paste');
+// The Library is a view of this page (#library): the editor comes back when
+// it is left. Import (#import, maybe ?url=, ?q=&platform=, ?shared=1) is a sheet over the editor.
 function route() {
-  const lib = location.hash === '#library';
+  const lib = location.hash === '#library', im = /^#import(\?|$)/.test(location.hash);
   if (lib) { done(); library().then((m) => m.show(), () => {}); } else fx.unlib?.();
+  if (im) { if (!/open|ready/.test(root.dataset.import)) { done(); imp().then((m) => m.show(new URLSearchParams(location.hash.slice(8))), () => {}); } } else impMod?.then((m) => m.close(), () => {});
   root.dataset.view = lib ? 'library' : 'editor';
 }
 const withFrames = (f) => () => { if (D.stroke || drag) return; done(); frames().then(f, () => {}); };
@@ -847,6 +895,17 @@ const studio = {
   setHead(o) { if ('name' in o) { $('s-name').value = o.name; nameDirty = true; } rec = { ...rec, ...o }; kept = true; queueSave(); },
   get tool() { return tool; }, useTool, swatches, keep() { kept = true; queueSave(); }, openRec, drafts, save,
   get journaled() { return journaled; }, jot, starters: () => starters, builtin,
+  // for import.js and paste.js
+  offer, imp, get clip() { return clip; }, paste(c) { clip = c; return act('paste'); },
+  // A whole body for this piece (an import's new layer), as one undo step.
+  async replace(body) {
+    done();
+    after(await D.restore(body, { palette: swatch.id }));
+    swatches();
+    paint();
+    await frames().catch(() => {});
+    fx.changed?.(D.steps[D.cur - 1]);
+  },
   // What the piece was made from gains `e` (once: the same id and hash, or note); false at the cap.
   // `dry`: only whether it could be (a stamp asks before it places, and adds once it has).
   addFrom(e, dry = false) {
@@ -890,13 +949,32 @@ async function main() {
   $('s-unused').addEventListener('click', unused);
   for (const b of document.querySelectorAll('.s-tool')) b.addEventListener('click', () => useTool(b.dataset.tool));
   for (const b of document.querySelectorAll('.s-size [data-size]')) b.addEventListener('click', () => useSize(+b.dataset.size));
-  $('s-selbar').addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) act(b.dataset.act); });
+  $('s-selbar').addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) { if (b.dataset.act === 'paste' && navigator.clipboard?.read) pasteButton(); else act(b.dataset.act); } });
   $('s-undo').addEventListener('click', () => undo(false));
   $('s-redo').addEventListener('click', () => undo(true));
   $('s-gif').addEventListener('click', () => download(false));
   $('s-send').addEventListener('click', () => { done(); out('send'); });
   $('s-libb').addEventListener('click', () => { location.hash = '#library'; });
+  $('s-imp-b').addEventListener('click', () => { done(); history.pushState({ imp: 1 }, '', '#import'); route(); });
   addEventListener('hashchange', route);
+  document.addEventListener('paste', pasted);
+  addEventListener('blur', () => { clipNew = false; }); // (something else may be copied now)
+  // A drop: Studio files to files.js; a picture, GIF or video, or a link, to Import.
+  // (Never left to the browser, which would open the file in place of the Studio.)
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const fs = [...e.dataTransfer.files], ours = fs.filter((f) => /\.(dmdart|dmdpack)$/i.test(f.name)), rest = fs.filter((f) => !ours.includes(f));
+    const u = (e.dataTransfer.getData('text/uri-list') || '').split('\n')[0].trim();
+    // On the open Import sheet: a picture or video into it; any other sheet takes no drop.
+    if (document.querySelector('dialog[open]')) { if (rest.length && /open|ready/.test(root.dataset.import)) imp().then((m) => m.bring(rest[0], 'Your file'), () => {}); return; }
+    if (root.dataset.view === 'library') { history.replaceState(null, '', location.pathname + location.search); route(); } // (to the editor first)
+    if (ours.length) {
+      files().then((m) => m.open(ours), () => {});
+      if (rest.length) say(`${rest.length === 1 ? 'The picture' : 'The pictures'} dropped with ${ours.length === 1 ? 'that file' : 'those files'} ${rest.length === 1 ? 'was' : 'were'} left: drop ${rest.length === 1 ? 'it' : 'one'} on its own to import it.`);
+    } else if (rest.length) imp().then((m) => m.bring(rest[0], 'Your file'), () => {});
+    else if (/^https:\/\//i.test(u)) imp().then((m) => { history.pushState({ imp: 1 }, '', '#import'); m.show(new URLSearchParams({ url: u }), true); }, () => {});
+  });
   $('s-stampsb').addEventListener('click', () => stamps().then((m) => m.show(), () => {}));
   $('s-savef').addEventListener('click', () => { done(); files().then((m) => m.saveOpen(), () => {}); });
   $('s-openf').addEventListener('click', () => files().then((m) => m.pick(), () => {}));
@@ -944,7 +1022,8 @@ async function main() {
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
-    else if (mod && CLIP[k] && (sel || k === 'v')) { e.preventDefault(); act(CLIP[k]); }
+    else if (mod && k === 'v') { /* the paste event (pasted): it says what the clipboard holds */ }
+    else if (mod && CLIP[k] && sel) { e.preventDefault(); act(CLIP[k]); }
     else if (mod && k === 'a') { e.preventDefault(); useTool('select'); drop(); sel = { x: 0, y: 0, w: W, h: H }; showSel(); paint(); }
     else if (mod || e.altKey || drag) { if (k === 'shift' && shapes()) shape(drag.q, true); }
     else if (e.shiftKey && (k === 'h' || k === 'v') && sel) act(k === 'h' ? 'fliph' : 'flipv');

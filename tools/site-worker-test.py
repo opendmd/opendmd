@@ -395,7 +395,8 @@ def headers(base: str, site: Path) -> None:
             why.append(f"status {st}")
         if len(csp) != 1:
             why.append(f"{len(csp)} CSPs")
-        elif (has and has not in csp[0]) or (hasnt and hasnt in csp[0]) or "frame-ancestors 'none'" not in csp[0]:
+        # (/create/ only is framed, by the Studio's Import, the same origin alone: frame-ancestors 'self'.)
+        elif (has and has not in csp[0]) or (hasnt and hasnt in csp[0]) or f"frame-ancestors '{'self' if path.startswith('/create/') else 'none'}'" not in csp[0]:
             why.append(f"CSP {csp[0][:80]}…")
         if h.get("Access-Control-Allow-Origin") != cors:
             why.append(f"CORS {h.get('Access-Control-Allow-Origin')}")

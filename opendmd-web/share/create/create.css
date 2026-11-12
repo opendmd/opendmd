@@ -64,3 +64,9 @@ body>.banner{border:0;border-radius:0;margin:0}
 #c-elsewhere .chips{margin-top:8px}
 .cpage main a.chip{text-decoration:none;font-size:14px;padding:6px 12px}
 .cpage main a.chip:hover{border-color:var(--acc)}
+/* Inside the Studio's Import sheet (create.js `framed`): the converter alone, no page chrome. */
+html.framed .skip,html.framed body>header,html.framed footer,html.framed #create>h1,html.framed #create>.lead{display:none}
+html.framed .cpage main{padding-top:4px}
+/* The file name and its warnings are the panel's: the Studio names a piece itself. */
+html.framed #st-name,html.framed #st-warn{display:none}
+html.framed .wrap{padding-top:0}

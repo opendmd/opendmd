@@ -421,7 +421,13 @@ SHARE_USES = ("pkg/", "pkg-psi/", "js/fcost.js", "js/wasm.js", "js/web.js", "js/
 # file, and the share target's manifest and service worker (sw.js, fetched
 # when the page registers it): 7,457 B gz. The app icons (PNG, fetched only when
 # the page is installed) are printed, not counted.
-CREATE_GZ_BUDGET = 8 * 1024
+# 12 KB since S2 branch 4 (2026-11-11, studio-s2-import; the owner: the site's
+# limits are growth alarms, the display's are the real ones): the framed mode
+# the Studio's Import sheet runs it in (one action, Use in the Studio, and the
+# message to the Studio), the GIF read back into frames (gifread.js, loaded
+# at Use), "Start at" for a long video, and the cutover's hand-off into the
+# Studio behind its switch: ~12.4 KB gz as written (gifread.js 2.3 of it).
+CREATE_GZ_BUDGET = 14 * 1024
 # Create Art's video reader (`create/video.js`: an MP4 or WebM played into
 # frames for the Studio; site-only, imported only when a video arrives): a
 # line of its own, <= 3 KB (2026-11-04, branch byo-gif: ~1.5 KB gz).
@@ -461,7 +467,13 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # section and its phone tab, This piece's Save as file / Open a file and
 # what it was made from), check() reading stamps, fonts, templates and
 # packs, the starter pack's every record: ~45.3 KB gz as written.
-STUDIO_PAGE_GZ_BUDGET = 48 * 1024
+# 50 KB since S2 branch 4 (2026-11-11, studio-s2-import, the same authority):
+# the Import… button and #import route, the paste event (an image to
+# paste.js, an address to Import, else the Studio's own copy), Copy's PNG on
+# the system clipboard, drops routed (Studio files to files.js, pictures and
+# videos to Import), a whole body as one step for an import's layer:
+# ~47.6 KB gz as written.
+STUDIO_PAGE_GZ_BUDGET = 50 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
 # (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
@@ -482,10 +494,20 @@ STUDIO_LAZY = {
     "library": (10 * 1024, ("library.js", "library.css")),  # Library (10 KB, was 8: branch 3's detail, duplicate, templates)
     "stamps": (5 * 1024, ("stamps.js",)),        # the Stamp tool, Save as stamp (5 KB, was 4: the ghost and the two sets)
     "link": (4 * 1024, ("link.js",)),            # Share, or an address with #p= or #k=
-    "paste": (2 * 1024, ("paste.js",)),          # a paste that carries an image
+    # paste 3 KB (was 2): a picture's size read from its first bytes (PNG, GIF, JPEG, WebP, BMP) before it is decoded.
+    "paste": (3 * 1024, ("paste.js",)),          # a paste that carries an image
+    # import 6 KB (3 in the plan; branch 4, ~4.9 KB): the sheet and its frame, every message checked, frames to a piece or a layer.
+    "import": (6 * 1024, ("import.js",)),        # Import…, a picture or video dropped, a paste too big to place, #import
 }
-# First paint and every lazy line together.
-STUDIO_ALL_GZ_BUDGET = 84 * 1024
+# Everything Import's frame fetches the first time it opens (S2 plan,
+# 2026-11-11, branch studio-s2-import): Create Art's page in its framed mode
+# and the demo's files it runs on (the main wasm, pkg-art, the Make art
+# editor and its styles), and the Studio's import.js. ~303 KB gz on the built
+# site when planned; counted here as written for the page's own files.
+IMPORT_OPEN_GZ_BUDGET = 330 * 1024
+# First paint and every lazy line together. 92 KB since S2 branch 4 (was 84;
+# import.js and paste.js, as their lines).
+STUDIO_ALL_GZ_BUDGET = 92 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out
@@ -813,6 +835,10 @@ def main() -> int:
         print(f"{'create':<10} raw {craw:>9,}           gz {cgz:>9,} / {CREATE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {cgz + demo_gz(CREATE_USES):,} B gz)")
         ok &= cgz <= CREATE_GZ_BUDGET
+        open_gz = cgz + demo_gz(CREATE_USES) + lazy["import"][1]
+        verdict = "ok" if open_gz <= IMPORT_OPEN_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'import open':<12} raw {'':>9}         gz {open_gz:>9,} / {IMPORT_OPEN_GZ_BUDGET // 1024} KB {verdict:<10}(what the Studio's Import fetches when it first opens)")
+        ok &= open_gz <= IMPORT_OPEN_GZ_BUDGET
         missing = [f for f in STUDIO_FIRST if f not in sp_seen]
         verdict = "ok" if 0 < sp_gz <= STUDIO_PAGE_GZ_BUDGET and not missing else "OVER BUDGET" if not missing else "MISSING"
         print(f"{'studio pg':<10} raw {sp_raw:>9,}           gz {sp_gz:>9,} / {STUDIO_PAGE_GZ_BUDGET // 1024} KB {verdict:<10}"

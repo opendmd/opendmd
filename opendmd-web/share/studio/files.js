@@ -18,8 +18,9 @@
 import { FORMAT, LICENCES, CAPS, envelope, check, hashOf, record, newId, isBuiltin, unpackPx } from './store.js';
 import { builtin, isStarter, starter } from './palettes.js';
 
-// Per file; and for one opening (files picked together): 64 MB and four files' records in all.
-export const LIMITS = { bytes: 16 << 20, records: 4096 + 64, pictures: 32768, dangling: 4096, openBytes: 64 << 20, openRecords: 4 * (4096 + 64) };
+// Per file; and for one opening (files picked together): 64 MB and four
+// files' records in all, and 65,536 pack members summed over every pack.
+export const LIMITS = { bytes: 16 << 20, records: 4096 + 64, pictures: 32768, dangling: 4096, members: 65536, batch: 2048, openBytes: 64 << 20, openRecords: 4 * (4096 + 64) };
 const LS = 'odmd.studio.author';
 const EXT = { pack: '.dmdpack' };
 let S = null;
@@ -278,12 +279,24 @@ export async function open(files) {
     }
     // Packs may name records elsewhere, up to a point: a member is missing
     // only if no file of this opening holds it and this browser doesn't either
-    // (a split backup's parts hold each other's).
+    // (a split backup's parts hold each other's). Every member a pack here
+    // names is a row in the store once added, so one opening's packs name
+    // LIMITS.members at most in all; the ones not in the files are looked up
+    // in batches, with progress on screen.
+    let members = 0;
+    const away = new Set();
+    for (const r of all.values()) if (r.type === 'pack') {
+      members += r.body.members.length;
+      if (members > LIMITS.members) throw new Error(`Packs in ${files.length > 1 ? 'those files' : 'that file'} name more than ${LIMITS.members.toLocaleString('en')} records in all: open fewer at once.`);
+      for (const m of r.body.members) if (!all.has(m.id)) away.add(m.id);
+    }
     let dangling = 0;
-    for (const r of all.values()) if (r.type === 'pack') for (const m of r.body.members) {
-      if (all.has(m.id)) continue;
-      if (S.store && await S.store.get(m.id)) continue;
-      if (++dangling > LIMITS.dangling) break;
+    const ids = [...away];
+    for (let i = 0; i < ids.length && dangling <= LIMITS.dangling; i += LIMITS.batch) {
+      const part = ids.slice(i, i + LIMITS.batch);
+      if (ids.length > LIMITS.batch) { S.status('saving', `Checking… ${i.toLocaleString('en')} of ${ids.length.toLocaleString('en')}`); await new Promise((ok) => setTimeout(ok)); }
+      const have = S.store ? await S.store.held(part) : new Set();
+      dangling += part.length - have.size;
     }
     if (dangling > LIMITS.dangling) throw new Error(`Packs in ${files.length > 1 ? 'those files' : 'that file'} name more than ${LIMITS.dangling.toLocaleString('en')} records neither they nor this browser hold: ${LIMITS.dangling.toLocaleString('en')} at most.`);
     p = await plan([...all.values()]);

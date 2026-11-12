@@ -19,7 +19,11 @@ which is not a licence; else `CC0-1.0` or `CC-BY-4.0`) and `from`.
 `from` lists what a record was made from. An entry that names a record
 carries `id`, `rev` and that revision's `hash`, so it says which content it
 was, plus `name`, `author` and `licence`; anything else (an imported file)
-is `{external: true, note}`. A copy made because another tab changed the
+is `{external: true, note}`, the note saying where it came from ("Game
+art: …", "GifCities: …", an address's host, "Your file", "Pasted"). An
+import's entry may also carry `title`, `platform`, `author` (a string) and
+`logo` (`true`), the naming fields Send to panel offers back; each is absent
+when empty. A copy made because another tab changed the
 same draft gets a new `id` and a new `created`, and its `from` names the
 draft.
 

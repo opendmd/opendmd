@@ -84,6 +84,16 @@ build URL serves. There the art index must also carry
   doc.js under 2,000 random operations, and a 4,000-colour paste from one
   key allocator; the hostile-input list (deflate bombs and broken cels,
   records and journals that lie); web-size failing a stray studio/ file;
+- /studio/ Import (studio-s2-import): Create Art's converter in a sheet
+  over the Studio, a same-origin frame (`/create/?in=studio`): the Studio's
+  CSP byte for byte as it was and nothing of the converter fetched without
+  Import; a still, an animated GIF, Game art and GifCities (stubbed) and
+  videos (any video/*, Start at) into a new piece or a layer, pixel for
+  pixel with what Download writes, with `from` and Send's fields; paste
+  (exact up to 128x32, else Fit it in Import) and drops routed; the
+  cutover's hand-off from /create/ with its switch forced on; the phone's
+  full-screen sheet; Import's hostile inputs (forged and lying messages,
+  other origins framing /create/, odd videos, bad pastes, frame caps);
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -4235,6 +4245,987 @@ def studio_open_limits2(browser, base: str, site: Path, errors: list[str]) -> No
     page.context.close()
 
 
+S_REFS = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open();
+    const n = await new Promise((ok) => { const q = s.db.transaction('refs').objectStore('refs').count(); q.onsuccess = () => ok(q.result); }); s.db.close(); return n; }"""
+
+
+def studio_held_members(browser, base: str, site: Path, errors: list[str]) -> None:
+    """A stranger's file whose packs name thousands of this browser's own
+    stamps: the members summed over every pack of one opening are capped at
+    65,536 (each would be a row in the store), the lookups go in batches
+    with "Checking… n of m" on screen, the page stays live, and one under
+    the cap opens and adds its rows in seconds, not minutes."""
+    page = s_page(browser, base, site, errors)
+    kev(page, """const s = await m.LocalStore.open(); const a = new Uint8Array(64); const ids = [];
+        for (let i = 0; i < 4000; i++) { a[i % 64] = 1; const r = m.record('stamp', 'S' + i, { w: 8, h: 8, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }); await s.put(r); ids.push({ id: r.id, rev: 1 }); }
+        s.db.close(); window.__mine = ids;""")
+    page.evaluate("""() => { window.__said = []; new MutationObserver(() => __said.push(document.getElementById('s-saved').textContent))
+        .observe(document.getElementById('s-saved'), { childList: true, characterData: true, subtree: true }); }""")
+
+    def stranger(packs: int, away: int = 0) -> str:
+        return kev(page, """const ids = [...window.__mine]; for (let i = 0; i < A.away; i++) ids.push({ id: m.newId('stamp'), rev: 1 });
+            const packs = []; for (let k = 0; k < A.packs; k++) { const p = m.record('pack', 'Names yours ' + k, { members: ids.slice(k * 7 % 64, k * 7 % 64 + 4000) }); p.hash = await m.hashOf(p.body); packs.push(p); }
+            const root = await K.stamp('Carrier'); return K.file(root, [root, ...packs]);""", {"packs": packs, "away": away})
+    big = stranger(17)  # 68,000 members in all
+    page.evaluate("window.__beats = 0; window.__iv = setInterval(() => __beats++, 100)")
+    t = time.time()
+    said = file_open(page, big, "names-yours.dmdpack")
+    dt = time.time() - t
+    msg = page.inner_text("#s-err") if said == "refused" else ""
+    check(said == "refused" and "65,536" in msg and dt < 10, f"/studio/ held members: a file whose packs name 68,000 records in all is refused at the cap ({said}, {dt:.1f} s, '{msg[:90]}')")
+    if said == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    page.evaluate("window.__said = []; window.__beats = 0")
+    ok = stranger(15, away=200)  # 60,000 members: 4,000 held here, 200 nowhere (each pack names 4,000 of the 4,200)
+    t = time.time()
+    said = file_open(page, ok, "names-yours.dmdpack")
+    dt = time.time() - t
+    seen = page.evaluate("window.__said")
+    checking = [x for x in seen if x.startswith("Checking…")]
+    if said == "asked":
+        refs0 = page.evaluate(S_REFS)
+        t2 = time.time()
+        added = file_add(page)
+        dt2 = time.time() - t2
+        refs = page.evaluate(S_REFS) - refs0
+    else:
+        added, dt2, refs = 0, 0, 0
+    beats = page.evaluate("window.__beats")
+    page.evaluate("clearInterval(__iv)")
+    check(said == "asked" and dt < 10 and checking and all(re.fullmatch(r"Checking… [\d,]+ of [\d,]+", x) for x in checking),
+          f"/studio/ held members: 15 packs naming 60,000 records open in {dt:.1f} s, 'Checking…' shown with progress ({said}, {checking[:2]})")
+    check(added == 16 and refs <= 60000 and dt2 < 60 and beats >= (dt + dt2) * 10 * 0.3,
+          f"/studio/ held members: added in {dt2:.1f} s, {refs:,} reference rows (only for what is here), the page live ({added} added, {beats} beats)")
+    page.context.close()
+
+
+# --- Import (S2 branch 4): Create Art's converter in a sheet over the Studio ---
+STUDIO_CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; "
+              "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")  # the Studio's, as it was before Import
+CONVERTER = ("/demo/pkg/", "/demo/pkg-art/", "/demo/js/find.js", "/demo/js/studio.js", "/create/")
+I_PIECE = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const id = document.getElementById('studio').dataset.id;
+    const r = await s.get(id); s.db.close(); if (!r) return null; const cm = new Map(r.body.colours.map((c) => [c.k, parseInt(c.hex.slice(1), 16)]));
+    const layers = []; for (const l of r.body.layers) { const cels = []; for (const z of l.cels) cels.push(Array.from(await m.unpackPx(z, 4096, r.body.keys === 2), (k) => (k ? cm.get(k) ?? -1 : 0))); layers.push({ name: l.name, moves: l.moves, cels }); }
+    return { id: r.id, name: r.name, hash: r.hash, ms: r.body.frames.map((f) => f.ms), plays: r.body.plays || 0, layers, from: r.from, colours: r.body.colours.length }; }"""
+
+
+def i_frames(p: dict) -> list[list[int]]:
+    """A piece's frames as shown (I_PIECE): each pixel the topmost layer's colour that is not off."""
+    out = []
+    for f in range(len(p["ms"])):
+        px = [0] * 4096
+        for l in p["layers"]:
+            c = l["cels"][f if l["moves"] else 0]
+            for i, v in enumerate(c):
+                if v:
+                    px[i] = v
+        out.append(px)
+    return out
+
+
+def gif_rgb(data: bytes) -> tuple[list[list[int]], list[int]]:
+    """A GIF's frames as 0xRRGGBB a pixel (black as 0, off: as the Studio takes them in) and their times."""
+    im = Image.open(io.BytesIO(data))
+    frames, ms = [], []
+    for i in range(getattr(im, "n_frames", 1)):
+        im.seek(i)
+        rgba = im.convert("RGBA")
+        raw = rgba.tobytes()
+        frames.append([(raw[i] << 16 | raw[i + 1] << 8 | raw[i + 2]) if raw[i + 3] >= 128 else 0 for i in range(0, len(raw), 4)])
+        d = im.info.get("duration", 0)
+        ms.append(100 if d <= 10 else d)  # (0 or 1 hundredths: 100 ms, as browsers play them)
+    return frames, ms
+
+
+def i_page(browser, base: str, site: Path, errors: list[str], size: str = "laptop", ctx=None, init: str = "", handoff: bool = False) -> Page:
+    """/studio/ (s_page) with /create/'s documents under their own CSP too (the frame's), the converter's sources stubbed."""
+    page = s_page(browser, base, site, errors, size=size, ctx=ctx, init=init)
+    i_route(page, site, base, handoff)
+    return page
+
+
+def i_route(page: Page, site: Path, base: str, handoff: bool = False) -> None:
+    def create(r):
+        resp = r.fetch()
+        body = resp.text()
+        if handoff:
+            body = body.replace('data-handoff="off"', 'data-handoff="on"')
+        r.fulfill(status=resp.status, body=body, headers={**resp.headers, "content-security-policy": csp_for(site, "/create/*")})
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/create/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")), create)
+    png, gif = c_fixtures()
+    page.c_asked = []
+    c_stub(page, base, png, gif, page.c_asked)
+
+
+def i_open(page: Page, how: str = "button") -> object:
+    """Import opened (the button, or as it is), its frame ready: the frame."""
+    if how == "button":
+        page.click("#s-imp-b")
+    wait_js(page, "document.getElementById('studio').dataset.import === 'ready'", timeout=60000)
+    fr = page.query_selector("#s-imp-f").content_frame()
+    fr.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=60000)
+    return fr
+
+
+def i_file(fr, name: str, data: bytes, mime: str) -> None:
+    fr.click("#st-src [data-v=own]")
+    fr.set_input_files("#st-file", {"name": name, "mimeType": mime, "buffer": data})
+
+
+def i_use(page: Page, fr, as_layer: bool = False, wait: str = "imported") -> str:
+    if as_layer:
+        page.check("#s-imp input[value=layer]")
+    page.evaluate("delete document.getElementById('studio').dataset.imported")
+    fr.click("#c-use")
+    wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=60000)
+    got = s_data(page)["imported"]
+    if not got.startswith("refused"):
+        wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+        s_kept(page)
+    return got
+
+
+def i_fixtures() -> dict:
+    """A 128x32 still (noise, 12 colours), a 5-frame 128x32 GIF with its own times, a 16x16 PNG with a see-through pixel."""
+    import random
+    rnd = random.Random(7)
+    pal = [(rnd.randrange(30, 256), rnd.randrange(256), rnd.randrange(256)) for _ in range(12)]
+    still = Image.new("RGB", (128, 32))
+    still.putdata([pal[rnd.randrange(12)] for _ in range(4096)])
+    b = io.BytesIO()
+    still.save(b, "PNG")
+    frames = []
+    for i in range(5):
+        f = Image.new("RGB", (128, 32), (0, 0, 0))
+        f.putdata([pal[rnd.randrange(12)] if rnd.random() < .4 else (0, 0, 0) for _ in range(4096)])
+        frames.append(f)
+    g = io.BytesIO()
+    frames[0].save(g, "GIF", save_all=True, append_images=frames[1:], duration=[100, 200, 50, 300, 120], loop=0, optimize=False, disposal=1)
+    small = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    small.putdata([(*pal[i % 12], 255) if i != 17 else (0, 0, 0, 0) for i in range(256)])
+    sm = io.BytesIO()
+    small.save(sm, "PNG")
+    return {"still": b.getvalue(), "anim": g.getvalue(), "small": sm.getvalue(), "pal": pal}
+
+
+def studio_import_fetches(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The Studio drawn on, saved and downloaded without opening Import
+    fetches no file of the converter, nor import.js or paste.js; its CSP
+    header is byte for byte what it was; /create/'s frame-ancestors is
+    'self' (no other site may frame it), the rest of its policy as it was."""
+    check(csp_for(site, "/studio/*") == STUDIO_CSP, f"/studio/ import: the Studio's CSP byte for byte as it was ({csp_for(site, '/studio/*')[-40:]})")
+    cc = csp_for(site, "/create/*")
+    check("frame-ancestors 'self'" in cc and "frame-ancestors 'none'" not in cc and "connect-src 'self' https:" in cc,
+          f"/studio/ import: /create/ may be framed by this site alone ({cc[-60:]})")
+    page = i_page(browser, base, site, errors)
+    page.mouse.click(*s_at(page, 5, 5))
+    s_kept(page)
+    with page.expect_download(timeout=60000):
+        page.click("#s-gif")
+    page.wait_for_timeout(500)
+    got = [p for p in s_paths(page) if p.startswith(CONVERTER) or p in ("/studio/import.js", "/studio/paste.js")]
+    check(not got and "/studio/out.js" in s_paths(page), f"/studio/ import: drawn, saved, downloaded: nothing of the converter fetched ({got[:3]})")
+    page.context.close()
+
+
+def studio_import(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """Import… opens the sheet with Create Art in its frame (one action, Use
+    in the Studio; no page chrome, no Send or Download); a local still
+    becomes a one-frame piece whose pixels equal the plain page's Download
+    GIF of the same picture; a 5-frame GIF becomes 5 frames with its times,
+    pixel for pixel; the same still as a new layer in this piece: a held
+    layer, one undo step, the other layers untouched; the piece's `from`
+    names it (Game art with its title and platform), and Send to panel
+    offers them; Game art and GifCities search inside the frame (stubbed),
+    with no CSP violation in the frame or the Studio."""
+    fx = i_fixtures()
+    # What the plain page's Download writes for the still.
+    plain = new_page(browser, "laptop", errors)
+    i_route(plain, site, base)
+    plain.goto(f"{base}/create/")
+    plain.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    i_file(plain, "still.png", fx["still"], "image/png")
+    wait_js(plain, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    plain.fill("#st-title", "Noise")
+    wait_js(plain, "!!document.querySelector('#studio').dataset.name", timeout=5000)
+    with plain.expect_download(timeout=60000) as dl:
+        plain.click("#st-save")
+    want_still, _ = gif_rgb(Path(dl.value.path()).read_bytes())
+    check(plain.is_visible("#c-send") and plain.query_selector("#c-use") is None,
+          "/create/ opened directly: as before, Send to my panel and no Use in the Studio")
+    plain.context.close()
+
+    page = i_page(browser, base, site, errors)
+    page.mouse.click(*s_at(page, 2, 2))
+    s_kept(page)
+    first = s_data(page)["id"]
+    fr = i_open(page)
+    if shots:
+        page.screenshot(path=str(shots / "studio-import-laptop.png"))
+    chrome = fr.evaluate("""() => ({ use: !!document.getElementById('c-use'), send: !!document.getElementById('c-send'), save: !document.getElementById('st-save').hidden,
+        h1: getComputedStyle(document.querySelector('#create > h1')).display, head: getComputedStyle(document.querySelector('body > header')).display })""")
+    check(chrome == {"use": True, "send": False, "save": False, "h1": "none", "head": "none"}, f"/studio/ import: the sheet, the converter framed: Use in the Studio alone ({chrome})")
+    i_file(fr, "still.png", fx["still"], "image/png")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    shown = i_frames(p)
+    check(got == "piece:1" and p["id"] != first and len(p["ms"]) == 1 and len(p["layers"]) == 1 and not p["layers"][0]["moves"] and shown[0] == want_still[0]
+          and p["name"] == "Imported", f"/studio/ import: a still becomes a one-frame piece, its pixels the Download GIF's ({got}, {p['name']}, {sum(a == b for a, b in zip(shown[0], want_still[0]))}/4096)")
+    fr_ = p["from"]
+    check(len(fr_) == 1 and fr_[0].get("external") is True and fr_[0].get("note") == "Your file", f"/studio/ import: its from says where it came from ({fr_})")
+    # An animated GIF: 5 frames, their times, pixel for pixel.
+    fr = i_open(page)
+    i_file(fr, "anim.gif", fx["anim"], "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    src, ms = gif_rgb(fx["anim"])
+    shown = i_frames(p)
+    same = [sum(a == b for a, b in zip(x, y)) for x, y in zip(shown, src)]
+    check(got == "piece:5" and p["ms"] == ms and same == [4096] * 5 and p["layers"][0]["moves"],
+          f"/studio/ import: a 5-frame GIF becomes 5 frames with its times, pixel for pixel ({got}, {p['ms']} vs {ms}, {same})")
+    # As a new layer in this piece: a held layer, one undo step, the rest untouched.
+    s_new(page)
+    page.mouse.click(*s_at(page, 9, 9))
+    s_kept(page)
+    before = page.evaluate(I_PIECE)
+    steps0 = s_data(page)["steps"]
+    fr = i_open(page)
+    i_file(fr, "still.png", fx["still"], "image/png")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    got = i_use(page, fr, as_layer=True)
+    after_ = page.evaluate(I_PIECE)
+    steps1 = s_data(page)["steps"]
+    check(got == "layer:1" and after_["id"] == before["id"] and len(after_["layers"]) == 2 and not after_["layers"][1]["moves"]
+          and after_["layers"][0]["cels"] == before["layers"][0]["cels"] and after_["layers"][1]["name"] == "Imported"
+          and int(steps1.split("/")[0]) == int(steps0.split("/")[0]) + 1 and page.is_visible("#s-lrows li"),
+          f"/studio/ import: as a new layer: a held layer on top, one undo step, the other layer untouched ({got}, {steps0} -> {steps1})")
+    page.keyboard.press("Control+z")
+    s_kept(page)
+    undone = page.evaluate(I_PIECE)
+    check(len(undone["layers"]) == 1 and undone["layers"][0]["cels"] == before["layers"][0]["cels"], f"/studio/ import: undo takes the layer away ({len(undone['layers'])})")
+    # Game art, with its title and platform; GifCities; Send to panel offers them.
+    fr = i_open(page)
+    fr.click("#st-src [data-v=gameart]")
+    fr.select_option("#find-platform", "SNES")
+    fr.fill("#st-q", "studio test")
+    fr.click("#st-go")
+    fr.wait_for_selector("#find-grid .find-hit", timeout=20000)
+    fr.click("#find-grid .find-hit[data-kind=Named_Titles]")
+    wait_js(fr, "document.querySelector('#studio').dataset.title === 'Studio Test'", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    e = p["from"][0] if p["from"] else {}
+    check(got == "piece:1" and e.get("note", "").startswith("Game art: Studio Test") and e.get("title") == "Studio Test" and e.get("platform") == "SNES" and p["name"] == "Studio Test",
+          f"/studio/ import: Game art in the frame (stubbed): its title and platform carried in from ({e})")
+    page.click("#s-send")
+    page.wait_for_selector("#s-p[open]", timeout=20000)
+    offered = [page.input_value("#s-p-title"), page.input_value("#s-p-platform")]
+    page.click("#s-p-close")
+    check(offered == ["Studio Test", "SNES"], f"/studio/ import: Send to panel offers the import's title and platform ({offered})")
+    fr = i_open(page)
+    fr.click("#st-src [data-v=gifcities]")
+    fr.fill("#st-q", "mario")
+    fr.click("#st-go")
+    wait_js(fr, "document.querySelectorAll('#find-grid .find-hit').length === 2", timeout=20000)
+    fr.click("#find-grid .find-hit[data-id=WIDE]")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    csp = page.evaluate("window.__csp || []") + fr.evaluate("window.__csp || []")
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    note = (p["from"] or [{}])[0].get("note", "")
+    check(got == "piece:4" and note.startswith("GifCities: ") and not csp, f"/studio/ import: GifCities in the frame, 4 frames ({got}, '{note}', CSP {csp[:2]})")
+    off = [u for u in page.c_asked if u.startswith("https://opendmd.dev/")]
+    check(not off, f"/studio/ import: nothing asked of opendmd.dev {off[:2]}")
+    page.context.close()
+
+
+def i_png(w: int, h: int, colours: list[tuple] | None = None) -> bytes:
+    im = Image.new("RGB", (w, h))
+    if colours:
+        im.putdata([colours[i % len(colours)] for i in range(w * h)])
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+I_EVENT = """([kind, name, type, b64]) => { const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); const dt = new DataTransfer();
+    dt.items.add(new File([bytes], name, { type }));
+    const e = kind === 'paste' ? new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }) : new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+    (kind === 'paste' ? document.body : document.getElementById('s-canvas')).dispatchEvent(e); }"""
+
+
+def i_event(page: Page, kind: str, name: str, mime: str, data: bytes) -> None:
+    import base64
+    page.evaluate(I_EVENT, [kind, name, mime, base64.b64encode(data).decode()])
+
+
+def studio_import_video(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Video in Import: the picker takes any video (video/*); a WebM from a
+    file becomes at most 200 frames; a video past 10 s offers Start at, and
+    at 3 s the first frame is the video's at 3 s; a .mov is taken."""
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    fr.click("#st-src [data-v=own]")
+    accept = fr.get_attribute("#st-file", "accept")
+    check(accept == "image/*,video/*", f"/studio/ import video: the picker takes any video ({accept})")
+    fr.set_input_files("#st-file", str(VIDEO_FIXTURES / "clip.webm"))
+    wait_js(fr, "document.querySelector('#studio').dataset.video === '1'", timeout=30000)
+    n = int(fr.evaluate("document.querySelector('#studio').dataset.srcFrames"))
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    check(got == f"piece:{n}" and 30 <= n <= 200 and len(p["ms"]) == n, f"/studio/ import video: a WebM from a file, {n} frames ({got})")
+    fr = i_open(page)
+    i_file(fr, "long.webm", (VIDEO_FIXTURES / "long.webm").read_bytes(), "video/webm")
+    wait_js(fr, "document.querySelector('#studio').dataset.video === '1'", timeout=60000)
+    shown = fr.is_visible("#c-start")
+    fr.fill("#c-start-s", "3")
+    fr.evaluate("document.querySelector('#studio').dataset.video = ''")
+    fr.click("#c-start-go")
+    wait_js(fr, "document.querySelector('#studio').dataset.video === '1'", timeout=60000)
+    n = int(fr.evaluate("document.querySelector('#studio').dataset.srcFrames"))
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    f0 = i_frames(p)[0]
+    from collections import Counter
+    top = Counter(v for v in f0 if v).most_common(1)[0][0] if any(f0) else 0
+    r, g, b = top >> 16, (top >> 8) & 255, top & 255
+    check(shown and got.startswith("piece:") and n <= 200 and r > 170 and g > 150 and b < 110,
+          f"/studio/ import video: past 10 s, Start at; at 3 s the first frame is the video's at 3 s (yellow: #{top:06x}; {n} frames, {got})")
+    fr = i_open(page)
+    i_file(fr, "clip.mov", (VIDEO_FIXTURES / "clip.mp4").read_bytes(), "video/quicktime")
+    with contextlib.suppress(PlaywrightTimeout):
+        wait_js(fr, "document.querySelector('#studio').dataset.video === '1'", timeout=30000)
+    msg = fr.inner_text("#st-msg")
+    check(fr.evaluate("document.querySelector('#studio').dataset.video") == "1", f"/studio/ import video: a .mov is taken ('{msg}')")
+    page.context.close()
+
+
+def studio_import_paste(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Paste and drop: a 16x16 PNG pasted floats in exactly (its colours,
+    a see-through pixel off, the converter not loaded, "Pasted" in from);
+    a 640x480 one is said, with Fit it in Import, which opens the sheet with
+    it; a GIF dropped on the Studio opens Import with it; a .dmdart dropped
+    opens as a file, not in Import."""
+    fx = i_fixtures()
+    page = i_page(browser, base, site, errors)
+    i_event(page, "paste", "image.png", "image/png", fx["small"])
+    wait_js(page, "!!document.getElementById('studio').dataset.sel", timeout=20000)
+    x0, y0 = (int(v) for v in s_data(page)["sel"].split(",")[:2])
+    s_blur(page)
+    page.keyboard.press("Enter")
+    s_kept(page)
+    px = s_pixels(page)
+    pal = fx["pal"]
+    want = [pal[i % 12] if i != 17 else None for i in range(256)]
+    ok = all((px[(y0 + i // 16) * 128 + x0 + i % 16] == want[i]) if want[i] else px[(y0 + i // 16) * 128 + x0 + i % 16] == (0, 0, 0) for i in range(256))
+    p = page.evaluate(I_PIECE)
+    lit = sum(1 for v in i_frames(p)[0] if v)
+    paths = s_paths(page)
+    check(ok and lit == 255 and p["colours"] == 12 and {"note": "Pasted", "external": True} in p["from"] and "/studio/paste.js" in paths
+          and not [q for q in paths if q.startswith(CONVERTER) or q == "/studio/import.js"],
+          f"/studio/ paste: a 16 × 16 PNG floats in exactly, a see-through pixel off, the converter not loaded ({lit} lit, {p['colours']} colours, {p['from']})")
+    i_event(page, "paste", "big.png", "image/png", i_png(640, 480, [(200, 40, 40), (40, 200, 40)]))
+    wait_js(page, "/bigger than the panel/.test(document.getElementById('s-err').textContent)", timeout=20000)
+    said = page.inner_text("#s-err")
+    page.click("#s-err button")
+    fr = i_open(page, how="as is")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Pasted: 640')", timeout=20000)
+    check(said.startswith("This picture is 640 × 480, bigger than the panel.") and "Fit it in Import" in said, f"/studio/ paste: 640 × 480 said, and Fit it in Import opens the sheet with it ('{said[:70]}')")
+    page.click("#s-imp-x")
+    wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    png, gif = c_fixtures()
+    i_event(page, "drop", "wide.gif", "image/gif", gif)
+    fr = i_open(page, how="as is")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Your file: 88 × 31 · 4 frames')", timeout=20000)
+    check(True, "/studio/ drop: a GIF dropped on the Studio opens Import with it")
+    page.click("#s-imp-x")
+    wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    art = kev(page, "const r = await K.piece('Dropped file'); return K.file(r, [r]);")
+    page.evaluate("delete document.getElementById('studio').dataset.opened")
+    i_event(page, "drop", "piece.dmdart", "", art.encode())
+    wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=20000)
+    check(s_data(page)["opened"] == "asked" and s_data(page)["import"] == "closed", f"/studio/ drop: a .dmdart dropped opens as a file, not in Import ({s_data(page).get('opened')})")
+    page.context.close()
+
+
+def studio_import_handoff(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The cutover's hand-off, its switch forced on here (index.html's
+    data-handoff, "off" as built): /create/?q=zelda&platform=SNES,
+    /create/?url=…, a POST to /create/share (the share target, through its
+    worker) and bare /create/ each end in the Studio with Import open on
+    the right thing. As built, the switch is off."""
+    built = (site / "create/index.html").read_text()
+    check('data-handoff="off"' in built, "/create/ hand-off: the switch is off as built")
+    png, gif = c_fixtures()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+        (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+    page.route(lambda u: urllib.parse.urlsplit(u).path.startswith("/studio/") and urllib.parse.urlsplit(u).path.endswith(("/", ".html")),
+               lambda r: (lambda resp: r.fulfill(response=resp, headers={**resp.headers, "content-security-policy": csp_for(site, "/studio/*")}))(r.fetch()))
+    i_route(page, site, base, handoff=True)
+    page.route("https://cors.example/**", lambda r: r.fulfill(status=200, body=gif, headers={"content-type": "image/gif", "access-control-allow-origin": "*"}))
+
+    def landed(path: str | None, frame_js: str) -> tuple[str, bool]:
+        if path:
+            page.goto(f"{base}{path}")
+        page.wait_for_url(f"{base}/studio/**", timeout=30000)
+        page.wait_for_selector(S_READY, timeout=30000)
+        fr = i_open(page, how="as is")
+        try:
+            wait_js(fr, frame_js, timeout=20000)
+            ok = True
+        except PlaywrightTimeout:
+            ok = False
+        return urllib.parse.urlsplit(page.url).fragment, ok
+    frag, ok = landed("/create/?q=zelda&platform=SNES", "document.getElementById('st-q').value === 'zelda' && document.getElementById('find-platform').value === 'SNES'")
+    check(frag == "import?q=zelda&platform=SNES" and ok, f"/create/ hand-off: ?q=zelda&platform=SNES -> the Studio's Import on that search (#{frag}, {ok})")
+    page.click("#s-imp-x")
+    page.goto(f"{base}/create/?url=" + urllib.parse.quote("https://cors.example/wide.gif", safe=""))
+    page.wait_for_url(f"{base}/studio/**", timeout=30000)
+    page.wait_for_selector("#s-imp-fetch", timeout=30000)
+    page.click("#s-imp-fetch")  # (an address from a link is fetched only when asked)
+    frag, ok = landed(None, "document.querySelector('#st-msg').textContent.startsWith('cors.example: 88')")
+    check(frag.startswith("import?url=https") and ok, f"/create/ hand-off: ?url= -> Import open on that picture (#{frag}, {ok})")
+    page.click("#s-imp-x")
+    frag, ok = landed("/create/", "true")
+    check(frag == "import" and ok, f"/create/ hand-off: bare /create/ -> the Studio's Import (#{frag})")
+    page.click("#s-imp-x")
+    state = page.evaluate("""async () => { for (let i = 0; i < 100; i++) { const r = await navigator.serviceWorker.getRegistration('/create/');
+        if (r?.active?.state === 'activated') return 'activated'; await new Promise((ok) => setTimeout(ok, 100)); } return 'none'; }""")
+    page.evaluate("""(b64) => { const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const f = document.createElement('form'); f.method = 'POST'; f.action = '/create/share'; f.enctype = 'multipart/form-data';
+        const i = document.createElement('input'); i.type = 'file'; i.name = 'media'; const t = new DataTransfer();
+        t.items.add(new File([bytes], 'shared.gif', { type: 'image/gif' })); i.files = t.files; f.append(i);
+        document.body.append(f); f.submit(); }""", __import__("base64").b64encode(gif).decode())
+    page.wait_for_url(f"{base}/studio/**", timeout=30000)
+    page.wait_for_selector(S_READY, timeout=30000)
+    fr = i_open(page, how="as is")
+    try:
+        wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Shared: 88 × 31')", timeout=20000)
+        ok = True
+    except PlaywrightTimeout:
+        ok = False
+    check(state == "activated" and urllib.parse.urlsplit(page.url).fragment == "import?shared=1" and ok,
+          f"/create/ hand-off: a file shared to the installed app (POST /create/share) -> Import open on it ({state}, {page.url}, {ok})")
+    check(not page.evaluate("window.__csp || []"), f"/create/ hand-off: no CSP violation {page.evaluate('window.__csp || []')[:2]}")
+    page.context.close()
+
+
+def studio_import_phone(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """On a phone the sheet fills the screen; Back closes it and the piece underneath is as it was."""
+    page = i_page(browser, base, site, errors, size="phone")
+    page.locator("#s-canvas").tap()
+    s_kept(page)
+    was = page.evaluate(I_PIECE)
+    px = s_pixels(page)
+    i_open(page)
+    box = page.locator("#s-imp").bounding_box()
+    if shots:
+        page.screenshot(path=str(shots / "studio-import-phone.png"))
+    page.go_back()
+    wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    now = page.evaluate(I_PIECE)
+    check(box["width"] >= 389 and box["height"] >= 800 and now["hash"] == was["hash"] and s_pixels(page) == px and not page.is_visible("#s-imp"),
+          f"/studio/ import (phone): the sheet fills the screen ({box['width']:.0f} × {box['height']:.0f}), Back closes it, the piece as it was")
+    page.context.close()
+
+
+def studio_import_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
+    out = subprocess.run(["uv", "run", str(web_size), str(ROOT / "opendmd-web/www-dist"), "--share", str(ROOT / "opendmd-web/share")], capture_output=True, text=True).stdout
+    line = next((l for l in out.splitlines() if l.startswith("import open")), "")
+    m = re.search(r"gz\s+([\d,]+) / (\d+) KB", line)
+    check(bool(m) and int(m.group(1).replace(",", "")) <= 330 * 1024 and int(m.group(2)) == 330, f"/studio/ import: web-size's import open under 330 KB ({line.strip()[:80]})")
+
+
+# A frames message as the frame sends it, made in the page: `o` overrides its fields; `colours` random colours over its frames.
+I_MSG = """(o) => { const k = new URLSearchParams(document.getElementById('s-imp-f')?.src.split('?')[1] || location.search).get('k');
+    const n = o.n ?? 1, f = o.frames ?? n, px = new Uint8Array(f * 4096 * 4);
+    for (let i = 0; i < f * 4096; i++) { const c = o.colours ? (i * 2654435761) % o.colours + 1 : 0xf7a531; px.set([c >> 16 & 255, c >> 8 & 255, c & 255, 255], i * 4); }
+    const m = { type: 'opendmd-studio-import', k, w: 128, h: 32, n, total: n, ms: Array(n).fill(100), plays: 0, px: px.buffer, title: '', platform: '', author: '', logo: false, note: 'Forged', ...o.set };
+    delete m.frames; return m; }"""
+
+
+def i_post(target, o: dict, where: str = "parent", origin: str = "location.origin") -> None:
+    """A frames message posted from `target` (a page or frame) to `where` (an expression for the Studio's window)."""
+    target.evaluate(f"(o) => {{ const m = ({I_MSG})(o); {where}.postMessage(m, {origin}, [m.px]); }}", o)
+
+
+def studio_import_red(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Import's hostile inputs: a frames message from another window, from
+    another origin, or from the frame before it said ready: ignored (and
+    the same message from the frame, ready, taken: the control); messages
+    that lie (frame count against the data, 300 frames, a time of 0, a frame
+    of the wrong size, 70,000 colours, times of the wrong count, a play
+    count that isn't one, a title past its cap): each refused with a
+    sentence, nothing made; /create/?in=studio opened directly is the plain
+    page, and another origin can't frame /create/; the sheet closed while a
+    video is read: nothing lands; Import opened twice at once: one frame,
+    one piece; `#import?url=` with javascript:, data: and http: addresses:
+    only https: goes on."""
+    page = i_page(browser, base, site, errors)
+    page.mouse.click(*s_at(page, 3, 3))
+    s_kept(page)
+    drafts = lambda: len(page.evaluate(S_STORE, ["list", None]))
+    n0 = drafts()
+    fr = i_open(page)
+    k = fr.evaluate("new URLSearchParams(location.search).get('k')")
+    # Another window of this origin (a page of the site in a second frame), with the right nonce.
+    page.evaluate("""(u) => new Promise((ok) => { const f = document.createElement('iframe'); f.id = 'x-other'; f.src = u; f.onload = ok; document.body.append(f); })""", f"{base}/licenses/")
+    other = page.query_selector("#x-other").content_frame()
+    i_post(other, {"set": {"k": k}})
+    # Another origin (localhost is not 127.0.0.1): a window the Studio opened, posting to its opener, to any origin.
+    port = urllib.parse.urlsplit(base).port
+    page.context.route(f"http://localhost:{port}/x-forge", lambda r: r.fulfill(body="<!doctype html><title>x</title>", content_type="text/html"))
+    with page.expect_popup() as pop:
+        page.evaluate("(u) => { window.__far = open(u); }", f"http://localhost:{port}/x-forge")
+    far = pop.value
+    far.wait_for_load_state()
+    i_post(far, {"set": {"k": k}}, where="opener", origin="'*'")
+    page.wait_for_timeout(800)
+    forged = s_data(page).get("imported")
+    check(not forged and drafts() == n0, f"/studio/ import red: a frames message from another window or another origin is ignored ({forged}, {drafts()} drafts)")
+    # The control: the same message from the frame, ready, is taken.
+    page.evaluate("document.getElementById('x-other').remove()")
+    far.close()
+    i_post(fr, {})
+    wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=20000)
+    s_kept(page)
+    check(s_data(page).get("imported") == "piece:1" and drafts() == n0 + 1, f"/studio/ import red: the control, the frame's own message, is taken ({s_data(page).get('imported')})")
+    # Lies, from the frame after its ready.
+    lies = [("a frame count against the data", {"n": 2, "frames": 1}), ("300 frames", {"n": 300}), ("a time of 0", {"set": {"ms": [0]}}),
+            ("frames of 64 × 32", {"set": {"w": 64}}), ("70,000 colours", {"n": 20, "colours": 70000}), ("times of the wrong count", {"n": 2, "set": {"ms": [100]}}),
+            ("a play count of -1", {"set": {"plays": -1}}), ("a title of 500 characters", {"set": {"title": "x" * 500}}), ("fewer frames in all than it holds", {"n": 2, "set": {"total": 1}}),
+            ("pictures not in an ArrayBuffer", {"set": {"px": None}}), ("a time of 1.5e9", {"set": {"ms": [1.5e9]}})]
+    n1 = drafts()
+    was = page.evaluate(I_PIECE)
+    for what, o in lies:
+        fr = i_open(page)
+        page.evaluate("delete document.getElementById('studio').dataset.imported")
+        if o.get("set", {}).get("px", 1) is None:
+            fr.evaluate(f"(o) => {{ const m = ({I_MSG})(o); m.px = [1, 2, 3]; parent.postMessage(m, location.origin); }}", {})
+        else:
+            i_post(fr, o)
+        wait_js(page, "!!document.getElementById('studio').dataset.imported", timeout=20000)
+        said = page.inner_text("#s-imp-say")
+        check(s_data(page)["imported"] == "refused" and said.startswith("That can’t be used:") and said.endswith("Nothing was changed.") and drafts() == n1,
+              f"/studio/ import red: {what}: refused with a sentence, nothing made ('{said[:90]}')")
+        page.click("#s-imp-x")
+    now = page.evaluate(I_PIECE)
+    check(now["hash"] == was["hash"], "/studio/ import red: the open piece untouched by every refusal")
+    # As a layer, past the piece's colours: refused, nothing half-made.
+    page.close()
+    page.context.close()
+
+    # Before ready: the frame's script never runs (blocked), a message from it is ignored.
+    page = i_page(browser, base, site, errors)
+    page.route("**/create/create.js", lambda r: r.abort())
+    page.click("#s-imp-b")
+    page.wait_for_timeout(1500)
+    fr = page.query_selector("#s-imp-f").content_frame()
+    i_post(fr, {})
+    page.wait_for_timeout(800)
+    check(s_data(page).get("import") == "open" and not s_data(page).get("imported"), f"/studio/ import red: a message from the frame before it said ready is ignored ({s_data(page).get('import')}, {s_data(page).get('imported')})")
+    page.unroute("**/create/create.js")
+    page.click("#s-imp-x")
+    wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    # #import?url= with javascript:, data: and http: addresses: only https: goes on.
+    for u in ("javascript:alert(1)", "data:image/gif;base64,R0lGODlh", "http://example.com/a.gif"):
+        page.evaluate("(u) => { history.pushState({ imp: 1 }, '', '#import?url=' + encodeURIComponent(u)); dispatchEvent(new HashChangeEvent('hashchange')); }", u)
+        wait_js(page, "/open|ready/.test(document.getElementById('studio').dataset.import)", timeout=10000)
+        src = page.get_attribute("#s-imp-f", "src") or ""
+        said = page.inner_text("#s-imp-say")
+        check("url=" not in src and said.startswith("Only an https:// address"), f"/studio/ import red: #import?url={u[:12]}… is not passed on ({src[-30:]}, '{said[:40]}')")
+        page.click("#s-imp-x")
+        wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    # The sheet closed while a video is read: nothing lands.
+    n2 = drafts()
+    fr = i_open(page)
+    i_file(fr, "long.webm", (VIDEO_FIXTURES / "long.webm").read_bytes(), "video/webm")
+    page.wait_for_timeout(1500)
+    page.click("#s-imp-x")
+    page.wait_for_timeout(3000)
+    check(s_data(page)["import"] == "closed" and page.query_selector("#s-imp-f") is None and drafts() == n2 and not s_data(page).get("imported"),
+          "/studio/ import red: the sheet closed while a video is read: the frame let go, nothing lands")
+    # Import opened twice at once: one frame, one sheet, one piece from one Use.
+    page.evaluate("async () => { const m = await import('/studio/import.js'); history.pushState({ imp: 1 }, '', '#import'); m.show(); m.show(); }")
+    fr = i_open(page, how="as is")
+    count = page.evaluate("[document.querySelectorAll('iframe').length, document.querySelectorAll('#s-imp').length]")
+    png, gif = c_fixtures()
+    i_file(fr, "wide.gif", gif, "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    got = i_use(page, fr)
+    page.wait_for_timeout(800)
+    check(count == [1, 1] and got == "piece:4" and drafts() == n2 + 1, f"/studio/ import red: Import opened twice at once: one frame, one piece ({count}, {got}, {drafts() - n2})")
+    page.context.close()
+
+    # /create/?in=studio opened directly: the plain page. Another origin framing /create/: refused by its frame-ancestors.
+    page = new_page(browser, "laptop", errors)
+    i_route(page, site, base)
+    page.goto(f"{base}/create/?in=studio&k=x")
+    page.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    plain = page.query_selector("#c-send") is not None and page.query_selector("#c-use") is None and page.is_visible("#create > h1")
+    page.route(f"http://localhost:{port}/x-frame", lambda r: r.fulfill(body=f'<!doctype html><iframe id="f" src="{base}/create/?in=studio"></iframe>', content_type="text/html"))
+    page.goto(f"http://localhost:{port}/x-frame")
+    page.wait_for_timeout(3000)
+    inner = page.query_selector("#f").content_frame()
+    framed = bool(inner and inner.query_selector("#create"))
+    check(plain and not framed, f"/create/?in=studio: opened directly, the plain page ({plain}); framed by another origin, refused ({framed})")
+    # (Both refusals are on purpose: the console says so.)
+    errors[:] = [e for e in errors if not ("violates the following Content Security Policy directive: \"frame-ancestors 'self'\"" in e or "/create/create.js)" in e)]
+    page.context.close()
+
+    # Another tab with the same piece open: this tab's import as a layer keeps its work as a copy.
+    page = i_page(browser, base, site, errors)
+    page.mouse.click(*s_at(page, 4, 4))
+    s_kept(page)
+    b = page.context.new_page()
+    b.on("pageerror", lambda e: errors.append(f"[studio b] pageerror: {e}"))
+    b.goto(f"{base}/studio/")
+    b.wait_for_selector(S_READY, timeout=30000)
+    b.mouse.click(*s_at(b, 20, 20))
+    wait_js(b, "document.getElementById('studio').dataset.saved === 'kept' && document.getElementById('studio').dataset.id === '" + s_data(page)["id"] + "'", timeout=10000)
+    b.wait_for_timeout(600)
+    fr = i_open(page)
+    i_file(fr, "small.png", i_fixtures()["small"], "image/png")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 16')", timeout=20000)
+    got = i_use(page, fr, as_layer=True)
+    wait_js(page, "/copy/.test(document.getElementById('s-saved').textContent) || /\\(copy\\)/.test(document.getElementById('s-name').value)", timeout=10000)
+    check(got == "layer:1" and "(copy)" in page.input_value("#s-name"), f"/studio/ import red: another tab changed the piece: this tab's import kept as a copy ({got}, '{page.input_value('#s-name')}')")
+    page.context.close()
+
+    # A GIF of 300 frames: the first 256 kept, and said.
+    frames = []
+    for i in range(300):
+        f = Image.new("RGB", (128, 32), (0, 0, 0))
+        f.paste((250, 210, 30), (i % 120, 8, i % 120 + 8, 24))
+        frames.append(f)
+    g = io.BytesIO()
+    frames[0].save(g, "GIF", save_all=True, append_images=frames[1:], duration=40, loop=0)
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "long.gif", g.getvalue(), "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=60000)
+    got = i_use(page, fr)
+    said = page.inner_text("#s-err")
+    check(got == "piece:256" and said.startswith("That had 300 frames: the first 256 are kept"), f"/studio/ import red: a GIF of 300 frames: 256 kept, said ({got}, '{said[:60]}')")
+    page.context.close()
+
+
+def studio_paste_red(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Paste's hostile inputs: a file that says image/png and isn't one, an
+    SVG, a 100-megapixel PNG (refused from its header, never decoded), and
+    a picture whose colours would take the piece past 4,096: each said,
+    nothing pasted."""
+    page = i_page(browser, base, site, errors, init="""; window.__decoded = 0; const cib = window.createImageBitmap; window.createImageBitmap = (...a) => { window.__decoded++; return cib(...a); };""")
+    import struct
+    import zlib
+    ihdr = struct.pack(">IIBBBBB", 10000, 10000, 8, 2, 0, 0, 0)
+    huge = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr)) + b"\0" * 64
+    cases = [("not a PNG", "x.png", "image/png", os.urandom(4000), "isn’t a picture the Studio can read"),
+             ("an SVG", "x.svg", "image/svg+xml", b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>', "isn’t a picture the Studio can read"),
+             ("a 100 MP PNG", "huge.png", "image/png", huge, "10,000 × 10,000: too big to bring in")]
+    for what, name, mime, data, want in cases:
+        page.evaluate("document.getElementById('s-err').textContent = ''")
+        i_event(page, "paste", name, mime, data)
+        wait_js(page, "!!document.getElementById('s-err').textContent", timeout=20000)
+        said = page.inner_text("#s-err")
+        check(want in said and not s_data(page).get("sel") and page.evaluate("window.__decoded") == 0, f"/studio/ paste red: {what}: said, nothing pasted, nothing decoded ('{said[:70]}')")
+    # Colours past the cap: a piece of 1,000 colours, a picture of 4,096 new ones.
+    kev(page, """const cs = Array.from({ length: 1000 }, (_, i) => ({ k: i + 1, hex: '#' + (0x100000 + i * 7).toString(16).padStart(6, '0') }));
+        const a = new Uint16Array(4096); a[0] = 1;
+        const r = m.record('piece', 'Many colours', { w: 128, h: 32, keys: 2, colours: cs, frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'Drawing', moves: false, cels: [await m.packPx(a, true)] }] });
+        await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    pending = s_data(page).get("pending")
+    many = [(i >> 8 | 0x40, i & 255, (i * 7) & 255) for i in range(4096)]  # 4,096 colours, each once
+    page.evaluate("document.getElementById('s-err').textContent = ''")
+    i_event(page, "paste", "many.png", "image/png", i_png(128, 32, many))
+    wait_js(page, "!!document.getElementById('s-err').textContent", timeout=20000)
+    said = page.inner_text("#s-err")
+    check("nothing was pasted" in said and not s_data(page).get("sel") and s_data(page).get("pending") == pending,
+          f"/studio/ paste red: colours past 4,096: said, nothing half-pasted ('{said[:80]}', pending {pending} -> {s_data(page).get('pending')})")
+    page.context.close()
+
+
+def studio_import_video_red(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Videos that won't do, in Import: one the browser can't play, one with
+    no picture, and one cut short (it stalls): each ends in a sentence,
+    never a page left reading."""
+    page = i_page(browser, base, site, errors)
+    long = (VIDEO_FIXTURES / "long.webm").read_bytes()
+    cases = [("one the browser can't play", "bad.mp4", "video/mp4", b"\0\0\0\x18ftypisom" + os.urandom(6000), "This browser can’t play that video"),
+             ("one with no picture", "audio.webm", "video/webm", (VIDEO_FIXTURES / "audio-only.webm").read_bytes(), "That video has no picture"),
+             ("one cut short", "cut.webm", "video/webm", long[: len(long) * 2 // 5], "")]
+    for what, name, mime, data, want in cases:
+        fr = i_open(page)
+        i_file(fr, name, data, mime)
+        t = time.time()
+        try:
+            wait_js(fr, "(() => { const t = document.querySelector('#st-msg').textContent; return t && !/^Reading/.test(t); })()", timeout=40000)
+        except PlaywrightTimeout:
+            pass
+        msg = fr.inner_text("#st-msg")
+        check(not msg.startswith("Reading") and (msg == want if want else bool(msg)), f"/studio/ import video red: {what}: ends in a sentence in {time.time() - t:.0f} s ('{msg[:70]}')")
+        page.click("#s-imp-x")
+        wait_js(page, "document.getElementById('studio').dataset.import === 'closed'", timeout=10000)
+    page.context.close()
+
+
+def i_closed(page: Page) -> None:
+    wait_js(page, "document.getElementById('studio').dataset.import === 'closed' && !document.querySelector('#s-imp[open]')", timeout=10000)
+
+
+def studio_import_history(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Import opened and closed three times (Close, Escape, Back; on a phone
+    Back each time): each close leaves the address with no #import and one
+    Back is enough; a reload after does not open Import again; the frame is
+    a fresh one each time."""
+    for size in ("laptop", "phone"):
+        page = i_page(browser, base, site, errors, size=size)
+        page.mouse.click(*s_at(page, 3, 3)) if size == "laptop" else page.locator("#s-canvas").tap()
+        s_kept(page)
+        frames, hashes = [], []
+        for how in (("close", "escape", "back") if size == "laptop" else ("back", "back", "back")):
+            i_open(page)
+            frames.append(page.evaluate("document.querySelectorAll('iframe').length"))
+            if how == "close":
+                page.click("#s-imp-x")
+            elif how == "escape":
+                page.keyboard.press("Escape")
+            else:
+                page.go_back()
+            i_closed(page)
+            page.wait_for_timeout(300)
+            hashes.append(page.evaluate("location.hash"))
+        page.reload()
+        page.wait_for_selector(S_READY, timeout=30000)
+        page.wait_for_timeout(800)
+        again = s_data(page).get("import")
+        check(frames == [1, 1, 1] and hashes == ["", "", ""] and again in (None, "closed") and not page.is_visible("#s-imp"),
+              f"/studio/ import ({size}): opened and closed three times, each close leaves no #import, a reload opens nothing ({hashes}, {frames}, {again})")
+        if size == "phone":
+            i_open(page)
+            h = page.evaluate("document.querySelector('#s-imp .s-hd').getBoundingClientRect().height")
+            check(h <= 96, f"/studio/ import (phone): the sheet's header in two rows at most ({h:.0f} px)")
+            page.go_back()
+            i_closed(page)
+        page.context.close()
+
+
+def studio_import_review(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The review's findings: Use works with no file name to be had (a title
+    and an author but no platform, a title of punctuation alone) and the
+    file name's warnings are hidden; a drop on the open sheet goes into it
+    (never to the browser); a reload right after an import keeps it; a
+    result that lands after Close makes nothing; a frame time past a minute
+    is kept at a minute; a delay of 1 hundredth is 100 ms; a JPEG whose size
+    comes after 300 KB of metadata pastes; a drop in the Library goes to the
+    editor; a .dmdart and a GIF dropped together: the file opens, the GIF is
+    said to be left; an address from a link (#import?url=, or the frame's
+    own ?url=) is fetched only when asked; gifread refuses cut-short data
+    and a frame bigger than the picture; as a layer, past the piece's
+    colours: refused, nothing half-made."""
+    fx = i_fixtures()
+    asked = []
+    png, gif = c_fixtures()
+    import base64
+
+    def fresh():
+        p = i_page(browser, base, site, errors)
+        p.on("request", lambda r: urllib.parse.urlsplit(r.url).hostname == "cors.example" and asked.append(r.url))
+        p.route("https://cors.example/**", lambda r: r.fulfill(status=200, body=gif, headers={"content-type": "image/gif", "access-control-allow-origin": "*"}))
+        return p
+    page = fresh()
+
+    def part(fn):
+        nonlocal page
+        try:
+            fn()
+        except Exception as e:  # (one finding that cannot finish fails alone, and the next starts on a fresh page)
+            check(False, f"/studio/ import review: {fn.__doc__} did not finish: {str(e).splitlines()[0][:120]}")
+            page.context.close()
+            page = fresh()
+
+    def s0():
+        """Use with no file name to be had"""
+        for what, title, author in (("a title and an author, no platform", "Night sky", "someone"), ("a title of punctuation alone", "!!!", "")):
+            fr = i_open(page)
+            i_file(fr, "still.png", fx["still"], "image/png")
+            wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+            fr.fill("#st-title", title)
+            fr.fill("#st-author", author)
+            fr.wait_for_timeout(400)
+            hidden = fr.evaluate("['st-warn', 'st-name'].every((id) => getComputedStyle(document.getElementById(id)).display === 'none')")
+            got = i_use(page, fr)
+            p = page.evaluate(I_PIECE)
+            e = (p["from"] or [{}])[0]
+            check(got == "piece:1" and hidden and e.get("title") == title and e.get("author", "") == author,
+                  f"/studio/ import review: Use with {what}: taken, its fields as typed, the file name's warnings hidden ({got}, {e})")
+    part(s0)
+
+    def s1():
+        """A drop on the open sheet: into it, never the browser's"""
+        fr = i_open(page)
+        prevented = page.evaluate("""(b64) => { const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); const dt = new DataTransfer(); dt.items.add(new File([bytes], 'wide.gif', { type: 'image/gif' }));
+            const e = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }); document.querySelector('#s-imp .s-hd').dispatchEvent(e); return e.defaultPrevented; }""", base64.b64encode(gif).decode())
+        try:
+            wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Your file: 88')", timeout=20000)
+            into = True
+        except PlaywrightTimeout:
+            into = False
+        check(prevented and into, f"/studio/ import review: a drop on the open sheet goes into it, not to the browser ({prevented}, {into})")
+        # A reload right after an import keeps it.
+        got = i_use(page, fr)
+        pid = s_data(page)["id"]
+        page.reload()
+        page.wait_for_selector(S_READY, timeout=30000)
+        check(got == "piece:4" and s_data(page)["id"] == pid, f"/studio/ import review: a reload right after an import opens it ({got})")
+    part(s1)
+
+    def s2():
+        """A result that lands after Close: nothing made"""
+        n0 = len(page.evaluate(S_STORE, ["list", None]))
+        fr = i_open(page)
+        fr.evaluate(f"(o) => {{ const m = ({I_MSG})(o); parent.postMessage(m, location.origin, [m.px]); parent.setTimeout(() => parent.document.getElementById('s-imp').close(), 0); }}", {})
+        page.wait_for_timeout(2000)
+        check(len(page.evaluate(S_STORE, ["list", None])) == n0, "/studio/ import review: a result that lands after Close makes nothing")
+        i_closed(page)
+    part(s2)
+
+    def s3():
+        """Frame times: past a minute kept at a minute; 1 hundredth as 100 ms"""
+        for what, dur, want in (("past a minute", 65000, 60000),):
+            fs = [Image.new("RGB", (128, 32), c) for c in ((200, 40, 40), (40, 200, 40))]
+            g = io.BytesIO()
+            fs[0].save(g, "GIF", save_all=True, append_images=fs[1:], duration=[dur, 100], loop=0)
+            fr = i_open(page)
+            i_file(fr, "t.gif", g.getvalue(), "image/gif")
+            wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+            got = i_use(page, fr)
+            p = page.evaluate(I_PIECE) if not got.startswith("refused") else {"ms": []}
+            check(got == "piece:2" and p["ms"][:1] == [want], f"/studio/ import review: a frame time {what} comes in as {want} ms ({got}, {p['ms']})")
+            if got.startswith("refused"):
+                page.click("#s-imp-x")
+                i_closed(page)
+    part(s3)
+
+    def s4():
+        """A JPEG whose size comes after 300 KB of metadata"""
+        j = io.BytesIO()
+        Image.new("RGB", (16, 16), (200, 120, 40)).save(j, "JPEG")
+        jb = j.getvalue()
+        seg = b"\xff\xef" + (65002).to_bytes(2, "big") + b"\0" * 65000
+        jpeg = jb[:2] + seg * 5 + jb[2:]
+        s_new(page)
+        page.evaluate("document.getElementById('s-err').textContent = ''")
+        i_event(page, "paste", "photo.jpg", "image/jpeg", jpeg)
+        try:
+            wait_js(page, "!!document.getElementById('studio').dataset.sel || !!document.getElementById('s-err').textContent", timeout=20000)
+        except PlaywrightTimeout:
+            pass
+        check(bool(s_data(page).get("sel")), f"/studio/ import review: a JPEG with 325 KB of metadata before its size pastes ('{page.inner_text('#s-err')[:60]}')")
+        page.keyboard.press("Escape")
+    part(s4)
+
+    def s5():
+        """A drop in the Library: to the editor first, Import open with it"""
+        lib_open(page)
+        i_event(page, "drop", "wide.gif", "image/gif", gif)
+        i_open(page, how="as is")
+        check(s_data(page).get("view") == "editor" and page.is_hidden("#s-lib") if page.query_selector("#s-lib") else s_data(page).get("view") == "editor",
+              f"/studio/ import review: a drop in the Library goes to the editor, Import open with it ({s_data(page).get('view')})")
+        page.click("#s-imp-x")
+        i_closed(page)
+    part(s5)
+
+    def s6():
+        """A .dmdart and a GIF dropped together"""
+        art = kev(page, "const r = await K.piece('Both at once'); return K.file(r, [r]);")
+        page.evaluate("delete document.getElementById('studio').dataset.opened")
+        page.evaluate("""([a, b64]) => { const dt = new DataTransfer(); dt.items.add(new File([a], 'piece.dmdart'));
+            dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'wide.gif', { type: 'image/gif' }));
+            document.getElementById('s-canvas').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); }""", [art, base64.b64encode(gif).decode()])
+        wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=20000)
+        said = page.inner_text("#s-err")
+        check(s_data(page)["opened"] == "asked" and "was left" in said, f"/studio/ import review: a .dmdart and a GIF dropped together: the file opens, the GIF said to be left ('{said[:70]}')")
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    part(s6)
+
+    def s7():
+        """An address from a link: fetched only when asked"""
+        asked.clear()
+        page.evaluate("(u) => { history.pushState({ imp: 1 }, '', '#import?url=' + encodeURIComponent(u)); dispatchEvent(new HashChangeEvent('hashchange')); }", "https://cors.example/wide.gif")
+        fr = i_open(page, how="as is")
+        page.wait_for_timeout(1500)
+        before = list(asked)
+        shown = page.inner_text("#s-imp-url")
+        page.click("#s-imp-fetch")
+        wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('cors.example: 88')", timeout=20000)
+        check(not before and "https://cors.example/wide.gif" in shown and asked, f"/studio/ import review: #import?url= shows the address and fetches it only when asked ({before}, '{shown[:60]}')")
+        page.click("#s-imp-x")
+        i_closed(page)
+        asked.clear()
+        page.evaluate("(u) => new Promise((ok) => { const f = document.createElement('iframe'); f.id = 'x-url'; f.src = '/create/?in=studio&k=x&url=' + encodeURIComponent(u); f.onload = ok; document.body.append(f); })", "https://cors.example/wide.gif")
+        xf = page.query_selector("#x-url").content_frame()
+        xf.wait_for_selector("#c-fetch", timeout=30000)
+        xf.wait_for_timeout(1000)
+        before = list(asked)
+        xf.click("#c-fetch")
+        wait_js(xf, "document.querySelector('#st-msg').textContent.startsWith('cors.example: 88')", timeout=20000)
+        check(not before and asked, f"/create/ framed: its own ?url= is fetched only when asked ({before})")
+        page.evaluate("document.getElementById('x-url').remove()")
+    part(s7)
+
+    def s8():
+        """gifread: cut-short data, a frame bigger than the picture"""
+        g = io.BytesIO()
+        Image.effect_noise((128, 32), 60).convert("RGB").save(g, "GIF")
+        gb = g.getvalue()
+        big = bytearray(gb)
+        i = 13 + (3 << ((gb[10] & 7) + 1) if gb[10] & 0x80 else 0)  # past the header and its table, to the first image
+        while big[i] == 0x21:
+            i += 2
+            while big[i]:
+                i += big[i] + 1
+            i += 1
+        big[i + 5:i + 9] = (300).to_bytes(2, "little") + (300).to_bytes(2, "little")
+        fs = [Image.new("RGB", (128, 32), c) for c in ((200, 40, 40), (40, 200, 40))]
+        one = io.BytesIO()
+        fs[0].save(one, "GIF", save_all=True, append_images=fs[1:], duration=[10, 100], loop=0)
+        res = page.evaluate("""async ([a, b, c]) => { const { read } = await import('/create/gifread.js'); const t = (x) => { try { return read(Uint8Array.from(atob(x), (c) => c.charCodeAt(0))).ms[0]; } catch (e) { return e.message; } };
+            return [t(a), t(b), t(c)]; }""", [base64.b64encode(gb[: len(gb) // 2]).decode(), base64.b64encode(bytes(big)).decode(), base64.b64encode(one.getvalue()).decode()])
+        check("cut short" in str(res[0]) and "bigger than the picture" in str(res[1]) and res[2] == 100,
+              f"/create/ gifread: cut-short data and a frame bigger than the picture refused; a delay of 1 hundredth read as 100 ms ({res})")
+    part(s8)
+
+    def s9():
+        """As a layer, past the piece's colours"""
+        kev(page, """const cs = Array.from({ length: 4000 }, (_, i) => ({ k: i + 1, hex: '#' + (0x200000 + i * 3).toString(16).padStart(6, '0') }));
+            const a = new Uint16Array(4096); a[0] = 1;
+            const r = m.record('piece', 'Full of colours', { w: 128, h: 32, keys: 2, colours: cs, frames: [{ key: '0000000a', ms: 100 }], layers: [{ key: '0000000b', name: 'Drawing', moves: false, cels: [await m.packPx(a, true)] }] });
+            await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+        page.reload()
+        page.wait_for_selector(S_READY, timeout=30000)
+        was = page.evaluate(I_PIECE)
+        pend = s_data(page).get("pending")
+        many = [(i >> 4 | 0x80, (i * 16) & 255, 7) for i in range(200)]
+        fr = i_open(page)
+        i_file(fr, "many.png", i_png(128, 32, many), "image/png")
+        wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+        got = i_use(page, fr, as_layer=True)
+        said = page.inner_text("#s-imp-say")
+        now = page.evaluate(I_PIECE)
+        check(got == "refused" and "more than 4,096" in said and now["hash"] == was["hash"] and len(now["layers"]) == 1 and s_data(page).get("pending") == pend,
+              f"/studio/ import review: as a layer, past the piece's colours: refused, nothing half-made ('{said[:80]}', pending {pend} -> {s_data(page).get('pending')})")
+
+
+    part(s9)
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -4445,7 +5436,7 @@ def create_video(browser, base: str, site: Path, errors: list[str], shots: Path 
     check(not any(p.endswith("/create/video.js") for p in asked), "/create/ video: the video reader not loaded with the page")
     page.click("#st-src [data-v=own]")
     accept = page.get_attribute("#st-file", "accept")
-    check(accept == "image/*,video/mp4,video/webm" and "video" in page.inner_text("#st-own"), f"/create/ video: Choose takes videos ({accept})")
+    check(accept == "image/*,video/*" and "video" in page.inner_text("#st-own"), f"/create/ video: Choose takes any video ({accept})")
     page.set_input_files("#st-file", str(VIDEO_FIXTURES / "clip.webm"))
     wait_js(page, "document.querySelector('#studio').dataset.video === '1'", timeout=30000)
     d = c_data(page)
@@ -6010,6 +7001,7 @@ def main() -> int:
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
     ap.add_argument("--base", help="fetch the site from here (e.g. cf dev's http://127.0.0.1:8787) instead of serving SITE")
     ap.add_argument("--only", choices=["studio"], help="run only these checks (the Studio's), e.g. against an older build")
+    ap.add_argument("--fn", help="run only these check functions, by name, comma-separated (a red run against an older build)")
     a = ap.parse_args()
     (a.shots or ROOT / "target/site-smoke").mkdir(parents=True, exist_ok=True)
     base = a.base.rstrip("/") if a.base else serve(a.site)
@@ -6018,6 +7010,20 @@ def main() -> int:
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        if a.fn:
+            for name in a.fn.split(","):
+                fn = globals()[name]
+                params = list(__import__("inspect").signature(fn).parameters)
+                args = {"browser": browser, "base": base, "site": a.site, "errors": errors, "shots": a.shots or ROOT / "target/site-smoke"}
+                print(name)
+                try:
+                    fn(*[args[x] for x in params if x in args])
+                except Exception as e:  # (a red run: a check that cannot even finish fails, and the rest still run)
+                    check(False, f"{name} did not finish: {str(e).splitlines()[0][:160]}")
+                    for c in browser.contexts:
+                        c.close()
+            browser.close()
+            return finish(errors)
         if a.only == "studio":
             print("the Studio (/studio/)")
             studio_page(browser, base, a.site, errors, a.shots)
@@ -6073,6 +7079,19 @@ def main() -> int:
             studio_files_attacks(browser, base, a.site, errors)
             studio_open_limits(browser, base, a.site, errors)
             studio_open_limits2(browser, base, a.site, errors)
+            studio_held_members(browser, base, a.site, errors)
+            studio_import_fetches(browser, base, a.site, errors)
+            studio_import(browser, base, a.site, errors, a.shots)
+            studio_import_video(browser, base, a.site, errors)
+            studio_import_paste(browser, base, a.site, errors)
+            studio_import_handoff(browser, base, a.site, errors)
+            studio_import_phone(browser, base, a.site, errors, a.shots)
+            studio_import_budget(a.site)
+            studio_import_red(browser, base, a.site, errors)
+            studio_paste_red(browser, base, a.site, errors)
+            studio_import_video_red(browser, base, a.site, errors)
+            studio_import_history(browser, base, a.site, errors)
+            studio_import_review(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -6142,6 +7161,19 @@ def main() -> int:
         studio_files_attacks(browser, base, a.site, errors)
         studio_open_limits(browser, base, a.site, errors)
         studio_open_limits2(browser, base, a.site, errors)
+        studio_held_members(browser, base, a.site, errors)
+        studio_import_fetches(browser, base, a.site, errors)
+        studio_import(browser, base, a.site, errors, a.shots)
+        studio_import_video(browser, base, a.site, errors)
+        studio_import_paste(browser, base, a.site, errors)
+        studio_import_handoff(browser, base, a.site, errors)
+        studio_import_phone(browser, base, a.site, errors, a.shots)
+        studio_import_budget(a.site)
+        studio_import_red(browser, base, a.site, errors)
+        studio_paste_red(browser, base, a.site, errors)
+        studio_import_video_red(browser, base, a.site, errors)
+        studio_import_history(browser, base, a.site, errors)
+        studio_import_review(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
