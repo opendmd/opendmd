@@ -7215,7 +7215,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                     return [s.querySelector('h2').textContent, s.querySelector('img').getAttribute('src'),
                             f.left >= t.right - 1 ? 'right' : f.right <= t.left + 1 ? 'left' : f.top >= t.bottom - 1 ? 'below' : 'over'];
                 })""")
-                want = [["Control it from your phone", "docs/images/phone-now.png"], ["Follows RePlayOS", "docs/images/now-follow.png"],
+                want = [["No app, just a web page", "docs/images/phone-now.png"], ["Follows RePlayOS", "docs/images/now-follow.png"],
                         ["Playlists", "docs/images/library.png"], ["Brightness and colour", "docs/images/settings-look.png"],
                         ["Night mode and schedules", "docs/images/settings-schedule.png"]]
                 check([b[:2] for b in bands] == want, f"home ({size}): the five bands in order, each with its screenshot {[b[:2] for b in bands]}")
