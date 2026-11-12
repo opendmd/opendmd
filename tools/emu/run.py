@@ -190,10 +190,9 @@ def main():
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
-    # the card is copy-on-write in RAM; the output is discarded (ESP32SIM_SD_OUT unset)
-    env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}
-    env.pop("ESP32SIM_SD_OUT", None)
-    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
+    # the card (--sd: copy-on-write, the file never modified) in a microSD slot on VSPI, CS 5
+    env = dict(os.environ)
+    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", "--sd", str(a.card), "--boot", "rom", "--rom", str(rom),
            "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
            "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)

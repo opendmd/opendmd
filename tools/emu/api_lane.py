@@ -464,12 +464,12 @@ class Lane:
 
     def boot(self, label, card: Path, no_reboot: bool, card_out: Path | None, image: Path | None = None):
         image = image or self.a.seeded
-        env = {**os.environ, "ESP32SIM_SD_IMG": str(card)}
-        env.pop("ESP32SIM_SD_OUT", None)
+        env = dict(os.environ)
+        # what the firmware writes goes to card_out (a copy, --sd-rw), or stays in memory (--sd)
         if card_out:
-            card_out.unlink(missing_ok=True)
-            env["ESP32SIM_SD_OUT"] = str(card_out)
-        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(self.rom),
+            shutil.copyfile(card, card_out)
+        sd = ["--sd-rw", str(card_out)] if card_out else ["--sd", str(card)]
+        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", *sd, "--boot", "rom", "--rom", str(self.rom),
                "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
                "--max-seconds", str(self.a.seconds or 7200), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]

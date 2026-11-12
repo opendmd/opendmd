@@ -24,15 +24,15 @@ Files:
   With `SCRATCH` set (e.g. in `local.mk`), refuses a dir outside it.
 - The fork: our emulator changes live on its `opendmd` branch (upstream 9fdeb32, merged 2026-11-03, plus the
   SD-SPI board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
-  The board: a byte-stream SD-over-SPI card on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) as
-  board `esp32dev-sdspi`. Env: `ESP32SIM_SD_IMG` (raw FAT image, copy-on-write in RAM),
-  `ESP32SIM_SD_OUT` (write back if modified; the runner leaves it unset), `ESP32SIM_SD_LOG`.
-  Spike quality, not upstream quality.
+  The card: esp32sim's own SD card model in SPI mode (branch `sdspi-card`, written to go upstream),
+  on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) of a bare `esp32dev`: `--sd CARD.img --sd-spi 18,23,19,5`
+  (copy-on-write: the image is never modified) or `--sd-rw` (written through: a lane that keeps
+  what boot A wrote copies the card and boots that copy). `--debug sdmmc` prints its commands.
 - `mkcard.py`: `tools/ci-card.py`'s synthetic card (with prepared copies) into a 256 MB FAT32 image with
   `mformat`/`mcopy`, no mount, no sudo. Needs `mtools`; says so if missing (it installs nothing).
 - `api_lane.py` (run by `run.py api`): the API lane, below. `fatcheck.py CARD.img`: a read-only FAT32
   check (cross-linked or lost clusters, chains the wrong length, FAT copies that differ), no mount.
-- `run.py smoke|probe --image FULL.bin`: runs `esp32sim --chip esp32 --board esp32dev-sdspi --boot rom
+- `run.py smoke|probe --image FULL.bin`: runs `esp32sim --chip esp32 --board esp32dev --sd-spi 18,23,19,5 --sd CARD --boot rom
   --rom esp32_rev300_rom.elf --flash-image ... --console uart0 --net none`, logs the console, judges it.
   Fails at once on a panic, `Guru Meditation`, stack overflow, `abort()` or a second reset.
 

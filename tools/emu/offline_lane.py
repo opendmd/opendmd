@@ -142,10 +142,12 @@ class Lane:
         print(line, flush=True)
 
     def emu(self, label, image: Path, card: Path, seconds: int, extra=(), card_out: Path | None = None):
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "ESP32SIM_SD_IMG": str(card)}
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home())}
+        # what the firmware writes goes to card_out (a copy, --sd-rw), or stays in memory (--sd)
         if card_out:
-            env["ESP32SIM_SD_OUT"] = str(card_out)
-        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(self.rom),
+            shutil.copyfile(card, card_out)
+        sd = ["--sd-rw", str(card_out)] if card_out else ["--sd", str(card)]
+        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", *sd, "--boot", "rom", "--rom", str(self.rom),
                "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
                "--max-seconds", str(seconds), "--console", "uart0", "--no-dump", *extra]
         e = Emulator(cmd, env, self.logs / f"offline-{self.stamp}-{label}.log", self.fail_rx, label)
