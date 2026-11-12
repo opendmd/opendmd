@@ -2,10 +2,13 @@
 # (src/index.js). Throwaway: delete it after S0.
 #
 # Deploying is the maintainer's (nothing in the repo runs it):
-#   cd connect/s0-echo && npm ci
+#   cd connect/s0-echo && npm install        # wrangler and miniflare as pinned in package.json
 #   npx wrangler login                       # or CLOUDFLARE_API_TOKEN in the environment
-#   npx wrangler secret put S0_SECRET        # once, before the first deploy (the panel's ?k=)
-#   npx wrangler deploy
+#   npx wrangler deploy                      # until the secret is set, every request is a 403
+#   export S0_SECRET=$(openssl rand -hex 24)               # the panel's ?k=, kept in this shell
+#   printf %s "$S0_SECRET" | npx wrangler secret put S0_SECRET
+# (the panel takes it as OPENDMD_CONNECT_TOKEN at build time, or
+# POST /api/debug/connect/config?token=... at run time, RAM only)
 # Removing it afterwards:
 #   npx wrangler delete opendmd-connect-s0
 #

@@ -39,8 +39,9 @@ s0lib.wait_open(run)
 done = []
 for k in range(args.runs):
     s0lib.wait_open(run, phase=f"{args.phase}:open")
-    run.panel.post("stream", bytes=args.bytes, chunk=args.chunk, window=args.window, seed=k + 1)
-    st = run.sample_for(240, args.phase, until=lambda s: s0lib.get(s, "connect.m10.state") not in ("running", "waiting for the session", None))
+    seq = run.panel.post("stream", bytes=args.bytes, chunk=args.chunk, window=args.window, seed=k + 1).get("ask")
+    st = run.sample_for(240, args.phase, until=lambda s, seq=seq: s0lib.get(s, "connect.m10.seq") == seq
+                        and s0lib.get(s, "connect.m10.state") not in ("running", "waiting for the session", None))
     m = s0lib.get(st or {}, "connect.m10") or {}
     done.append(m)
     print(f"  run {k + 1}: {m.get('state')} {m.get('bytes')} B in {m.get('ms')} ms ({m.get('kb_s')} KB/s), checksum {m.get('checksum_ok')}, heap low {m.get('heap_low')}", flush=True)

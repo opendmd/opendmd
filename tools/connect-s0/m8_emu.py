@@ -259,8 +259,10 @@ class Lane:
                                capture_output=True, text=True, timeout=3600)
             out = r.stdout + r.stderr
             (self.logs / f"m8-{script}.log").write_text(out)
-            self.expect(r.returncode in (0, 1) and "Traceback" not in out and ("PASS" in out or "FAIL" in out),
-                        f"{script} runs against the emulator", out.strip().splitlines()[-1] if out.strip() else "(no output)")
+            # Every gate the emulator can judge passes (timing ones too: the
+            # emulator's are generous); the baseline's are not judged.
+            self.expect(r.returncode == 0 and "Traceback" not in out,
+                        f"{script} against the emulator", out.strip().splitlines()[-1] if out.strip() else "(no output)")
             self.wait("open", lambda s: s["connect"].get("state") == "open", 600)
 
         # M8 4: the session closed: nothing of it left.

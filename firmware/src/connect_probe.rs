@@ -269,10 +269,16 @@ impl Ask {
     }
 }
 
-static ASK: Mutex<Option<Ask>> = Mutex::new(None);
+/// The last request and its number (each POST's `ask`; a job, M9 and M10
+/// report the number that started them as `seq`, so a script tells its own
+/// run from the one before: the probe takes a request at its next turn).
+static ASK: Mutex<Option<(u32, Ask)>> = Mutex::new(None);
+static ASK_SEQ: AtomicU32 = AtomicU32::new(0);
 
-fn ask(a: Ask) {
-    *ASK.lock().unwrap_or_else(|p| p.into_inner()) = Some(a);
+fn ask(a: Ask) -> u32 {
+    let seq = ASK_SEQ.fetch_add(1, Relaxed) + 1;
+    *ASK.lock().unwrap_or_else(|p| p.into_inner()) = Some((seq, a));
+    seq
 }
 
 // --- mbedTLS's heap, counted ---------------------------------------------------
@@ -356,6 +362,7 @@ impl Cause {
 
 #[derive(Default, Clone)]
 struct M9 {
+    seq: u32,
     n: u32,
     of: u32,
     min_us: u32,
@@ -368,6 +375,7 @@ struct M9 {
 
 #[derive(Default, Clone)]
 struct M10 {
+    seq: u32,
     state: &'static str,
     bytes: u64,
     of: u64,
@@ -440,6 +448,7 @@ struct Tele {
     root: &'static str,
     cert_flags: u32,
     job: &'static str,
+    job_seq: u32,
     job_done: u32,
     job_of: u32,
     job_failed: u32,
@@ -494,6 +503,7 @@ impl Tele {
             root: "",
             cert_flags: 0,
             job: "none",
+            job_seq: 0,
             job_done: 0,
             job_of: 0,
             job_failed: 0,
@@ -547,7 +557,8 @@ pub fn json() -> String {
         .collect();
     let m9 = t.m9.as_ref().map(|m| {
         format!(
-            r#"{{"n":{},"of":{},"done":{},"min_us":{},"mean_us":{},"max_us":{},"failed":{},"stack_unused":{}}}"#,
+            r#"{{"seq":{},"n":{},"of":{},"done":{},"min_us":{},"mean_us":{},"max_us":{},"failed":{},"stack_unused":{}}}"#,
+            m.seq,
             m.n,
             m.of,
             m.done,
@@ -561,7 +572,8 @@ pub fn json() -> String {
     let m10 = t.m10.as_ref().map(|m| {
         let kbps = if m.ms > 0 { m.bytes * 1000 / u64::from(m.ms) / 1024 } else { 0 };
         format!(
-            r#"{{"state":"{}","bytes":{},"of":{},"chunk":{},"window":{},"frames":{},"credits":{},"ms":{},"kb_s":{kbps},"mismatches":{},"fnv":"{:08x}","server":{},"checksum_ok":{},"heap_low":{},"largest_at_low":{}}}"#,
+            r#"{{"seq":{},"state":"{}","bytes":{},"of":{},"chunk":{},"window":{},"frames":{},"credits":{},"ms":{},"kb_s":{kbps},"mismatches":{},"fnv":"{:08x}","server":{},"checksum_ok":{},"heap_low":{},"largest_at_low":{}}}"#,
+            m.seq,
             m.state,
             m.bytes,
             m.of,
@@ -586,7 +598,7 @@ pub fn json() -> String {
             r#""reconnects":{},"causes":{{{}}},"gate_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
             r#""heap":{{"at_connect":{},"hs_low":{},"low":{},"low_largest":{},"open":{},"tls_hs_peak":{},"tls_hs_peak_max":{},"tls_open":{},"tls_in_use":{},"rust":{}}},"#,
             r#""stack_unused":{},"ping":{{"sent":{},"pongs":{},"missed":{},"rtt_ms":{},"rtt_max_ms":{}}},"rx":{},"tx":{},"root":{},"cert_flags":{},"#,
-            r#""job":{{"kind":"{}","done":{},"of":{},"failed":{}}},"m9":{},"m10":{},"errors":{},"last_error":{},"last_error_s":{}}}"#
+            r#""job":{{"kind":"{}","seq":{},"done":{},"of":{},"failed":{}}},"m9":{},"m10":{},"errors":{},"last_error":{},"last_error_s":{}}}"#
         ),
         t.state,
         t.since_s,
@@ -635,6 +647,7 @@ pub fn json() -> String {
         if t.root.is_empty() { "null".to_string() } else { json_string(t.root) },
         t.cert_flags,
         t.job,
+        t.job_seq,
         t.job_done,
         t.job_of,
         t.job_failed,
@@ -1019,7 +1032,7 @@ pub struct Probe {
     job: Job,
     m9: Option<M9Run>,
     /// A stream asked for, sent once the session is open.
-    stream_ask: Option<(u64, u32, u32, u32)>,
+    stream_ask: Option<(u32, u64, u32, u32, u32)>,
     online_since: Option<Instant>,
     cfg_gen: u32,
     floor: Option<i64>,
@@ -1141,8 +1154,8 @@ impl Probe {
             if let Job::Handshakes { .. } = self.job {
                 return self.close(Cause::Forced, "");
             }
-            if let Some((bytes, chunk, window, seed)) = self.stream_ask.take() {
-                if let Err(e) = start_stream(conn, bytes, chunk, window, seed) {
+            if let Some((seq, bytes, chunk, window, seed)) = self.stream_ask.take() {
+                if let Err(e) = start_stream(conn, seq, bytes, chunk, window, seed) {
                     return self.end(e);
                 }
             }
@@ -1176,7 +1189,7 @@ impl Probe {
     }
 
     fn take_ask(&mut self) {
-        let Some(a) = ASK.lock().unwrap_or_else(|p| p.into_inner()).take() else { return };
+        let Some((seq, a)) = ASK.lock().unwrap_or_else(|p| p.into_inner()).take() else { return };
         log::info!("connect-probe: asked {}", a.name());
         match a {
             Ask::Handshakes { n, interval, resume } => {
@@ -1191,6 +1204,7 @@ impl Probe {
                 self.job = Job::Handshakes { n, done: 0, failed: 0, interval, resume, next: Instant::now() };
                 tele(|t| {
                     t.job = if resume { "resumed" } else { "full" };
+                    t.job_seq = seq;
                     t.job_done = 0;
                     t.job_of = n;
                     t.job_failed = 0;
@@ -1200,16 +1214,16 @@ impl Probe {
                 let mut msg = Box::new([0u8; cx::ED25519_MSG_LEN]);
                 *msg = cx::ed25519_msg();
                 self.m9 = Some(M9Run { n, done: 0, msg });
-                tele(|t| t.m9 = Some(M9 { of: n, min_us: u32::MAX, ..M9::default() }));
+                tele(|t| t.m9 = Some(M9 { seq, of: n, min_us: u32::MAX, ..M9::default() }));
             }
             Ask::Stream { bytes, chunk, window, seed } => {
                 if let Some(c) = self.conn.as_mut().filter(|c| c.phase == Phase::Open && c.stream.is_none()) {
-                    if let Err(e) = start_stream(c, bytes, chunk, window, seed) {
+                    if let Err(e) = start_stream(c, seq, bytes, chunk, window, seed) {
                         self.end(e);
                     }
                 } else {
-                    self.stream_ask = Some((bytes, chunk, window, seed));
-                    tele(|t| t.m10 = Some(M10 { state: "waiting for the session", of: bytes, chunk, window, ..M10::default() }));
+                    self.stream_ask = Some((seq, bytes, chunk, window, seed));
+                    tele(|t| t.m10 = Some(M10 { seq, state: "waiting for the session", of: bytes, chunk, window, ..M10::default() }));
                 }
             }
             Ask::Stop => {
@@ -1675,7 +1689,7 @@ fn step_upgrade(conn: &mut Conn, c: &Cfg, started: Instant) -> Result<(), End> {
     }
 }
 
-fn start_stream(conn: &mut Conn, bytes: u64, chunk: u32, window: u32, seed: u32) -> Result<(), End> {
+fn start_stream(conn: &mut Conn, seq: u32, bytes: u64, chunk: u32, window: u32, seed: u32) -> Result<(), End> {
     conn.text(&format!("stream {bytes} {chunk} {window} {seed}"))?;
     let free = free_heap();
     conn.stream = Some(Stream {
@@ -1693,7 +1707,7 @@ fn start_stream(conn: &mut Conn, bytes: u64, chunk: u32, window: u32, seed: u32)
         largest_at_low: largest_free_block() as u32,
         server: None,
     });
-    tele(|t| t.m10 = Some(M10 { state: "running", of: bytes, chunk, window, heap_low: free, ..M10::default() }));
+    tele(|t| t.m10 = Some(M10 { seq, state: "running", of: bytes, chunk, window, heap_low: free, ..M10::default() }));
     log::info!("connect-probe: M10 stream of {bytes} B asked ({chunk} B chunks, window {window})");
     Ok(())
 }
@@ -1985,13 +1999,13 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             let n = ranged(num(q, "n", 200)?, 1, 10_000, "n")? as u32;
             let ms = ranged(num(q, "interval_ms", num(q, "interval_s", 10u64)? * 1000)?, 200, 3_600_000, "interval_ms")?;
             let resume = num(q, "resume", 0u8)? != 0;
-            ask(Ask::Handshakes { n, interval: Duration::from_millis(ms), resume });
-            Ok(format!(r#"{{"ok":true,"n":{n},"interval_ms":{ms},"resume":{resume}}}"#))
+            let seq = ask(Ask::Handshakes { n, interval: Duration::from_millis(ms), resume });
+            Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n},"interval_ms":{ms},"resume":{resume}}}"#))
         }
         "ed25519" => {
             let n = ranged(num(q, "n", 100)?, 1, 10_000, "n")? as u32;
-            ask(Ask::Ed25519 { n });
-            Ok(format!(r#"{{"ok":true,"n":{n}}}"#))
+            let seq = ask(Ask::Ed25519 { n });
+            Ok(format!(r#"{{"ok":true,"ask":{seq},"n":{n}}}"#))
         }
         "stream" => {
             let bytes = ranged(num(q, "bytes", 524_288)?, 1, 16 << 20, "bytes")?;
@@ -2003,20 +2017,20 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             if u64::from(window) * u64::from(chunk + 4) > u64::from(TLS_IN) {
                 return Err(format!("window x (chunk + 4) must be at most {TLS_IN} (this build's TLS input record)"));
             }
-            ask(Ask::Stream { bytes, chunk, window, seed });
-            Ok(format!(r#"{{"ok":true,"bytes":{bytes},"chunk":{chunk},"window":{window},"seed":{seed}}}"#))
+            let seq = ask(Ask::Stream { bytes, chunk, window, seed });
+            Ok(format!(r#"{{"ok":true,"ask":{seq},"bytes":{bytes},"chunk":{chunk},"window":{window},"seed":{seed}}}"#))
         }
         "stop" => {
-            ask(Ask::Stop);
-            Ok(r#"{"ok":true}"#.into())
+            let seq = ask(Ask::Stop);
+            Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         "reconnect" => {
-            ask(Ask::Reconnect);
-            Ok(r#"{"ok":true}"#.into())
+            let seq = ask(Ask::Reconnect);
+            Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         "reset" => {
-            ask(Ask::Reset);
-            Ok(r#"{"ok":true}"#.into())
+            let seq = ask(Ask::Reset);
+            Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
         _ => Err(format!("{what}: config, handshakes, ed25519, stream, stop, reconnect or reset")),
     }
