@@ -46,6 +46,9 @@ for k in range(args.runs):
     st = run.sample_for(240, args.phase, until=lambda s, seq=seq: s0lib.get(s, "connect.m10.seq") == seq
                         and s0lib.get(s, "connect.m10.state") not in ("running", "waiting for the session", None))
     m = s0lib.get(st or {}, "connect.m10") or {}
+    if m.get("seq") != seq:
+        # Not this request's: it never started, or the read failed.
+        m = {"seq": seq, "state": f"no result for request {seq}"}
     done.append(m)
     print(f"  run {k + 1}: {m.get('state')} {m.get('bytes')} B in {m.get('ms')} ms ({m.get('kb_s')} KB/s), checksum {m.get('checksum_ok')}, heap low {m.get('heap_low')}", flush=True)
 stats = run.phase_stats(args.phase)

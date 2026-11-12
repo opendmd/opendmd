@@ -1992,7 +1992,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // The Connect probe's test hooks (`connect-probe` builds only; not in
     // docs/api.md: this build's alone).
-    #[cfg(feature = "connect-probe")]
+    #[cfg(feature = "connect-measure")]
     crate::connect_probe::routes(&mut server)?;
 
     // --- Catch-all, registered last ---------------------------------------
@@ -2971,7 +2971,7 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
         net_json(),
     );
     // The Connect probe (spike S0, `connect-probe` builds only).
-    #[cfg(feature = "connect-probe")]
+    #[cfg(feature = "connect-measure")]
     let _ = write!(out, r#""connect":{},"#, crate::connect_probe::json());
     let _ = write!(
         out,

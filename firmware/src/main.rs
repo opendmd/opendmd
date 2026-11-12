@@ -48,7 +48,7 @@ mod cardspeed;
 mod chan;
 mod clock;
 mod config;
-#[cfg(feature = "connect-probe")]
+#[cfg(feature = "connect-core")]
 mod connect_probe;
 mod diag;
 mod dns_server;

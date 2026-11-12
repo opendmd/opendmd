@@ -666,7 +666,7 @@ pub fn stack_low_water(task: &str, low: &std::sync::atomic::AtomicU32) {
 /// `uri` for the log: a query with a `key=` in it is never written down.
 pub fn log_uri(uri: &str) -> &str {
     // A connect-probe build's debug config takes a `token=`: a secret too.
-    #[cfg(feature = "connect-probe")]
+    #[cfg(feature = "connect-measure")]
     if uri.contains("token=") {
         return uri.split('?').next().unwrap_or("");
     }

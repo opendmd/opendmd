@@ -80,7 +80,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OPENDMD_CONNECT_TEST_ROOT");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-changed=sdkconfig.connect-probe");
-    if std::env::var_os("CARGO_FEATURE_CONNECT_PROBE").is_some() {
+    if std::env::var_os("CARGO_FEATURE_CONNECT_CORE").is_some() {
         let now = std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

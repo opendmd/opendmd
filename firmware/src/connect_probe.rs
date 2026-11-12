@@ -19,18 +19,30 @@
 //! Nothing here runs on CPU1, takes a lock the display waits on, or writes
 //! flash.
 //!
+//! **Two halves** (Cargo features): `connect-core` is the session itself
+//! (TLS, the WebSocket client, the roots, backoff, DNS, the crash guard),
+//! starting by itself to the build-time host; `connect-measure` adds what
+//! only the spike needs (the `connect` telemetry, the debug hooks, M9, M10,
+//! the mbedTLS byte counters, the histograms). `connect-probe` is both.
+//! Without `connect-measure`, [`tele`] runs nothing and the measuring code
+//! is not compiled.
+//!
 //! **How long it can hold the worker** (which meanwhile serves nothing
 //! else, `VerifyBundle` for an update included, whose handler waits 30 s):
-//! one turn does one blocking thing at most, each bounded: the TCP connect
-//! ([`CONNECT_TIMEOUT`], 5 s, a turn of its own), or socket reads and
-//! writes, which share a deadline of [`BLOCK_MAX`] (8 s) a turn (a peer
-//! that drips a record's bytes is cut off there), or a close
-//! ([`CLOSE_WAIT`]). DNS never runs on the worker: a short-lived task of
-//! its own (`connect-dns`, 5 KB of stack while it runs) asks lwIP's
-//! resolver, which can take ~7 s a server (4 tries, 1+1+2+3 s) and tries
-//! each of its servers in turn; the answer is kept an hour, and asked again
-//! after a TCP connect fails. A handshake that has not finished
-//! [`HANDSHAKE_TIMEOUT`] (15 s) after it began ends as a failure.
+//! a turn does one bounded blocking thing at most, and a close or a new
+//! attempt ends its turn: the TCP connect ([`CONNECT_TIMEOUT`], 5 s), or
+//! socket reads and writes, sharing [`BLOCK_MAX`] (8 s) from the turn's
+//! start (a peer that drips a record's bytes is cut off there), or a close
+//! (its WebSocket close written and the answer awaited, [`CLOSE_WAIT`],
+//! within a 3.5 s deadline of its own). So ~8-9 s at worst, plus up to a
+//! [`SLICE`] of work that does not block. DNS never runs on the worker: a
+//! short-lived task of its own (`connect-dns`, 5 KB of stack while it
+//! runs) asks lwIP's resolver, which has no timeout of its own (~7 s a
+//! server: 4 tries, 1+1+2+3 s, each server in turn); the probe stops
+//! waiting for it after [`DNS_WAIT`] (counted as a failed attempt; the task
+//! ends when lwIP answers). The answer is kept an hour, and asked again
+//! after a TCP connect fails. A handshake not finished [`HANDSHAKE_TIMEOUT`]
+//! (15 s) after it began ends as a failure.
 //!
 //! **When it starts.** By itself after a clean boot, but not before
 //! [`HOLD_S`] (180 s, `OPENDMD_CONNECT_HOLD_S` at build time) of uptime;
@@ -70,15 +82,20 @@
 //! ([`routes`]). Not in `docs/api.md`: they exist only in this build.
 //! **Telemetry**: `/api/status` `connect` ([`json`]).
 
+#[cfg(feature = "connect-measure")]
 use crate::httpd::{json_string, query_param, Method, Respond, Server};
 use crate::state::{free_heap, largest_free_block};
 use esp_idf_sys as sys;
-use opendmd_core::connect::{self as cx, Backoff, Decoder, Event, Fnv, Hist, Payload};
+use opendmd_core::connect::{self as cx, Backoff, Decoder, Event, Hist};
+#[cfg(feature = "connect-measure")]
+use opendmd_core::connect::{Fnv, Payload};
 use std::ffi::{c_int, c_uchar, c_void, CString};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering::Relaxed};
-use std::sync::{LazyLock, Mutex};
+#[cfg(feature = "connect-measure")]
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 // --- What this build needs from the sdkconfig ---------------------------
@@ -169,6 +186,10 @@ const BLOCK_MAX: Duration = Duration::from_secs(8);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a looked-up address is used.
 const DNS_KEEP: Duration = Duration::from_secs(3600);
+/// How long the probe waits for a lookup before counting it failed.
+const DNS_WAIT: Duration = Duration::from_secs(20);
+/// While a lookup runs, the worker's pace (not the busy 5 ms).
+const DNS_POLL: Duration = Duration::from_millis(200);
 /// No attempt of its own before this much uptime (seconds).
 const HOLD_S: u64 = match option_env!("OPENDMD_CONNECT_HOLD_S") {
     Some(v) => parse_u64(v),
@@ -191,6 +212,7 @@ const CLOCK_WAIT: Duration = Duration::from_secs(60);
 /// How long a close waits for the server's own close (so the server's end
 /// holds the TIME_WAIT pcb, not ours: CLAUDE.md's "close second").
 const CLOSE_WAIT: Duration = Duration::from_millis(1500);
+#[cfg(feature = "connect-measure")]
 const STREAM_TIMEOUT: Duration = Duration::from_secs(180);
 /// A session that ran this long counts as having run (backoff forgotten).
 const RAN: Duration = Duration::from_secs(60);
@@ -214,6 +236,7 @@ fn rand_u32() -> u32 {
 
 // --- Run-time settings ----------------------------------------------------
 
+#[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PingKind {
     /// A WebSocket ping frame: the runtime answers it, the object sleeps on.
@@ -224,6 +247,7 @@ pub enum PingKind {
     Echo,
 }
 
+#[cfg(feature = "connect-measure")]
 impl PingKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -265,6 +289,7 @@ impl Cfg {
         }
     }
 
+    #[cfg(feature = "connect-measure")]
     fn json(&self) -> String {
         format!(
             r#"{{"enabled":{},"host":{},"addr":{},"path":{},"token":{},"ping_s":{},"ping":"{}","tickets":{},"gate_free":{},"gate_largest":{},"tls_in":{TLS_IN},"tls_out":{TLS_OUT}}}"#,
@@ -282,7 +307,7 @@ impl Cfg {
     }
 }
 
-static CFG: LazyLock<Mutex<Cfg>> = LazyLock::new(|| Mutex::new(Cfg::defaults()));
+static CFG: std::sync::LazyLock<Mutex<Cfg>> = std::sync::LazyLock::new(|| Mutex::new(Cfg::defaults()));
 /// Bumped by every config change: the probe reconnects to apply it.
 static CFG_GEN: AtomicU32 = AtomicU32::new(0);
 
@@ -292,6 +317,7 @@ fn cfg() -> Cfg {
 
 // --- What the debug API asks -------------------------------------------------
 
+#[cfg(feature = "connect-measure")]
 #[derive(Clone, Copy)]
 enum Ask {
     /// M4 (`resume` false: tickets off, every one a full handshake) and M5
@@ -304,8 +330,11 @@ enum Ask {
     Stop,
     Reconnect,
     Reset,
+    /// The crash guard's test: a panic on the worker.
+    Crash,
 }
 
+#[cfg(feature = "connect-measure")]
 impl Ask {
     fn name(&self) -> &'static str {
         match self {
@@ -316,6 +345,7 @@ impl Ask {
             Ask::Stop => "stop",
             Ask::Reconnect => "reconnect",
             Ask::Reset => "reset",
+            Ask::Crash => "crash",
         }
     }
 }
@@ -324,12 +354,21 @@ impl Ask {
 /// report the number that started them as `seq`, so a script tells its own
 /// run from the one before: the probe takes a request at its next turn).
 /// Up to [`ASK_MAX`] wait, taken one a turn, in order; one more is a 409.
+#[cfg(feature = "connect-measure")]
 static ASK: Mutex<std::collections::VecDeque<(u32, Ask)>> = Mutex::new(std::collections::VecDeque::new());
+#[cfg(feature = "connect-measure")]
 static ASK_SEQ: AtomicU32 = AtomicU32::new(0);
+/// The last request the probe took (`connect.ask_taken`): a script waits
+/// for its own to be taken.
+#[cfg(feature = "connect-measure")]
+static ASK_TAKEN: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "connect-measure")]
 const ASK_MAX: usize = 4;
 /// `post`'s error for a full queue (answered 409).
+#[cfg(feature = "connect-measure")]
 const BUSY: &str = "busy: requests still waiting for the probe; try again in a second";
 
+#[cfg(feature = "connect-measure")]
 fn ask(a: Ask) -> Result<u32, String> {
     let mut q = ASK.lock().unwrap_or_else(|p| p.into_inner());
     if q.len() >= ASK_MAX {
@@ -351,6 +390,7 @@ static TLS_PEAK: AtomicI32 = AtomicI32::new(0);
 unsafe extern "C" fn tls_calloc(n: usize, size: usize) -> *mut c_void {
     // As IDF's own (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC): internal RAM.
     let p = sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT);
+    #[cfg(feature = "connect-measure")]
     if !p.is_null() {
         let size = sys::heap_caps_get_allocated_size(p) as i32;
         let now = TLS_IN_USE.fetch_add(size, Relaxed) + size;
@@ -361,11 +401,13 @@ unsafe extern "C" fn tls_calloc(n: usize, size: usize) -> *mut c_void {
 
 unsafe extern "C" fn tls_free(p: *mut c_void) {
     if !p.is_null() {
+        #[cfg(feature = "connect-measure")]
         TLS_IN_USE.fetch_sub(sys::heap_caps_get_allocated_size(p) as i32, Relaxed);
         sys::heap_caps_free(p);
     }
 }
 
+#[cfg(feature = "connect-measure")]
 extern "C" {
     // mbedtls/platform.h (MBEDTLS_PLATFORM_MEMORY, which IDF defines).
     fn mbedtls_platform_set_calloc_free(
@@ -378,6 +420,10 @@ fn mark_tls_peak() -> i32 {
     let now = TLS_IN_USE.load(Relaxed);
     TLS_PEAK.store(now, Relaxed);
     now
+}
+
+fn tls_in_use() -> i32 {
+    TLS_IN_USE.load(Relaxed)
 }
 
 // --- Telemetry -------------------------------------------------------------------
@@ -421,6 +467,7 @@ impl Cause {
     }
 }
 
+#[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 #[derive(Default, Clone)]
 struct M9 {
     seq: u32,
@@ -434,6 +481,7 @@ struct M9 {
     done: bool,
 }
 
+#[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 #[derive(Default, Clone)]
 struct M10 {
     seq: u32,
@@ -453,6 +501,7 @@ struct M10 {
     credits: u32,
 }
 
+#[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 struct Tele {
     state: &'static str,
     since_s: u32,
@@ -522,6 +571,7 @@ struct Tele {
     crash_boot: bool,
 }
 
+#[cfg_attr(not(feature = "connect-measure"), allow(dead_code))]
 impl Tele {
     fn new() -> Tele {
         Tele {
@@ -580,10 +630,19 @@ impl Tele {
     }
 }
 
+#[cfg(feature = "connect-measure")]
 static TELE: LazyLock<Mutex<Tele>> = LazyLock::new(|| Mutex::new(Tele::new()));
 
-fn tele<R>(f: impl FnOnce(&mut Tele) -> R) -> R {
+/// Run `f` on the telemetry (a `connect-measure` build); without it,
+/// nothing runs and the default comes back.
+#[cfg(feature = "connect-measure")]
+fn tele<R: Default>(f: impl FnOnce(&mut Tele) -> R) -> R {
     f(&mut TELE.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
+#[cfg(not(feature = "connect-measure"))]
+fn tele<R: Default>(_: impl FnOnce(&mut Tele) -> R) -> R {
+    R::default()
 }
 
 fn set_state(s: &'static str) {
@@ -604,11 +663,13 @@ fn error(e: String) {
     });
 }
 
+#[cfg(feature = "connect-measure")]
 fn opt<T: ToString>(v: Option<T>) -> String {
     v.map_or_else(|| "null".to_string(), |v| v.to_string())
 }
 
 /// `/api/status` `connect`: everything the probe measures.
+#[cfg(feature = "connect-measure")]
 pub fn json() -> String {
     let t = TELE.lock().unwrap_or_else(|p| p.into_inner());
     let c = cfg();
@@ -656,7 +717,7 @@ pub fn json() -> String {
     });
     format!(
         concat!(
-            r#"{{"state":"{}","since_s":{},"crash_boot":{},"hold_s":{},"host":{},"tickets":{},"ping_mode":"{}","ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
+            r#"{{"state":"{}","since_s":{},"crash_boot":{},"hold_s":{},"ask_taken":{},"dns_stack_unused":{},"host":{},"tickets":{},"ping_mode":"{}","ping_s":{},"tls_in":{},"tls_out":{},"clock":"{}","#,
             r#""attempts":{},"opened":{},"full":{},"resumed":{},"resume_missed":{},"#,
             r#""dns_ms":{},"tcp_ms":{},"upgrade_ms":{},"connect_ms":{},"hs_cpu_ms":{},"hs_cpu_max_ms":{},"#,
             r#""reconnects":{},"causes":{{{}}},"gate_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
@@ -668,6 +729,11 @@ pub fn json() -> String {
         t.since_s,
         t.crash_boot,
         HOLD_S,
+        ASK_TAKEN.load(Relaxed),
+        match DNS_STACK_LOW.load(Relaxed) {
+            u32::MAX => "null".to_string(),
+            v => v.to_string(),
+        },
         json_string(&c.host),
         c.tickets,
         c.ping.as_str(),
@@ -963,6 +1029,7 @@ enum Phase {
     Open,
 }
 
+#[cfg(feature = "connect-measure")]
 struct Stream {
     want: u64,
     window: u32,
@@ -1004,7 +1071,16 @@ struct Conn {
     buf: Box<[u8; 512]>,
     opened: Option<Instant>,
     ping: Ping,
+    #[cfg(feature = "connect-measure")]
     stream: Option<Stream>,
+}
+
+/// An M10 stream is being received (it keeps the probe busy).
+fn streaming(_c: &Conn) -> bool {
+    #[cfg(feature = "connect-measure")]
+    return _c.stream.is_some();
+    #[cfg(not(feature = "connect-measure"))]
+    false
 }
 
 /// The Rust side's bytes for an open session (reported with mbedTLS's;
@@ -1085,10 +1161,12 @@ impl Conn {
 #[derive(Clone, Copy, Debug)]
 enum Job {
     None,
+    #[cfg(feature = "connect-measure")]
     Handshakes { n: u32, done: u32, failed: u32, interval: Duration, resume: bool, next: Instant },
 }
 
 /// M9 in progress (beside anything else).
+#[cfg(feature = "connect-measure")]
 struct M9Run {
     n: u32,
     done: u32,
@@ -1105,8 +1183,10 @@ pub struct Probe {
     not_before: Instant,
     session: Option<Box<Session>>,
     job: Job,
+    #[cfg(feature = "connect-measure")]
     m9: Option<M9Run>,
     /// A stream asked for, sent once the session is open.
+    #[cfg(feature = "connect-measure")]
     stream_ask: Option<(u32, u64, u32, u32, u32)>,
     online_since: Option<Instant>,
     cfg_gen: u32,
@@ -1125,12 +1205,18 @@ pub struct Probe {
 struct Dns {
     host: String,
     answer: Option<(Result<SocketAddr, String>, u32)>,
+    started: Instant,
+    /// Counted failed already (it ran past [`DNS_WAIT`]).
+    given_up: bool,
 }
 
 static DNS: Mutex<Option<Dns>> = Mutex::new(None);
+/// The least of `connect-dns`'s stack never used (bytes; `u32::MAX` before
+/// a lookup has run).
+static DNS_STACK_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
 
 fn lookup(host: String) -> Result<(), String> {
-    *DNS.lock().unwrap_or_else(|p| p.into_inner()) = Some(Dns { host: host.clone(), answer: None });
+    *DNS.lock().unwrap_or_else(|p| p.into_inner()) = Some(Dns { host: host.clone(), answer: None, started: Instant::now(), given_up: false });
     let job = Box::new(move || {
         let t0 = Instant::now();
         let r = (host.as_str(), 443)
@@ -1141,6 +1227,9 @@ fn lookup(host: String) -> Result<(), String> {
         if let Some(d) = DNS.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             d.answer = Some((r, ms));
         }
+        // SAFETY: the calling task's own high-water mark (bytes on IDF).
+        let unused = unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+        DNS_STACK_LOW.fetch_min(unused, Relaxed);
     });
     crate::task::spawn_core0(b"connect-dns\0", 5 * 1024, 2, job).map_err(|e| {
         *DNS.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -1152,7 +1241,10 @@ impl Probe {
     pub fn new() -> Probe {
         // SAFETY: once, before any TLS use of ours (mbedTLS's other users
         // may already hold blocks: `tls_free` takes any heap block).
-        unsafe { mbedtls_platform_set_calloc_free(tls_calloc, tls_free) };
+        #[cfg(feature = "connect-measure")]
+        unsafe {
+            mbedtls_platform_set_calloc_free(tls_calloc, tls_free)
+        };
         log::info!(
             "connect-probe: on (host {DEFAULT_HOST}, path {DEFAULT_PATH}, token {}, TLS in {TLS_IN} out {TLS_OUT}, {} pinned roots)",
             if DEFAULT_TOKEN.is_empty() { "unset" } else { "set" },
@@ -1170,7 +1262,9 @@ impl Probe {
             not_before: Instant::now(),
             session: None,
             job: Job::None,
+            #[cfg(feature = "connect-measure")]
             m9: None,
+            #[cfg(feature = "connect-measure")]
             stream_ask: None,
             online_since: None,
             cfg_gen: CFG_GEN.load(Relaxed),
@@ -1188,16 +1282,18 @@ impl Probe {
     /// to [`SLICE`] and the loop comes straight back).
     pub fn wait(&self) -> Duration {
         let busy = Duration::from_millis(5);
+        #[cfg(feature = "connect-measure")]
         if self.m9.is_some() {
             return busy;
         }
         let at = match self.conn.as_deref() {
-            Some(c) if c.phase != Phase::Open || c.stream.is_some() => return busy,
+            Some(c) if c.phase != Phase::Open || streaming(c) => return busy,
             Some(c) => Some(c.ping.next),
             // Waiting for something that is not a time (the network, the
             // clock, switched on): the worker's own pace.
             None if !self.timed => None,
             None => match self.job {
+                #[cfg(feature = "connect-measure")]
                 Job::Handshakes { next, .. } => Some(next),
                 Job::None => Some(self.not_before),
             },
@@ -1214,8 +1310,19 @@ impl Probe {
     fn turn(&mut self, online: bool) {
         let started = Instant::now();
         self.timed = false;
-        self.take_ask();
-        self.run_m9(started);
+        // This turn's blocking budget, before anything can write.
+        if let Some(conn) = self.conn.as_mut() {
+            conn.bio.deadline = started + BLOCK_MAX;
+        }
+        #[cfg(feature = "connect-measure")]
+        {
+            // A request that closed the session ends the turn: the next
+            // attempt is a turn of its own.
+            if self.take_ask() {
+                return;
+            }
+            self.run_m9(started);
+        }
         let c = cfg();
         let gen = CFG_GEN.load(Relaxed);
         if gen != self.cfg_gen {
@@ -1265,7 +1372,6 @@ impl Probe {
             return self.maybe_connect(&c);
         }
         let Some(conn) = self.conn.as_mut() else { return };
-        conn.bio.deadline = started + BLOCK_MAX;
         let result = match conn.phase {
             Phase::Handshake => step_handshake(conn, started),
             Phase::Upgrade => step_upgrade(conn, &c, started),
@@ -1280,13 +1386,16 @@ impl Probe {
         }
         let conn = self.conn.as_mut().expect("held");
         if conn.phase == Phase::Open {
-            // A job's connection is closed as soon as it is open.
-            if let Job::Handshakes { .. } = self.job {
-                return self.close(Cause::Forced, "");
-            }
-            if let Some((seq, bytes, chunk, window, seed)) = self.stream_ask.take() {
-                if let Err(e) = start_stream(conn, seq, bytes, chunk, window, seed) {
-                    return self.end(e);
+            #[cfg(feature = "connect-measure")]
+            {
+                // A job's connection is closed as soon as it is open.
+                if let Job::Handshakes { .. } = self.job {
+                    return self.close(Cause::Forced, "");
+                }
+                if let Some((seq, bytes, chunk, window, seed)) = self.stream_ask.take() {
+                    if let Err(e) = start_stream(conn, seq, bytes, chunk, window, seed) {
+                        return self.end(e);
+                    }
                 }
             }
             if let Err(e) = service(conn, &c, started) {
@@ -1318,14 +1427,20 @@ impl Probe {
         tele(|t| t.stack_unused = t.stack_unused.min(unused));
     }
 
-    fn take_ask(&mut self) {
-        let Some((seq, a)) = ASK.lock().unwrap_or_else(|p| p.into_inner()).pop_front() else { return };
+    /// Take the next request; `true` if it closed the session (the turn
+    /// ends there).
+    #[cfg(feature = "connect-measure")]
+    fn take_ask(&mut self) -> bool {
+        let Some((seq, a)) = ASK.lock().unwrap_or_else(|p| p.into_inner()).pop_front() else { return false };
+        ASK_TAKEN.store(seq, Relaxed);
         log::info!("connect-probe: asked {}", a.name());
+        let mut closed = false;
         match a {
             Ask::Handshakes { n, interval, resume } => {
                 self.stream_ask = None;
                 if self.conn.is_some() {
                     self.close(Cause::Forced, "");
+                    closed = true;
                 }
                 if resume && self.session.is_none() {
                     // The first one makes the ticket the rest resume.
@@ -1374,6 +1489,7 @@ impl Probe {
             Ask::Reconnect => {
                 if self.conn.is_some() {
                     self.close(Cause::Forced, "");
+                    closed = true;
                 }
                 self.backoff.reset();
                 self.not_before = Instant::now();
@@ -1383,9 +1499,12 @@ impl Probe {
                 *t = Tele::new();
                 (t.state, t.since_s, t.clock, t.stack_unused, t.rust_bytes, t.crash_boot) = keep;
             }),
+            Ask::Crash => panic!("connect-probe: crash on purpose (POST /api/debug/connect/crash)"),
         }
+        closed
     }
 
+    #[cfg(feature = "connect-measure")]
     fn run_m9(&mut self, started: Instant) {
         let Some(run) = self.m9.as_mut() else { return };
         while run.done < run.n && started.elapsed() < SLICE {
@@ -1425,6 +1544,7 @@ impl Probe {
         let now = Instant::now();
         // Tickets offered at all, and the saved session offered back.
         let tickets = match self.job {
+            #[cfg(feature = "connect-measure")]
             Job::Handshakes { next, resume, .. } => {
                 if now < next {
                     set_state(if resume { "job: next resumed" } else { "job: next full" });
@@ -1446,11 +1566,13 @@ impl Probe {
             set_state("waiting for memory");
             tele(|t| t.gate_waits += 1);
             self.not_before = now + Duration::from_secs(2);
+            #[cfg(feature = "connect-measure")]
             if let Job::Handshakes { ref mut next, .. } = self.job {
                 *next = now + Duration::from_secs(2);
             }
             return;
         }
+        #[cfg(feature = "connect-measure")]
         if let Job::Handshakes { ref mut next, interval, .. } = self.job {
             *next = now + interval;
         }
@@ -1491,18 +1613,22 @@ impl Probe {
         }
         let done = {
             let mut d = DNS.lock().unwrap_or_else(|p| p.into_inner());
-            match d.as_ref() {
+            match d.as_mut() {
                 Some(j) if j.host == c.host && j.answer.is_some() => d.take().and_then(|j| j.answer),
-                Some(j) if j.host == c.host => {
-                    drop(d);
-                    set_state("looking up the server");
-                    return None;
-                }
-                // Another host's answer, or none asked yet (a lookup for
-                // another host still running is left to finish).
+                // Still running (this host's, or another's left to finish:
+                // one lookup at a time).
                 Some(j) if j.answer.is_none() => {
+                    let late = j.host == c.host && !j.given_up && j.started.elapsed() > DNS_WAIT;
+                    if late {
+                        j.given_up = true;
+                    }
                     drop(d);
-                    set_state("looking up the server");
+                    if late {
+                        self.failed(End::new(Cause::Dns, format!("{}: no answer within {} s", c.host, DNS_WAIT.as_secs())));
+                    } else {
+                        set_state("looking up the server");
+                        self.not_before = Instant::now() + DNS_POLL;
+                    }
                     return None;
                 }
                 _ => None,
@@ -1524,6 +1650,7 @@ impl Probe {
                     self.failed(End::new(Cause::Dns, e));
                 } else {
                     set_state("looking up the server");
+                    self.not_before = Instant::now() + DNS_POLL;
                 }
                 None
             }
@@ -1538,7 +1665,7 @@ impl Probe {
         let full = conn.verify.called;
         let connect_ms = conn.t0.elapsed().as_millis() as u32;
         let free = free_heap();
-        let tls_open = TLS_IN_USE.load(Relaxed) - conn.tls_before;
+        let tls_open = tls_in_use() - conn.tls_before;
         // A new ticket for the next resumption.
         if conn.tickets {
             let s = self.session.get_or_insert_with(Session::new);
@@ -1577,6 +1704,7 @@ impl Probe {
             tele(|t| t.tls_hs_peak),
             tls_open
         );
+        #[cfg(feature = "connect-measure")]
         if let Job::Handshakes { ref mut done, n, .. } = self.job {
             *done += 1;
             let d = *done;
@@ -1596,6 +1724,7 @@ impl Probe {
     fn failed(&mut self, e: End) {
         tele(|t| t.causes[e.cause as usize] += 1);
         error(format!("{}: {}", e.cause.as_str(), e.why));
+        #[cfg(feature = "connect-measure")]
         if let Job::Handshakes { ref mut failed, n, .. } = self.job {
             *failed += 1;
             let f = *failed;
@@ -1628,6 +1757,7 @@ impl Probe {
             // It never opened: an attempt that failed.
             return self.failed(e);
         };
+        #[cfg(feature = "connect-measure")]
         self.finish_stream(&conn, e.cause.as_str());
         let secs = opened.elapsed().as_secs() as u32;
         let (rx, tx) = (conn.bio.rx, conn.bio.tx);
@@ -1688,6 +1818,7 @@ impl Probe {
         self.end(End::new(cause, why));
     }
 
+    #[cfg(feature = "connect-measure")]
     fn finish_stream(&self, conn: &Conn, cause: &'static str) {
         if conn.stream.is_some() {
             tele(|t| {
@@ -1707,12 +1838,21 @@ impl Default for Probe {
 }
 
 /// DNS, TCP, and the TLS context ready for its handshake.
+/// The address's IPv4 part as text (IPv4 only: `IpAddr`'s own Display
+/// would link the IPv6 formatter, ~1.5 KB, for nothing).
+fn v4_ip(addr: &SocketAddr) -> String {
+    match addr {
+        SocketAddr::V4(a) => a.ip().to_string(),
+        SocketAddr::V6(_) => "an IPv6 address".into(),
+    }
+}
+
 /// TCP to `addr` (looked up already: [`Probe::address`]), and the TLS
 /// context ready for its handshake.
 fn connect(c: &Cfg, addr: SocketAddr, tickets: bool, session: Option<&Session>, floor: Option<i64>, free: u32) -> Result<Box<Conn>, End> {
     let t0 = Instant::now();
     let t1 = Instant::now();
-    let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| End::new(Cause::Tcp, format!("{}: {e}", addr.ip())))?;
+    let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| End::new(Cause::Tcp, format!("{}: {e}", v4_ip(&addr))))?;
     let tcp_ms = t1.elapsed().as_millis() as u32;
     let _ = tcp.set_nodelay(true);
     let _ = tcp.set_read_timeout(Some(IO_TIMEOUT));
@@ -1743,6 +1883,7 @@ fn connect(c: &Cfg, addr: SocketAddr, tickets: bool, session: Option<&Session>, 
         buf: Box::new([0; 512]),
         opened: None,
         ping: Ping { seq: 0, sent: None, next: Instant::now(), missed: 0 },
+        #[cfg(feature = "connect-measure")]
         stream: None,
     });
     let Conn { tls, bio, verify, .. } = &mut *conn;
@@ -1882,6 +2023,7 @@ fn step_upgrade(conn: &mut Conn, c: &Cfg, started: Instant) -> Result<(), End> {
     }
 }
 
+#[cfg(feature = "connect-measure")]
 fn start_stream(conn: &mut Conn, seq: u32, bytes: u64, chunk: u32, window: u32, seed: u32) -> Result<(), End> {
     conn.text(&format!("stream {bytes} {chunk} {window} {seed}"))?;
     let free = free_heap();
@@ -1911,47 +2053,82 @@ struct Acts {
     pong: Option<Vec<u8>>,
     pong_seen: Option<u32>,
     close: Option<Option<u16>>,
+    #[cfg(feature = "connect-measure")]
     stream_end: bool,
+}
+
+/// What the decoder's events write to: the ping, and (measuring) the
+/// stream.
+struct Sink<'a> {
+    ping: &'a mut Ping,
+    #[cfg(feature = "connect-measure")]
+    stream: &'a mut Option<Stream>,
 }
 
 /// Feed the first `n` bytes of the connection's buffer to its decoder.
 fn feed_buf(conn: &mut Conn, n: usize, c: &Cfg) -> Result<(), End> {
+    #[cfg(feature = "connect-measure")]
     let Conn { dec, stream, ping, buf, .. } = conn;
-    let acts = decode(dec, stream, ping, &buf[..n])?;
+    #[cfg(not(feature = "connect-measure"))]
+    let Conn { dec, ping, buf, .. } = conn;
+    let sink = Sink {
+        ping,
+        #[cfg(feature = "connect-measure")]
+        stream,
+    };
+    let acts = decode(dec, sink, &buf[..n])?;
     act(conn, acts, c)
 }
 
 /// Feed bytes from elsewhere (what followed the upgrade's head).
 fn feed(conn: &mut Conn, data: &[u8], c: &Cfg) -> Result<(), End> {
+    #[cfg(feature = "connect-measure")]
     let Conn { dec, stream, ping, .. } = conn;
-    let acts = decode(dec, stream, ping, data)?;
+    #[cfg(not(feature = "connect-measure"))]
+    let Conn { dec, ping, .. } = conn;
+    let sink = Sink {
+        ping,
+        #[cfg(feature = "connect-measure")]
+        stream,
+    };
+    let acts = decode(dec, sink, data)?;
     act(conn, acts, c)
 }
 
-fn decode(dec: &mut Decoder, stream: &mut Option<Stream>, ping: &mut Ping, data: &[u8]) -> Result<Acts, End> {
+fn decode(dec: &mut Decoder, sink: Sink<'_>, data: &[u8]) -> Result<Acts, End> {
     let mut acts = Acts::default();
+    #[cfg(feature = "connect-measure")]
+    let Sink { ping, stream } = sink;
+    #[cfg(not(feature = "connect-measure"))]
+    let Sink { ping } = sink;
     let r = dec.feed(data, &mut |e| match e {
         Event::Text(t) => {
+            #[cfg(feature = "connect-measure")]
             if let Some((b, f)) = cx::parse_end(t) {
                 if let Some(s) = stream.as_mut() {
                     s.server = Some((b, f));
                     acts.stream_end = true;
                 }
-            } else if t == b"pong" {
+                return;
+            }
+            if t == b"pong" {
                 acts.pong_seen = Some(ping.seq);
             } else if let Some(n) = t.strip_prefix(b"echo ") {
                 acts.pong_seen = std::str::from_utf8(n).ok().and_then(|n| n.parse().ok());
             }
         }
         Event::BinaryStart(_) => {}
-        Event::Binary(b) => {
+        // Binary frames: only M10's stream sends them.
+        Event::Binary(_b) => {
+            #[cfg(feature = "connect-measure")]
             if let Some(s) = stream.as_mut() {
-                s.got += b.len() as u64;
-                s.mismatches += s.gen.check(b);
-                s.fnv.update(b);
+                s.got += _b.len() as u64;
+                s.mismatches += s.gen.check(_b);
+                s.fnv.update(_b);
             }
         }
         Event::BinaryEnd { .. } => {
+            #[cfg(feature = "connect-measure")]
             if let Some(s) = stream.as_mut() {
                 s.frames += 1;
                 s.ungranted += 1;
@@ -1992,6 +2169,14 @@ fn act(conn: &mut Conn, acts: Acts, c: &Cfg) -> Result<(), End> {
         let _ = conn.send(cx::OP_CLOSE, &code.map(|c| c.to_be_bytes().to_vec()).unwrap_or_default());
         return Err(End { cause: Cause::ServerClose, code: code.unwrap_or(1005), why: format!("code {}", code.unwrap_or(1005)) });
     }
+    #[cfg(feature = "connect-measure")]
+    stream_act(conn, acts.stream_end)?;
+    Ok(())
+}
+
+/// M10: the stream's credit, its figures, its end.
+#[cfg(feature = "connect-measure")]
+fn stream_act(conn: &mut Conn, stream_end: bool) -> Result<(), End> {
     let free = free_heap();
     if let Some(s) = conn.stream.as_mut() {
         if free < s.heap_low {
@@ -2022,7 +2207,7 @@ fn act(conn: &mut Conn, acts: Acts, c: &Cfg) -> Result<(), End> {
             }
         });
     }
-    if acts.stream_end {
+    if stream_end {
         if let Some(s) = conn.stream.take() {
             let ok = s.server == Some((s.got, s.fnv.0)) && s.mismatches == 0 && s.got == s.want;
             let ms = s.t0.elapsed().as_millis() as u32;
@@ -2071,6 +2256,7 @@ fn service(conn: &mut Conn, c: &Cfg, started: Instant) -> Result<(), End> {
             return Err(End::new(Cause::Tls, tls_error(r)));
         }
         // Nothing more now. A stream keeps reading for the slice.
+        #[cfg(feature = "connect-measure")]
         if let Some(s) = conn.stream.as_ref() {
             if s.t0.elapsed() > STREAM_TIMEOUT {
                 conn.stream = None;
@@ -2138,6 +2324,7 @@ fn service_once(conn: &mut Conn, c: &Cfg) -> Result<(), End> {
 
 // --- The debug API ---------------------------------------------------------------------
 
+#[cfg(feature = "connect-measure")]
 fn num<T: std::str::FromStr>(q: Option<&str>, key: &str, default: T) -> Result<T, String> {
     match query_param(q, key) {
         None => Ok(default),
@@ -2145,6 +2332,7 @@ fn num<T: std::str::FromStr>(q: Option<&str>, key: &str, default: T) -> Result<T
     }
 }
 
+#[cfg(feature = "connect-measure")]
 fn ranged(v: u64, lo: u64, hi: u64, key: &str) -> Result<u64, String> {
     if (lo..=hi).contains(&v) {
         Ok(v)
@@ -2154,6 +2342,7 @@ fn ranged(v: u64, lo: u64, hi: u64, key: &str) -> Result<u64, String> {
 }
 
 /// `POST /api/debug/connect/<what>`'s work; the JSON to answer.
+#[cfg(feature = "connect-measure")]
 fn post(what: &str, q: Option<&str>) -> Result<String, String> {
     match what {
         "config" => {
@@ -2233,11 +2422,18 @@ fn post(what: &str, q: Option<&str>) -> Result<String, String> {
             let seq = ask(Ask::Reset)?;
             Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
         }
-        _ => Err(format!("{what}: config, handshakes, ed25519, stream, stop, reconnect or reset")),
+        // The crash guard's test (the emulator lane): the worker panics at
+        // its next turn; the boot after it must not start the probe.
+        "crash" => {
+            let seq = ask(Ask::Crash)?;
+            Ok(format!(r#"{{"ok":true,"ask":{seq}}}"#))
+        }
+        _ => Err(format!("{what}: config, handshakes, ed25519, stream, stop, reconnect, reset or crash")),
     }
 }
 
 /// The test hooks, registered before the catch-all (`http::start`).
+#[cfg(feature = "connect-measure")]
 pub fn routes(server: &mut Server) -> anyhow::Result<()> {
     server.route("/api/debug/connect", Method::Get, |req| {
         req.json(&format!(r#"{{"connect":{},"cfg":{}}}"#, json(), cfg().json()))

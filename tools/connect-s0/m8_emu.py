@@ -332,6 +332,41 @@ class Lane:
         st = self.status()
         self.expect(st.get("uptime_secs", 0) > 0 and not self.emu.failure and self.emu.resets <= 1, "no restart, no panic", f"uptime {st.get('uptime_secs')} s, resets {self.emu.resets}")
         self.post("config", enabled=1)
+        self.wait("open again", lambda s: s["connect"].get("state") == "open", 600)
+
+        # A planned restart (POST /api/reboot): the probe starts by itself
+        # again after the hold (what M7 needs across a restart).
+        self.emu.resets_allowed += 1
+        try:
+            self.http("POST", "/api/reboot", timeout=10)
+        except Exception:  # noqa: BLE001 - the answer may race the restart
+            pass
+        s = self.wait("back after the planned restart", lambda s: s.get("uptime_secs", 9999) < 300 and "connect" in s, 900, every=3)
+        self.expect(s["connect"].get("crash_boot") is False, "a planned restart: crash_boot false", f"restarts[0] {(s.get('restarts') or [{}])[0].get('reason')}")
+        s = self.wait("open by itself after the planned restart", lambda s: s["connect"].get("state") == "open", 900)
+        self.expect(s.get("uptime_secs", 0) >= s["connect"].get("hold_s", 0), "started by itself, after the hold", f"open at uptime {s.get('uptime_secs')} s")
+
+        # The crash guard: a panic on the worker (the debug hook); the boot
+        # after it must not start the probe, until asked.
+        self.emu.resets_allowed += 1
+        kept = self.emu.fail_rx
+        self.emu.fail_rx = [(rx, name) for rx, name in kept if name in ("stack overflow", "heap corruption")]
+        self.post("crash")
+        s = self.wait("back after the crash", lambda s: s.get("uptime_secs", 9999) < 300 and "connect" in s, 900, every=3)
+        time.sleep(5)
+        self.emu.fail_rx = kept
+        s = self.status()
+        reason = (s.get("restarts") or [{}])[0].get("reason")
+        self.expect(reason == "panic" and s["connect"].get("crash_boot") is True and s["connect"].get("state") == "off",
+                    "after a crash: crash_boot true, not started", f"restarts[0] {reason}, state {s['connect'].get('state')}, last_error {s['connect'].get('last_error')}")
+        # It stays off past the hold.
+        hold = s["connect"].get("hold_s", 0)
+        s = self.wait("past the hold", lambda s: s.get("uptime_secs", 0) > hold + 10, 900, every=5)
+        self.expect(s["connect"].get("state") == "off" and s["connect"].get("attempts", 0) == 0, "after a crash: still off past the hold, no attempt",
+                    f"state {s['connect'].get('state')}, attempts {s['connect'].get('attempts')}")
+        self.post("config", enabled=1)
+        self.wait("open once asked", lambda s: s["connect"].get("state") == "open", 900)
+        self.ok("after a crash: started once asked", "config?enabled=1")
 
 
 def main():
