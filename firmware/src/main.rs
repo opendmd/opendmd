@@ -1848,7 +1848,12 @@ fn main() -> Result<()> {
         screen.heed();
         if let Some(rx) = boot_rx.as_ref().filter(|_| pending.is_none()) {
             match rx.try_recv() {
-                Ok(boot::Event::NoCard) => screen.no_card(),
+                Ok(boot::Event::NoCard) => {
+                    screen.no_card();
+                    // The probe's card-free sections (psi_probe::run_nocard).
+                    #[cfg(feature = "psi-probe")]
+                    psi_probe::run_nocard();
+                }
                 #[cfg(feature = "psi")]
                 Ok(boot::Event::Formula(f)) => {
                     let (path, psb) = *f;
