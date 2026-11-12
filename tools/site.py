@@ -514,6 +514,9 @@ GIFs with Create Art; the GIFs themselves are not on this site.
 # The pages' chrome and styles (see the docstring).
 THEME = ROOT / "site/theme"
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
+# The home page's own, in its hero's words (site/pages/home.html).
+HOME_DESCRIPTION = ("OpenDMD is free, open firmware for the DMDoS display. It plays the GIFs already on your SD "
+                    "card and adds a web app: playlists, brightness, night dimming.")
 # The HTTP API's frozen copies (see the docstring): dev/api/v<version>.html.
 API_PAGE = "docs/api.md"
 API_DIR = "dev/api"
@@ -1218,7 +1221,7 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     head = "\n" + (INSTALL_HEAD if page == INSTALL_PAGE else psi_head(page) if page in PSI_PAGES
                    else HOME_HEAD if src == HOME else CHANGELOG_HEAD if feed else "")
     dest.write_text(render(page, title, body, art["wordmark"], head=head, on=on,
-                           description=CHANGELOG_ABOUT if feed else DESCRIPTION,
+                           description=CHANGELOG_ABOUT if feed else HOME_DESCRIPTION if src == HOME else DESCRIPTION,
                            kind="home" if src == HOME else "doc"), encoding="utf-8")
     if feed:
         (out / CHANGELOG_FEED).write_text(feed, encoding="utf-8")

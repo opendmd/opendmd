@@ -1,0 +1,27 @@
+# OpenDMD partition table for the ESP32-S3 (variant "s3"), 8 MB flash: the
+# ESP32-S3-DevKitC-1 N8R8, and the N16R8 with the same image (a chip larger
+# than its image header says runs with the header's 8 MB; the top 8 MB of an
+# N16R8 stay unused until a 16 MB layout needs them).
+# PREVIEW, NOT RELEASED (S3 port phase 0, 2026-11-12): built only into a
+# DIST of its own or the emulator's dirs, never dist/; no signed bundle, no
+# ODFW magic (opendmd-core's LAYOUTS has none, so a player refuses any
+# bundle over WiFi for it), no installer manifest, no updater in ota_0 yet.
+# The layout is the 4mb v4 table's roles with room to grow; the release
+# phase decides whether it keeps them or turns the spare into a second
+# firmware slot.
+# - The bootloader is at 0x0 on the S3 (0x1000 on the classic ESP32); the
+#   table at 0x8000 on both.
+# - nvs, otadata, phy_init: where the 4mb table has them.
+# - factory: 3,584 KB (the classic's 2,816 KB: the S3 maps far more code,
+#   so the classic's ~3.19 MB ceiling does not apply).
+# - ota_0: the updater, 384 KB as on the classic (empty in phase 0).
+# - www: the web app's pack, 1,024 KB (the classic's 768 KB).
+# - 0x500000..0x800000 (3 MB) unused.
+# 0x20000 + 0x380000 = 0x3A0000; + 0x60000 = 0x400000; + 0x100000 = 0x500000.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000,
+otadata,   data, ota,      0xF000,   0x2000,
+phy_init,  data, phy,      0x11000,  0x1000,
+factory,   app,  factory,  0x20000,  0x380000,
+ota_0,     app,  ota_0,    0x3A0000, 0x60000,
+www,       data, esphttpd, 0x400000, 0x100000,

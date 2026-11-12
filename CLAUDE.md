@@ -61,6 +61,7 @@ make fw-flash PORT=/dev/ttyUSB0   # bench build + web app + flash + monitor
 make fw-release  # release images into dist/ (the 4mb layout), signed with FW_SIGN_KEY
 make notices-check                # third-party notices up to date
 make emu-build emu-smoke          # the firmware in an emulator (esp32sim): correctness only, never timing
+make emu-s3-nocard emu-s3-probe   # the ESP32-S3 preview (VARIANT=s3, not released) in the emulator's S3 machine
 ```
 
 - Machine-local settings go in a gitignored `local.mk` beside the

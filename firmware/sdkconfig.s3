@@ -1,0 +1,54 @@
+# The ESP32-S3's sdkconfig (variant "s3", S3 port phase 0), layered by the
+# Makefile after sdkconfig.defaults and before the build's fragment for the
+# s3 variant only: the classic ESP32's builds never read this file.
+# The target itself comes from MCU=esp32s3 (esp-idf-sys).
+
+# The brownout detector's numbering is inverted on the S3: the classic's
+# level 7 is its highest threshold, ~2.80 V (sdkconfig.defaults, see
+# config.rs's brightness table), the S3's level 7 is its lowest, 2.44 V.
+# Level 4 (2.84 V) is the S3's nearest to the classic's 2.80 V.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=n
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_4=y
+
+# The Formula JIT's kernels live in executable heap (MALLOC_CAP_EXEC). On
+# the S3, memory protection (on by default) splits internal SRAM into a
+# no-write IRAM half and a no-execute DRAM half, and IDF's heap then offers
+# no executable memory at all (heap/port/esp32s3/memory_layout.c). Off,
+# the D/IRAM heap is executable, through its IRAM alias, as on the classic.
+CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n
+
+# PSRAM: the DevKitC-1 N8R8 / N16R8's 8 MB of octal PSRAM (ESP32-S3-WROOM-1
+# N8R8/N16R8: quad flash, octal PSRAM on GPIO 35-37 among others). On, and
+# phase 0 moves none of the firmware's buffers into it, so phase 1 measures
+# the internal heap as the firmware uses it today. What IDF v5.3 does with
+# it here (esp_psram.c, heap_caps.c, esp_wifi, fatfs):
+# - malloc (Rust's allocator, C's) is internal only: USE_CAPS_ALLOC makes
+#   heap_caps_malloc_default ask for MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL.
+# - The PSRAM pool is registered with MALLOC_CAP_SPIRAM | MALLOC_CAP_DEFAULT
+#   (and 8BIT/32BIT): a heap_caps_malloc with caps that do not exclude it
+#   (MALLOC_CAP_DEFAULT or MALLOC_CAP_8BIT alone, as some IDF components ask)
+#   tries the internal heaps first and falls back to PSRAM when they are full.
+#   esp_get_free_heap_size counts it (state::free_heap does not).
+# - The WiFi driver's cache TX buffers (ESP_WIFI_CACHE_TX_BUFFER_NUM, 32, on
+#   whenever SPIRAM is) are PSRAM: frames queued when its internal TX
+#   buffers run out. Its other buffers stay internal (TRY_ALLOCATE_WIFI_LWIP
+#   is off by default), as do mbedTLS's (MBEDTLS_INTERNAL_MEM_ALLOC).
+# - Pinned off below: FATFS's buffers preferring PSRAM (IDF's default with
+#   SPIRAM) and task stacks in PSRAM, so the card path and every task are
+#   as on the classic.
+# Which buffers move is a later phase's choice.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_FATFS_ALLOC_PREFER_EXTRAM=n
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n
+# A board without its PSRAM (or a chip variant without) still boots.
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# The devkit's console is UART0 on GPIO 43/44 through its USB-UART bridge,
+# as the classic DevKit V1's (sdkconfig.defaults' custom UART0 at 921600).
+# The S3's native USB (GPIO 19/20) is left alone: no secondary console on
+# its USB-Serial-JTAG (IDF's S3 default), which took the firmware's own
+# lines (fd 1) and its panic output away from UART0.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

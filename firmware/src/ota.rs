@@ -545,6 +545,7 @@ pub fn info_json(card_mounted: bool) -> String {
 /// 80 / ((pre + 1) × (n + 1))) and `qio`, `qout`, `dio`, `dout`, `fast` or
 /// `slow`. The app sets the clock at start-up from its own image header
 /// (`esp_system/port/cpu_start.c`), the read mode is the bootloader's.
+#[cfg(not(esp32s3))]
 pub fn flash_clock() -> (u32, &'static str) {
     const SPI0: usize = 0x3ff4_3000; // DR_REG_SPI0_BASE
     const CTRL: usize = SPI0 + 0x08; // SPI_CTRL_REG(0)
@@ -578,6 +579,13 @@ pub fn flash_clock() -> (u32, &'static str) {
         "fast"
     };
     (mhz, mode)
+}
+
+/// The S3's flash controller is SPI_MEM0 at 0x60003000, with another
+/// register layout: not read back yet (S3 port phase 1). 0 MHz, `unknown`.
+#[cfg(esp32s3)]
+pub fn flash_clock() -> (u32, &'static str) {
+    (0, "unknown")
 }
 
 /// At boot, once the card is mounted: account for an update that ran (or

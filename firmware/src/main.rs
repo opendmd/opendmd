@@ -588,10 +588,23 @@ fn main() -> Result<()> {
     // The GPIO peripherals are typed (`Gpio18` and friends), so the numbers in
     // `config` cannot be used to select them; `expect_pin` asserts the two
     // agree instead, which catches the map drifting out of step.
+    #[cfg(not(esp32s3))]
     let sck = expect_pin(AnyOutputPin::from(pins.gpio18), config::SD_SCK, "SD SCK");
+    #[cfg(not(esp32s3))]
     let mosi = expect_pin(AnyOutputPin::from(pins.gpio23), config::SD_MOSI, "SD MOSI");
+    #[cfg(not(esp32s3))]
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
+    #[cfg(not(esp32s3))]
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
+    // The S3's (config.rs): the 4-bit wiring's CLK, CMD, D0 and D3.
+    #[cfg(esp32s3)]
+    let sck = expect_pin(AnyOutputPin::from(pins.gpio39), config::SD_SCK, "SD SCK");
+    #[cfg(esp32s3)]
+    let mosi = expect_pin(AnyOutputPin::from(pins.gpio40), config::SD_MOSI, "SD MOSI");
+    #[cfg(esp32s3)]
+    let miso = expect_pin(AnyIOPin::from(pins.gpio41), config::SD_MISO, "SD MISO");
+    #[cfg(esp32s3)]
+    let cs = expect_pin(AnyOutputPin::from(pins.gpio21), config::SD_CS, "SD CS");
     let bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
     heapmap::cp("sd spi bus");
     let reset_reason = reset.name();
@@ -1835,7 +1848,12 @@ fn main() -> Result<()> {
         screen.heed();
         if let Some(rx) = boot_rx.as_ref().filter(|_| pending.is_none()) {
             match rx.try_recv() {
-                Ok(boot::Event::NoCard) => screen.no_card(),
+                Ok(boot::Event::NoCard) => {
+                    screen.no_card();
+                    // The probe's card-free sections (psi_probe::run_nocard).
+                    #[cfg(feature = "psi-probe")]
+                    psi_probe::run_nocard();
+                }
                 #[cfg(feature = "psi")]
                 Ok(boot::Event::Formula(f)) => {
                     let (path, psb) = *f;
@@ -3119,9 +3137,19 @@ fn random_seed() -> u64 {
 }
 
 /// Lowest free heap seen since boot, in bytes.
+#[cfg(not(esp32s3))]
 fn min_free_heap() -> u32 {
     // SAFETY: as above.
     unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
+}
+
+/// The S3's: internal RAM only (`state::free_heap`).
+#[cfg(esp32s3)]
+fn min_free_heap() -> u32 {
+    // SAFETY: as above.
+    unsafe {
+        esp_idf_sys::heap_caps_get_minimum_free_size(esp_idf_sys::MALLOC_CAP_INTERNAL | esp_idf_sys::MALLOC_CAP_8BIT) as u32
+    }
 }
 
 /// Assert that a typed GPIO peripheral really is the pin `config` names.

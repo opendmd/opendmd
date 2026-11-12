@@ -2033,6 +2033,17 @@ impl Exec {
         self.p as usize
     }
 
+    #[cfg(esp32s3)]
+    fn region(&self) -> &'static str {
+        // The S3's internal SRAM through its instruction bus: every block of
+        // executable heap is D/IRAM (one pool, no IRAM-only leftover).
+        match self.addr() {
+            0x4037_0000..=0x403D_FFFF => "D/IRAM",
+            _ => "elsewhere",
+        }
+    }
+
+    #[cfg(not(esp32s3))]
     fn region(&self) -> &'static str {
         match self.addr() {
             0x4007_0000..=0x4007_FFFF => "cache IRAM",
@@ -2173,7 +2184,10 @@ fn jit_spike(out: &mut [u8]) {
     let regions = [("IRAM", iram), ("D/IRAM", diram)];
     for (what, at) in regions {
         let Some(i) = at else {
-            say!(error, "psi-probe: jit: no {what} block to run from");
+            // (The S3 has no IRAM-only pool: D/IRAM is all there is.)
+            if !(cfg!(esp32s3) && what == "IRAM") {
+                say!(error, "psi-probe: jit: no {what} block to run from");
+            }
             continue;
         };
         let Some(a) = blocks[i].load(jitk::TINY) else { continue };
@@ -2502,6 +2516,48 @@ pub fn run(root: &str) {
     // by the `*_ONLY` modes -- `ROAD_ONLY`, `JIT2_ONLY` -- for a test panel.)
     *REPORT.lock().unwrap() = None;
     let _ = root;
+}
+
+/// The probe with no card, once a boot, when the boot task says there is
+/// none (`boot::Event::NoCard`): only the sections that need no card, logged
+/// (no report file): every bundled Formula opened, the JIT spike's
+/// hand-written kernels, the golden frames through the VM and through the
+/// JIT's kernels, and the done line. For a board without a card and the
+/// emulator's ESP32-S3 machine, which has no card yet (`make emu-s3-probe`:
+/// the S3 port's gate, the JIT's output equal to the VM's on the LX7).
+pub fn run_nocard() {
+    static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RAN.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let start = Instant::now();
+    let stack0 = stack_unused();
+    say!(info, "psi-probe: start (no card): main stack {stack0} B unused, heap {} B free (largest {} B)", heap(), crate::state::largest_free_block());
+    let mut canvas = Canvas::new();
+    bundled(&mut canvas);
+    let mut out = vec![0u8; psi::W * psi::H * 3];
+    jit_spike(&mut out);
+    psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    fx_psi::set_jit_gate(Some(crate::jit_gate));
+    say!(info, "psi-probe: golden frames from {} B free", heap());
+    #[allow(unused_mut)]
+    let (mut ok, mut bad) = vm_goldens(&mut out, true);
+    #[cfg(feature = "jit")]
+    {
+        let (o, b) = jit2::goldens(&mut out);
+        ok += o;
+        bad += b;
+    }
+    say!(
+        info,
+        "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
+        if bad == 0 { " (bit-identical)" } else { "" }
+    );
+    say!(info,
+        "{DONE}: no card, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
 }
 
 /// The JIT's rows (opendmd-notes docs/research/psi-jit-esp32.md, "Phase 2 as built"):
