@@ -346,6 +346,13 @@ fi
 [ $(( 8#$(stat -c %a "$FW_SIGN_KEY") & 8#077 )) -eq 0 ] || die "$FW_SIGN_KEY is readable by others (mode $(stat -c %a "$FW_SIGN_KEY")): chmod 600 it"
 pass "signing key present (32 bytes, mode $(stat -c %a "$FW_SIGN_KEY"); its contents are never read here)"
 
+# The site's changelog: a reminder, never a failure (docs/deploying.md "The changelog").
+if grep -qF "## $VERSION · " site/pages/changelog.md 2>/dev/null; then
+  pass "changelog: site/pages/changelog.md has $VERSION's highlights"
+else
+  printf 'NOTE  %s\n' "no \"## $VERSION · <date>\" in site/pages/changelog.md: opendmd.dev/changelog/ will not list $VERSION until its highlights are added (docs/deploying.md \"The changelog\")"
+fi
+
 # ---- 2. bump --------------------------------------------------------------
 
 if [ "$RESUME" = 1 ]; then
