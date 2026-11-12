@@ -241,6 +241,18 @@ BOOT_SHOW = re.compile(r"boot show: (.*)")
 
 # --- the emulator and its console ------------------------------------------------
 
+SD_WRITTEN = re.compile(r"^\[sd\] SPI mode .*?(\d+) blocks read, (\d+) written")
+
+
+def card_blocks_written(emu) -> int | None:
+    """Blocks the run wrote to its card, from esp32sim's end-of-run `[sd]` line (None before it)."""
+    for line in reversed(emu.lines):
+        m = SD_WRITTEN.match(line)
+        if m:
+            return int(m[2])
+    return None
+
+
 class Emulator:
     """esp32sim with the console read on a thread: every line kept and logged, the fail
     patterns and resets watched (`resets_allowed`: the power-on one, plus any asked for)."""
@@ -464,12 +476,12 @@ class Lane:
 
     def boot(self, label, card: Path, no_reboot: bool, card_out: Path | None, image: Path | None = None):
         image = image or self.a.seeded
-        env = {**os.environ, "ESP32SIM_SD_IMG": str(card)}
-        env.pop("ESP32SIM_SD_OUT", None)
+        env = dict(os.environ)
+        # what the firmware writes goes to card_out (a copy, --sd-rw), or stays in memory (--sd)
         if card_out:
-            card_out.unlink(missing_ok=True)
-            env["ESP32SIM_SD_OUT"] = str(card_out)
-        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(self.rom),
+            shutil.copyfile(card, card_out)
+        sd = ["--sd-rw", str(card_out)] if card_out else ["--sd", str(card)]
+        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", *sd, "--boot", "rom", "--rom", str(self.rom),
                "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
                "--max-seconds", str(self.a.seconds or 7200), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
@@ -483,7 +495,7 @@ class Lane:
 
     def run_a(self):
         emu, api = self.boot("A", self.a.card, True, self.card_out)
-        self.emu = emu
+        self.emu = self.emu_a = emu
         try:
             self.boot_checks(emu, api)
             if os.environ.get("EMU_API_ONLY") == "sent":
@@ -1613,9 +1625,12 @@ class Lane:
         if not emu.wait_exit(120):
             raise LaneFail("boot A: the emulator did not stop at the reboot (--no-reboot)")
         time.sleep(0.5)
-        self.expect(self.card_out.exists(), "card", f"the emulator wrote no card to {self.card_out}")
+        # card_out is boot A's copy of the card from the start (--sd-rw): what says it was written
+        # to is the emulator's end-of-run `[sd] ... N written` line
+        written = card_blocks_written(emu)
+        self.expect(written, "card", f"boot A wrote no block to {self.card_out} (the emulator's [sd] line: {written})")
         h = st["heap"]
-        self.ok("end of boot A", f"{len(self.expected)} files read back the same, the gone ones 404; index stale {fi['stale']}, {fi['files']} records; heap {h['free']} B free (floor {h['floor']} B); rebooted, the card written out")
+        self.ok("end of boot A", f"{len(self.expected)} files read back the same, the gone ones 404; index stale {fi['stale']}, {fi['files']} records; heap {h['free']} B free (floor {h['floor']} B); rebooted, {written} blocks written to the card")
 
     def report_console(self, emu):
         hb = emu.find(HEARTBEAT)
@@ -1856,7 +1871,9 @@ def run(a, sim, rom, fail_rx) -> int:
             e = LaneFail(f"{e} -- the network wedged: no TCP answer while the player plays on (RX_BUFFERS in api_lane.py)")
         print(f"EMU_API_FAIL: {e}")
         if lane.card_out.exists():
-            print(f"(the card boot A wrote is kept: {lane.card_out})")
+            emu_a = getattr(lane, "emu_a", None)
+            written = card_blocks_written(emu_a) if emu_a else None
+            print(f"(boot A's card is kept: {lane.card_out}; " + (f"{written} blocks written to it)" if written is not None else "what was written to it unknown, no [sd] line yet)"))
         emu = getattr(lane, "emu", None)
         if emu:
             print(f"--- last console lines of {emu.log}:")

@@ -60,14 +60,6 @@ BOOT_SHA = re.compile(r"ELF file SHA256:\s+([0-9a-f]+)")
 APP_DESC_MAGIC = (0xABCD5432).to_bytes(4, "little")
 
 
-def empty_card() -> Path:
-    """An empty card image: a card the firmware cannot mount."""
-    card = EMU_DIR / "card" / "empty.img"
-    card.parent.mkdir(parents=True, exist_ok=True)
-    card.write_bytes(b"")
-    return card
-
-
 def image_elf_sha(image: Path) -> str | None:
     """The app descriptor's ELF SHA-256 (hex) of the first app in a full flash image: the
     descriptor follows the app image's 24 B header and first 8 B segment header, its hash at +0x90."""
@@ -187,14 +179,13 @@ def main():
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
     rom = a.rom or next(iter(sorted(Path.home().glob(f".espressif/tools/esp-rom-elfs/*/{rom_elf}"))[::-1]), None)
-    for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", None if a.no_card else a.card), (f"{rom_elf} under ~/.espressif/tools/esp-rom-elfs/", rom)):
-        if what.startswith("card") and p is None:
-            continue
+    if a.no_card or (a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img"):
+        # No card: the slot left empty (no --sd)
+        a.card = None
+    needed = [("emulator (run make emu-build)", sim), ("flash image", a.image), (f"{rom_elf} under ~/.espressif/tools/esp-rom-elfs/", rom)]
+    for what, p in needed + ([("card image (run mkcard.py)", a.card)] if a.card else []):
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
-    if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
-        # No card: an empty image (a card the firmware cannot mount).
-        a.card = empty_card()
     if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
     want_sha = image_elf_sha(a.image)
@@ -221,21 +212,16 @@ def main():
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
-    # the card is copy-on-write in RAM; the output is discarded (ESP32SIM_SD_OUT unset)
-    env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}
-    env.pop("ESP32SIM_SD_OUT", None)
+    # the card (--sd: copy-on-write, the file never modified) in a microSD slot on VSPI, CS 5
+    env = dict(os.environ)
     if a.chip == "s3":
         # No board (nothing wired to the pins: the panel's output goes nowhere),
         # the DevKitC-1 N8R8's 8 MB of flash and 8 MB of octal PSRAM; no card.
-        env.pop("ESP32SIM_SD_IMG", None)
         cmd = [str(sim), "--chip", "s3", "--board", "none", "--boot", "rom", "--rom", str(rom),
                "--flash-image", str(a.image), "--flash-mb", str(max(8, a.image.stat().st_size >> 20)), "--psram-mb", "8",
                "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     else:
-        if a.no_card:
-            # A card the firmware cannot mount (as the nocard lane's).
-            env["ESP32SIM_SD_IMG"] = str(empty_card())
-        cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
+        cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev", *(["--sd-spi", "18,23,19,5", "--sd", str(a.card)] if a.card else []), "--boot", "rom", "--rom", str(rom),
                "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
                "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)

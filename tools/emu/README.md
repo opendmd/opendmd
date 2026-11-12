@@ -5,7 +5,7 @@ Boots OpenDMD's real classic-ESP32 4mb full flash image in
 Correctness only, never timing; safe to run any time: it never touches a device.
 
 ```
-make emu-build     # fetch esp32sim at the pinned commit of our fork (the SD-SPI board is in it), cargo build --release (cached)
+make emu-build     # fetch esp32sim at the pinned commit of our fork (SD in SPI mode via --sd/--sd-spi is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
 make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
 make emu-paint-probe  # paint-probe image (4mb, a test board's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to a test board by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
@@ -26,11 +26,10 @@ make emu-image-s3  # the plain s3 build into $EMU_DIR/s3/dist (its size; no lane
 `run.py --chip s3` gives `--chip s3 --board none --rom esp32s3_rev0_rom.elf --flash-mb 8 --psram-mb 8`
 (the DevKitC-1 N8R8: quad flash, octal PSRAM). Nothing is wired to the pins, so the panel driver (the
 HUB75 library's LCD_CAM backend) comes up and clocks into nothing. The S3 machine has **no SD card**:
-the SD-over-SPI card is a board of the classic ESP32's (`esp32dev-sdspi`, which watches that chip's
-SPI3), so only `nocard` and `probe --no-card` run there. A card for the S3 would need the same byte-stream
-card as an S3 board (`--board s3-sdspi`: the sdspi device behind the S3's SPI2/SPI3 model on GPIO 39-41/21,
-the pins in firmware/src/config.rs), or the P4's `--sd` SDMMC card wired into the S3's SDMMC host for
-the 4-bit phase.
+esp32sim's SD card in SPI mode (`--sd` with `--sd-spi`) is routed through the classic ESP32's GP-SPI
+only, so only `nocard` and `probe --no-card` run there. A card for the S3 needs that routing in the S3's
+SPI model (GPIO 39-41/21, the pins in firmware/src/config.rs), or the same card wired into the S3's
+SDMMC host for the 4-bit phase.
 
 `run.py probe --no-card` (either chip) boots a psi-probe image with no card and NVS `network` = `off`
 (seeded as in the nocard lane: with no card the probe runs at once, and the setup AP starting beside it
@@ -47,19 +46,19 @@ each of which must fail -> PROBE_RED_OK.
 Files:
 
 - `build-emulator.sh`: clone/fetch https://github.com/opendmd/esp32sim, check out `ESP32SIM_COMMIT`
-  (pinned in the script, a7ccd1b on the fork's `opendmd` branch), build. Stamp = repo + commit.
+  (pinned in the script, a0a15f0 on the fork's `sdspi-card` branch, merged into `opendmd`), build. Stamp = repo + commit.
   With `SCRATCH` set (e.g. in `local.mk`), refuses a dir outside it.
-- The fork: our emulator changes live on its `opendmd` branch (upstream 9fdeb32, merged 2026-11-03, plus the
-  SD-SPI board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
-  The board: a byte-stream SD-over-SPI card on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) as
-  board `esp32dev-sdspi`. Env: `ESP32SIM_SD_IMG` (raw FAT image, copy-on-write in RAM),
-  `ESP32SIM_SD_OUT` (write back if modified; the runner leaves it unset), `ESP32SIM_SD_LOG`.
-  Spike quality, not upstream quality.
+- The fork: our emulator changes live on its `opendmd` branch (upstream a57c5e0a, merged 2026-11-12, plus
+  SD in SPI mode via --sd/--sd-spi); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
+  The card: esp32sim's own SD card model in SPI mode (from its `sdspi-card` branch, written to go upstream),
+  on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) of a bare `esp32dev`: `--sd CARD.img --sd-spi 18,23,19,5`
+  (copy-on-write: the image is never modified) or `--sd-rw` (written through: a lane that keeps
+  what boot A wrote copies the card and boots that copy). `--debug sdmmc` prints its commands.
 - `mkcard.py`: `tools/ci-card.py`'s synthetic card (with prepared copies) into a 256 MB FAT32 image with
   `mformat`/`mcopy`, no mount, no sudo. Needs `mtools`; says so if missing (it installs nothing).
 - `api_lane.py` (run by `run.py api`): the API lane, below. `fatcheck.py CARD.img`: a read-only FAT32
   check (cross-linked or lost clusters, chains the wrong length, FAT copies that differ), no mount.
-- `run.py smoke|probe --image FULL.bin`: runs `esp32sim --chip esp32 --board esp32dev-sdspi --boot rom
+- `run.py smoke|probe --image FULL.bin`: runs `esp32sim --chip esp32 --board esp32dev --sd-spi 18,23,19,5 --sd CARD --boot rom
   --rom esp32_rev300_rom.elf --flash-image ... --console uart0 --net none`, logs the console, judges it.
   Fails at once on a panic, `Guru Meditation`, stack overflow, `abort()` or a second reset.
 
