@@ -178,6 +178,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
+	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-nocard emu-s3-probe \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1411,6 +1412,43 @@ emu-image-nocard:
 emu-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-nocard &&) \
 	uv run --quiet tools/emu/run.py nocard --image $(or $(FW_IMAGE),$(EMU_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+
+# The ESP32-S3 preview (VARIANT=s3, S3 port phase 0) in esp32sim's S3 machine
+# (`--chip s3 --board none`, 8 MB flash, 8 MB octal PSRAM): correctness only,
+# like every emulator lane. The machine has no SD card yet (the SD-over-SPI
+# card is a classic ESP32 board), so both lanes run with none:
+# emu-s3-nocard: the nocard-test image boots, its panel driver comes up (the
+#   LCD_CAM backend; its output goes nowhere), its settings live in NVS and
+#   a change survives a restart. EMU_NOCARD_OK.
+# emu-s3-probe: the psi-probe image runs the probe's card-free sections
+#   (psi_probe::run_nocard): every bundled Formula, the JIT spike's
+#   hand-written kernels, the golden frames through the VM and through the
+#   JIT's kernels, bit-identical. EMU_PROBE_OK.
+# emu-image-s3: the plain s3 build (the release feature set), for its size.
+# Each image has a target dir of its own (a feature set's sdkconfig differs).
+EMU_S3_IMAGE = $(EMU_DIR)/s3/dist/opendmd-$(FW_VERSION)-s3-full.bin
+EMU_S3_NOCARD_IMAGE = $(EMU_DIR)/s3nocard/dist/opendmd-$(FW_VERSION)-s3-full.bin
+EMU_S3_PROBE_IMAGE = $(EMU_DIR)/s3probe/dist/opendmd-$(FW_VERSION)-s3-full.bin
+# $(1): the image's dir under EMU_DIR; $(2): its features; $(3): its spare.
+EMU_S3_BUILD = $(MAKE) --no-print-directory fw-release-variant VARIANT=s3 $(if $(2),FW_RELEASE_FEATURES=$(2) )FW_APP_SPARE=$(3) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/$(1)/target DIST=$(EMU_DIR)/$(1)/dist
+emu-image-s3:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3,,$(FW_APP_SPARE))
+emu-image-s3-nocard:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3nocard/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3nocard/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3nocard,nocard-test,32768)
+emu-image-s3-probe:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/s3probe/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3probe/dist/opendmd-*-s3-app.bin
+	$(call EMU_S3_BUILD,s3probe,psi-probe,$(EMU_PROBE_SPARE))
+emu-s3-nocard: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
+	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+emu-s3-probe: emu-build
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-probe &&) \
+	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe

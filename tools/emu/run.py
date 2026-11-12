@@ -41,6 +41,13 @@ api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy
        the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
        (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
        (tools/emu/api_lane.py says what each covers); prints EMU_API_OK.
+--chip s3: the ESP32-S3 preview image (VARIANT=s3) in esp32sim's S3 machine (`--chip s3 --board none`,
+       8 MB flash, 8 MB octal PSRAM, the S3 ROM ELF). That machine has no SD card yet (the SD-over-SPI
+       card is a board of the classic ESP32's only), so the card is never attached: nocard runs as it
+       does on the classic, and probe needs --no-card.
+--no-card (probe): a probe image booted with no card runs only the card-free sections
+       (psi_probe::run_nocard): pass on `psi-probe: done: no card`, every bundled Formula opened, the
+       golden frames through the VM and the JIT's kernels all matching, and no `N differ` (N > 0).
 Each fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -51,6 +58,14 @@ EMU_DIR = Path(os.environ.get("EMU_DIR") or (Path(os.environ["SCRATCH"]) / "open
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 BOOT_SHA = re.compile(r"ELF file SHA256:\s+([0-9a-f]+)")
 APP_DESC_MAGIC = (0xABCD5432).to_bytes(4, "little")
+
+
+def empty_card() -> Path:
+    """An empty card image: a card the firmware cannot mount."""
+    card = EMU_DIR / "card" / "empty.img"
+    card.parent.mkdir(parents=True, exist_ok=True)
+    card.write_bytes(b"")
+    return card
 
 
 def image_elf_sha(image: Path) -> str | None:
@@ -158,18 +173,25 @@ def main():
                     help="api: the load's connections at once: 5 (the default: display-stress's five loads each on its own, and the simultaneous-upload bursts), 2 (status polls beside the rest) or 1")
     ap.add_argument("--host-psb", type=Path, help="offline: a directory of the lane's Formulas compiled by the host's psi build")
     ap.add_argument("--formula", dest="formula_src", type=Path, help="api: that Formula's source (saved beside its .psb on the card)")
+    ap.add_argument("--chip", choices=["esp32", "s3"], default="esp32", help="the classic ESP32 (default) or the ESP32-S3 preview (smoke, rig, leak, api and offline need a card: esp32 only)")
+    ap.add_argument("--no-card", action="store_true", help="probe: no card attached; judge the card-free probe (always so with --chip s3)")
     a = ap.parse_args()
+    if a.chip == "s3":
+        if a.mode not in ("nocard", "probe"):
+            sys.exit(f"run: --chip s3 runs nocard and probe only (esp32sim's S3 machine has no SD card yet), not {a.mode}")
+        a.no_card = True
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
-    rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)
-    for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
+    rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
+    rom = a.rom or next(iter(sorted(Path.home().glob(f".espressif/tools/esp-rom-elfs/*/{rom_elf}"))[::-1]), None)
+    for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", None if a.no_card else a.card), (f"{rom_elf} under ~/.espressif/tools/esp-rom-elfs/", rom)):
+        if what.startswith("card") and p is None:
+            continue
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
     if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
         # No card: an empty image (a card the firmware cannot mount).
-        a.card = EMU_DIR / "card" / "empty.img"
-        a.card.parent.mkdir(parents=True, exist_ok=True)
-        a.card.write_bytes(b"")
+        a.card = empty_card()
     if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
     want_sha = image_elf_sha(a.image)
@@ -183,6 +205,12 @@ def main():
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
         import api_lane
         a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None, extra={"boot_fx": "/formulas/x.psi"})
+    if a.mode == "probe" and a.no_card:
+        # Offline (NVS `network` = `off`, as the installer's offline box
+        # writes): with no card the probe runs at once, and the setup AP
+        # starting beside it would take ~90 KB of the heap its goldens need.
+        import api_lane
+        a.image = api_lane.seeded_image(a.image, EMU_DIR / "probe-seed", ssid=None, extra={"network": "off"})
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
     seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)
@@ -193,11 +221,22 @@ def main():
     # the card is copy-on-write in RAM; the output is discarded (ESP32SIM_SD_OUT unset)
     env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}
     env.pop("ESP32SIM_SD_OUT", None)
-    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
-           "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
-           "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
+    if a.chip == "s3":
+        # No board (nothing wired to the pins: the panel's output goes nowhere),
+        # the DevKitC-1 N8R8's 8 MB of flash and 8 MB of octal PSRAM; no card.
+        env.pop("ESP32SIM_SD_IMG", None)
+        cmd = [str(sim), "--chip", "s3", "--board", "none", "--boot", "rom", "--rom", str(rom),
+               "--flash-image", str(a.image), "--flash-mb", str(max(8, a.image.stat().st_size >> 20)), "--psram-mb", "8",
+               "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
+    else:
+        if a.no_card:
+            # A card the firmware cannot mount (as the nocard lane's).
+            env["ESP32SIM_SD_IMG"] = str(empty_card())
+        cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
+               "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
+               "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)
-    print(f"emu: log {log}  (card {a.card}; {seconds} emulated s, {wall} s wall limit)", flush=True)
+    print(f"emu: log {log}  (card {'none' if a.no_card and a.mode == 'probe' else a.card if a.chip == 'esp32' else 'none (S3)'}; {seconds} emulated s, {wall} s wall limit)", flush=True)
 
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
@@ -411,6 +450,33 @@ def main():
             die(f"no `psi-probe: done` within {seconds} emulated s / {wall} s wall")
         if differ_bad:
             die("differ with a non-zero count:\n" + "\n".join(differ_bad))
+        # No card (psi_probe::run_nocard): the bundled Formulas, the JIT
+        # spike's kernels and the golden frames (VM and JIT), nothing else.
+        if a.no_card:
+            if "psi-probe: done: no card" not in done_at:
+                die(f"not the no-card probe's done line: {done_at[:200]}")
+            if not golden:
+                die("the golden-frames result line is missing")
+            if golden[1] == 0 or golden[2] != 0:
+                die(f"golden frames: {golden[1]} match, {golden[2]} differ")
+            if not bundled:
+                die("the bundled-formulas line is missing")
+            # Offline (the image is seeded `network` = `off`), a Formula that
+            # shows the time refuses to open, by design: those, and only those.
+            clockless = sum(1 for l in lines if re.search(r"psi-probe: bundled \S+: did not open: this Formula shows the time, and the display has no clock with WiFi off", l))
+            if bundled[1] == 0 or bundled[2] != clockless or bundled[3] != "refused" or bundled[4] != "refused":
+                die(f"bundled formulas: {bundled[0]} ({clockless} refused as clock Formulas offline)")
+            jit =[l for l in lines if re.search(r"psi-probe: jit2?: ", l)]
+            kernels = [l for l in jit if re.search(r"returned 42 \(want 42\)|through callx8 = .*\(the same\)|floor kernel against the VM at four times: 0 of \d+ bytes differ", l)]
+            if len(kernels) < 3:
+                die("the JIT spike's kernels did not all run as the VM does:\n" + "\n".join(l[:200] for l in jit if "kernel" in l))
+            print("--- correctness lines:")
+            for l in lines:
+                if PROBE_KEYS.search(l) or re.search(r"psi-probe: jit: (tiny|call|floor) kernel|psi-probe: jit: block 0|psi-probe: jit: exec heap", l):
+                    print(l[:230])
+            print(f"golden: {golden[1]} match, {golden[2]} differ; JIT spike kernels: {len(kernels)} as the VM")
+            print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+            return
         # The paint probe's image (`make emu-image-paint`): its own summary
         # line (each case's kernel frames against the VM's), nothing else.
         if "psi-probe: done: paint" in done_at:
