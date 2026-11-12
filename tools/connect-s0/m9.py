@@ -23,8 +23,8 @@ if args.sample_s == 5.0:
     args.sample_s = 1.0
 run = s0lib.Run("m9", args)
 s0lib.need_probe(run.sample("start"))
-run.panel.post("ed25519", n=args.n)
-st = run.sample_for(args.n * 2 + 60, "m9", until=lambda s: s0lib.get(s, "connect.m9.done") is True)
+seq = run.panel.post("ed25519", n=args.n).get("ask")
+st = run.sample_for(args.n * 2 + 60, "m9", until=lambda s: s0lib.get(s, "connect.m9.seq") == seq and s0lib.get(s, "connect.m9.done") is True)
 m = s0lib.get(st or {}, "connect.m9") or {}
 run.phases["m9"] = {**run.phase_stats("m9"), "m9": m}
 print(f"  {m}", flush=True)

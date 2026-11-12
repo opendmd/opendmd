@@ -5,7 +5,7 @@ import s0lib
 def run_job(run, args, phase: str, resume: bool, n: int, interval_s: float, timeout_s: float):
     st = run.sample(f"{phase}:before")
     before = st.get("connect") or {}
-    run.panel.post("handshakes", n=n, interval_ms=int(interval_s * 1000), resume=int(resume))
+    seq = run.panel.post("handshakes", n=n, interval_ms=int(interval_s * 1000), resume=int(resume)).get("ask")
     print(f"  asked {n} {'resumed' if resume else 'full'} handshakes {interval_s:g} s apart", flush=True)
     seen = {"k": 0}
 
@@ -18,8 +18,9 @@ def run_job(run, args, phase: str, resume: bool, n: int, interval_s: float, time
             print(f"    {d}/{n}: last {h.get('last')} ms, max {h.get('max')}, heap hs_low {s0lib.get(c, 'heap.hs_low')}, floor {s0lib.get(s, 'heap.floor')}", flush=True)
 
     def done(s):
+        # This job (its number), over: done, or stopped by its failures.
         c = s.get("connect") or {}
-        return s0lib.get(c, "job.kind") == "none" and (s0lib.get(c, "job.done") or 0) >= n
+        return s0lib.get(c, "job.seq") == seq and s0lib.get(c, "job.kind") == "none"
 
     st = run.sample_for(timeout_s, phase, until=done, every=progress)
     after = (st or {}).get("connect") or {}
