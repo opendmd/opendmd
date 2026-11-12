@@ -460,7 +460,8 @@ impl Anim {
         self.cache.get(i).is_some_and(|c| c.is_some())
     }
 
-    fn make(&self, i: usize) -> Rendered {
+    /// Frame `i` edited, in full colour: the window, keyed, brightened, the text drawn.
+    pub fn looked(&self, i: usize) -> Image {
         let st = self.stage(i);
         let (x, y) = self.window(&st);
         let mut win = st.crop(x, y, W.min(st.w), H.min(st.h));
@@ -473,6 +474,11 @@ impl Anim {
                 t.draw(m, &mut win);
             }
         }
+        win
+    }
+
+    fn make(&self, i: usize) -> Rendered {
+        let win = self.looked(i);
         let counts = pipeline::colour_counts(&win);
         let palette = pipeline::spread_pick(&counts, self.look.colours.max());
         let mut map = Mapper::new(&palette);
