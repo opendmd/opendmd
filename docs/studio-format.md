@@ -161,6 +161,38 @@ picked so far, weighted by log(1 + its uses), so a rare colour far from the
 rest is kept and a crowd of near-twins is not. The GIF writers are
 `opendmd-studio-web`.
 
+## Share links
+
+A link carries what it shares in its fragment, which never reaches the
+server: `opendmd.dev/studio/#p=<code>` (one piece) or `#k=<code>` (a small
+pack). A link is 8,000 characters at most; anything bigger is shared as a
+file. `<code>` is base64url (no padding) of zlib-deflated bytes.
+
+- **`#k=`** is a `.dmdpack` file's JSON (see Files), and opens as that file
+  would: every record checked and hashed, nothing stored until it is added.
+- **`#p=`** is one piece, flattened (every shown layer composited, as its
+  GIF is), version 1, big-endian:
+
+| Bytes | What |
+|---|---|
+| 1 | version, 1 |
+| 2, 2 | frames *n* (1 to 256), plays (0: forever) |
+| 2, 3 × *c* | colours *c* (0 to 4,096), then each as R, G, B; index 0 is off, indices 1 to *c* the colours |
+| 2 × *n* | each frame's time in tens of ms (2 to 6,000) |
+| *n* × 4,096 × *w* | the pixels as indices, one byte each (*w* 1) or, past 255 colours, two (*w* 2); frame 0 as it is, each later frame XOR the one before |
+| 1 + *l* | the name (UTF-8, its byte length first; 120 characters at most) |
+| 1 + *l* | the author's name (80 characters at most) |
+| 1 | licence: 0 not chosen, 1 CC0-1.0, 2 CC-BY-4.0 |
+| 1, … | 1 if the source record follows: its id (length first), rev (4 bytes), hash (32 bytes, the SHA-256); else 0 |
+
+Nothing may follow. A reader refuses a fragment over 8,000 characters
+before decoding it, stops inflating at the most a valid `#p=` could hold,
+and refuses any count, index, time or string that disagrees with the bytes.
+Opening one stores nothing: it shows the picture with who the link says
+made it and its licence, and "Open as a new piece" makes a new piece whose
+`from` names the source, unless this browser holds that id with other
+content (then the entry is `{external: true, note}`).
+
 ## The hash
 
 `hash` is `sha256-` and the SHA-256, in lower-case hex, of the body's

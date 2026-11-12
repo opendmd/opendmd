@@ -174,6 +174,7 @@ async function detail(id) {
   if (r.type === 'palette') acts.append(button('Use its colours as swatches', 'swatch'));
   if (r.type === 'stamp') acts.append(button('Use this stamp', 'stamp'));
   acts.append(button('Duplicate', 'dup'), button('Save as file', 'file'));
+  if (r.type === 'pack') acts.append(button('Share link', 'link'));
   if (own) acts.append(button('Delete', 'del'));
   d.replaceChildren(head, facts, acts);
   d.dataset.id = id;
@@ -203,6 +204,7 @@ async function act(e) {
   if (a === 'swatch') { S.useSwatches(r); S.menu(); location.hash = ''; }
   if (a === 'stamp') { location.hash = ''; const m = await S.stamps(); await m.show(); m.pickId(id); }
   if (a === 'file') (await S.files()).save(id);
+  if (a === 'link') (await S.link()).sharePack(id);
   if (a === 'dup') await duplicate(r);
   if (a === 'del') {
     const used = await usedIn(id);

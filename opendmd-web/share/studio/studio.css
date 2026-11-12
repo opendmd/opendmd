@@ -13,10 +13,10 @@ html,body.spage{height:auto}
 .s-bad{color:var(--pink)}
 
 /* The piece's own bar: its name, what it is, whether it is kept; undo, redo, the GIF */
-.s-doc{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:0 0 14px}
+.s-doc{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;padding:0 0 14px}
 .s-title{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0}
 .s-name input{font:600 28px/1.15 var(--display);letter-spacing:-.012em;color:var(--head);background:none;border:1px solid transparent;
-border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(11.5em,70vw)}
+border-radius:8px;padding:3px 8px;margin-left:-9px;width:min(10em,70vw)}
 .s-name input:hover{border-color:var(--line)}
 .s-name input:focus{border-color:var(--cyan);outline:0;background:var(--bg2)}
 .s-kind{font:400 8px/1 var(--pixel);color:var(--mut);padding-top:2px}
