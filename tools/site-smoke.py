@@ -5226,6 +5226,331 @@ def studio_import_review(browser, base: str, site: Path, errors: list[str]) -> N
     page.context.close()
 
 
+# --- Share links (S2 branch 5): #p= a flattened piece, #k= a small pack ---
+def link_p(frames: list[list[int]], ms: list[int], colours: list[int], name: str = "", author: str = "", licence: int = 0,
+           src: tuple | None = None, plays: int = 0, version: int = 1, raw_hook=None) -> str:
+    """A #p= code written here, from docs/studio-format.md's layout (not the page's encoder): frames as
+    indices into `colours` (1-based, 0 off)."""
+    import base64
+    import struct
+    import zlib
+    c = len(colours)
+    wide = c > 255
+    b = bytearray(struct.pack(">BHHH", version, len(frames), plays, c))
+    for v in colours:
+        b += bytes([v >> 16 & 255, v >> 8 & 255, v & 255])
+    for t in ms:
+        b += struct.pack(">H", t // 10)
+    px = bytearray()
+    for f in frames:
+        for v in f:
+            px += struct.pack(">H", v) if wide else bytes([v])
+    w = 4096 * (2 if wide else 1)
+    for i in range(len(px) - 1, w - 1, -1):
+        px[i] ^= px[i - w]
+    b += px
+    for t in (name, author):
+        e = t.encode()[:255]
+        b += bytes([len(e)]) + e
+    b += bytes([licence])
+    if src:
+        e = src[0].encode()
+        b += bytes([1, len(e)]) + e + struct.pack(">I", src[1]) + bytes.fromhex(src[2].removeprefix("sha256-"))
+    else:
+        b += b"\0"
+    if raw_hook:
+        b = raw_hook(b)
+    return base64.urlsafe_b64encode(zlib.compress(bytes(b), 9)).decode().rstrip("=")
+
+
+def link_k(data: dict | str) -> str:
+    import base64
+    import zlib
+    text = data if isinstance(data, str) else json.dumps(data)
+    return base64.urlsafe_b64encode(zlib.compress(text.encode(), 9)).decode().rstrip("=")
+
+
+L_SHOWN = "document.getElementById('studio').dataset.linkOpened"
+
+
+def l_goto(page: Page, base: str, frag: str) -> str:
+    """The Studio opened anew at `frag`; what link.js made of it: shown, pack, refused (or nothing)."""
+    page.goto("about:blank")  # (else a new fragment is the same page, its state kept)
+    page.goto(f"{base}/studio/{frag}")
+    page.wait_for_selector(S_READY, timeout=30000)
+    try:
+        wait_js(page, f"['shown', 'pack', 'refused'].includes({L_SHOWN})", timeout=20000)
+    except PlaywrightTimeout:
+        return ""
+    if s_data(page).get("linkOpened") == "pack":
+        wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=30000)
+    return s_data(page)["linkOpened"]
+
+
+def l_share(page: Page) -> str:
+    page.evaluate("delete document.getElementById('studio').dataset.link; document.getElementById('s-err').textContent = ''")
+    page.click("#s-share")
+    wait_js(page, "!!document.getElementById('studio').dataset.link || !!document.getElementById('s-err').textContent", timeout=30000)
+    return s_data(page).get("link", "")
+
+
+def l_pieces(page: Page) -> int:
+    return len(page.evaluate(S_STORE, ["list", None]))
+
+
+def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path | None) -> None:
+    """Share (one button, the link copied): a still under 1,200 characters,
+    an 8-frame loop under 2,800; the link opened in a fresh profile shows the
+    picture playing and who it says made it, stores nothing and fetches
+    nothing but link.js until Open as a new piece, whose flattened pixels
+    equal the source's and whose from names the source's id, rev and hash; a
+    pack of three stamps travels as #k= and merges as a file does, the
+    link's claims shown; a piece too big for a link is told so and offered
+    the file; link.js only at Share or a #p=/#k= address; no request carries
+    the fragment."""
+    page = s_page(browser, base, site, errors)
+    got = s_paths(page)
+    page.click('#s-set .s-sw[data-hex="#33d1ff"]')
+    for x in range(10, 50):
+        page.mouse.click(*s_at(page, x, 8 + x % 9))
+    s_kept(page)
+    page.fill("#s-name", "Wave")
+    s_kept(page)
+    still = l_share(page)
+    clip = page.evaluate("navigator.clipboard.readText()")
+    check("/studio/link.js" not in got and "#p=" in still and len(still) < 1200 and clip == still,
+          f"/studio/ links: Share copies a still's link, under 1,200 characters ({len(still)}; link.js not with the page)")
+    # An 8-frame loop.
+    kev(page, """const fr = []; const cels = [];
+        for (let f = 0; f < 8; f++) { const a = new Uint8Array(4096); for (let y = 8; y < 24; y++) for (let x = 0; x < 16; x++) a[y * 128 + x + f * 12] = 1 + (x + y) % 3; cels.push(await m.packPx(a)); fr.push({ key: '0000000' + f, ms: 80 }); }
+        const r = m.record('piece', 'Loop', { w: 128, h: 32, colours: [{ k: 1, hex: '#f7a531' }, { k: 2, hex: '#33d1ff' }, { k: 3, hex: '#ff4f8b' }], frames: fr,
+          layers: [{ key: 'a0000001', name: 'Box', moves: true, cels }] }, { author: 'tester' });
+        r.licence = 'CC0-1.0'; await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    s_kept(page) if s_data(page).get("saved") != "kept" else None
+    loop = l_share(page)
+    src = page.evaluate(S_STORE, ["get", None])["r"]
+    want = page.evaluate(I_PIECE)
+    check("#p=" in loop and len(loop) < 2800, f"/studio/ links: an 8-frame loop under 2,800 characters ({len(loop)})")
+    if shots:
+        page.screenshot(path=str(shots / "studio-share-laptop.png"))
+    page.context.close()
+    # A fresh profile.
+    page = s_page(browser, base, site, errors)
+    asked = []
+    page.on("request", lambda r: asked.append(r.url))
+    n0 = l_pieces(page)
+    said = l_goto(page, base, "#p=" + loop.split("#p=")[1])
+    page.wait_for_timeout(400)
+    a = page.evaluate("document.querySelector('#s-lk canvas').toDataURL()")
+    page.wait_for_timeout(250)
+    b = page.evaluate("document.querySelector('#s-lk canvas').toDataURL()")
+    who = page.inner_text("#s-lk-who")
+    code = loop.split("#p=")[1]
+    others = {urllib.parse.urlsplit(u).path for u in asked} - S_FIRST - {"/studio/link.js", "/studio/"}
+    check(said == "shown" and a != b and "8 frames · by tester · licence CC0, the link says" in who and l_pieces(page) == n0 and page.evaluate("location.hash") == "",
+          f"/studio/ links: opened in a fresh profile, the picture plays, who made it as the link says, nothing stored ({said}, '{who[:60]}', {l_pieces(page) - n0})")
+    check(not others and not any(code[:40] in u for u in asked) and all(urllib.parse.urlsplit(u).hostname == "127.0.0.1" for u in asked),
+          f"/studio/ links: opening a link fetches nothing but link.js, and no request carries the fragment ({sorted(others)[:3]})")
+    if shots:
+        page.screenshot(path=str(shots / "studio-link-laptop.png"))
+    page.click("#s-lk-open")
+    wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+    s_kept(page)
+    p = page.evaluate(I_PIECE)
+    e = (p["from"] or [{}])[0]
+    check(i_frames(p) == i_frames(want) and p["ms"] == [80] * 8 and e.get("id") == src["id"] and e.get("rev") == src["rev"] and e.get("hash") == src["hash"] and l_pieces(page) == n0 + 1,
+          f"/studio/ links: Open as a new piece: its pixels the source's, from naming its id, rev and hash ({e.get('id', '')[:12]}, rev {e.get('rev')})")
+    page.context.close()
+    # A pack of three stamps as #k=.
+    page = s_page(browser, base, site, errors)
+    kev(page, """const st = []; for (const n of ['Star', 'Heart', 'Coin']) { const r = await K.stamp(n, 4, 4, { env: { author: 'packer', licence: 'CC-BY-4.0' } }); await K.put(r); st.push(r); }
+        await K.put(await K.pack('Three', st));""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    lib_open(page)
+    lib_kind(page, "pack")
+    lib_detail(page, "Three")
+    page.evaluate("delete document.getElementById('studio').dataset.link")
+    page.click("#s-ldet [data-la=link]")
+    wait_js(page, "!!document.getElementById('studio').dataset.link", timeout=20000)
+    kl = s_data(page)["link"]
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    n0 = page.evaluate(S_LIVE)
+    said = l_goto(page, base, "#k=" + kl.split("#k=")[1])
+    rows = file_rows(page)
+    title = page.inner_text("#s-fs h2")
+    before = page.evaluate(S_LIVE)
+    added = file_add(page)
+    after_ = page.evaluate(S_LIVE)
+    check("#k=" in kl and len(kl) <= 8000 and said == "pack" and title == "Open a shared link" and len(rows) == 4 and all("the link says" in r["text"] for r in rows)
+          and before == n0 and added == 4 and after_["stamp"] == n0["stamp"] + 3 and after_["pack"] == n0["pack"] + 1,
+          f"/studio/ links: a pack of three stamps as #k= ({len(kl)}), opened as a file is, the link's claims shown, stored only on Add ({added}, {after_})")
+    page.context.close()
+    # Too big for a link.
+    page = s_page(browser, base, site, errors)
+    kev(page, """const cs = Array.from({ length: 200 }, (_, i) => ({ k: i + 1, hex: '#' + (0x300000 + i * 4099).toString(16).padStart(6, '0') }));
+        const cels = []; for (let f = 0; f < 3; f++) { const a = new Uint8Array(4096); for (let i = 0; i < 4096; i++) a[i] = 1 + Math.floor(Math.random() * 200); cels.push(await m.packPx(a)); }
+        const r = m.record('piece', 'Noise', { w: 128, h: 32, colours: cs, frames: ['0000000a', '0000000c', '0000000d'].map((key) => ({ key, ms: 100 })), layers: [{ key: '0000000b', name: 'N', moves: true, cels }] });
+        await K.put(r); localStorage.setItem('odmd.studio.last', r.id);""")
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    l_share(page)
+    said = page.inner_text("#s-err")
+    check(not s_data(page).get("link") and "too big for a link" in said and "Save as file" in said, f"/studio/ links: a piece too big for a link is told so and offered the file ('{said[:70]}')")
+    page.context.close()
+
+
+def studio_links_red(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Hostile links: too long (refused before decoding), bad base64, a
+    deflate bomb (inflating stops at the cap), counts and sizes that lie,
+    an unknown version, a #p= that is really a pack, a pixel with no colour,
+    names that aren't text or are markup (shown as text), __proto__ keys, a
+    lying hash in a #k=, links naming the user's own ids (their records
+    untouched), links with #import or #library; 500 random, truncated and
+    bit-flipped fragments: each ends at a sentence, never an exception, and
+    nothing is ever stored by opening one."""
+    import random
+    import zlib
+    import base64
+    page = s_page(browser, base, site, errors)
+    page.mouse.click(*s_at(page, 2, 2))
+    s_kept(page)
+    mine = page.evaluate(S_STORE, ["get", None])["r"]
+    asked = []
+    page.on("request", lambda r: urllib.parse.urlsplit(r.url).hostname != "127.0.0.1" and asked.append(r.url))
+    one = [[1 if i % 5 == 0 else 0 for i in range(4096)]]
+    good = link_p(one, [100], [0xf7a531], name="Ok")
+    n0 = l_pieces(page)
+    cases = [
+        ("9,000 characters", "#p=" + "A" * 9000, "more than a Studio link holds"),
+        ("100,000 characters", "#k=" + "A" * 100000, "more than a Studio link holds"),
+        ("bad base64", "#p=@@!!", "damaged"),
+        ("base64 that doesn't unpack", "#p=AAAA", "damaged"),
+        ("a deflate bomb", "#p=" + base64.urlsafe_b64encode(zlib.compress(b"\1" + b"\0" * (3 << 20), 9)).decode().rstrip("="), "damaged"),
+        ("a #k= bomb", "#k=" + base64.urlsafe_b64encode(zlib.compress(b" " * (5 << 20), 9)).decode().rstrip("="), "damaged"),
+        ("an unknown version", "#p=" + link_p(one, [100], [0xf7a531], version=2), "version"),
+        ("300 frames", "#p=" + link_p(one, [100], [0xf7a531], raw_hook=lambda b: b[:1] + (300).to_bytes(2, "big") + b[3:]), "damaged"),
+        ("5,000 colours", "#p=" + link_p(one, [100], [0xf7a531], raw_hook=lambda b: b[:5] + (5000).to_bytes(2, "big") + b[7:]), "damaged"),
+        ("2 frames with one frame's data", "#p=" + link_p(one, [100], [0xf7a531], raw_hook=lambda b: b[:1] + (2).to_bytes(2, "big") + b[3:]), "damaged"),
+        ("bytes past its end", "#p=" + link_p(one, [100], [0xf7a531], raw_hook=lambda b: b + b"xyz"), "more than it says"),
+        ("a pixel with no colour", "#p=" + link_p([[5] * 4096], [100], [0xf7a531]), "no colour"),
+        ("a time of 0", "#p=" + link_p(one, [0], [0xf7a531]), "0 ms"),
+        ("a licence that isn't one", "#p=" + link_p(one, [100], [0xf7a531], licence=9), "licence"),
+        ("a name that isn't text", "#p=" + link_p(one, [100], [0xf7a531], raw_hook=lambda b: b[:-4] + b"\2\xff\xfe\0\0"), "isn’t text"),
+        ("a colour listed twice", "#p=" + link_p(one, [100], [0xf7a531, 0xf7a531]), "twice"),
+        ("a source that isn't a piece", "#p=" + link_p(one, [100], [0xf7a531], src=("pl_" + "0" * 32, 1, "sha256-" + "0" * 64)), "source"),
+        ("a #p= that is really a pack", "#p=" + link_k({"format": "opendmd-studio/1", "root": "x", "records": []}), "damaged"),
+        ("#p= with #import after it", "#p=" + good + "#import", "damaged"),
+    ]
+    for what, frag, want in cases:
+        said = l_goto(page, base, frag)
+        msg = page.inner_text("#s-err")
+        check(said == "refused" and want in msg and l_pieces(page) == n0 and not page.is_visible("#s-lk") and not page.is_visible("#s-imp"),
+              f"/studio/ links red: {what}: refused with a sentence, nothing stored ('{msg[:70]}')")
+        if "bomb" in what:
+            got = page.evaluate("import('/studio/store.js').then((m) => [m.inflated.read, m.inflated.kept])")
+            check(got[0] < (3 << 20) + (256 << 10) and len(frag) <= 8003, f"/studio/ links red: {what} ({len(frag):,} characters): inflating stopped at the cap ({got[0]:,} B read)")
+    # Markup as names: shown as text.
+    said = l_goto(page, base, "#p=" + link_p(one, [100], [0xf7a531], name='<img src=x onerror="window.__x=1">', author="<b>me</b>"))
+    h2 = page.inner_text("#s-lk h2")
+    check(said == "shown" and h2 == '<img src=x onerror="window.__x=1">' and "by <b>me</b>" in page.inner_text("#s-lk-who") and not page.evaluate("window.__x"),
+          "/studio/ links red: a name and an author of markup, shown as text")
+    page.click("#s-lk button:has-text('Close')")
+    # A #p= naming my own piece, with other content: my record untouched, the new piece's from not naming it.
+    said = l_goto(page, base, "#p=" + link_p(one, [100], [0xf7a531], name="Mine?", src=(mine["id"], mine["rev"], "sha256-" + "ab" * 32)))
+    page.click("#s-lk-open")
+    wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+    s_kept(page)
+    p = page.evaluate(I_PIECE)
+    again = page.evaluate(S_STORE, ["get", mine["id"]])["r"]
+    check(p["id"] != mine["id"] and again["hash"] == mine["hash"] and again["rev"] == mine["rev"] and not any(f.get("id") == mine["id"] for f in p["from"]),
+          f"/studio/ links red: a #p= naming my piece with other content: mine untouched, it isn't named ({p['from']})")
+    n1 = l_pieces(page)
+    # #k=: a lying hash, __proto__, my own id with other content.
+    recs = kev(page, """const st = await K.stamp('Liar'); const bad = { ...st, hash: 'sha256-' + '0'.repeat(64) };
+        const proto = JSON.parse(JSON.stringify(await K.stamp('Proto'))); const raw = JSON.stringify({ format: m.FORMAT, root: proto.id, records: [proto] }).replace('"name":"Proto"', '"name":"Proto","__proto__":{"polluted":1},"constructor":{"prototype":{"polluted":1}}');
+        const mineCopy = await K.piece('Not yours', [[9, 9, 2]], { set: { id: A } });
+        return { lie: K.file(bad, [bad]), proto: raw, mine: K.file(mineCopy, [mineCopy]) };""", mine["id"])
+    said = l_goto(page, base, "#k=" + link_k(recs["lie"]))
+    msg = page.inner_text("#s-err")
+    check(said == "pack" and s_data(page).get("opened") == "refused" and "isn’t what its hash says" in msg, f"/studio/ links red: a #k= with a lying hash: refused ('{msg[:60]}')")
+    said = l_goto(page, base, "#k=" + link_k(recs["proto"]))
+    if s_data(page).get("opened") == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    check(not page.evaluate("({}).polluted || Object.prototype.polluted") and l_pieces(page) == n1, f"/studio/ links red: __proto__ and constructor keys pollute nothing ({s_data(page).get('opened')})")
+    said = l_goto(page, base, "#k=" + link_k(recs["mine"]))
+    how = [r["how"] for r in file_rows(page)] if s_data(page).get("opened") == "asked" else []
+    if how:
+        file_add(page)
+    again = page.evaluate(S_STORE, ["get", mine["id"]])["r"]
+    check(how == ["copy"] and again["hash"] == mine["hash"], f"/studio/ links red: a #k= with my piece's id and other content comes in as a copy, mine untouched ({how})")
+    # With #import or #library.
+    n2 = l_pieces(page)
+    page.goto("about:blank")
+    page.goto(f"{base}/studio/#import?p={good}")
+    page.wait_for_selector(S_READY, timeout=30000)
+    wait_js(page, "/open|ready/.test(document.getElementById('studio').dataset.import)", timeout=20000)
+    imp_ok = not s_data(page).get("linkOpened") and not page.is_visible("#s-lk") and "p=" not in (page.get_attribute("#s-imp-f", "src") or "")
+    page.click("#s-imp-x")
+    page.goto("about:blank")
+    page.goto(f"{base}/studio/#library&k={link_k(recs['mine'])}")
+    page.wait_for_selector(S_READY, timeout=30000)
+    page.wait_for_timeout(1500)
+    lib_ok = not s_data(page).get("linkOpened") and not page.is_visible("#s-fs") and not page.is_visible("#s-lk")
+    check(imp_ok and lib_ok and l_pieces(page) == n2, f"/studio/ links red: #import?p= and #library&k= open no link ({imp_ok}, {lib_ok})")
+    # 500 random, truncated and bit-flipped fragments, in the page's own reader.
+    rnd = random.Random(5)
+    frags = []
+    for i in range(500):
+        k = i % 3
+        if k == 0:
+            frags.append(base64.urlsafe_b64encode(rnd.randbytes(rnd.randrange(1, 3000))).decode().rstrip("="))
+        elif k == 1:
+            frags.append(good[: rnd.randrange(1, len(good))])
+        else:
+            z = bytearray(base64.urlsafe_b64decode(good + "=" * (-len(good) % 4)))
+            for _ in range(rnd.randrange(1, 4)):
+                z[rnd.randrange(len(z))] ^= 1 << rnd.randrange(8)
+            frags.append(base64.urlsafe_b64encode(bytes(z)).decode().rstrip("="))
+    res = page.evaluate("""async (fs) => { const m = await import('/studio/link.js'); const out = { damaged: 0, read: 0, other: [] };
+        for (const f of fs) { try { await m.decodePiece(f); out.read++; } catch (e) { if (/^This link is damaged/.test(e.message)) out.damaged++; else out.other.push(e.message); } } return out; }""", frags)
+    check(res["damaged"] + res["read"] == 500 and not res["other"] and l_pieces(page) == n2,
+          f"/studio/ links red: 500 random, truncated and bit-flipped fragments: each damaged or a piece, never an exception ({res['damaged']} damaged, {res['read']} read, {res['other'][:2]})")
+    check(not asked, f"/studio/ links red: opening links fetched nothing from anywhere else {asked[:2]}")
+    page.context.close()
+
+
+def studio_links_leftovers(browser, base: str, site: Path, errors: list[str]) -> None:
+    """From the import review: framed /create/ keeps every drop from the
+    browser (one outside the converter loads); Use never touches the title
+    and author fields as it writes the GIF."""
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    png, gif = c_fixtures()
+    import base64
+    prevented = fr.evaluate("""(b64) => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'w.gif', { type: 'image/gif' }));
+        const o = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }); document.body.dispatchEvent(o);
+        const e = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }); document.querySelector('#c-cap').dispatchEvent(e); return o.defaultPrevented && e.defaultPrevented; }""",
+                           base64.b64encode(gif).decode())
+    try:
+        wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Your file: 88')", timeout=20000)
+        loaded = True
+    except PlaywrightTimeout:
+        loaded = False
+    check(prevented and loaded, f"/create/ framed: a drop outside the converter is the page's, never the browser's, and loads ({prevented}, {loaded})")
+    fr.fill("#st-title", "Night sky")
+    fr.fill("#st-author", "someone")
+    fr.evaluate("""() => { parent.__seen = new Set(); const t = document.getElementById('st-title'), a = document.getElementById('st-author');
+        const look = () => parent.__seen.add(t.value + '|' + a.value); setInterval(look, 2); t.addEventListener('input', look); a.addEventListener('input', look); }""")
+    got = i_use(page, fr)
+    seen = page.evaluate("[...window.__seen]")
+    check(got == "piece:4" and seen == ["Night sky|someone"], f"/create/ framed: Use writes the GIF without touching the title and author ({got}, {seen})")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -7092,6 +7417,9 @@ def main() -> int:
             studio_import_video_red(browser, base, a.site, errors)
             studio_import_history(browser, base, a.site, errors)
             studio_import_review(browser, base, a.site, errors)
+            studio_links(browser, base, a.site, errors, a.shots)
+            studio_links_red(browser, base, a.site, errors)
+            studio_links_leftovers(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -7174,6 +7502,9 @@ def main() -> int:
         studio_import_video_red(browser, base, a.site, errors)
         studio_import_history(browser, base, a.site, errors)
         studio_import_review(browser, base, a.site, errors)
+        studio_links(browser, base, a.site, errors, a.shots)
+        studio_links_red(browser, base, a.site, errors)
+        studio_links_leftovers(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)
