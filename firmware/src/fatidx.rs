@@ -2050,9 +2050,31 @@ pub fn status_json() -> String {
 /// psi-probe: every `/gifs/<folder>`'s names from the names file (after
 /// [`raw_self_check`]'s build) against the folder's listing: (folders that
 /// match, folders that differ, names in all).
+///
+/// Compared as an order-free digest of each side (a count and two sums of
+/// 64-bit hashes of the exact names), not as two sorted lists: the card's
+/// Consoles has ~3,400 names, and a `Vec<String>` of them each side is
+/// ~200 KB, which the heap here does not have (an unchecked 48 KB grow
+/// aborted the probe, 2026-11-12). The digest holds nothing per name.
 #[cfg(feature = "psi-probe")]
 #[inline(never)]
 pub fn names_self_check(root: &str) -> (usize, usize, usize) {
+    /// Count, wrapping sum and xor of two different hashes of each name.
+    #[derive(Default, PartialEq, Eq)]
+    struct Digest(usize, u64, u64);
+    impl Digest {
+        fn add(&mut self, s: &str) {
+            let (mut a, mut b) = (0xcbf2_9ce4_8422_2325u64, 0x8422_2325_cbf2_9ce4u64);
+            for &c in s.as_bytes() {
+                a = (a ^ u64::from(c)).wrapping_mul(0x0000_0100_0000_01b3);
+                b = b.rotate_left(5) ^ u64::from(c);
+                b = b.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            }
+            self.0 += 1;
+            self.1 = self.1.wrapping_add(a);
+            self.2 ^= b ^ (b >> 29);
+        }
+    }
     let (mut ok, mut bad, mut total) = (0, 0, 0);
     let Ok(dirs) = fs::read_dir(format!("{root}/gifs")) else { return (0, 0, 0) };
     for d in dirs.flatten() {
@@ -2061,22 +2083,23 @@ pub fn names_self_check(root: &str) -> (usize, usize, usize) {
         }
         let name = d.file_name().to_string_lossy().into_owned();
         let card = format!("/gifs/{name}");
-        let mut want: Vec<String> = fs::read_dir(d.path())
-            .map(|r| r.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default();
-        let mut got = Vec::new();
+        let mut want = Digest::default();
+        if let Ok(r) = fs::read_dir(d.path()) {
+            for e in r.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())) {
+                want.add(&e.file_name().to_string_lossy());
+            }
+        }
+        let mut got = Digest::default();
         let read = names(&card).map(|n| n.each(&mut |s| {
-            got.push(s.to_string());
+            got.add(s);
             Ok(())
         }));
-        want.sort();
-        got.sort();
-        total += got.len();
+        total += got.0;
         if matches!(read, Some(Ok(()))) && got == want {
             ok += 1;
         } else {
             bad += 1;
-            log::warn!("names {card}: {} from the names file, {} listed", got.len(), want.len());
+            log::warn!("names {card}: {} from the names file, {} listed", got.0, want.0);
         }
     }
     (ok, bad, total)
