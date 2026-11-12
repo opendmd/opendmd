@@ -156,13 +156,19 @@ rest may follow later (their records keep their ids, so they link up).
 note, title and platform) is read as plain text, in what is shown and in
 what is stored: controls that reorder or hide text are dropped (U+0000 to
 U+001F and U+007F to U+009F, a line break as a space; U+00AD, U+061C,
-U+180E, U+200B, U+200E, U+200F, U+2028 to U+202E, U+2060 to U+2069,
-U+FEFF, U+FFF9 to U+FFFB; tag characters, U+E0000 to U+E007F, except in a
-flag's sequence after U+1F3F4; and lone surrogates). The joiners U+200C and
+U+034F, U+17B4, U+17B5, U+180E, U+200B, U+200E, U+200F, U+2028 to U+202E, U+2060 to
+U+206F, U+FEFF, U+FFF9 to U+FFFB, U+1D173 to U+1D17A; the blank-looking fillers U+115F,
+U+1160, U+2800, U+3164 and U+FFA0, so a name can't look like nothing; tag
+characters, U+E0000 to U+E007F, except a subdivision flag's: U+1F3F4, one
+to seven of U+E0030 to U+E0039 and U+E0061 to U+E007A, then U+E007F; and
+lone surrogates). The joiners U+200C and
 U+200D stay where they join two characters (Persian, emoji sequences): a
 run of them is kept as its first, and one at either end or beside a space
 is dropped. Spaces at the ends go; a note left empty goes, as does an
-empty tag. The hash is the body's, so none of this changes it. The Studio
+empty tag. A `from` entry's name, note, title and platform must be text,
+its author text or `{name, account}`, its rev a whole number and its id a
+record id, or the record is refused. The hash is the body's, so none of
+this changes it. The Studio
 shows each such claim in quotes, isolated.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.

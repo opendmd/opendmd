@@ -240,8 +240,13 @@ export function check(rec) {
   if (rec.note !== undefined && (typeof rec.note !== 'string' || !rec.note || rec.note.length > CAPS.note)) bad('note');
   if (rec.licence !== null && !LICENCES.includes(rec.licence)) bad('licence');
   // An entry naming a record says which content it was: its hash too.
+  // Its words are text (a stranger's array would be shown as text, controls
+  // and all), its author text or {name, account}, its rev a whole number.
+  const txt = (v) => v === undefined || typeof v === 'string';
   if (!arr(rec.from) || rec.from.length > CAPS.from || rec.from.some((f) => !obj(f)
-    || (f.id !== undefined && (typeof f.id !== 'string' || typeof f.hash !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash))))) bad('from');
+    || (f.id !== undefined && (typeof f.id !== 'string' || !ID.test(f.id) || typeof f.hash !== 'string' || !/^sha256-[0-9a-f]{64}$/.test(f.hash)))
+    || !txt(f.name) || !txt(f.note) || !txt(f.title) || !txt(f.platform) || (f.rev !== undefined && !(Number.isInteger(f.rev) && f.rev >= 0))
+    || (f.author !== undefined && !txt(f.author) && !(obj(f.author) && typeof f.author.name === 'string' && (f.author.account === null || f.author.account === undefined || typeof f.author.account === 'string'))))) bad('from');
   checkBody(rec.type, rec.body);
   if (rec.type === 'pack' && rec.body.members.some((m) => m.id === rec.id)) bad('members');
   if (JSON.stringify(rec).length > (rec.type === 'piece' ? CAPS.piece : CAPS.bytes)) bad('too big');
@@ -314,14 +319,15 @@ export function checkBody(type, b) {
 export const ENVELOPE = ['type', 'id', 'rev', 'hash', 'name', 'tags', 'note', 'author', 'licence', 'from', 'created', 'modified', 'body'];
 // A name, author, note or tag from someone else (a file, a link, Import)
 // without what reorders or hides text (bidi marks, overrides and isolates,
-// zero-width spaces, controls (a line break as a space), soft hyphens, lone
-// surrogates, tag characters outside a flag), so it can't scramble the
-// Studio's own words around it.
+// zero-width spaces, controls (a line break as a space), soft hyphens, the
+// grapheme joiner, deprecated format controls, blank-looking fillers (Hangul,
+// braille), lone surrogates, tag characters outside a subdivision flag), so
+// it can't scramble the Studio's own words around it or look like nothing.
 // The joiners (ZWNJ, ZWJ) stay, for Persian and emoji, but only between two
 // characters: once, never at either end or beside a space. Spaces at the
 // ends go too.
 export const plain = (t) => (typeof t === 'string' ? t.replace(/[\t-\r\u0085\u2028\u2029]/g, ' ')
-  .replace(/(\u{1f3f4}[\u{e0020}-\u{e007e}]+\u{e007f})|[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b\u200e\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]|\p{Cs}/gu, '$1')
+  .replace(/(\u{1f3f4}[\u{e0030}-\u{e0039}\u{e0061}-\u{e007a}]{1,7}\u{e007f})|[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b\u200e\u200f\u2028-\u202e\u2060-\u206f\u2800\u3164\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e007f}]|\p{Cs}/gu, '$1')
   .replace(/[\u200c\u200d]{2,}/g, (j) => j[0]).replace(/^[\u200c\u200d]|[\u200c\u200d]$|(\s)[\u200c\u200d]|[\u200c\u200d](?=\s)/g, '$1').trim() : t);
 export const envelope = (r) => Object.fromEntries(ENVELOPE.filter((k) => r[k] !== undefined).map((k) => [k, r[k]]));
 
