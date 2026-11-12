@@ -87,6 +87,14 @@ psi = ["opendmd-core/psi", "opendmd-core/psi-compiler"]
 # its first frame; `formula_jit` in /api/config turns it off. In every
 # build; `--no-default-features --features psi` builds without.
 jit = ["formulas", "opendmd-core/psi-jit"]
+# OpenDMD Connect's spike S0 (src/connect_probe.rs): a TLS WebSocket
+# client probe in the network worker, its test hooks under
+# /api/debug/connect and `connect` in /api/status. A measurement build
+# only, never a release: the Makefile layers firmware/sdkconfig.connect-probe
+# on whenever it is on (dynamic TLS buffers, session tickets, the
+# trusted-certificate callback, one more socket), so the build without it
+# is today's, bit for bit. `make fw-release FW_RELEASE_FEATURES=connect-probe`.
+connect-probe = ["opendmd-core/connect"]
 # Bench test hooks that a release does without: card speed's
 # `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
 # `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a
