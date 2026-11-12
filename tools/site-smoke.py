@@ -3742,7 +3742,7 @@ def studio_files_trust(browser, base: str, site: Path, errors: list[str]) -> Non
     file_add(page)
     raw = page.evaluate(S_RAW)
     kept = next(r for r in raw["records"] if r["id"] == got["id"])
-    check(rows[0]["how"] == "update" and rows[0]["box"] is False and "by Mallory · licence CC0, the file says" in rows[0]["text"] and kept["hash"] == got["mine"],
+    check(rows[0]["how"] == "update" and rows[0]["box"] is False and "by “Mallory” · licence CC0, the file says" in rows[0]["text"] and kept["hash"] == got["mine"],
           f"/studio/ files trust: a stranger's newer version is offered unticked, its claim shown as the file's; left, mine stays ({rows[0]['text'][:90]})")
     file_open(page, got["same"])
     rows = file_rows(page)
