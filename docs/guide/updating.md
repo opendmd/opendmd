@@ -3,6 +3,8 @@
 OpenDMD has two parts that get updated: the firmware, which runs the
 panel, and the web app you use at `opendmd.local`. Your settings, WiFi
 details, playlists and GIFs stay as they are whichever way you update.
+The [changelog](../../site/pages/changelog.md) says what each version
+brought.
 
 ## Over WiFi
 

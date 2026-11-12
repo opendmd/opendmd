@@ -460,6 +460,46 @@ To try the token without releasing: run the **Site** workflow by hand
 (Actions → Site → Run workflow, on main). It deploys main's docs with the
 latest release's files, and checks the result live.
 
+### The changelog
+
+<https://opendmd.dev/changelog/> is written by hand in one file,
+`site/pages/changelog.md`: the highlights of each release for a display's
+owner, newest first. Add a release's entry at the top, on main, **before**
+`make release` (the release needs a clean tree):
+
+```markdown
+## 1.2.0 · 2026-12-01
+
+One line that sums the release up.
+
+- Two to five things an owner would notice: new features, big fixes, speed.
+```
+
+- The heading is `## <version> · <YYYY-MM-DD>` (a leading `v` is
+  accepted and dropped). `tools/site.py` (`changelog`) makes the rest from it: the date in
+  words, **Beta** on a pre-release, **Latest** on the release the Install
+  button installs, the link to the GitHub release, and the Atom feed
+  (`/changelog/feed.xml`). A heading out of order or in another shape, or
+  a group with nothing under it, fails `make site`. A tag that never had a
+  GitHub release (0.3.0) is listed in `CHANGELOG_TAG_ONLY` and links to
+  its tree instead.
+- An entry for a version newer than the newest published release is **held
+  back**: the page and the feed leave it out until the site is built with
+  that release (`make site` says which entries it held back). So the entry
+  can be written ahead, as the work merges, and nothing links to a release
+  that is not out.
+- A run of betas can be folded once their release is out, as "Road to 1.0"
+  is: a `## <title>` heading that is not a version, a line under it, then
+  each beta as `### <version> · <YYYY-MM-DD>` with a sentence or two.
+- Words: GIFs, Formulas, playlists and the web app's own names for things.
+  Nothing internal, nothing that is not released or linked from the site
+  yet.
+
+A release without an entry still goes out: `make release` prints a `NOTE`
+in its plan, and `make site` and `make site-smoke` say `no entry for
+<version>`. Nothing fails; add the entry on main afterwards and the next
+site deploy shows it.
+
 ### Betas: the two update feeds
 
 Releases are `X.Y.Z` (final) or `X.Y.Z-beta.N` (a beta of the next

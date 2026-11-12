@@ -122,6 +122,10 @@ build URL serves. There the art index must also carry
   the frozen page says which release it describes and links the latest;
   with `--api-freeze auto` off a tag, nothing new is frozen (the release
   frozen is `--beta-dist`'s when one is given: the tree's own);
+- the changelog (/changelog/): its entries newest first, none newer than
+  the newest release the site serves, each linked to its GitHub release,
+  the release marked Latest and pre-releases Beta; the same entries in its
+  Atom feed; linked from the footer and the install page;
 - the install page: the DevKit's button for `--dist`'s release, which
   install/release.json names; install/beta.json the same shape: with
   `--beta-dist`, that beta's (files, manifest and parts under
@@ -6699,6 +6703,7 @@ def gallery_sort(browser, base: str, errors: list[str]) -> None:
 KEY_PAGES = {  # shot name: path
     "home": "/", "install": "/install/", "guide": "/guide/", "guide-web-app": "/guide/web-app.html",
     "formulas": "/formulas/", "create": "/create/", "studio": "/studio/", "dev": "/dev/", "dev-psi": "/dev/psi/", "dev-psi-errors": "/dev/psi/errors/", "licences": "/licenses/",
+    "changelog": "/changelog/",
 }
 TOP_LABELS = ["Guide", "Gallery", "Create Art", "Demo", "For developers", "Install"]
 # Words users never see (CLAUDE.md, "Product model"); "pack" only as the DMDoS GIF pack's name.
@@ -6789,7 +6794,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
                 lum = sum(int(x) for x in re.findall(r"\d+", bg)[:3])
                 check(lum > 600 if scheme == "light" else lum < 120, f"{what}: the {scheme} theme ({bg})")
-                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create", "studio"):
+                if scheme == "light" and size == "laptop" and name in ("home", "install", "guide", "formulas", "create", "studio", "changelog"):
                     text = page.inner_text("body")
                     hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(text)})
                     check(not hit, f"{name}: none of the words users never see {hit}")
@@ -7328,6 +7333,43 @@ def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     page.context.close()
 
 
+def changelog(site: Path) -> None:
+    """The changelog page and its feed (tools/site.py `changelog`), against
+    the releases this site serves (install/release.json, install/beta.json)."""
+    text = (site / "changelog/index.html").read_text(encoding="utf-8")
+    final = json.loads((site / "install/release.json").read_text())["version"]
+    newest = json.loads((site / "install/beta.json").read_text())["version"]
+
+    def key(v: str) -> tuple:  # 1.0.0-beta.2 < 1.0.0-beta.10 < 1.0.0
+        core, _, pre = v.partition("-")
+        return tuple(int(x) for x in core.split(".")), not pre, tuple(int(x) if x.isdigit() else x for x in pre.split("."))
+    vers = re.findall(r'<(?:section|article) class="rel(?:-row)?" id="v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)"', text)
+    check(bool(vers) and vers == sorted(vers, key=key, reverse=True) and len(set(vers)) == len(vers),
+          f"changelog: {len(vers)} releases, newest first ({vers[0] if vers else 'none'} down to {vers[-1] if vers else 'none'})")
+    # A release with no entry yet is not a failure (a release never waits for its highlights).
+    check(bool(vers) and key(vers[0]) <= key(newest),
+          f"changelog: nothing newer than the newest release the site serves ({vers[:1]}, {newest})")
+    for v in dict.fromkeys((newest, final)):
+        if v not in vers:
+            print(f"  NOTE  the changelog has no entry for {v} (site/pages/changelog.md)")
+    # A tag with no GitHub release (tools/site.py CHANGELOG_TAG_ONLY) links its tree, never a release page.
+    gh, tag_only = "https://github.com/opendmd/opendmd/", {"0.3.0"}
+    bad = [v for v in vers if (f'href="{gh}tree/v{v}"' in text, f'href="{gh}releases/tag/v{v}"' in text) != (v in tag_only, v not in tag_only)]
+    check(not bad, f"changelog: every release linked to its GitHub release, a tag without one ({sorted(tag_only & set(vers))}) to its tree {bad}")
+    tagged = dict(re.findall(r'<section class="rel" id="v(\d[^"]*)"><p class="rel-meta"><time[^>]*>[^<]*</time>(?:<span>(\w+)</span>)?', text))
+    want = {v: "Beta" if "-" in v else "Latest" if v == final else "" for v in tagged}
+    check(tagged == want and tagged, f"changelog: pre-releases marked Beta, {final} marked Latest "
+                                     f"({ {v: t for v, t in tagged.items() if t != want[v]} or 'as built'})")
+    feed = (site / "changelog/feed.xml").read_text(encoding="utf-8")
+    import xml.etree.ElementTree as ET
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    ids = [e.findtext("a:id", namespaces=ns) for e in ET.fromstring(feed).findall("a:entry", ns)]
+    check(ids == [f"https://opendmd.dev/changelog/#v{v}" for v in vers] and 'href="../' not in feed and "feed.xml" in text,
+          f"changelog: the Atom feed has the same {len(ids)} entries, its links whole, and the page names it")
+    check('href="../changelog/"' in (site / "guide/index.html").read_text() and f'href="../changelog/#v{final}"' in (site / "install/index.html").read_text(),
+          "changelog: linked from every page's footer and from the install page's version line")
+
+
 def install_links(site: Path, dist: Path, beta_dist: Path | None) -> None:
     install = (site / "install/index.html").read_text()
     fw = site / "install/firmware"
@@ -7668,6 +7710,8 @@ def main() -> int:
         psi_error_links(browser, base, errors)
         print("What costs most and Tidy up (/f/, the demo)")
         f_cost(browser, base, errors, a.shots or ROOT / "target/site-smoke")
+        print("the changelog")
+        changelog(a.site)
         print("install page")
         install_links(a.site, a.dist, a.beta_dist)
         install_page(browser, base, a.site, a.dist, a.beta_dist, errors)
