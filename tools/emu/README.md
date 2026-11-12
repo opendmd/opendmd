@@ -16,7 +16,7 @@ make emu-api       # the emu-census image on WiFi, its HTTP API driven from the 
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
 make emu-s3-nocard # the ESP32-S3 preview (VARIANT=s3), nocard-test image, in the S3 machine: as emu-nocard -> EMU_NOCARD_OK
-make emu-s3-probe  # the S3 psi-probe image, no card, offline: bundled Formulas, the JIT spike's kernels, every golden frame through the VM and the JIT -> EMU_PROBE_OK
+make emu-s3-probe  # the S3 psi-probe image, no card, offline: bundled Formulas, the JIT spike's kernels, every golden frame through the VM and the JIT -> EMU_PROBE_OK, then the judge's red checks -> PROBE_RED_OK
 make emu-image-s3  # the plain s3 build into $EMU_DIR/s3/dist (its size; no lane boots it)
 ```
 
@@ -36,7 +36,13 @@ the 4-bit phase.
 (seeded as in the nocard lane: with no card the probe runs at once, and the setup AP starting beside it
 took ~90 KB of the heap the goldens need); the firmware then runs `psi_probe::run_nocard`, and the judge
 wants `psi-probe: done: no card`, every bundled Formula opened (offline, a clock Formula refuses by design),
-the JIT spike's three hand-written kernels as the VM, the golden line with none differing, and no `N differ`.
+the JIT spike's three hand-written kernels each as the VM (tiny 42 from every block, the call's value, the
+floor's bytes), the golden line with none differing, the goldens through the JIT's kernels with some matched
+and none differing, none on the VM and none skipped for the probe's heap (`--jit-skips N` allows N: the
+classic's no-card probe skips 2), and no `N differ`. `make emu-s3-probe` then runs `probe_red.py` on its log:
+the judge replays it (`run.py --replay LOG`: no emulator) as it is, which must pass, and doctored (kernels
+skipped, kernels on the VM, the kernel goldens line or the floor kernel's missing, the tiny kernel wrong),
+each of which must fail -> PROBE_RED_OK.
 
 Files:
 
