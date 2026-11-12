@@ -180,10 +180,18 @@ ESP_SYSTEM_INIT_FN(hub75_early_blank, CORE, BIT(0), 2) {
  * or the other way, so in_pair and torn are good to about that resolution.
  */
 static inline uint32_t scan_desc_index(void) {
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    /* The S3's LCD_CAM is fed by a GDMA channel, whose own register holds
+     * the descriptor it is on (GDMA's OUT_DSCR): not read yet (S3 port
+     * phase 1/2). hub75_scan_init never models the scan there, so this is
+     * not reached; the beam is not raced and panel_sync has no scan. */
+    return UINT32_MAX;
+#else
     const uint32_t addr = getDev()->out_link_dscr;
     const uint32_t off = addr - s_scan_desc;
     const uint32_t idx = off / sizeof(HUB75_DMA_DESCRIPTOR_T);
     return idx < s_scan_count ? idx : UINT32_MAX;
+#endif
 }
 
 /* In IRAM, as the span writers: read twice a row pair while a Formula
@@ -216,6 +224,9 @@ extern "C" void hub75_scan_init(void) {
     if (s_panel == nullptr || s_stopped) {
         return;
     }
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    ESP_LOGW(TAG, "scan: not modelled on the ESP32-S3 yet (GDMA): the beam is not raced");
+#else
     const uint16_t rows = static_cast<uint16_t>(s_height / MATRIX_ROWS_IN_PARALLEL);
     if (s_panel->getCfg().double_buff || rows == 0) {
         return;
@@ -281,6 +292,7 @@ extern "C" void hub75_scan_init(void) {
     s_scan_row_us = period / rows;
     ESP_LOGI(TAG, "scan: %u descriptors, %u per row pair, refresh %u us", (unsigned)count,
              (unsigned)per_row, (unsigned)period);
+#endif
 }
 
 extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
@@ -380,6 +392,9 @@ extern "C" void hub75_set_clk_phase(bool clkphase) {
     // As Bus_Parallel16::init routes it: the I2S WS output, inverted or not.
 #if defined(CONFIG_IDF_TARGET_ESP32S2)
     const uint32_t sig = I2S0O_WS_OUT_IDX;
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
+    /* The LCD_CAM's pixel clock (gdma_lcd_parallel16.cpp's pin_wr). */
+    const uint32_t sig = LCD_PCLK_IDX;
 #else
     const uint32_t sig = I2S1O_WS_OUT_IDX;
 #endif
