@@ -94,6 +94,14 @@ build URL serves. There the art index must also carry
   cutover's hand-off from /create/ with its switch forced on; the phone's
   full-screen sheet; Import's hostile inputs (forged and lying messages,
   other origins framing /create/, odd videos, bad pastes, frame caps);
+- /studio/ tidy (studio-tidy): foreign names, authors, notes, tags and
+  from[] as plain text with the joiners kept between characters (files,
+  links, Import, and hostile ones by the thousand), Made from quoted, a
+  split backup's part opened alone, packs naming absent records, framed
+  /create/'s drops; Import in full colour (4,096 and 600 colours pixel for
+  pixel, dark colours not turned black), Fit to 256 colours when asked,
+  and by itself past a piece's 4,096; from[] entries that aren't text
+  refused; blank fillers and flag-smuggled tags dropped;
 - Open on my panel from every gallery tile (by name; asked once, then one
   press to the panel; Back never hands on again);
 - Open on my panel, both ends: an edited Formula sent from /f/ (this build
@@ -5691,6 +5699,356 @@ def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> No
     page.context.close()
 
 
+S_TIDY_REC = """async (id) => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const r = await s.get(id); s.db.close(); return r && { name: r.name, note: r.note ?? null, tags: r.tags, author: r.author, from: r.from, keys: Object.keys(r) }; }"""
+
+
+def studio_tidy(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The studio-tidy follow-ups. plain(): the joiners (ZWNJ, ZWJ) kept
+    between characters (Persian, an emoji family) and dropped at the ends,
+    doubled or beside a space; bidi controls, zero-width spaces, controls,
+    soft hyphens, tag characters outside a flag and lone surrogates dropped,
+    from a file's names, authors, notes, tags and every from[] entry, from a
+    link's and from Import's fields; a note left empty goes. The Library's
+    Made from quotes and isolates each claim. A split backup's part opened
+    without the rest says so and offers Pick all; numbers that don't add up,
+    or a pack not tagged backup, say nothing. A pack naming records neither
+    the file nor this browser holds says so on its row, and the Library's
+    Holds counts them. Framed /create/: a drop the converter took is left to
+    it; one outside takes a picture or an https address, never another file."""
+    page = s_page(browser, base, site, errors)
+    ZW, ZN = "‍", "‌"
+    fa = f"\U0001F468{ZW}\U0001F469{ZW}\U0001F467"  # a family: three people joined
+    fa_name = f"{ZW}{ZW}{fa}{ZW}{ZN}"
+    persian = f"می{ZN}خواهم"
+    flag = "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
+
+    def part(what, fn):
+        nonlocal page
+        try:
+            fn()
+        except Exception as e:  # (one finding that can't finish fails alone)
+            check(False, f"/studio/ tidy: {what} did not finish: {str(e).splitlines()[0][:120]}")
+        page.context.close()  # (each on a fresh page)
+        page = s_page(browser, base, site, errors)
+
+    def joiners():
+        got = kev(page, """const [persian, fa, flag] = A;
+            const r = await K.stamp(persian + '\\u200d', 4, 4, { env: { author: fa, tags: ['x\\u200d', '\\u200b', 'ok\\u00ad'] },
+              set: { note: 'a\\u200d\\u200db \\u202eevil\\u202c ' + flag + ' hi\\u{e0041}\\u{e0042}', from: [{ external: true, note: '\\u2066Fake\\u2069\\u200b' }, { external: true, note: '\\u202e' }, { id: 'st_' + '0'.repeat(32), rev: 1, hash: 'sha256-' + '0'.repeat(64), name: '\\u2067Mal\\u200dlory\\u200d', author: { name: '\\u202eyrollam', account: null }, title: '\\u061ct', platform: 'p\\u200f' }] } });
+            const e = await K.stamp('Empty note', 4, 4, { set: { note: '\\u200b\\u202e\\u200d' } });
+            const pk = await K.pack('Two', [r, e]);
+            return { id: r.id, e: e.id, file: K.file(pk, [pk, r, e]) };""", [persian, fa, flag])
+        said = file_open(page, got["file"], "joiners.dmdpack")
+        claims = page.eval_on_selector_all("#s-fs .s-fs-claim bdi", "els => els.map((e) => e.textContent)")
+        file_add(page)
+        r, e = page.evaluate(S_TIDY_REC, got["id"]), page.evaluate(S_TIDY_REC, got["e"])
+        f = r["from"]
+        check(said == "asked" and r["name"] == persian and r["author"]["name"] == fa and fa in claims,
+              f"/studio/ tidy: a file's joiners kept between characters: Persian's ZWNJ and an emoji family's ZWJs ({r['name']!r}, {r['author']['name']!r}), a trailing one dropped")
+        check(r["note"] == f"a{ZW}b evil {flag} hi" and r["tags"] == ["x", "ok"] and e["note"] is None and "note" not in e["keys"],
+              f"/studio/ tidy: a note and tags as plain text: a doubled joiner once, bidi, tag characters (a flag's kept) and soft hyphens gone, an empty tag gone, a note left empty gone ({r['note']!r}, {r['tags']}, {e['note']!r})")
+        check(f[0]["note"] == "Fake" and f[1]["note"] == "" and f[2]["name"] == f"Mal{ZW}lory" and f[2]["author"]["name"] == "yrollam" and f[2]["title"] == "t" and f[2]["platform"] == "p",
+              f"/studio/ tidy: every from[] entry's note, name, author, title and platform plain ({f})")
+        # The Library's Made from: each claim quoted and isolated.
+        lib_open(page)
+        lib_kind(page, "stamp")
+        lib_detail(page, persian)
+        dd = page.evaluate("""() => { const dt = [...document.querySelectorAll('#s-ldet dt')].find((x) => x.textContent === 'Made from'); const dd = dt.nextElementSibling;
+            return { text: dd.textContent, bdi: [...dd.querySelectorAll('bdi')].map((b) => b.textContent) }; }""")
+        check(dd["bdi"] == ["Fake", f"Mal{ZW}lory"] and dd["text"].startswith("“Fake”, an imported picture, “Mal") and "(version 1)" in dd["text"],
+              f"/studio/ tidy: the Library's Made from quotes and isolates each claim, a note left empty said as an imported picture ({dd})")
+
+    def hostile_names():
+        # 4,000 records, each named to abuse: joiners by the hundred, every control at once, a lone surrogate (JSON's \\ud800).
+        raw = kev(page, """const recs = []; const a = new Uint8Array(16).fill(1); const nasty = '\\u200d'.repeat(100) + '\\u202e\\u2066\\u200b\\u0000\\u0007\\u2028\\ufeff\\u{e0001}';
+            for (let i = 0; i < 4000; i++) { const r = m.record('stamp', (i % 2 ? nasty : '\\u200c\\u200d'.repeat(50)), { w: 4, h: 4, colours: [{ k: 1, hex: '#ff0000' }], frames: [{ px: await m.packPx(a) }] }, { author: nasty }); r.note = nasty + 'n'; r.hash = await m.hashOf(r.body); recs.push(r); }
+            const pk = await K.pack('Many', recs); return K.file(pk, [pk, ...recs]).replace('"Many"', '"M\\\\ud800any"');""")
+        said = file_open(page, raw, "nasty.dmdpack")
+        bad = page.evaluate("""() => [...document.querySelectorAll('#s-fs li')].filter((li) => /[\\u0000-\\u001f\\u061c\\u200b\\u200e\\u200f\\u2028-\\u202e\\u2060-\\u2069\\ufeff\\u{e0000}-\\u{e007f}]|[\\u200c\\u200d]{2}|^[\\u200c\\u200d]/u.test(li.querySelector('b').textContent + li.querySelector('bdi')?.textContent)).length""")
+        n = file_add(page)
+        stored = page.evaluate("""async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const l = (await s.list({ type: 'stamp' })).items; s.db.close();
+            return { n: l.length, names: [...new Set(l.map((h) => h.name))], authors: [...new Set(l.map((h) => h.author.name))], notes: [...new Set(l.map((h) => h.note ?? null))] }; }""")
+        check(said == "asked" and bad == 0 and n == 4001 and stored["names"] == [""] and stored["authors"] == [""] and stored["notes"] == ["n"],
+              f"/studio/ tidy: 4,000 records named in joiners and controls open, shown and stored as plain text, a lone surrogate dropped ({n} added; {stored['names']}, {stored['notes']})")
+
+    def link_joiners():
+        one = [[1 if i % 9 == 0 else 0 for i in range(4096)]]
+        code = link_p(one, [100], [0xf7a531], name=f"{ZW}{persian}{ZW}{ZW}", author=fa_name)
+        said = l_goto(page, base, "#p=" + code)
+        nm, who = page.inner_text("#s-lk-name"), page.inner_text("#s-lk-who")
+        page.click("#s-lk-open")
+        wait_js(page, f"{L_SHOWN} === 'opened'", timeout=20000)
+        s_kept(page)
+        p = page.evaluate(I_PIECE)
+        e = (p["from"] or [{}])[0]
+        prov = page.inner_text("#s-prov")
+        check(said == "shown" and p["name"] == persian and e.get("author") == fa and f"“{fa}”" in who and persian in nm,
+              f"/studio/ tidy: a link's joiners kept between characters, dropped at the ends and doubled ({p['name']!r}, {e.get('author')!r})")
+        check("Made from “⁨A shared link⁩”" in prov, f"/studio/ tidy: the piece's Made from line quotes and isolates the claim ({prov[-60:]!r})")
+
+    def parts():
+        got = kev(page, """const P = await K.palette('Part colours'); const S1 = await K.stamp('Part stamp'); const S2 = await K.stamp('Other stamp');
+            const day = 'Backup, 2026-11-12';
+            const b1 = await K.pack(day + ' (1 of 3)', [P], { env: { tags: ['backup'] } }), b2 = await K.pack(day + ' (2 of 3)', [S1], { env: { tags: ['backup'] } }), b3 = await K.pack(day + ' (3 of 3)', [S2], { env: { tags: ['backup'] } });
+            const odd = await K.pack(day + ' (5 of 3)', [S1], { env: { tags: ['backup'] } }), untagged = await K.pack(day + ' (1 of 2)', [S1]);
+            return { b1: K.file(b1, [b1, P]), b2: K.file(b2, [b2, S1]), b3: K.file(b3, [b3, S2]), odd: K.file(odd, [odd, S1]), untagged: K.file(untagged, [untagged, S1]) };""")
+        def sheet(files):
+            page.evaluate("delete document.getElementById('studio').dataset.opened")
+            with page.expect_file_chooser(timeout=20000) as fc:
+                page.click("#s-openf")
+            fc.value.set_files([{"name": n, "mimeType": "application/json", "buffer": got[n].encode()} for n in files])
+            wait_js(page, "['asked', 'refused'].includes(document.getElementById('studio').dataset.opened)", timeout=60000)
+            return {"said": page.evaluate("document.getElementById('s-fs-parts')?.textContent || ''"),
+                    "pick": page.evaluate("[...document.querySelectorAll('#s-fs[open] button')].map((b) => b.textContent)")}
+        one = sheet(["b2"])
+        with page.expect_file_chooser(timeout=10000) as fc:
+            page.click("#s-fs[open] button:has-text('Pick all 3')")
+        chooser = fc.value.is_multiple()
+        closed = not page.is_visible("#s-fs")
+        two = sheet(["b1", "b3"])
+        page.click("#s-fs[open] button:has-text('Cancel')")
+        three = sheet(["b1", "b2", "b3"])
+        page.click("#s-fs[open] button:has-text('Cancel')")
+        odd = sheet(["odd"])
+        page.click("#s-fs[open] button:has-text('Cancel')")
+        untagged = sheet(["untagged"])
+        page.click("#s-fs[open] button:has-text('Cancel')")
+        check(one["said"].startswith("This is one part of a backup in 3 files") and "Pick all 3" in one["pick"] and chooser and closed,
+              f"/studio/ tidy: one part of a split backup picked alone says so and offers Pick all 3, which opens the picker for several ({one['said'][:60]!r}, {one['pick']})")
+        check(two["said"].startswith("These are 2 parts of a backup in 3 files") and not three["said"] and "Pick all 3" not in three["pick"],
+              f"/studio/ tidy: two of three parts say so; all three picked together say nothing ({two['said'][:40]!r}, {three['said']!r})")
+        check(not odd["said"] and not untagged["said"], f"/studio/ tidy: a part 5 of 3, or a pack not tagged backup, says nothing of parts ({odd['said']!r}, {untagged['said']!r})")
+        # The same part as a shared link (#k=): a link is no file the user picked, so no Pick all.
+        import base64
+        import zlib
+        code = base64.urlsafe_b64encode(zlib.compress(got["b2"].encode())).decode().rstrip("=")
+        said = l_goto(page, base, "#k=" + code)
+        lk = page.evaluate("document.getElementById('s-fs-parts')?.textContent || ''")
+        check(said == "pack" and not lk, f"/studio/ tidy: a backup part as a #k= link offers no Pick all ({said}, {lk!r})")
+
+    def dangling():
+        got = kev(page, """const st = await K.stamp('Here'); const den = (await import('/studio/palettes.js')); await den.ready; const sid = den.STARTER[0].id;
+            const absent = [m.newId('stamp'), m.newId('stamp')];
+            const pk = m.record('pack', 'Names absent ones', { members: [{ id: st.id, rev: st.rev }, { id: sid, rev: den.STARTER[0].rev }, ...absent.map((id) => ({ id, rev: 1 }))] }); pk.hash = await m.hashOf(pk.body);
+            const ok = m.record('pack', 'Names held ones', { members: [{ id: st.id, rev: st.rev }] }); ok.hash = await m.hashOf(ok.body);
+            const root = await K.pack('Root', [st, pk, ok]); return K.file(root, [root, st, pk, ok]);""")
+        said = file_open(page, got, "absent.dmdpack")
+        rows = page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#s-fs li')].map((li) => [li.querySelector('b').textContent, li.querySelector('[data-missing]')?.textContent || '']))""")
+        file_add(page)
+        lib_open(page)
+        lib_kind(page, "pack")
+        lib_detail(page, "Names absent ones")
+        holds = page.evaluate("""() => { const dt = [...document.querySelectorAll('#s-ldet dt')].find((x) => x.textContent === 'Holds'); const dd = dt?.nextElementSibling; return dd ? { text: dd.textContent, missing: dd.querySelector('[data-missing]')?.dataset.missing } : null; }""")
+        check(said == "asked" and rows.get("Names absent ones") == " · names 2 records not in the file or this browser" and rows.get("Names held ones") == "" and rows.get("Here") == "",
+              f"/studio/ tidy: a pack naming records neither the file nor this browser holds says how many on its row (a starter record not among them) {rows}")
+        check(holds and holds["missing"] == "2" and holds["text"].startswith("Here, ") and holds["text"].endswith(" · 2 not in this browser"),
+              f"/studio/ tidy: the Library's Holds names a pack's members and says the ones not here ({holds})")
+
+    def drops():
+        nonlocal page
+        page.context.close()
+        page = i_page(browser, base, site, errors)
+        fr = i_open(page)
+        png, gif = c_fixtures()
+        import base64
+        b64 = base64.b64encode(gif).decode()
+        drop = """([b64, where, kind]) => { const dt = new DataTransfer();
+            if (kind === 'gif') dt.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'w.gif', { type: 'image/gif' }));
+            if (kind === 'text') dt.items.add(new File(['not a picture'], 'notes.txt', { type: 'text/plain' }));
+            if (kind === 'url') dt.setData('text/uri-list', 'https://raw.githubusercontent.com/x/y/z.png');
+            const e = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }); document.querySelector(where).dispatchEvent(e); return e.defaultPrevented; }"""
+        fr.evaluate("document.querySelector('#st-msg').textContent = ''")
+        p_text = fr.evaluate(drop, [b64, "#c-cap", "text"])
+        fr.wait_for_timeout(500)
+        msg_text = fr.inner_text("#st-msg")
+        p_in = fr.evaluate(drop, [b64, "#studio .st-grid", "gif"])
+        wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Dropped: 88')", timeout=20000)
+        fr.wait_for_timeout(500)
+        msg_in = fr.inner_text("#st-msg")
+        p_url = fr.evaluate(drop, [b64, "#c-cap", "url"])
+        fr.wait_for_timeout(300)
+        url = fr.input_value("#st-url")
+        check(p_text and not msg_text.startswith("Your file"), f"/create/ framed: a file that is no picture dropped outside the converter is kept from the browser and not loaded ({msg_text!r})")
+        check(p_in and msg_in.startswith("Dropped: 88"), f"/create/ framed: a drop the converter took is its own, not taken again by the page ({msg_in[:30]!r})")
+        check(p_url and url == "https://raw.githubusercontent.com/x/y/z.png", f"/create/ framed: an address dropped outside the converter is fetched as the converter would ({url!r})")
+
+    def import_names():
+        nonlocal page
+        page.context.close()
+        page = i_page(browser, base, site, errors)
+        fr = i_open(page)
+        png, gif = c_fixtures()
+        i_file(fr, "w.gif", gif, "image/gif")
+        wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+        fr.fill("#st-title", f"‮{persian}​{ZW}")
+        fr.fill("#st-author", fa_name)
+        got = i_use(page, fr)
+        p = page.evaluate(I_PIECE)
+        e = (p["from"] or [{}])[0]
+        check(got.startswith("piece") and p["name"] == persian and e.get("title") == persian and e.get("author") == fa,
+              f"/studio/ tidy: Import's title and author as plain text, the joiners between characters kept ({p['name']!r}, {e.get('title')!r}, {e.get('author')!r})")
+
+    for what, fn in (("joiners", joiners), ("hostile names", hostile_names), ("a link's joiners", link_joiners), ("backup parts", parts),
+                     ("absent members", dangling), ("framed drops", drops), ("Import's names", import_names)):
+        part(what, fn)
+    page.context.close()
+
+
+def i_colour_fixtures() -> dict:
+    """128x32 pictures past 256 colours: a still of 4,096 distinct colours (gradients, among them
+    dark ones that are not black, and some pure black), and a 3-frame GIF whose frames have 200
+    colours each, 600 in all, with its own times."""
+    still = Image.new("RGB", (128, 32))
+    px = []
+    for y in range(32):
+        for x in range(128):
+            if x < 4:
+                px.append((0, 0, 0))  # pure black: off
+            elif x < 12:
+                px.append((x - 3, y // 4, (x + y) % 3))  # dark, not black (1..8 on red)
+            else:
+                px.append(((x * 2) & 255, (y * 8) & 255, ((x * 7 + y * 3) & 255)))
+    still.putdata(px)
+    b = io.BytesIO()
+    still.save(b, "PNG")
+    frames = []
+    for f in range(3):
+        im = Image.new("P", (128, 32))
+        pal = []
+        for i in range(256):
+            c = f * 200 + i
+            pal += [40 + (c % 200), (c * 3) % 256, 10 + (c // 3) % 240] if i < 200 else [0, 0, 0]
+        im.putpalette(pal)
+        im.putdata([(x + y * 7) % 200 for y in range(32) for x in range(128)])
+        frames.append(im)
+    g = io.BytesIO()
+    frames[0].save(g, "GIF", save_all=True, append_images=frames[1:], duration=[80, 120, 160], loop=0, optimize=False, disposal=1)
+    return {"still": b.getvalue(), "still_px": px, "anim": g.getvalue()}
+
+
+def studio_import_colours(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Import keeps the picture's every colour (the panel's 24 bits): a still
+    of 4,096 colours and an animated GIF of 600 come in pixel for pixel, pure
+    black as off, dark colours that are not black kept as they are, the
+    piece past 255 colours in two-byte keys and said so; "Fit to 256
+    colours" still gives the device converter's 256. /create/'s own Download
+    GIF is unchanged (256 at most) and has no Fit box."""
+    fx = i_colour_fixtures()
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "many.png", fx["still"], "image/png")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    want = [(r << 16 | g << 8 | b) for r, g, b in fx["still_px"]]
+    have = i_frames(p)[0] if p else []
+    wrong = [i for i, (a, b) in enumerate(zip(have, want)) if a != b]
+    dark = [have[y * 128 + x] for y in range(32) for x in range(4, 12)] if have else []
+    check(got.startswith("piece") and not wrong and len(have) == 4096 and p["colours"] == len(set(want) - {0}) and all(dark),
+          f"/studio/ import colours: a still of {len(set(want))} colours comes in pixel for pixel, black as off and dark colours kept ({got}, {len(wrong)} pixels wrong, "
+          f"{p['colours'] if p else 0} colours; first wrong {[(i, hex(have[i]), hex(want[i])) for i in wrong[:3]]})")
+    page.context.close()
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "many.gif", fx["anim"], "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    im = Image.open(io.BytesIO(fx["anim"]))
+    want = []
+    for i in range(im.n_frames):
+        im.seek(i)
+        want.append([(r << 16 | g << 8 | b) for r, g, b in im.convert("RGB").getdata()])
+    have = i_frames(p) if p else []
+    wrong = sum(1 for a, b in zip(have, want) for x, y in zip(a, b) if x != y)
+    check(got.startswith("piece") and len(have) == 3 and not wrong and p["ms"] == [80, 120, 160] and p["colours"] == 600,
+          f"/studio/ import colours: an animated GIF of 600 colours comes in pixel for pixel with its times ({got}, {len(have)} frames, {wrong} pixels wrong, {p['colours'] if p else 0} colours, {p['ms'] if p else None})")
+    page.context.close()
+    # Fit to 256 colours, ticked: the converter's own GIF, as before (256 at most).
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "many.png", fx["still"], "image/png")
+    wait_js(fr, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    fitted = fr.is_visible("#c-fit") and not fr.is_checked("#c-fit")
+    fr.check("#c-fit")
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    check(fitted and got.startswith("piece") and p and p["colours"] <= 256, f"/studio/ import colours: Fit to 256 colours, offered unticked, ticked gives the converter's 256 ({got}, {p['colours'] if p else 0})")
+    page.context.close()
+    # /create/ itself: Download GIF still writes 256 colours at most, and no Fit box.
+    plain = new_page(browser, "laptop", errors)
+    i_route(plain, site, base)
+    plain.goto(f"{base}/create/")
+    plain.wait_for_selector("#create:not([aria-busy]) #studio .st-grid", timeout=30000)
+    i_file(plain, "many.png", fx["still"], "image/png")
+    wait_js(plain, "document.querySelector('#st-msg').textContent.startsWith('Picture 128')", timeout=20000)
+    plain.fill("#st-title", "Many")
+    wait_js(plain, "!!document.querySelector('#studio').dataset.name", timeout=5000)
+    im = c_download(plain)
+    n = len(im.convert("RGB").getcolors(1 << 16) or [])
+    check(n <= 256 and plain.query_selector("#c-fit") is None, f"/create/: Download GIF of a picture of 3,905 colours still writes 256 at most ({n}), and offers no Fit box")
+    plain.context.close()
+
+
+def studio_tidy_review(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The studio-tidy review: an animation past the 4,096 colours a piece
+    holds is fitted to 256 by itself and says so (never refused); a file's
+    from[] entries whose words aren't text, whose author is neither text nor
+    {name, account}, whose rev isn't a whole number or whose id isn't a
+    record id are refused; blank-looking fillers, the grapheme joiner,
+    deprecated format controls and tag characters smuggled after a flag
+    come out of names."""
+    # 20 frames of 256 colours each, none shared: 5,120 in all.
+    frames = []
+    for f in range(20):
+        im = Image.new("P", (128, 32))
+        pal = []
+        for i in range(256):
+            c = f * 256 + i
+            pal += [16 + (c % 240), 16 + (c * 7) % 240, 16 + (c // 22) % 240]
+        im.putpalette(pal)
+        im.putdata([(x + y * 5 + f) % 256 for y in range(32) for x in range(128)])
+        frames.append(im)
+    g = io.BytesIO()
+    frames[0].save(g, "GIF", save_all=True, append_images=frames[1:], duration=60, loop=0, optimize=False, disposal=1)
+    page = i_page(browser, base, site, errors)
+    fr = i_open(page)
+    i_file(fr, "photo.gif", g.getvalue(), "image/gif")
+    wait_js(fr, "document.querySelector('#studio').dataset.animated === '1'", timeout=20000)
+    got = i_use(page, fr)
+    p = page.evaluate(I_PIECE)
+    said = page.inner_text("#s-err")
+    check(got == "piece:20" and p and p["colours"] <= 256 and "more than 4,096 colours, so it was fitted to 256" in said,
+          f"/studio/ tidy review: an animation of 5,120 colours is fitted to 256 by itself and says so ({got}, {p['colours'] if p else 0} colours, '{said[:70]}')")
+    page.context.close()
+    page = s_page(browser, base, site, errors)
+    bad = {
+        "a note that is an array": "{ external: true, note: ['\\u2069\\u202eevil'] }",
+        "a name that is an object": "{ id: 'st_' + '0'.repeat(32), rev: 1, hash: 'sha256-' + '0'.repeat(64), name: { toString: 1 } }",
+        "a rev that is text": "{ id: 'st_' + '0'.repeat(32), rev: '1\\u202e) fake', hash: 'sha256-' + '0'.repeat(64), name: 'x' }",
+        "an id that isn't one": "{ id: 'pc_\\u202e', rev: 1, hash: 'sha256-' + '0'.repeat(64), name: 'x' }",
+        "an author with no name": "{ external: true, note: 'n', author: { name: 5 } }",
+        "a platform that is a number": "{ external: true, note: 'n', platform: 9 }",
+    }
+    out = {}
+    for what, entry in bad.items():
+        f = kev(page, "const r = await K.stamp('Pad', 4, 4, { set: { from: [" + entry + "] } }); return K.file(r, [r]);")
+        out[what] = file_open(page, f, "bad-from.dmdart")
+        if out[what] == "asked":
+            page.click("#s-fs[open] button:has-text('Cancel')")
+    ok_entry = kev(page, "const r = await K.stamp('Fine', 4, 4, { set: { from: [{ external: true, note: 'n', title: 't', platform: 'SNES', author: 'a' }, { id: 'st_' + '0'.repeat(32), rev: 0, hash: 'sha256-' + '0'.repeat(64), name: 'x', author: { name: 'y', account: null } }] } }); return K.file(r, [r]);")
+    fine = file_open(page, ok_entry, "fine.dmdart")
+    check(all(v == "refused" for v in out.values()) and fine == "asked", f"/studio/ tidy review: from[] entries that aren't text where text goes are refused {out}; a right one opens ({fine})")
+    if fine == "asked":
+        page.click("#s-fs[open] button:has-text('Cancel')")
+    names = kev(page, """const m2 = await import('/studio/store.js'); const p = m2.plain;
+        return [p('\\u3164\\u3164'), p('\\u2800'), p('\\u115f\\u1160\\uffa0'), p('a\\u034fb\\u206ac'), p('\\u{1f3f4}' + [...'say hello'].map((c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join('') + '\\u{e007f}'),
+          p('\\u{1f3f4}\\u{e0067}\\u{e0062}\\u{e0073}\\u{e0063}\\u{e0074}\\u{e007f}')];""")
+    check(names == ["", "", "", "abc", "\U0001F3F4", "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"],
+          f"/studio/ tidy review: blank fillers, the grapheme joiner, deprecated controls and a sentence smuggled after a flag dropped; Scotland's flag kept {names!r}")
+    page.context.close()
+
+
 def studio_budget(site: Path, web_size: Path = ROOT / "tools/web-size.py") -> None:
     """web-size fails on a file in studio/ that is on no budget line."""
     with tempfile.TemporaryDirectory() as t:
@@ -7599,6 +7957,9 @@ def main() -> int:
             studio_links_red(browser, base, a.site, errors)
             studio_links_leftovers(browser, base, a.site, errors)
             studio_links_review(browser, base, a.site, errors)
+            studio_tidy(browser, base, a.site, errors)
+            studio_import_colours(browser, base, a.site, errors)
+            studio_tidy_review(browser, base, a.site, errors)
             browser.close()
             return finish(errors)
         print("the site's structure (menu, home, themes, phone width, CSP, every page reachable, old addresses)")
@@ -7685,6 +8046,9 @@ def main() -> int:
         studio_links_red(browser, base, a.site, errors)
         studio_links_leftovers(browser, base, a.site, errors)
         studio_links_review(browser, base, a.site, errors)
+        studio_tidy(browser, base, a.site, errors)
+        studio_import_colours(browser, base, a.site, errors)
+        studio_tidy_review(browser, base, a.site, errors)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         demo_own_card(browser, base, a.site, errors)

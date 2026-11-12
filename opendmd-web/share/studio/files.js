@@ -31,6 +31,18 @@ const stem = (n) => String(n).replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(
 const ls = { get: () => { try { return localStorage.getItem(LS) || ''; } catch { return ''; } }, set: (v) => { try { localStorage.setItem(LS, v); } catch { /* not kept */ } } };
 const want = (r) => (r.type === 'piece' || r.type === 'template' ? 4096 * (r.body.keys === 2 ? 2 : 1) : 0);
 const mineId = (id) => !isBuiltin(id) && !isStarter(id);
+const obj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// A record from someone else with plain() through what it says of itself
+// (name, author, note, tags, and the same in `from`): a note left empty goes,
+// as does an empty tag.
+export function plainRec(r) {
+  if (!obj(r)) return r;
+  const who = (a) => (obj(a) ? { ...a, name: plain(a.name) } : plain(a)), o = { ...r, name: plain(r.name), author: who(r.author) };
+  if (typeof r.note === 'string') { o.note = plain(r.note); if (!o.note) delete o.note; }
+  if (Array.isArray(r.tags)) o.tags = r.tags.map(plain).filter((t) => t !== '');
+  if (Array.isArray(r.from)) o.from = r.from.map((f) => (obj(f) ? Object.fromEntries(Object.entries(f).map(([k, v]) => [k, k === 'author' ? who(v) : ['name', 'note', 'title', 'platform'].includes(k) ? plain(v) : v])) : f));
+  return o;
+}
 
 export function mount(studio) { S = studio; }
 
@@ -208,11 +220,8 @@ export async function read(file) {
     const own = r0 && typeof r0 === 'object' ? ['gone', 'seq', 'ver', 'label'].filter((k) => Object.hasOwn(r0, k)) : [];
     if (own.length) no(`A record in it carries what only this browser’s store writes (${own.join(', ')}): nothing was taken from the file.`);
     let r = r0 && typeof r0 === 'object' && !Array.isArray(r0) ? envelope(r0) : r0;
-    // (Names and authors as plain text: the hash is the body's, so this changes nothing it says.)
-    if (r && typeof r === 'object') {
-      const who = (a) => (a && typeof a === 'object' && !Array.isArray(a) ? { ...a, name: plain(a.name) } : a);
-      r = { ...r, name: plain(r.name), author: who(r.author), ...(Array.isArray(r.from) ? { from: r.from.map((f) => (f && typeof f === 'object' ? { ...f, ...(typeof f.name === 'string' ? { name: plain(f.name) } : {}), ...(f.author !== undefined ? { author: typeof f.author === 'string' ? plain(f.author) : who(f.author) } : {}) } : f)) } : {}) };
-    }
+    // (What it says of itself as plain text: the hash is the body's, so this changes nothing it holds.)
+    r = plainRec(r);
     try { check(r); } catch (e) { no(`A record in it isn’t one (${e.message.replace('not a record: ', '')}): nothing was taken from the file.`); }
     if (by.has(r.id)) no('The file names one record twice: nothing was taken from it.');
     let h = '';
@@ -270,6 +279,7 @@ const ORDER = ['palette', 'font', 'stamp', 'template', 'piece', 'pack'];
 export async function open(files, as = '') {
   files = Array.isArray(files) ? files : [files];
   let p;
+  const missing = new Set();
   const was = S.root.dataset.saved, text = $('s-saved').textContent, all = new Map(), roots = [], fileOf = new Map();
   try {
     const bytes = files.reduce((n, f) => n + f.size, 0);
@@ -307,6 +317,7 @@ export async function open(files, as = '') {
       if (ids.length > LIMITS.batch) { S.status('saving', `Checking… ${i.toLocaleString('en')} of ${ids.length.toLocaleString('en')}`); await new Promise((ok) => setTimeout(ok)); }
       const have = S.store ? await S.store.held(part) : new Set();
       dangling += part.length - have.size;
+      for (const id of part) if (!have.has(id)) missing.add(id);
     }
     if (dangling > LIMITS.dangling) throw new Error(`Packs in ${files.length > 1 ? 'those files' : 'that file'} name more than ${LIMITS.dangling.toLocaleString('en')} records neither they nor this browser hold: ${LIMITS.dangling.toLocaleString('en')} at most.`);
     p = await plan([...all.values()]);
@@ -322,6 +333,9 @@ export async function open(files, as = '') {
     // (The claim's name in quotes and isolated, so it can't pass for the Studio's own words.)
     claim.append(x.r.author?.name ? ' · by “' : ' · by no one named', ...(x.r.author?.name ? [who, '”'] : []), ` · licence ${LIC[x.r.licence] || 'not chosen'}, the ${as ? 'link' : 'file'} says`);
     li.append(b, small, claim);
+    // A pack naming records neither the files nor this browser hold: said on its row (it comes in, naming them, and they come in with the file that holds them).
+    const gone = x.r.type === 'pack' ? x.r.body.members.filter((m) => missing.has(m.id) && !builtin(m.id)).length : 0;
+    if (gone) { const w = el('small', 's-warn', ` · names ${gone.toLocaleString('en')} record${gone > 1 ? 's' : ''} not in ${as ? 'the link' : files.length > 1 ? 'these files' : 'the file'} or this browser`); w.dataset.missing = gone; li.append(w); }
     if (x.how === 'update' || x.how === 'older') {
       const c = el('input');
       c.type = 'checkbox';
@@ -340,8 +354,23 @@ export async function open(files, as = '') {
   const n = (h) => shown.filter((x) => x.how === h).length;
   const named = as || (files.length > 1 ? `${files.length} files` : files[0].name);
   const what = el('p', 's-cap', `${named}: ${n('new')} new, ${n('update')} newer, ${n('copy')} as copies, ${n('older')} older, ${n('same') + n('starter')} already here.`);
+  // Part of a split backup picked without the rest ("(2 of 3)" in its name,
+  // a claim, so only its numbers are said): it opens alone, but what one
+  // part's records use may be in another, so the sheet offers to pick them all.
+  const parts = new Map();
+  for (const r of roots) {
+    const m = r.type === 'pack' && r.tags.includes('backup') && /^(.{0,80}) \(([1-9]\d{0,2}) of ([2-9]|[1-9]\d{1,2})\)$/.exec(r.name);
+    if (m && +m[2] <= +m[3]) { const k = `${m[1]}\n${m[3]}`, x = parts.get(k) || { of: +m[3], got: new Set() }; parts.set(k, x); x.got.add(m[2]); }
+  }
+  const short = as ? null : [...parts.values()].find((x) => x.got.size < x.of), body = [what, ul];
+  if (short) {
+    const k = short.got.size, w = el('p', 's-cap s-warn', `${k > 1 ? `These are ${k} parts` : 'This is one part'} of a backup in ${short.of} files: pieces in one part may use colours or stamps kept in another. Pick all ${short.of} at once to bring it all back, or add ${k > 1 ? 'these' : 'this one'} now and the rest later.`);
+    w.id = 's-fs-parts';
+    body.unshift(w);
+  }
   return new Promise((done) => {
-    const d = sheet(as ? 'Open a shared link' : 'Open a file', [what, ul], [
+    const d = sheet(as ? 'Open a shared link' : 'Open a file', body, [
+      ...(short ? [button(`Pick all ${short.of}`, false, () => { d.close(); pick(); })] : []),
       button('Add', true, async () => { d.onclose = null; d.close(); done(await add(p, roots, skip, ul, fileOf)); }),
       button('Cancel', false, () => { d.close(); })]);
     d.onclose = () => { S.root.dataset.opened = 'cancelled'; done(null); };
