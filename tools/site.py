@@ -515,9 +515,8 @@ GIFs with Create Art; the GIFs themselves are not on this site.
 THEME = ROOT / "site/theme"
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
 # The home page's own, in its hero's words (site/pages/home.html).
-HOME_DESCRIPTION = ("OpenDMD is free, open firmware for the DMDoS display, a 128x32 LED panel. It plays the GIFs "
-                    "already on your SD card, and adds a web app to run it from your phone: playlists, brightness "
-                    "and colour, night mode, and updates over WiFi.")
+HOME_DESCRIPTION = ("OpenDMD is free, open firmware for the DMDoS display. It plays the GIFs already on your SD "
+                    "card and adds a web app: playlists, brightness, night dimming.")
 # The HTTP API's frozen copies (see the docstring): dev/api/v<version>.html.
 API_PAGE = "docs/api.md"
 API_DIR = "dev/api"
