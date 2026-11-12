@@ -162,14 +162,13 @@ def main():
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)
-    for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
+    if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
+        # No card: the slot left empty (no --sd)
+        a.card = None
+    needed = [("emulator (run make emu-build)", sim), ("flash image", a.image), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)]
+    for what, p in needed + ([("card image (run mkcard.py)", a.card)] if a.card else []):
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
-    if a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img":
-        # No card: an empty image (a card the firmware cannot mount).
-        a.card = EMU_DIR / "card" / "empty.img"
-        a.card.parent.mkdir(parents=True, exist_ok=True)
-        a.card.write_bytes(b"")
     if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
         sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
     want_sha = image_elf_sha(a.image)
@@ -192,7 +191,7 @@ def main():
 
     # the card (--sd: copy-on-write, the file never modified) in a microSD slot on VSPI, CS 5
     env = dict(os.environ)
-    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", "--sd", str(a.card), "--boot", "rom", "--rom", str(rom),
+    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev", *(["--sd-spi", "18,23,19,5", "--sd", str(a.card)] if a.card else []), "--boot", "rom", "--rom", str(rom),
            "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
            "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)

@@ -5,7 +5,7 @@ Boots OpenDMD's real classic-ESP32 4mb full flash image in
 Correctness only, never timing; safe to run any time: it never touches a device.
 
 ```
-make emu-build     # fetch esp32sim at the pinned commit of our fork (the SD-SPI board is in it), cargo build --release (cached)
+make emu-build     # fetch esp32sim at the pinned commit of our fork (SD in SPI mode via --sd/--sd-spi is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
 make emu-probe     # psi-probe image (emu8mb, firmware/partitions-emu.csv: an emulator-only 8 MB layout with a 3 MB factory, never released; 64 KB spare; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
 make emu-paint-probe  # paint-probe image (4mb, a test board's; 80 MHz flash like every build, FW_FLASH_FREQ=40 for the old clock; its .odfw in $EMU_DIR/paint/dist goes to a test board by OTA): `psi-probe: paint: N cases, 0 differ` (each case's kernel frames against the VM's) -> EMU_PROBE_OK
@@ -20,11 +20,11 @@ make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
 Files:
 
 - `build-emulator.sh`: clone/fetch https://github.com/opendmd/esp32sim, check out `ESP32SIM_COMMIT`
-  (pinned in the script, a7ccd1b on the fork's `opendmd` branch), build. Stamp = repo + commit.
+  (pinned in the script, a0a15f0 on the fork's `sdspi-card` branch, merged into `opendmd`), build. Stamp = repo + commit.
   With `SCRATCH` set (e.g. in `local.mk`), refuses a dir outside it.
-- The fork: our emulator changes live on its `opendmd` branch (upstream 9fdeb32, merged 2026-11-03, plus the
-  SD-SPI board); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
-  The card: esp32sim's own SD card model in SPI mode (branch `sdspi-card`, written to go upstream),
+- The fork: our emulator changes live on its `opendmd` branch (upstream a57c5e0a, merged 2026-11-12, plus
+  SD in SPI mode via --sd/--sd-spi); upstream PRs maybe later if a change is general enough. To bump, commit on the fork and change the pin.
+  The card: esp32sim's own SD card model in SPI mode (from its `sdspi-card` branch, written to go upstream),
   on VSPI (SCLK 18, MOSI 23, MISO 19, CS 5) of a bare `esp32dev`: `--sd CARD.img --sd-spi 18,23,19,5`
   (copy-on-write: the image is never modified) or `--sd-rw` (written through: a lane that keeps
   what boot A wrote copies the card and boots that copy). `--debug sdmmc` prints its commands.
