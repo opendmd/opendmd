@@ -15,10 +15,16 @@ use tera::{Context, Tera};
 
 fn main() {
     embuild::espidf::sysenv::output();
+    // The chip's cfg (`esp32` or `esp32s3`, esp-idf-sys's MCU, which the line
+    // above passes on): the S3 port's pin map and its stubs are
+    // `#[cfg(esp32s3)]`. Declared for rustc's cfg check.
+    println!("cargo:rustc-check-cfg=cfg(esp32, esp32s3)");
 
     // The Makefile rewrites the partition path into target/sdkconfig.partitions;
     // still re-run when the table itself changes.
     println!("cargo:rerun-if-changed=partitions.csv");
+    println!("cargo:rerun-if-changed=partitions-s3.csv");
+    println!("cargo:rerun-if-changed=sdkconfig.s3");
     println!("cargo:rerun-if-changed=sdkconfig.defaults");
     println!("cargo:rerun-if-changed=components/hub75_shim/include/hub75_shim.h");
     println!("cargo:rerun-if-changed=components/hub75_shim/hub75_shim.cpp");
@@ -33,7 +39,9 @@ fn main() {
         "4mb" => "DevKit (4 MB)",
         // partitions-emu.csv: esp32sim's psi-probe image, never released.
         "emu8mb" => "emulator only (8 MB)",
-        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb (and emu8mb, emulator only)"),
+        // partitions-s3.csv: the ESP32-S3 DevKitC-1 preview (not released).
+        "s3" => "ESP32-S3 DevKitC-1 (8 MB)",
+        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb (and emu8mb, emulator only; s3, the S3 preview)"),
     };
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");

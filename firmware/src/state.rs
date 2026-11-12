@@ -98,15 +98,35 @@ pub fn running_version() -> String {
 /// region does not inflate it — this is memory a `Vec<u8>` could actually use.
 /// Both the display loop and the HTTP handlers read it: the loop to report the
 /// floor, the handlers to decide whether they can afford to serve at all.
+#[cfg(not(esp32s3))]
 pub fn free_heap() -> u32 {
     // SAFETY: an argument-free read of ESP-IDF's heap accounting.
     unsafe { esp_idf_sys::esp_get_free_heap_size() }
 }
 
-/// Largest single allocation currently possible from byte-addressable heap.
-pub fn largest_free_block() -> usize {
+/// The S3's: internal RAM only. Its PSRAM is in the heap too, but only an
+/// explicit `MALLOC_CAP_SPIRAM` allocation takes it (sdkconfig.s3,
+/// `CONFIG_SPIRAM_USE_CAPS_ALLOC`): a `Vec` never does, so the gates that
+/// read this (transitions, the still cache, the 503s) must not count it.
+#[cfg(esp32s3)]
+pub fn free_heap() -> u32 {
     // SAFETY: a read-only query with a capability mask argument.
-    unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
+    unsafe { esp_idf_sys::heap_caps_get_free_size(INTERNAL_8BIT) as u32 }
+}
+
+/// Internal, byte-addressable: what `malloc` takes on the S3.
+#[cfg(esp32s3)]
+const INTERNAL_8BIT: u32 = esp_idf_sys::MALLOC_CAP_INTERNAL | esp_idf_sys::MALLOC_CAP_8BIT;
+
+/// Largest single allocation currently possible from byte-addressable heap
+/// (internal only on the S3, as [`free_heap`]).
+pub fn largest_free_block() -> usize {
+    #[cfg(not(esp32s3))]
+    let caps = esp_idf_sys::MALLOC_CAP_8BIT;
+    #[cfg(esp32s3)]
+    let caps = INTERNAL_8BIT;
+    // SAFETY: a read-only query with a capability mask argument.
+    unsafe { esp_idf_sys::heap_caps_get_largest_free_block(caps) }
 }
 
 /// The phosphor glow holds its 12 KB copy now (`/api/status` `glow_held`).

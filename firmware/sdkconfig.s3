@@ -1,0 +1,38 @@
+# The ESP32-S3's sdkconfig (variant "s3", S3 port phase 0), layered by the
+# Makefile after sdkconfig.defaults and before the build's fragment for the
+# s3 variant only: the classic ESP32's builds never read this file.
+# The target itself comes from MCU=esp32s3 (esp-idf-sys).
+
+# The brownout detector's numbering is inverted on the S3: the classic's
+# level 7 is its highest threshold, ~2.80 V (sdkconfig.defaults, see
+# config.rs's brightness table), the S3's level 7 is its lowest, 2.44 V.
+# Level 4 (2.84 V) is the S3's nearest to the classic's 2.80 V.
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=n
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_4=y
+
+# The Formula JIT's kernels live in executable heap (MALLOC_CAP_EXEC). On
+# the S3, memory protection (on by default) splits internal SRAM into a
+# no-write IRAM half and a no-execute DRAM half, and IDF's heap then offers
+# no executable memory at all (heap/port/esp32s3/memory_layout.c). Off,
+# the D/IRAM heap is executable, through its IRAM alias, as on the classic.
+CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n
+
+# PSRAM: the DevKitC-1 N8R8 / N16R8's 8 MB of octal PSRAM (ESP32-S3-WROOM-1
+# N8R8/N16R8: quad flash, octal PSRAM on GPIO 35-37 among others). On, but
+# phase 0 moves nothing into it: only an explicit heap_caps_malloc(..,
+# MALLOC_CAP_SPIRAM) takes it (USE_CAPS_ALLOC), so malloc stays internal
+# exactly as on the classic, and phase 1 measures the internal heap as the
+# firmware uses it today. Which buffers move is a later phase's choice.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+# A board without its PSRAM (or a chip variant without) still boots.
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# The devkit's console is UART0 on GPIO 43/44 through its USB-UART bridge,
+# as the classic DevKit V1's (sdkconfig.defaults' custom UART0 at 921600).
+# The S3's native USB (GPIO 19/20) is left alone: no secondary console on
+# its USB-Serial-JTAG (IDF's S3 default), which took the firmware's own
+# lines (fd 1) and its panic output away from UART0.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

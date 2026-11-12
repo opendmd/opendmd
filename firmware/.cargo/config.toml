@@ -10,6 +10,12 @@ runner = "espflash flash --monitor"
 # 2 MB image hashed per firmware update.
 rustflags = ["--cfg", 'sha2_backend_soft="compact"']
 
+# The ESP32-S3 (the Makefile's VARIANT=s3, which passes --target and
+# MCU=esp32s3): the same linker and flags as the classic above.
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", 'sha2_backend_soft="compact"']
+
 [unstable]
 build-std = ["std", "panic_abort"]
 # None of std's default features: `backtrace` linked a whole DWARF
