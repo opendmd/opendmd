@@ -2132,12 +2132,15 @@ pub struct ReadaheadCheck {
 #[cfg(feature = "psi-probe")]
 #[inline(never)]
 pub fn readahead_self_check(root: &str) -> Option<ReadaheadCheck> {
-    let list = fs::read_to_string(format!("{root}/filelist.txt")).ok()?;
+    // A line at a time: the whole playlist (28 KB on the CI card) held
+    // through the check took the heap the read-ahead's gate asks for.
+    use std::io::BufRead;
+    let list = std::io::BufReader::with_capacity(512, File::open(format!("{root}/filelist.txt")).ok()?);
     let path = list
         .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("/gifs/"))
-        .map(|l| format!("{root}{l}"))
+        .map_while(Result::ok)
+        .filter(|l| l.trim().starts_with("/gifs/"))
+        .map(|l| format!("{root}{}", l.trim()))
         .max_by_key(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))?;
     let (_, h0, u0, f0) = crate::readahead::probe_counts();
     let heap0 = crate::state::free_heap();

@@ -1139,6 +1139,12 @@ fn vm_goldens(out: &mut [u8], variants_too: bool) -> (u32, u32) {
             break;
         }
         if let Err(e) = compile(src, &mut prog, true, true) {
+            // (The probe's heap, not the formula: skipped and said, as
+            // `jit2::goldens` does, not a difference.)
+            if e.msg == psi::NO_MEMORY {
+                say!(info, "psi-probe: golden {name}: skipped, no heap to compile it here (heap {} B free, largest block {} B)", heap(), crate::state::largest_free_block());
+                continue;
+            }
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile: {}", e.msg);
             continue;
@@ -2367,6 +2373,31 @@ pub fn run(root: &str) {
         std::mem::size_of::<psi::Scratch<64>>(),
         std::mem::size_of::<psi::Ink>()
     );
+    // Golden frames: the host's and wasm's hashes, here (plain with the
+    // still cache's variants, over the picture, drawn), then the same
+    // through the JIT's kernels (the emulator lane's check of the
+    // generated code), counted together. First, on the heap the probe
+    // starts with: they check the compiler and the JIT, not the heap, and
+    // each compile wants a 12 KB block for the formula stack beside its
+    // ~35 KB of buffers. After the card sections the heap's free blocks
+    // were 12-19 KB (a 2 KB larger boot task stack, 1ec4f55, was enough to
+    // leave all of them skipped).
+    {
+        say!(info, "psi-probe: golden frames from {} B free (largest {} B)", heap(), crate::state::largest_free_block());
+        let mut out = vec![0u8; psi::W * psi::H * 3];
+        let (mut ok, mut bad) = vm_goldens(&mut out, true);
+        #[cfg(feature = "jit")]
+        {
+            let (o, b) = jit2::goldens(&mut out);
+            ok += o;
+            bad += b;
+        }
+        say!(
+            info,
+            "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
+            if bad == 0 { " (bit-identical)" } else { "" }
+        );
+    }
     // What the probe is for first: the compiler's stack.
     // (The compile-stack worst cases are gone: the player never compiles;
     // the browser and `psi build` do, with the stacks they have.)
@@ -2429,25 +2460,9 @@ pub fn run(root: &str) {
     speed2(&mut out);
     say!(info, "psi-probe: main stack {} B unused after the speed2 rows", stack_unused());
     compile_leak();
-    // Golden frames: the host's and wasm's hashes, here (plain with the
-    // still cache's variants, over the picture, drawn), then the same
-    // through the JIT's kernels (the emulator lane's check of the
-    // generated code), counted together.
-    say!(info, "psi-probe: golden frames from {} B free", heap());
-    let (mut ok, mut bad) = vm_goldens(&mut out, true);
-    #[cfg(feature = "jit")]
-    {
-        let (o, b) = jit2::goldens(&mut out);
-        ok += o;
-        bad += b;
-    }
+    // (The golden frames ran first, on the fresh heap: see `run`.)
     let mut under = vec![0u8; psi::W * psi::H * 3];
     psi::golden::picture(&mut under);
-    say!(
-        info,
-        "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
-        if bad == 0 { " (bit-identical)" } else { "" }
-    );
     beam::goldens(&mut out);
 
     // The formula look as the main loop runs it (`FormulaLook::apply` over
