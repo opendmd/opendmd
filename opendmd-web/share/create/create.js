@@ -37,7 +37,8 @@
 // It takes the frames Download GIF would write, in full colour (`out(true,
 // true)`: the art module's `exact`, no palette, so a picture past 256
 // colours, or a dark one, keeps every colour; with "Fit to 256 colours"
-// ticked, or Look's colours set, the GIF itself, read back by
+// ticked, Look's colours set, or past the 4,096 colours a piece holds (a
+// photo, a video: said in the Studio), the GIF itself, read back by
 // ./gifread.js), and posts them to the Studio, transferred, with
 // their times, the play count, the naming fields and where it came from;
 // the Studio checks every message (studio/import.js). The page says it is
@@ -187,13 +188,16 @@ function inStudio(st, use) {
     use.disabled = true;
     try {
       // Every colour as it is, unless Fit is ticked or Look's colours say how many (then the GIF's, read back).
-      const exact = !$('c-fit').checked && $('st-colours').value === '0', o = await st.out(true, exact);
+      // Past the 4,096 colours a piece holds (a photo, a video), fitted to 256 as if asked, and said.
+      let o = await st.out(true, !$('c-fit').checked && $('st-colours').value === '0'), g = o && o.gif instanceof Uint32Array ? full(o.gif, o.plays) : null;
+      const fitted = !!g && g.colours > PIECE_COLOURS;
+      if (fitted) { o = await st.out(true, false); g = null; }
       if (!o) { say('The GIF could not be made: try again.'); return; }
-      const g = exact ? full(o.gif, o.plays) : (await import('./gifread.js')).read(o.gif);
+      g ||= (await import('./gifread.js')).read(o.gif);
       // (Times as the Studio keeps them: 20 ms to a minute.)
       const ms = g.ms.map((x) => Math.min(60000, Math.max(20, Math.round(x / 10) * 10)));
       to({ type: FRAMES, w: 128, h: 32, n: g.n, total: g.total, ms, plays: g.plays, px: g.px.buffer,
-        title: o.title.slice(0, 120), platform: o.platform, author: o.author.slice(0, 80), logo: o.logo, note: from() }, [g.px.buffer]);
+        title: o.title.slice(0, 120), platform: o.platform, author: o.author.slice(0, 80), logo: o.logo, note: from(), fitted }, [g.px.buffer]);
     } catch (e) { say(e.message || String(e)); } finally {
       use.disabled = false;
     }
@@ -216,10 +220,17 @@ function inStudio(st, use) {
 // st.exact's frames (`[n, total, n times, n * 4096 0xRRGGBB]`) as gifread's
 // {n, total, ms, plays, px} (RGBA, every pixel opaque: the Studio takes
 // black as off, as the panel shows it).
+// `colours`: how many it has besides black, counted only to just past
+// PIECE_COLOURS (the Studio's CAPS.colours, the most a piece holds).
+const PIECE_COLOURS = 4096;
 function full(x, plays) {
-  const n = x[0], c = x.subarray(2 + n), px = new Uint8Array(c.length * 4);
-  for (let i = 0; i < c.length; i++) { const v = c[i]; px[i * 4] = v >> 16; px[i * 4 + 1] = (v >> 8) & 255; px[i * 4 + 2] = v & 255; px[i * 4 + 3] = 255; }
-  return { n, total: x[1], ms: [...x.subarray(2, 2 + n)], plays, px };
+  const n = x[0], c = x.subarray(2 + n), px = new Uint8Array(c.length * 4), seen = new Set();
+  for (let i = 0; i < c.length; i++) {
+    const v = c[i];
+    px[i * 4] = v >> 16; px[i * 4 + 1] = (v >> 8) & 255; px[i * 4 + 2] = v & 255; px[i * 4 + 3] = 255;
+    if (v && seen.size <= PIECE_COLOURS) seen.add(v);
+  }
+  return { n, total: x[1], ms: [...x.subarray(2, 2 + n)], plays, px, colours: seen.size };
 }
 // Where the picture came from, for the piece's `from`: "Game art: <title>",
 // "GifCities: <words>", an address's host, "Your file", "Pasted", "Shared".

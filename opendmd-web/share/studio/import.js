@@ -159,7 +159,9 @@ function on(e) {
   take(m, () => d.open && k === me).then((done) => {
     if (!done) return;
     d.close();
-    S.say(m.total > m.n ? `That had ${m.total.toLocaleString('en')} frames: the first ${m.n} are kept (a piece has ${CAPS.frames} at most). Import’s timeline trims it to the part you want.` : '');
+    // (Said by the frame's message: past a piece's colours it was fitted to 256, not refused.)
+    const fitted = m.fitted === true ? `That had more than ${CAPS.colours.toLocaleString('en')} colours, so it was fitted to 256.` : '';
+    S.say([fitted, m.total > m.n ? `That had ${m.total.toLocaleString('en')} frames: the first ${m.n} are kept (a piece has ${CAPS.frames} at most). Import’s timeline trims it to the part you want.` : ''].filter(Boolean).join(' '));
   }, (err) => refuse(err.message || String(err))).finally(() => { busy = false; });
 }
 function refuse(why) {
@@ -189,7 +191,7 @@ function read(m) {
       if (!v) continue; // black: off, as the panel shows it
       let key = keys.get(v);
       if (key === undefined) {
-        if (keys.size >= CAPS.colours) throw new Error(`it has more than ${CAPS.colours.toLocaleString('en')} colours, more than a piece holds`);
+        if (keys.size >= CAPS.colours) throw new Error(`it has more than ${CAPS.colours.toLocaleString('en')} colours, more than a piece holds: tick Fit to 256 colours and use it again`);
         keys.set(v, (key = keys.size + 1));
       }
       c[i] = key;
@@ -205,7 +207,7 @@ async function take(m, now) {
   const { ms, cels, colours } = read(m);
   const n = cels.length;
   // (The naming fields as plain text, as a file's are.)
-  m = { ...m, title: text(m.title), author: text(m.author), note: text(m.note) };
+  m = { ...m, title: text(m.title), platform: text(m.platform), author: text(m.author), note: text(m.note) };
   const entry = { external: true, note: m.note || 'Imported', ...(m.title ? { title: m.title } : {}), ...(m.platform ? { platform: m.platform } : {}),
     ...(m.author ? { author: m.author } : {}), ...(m.logo ? { logo: true } : {}) };
   const as = d.querySelector('input[name=s-imp-as]:checked')?.value;
