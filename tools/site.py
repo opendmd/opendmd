@@ -89,6 +89,11 @@
                release's there and never removes one).
                dev/api.html (the latest) links them all; the web app's
                Settings -> About links its firmware's
+- /changelog/  the changelog (site/pages/changelog.md: each release's
+               highlights, newest first; `changelog` below turns its
+               headings into the page's sections, and holds back an entry
+               newer than the newest release the site serves), and
+               changelog/feed.xml, the same entries as an Atom feed
 - /licenses/   the licences: a page (LICENCES below, linked from every
                page's footer) and the third-party notices from licenses/
                (tools/notices.py), the same files the release and the
@@ -124,6 +129,7 @@ the link. `make site` runs this; `make site-deploy` deploys it.
 """
 
 import argparse
+import datetime
 import functools
 import html
 import json
@@ -182,6 +188,7 @@ PAGES = {
     "docs/psi-errors.md": "dev/psi/errors/index.html",
     "docs/simulator.md": "dev/simulator.html",
     "hardware/PINOUT.md": "dev/pinout.html",
+    "site/pages/changelog.md": "changelog/index.html",
 }
 # Pages that moved: old published path -> new one, kept as redirects.
 MOVED = {
@@ -369,7 +376,7 @@ INSTALL_ONE = """<div class="board" id="board-{v}">
 </div>"""
 
 
-def install_button(version: str, offline: set[str]) -> str:
+def install_button(page: str, version: str, offline: set[str]) -> str:
     """The release's buttons (`offline`: the layouts whose offline manifest it publishes)."""
     def one(v: str) -> str:
         b, lab, about = BOARDS[v]
@@ -377,7 +384,7 @@ def install_button(version: str, offline: set[str]) -> str:
         return INSTALL_ONE.format(v=v, board=b, label=lab, about=about, attrs=install_attrs(f"firmware/manifest-{v}.json", off),
                                   offline=offline_box(v, off))
     return ('<div class="install"><div class="boards">' + "".join(one(v) for v in INSTALL_BOARDS)
-            + f'</div><p class="ver">OpenDMD {version}.</p></div>')
+            + f'</div><p class="ver">OpenDMD {version}. <a href="{href(page, CHANGELOG_PAGE)}#v{version}">What\'s new</a></p></div>')
 
 
 # A beta newer than the final release (`--beta-dist`): its installer and
@@ -949,7 +956,7 @@ def markers(page: str, text: str, rel_info: dict) -> str:
     """Site-only pieces, written in the docs as HTML comments (invisible on
     GitHub): the install button, the update bundle's download link."""
     ver = html.escape(rel_info["version"])
-    button = install_button(ver, OFFLINE.get("firmware", set()))
+    button = install_button(page, ver, OFFLINE.get("firmware", set()))
     if rel_info.get("beta"):
         off = f"{BETA_DIR}/manifest-4mb-offline.json" if "4mb" in OFFLINE.get(BETA_DIR, set()) else None
         button += INSTALL_BETA.format(version=html.escape(rel_info["beta"]), attrs=install_attrs(f"{BETA_DIR}/manifest-4mb.json", off),
@@ -1074,6 +1081,109 @@ def app_page(out: Path, page: str, wm: dict) -> None:
     dest.write_text(text, encoding="utf-8")
 
 
+# The changelog (changelog/index.html, changelog/feed.xml), written in
+# site/pages/changelog.md, newest first:
+#   ## <version> · <YYYY-MM-DD>    a release: a summary line and a few bullets
+#   ## <anything else>             a group of short entries (a release's betas)
+#   ### <version> · <YYYY-MM-DD>   a short entry in a group
+# The headings become the page's sections: the date in words, Beta (a
+# pre-release) and Latest (the release the Install button installs), and the
+# release's page on GitHub. An entry for a version newer than the newest
+# release this build serves is held back (so it can be written before the
+# release, and never links to a release that is not out).
+CHANGELOG = "site/pages/changelog.md"
+CHANGELOG_PAGE = PAGES[CHANGELOG]
+CHANGELOG_FEED = "changelog/feed.xml"
+CHANGELOG_ABOUT = "What's new in each OpenDMD release: the highlights, newest first."
+CHANGELOG_HEAD = '<link rel="alternate" type="application/atom+xml" title="OpenDMD changelog" href="feed.xml">'
+SITE_URL = "https://opendmd.dev"
+RELEASE_URL = "https://github.com/opendmd/opendmd/releases/tag/v"
+CL_HEADING = re.compile(r'<h([23]) id="([^"]*)">(.*?)<a class="headerlink"[^>]*>[^<]*</a></h\1>\s*', re.S)
+CL_RELEASE = re.compile(r"(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?) · (\d{4}-\d\d-\d\d)")
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+          "November", "December")
+
+
+def day(d: datetime.date, short: bool = False, year: bool = True) -> str:
+    m = MONTHS[d.month - 1]
+    return f"{d.day} {m[:3] if short else m}" + (f" {d.year}" if year else "")
+
+
+def changelog(body: str, info: dict) -> tuple[str, str]:
+    """The changelog's page body and its Atom feed, from the markdown's HTML."""
+    newest = info.get("beta") or info["version"]
+    parts = CL_HEADING.split(re.sub(r"<!--.*?-->\s*", "", body, flags=re.S))
+    out, entries, held, prev = [parts[0]], [], [], None
+    group: dict | None = None
+    link = '<a class="headerlink" href="#{0}" title="Permanent link">#</a>'
+
+    def close() -> None:
+        nonlocal group
+        if group and group["rows"]:
+            days = [d for d, _ in group["rows"]]
+            span = day(max(days)) if min(days) == max(days) else f"{day(min(days), year=min(days).year != max(days).year)} to {day(max(days))}"
+            kind = "betas" if all(b for b in group["betas"]) else "releases"
+            out.append(f'<section class="rel" id="{group["id"]}"><p class="rel-meta">{span}<span>{len(days)} {kind}</span></p>'
+                       f'<h2>{group["title"]}{link.format(group["id"])}</h2>\n{group["intro"]}'
+                       f'<div class="rel-list">{"".join(r for _, r in group["rows"])}</div></section>\n')
+        group = None
+
+    for level, hid, text, content in zip(parts[1::4], parts[2::4], parts[3::4], parts[4::4]):
+        m = CL_RELEASE.fullmatch(text.strip())
+        if level == "2" and not m:
+            if re.match(r"\d", text.strip()):
+                raise SystemExit(f'{CHANGELOG}: "{text.strip()}" is not "<version> · <YYYY-MM-DD>"')
+            close()
+            group = {"id": hid, "title": text.strip(), "intro": content, "rows": [], "betas": []}
+            continue
+        if not m or (level == "3" and group is None):
+            raise SystemExit(f'{CHANGELOG}: "### {text.strip()}" must be "<version> · <YYYY-MM-DD>", inside a group')
+        try:
+            ver, d = m.group(1), datetime.date.fromisoformat(m.group(2))
+        except ValueError as e:
+            raise SystemExit(f"{CHANGELOG}: {m.group(1)}'s date {m.group(2)}: {e}")
+        if prev and not (semver_key(ver) < semver_key(prev[0]) and d <= prev[1]):
+            raise SystemExit(f"{CHANGELOG}: {ver} ({d}) comes after {prev[0]} ({prev[1]}): newest first")
+        prev = (ver, d)
+        if level == "2":
+            close()
+        if semver_key(ver) > semver_key(newest):
+            held.append(ver)
+            continue
+        entries.append((ver, d, content))
+        url, beta = RELEASE_URL + ver, "-" in ver
+        if level == "3":
+            group["betas"].append(beta)
+            group["rows"].append((d, f'<article class="rel-row" id="v{ver}"><div class="rel-k"><h3>{ver}</h3>'
+                                     f'<p><time datetime="{d}">{day(d, short=True)}</time> · '
+                                     f'<a href="{url}" aria-label="OpenDMD {ver} on GitHub">GitHub</a></p></div>'
+                                     f'<div class="rel-v">{content}</div></article>\n'))
+            continue
+        tag = "<span>Beta</span>" if beta else "<span>Latest</span>" if ver == info["version"] else ""
+        out.append(f'<section class="rel" id="v{ver}"><p class="rel-meta"><time datetime="{d}">{day(d)}</time>{tag}</p>'
+                   f'<h2>{ver}{link.format("v" + ver)}</h2>\n{content}'
+                   f'<p class="vers"><a href="{url}">OpenDMD {ver} on GitHub</a></p></section>\n')
+    close()
+    if not entries:
+        raise SystemExit(f"{CHANGELOG}: no release up to {newest}")
+    if held:
+        print(f"changelog: held back until released: {', '.join(held)} (the newest release here is {newest})")
+    for v in dict.fromkeys((newest, info["version"])):
+        if all(e[0] != v for e in entries):
+            print(f"changelog: no entry for {v}: add its highlights to {CHANGELOG} (docs/deploying.md, \"The changelog\")")
+    # The feed: the same entries, links made whole.
+    here = SITE_URL + served(CHANGELOG_PAGE)
+    whole = functools.partial(re.sub, r'href="([^"]+)"', lambda m: f'href="{html.escape(urllib.parse.urljoin(here, html.unescape(m.group(1))))}"')
+    feed = ('<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n<title>OpenDMD changelog</title>\n'
+            f'<subtitle>{html.escape(CHANGELOG_ABOUT)}</subtitle>\n<id>{here}</id>\n<link href="{here}"/>\n'
+            f'<link rel="self" href="{SITE_URL}/{CHANGELOG_FEED}"/>\n<updated>{max(e[1] for e in entries)}T00:00:00Z</updated>\n'
+            '<author><name>OpenDMD</name></author>\n')
+    for ver, d, content in entries:
+        feed += (f'<entry><title>OpenDMD {ver}</title><id>{here}#v{ver}</id><link href="{here}#v{ver}"/>'
+                 f'<updated>{d}T00:00:00Z</updated><content type="html">{html.escape(whole(content.strip()))}</content></entry>\n')
+    return "".join(out), feed + "</feed>\n"
+
+
 def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set[str], extra: str = "",
               on: str | None = None, title_note: str = "") -> str:
     """One doc (`src`) as the published `page`, with `extra` after its
@@ -1088,15 +1198,21 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     title = "OpenDMD" if title == "OpenDMD" else f"{title}{title_note} · OpenDMD"
     if src == HOME:
         body, title = home(art, assets), "OpenDMD: open firmware and a web app for the DMDoS LED display"
+    feed = None
+    if src == CHANGELOG:
+        body, feed = changelog(body, info)
     if page in TOC_PAGES or on in TOC_PAGES:
         extra += on_this_page(md.toc_tokens)
     body = after_h1(decorate(body), extra)
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
     head = "\n" + (INSTALL_HEAD if page == INSTALL_PAGE else psi_head(page) if page in PSI_PAGES
-                   else HOME_HEAD if src == HOME else "")
+                   else HOME_HEAD if src == HOME else CHANGELOG_HEAD if feed else "")
     dest.write_text(render(page, title, body, art["wordmark"], head=head, on=on,
+                           description=CHANGELOG_ABOUT if feed else DESCRIPTION,
                            kind="home" if src == HOME else "doc"), encoding="utf-8")
+    if feed:
+        (out / CHANGELOG_FEED).write_text(feed, encoding="utf-8")
     return body
 
 
