@@ -5595,7 +5595,7 @@ def studio_links_review(browser, base: str, site: Path, errors: list[str]) -> No
         page.goto(f"{base}/studio/")
         page.wait_for_selector(S_READY, timeout=30000)
         page.evaluate("""() => { window.__paints = 0; const p = CanvasRenderingContext2D.prototype.putImageData;
-            CanvasRenderingContext2D.prototype.putImageData = function (...a) { if (this.canvas.closest?.('#s-lk')) __paints++; return p.apply(this, a); }; }""")
+            CanvasRenderingContext2D.prototype.putImageData = function (...a) { if (this.canvas.id !== 's-canvas') __paints++; return p.apply(this, a); }; }""")
         for _ in range(30):
             page.evaluate("(c) => { location.hash = '#p=' + c; }", code)
             wait_js(page, f"{L_SHOWN} === 'shown'", timeout=10000)
