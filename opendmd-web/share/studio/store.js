@@ -312,10 +312,17 @@ export function checkBody(type, b) {
 
 // A record's envelope as the format names it, and nothing else.
 export const ENVELOPE = ['type', 'id', 'rev', 'hash', 'name', 'tags', 'note', 'author', 'licence', 'from', 'created', 'modified', 'body'];
-// A name or an author from someone else (a file, a link) without the
-// controls that reorder or hide text (bidi overrides and isolates, zero-width
-// marks), so it can't scramble the Studio's own words around it.
-export const plain = (t) => (typeof t === 'string' ? t.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '') : t);
+// A name, author, note or tag from someone else (a file, a link, Import)
+// without what reorders or hides text (bidi marks, overrides and isolates,
+// zero-width spaces, controls (a line break as a space), soft hyphens, lone
+// surrogates, tag characters outside a flag), so it can't scramble the
+// Studio's own words around it.
+// The joiners (ZWNJ, ZWJ) stay, for Persian and emoji, but only between two
+// characters: once, never at either end or beside a space. Spaces at the
+// ends go too.
+export const plain = (t) => (typeof t === 'string' ? t.replace(/[\t-\r\u0085\u2028\u2029]/g, ' ')
+  .replace(/(\u{1f3f4}[\u{e0020}-\u{e007e}]+\u{e007f})|[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b\u200e\u200f\u2028-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]|\p{Cs}/gu, '$1')
+  .replace(/[\u200c\u200d]{2,}/g, (j) => j[0]).replace(/^[\u200c\u200d]|[\u200c\u200d]$|(\s)[\u200c\u200d]|[\u200c\u200d](?=\s)/g, '$1').trim() : t);
 export const envelope = (r) => Object.fromEntries(ENVELOPE.filter((k) => r[k] !== undefined).map((k) => [k, r[k]]));
 
 const head = (rec) => { const { body, ...h } = rec; return h; };

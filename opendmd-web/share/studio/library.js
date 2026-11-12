@@ -146,7 +146,9 @@ async function detail(id) {
   open = id;
   const r = find(id), d = $('s-ldet');
   if (!r) { d.hidden = true; return; }
-  const own = !ro(r), from = (r.from || []).map((f) => (f.external ? f.note || 'an imported picture' : `${f.name || f.id} (version ${f.rev})`));
+  // (What it was made from, each a claim: in quotes and isolated, as the open sheet shows a file's.)
+  const own = !ro(r), from = el('span'), q = (t) => ['“', el('bdi', '', t), '”'];
+  for (const [i, f] of (r.from || []).entries()) from.append(...(i ? [', '] : []), ...(f.external ? (f.note ? q(f.note) : ['an imported picture']) : [...q(f.name || f.id), ` (version ${f.rev})`]));
   const used = own ? await usedIn(id) : [];
   const revs = S.store && own ? await S.store.revs(id) : [];
   const head = el('div', 's-hd');
@@ -165,8 +167,16 @@ async function detail(id) {
   fact('Note', own ? field('note', r.note || '', 'Note', CAPS.note) : r.note || '—');
   fact('Made by', r.author?.name || '—');
   fact('Licence', LICENCE[r.licence] || 'not chosen');
-  fact('Made from', from.join(', ') || '—');
+  fact('Made from', from.childNodes.length ? from : '—');
   if (own) fact('Used in', used.map((u) => u.name).join(', ') || '—');
+  // A pack's members, each a name, and the ones this browser doesn't hold (a file named them, or they were deleted) said as such.
+  if (r.type === 'pack') {
+    const here = new Map(Object.values(all).flat().map((x) => [x.id, x])), ms = r.body.members.map((m) => here.get(m.id) || builtin(m.id)), got = ms.filter(Boolean), gone = ms.length - got.length, h = el('span');
+    if (got.length) h.append(got.slice(0, 12).map((x) => x.name || 'Untitled').join(', ') + (got.length > 12 ? ` and ${got.length - 12} more` : ''));
+    if (gone) h.append(...(got.length ? [' · '] : []), el('span', 's-warn', `${gone} not in this browser`));
+    h.dataset.missing = gone;
+    fact('Holds', h.childNodes.length ? h : '—');
+  }
   if (own && revs.length) fact('Versions', revs.map((v) => `${v.rev}${v.label ? ` (${v.label})` : ''}`).join(', ') + `, ${r.rev} now`);
   const acts = el('div', 's-row');
   if (r.type === 'piece' && own) acts.append(button(r.id === S.rec?.id ? 'Back to it' : 'Open', 'edit', true));

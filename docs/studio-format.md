@@ -143,7 +143,27 @@ between openings.
 most in all. The packs it carries may name 4,096 records that neither its
 files nor this browser hold. The store keeps "what uses what" rows only
 for records it has; the Library's Used in also reads every pack that
-names a record, so one that came first still counts.
+names a record, so one that came first still counts. A pack naming
+records that neither the opening's files nor this browser hold says how
+many on its row as it is opened, and the Library's Holds says how many of
+a pack's members this browser doesn't have. A part of a split backup (a
+pack tagged `backup` whose name ends "(*i* of *n*)") opened without the
+others says so and offers to pick all *n*; it opens alone too, and the
+rest may follow later (their records keep their ids, so they link up).
+
+**Plain text.** What a record from a file, a link or Import says of itself
+(its name, author, note and tags, and each `from` entry's name, author,
+note, title and platform) is read as plain text, in what is shown and in
+what is stored: controls that reorder or hide text are dropped (U+0000 to
+U+001F and U+007F to U+009F, a line break as a space; U+00AD, U+061C,
+U+180E, U+200B, U+200E, U+200F, U+2028 to U+202E, U+2060 to U+2069,
+U+FEFF, U+FFF9 to U+FFFB; tag characters, U+E0000 to U+E007F, except in a
+flag's sequence after U+1F3F4; and lone surrogates). The joiners U+200C and
+U+200D stay where they join two characters (Persian, emoji sequences): a
+run of them is kept as its first, and one at either end or beside a space
+is dropped. Spaces at the ends go; a note left empty goes, as does an
+empty tag. The hash is the body's, so none of this changes it. The Studio
+shows each such claim in quotes, isolated.
 
 **Its GIF.** Up to 256 colours a GIF frame holds them all, over one table.
 Past 256, each frame is written as a base and corrections: first the whole
@@ -186,9 +206,7 @@ file. `<code>` is base64url (no padding) of zlib-deflated bytes.
 | 1, … | 1 if the source record follows: its id (length first; `pc_` and 32 lowercase hex digits), rev (4 bytes, 1 to 2^31), hash (32 bytes, the SHA-256); else 0 |
 
 Nothing may follow. Names and authors, from a link or a file, are read as
-plain text: controls that reorder or hide text (U+061C, U+200B to U+200F,
-U+202A to U+202E, U+2060 to U+2069, U+FEFF) are dropped, in what is shown
-and in what is stored. A reader refuses a fragment over 8,000 characters
+plain text (see **Plain text** under Files). A reader refuses a fragment over 8,000 characters
 before decoding it, stops inflating at the most a valid `#p=` could hold,
 and refuses any count, index, time or string that disagrees with the bytes.
 Opening one stores nothing: it shows the picture with who the link says

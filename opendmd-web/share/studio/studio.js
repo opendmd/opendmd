@@ -775,7 +775,8 @@ async function drafts() {
 // --- snapshots: named revisions (store.snapshot), restored as one undo step ---
 // What the piece says about itself: who made it, its licence, what it was made from.
 function prov() {
-  const r = rec, from = (r?.from || []).map((f) => (f.external ? f.note || 'an imported picture' : f.name || 'a record')).filter(Boolean);
+  // (Each a claim: quoted and isolated, U+2068 to U+2069, which plain() keeps out of what it quotes.)
+  const r = rec, from = (r?.from || []).map((f) => { const t = f.external ? f.note : f.name; return t ? `“\u2068${t}\u2069”` : f.external ? 'an imported picture' : 'a record'; });
   $('s-prov').textContent = r ? `Made by ${r.author?.name || '—'} · Licence ${r.licence === 'CC0-1.0' ? 'CC0' : r.licence === 'CC-BY-4.0' ? 'CC BY 4.0' : 'not chosen'}`
     + (from.length ? ` · Made from ${from.slice(0, 3).join(', ')}${from.length > 3 ? ` and ${from.length - 3} more` : ''}` : '') : '';
 }
