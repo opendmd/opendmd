@@ -60,6 +60,7 @@ pub mod sky;
 pub mod synth;
 #[cfg(feature = "tags")]
 pub mod tags;
+pub mod tree;
 pub mod text;
 pub mod updater_picture;
 pub mod wifi_login;
