@@ -475,12 +475,14 @@ One line that sums the release up.
 - Two to five things an owner would notice: new features, big fixes, speed.
 ```
 
-- The heading is `## <version> · <YYYY-MM-DD>`, the version without its
-  `v`. `tools/site.py` (`changelog`) makes the rest from it: the date in
+- The heading is `## <version> · <YYYY-MM-DD>` (a leading `v` is
+  accepted and dropped). `tools/site.py` (`changelog`) makes the rest from it: the date in
   words, **Beta** on a pre-release, **Latest** on the release the Install
   button installs, the link to the GitHub release, and the Atom feed
-  (`/changelog/feed.xml`). A heading out of order or in another shape fails
-  `make site`.
+  (`/changelog/feed.xml`). A heading out of order or in another shape, or
+  a group with nothing under it, fails `make site`. A tag that never had a
+  GitHub release (0.3.0) is listed in `CHANGELOG_TAG_ONLY` and links to
+  its tree instead.
 - An entry for a version newer than the newest published release is **held
   back**: the page and the feed leave it out until the site is built with
   that release (`make site` says which entries it held back). So the entry

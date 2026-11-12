@@ -1098,8 +1098,12 @@ CHANGELOG_ABOUT = "What's new in each OpenDMD release: the highlights, newest fi
 CHANGELOG_HEAD = '<link rel="alternate" type="application/atom+xml" title="OpenDMD changelog" href="feed.xml">'
 SITE_URL = "https://opendmd.dev"
 RELEASE_URL = "https://github.com/opendmd/opendmd/releases/tag/v"
+# Tags that never had a GitHub release (before the releases began): linked to
+# the tag's tree instead. tools/site-smoke.py has the same set.
+TAG_URL = "https://github.com/opendmd/opendmd/tree/v"
+CHANGELOG_TAG_ONLY = {"0.3.0"}
 CL_HEADING = re.compile(r'<h([23]) id="([^"]*)">(.*?)<a class="headerlink"[^>]*>[^<]*</a></h\1>\s*', re.S)
-CL_RELEASE = re.compile(r"(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?) · (\d{4}-\d\d-\d\d)")
+CL_RELEASE = re.compile(r"v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?) · (\d{4}-\d\d-\d\d)")
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December")
 
@@ -1119,10 +1123,13 @@ def changelog(body: str, info: dict) -> tuple[str, str]:
 
     def close() -> None:
         nonlocal group
+        if group and not group["rows"] and not group["held"]:
+            raise SystemExit(f'{CHANGELOG}: "## {group["title"]}" has no entries under it: a release is '
+                             '"## <version> · <YYYY-MM-DD>", a group\'s entries "### <version> · <YYYY-MM-DD>"')
         if group and group["rows"]:
             days = [d for d, _ in group["rows"]]
             span = day(max(days)) if min(days) == max(days) else f"{day(min(days), year=min(days).year != max(days).year)} to {day(max(days))}"
-            kind = "betas" if all(b for b in group["betas"]) else "releases"
+            kind = ("beta" if all(group["betas"]) else "release") + ("s" if len(days) != 1 else "")
             out.append(f'<section class="rel" id="{group["id"]}"><p class="rel-meta">{span}<span>{len(days)} {kind}</span></p>'
                        f'<h2>{group["title"]}{link.format(group["id"])}</h2>\n{group["intro"]}'
                        f'<div class="rel-list">{"".join(r for _, r in group["rows"])}</div></section>\n')
@@ -1131,10 +1138,10 @@ def changelog(body: str, info: dict) -> tuple[str, str]:
     for level, hid, text, content in zip(parts[1::4], parts[2::4], parts[3::4], parts[4::4]):
         m = CL_RELEASE.fullmatch(text.strip())
         if level == "2" and not m:
-            if re.match(r"\d", text.strip()):
+            if re.match(r"v?\d", text.strip()):
                 raise SystemExit(f'{CHANGELOG}: "{text.strip()}" is not "<version> · <YYYY-MM-DD>"')
             close()
-            group = {"id": hid, "title": text.strip(), "intro": content, "rows": [], "betas": []}
+            group = {"id": hid, "title": text.strip(), "intro": content, "rows": [], "betas": [], "held": 0}
             continue
         if not m or (level == "3" and group is None):
             raise SystemExit(f'{CHANGELOG}: "### {text.strip()}" must be "<version> · <YYYY-MM-DD>", inside a group')
@@ -1149,9 +1156,11 @@ def changelog(body: str, info: dict) -> tuple[str, str]:
             close()
         if semver_key(ver) > semver_key(newest):
             held.append(ver)
+            if level == "3":
+                group["held"] += 1
             continue
         entries.append((ver, d, content))
-        url, beta = RELEASE_URL + ver, "-" in ver
+        url, beta = (TAG_URL if ver in CHANGELOG_TAG_ONLY else RELEASE_URL) + ver, "-" in ver
         if level == "3":
             group["betas"].append(beta)
             group["rows"].append((d, f'<article class="rel-row" id="v{ver}"><div class="rel-k"><h3>{ver}</h3>'

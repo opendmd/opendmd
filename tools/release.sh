@@ -347,7 +347,9 @@ fi
 pass "signing key present (32 bytes, mode $(stat -c %a "$FW_SIGN_KEY"); its contents are never read here)"
 
 # The site's changelog: a reminder, never a failure (docs/deploying.md "The changelog").
-if grep -qF "## $VERSION · " site/pages/changelog.md 2>/dev/null; then
+odd=$(grep -nE '^###? v?[0-9]' site/pages/changelog.md 2>/dev/null | grep -vE '^[0-9]+:###? v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)? · [0-9]{4}-[0-9]{2}-[0-9]{2}$' || true)
+[ -z "$odd" ] || printf 'NOTE  %s\n' "site/pages/changelog.md: not \"<version> · <YYYY-MM-DD>\" (make site will refuse it): $(head -1 <<<"$odd")"
+if grep -qE "^## v?${VERSION//./\\.} · " site/pages/changelog.md 2>/dev/null; then
   pass "changelog: site/pages/changelog.md has $VERSION's highlights"
 else
   printf 'NOTE  %s\n' "no \"## $VERSION · <date>\" in site/pages/changelog.md: opendmd.dev/changelog/ will not list $VERSION until its highlights are added (docs/deploying.md \"The changelog\")"

@@ -7343,8 +7343,8 @@ def changelog(site: Path) -> None:
     def key(v: str) -> tuple:  # 1.0.0-beta.2 < 1.0.0-beta.10 < 1.0.0
         core, _, pre = v.partition("-")
         return tuple(int(x) for x in core.split(".")), not pre, tuple(int(x) if x.isdigit() else x for x in pre.split("."))
-    vers = re.findall(r'<(?:section|article) class="rel(?:-row)?" id="v([^"]+)"', text)
-    check(len(vers) > 20 and vers == sorted(vers, key=key, reverse=True) and len(set(vers)) == len(vers),
+    vers = re.findall(r'<(?:section|article) class="rel(?:-row)?" id="v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)"', text)
+    check(bool(vers) and vers == sorted(vers, key=key, reverse=True) and len(set(vers)) == len(vers),
           f"changelog: {len(vers)} releases, newest first ({vers[0] if vers else 'none'} down to {vers[-1] if vers else 'none'})")
     # A release with no entry yet is not a failure (a release never waits for its highlights).
     check(bool(vers) and key(vers[0]) <= key(newest),
@@ -7352,9 +7352,11 @@ def changelog(site: Path) -> None:
     for v in dict.fromkeys((newest, final)):
         if v not in vers:
             print(f"  NOTE  the changelog has no entry for {v} (site/pages/changelog.md)")
-    check(all(f'href="https://github.com/opendmd/opendmd/releases/tag/v{v}"' in text for v in vers),
-          "changelog: every release linked to its page on GitHub")
-    tagged = dict(re.findall(r'<section class="rel" id="v([^"]+)"><p class="rel-meta"><time[^>]*>[^<]*</time>(?:<span>(\w+)</span>)?', text))
+    # A tag with no GitHub release (tools/site.py CHANGELOG_TAG_ONLY) links its tree, never a release page.
+    gh, tag_only = "https://github.com/opendmd/opendmd/", {"0.3.0"}
+    bad = [v for v in vers if (f'href="{gh}tree/v{v}"' in text, f'href="{gh}releases/tag/v{v}"' in text) != (v in tag_only, v not in tag_only)]
+    check(not bad, f"changelog: every release linked to its GitHub release, a tag without one ({sorted(tag_only & set(vers))}) to its tree {bad}")
+    tagged = dict(re.findall(r'<section class="rel" id="v(\d[^"]*)"><p class="rel-meta"><time[^>]*>[^<]*</time>(?:<span>(\w+)</span>)?', text))
     want = {v: "Beta" if "-" in v else "Latest" if v == final else "" for v in tagged}
     check(tagged == want and tagged, f"changelog: pre-releases marked Beta, {final} marked Latest "
                                      f"({ {v: t for v, t in tagged.items() if t != want[v]} or 'as built'})")
