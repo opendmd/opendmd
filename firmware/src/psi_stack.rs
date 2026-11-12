@@ -130,7 +130,7 @@ pub fn run_with_prio<T: Send, F: FnOnce() -> T + Send>(stack: usize, prio: Optio
         }
         log::warn!(
             "formula: no task to compile on; heap {} B free",
-            unsafe { sys::esp_get_free_heap_size() }
+            crate::state::free_heap()
         );
         return None;
     }
@@ -150,7 +150,7 @@ pub fn run_with_prio<T: Send, F: FnOnce() -> T + Send>(stack: usize, prio: Optio
         sys::vQueueDelete(done);
         if monitored {
             LAST_LOW.store(
-                sys::heap_caps_get_minimum_free_size(sys::MALLOC_CAP_DEFAULT) as u32,
+                sys::heap_caps_get_minimum_free_size(crate::state::internal(sys::MALLOC_CAP_DEFAULT)) as u32,
                 core::sync::atomic::Ordering::Relaxed,
             );
             sys::heap_caps_monitor_local_minimum_free_size_stop();

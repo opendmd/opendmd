@@ -124,6 +124,33 @@ pub fn free_heap() -> u32 {
 #[cfg(esp32s3)]
 const INTERNAL_8BIT: u32 = esp_idf_sys::MALLOC_CAP_INTERNAL | esp_idf_sys::MALLOC_CAP_8BIT;
 
+/// A heap query's capabilities as the classic asks them, made internal-only
+/// on the S3, where `MALLOC_CAP_8BIT` and `MALLOC_CAP_DEFAULT` take in the
+/// PSRAM pool too (8 MB), which no gate or diagnostic means. The classic's
+/// are returned as they are.
+#[inline(always)]
+#[allow(dead_code)] // (its callers are all behind features: psi, heapmap, emu-census)
+pub const fn internal(caps: u32) -> u32 {
+    #[cfg(esp32s3)]
+    return caps | esp_idf_sys::MALLOC_CAP_INTERNAL;
+    #[cfg(not(esp32s3))]
+    caps
+}
+
+/// Lowest free heap since boot: IDF's sum of each region's own minimum on
+/// the classic (`esp_get_minimum_free_heap_size`, as before), internal RAM
+/// only on the S3 (that sum there takes in the PSRAM pool's 8 MB).
+pub fn min_free_heap() -> u32 {
+    #[cfg(not(esp32s3))]
+    // SAFETY: an argument-free read of ESP-IDF's heap accounting.
+    return unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() };
+    #[cfg(esp32s3)]
+    // SAFETY: a read-only query with a capability mask argument.
+    unsafe {
+        esp_idf_sys::heap_caps_get_minimum_free_size(INTERNAL_8BIT) as u32
+    }
+}
+
 /// Largest single allocation currently possible from byte-addressable heap
 /// (internal only on the S3, as [`free_heap`]).
 pub fn largest_free_block() -> usize {

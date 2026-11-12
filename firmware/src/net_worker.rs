@@ -416,6 +416,9 @@ fn run(worker: NetWorker) {
         follow.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
         #[cfg(feature = "connect-core")]
         probe.tick(net.wifi.state() == WifiState::Connected && net.wifi.is_associated());
+        // The S3 preview's memory line (`s3mem`), every 30 s.
+        #[cfg(esp32s3)]
+        crate::s3mem::tick();
 
         // A cache count put off for a transfer, once it is over.
         crate::cache::tick();
@@ -1195,7 +1198,7 @@ fn census() {
     }
     LAST.store(now, std::sync::atomic::Ordering::Relaxed);
     let mut info: esp_idf_sys::multi_heap_info_t = unsafe { std::mem::zeroed() };
-    unsafe { esp_idf_sys::heap_caps_get_info(&mut info, esp_idf_sys::MALLOC_CAP_8BIT) };
+    unsafe { esp_idf_sys::heap_caps_get_info(&mut info, crate::state::internal(esp_idf_sys::MALLOC_CAP_8BIT)) };
     log::info!(
         "census: {} blocks in use, {} B allocated, {} B free, largest {} B",
         info.allocated_blocks,

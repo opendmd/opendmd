@@ -104,6 +104,13 @@ connect-probe = ["connect-core", "connect-measure"]
 #   handshake histograms).
 connect-core = ["opendmd-core/connect"]
 connect-measure = ["connect-core"]
+# ESP32-S3 measurement switches (S3 port phase 1, `make fw-s3-image`;
+# refused on the classic): mbedTLS's allocations from PSRAM (the Connect
+# probe's allocator, with sdkconfig's MBEDTLS_EXTERNAL_MEM_ALLOC for IDF's
+# own), and the cold buffers (`arena::cold`: Rust allocations of 1 KB or
+# more off the display task) from PSRAM.
+psram-tls = []
+psram-cold = ["psi"]
 # Bench test hooks that a release does without: card speed's
 # `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
 # `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a

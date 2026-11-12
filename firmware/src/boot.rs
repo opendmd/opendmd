@@ -276,8 +276,7 @@ fn format(
                 "microSD: formatted {:.2} GB in {} ms; free heap {free} B before, {} B at the lowest since boot",
                 f.capacity_bytes as f64 / 1e9,
                 f.ms,
-                // SAFETY: an argument-free read of the heap's accounting.
-                unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
+                crate::state::min_free_heap()
             );
             None
         }

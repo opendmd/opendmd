@@ -387,14 +387,51 @@ fn ask(a: Ask) -> Result<u32, String> {
 static TLS_IN_USE: AtomicI32 = AtomicI32::new(0);
 static TLS_PEAK: AtomicI32 = AtomicI32::new(0);
 
+/// Of [`TLS_IN_USE`], the bytes in PSRAM (`psram-tls`, an ESP32-S3
+/// measurement build), and the allocations that wanted PSRAM and got
+/// internal RAM.
+#[cfg(all(esp32s3, feature = "psram-tls"))]
+static TLS_PSRAM: AtomicI32 = AtomicI32::new(0);
+#[cfg(all(esp32s3, feature = "psram-tls"))]
+static TLS_FELL_BACK: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "psram-tls", not(esp32s3)))]
+compile_error!("psram-tls is an ESP32-S3 measurement switch (VARIANT=s3)");
+// IDF's own mbedTLS allocator must say PSRAM too (sdkconfig's line, which
+// the Makefile's switch adds with the feature): its allocations before the
+// probe's allocator is set, and WPA-Enterprise's.
+#[cfg(all(esp32s3, feature = "psram-tls"))]
+const _: u32 = sys::CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC;
+
+#[cfg(all(esp32s3, feature = "psram-tls"))]
+fn is_psram(p: *mut c_void) -> bool {
+    (0x3C00_0000..0x3E00_0000).contains(&(p as usize))
+}
+
 unsafe extern "C" fn tls_calloc(n: usize, size: usize) -> *mut c_void {
     // As IDF's own (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC): internal RAM.
+    #[cfg(not(all(esp32s3, feature = "psram-tls")))]
     let p = sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT);
+    // `psram-tls`: PSRAM, internal RAM only if that fails (as IDF's
+    // CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC, which has no fallback).
+    #[cfg(all(esp32s3, feature = "psram-tls"))]
+    let p = {
+        let p = sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT);
+        if p.is_null() && n.saturating_mul(size) > 0 {
+            TLS_FELL_BACK.fetch_add(1, Relaxed);
+            sys::heap_caps_calloc(n, size, sys::MALLOC_CAP_INTERNAL | sys::MALLOC_CAP_8BIT)
+        } else {
+            p
+        }
+    };
     #[cfg(feature = "connect-measure")]
     if !p.is_null() {
         let size = sys::heap_caps_get_allocated_size(p) as i32;
         let now = TLS_IN_USE.fetch_add(size, Relaxed) + size;
         TLS_PEAK.fetch_max(now, Relaxed);
+        #[cfg(all(esp32s3, feature = "psram-tls"))]
+        if is_psram(p) {
+            TLS_PSRAM.fetch_add(size, Relaxed);
+        }
     }
     p
 }
@@ -402,9 +439,46 @@ unsafe extern "C" fn tls_calloc(n: usize, size: usize) -> *mut c_void {
 unsafe extern "C" fn tls_free(p: *mut c_void) {
     if !p.is_null() {
         #[cfg(feature = "connect-measure")]
-        TLS_IN_USE.fetch_sub(sys::heap_caps_get_allocated_size(p) as i32, Relaxed);
+        {
+            let size = sys::heap_caps_get_allocated_size(p) as i32;
+            TLS_IN_USE.fetch_sub(size, Relaxed);
+            #[cfg(all(esp32s3, feature = "psram-tls"))]
+            if is_psram(p) {
+                TLS_PSRAM.fetch_sub(size, Relaxed);
+            }
+        }
         sys::heap_caps_free(p);
     }
+}
+
+/// The S3's PSRAM side of `connect.heap` (`json`): the pool now and at its
+/// lowest, and mbedTLS's part of it. Empty on the classic.
+#[cfg(feature = "connect-measure")]
+fn psram_json() -> String {
+    #[cfg(esp32s3)]
+    {
+        // SAFETY: read-only queries with a capability mask.
+        let (free, low, largest) = unsafe {
+            (
+                sys::heap_caps_get_free_size(sys::MALLOC_CAP_SPIRAM),
+                sys::heap_caps_get_minimum_free_size(sys::MALLOC_CAP_SPIRAM),
+                sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_SPIRAM),
+            )
+        };
+        #[cfg(feature = "psram-tls")]
+        let tls = format!(
+            r#","tls_psram":{},"tls_fell_back":{}"#,
+            TLS_PSRAM.load(Relaxed),
+            TLS_FELL_BACK.load(Relaxed)
+        );
+        #[cfg(not(feature = "psram-tls"))]
+        let tls = r#","tls_psram":null"#;
+        format!(
+            r#","internal":true,"psram":{{"free":{free},"largest":{largest},"low":{low}{tls}}}"#
+        )
+    }
+    #[cfg(not(esp32s3))]
+    String::new()
 }
 
 #[cfg(feature = "connect-measure")]
@@ -721,7 +795,7 @@ pub fn json() -> String {
             r#""attempts":{},"opened":{},"full":{},"resumed":{},"resume_missed":{},"#,
             r#""dns_ms":{},"tcp_ms":{},"upgrade_ms":{},"connect_ms":{},"hs_cpu_ms":{},"hs_cpu_max_ms":{},"#,
             r#""reconnects":{},"causes":{{{}}},"gate_waits":{},"backoff_s":{},"sessions":[{}],"session_max_s":{},"#,
-            r#""heap":{{"at_connect":{},"hs_low":{},"low":{},"low_largest":{},"open":{},"tls_hs_peak":{},"tls_hs_peak_max":{},"tls_open":{},"tls_in_use":{},"rust":{}}},"#,
+            r#""heap":{{"at_connect":{},"hs_low":{},"low":{},"low_largest":{},"open":{},"tls_hs_peak":{},"tls_hs_peak_max":{},"tls_open":{},"tls_in_use":{},"rust":{}{}}},"#,
             r#""stack_unused":{},"ping":{{"sent":{},"pongs":{},"missed":{},"rtt_ms":{},"rtt_max_ms":{}}},"rx":{},"tx":{},"root":{},"cert_flags":{},"#,
             r#""job":{{"kind":"{}","seq":{},"done":{},"of":{},"failed":{}}},"m9":{},"m10":{},"errors":{},"last_error":{},"last_error_s":{}}}"#
         ),
@@ -768,6 +842,7 @@ pub fn json() -> String {
         t.tls_open,
         TLS_IN_USE.load(Relaxed),
         t.rust_bytes,
+        psram_json(),
         if t.stack_unused == u32::MAX { "null".to_string() } else { t.stack_unused.to_string() },
         t.pings,
         t.pongs,
