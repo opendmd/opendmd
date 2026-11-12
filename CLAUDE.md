@@ -62,6 +62,8 @@ make fw-release  # release images into dist/ (the 4mb layout), signed with FW_SI
 make notices-check                # third-party notices up to date
 make emu-build emu-smoke          # the firmware in an emulator (esp32sim): correctness only, never timing
 make emu-s3-nocard emu-s3-probe   # the ESP32-S3 preview (VARIANT=s3, not released) in the emulator's S3 machine
+make fw-s3-image S3_IMAGE=base    # an S3 measurement image (base, tls-psram, wifi-psram, cold-psram, iram-trim, all-psram, jit)
+make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=base   # write it to a bare DevKitC-1 over USB (PORT required; DRY=1 prints only)
 ```
 
 - Machine-local settings go in a gitignored `local.mk` beside the

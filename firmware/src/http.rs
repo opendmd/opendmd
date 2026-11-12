@@ -1994,6 +1994,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // docs/api.md: this build's alone).
     #[cfg(feature = "connect-measure")]
     crate::connect_probe::routes(&mut server)?;
+    // The S3 preview's memory report (`s3mem`: not in docs/api.md, the
+    // preview's alone).
+    #[cfg(esp32s3)]
+    crate::s3mem::routes(&mut server)?;
 
     // --- Catch-all, registered last ---------------------------------------
     //
@@ -2934,11 +2938,12 @@ fn status_json(s: &Status, looks: &dyn Fn() -> String, recent: bool, out: &mut d
     }
     let _ = write!(
         out,
-        r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
+        r#""heap":{{"free":{},"floor":{},"idf_min":{}{}{}}},"heap_floor_at":{},"#,
         s.heap_free,
         s.heap_floor,
         s.heap_idf_min,
         main_stack_json(),
+        psram_heap_json(),
         s.heap_floor_at
             .as_ref()
             .map_or_else(|| "null".to_string(), |a| a.json()),
@@ -3110,6 +3115,30 @@ fn formula_json(_: &str) -> String {
 /// since boot: the heartbeat's figure), and in a probe build `main_stack`
 /// (the main task's stack high-water mark, bytes never used, as of the last
 /// heartbeat) and `pushed` (pixels pushed to the panel since boot).
+/// The S3's: `free`, `floor` and `idf_min` are internal RAM there
+/// (`state::free_heap`); its largest block and the PSRAM pool beside them.
+/// Nothing on the classic.
+fn psram_heap_json() -> String {
+    #[cfg(esp32s3)]
+    {
+        use esp_idf_sys as sys;
+        // SAFETY: read-only queries with a capability mask.
+        let (free, largest, min) = unsafe {
+            (
+                sys::heap_caps_get_free_size(sys::MALLOC_CAP_SPIRAM),
+                sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_SPIRAM),
+                sys::heap_caps_get_minimum_free_size(sys::MALLOC_CAP_SPIRAM),
+            )
+        };
+        format!(
+            r#","internal_largest":{},"psram":{{"free":{free},"largest":{largest},"min":{min}}}"#,
+            crate::state::largest_free_block()
+        )
+    }
+    #[cfg(not(esp32s3))]
+    String::new()
+}
+
 fn main_stack_json() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let cut = crate::TRANSITIONS_CUT.load(Relaxed);

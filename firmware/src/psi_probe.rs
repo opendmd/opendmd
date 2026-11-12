@@ -2351,7 +2351,7 @@ pub fn run(root: &str) {
         let mut canvas = Canvas::new();
         swap(root, &mut canvas);
         swap_card(root, &mut canvas);
-        say!(info, "{DONE}: swap only, heap {} B free (largest {} B), lowest {} B, {} ms in all", heap(), crate::state::largest_free_block(), unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }, start.elapsed().as_millis());
+        say!(info, "{DONE}: swap only, heap {} B free (largest {} B), lowest {} B, {} ms in all", heap(), crate::state::largest_free_block(), crate::state::min_free_heap(), start.elapsed().as_millis());
         return;
     }
     if ROAD_ONLY {
@@ -2503,6 +2503,11 @@ pub fn run(root: &str) {
     let _ = root;
 }
 
+/// `run_nocard` runs the JIT's timing rows too (`OPENDMD_PROBE_NOCARD_TIMINGS`
+/// set at build time; the emulator lanes' images leave it unset).
+#[cfg(feature = "jit")]
+const NOCARD_TIMINGS: bool = option_env!("OPENDMD_PROBE_NOCARD_TIMINGS").is_some();
+
 /// The probe with no card, once a boot, when the boot task says there is
 /// none (`boot::Event::NoCard`): only the sections that need no card, logged
 /// (no report file): every bundled Formula opened, the JIT spike's
@@ -2539,6 +2544,13 @@ pub fn run_nocard() {
         "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
         if bad == 0 { " (bit-identical)" } else { "" }
     );
+    // A timing image (`OPENDMD_PROBE_NOCARD_TIMINGS` at build time: the
+    // S3's on a bare board, `make fw-s3-image S3_IMAGE=jit`): the JIT's
+    // timing rows too, as `JIT2_ONLY` has them, with no card.
+    #[cfg(feature = "jit")]
+    if NOCARD_TIMINGS {
+        jit2::timings(&mut canvas);
+    }
     say!(info,
         "{DONE}: no card, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
         stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
@@ -2833,6 +2845,19 @@ pub(crate) mod jit2 {
         drop(out);
         exec_line("after the goldens");
         let mut canvas = Canvas::new();
+        timings(&mut canvas);
+        say!(info,
+            "{DONE}: jit2, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+            stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+        );
+        *REPORT.lock().unwrap() = None;
+        play::start(format!("{root}/{REPORT_NAME}"));
+    }
+
+    /// The examples as effects, JIT against VM with their frame splits,
+    /// then the looks over a changing picture: the timing rows (also
+    /// `run_nocard`'s, in an S3 timing image).
+    pub fn timings(canvas: &mut Canvas) {
         let list: [(&str, &str, &str); 11] = [
             ("Endless road", bundled_src("endless-road"), ""),
             ("Endless road Both", ROAD_BOTH, ""),
@@ -2847,7 +2872,7 @@ pub(crate) mod jit2 {
             ("Plasma", PLASMA, ""),
         ];
         for (name, src, opts) in list {
-            effect(name, src, opts, &mut canvas);
+            effect(name, src, opts, canvas);
             split(name, src);
         }
         say!(info, "psi-probe: jit2: main stack {} B unused after the examples", stack_unused());
@@ -2858,15 +2883,9 @@ pub(crate) mod jit2 {
             ("Plasma (screen 40)", fx_psi::path(&psi::look::set(PLASMA, "screen", 40).unwrap_or_default(), "")),
         ];
         for (name, path) in &looks {
-            look(name, path, &mut canvas);
+            look(name, path, canvas);
         }
         exec_line("after the looks");
-        say!(info,
-            "{DONE}: jit2, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
-            stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
-        );
-        *REPORT.lock().unwrap() = None;
-        play::start(format!("{root}/{REPORT_NAME}"));
     }
 }
 

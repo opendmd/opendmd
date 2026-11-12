@@ -86,6 +86,8 @@ mod psi_stack;
 #[cfg(feature = "psi")]
 mod card_formulas;
 mod restarts;
+#[cfg(esp32s3)]
+mod s3mem;
 mod sched;
 mod sd;
 #[cfg(feature = "nocard-test")]
@@ -499,6 +501,10 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
     logring::init();
+    // `psram-cold` (S3 measurement builds): this task, the display's, keeps
+    // its allocations internal.
+    #[cfg(all(esp32s3, feature = "psram-cold"))]
+    arena::cold::set_display_task();
     heapmap::cp("app_main");
     // Why the last run ended (`restarts`), before anything can fail an
     // allocation and overwrite its record; installs the panic hook.
@@ -3138,20 +3144,10 @@ fn random_seed() -> u64 {
     unsafe { ((esp_idf_sys::esp_random() as u64) << 32) | (esp_idf_sys::esp_random() as u64) }
 }
 
-/// Lowest free heap seen since boot, in bytes.
-#[cfg(not(esp32s3))]
+/// Lowest free heap seen since boot, in bytes (internal RAM only on the
+/// S3: `state::min_free_heap`).
 fn min_free_heap() -> u32 {
-    // SAFETY: as above.
-    unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
-}
-
-/// The S3's: internal RAM only (`state::free_heap`).
-#[cfg(esp32s3)]
-fn min_free_heap() -> u32 {
-    // SAFETY: as above.
-    unsafe {
-        esp_idf_sys::heap_caps_get_minimum_free_size(esp_idf_sys::MALLOC_CAP_INTERNAL | esp_idf_sys::MALLOC_CAP_8BIT) as u32
-    }
+    crate::state::min_free_heap()
 }
 
 /// Assert that a typed GPIO peripheral really is the pin `config` names.

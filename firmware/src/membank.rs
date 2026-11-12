@@ -6,14 +6,23 @@
 //! the heartbeat logs them, and `/api/status?pools=1` walks the heap for
 //! the bytes in use in each pool.
 //!
-//! The pools are IDF's (`heap/port/esp32/memory_layout.c`): SRAM2 at
-//! 0x3FFAE000..0x3FFE0000 (pools 16, 15, 14, then 10-13 as 32 KB blocks),
+//! The classic's pools are IDF's (`heap/port/esp32/memory_layout.c`): SRAM2
+//! at 0x3FFAE000..0x3FFE0000 (pools 16, 15, 14, then 10-13 as 32 KB blocks),
 //! SRAM1 at 0x3FFE0000..0x40000000 (pools 9, 8, 7, 6), SRAM0 the IRAM.
+//!
+//! The ESP32-S3's (`heap/port/esp32s3/memory_layout.c`, the S3 TRM's map)
+//! are named by address instead, in 32 KB blocks: SRAM1, the D/IRAM, at
+//! 0x3FC88000..0x3FCF0000 (`SRAM1/0`..`SRAM1/12`; its IRAM alias
+//! 0x40378000.. runs the same way, 0x6F0000 above), SRAM2 (data only) at
+//! 0x3FCF0000..0x3FD00000 (`SRAM2/0`, `SRAM2/1`), SRAM0 (IRAM only) at
+//! 0x40370000..0x40378000, RTC fast memory, and `PSRAM` (the octal PSRAM's
+//! data mapping, 0x3C000000..0x3E000000, shared with the flash's rodata).
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
 
 /// SRAM1's IRAM alias (0x400A0000..0x400C0000) as its DRAM address: the
 /// two run in opposite directions, word for word.
+#[cfg(not(esp32s3))]
 fn dram_of(a: usize) -> usize {
     if (0x400A_0000..0x400C_0000).contains(&a) {
         0x3FFE_0000 + (0x400B_FFFC - (a & !3)) + (a & 3)
@@ -22,8 +31,20 @@ fn dram_of(a: usize) -> usize {
     }
 }
 
+/// The S3's SRAM1 IRAM alias (0x40378000..0x403E0000) as its DRAM address:
+/// the same direction, 0x6F0000 apart.
+#[cfg(esp32s3)]
+fn dram_of(a: usize) -> usize {
+    if (0x4037_8000..0x403E_0000).contains(&a) {
+        a - 0x6F_0000
+    } else {
+        a
+    }
+}
+
 /// `"SRAM2/15"`, `"SRAM2/10-13.2"` (the third 32 KB block of 10-13),
 /// `"SRAM1/7"`, `"SRAM0"`, or `"?"`.
+#[cfg(not(esp32s3))]
 pub fn pool(a: usize) -> String {
     let d = dram_of(a);
     match d {
@@ -40,7 +61,23 @@ pub fn pool(a: usize) -> String {
     }
 }
 
+/// The S3's: `"SRAM1/3"` (the fourth 32 KB block of SRAM1), `"SRAM2/1"`,
+/// `"SRAM0"`, `"RTC"`, `"PSRAM"`, or `"?"`.
+#[cfg(esp32s3)]
+pub fn pool(a: usize) -> String {
+    let d = dram_of(a);
+    match d {
+        0x3FC8_8000..=0x3FCE_FFFF => format!("SRAM1/{}", (d - 0x3FC8_8000) >> 15),
+        0x3FCF_0000..=0x3FCF_FFFF => format!("SRAM2/{}", (d - 0x3FCF_0000) >> 15),
+        0x4037_0000..=0x4037_7FFF => "SRAM0".into(),
+        0x600F_E000..=0x600F_FFFF => "RTC".into(),
+        0x3C00_0000..=0x3DFF_FFFF => "PSRAM".into(),
+        _ => "?".into(),
+    }
+}
+
 /// The pool keys `pools_json` reports, in address order.
+#[cfg(not(esp32s3))]
 const POOLS: [(usize, usize, &str); 11] = [
     (0x3FFA_E000, 0x3FFB_0000, "SRAM2/16"),
     (0x3FFB_0000, 0x3FFB_8000, "SRAM2/15"),
@@ -53,6 +90,30 @@ const POOLS: [(usize, usize, &str); 11] = [
     (0x3FFE_8000, 0x3FFF_0000, "SRAM1/8"),
     (0x3FFF_0000, 0x3FFF_8000, "SRAM1/7"),
     (0x3FFF_8000, 0x4000_0000, "SRAM1/6"),
+];
+
+/// The S3's (the heap's part of each: SRAM1's blocks below the heap's start
+/// hold the image's IRAM code and static data, and report 0).
+#[cfg(esp32s3)]
+const POOLS: [(usize, usize, &str); 18] = [
+    (0x3FC8_8000, 0x3FC9_0000, "SRAM1/0"),
+    (0x3FC9_0000, 0x3FC9_8000, "SRAM1/1"),
+    (0x3FC9_8000, 0x3FCA_0000, "SRAM1/2"),
+    (0x3FCA_0000, 0x3FCA_8000, "SRAM1/3"),
+    (0x3FCA_8000, 0x3FCB_0000, "SRAM1/4"),
+    (0x3FCB_0000, 0x3FCB_8000, "SRAM1/5"),
+    (0x3FCB_8000, 0x3FCC_0000, "SRAM1/6"),
+    (0x3FCC_0000, 0x3FCC_8000, "SRAM1/7"),
+    (0x3FCC_8000, 0x3FCD_0000, "SRAM1/8"),
+    (0x3FCD_0000, 0x3FCD_8000, "SRAM1/9"),
+    (0x3FCD_8000, 0x3FCE_0000, "SRAM1/10"),
+    (0x3FCE_0000, 0x3FCE_8000, "SRAM1/11"),
+    (0x3FCE_8000, 0x3FCF_0000, "SRAM1/12"),
+    (0x3FCF_0000, 0x3FCF_8000, "SRAM2/0"),
+    (0x3FCF_8000, 0x3FD0_0000, "SRAM2/1"),
+    (0x4037_0000, 0x4037_8000, "SRAM0"),
+    (0x600F_E000, 0x6010_0000, "RTC"),
+    (0x3C00_0000, 0x3E00_0000, "PSRAM"),
 ];
 
 /// The canvas's pixels (set once at boot).
