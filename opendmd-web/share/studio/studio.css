@@ -11,6 +11,19 @@ html,body.spage{height:auto}
 .s-sp{flex:1}
 .s-cap{color:var(--mut);font-size:13px;margin:10px 0 0}
 .s-bad{color:var(--pink)}
+/* The notice: pinned in view, under the control that asked or at the top (studio.js say) */
+#s-notes{display:contents}
+#s-note{position:fixed;z-index:50;box-sizing:border-box;max-height:calc(100dvh - 24px);display:flex;align-items:flex-start;gap:4px;width:max-content;max-width:min(30em,calc(100vw - 16px));margin:0;padding:10px 6px 10px 14px;
+border:1px solid var(--line);border-left:4px solid var(--cyan);border-radius:10px;background:var(--bg2);color:var(--fg);font-size:14px;line-height:1.45;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+#s-note[hidden]{display:none}
+#s-note[data-kind=bad]{border-left-color:var(--pink)}
+#s-note[data-at=top]::before{display:none}
+#s-note::before{content:"";position:absolute;top:-6px;left:calc(var(--ax,-99px) - 6px);width:10px;height:10px;background:inherit;border:solid var(--line);border-width:1px 0 0 1px;transform:rotate(45deg)}
+#s-note #s-err{flex:1;min-width:0;max-height:calc(100dvh - 44px);margin:0;overflow:auto;overflow-wrap:anywhere}
+#studio:focus{outline:0}
+#s-note #s-err .s-pill{margin-top:6px}
+.s-note-x{flex:none;width:32px;height:32px;margin:-6px 0 -6px;border:0;border-radius:8px;background:none;color:var(--mut);font-size:20px!important;line-height:1}
+.s-note-x:hover{background:var(--bg3);color:var(--fg)}
 
 /* The piece's own bar: its name, what it is, whether it is kept; undo, redo, the GIF */
 .s-doc{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;padding:0 0 14px}

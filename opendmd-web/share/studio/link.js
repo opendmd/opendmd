@@ -1,6 +1,7 @@
 // Share links (/studio/), loaded by Share, a pack's Share link in the
 // Library, or an address with #p= or #k= (docs/studio-format.md "Share
-// links"). The fragment never reaches the server, and opening a link fetches
+// links"). Share and the pack's link are off (studio.js SHARE, sharing
+// shelved 2026-11-12): only an address with #p= or #k= loads this now. The fragment never reaches the server, and opening a link fetches
 // nothing and stores nothing until the user says so.
 //
 // `#p=`: one piece, flattened (every shown layer composited, as a GIF has

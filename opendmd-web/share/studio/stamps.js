@@ -82,6 +82,7 @@ export async function show() {
 }
 function pick(n) {
   picked = list[n];
+  S.say('', 'info'); // (the hint to pick one: done)
   S.root.dataset.stamp = picked?.r.id || '';
   for (const b of document.querySelectorAll('#s-sgrid .s-sbtn')) b.classList.toggle('on', +b.dataset.n === n);
   if (S.tool !== 'stamp') S.useTool('stamp');
@@ -95,7 +96,7 @@ export async function pickId(id) {
 }
 // The Stamp tool chosen with nothing picked: the picker, and a word.
 export function tool() {
-  if (!picked) { show(); S.say('Pick a stamp under Stamps, then click the panel to place it.'); }
+  if (!picked) { show(); S.say('Pick a stamp under Stamps, then click the panel to place it.', 'info'); }
 }
 
 // Where a stamp lands: centred on the pixel pointed at.

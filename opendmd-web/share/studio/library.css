@@ -1,6 +1,6 @@
 /* The Studio's Library (library.js): a view of the same page. */
 #s-lib{display:none}
-#studio[data-view=library]>:not(#s-lib):not(#s-err){display:none!important}
+#studio[data-view=library]>:not(#s-lib){display:none!important}
 #studio[data-view=library] #s-lib{display:block}
 .s-lhd{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:14px}
 .s-lhd h1{margin:0;font:600 30px/1.1 var(--display)}

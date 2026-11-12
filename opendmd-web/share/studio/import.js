@@ -40,7 +40,7 @@ function build() {
 #s-imp[open]{display:flex;flex-direction:column}#s-imp::backdrop{background:rgba(0,0,0,.6)}
 #s-imp .s-hd{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 16px;border-bottom:1px solid var(--line)}
 #s-imp .s-hd h2{margin:0;font-size:18px}#s-imp label{display:inline-flex;align-items:center;gap:6px;font-size:14px;min-height:36px}
-#s-imp-say{margin:6px 16px}#s-imp iframe{flex:1;width:100%;border:0;background:var(--bg)}#s-imp-url{margin:6px 16px;word-break:break-all}
+#s-imp iframe{flex:1;width:100%;border:0;background:var(--bg)}#s-imp-url{margin:6px 16px;word-break:break-all}
 @media (max-width:700px){#s-imp{width:100vw;height:100dvh;border:0;border-radius:0;margin:0}
 #s-imp .s-hd{gap:0 10px;padding:6px 12px}#s-imp .s-hd h2{font-size:16px}#s-imp .s-sp{display:none}#s-imp-x{order:2;margin-left:auto}
 #s-imp .s-imp-as{order:3;flex:1 0 100%;display:flex;gap:12px}#s-imp label{min-height:32px;font-size:13px}}`);
@@ -61,13 +61,10 @@ function build() {
   x.type = 'button';
   x.onclick = () => d.close();
   hd.append(el('h2', '', 'Import'), as, el('span', 's-sp'), x);
-  const say = el('p', 's-cap s-bad');
-  say.id = 's-imp-say';
-  say.setAttribute('role', 'status');
   const ask = el('p', 's-cap');
   ask.id = 's-imp-url';
   ask.hidden = true;
-  d.append(css, hd, say, ask);
+  d.append(css, hd, ask);
   // Closed (Close, Escape, Back): the converter is let go, so nothing it was doing can land later.
   d.onclose = () => {
     if (d.open) return; // (opened again before this close was told)
@@ -84,7 +81,7 @@ function build() {
   };
   document.body.append(d);
 }
-const say = (t) => { const p = $('s-imp-say'); p.hidden = !t; p.textContent = t || ''; };
+const say = (t) => S.say(t); // (the Studio's notice, in this sheet while it is open)
 
 // The sheet opened, from `#import?…` (route): an https address, a search, a shared file.
 // `asked`: the address is one the user just gave here (a paste, a drop), not a link's.
@@ -124,9 +121,9 @@ export function show(q = new URLSearchParams(), asked = false) {
   fr.title = 'Find or bring a picture, a GIF or a video, and make it fit the panel';
   fr.src = `../create/?${p}`;
   d.append(fr);
-  say(why);
   for (const r of d.querySelectorAll('input[name=s-imp-as]')) r.checked = r.value === 'new';
   if (!d.open) d.showModal();
+  if (why) say(why); // (once the sheet is open: said in it)
   S.root.dataset.import = 'open';
 }
 // A file for Import (dropped on the Studio, a paste too big to place): the sheet opens with it.
@@ -161,7 +158,7 @@ function on(e) {
     d.close();
     // (Said by the frame's message: past a piece's colours it was fitted to 256, not refused.)
     const fitted = m.fitted === true ? `That had more than ${CAPS.colours.toLocaleString('en')} colours, so it was fitted to 256.` : '';
-    S.say([fitted, m.total > m.n ? `That had ${m.total.toLocaleString('en')} frames: the first ${m.n} are kept (a piece has ${CAPS.frames} at most). Import’s timeline trims it to the part you want.` : ''].filter(Boolean).join(' '));
+    S.say([fitted, m.total > m.n ? `That had ${m.total.toLocaleString('en')} frames: the first ${m.n} are kept (a piece has ${CAPS.frames} at most). Import’s timeline trims it to the part you want.` : ''].filter(Boolean).join(' '), 'info');
   }, (err) => refuse(err.message || String(err))).finally(() => { busy = false; });
 }
 function refuse(why) {

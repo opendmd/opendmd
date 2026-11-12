@@ -39,7 +39,7 @@ const ls = {
 };
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
-const root = $('studio'), cv = $('s-canvas'), ctx = cv.getContext('2d'), work = $('s-work'), scroll = $('s-scroll');
+const notes = $('s-notes'), root = $('studio'), cv = $('s-canvas'), ctx = cv.getContext('2d'), work = $('s-work'), scroll = $('s-scroll');
 const coarse = matchMedia('(pointer: coarse)').matches;
 
 let store = null;
@@ -555,14 +555,64 @@ function status(what, text) {
   root.dataset.saved = what;
   $('s-saved').textContent = text || (what === 'kept' ? 'Kept in this browser' : TEXT[what]);
 }
-function say(text) { $('s-err').hidden = !text; $('s-err').textContent = text || ''; }
-// A sentence with one thing to do about it.
-function offer(text, label, go) {
-  say(text);
-  const b = el('button', 's-pill', label);
-  b.onclick = () => { say(''); go(); };
-  $('s-err').append(' ', b);
+// --- what the Studio says: one notice, pinned in view ---
+// Under the control that asked (o.at, else the button clicked, when said in
+// its click) while that is on screen, else at the top of the window. In the
+// open sheet when one is (a modal sheet makes the rest of the page inert):
+// under its heading (its Close kept clear), gone with the sheet. In the page
+// right after its control, so Dismiss is the next Tab or two. Errors stay
+// until dismissed or the next thing said; news ('info') goes by itself, or
+// when what it asked for is done (say('', 'info') clears only news). Read out
+// by two live regions that are never hidden (#s-said polite, #s-alarm an
+// alert), the buttons kept out of them. o: 'info' or { kind, at, acts: [{ label, go }] }.
+// (`notes` is held: a sheet that redraws itself may take it out of the page.)
+let noteAt = null, noteBy = null, noteGo = 0, liveGo = 0, clicked = null;
+function say(text, o) {
+  o = typeof o === 'string' ? { kind: o } : o || {};
+  const n = notes.querySelector('#s-note'), m = n.querySelector('#s-err'), kind = o.kind || 'bad';
+  const lives = notes.querySelectorAll('[aria-live]');
+  clearTimeout(noteGo);
+  clearTimeout(liveGo);
+  if (!text) {
+    if (o.kind && n.dataset.kind !== o.kind) return;
+    m.hidden = n.hidden = true; m.textContent = ''; noteAt = noteBy = null;
+    for (const l of lives) l.textContent = '';
+    return;
+  }
+  noteBy = [...document.querySelectorAll('dialog[open]')].pop() || null;
+  const at = o.at || clicked, home = noteBy || $('studio');
+  noteAt = at && home.contains(at) ? at : noteBy?.querySelector('.s-hd') || null;
+  if (noteAt) noteAt.after(notes); else $('main').append(notes);
+  n.dataset.kind = kind;
+  m.textContent = text;
+  for (const a of o.acts || []) { const b = el('button', 's-pill', a.label); b.type = 'button'; b.onclick = () => { say(''); a.go(); }; m.append(' ', b); }
+  m.hidden = n.hidden = false;
+  place();
+  for (const l of lives) l.textContent = '';
+  liveGo = setTimeout(() => { lives[kind === 'bad' ? 1 : 0].textContent = text; }, 50); // (a change the reader hears, after the move)
+  if (kind === 'info') { const gone = () => { if (n.matches(':hover, :focus-within')) noteGo = setTimeout(gone, 2000); else say('', 'info'); }; noteGo = setTimeout(gone, 8000); }
 }
+// Dismissed (its button, Escape): focus back to its control, else the sheet's Close, else the editor.
+function dismiss() {
+  const a = noteAt, d = noteBy;
+  say('');
+  const to = a?.isConnected && a.matches('button:not(:disabled), input:not(:disabled)') ? a : d?.open ? d.querySelector('.s-hd button') || d.querySelector('button') : root;
+  to?.focus({ preventScroll: true });
+}
+function place() {
+  const n = notes.querySelector('#s-note');
+  if (n.hidden) return;
+  const v = window.visualViewport, vw = v?.width ?? innerWidth, vh = v?.height ?? innerHeight, ox = v?.offsetLeft ?? 0, oy = v?.offsetTop ?? 0;
+  const a = noteAt?.isConnected && noteAt.getClientRects().length ? noteAt.getBoundingClientRect() : null, w = n.offsetWidth, h = n.offsetHeight;
+  const under = a && a.top >= oy && a.bottom + h + 16 <= oy + vh;
+  const x = under ? Math.min(Math.max(ox + 8, a.left + a.width / 2 - w / 2), ox + vw - w - 8) : ox + Math.max(8, (vw - w) / 2);
+  n.style.left = `${x}px`;
+  n.style.top = `${under ? a.bottom + 8 : oy + 12}px`;
+  n.style.setProperty('--ax', `${under ? Math.min(Math.max(16, a.left + a.width / 2 - x), w - 16) : -99}px`);
+  n.dataset.at = under ? 'control' : 'top';
+}
+// A sentence with one thing to do about it.
+function offer(text, label, go) { say(text, { acts: [{ label, go }] }); }
 function queueSave() {
   clearTimeout(timer);
   if (!store || !kept || closed) return;
@@ -865,6 +915,13 @@ const library = lazy(() => libMod, (v) => (libMod = v), 'library');
 const files = lazy(() => filesMod, (v) => (filesMod = v), 'files');
 let impMod = null, pasteMod_ = null;
 const imp = lazy(() => impMod, (v) => (impMod = v), 'import');
+// Share links (link.js: Share, a pack's Share link in the Library) are off:
+// the owner shelved sharing (2026-11-12) until it works for everything, not
+// half-way. With SHARE false nothing in the UI shares; an address with #p= or
+// #k= still opens (it fetches and stores nothing until the user says so).
+// (While SHARE is false, link.js's encoder, Share and the pack's link, is
+// untested: studio_links checks only what comes in.)
+const SHARE = false;
 let linkMod = null;
 const link = lazy(() => linkMod, (v) => (linkMod = v), 'link');
 const pasteMod = lazy(() => pasteMod_, (v) => (pasteMod_ = v), 'paste');
@@ -901,7 +958,7 @@ const studio = {
   get tool() { return tool; }, useTool, swatches, keep() { kept = true; queueSave(); }, openRec, drafts, save,
   get journaled() { return journaled; }, jot, starters: () => starters, builtin,
   // for import.js and paste.js
-  offer, imp, link, get clip() { return clip; }, paste(c) { clip = c; return act('paste'); },
+  offer, imp, link, sharing: SHARE, get clip() { return clip; }, paste(c) { clip = c; return act('paste'); },
   // A whole body for this piece (an import's new layer), as one undo step.
   async replace(body) {
     done();
@@ -960,7 +1017,30 @@ async function main() {
   $('s-gif').addEventListener('click', () => download(false));
   $('s-send').addEventListener('click', () => { done(); out('send'); });
   $('s-libb').addEventListener('click', () => { location.hash = '#library'; });
-  $('s-share').addEventListener('click', () => { done(); link().then((m) => m.share(), () => {}); });
+  if (SHARE) { // (off: SHARE above)
+    const b = el('button', 's-pill', 'Share');
+    b.id = 's-share';
+    b.title = 'Copy a link to this piece: it carries the picture itself, nothing is uploaded';
+    $('s-gif').before(b);
+    b.addEventListener('click', () => { done(); link().then((m) => m.share(), (e) => console.error(e)); });
+  }
+  // The notice: dismissed by its button or Escape (focus back where it came from), kept beside its control as the page moves.
+  $('s-note-x').addEventListener('click', dismiss);
+  // A notice showing: Escape dismisses it first (before a selection, the stamp tool or a sheet hears it).
+  const shown = () => notes.isConnected && !notes.querySelector('#s-note').hidden;
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && shown()) { e.preventDefault(); e.stopImmediatePropagation(); dismiss(); } }, true);
+  document.addEventListener('cancel', (e) => { if (e.target === noteBy && shown()) { e.preventDefault(); dismiss(); } }, true);
+  // The button whose click is being handled (a notice said in it sits under it), forgotten once the click is done.
+  document.addEventListener('click', (e) => { clicked = e.target.closest?.('button'); setTimeout(() => { clicked = null; }); }, true);
+  addEventListener('scroll', place, { capture: true, passive: true });
+  addEventListener('resize', place);
+  visualViewport?.addEventListener('resize', place);
+  visualViewport?.addEventListener('scroll', place);
+  root.tabIndex = -1; // (focus's last place once a notice is dismissed)
+  // A sheet's notice goes with it. (A sheet closed late, after a newer notice
+  // was said in another sheet, can't happen: one sheet is open at a time and
+  // say() takes the topmost; noteBy names the one it is in.)
+  document.addEventListener('close', (e) => { if (e.target === noteBy) say(''); }, true);
   $('s-imp-b').addEventListener('click', () => { done(); history.pushState({ imp: 1 }, '', '#import'); route(); });
   addEventListener('hashchange', route);
   document.addEventListener('paste', pasted);
@@ -1000,7 +1080,7 @@ async function main() {
   $('s-shade').addEventListener('click', (e) => { const b = e.target.closest('[data-shade]'); if (b) useShade(b.dataset.shade); });
   $('s-snap').addEventListener('click', async () => {
     const n = $('s-snapname');
-    if (!kept) { say('Draw something first: a snapshot keeps a piece as it is.'); return; }
+    if (!kept) { say('Draw something first: a snapshot keeps a piece as it is.', 'info'); return; }
     done();
     if (await freeze(n.value.trim() || `Snapshot, ${new Date().toLocaleString()}`)) { n.value = ''; await snaps(); }
   });

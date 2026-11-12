@@ -189,6 +189,12 @@ rest is kept and a crowd of near-twins is not. The GIF writers are
 
 ## Share links
 
+**Sharing is off in the Studio for now** (the owner, 2026-11-12: it should
+work for everything or not at all). Nothing in the UI makes a link: no Share
+button, no pack's Share link (`SHARE` in `studio.js` is the one switch). An
+address with `#p=` or `#k=` still opens as below, and the format stays as
+written so links can come back.
+
 A link carries what it shares in its fragment, which never reaches the
 server: `opendmd.dev/studio/#p=<code>` (one piece) or `#k=<code>` (a small
 pack). A link is 8,000 characters at most; anything bigger is shared as a
