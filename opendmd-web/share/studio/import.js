@@ -10,14 +10,16 @@
 // holds: a dropped or pasted file, or an address (a search or a shared file
 // go in its address). An address that came in a link (#import?url=) is
 // shown and fetched only once "Fetch it" is pressed.
-// Use in the Studio posts the frames of what Download GIF would write. Every
+// Use in the Studio posts the frames Download GIF would write, in full
+// colour (up to the piece's 4,096, two-byte keys past 255; fitted to 256 only
+// when asked in the frame). Every
 // message is checked here: from this frame's window, this origin and this
 // opening's nonce, after its ready; and its shape, sizes, frame count,
 // frame times and colours, so a message that lies is refused with a
 // sentence and nothing is half-made. The frames become a new piece, or a
 // new layer in this piece in one undo step; the piece's `from` gains
 // {external: true, note, title, platform, author, logo}.
-import { CAPS, packPx, unpackPx, checkBody } from './store.js';
+import { CAPS, packPx, unpackPx, checkBody, plain as text } from './store.js';
 import { W, H, N, hexOf } from './doc.js';
 
 const READY = 'opendmd-studio-import-ready', IN = 'opendmd-studio-import-in', FRAMES = 'opendmd-studio-import';
@@ -180,27 +182,30 @@ function read(m) {
   if (!str(m.title, CAPS.name) || !str(m.platform, 16) || !str(m.author, 80) || !str(m.note, CAPS.note) || typeof m.logo !== 'boolean') throw new Error('its naming fields aren’t right');
   const px = new Uint8Array(m.px), keys = new Map(), cels = [];
   for (let f = 0; f < m.n; f++) {
-    const c = new Uint8Array(N);
+    const c = new Uint16Array(N);
     for (let i = 0, o = f * N * 4; i < N; i++, o += 4) {
       if (px[o + 3] < 128) continue; // see-through: off
       const v = (px[o] << 16) | (px[o + 1] << 8) | px[o + 2];
       if (!v) continue; // black: off, as the panel shows it
       let key = keys.get(v);
       if (key === undefined) {
-        if (keys.size >= 256) throw new Error('it has more than 256 colours, more than the converter writes');
+        if (keys.size >= CAPS.colours) throw new Error(`it has more than ${CAPS.colours.toLocaleString('en')} colours, more than a piece holds`);
         keys.set(v, (key = keys.size + 1));
       }
       c[i] = key;
     }
     cels.push(c);
   }
-  return { ms, cels, colours: [...keys.keys()] };
+  // (One byte a pixel when the colours fit in 255, as the Studio writes them; else two.)
+  return { ms, cels: keys.size > 255 ? cels : cels.map((c) => Uint8Array.from(c)), colours: [...keys.keys()] };
 }
 
 // `now()`: this opening is still the one open (else nothing is made: false).
 async function take(m, now) {
   const { ms, cels, colours } = read(m);
   const n = cels.length;
+  // (The naming fields as plain text, as a file's are.)
+  m = { ...m, title: text(m.title), author: text(m.author), note: text(m.note) };
   const entry = { external: true, note: m.note || 'Imported', ...(m.title ? { title: m.title } : {}), ...(m.platform ? { platform: m.platform } : {}),
     ...(m.author ? { author: m.author } : {}), ...(m.logo ? { logo: true } : {}) };
   const as = d.querySelector('input[name=s-imp-as]:checked')?.value;

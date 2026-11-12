@@ -456,6 +456,57 @@ impl Studio {
         encode::encode(&anim)
     }
 
+    /// What `render` (a still) or the save (an animation, its last
+    /// `setEdit`) would write, in full colour, for the site's Studio:
+    /// `[n, total, n delays in ms, then n * 4096 pixels as 0xRRGGBB]`, the
+    /// first 256 frames of `total`. No palette, so no colour is lost.
+    #[allow(clippy::too_many_arguments)]
+    pub fn exact(
+        &self,
+        motion: &str,
+        x: u32,
+        y: u32,
+        step_ms: u32,
+        hold_ms: u32,
+        key: bool,
+        gain: u32,
+    ) -> Vec<u32> {
+        let (frames, delays) = match &self.anim {
+            Some(a) => {
+                let seq = &self.seq[..self.seq.len().min(256)];
+                (
+                    seq.iter().map(|&(i, _)| a.looked(i)).collect(),
+                    seq.iter().map(|s| s.1).collect(),
+                )
+            }
+            None => {
+                let plan = Plan {
+                    motion: Motion::parse(motion),
+                    x: x as usize,
+                    y: y as usize,
+                    step_ms,
+                    hold_ms,
+                    key,
+                    gain: gain.clamp(10, 200),
+                    colours: Colours::Auto,
+                };
+                pipeline::render_exact(&self.stage, &plan, self.text.as_ref())
+            }
+        };
+        let total = if self.anim.is_some() {
+            self.seq.len()
+        } else {
+            delays.len()
+        };
+        let n = delays.len().min(256);
+        let mut out = vec![n as u32, total as u32];
+        out.extend(&delays[..n]);
+        for f in &frames[..n] {
+            out.extend(f.px.iter().map(|&p| pipeline::rgb_key(p)));
+        }
+        out
+    }
+
     /// Of the last `render`.
     #[wasm_bindgen(getter)]
     pub fn frames(&self) -> usize {

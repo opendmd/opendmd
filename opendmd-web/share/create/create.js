@@ -34,8 +34,11 @@
 // Inside the Studio (/studio/'s Import sheet frames this page as
 // `?in=studio&k=<nonce>`, same origin, its parent the Studio): the page's
 // own chrome, Send and Download give way to one action, Use in the Studio.
-// It takes what Download GIF would write (`out()`), reads it back into
-// frames (./gifread.js) and posts them to the Studio, transferred, with
+// It takes the frames Download GIF would write, in full colour (`out(true,
+// true)`: the art module's `exact`, no palette, so a picture past 256
+// colours, or a dark one, keeps every colour; with "Fit to 256 colours"
+// ticked, or Look's colours set, the GIF itself, read back by
+// ./gifread.js), and posts them to the Studio, transferred, with
 // their times, the play count, the naming fields and where it came from;
 // the Studio checks every message (studio/import.js). The page says it is
 // ready the same way, and takes a file the Studio holds (dropped, pasted).
@@ -128,7 +131,9 @@ async function start() {
   app.site = true;
   const { mount } = await import('../demo/js/studio.js');
   const send = Object.assign(document.createElement('button'), { id: framed ? 'c-use' : 'c-send', className: 'pri', textContent: framed ? 'Use in the Studio' : 'Send to my panel' });
-  const st = await mount($('c-ed'), { css: false, acts: [send], relay, video: reader });
+  // (Framed: the Studio keeps every colour; fitted to 256 only when asked, as Download GIF would be.)
+  const fit = framed && h('label', { id: 'c-fitl' }, h('input', { type: 'checkbox', id: 'c-fit' }), ' Fit to 256 colours');
+  const st = await mount($('c-ed'), { css: false, acts: fit ? [send, fit] : [send], relay, video: reader });
   $('st-save').classList.remove('pri'); // (Send is the page's first way; Download the other)
   if (framed) $('st-save').hidden = true; // (the Studio downloads)
   startAt(st);
@@ -181,9 +186,10 @@ function inStudio(st, use) {
     // The Studio needs no file name (out(true)): the fields go as they were typed.
     use.disabled = true;
     try {
-      const o = await st.out(true);
+      // Every colour as it is, unless Fit is ticked or Look's colours say how many (then the GIF's, read back).
+      const exact = !$('c-fit').checked && $('st-colours').value === '0', o = await st.out(true, exact);
       if (!o) { say('The GIF could not be made: try again.'); return; }
-      const { read } = await import('./gifread.js'), g = read(o.gif);
+      const g = exact ? full(o.gif, o.plays) : (await import('./gifread.js')).read(o.gif);
       // (Times as the Studio keeps them: 20 ms to a minute.)
       const ms = g.ms.map((x) => Math.min(60000, Math.max(20, Math.round(x / 10) * 10)));
       to({ type: FRAMES, w: 128, h: 32, n: g.n, total: g.total, ms, plays: g.plays, px: g.px.buffer,
@@ -192,15 +198,28 @@ function inStudio(st, use) {
       use.disabled = false;
     }
   };
-  // A drop anywhere on the page, not only on the converter: never left to the browser.
+  // A drop anywhere on the page, not only on the converter: never left to
+  // the browser (which would open the file in place of the page). One the
+  // converter took is already prevented; any other is taken here as the
+  // converter would: a picture or video, else an https address.
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => {
+    if (e.defaultPrevented) return; // (the converter's own)
     e.preventDefault();
-    if (e.target.closest?.('#studio')) return; // (the converter's own)
-    const f = [...(e.dataTransfer?.files || [])][0];
+    const f = [...(e.dataTransfer?.files || [])].find((x) => /^(image|video)\//.test(x.type));
+    const u = (e.dataTransfer?.getData('text/uri-list') || '').split('\n')[0].trim();
     if (f) st.load(f, { label: 'Your file' });
+    else if (/^https:\/\//i.test(u)) st.open(u);
   });
   to({ type: S_READY });
+}
+// st.exact's frames (`[n, total, n times, n * 4096 0xRRGGBB]`) as gifread's
+// {n, total, ms, plays, px} (RGBA, every pixel opaque: the Studio takes
+// black as off, as the panel shows it).
+function full(x, plays) {
+  const n = x[0], c = x.subarray(2 + n), px = new Uint8Array(c.length * 4);
+  for (let i = 0; i < c.length; i++) { const v = c[i]; px[i * 4] = v >> 16; px[i * 4 + 1] = (v >> 8) & 255; px[i * 4 + 2] = v & 255; px[i * 4 + 3] = 255; }
+  return { n, total: x[1], ms: [...x.subarray(2, 2 + n)], plays, px };
 }
 // Where the picture came from, for the piece's `from`: "Game art: <title>",
 // "GifCities: <words>", an address's host, "Your file", "Pasted", "Shared".

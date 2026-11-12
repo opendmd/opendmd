@@ -975,12 +975,7 @@ pub fn render(stage: &Image, plan: &Plan) -> Animation {
 /// [`render`], with a text overlay drawn over every frame (after the Look:
 /// the text keeps its colour; its colour joins the palette).
 pub fn render_with(stage: &Image, plan: &Plan, text: Option<&Overlay>) -> Animation {
-    let (rect, wins) = windows(stage.w, stage.h, plan.motion, plan.x, plan.y);
-    let mut region = stage.crop(rect.0, rect.1, rect.2, rect.3);
-    if plan.key {
-        key_background(&mut region, 12);
-    }
-    gain(&mut region, plan.gain);
+    let (rect, wins, region) = looked(stage, plan);
     let mask = text.map(|t| (t.mask(), t.rgb()));
     let mut counts = colour_counts(&region);
     if let Some((m, c)) = &mask {
@@ -1020,6 +1015,42 @@ pub fn render_with(stage: &Image, plan: &Plan, text: Option<&Overlay>) -> Animat
         frames,
         delays_ms,
     }
+}
+
+/// What the windows cover together, with the background key and the
+/// brightness applied: the rectangle, each window's top-left, the pixels.
+fn looked(stage: &Image, plan: &Plan) -> (Rect, Vec<(usize, usize)>, Image) {
+    let (rect, wins) = windows(stage.w, stage.h, plan.motion, plan.x, plan.y);
+    let mut region = stage.crop(rect.0, rect.1, rect.2, rect.3);
+    if plan.key {
+        key_background(&mut region, 12);
+    }
+    gain(&mut region, plan.gain);
+    (rect, wins, region)
+}
+
+/// [`render_with`] in full colour, with no palette: each frame's `W * H`
+/// pixels, and the delays (the site's Studio keeps every colour a picture
+/// has; `plan.colours` is not used).
+pub fn render_exact(stage: &Image, plan: &Plan, text: Option<&Overlay>) -> (Vec<Image>, Vec<u32>) {
+    let (rect, wins, region) = looked(stage, plan);
+    let mask = text.map(|t| (t.mask(), t.rgb()));
+    let frames: Vec<Image> = wins
+        .iter()
+        .map(|&(x, y)| {
+            let mut f = region.crop(x - rect.0, y - rect.1, W, H);
+            if let Some((m, c)) = &mask {
+                for (p, &on) in f.px.iter_mut().zip(m) {
+                    if on {
+                        *p = [(c >> 16) as u8, (c >> 8) as u8, *c as u8, 255];
+                    }
+                }
+            }
+            f
+        })
+        .collect();
+    let d = delays(frames.len(), plan.motion, plan.step_ms, plan.hold_ms);
+    (frames, d)
 }
 
 // --- Text -----------------------------------------------------------------------
