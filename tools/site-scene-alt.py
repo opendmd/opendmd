@@ -11,14 +11,15 @@ photograph, no model, no third-party art, no game's characters or logos, and
 no real machine's design. Every console, cartridge, pad, handheld,
 television and cabinet is made up. Flat colours, no dither.
 
-  synth    the one the site uses (LIVE): synthwave. A banded sun on the
+  synth    synthwave. A banded sun on the
            horizon, a perspective grid, ridge lines and palms either side
   day      the den of tools/site-scene.py by daylight: that script's own
            drawing on bright ramps (mint and cream, coral and yellow)
   chunky   a 16-bit playroom: x6 art pixels, bold outlines. A television and
            console on the floor, a beanbag, a bookcase of cartridges
-  shelf    a collector's wall by day: a long bench of made-up consoles under
-           the panel, shelves of cartridges and handhelds either side
+  shelf    the one the site uses (LIVE). A collector's wall by day: a long
+           bench of made-up consoles under the panel, shelves of cartridges
+           and handhelds either side
   neon     the same wall at night, lit by neon strips (shelf, repainted)
   arcade   an arcade corner: bright cabinets on a confetti carpet, a
            television and console on the floor
@@ -45,7 +46,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "site/theme"
-LIVE = "synth"  # everyone's scene: written to den.webp and den-phone.webp; the others to den-NAME*.webp
+LIVE = "shelf"  # everyone's scene: written to den.webp and den-phone.webp; the others to den-NAME*.webp
 FULL, PHONE = (1920, 1488), (780, 720)
 
 

@@ -26,7 +26,7 @@ build URL serves. There the art index must also carry
 - the home page's scenes (scene.js, site/theme/SCENES.md): each of them at
   /?scene=NAME, laptop, tablet and phone, light and dark: its own picture behind
   the hero and no other scene's fetched, the hero's words legible over it,
-  nothing wider than a phone; the name remembered, forgotten by `synth`,
+  nothing wider than a phone; the name remembered, forgotten by everyone's own,
   untouched by a name that isn't one; the address working with no storage;
 - the home page's hero show (hero.js): live on its first item, on to the
   second with its caption, no layout shift, no console errors; stopped
@@ -7875,7 +7875,7 @@ def scenes(browser, base: str, site: Path, errors: list[str]) -> None:
     """The home page's scenes (site/theme/SCENES.md): /?scene=NAME shows each
     of them, with its own picture and no other's fetched, its words legible
     over it in both themes and nothing wider than a phone; the name is
-    remembered, `synth` forgets it, a name that isn't one changes nothing,
+    remembered, everyone's own name forgets it, a name that isn't one changes nothing,
     and with no storage the address still works."""
     css, js = (site / "site.css").read_text(), (site / "scene.js").read_text()
     listed = re.search(r"all = \[([^\]]*)\]", js)
@@ -7917,11 +7917,12 @@ def scenes(browser, base: str, site: Path, errors: list[str]) -> None:
     page = new_page(browser, "laptop", errors)
     first = open_at(page, "/")
     check(first == ["den.webp"] and page.evaluate(named) is None, f"scenes: a first visit gets everyone's scene {first}")
-    asked, kept = open_at(page, "/?scene=shelf"), open_at(page, "/")
-    check(asked == kept == ["den-shelf.webp"] and page.evaluate(named) == "shelf", f"scenes: ?scene=shelf shows it, and the next visit remembers {asked} {kept}")
+    other = SCENES[1]
+    asked, kept = open_at(page, f"/?scene={other}"), open_at(page, "/")
+    check(asked == kept == [f"den-{other}.webp"] and page.evaluate(named) == other, f"scenes: ?scene={other} shows it, and the next visit remembers {asked} {kept}")
     odd = open_at(page, "/?scene=no-such-scene")
     odd_name, after = page.evaluate(named), open_at(page, "/")
-    check(odd == ["den.webp"] and odd_name is None and after == ["den-shelf.webp"],
+    check(odd == ["den.webp"] and odd_name is None and after == [f"den-{other}.webp"],
           f"scenes: a name that isn't one shows everyone's scene {odd} and leaves the remembered one alone {after}")
     back, then = open_at(page, f"/?scene={SCENES[0]}"), open_at(page, "/")
     check(back == then == ["den.webp"] and page.evaluate(named) is None, f"scenes: ?scene={SCENES[0]} goes back to everyone's and forgets {back} {then}")

@@ -407,7 +407,7 @@ betas over WiFi as well, switch on Get beta updates in the web app's Settings, F
 </details>"""
 # Other files published as they are: repo path -> published path.
 # The home page's scenes: the first is everyone's (den.webp), the others are den-NAME.webp.
-SCENES = ("synth", "night", "day", "chunky", "shelf", "neon", "arcade")
+SCENES = ("shelf", "synth", "night", "day", "chunky", "neon", "arcade")
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
     "LICENSE-APACHE": "LICENSE-APACHE.txt",

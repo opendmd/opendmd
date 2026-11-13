@@ -13,42 +13,48 @@
 --shadow:0 1px 2px rgba(40,30,10,.05),0 6px 20px rgba(40,30,10,.06);
 --r:12px;--max:1180px;--text:760px;
 --display:Fraunces,"Iowan Old Style","Palatino Linotype",Georgia,serif;--pixel:Silkscreen,ui-monospace,Menlo,monospace;
---den:#0d0221;--den-fg:#f1ebdd;--den-mut:#b9b6c6}
+--den:#f6ecd2;--den-fg:#1c1d20;--den-mut:#4f4b3f}
 @media (prefers-color-scheme:dark){:root{
 --bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
 --ink:#f7a531;--head:#ecebe7;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;
 --code:#1e2025;--pre:#15171b;--glow:rgba(247,165,49,.16);--shadow:none}}
 /* The home page's scene: the picture behind its hero and the colours that go with it, as variables,
-   so a scene is one rule. `synth` is everyone's; scene.js (in the home page's head) puts another's
-   name on <html data-scene> for a viewer who asked with ?scene=NAME (site/theme/SCENES.md). Only the
-   scene in use is fetched: --den-img and --den-img2 (a phone's) are read by .hero alone.
+   so a scene is one rule. `shelf` is everyone's (a light wall and dark ink, in both themes); scene.js
+   (in the home page's head) puts another's name on <html data-scene> for a viewer who asked with
+   ?scene=NAME (site/theme/SCENES.md). Only the scene in use is fetched: --den-img and --den-img2 (a
+   phone's) are read by .hero alone.
    --den the flat colour behind the picture; -fg -mut -lead the hero's ink; -bar -line the top bar;
    -edge the outlined button; -sh -a -b the shade behind the words (its colour, its alpha at the middle
    and half way out) and -sg -sg2 its shape (wide, and at 1180px and under); -btn the second button;
    -cord -cord2 the panel's cords; -glow the panel's shadow; -pad the room under the words; -dot the
    row of LEDs over the numbers; -focus the focus ring. */
-:root{--den-lead:#d9d5cb;--den-bar:#070114;--den-line:#360f66;--den-edge:#6b5aa8;--den-sh:13,2,33;--den-a:.9;--den-b:.66;
---den-sg:35% 34% at 50% 45%;--den-sg2:58% 40% at 50% 47%;--den-btn:rgba(13,2,33,.6);--den-cord:#360f66;--den-cord2:#070114;
---den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);
---den-pad:clamp(260px,19vw,620px);--den-dot:rgba(232,225,207,.34);--den-focus:#fff;--den-img:url(den.webp);--den-img2:url(den-phone.webp)}
-/* Every scene but synth: the shade sits lower (no sun to clear), the foot is shallower, the panel's glow is the den's */
-[data-scene]{--den-sg:35% 44% at 50% 54%;--den-sg2:58% 46% at 50% 56%;--den-pad:clamp(170px,14.5vw,250px);
+:root{--den-lead:#3a3a3d;--den-bar:#eddfbd;--den-line:#d8c59a;--den-edge:#8a8576;--den-sh:246,236,210;--den-a:.94;--den-b:.8;
+--den-sg:35% 34% at 50% 45%;--den-sg2:58% 38% at 50% 46%;--den-btn:rgba(255,255,255,.7);--den-cord:#8a8576;--den-cord2:rgba(0,0,0,.18);
+--den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 18px 40px rgba(60,40,10,.3);
+--den-pad:clamp(190px,16vw,280px);--den-dot:rgba(28,29,32,.4);--den-focus:#1c1d20;--den-img:url(den.webp);--den-img2:url(den-phone.webp)}
+/* Every scene but shelf starts from the dark ones' ink and shade (light ink, a shade that sits lower, a shallower
+   foot, the den's glow round the panel); each then says what is its own */
+[data-scene]{--den-fg:#f1ebdd;--den-mut:#b9b6c6;--den-lead:#d9d5cb;--den-edge:#6b5aa8;--den-a:.9;--den-b:.66;
+--den-sg:35% 44% at 50% 54%;--den-sg2:58% 46% at 50% 56%;--den-pad:clamp(170px,14.5vw,250px);--den-dot:rgba(232,225,207,.34);--den-focus:#fff;
 --den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 110px rgba(247,165,49,.13),0 0 46px rgba(87,91,140,.3)}
+/* Synthwave: the shade stops short of the sun on the horizon, and the foot is deep enough to show it */
+[data-scene=synth]{--den:#0d0221;--den-bar:#070114;--den-line:#360f66;--den-sh:13,2,33;--den-sg:35% 34% at 50% 45%;--den-sg2:58% 40% at 50% 47%;--den-btn:rgba(13,2,33,.6);
+--den-cord:#360f66;--den-cord2:#070114;--den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);
+--den-pad:clamp(260px,19vw,620px);--den-img:url(den-synth.webp);--den-img2:url(den-synth-phone.webp)}
 [data-scene=night]{--den:#10121b;--den-bar:#07080c;--den-line:#1b1f31;--den-edge:#575b8c;--den-sh:7,8,12;--den-a:.88;--den-b:.62;--den-btn:rgba(7,8,12,.55);
 --den-cord:#2e3454;--den-cord2:#07080c;--den-img:url(den-night.webp);--den-img2:url(den-night-phone.webp)}
 [data-scene=chunky]{--den:#1d5c6e;--den-mut:#d3dfe0;--den-bar:#0e1b26;--den-line:#184e5f;--den-edge:#4f8fa0;--den-sh:16,53,64;--den-btn:rgba(16,53,64,.6);
 --den-cord:#184e5f;--den-cord2:#0e1b26;--den-pad:clamp(190px,16vw,280px);--den-img:url(den-chunky.webp);--den-img2:url(den-chunky-phone.webp)}
-[data-scene=neon]{--den:#150b2e;--den-bar:#05020e;--den-line:#3a1d63;--den-sh:12,6,28;--den-btn:rgba(12,6,28,.6);
---den-cord:#3a1d63;--den-cord2:#05020e;--den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);--den-img:url(den-neon.webp);--den-img2:url(den-neon-phone.webp)}
+/* Shelf's wall at night: its bench runs under the words too, so the shade and the foot are shelf's */
+[data-scene=neon]{--den:#150b2e;--den-bar:#05020e;--den-line:#3a1d63;--den-sh:12,6,28;--den-sg:35% 34% at 50% 45%;--den-sg2:58% 38% at 50% 46%;--den-btn:rgba(12,6,28,.6);
+--den-cord:#3a1d63;--den-cord2:#05020e;--den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);
+--den-pad:clamp(190px,16vw,280px);--den-img:url(den-neon.webp);--den-img2:url(den-neon-phone.webp)}
 [data-scene=arcade]{--den:#231942;--den-bar:#0d0a1c;--den-line:#2d2157;--den-sh:21,15,43;--den-btn:rgba(21,15,43,.6);
 --den-cord:#2d2157;--den-cord2:#0d0a1c;--den-img:url(den-arcade.webp);--den-img2:url(den-arcade-phone.webp)}
-/* The wall of consoles, by day and by night: its bench runs under the words, so the shade stops short of it */
-[data-scene=shelf],[data-scene=neon]{--den-sg:35% 34% at 50% 45%;--den-sg2:58% 38% at 50% 46%;--den-pad:clamp(190px,16vw,280px)}
-/* The two by daylight: dark ink on a light wall, in both themes */
-[data-scene=day],[data-scene=shelf]{--den-fg:#1c1d20;--den-mut:#4f4b3f;--den-lead:#3a3a3d;--den-edge:#8a8576;--den-a:.94;--den-b:.8;--den-btn:rgba(255,255,255,.7);
---den-cord:#8a8576;--den-cord2:rgba(0,0,0,.18);--den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 18px 40px rgba(60,40,10,.3);--den-dot:rgba(28,29,32,.4);--den-focus:#1c1d20}
-[data-scene=day]{--den-pad:clamp(190px,16vw,280px);--den:#fdf8e7;--den-bar:#eef3dc;--den-line:#cfe3c8;--den-sh:253,248,231;--den-img:url(den-day.webp);--den-img2:url(den-day-phone.webp)}
-[data-scene=shelf]{--den:#f6ecd2;--den-bar:#eddfbd;--den-line:#d8c59a;--den-sh:246,236,210;--den-img:url(den-shelf.webp);--den-img2:url(den-shelf-phone.webp)}
+/* The den by daylight: dark ink on a light wall like shelf, in both themes */
+[data-scene=day]{--den:#fdf8e7;--den-fg:#1c1d20;--den-mut:#4f4b3f;--den-lead:#3a3a3d;--den-bar:#eef3dc;--den-line:#cfe3c8;--den-edge:#8a8576;--den-sh:253,248,231;--den-a:.94;--den-b:.8;
+--den-btn:rgba(255,255,255,.7);--den-cord:#8a8576;--den-cord2:rgba(0,0,0,.18);--den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 18px 40px rgba(60,40,10,.3);
+--den-pad:clamp(190px,16vw,280px);--den-dot:rgba(28,29,32,.4);--den-focus:#1c1d20;--den-img:url(den-day.webp);--den-img2:url(den-day-phone.webp)}
 @font-face{font-family:Silkscreen;src:url(fonts/silkscreen.woff2) format("woff2");font-display:swap}
 /* One cut (tools/site-font.py): the weight is declared so nothing is emboldened by the browser */
 @font-face{font-family:Fraunces;src:url(fonts/fraunces.woff2) format("woff2");font-weight:400 700;font-display:swap}

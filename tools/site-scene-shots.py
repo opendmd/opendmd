@@ -10,7 +10,7 @@ SITE is a built site (make site; target/site by default), served from a
 local port and opened as /?scene=NAME (site/theme/scene.js, SCENES.md), each
 time in a browser that remembers nothing.
 
-Writes DIR/NAME-{1280,1920,390}-{light,dark}.png (the hero down to the
+Writes DIR/NAME-{1280,1920,820,390}-{light,dark}.png (the hero down to the
 start of the next band) and DIR/contact.png, every scene side by side;
 --compare adds one more picture to that sheet (a screenshot of another
 site, say), which is not kept in the repository.
@@ -26,8 +26,8 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 THEME = ROOT / "site/theme"
-SCENES = ("synth", "night", "day", "chunky", "shelf", "neon", "arcade")  # tools/site.py SCENES: the first is everyone's
-VIEWS = (("1280", 1280, 800), ("1920", 1920, 1080), ("390", 390, 844))
+SCENES = ("shelf", "synth", "night", "day", "chunky", "neon", "arcade")  # tools/site.py SCENES: the first is everyone's
+VIEWS = (("1280", 1280, 800), ("1920", 1920, 1080), ("820", 820, 1180), ("390", 390, 844))
 
 
 def serve(folder: Path):
