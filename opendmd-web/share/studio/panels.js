@@ -3,7 +3,7 @@
 // piece, each docked in the left or right column or floating over the stage.
 // A title bar drags (to within 28 px of the stage's edge: docked in that
 // column, where it was dropped in the stack; Escape puts it back); its name
-// is a button the arrow keys move (16 px, Shift 64) and Enter folds; its ⋮
+// is a button the arrow keys move (16 px, Shift 64) and Enter or Space folds; its ⋮
 // menu docks, floats, folds and closes it; a floating one resizes by its
 // corner (dragged, or the arrow keys on it). The Panels menu shows or closes
 // each, hides them all (H, or PANELS in the chin: for this tab's visit only)
@@ -38,13 +38,15 @@ export function mount(studio) {
   css.href = new URL('panels.css', import.meta.url).href;
   ready = new Promise((ok) => { css.onload = css.onerror = ok; document.head.append(css); }).then(() => { if (ws.matches) up(); });
   ws.addEventListener('change', () => (ws.matches ? up() : down()));
-  addEventListener('resize', () => { if (on && !raf) raf = requestAnimationFrame(() => { raf = 0; apply(); }); });
+  addEventListener('resize', () => { shut(); if (on && !raf) raf = requestAnimationFrame(() => { raf = 0; apply(); }); });
   addEventListener('hashchange', () => shut());
   root.addEventListener('pointerdown', grab);
   root.addEventListener('pointermove', move);
   root.addEventListener('pointerup', (e) => let_go(e, true));
   root.addEventListener('pointercancel', (e) => let_go(e, false));
-  root.addEventListener('lostpointercapture', (e) => let_go(e, false));
+  // (Only the Studio's own capture: a touch's implicit capture on the title bar is let go, and bubbles here, as the drag takes it.)
+  root.addEventListener('lostpointercapture', (e) => { if (e.target === root) let_go(e, false); });
+  root.addEventListener('pointerdown', (e) => { const p = on && e.target.closest?.('.s-panel.float'); if (p) front(p.dataset.panel); }, true);
   root.addEventListener('dblclick', (e) => { const hd = bar(e); if (hd) fold(hd.parentNode.dataset.panel); });
   root.addEventListener('keydown', keys);
   root.addEventListener('click', press);
@@ -117,7 +119,7 @@ function up() {
     if (!hd) { hd = el('div', 's-hd s-gen'); hd.append(el('h2')); p.prepend(hd); }
     const h2 = hd.querySelector('h2'), g = el('button', 's-grip');
     g.type = 'button';
-    g.title = `${NAME[id]}: drag to move it (to a column's edge to dock it); arrow keys move it, Enter folds it`;
+    g.title = `${NAME[id]}: drag to move it (to a column's edge to dock it); arrow keys move it${id === 'tools' ? '' : ', Enter folds it'}`;
     if (hd.classList.contains('s-gen')) g.textContent = NAME[id]; else g.append(...h2.childNodes);
     h2.append(g);
     const b = (pa, text, label) => { const x = el('button', 's-pbtn', text); x.type = 'button'; x.dataset.pa = pa; x.setAttribute('aria-label', label); x.title = label; return x; };
@@ -191,13 +193,13 @@ function apply() {
   for (const id of IDS) {
     const p = P[id], q = L.p[id], fl = q.at === 'f';
     p.classList.toggle('float', fl);
-    p.classList.toggle('col', !!q.c);
+    p.classList.toggle('col', !!q.c && id !== 'tools');
     p.classList.toggle('shut', !!q.h);
     const fb = p.querySelector('[data-pa=col]');
     if (fb) { fb.textContent = q.c ? '▸' : '▾'; fb.setAttribute('aria-label', `${q.c ? 'Unfold' : 'Fold'} ${NAME[id]}`); fb.title = fb.getAttribute('aria-label'); fb.setAttribute('aria-expanded', !q.c); }
     if (!fl) { p.style.cssText = ''; continue; }
     if (p.parentNode !== root) root.append(p);
-    const w = width(id), left = Math.max(0, Math.min(W - w, q.ax === 'r' ? W - (q.x ?? 0) - w : q.x ?? 0)), top = Math.max(0, Math.min(H - TB, q.y ?? 0));
+    const x = q.x ?? 80, w = width(id), left = Math.max(0, Math.min(W - w, q.ax === 'r' ? W - x - w : x)), top = Math.max(0, Math.min(H - TB, q.y ?? 200)); // (no place kept: over the stage)
     const room = Math.max(TB, H - top - 8), ht = q.ht != null ? Math.max(MINH, Math.min(room, q.ht)) : null;
     p.style.cssText = `left:${left}px;top:${top}px;width:${w}px;${ht ? `height:${ht}px` : `max-height:${room}px`};z-index:${19 - L.order.indexOf(id)}`;
   }
@@ -236,6 +238,7 @@ function float(id) {
   if (q.x == null || q.y == null) at(id, r.left, Math.min(r.top, innerHeight - 320)); else q.at = 'f'; // (where it is, room below it to use it)
 }
 function fold(id) {
+  if (id === 'tools') return; // (Tools is narrow: no fold, so never a column with no way back)
   const q = cur().p[id];
   q.c = q.c ? 0 : 1;
   save();
@@ -256,7 +259,9 @@ export function show(id) {
   if (bare) setBare(false); else apply();
 }
 // H, PANELS: every panel hidden, or back.
-export function toggle() { if (on) setBare(!bare); }
+export function toggle() { if (on && root.dataset.view !== 'library') setBare(!bare); }
+// The notice said under a control in a floating panel: that panel to the front, so nothing in front covers it.
+export function raise(id) { if (on && cur().p[id]?.at === 'f') front(id); }
 
 // --- pointers: a title bar dragged, a corner pulled ---
 const bar = (e) => {
@@ -312,6 +317,7 @@ function let_go(e, ok) {
   if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pid)) return;
   drag = null;
   cancelAnimationFrame(d.f);
+  try { if (root.hasPointerCapture(d.pid)) root.releasePointerCapture(d.pid); } catch { /* gone */ }
   if (d.moved && ok) frame(d);
   d.p.classList.remove('drag');
   for (const k of ['l', 'r']) docks[k].classList.remove('hot');
@@ -329,7 +335,7 @@ const ARROW = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowD
 function keys(e) {
   if (!on || e.ctrlKey || e.metaKey || e.altKey) return;
   const g = e.target.closest?.('.s-grip, .s-rsz'), v = ARROW[e.key];
-  if (!g || (!v && !(e.key === 'Enter' && g.classList.contains('s-grip')))) return;
+  if (!g || (!v && !((e.key === 'Enter' || e.key === ' ') && g.classList.contains('s-grip')))) return;
   e.preventDefault();
   e.stopPropagation(); // (not the Studio's own keys)
   const p = g.closest('.s-panel'), id = p.dataset.panel, q = cur().p[id];
@@ -404,9 +410,11 @@ function open(at, items) {
   m.addEventListener('keydown', (e) => {
     const bs = [...m.querySelectorAll('button')], n = bs.indexOf(document.activeElement);
     const to = { ArrowDown: n + 1, ArrowUp: n - 1, Home: 0, End: bs.length - 1 }[e.key];
-    if (to !== undefined) { e.preventDefault(); bs[(to + bs.length) % bs.length].focus(); } else if (e.key === 'Escape') { e.preventDefault(); shut(true); } else if (e.key === 'Tab') shut();
+    if (to !== undefined) { e.preventDefault(); bs[(to + bs.length) % bs.length].focus(); } else if (e.key === 'Escape') { e.preventDefault(); shut(true); } else if (e.key === 'Tab') shut(true); // (focus to its opener, then on as Tab goes)
     e.stopPropagation(); // (the Studio's own keys are not for a menu)
   });
+  // Focus gone elsewhere (a notice's Escape, a click away): the menu closes.
+  m.addEventListener('focusout', (e) => { if (menu?.m === m && !m.contains(e.relatedTarget)) shut(); });
   document.body.append(m);
   const r = at.getBoundingClientRect(), W = vw();
   m.style.left = `${Math.max(8, Math.min(r.left, W - m.offsetWidth - 8))}px`;

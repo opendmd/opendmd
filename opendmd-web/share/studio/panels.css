@@ -43,7 +43,7 @@ background:linear-gradient(135deg,transparent 52%,var(--mut) 52% 60%,transparent
 .s-tray .s-pbtn{width:22px}
 #studio .s-tray.float>.s-pb,#studio .s-bench>.s-tray>.s-pb{flex-flow:row wrap;justify-content:center;align-content:flex-start}
 #studio .s-tray.float .s-tools,#studio .s-bench>.s-tray .s-tools{flex-flow:row wrap;justify-content:center}
-@media (pointer:coarse){#studio .s-panel>.s-hd{min-height:44px}.s-pbtn{width:36px;height:36px}.s-grip{padding:12px 6px}}
+@media (pointer:coarse){#studio .s-panel>.s-hd{min-height:44px}.s-pbtn{width:36px;height:36px}.s-grip{padding:12px 6px}#studio .s-panel.float>.s-rsz{width:32px;height:32px}}
 /* The Panels menu and a panel's ⋮ menu */
 .s-pmenu{position:fixed;z-index:40;display:grid;gap:2px;min-width:200px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--bg2);color:var(--fg);
 font-size:14px;box-shadow:0 14px 36px rgba(0,0,0,.24)}

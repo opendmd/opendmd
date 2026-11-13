@@ -3711,6 +3711,127 @@ def studio_panels(browser, base: str, site: Path, errors: list[str], shots: Path
           f"/studio/ panels (phone): with a desktop layout stored, panels.js is not fetched and the four tabs are as without one ({seen_boxes[1]})")
 
 
+def p_touch(page: Page, a: tuple[float, float], b: tuple[float, float], end: str = "touchEnd") -> None:
+    """One finger from a to b (CDP touch events), lifted or cancelled."""
+    cdp = page.context.new_cdp_session(page)
+    pt = lambda x, y: [{"x": x, "y": y, "id": 1}]
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": pt(*a)})
+    for n in range(1, 9):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": pt(a[0] + (b[0] - a[0]) * n / 8, a[1] + (b[1] - a[1]) * n / 8)})
+    cdp.send("Input.dispatchTouchEvent", {"type": end, "touchPoints": []})
+    page.wait_for_timeout(150)
+
+
+def studio_panels_review(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The panels' review: a finger drags, resizes and (cancelled) puts back
+    a panel; Escape with a notice up and a menu open leaves no menu behind;
+    Space after a click is Play, Space on a control reached by the keyboard
+    presses it; Tab in a menu goes on from its opener; a notice from a
+    floating panel behind another is in front of it; Tools never folds; H
+    does nothing in the Library."""
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900}, has_touch=True)
+    page = s_page(browser, base, site, errors, ctx=ctx)
+    s0 = p_box(page, "stamps")
+    g = p_grip(page, "stamps")
+    p_touch(page, g, (g[0] - 300, g[1] - 250))
+    s1 = p_box(page, "stamps")
+    c = page.locator("[data-panel=stamps] .s-rsz").bounding_box()
+    cx, cy = c["x"] + c["width"] / 2, c["y"] + c["height"] / 2
+    p_touch(page, (cx, cy), (cx + 80, cy + 60))
+    s2 = p_box(page, "stamps")
+    g = p_grip(page, "stamps")
+    p_touch(page, g, (g[0] - 200, g[1] + 50), end="touchCancel")
+    s3 = p_box(page, "stamps")
+    check(s1["fixed"] and abs(s1["x"] - (s0["x"] - 300)) <= 1 and abs(s1["y"] - (s0["y"] - 250)) <= 1 and abs(s2["w"] - (s1["w"] + 80)) <= 2
+          and abs(s2["h"] - (s1["h"] + 60)) <= 2 and (s3["x"], s3["y"], s3["w"]) == (s2["x"], s2["y"], s2["w"]),
+          f"/studio/ panels review: a finger drags a panel ({s0['x']},{s0['y']} -> {s1['x']},{s1['y']}), resizes it by its corner ({s1['w']}x{s1['h']} -> {s2['w']}x{s2['h']}), and a cancelled touch puts it back ({s3['x']},{s3['y']})")
+    page.context.close()
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    page = s_page(browser, base, site, errors, ctx=ctx)
+    page.evaluate(S_WHOLE, [S_TWO])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    s_new(page)
+    # Escape with a notice up and a menu open: the notice goes, and the menu with it.
+    left = []
+    for opener in ("#s-panels", "[data-panel=layers] [data-pa=menu]"):
+        page.click("#s-snap")
+        n_seen(page)
+        page.click(opener)
+        page.wait_for_selector(".s-pmenu")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(150)
+        left.append([page.is_hidden("#s-note"), page.locator(".s-pmenu").count(), page.get_attribute(opener, "aria-expanded")])
+    check(left == [[True, 0, "false"], [True, 0, "false"]], f"/studio/ panels review: Escape with a notice up and the Panels or ⋮ menu open dismisses the notice and closes the menu ({left})")
+    # Tab in a menu: closed, focus on from its opener.
+    page.click("#s-panels")
+    page.wait_for_selector(".s-pmenu")
+    page.keyboard.press("Tab")
+    page.wait_for_timeout(100)
+    tab = [page.locator(".s-pmenu").count(), n_active(page)]
+    check(tab == [0, "s-libb"], f"/studio/ panels review: Tab in the Panels menu closes it and goes on from its opener ({tab})")
+    page.context.close()
+    page = s_page(browser, base, site, errors, ctx=browser.new_context(viewport={"width": 1440, "height": 900}))
+    page.evaluate(S_WHOLE, [S_TWO])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    page.wait_for_timeout(200)
+    # Space after a click: Play (the button is not pressed again); on a button reached by the keyboard: pressed.
+    page.click("#s-g-grid")
+    page.keyboard.press(" ")
+    page.wait_for_timeout(250)
+    clicked = [page.get_attribute("#s-g-grid", "aria-pressed"), s_data(page).get("playing")]
+    page.keyboard.press(" ")
+    page.wait_for_timeout(250)
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    focused = n_active(page)
+    page.keyboard.press(" ")
+    page.wait_for_timeout(250)
+    keyed = [page.get_attribute("#s-g-grid", "aria-pressed"), s_data(page).get("playing")]
+    check(clicked == ["false", "yes"] and focused == "s-g-grid" and keyed[0] == "true" and keyed[1] != "yes",
+          f"/studio/ panels review: Space after a mouse click plays, not pressing the button again ({clicked}); on a button reached by Tab it presses it ({focused}, {keyed})")
+    # A notice from a floating panel under another one in front: in front of it.
+    p_menu(page, "[data-panel=piece] [data-pa=menu]", "Float")
+    page.click("#s-stampsb")
+    page.wait_for_selector("#s-stampsx [data-n]", timeout=20000)
+    s_new(page)
+    page.click("#s-snap")
+    n_seen(page)
+    snap = page.locator("#s-snap").bounding_box()
+    page.keyboard.press("Escape")
+    g = p_grip(page, "stamps")
+    sb = p_box(page, "stamps")
+    p_drag(page, g, (g[0] + (snap["x"] - 40 - sb["x"]), g[1] + (snap["y"] - 60 - sb["y"])))
+    page.click("[data-panel=stamps] .s-pb", position={"x": 5, "y": 5})
+    under = page.evaluate("(() => { const r = document.getElementById('s-snap').getBoundingClientRect(); return !!document.elementFromPoint(r.left + 10, r.bottom + 20)?.closest('[data-panel=stamps]'); })()")
+    page.evaluate("document.getElementById('s-snap').click()")
+    page.wait_for_timeout(300)
+    x = n_seen(page)
+    check(under and x["at"] == "control" and x["onTop"] and x["inView"],
+          f"/studio/ panels review: a notice under a control in a floating panel with another panel in front ({under}) is shown in front of both ({x['at']}, on top {x['onTop']})")
+    page.keyboard.press("Escape")
+    # Tools never folds (no way back from a folded narrow column).
+    x0, y0 = p_grip(page, "tools")
+    page.mouse.dblclick(x0, y0)
+    page.focus("[data-panel=tools] .s-grip")
+    page.keyboard.press("Enter")
+    tools = p_box(page, "tools")
+    page.click("[data-panel=tools] [data-pa=menu]")
+    items = page.evaluate("[...document.querySelectorAll('.s-pmenu button')].map((b) => b.textContent)")
+    page.keyboard.press("Escape")
+    check(tools["body"] and not tools["col"] and not any("Fold" in i for i in items), f"/studio/ panels review: Tools never folds (double-click, Enter), and its menu offers no fold ({items})")
+    # H in the Library: nothing hidden.
+    page.evaluate("location.hash = '#library'")
+    wait_js(page, "document.getElementById('studio').dataset.view === 'library'")
+    s_blur(page)
+    page.keyboard.press("h")
+    page.wait_for_timeout(100)
+    lib = page.evaluate("document.getElementById('studio').hasAttribute('data-bare')")
+    page.evaluate("location.hash = ''")
+    wait_js(page, "document.getElementById('studio').dataset.view === 'editor'")
+    check(not lib and all(p_box(page, i)["shown"] for i in ("tools", "colours", "layers")), f"/studio/ panels review: H in the Library hides nothing ({lib})")
+    page.context.close()
+
+
 # --- the Studio, S2 branch 3 (studio-s2-library): the Library, files, stamps, templates ---
 S_ALL = """async () => { const m = await import('/studio/store.js'); const s = await m.LocalStore.open(); const out = [];
     for (const type of ['piece', 'palette', 'stamp', 'font', 'template', 'pack']) for (const h of (await s.list({ type })).items) { const r = await s.get(h.id); out.push({ id: r.id, type: r.type, rev: r.rev, hash: r.hash, name: r.name, from: r.from, author: r.author, licence: r.licence }); }
@@ -8411,6 +8532,7 @@ def main() -> int:
             studio_layout(browser, base, a.site, errors)
             studio_workspace(browser, base, a.site, errors)
             studio_panels(browser, base, a.site, errors, a.shots)
+            studio_panels_review(browser, base, a.site, errors)
             studio_library(browser, base, a.site, errors)
             studio_files(browser, base, a.site, errors)
             studio_stamps(browser, base, a.site, errors)
@@ -8503,6 +8625,7 @@ def main() -> int:
         studio_layout(browser, base, a.site, errors)
         studio_workspace(browser, base, a.site, errors)
         studio_panels(browser, base, a.site, errors, a.shots)
+        studio_panels_review(browser, base, a.site, errors)
         studio_library(browser, base, a.site, errors)
         studio_files(browser, base, a.site, errors)
         studio_stamps(browser, base, a.site, errors)

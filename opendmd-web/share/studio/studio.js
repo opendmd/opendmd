@@ -593,6 +593,8 @@ function say(text, o) {
   const at = o.at || clicked, home = noteBy || $('studio');
   noteAt = at && home.contains(at) && at.getClientRects().length ? at : noteBy?.querySelector('.s-hd') || null; // (no box: in a closed or folded panel)
   if (noteAt) noteAt.after(notes); else $('main').append(notes);
+  const fp = noteAt?.closest('.s-panel.float');
+  if (fp) panelsMod?.then((m) => { m.raise(fp.dataset.panel); place(); }, () => {}); // (in front of any other panel)
   n.dataset.kind = kind;
   m.textContent = text;
   for (const a of o.acts || []) { const b = el('button', 's-pill', a.label); b.type = 'button'; b.onclick = () => { say(''); a.go(); }; m.append(' ', b); }
@@ -1143,10 +1145,15 @@ async function main() {
   const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick', s: 'stamp' };
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
+  // The control a pointer focused (until focus moves by other means): Space there is Play, not a second press.
+  let poked = null;
+  document.addEventListener('pointerdown', (e) => { poked = e.target.closest?.('button, a[href], summary, [role=tab]') || null; }, true);
+  document.addEventListener('focusin', (e) => { if (e.target !== poked) poked = null; }, true);
   document.addEventListener('keydown', (e) => {
     // Not in a field, nor behind an open sheet (Send to panel): the piece there is the one going out.
     if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
-    if (e.key === ' ' && e.target.closest('button, a[href], summary, [role=tab]')) return; // Space presses the control focused
+    // Space presses a control focused from the keyboard; one focused by a click is still Play's.
+    if (e.key === ' ' && e.target.closest('button, a[href], summary, [role=tab]') && e.target !== poked) return;
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
