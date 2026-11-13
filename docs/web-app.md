@@ -538,15 +538,18 @@ The demo's display also has a power switch, a card slot and a network, in
 compressed time, for the site's pages to drive (`window.opendmdDemo`):
 `state` (`power`, `card`, `up`: answering on the network, `b`: the
 brightness in effect, `canvas`: its panel), `power(on)`, `card(in)`,
-`scale(px per LED)` and `on(fn)` (called with the state now and on each
-change; returns a function that stops it). Off, every call fails as a
+`scale(px per LED)`, `on(fn)` (called with the state now and on each
+change; returns a function that stops it), `run(on)` (false: everything
+stops, the panel, the status stream and the app's reads, for a page out of
+sight) and `mirror(on)` (false: Now draws no mirror, for a page that shows
+the panel itself; `?desk` in the address starts that way). Off, every call fails as a
 dropped connection does and the panel goes dark; on, it starts afresh (its
 clock and uptime from zero), plays the start-up show, then the playlist,
 and answers on the network a moment later, so the app reconnects by
 itself. The card out, it restarts and shows the status card ("No card" on
-Now); back in, it plays again. When the display can't be reached, or has
-no card, Now's mirror dims and stops under its caption, here as with a
-real display.
+Now); back in, it plays again. When the display has been out of reach for 3 s,
+or has no card, Now's mirror dims and stops under its caption, here as with
+a real display, and comes back at the first good answer.
 
 The Formula editor on the site (the demo's and `/f/`) has two aids the
 player's copy leaves out (`js/fcost.js`, imported only there, and its wasm
