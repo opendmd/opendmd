@@ -1575,6 +1575,18 @@ emu-s3-probe: emu-build
 #               too, OPENDMD_PROBE_NOCARD_TIMINGS), network off in NVS (no
 #               WiFi, no credentials): timings on the console
 #
+# Phase 2 (the DevKitC-1 jumpered into a DMDoS carrier in the classic's
+# place: the panel and the card on config.rs's S3 pins), into
+# $(S3_P2_DIR)/<name>/:
+#
+#   carrier     a normal device (the release feature set: web app, card,
+#               Formulas) on the bench WiFi, with all-psram's switches and
+#               the Connect probe compiled in but off
+#               (OPENDMD_CONNECT_ENABLED=0: POST
+#               /api/debug/connect/config?enabled=1 starts it); the card at
+#               20 MHz (card_speed safe only on the S3), the panel clock the
+#               panel timing's i2s_speed exactly (8 MHz by default; 16, 20)
+#
 # `make fw-s3-image S3_IMAGE=<name>` (or `fw-s3-images`, all of them) builds;
 # `make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=<name>` writes one to a board
 # over USB: the merged 8 MB image at 0x0 (bootloader, table, the app in
@@ -1585,9 +1597,11 @@ emu-s3-probe: emu-build
 # other boards) are refused; DRY=1 prints the command without running it.
 # The images carry bench WiFi credentials: never published, never in dist/.
 S3_P1_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p1,$(CURDIR)/target/s3-p1)
-S3_IMAGES := base tls-psram wifi-psram cold-psram iram-trim all-psram jit
+S3_P2_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p2,$(CURDIR)/target/s3-p2)
+S3_P2_IMAGES := carrier
+S3_IMAGES := base tls-psram wifi-psram cold-psram iram-trim all-psram jit $(S3_P2_IMAGES)
 S3_IMAGE ?= base
-S3_DIR = $(S3_P1_DIR)/$(S3_IMAGE)
+S3_DIR = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),$(S3_P2_DIR),$(S3_P1_DIR))/$(S3_IMAGE)
 S3_CREDENTIALS ?= $(CURDIR)/$(FW)/.env
 S3_REFUSED_PORTS := /dev/ttyACM0 /dev/ttyUSB0
 S3_FLASH_BAUD ?= 115200
@@ -1608,6 +1622,12 @@ S3_SDK_iram-trim := $(S3_IRAM_SDK)
 S3_FEATURES_all-psram := $(S3_COMMON),psram-tls,psram-cold
 S3_SDK_all-psram := $(S3_TLS_SDK) $(S3_WIFI_SDK) $(S3_IRAM_SDK)
 S3_FEATURES_jit := psi-probe
+S3_FEATURES_carrier := $(S3_FEATURES_all-psram)
+S3_SDK_carrier := $(S3_SDK_all-psram)
+S3_ENV_carrier := OPENDMD_CONNECT_ENABLED=0
+# The app spare each image must leave: the release's 64 KB for phase 2's,
+# 32 KB for the measurement images.
+S3_SPARE = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),65536,32768)
 # The images that join the WiFi (the rest have network off in NVS).
 S3_WIFI_IMAGES := $(filter-out jit,$(S3_IMAGES))
 S3_ON_WIFI = $(filter $(S3_IMAGE),$(S3_WIFI_IMAGES))
@@ -1624,10 +1644,10 @@ fw-s3-image:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	@mkdir -p $(S3_DIR)
 	@find $(S3_DIR) -maxdepth 1 -name 'opendmd-*-s3-*.bin' -delete
-	OPENDMD_S3_IMAGE=$(S3_IMAGE) OPENDMD_S3_SWITCHES="$(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))" \
+	OPENDMD_S3_IMAGE=$(S3_IMAGE) OPENDMD_S3_SWITCHES="$(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))" $(S3_ENV_$(S3_IMAGE)) \
 	$(if $(S3_ON_WIFI),,OPENDMD_PROBE_NOCARD_TIMINGS=1 )$(MAKE) --no-print-directory fw-release-variant VARIANT=s3 \
 	  FW_RELEASE_FEATURES=$(S3_FEATURES_$(S3_IMAGE)) $(if $(S3_SDK_$(S3_IMAGE)),FW_EXTRA_SDKCONFIG="$(strip $(S3_SDK_$(S3_IMAGE)))") \
-	  $(if $(S3_ON_WIFI),FW_S3_CREDENTIALS="$(S3_CREDENTIALS)") FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(S3_DIR)/target DIST=$(S3_DIR)
+	  $(if $(S3_ON_WIFI),FW_S3_CREDENTIALS="$(S3_CREDENTIALS)") FW_APP_SPARE=$(S3_SPARE) FW_RELEASE_TARGET_DIR=$(S3_DIR)/target DIST=$(S3_DIR)
 	@full=$$(ls $(S3_DIR)/opendmd-*-s3-full.bin); test "$$(echo "$$full" | wc -l)" = 1 || { echo "want one full image in $(S3_DIR)"; exit 1; }; \
 	 elf=$(S3_DIR)/target/xtensa-esp32s3-espidf/release/opendmd-firmware; cp $$elf $(S3_ELF); \
 	 h=$$(grep -aoE "esp-idf-sys-[0-9a-f]{16}" $$elf | sort -u | head -1); \
@@ -1652,7 +1672,7 @@ fw-s3-image:
 
 fw-s3-images:
 	@for i in $(S3_IMAGES); do $(MAKE) --no-print-directory fw-s3-image S3_IMAGE=$$i || exit 1; done
-	@ls -l $(S3_P1_DIR)/*/opendmd-*-s3-full.bin
+	@ls -l $(S3_P1_DIR)/*/opendmd-*-s3-full.bin $(S3_P2_DIR)/*/opendmd-*-s3-full.bin
 
 fw-s3-flash:
 	@test "$(origin PORT)" = "command line" || { echo "fw-s3-flash: name the S3's port, make fw-s3-flash PORT=/dev/ttyXXX (no default)"; exit 2; }

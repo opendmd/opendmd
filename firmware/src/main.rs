@@ -625,6 +625,16 @@ fn main() -> Result<()> {
     let health = {
         let poweron = matches!(reset_reason, "poweron" | "brownout");
         let mode = nvs_config.card_speed();
+        // The S3 preview's card pins go through the GPIO matrix (config.rs,
+        // `SD_SCK`): 40 MHz is refused at the clock switch there, and that
+        // failure's teardown crashes. The safe clock, 20 MHz, whatever NVS says.
+        #[cfg(esp32s3)]
+        let mode = {
+            if mode != opendmd_core::card_speed::CardSpeed::Safe {
+                log::warn!("card_speed {} in NVS: the ESP32-S3 preview runs the card at the safe clock only", mode.as_str());
+            }
+            opendmd_core::card_speed::CardSpeed::Safe
+        };
         cardspeed::init(mode);
         let health = sdhealth::boot(poweron, nvs_config.sd_slow(), mode);
         if health.clear_nvs {

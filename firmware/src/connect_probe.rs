@@ -190,6 +190,14 @@ const DNS_KEEP: Duration = Duration::from_secs(3600);
 const DNS_WAIT: Duration = Duration::from_secs(20);
 /// While a lookup runs, the worker's pace (not the busy 5 ms).
 const DNS_POLL: Duration = Duration::from_millis(200);
+/// Whether the probe starts by itself after the hold
+/// (`OPENDMD_CONNECT_ENABLED` at build time: `0` for an image that
+/// stays off until `POST /api/debug/connect/config?enabled=1`, the S3
+/// phase-2 image's; anything else, or unset, is on).
+const ENABLED: bool = match option_env!("OPENDMD_CONNECT_ENABLED") {
+    Some(v) => !matches!(v.as_bytes(), b"0"),
+    None => true,
+};
 /// No attempt of its own before this much uptime (seconds).
 const HOLD_S: u64 = match option_env!("OPENDMD_CONNECT_HOLD_S") {
     Some(v) => parse_u64(v),
@@ -275,7 +283,7 @@ struct Cfg {
 impl Cfg {
     fn defaults() -> Cfg {
         Cfg {
-            enabled: true,
+            enabled: ENABLED,
             host: DEFAULT_HOST.into(),
             addr: DEFAULT_ADDR.into(),
             path: DEFAULT_PATH.into(),
@@ -1321,7 +1329,8 @@ impl Probe {
             mbedtls_platform_set_calloc_free(tls_calloc, tls_free)
         };
         log::info!(
-            "connect-probe: on (host {DEFAULT_HOST}, path {DEFAULT_PATH}, token {}, TLS in {TLS_IN} out {TLS_OUT}, {} pinned roots)",
+            "connect-probe: compiled in, {} (host {DEFAULT_HOST}, path {DEFAULT_PATH}, token {}, TLS in {TLS_IN} out {TLS_OUT}, {} pinned roots)",
+            if ENABLED { "starts by itself after the hold" } else { "off until POST /api/debug/connect/config?enabled=1" },
             if DEFAULT_TOKEN.is_empty() { "unset" } else { "set" },
             ROOTS.len()
         );

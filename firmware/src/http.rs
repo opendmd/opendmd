@@ -752,6 +752,11 @@ pub fn apply_patch(next: &mut Settings, patch: &ConfigPatch) -> Result<(), Patch
         let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
             return Err(PatchErr::bad(opendmd_core::card_speed::INVALID));
         };
+        // The S3 preview: the GPIO matrix's pins refuse 40 MHz (main.rs).
+        #[cfg(esp32s3)]
+        if mode != opendmd_core::card_speed::CardSpeed::Safe {
+            return Err(PatchErr::bad("card_speed: the ESP32-S3 preview runs the card at 20 MHz only (safe)"));
+        }
         next.card_speed = mode;
     }
     match (patch.lat, patch.lon) {
