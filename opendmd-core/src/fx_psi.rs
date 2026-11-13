@@ -2879,8 +2879,8 @@ mod tests {
     fn core_lends_the_same_tables_psi_has() {
         let t = tables();
         assert_eq!(t.sin, &psi::SIN);
-        for i in 0..5 {
-            assert_eq!(t.palettes[i], &psi::PALETTES[i], "palette {i}");
+        for (i, p) in t.palettes.iter().enumerate().take(5) {
+            assert_eq!(*p, &psi::PALETTES[i], "palette {i}");
         }
         // The very tables `text` draws with (Psi's own copy is the same
         // file, `include!`d).

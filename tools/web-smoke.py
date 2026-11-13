@@ -2143,6 +2143,12 @@ def thumbs_dark_checks(browser, base: str, errors: list[str]) -> None:
     pick_cat(page, "SmokeDark")
     sel = f"#lib-list .vrow[data-path={json.dumps(path)}] canvas.th[data-done]"
     page.wait_for_selector(sel, timeout=20000)
+    # requestfinished reaches us a beat after the canvas is drawn (a loaded runner: after
+    # 500 ms, "read once ([] B)"): wait for the read to be counted, then for any second.
+    for _ in range(50):
+        if reads:
+            break
+        page.wait_for_timeout(100)
     page.wait_for_timeout(500)
     lit = page.eval_on_selector(sel, """c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
         for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
