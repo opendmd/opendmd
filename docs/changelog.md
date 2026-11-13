@@ -20,6 +20,16 @@ it can be written ahead. Write for a panel's owner: GIFs, Formulas, playlists,
 the web app. No internals.
 -->
 
+## 1.1.0-beta.3 · 2026-11-13
+
+Sprites from your own pictures.
+
+- **Picture…** in the Formula editor makes a sprite from a picture you
+  choose, drop or paste: crop it, size it up to 64 × 32 and pick 2, 4 or
+  16 colours, with what each costs the Formula said as you go.
+- A sprite's picture editor can replace it from a picture, keeping the key
+  characters you gave its colours. The picture never leaves your browser.
+
 ## 1.1.0-beta.2 · 2026-11-11
 
 Formulas keep better time on the panel.

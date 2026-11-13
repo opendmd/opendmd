@@ -628,6 +628,18 @@ PSI_LANG_GZ_BUDGET = 124 * 1024
 # with it), as it never loads with the Formulas line.
 FSPRITE_GZ_BUDGET = 6 * 1024
 FSPRITE = {"js/fsprite.js"}
+# A sprite from a picture (js/fimport.js, branch sprite-import, 2026-11-13:
+# the picture read in the browser, an SVG made safe, the crop, the size,
+# the colours reduced to a key of 2, 4 or 16, the dialog and its cost line;
+# imported by js/formulas.js only once a picture is chosen, dropped or
+# pasted): a line of its own, as it never loads with the Formulas line or
+# fsprite's (it imports fsprite.js's parsers). Planned at 6 KB; 10 KB
+# (Claude, under the owner's budget authority): measured ~9.3 KB gz with
+# the SVG sanitiser, the median cut, the re-import's key matching and the
+# dialog's crop, a file only a picture's import ever fetches (the pack
+# keeps > 170 KB spare).
+FIMPORT_GZ_BUDGET = 10 * 1024
+FIMPORT = {"js/fimport.js"}
 # The site's Psi pages' script (`--share`'s ref/psiref.js, copied to the
 # site's root and loaded by the reference, its error codes and the guide's
 # Psi pages: the live examples, highlighting, the name index, search and the
@@ -778,6 +790,8 @@ def main() -> int:
             kind = "fhint"
         elif rel in FSPRITE:
             kind = "fsprite"
+        elif rel in FIMPORT:
+            kind = "fimport"
         elif rel in IMPORT:
             kind = "import"
         else:
@@ -930,6 +944,11 @@ def main() -> int:
         limit = "" if budget is None else f"/ {budget // 1024} KB"
         print(f"{kind:<10} raw {raw:>9,}           gz {gz:>9,} {limit:<10} {verdict}")
         ok &= budget is None or gz <= budget
+    # (The picture import's line, on its own: js/fimport.js.)
+    raw, gz = totals.get("fimport", [0, 0])
+    verdict = "ok" if 0 < gz <= FIMPORT_GZ_BUDGET else "OVER BUDGET" if gz else "MISSING"
+    print(f"{'fimport':<10} raw {raw:>9,}           gz {gz:>9,} / {FIMPORT_GZ_BUDGET // 1024} KB {'':<5}{verdict}")
+    ok &= 0 < gz <= FIMPORT_GZ_BUDGET
     all_raw = sum(t[0] for t in totals.values())
     all_gz = sum(t[1] for t in totals.values())
     print(f"{'total':<10} raw {all_raw:>9,}           gz {all_gz:>9,}")
