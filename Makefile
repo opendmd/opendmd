@@ -60,7 +60,7 @@ $(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/ 
 endif
 else ifeq ($(FW_VARIANT),$(FW_S3_VARIANT))
 ifneq ($(filter fw-flash fw-release-flash fw-erase fw-ota fw-sign fw-release flasher,$(MAKECMDGOALS)),)
-$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator (make fw-build, emu-s3-nocard, emu-s3-probe), or as a measurement image over USB (make fw-s3-image, fw-s3-flash); no install, update or release yet)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator (make fw-build, emu-s3-smoke, emu-s3-nocard, emu-s3-probe), or as a measurement image over USB (make fw-s3-image, fw-s3-flash); no install, update or release yet)
 endif
 ifeq ($(FW_DIST_OWN),)
 ifneq ($(filter fw-release-variant,$(MAKECMDGOALS)),)
@@ -183,7 +183,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
-	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-nocard emu-s3-probe fw-s3-image fw-s3-images fw-s3-flash \
+	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-smoke emu-s3-nocard emu-s3-probe fw-s3-image fw-s3-images fw-s3-flash \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -1535,11 +1535,16 @@ emu-nocard: emu-build
 
 # The ESP32-S3 preview (VARIANT=s3, S3 port phase 0) in esp32sim's S3 machine
 # (`--chip s3 --board none`, 8 MB flash, 8 MB octal PSRAM): correctness only,
-# like every emulator lane. The machine has no SD card yet (the SD-over-SPI
-# card is a classic ESP32 board), so both lanes run with none:
+# like every emulator lane. The card is on SPI3 through the GPIO matrix at the
+# S3 map's pins (`--sd-spi 39,40,41,21`, config.rs); the panel's LCD_CAM runs
+# in i8080 always-out mode and drains its GDMA ring at the pixel clock, its
+# output going nowhere (no HUB75 sink):
+# emu-s3-smoke: the plain s3 image (EMU_S3_IMAGE) with the smoke card: the
+#   card mounts, the panel comes up, httpd, the www pack, GIFs start from the
+#   playlist and the playlist is read raw after the handover. EMU_SMOKE_OK.
 # emu-s3-nocard: the nocard-test image boots, its panel driver comes up (the
-#   LCD_CAM backend; its output goes nowhere), its settings live in NVS and
-#   a change survives a restart. EMU_NOCARD_OK.
+#   LCD_CAM backend), its settings live in NVS and a change survives a
+#   restart. EMU_NOCARD_OK.
 # emu-s3-probe: the psi-probe image runs the probe's card-free sections
 #   (psi_probe::run_nocard): every bundled Formula, the JIT spike's
 #   hand-written kernels, the golden frames through the VM and through the
@@ -1563,6 +1568,9 @@ emu-image-s3-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/s3probe/dist/opendmd-*-s3-full.bin $(EMU_DIR)/s3probe/dist/opendmd-*-s3-app.bin
 	$(call EMU_S3_BUILD,s3probe,psi-probe,$(EMU_PROBE_SPARE))
+emu-s3-smoke: emu-build emu-card
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3 &&) \
+	uv run --quiet tools/emu/run.py smoke --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 emu-s3-nocard: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-nocard &&) \
 	uv run --quiet tools/emu/run.py nocard --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_NOCARD_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)

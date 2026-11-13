@@ -157,6 +157,24 @@ class LaneFail(Exception):
 
 # --- the seeded image ----------------------------------------------------------
 
+# The card's SPI pins, SCLK,MOSI,MISO,CS (firmware/src/config.rs SD_*): the classic's VSPI
+# IO_MUX pins, the S3's SPI3 through the GPIO matrix.
+SD_SPI = {"esp32": "18,23,19,5", "s3": "39,40,41,21"}
+
+
+def machine(sim, chip: str, image: Path, rom, sd: list[str]) -> list[str]:
+    """esp32sim's command line up to the run options: the chip's machine (the classic on a bare
+    esp32dev with 4 MB of flash; the S3 with no board, 8 MB of flash and 8 MB of octal PSRAM,
+    the DevKitC-1 N8R8's), the card of `sd` (`--sd IMG` or `--sd-rw IMG`; none if empty) on its
+    SPI pins, a ROM boot of the full flash image."""
+    card = ["--sd-spi", SD_SPI[chip], *sd] if sd else []
+    if chip == "s3":
+        return [str(sim), "--chip", "s3", "--board", "none", *card, "--boot", "rom", "--rom", str(rom),
+                "--flash-image", str(image), "--flash-mb", str(max(8, image.stat().st_size >> 20)), "--psram-mb", "8"]
+    return [str(sim), "--chip", "esp32", "--board", "esp32dev", *card, "--boot", "rom", "--rom", str(rom),
+            "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20))]
+
+
 def nvs_partition(image: bytes) -> tuple[int, int]:
     """The `nvs` data partition's offset and size from the image's table at 0x8000."""
     for off in range(0x8000, 0x8000 + 0xC00, 32):
@@ -505,8 +523,7 @@ class Lane:
         if card_out:
             shutil.copyfile(card, card_out)
         sd = ["--sd-rw", str(card_out)] if card_out else ["--sd", str(card)]
-        cmd = [str(self.sim), "--chip", "esp32", "--board", "esp32dev", "--sd-spi", "18,23,19,5", *sd, "--boot", "rom", "--rom", str(self.rom),
-               "--flash-image", str(image), "--flash-mb", str(max(4, image.stat().st_size >> 20)),
+        cmd = [*machine(self.sim, getattr(self.a, "chip", "esp32"), image, self.rom, sd),
                "--max-seconds", str(self.a.seconds or 7200), "--console", "uart0",
                "--wifi", WIFI, "--net", "nat", "--hostfwd", f"tcp:127.0.0.1:{PORT}-:80", "--no-dump"]
         if no_reboot:
