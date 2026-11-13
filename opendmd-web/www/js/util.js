@@ -43,6 +43,25 @@ export const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
 // A playlist line that names a Formula, not a GIF: inline or by name
 // (`@formula…`), or one of the user's on the card (`/formulas/x.psi?a=…`).
 export const isFormula = (p) => p.startsWith('@formula') || /^\/.*\.psi(\?|$)/i.test(p);
+// A Formula's name from its path, with nothing fetched: an inline one's
+// own (its compiled header's, else `&name=`), else its stem's
+// (`@formula:time-gate`, `/formulas/time-gate.psi` -> "Time gate"); never the path.
+export function formulaName(p) {
+  const [head, query] = p.split('?'), q = new URLSearchParams(query);
+  if (head == '@formula') {
+    try {
+      const b = Uint8Array.from(atob((q.get('psb') || '').slice(0, 96).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      const n = b[0] == 80 && new TextDecoder().decode(b.subarray(6, 6 + b[5])).trim();
+      if (n) return n;
+    } catch { /* not base64 */ }
+    return q.get('name')?.trim().slice(0, 60) || 'Formula';
+  }
+  const t = head.replace(/^@formula:|^.*\/|\.psi$/gi, '').replace(/[-_]+/g, ' ').trim();
+  return t && t[0] != '~' ? t[0].toUpperCase() + t.slice(1) : 'Formula';
+}
+// A failure of the panel's link, not of the file: no answer (js/source.js
+// dfetch's `link`), timed out (0) or busy (503).
+export const unreachable = (e) => !!e?.link || e?.status === 0 || e?.status == 503;
 // Drawn by the player, not read as a GIF: a title card or a Formula.
 export const drawn = (p) => p[0] == '@' || isFormula(p);
 // A playlist line the player skips, so the editor drops it: the clock's or
@@ -98,7 +117,7 @@ export const lines = (text) => text.replace(/^﻿/, '').split('\n').map((l) => l
 
 // The display name of an entry: "Title 03" plus nothing else; a name with
 // no title (or only a number: N64_LOGO_01.gif) reads "N64 Logo 01".
-export const label = (e) => ((!e.title || /^\d\d?$/.test(e.title) ? [e.platform, ...(e.flags || []).filter(isFlag).map(flagName), e.title].filter(Boolean).join(' ') : e.title) || base(e.path))
+export const label = (e) => isFormula(e.path || '') ? formulaName(e.path) : ((!e.title || /^\d\d?$/.test(e.title) ? [e.platform, ...(e.flags || []).filter(isFlag).map(flagName), e.title].filter(Boolean).join(' ') : e.title) || base(e.path))
   + (e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : '');
 
 export function confirmBox(msg) { return window.confirm(msg); }

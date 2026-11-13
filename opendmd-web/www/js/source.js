@@ -73,7 +73,8 @@ export async function dfetch(url, init = {}, ms = 90000) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
     init.signal?.addEventListener('abort', () => ctl.abort());
     let r;
-    try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } finally { clearTimeout(t); }
+    // (No answer at all: `link`, js/util.js unreachable.)
+    try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } catch (e) { if (e instanceof TypeError) e.link = true; throw e; } finally { clearTimeout(t); }
     if (r.status !== 401 || !await askKey()) return r;
   }
 }
