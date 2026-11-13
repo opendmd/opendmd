@@ -297,8 +297,8 @@ card shows progress with `sd.formatting` true (a second POST: 409), ends
 
 Power-safe pass: a mock with `--power-safe` (an ESP32-S3 whose brownout-loop
 guard left the panel off): status reset_note "power-safe: ..." and scan
-null, and the #powersafe banner over every view saying the panel's supply
-is missing or too weak; the slowed-card pass's normal device shows none.
+null, and the #powersafe banner over every view saying the power supply
+kept dipping; the slowed-card pass's normal device shows none.
 
 Slowed-card pass: a third mock with `--sd slowed` (a card set to Fast
 that has already been slowed in place): status sd {clock_khz 20000,
@@ -11115,7 +11115,7 @@ def sd_unreadable_pass(browser) -> None:
 def power_safe_pass(browser) -> None:
     """`mock-device.py --power-safe`: an ESP32-S3 whose brownout-loop guard
     left the panel off (reset_note "power-safe: ..."): one banner above the
-    views saying the panel's supply is missing or too weak."""
+    views saying the power supply kept dipping."""
     proc, base = start_mock(["--root", str(CARD), "--power-safe"])
     errors: list[str] = []
     try:
@@ -11127,8 +11127,8 @@ def power_safe_pass(browser) -> None:
         page.goto(base + "/")
         page.wait_for_selector("#powersafe", state="visible", timeout=20000)
         text = page.inner_text("#powersafe")
-        check("power supply is missing or too weak" in text and "5 V" in text and "power-safe" not in text,
-              f"power-safe: the banner says the panel's supply is missing or too weak, in plain words ({text!r})")
+        check("power supply kept dipping" in text and "5 V" in text and "power-safe" not in text,
+              f"power-safe: the banner says the power supply kept dipping, in plain words ({text!r})")
         goto_view(page, "settings/device")
         check(page.is_visible("#powersafe"), "power-safe: the banner stays over every view")
         shot(page, "power-safe-banner", "laptop")
