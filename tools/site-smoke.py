@@ -188,6 +188,7 @@ Needs, once, `uv run --with playwright playwright install chromium`.
 """
 
 import argparse
+import base64
 import contextlib
 import filecmp
 import functools
@@ -8061,7 +8062,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 want_scene = "den-phone.webp" if size == "phone" else "den.webp"
                 loaded = page.evaluate("fetch(%r).then(r => r.ok && r.headers.get('content-type'))" % want_scene)
                 check(want_scene in scene and loaded == "image/webp", f"home ({size}): the hero's scene is {want_scene} ({loaded})")
-                framed = page.evaluate("[document.querySelectorAll('section.focus figure > .frame > img').length, document.querySelectorAll('.door > .frame > .led').length]")
+                framed = page.evaluate("[document.querySelectorAll('section.focus figure > .frame > img, section.focus figure > .frame > .pic > img').length, document.querySelectorAll('.door > .frame > .led').length]")
                 check(framed == [5, 2], f"home ({size}): every screenshot and still panel in the frame {framed}")
                 wait_js(page, "document.fonts.check('600 40px Fraunces') && document.fonts.check('16px Silkscreen')")
                 faces = page.evaluate("['.hero h1', 'section.focus h2', '.hero .chip'].map(s => getComputedStyle(document.querySelector(s)).fontFamily.split(',')[0])")
@@ -8070,6 +8071,10 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 # screenshot of the web app that has loaded (they load lazily: each
                 # scrolled to): side by side on a laptop, every other one swapped,
                 # the words first on a phone.
+                # (Before that: the hero plays, so home.js has run, and the
+                # second band's panel, far below the screen, has not started.)
+                wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
+                lazy = page.evaluate("(p => !!p && !p.dataset.live && !p.querySelector('canvas'))(document.querySelector('section.focus.rev .pic[data-plays]'))")
                 page.eval_on_selector_all("section.focus figure", "els => els.forEach(f => f.scrollIntoView())")
                 wait_js(page, "[...document.querySelectorAll('section.focus img')].every(i => i.complete && i.naturalWidth > 0)")
                 page.evaluate("scrollTo(0, 0)")
@@ -8092,11 +8097,176 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 # The hero's Formula plays live once the page has loaded (home.js).
                 wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
                 check(True, f"home ({size}): the hero plays its Formula live")
+                # The first two bands' screenshots have their panels playing: a
+                # published Formula each, not started while the band is far
+                # below the screen, then drawn over the screenshot's own
+                # panel (panels.json's box, inside the picture), its frames
+                # counting.
+                shots = page.evaluate("""[...document.querySelectorAll('section.focus .pic')].map(p => [p.querySelector('img').getAttribute('src'),
+                    p.dataset.plays, p.dataset.at])""")
+                want_shots = [[f"docs/images/{k}", f"formulas/src/{v['formula']}", " ".join(f"{n:g}" for n in v["at"])] for k, v in PANELS.items()]
+                check(sorted(shots) == sorted(want_shots) and all((site / s[1]).is_file() for s in shots) and lazy,
+                      f"home ({size}): two screenshots name the Formula on their panel and where it is; the second waits to be scrolled to ({lazy}) {shots}")
+                for src, plays, at in shots:
+                    pic = f"section.focus .pic:has(img[src='{src}'])"
+                    page.eval_on_selector(pic, "p => p.scrollIntoView({block: 'center'})")
+                    wait_js(page, f"+document.querySelector({pic!r}).querySelector('.lit canvas')?.dataset.frames > 10")
+                    # (Against the picture itself: the box is in hundredths of the image.)
+                    box = page.eval_on_selector(pic, """p => { const a = p.querySelector('img').getBoundingClientRect(), b = p.querySelector('.lit').getBoundingClientRect(), c = p.querySelector('canvas').getBoundingClientRect();
+                        return [(b.left - a.left) / a.width, (b.top - a.top) / a.height, b.width / a.width, b.height / a.height, c.width / b.width, c.height / b.height].map(v => Math.round(v * 1e4) / 100); }""")
+                    near = all(abs(g - w) < 0.6 for g, w in zip(box, [*map(float, at.split()), 100, 100]))
+                    # LEDs lit: the canvas's dot centres (it is the web app's LEDs, `data-led` pixels a dot).
+                    lit = page.eval_on_selector(pic + " canvas", """c => { const r = c.width / 128, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
+                        for (let y = 0; y < 32; y++) for (let x = 0; x < 128; x++) { const i = (((y * r + (r >> 1)) * c.width) + x * r + (r >> 1)) * 4; n += d[i] + d[i+1] + d[i+2] > 90; } return n; }""")
+                    check(near and lit > 100 and page.eval_on_selector(pic, "p => p.dataset.live") == "on",
+                          f"home ({size}): {src.rsplit('/', 1)[-1]} plays {plays.rsplit('/', 1)[-1]} over its panel {box} ({lit} LEDs lit)")
+                page.evaluate("scrollTo(0, 0)")
                 if size == "phone":
                     hero = page.evaluate("document.querySelector('.hero-panel').getBoundingClientRect().top < document.querySelector('.hero h1').getBoundingClientRect().top")
                     check(hero, "home (phone): the panel comes first")
             page.context.close()
 
+
+# The home page's screenshots whose panels play (tools/screenshots.py writes it).
+PANELS = json.loads((ROOT / "docs/images/panels.json").read_text())
+
+
+def panels_match_shots() -> None:
+    """panels.json's boxes are where the panels are in the pictures, from
+    the pictures themselves: just inside each edge of the box (the middle of
+    it, clear of the round corners) the web app's near-black mask between
+    the LEDs shows; just outside, the card or the page round it, never that
+    dark. A box a fraction of a LED out fails one side or the other."""
+    for name, p in PANELS.items():
+        im = Image.open(ROOT / "docs/images" / name).convert("L")
+        W, H = im.size
+        l, t, w, h = (v / 100 * d for v, d in zip(p["at"], (W, H, W, H)))
+        pitch = w / 128
+
+        def strip(edge: str, off: float) -> list[int]:
+            # `off` px from the edge, inward (+) or outward (-), along its middle half.
+            if edge in ("left", "right"):
+                x = l + off if edge == "left" else l + w - 1 - off
+                return [im.getpixel((int(x), int(y))) for y in range(int(t + h / 4), int(t + 3 * h / 4))]
+            y = t + off if edge == "top" else t + h - 1 - off
+            return [im.getpixel((int(x), int(y))) for x in range(int(l + w / 4), int(l + 3 * w / 4))]
+        for edge in ("left", "top", "right", "bottom"):
+            # Inside: the mask round the edge's own LEDs (within half a pitch, past the corner pixel).
+            inside = min(min(strip(edge, k)) for k in range(1, max(2, int(pitch / 2))))
+            # (Outside: 3 px on, past the pixel the browser's rounding may give the panel.)
+            outside = min(min(strip(edge, -k)) for k in (3, 4))
+            check(inside <= 9 and outside >= 14, f"{name}: panels.json's box is the panel's {edge} edge in the picture "
+                                                 f"(the mask {inside} just inside, {outside} just outside)")
+
+
+# Layout shifts on the page so far (buffered), and the elements they moved.
+CLS = """new Promise(r => new PerformanceObserver((l, o) => { o.disconnect(); r(l.getEntries().filter(e => !e.hadRecentInput)
+    .map(e => [e.value, e.sources.map(s => s.node ? (s.node.closest?.('section,header,footer')?.className || s.node.nodeName) : '?')])); })
+    .observe({ type: 'layout-shift', buffered: true })).then(x => x, () => [])"""
+
+
+def home_shots(browser, base: str, errors: list[str]) -> None:
+    """The screenshots whose panels play (home.js, leds.js): the overlay
+    starts on the frame its still shows, drawn as the shot draws it (no pop:
+    the picture under it and the overlay agree, dot for dot); it moves no
+    layout; it stops off-screen and while the tab is hidden, and goes on
+    after; with less motion asked for, no Formula and no Psi module is
+    fetched at all."""
+    panels_match_shots()
+    page = new_page(browser, "laptop", errors)
+    page.add_init_script("""window.__shifts = []; new PerformanceObserver(l => l.getEntries().forEach(e => e.hadRecentInput || window.__shifts.push(e.value)))
+        .observe({ type: 'layout-shift', buffered: true })""")
+    page.goto(base + "/")
+    page.wait_for_load_state("load")
+    wait_js(page, "document.fonts.status === 'loaded'")
+    for name, p in PANELS.items():
+        src = f"docs/images/{name}"
+        pic = f"section.focus .pic:has(img[src='{src}'])"
+        page.eval_on_selector(pic, "p => p.scrollIntoView({block: 'center'})")
+        wait_js(page, f"(i => i.complete && i.naturalWidth > 0)(document.querySelector({pic!r} + ' img'))")
+        page.wait_for_timeout(300)
+        before = page.evaluate("window.__shifts.reduce((a, b) => a + b, 0)")
+        wait_js(page, f"+document.querySelector({pic!r}).querySelector('.lit canvas')?.dataset.frames >= 1", timeout=20000)
+        dims = page.eval_on_selector(pic + " .lit canvas", "c => c.width")
+        check(dims == 128 * p["led"], f"home: {name}'s overlay drawn at the shot's own {p['led']} px a LED ({dims} wide)")
+        after = page.evaluate("window.__shifts.reduce((a, b) => a + b, 0)")
+        check(after == before, f"home: {name}'s overlay starting moves nothing on the page (layout shift {after - before:.4f})")
+        # No pop: the overlay's first frame (the Formula `ms` in at its `seed`, drawn
+        # by leds.js as home.js draws it) against the shot's own panel, the whole of
+        # it at the overlay's pixels: the same LEDs, dot for dot, give or take
+        # resampling and the recording's 64 colours; a frame a second on is far off.
+        diffs = []
+        for ms in (p["ms"], p["ms"] + 1000):
+            url = page.evaluate("""async ([src, led, ms, seed]) => {
+                const { psi, use, rgbAt, frameAt } = await import('./psiled.js'), { leds } = await import('./leds.js');
+                const L = await psi(9), text = await (await fetch(src)).text();
+                if (!use(L.P, text)) return '';
+                L.P.setSeed(seed);
+                const x = leds(led), info = L.P.info();
+                x.draw(rgbAt(L, info, frameAt(info, ms)));
+                return x.cv.toDataURL('image/png');
+            }""", [f"formulas/src/{p['formula']}", p["led"], ms, p["seed"]])
+            drawn = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).convert("RGB") if url else None
+            im = Image.open(ROOT / "docs/images" / name).convert("RGB")
+            W, H = im.size
+            l, t, w, h = p["at"]
+            box = (round(l / 100 * W), round(t / 100 * H), round((l + w) / 100 * W), round((t + h) / 100 * H))
+            if not drawn:
+                diffs.append(255.0)
+                continue
+            # At the smaller of the two (the shot's panel may be the app's canvas scaled down).
+            shot = im.crop(box)
+            if shot.size[0] < drawn.size[0]:
+                drawn = drawn.resize(shot.size, Image.BILINEAR)
+            else:
+                shot = shot.resize(drawn.size, Image.BOX)
+            a, b = drawn.tobytes(), shot.tobytes()
+            # (Clear of the panel's round corners: the middle rows.)
+            row = drawn.size[0] * 3
+            a, b = a[row * (drawn.size[1] // 8):row * (7 * drawn.size[1] // 8)], b[row * (drawn.size[1] // 8):row * (7 * drawn.size[1] // 8)]
+            diffs.append(sum(abs(x - y) for x, y in zip(a, b)) / len(a))
+        check(diffs[0] < 4 and diffs[1] > 3 * diffs[0], f"home: {name}'s overlay starts on the shot's own frame, its LEDs as the shot draws them "
+                                                         f"(mean difference {diffs[0]:.2f} a channel; a second later {diffs[1]:.2f})")
+    # Off-screen: no frames drawn; back on screen, frames again.
+    name = next(iter(PANELS))
+    pic = f"section.focus .pic:has(img[src='docs/images/{name}'])"
+    frames = f"+document.querySelector({pic!r}).querySelector('.lit canvas').dataset.frames"
+    page.eval_on_selector(pic, "p => p.scrollIntoView({block: 'center'})")
+    wait_js(page, f"({frames}) > 3")
+    page.evaluate("scrollTo(0, 0)")
+    page.wait_for_timeout(300)
+    n = page.evaluate(frames)
+    page.wait_for_timeout(600)
+    m = page.evaluate(frames)
+    page.eval_on_selector(pic, "p => p.scrollIntoView({block: 'center'})")
+    wait_js(page, f"({frames}) > {m}", timeout=5000)
+    check(m == n, f"home: {name}'s overlay stops drawing off-screen ({n} then {m} frames), and goes on when back")
+    # A hidden tab: no frames; shown again, frames again.
+    page.evaluate("Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_timeout(200)
+    n = page.evaluate(frames)
+    page.wait_for_timeout(600)
+    m = page.evaluate(frames)
+    page.evaluate("delete document.hidden; document.dispatchEvent(new Event('visibilitychange'))")
+    wait_js(page, f"({frames}) > {m}", timeout=5000)
+    check(m == n, f"home: {name}'s overlay stops while the tab is hidden ({n} then {m} frames), and goes on when shown")
+    # The whole page's layout shift, scrolled through and played (fonts, lazy pictures, overlays).
+    total = page.evaluate("window.__shifts.reduce((a, b) => a + b, 0)")
+    check(total < 0.01, f"home: no layout shift across the page as it loads and plays (CLS {total:.4f})")
+    page.context.close()
+    # Less motion: nothing for the panels is fetched at all.
+    page = new_page(browser, "laptop", errors)
+    page.emulate_media(reduced_motion="reduce")
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(urllib.parse.urlsplit(r.url).path))
+    page.goto(base + "/")
+    page.wait_for_load_state("load")
+    page.eval_on_selector_all("section.focus .pic", "els => els.forEach(p => p.scrollIntoView({block: 'center'}))")
+    page.wait_for_timeout(2500)
+    psi = [a for a in asked if a.endswith(".psi") or "pkg-psi" in a or a.endswith(("/leds.js", "/hero.js"))]
+    check(not psi and any(a.endswith("/home.js") for a in asked),
+          f"home: with less motion asked for, no Formula, Psi module or LED drawing is fetched {psi[:3]}")
+    page.context.close()
 
 # The scenes tools/site.py publishes (its SCENES, read from its source: the first is everyone's).
 SCENES = tuple(re.findall(r'"(\w+)"', re.search(r"^SCENES = \(([^)]*)\)", (ROOT / "tools/site.py").read_text(), re.M).group(1)))
@@ -8244,6 +8414,10 @@ def hero_show(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(2500)
     check(page.evaluate(f"!{hero}.querySelector('canvas') && !!{hero}.querySelector('picture.led img')"),
           "home: with less motion asked for, the hero keeps its still")
+    page.eval_on_selector_all("section.focus .pic", "els => els.forEach(p => p.scrollIntoView({block: 'center'}))")
+    page.wait_for_timeout(1500)
+    check(page.evaluate("(ps => ps.length == 2 && ps.every(p => !p.querySelector('canvas') && p.querySelector('img').naturalWidth > 0))([...document.querySelectorAll('section.focus .pic')])"),
+          "home: with less motion asked for, the screenshots stay stills")
     page.context.close()
 
 
@@ -8929,6 +9103,7 @@ def main() -> int:
         structure(browser, base, a.site, errors)
         print("the home page's hero show")
         hero_show(browser, base, errors)
+        home_shots(browser, base, errors)
         print("the home page's scenes (?scene=)")
         scenes(browser, base, a.site, errors)
         print("formula page (/f/)")

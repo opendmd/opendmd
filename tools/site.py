@@ -309,10 +309,12 @@ TOC_PAGES = ("dev/api.html", "guide/web-app.html", "dev/psi/index.html", "dev/ps
 # drawing; both copied to the root): the demo's Psi again, so CSP["home"].
 # Its hero plays a little show (hero.js, imported by home.js once it runs):
 # Formulas, the site's own GIFs and a look, with the panel's transitions.
+# leds.js (imported by home.js as a screenshot whose panel plays nears the
+# screen) draws the web app's LEDs over it.
 # Before them, scene.js (site/theme/, a classic script, so it runs before the first paint) names
 # the viewer's scene on <html>, if they asked for one.
 HOME_HEAD = '<script src="scene.js"></script>\n<script type="module" src="home.js"></script>'
-ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js", PSI_SCRIPT)  # from opendmd-web/share/ref/
+ROOT_SCRIPTS = ("psiled.js", "home.js", "hero.js", "leds.js", PSI_SCRIPT)  # from opendmd-web/share/ref/
 # The gallery's tiles play on hover or focus (ftiles.js, beside the page,
 # on psiled.js): CSP["home"] there too. ftsort.js sorts and filters them.
 GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>\n<script type="module" src="ftsort.js"></script>'
@@ -514,8 +516,7 @@ stored on this site.
 The demo's and this site's animations are OpenDMD's own (its Formulas, recorded or playing
 live in your browser, and its start-up show) and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites and tiles (CC0).
-The web app's screenshots show game title screens from libretro-thumbnails, made into panel
-GIFs with Create Art; the GIFs themselves are not on this site.
+The web app's screenshots show the same: Formulas, GIFs recorded from them, and the sprites.
 """
 
 # The pages' chrome and styles (see the docstring).
@@ -596,7 +597,7 @@ CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release
 # later app.js would ask for an earlier wasm module (js/wasm.js).
 CACHE_APP = "no-cache"
 APP_PATHS = ("/demo/*", "/f/*", "/create/*", "/studio/*", "/dev/psi/*", "/panel.js",
-             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "psiref.js", "scene.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
+             *(f"/{s}" for s in ("psiled.js", "home.js", "hero.js", "leds.js", "psiref.js", "scene.js")), "/formulas/ftiles.js", "/formulas/ftsort.js")
 CORS_PATHS = ("/install/*", "/art-index/*", "/formulas/src/*")  # fetched from a player's http:// web app
 
 
@@ -797,6 +798,12 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
 # The home page (site/pages/home.html).
 HOME = "site/pages/home.html"
 HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
+# A screenshot whose panel plays: {{plays:NAME.png}} becomes the Formula on
+# that shot's panel, where the panel is in it, the web app's pixels a LED
+# there and the frame the shot shows (docs/images/panels.json,
+# tools/screenshots.py's measure), for home.js.
+HOME_PLAYS = re.compile(r"\{\{plays:([\w.-]+)\}\}")
+PANELS = "docs/images/panels.json"
 HOME_FORMULA = re.compile(r'data-(?:formula|look)="formulas/src/([\w.-]+\.psi)"')
 # The hero show's transitions (opendmd-core compositor.rs `Kind::name`), as
 # data-in="kind:ms" (ms 20..2000, as the panel clamps them).
@@ -819,6 +826,15 @@ def home(art: dict, assets: set[str]) -> str:
             return html.escape("art/" + items[name]["gif"])
         return led("", items[name], alt=None if alt is None else "")
     text = re.sub(r"\{\{(led|art):([\w-]+)(:)?\}\}", fill, text)
+    panels = json.loads((ROOT / PANELS).read_text(encoding="utf-8"))
+
+    def plays(m: re.Match) -> str:
+        p = panels.get(m.group(1))
+        if not p or not (ROOT / "opendmd-web/formulas" / p["formula"]).is_file() or f'src="docs/images/{m.group(1)}"' not in text:
+            raise SystemExit(f"{HOME}: {m.group(0)}: no such shot beside it, or no Formula for it in {PANELS} (make screenshots)")
+        return (f'data-plays="formulas/src/{html.escape(p["formula"])}" data-at="{" ".join(f"{v:g}" for v in p["at"])}"'
+                f' data-led="{int(p["led"])}" data-ms="{int(p["ms"])}" data-seed="{int(p["seed"])}"')
+    text = HOME_PLAYS.sub(plays, text)
     for m in HOME_TRANSITION.finditer(text):
         if m.group(1) not in TRANSITIONS or not 20 <= int(m.group(2)) <= 2000:
             raise SystemExit(f"{HOME}: data-in={m.group(0)[8:]} is not one of the panel's transitions ({', '.join(TRANSITIONS)}) over 20..2000 ms")

@@ -1,0 +1,26 @@
+{
+ "now-follow.png": {
+  "formula": "rift-patrol.psi",
+  "at": [
+   2.593,
+   5.425,
+   94.815,
+   49.603
+  ],
+  "led": 8,
+  "ms": 3880,
+  "seed": 0
+ },
+ "phone-now.png": {
+  "formula": "neon-city.psi",
+  "at": [
+   6.154,
+   9.714,
+   87.692,
+   12.214
+  ],
+  "led": 6,
+  "ms": 3640,
+  "seed": 0
+ }
+}

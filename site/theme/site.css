@@ -80,7 +80,7 @@ background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 box-shadow:0 0 0 1px #26282d,inset 0 0 0 1px #000,inset 0 1px 0 1px #1c1d22,0 18px 44px rgba(0,0,0,.26)}
 .bezel::before,.frame::before{content:"";position:absolute;left:18px;bottom:11px;width:6px;height:6px;border-radius:50%;
 background:#e8e1cf;box-shadow:0 0 6px rgba(232,225,207,.7),12px 0 0 #2a2c33,24px 0 0 #2a2c33}
-.frame>img,.frame>.led{border-radius:4px;box-shadow:none}
+.frame>img,.frame>.led,.frame>.pic>img{border-radius:4px;box-shadow:none}
 
 /* The page: the top bar, a side menu (the guide's, the developers'), the page, the footer */
 .top{position:relative;z-index:5;background:var(--bg2);border-bottom:1px solid var(--line)}
@@ -230,7 +230,12 @@ background:radial-gradient(circle,var(--den-dot) 1.2px,transparent 1.8px) 0 0/8p
 .shot figcaption{margin:12px 4px 0;font-size:14px;color:var(--mut)}
 .shot.phone{max-width:320px;justify-self:center}
 .shot.phone .frame{padding:12px 12px 30px;border-radius:26px}
-.shot.phone .frame>img{border-radius:14px}
+.shot.phone .frame>img,.shot.phone .frame>.pic>img{border-radius:14px}
+/* A screenshot whose panel plays (home.js): the Formula drawn over the screenshot's own panel */
+.shot .pic{position:relative;display:block}
+/* (drawn as the web app draws its panel, at the shot's own scale: no dot mask here, and scaled smoothly as the picture is) */
+.shot .pic>.lit{position:absolute;display:block;line-height:0;overflow:hidden;background:#000}
+.shot .pic>.lit canvas{display:block;width:100%;height:100%}
 .need{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 40px;margin:26px 0 14px;padding:0;list-style:none}
 .need li{margin:0;padding:18px 0 0;border-top:2px solid var(--fg);font-size:16px}
 .need li strong{display:block;margin-bottom:6px;font:600 24px/1.2 var(--display);letter-spacing:-.01em}

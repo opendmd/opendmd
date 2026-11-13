@@ -2,7 +2,10 @@
      GitHub's front page. {{led:NAME}} is that animation from tools/site-art.py drawn as
      LEDs, {{led:NAME:alt}} the same with no alt text (beside its own words). Links are
      relative to the site's root, and each docs/images/ picture is published with the
-     page (tools/screenshots.py takes them). A panel's data-formula (a bundled Formula)
+     page (tools/screenshots.py takes them). A screenshot in a .pic with {{plays:NAME.png}}
+     has the Formula its panel shows (docs/images/panels.json) played over that panel once
+     it is near the screen (home.js), drawn as the web app draws it from the frame the
+     shot shows (leds.js), so it takes over unseen; the screenshot is its still. A panel's data-formula (a bundled Formula)
      plays live in place of its still once the page has loaded
      (opendmd-web/share/ref/home.js). The hero's data-show is a little playlist, played
      as the panel plays one (hero.js): each <li> a bundled Formula (data-formula) or a
@@ -54,7 +57,7 @@ GIFs on the panel: tap one to see it again.</p>
 <p>On a computer, Space pauses and the arrow keys skip and go back.
 <a href="guide/web-app.html">A tour of the web app</a></p>
 </div>
-<figure class="shot phone"><span class="frame"><img src="docs/images/phone-now.png" alt="Now on a phone: the panel's GIF, Skip, Pause, Previous and Replay, the brightness, and Recently played" width="390" height="700" loading="lazy" decoding="async"></span>
+<figure class="shot phone"><span class="frame"><span class="pic" {{plays:phone-now.png}}><img src="docs/images/phone-now.png" alt="Now on a phone: the GIF on the panel, a neon city at night, then Skip, Pause, Previous and Replay, the brightness, and Recently played" width="390" height="700" loading="lazy" decoding="async"></span></span>
 <figcaption>Now, on a phone.</figcaption></figure>
 </section>
 
@@ -67,7 +70,7 @@ coming up most. In the menus it plays a playlist you pick.</p>
 <p>Nothing is installed on the box: turn on its NET CONTROL, then type its address and code into
 Settings. When the box is off, the display plays as usual. <a href="guide/replayos.html">Set it up</a></p>
 </div>
-<figure class="shot"><span class="frame"><img src="docs/images/now-follow.png" alt="Now while following RePlayOS: the panel plays a GIF of the game on the box, and the line under the title names the console and the game" width="1080" height="516" loading="lazy" decoding="async"></span>
+<figure class="shot"><span class="frame"><span class="pic" {{plays:now-follow.png}}><img src="docs/images/now-follow.png" alt="Now while following RePlayOS: the panel plays a GIF of the game on the box, a side-scrolling space shooter, and the line under the title names the console and the game" width="1080" height="516" loading="lazy" decoding="async"></span></span>
 <figcaption>Now, while a game plays on the box.</figcaption></figure>
 </section>
 
@@ -79,7 +82,7 @@ first. Or fill one by platform, category and words in the title.</p>
 <p>Reorder, rename and duplicate playlists, mark favourites to play more often, and switch the
 panel to another in a few seconds. <a href="guide/web-app.html#playlists">More about playlists</a></p>
 </div>
-<figure class="shot"><span class="frame"><img src="docs/images/library.png" alt="The Library with two GIFs ticked, and the menu to add them to a playlist: the one playing first, then the others, then New playlist" width="670" height="524" loading="lazy" decoding="async"></span>
+<figure class="shot"><span class="frame"><img src="docs/images/library.png" alt="The Library with two GIFs ticked, and the menu to add them to a playlist: the one playing first, then the others, then New playlist" width="670" height="518" loading="lazy" decoding="async"></span>
 <figcaption>Two GIFs ticked in the Library, on their way to a playlist.</figcaption></figure>
 </section>
 
@@ -92,7 +95,7 @@ power supply can give.</p>
 green, blue or white. Add a soft phosphor glow, and choose how the panel moves from one GIF to the
 next. <a href="guide/web-app.html#panel">The Panel settings</a></p>
 </div>
-<figure class="shot"><span class="frame"><img src="docs/images/settings-look.png" alt="Settings, Panel: brightness, maximum brightness, colour set to amber, and phosphor glow" width="844" height="455" loading="lazy" decoding="async"></span>
+<figure class="shot"><span class="frame"><img src="docs/images/settings-look.png" alt="Settings, Panel: brightness, maximum brightness, colour set to amber, and phosphor glow" width="844" height="454" loading="lazy" decoding="async"></span>
 <figcaption>Settings › Panel, with amber and a short glow.</figcaption></figure>
 </section>
 
@@ -106,7 +109,7 @@ Now when you want it back.</p>
 year if you like. If your card has the Halloween or Christmas playlist, one press adds a rule that
 plays it in its season. <a href="guide/web-app.html#schedule">The schedule</a></p>
 </div>
-<figure class="shot"><span class="frame"><img src="docs/images/settings-schedule.png" alt="Settings, Schedule: a Christmas rule from 1 to 26 December, a weekday evening rule, and night mode dimming the panel from sunset to sunrise" width="844" height="381" loading="lazy" decoding="async"></span>
+<figure class="shot"><span class="frame"><img src="docs/images/settings-schedule.png" alt="Settings, Schedule: a Christmas rule from 1 to 26 December, a weekday evening rule, and night mode dimming the panel from sunset to sunrise" width="844" height="379" loading="lazy" decoding="async"></span>
 <figcaption>A Christmas rule, weekday evenings, and night mode by the sun.</figcaption></figure>
 </section>
 

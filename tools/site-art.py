@@ -65,7 +65,7 @@ ART = [
     # The home page's panel: a still only (it never repeats, and the page
     # plays it live: site/pages/home.html).
     ("endless-road", "formula:Endless road", 0, 128, "hero",
-     "An OutRun road through a synthwave landscape, palms passing", "Endless road (a Formula)"),
+     "An arcade road through a synthwave landscape, palms passing", "Endless road (a Formula)"),
     # Get started: Install and Using it.
     ("boot", "@boot?len=full&ip=opendmd.local", 40, 32, "doors",
      "OpenDMD's start-up show: the name lighting up dot by dot", "The start-up show"),

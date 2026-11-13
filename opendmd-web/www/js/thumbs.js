@@ -98,11 +98,14 @@ async function fetchCut(path, want, cap, extend) {
         stats.bytes += value.length;
       }
       if (done || got >= cap || walk(buf.subarray(0, got), want)[2]) {
-        if (!done && !more && extend && got < CLIP_BYTES && await extend(cutBytes(buf.subarray(0, got), want, cap))) {
+        // A dark start reads on to its clip, unless what came already holds
+        // it (a fast link's first piece can be the whole clip, or the file).
+        const first = walk(buf.subarray(0, got), 1)[0];
+        if (!more && extend && first && first <= CLIP_BYTES && await extend(cutBytes(buf.subarray(0, got), want, cap))) {
           more = true;
           want = CLIP_FRAMES;
           cap = CLIP_BYTES;
-          continue;
+          if (!done && got < cap && !walk(buf.subarray(0, got), want)[2]) continue;
         }
         // The rest stays on the card. The device notices at its next 2 KB
         // piece: the slot is held a moment longer, so it never serves more
