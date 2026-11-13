@@ -637,8 +637,11 @@ FSPRITE = {"js/fsprite.js"}
 # (Claude, under the owner's budget authority): measured ~9.3 KB gz with
 # the SVG sanitiser, the median cut, the re-import's key matching and the
 # dialog's crop, a file only a picture's import ever fetches (the pack
-# keeps > 170 KB spare).
-FIMPORT_GZ_BUDGET = 10 * 1024
+# keeps > 170 KB spare). 11 KB (Claude, budget authority, branch
+# import-320): its labels wrap and its selects shrink on a 320 px phone
+# with wider fonts (CI's DejaVu Sans overflowed the sheet), +7 B on a line
+# with 1 B left.
+FIMPORT_GZ_BUDGET = 11 * 1024
 FIMPORT = {"js/fimport.js"}
 # The site's Psi pages' script (`--share`'s ref/psiref.js, copied to the
 # site's root and loaded by the reference, its error codes and the guide's
