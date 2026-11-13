@@ -13,11 +13,42 @@
 --shadow:0 1px 2px rgba(40,30,10,.05),0 6px 20px rgba(40,30,10,.06);
 --r:12px;--max:1180px;--text:760px;
 --display:Fraunces,"Iowan Old Style","Palatino Linotype",Georgia,serif;--pixel:Silkscreen,ui-monospace,Menlo,monospace;
---den:#10121b;--den-fg:#f1ebdd;--den-mut:#b9b6c6}
+--den:#0d0221;--den-fg:#f1ebdd;--den-mut:#b9b6c6}
 @media (prefers-color-scheme:dark){:root{
 --bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
 --ink:#f7a531;--head:#ecebe7;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;
 --code:#1e2025;--pre:#15171b;--glow:rgba(247,165,49,.16);--shadow:none}}
+/* The home page's scene: the picture behind its hero and the colours that go with it, as variables,
+   so a scene is one rule. `synth` is everyone's; scene.js (in the home page's head) puts another's
+   name on <html data-scene> for a viewer who asked with ?scene=NAME (site/theme/SCENES.md). Only the
+   scene in use is fetched: --den-img and --den-img2 (a phone's) are read by .hero alone.
+   --den the flat colour behind the picture; -fg -mut -lead the hero's ink; -bar -line the top bar;
+   -edge the outlined button; -sh -a -b the shade behind the words (its colour, its alpha at the middle
+   and half way out) and -sg -sg2 its shape (wide, and at 1180px and under); -btn the second button;
+   -cord -cord2 the panel's cords; -glow the panel's shadow; -pad the room under the words; -dot the
+   row of LEDs over the numbers; -focus the focus ring. */
+:root{--den-lead:#d9d5cb;--den-bar:#070114;--den-line:#360f66;--den-edge:#6b5aa8;--den-sh:13,2,33;--den-a:.9;--den-b:.66;
+--den-sg:35% 34% at 50% 45%;--den-sg2:58% 40% at 50% 47%;--den-btn:rgba(13,2,33,.6);--den-cord:#360f66;--den-cord2:#070114;
+--den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);
+--den-pad:clamp(260px,19vw,620px);--den-dot:rgba(232,225,207,.34);--den-focus:#fff;--den-img:url(den.webp);--den-img2:url(den-phone.webp)}
+/* Every scene but synth: the shade sits lower (no sun to clear), the foot is shallower, the panel's glow is the den's */
+[data-scene]{--den-sg:35% 44% at 50% 54%;--den-sg2:58% 46% at 50% 56%;--den-pad:clamp(170px,14.5vw,250px);
+--den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 110px rgba(247,165,49,.13),0 0 46px rgba(87,91,140,.3)}
+[data-scene=night]{--den:#10121b;--den-bar:#07080c;--den-line:#1b1f31;--den-edge:#575b8c;--den-sh:7,8,12;--den-a:.88;--den-b:.62;--den-btn:rgba(7,8,12,.55);
+--den-cord:#2e3454;--den-cord2:#07080c;--den-img:url(den-night.webp);--den-img2:url(den-night-phone.webp)}
+[data-scene=chunky]{--den:#1d5c6e;--den-mut:#d3dfe0;--den-bar:#0e1b26;--den-line:#184e5f;--den-edge:#4f8fa0;--den-sh:16,53,64;--den-btn:rgba(16,53,64,.6);
+--den-cord:#184e5f;--den-cord2:#0e1b26;--den-pad:clamp(190px,16vw,280px);--den-img:url(den-chunky.webp);--den-img2:url(den-chunky-phone.webp)}
+[data-scene=neon]{--den:#150b2e;--den-bar:#05020e;--den-line:#3a1d63;--den-sh:12,6,28;--den-btn:rgba(12,6,28,.6);
+--den-cord:#3a1d63;--den-cord2:#05020e;--den-glow:0 0 0 1px #6a1687,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 90px rgba(255,46,151,.22),0 0 40px rgba(45,226,230,.18);--den-img:url(den-neon.webp);--den-img2:url(den-neon-phone.webp)}
+[data-scene=arcade]{--den:#231942;--den-bar:#0d0a1c;--den-line:#2d2157;--den-sh:21,15,43;--den-btn:rgba(21,15,43,.6);
+--den-cord:#2d2157;--den-cord2:#0d0a1c;--den-img:url(den-arcade.webp);--den-img2:url(den-arcade-phone.webp)}
+/* The wall of consoles, by day and by night: its bench runs under the words, so the shade stops short of it */
+[data-scene=shelf],[data-scene=neon]{--den-sg:35% 34% at 50% 45%;--den-sg2:58% 38% at 50% 46%;--den-pad:clamp(190px,16vw,280px)}
+/* The two by daylight: dark ink on a light wall, in both themes */
+[data-scene=day],[data-scene=shelf]{--den-fg:#1c1d20;--den-mut:#4f4b3f;--den-lead:#3a3a3d;--den-edge:#8a8576;--den-a:.94;--den-b:.8;--den-btn:rgba(255,255,255,.7);
+--den-cord:#8a8576;--den-cord2:rgba(0,0,0,.18);--den-glow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 18px 40px rgba(60,40,10,.3);--den-dot:rgba(28,29,32,.4);--den-focus:#1c1d20}
+[data-scene=day]{--den-pad:clamp(190px,16vw,280px);--den:#fdf8e7;--den-bar:#eef3dc;--den-line:#cfe3c8;--den-sh:253,248,231;--den-img:url(den-day.webp);--den-img2:url(den-day-phone.webp)}
+[data-scene=shelf]{--den:#f6ecd2;--den-bar:#eddfbd;--den-line:#d8c59a;--den-sh:246,236,210;--den-img:url(den-shelf.webp);--den-img2:url(den-shelf-phone.webp)}
 @font-face{font-family:Silkscreen;src:url(fonts/silkscreen.woff2) format("woff2");font-display:swap}
 /* One cut (tools/site-font.py): the weight is declared so nothing is emboldened by the browser */
 @font-face{font-family:Fraunces;src:url(fonts/fraunces.woff2) format("woff2");font-weight:400 700;font-display:swap}
@@ -134,31 +165,32 @@ background:var(--bg2)}
 .home main{padding:0 0 88px;counter-reset:band}
 .home main>*{max-width:none}
 .home main h2{border:0;padding:0;margin:0 0 14px;font-size:38px}
-/* The top bar joins the den */
-.home .top{background:#07080c;border-bottom-color:#1b1f31}
+/* The top bar joins the scene's night sky */
+.home .top{background:var(--den-bar);border-bottom-color:var(--den-line)}
 .home .topnav a,.home .mnav summary{color:var(--den-fg)}
-.home .topnav a:hover{background:#1b1f31}
+.home .topnav a:hover{background:var(--den-line)}
 .home .topnav a.go{color:var(--on-acc)}.home .topnav a.go:hover{background:var(--acc)}
-.home .mnav summary{border-color:#2e3454}.home .mnav[open] summary{background:#1b1f31}
-/* The hero: the panel hangs on the den's wall (den.webp, tools/site-scene.py: dark in both themes,
-   its middle bare), the words under it. The panel comes first whatever the width. */
+.home .mnav summary{border-color:var(--den-edge)}.home .mnav[open] summary{background:var(--den-line)}
+/* The hero: the panel hangs in its scene (the variables above; a scene is the same in both themes,
+   its middle bare), the words under it, and under them room for the scene's foot.
+   The panel comes first whatever the width. */
 .hero{position:relative;isolation:isolate;display:flex;flex-direction:column;align-items:center;text-align:center;
-padding:48px 24px clamp(170px,14.5vw,250px);color:var(--den-fg);background:var(--den) url(den.webp) center bottom/cover no-repeat}
-/* A shade behind the words, so they read where the room's things come close */
+padding:48px 24px var(--den-pad);color:var(--den-fg);background:var(--den) var(--den-img) center bottom/cover no-repeat}
+/* A shade behind the words, so they read where the scene's things come close */
 .hero::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
-background:radial-gradient(ellipse 35% 44% at 50% 54%,rgba(7,8,12,.88),rgba(7,8,12,.62) 55%,rgba(7,8,12,0) 100%)}
+background:radial-gradient(ellipse var(--den-sg),rgba(var(--den-sh),var(--den-a)),rgba(var(--den-sh),var(--den-b)) 55%,rgba(var(--den-sh),0) 100%)}
 .hero-text{display:flex;flex-direction:column;align-items:center;width:100%;max-width:820px}
 .hero .chip{color:var(--den-mut);margin:0 0 14px}.hero .chip:hover{color:var(--den-fg)}
 .hero h1{color:var(--den-fg);margin:0 0 16px;font-size:clamp(40px,4.8vw,66px);line-height:1.02;letter-spacing:-.02em}
-.hero .lead{margin:0 0 20px;max-width:740px;color:#d9d5cb}
+.hero .lead{margin:0 0 20px;max-width:740px;color:var(--den-lead)}
 .hero .ctas{margin:0 0 26px}
 .hero .cta{margin:6px;padding:13px 26px;font-size:18px}
-.hero .cta.alt{background:rgba(7,8,12,.55);color:var(--den-fg);box-shadow:inset 0 0 0 1.5px #575b8c}
+.hero .cta.alt{background:var(--den-btn);color:var(--den-fg);box-shadow:inset 0 0 0 1.5px var(--den-edge)}
 .hero .cta.alt:hover{box-shadow:inset 0 0 0 1.5px var(--den-fg)}
-.hero :focus-visible{outline-color:#fff}
+.hero :focus-visible{outline-color:var(--den-focus)}
 /* What was measured, in the display face, under a row of LEDs */
 .proof{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 40px;width:100%;max-width:480px;margin:0 0 20px;padding:26px 0 0;list-style:none;
-background:radial-gradient(circle,rgba(232,225,207,.34) 1.2px,transparent 1.8px) 0 0/8px 8px repeat-x}
+background:radial-gradient(circle,var(--den-dot) 1.2px,transparent 1.8px) 0 0/8px 8px repeat-x}
 .proof li{margin:0;font-size:14px;line-height:1.4;color:var(--den-mut)}
 .proof b{display:block;margin:0 0 4px;font:600 clamp(34px,4vw,50px)/1 var(--display);letter-spacing:-.02em;color:var(--den-fg);white-space:nowrap}
 .ticks{list-style:none;display:flex;flex-wrap:wrap;justify-content:center;gap:4px 28px;margin:0;padding:0;color:var(--den-mut);font-size:15px}
@@ -166,13 +198,13 @@ background:radial-gradient(circle,rgba(232,225,207,.34) 1.2px,transparent 1.8px)
 .ticks li::before{content:"";position:absolute;left:4px;top:.4em;width:6px;height:10px;border:solid var(--den-fg);border-width:0 2px 2px 0;transform:rotate(45deg)}
 .hero-panel{order:-1;position:relative;width:100%;max-width:880px;margin:0 0 28px}
 /* The two cords it hangs by, up to the top bar */
-.hero-panel::before,.hero-panel::after{content:"";position:absolute;bottom:100%;left:14%;width:3px;height:48px;background:#2e3454;box-shadow:3px 0 0 #07080c}
+.hero-panel::before,.hero-panel::after{content:"";position:absolute;bottom:100%;left:14%;width:3px;height:48px;background:var(--den-cord);box-shadow:3px 0 0 var(--den-cord2)}
 .hero-panel::after{left:auto;right:14%}
-.hero-panel .bezel{padding:14px 14px 30px;box-shadow:0 0 0 1px #2e3454,inset 0 0 0 1px #000,0 24px 60px rgba(0,0,0,.6),0 0 110px rgba(247,165,49,.13),0 0 46px rgba(87,91,140,.3)}
+.hero-panel .bezel{padding:14px 14px 30px;box-shadow:var(--den-glow)}
 .hero-panel .cap{margin:12px 2px 0;min-height:1lh;font-size:14px;line-height:1.5;color:var(--den-mut)}
 /* The hero's show (hero.js): a click pauses it; captions change, so two lines are kept on a phone */
 .hero-panel .bezel[data-live]{cursor:pointer}
-.hero-panel .bezel[data-live]:focus-visible{outline:2px solid #fff;outline-offset:3px}
+.hero-panel .bezel[data-live]:focus-visible{outline:2px solid var(--den-focus);outline-offset:3px}
 .hero-panel .bezel[data-paused]::after{content:"";position:absolute;top:18px;right:18px;width:4px;height:12px;border:solid rgba(255,255,255,.55);border-width:0 4px;pointer-events:none}
 
 .band{margin:0;padding:84px max(24px,calc(50% - var(--max) / 2)) 0}
@@ -326,8 +358,8 @@ main.cheat table{font-size:14px;margin:8px 0}
 main.cheat td{padding:3px 8px}
 
 @media (max-width:1180px){
-  /* The room's things come in under the words: a broader, deeper shade */
-  .hero::before{background:radial-gradient(ellipse 58% 46% at 50% 56%,rgba(7,8,12,.93),rgba(7,8,12,.78) 60%,rgba(7,8,12,0) 100%)}
+  /* The scene's things come in under the words: a broader, deeper shade */
+  .hero::before{background:radial-gradient(ellipse var(--den-sg2),rgba(var(--den-sh),calc(var(--den-a) + .04)),rgba(var(--den-sh),calc(var(--den-b) + .14)) 60%,rgba(var(--den-sh),0) 100%)}
 }
 @media (max-width:980px){
   .wrap.sided{grid-template-columns:180px minmax(0,1fr);gap:32px}
@@ -385,8 +417,8 @@ main.cheat td{padding:3px 8px}
   .foot .in{grid-template-columns:repeat(2,minmax(0,1fr));padding:24px 16px 28px}
 }
 @media (max-width:600px){
-  /* The hero on a phone: the foot of the den under the words (den-phone.webp), flat wall above */
-  .hero{padding-bottom:calc(74vw + 8px);background:var(--den) url(den-phone.webp) center bottom/100% auto no-repeat}
+  /* The hero on a phone: the foot of the scene under the words (den-phone.webp), flat sky above */
+  .hero{padding-bottom:calc(74vw + 8px);background:var(--den) var(--den-img2) center bottom/100% auto no-repeat}
   .hero::before{display:none}
   table.psi-ex-t thead{display:none}
   table.psi-ex-t tbody,table.psi-ex-t tr,table.psi-ex-t td{display:block}

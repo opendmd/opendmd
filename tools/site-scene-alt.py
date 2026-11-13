@@ -2,37 +2,37 @@
 # requires-python = ">=3.11"
 # dependencies = ["numpy==2.2.6", "pillow==11.3.0"]
 # ///
-"""Draw alternate styles of the home page's scene, for the owner to choose from.
+"""Draw the home page's scene, and the other styles it could have.
 
-    uv run tools/site-scene-alt.py [--style NAME ...] [--preview DIR]
+    uv run tools/site-scene-alt.py [--style NAME ...] [--preview DIR]     # make site-scene
 
-tools/site-scene.py draws the scene the site uses (the den at night, two
-ramps and a Bayer dither); it is not changed and still reproduces den.webp.
-This script draws the candidates beside it. Original pixel art, drawn here
-from rectangles, discs and lines: no photograph, no model, no third-party
-art, no game's characters or logos, and no real machine's design. Every
-console, cartridge, pad, handheld, television and cabinet is made up.
+Original pixel art, drawn here from rectangles, discs and lines: no
+photograph, no model, no third-party art, no game's characters or logos, and
+no real machine's design. Every console, cartridge, pad, handheld,
+television and cabinet is made up. Flat colours, no dither.
 
-  day      the same den by daylight: site-scene.py's own drawing on bright
-           ramps (mint and cream, coral and yellow), lamp off, no vignette
-  chunky   a 16-bit playroom: x6 art pixels, bold outlines, flat saturated
-           colours, no dither. A television and console on the floor, a
-           beanbag, a bookcase of cartridges
+  synth    the one the site uses (LIVE): synthwave. A banded sun on the
+           horizon, a perspective grid, ridge lines and palms either side
+  day      the den of tools/site-scene.py by daylight: that script's own
+           drawing on bright ramps (mint and cream, coral and yellow)
+  chunky   a 16-bit playroom: x6 art pixels, bold outlines. A television and
+           console on the floor, a beanbag, a bookcase of cartridges
   shelf    a collector's wall by day: a long bench of made-up consoles under
            the panel, shelves of cartridges and handhelds either side
   neon     the same wall at night, lit by neon strips (shelf, repainted)
   arcade   an arcade corner: bright cabinets on a confetti carpet, a
            television and console on the floor
-  synth    synthwave: a banded sun on the horizon, a perspective grid,
-           ridge lines and palms either side, all in flat bands
+  (night   the first scene, the den at night: tools/site-scene.py draws it)
 
-Each style writes site/theme/den-NAME.webp (1920x1488, laid `cover` behind
-the hero like den.webp) and den-NAME-phone.webp (780x720, whose top row is
-the flat colour STYLES[NAME]["wall"]: the hero's background on a phone).
-The live LED panel is laid over the picture's upper middle by site.css, so
-that part stays bare; what the eye gets is the two sides and the foot.
-Lossless WebP, every art pixel a clean square. tools/site-scene-shots.py
-swaps a style into a built site and photographs the hero.
+Everyone's style is written to site/theme/den.webp (1920x1488, laid `cover`
+behind the hero) and den-phone.webp (780x720, whose top row is the flat
+colour STYLES[NAME]["wall"]: that scene's --den in site.css, the hero's
+background on a phone); every other style to den-NAME.webp and
+den-NAME-phone.webp. All are published: a viewer picks one with ?scene=NAME
+(site/theme/scene.js, SCENES.md). The live LED panel is laid over the
+picture's upper middle by site.css, so that part stays bare; what the eye
+gets is the two sides and the foot. Lossless WebP, every art pixel a clean
+square. tools/site-scene-shots.py photographs the hero in every scene.
 """
 import argparse
 import importlib.util
@@ -45,6 +45,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "site/theme"
+LIVE = "synth"  # everyone's scene: written to den.webp and den-phone.webp; the others to den-NAME*.webp
 FULL, PHONE = (1920, 1488), (780, 720)
 
 
@@ -767,7 +768,7 @@ def palm(a: Art, x, base, ht, lean, P):
 
 
 def synth_wide() -> Image.Image:
-    return synth(480, 372, 322, 64, 24, 0, [(34, 338, 150, 16), (86, 330, 96, -12), (448, 340, 158, -18), (398, 330, 90, 10)], 140)
+    return synth(480, 372, 332, 64, 30, 0, [(34, 348, 150, 16), (86, 340, 96, -12), (448, 350, 158, -18), (398, 340, 90, 10)], 95)
 
 
 def synth_phone() -> Image.Image:
@@ -843,12 +844,12 @@ def day(which: str) -> Image.Image:
 
 STYLES = {
     # name: (wide, phone, art-pixel scale, the flat colour at the phone picture's top)
+    "synth": dict(wide=synth_wide, phone=synth_phone, scale=4, wall=SYNTH["sky"][0]),
     "day": dict(wide=lambda: day("wide"), phone=lambda: day("phone"), scale=4, wall=DAY_COOL[5]),
     "chunky": dict(wide=chunky_wide, phone=chunky_phone, scale=6, wall=CHUNKY["wall"]),
     "shelf": dict(wide=lambda: shelf_wide(SHELF), phone=lambda: shelf_phone(SHELF), scale=6, wall=SHELF["wall"]),
     "neon": dict(wide=lambda: shelf_wide(NEON), phone=lambda: shelf_phone(NEON), scale=6, wall=NEON["wall"]),
     "arcade": dict(wide=arcade_wide, phone=arcade_phone, scale=6, wall=ARCADE["wall"]),
-    "synth": dict(wide=synth_wide, phone=synth_phone, scale=4, wall=SYNTH["sky"][0]),
 }
 
 
@@ -867,11 +868,11 @@ def main() -> int:
             if suffix and st["wall"]:
                 assert {c for _, c in im.crop((0, 0, im.width, 1)).getcolors()} == {hx(st["wall"])}, f"{style}{suffix}: the top row is not flat {st['wall']}"
             big = im.resize(size, Image.NEAREST)
-            name = f"den-{style}{suffix}"
+            name = f"den{suffix}" if style == LIVE else f"den-{style}{suffix}"
             if args.preview:
                 args.preview.mkdir(parents=True, exist_ok=True)
-                big.save(args.preview / f"{name}.png")
-                print(args.preview / f"{name}.png", f"{len(colours)} colours, top {top}")
+                big.save(args.preview / f"den-{style}{suffix}.png")
+                print(args.preview / f"den-{style}{suffix}.png", f"{len(colours)} colours, top {top}")
                 continue
             out = OUT / f"{name}.webp"
             big.save(out, "WEBP", lossless=True, quality=100, method=6, exact=True)
