@@ -1732,6 +1732,7 @@ def studio_phone(browser, base: str, site: Path, errors: list[str]) -> None:
 # first-paint files, the site's stylesheet, fonts and wordmark, the starter pack.
 S_FIRST = {"/studio/", "/studio/studio.css", "/studio/studio.js", "/studio/doc.js", "/studio/store.js", "/studio/palettes.js",
            "/studio/tools.js", "/studio/starter.dmdpack", "/site.css", "/fonts/fraunces.woff2", "/fonts/silkscreen.woff2", "/art/wordmark.png"}
+S_PANELS = {"/studio/panels.js", "/studio/panels.css"}
 
 
 def s_paths(page: Page) -> set[str]:
@@ -1744,7 +1745,8 @@ def studio_fetches(browser, base: str, site: Path, errors: list[str]) -> None:
     wait_js(page, "document.getElementById('studio').dataset.starter !== undefined", timeout=20000)
     page.wait_for_timeout(300)
     got = s_paths(page)
-    check(got == S_FIRST, f"/studio/ fetches: a first visit asks for first paint and nothing else (extra {sorted(got - S_FIRST)}, missing {sorted(S_FIRST - got)})")
+    want = S_FIRST | S_PANELS  # (a laptop's window is the workspace's: its panels too, before the page shows)
+    check(got == want, f"/studio/ fetches: a first visit asks for first paint (and, at the workspace's size, the panels) and nothing else (extra {sorted(got - want)}, missing {sorted(want - got)})")
     page.mouse.click(*s_at(page, 4, 4))
     s_kept(page)
     page.click("#s-add")
@@ -3362,6 +3364,351 @@ def studio_workspace(browser, base: str, site: Path, errors: list[str]) -> None:
     check(m["chin"] == "s-tray" and tabs and m["wide"] <= 0 and page.evaluate("getComputedStyle(document.getElementById('studio')).display") == "flex",
           f"/studio/ workspace (phone): as it was, zoom with the tools, the four tabs ({m['chin']}, {tabs})")
     page.context.close()
+
+
+# --- the Studio's panels (studio-float F1, FLOAT.md): docked, floating, resized, hidden, remembered ---
+P_BOX = """(id) => { const p = document.querySelector(`[data-panel=${id}]`); if (!p) return null; const r = p.getBoundingClientRect(), b = p.querySelector('.s-hd').getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), r: Math.round(r.right), b: Math.round(r.bottom),
+      bar: [b.left, b.top, b.right, b.bottom].map(Math.round), fixed: getComputedStyle(p).position === 'fixed', shown: p.getClientRects().length > 0,
+      col: p.classList.contains('col'), dock: p.parentElement.classList.contains('s-dl') ? 'l' : p.parentElement.classList.contains('s-bench') ? 'r' : 'f',
+      body: !!p.querySelector('.s-pb')?.getClientRects().length, opacity: getComputedStyle(p).opacity }; }"""
+P_STORED = "(() => { try { return JSON.parse(localStorage.getItem('odmd.studio.panels')); } catch { return 'unreadable'; } })()"
+P_WORK = "(() => { const r = document.getElementById('s-work').getBoundingClientRect(); return [r.left, r.top, r.width].map(Math.round); })()"
+
+
+def p_box(page: Page, pid: str) -> dict:
+    return page.evaluate(P_BOX, pid)
+
+
+def p_grip(page: Page, pid: str) -> tuple[float, float]:
+    b = page.locator(f"[data-panel={pid}] .s-grip").bounding_box()
+    return b["x"] + min(12, b["width"] / 2), b["y"] + b["height"] / 2
+
+
+def p_drag(page: Page, a: tuple[float, float], b: tuple[float, float], steps: int = 10) -> None:
+    page.mouse.move(*a)
+    page.mouse.down()
+    page.mouse.move(a[0] + 6, a[1] + 2, steps=2)
+    page.mouse.move(*b, steps=steps)
+    page.wait_for_timeout(60)
+    page.mouse.up()
+    page.wait_for_timeout(120)
+
+
+def p_menu(page: Page, opener: str, label: str) -> None:
+    """A menu opened by its button and an item chosen, by the mouse."""
+    page.click(opener)
+    page.click(f".s-pmenu button:has-text('{label}')")
+    page.wait_for_timeout(100)
+
+
+def p_ctx(browser, w: int, h: int, scheme: str | None = None, init: str = ""):
+    ctx = browser.new_context(viewport={"width": w, "height": h}, color_scheme=scheme)
+    if init:
+        ctx.add_init_script(init)
+    return ctx
+
+
+def studio_panels(browser, base: str, site: Path, errors: list[str], shots: Path | None = None) -> None:
+    """The workspace's panels (FLOAT.md section 4's checks): the default all
+    docked and covering nothing; a title bar dragged floats a panel and moves
+    it exactly, the canvas unmoved, faded while a stroke is drawn; kept over
+    a reload; dragged to the stage's edge, docked, the canvas refitting;
+    moved and docked by the keyboard alone (focus back on ⋮); folded, closed
+    and shown again where it was; Reset; kept on screen as the window shrinks
+    and back at the right as it grows; below the workspace's size everything
+    back in its place; a phone with a stored layout unaffected; notices in
+    view (following a dragged panel, at the top once folded or closed);
+    sheets above panels; storage refused; the Stamp tool showing Stamps.
+    Resized by the corner (and the arrow keys), kept, held to a least size
+    and to the window. H (and PANELS in the chin) hides every panel and
+    brings them back, for this visit only, notices and sheets unbroken."""
+    ctx = p_ctx(browser, 1440, 900)
+    page = s_page(browser, base, site, errors, ctx=ctx)
+    page.evaluate(S_WHOLE, [S_TWO])
+    wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+    page.wait_for_timeout(200)
+    asked = s_paths(page)
+    ids = ["tools", "colours", "layers", "stamps", "piece"]
+    boxes = {i: p_box(page, i) for i in ids}
+    work0 = page.evaluate(P_WORK)
+    check("/studio/panels.js" in asked and [boxes[i]["dock"] for i in ids] == ["l", "r", "r", "r", "r"] and all(b["shown"] and not b["fixed"] for b in boxes.values())
+          and page.is_visible("#s-panels") and page.get_attribute("#s-g-panels", "aria-pressed") == "true" and page.evaluate(P_STORED) is None,
+          f"/studio/ panels: the default is every panel docked (Tools left, the rest right), the Panels button and PANELS shown, nothing stored ({[boxes[i]['dock'] for i in ids]})")
+    # 3. A title bar dragged: the panel floats, moved by exactly that much; the canvas did not move. Faded during a stroke.
+    s0 = p_box(page, "stamps")
+    g = p_grip(page, "stamps")
+    p_drag(page, g, (g[0] - 300, g[1] - 250))
+    s1 = p_box(page, "stamps")
+    work1 = page.evaluate(P_WORK)
+    check(s1["fixed"] and s1["dock"] == "f" and abs(s1["x"] - (s0["x"] - 300)) <= 1 and abs(s1["y"] - (s0["y"] - 250)) <= 1 and work1 == work0,
+          f"/studio/ panels: dragged by its title bar, Stamps floats, moved by (-300, -250) ({s0['x']},{s0['y']} -> {s1['x']},{s1['y']}), the canvas unmoved ({work0}, {work1})")
+    x, y = s_at(page, 100, 4)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 8, y, steps=2)
+    faded = p_box(page, "stamps")["opacity"], page.evaluate("getComputedStyle(document.querySelector('[data-panel=stamps]')).pointerEvents")
+    page.mouse.up()
+    page.wait_for_timeout(100)
+    check(faded == ("0.3", "none") and p_box(page, "stamps")["opacity"] == "1", f"/studio/ panels: a floating panel fades and lets the pointer through while a stroke is drawn, and comes back ({faded})")
+    page.keyboard.press("Control+z")
+    # Resized by its corner: kept; held to its least size and to the window.
+    c = page.locator("[data-panel=stamps] .s-rsz").bounding_box()
+    cx, cy = c["x"] + c["width"] / 2, c["y"] + c["height"] / 2
+    p_drag(page, (cx, cy), (cx + 80, cy + 60))
+    s2 = p_box(page, "stamps")
+    check(abs(s2["w"] - (s1["w"] + 80)) <= 2 and abs(s2["h"] - (s1["h"] + 60)) <= 2 and s2["x"] == s1["x"] and s2["y"] == s1["y"],
+          f"/studio/ panels: dragged by its corner, a floating panel resizes by (+80, +60) ({s1['w']}x{s1['h']} -> {s2['w']}x{s2['h']}), its corner opposite unmoved")
+    if shots:
+        page.screenshot(path=str(shots / "studio-panels-float-1440.png"))
+    # 4. Kept over a reload: the same box, the stored value version 1.
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    s3 = p_box(page, "stamps")
+    st = page.evaluate(P_STORED)
+    check(st and st.get("v") == 1 and st["n"]["p"]["stamps"]["at"] == "f" and all(abs(s3[k] - s2[k]) <= 1 for k in ("x", "y", "w", "h")) and s3["fixed"] and not s3["col"],
+          f"/studio/ panels: kept over a reload, the same box and size ({s3['x']},{s3['y']} {s3['w']}x{s3['h']}), stored as version 1")
+    c = page.locator("[data-panel=stamps] .s-rsz").bounding_box()
+    cx, cy = c["x"] + c["width"] / 2, c["y"] + c["height"] / 2
+    p_drag(page, (cx, cy), (cx - 1000, cy - 1000))
+    small = p_box(page, "stamps")
+    c = page.locator("[data-panel=stamps] .s-rsz").bounding_box()
+    cx, cy = c["x"] + c["width"] / 2, c["y"] + c["height"] / 2
+    p_drag(page, (cx, cy), (cx + 3000, cy + 3000))
+    big = p_box(page, "stamps")
+    page.focus("[data-panel=stamps] .s-rsz")
+    page.keyboard.press("ArrowLeft")
+    keyed = p_box(page, "stamps")
+    check(small["w"] == 200 and small["h"] == 90 and big["r"] <= 1440 and big["b"] <= 900 and big["x"] == small["x"] and keyed["w"] == big["w"] - 16,
+          f"/studio/ panels: a resize is held to its least size (200 x 90: {small['w']}x{small['h']}) and to the window ({big['r']}, {big['b']}); the corner's arrow keys resize it too ({big['w']} -> {keyed['w']})")
+    page.keyboard.press("Shift+ArrowLeft")
+    page.keyboard.press("Shift+ArrowLeft")
+    page.keyboard.press("Shift+ArrowUp")
+    page.keyboard.press("Shift+ArrowUp")
+    # 5. Dragged to the stage's right edge: docked there, in the stack where it was dropped.
+    stage = page.locator(".s-stage").bounding_box()
+    lay = p_box(page, "layers")
+    g = p_grip(page, "stamps")
+    p_drag(page, g, (stage["x"] + stage["width"] - 6, lay["y"] + 10))
+    order = page.evaluate("[...document.querySelectorAll('.s-bench > .s-panel')].map((p) => p.dataset.panel)")
+    check(p_box(page, "stamps")["dock"] == "r" and order == ["colours", "stamps", "layers", "piece"] and page.evaluate(P_WORK) == work0,
+          f"/studio/ panels: dragged to the stage's right edge, docked in the right column where it was dropped ({order}), the canvas as before")
+    # 6. The keyboard alone: the name's arrow keys move it (floating it first); ⋮ › Dock left; focus back on ⋮.
+    page.focus("[data-panel=layers] .s-grip")
+    page.keyboard.press("ArrowLeft")
+    l0 = p_box(page, "layers")
+    for _ in range(4):
+        page.keyboard.press("ArrowLeft")
+    l1 = p_box(page, "layers")
+    page.focus("[data-panel=layers] [data-pa=menu]")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".s-pmenu")
+    first = page.evaluate("document.activeElement.textContent")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    l2 = p_box(page, "layers")
+    back = page.evaluate("document.activeElement.dataset.pa + ' ' + document.activeElement.closest('[data-panel]')?.dataset.panel")
+    page.focus("[data-panel=layers] [data-pa=menu]")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Escape")
+    esc = page.evaluate("[!!document.querySelector('.s-pmenu'), document.activeElement.dataset.pa]")
+    check(l0["fixed"] and l1["x"] == l0["x"] - 64 and l1["y"] == l0["y"] and "Dock left" in first and l2["dock"] == "l" and back == "menu layers" and esc == [False, "menu"],
+          f"/studio/ panels: by keys alone, the name's ArrowLeft floats Layers and moves it 16 px a press ({l0['x']} -> {l1['x']}); ⋮ › Dock left docks it, focus back on ⋮ ({back}); Escape closes a menu, focus kept ({esc})")
+    # 7. Folded, closed and shown again where it was.
+    page.click("[data-panel=layers] [data-pa=col]")
+    fold = p_box(page, "layers")
+    page.click("[data-panel=layers] [data-pa=col]")
+    page.click("[data-panel=layers] [data-pa=close]")
+    shut = p_box(page, "layers")
+    page.click("#s-panels")
+    ticks = page.evaluate("[...document.querySelectorAll('.s-pmenu [role=menuitemcheckbox]')].map((b) => [b.childNodes[1].textContent, b.getAttribute('aria-checked')])")
+    if shots:
+        page.screenshot(path=str(shots / "studio-panels-menu-1440.png"))
+    page.click(".s-pmenu button:has-text('Layers')")
+    again = p_box(page, "layers")
+    check(fold["shown"] and not fold["body"] and fold["col"] and not shut["shown"] and ["Layers", "false"] in ticks and ["Colours", "true"] in ticks
+          and again["shown"] and again["dock"] == "l" and again["body"],
+          f"/studio/ panels: folded, only its title bar; closed, gone and unticked in the Panels menu ({ticks}); chosen there, back where it was ({again['dock']})")
+    # 15. The Stamp tool shows Stamps (closed first).
+    page.click("[data-panel=stamps] [data-pa=close]")
+    s_blur(page)
+    page.keyboard.press("s")
+    page.wait_for_selector("#s-stampsx [data-n]", timeout=20000)
+    check(p_box(page, "stamps")["shown"] and p_box(page, "stamps")["dock"] == "r", "/studio/ panels: the Stamp tool (S) shows Stamps, closed, where it was, with its stamps")
+    page.keyboard.press("b")
+    # 8. Reset: every panel in its default column, this size's stored layout gone.
+    p_menu(page, "#s-panels", "Reset layout")
+    docks = [p_box(page, i)["dock"] for i in ids]
+    order = page.evaluate("[...document.querySelectorAll('.s-bench > .s-panel')].map((p) => p.dataset.panel)")
+    st = page.evaluate(P_STORED)
+    check(docks == ["l", "r", "r", "r", "r"] and order == ["colours", "layers", "stamps", "piece"] and st and st.get("v") == 1 and "n" not in st,
+          f"/studio/ panels: Reset layout puts every panel back in its default column and order ({docks}, {order}), this size's stored layout gone ({st})")
+    # 9. Kept on screen as the window shrinks, back at the right as it grows.
+    p_menu(page, "[data-panel=stamps] [data-pa=menu]", "Float")
+    page.focus("[data-panel=stamps] .s-grip")
+    for _ in range(30):
+        page.keyboard.press("Shift+ArrowRight")
+    right = p_box(page, "stamps")
+    page.set_viewport_size({"width": 1100, "height": 700})
+    page.wait_for_timeout(300)
+    shrunk = p_box(page, "stamps")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.wait_for_timeout(300)
+    grown = p_box(page, "stamps")
+    check(right["r"] >= 1430 and 0 <= shrunk["bar"][0] and shrunk["bar"][2] <= 1100 and 0 <= shrunk["bar"][1] and shrunk["bar"][3] <= 700 and grown["r"] >= 1430,
+          f"/studio/ panels: a panel at the right edge keeps its title bar in the window at 1100 x 700 ({shrunk['bar']}) and is back at the right at 1440 ({grown['r']})")
+    # 10. Below the workspace's size: everything back in its place; and back again.
+    page.set_viewport_size({"width": 900, "height": 700})
+    page.wait_for_timeout(300)
+    small = page.evaluate("""() => ({ bench: [...document.querySelectorAll('.s-bench > section')].map((s) => s.dataset.tab), pbtn: document.querySelectorAll('.s-pbtn, .s-panel, .s-grip, .s-rsz, .s-pb, #s-panels, .s-dl').length,
+        tray: document.querySelector('.s-tray').nextElementSibling.id, chin: document.getElementById('s-z').closest('.s-tray, .s-chin').className })""")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.wait_for_timeout(300)
+    back = p_box(page, "stamps")
+    check(small == {"bench": ["colours", "layers", "stamps", "piece"], "pbtn": 0, "tray": "s-selbar", "chin": "s-tray"} and back["fixed"] and abs(back["x"] - grown["x"]) <= 1,
+          f"/studio/ panels: below 1000 x 620 every section back in the bench in order, no panel chrome left ({small}); grown again, the layout as it was ({back['x']}, {grown['x']})")
+    # 12. Notices in view: under a control in a floating panel, following it as it is dragged; at the top once folded or closed.
+    p_menu(page, "[data-panel=piece] [data-pa=menu]", "Float")
+    s_new(page)
+    page.click("#s-snap")
+    n0 = n_seen(page)
+    gap = page.evaluate("document.getElementById('s-note').getBoundingClientRect().top - document.getElementById('s-snap').getBoundingClientRect().bottom")
+    g = p_grip(page, "piece")
+    p_drag(page, g, (g[0] - 200, g[1] - 160))
+    n1 = n_seen(page)
+    gap1 = page.evaluate("document.getElementById('s-note').getBoundingClientRect().top - document.getElementById('s-snap').getBoundingClientRect().bottom")
+    page.click("[data-panel=piece] [data-pa=col]")
+    n2 = n_seen(page)
+    page.click("[data-panel=piece] [data-pa=col]")
+    page.click("[data-panel=piece] [data-pa=close]")
+    page.evaluate("document.getElementById('s-snap').click()")
+    n3 = n_seen(page)
+    check(n0["inView"] and n0["onTop"] and n0["at"] == "control" and 0 <= gap <= 12 and n1["inView"] and n1["at"] == "control" and 0 <= gap1 <= 12
+          and n2["inView"] and n2["at"] == "top" and n3["inView"] and n3["at"] == "top" and "Draw something first" in n3["text"],
+          f"/studio/ panels: a notice from a floating panel sits under its control ({gap:.0f} px) and follows it as it is dragged ({gap1:.0f} px); folded, at the top; closed, its control's notice at the top ({n2['at']}, {n3['at']})")
+    page.keyboard.press("Escape")
+    p_menu(page, "#s-panels", "This piece")
+    # 13. Sheets above panels: Send to panel over a floating panel; Escape, and the panel where it was.
+    page.mouse.click(*s_at(page, 3, 3))
+    s_kept(page)
+    g = p_grip(page, "piece")
+    p_drag(page, g, (700, 380))
+    pc = p_box(page, "piece")
+    page.click("#s-send")
+    page.wait_for_selector("#s-p[open]", timeout=60000)
+    over = page.evaluate("""() => { const p = document.querySelector('[data-panel=piece]').getBoundingClientRect(), d = document.querySelector('#s-p').getBoundingClientRect();
+        const x = (Math.max(p.left, d.left) + Math.min(p.right, d.right)) / 2, y = (Math.max(p.top, d.top) + Math.min(p.bottom, d.bottom)) / 2;
+        return [x > Math.max(p.left, d.left) && y > Math.max(p.top, d.top), !!document.elementFromPoint(x, y)?.closest('#s-p')]; }""")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    check(over == [True, True] and page.is_hidden("#s-p") and p_box(page, "piece") == pc,
+          f"/studio/ panels: Send to panel's sheet is above a floating panel where they overlap ({over}); Escape closes it, the panel where it was")
+    # Hide all (H; PANELS): every panel gone, the canvas given the room; back the same; notices and sheets unbroken; this visit only.
+    before = {i: p_box(page, i) for i in ids}
+    s_blur(page)
+    page.keyboard.press("h")
+    page.wait_for_timeout(200)
+    hidden = [p_box(page, i)["shown"] for i in ids]
+    pressed = page.get_attribute("#s-g-panels", "aria-pressed")
+    bare_work = page.evaluate(P_WORK)
+    if shots:
+        page.screenshot(path=str(shots / "studio-panels-hidden-1440.png"))
+    page.evaluate("document.getElementById('s-snap').click()")
+    page.evaluate("document.getElementById('s-new').click()")
+    page.wait_for_timeout(300)
+    page.evaluate("document.getElementById('s-snap').click()")
+    nb = n_seen(page)
+    page.keyboard.press("Escape")
+    page.mouse.click(*s_at(page, 5, 5))
+    s_kept(page)
+    page.click("#s-send")
+    page.wait_for_selector("#s-p[open]", timeout=60000)
+    sheet = page.is_visible("#s-p")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    page.reload()
+    page.wait_for_selector(S_READY, timeout=30000)
+    kept_bare = [p_box(page, i)["shown"] for i in ids]
+    page.click("#s-g-panels")
+    page.wait_for_timeout(200)
+    after = {i: p_box(page, i) for i in ids}
+    check(not any(hidden) and pressed == "false" and nb["inView"] and nb["at"] == "top" and sheet and not any(kept_bare)
+          and all(after[i]["shown"] and after[i]["dock"] == before[i]["dock"] and abs(after[i]["x"] - before[i]["x"]) <= 1 for i in ids),
+          f"/studio/ panels: H hides every panel ({hidden}, PANELS pressed {pressed}), a notice then at the top and in view, a sheet still opens; kept over a reload; PANELS brings them back where they were")
+    page.keyboard.press("h")
+    page.keyboard.press("h")
+    toggled = [p_box(page, i)["shown"] for i in ids]
+    hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(page.inner_text("body"))})
+    off = [u for u in page.asked if not u.startswith(base) and not u.startswith(("blob:", "data:"))]
+    check(all(toggled) and not hit and not off and not page.evaluate("window.__csp || []"),
+          f"/studio/ panels: H twice, as it was; none of the words users never see, nothing asked of another site, no CSP violation ({hit}, {off[:2]})")
+    page.context.close()
+    # A new visit (another tab's session): not hidden; the layout kept.
+    ctx = p_ctx(browser, 1440, 900, init="localStorage.setItem('odmd.studio.panels', JSON.stringify({ v: 1, n: { order: ['stamps'], p: { stamps: { at: 'f', x: 30, y: 300, ax: 'l', c: 1 } } } }))")
+    page = s_page(browser, base, site, errors, ctx=ctx)
+    sb = p_box(page, "stamps")
+    check(all(p_box(page, i)["shown"] for i in ids) and sb["fixed"] and sb["x"] == 30 and sb["y"] == 300 and sb["col"],
+          f"/studio/ panels: hiding is for one visit: a new one shows every panel; a stored layout opens as stored (Stamps floating, folded, at {sb['x']},{sb['y']})")
+    page.context.close()
+    # 5 (again), at 1280 x 800: the right column emptied, Fit is 8x; one panel docked back by a drag, 7x.
+    ctx = p_ctx(browser, 1280, 800)
+    page = s_page(browser, base, site, errors, ctx=ctx)
+    g = p_grip(page, "colours")
+    p_drag(page, g, (g[0] - 600, g[1] + 300))
+    for i in ("layers", "stamps", "piece"):
+        page.click(f"[data-panel={i}] [data-pa=close]")
+    page.wait_for_timeout(200)
+    wide = page.evaluate("document.getElementById('s-work').offsetWidth / 128")
+    empty = page.evaluate("getComputedStyle(document.querySelector('.s-bench')).display")
+    stage = page.locator(".s-stage").bounding_box()
+    g = p_grip(page, "colours")
+    p_drag(page, g, (stage["x"] + stage["width"] - 6, 300))
+    page.wait_for_timeout(200)
+    narrow = page.evaluate("document.getElementById('s-work').offsetWidth / 128")
+    check(wide == 8 and empty == "none" and narrow == 7 and p_box(page, "colours")["dock"] == "r",
+          f"/studio/ panels (1280 x 800): the right column's panels floated or closed, the column goes and Fit is {wide}x; Colours dragged back to the edge, docked, {narrow}x")
+    if shots:
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            page.screenshot(path=str(shots / f"studio-panels-float-1280-{scheme}.png"))
+    page.context.close()
+    # 14. Storage refused: the page starts, a drag works, nothing thrown.
+    ctx = p_ctx(browser, 1440, 900, init="for (const k of ['getItem', 'setItem']) Storage.prototype[k] = () => { throw new DOMException('refused', 'SecurityError'); };")
+    seen: list[str] = []
+    page = s_page(browser, base, site, seen, ctx=ctx)
+    s0 = p_box(page, "stamps")
+    g = p_grip(page, "stamps")
+    p_drag(page, g, (g[0] - 300, g[1] + 50))
+    s1 = p_box(page, "stamps")
+    s_blur(page)
+    page.keyboard.press("h")
+    page.keyboard.press("h")
+    check(s1["fixed"] and abs(s1["x"] - (s0["x"] - 300)) <= 1 and not seen and all(p_box(page, i)["shown"] for i in ids),
+          f"/studio/ panels: with storage refused the page starts, a drag works, H works, nothing thrown ({seen[:1]})")
+    errors.extend(seen)
+    page.context.close()
+    # Hostile stored layouts: off screen, negative and huge sizes, unknown ids, junk: every panel in reach.
+    for junk in ("{ v: 1, n: { order: ['nope', 'stamps', 'stamps'], p: { nope: { at: 'f' }, stamps: { at: 'f', x: -99999, y: 99999, ax: 'r', w: -50, ht: 1e9 }, layers: { at: 'x', i: 'a' }, colours: { at: 'f', x: 'NaN', y: null, w: 1e9 } } } }",
+                 "'not json'", "{ v: 2, n: { p: { stamps: { at: 'f' } } } }", "[1, 2]"):
+        ctx = p_ctx(browser, 1000, 620, init=f"localStorage.setItem('odmd.studio.panels', typeof ({junk}) === 'string' ? ({junk}) : JSON.stringify({junk}))")
+        page = s_page(browser, base, site, errors, ctx=ctx)
+        bars = [p_box(page, i) for i in ids]
+        check(all(b["shown"] and b["w"] >= 54 and (b["dock"] in "lr" if b["dock"] != "f" else b["bar"][0] >= 0 and b["bar"][1] >= 0 and b["bar"][2] <= 1000 and b["bar"][3] <= 620) for b in bars),
+              f"/studio/ panels red: a stored layout of {junk[:40]}… at 1000 x 620 leaves every panel docked or with its title bar in the window ({[(b['dock'], b['bar']) for b in bars]})")
+        page.context.close()
+    # 11. A phone with a desktop layout stored: panels.js never asked for; the four tabs as without one.
+    seen_boxes = []
+    for init in ("", "localStorage.setItem('odmd.studio.panels', JSON.stringify({ v: 1, n: { order: [], p: { stamps: { at: 'f', x: 10, y: 10 }, colours: { at: 'l', h: 1 } } } }))"):
+        page = s_page(browser, base, site, errors, "phone", init=";" + init)
+        got = []
+        for tab in ("colours", "layers", "stamps", "piece"):
+            page.click(f"#s-tabs [data-tab={tab}]")
+            got.append(page.evaluate("""(t) => { const s = document.querySelector(`.s-bench > [data-tab=${t}]`), r = s.getBoundingClientRect();
+                return [t, Math.round(r.left), Math.round(r.top), Math.round(r.width), s.getClientRects().length > 0]; }""", tab))
+        seen_boxes.append((got, "/studio/panels.js" in s_paths(page)))
+        page.context.close()
+    check(seen_boxes[0] == seen_boxes[1] and not seen_boxes[1][1] and all(g[4] for g in seen_boxes[1][0]),
+          f"/studio/ panels (phone): with a desktop layout stored, panels.js is not fetched and the four tabs are as without one ({seen_boxes[1]})")
 
 
 # --- the Studio, S2 branch 3 (studio-s2-library): the Library, files, stamps, templates ---
@@ -5431,7 +5778,7 @@ def studio_links(browser, base: str, site: Path, errors: list[str], shots: Path 
     page.wait_for_timeout(250)
     b = page.evaluate("document.querySelector('#s-lk canvas').toDataURL()")
     who = page.inner_text("#s-lk-who")
-    others = {urllib.parse.urlsplit(u).path for u in asked} - S_FIRST - {"/studio/link.js", "/studio/"}
+    others = {urllib.parse.urlsplit(u).path for u in asked} - S_FIRST - S_PANELS - {"/studio/link.js", "/studio/"}
     check(said == "shown" and a != b and "8 frames · by “tester” · licence CC0, the link says" in who and l_pieces(page) == n0 and page.evaluate("location.hash") == "",
           f"/studio/ links: opened in a fresh profile, the picture plays, who made it as the link says, nothing stored ({said}, '{who[:60]}', {l_pieces(page) - n0})")
     check(not others and not any(code[:40] in u for u in asked) and all(urllib.parse.urlsplit(u).hostname == "127.0.0.1" for u in asked),
@@ -8063,6 +8410,7 @@ def main() -> int:
             studio_small_things(browser, base, a.site, errors)
             studio_layout(browser, base, a.site, errors)
             studio_workspace(browser, base, a.site, errors)
+            studio_panels(browser, base, a.site, errors, a.shots)
             studio_library(browser, base, a.site, errors)
             studio_files(browser, base, a.site, errors)
             studio_stamps(browser, base, a.site, errors)
@@ -8154,6 +8502,7 @@ def main() -> int:
         studio_small_things(browser, base, a.site, errors)
         studio_layout(browser, base, a.site, errors)
         studio_workspace(browser, base, a.site, errors)
+        studio_panels(browser, base, a.site, errors, a.shots)
         studio_library(browser, base, a.site, errors)
         studio_files(browser, base, a.site, errors)
         studio_stamps(browser, base, a.site, errors)

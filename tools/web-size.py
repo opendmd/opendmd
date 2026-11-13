@@ -511,6 +511,9 @@ STUDIO_LAZY = {
     "paste": (3 * 1024, ("paste.js",)),          # a paste that carries an image
     # import 6 KB (3 in the plan; branch 4, ~4.9 KB): the sheet and its frame, every message checked, frames to a piece or a layer.
     "import": (6 * 1024, ("import.js",)),        # Import…, a picture or video dropped, a paste too big to place, #import
+    # panels 10 KB (studio-float F1, 2026-11-13; ~4 in FLOAT.md before the owner added resizing and hide-all): the
+    # workspace's panels, docked or floating, dragged, moved by keys, resized, folded, closed, hidden all at once, kept.
+    "panels": (10 * 1024, ("panels.js", "panels.css")),  # a window of the workspace's size (1000 x 620 or more)
 }
 # Everything Import's frame fetches the first time it opens (S2 plan,
 # 2026-11-11, branch studio-s2-import): Create Art's page in its framed mode
@@ -522,7 +525,9 @@ IMPORT_OPEN_GZ_BUDGET = 330 * 1024
 # import.js and paste.js, as their lines).
 # 96 KB since S2 branch 5 (studio-s2-links: link.js, the pack's Share link, ~92.7 KB).
 # 98 KB since studio-share (2026-11-12, the notice above, ~96.2 KB).
-STUDIO_ALL_GZ_BUDGET = 98 * 1024
+# 110 KB since studio-float (2026-11-13, the owner's OK for 104 with "raise to what resizing and hide-all
+# need"): the workspace (F0) and the panels line (F1).
+STUDIO_ALL_GZ_BUDGET = 110 * 1024
 STUDIO_PAGE_USES = ("pkg-studio/", "js/wasm.js", "js/build.js", "fonts/silkscreen.woff2")
 # The Studio page's GIF writers (pkg-studio/: opendmd-studio-web, the
 # indexed, wide and fitted encoders over the gif crate; site-only, left out

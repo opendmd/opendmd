@@ -164,6 +164,7 @@ background:linear-gradient(90deg,red,#ff0,lime,cyan,blue,#f0f,red)}
   #studio{display:grid;grid-template:"doc doc doc" auto "l stage r" minmax(0,1fr) "l strip r" auto/auto minmax(0,1fr) auto;gap:0 8px;
   height:calc(100dvh - var(--top,77px) - 8px);margin-bottom:8px}
   #studio[data-view=library]{display:block;height:auto}
+  #studio[aria-busy][data-laid] .s-tray,#studio[aria-busy][data-laid] .s-bench{visibility:hidden} /* (a stored layout: shown once panels.js has put it in place) */
   .s-doc{grid-area:doc;padding:0 2px 8px}
   .s-name input{font-size:24px}
   .s-stage{grid-area:stage;display:flex;flex-direction:column;min-height:0;padding:10px 0}
