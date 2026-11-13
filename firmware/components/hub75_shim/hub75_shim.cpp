@@ -702,14 +702,33 @@ static bool s3_init_hook(const hub75_cfg_t *cfg) {
     if (!s_power_safe) {
         return false;
     }
-    // No driver, no DMA, no pin but OE touched: the lines into an unpowered
-    // panel stay undriven (the bench's brownout loops, 2026-11-13). Every
-    // other hub75_* call is a no-op with no panel.
-    if (cfg->oe >= 0 && oe_pin_ok(static_cast<uint32_t>(cfg->oe))) {
-        oe_high(static_cast<uint32_t>(cfg->oe));
+    // No driver, no DMA, and nothing driven into a panel that may have no
+    // supply (the bench's brownout loops, 2026-11-13: a driven line into an
+    // unpowered panel feeds it through its input clamps, ~20-40 mA a line):
+    // every HUB75 pin an input with no output path, OE pulled up (the
+    // panel's off level) by the pad's own pull-up, not driven high. Every
+    // other hub75_* call is a no-op with no panel. (hub75_early_blank has
+    // driven OE high from start-up to here, ~1 s, as on every boot; and
+    // hub75_blank, at a restart, does again until that restart.)
+    const int8_t pins[] = {cfg->r1, cfg->g1, cfg->b1, cfg->r2, cfg->g2, cfg->b2, cfg->a,
+                           cfg->b,  cfg->c,  cfg->d,  cfg->e,  cfg->lat, cfg->clk, cfg->oe};
+    for (const int8_t pin : pins) {
+        if (pin < 0 || !oe_pin_ok(static_cast<uint32_t>(pin))) {
+            continue;
+        }
+        const uint32_t p = static_cast<uint32_t>(pin);
+        gpio_ll_output_disable(&GPIO, p);
+        esp_rom_gpio_pad_select_gpio(p);
+        gpio_ll_input_enable(&GPIO, p);
+        gpio_ll_pulldown_dis(&GPIO, p);
+        if (pin == cfg->oe) {
+            gpio_ll_pullup_en(&GPIO, p);
+        } else {
+            gpio_ll_pullup_dis(&GPIO, p);
+        }
     }
     s_oe = cfg->oe;
-    ESP_LOGW(TAG, "power-safe: the panel driver is not started (OE high, the other HUB75 pins undriven)");
+    ESP_LOGW(TAG, "power-safe: the panel driver is not started (every HUB75 pin an input, OE pulled up, nothing driven)");
     return true;
 }
 
@@ -752,10 +771,20 @@ static IRAM_ATTR uint32_t s3_scan_desc_index(void) {
  * descriptor the pair before: the library's latch overlap), so each
  * register's descriptor, as a row pair, is set beside the pins read back
  * through their input path (enabled here; the LCD_CAM's output is
- * untouched), a few hundred times over two refreshes or so. The register
- * the racer should read is the one that agrees nearly always; one a
- * descriptor behind disagrees for most of every pair's first (long)
- * descriptor. "pins a row ahead": the register lags the scan.
+ * untouched), a few hundred times over two refreshes or so. "pins a row
+ * ahead": the register lags the scan; "a row behind": it leads.
+ *
+ * What the bench should see (the default panel: 32 descriptors a pair, the
+ * first one every colour plane, the pins carrying the pair before for its
+ * first plane): the register that names the descriptor being sent agrees
+ * ~97% of the time, its misses counted as "ahead" (that first plane); one a
+ * descriptor early ~95%, with ~13 of 500 "behind"; one a descriptor late
+ * ~80%. The racer's register should be the ~97% one (NVS scan_reg).
+ *
+ * In the emulator the number means nothing: esp32sim drains the descriptors
+ * but does not loop the LCD_CAM's output back to GPIO_IN, so the pins read
+ * a constant and every register "agrees" ~1/16 of the time (~18-22/500).
+ * The emulator lanes check only that the lines are logged.
  */
 static void s3_pins_check(uint32_t per_row) {
     for (int b = 0; b < 4; b++) {
@@ -796,6 +825,9 @@ static void s3_pins_check(uint32_t per_row) {
         }
         esp_rom_delay_us(37); /* (prime to the ~625 us row pair) */
     }
+    // One line a register. Bench: the "current" register ~97% (misses as
+    // "ahead"), one a descriptor early ~95% (~13 "behind"), one late ~80%;
+    // the emulator: ~1/16 for all four, meaningless (no pin loopback).
     for (uint8_t s = 0; s < 4; s++) {
         ESP_LOGI(TAG,
                  "scan: register %s agrees with the address pins %u/%u (pins a row ahead %u, a row "

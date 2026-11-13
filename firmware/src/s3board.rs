@@ -163,8 +163,10 @@ fn arm_clear() {
 /// The power-safe lane's test hook (`nocard-test` images only; `make
 /// emu-s3-power-safe`): NVS `ps_test` = N fakes N brownout resets in a row
 /// after the power-on, each a restart ~3 s after the boot before it (well
-/// inside safe start), so boot N+1 is the Nth "brownout". The count left is
-/// in RTC memory.
+/// inside safe start), so the boots after it count as brownouts. The first
+/// faked boot (with N >= 2) instead lives until safe start is over and the
+/// guard has cleared, then restarts: the next boot counts 1 again. The
+/// fakes left and N are in RTC memory.
 #[cfg(feature = "nocard-test")]
 mod test {
     use super::*;
@@ -173,19 +175,20 @@ mod test {
     static mut LEFT: u32 = 0;
     const TAG: u32 = 0xFA4E_0000;
 
-    fn left() -> u32 {
+    /// (fakes left, N), both under 256.
+    fn left() -> (u32, u32) {
         // SAFETY: a static's own word, read and written only here.
         let v = unsafe { core::ptr::read_volatile(&raw const LEFT) };
         if v & 0xFFFF_0000 == TAG {
-            v & 0xFFFF
+            (v & 0xFF, (v >> 8) & 0xFF)
         } else {
-            0
+            (0, 0)
         }
     }
 
-    fn set_left(n: u32) {
+    fn set_left(n: u32, total: u32) {
         // SAFETY: as `left`.
-        unsafe { core::ptr::write_volatile(&raw mut LEFT, TAG | n) };
+        unsafe { core::ptr::write_volatile(&raw mut LEFT, TAG | (total.min(255) << 8) | n.min(255)) };
     }
 
     /// `ps_test` is set: the lane's, not the no-card test's, boot
@@ -201,25 +204,44 @@ mod test {
             return false;
         }
         super::PS_TEST.store(true, Relaxed);
+        let (was, total) = left();
         let faked = if reset == Reset::PowerOn {
             let n = nvs.s3_string("ps_test").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
-            set_left(n);
+            set_left(n, n);
             log::info!("ps-test: power-on; {n} brownout resets to fake");
             false
-        } else if reset == Reset::Software && left() > 0 {
-            set_left(left() - 1);
+        } else if reset == Reset::Software && was > 0 {
+            set_left(was - 1, total);
             true
         } else {
             false
         };
-        if left() > 0 {
+        let (now, total) = left();
+        // The first faked boot waits for the guard to clear.
+        let slow = faked && total >= 2 && now + 1 == total;
+        if slow {
+            // (Said here, not on the thread: two tasks logging at once this
+            // early interleave on the console.)
+            log::info!("ps-test: this boot lives past safe start (the guard should clear)");
+        }
+        if now > 0 {
             let _ = crate::task::spawn_core0(
                 b"ps-test\0",
                 4 * 1024,
                 2,
-                Box::new(|| {
-                    std::thread::sleep(Duration::from_secs(3));
-                    log::info!("ps-test: faking a brownout reset ({} left)", left());
+                Box::new(move || {
+                    if slow {
+                        for _ in 0..600 {
+                            if super::guard_load() == 0 {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                        std::thread::sleep(Duration::from_secs(1));
+                    } else {
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                    log::info!("ps-test: faking a brownout reset ({} left)", left().0);
                     crate::restart(opendmd_core::restarts::Reason::ApiReboot);
                 }),
             );
@@ -237,3 +259,45 @@ static PS_TEST: AtomicBool = AtomicBool::new(false);
 pub fn ps_test() -> bool {
     PS_TEST.load(Relaxed)
 }
+
+/// The logger's hook (`logring`'s `log`, S3 only): on a power-safe boot,
+/// `main`'s "panel up: …" line (it follows `Panel::new`, which started no
+/// panel) is replaced by one saying the panel was not started. True: the
+/// record is not to be logged.
+pub fn swallow(record: &log::Record) -> bool {
+    use core::fmt::Write;
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if !POWER_SAFE.load(Relaxed) || DONE.load(Relaxed) || record.level() != log::Level::Info
+        || record.target() != "opendmd_firmware"
+    {
+        return false;
+    }
+    /// The message's first bytes, no more.
+    struct Head([u8; 10], usize);
+    impl Write for Head {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for &b in s.as_bytes() {
+                if self.1 == self.0.len() {
+                    return Err(core::fmt::Error);
+                }
+                self.0[self.1] = b;
+                self.1 += 1;
+            }
+            Ok(())
+        }
+    }
+    let mut head = Head([0; 10], 0);
+    let _ = write!(head, "{}", record.args());
+    if &head.0[..head.1] != b"panel up: " {
+        return false;
+    }
+    DONE.store(true, Relaxed);
+    log::warn!("panel: not started (power-safe): no driver, no DMA, every HUB75 pin an input with OE pulled up; WiFi and the web app as ever");
+    true
+}
+
+// TODO(s3 follow-up): the same-line hooks (main.rs's `panel_cfg` line,
+// `restarts::reset_note`, `logring`'s `log`, hub75_init's first line in
+// hub75_shim.cpp) keep the classic's line tables byte-identical; unfold
+// them into ordinary statements the next time the classic build may change
+// anyway (a release that moves those files' lines for other reasons).
