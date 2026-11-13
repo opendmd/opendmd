@@ -520,6 +520,20 @@ wasm module of its own, `pkg-studio/` (`opendmd-studio-web`), loaded at
 its first download; like `pkg-psi-lang/` it is published with the demo
 and never in the www pack.
 
+On a window of 1000 × 620 or more the Studio is one screen (`studio.css`'s
+workspace): the piece bar on top, the tools a column on the left, the bench
+a column on the right, the canvas at the top of the stage between them and
+the frames under it; zoom and the guides sit in the chin under the canvas.
+`panels.js` (loaded at that size only, before the page shows) makes Tools,
+Colours, Layers, Stamps and This piece panels: each docks left or right or
+floats, dragged by its title bar (to the stage's edge to dock it), moved by
+the arrow keys on its name, resized by its corner, folded, closed and shown
+again from the **Panels** menu; **H** (or PANELS in the chin) hides them
+all for the visit. The layout is kept in `localStorage`
+(`odmd.studio.panels`, version 1, one arrangement under 1600 px wide and
+one wider); the default and Reset are every panel docked. Below that size,
+and on a phone (its four tabs), the page is as before.
+
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites (a playlist of sprites, "Sprites")
 (`tools/demo-card.py`). `make site` builds the whole public site into
