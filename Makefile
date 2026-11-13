@@ -46,20 +46,25 @@ FW_VARIANT := $(or $(VARIANT),4mb)
 # it gets no signed bundle (fw-sign.py does not know it) and no manifest.
 FW_EMU_VARIANT := emu8mb
 FW_S3_VARIANT := s3
+# Non-empty when DIST was given on the command line (a DIST from the
+# environment is overridden by `DIST := dist` below) and is neither dist/
+# nor under it: the builds that must never reach dist/ require it.
+FW_DIST_OWN = $(and $(filter command line,$(origin DIST)),$(if $(filter $(abspath dist) $(abspath dist)/%,$(abspath $(DIST))),,own))
+FW_DIST_OWN_HINT := give DIST=<a dir outside dist/> on the command line
 ifeq ($(FW_VARIANT),$(FW_EMU_VARIANT))
 ifneq ($(or $(filter-out fw-release-variant updater notices-check,$(MAKECMDGOALS)),$(if $(MAKECMDGOALS),,default)),)
 $(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: make emu-probe builds it)
 endif
-ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
-$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/)
+ifeq ($(FW_DIST_OWN),)
+$(error VARIANT=$(FW_EMU_VARIANT) is the emulator-only layout: never into dist/ ($(FW_DIST_OWN_HINT)))
 endif
 else ifeq ($(FW_VARIANT),$(FW_S3_VARIANT))
 ifneq ($(filter fw-flash fw-release-flash fw-erase fw-ota fw-sign fw-release flasher,$(MAKECMDGOALS)),)
-$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator only (make fw-build, emu-s3-nocard, emu-s3-probe); no install, update or release yet)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview: built and run in the emulator (make fw-build, emu-s3-nocard, emu-s3-probe), or as a measurement image over USB (make fw-s3-image, fw-s3-flash); no install, update or release yet)
 endif
-ifeq ($(abspath $(or $(DIST),dist)),$(abspath dist))
+ifeq ($(FW_DIST_OWN),)
 ifneq ($(filter fw-release-variant,$(MAKECMDGOALS)),)
-$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview, not released: give it a DIST of its own, never dist/)
+$(error VARIANT=$(FW_S3_VARIANT) is the ESP32-S3 preview, not released: never into dist/ ($(FW_DIST_OWN_HINT)))
 endif
 endif
 else ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
@@ -177,9 +182,9 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: blocklist-check test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web webmin font site-font site-scene logo web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb \
-	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-nocard emu-s3-probe \
-	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe emu-image-paint emu-paint-probe emu-rig emu-rig-card emu-rig-tight emu-image-rigtight emu-leak emu-image-leak emu-api emu-api-psb emu-connect emu-connect-certs emu-image-connect \
+	emu-image-s3 emu-image-s3-nocard emu-image-s3-probe emu-s3-nocard emu-s3-probe fw-s3-image fw-s3-images fw-s3-flash \
+	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-clippy-connect fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota ota-compat updater updater-picture emu-old-updater emu-offline emu-offline-psb www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
 	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate site-stats release studio-starter
@@ -199,8 +204,8 @@ blocklist-check:
 	uv run tools/blocklist-check.py $(BLOCKLIST_ARGS)
 
 test:
-	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags
+	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles; tags: tags, ratings and the search; connect: the Connect probe's half)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota,tags,connect
 	@echo "==> Testing the updater's panel timing parser on the host (ota/updater/test, the vectors from_nvs is held to)"
 	@mkdir -p target
 	$${CC:-cc} -std=c11 -Wall -Wextra -Werror -Iota/updater/main -o target/updater-panel-timing-test \
@@ -642,7 +647,7 @@ fmt:
 clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota,tags,connect -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features player,ota -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
@@ -768,6 +773,32 @@ FW_L2_COPY ?= 0
 # the frame loop's own depth, and left 268 B of the 16 KB; a
 # release build never runs them. (From the heap: the probe's heap figures
 # are 2 KB under a release build's.)
+# connect-probe builds only (OpenDMD Connect's spike S0, src/connect_probe.rs):
+# firmware/sdkconfig.connect-probe (dynamic TLS buffers, session tickets, the
+# trusted-certificate callback, one more socket) and the TLS record sizes,
+# CONNECT_TLS_IN/OUT (CONNECT.md 5.2: 4096 in, 2048 out). Every other build
+# keeps sdkconfig.defaults' TLS section as it is.
+CONNECT_TLS_IN ?= 4096
+CONNECT_TLS_OUT ?= 2048
+FW_CONNECT_FEATURES := connect-probe connect-core connect-measure
+FW_CONNECT = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES)))
+# The feature and its sdkconfig must go together: a bench build takes it in
+# FW_FEATURES, a release build in FW_RELEASE_FEATURES; the other spelling
+# would layer the sdkconfig on a build without the code, and is refused.
+FW_CONNECT_IN_BENCH = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_FEATURES)))
+FW_CONNECT_IN_RELEASE = $(filter $(FW_CONNECT_FEATURES),$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)))
+FW_CONNECT_BENCH_GUARD = $(if $(FW_CONNECT_IN_RELEASE),{ echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE) is for release builds (make fw-release); a bench build takes FW_FEATURES=$(FW_CONNECT_IN_RELEASE)"; exit 2; },true)
+# A Connect release build is a measurement build: never into the release's
+# own dist/ or target dir (give both: DIST=... FW_RELEASE_TARGET_DIR=...),
+# and its version says so (FW_VERSION gets -connect-s0, below).
+FW_CONNECT_RELEASE_GUARD = $(if $(FW_CONNECT_IN_BENCH),{ echo "FW_FEATURES=$(FW_CONNECT_IN_BENCH) is for bench builds; a release build takes FW_RELEASE_FEATURES=$(FW_CONNECT_IN_BENCH)"; exit 2; },true) \
+	$(if $(FW_CONNECT_IN_RELEASE),$(if $(filter command line environment,$(origin DIST)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a DIST of its own (not dist/)"; exit 2; }) \
+	$(if $(filter command line environment,$(origin FW_RELEASE_TARGET_DIR)),,&& { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): give a FW_RELEASE_TARGET_DIR of its own"; exit 2; }) \
+	&& { test "$(abspath $(DIST))" != "$(abspath dist)" || { echo "FW_RELEASE_FEATURES=$(FW_CONNECT_IN_RELEASE): DIST must not be dist/"; exit 2; }; })
+# fw-clippy's connect-probe lane: a target dir of its own (keyed by the
+# fragment's inputs, so a change makes a new one), its sdkconfig the
+# feature's.
+FW_CLIPPY_CONNECT = $(CURDIR)/$(FW)/target/connect-clippy$(if $(FW_CHIP_SDKCONFIG),-$(FW_CHIP))
 FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
 	$(if $(filter 80,$(FW_FLASH_FREQ)),echo 'CONFIG_ESPTOOLPY_FLASHFREQ_40M=n'; echo 'CONFIG_ESPTOOLPY_FLASHFREQ_80M=y';) \
 	$(if $(filter 8mb,$(FW_FLASH_SIZE)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
@@ -775,6 +806,7 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 	$(if $(filter 1,$(FW_L2_COPY)),echo 'CONFIG_LWIP_L2_TO_L3_COPY=y';) \
 	$(if $(filter psi-probe paint-probe,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_ESP_MAIN_TASK_STACK_SIZE=18432';) \
 	$(if $(filter heapmap,$(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES) $(FW_FEATURES))),echo 'CONFIG_FREERTOS_USE_TRACE_FACILITY=y';) \
+	$(if $(FW_CONNECT),cat $(CURDIR)/$(FW)/sdkconfig.connect-probe; echo 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)'; echo 'CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=$(CONNECT_TLS_OUT)';)$(if $(FW_EXTRA_SDKCONFIG),printf '%s\n' $(FW_EXTRA_SDKCONFIG);) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
 # The bench builds' (fw-build, fw-flash, fw-clippy).
@@ -796,8 +828,9 @@ FW_SDKCONFIG_GUARD = for cfg in $(1); do \
 # version changes: it keeps the values it already has (the descriptor's
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag)$(if $(FW_CHIP_SDKCONFIG), $(FW_CHIP_SDKCONFIG)) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal)$(if $(FW_CONNECT),+connect-$(CONNECT_TLS_IN)-$(CONNECT_TLS_OUT)) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag)$(if $(FW_CHIP_SDKCONFIG), $(FW_CHIP_SDKCONFIG)) $(if $(FW_CONNECT),$(FW)/sdkconfig.connect-probe) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -806,6 +839,7 @@ fw-sdkconfig-flavour:
 	@$(call FW_SDKCONFIG_GUARD,$(FW)/target/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig)
 
 fw-build: fw-sdkconfig-flavour
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build$(FW_TARGET_FLAG) $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
@@ -859,6 +893,7 @@ fw-erase:
 # release build (the defaults, no .env) and none at all (no psi), so no cfg
 # branch rots.
 fw-clippy: fw-sdkconfig-flavour
+	@$(FW_CONNECT_BENCH_GUARD)
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
@@ -867,6 +902,24 @@ fw-clippy: fw-sdkconfig-flavour
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets -- -D warnings'
 	@echo "==> Clippy firmware, no features (FW_DISABLE=formulas: without Formulas or the JIT)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy$(FW_TARGET_FLAG) --all-targets --no-default-features -- -D warnings'
+	@$(MAKE) --no-print-directory fw-clippy-connect FW_FEATURES=connect-probe
+
+# The connect-probe feature set (src/connect_probe.rs) with its sdkconfig,
+# in a target dir of its own (FW_CLIPPY_CONNECT), so fw-clippy's other
+# lanes keep theirs. Run by fw-clippy.
+fw-clippy-connect:
+	@mkdir -p $(FW_CLIPPY_CONNECT)
+	@$(FW_FRAGMENT) > $(FW_CLIPPY_CONNECT)/sdkconfig.fragment
+	@# One dir: its generated sdkconfig goes whenever the inputs change.
+	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_CHIP_SDKCONFIG) $(FW_CLIPPY_CONNECT)/sdkconfig.fragment | sha256sum | cut -c1-16); \
+	 if [ "$$want" != "$$(cat $(FW_CLIPPY_CONNECT)/sdkconfig.stamp 2>/dev/null)" ]; then \
+	   rm -f $(FW_CLIPPY_CONNECT)/$(FW_TRIPLE)/*/build/esp-idf-sys-*/out/sdkconfig; \
+	   echo $$want > $(FW_CLIPPY_CONNECT)/sdkconfig.stamp; \
+	 fi
+	@echo "==> Clippy firmware, connect-probe (the Connect spike's probe, with sdkconfig.connect-probe)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-probe -- -D warnings'
+	@echo "==> Clippy firmware, connect-core (the probe's session alone, M1's build)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCONFIG),$(FW_CHIP_SDKCONFIG);)$(FW_CLIPPY_CONNECT)/sdkconfig.fragment" cargo clippy$(FW_TARGET_FLAG) --all-targets --target-dir "$(FW_CLIPPY_CONNECT)" --features connect-core -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -912,6 +965,11 @@ fw-clean:
 # descriptor as "<version> <var>" (checked below at offset 0x30 of the image).
 # See docs/deploying.md.
 FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+# A Connect measurement build's files and app descriptor say so
+# ("<version>-connect-s0"): they cannot be taken for the release's.
+ifneq ($(filter connect-probe connect-core connect-measure,$(subst $(comma), ,$(FW_RELEASE_FEATURES))),)
+FW_VERSION := $(FW_VERSION)-connect-s0
+endif
 # The release build wants ~1.5 GB of its own (host build scripts plus a
 # second ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier moves it.
 # CARGO_WORKSPACE_DIR is set below because embuild otherwise takes the crate
@@ -943,6 +1001,41 @@ FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(if $(FW_CHIP_SDKCON
 # DIST=/somewhere/else), signed like any other so it can go to a test panel
 # over the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
+# The S3 measurement images only (fw-s3-image): a file of bench WiFi
+# credentials (firmware/.env's form) sourced into the release build, for its
+# `dev-credentials` feature to compile in. Never for the classic, never into
+# dist/: every other release build scrubs both variables and reads no file.
+FW_S3_CREDENTIALS ?=
+ifneq ($(FW_S3_CREDENTIALS),)
+ifeq ($(and $(filter $(FW_S3_VARIANT),$(FW_VARIANT)),$(filter command line,$(origin FW_S3_CREDENTIALS))),)
+$(error FW_S3_CREDENTIALS is for the ESP32-S3 measurement images (make fw-s3-image) only, given on the command line)
+endif
+ifeq ($(FW_DIST_OWN),)
+$(error FW_S3_CREDENTIALS: never into dist/ ($(FW_DIST_OWN_HINT)))
+endif
+endif
+FW_S3_CREDENTIALS_SOURCE = $(if $(FW_S3_CREDENTIALS),set -a; . "$(FW_S3_CREDENTIALS)"; set +a; )
+# sdkconfig lines (KEY=VALUE, space-separated) added last to the fragment,
+# each checked in the generated sdkconfig after the build: the S3
+# measurement images' switches (fw-s3-image passes them to
+# fw-release-variant). Empty in every other build, and refused there: from
+# the environment, for the classic, or for any goal but fw-release-variant
+# (the bench builds' flavour stamp does not track it).
+FW_EXTRA_SDKCONFIG ?=
+ifneq ($(FW_EXTRA_SDKCONFIG),)
+ifeq ($(and $(filter $(FW_S3_VARIANT),$(FW_VARIANT)),$(filter command line,$(origin FW_EXTRA_SDKCONFIG))),)
+$(error FW_EXTRA_SDKCONFIG is for the ESP32-S3 measurement images (make fw-s3-image) only, given on the command line)
+endif
+ifneq ($(MAKECMDGOALS),fw-release-variant)
+$(error FW_EXTRA_SDKCONFIG is for fw-release-variant only (make fw-s3-image), not $(or $(MAKECMDGOALS),the default goal))
+endif
+endif
+# (Appended to the release recipe's flash-size check, `cfg` its sdkconfig.)
+FW_EXTRA_SDKCONFIG_CHECK = ; \
+	 for kv in $(FW_EXTRA_SDKCONFIG); do k=$${kv%%=*}; v=$${kv\#*=}; \
+	   if [ "$$v" = n ]; then ! grep -q "^$$k=" "$$cfg" || { echo "$$cfg: $$k is on, $$kv was asked (a dependency it lacks?)"; exit 1; }; \
+	   else grep -qx "$$kv" "$$cfg" || { echo "$$cfg: no $$kv (asked; a dependency it lacks?)"; exit 1; }; fi; \
+	 done; echo "sdkconfig: $(FW_EXTRA_SDKCONFIG) in force"
 FW_COMMA := ,
 FW_RELEASE_CARGO_FEATURES = $(subst $(eval) ,$(FW_COMMA),$(strip $(subst $(FW_COMMA), ,$(FW_RELEASE_FEATURES)) $(if $(filter 1,$(FW_SRAM1_IRAM)),sram1-iram) $(if $(FW_DISABLE),$(FW_ENABLED))))
 DIST := dist
@@ -982,6 +1075,7 @@ fw-release: web
 
 # One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
 fw-release-variant:
+	@$(FW_CONNECT_RELEASE_GUARD)
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
 	@echo "==> Release build, $(FW_VARIANT)$(if $(FW_DISABLE), without $(FW_DISABLE)) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
@@ -998,12 +1092,12 @@ fw-release-variant:
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
 	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/$(FW_TRIPLE)/release/build/esp-idf-sys-*/out/sdkconfig)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_$(FW_TRIPLE_ENV)_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build$(FW_TARGET_FLAG) --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '$(FW_S3_CREDENTIALS_SOURCE). $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" $(FW_MCU_ENV)OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_$(FW_TRIPLE_ENV)_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build$(FW_TARGET_FLAG) --release --target-dir "$(FW_RELEASE_VTARGET)" $(FW_NO_DEFAULT)$(if $(FW_RELEASE_CARGO_FEATURES),--features $(FW_RELEASE_CARGO_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size.
 	@out=$$($(FW_RELEASE_IDF_OUT)) || exit 1; cfg=$$out/sdkconfig; \
 	 want=$$(echo $(FW_FLASH_SIZE) | tr a-z A-Z); \
 	 grep -q "^CONFIG_ESPTOOLPY_FLASHSIZE=\"$$want\"" "$$cfg" || { echo "$$cfg: CONFIG_ESPTOOLPY_FLASHSIZE is not \"$$want\""; exit 1; }; \
-	 echo "sdkconfig: flash size $$want ($$cfg)"
+	 echo "sdkconfig: flash size $$want ($$cfg)"$(if $(FW_EXTRA_SDKCONFIG),$(FW_EXTRA_SDKCONFIG_CHECK))
 	@# The updater after the firmware: on a fresh machine (CI) it is the
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	@# (The S3 preview has none yet: its ota_0 stays erased.)
@@ -1314,6 +1408,25 @@ emu-image-leak:
 emu-leak: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-leak &&) \
 	uv run --quiet tools/emu/run.py leak --image $(or $(FW_IMAGE),$(EMU_LEAK_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
+# OpenDMD Connect's spike S0 in the emulator (tools/connect-s0/m8_emu.py): M8
+# (the heap's pools and census around a TLS session) and the probe's
+# behaviour end to end, against tools/connect-s0/echo_server.py inside the
+# lane's own network namespace. The image: emu-census + connect-probe, the
+# host connect-s0.test at 10.0.2.2:8443 and a local test root
+# ($(EMU_CONNECT_DIR)/certs, made once and again after 20 days) pinned beside
+# the real ones; never a device's. EMU_CONNECT_OK.
+EMU_CONNECT_DIR = $(EMU_DIR)/connect
+EMU_CONNECT_IMAGE = $(EMU_CONNECT_DIR)/dist/opendmd-$(FW_VERSION)-connect-s0-4mb-full.bin
+emu-connect-certs:
+	@if [ -z "$$(find $(EMU_CONNECT_DIR)/certs/root.der -mtime -20 2>/dev/null)" ]; then uv run --quiet tools/connect-s0/echo_server.py certs $(EMU_CONNECT_DIR)/certs; fi
+emu-image-connect: emu-connect-certs
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	OPENDMD_CONNECT_HOST=connect-s0.test OPENDMD_CONNECT_ADDR=10.0.2.2:8443 OPENDMD_CONNECT_TOKEN=emu-s0 OPENDMD_CONNECT_HOLD_S=90 \
+	OPENDMD_CONNECT_TEST_ROOT=$(EMU_CONNECT_DIR)/certs/root.der \
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=emu-census,connect-probe FW_APP_SPARE=32768 FW_RELEASE_TARGET_DIR=$(EMU_CONNECT_DIR)/target DIST=$(EMU_CONNECT_DIR)/dist UPDATER_BUILD=$(EMU_UPDATER)
+emu-connect: emu-build emu-card
+	$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-connect &&) \
+	uv run --quiet tools/connect-s0/m8_emu.py --image $(or $(FW_IMAGE),$(EMU_CONNECT_IMAGE)) --certs $(EMU_CONNECT_DIR)/certs $(EMU_ARGS)
 # The API lane: the leak lane's `emu-census` image with WiFi credentials
 # seeded into a copy's NVS, on the emulator's virtual AP with port 80 on
 # 127.0.0.1, inside a private network namespace (nothing reaches a real
@@ -1457,6 +1570,146 @@ emu-s3-probe: emu-build
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-s3-probe &&) \
 	uv run --quiet tools/emu/run.py probe --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) --log $(EMU_DIR)/logs/s3-probe-last.log $(EMU_ARGS) && \
 	uv run --quiet tools/emu/probe_red.py --chip s3 --image $(or $(FW_IMAGE),$(EMU_S3_PROBE_IMAGE)) --log $(EMU_DIR)/logs/s3-probe-last.log
+
+# --- ESP32-S3 phase 1: measurement images for a bare DevKitC-1 on USB --------
+# (S3 port phase 1: an ESP32-S3-DevKitC-1 N8R8/N16R8, no panel, no card.) Each
+# image is the s3 preview (VARIANT=s3, partitions-s3.csv) built by
+# fw-release-variant into a directory of its own, $(S3_P1_DIR)/<name>/
+# (never dist/), with its own target dir under it:
+#
+#   base        the Connect probe (connect-probe) and the bench WiFi seed
+#               (dev-credentials, from S3_CREDENTIALS, firmware/.env's form);
+#               nothing moved to PSRAM: the internal heap as the firmware
+#               uses it, with WiFi up and a TLS session open
+#   tls-psram   base + mbedTLS's allocations from PSRAM (the probe's
+#               allocator, `psram-tls`, and IDF's MBEDTLS_EXTERNAL_MEM_ALLOC)
+#   wifi-psram  base + SPIRAM_TRY_ALLOCATE_WIFI_LWIP (the WiFi driver's and
+#               lwIP's buffers from PSRAM first)
+#   cold-psram  base + `psram-cold` (Rust allocations of 1 KB or more off the
+#               display task from PSRAM first: transfers, the cache builder,
+#               the Formula compiler, the network worker)
+#   iram-trim   base + code out of IRAM, each byte of which is D/IRAM heap
+#               on the S3 (S3_IRAM_SDK: FreeRTOS's and the ring buffer's
+#               non-ISR functions into flash, WiFi's IRAM speed-ups off;
+#               not SPI_FLASH_ROM_IMPL: with it the first NVS write
+#               asserted in xTaskRemoveFromEventList in the emulator)
+#   all-psram   base + all four
+#   jit         the psi probe with no card (psi-probe; the JIT's timing rows
+#               too, OPENDMD_PROBE_NOCARD_TIMINGS), network off in NVS (no
+#               WiFi, no credentials): timings on the console
+#
+# Phase 2 (the DevKitC-1 jumpered into a DMDoS carrier in the classic's
+# place: the panel and the card on config.rs's S3 pins), into
+# $(S3_P2_DIR)/<name>/:
+#
+#   carrier     a normal device (the release feature set: web app, card,
+#               Formulas) on the bench WiFi, with all-psram's switches and
+#               the Connect probe compiled in but off
+#               (OPENDMD_CONNECT_ENABLED=0: POST
+#               /api/debug/connect/config?enabled=1 starts it); the card at
+#               20 MHz (card_speed safe only on the S3), the panel clock the
+#               panel timing's i2s_speed exactly (8 MHz by default; 16, 20)
+#
+# `make fw-s3-image S3_IMAGE=<name>` (or `fw-s3-images`, all of them) builds;
+# `make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=<name>` writes one to a board
+# over USB: the merged 8 MB image at 0x0 (bootloader, table, the app in
+# factory, otadata and NVS erased, the www pack at 0x400000; the jit image's
+# NVS says network off), one espflash write-bin. S3_FLASH=app writes the
+# bootloader, the table and the app only (NVS and the www pack stay).
+# PORT has no default here, and the ports in S3_REFUSED_PORTS (other boards
+# on this machine; empty by default, set it in local.mk) are refused, by
+# their resolved device; DRY=1 prints the command without running it.
+# The images carry bench WiFi credentials: never published, never in dist/.
+S3_P1_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p1,$(CURDIR)/target/s3-p1)
+S3_P2_DIR ?= $(if $(SCRATCH),$(SCRATCH)/opendmd-target/s3-p2,$(CURDIR)/target/s3-p2)
+S3_P2_IMAGES := carrier
+S3_IMAGES := base tls-psram wifi-psram cold-psram iram-trim all-psram jit $(S3_P2_IMAGES)
+S3_IMAGE ?= base
+S3_DIR = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),$(S3_P2_DIR),$(S3_P1_DIR))/$(S3_IMAGE)
+S3_CREDENTIALS ?= $(CURDIR)/$(FW)/.env
+S3_REFUSED_PORTS ?=
+S3_FLASH_BAUD ?= 115200
+S3_FLASH ?= full
+S3_COMMON := dev-credentials,bench,connect-probe
+S3_TLS_SDK := CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+S3_WIFI_SDK := CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+S3_IRAM_SDK := CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y \
+	CONFIG_ESP_WIFI_IRAM_OPT=n CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+S3_FEATURES_base := $(S3_COMMON)
+S3_FEATURES_tls-psram := $(S3_COMMON),psram-tls
+S3_SDK_tls-psram := $(S3_TLS_SDK)
+S3_FEATURES_wifi-psram := $(S3_COMMON)
+S3_SDK_wifi-psram := $(S3_WIFI_SDK)
+S3_FEATURES_cold-psram := $(S3_COMMON),psram-cold
+S3_FEATURES_iram-trim := $(S3_COMMON)
+S3_SDK_iram-trim := $(S3_IRAM_SDK)
+S3_FEATURES_all-psram := $(S3_COMMON),psram-tls,psram-cold
+S3_SDK_all-psram := $(S3_TLS_SDK) $(S3_WIFI_SDK) $(S3_IRAM_SDK)
+S3_FEATURES_jit := psi-probe
+# Not psram-cold: PSRAM buffers make the SD driver copy one sector per
+# command through a DMA bounce buffer (sdmmc_cmd.c), which would slow card
+# I/O on what should be a normal device.
+S3_FEATURES_carrier := $(S3_COMMON),psram-tls
+S3_SDK_carrier := $(S3_SDK_all-psram)
+S3_ENV_carrier := OPENDMD_CONNECT_ENABLED=0
+# The app spare each image must leave: the release's 64 KB for phase 2's,
+# 32 KB for the measurement images.
+S3_SPARE = $(if $(filter $(S3_IMAGE),$(S3_P2_IMAGES)),65536,32768)
+# The images that join the WiFi (the rest have network off in NVS).
+S3_WIFI_IMAGES := $(filter-out jit,$(S3_IMAGES))
+S3_ON_WIFI = $(filter $(S3_IMAGE),$(S3_WIFI_IMAGES))
+S3_FULL = $(firstword $(wildcard $(S3_DIR)/opendmd-*-s3-full.bin))
+S3_ELF = $(S3_DIR)/opendmd-s3.elf
+S3_FLASH_CMD_full = espflash write-bin --chip esp32s3 --port $(PORT) --baud $(S3_FLASH_BAUD) 0x0 $(S3_FULL)
+S3_FLASH_CMD_app = espflash flash --chip esp32s3 --port $(PORT) --baud $(S3_FLASH_BAUD) --bootloader $(S3_DIR)/bootloader-s3.bin \
+	--partition-table $(CURDIR)/$(FW_PARTITIONS_s3) --erase-parts otadata --flash-size 8mb --flash-freq $(FW_FLASH_FREQ)mhz $(S3_ELF)
+S3_FLASH_CMD = $(S3_FLASH_CMD_$(S3_FLASH))
+
+fw-s3-image:
+	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
+	@$(if $(S3_ON_WIFI),test -f "$(S3_CREDENTIALS)" || { echo "no $(S3_CREDENTIALS): S3_CREDENTIALS=<a file like firmware/.env.example>"; exit 2; },true)
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	@mkdir -p $(S3_DIR)
+	@find $(S3_DIR) -maxdepth 1 -name 'opendmd-*-s3-*.bin' -delete
+	OPENDMD_S3_IMAGE=$(S3_IMAGE) OPENDMD_S3_SWITCHES="$(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))" $(S3_ENV_$(S3_IMAGE)) \
+	$(if $(S3_ON_WIFI),,OPENDMD_PROBE_NOCARD_TIMINGS=1 )$(MAKE) --no-print-directory fw-release-variant VARIANT=s3 \
+	  FW_RELEASE_FEATURES=$(S3_FEATURES_$(S3_IMAGE)) $(if $(S3_SDK_$(S3_IMAGE)),FW_EXTRA_SDKCONFIG="$(strip $(S3_SDK_$(S3_IMAGE)))") \
+	  $(if $(S3_ON_WIFI),FW_S3_CREDENTIALS="$(S3_CREDENTIALS)") FW_APP_SPARE=$(S3_SPARE) FW_RELEASE_TARGET_DIR=$(S3_DIR)/target DIST=$(S3_DIR)
+	@full=$$(ls $(S3_DIR)/opendmd-*-s3-full.bin); test "$$(echo "$$full" | wc -l)" = 1 || { echo "want one full image in $(S3_DIR)"; exit 1; }; \
+	 elf=$(S3_DIR)/target/xtensa-esp32s3-espidf/release/opendmd-firmware; cp $$elf $(S3_ELF); \
+	 h=$$(grep -aoE "esp-idf-sys-[0-9a-f]{16}" $$elf | sort -u | head -1); \
+	 cp $(S3_DIR)/target/xtensa-esp32s3-espidf/release/build/$$h/out/sdkconfig $(S3_DIR)/sdkconfig; \
+	 grep -E '^(# )?CONFIG_(SPIRAM|MBEDTLS_(INTERNAL|EXTERNAL|DYNAMIC|SSL_IN|SSL_OUT|ASYMMETRIC|CLIENT_SSL_SESSION|X509_TRUSTED)|ESP_WIFI_(STATIC|DYNAMIC|CACHE|TX_BUFFER|IRAM|RX_IRAM|EXTRA_IRAM)|LWIP_(MAX_SOCKETS|TCP_WND|TCP_SND|IRAM)|FREERTOS_PLACE|RINGBUF_PLACE|SPI_FLASH_ROM_IMPL|ESP_SYSTEM_MEMPROT|ESP_MAIN_TASK_STACK|ESP_BROWNOUT_DET_LVL)' \
+	   $(S3_DIR)/sdkconfig > $(S3_DIR)/sdkconfig-facts.txt; \
+	 bash -c '. $(ESPUP_ENV) && xtensa-esp32s3-elf-size -A $(S3_ELF)' | grep -E '^\.(iram0|dram0|flash|rtc|ext_ram)' > $(S3_DIR)/sections.txt; \
+	 if [ -z "$(S3_ON_WIFI)" ]; then \
+	   py=$$(ls -d $(ESPRESSIF)/python_env/idf5.3_py3*_env/bin/python 2>/dev/null | sort | tail -1); \
+	   test -n "$$py" || { echo "no ESP-IDF v5.3 Python env (nvs_partition_gen)"; exit 1; }; \
+	   printf '%s\n' key,type,encoding,value opendmd,namespace,, network,data,string,off > $(S3_DIR)/nvs-network-off.csv; \
+	   "$$py" -m esp_idf_nvs_partition_gen generate $(S3_DIR)/nvs-network-off.csv $(S3_DIR)/nvs-network-off.bin 0x6000 >/dev/null || exit 1; \
+	   dd if=$(S3_DIR)/nvs-network-off.bin of=$$full bs=4096 seek=$$(( 0x9000 / 4096 )) conv=notrunc status=none; \
+	   echo "$$full: NVS at 0x9000 says network = off"; \
+	 fi; \
+	 { echo "# $(S3_IMAGE): $(S3_FEATURES_$(S3_IMAGE)) $(S3_SDK_$(S3_IMAGE))"; \
+	   echo "make fw-s3-flash PORT=/dev/ttyXXX S3_IMAGE=$(S3_IMAGE)"; \
+	   echo "espflash write-bin --chip esp32s3 --port /dev/ttyXXX --baud $(S3_FLASH_BAUD) 0x0 $$full"; } > $(S3_DIR)/flash.txt; \
+	 echo "==> $(S3_IMAGE): $$full ($$(stat -c %s $(S3_DIR)/opendmd-*-s3-app.bin) B app)"; cat $(S3_DIR)/sections.txt
+	@! grep -q '^CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=y' $(S3_DIR)/sdkconfig || { echo "memory protection is on: no executable heap for the JIT"; exit 1; }
+	@$(if $(filter connect-probe,$(subst $(FW_COMMA), ,$(S3_FEATURES_$(S3_IMAGE)))),grep -qx 'CONFIG_MBEDTLS_DYNAMIC_BUFFER=y' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=$(CONNECT_TLS_IN)' $(S3_DIR)/sdkconfig && grep -qx 'CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=y' $(S3_DIR)/sdkconfig && echo "sdkconfig: the Connect probe's mbedTLS settings in force" || { echo "$(S3_DIR)/sdkconfig: the probe's mbedTLS settings are missing"; exit 1; },true)
+
+fw-s3-images:
+	@for i in $(S3_IMAGES); do $(MAKE) --no-print-directory fw-s3-image S3_IMAGE=$$i || exit 1; done
+	@ls -l $(S3_P1_DIR)/*/opendmd-*-s3-full.bin $(S3_P2_DIR)/*/opendmd-*-s3-full.bin
+
+fw-s3-flash:
+	@test "$(origin PORT)" = "command line" || { echo "fw-s3-flash: name the S3's port, make fw-s3-flash PORT=/dev/ttyXXX (no default)"; exit 2; }
+	@p=$$(readlink -f "$(PORT)"); for bad in $(S3_REFUSED_PORTS); do \
+	   if [ "$$p" = "$$(readlink -f $$bad)" ]; then echo "fw-s3-flash: $(PORT) is $$bad, another board on this machine: refused"; exit 2; fi; done
+	@case " $(S3_IMAGES) " in *" $(S3_IMAGE) "*) ;; *) echo "S3_IMAGE=$(S3_IMAGE): the images are $(S3_IMAGES)"; exit 2;; esac
+	@case "$(S3_FLASH)" in full|app) ;; *) echo "S3_FLASH=$(S3_FLASH): full or app"; exit 2;; esac
+	@test -n "$(S3_FULL)" && test -f "$(S3_ELF)" || { echo "no $(S3_IMAGE) image in $(S3_DIR): make fw-s3-image S3_IMAGE=$(S3_IMAGE)"; exit 2; }
+	@echo "==> $(S3_IMAGE) ($(S3_FLASH)): $(S3_FLASH_CMD)"
+	$(if $(DRY),@echo "DRY=1: not run",bash -c '. $(ESPUP_ENV) && $(S3_FLASH_CMD)')
 
 # A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
 # The emulator-only emu8mb layout (firmware/partitions-emu.csv): the probe

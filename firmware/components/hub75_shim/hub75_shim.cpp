@@ -18,6 +18,9 @@
 #include "hal/gpio_ll.h"
 #include "soc/gpio_sig_map.h"
 #include "soc/soc_caps.h"
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#include "soc/lcd_cam_struct.h"
+#endif
 
 static const char *TAG = "hub75_shim";
 
@@ -331,6 +334,28 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
         s_panel = nullptr;
         return false;
     }
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && !defined(SPIRAM_DMA_BUFFER)
+    {
+        /* The S3's LCD_CAM pixel clock is 160 MHz / lcd_clkm_div_num
+         * (lcd_clk_equ_sysclk = 1). The driver picks one of three dividers
+         * from the asked clock (16: 10 MHz up to 10 MHz asked, 10: 16 MHz,
+         * 7: 22.9 MHz), so the panel timing's 8 MHz ran at 10 and nothing
+         * went lower. Set the divider the asked clock names instead
+         * (8 MHz -> 20, 16 -> 10, 20 -> 8), for long wires to a carrier.
+         * Written once, right after begin(): the clock generator takes it
+         * as it comes; the DMA chain does not depend on it. */
+        const int32_t hz = cfg->i2sspeed > 0 ? cfg->i2sspeed : 8000000;
+        int32_t div = (160000000 + hz - 1) / hz;
+        if (div < 2) div = 2;
+        if (div > 255) div = 255;
+        LCD_CAM.lcd_clock.lcd_clkm_div_num = static_cast<uint32_t>(div);
+        LCD_CAM.lcd_clock.lcd_clkm_div_a = 1;
+        LCD_CAM.lcd_clock.lcd_clkm_div_b = 0;
+        ESP_LOGI(TAG, "panel clock: divider %d, %d kHz (asked %d kHz)", (int)div,
+                 (int)(160000 / div), (int)(hz / 1000));
+    }
+#endif
 
     s_width = static_cast<uint16_t>(cfg->mx_width * cfg->chain_length);
     s_height = cfg->mx_height;

@@ -43,6 +43,10 @@ tags = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
+# OpenDMD Connect's spike S0 (src/connect.rs): the host-testable half of
+# the firmware's `connect-probe` (WebSocket framing, backoff, the M10
+# stream, the M9 vector). Only that firmware feature and the tests use it.
+connect = []
 # The device's player (the firmware enables it, always): built without
 # `psi` (the firmware's `formulas` off), a playlist's Formula lines
 # (`@formula…`, `/formulas/<stem>.psi`) are skipped as they are read, like

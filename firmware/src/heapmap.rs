@@ -415,8 +415,8 @@ mod on {
         // SAFETY: read-only queries of IDF's heap accounting.
         unsafe {
             Heap {
-                free8: sys::heap_caps_get_free_size(sys::MALLOC_CAP_8BIT) as u32,
-                big8: sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_8BIT) as u32,
+                free8: sys::heap_caps_get_free_size(crate::state::internal(sys::MALLOC_CAP_8BIT)) as u32,
+                big8: sys::heap_caps_get_largest_free_block(crate::state::internal(sys::MALLOC_CAP_8BIT)) as u32,
                 free_int: sys::heap_caps_get_free_size(sys::MALLOC_CAP_INTERNAL) as u32,
                 big_int: sys::heap_caps_get_largest_free_block(sys::MALLOC_CAP_INTERNAL) as u32,
                 free_dma: sys::heap_caps_get_free_size(sys::MALLOC_CAP_DMA) as u32,
@@ -548,7 +548,7 @@ mod on {
     /// `before` (the 8-bit free heap read before it).
     pub fn cp_if_moved(name: &'static str, before: u32) {
         // SAFETY: a read of IDF's heap accounting.
-        let now = unsafe { sys::heap_caps_get_free_size(sys::MALLOC_CAP_8BIT) } as u32;
+        let now = unsafe { sys::heap_caps_get_free_size(crate::state::internal(sys::MALLOC_CAP_8BIT)) } as u32;
         if now + 2048 <= before {
             cp(name);
         }
