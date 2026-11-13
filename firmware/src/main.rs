@@ -3917,3 +3917,8 @@ fn heartbeat(
 // guard): last in the file, so the classic's lines stay where they were.
 #[cfg(esp32s3)]
 mod s3board;
+
+// The ESP32-S3's panel output, double-buffered (s3panel.rs): last in the
+// file, as s3board.
+#[cfg(esp32s3)]
+mod s3panel;
