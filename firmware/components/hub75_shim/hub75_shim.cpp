@@ -436,13 +436,13 @@ extern "C" void hub75_set_latch_blanking(uint8_t latch_blanking) {
     ESP_LOGI(TAG, "latch blanking now %u", latch_blanking);
 }
 
-extern "C" void hub75_clear(void) {
+extern "C" void hub75_clear(void) { HUB75_S3_WRITE_HOOK(0xFFFF) /* (the S3: hub75_shim_s3.inc) */
     if (s_panel != nullptr) {
         s_panel->clearScreen();
     }
 }
 
-extern "C" void hub75_draw_rgb888(const uint8_t *rgb, uint16_t w, uint16_t h) {
+extern "C" void hub75_draw_rgb888(const uint8_t *rgb, uint16_t w, uint16_t h) { HUB75_S3_WRITE_HOOK(0xFFFF) /* (the S3) */
     if (s_panel == nullptr || rgb == nullptr) {
         return;
     }
@@ -459,7 +459,7 @@ extern "C" void hub75_draw_rgb888(const uint8_t *rgb, uint16_t w, uint16_t h) {
     }
 }
 
-extern "C" void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b) {
+extern "C" void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b) { HUB75_S3_WRITE_HOOK(y) /* (the S3) */
     if (s_panel != nullptr) {
         s_panel->drawPixelRGB888(static_cast<int16_t>(x), static_cast<int16_t>(y), r, g, b);
     }
@@ -479,7 +479,7 @@ extern "C" void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, ui
  * Formula writes a pair between rendering rows, whose flash code evicted
  * these from the flash cache in some builds (psi-perf, 2026-11-02: the
  * same pixels written cost 0.4 ms a frame on main, 1.2 ms on the branch). */
-extern "C" IRAM_ATTR void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1) {
+extern "C" IRAM_ATTR void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1) { HUB75_S3_WRITE_HOOK(y) /* (the S3) */
     if (s_panel == nullptr || rgb_row == nullptr || y >= s_height) {
         return;
     }
@@ -535,7 +535,7 @@ extern "C" IRAM_ATTR void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, ui
  * instead of two. For frames that repaint whole rows -- the first of every
  * file, scrollers. Falls back to two spans when the fast path is off.
  */
-extern "C" IRAM_ATTR void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y) {
+extern "C" IRAM_ATTR void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y) { HUB75_S3_WRITE_HOOK(y) /* (the S3) */
     if (s_panel == nullptr || top_row == nullptr || bottom_row == nullptr) {
         return;
     }
@@ -593,7 +593,7 @@ extern "C" uint32_t hub75_fb_checksum(void) {
     return h;
 }
 
-extern "C" void hub75_flip(void) {
+extern "C" void hub75_flip(void) { HUB75_S3_FLIP_HOOK /* (the S3: hub75_shim_s3.inc) */
     if (s_panel != nullptr) {
         s_panel->flipDMABuffer();
     }
@@ -691,16 +691,363 @@ extern "C" void hub75_set_power_safe(bool on) {
     s_power_safe = on;
 }
 
-static bool s3_init_hook(const hub75_cfg_t *cfg) {
-    if (cfg == nullptr || s_panel != nullptr) {
+/* --- Double buffering (hub75_set_buffers; hub75_shim.h) --- */
+
+/* MatrixPanel_I2S_DMA::frame_buffer and ::back_buffer_id, and
+ * Bus_Parallel16::_dmadesc_b (all private), by the idiom above. */
+struct FrameBufTag {
+    typedef frameStruct (MatrixPanel_I2S_DMA::*type)[2];
+    friend type get(FrameBufTag);
+};
+template struct Rob<FrameBufTag, &MatrixPanel_I2S_DMA::frame_buffer>;
+struct BackIdTag {
+    typedef volatile int MatrixPanel_I2S_DMA::*type;
+    friend type get(BackIdTag);
+};
+template struct Rob<BackIdTag, &MatrixPanel_I2S_DMA::back_buffer_id>;
+struct DescBTag {
+    typedef HUB75_DMA_DESCRIPTOR_T *Bus_Parallel16::*type;
+    friend type get(DescBTag);
+};
+template struct Rob<DescBTag, &Bus_Parallel16::_dmadesc_b>;
+
+/* Internal heap the second frame buffer and ring must leave free at
+ * hub75_init (WiFi, lwIP, httpd, the decoders and the Formula compiler come
+ * after it): below this the panel runs single-buffered and the beam is
+ * raced. */
+#define S3_DBUF_KEEP (96 * 1024)
+
+/* What hub75_set_buffers asked (0: the build's default). */
+static uint8_t s_buffers_asked = 0;
+/* The build's default: double-buffered where WiFi's and lwIP's buffers go to
+ * PSRAM first (the carrier image's all-psram switches: ~110-150 KB of the
+ * internal heap free while playing, single-buffered, on the bench), single
+ * where they stay in internal RAM (the plain S3 build: ~38 KB free while
+ * playing single-buffered with no WiFi, in the emulator; the second buffer
+ * and ring take ~38 KB of it). */
+#if CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP
+#define S3_BUILD_BUFFERS 2
+#else
+#define S3_BUILD_BUFFERS 1
+#endif
+/* A nested hub75_init (the hook's double-buffered try) is running. */
+static bool s_in_init = false;
+/* Running double-buffered: set once at init, never cleared. */
+static bool s_dbuf = false;
+/* The two descriptor rings' first descriptor (0: frame_buffer[0]'s, the
+ * library's _dmadesc_a; 1: _dmadesc_b's), their length. */
+static uint32_t s_ring[2] = {0, 0};
+static uint32_t s_ring_count = 0;
+/* The ring the DMA shows, or was last asked to (the last flip's). */
+static uint8_t s_front = 0;
+/* A flip asked, its switch not seen yet. */
+static bool s_flip_pending = false;
+/* When the last flip was asked, and the us then left of the ring the DMA
+ * was in (its switch is due then). */
+static int64_t s_flip_at = 0;
+static uint32_t s_flip_left_us = 0;
+/* The descriptor the DMA was on at the flip (for the late line). */
+static uint32_t s_flip_idx = 0;
+/* Row pairs written since the last flip, and those to copy across once its
+ * switch is seen (bit p: pair p). */
+static uint32_t s_written = 0;
+static uint32_t s_copy = 0;
+static hub75_s3_dbuf_t s_db = {};
+
+extern "C" void hub75_set_buffers(uint8_t buffers) {
+    s_buffers_asked = buffers == 1 || buffers == 2 ? buffers : 0;
+}
+
+extern "C" void hub75_s3_dbuf(hub75_s3_dbuf_t *out) {
+    if (out != nullptr) {
+        *out = s_db;
+    }
+}
+
+static uint32_t s3_internal_free(void) {
+    return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+static uint32_t s3_internal_largest(void) {
+    return static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
+/* The LCD's GDMA channel (s_gdma_ch), from the panel's bus; -1 none. */
+static int s3_find_gdma(void) {
+    if (s_panel == nullptr) {
+        return -1;
+    }
+    Bus_Parallel16 &bus = s_panel->*get(BusTag());
+    const gdma_channel_handle_t chan = bus.*get(DmaChanTag());
+    int ch = -1;
+    if (chan == nullptr || gdma_get_channel_id(chan, &ch) != ESP_OK || ch < 0 ||
+        ch >= SOC_GDMA_PAIRS_PER_GROUP) {
+        return -1;
+    }
+    s_gdma_ch = ch;
+    return ch;
+}
+
+/* Which ring GDMA's OUT_DSCR is in (0, 1; -1 neither, or no channel), and
+ * the descriptor's index in it. In IRAM: every write calls it. */
+static IRAM_ATTR int s3_ring_now(uint32_t *idx) {
+    if (s_gdma_ch < 0 || s_ring_count == 0) {
+        return -1;
+    }
+    const uint32_t reg = GDMA.channel[s_gdma_ch].out.dscr;
+    for (int r = 0; r < 2; r++) {
+        const uint32_t i = (reg - s_ring[r]) / sizeof(HUB75_DMA_DESCRIPTOR_T);
+        if (i < s_ring_count) {
+            *idx = i;
+            return r;
+        }
+    }
+    return -1;
+}
+
+/*
+ * The last flip's switch: wait until OUT_DSCR is in the ring it asked for
+ * (a tick asleep at a time while the old ring has more than 1.5 ms to go,
+ * else spinning), and past that ring's first two descriptors (OUT_DSCR
+ * leads the pins: the old ring's last bytes may still be on their way out
+ * when it already names the new one: at a later lap's wrap this costs a
+ * spin of two descriptors too). Late: the DMA was seen still in the old ring
+ * more than 1 ms past the end of the refresh the flip was asked in. Then the pairs the flip's frame wrote
+ * are copied from the new front buffer into the new back one, which held the
+ * frame before. Given up (counted) 3 refreshes after the flip; at once if
+ * the DMA was stopped (hub75_blank). Returns the us waited (0: no wait).
+ */
+static uint32_t s3_resolve(void) {
+    const int64_t t0 = esp_timer_get_time();
+    const uint32_t per = s_db.refresh_us != 0 ? s_db.refresh_us : 20000;
+    int64_t give_up = s_flip_at + 3 * static_cast<int64_t>(per) + 2000;
+    if (give_up < t0 + 1000) {
+        give_up = t0 + 1000;
+    }
+    bool waited = false;
+    bool old_seen = false; /* the DMA seen still in the ring it was leaving */
+    bool seen = false;
+    int64_t now = t0;
+    while (!s_stopped) {
+        uint32_t idx = 0;
+        const int ring = s3_ring_now(&idx);
+        now = esp_timer_get_time();
+        if (ring == s_front && idx >= 2) {
+            seen = true;
+            break;
+        }
+        if (now > give_up) {
+            s_db.timeouts++;
+            break;
+        }
+        waited = true;
+        old_seen |= ring >= 0 && ring != s_front;
+        const uint32_t left = (ring >= 0 && ring != s_front) ? (s_ring_count - idx) * per / s_ring_count : 0;
+        if (left > 1500) {
+            vTaskDelay(1);
+        }
+    }
+    if (seen) {
+        s_db.switched++;
+        if (old_seen && now > s_flip_at + static_cast<int64_t>(s_flip_left_us) + 1000) {
+            // Asked in the ring's last two descriptors: the DMA may have
+            // read the last one's link already (a refresh more of the old
+            // frame, expected). Anywhere else it should not happen.
+            const bool wrap = s_flip_idx != UINT32_MAX && s_flip_idx + 2 >= s_ring_count;
+            if (wrap) {
+                s_db.late_wrap++;
+            } else {
+                s_db.late++;
+            }
+            if (s_db.late + s_db.late_wrap <= 8) {
+                ESP_LOGW(TAG, "panel: a flip's switch late: asked at descriptor %u of %u, due in %u us, seen after %u us",
+                         (unsigned)s_flip_idx, (unsigned)s_ring_count, (unsigned)s_flip_left_us,
+                         (unsigned)(now - s_flip_at));
+            }
+        }
+    }
+    const uint32_t copy = s_copy;
+    if (copy != 0 && !s_stopped) {
+        frameStruct *fbs = s_panel->*get(FrameBufTag());
+        const frameStruct &from = fbs[s_front];
+        frameStruct &to = fbs[s_front ^ 1];
+        const size_t rows = from.rowBits.size();
+        for (size_t p = 0; p < rows && p < 32; p++) {
+            if ((copy >> p) & 1U) {
+                memcpy(to.rowBits[p]->data, from.rowBits[p]->data, from.rowBits[p]->getColorDepthSize(false));
+                s_db.copied_pairs++;
+            }
+        }
+    }
+    s_copy = 0;
+    s_flip_pending = false;
+    if (!waited) {
+        return 0;
+    }
+    const uint32_t us = static_cast<uint32_t>(esp_timer_get_time() - t0);
+    s_db.waits++;
+    s_db.wait_us += us;
+    if (us > s_db.wait_max_us) {
+        s_db.wait_max_us = us;
+    }
+    return us;
+}
+
+extern "C" uint32_t hub75_s3_back_ready(void) {
+    if (!s_dbuf || !s_flip_pending) {
+        return 0;
+    }
+    return s3_resolve();
+}
+
+static IRAM_ATTR void s3_before_write(uint32_t row) {
+    if (!s_dbuf) {
+        return;
+    }
+    if (s_flip_pending) {
+        s3_resolve();
+    }
+    const uint32_t pairs = s_height / MATRIX_ROWS_IN_PARALLEL;
+    s_written |= row < s_height ? (1U << (row % pairs)) : (pairs >= 32 ? UINT32_MAX : (1U << pairs) - 1);
+    // The check the double buffering is for (the emulator lane's
+    // `back_hits`): the DMA must not be in the ring about to be written.
+    uint32_t idx = 0;
+    if (!s_stopped && s3_ring_now(&idx) == (s_front ^ 1)) {
+        s_db.back_hits++;
+    }
+}
+
+static bool s3_flip(void) {
+    if (!s_dbuf) {
+        return false; /* (single-buffered: the library's flip is a no-op) */
+    }
+    if (s_stopped) {
+        return true;
+    }
+    // Nothing written since the last flip (whose switch then is still due):
+    // nothing new to show, and flipping back would show the older frame.
+    if (s_flip_pending || s_written == 0) {
+        s_db.skipped++;
+        return true;
+    }
+    const uint8_t back = static_cast<uint8_t>(s_panel->*get(BackIdTag()) & 1);
+    uint32_t idx = 0;
+    const int ring = s3_ring_now(&idx);
+    s_flip_idx = ring >= 0 ? idx : UINT32_MAX;
+    s_flip_left_us = (ring >= 0 && s_db.refresh_us != 0)
+                         ? (s_ring_count - idx) * s_db.refresh_us / s_ring_count
+                         : s_db.refresh_us;
+    // The library's flip: the ring now shown ends into the back buffer's,
+    // which loops on itself; the library writes the other buffer from here.
+    s_panel->flipDMABuffer();
+    s_flip_at = esp_timer_get_time();
+    s_front = back;
+    s_flip_pending = true;
+    s_copy = s_written;
+    s_written = 0;
+    s_db.flips++;
+    return true;
+}
+
+/* The heap hub75_init's frame buffers and descriptors take, at most, for one
+ * buffer (before begin(), which says exactly: logged after). */
+static uint32_t s3_one_buffer_bytes(const hub75_cfg_t *cfg) {
+    const uint32_t width = static_cast<uint32_t>(cfg->mx_width) * cfg->chain_length;
+    const uint32_t rows = cfg->mx_height / MATRIX_ROWS_IN_PARALLEL;
+    const uint32_t fb = rows * width * PIXEL_COLOR_DEPTH_BITS * sizeof(ESP32_I2S_DMA_STORAGE_TYPE);
+    /* One descriptor a colour plane's pass, at most 2^(depth-1) passes a
+     * pair: 64 a pair is the default panel's 32 with room. */
+    const uint32_t desc = rows * 64 * sizeof(HUB75_DMA_DESCRIPTOR_T);
+    return fb + desc;
+}
+
+/* The double-buffered init: a nested hub75_init with double_buff, checked. */
+static bool s3_init_double(hub75_cfg_t *out) {
+    const uint32_t one = s3_one_buffer_bytes(out);
+    const uint32_t free_dma = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    const uint32_t largest = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    if (free_dma < 2 * one + S3_DBUF_KEEP || largest < one / 4) {
+        s_db.why = HUB75_S3_WHY_HEAP;
+        ESP_LOGW(TAG,
+                 "panel: single-buffered, the beam raced: double buffering needs up to %u B of internal DMA heap "
+                 "and %u B left after it, %u B free (largest block %u)",
+                 (unsigned)(2 * one), (unsigned)S3_DBUF_KEEP, (unsigned)free_dma, (unsigned)largest);
         return false;
     }
+    out->double_buff = true;
+    s_in_init = true;
+    const bool ok = hub75_init(out);
+    s_in_init = false;
+    out->double_buff = false;
+    if (!ok) {
+        s_db.why = HUB75_S3_WHY_BEGIN;
+        ESP_LOGE(TAG, "panel: the double-buffered start failed (internal heap %u B free): single-buffered, the beam raced",
+                 (unsigned)s3_internal_free());
+        return false;
+    }
+    Bus_Parallel16 &bus = s_panel->*get(BusTag());
+    HUB75_DMA_DESCRIPTOR_T *a = bus.*get(DescTag());
+    HUB75_DMA_DESCRIPTOR_T *b = bus.*get(DescBTag());
+    const uint32_t count = bus.*get(DescCountTag());
+    if (a == nullptr || b == nullptr || count == 0 || !s_panel->getCfg().double_buff || s3_find_gdma() < 0) {
+        // The library carries on without its second ring (its flip would
+        // then link to nothing): start again single-buffered. (The GDMA
+        // channel the first start took is not given back.)
+        s_db.why = HUB75_S3_WHY_RING;
+        ESP_LOGE(TAG, "panel: double-buffered start without a second descriptor ring or GDMA channel: "
+                      "single-buffered, the beam raced");
+        esp_unregister_shutdown_handler(blank_on_shutdown);
+        s_panel->stopDMAoutput();
+        delete s_panel;
+        s_panel = nullptr;
+        s_gdma_ch = -1;
+        return false;
+    }
+    s_ring[0] = reinterpret_cast<uint32_t>(a);
+    s_ring[1] = reinterpret_cast<uint32_t>(b);
+    s_ring_count = count;
+    frameStruct *fbs = s_panel->*get(FrameBufTag());
+    uint32_t fb_bytes = 0;
+    for (auto &r : fbs[0].rowBits) {
+        fb_bytes += static_cast<uint32_t>(r->getColorDepthSize(false));
+    }
+    s_db.fb_bytes = fb_bytes;
+    s_db.desc_bytes = count * sizeof(HUB75_DMA_DESCRIPTOR_T);
+    // begin() flipped once: the DMA loops on ring 0 and the library writes
+    // buffer 1.
+    s_front = 0;
+    s_written = 0;
+    s_dbuf = true;
+    s_db.buffers = 2;
+    s_db.why = HUB75_S3_WHY_OK;
+    return true;
+}
+
+static bool s3_init_hook(const hub75_cfg_t *cfg, hub75_cfg_t *out, bool *result) {
+    if (cfg == nullptr) {
+        *result = false;
+        return true;
+    }
+    *out = *cfg;
+    if (s_in_init || s_panel != nullptr) {
+        return false; /* (the nested try; or a second call: a no-op as ever) */
+    }
+    s_db.buffers = 1;
+    s_db.heap_before = s3_internal_free();
+    s_db.largest_before = s3_internal_largest();
     s_addr_pins[0] = cfg->a;
     s_addr_pins[1] = cfg->b;
     s_addr_pins[2] = cfg->c;
     s_addr_pins[3] = cfg->d;
     if (!s_power_safe) {
-        return false;
+        if ((s_buffers_asked != 0 ? s_buffers_asked : S3_BUILD_BUFFERS) < 2) {
+            s_db.why = s_buffers_asked != 0 ? HUB75_S3_WHY_ASKED : HUB75_S3_WHY_BUILD;
+            return false;
+        }
+        if (s3_init_double(out)) {
+            *result = true;
+            return true;
+        }
+        return false; /* (single-buffered: hub75_init's own body, with *out) */
     }
     // No driver, no DMA, and nothing driven into a panel that may have no
     // supply (the bench's brownout loops, 2026-11-13: a driven line into an
@@ -728,7 +1075,9 @@ static bool s3_init_hook(const hub75_cfg_t *cfg) {
         }
     }
     s_oe = cfg->oe;
+    s_db.why = HUB75_S3_WHY_NO_PANEL;
     ESP_LOGW(TAG, "power-safe: the panel driver is not started (every HUB75 pin an input, OE pulled up, nothing driven)");
+    *result = true;
     return true;
 }
 
@@ -837,9 +1186,67 @@ static void s3_pins_check(uint32_t per_row) {
     }
 }
 
+/* hub75_scan_init when double-buffered: no beam to race (hub75_scan_pos
+ * stays unknown), but the refresh is timed off ring 0, which the DMA loops
+ * until the first flip (four wraps, the shortest of three intervals), for
+ * the flips' timing; then the line the lanes and the bench read. */
+static void s3_dbuf_scan_init(void) {
+    int64_t wraps[4] = {0, 0, 0, 0};
+    int seen = 0;
+    uint32_t last = UINT32_MAX;
+    const int64_t give_up = esp_timer_get_time() + 150000;
+    while (seen < 4 && esp_timer_get_time() < give_up) {
+        uint32_t idx = 0;
+        if (s3_ring_now(&idx) != 0) {
+            continue;
+        }
+        if (last != UINT32_MAX && idx + s_ring_count / 2 < last) {
+            wraps[seen++] = esp_timer_get_time();
+        }
+        last = idx;
+    }
+    uint32_t period = 0;
+    if (seen == 4) {
+        period = UINT32_MAX;
+        for (int i = 1; i < 4; i++) {
+            const uint32_t d = static_cast<uint32_t>(wraps[i] - wraps[i - 1]);
+            period = d < period ? d : period;
+        }
+        const int calc = s_panel->calculated_refresh_rate;
+        const uint32_t expect = calc > 0 ? 1000000u / static_cast<uint32_t>(calc) : 0;
+        if (expect == 0 || period * 3 < expect * 2 || period > expect * 2) {
+            ESP_LOGW(TAG, "panel: refresh %u us measured, %u us expected: implausible, not used",
+                     (unsigned)period, (unsigned)expect);
+            period = 0;
+        }
+    } else {
+        ESP_LOGW(TAG, "panel: no refresh of ring 0 in 150 ms: flips timed out at 60 ms");
+    }
+    s_db.refresh_us = period;
+    ESP_LOGI(TAG,
+             "panel: double-buffered: 2 frame buffers of %u B and 2 descriptor rings of %u B (%u descriptors), "
+             "refresh %u us (GDMA channel %d; a flip's switch seen on OUT_DSCR): the beam is not raced; "
+             "internal heap %u B free (largest %u) before the driver, %u (%u) after",
+             (unsigned)s_db.fb_bytes, (unsigned)s_db.desc_bytes, (unsigned)s_ring_count, (unsigned)period,
+             s_gdma_ch, (unsigned)s_db.heap_before, (unsigned)s_db.largest_before, (unsigned)s_db.heap_after,
+             (unsigned)s_db.largest_after);
+}
+
 /* hub75_scan_init on the S3: the classic's layout check and wrap timing,
  * through the GDMA channel's register. */
 static void s3_scan_init(void) {
+    s_db.heap_after = s3_internal_free();
+    s_db.largest_after = s3_internal_largest();
+    if (s_dbuf) {
+        s3_dbuf_scan_init();
+        return;
+    }
+    ESP_LOGI(TAG, "panel: single-buffered (%s): internal heap %u B free (largest %u) before the driver, %u (%u) after",
+             s_db.why == HUB75_S3_WHY_ASKED  ? "asked"
+             : s_db.why == HUB75_S3_WHY_BUILD ? "the build's default: WiFi's buffers in internal RAM"
+                                              : "double buffering did not start",
+             (unsigned)s_db.heap_before, (unsigned)s_db.largest_before, (unsigned)s_db.heap_after,
+             (unsigned)s_db.largest_after);
     const uint16_t rows = static_cast<uint16_t>(s_height / MATRIX_ROWS_IN_PARALLEL);
     if (s_panel->getCfg().double_buff || rows == 0) {
         return;

@@ -116,6 +116,55 @@ NOCARD = [
 S3_SCAN = [("scan modelled", re.compile(r"hub75_shim: scan: \d+ descriptors, \d+ per row pair, refresh \d+ us"))]
 S3_PINS = [("address-pin check", re.compile(r"hub75_shim: scan: register OUT_STATE agrees with the address pins \d+/\d+"))]
 S3_SCAN_BAD = re.compile(r"scan: (not modelled|layout not modelled|no refresh|refresh \d+ us measured.*implausible|no GDMA channel)")
+# The S3 double-buffered (NVS `panel_bufs` 2 seeded: smoke, probe, power-safe; the carrier's own
+# default, the plain build's being single; firmware/src/s3panel.rs, hub75_shim.cpp's end): the start
+# line (the buffers, the rings, the refresh timed off ring 0, the heap before and after), and the
+# `s3panel:` line every 30 s with the flips' counters. Judged at the end (s3panel_checks): flips
+# made, each switch seen before the next (flips - switched <= 1: one may be pending), none timed
+# out, none seen late (an old frame shown a refresh longer; those asked in the ring's last two
+# descriptors, `at the wrap`, are allowed: the DMA may have read the link already), and `back hits` 0: no write found the
+# DMA in the buffer being written (the shim checks GDMA's OUT_DSCR at every write). A fallback to
+# single buffering, or a refresh not timed, fails at once. With --buffers 1 (nocard's default) the S3 runs single-buffered with the beam raced: the scan line as before, and a
+# double-buffered start line fails.
+S3_DBUF_LINE = re.compile(r"hub75_shim: panel: double-buffered: 2 frame buffers of (\d+) B and 2 descriptor rings of (\d+) B "
+                          r"\((\d+) descriptors\), refresh (\d+) us .*internal heap (\d+) B free \(largest (\d+)\) before the driver, "
+                          r"(\d+) \((\d+)\) after")
+S3_SINGLE_LINE = re.compile(r"hub75_shim: panel: single-buffered \(([^)]*)\): internal heap (\d+) B free \(largest (\d+)\) "
+                            r"before the driver, (\d+) \((\d+)\) after")
+S3_PANEL = re.compile(r"s3panel: buffers 2, flips (\d+), switched (\d+), skipped (\d+), waits (\d+) \((\d+) us in all, max (\d+)\), "
+                      r"late (\d+) \(at the wrap (\d+)\), timeouts (\d+), back hits (\d+), pairs copied (\d+)")
+S3_MEM = re.compile(r"s3mem: \S+ up (\d+) s: internal (\d+) B free, largest (\d+), lowest (\d+)")
+S3_DBUF = [("double-buffered", S3_DBUF_LINE),
+           ("flips made", re.compile(r"s3panel: buffers 2, flips [1-9]\d*,"))]
+S3_DBUF_BAD = re.compile(r"panel: (single-buffered|the double-buffered start failed|double-buffered start without|no refresh of ring 0|refresh \d+ us measured.*implausible)|s3panel: buffers 1")
+S3_SINGLE_BAD = re.compile(r"panel: double-buffered:|s3panel: buffers 2")
+
+
+def s3panel_checks(lines):
+    """The double-buffered S3's flip counters, over every `s3panel:` line: pass lines, or the
+    reason it fails."""
+    rows = [tuple(int(x) for x in m.groups()) for m in (S3_PANEL.search(l) for l in lines) if m]
+    if not rows or rows[-1][0] == 0:
+        return None, "no `s3panel: buffers 2` line with flips made"
+    for i, (flips, switched, skipped, waits, wait_us, wait_max, late, late_wrap, timeouts, hits, copied) in enumerate(rows):
+        if i and flips < rows[i - 1][0]:
+            return None, f"flips went down: {rows[i - 1][0]} -> {flips}"
+        if hits:
+            return None, f"{hits} writes found the DMA in the buffer being written (back hits)"
+        if timeouts:
+            return None, f"{timeouts} flips whose switch was never seen (timeouts)"
+        if late:
+            return None, f"{late} switches seen after the refresh their flip was due in (late: an old frame shown again)"
+        if not 0 <= flips - switched <= 1:
+            return None, f"flips {flips}, switches seen {switched}: more than the last one pending"
+        if switched and copied == 0:
+            return None, "switches seen but no row pair copied across"
+    if len(rows) < 2 or rows[-1][0] <= rows[0][0]:
+        return None, f"flips did not go on between the first and the last of {len(rows)} `s3panel:` lines"
+    f = rows[-1]
+    return [f"flips {f[0]}, switched {f[1]}, skipped {f[2]}, waits {f[3]} ({f[4]} us, max {f[5]}), late {f[6]} (at the wrap {f[7]}: "
+            f"asked in the ring's last descriptors, a refresh later, allowed), timeouts {f[8]}, back hits {f[9]}, pairs copied {f[10]} "
+            f"(over {len(rows)} lines)"], None
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
 # 60 after the warm-up (was 40): a sample's level depends on where in a GIF it
 # falls (~194, 199, 209 or 219 KB allocated in the census image), and with 40
@@ -193,6 +242,8 @@ def main():
     ap.add_argument("--no-card", action="store_true", help="probe: no card attached; judge the card-free probe (always so with --chip s3)")
     ap.add_argument("--jit-skips", type=int, default=0, help="probe --no-card: golden frames the JIT may skip for the probe's heap (default 0; the classic's no-card probe skips 2)")
     ap.add_argument("--vm-skips", type=int, default=0, help="probe: golden frames the VM may skip for the probe's heap (default 0; the classic's card probe skips 2: `big`)")
+    ap.add_argument("--buffers", type=int, choices=[1, 2], help="--chip s3: the panel's buffers (NVS `panel_bufs` seeded): smoke, probe and power-safe default 2, nocard 1 (the beam raced: its scan line and address-pin check)")
+    ap.add_argument("--nvs", action="append", default=[], metavar="KEY=VALUE", help="--chip s3 smoke: more NVS string keys seeded beside panel_bufs (e.g. boot_fx=@formula:starfield)")
     ap.add_argument("--replay", type=Path, help="judge a console log recorded before (the lane's own log) instead of running the emulator: the judges' red checks")
     a = ap.parse_args()
     if a.chip == "s3":
@@ -202,6 +253,8 @@ def main():
             sys.exit(f"run: --chip s3 runs nocard, probe, smoke and power-safe, not {a.mode} (rig and leak are not tried on the S3 yet; api needs an S3 bundle and updater)")
         if a.mode == "probe":
             a.no_card = True
+        if a.buffers is None:
+            a.buffers = 1 if a.mode == "nocard" else 2
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
@@ -228,12 +281,18 @@ def main():
         return power_safe(a, sim, rom, want_sha)
     if a.mode == "nocard":
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
-        a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None, extra={"boot_fx": "/formulas/x.psi"})
+        a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None,
+                                        extra={"boot_fx": "/formulas/x.psi", **({"panel_bufs": str(a.buffers)} if a.chip == "s3" else {})})
+    # (The S3's buffers always seeded: the plain S3 build's own default is single-buffered, its
+    # WiFi buffers being internal; the carrier's double.)
+    if a.mode == "smoke" and a.chip == "s3" and not a.replay:
+        a.image = api_lane.seeded_image(a.image, EMU_DIR / "smoke-seed", ssid=None, extra={"panel_bufs": str(a.buffers), **dict(kv.split("=", 1) for kv in a.nvs)})
     if a.mode == "probe" and a.no_card:
         # Offline (NVS `network` = `off`, as the installer's offline box
         # writes): with no card the probe runs at once, and the setup AP
         # starting beside it would take ~90 KB of the heap its goldens need.
-        a.image = api_lane.seeded_image(a.image, EMU_DIR / "probe-seed", ssid=None, extra={"network": "off"})
+        a.image = api_lane.seeded_image(a.image, EMU_DIR / "probe-seed", ssid=None,
+                                        extra={"network": "off", **({"panel_bufs": str(a.buffers)} if a.chip == "s3" else {})})
     if a.mode == "rig" and a.card == EMU_DIR / "card" / "sd.img":
         a.card = EMU_DIR / "card" / "rig.img"
     seconds = a.seconds or {"smoke": 60, "nocard": 40, "rig": 1800, "leak": 1500, "heapmap": 300}.get(a.mode, 400)
@@ -250,10 +309,13 @@ def main():
     print("emu:", " ".join(cmd), flush=True)
     print(f"emu: log {log}  (card {a.card or 'none'}; {seconds} emulated s, {wall} s wall limit)", flush=True)
 
-    smoke_want = SMOKE + (S3_SCAN if a.chip == "s3" else [])
-    nocard_want = NOCARD + (S3_SCAN + S3_PINS if a.chip == "s3" else [])
+    dbuf = a.chip == "s3" and a.buffers == 2
+    s3_scan = (S3_DBUF if dbuf else S3_SCAN) if a.chip == "s3" else []
+    smoke_want = SMOKE + s3_scan
+    nocard_want = NOCARD + (s3_scan + S3_PINS if a.chip == "s3" else [])
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
+    panel_lines = 0
     booted_sha = None
     golden = None
     bundled = None
@@ -300,6 +362,8 @@ def main():
                     failure = f"{name}: {line[:200]}"
             if a.chip == "s3" and a.mode in ("smoke", "nocard") and S3_SCAN_BAD.search(line):
                 failure = f"the scan is not modelled: {line[:200]}"
+            if a.chip == "s3" and a.mode in ("smoke", "nocard", "probe") and (S3_DBUF_BAD if dbuf else S3_SINGLE_BAD).search(line):
+                failure = f"not {'double' if dbuf else 'single'}-buffered as asked: {line[:200]}"
             if failure:
                 # The register dump and backtrace that follow, for the log.
                 for _ in range(40):
@@ -349,6 +413,12 @@ def main():
             elif a.mode == "smoke":
                 for name, rx in smoke_want:
                     if name not in seen and rx.search(line) and name != "GIFs from the playlist":
+                        # (Two `s3panel:` lines with flips, 30 s apart: the counters judged over a
+                        # while of play, the heap read in it.)
+                        if name == "flips made":
+                            panel_lines += 1
+                            if panel_lines < 2:
+                                continue
                         seen[name] = line
                 if SMOKE[4][1].search(line):
                     gifs += 1
@@ -431,6 +501,35 @@ def main():
             die(f"golden frames: {golden[1]} match, but the VM's {v_ok} and the kernels' {k_ok}")
         return (v_ok, v_skip, v_cases), (k_ok, k_vm, k_skip)
 
+    def s3_report():
+        """The S3's buffers: their checks (double-buffered) and the heap before and after the
+        driver started and during play (`s3mem` lines)."""
+        if a.chip != "s3":
+            return
+        if dbuf:
+            ok, why = s3panel_checks(lines)
+            if why:
+                die(why)
+            m = next((m for m in (S3_DBUF_LINE.search(l) for l in lines) if m), None)
+            fb, desc, n, refresh, hb, lb, ha, la = (int(x) for x in m.groups())
+            if refresh == 0:
+                die("double-buffered with no refresh timed")
+            print(f"pass  buffers 2: frame buffers 2 x {fb} B, rings 2 x {desc} B ({n} descriptors), refresh {refresh} us")
+            print(f"pass  {ok[0]}")
+        else:
+            m = next((m for m in (S3_SINGLE_LINE.search(l) for l in lines) if m), None)
+            if not m:
+                die("no `panel: single-buffered (asked)` line")
+            if m[1] != "asked":
+                die(f"single-buffered, but not as asked: {m[0][:200]}")
+            hb, lb, ha, la = (int(x) for x in m.groups()[1:])
+            print("pass  buffers 1 (asked): the beam raced")
+        print(f"      internal heap at the driver's start: {hb} B free (largest {lb}) before, {ha} ({la}) after: {hb - ha} B taken")
+        mem = [m for m in (S3_MEM.search(l) for l in lines) if m]
+        if mem:
+            print(f"      internal heap while playing (s3mem, {len(mem)} lines): last {mem[-1][2]} B free, largest {mem[-1][3]}, "
+                  f"lowest since boot {mem[-1][4]} (at {mem[-1][1]} s)")
+
     if failure:
         die(failure)
     if booted_sha is None:
@@ -477,6 +576,7 @@ def main():
             die(f"not seen within {seconds} emulated s / {wall} s wall: {missing}")
         for n, _ in nocard_want:
             print(f"pass  {n}: {seen[n][:170]}")
+        s3_report()
         if a.chip == "s3":
             print("      (the address-pin k/n below is meaningless in the emulator, which does not loop the panel's"
                   " output back to the pins; bench: the current register ~97%, one early ~95%, one late ~80%)")
@@ -491,6 +591,7 @@ def main():
             die(f"not seen within {seconds} emulated s / {wall} s wall: {missing or ''} (GIF starts {gifs}/{a.min_gifs})")
         for n, _ in smoke_want:
             print(f"pass  {n}: {seen[n][:170]}")
+        s3_report()
         print(f"pass  GIF starts: {gifs}")
         print(f"EMU_SMOKE_OK ({took:.0f} s wall)")
     else:
@@ -642,7 +743,7 @@ def power_safe(a, sim, rom, want_sha):
     if os.environ.get("EMU_API_NETNS") != "1":
         try:
             # Seeded before the namespace (its nvs_partition_gen needs nothing from it).
-            api_lane.seeded_image(a.image, EMU_DIR / "power-safe", extra={"ps_test": "4"})
+            api_lane.seeded_image(a.image, EMU_DIR / "power-safe", extra={"ps_test": "4", "panel_bufs": str(a.buffers)})
         except api_lane.LaneFail as e:
             sys.exit(f"EMU_POWER_SAFE_FAIL: {e}")
         if not shutil.which("unshare"):

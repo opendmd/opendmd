@@ -106,6 +106,7 @@ pub fn before_panel(reset: Reset, nvs: &Config) {
         },
     };
     log::info!("scan: the racer reads GDMA's {} ({from})", SCAN_REGS[src as usize].1);
+    crate::s3panel::before_panel(nvs);
     // SAFETY: plain flags the shim reads in hub75_scan_init, not yet run.
     unsafe {
         hub75::hub75_scan_set_source(src);
