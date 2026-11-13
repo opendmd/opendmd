@@ -169,7 +169,9 @@ make emu-s3-nocard emu-s3-probe   # the ESP32-S3 preview (VARIANT=s3, not releas
   panel GIFs that Create Art made from libretro-thumbnails **title
   screens**, credited ("Game title screens from libretro-thumbnails, made
   into panel GIFs with Create Art"). `tools/game-art.py` makes them into
-  gitignored `target/game-art/` for `make screenshots`. The GIFs themselves
+  gitignored `target/game-art/` for `make screenshots GAME_ART=1`; the
+  screenshots published now show our own Formulas instead, and carry no
+  such credit. The GIFs themselves
   are never committed, hosted or put on a published card; no box art or
   logos beyond what a title screen contains; never pack or card GIFs, and
   nothing from GifCities.
