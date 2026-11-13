@@ -9,13 +9,19 @@
 // Nothing loads until the page has (and the browser is idle); a still
 // gives way only once its first frame is drawn. A panel stops drawing
 // while it is off-screen or the tab is hidden. Nothing goes to the console.
+// A screenshot of the web app whose panel plays (`.pic[data-plays]`, with
+// `data-at`: where the panel is in the picture, in hundredths of its width
+// and height, tools/screenshots.py's measure) gets the same Formula drawn
+// over that part of it, and nothing is fetched for it until it is near the
+// screen. The screenshot itself is its still.
 
 import { psi, use, frameAt, panel, paint } from './psiled.js';
 
 const less = matchMedia('(prefers-reduced-motion: reduce)');
 const boxes = [...document.querySelectorAll('[data-formula]')].filter((b) => b.querySelector('.led'));
+const shots = [...document.querySelectorAll('.pic[data-plays][data-at]')];
 
-if (boxes.length && !less.matches) {
+if (boxes.length + shots.length && !less.matches) {
   const idle = () => (window.requestIdleCallback ? requestIdleCallback(go, { timeout: 2000 }) : setTimeout(go, 200));
   if (document.readyState === 'complete') idle(); else addEventListener('load', idle, { once: true });
 }
@@ -24,17 +30,27 @@ if (boxes.length && !less.matches) {
 // at once without compiling again every frame.
 // The hero's panel plays a little show instead (`data-show`: hero.js,
 // fetched only now).
-function go() { boxes.forEach((b, i) => (b.dataset.show ? import('./hero.js').then((m) => m.show(b, i, less)) : live(b, i)).catch(() => {})); }
+function go() {
+  boxes.forEach((b, i) => (b.dataset.show ? import('./hero.js').then((m) => m.show(b, i, less)) : live(b, i)).catch(() => {}));
+  shots.forEach((b, i) => {
+    const io = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting) return;
+      io.disconnect();
+      live(b, boxes.length + i).catch(() => {});
+    }, { rootMargin: '300px' });
+    io.observe(b);
+  });
+}
 
 async function live(box, slot) {
   const pic = box.querySelector('.led');
-  const [L, src] = await Promise.all([psi(slot), fetch(box.dataset.formula).then((r) => (r.ok ? r.text() : null))]);
+  const [L, src] = await Promise.all([psi(slot), fetch(box.dataset.plays || box.dataset.formula).then((r) => (r.ok ? r.text() : null))]);
   if (!src || less.matches || !use(L.P, src)) return;
   const info = L.P.info();
   // A formula that never repeats starts somewhere else each time, as on
   // the panel (Q16.16: 65,536 is 1).
   L.P.setSeed(Math.floor(Math.random() * 65536));
-  const x = panel(pic.querySelector('img')?.alt || '');
+  const x = panel(pic?.querySelector('img')?.alt || '');
   let ran = 0, prev = 0, last = -1, raf = 0, seen = true;
   const tick = (now) => {
     raf = 0;
@@ -46,7 +62,13 @@ async function live(box, slot) {
       last = ms;
       try { paint(L, info, x, ms); } catch { return; }
       if (!x.led.isConnected) {
-        pic.replaceWith(x.led);
+        if (pic) pic.replaceWith(x.led);
+        else {
+          // Over the screenshot's own panel (its alt text says what plays).
+          const [l, t, w, h] = box.dataset.at.split(' ');
+          Object.assign(x.led.style, { left: l + '%', top: t + '%', width: w + '%', height: h + '%' });
+          box.append(x.led);
+        }
         box.dataset.live = 'on';
       }
     }
