@@ -6,7 +6,7 @@
 
     uv run tools/site-scene.py [--preview DIR]      # make site-scene
 
-Everyone's scene is now `synth`, one of the styles tools/site-scene-alt.py
+Everyone's scene is now `shelf`, one of the styles tools/site-scene-alt.py
 draws; this one is shown to a viewer who asks for it (?scene=night,
 site/theme/SCENES.md).
 
