@@ -1,0 +1,55 @@
+/* The Studio's panels (panels.js), loaded with them, in the workspace only: the left column, a
+   panel's title bar (its name a button to drag or move by keys, fold, ⋮, close), floating panels
+   (left / top only: never a transform, filter or contain, which would take the notice with
+   them), the corner that resizes one, the menus. */
+.s-dl{grid-area:l;display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-height:0;overflow-y:auto;scrollbar-width:none}
+.s-dl>.s-panel:not(.s-tray){width:264px}
+.s-bench>.s-panel{width:100%}
+#studio .s-dock.empty,#studio[data-bare] .s-dock,#studio[data-bare] .s-panel,#studio .s-panel.shut{display:none}
+.s-dock.hot{outline:2px dashed var(--acc);outline-offset:2px;border-radius:12px}
+.s-stage[data-hot=l]{box-shadow:inset 4px 0 0 var(--acc)}
+.s-stage[data-hot=r]{box-shadow:inset -4px 0 0 var(--acc)}
+#studio .s-panel{position:relative;box-sizing:border-box;display:flex;flex-direction:column;flex:none;align-items:stretch;gap:0;min-width:0;min-height:0;max-height:none;
+padding:0;overflow:visible;border:1px solid var(--line);border-radius:12px;background:var(--bg2)}
+#studio .s-panel>.s-hd{flex:none;display:flex;align-items:center;gap:2px;min-height:34px;margin:0;padding:0 3px 0 4px;border-radius:11px 11px 0 0;background:var(--bg3);
+cursor:grab;user-select:none;touch-action:none}
+#studio .s-panel.col>.s-hd{border-radius:11px}
+#studio .s-panel>.s-hd h2{flex:0 1 auto;min-width:0;font:600 15px/1 var(--display)}
+.s-grip{display:block;max-width:100%;padding:6px;border:0;border-radius:6px;background:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:inherit;touch-action:none}
+.s-grip:hover{background:var(--bg2)}
+#studio .s-panel>.s-hd .s-pill{height:26px;padding:0 9px;font-size:13px;background:var(--bg2)}
+#studio .s-panel>.s-hd .s-pri{background:var(--acc)}
+#studio .s-panel>.s-hd .s-used{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.s-pbtn{flex:none;display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:none;color:var(--mut);font-size:15px!important;line-height:1}
+.s-pbtn:hover{background:var(--bg2);color:var(--fg)}
+.s-pb{flex:1 1 auto;min-height:0;padding:8px 10px 10px;overflow:auto;scrollbar-width:thin}
+#studio .s-panel.col>.s-pb,.s-rsz{display:none}
+/* Floating: over the stage, the front one on top (z-index 15 to 19, under the menus and the notice) */
+#studio .s-panel.float{position:fixed;z-index:10;box-shadow:0 14px 36px rgba(0,0,0,.24),0 0 0 1px rgba(0,0,0,.04)}
+#studio .s-panel.drag{opacity:.92;box-shadow:0 22px 50px rgba(0,0,0,.34)}
+#studio .s-panel.drag>.s-hd{cursor:grabbing}
+#studio[data-drawing] .s-panel.float{opacity:.3;pointer-events:none}
+#studio .s-panel.float>.s-rsz{position:absolute;right:0;bottom:0;display:block;width:18px;height:18px;padding:0;border:0;border-radius:0 0 11px 0;cursor:nwse-resize;touch-action:none;
+background:linear-gradient(135deg,transparent 52%,var(--mut) 52% 60%,transparent 60% 70%,var(--mut) 70% 78%,transparent 78%)}
+#studio .s-panel.float.col>.s-rsz{display:none}
+/* Tools: a column docked left (its name a grip of dots); wider elsewhere, the tools in rows */
+#studio .s-tray.s-panel{max-height:100%;overflow:visible;width:auto}
+.s-dl>.s-tray.s-panel{width:54px!important}
+.s-tray>.s-pb{display:flex;flex-direction:column;align-items:center;gap:8px;padding:5px 4px 8px;scrollbar-width:none}
+.s-tray>.s-pb>.s-sp{display:none}
+#studio .s-tray>.s-hd{justify-content:space-between;padding:0 2px}
+.s-tray .s-grip{font:400 8px/1 var(--pixel);color:var(--mut)}
+.s-dl>.s-tray .s-grip{width:20px;height:26px;font-size:0;background:radial-gradient(circle,var(--mut) 1px,transparent 1.5px) 50% 50%/5px 5px}
+.s-tray .s-pbtn{width:22px}
+#studio .s-tray.float>.s-pb,#studio .s-bench>.s-tray>.s-pb{flex-flow:row wrap;justify-content:center;align-content:flex-start}
+#studio .s-tray.float .s-tools,#studio .s-bench>.s-tray .s-tools{flex-flow:row wrap;justify-content:center}
+@media (pointer:coarse){#studio .s-panel>.s-hd{min-height:44px}.s-pbtn{width:36px;height:36px}.s-grip{padding:12px 6px}#studio .s-panel.float>.s-rsz{width:32px;height:32px}}
+/* The Panels menu and a panel's ⋮ menu */
+.s-pmenu{position:fixed;z-index:40;display:grid;gap:2px;min-width:200px;padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--bg2);color:var(--fg);
+font-size:14px;box-shadow:0 14px 36px rgba(0,0,0,.24)}
+.s-pmenu button{display:flex;align-items:center;gap:9px;height:32px;padding:0 10px;border:0;border-radius:7px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.s-pmenu button:hover,.s-pmenu button:focus{background:var(--bg3)}
+.s-pmenu button:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+.s-pmenu i{width:14px;font-style:normal;font-weight:700;color:var(--ink)}
+.s-pmenu kbd{margin-left:auto;font:400 8px/1 var(--pixel);color:var(--mut)}
+.s-pmenu hr{width:100%;margin:4px 0;border:0;border-top:1px solid var(--line)}

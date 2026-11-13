@@ -41,6 +41,8 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 const notes = $('s-notes'), root = $('studio'), cv = $('s-canvas'), ctx = cv.getContext('2d'), work = $('s-work'), scroll = $('s-scroll');
 const coarse = matchMedia('(pointer: coarse)').matches;
+// The workspace (studio.css): a window wide and tall enough for the canvas, the tools and the bench on one screen.
+const ws = matchMedia('(min-width:1000px) and (min-height:620px)');
 
 let store = null;
 let rec = null;            // the piece's record (its pixels packed only when saved)
@@ -277,7 +279,7 @@ function drop() {
 }
 function done() { drop(); sel = null; showSel(); paint(); }
 function act(a) {
-  if (a === 'stamp') { if (sel) stamps().then((m) => m.saveSel(), () => {}); return; }
+  if (a === 'stamp') { if (sel) { panelsMod?.then((m) => m.show('stamps'), () => {}); stamps().then((m) => m.saveSel(), () => {}); } return; }
   if (a === 'paste') {
     if (!clip) return;
     fx.stop?.();
@@ -449,6 +451,8 @@ const up = (e) => {
 };
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
+// A stroke, shape or move in progress: floating panels fade and let the pointer through (panels.css).
+for (const t of ['pointerdown', 'pointerup', 'pointercancel']) cv.addEventListener(t, () => root.toggleAttribute('data-drawing', !!drag));
 cv.addEventListener('pointerleave', () => { $('s-cursor').hidden = true; $('s-xy').innerHTML = 'X <b>–</b> Y <b>–</b>'; });
 function hover([x, y]) {
   const c = $('s-cursor');
@@ -481,7 +485,7 @@ function pinch() {
 function useTool(t, fill) {
   if (t !== 'select' && sel) done();
   if (tool === 'stamp' && t !== 'stamp') fx.unstamp?.();
-  if (t === 'stamp') stamps().then((m) => m.tool(), () => {});
+  if (t === 'stamp') { panelsMod?.then((m) => m.show('stamps'), () => {}); stamps().then((m) => m.tool(), () => {}); }
   if (t !== 'pick') prev = t;
   if (fill !== undefined) filled[t] = fill;
   else if (t === tool && t in filled) filled[t] = !filled[t]; // the shape's button again: edge <-> filled
@@ -513,8 +517,14 @@ function useSize(n) {
 // --- the view: zoom (Fit, then whole steps), the grid, the seam, LEDs ---
 let fitScale = () => 1;
 function layout() {
-  const cs = getComputedStyle(scroll);
-  const avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+  const cs = getComputedStyle(scroll), bench = root.querySelector('.s-bench');
+  let avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+  // The workspace: the bench (240 to 300 px wide) gives the canvas what it needs for a whole step at Fit.
+  if (ws.matches && bench.offsetWidth) {
+    const room = avail + bench.offsetWidth - 240, d = Math.min(300, 240 + room - Math.max(1, Math.min(8, Math.floor(room / W))) * W);
+    root.style.setProperty('--dock', `${d}px`);
+    avail = room + 240 - d;
+  }
   fitScale = () => Math.max(1, avail / W);
   let s = zoom ? ZOOMS[zoom - 1] : fitScale();
   if (!zoom && s > 4) s = Math.min(8, Math.floor(s));
@@ -581,8 +591,10 @@ function say(text, o) {
   }
   noteBy = [...document.querySelectorAll('dialog[open]')].pop() || null;
   const at = o.at || clicked, home = noteBy || $('studio');
-  noteAt = at && home.contains(at) ? at : noteBy?.querySelector('.s-hd') || null;
+  noteAt = at && home.contains(at) && at.getClientRects().length ? at : noteBy?.querySelector('.s-hd') || null; // (no box: in a closed or folded panel)
   if (noteAt) noteAt.after(notes); else $('main').append(notes);
+  const fp = noteAt?.closest('.s-panel.float');
+  if (fp) panelsMod?.then((m) => { m.raise(fp.dataset.panel); place(); }, () => {}); // (in front of any other panel)
   n.dataset.kind = kind;
   m.textContent = text;
   for (const a of o.acts || []) { const b = el('button', 's-pill', a.label); b.type = 'button'; b.onclick = () => { say(''); a.go(); }; m.append(' ', b); }
@@ -603,13 +615,25 @@ function place() {
   const n = notes.querySelector('#s-note');
   if (n.hidden) return;
   const v = window.visualViewport, vw = v?.width ?? innerWidth, vh = v?.height ?? innerHeight, ox = v?.offsetLeft ?? 0, oy = v?.offsetTop ?? 0;
-  const a = noteAt?.isConnected && noteAt.getClientRects().length ? noteAt.getBoundingClientRect() : null, w = n.offsetWidth, h = n.offsetHeight;
+  let a = noteAt?.isConnected && noteAt.getClientRects().length ? noteAt.getBoundingClientRect() : null;
+  const w = n.offsetWidth, h = n.offsetHeight;
+  // A control scrolled out of its panel's body or its column is not in view.
+  for (let e = a && noteAt.parentElement; e && e !== root; e = e.parentElement) {
+    if (!e.matches('.s-pb, .s-bench, .s-dl')) continue;
+    const b = e.getBoundingClientRect();
+    if (a.bottom <= b.top || a.top >= b.bottom) { a = null; break; }
+  }
   const under = a && a.top >= oy && a.bottom + h + 16 <= oy + vh;
   const x = under ? Math.min(Math.max(ox + 8, a.left + a.width / 2 - w / 2), ox + vw - w - 8) : ox + Math.max(8, (vw - w) / 2);
   n.style.left = `${x}px`;
   n.style.top = `${under ? a.bottom + 8 : oy + 12}px`;
   n.style.setProperty('--ax', `${under ? Math.min(Math.max(16, a.left + a.width / 2 - x), w - 16) : -99}px`);
   n.dataset.at = under ? 'control' : 'top';
+}
+// The notice's control gone from view (its panel closed, folded or hidden): the notice to the top.
+function rehome() {
+  if (noteAt && !noteAt.getClientRects().length && !noteBy) { $('main').append(notes); noteAt = null; }
+  place();
 }
 // A sentence with one thing to do about it.
 function offer(text, label, go) { say(text, { acts: [{ label, go }] }); }
@@ -925,6 +949,9 @@ const SHARE = false;
 let linkMod = null;
 const link = lazy(() => linkMod, (v) => (linkMod = v), 'link');
 const pasteMod = lazy(() => pasteMod_, (v) => (pasteMod_ = v), 'paste');
+// The workspace's panels (panels.js): loaded once the window is the workspace's size, before the page shows.
+let panelsMod = null;
+const panels = lazy(() => panelsMod, (v) => (panelsMod = v), 'panels');
 // The Library is a view of this page (#library): the editor comes back when
 // it is left. Import (#import, maybe ?url=, ?q=&platform=, ?shared=1) is a sheet over the editor.
 function route() {
@@ -946,6 +973,8 @@ const studio = {
   // for out.js
   get doc() { return D; }, get rec() { return rec; }, get kept() { return kept; }, get saved() { return root.dataset.saved; },
   root, listOf, done, freeze, snaps, status, nameNow,
+  // for panels.js
+  ls, place, rehome,
   // for frames.js
   fx, after, paint, buttons, showSel, get sel() { return sel; }, get dragging() { return !!drag; },
   newPiece: piece, // a whole piece in (import, templates, files, links); piece() above is the open one's reference
@@ -1099,12 +1128,32 @@ async function main() {
   $('s-z-in').addEventListener('click', () => zoomBy(1));
   $('s-z-out').addEventListener('click', () => zoomBy(-1));
   new ResizeObserver(layout).observe(scroll);
+  // The workspace: zoom and the guides into the chin (view controls, beside PIXELS / LEDS), back to
+  // the tools below it; the Studio's top on the page, for its height.
+  const views = [$('s-z').parentNode, $('s-g-grid').parentNode];
+  const wsMode = () => {
+    if (ws.matches !== (views[0].parentNode === $('s-xy').parentNode)) {
+      if (ws.matches) $('s-xy').before(...views); else (root.querySelector('.s-tray>.s-pb') || root.querySelector('.s-tray')).append(...views);
+    }
+    root.style.setProperty('--top', `${root.getBoundingClientRect().top + scrollY}px`);
+  };
+  ws.addEventListener('change', wsMode);
+  ws.addEventListener('change', () => { if (ws.matches && !root.hasAttribute('aria-busy')) panels().catch(() => {}); });
+  if (ws.matches && ls.get('panels')) root.dataset.laid = ''; // a layout of the user's: not shown until it is in place
+  addEventListener('resize', wsMode);
+  wsMode();
   const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick', s: 'stamp' };
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
+  // The control a pointer focused (until focus moves by other means): Space there is Play, not a second press.
+  let poked = null;
+  document.addEventListener('pointerdown', (e) => { poked = e.target.closest?.('button, a[href], summary, [role=tab]') || null; }, true);
+  document.addEventListener('focusin', (e) => { if (e.target !== poked) poked = null; }, true);
   document.addEventListener('keydown', (e) => {
     // Not in a field, nor behind an open sheet (Send to panel): the piece there is the one going out.
     if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
+    // Space presses a control focused from the keyboard; one focused by a click is still Play's.
+    if (e.key === ' ' && e.target.closest('button, a[href], summary, [role=tab]') && e.target !== poked) return;
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
@@ -1113,6 +1162,7 @@ async function main() {
     else if (mod && k === 'a') { e.preventDefault(); useTool('select'); drop(); sel = { x: 0, y: 0, w: W, h: H }; showSel(); paint(); }
     else if (mod || e.altKey || drag) { if (k === 'shift' && shapes()) shape(drag.q, true); }
     else if (e.shiftKey && (k === 'h' || k === 'v') && sel) act(k === 'h' ? 'fliph' : 'flipv');
+    else if (k === 'h' && !e.shiftKey) panelsMod?.then((m) => m.toggle(), () => {}); // H: every panel hidden, or back
     else if (TOOLS[k]) useTool(TOOLS[k], TOOLS[k] in filled ? e.shiftKey : undefined);
     else if (k === 'd') useShade(T.SHADES[(T.SHADES.indexOf(shade) + 1) % T.SHADES.length]); // D cycles the shade
     else if (k === '1' || k === '2' || k === '3') useSize(+k);
@@ -1156,6 +1206,7 @@ async function main() {
   }
   if (!r || !await tryOpen(r)) await fresh();
   await drafts();
+  if (ws.matches) await panels().then((m) => m.ready, () => {});
   root.removeAttribute('aria-busy');
   route();
   // The starter palettes, once the page is up; read-only, as the starter pack lists them.
