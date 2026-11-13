@@ -7,6 +7,13 @@
 # level 7 is its highest threshold, ~2.80 V (sdkconfig.defaults, see
 # config.rs's brightness table), the S3's level 7 is its lowest, 2.44 V.
 # Level 4 (2.84 V) is the S3's nearest to the classic's 2.80 V.
+# Kept at 4 after the carrier bench (2026-11-13): its brownout loops came
+# from driving the HUB75 lines into an unpowered panel (the clone devkit's
+# 5V pin does not put out the USB 5 V, so the panel had no supply), and once
+# from a weak USB hub; at 2.84 V on a wall charger with the panel properly
+# powered it held under upload load. No WiFi TX power cap. A loop that does
+# happen is caught by the brownout-loop guard (src/s3board.rs: power-safe at
+# 3 brownouts in a row, the panel not started).
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=n
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_4=y
 

@@ -37,6 +37,9 @@ leak:  (an `emu-census` image, make emu-leak) the heap's census every 20 s: afte
 heapmap: (a `heapmap` image, src/heapmap.rs) run the whole --seconds (default 300) playing, then
        pass if the heap map's first report ended and GIFs started; prints EMU_HEAPMAP_OK and the
        `heapmap:` lines (tools/heapmap-report.py makes the tables from the log).
+power-safe: (--chip s3, the S3 nocard-test image, make emu-s3-power-safe) the brownout-loop guard:
+       three faked brownout resets in a row, the third boot power-safe (no panel, /api/status
+       reset_note says so), a restart after it back to normal (powersafe_lane.py); EMU_POWER_SAFE_OK.
 api:   (an `emu-census` image, make emu-api) WiFi credentials seeded into a copy of the image's NVS,
        the virtual AP, the guest's port 80 on 127.0.0.1, all inside a private network namespace
        (`unshare -rn`: nothing reaches a real network); the HTTP API driven from the host, two boots
@@ -101,6 +104,13 @@ NOCARD = [
     # NVS names a card Formula as the start-up show (seeded): with no card, the wordmark.
     ("start-up formula: the wordmark", re.compile(r"boot show: formula /formulas/x\.psi does not build \((the card was not ready in time|no card)\): the built-in show")),
 ]
+# The S3 (smoke and nocard): the beam's scan modelled through the LCD's GDMA channel
+# (hub75_scan_init: the layout check and four wraps timed, within 0.67-2x of the driver's
+# rate), and the nocard image's address-pin check of the four registers (bench and test
+# builds); a line saying the scan is not modelled fails at once.
+S3_SCAN = [("scan modelled", re.compile(r"hub75_shim: scan: \d+ descriptors, \d+ per row pair, refresh \d+ us"))]
+S3_PINS = [("address-pin check", re.compile(r"hub75_shim: scan: register OUT_STATE agrees with the address pins \d+/\d+"))]
+S3_SCAN_BAD = re.compile(r"scan: (not modelled|layout not modelled|no refresh|refresh \d+ us measured.*implausible|no GDMA channel)")
 CENSUS = re.compile(r"census: (\d+) blocks in use, (\d+) B allocated")
 # 60 after the warm-up (was 40): a sample's level depends on where in a GIF it
 # falls (~194, 199, 209 or 219 KB allocated in the census image), and with 40
@@ -152,7 +162,7 @@ PROBE_KEYS = re.compile(r"psi-probe: (paint: |settings file|raw reads|names file
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline"])
+    ap.add_argument("mode", choices=["smoke", "probe", "nocard", "rig", "leak", "heapmap", "api", "offline", "power-safe"])
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
     ap.add_argument("--log", type=Path)
@@ -183,15 +193,15 @@ def main():
     if a.chip == "s3":
         # rig and leak need S3 images of the ballast and census feature sets and have not been run
         # on the S3; api's OTA steps need an S3 bundle and updater, which do not exist yet.
-        if a.mode not in ("nocard", "probe", "smoke"):
-            sys.exit(f"run: --chip s3 runs nocard, probe and smoke, not {a.mode} (rig and leak are not tried on the S3 yet; api needs an S3 bundle and updater)")
+        if a.mode not in ("nocard", "probe", "smoke", "power-safe"):
+            sys.exit(f"run: --chip s3 runs nocard, probe, smoke and power-safe, not {a.mode} (rig and leak are not tried on the S3 yet; api needs an S3 bundle and updater)")
         if a.mode == "probe":
             a.no_card = True
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
     rom_elf = {"esp32": "esp32_rev300_rom.elf", "s3": "esp32s3_rev0_rom.elf"}[a.chip]
     rom = a.rom or next(iter(sorted(Path.home().glob(f".espressif/tools/esp-rom-elfs/*/{rom_elf}"))[::-1]), None)
-    if a.no_card or (a.mode == "nocard" and a.card == EMU_DIR / "card" / "sd.img"):
+    if a.no_card or (a.mode in ("nocard", "power-safe") and a.card == EMU_DIR / "card" / "sd.img"):
         # No card: the slot left empty (no --sd)
         a.card = None
     needed = [("emulator (run make emu-build)", sim), ("flash image", a.image), (f"{rom_elf} under ~/.espressif/tools/esp-rom-elfs/", rom)]
@@ -207,6 +217,10 @@ def main():
         return api(a, sim, rom, want_sha)
     if a.mode == "offline":
         return offline(a, sim, rom, want_sha)
+    if a.mode == "power-safe":
+        if a.chip != "s3":
+            sys.exit("run: power-safe is the ESP32-S3's lane (--chip s3)")
+        return power_safe(a, sim, rom, want_sha)
     if a.mode == "nocard":
         # The start-up show's Formula is on the card (`boot_fx` seeded, no WiFi).
         a.image = api_lane.seeded_image(a.image, EMU_DIR / "nocard-seed", ssid=None, extra={"boot_fx": "/formulas/x.psi"})
@@ -231,6 +245,8 @@ def main():
     print("emu:", " ".join(cmd), flush=True)
     print(f"emu: log {log}  (card {a.card or 'none'}; {seconds} emulated s, {wall} s wall limit)", flush=True)
 
+    smoke_want = SMOKE + (S3_SCAN if a.chip == "s3" else [])
+    nocard_want = NOCARD + (S3_SCAN + S3_PINS if a.chip == "s3" else [])
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
     booted_sha = None
@@ -277,6 +293,8 @@ def main():
             for rx, name in FAIL:
                 if rx.search(line):
                     failure = f"{name}: {line[:200]}"
+            if a.chip == "s3" and a.mode in ("smoke", "nocard") and S3_SCAN_BAD.search(line):
+                failure = f"the scan is not modelled: {line[:200]}"
             if failure:
                 # The register dump and backtrace that follow, for the log.
                 for _ in range(40):
@@ -318,19 +336,19 @@ def main():
                 if built and gifs >= a.min_gifs:
                     break
             elif a.mode == "nocard":
-                for name, rx in NOCARD:
+                for name, rx in nocard_want:
                     if name not in seen and rx.search(line):
                         seen[name] = line
-                if len(seen) == len(NOCARD):
+                if len(seen) == len(nocard_want):
                     break
             elif a.mode == "smoke":
-                for name, rx in SMOKE:
+                for name, rx in smoke_want:
                     if name not in seen and rx.search(line) and name != "GIFs from the playlist":
                         seen[name] = line
                 if SMOKE[4][1].search(line):
                     gifs += 1
                     seen.setdefault("GIFs from the playlist", line)
-                if len(seen) == len(SMOKE) and gifs >= a.min_gifs:
+                if len(seen) == len(smoke_want) and gifs >= a.min_gifs:
                     break
             else:
                 m = GOLDEN.search(line)
@@ -449,18 +467,22 @@ def main():
         print(f"EMU_RIG_OK ({took:.0f} s wall)")
         return
     if a.mode == "nocard":
-        missing = [n for n, _ in NOCARD if n not in seen]
+        missing = [n for n, _ in nocard_want if n not in seen]
         if missing:
             die(f"not seen within {seconds} emulated s / {wall} s wall: {missing}")
-        for n, _ in NOCARD:
+        for n, _ in nocard_want:
             print(f"pass  {n}: {seen[n][:170]}")
+        if a.chip == "s3":
+            for l in lines:
+                if "scan: register " in l or "scan: the racer reads" in l:
+                    print(f"      {l[:200]}")
         print(f"EMU_NOCARD_OK ({took:.0f} s wall)")
         return
     if a.mode == "smoke":
-        missing = [n for n, _ in SMOKE if n not in seen]
+        missing = [n for n, _ in smoke_want if n not in seen]
         if missing or gifs < a.min_gifs:
             die(f"not seen within {seconds} emulated s / {wall} s wall: {missing or ''} (GIF starts {gifs}/{a.min_gifs})")
-        for n, _ in SMOKE:
+        for n, _ in smoke_want:
             print(f"pass  {n}: {seen[n][:170]}")
         print(f"pass  GIF starts: {gifs}")
         print(f"EMU_SMOKE_OK ({took:.0f} s wall)")
@@ -604,6 +626,27 @@ def offline(a, sim, rom, want_sha):
         sys.exit("EMU_OFFLINE_FAIL: cannot bring up the loopback in the lane's network namespace")
     a.emu_dir, a.want_sha = EMU_DIR, want_sha
     sys.exit(offline_lane.run(a, sim, rom, FAIL, ANSI, BOOT_SHA))
+
+
+def power_safe(a, sim, rom, want_sha):
+    """The S3's power-safe lane (powersafe_lane.py), in its own network namespace like the API
+    lane's: the power-safe boot's /api/status is read from the host."""
+    import api_lane, powersafe_lane
+    if os.environ.get("EMU_API_NETNS") != "1":
+        try:
+            # Seeded before the namespace (its nvs_partition_gen needs nothing from it).
+            api_lane.seeded_image(a.image, EMU_DIR / "power-safe", extra={"ps_test": "3"})
+        except api_lane.LaneFail as e:
+            sys.exit(f"EMU_POWER_SAFE_FAIL: {e}")
+        if not shutil.which("unshare"):
+            sys.exit("EMU_POWER_SAFE_FAIL: no `unshare` (util-linux): the lane runs in its own network namespace")
+        env = {**os.environ, "EMU_API_NETNS": "1"}
+        os.execvpe("unshare", ["unshare", "--user", "--map-root-user", "--net", "--", sys.executable, __file__, *sys.argv[1:]], env)
+    ip = shutil.which("ip") or next((p for p in ("/usr/sbin/ip", "/sbin/ip") if os.path.exists(p)), None)
+    if not ip or subprocess.run([ip, "link", "set", "lo", "up"]).returncode != 0:
+        sys.exit("EMU_POWER_SAFE_FAIL: cannot bring up the loopback in the lane's network namespace")
+    a.emu_dir, a.want_sha = EMU_DIR, want_sha
+    sys.exit(powersafe_lane.run(a, sim, rom, FAIL))
 
 
 def api(a, sim, rom, want_sha):

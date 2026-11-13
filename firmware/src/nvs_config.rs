@@ -752,3 +752,12 @@ impl Config {
         }
     }
 }
+
+// The ESP32-S3 board's keys (`s3board`: `scan_reg`, and the power-safe
+// lane's `ps_test`): last in the file, so the classic's lines stay put.
+#[cfg(esp32s3)]
+impl Config {
+    pub fn s3_string(&self, key: &str) -> Option<String> {
+        self.get_string(key)
+    }
+}
