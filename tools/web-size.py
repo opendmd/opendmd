@@ -481,7 +481,11 @@ CREATE_USES = ("pkg/", "pkg-art/", "js/wasm.js", "js/web.js", "js/build.js", "js
 # one notice pinned in view (say/offer: under its control or at the top, in
 # the open sheet, Escape and Dismiss, two live regions, focus back):
 # ~50.4 KB gz as written.
-STUDIO_PAGE_GZ_BUDGET = 52 * 1024
+# 54 KB since studio-float F0 (2026-11-13, the owner's OK, site-only): the one-screen
+# workspace from 1000 x 620 up (FLOAT.md: the tools a column, the bench a scrolling column, the
+# frames under the stage, zoom and the guides in the chin, the bench's width set so Fit lands on
+# a whole step) and Space pressing a focused button rather than playing: ~52.9 KB gz as written.
+STUDIO_PAGE_GZ_BUDGET = 54 * 1024
 STUDIO_FIRST = ("index.html", "studio.css", "studio.js", "doc.js", "store.js", "palettes.js", "tools.js")
 # What the Studio's page imports only when it is first used: a line each
 # (S2 plan, 2026-11-11), name -> (gz budget, its files). Every file in
