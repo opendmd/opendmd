@@ -8770,6 +8770,42 @@ def psi_error_links(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def f_import(browser, base: str, errors: list[str]) -> None:
+    """/f/'s Picture… under the page's own CSP (blob: pictures only): a PNG
+    drawn here becomes a sprite after the header with its draw line, it
+    compiles, and one undo takes it out (js/fimport.js; the web app's smoke
+    has the rest)."""
+    import struct
+    import zlib
+
+    def png(w: int, h: int, px: list) -> bytes:
+        def chunk(t: bytes, d: bytes) -> bytes:
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+        raw = b"".join(b"\0" + bytes(c for p in px[y * w:(y + 1) * w] for c in p) for y in range(h))
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+    rows = ["..RR..", ".RRRR.", "RRBBRR", ".RRRR."]
+    col = {".": (0, 0, 0, 0), "R": (255, 0, 0, 255), "B": (0, 0, 255, 255)}
+    src = "loop 4\nhsv(x, 1, 1)"
+    page = new_page(browser, "laptop", errors)
+    open_text(page, base, src, "Picture")
+    page.set_input_files("#psi-pic-file", files=[{"name": "mine.png", "mimeType": "image/png", "buffer": png(6, 4, [col[c] for r in rows for c in r])}])
+    page.wait_for_selector("#psi-imp", timeout=10000)
+    page.select_option("#psi-imp-size", "as")
+    page.wait_for_timeout(300)
+    page.click("#psi-imp-go")
+    page.wait_for_selector("#psi-imp", state="detached", timeout=5000)
+    page.wait_for_timeout(400)
+    got = page.input_value("#psi-src")
+    want = "loop 4\nsprite pic {\n  key . 0, R #f00, B #00f\n" + "".join(f"  {r}\n" for r in rows) + "}\ndraw { spr(pic, 61, 14) }\nhsv(x, 1, 1)"
+    check(got == want and page.get_attribute("#psi-ed", "data-err") is None, f"/f/: a picture becomes a sprite under the page's CSP ({got!r})")
+    page.focus("#psi-src")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == src, "/f/: one undo takes the picture's sprite out")
+    page.context.close()
+
+
 def f_cost(browser, base: str, errors: list[str], shots: Path) -> None:
     """The site editor's What costs most and Tidy up (js/fcost.js, its wasm
     pkg-psi-lang): a heavy Formula gets a bar in the gutter beside its
@@ -9219,6 +9255,8 @@ def main() -> int:
         psi_error_links(browser, base, errors)
         print("What costs most and Tidy up (/f/, the demo)")
         f_cost(browser, base, errors, a.shots or ROOT / "target/site-smoke")
+        print("a sprite from a picture (/f/)")
+        f_import(browser, base, errors)
         print("the changelog")
         changelog(a.site)
         print("install page")

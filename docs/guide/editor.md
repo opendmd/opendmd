@@ -74,6 +74,29 @@ dimmed.
   change its size at the right and the bottom, and **+ Colour** adds a
   colour to the key. Each stroke goes into the text, and **Undo** takes it
   back.
+- **Make a sprite from a picture.** Press **Picture…** under the code,
+  or drop a picture on the code, or paste one into it. PNG, JPEG, GIF,
+  WebP, BMP and SVG work, up to 8 MB and 4,096 pixels a side. The picture
+  stays in your browser: it is never uploaded. Drag on it to crop it (on
+  a phone, with one finger), or move the crop with the arrow keys and
+  change its size with Alt and the arrows. Pick a size up to 64 × 32,
+  **As it is** keeps a small picture's own pixels, and **Fit** says
+  whether it is cropped to fill, fitted inside or stretched. **Smooth**
+  averages the pixels and **Sharp** keeps hard edges. The **Colours**
+  buttons choose 2, 4 or 16 colours and say what each costs: a sprite
+  takes some of the 1,024 numbers a Formula's tables and sprites share,
+  and more colours take more. **Palette** can hold the colours to the
+  panel's own or to one of the Formula's palettes; the sprite keeps the
+  colours themselves, so changing the palette later won't change it.
+  **Background** makes a background see-through, or turns the picture
+  into one colour. The line by the buttons says what the Formula would
+  use with it, or what stops it. **Add the sprite** puts it in after the
+  Formula's first lines, and a `draw { }` line that shows it in the middle
+  if the Formula has none; Ctrl+Z (⌘Z) takes it out again. With the
+  cursor in a sprite, or from **Replace from a picture…** in its picture
+  editor, the picture replaces that sprite and its key keeps the
+  characters it had for colours that stay. Use pictures you made or may
+  share.
 - **Edit a palette.** With the cursor in a `palette` line, press **Edit
   the palette**. A strip shows its colours as the panel reads them, from
   left to right. Tap a colour to change it, drag it to move it, give it a

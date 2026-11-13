@@ -6756,6 +6756,13 @@ pub struct Info {
     /// which 1.0 refused). A level only grows; a panel's web app says its
     /// own (`feat`, js/formulas.js).
     pub level: u8,
+    /// Numbers the store holds as laid out (tables, sprites and texts, each
+    /// at a multiple of 4, runs alike once): what [`MAX_TABLE`] bounds
+    /// (E924 counts the same way).
+    pub store: usize,
+    /// Paint colours in use (each `#hex` in `draw { }` or a sprite's key
+    /// once, a palette drawn with 32): of [`MAX_PAINT`]` - 1`.
+    pub paint: usize,
 }
 
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
@@ -7131,6 +7138,8 @@ fn finish(
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
     prog.paint[..p.paint.len()].copy_from_slice(&p.paint);
+    // (Counted now: the lists go before the layout.)
+    let (store, paint) = (p.tables.len(), p.paint.len().saturating_sub(1));
     if p.dag.forever {
         // E905 at the formula's own value that grows and varies across the
         // panel, when one is on the way.
@@ -7335,6 +7344,8 @@ fn finish(
         frame_values,
         layers: body.blocks,
         level: p.level,
+        store,
+        paint,
     })
 }
 
