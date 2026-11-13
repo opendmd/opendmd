@@ -797,6 +797,11 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
 # The home page (site/pages/home.html).
 HOME = "site/pages/home.html"
 HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
+# A screenshot whose panel plays: {{plays:NAME.png}} becomes the Formula on
+# that shot's panel and where the panel is in it (docs/images/panels.json,
+# tools/screenshots.py's measure), for home.js.
+HOME_PLAYS = re.compile(r"\{\{plays:([\w.-]+)\}\}")
+PANELS = "docs/images/panels.json"
 HOME_FORMULA = re.compile(r'data-(?:formula|look)="formulas/src/([\w.-]+\.psi)"')
 # The hero show's transitions (opendmd-core compositor.rs `Kind::name`), as
 # data-in="kind:ms" (ms 20..2000, as the panel clamps them).
@@ -819,6 +824,14 @@ def home(art: dict, assets: set[str]) -> str:
             return html.escape("art/" + items[name]["gif"])
         return led("", items[name], alt=None if alt is None else "")
     text = re.sub(r"\{\{(led|art):([\w-]+)(:)?\}\}", fill, text)
+    panels = json.loads((ROOT / PANELS).read_text(encoding="utf-8"))
+
+    def plays(m: re.Match) -> str:
+        p = panels.get(m.group(1))
+        if not p or not (ROOT / "opendmd-web/formulas" / p["formula"]).is_file() or f'src="docs/images/{m.group(1)}"' not in text:
+            raise SystemExit(f"{HOME}: {m.group(0)}: no such shot beside it, or no Formula for it in {PANELS} (make screenshots)")
+        return f'data-plays="formulas/src/{html.escape(p["formula"])}" data-at="{" ".join(f"{v:g}" for v in p["at"])}"'
+    text = HOME_PLAYS.sub(plays, text)
     for m in HOME_TRANSITION.finditer(text):
         if m.group(1) not in TRANSITIONS or not 20 <= int(m.group(2)) <= 2000:
             raise SystemExit(f"{HOME}: data-in={m.group(0)[8:]} is not one of the panel's transitions ({', '.join(TRANSITIONS)}) over 20..2000 ms")

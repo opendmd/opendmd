@@ -7807,7 +7807,7 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 want_scene = "den-phone.webp" if size == "phone" else "den.webp"
                 loaded = page.evaluate("fetch(%r).then(r => r.ok && r.headers.get('content-type'))" % want_scene)
                 check(want_scene in scene and loaded == "image/webp", f"home ({size}): the hero's scene is {want_scene} ({loaded})")
-                framed = page.evaluate("[document.querySelectorAll('section.focus figure > .frame > img').length, document.querySelectorAll('.door > .frame > .led').length]")
+                framed = page.evaluate("[document.querySelectorAll('section.focus figure > .frame > img, section.focus figure > .frame > .pic > img').length, document.querySelectorAll('.door > .frame > .led').length]")
                 check(framed == [5, 2], f"home ({size}): every screenshot and still panel in the frame {framed}")
                 wait_js(page, "document.fonts.check('600 40px Fraunces') && document.fonts.check('16px Silkscreen')")
                 faces = page.evaluate("['.hero h1', 'section.focus h2', '.hero .chip'].map(s => getComputedStyle(document.querySelector(s)).fontFamily.split(',')[0])")
@@ -7816,6 +7816,10 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 # screenshot of the web app that has loaded (they load lazily: each
                 # scrolled to): side by side on a laptop, every other one swapped,
                 # the words first on a phone.
+                # (Before that: the hero plays, so home.js has run, and the
+                # second band's panel, far below the screen, has not started.)
+                wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
+                lazy = page.evaluate("(p => !!p && !p.dataset.live && !p.querySelector('canvas'))(document.querySelector('section.focus.rev .pic[data-plays]'))")
                 page.eval_on_selector_all("section.focus figure", "els => els.forEach(f => f.scrollIntoView())")
                 wait_js(page, "[...document.querySelectorAll('section.focus img')].every(i => i.complete && i.naturalWidth > 0)")
                 page.evaluate("scrollTo(0, 0)")
@@ -7838,11 +7842,35 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                 # The hero's Formula plays live once the page has loaded (home.js).
                 wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
                 check(True, f"home ({size}): the hero plays its Formula live")
+                # The first two bands' screenshots have their panels playing: a
+                # published Formula each, not started while the band is far
+                # below the screen, then drawn over the screenshot's own
+                # panel (panels.json's box, inside the picture), its frames
+                # counting.
+                shots = page.evaluate("""[...document.querySelectorAll('section.focus .pic')].map(p => [p.querySelector('img').getAttribute('src'),
+                    p.dataset.plays, p.dataset.at])""")
+                want_shots = [[f"docs/images/{k}", f"formulas/src/{v['formula']}", " ".join(f"{n:g}" for n in v["at"])] for k, v in PANELS.items()]
+                check(sorted(shots) == sorted(want_shots) and all((site / s[1]).is_file() for s in shots) and lazy,
+                      f"home ({size}): two screenshots name the Formula on their panel and where it is; the second waits to be scrolled to ({lazy}) {shots}")
+                for src, plays, at in shots:
+                    pic = f"section.focus .pic:has(img[src='{src}'])"
+                    page.eval_on_selector(pic, "p => p.scrollIntoView({block: 'center'})")
+                    wait_js(page, f"+document.querySelector({pic!r}).querySelector('.led canvas')?.dataset.frames > 10")
+                    box = page.eval_on_selector(pic, """p => { const a = p.getBoundingClientRect(), b = p.querySelector('.led').getBoundingClientRect(), c = p.querySelector('canvas').getBoundingClientRect();
+                        return [(b.left - a.left) / a.width, (b.top - a.top) / a.height, b.width / a.width, b.height / a.height, c.width / b.width, c.height / b.height].map(v => Math.round(v * 1e4) / 100); }""")
+                    near = all(abs(g - w) < 0.6 for g, w in zip(box, [*map(float, at.split()), 100, 100]))
+                    lit = page.eval_on_selector(pic + " canvas", "c => { const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] + d[i+1] + d[i+2] > 90; return n; }")
+                    check(near and lit > 100 and page.eval_on_selector(pic, "p => p.dataset.live") == "on",
+                          f"home ({size}): {src.rsplit('/', 1)[-1]} plays {plays.rsplit('/', 1)[-1]} over its panel {box} ({lit} LEDs lit)")
+                page.evaluate("scrollTo(0, 0)")
                 if size == "phone":
                     hero = page.evaluate("document.querySelector('.hero-panel').getBoundingClientRect().top < document.querySelector('.hero h1').getBoundingClientRect().top")
                     check(hero, "home (phone): the panel comes first")
             page.context.close()
 
+
+# The home page's screenshots whose panels play (tools/screenshots.py writes it).
+PANELS = json.loads((ROOT / "docs/images/panels.json").read_text())
 
 # The scenes tools/site.py publishes (its SCENES, read from its source: the first is everyone's).
 SCENES = tuple(re.findall(r'"(\w+)"', re.search(r"^SCENES = \(([^)]*)\)", (ROOT / "tools/site.py").read_text(), re.M).group(1)))
@@ -7990,6 +8018,10 @@ def hero_show(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(2500)
     check(page.evaluate(f"!{hero}.querySelector('canvas') && !!{hero}.querySelector('picture.led img')"),
           "home: with less motion asked for, the hero keeps its still")
+    page.eval_on_selector_all("section.focus .pic", "els => els.forEach(p => p.scrollIntoView({block: 'center'}))")
+    page.wait_for_timeout(1500)
+    check(page.evaluate("(ps => ps.length == 2 && ps.every(p => !p.querySelector('canvas') && p.querySelector('img').naturalWidth > 0))([...document.querySelectorAll('section.focus .pic')])"),
+          "home: with less motion asked for, the screenshots stay stills")
     page.context.close()
 
 
