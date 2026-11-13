@@ -5557,8 +5557,8 @@ impl<'s> Parser<'s> {
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn last_line(&self, body: usize, end: usize) -> usize {
         let (mut last, mut depth, mut start) = (end, 0i32, true);
-        for k in body..end {
-            let t = self.toks[k].get().tok;
+        for (k, tk) in self.toks.iter().enumerate().take(end).skip(body) {
+            let t = tk.get().tok;
             if start && t != Tok::Newline {
                 last = k;
             }
@@ -8036,8 +8036,7 @@ fn fuse_compares(
     for tw in tweens {
         root(tw.w, &mut live, &mut uses);
     }
-    for k in 0..dag.conds.len() {
-        let c = dag.conds[k];
+    for &c in &dag.conds {
         root(c, &mut live, &mut uses);
     }
     for i in (0..n).rev() {
