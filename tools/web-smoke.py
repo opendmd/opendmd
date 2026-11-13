@@ -6788,7 +6788,11 @@ def psi_import_phone(browser, base: str, errors: list[str]) -> None:
     imp_open(page, imp_scene(), "scene.png")
     fit = page.evaluate("""() => { const c = document.querySelector('#psi-imp-src'), d = document.querySelector('#psi-imp'), r = c.getBoundingClientRect(), q = d.getBoundingClientRect();
         return [r.left >= q.left, r.right <= q.right, Math.abs(r.width / r.height - 2) < 0.05, d.scrollWidth <= d.clientWidth + 1]; }""")
-    check(all(fit), f"import (320 px phone): the picture fits the sheet at its shape, nothing wider ({fit})")
+    # (And in a wider font, as CI's runner draws it: DejaVu Sans, a size bigger.)
+    page.add_style_tag(content="#psi-imp, #psi-imp * { font-family: 'DejaVu Sans' !important }")
+    page.evaluate("() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    wide = page.evaluate("() => { const d = document.querySelector('#psi-imp'); return [d.scrollWidth, d.clientWidth]; }")
+    check(all(fit) and wide[0] <= wide[1] + 1, f"import (320 px phone): the picture fits the sheet at its shape, nothing wider, in a wider font too ({fit}, {wide})")
     page.keyboard.press("Escape")
     page.context.close()
     page = new_page(browser, "laptop", errors)
