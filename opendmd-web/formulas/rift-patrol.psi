@@ -1,0 +1,357 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Rift patrol"
+about "A lone ship on patrol through caverns, stations, moons and asteroid belts that never end"
+loop forever
+
+-- Rift patrol: a side-scrolling shooter that plays itself and never ends.
+-- Psi keeps nothing between frames, so nothing here is simulated: every
+-- frame is worked out from the time alone, and the game is built
+-- backwards so that it can't contradict itself.
+--  - The world is cut into segments of 64 px; a lane's middle and height
+--    at each segment's start come from hashes of its number, and the
+--    roof and floor are drawn either side of the lane. The ship flies the
+--    lane's middle (a little off it, by a slow noise), so it never needs
+--    to see the walls to miss them.
+--  - Zones of 16 segments (20 s): a cavern, a station, a moon's surface or
+--    an asteroid belt, with four segments of open space between two,
+--    where the colours slide from one zone's to the next's.
+--  - The time is cut into slots of 0.32 s, eight to an encounter: a wave
+--    of drones, darts swooping, guns on the ground, a pod to pick up at a
+--    zone's start and a hulk at its end. Each slot's shot is aimed at one
+--    target, and the target's path is written from the hit backwards: it
+--    is where the bolt arrives, when it arrives. So every bolt hits,
+--    every hit shows its blast, and a wreck stays where it fell.
+-- The ship, the enemies and everything else here are OpenDMD's own.
+
+-- Colours, 16 a zone, the nearer on higher entries: 1-3 the sky's bands,
+-- 4-5 the far gas, 6-8 the stars, 9-14 the ground (dark, mid, a glint,
+-- light, the lit edge, a lamp)
+palette cave = #000, #0a0616, #0c071a, #10081e, #1c1030, #2c1846, #505068, #a0a0c0,
+  #fff, #3a1c50, #6c3a80, #ff508c, #a868c8, #f0b0ff, #40e0ff, #000
+palette station = #000, #04081a, #050a20, #060c26, #0c1838, #142850, #505068, #a0a0c0,
+  #fff, #1c2c48, #34587c, #ffd040, #6c9ccc, #d0f4ff, #ff4040, #000
+palette planet = #000, #180c3c, #48185c, #a03858, #70306c, #d86858, #606078, #b0b0d0,
+  #fff, #301808, #7c3c14, #48c868, #cc7828, #ffc860, #fff0a0, #000
+palette rocks = #000, #020208, #03030c, #040410, #1c0c40, #48186c, #505068, #a0a0c0,
+  #fff, #222, #444, #888, #aaa, #ddd, #fff, #000
+
+-- The ground by its depth under the edge (row 0 the lit edge), 8 columns
+-- that repeat: rock, a station's hull, a moon's soil
+sprite ground {
+  key . 0, d 9, m 10, a 11, l 12, e 13, b 14
+  eeeeeeeeeeeeeeeeeeeeeeee
+  llellllelllllllllelllell
+  mlmmlmmmmmmammmmllmlmmlm
+  mmmmmmdmdddadddmmmmmdmmm
+  dmmamddmmmmmmmmmmdmmmmdm
+  mddmmmmdmddddddbdmmdmmmd
+  ddmddmdddmmmmmmmdddmdamd
+  dddddmdddddadddmddddddmd
+  dmddddddmmmammmmdddddddd
+  ddddmdddddddddddddmddddd
+  dddddddddmmmmmmbdddddmdd
+  dddddddddddddddddddddddd
+}
+sprite ship {
+  key . 0, W #fff, G #9ab0c8, D #506880, O #ff8c1a, B #20b8ff, Y #ffe040
+  ..GG..........
+  .OGWWG........
+  OOWWWWWWG.....
+  DGWWBBBWWWWWG.
+  OOWWWWWWWWWWWY
+  .DDGGWWWGD....
+  ..DD..GGD.....
+}
+sprite drone {
+  key . 0, R #ff3058, P #c01890, Y #ffe040, K #601030
+  ..RRR..
+  .RRRRR.
+  RRYYRRP
+  RYYKRPP
+  RRYYRRP
+  .PRRRP.
+  ..PPP..
+}
+sprite dart {
+  key . 0, G #50f070, D #189048, W #fff, Y #ffe040
+  ....GGGGD
+  ..GGWGDD.
+  YWWGGD...
+  ..GGWGDD.
+  ....GGGGD
+}
+sprite turret {
+  key . 0, S #9ab0c8, D #506880, R #ff3058, K #2c3448
+  S......
+  .SS....
+  ..SSRD.
+  .SSSSDD
+  SSSSSDD
+  KDDDDDK
+  KKDDDKK
+  KKDDDKK
+}
+sprite hulk {
+  key . 0, V #9050e0, P #5c2ca0, K #2c1458, O #ff8c1a, Y #ffe040, W #fff
+  .....VVVVVV.....
+  ...VVVPPPPVVVK..
+  .OVVPPPWWPPPVVK.
+  YOVPPWWYYWPPPVVK
+  YOVPPWYOOYPPPVVK
+  YOVPPWWYYWPPPVVK
+  .OVVPPPWWPPPVVK.
+  ...VVVPPPPVVVK..
+  .....VVVKKK.....
+}
+sprite rock {
+  key . 0, l #b8a898, m #7c6c60, d #483c38
+  ..lmm..
+  .llmmm.
+  lmmmdmm
+  lmmdmmd
+  mmmmmdd
+  .mmddd.
+  ..ddd..
+}
+sprite crag {
+  key . 0, l #b8a898, m #7c6c60, d #483c38
+  ...lllmm....
+  .llmmmmmmm..
+  llmmmdmmmmm.
+  lmmmmmmmdmmd
+  lmmdmmmmmmdd
+  mmmmmmdmmmdd
+  mmmdmmmmmdd.
+  .mmmmmmdddd.
+  ..mddddddd..
+  ....dddd....
+}
+sprite pod {
+  key . 0, W #fff, C #40e0ff, B #2060ff
+  .CCC.
+  CWWCB
+  CWCCB
+  CCCBB
+  .BBB.
+}
+sprite boom1 {
+  key . 0, W #fff, Y #ffe040
+  .......
+  ...Y...
+  ..YWY..
+  .YWWWY.
+  ..YWY..
+  ...Y...
+  .......
+}
+sprite boom2 {
+  key . 0, W #fff, Y #ffe040, O #ff8c1a
+  ..OYO..
+  .OYYYO.
+  OYYWYYO
+  YYW.WYY
+  OYYWYYO
+  .OYYYO.
+  ..OYO..
+}
+sprite boom3 {
+  key . 0, O #ff8c1a, R #d02818
+  .O...R.
+  R..O...
+  ......O
+  O.....R
+  ......O
+  .R..O..
+  ..O..R.
+}
+
+-- ---- Where the ship is ----
+-- Xs: the ship's place in the world, whole pixels, 50 a second (a new
+-- stretch each play, starting in a zone's open space); n0 its segment
+-- (the world starts over after 4,096: 87 minutes), f64 how far through
+-- it; s0 its slot (16 px, 0.32 s), fs how far through that. The ship is
+-- drawn at column 16.
+Xs = floor(t*50) + floor(seed*256)*1024 + 160
+n0 = floor(Xs/64)%4096
+us = Xs%64
+f64 = (us + frac(t*50)) / 64
+s0 = n0*4 + floor(us/16)
+fs = (us%16 + frac(t*50)) / 16
+-- the layers' offsets, each held to its pattern's length: the ground's
+-- grain, the far gas (a quarter as fast), the stars at three depths
+Xm = (Xs - 16) % 2048
+Xn = Xs%4096/4
+st0 = Xs%2048/16
+st1 = Xs%1024/8
+st2 = Xs%512/4
+
+-- ---- The world, from a segment's number ----
+-- zones of 16 segments: 0 a cavern, 1 a station, 2 a moon's surface, 3 an
+-- asteroid belt (caverns and stations on even zones)
+fn tz(z) = z%2*2 + (hash(z, 5 + seed) > .5)
+-- the lane's middle and half its height at a segment's start (open space
+-- for a zone's first four and all through a belt), eased between starts
+fn Cc(n) = 11 + hash(n, 1 + seed)*10
+fn Gh(n) = 9 + n%3*1.25
+fn Gc(n, ty) = (n%16 < 4) + (ty == 3) > 0 ? 40 : Gh(n)
+fn sm(u) = u * u * (3 - 2*u)
+fn cen(n, u) = mix(Cc(n), Cc(n + 1), sm(u))
+-- the ship's drift off the middle at a slot's start
+fn Of(s) = noise(s*.37, 3 + seed*40, 0)*3 - 1.5
+
+-- ---- The zone's colours, sliding in the open space between two ----
+zc = floor(n0/16)
+par = zc%2
+zw = clamp((n0%16 + f64 - .25) / 1.6, 0, 1)
+palette Z = tween(tween(cave, station, hash(zc - par, 5 + seed) > .5),
+  tween(planet, rocks, hash(zc - 1 + par, 5 + seed) > .5), par ? zw : 1 - zw)
+
+-- ---- The ship: the lane's middle, its drift eased from slot to slot ----
+shipY = cen(n0, f64) + mix(Of(s0), Of(s0 + 1), sm(fs))
+sy = floor(shipY + .5)
+flame = 2 + floor(hash(floor(t*25)%64, 1)*3)
+
+-- what each kind of target is: 0 drones in a wave (rocks in a belt), 1
+-- darts swooping, 2 a gun on the ground, 3 the hulk, 4 a pod to pick up.
+-- For each: how fast it comes (px a slot), the slots of its eight that
+-- shoot at it (as bits), how long the last shot flies (slots), how far it
+-- weaves, how much further in the open, how fast
+table K = 13, 20, 16, 7, 22,
+  62, 42, 17, 60, 8,
+  0, 0, .7125, 1.14, 0,
+  1.5, 1.5, 0, 1, 0,
+  2, 3, 0, 3, 0,
+  .17, .06, 0, .1, 0
+
+draw {
+  -- stars at three depths
+  for k < 24 {
+    dot((hash(k, 1)*128 - pick(k%3, st0, st1, st2)) % 128, hash(k, 2)*32, (6 + k%3) / 16)
+  }
+  -- a belt's rocks along the edges, one to a cell of 32 px
+  for k < 6 {
+    c = n0*2 + floor(us/32) + k - 1
+    hr = hash(c, 8 + seed)
+    rx = (c - n0*2)*32 - us + 16 + hr*18
+    if tz(floor(c/32)) == 3 {
+      spr(crag, rx, hr > .5 ? 28 + frac(hr*8)*3 : -6 - frac(hr*8)*3, floor(hr*32)%4)
+    }
+  }
+  -- every slot's shot and what it is aimed at, the furthest ahead first:
+  -- five slots ahead (what is coming) to three back (the wrecks)
+  for q < 9 {
+    d = 5 - q
+    s = s0 + d
+    age = fs - d
+    E = floor(s/8)
+    j = s%8
+    e8 = E%8
+    rk = tz(floor(E/8)) == 3
+    open = rk + (e8 < 2) > 0
+    kr = floor(hash(E, 3 + seed) * 3)
+    kind = e8 == 7 ? 3 : e8 == 0 ? 4 : kr * (1 - (kr == 2)*open)
+    r = kind == 3 ? s - j + 5 : s
+    hE = hash(E, 6 + seed)
+    ve = K[kind]
+    flr = kind < 2 ? (43 + hE*30) / 64 : K[10 + kind]
+    fl = flr + ve*(r - s)/64
+    -- the target, b slots before its end (held at this shot's hit), and
+    -- how long since the hit
+    since = max(age - fl, 0)
+    b = r - s + flr - min(age, fl)
+    ox = 23 + flr*64 + ve*b
+    wr = (f64*64 - 16 + ox)/64 - since/4
+    wave = (K[15 + kind] + rk*K[20 + kind]) * (hE > .5 ? 1 : -1) * sin(b * K[25 + kind])
+    oy = cen(n0 + floor(wr), frac(wr)) + (kind == 2 ? Gh(floor(r/4) + 1) - 3 : Of(r) + wave) + (kind == 3)*sin((j - 5) / 3)*3
+    sx = ox - since*16
+    act = bit(K[5 + kind], j)
+    bo = act * (kind < 4) * (age >= fl) ? since : 9
+    if act * (s == r) * (age < fl) {
+      if kind < 2 {
+        if kind < 1 {
+          if rk {
+            spr(rock, ox - 3, oy - 3, j%4)
+          } else {
+            spr(drone, ox - 3, oy - 3)
+          }
+        } else {
+          spr(dart, ox - 4, oy - 2)
+        }
+      } else {
+        if kind < 3 {
+          spr(turret, ox - 3, oy - 2)
+        } else {
+          if kind < 4 {
+            spr(hulk, ox - 8, oy - 4)
+          } else {
+            spr(pod, ox - 2, oy - 2)
+          }
+        }
+      }
+    } else {
+      -- the hit: a flash, a fireball, embers
+      if bo < .3 {
+        spr(boom1, sx - 3, oy - 3)
+      } else {
+        if bo < .8 {
+          spr(boom2, sx - 3, oy - 3)
+        } else {
+          if bo < 1.5 {
+            spr(boom3, sx - 3, oy - 3)
+          }
+        }
+      }
+    }
+    if act * (kind < 4) * (age >= 0) * (age < fl) {
+      -- the bolt on its way
+      p = age/fl
+      bx = mix(23, ox, p)
+      by = mix(sy, oy, p)
+      line(bx - 5, by, bx - 1, by, #40e0ff)
+      pset(bx, by, #fff)
+    }
+    if act * (kind == 4) * (age >= 0) * (age < 1) {
+      -- the pod, taken: a ring opening round the ship
+      rect(9 - age*7, sy - 4 - age*7, 23 + age*7, sy + 4 + age*7, #40e0ff)
+    }
+  }
+  line(9 - flame, sy, 8, sy, #ff8c1a)
+  pset(8, sy, #ffe040)
+  spr(ship, 9, sy - 3)
+}
+
+-- ---- Once a column: the lane's edges ----
+-- which segment the column is in and how far through; the roof's and the
+-- floor's edges, T and F: rough between a segment's ends and only ever
+-- back from the lane (a station's are squared off instead, a moon has no
+-- roof); which of the ground's columns
+wr = us - 16 + px
+rel = floor(wr/64)
+u = wr/64 - rel
+n = n0 + rel
+ty = tz(floor(n/16))
+k = sm(u)
+C = mix(Cc(n), Cc(n + 1), k)
+G = mix(Gc(n, ty), Gc(n + 1, ty), k)
+xw = Xm + px
+h = hash(floor(xw/2)%1024, 7)
+rough = sin(u*.5)
+jt = rough * (abs(tri(xw/32))*4 + h*2)
+jf = rough * (abs(tri(xw/16 + .3))*3 + frac(h*8)*2)
+T = ty == 1 ? floor((C - G) / 4) * 4 : ty == 2 ? -99 : C - G - jt
+F = ty == 1 ? 0 - floor((0 - C - G) / 4)*4 : C + G + jf
+texU = xw%8 + 8*ty
+-- the far gas: two waves across, each times a wave down
+A1 = sin((Xn + px) / 64)
+A2 = sin((Xn + px)/40.96 + .2)
+
+-- ---- Pixels: the sky's band, the gas (dithered), the stars, the ground ----
+bg = 1 + min(floor(py*3/32), 2)
+R1 = sin(py/37 + .1)
+R2 = cos(py/19)
+v = A1*R1 + A2*R2
+k = max(bg, pick(v*2 + (px + py)%2*.5, 0, 4, 5, 5, 5))
+k = max(k, ink(16))
+k = max(k, ground[texU, max(T - (1 + py), py - F)])
+pal(Z, k/15)

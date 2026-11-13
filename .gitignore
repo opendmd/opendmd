@@ -74,3 +74,6 @@ opendmd-web/experiments/art/cors/cors_results.json
 # CARD_ROOT, ...) and CLAUDE.local.md (notes Claude Code reads beside CLAUDE.md)
 /local.mk
 CLAUDE.local.md
+
+# `psi check FILE.psi` with no --out writes its contact sheet beside the file
+opendmd-*/formulas/*.png
