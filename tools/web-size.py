@@ -513,7 +513,9 @@ STUDIO_LAZY = {
     "import": (6 * 1024, ("import.js",)),        # Import…, a picture or video dropped, a paste too big to place, #import
     # panels 10 KB (studio-float F1, 2026-11-13; ~4 in FLOAT.md before the owner added resizing and hide-all): the
     # workspace's panels, docked or floating, dragged, moved by keys, resized, folded, closed, hidden all at once, kept.
-    "panels": (10 * 1024, ("panels.js", "panels.css")),  # a window of the workspace's size (1000 x 620 or more)
+    # 11 KB since studio-dark (2026-11-13, site-only, ~10.5 KB): the row of panels under the canvas, a third dock (its room
+    # worked out from the window, kept through a drag, its place in the menus).
+    "panels": (11 * 1024, ("panels.js", "panels.css")),  # a window of the workspace's size (1000 x 620 or more)
 }
 # Everything Import's frame fetches the first time it opens (S2 plan,
 # 2026-11-11, branch studio-s2-import): Create Art's page in its framed mode

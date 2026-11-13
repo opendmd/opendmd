@@ -524,14 +524,29 @@ On a window of 1000 × 620 or more the Studio is one screen (`studio.css`'s
 workspace): the piece bar on top, the tools a column on the left, the bench
 a column on the right, the canvas at the top of the stage between them and
 the frames under it; zoom and the guides sit in the chin under the canvas.
-`panels.js` (loaded at that size only, before the page shows) makes Tools,
-Colours, Layers, Stamps and This piece panels: each docks left or right or
-floats, dragged by its title bar (to the stage's edge to dock it), moved by
+Fit is the largest whole step, 16× at most, the stage has the width and
+the height for. Its colours are the site's theme tokens in both themes
+(`--bg2`, `--bg3`, `--line`, `--mut`, `--ink`), never a home-page scene's
+(`--den*`). `panels.js` (loaded at that size only, before the page shows)
+makes Tools, Colours, Layers, Stamps and This piece panels: each docks
+left, right or **under the canvas**, or floats. A window with 200 px to
+spare below the canvas at Fit and the frames, or with it once Fit gives up
+one step (never below 7×), makes the stage only as tall as the canvas and
+puts a row of panels under the frames, Layers and Stamps to begin with
+(by the window's size alone: 1440 × 820 and up, 1710 × 917, not
+1280 × 800, whose 7× leaves a little under 200 px). In a window without
+that room the row's panels sit in the right column, and their menus still
+say they are docked under the canvas. With the row, the selection bar
+lies over the bezel's chin, so picking Select moves nothing. A
+piece's colours past 23 are a grid that scrolls in itself, so Swatches and
+Layers stay in reach. A panel is dragged by its title bar (to the stage's
+edge or onto that row to dock it), moved by
 the arrow keys on its name, resized by its corner, folded, closed and shown
 again from the **Panels** menu; **H** (or PANELS in the chin) hides them
 all for the visit. The layout is kept in `localStorage`
-(`odmd.studio.panels`, version 1, one arrangement under 1600 px wide and
-one wider); the default and Reset are every panel docked. Below that size,
+(`odmd.studio.panels`, version 2, one arrangement under 1600 px wide and
+one wider; an older version's is dropped); the default and Reset are every
+panel docked. Below that size,
 and on a phone (its four tabs), the page is as before.
 
 The demo card is OpenDMD's own Formulas, recorded by the simulator, the
