@@ -160,7 +160,7 @@ function mountDevice(el) {
   // shownPath: what the preview follows (a path; for the panel's sent
   // Formula with its start and this page's sends, js/psishow.js);
   // fgen: the follow's generation (a Formula's frames stop when it moves on).
-  let shownPath = '', stopF = null, fgen = 0, restarts = 0, sentN = 0, frozen = null;
+  let shownPath = '', stopF = null, fgen = 0, restarts = 0, sentN = 0, frozen = null, run = {}, retry = null;
   const fkey = (p, np) => (p?.startsWith('@formula:~sent') ? `${p} ${np.ordinal} ${restarts} ${sentN} ${np.title}` : p);
   on('psisent', () => { sentN++; app.soon('now', 300); });
   const unfollow = () => { fgen++; stopF?.(); stopF = null; shownPath = ''; };
@@ -206,8 +206,18 @@ function mountDevice(el) {
     unfollow();
     shownPath = key;
     const g = fgen, alive = () => g === fgen;
-    cap.textContent = 'Loading…';
-    const again = (e) => { if (alive() && (e?.wait || unreachable(e))) { shownPath = ''; cap.textContent = e.wait ? 'Loading…' : UNREACH; return true; } };
+    // (Asked again: the caption stays as it was meanwhile.)
+    if (key !== retry) cap.textContent = 'Loading…';
+    retry = null;
+    // (Streaming, a status may be 3 s away: a sent Formula on its way asks sooner.)
+    const again = (e) => {
+      if (!alive() || !(e?.wait || unreachable(e))) return false;
+      shownPath = '';
+      retry = key;
+      cap.textContent = e.no ? NO_F : e.wait ? 'Loading…' : UNREACH;
+      if (e.wait && !e.no) app.soon('now', 300);
+      return true;
+    };
     if (isFormula(path)) {
       preview.clear();
       const no = () => { if (alive()) cap.textContent = NO_F; };
@@ -236,10 +246,13 @@ function mountDevice(el) {
     if (!app.status?.paused) { frozen = null; return e; }
     return (frozen ??= e);
   }
-  // When (page clock) the panel started `p`, or null.
+  // When (page clock) the panel started `p`, or null: its position at
+  // the rate measured (at most 0.9: early rather than late, its content
+  // running a little behind its clock) and its pauses.
   function start(p) {
     const off = offset();
-    return !last || last.path !== p || off == null ? null : last.t - off - last.elapsed / last.rate;
+    if (!last || last.path !== p || off == null) return null;
+    return last.t - off - last.elapsed / Math.min(0.9, last.rate) - run.paused - (run.at != null ? last.t - run.at : 0);
   }
 
   // One status sample, requested at local t0 and answered at t1; an event
@@ -260,7 +273,14 @@ function mountDevice(el) {
     const key = `${np.ordinal} ${np.path} ${s.paused}`;
     // (Its position going back with the same ordinal: a Formula retuned in
     // place, started over; measured afresh, never as a slow panel.)
+    // (A reply older than the last sample, held up: not the panel going back.)
+    if (last && s.t_ms < last.t && s.t_ms + 5000 >= last.t) return;
     if (base?.key !== key || np.elapsed_ms < base.e) { if (base?.key === key) restarts++; base = { key, t: s.t_ms, e: np.elapsed_ms }; }
+    // This run's pauses (ms; `at`: paused since, device clock), for start().
+    const rk = `${np.ordinal} ${np.path} ${restarts}`;
+    if (run.key !== rk) run = { key: rk, paused: 0, at: s.paused ? s.t_ms : null };
+    else if (s.paused && run.at == null) run.at = s.t_ms;
+    else if (!s.paused && run.at != null) { run.paused += s.t_ms - run.at; run.at = null; }
     const span = s.t_ms - base.t;
     const rate = span >= 2000 ? Math.min(1.1, Math.max(0.5, (np.elapsed_ms - base.e) / span)) : 1;
     last = { path: np.path, elapsed: np.elapsed_ms, t: s.t_ms, frame: np.frame, rate, paused: !!s.paused };

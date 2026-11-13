@@ -153,6 +153,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   on screen included; web-smoke holds the file with it where a check is
   about one file (Now's resume, a Formula shown over the panel's GIF), so
   the playlist moving on can't end what is being measured.
+- **`GET /mock/rate?r=X`** (mock only, 0.5..1.1, default 1): the file's
+  position runs X ms per clock ms from now on, as a real panel's runs a
+  little behind its clock; web-smoke's Now checks a sent Formula with it.
 - **`GET /mock/fail-move?after=N`** (mock only): after N more moves that
   work, the next `POST /api/files/move` is a 404 (as when the GIF went
   meanwhile), then moves work again; `after=-1` turns it off.
@@ -2528,7 +2531,7 @@ class Player:
         if not loop:
             return 0, 0
         at = self.frozen_at if self._frozen() else time.monotonic()
-        ms = int((at - self.file_t0) * 1000)
+        ms = int((at - self.file_t0) * 1000 * self.ctx.pos_rate)
         loops, rem = divmod(ms, loop)
         idx = 0
         while idx < len(delays) and rem >= delays[idx]:
@@ -2996,6 +2999,8 @@ class Context:
         self.fs = fs
         self.www_root = www_root
         self.dwell = dwell
+        # GET /mock/rate: content ms per clock ms (a real panel's runs a little behind its clock).
+        self.pos_rate = 1.0
         self.strict = strict
         self.settings = dict(DEFAULT_SETTINGS)
         self.panel = PanelTuner()
@@ -3424,6 +3429,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/mock/fail-move"), {"GET": self.h_mock_fail_move}),
                 (m_exact("/mock/refresh"), {"GET": self.h_mock_refresh}),
                 (m_exact("/mock/dwell"), {"GET": self.h_mock_dwell}),
+                (m_exact("/mock/rate"), {"GET": self.h_mock_rate}),
                 (m_exact("/mock/fail-list"), {"GET": self.h_mock_fail_list}),
                 (m_exact("/mock/www-cache"), {"GET": self.h_mock_www_cache}),
                 (lambda cur: True, {"GET": self.h_catchall}),
@@ -5211,6 +5217,23 @@ def make_handler(ctx: Context, quiet: bool):
                 if n is not None:
                     ctx.dwell = v
                 self.send_json(200, {"s": ctx.dwell})
+
+        def h_mock_rate(self, path):
+            # GET /mock/rate?r=X (mock only): the position's ms per clock ms from now on.
+            q = self.path.partition("?")[2] if "?" in self.path else None
+            n = query_param(q, "r")
+            if n is not None:
+                try:
+                    v = float(n)
+                except ValueError:
+                    v = float("nan")
+                if not math.isfinite(v) or not 0.5 <= v <= 1.1:
+                    self.send_error_json(400, "r: a number from 0.5 to 1.1")
+                    return
+            with ctx.lock:
+                if n is not None:
+                    ctx.pos_rate = v
+                self.send_json(200, {"r": ctx.pos_rate})
 
         def h_mock_fail_move(self, path):
             # GET /mock/fail-move?after=N (mock only): after N more moves

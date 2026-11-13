@@ -59,8 +59,9 @@ export function formulaName(p) {
   const t = head.replace(/^@formula:|^.*\/|\.psi$/gi, '').replace(/[-_]+/g, ' ').trim();
   return t && t[0] != '~' ? t[0].toUpperCase() + t.slice(1) : 'Formula';
 }
-// A failure of the panel's link, not of the file: no answer (fetch's TypeError) or busy (503).
-export const unreachable = (e) => e instanceof TypeError || e?.status == 503;
+// A failure of the panel's link, not of the file: no answer (js/source.js
+// dfetch's `link`), timed out (0) or busy (503).
+export const unreachable = (e) => !!e?.link || e?.status === 0 || e?.status == 503;
 // Drawn by the player, not read as a GIF: a title card or a Formula.
 export const drawn = (p) => p[0] == '@' || isFormula(p);
 // A playlist line the player skips, so the editor drops it: the clock's or

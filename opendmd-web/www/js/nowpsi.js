@@ -14,20 +14,30 @@ import { Q, num, path as fpath, compiler, hasCompiler } from './psikit.js';
 import { load } from './wasm.js';
 import { store } from './util.js';
 
-// (A trap leaves an instance unusable: the next is a fresh one, `gen`.)
-let M = null, gen = 0, B = null, loops = 0;
-const own = () => (M ??= load('pkg-psi', 'now' + gen).then(([m, x]) => ({ ...m, mem: x.memory })).catch((e) => { M = null; throw e; }));
-// The bundled Formulas, read once (again after a failure).
-const bundled = () => (B ??= fetch('formulas.json').then((r) => { if (!r.ok) throw r; return r.json(); })
-  .then((x) => (Array.isArray(x) ? x : []).filter((f) => typeof f?.src == 'string'), () => { B = null; return []; }));
+// (A trap leaves an instance unusable: the next is a fresh one, `gen`. `k`:
+// the text its program was last compiled from, whoever compiled it, null
+// after a failure; `reg`: the instance this module made psikit's compiler.)
+let M = null, gen = 0, B = null, loops = 0, reg = null;
+const own = () => (M ??= load('pkg-psi', 'now' + gen).then(([m, x]) => {
+  const P = { ...m, mem: x.memory, k: null };
+  P.compile = (src) => { const ok = m.compile(src); P.k = ok ? src : null; return ok; };
+  return P;
+}).catch((e) => { M = null; throw e; }));
+// The bundled Formulas, read once (again after a failure: no answer
+// throws, as js/util.js unreachable reads it; anything else is none).
+const bundled = () => (B ??= fetch('formulas.json').then((r) => (r.ok ? r.json() : []), (e) => { e.link = true; throw e; })
+  .then((x) => (Array.isArray(x) ? x : []).filter((f) => typeof f?.src == 'string'), (e) => { if (e.link) throw e; return []; })
+  .catch((e) => { B = null; throw e; }));
 
-// Not now, maybe soon: Now asks again at its next status.
-export class Later extends Error {}
+// Not now, maybe soon: Now asks again at its next status (`no`: meanwhile
+// it says there's no preview).
+export class Later extends Error { constructor(no) { super('later'); this.no = no; } }
 
 // The saved (this browser's) or bundled Formula an inline path
 // (`@formula?psb=…`) was compiled from, or undefined.
 export async function find(p) {
-  if (!hasCompiler()) compiler(await own());
+  const P = await own();
+  if (!hasCompiler() || (reg && reg !== P)) compiler((reg = P));
   const want = p.split('&')[0];
   return [...[store.get('psi.mine', [])].flat(), ...await bundled()].find((f) => typeof f?.src == 'string' && fpath({ src: f.src }) == want);
 }
@@ -36,14 +46,15 @@ export async function find(p) {
 async function source(p, start) {
   const head = p.split('?')[0];
   if (head == '@formula:~sent') {
-    // This page's last send, if what the panel plays started by then and
-    // has its name (another's sent since: none; a send of ours on its way
-    // to the status: not yet).
+    // This page's last send, if what the panel plays started by then (its
+    // start, js/now.js, errs early) and has its name; else asked again at
+    // each status (a send of ours on its way to it, a clock not yet
+    // measured), saying there's none once its send is 2 s old.
+    // (Proper: now_playing carrying the send's identity.)
     const s = app.device && (await import('./psishow.js')).sent(), t = start(), n = /^\s*name\s+"([^"\n]*)"/m.exec(s?.src || '')?.[1];
-    if (!s || t == null) return null;
-    if (t <= s.at + 300 && (!n || n.trim() == app.status?.now_playing?.title)) return s.src;
-    if (performance.now() - s.at < 2000) throw new Later();
-    return null;
+    if (!s) return null;
+    if (t != null && t <= s.at + 300 && (!n || n.trim() == (app.status?.now_playing?.title || '').trim())) return s.src;
+    throw new Later(performance.now() - s.at >= 2000);
   }
   if (head.startsWith('@formula:')) return (await bundled()).find((f) => f.stem === head.slice(9))?.src;
   if (head[0] == '/') return app.src.readText(head);
@@ -73,16 +84,14 @@ export async function play(p, pv, { pos, start, alive, fail }) {
     n0 = n;
     const d = new Date();
     try {
-      // (One instance: a Formula compiled since for another path puts this one back.)
+      // (One instance: anything compiled since puts this one back.)
       if (P.k !== src && !P.compile(src)) throw 0;
-      P.k = src;
       P.frame((n * g) % lp, d.getHours(), d.getMinutes(), d.getSeconds(), a, b, c);
       pv.p.showRgb(new Uint8Array(P.mem.buffer, P.pixels(), 12288));
     } catch { stop(); M = null; gen++; fail(); return; }
     // (For tools/web-smoke.py.)
     Object.assign(ds, { frames: -~ds.frames, ms: (n * g) % lp, src: p, len: src.length, q: `${a},${b},${c}` });
   };
-  P.k = src;
   ds.loops = ++loops;
   raf = requestAnimationFrame(step);
   return stop;
