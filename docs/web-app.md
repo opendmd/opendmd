@@ -69,7 +69,11 @@ button lands on them.
   one) or the world (the clock, `since`/`was`; Endless road, Time gate,
   the clocks) previews in step but not always the same picture: the
   status doesn't carry the panel's seed (a follow-up: `now_playing` could
-  carry it cheaply). Captions and
+  carry it cheaply). Which send the panel's `~sent` is, Now infers from
+  when it started (early rather than late: content time runs a little
+  behind the panel's clock; its pauses taken out) and its name, asked
+  again at each status; the proper follow-up is `now_playing` carrying
+  the send's identity (a counter or a CRC of the compiled bytes). Captions and
   names are plain words, never a path or the player's error. The preview
   can be switched off (Settings
   → Panel → *Mirror the panel on Now*, per browser). The device's figures

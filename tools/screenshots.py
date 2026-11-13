@@ -203,7 +203,7 @@ def now_ready(page: Page, path: str) -> None:
 
 # What a published shot must never show: a path, a hidden cache's or
 # playlist file's words, or the preview's raw error (CLAUDE.md, the product model).
-PLUMBING = re.compile(r"@formula|psb=|/gifs/|/formulas/|/sets/|\.psi\b|\bodm\b|\.odm\b|\bbuckets?\b|\bcache\b|\bmanifests?\b|Preview:", re.I)
+PLUMBING = re.compile(r"@formula|psb=|/gifs/|/formulas/|/sets/|\.psi\b|\.psb\b|\.idx\b|filelist|\bodm\b|\bbuckets?\b|\bcache(s|d)?\b|\bmanifests?\b|Preview:", re.I)
 
 
 def guard(page: Page, name: str) -> None:
