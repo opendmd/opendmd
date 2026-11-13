@@ -28,7 +28,7 @@ import { fileFor } from './overrides.js';
 import { Q as Qn, num, b64 } from './psikit.js';
 import { load } from './wasm.js';
 import web from './web.js';
-import { h, emit, on, label, toast, isFormula, formulaName } from './util.js';
+import { h, emit, on, bus, label, toast, isFormula, formulaName } from './util.js';
 
 const KEY = 'odmd.demo', SAFE = 144, DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const PANEL = { clk_phase: true, latch_blanking: 1, driver: 'shiftreg', i2s_speed: 8, min_refresh: 60 }, BOOT = ['driver', 'i2s_speed', 'min_refresh'];
@@ -156,7 +156,7 @@ const tell = () => { const s = snap(); for (const f of subs) f(s); };
 // mode: 'play' (the playlist), 'boot' (the start-up show), 'card' (the
 // status card: no card), 'off'. F: the Formula on the panel (its pkg-psi
 // instance, values, grid, loop, length; `boot`: the start-up show's line).
-let K = 5, pv = null, mode = 'play', gen = 0, list = [], li = -1, hist = [], hc = 0, F = null, held = null, going = null, seed = 7;
+let K = 5, pv = null, mode = 'play', gen = 0, list = [], li = -1, hist = [], hc = 0, F = null, held = null, going = null, seed = 7, tok = 0, bt = 0, raf = 0, running = true, cardT = 0;
 let cur = { path: '', at: 0, n: 0 }, pausedAt = 0, pausedFor = 0, title = '', kept = null, ovr = '', bootErr = '';
 let entries = 0, started = 0, up0 = Date.now() - 4 * 3600e3, t0 = 0, version = '';
 const ver = () => version.replace(/^v/, '') || 'demo';
@@ -212,8 +212,8 @@ function drawF() {
   if (F.boot) pv.showBoot(px, F.boot, n * F.g); else pv.showRgb(px);
 }
 function tick() {
-  requestAnimationFrame(tick);
-  if (!W.power || !live) return;
+  raf = running && live ? requestAnimationFrame(tick) : 0;
+  if (!W.power || !raf) return;
   if (F) try { drawF(); } catch { F = null; if (mode == 'play') advance(); }
   const r = pv.frame();
   if (mode == 'play' && (F ? !F.boot && elapsed() >= F.dur : r === 2 || r < 0)) advance();
@@ -223,9 +223,11 @@ const advance = () => (going ??= next().finally(() => { going = null; }));
 // Play `p` now (`rec`: a new start, into Recently played by the device's
 // rules, opendmd-core history.rs; not for Previous).
 async function show(p, rec) {
-  const g = gen, f = isFormula(p) && await formula(p), b = f ? E : (need(), await L.readBytes(copyOf(p) || p));
-  if (g != gen || mode != 'play') return;
-  if (rec) {
+  // (Last caller wins: a slow read never replaces a later show.)
+  const t = ++tok, g = gen, f = isFormula(p) && await formula(p), b = f ? E : (need(), await L.readBytes(copyOf(p) || p).catch(() => { throw new HttpError(404, 'not on the card'); }));
+  if (t != tok || g != gen || mode != 'play') return;
+  // (The panel's sent Formula is not a file to play again: Recently played leaves it out, as the player does.)
+  if (rec && !p.startsWith('@formula:~sent')) {
     if (hc) hist.unshift(...hist.splice(hc, 1));
     hc = 0;
     hist = [p, ...hist.filter((x) => x !== p)].slice(0, 16);
@@ -252,8 +254,8 @@ async function next(tries = 0) {
 }
 // The playlist in play, read again; `go`: started from its top (a new one), else on after the GIF on screen (its file written).
 async function rebuild(go) {
-  const g = gen, p = playing(), text = W.card ? await L.readText(has(p) ? p : '/filelist.txt').catch(() => null) : null;
-  if (g != gen) return;
+  const t = ++bt, g = gen, p = playing(), text = W.card ? await L.readText(has(p) ? p : '/filelist.txt').catch(() => null) : null;
+  if (t != bt || g != gen) return;
   list = text ? app.wasm.filterManifest(text, JSON.stringify({ platforms: S.c.platforms, shuffle: S.c.shuffle, seed })) : [];
   entries = list.length;
   li = go ? -1 : list.indexOf(cur.path);
@@ -324,15 +326,27 @@ const world = {
   // Out while it plays: its reads fail, three in a minute restart the
   // player, and it comes up with no card (the status card), trying the
   // card again (every minute on a display; here, soon).
+  // (Back in before the restart: none.)
   card(v) {
     if (!v == !W.card || !live) return;
     W.card = !!v;
     tell();
     const g = gen;
-    if (W.power) setTimeout(() => { if (g == gen) { if (!v) boot(); else if (mode == 'card') start(); } }, v ? 1500 : 1000);
+    clearTimeout(cardT);
+    if (W.power) cardT = setTimeout(() => { if (g == gen) { if (!v) boot(); else if (mode == 'card') start(); } }, v ? 1500 : 1000);
   },
+  // Everything stops (the panel, the status stream, the app's reads) while false: the desk scene off screen.
+  run(v) {
+    if (!live) return;
+    running = !!v;
+    app.hold(!running);
+    if (running && !raf && live) raf = requestAnimationFrame(tick);
+  },
+  // Now's mirror of the panel drawn (true) or not (a page that shows this panel itself).
+  mirror(v) { app.noMirror = !v; emit('mirror'); },
   // Canvas px per LED (1..12); what is on the panel starts again at the new size.
   scale(k) {
+    if (!live) return;
     K = Math.min(12, Math.max(1, Math.round(k) || 5));
     const p = pv.paused;
     newPanel();
@@ -352,8 +366,8 @@ function status(recent) {
   const s = {
     version: ver(), variant: '4mb', uptime_secs: Math.round((Date.now() - up0) / 1000), t_ms: Math.round(performance.now() - t0),
     ip: IP, wifi: 'sta', hostname: c.hostname, mdns: c.hostname,
-    now_playing: { ordinal: cur.n, path: p, title: p && title, elapsed_ms: Math.round(p ? elapsed() : 0), frame: 1, ...(p && kept != null && { kept_s: kept }) },
-    paused: pv.paused, entries: W.card ? entries : 0, manifest: '/sdcard' + playing(r), index_state: 'ready', www_version: version || null,
+    now_playing: { ordinal: cur.n, path: p, title: p && title, elapsed_ms: Math.round(p ? elapsed() : 0), frame: p ? 1 : 0, ...(p && kept != null && { kept_s: kept }) },
+    paused: !!pv?.paused, entries: W.card ? entries : 0, manifest: '/sdcard' + playing(r), index_state: W.card ? 'ready' : 'unavailable', www_version: version || null,
     heap: { free: 61440, floor: 48128, idf_min: 45056, transitions_cut: 0 }, refresh_hz: 100, deadline_misses: 0, worst_lateness_ms: 0,
     misses: { steady: 0, switch: 0, threshold_ms: 4, window_ms: 2000 }, gifs_started: started,
     sd: W.card ? { mounted: true, readable: true, card_id: 'demo', capacity_bytes: 31914983424, clock_khz: c.card_speed == 'fast' ? 40000 : 20000, failures: 0, attempts: 1 }
@@ -463,7 +477,8 @@ async function json(method, url, body) {
     await L.deleteFile(p);
     return { ok: true };
   }
-  throw cant(`do that (${r})`);
+  if (r == 'POST /api/card/format') throw cant('format a card');
+  throw cant('do that');
 }
 
 // --- what the settings do to the demo's panel (and to Now's mirror of it, so the plain page shows them too)
@@ -473,7 +488,7 @@ let driven = '', lookOn = '', lookErr = '', psi = null, overFn, mir = null;
 const dropKey = () => { try { localStorage.removeItem('odmd.apiKey'); } catch { /* none */ } };
 let live = true;
 const pkg = () => (psi ??= load('pkg-psi', 'demo').then(([m, x]) => ({ ...m, mem: x.memory })));
-const over = (f) => { overFn = f; pv.setOver(f); mir?.setOver(f); };
+const over = (f) => { if (!live) return; overFn = f; pv.setOver(f); mir?.setOver(f); };
 function apply() {
   if (!live) return;
   const r = evaluate(), c = S.c, b = Math.min(r.b ?? c.brightness, c.max_brightness);
@@ -603,6 +618,7 @@ export async function simulate(src) {
     async events(f, signal) {
       for (let k = '', at = 0; live && !signal?.aborted; await sleep(250)) {
         if (!W.up) throw down();
+        if (!running) continue;
         const s = status(), e = { brightness: S.c.brightness };
         for (const x of ['t_ms', 'now_playing', 'paused', 'entries', 'manifest', 'index_state', 'sd', 'mode', 'mode_until', 'wake_until', 'schedule', 'context']) e[x] = s[x];
         const key = JSON.stringify({ ...e, t_ms: 0, now_playing: { ...e.now_playing, elapsed_ms: 0 } }), t = performance.now();
@@ -624,7 +640,7 @@ export async function simulate(src) {
       else throw new HttpError(404, 'nothing earlier');
       return { ok: true };
     },
-    pause: async () => { setPaused(!pv.paused); return { paused: pv.paused }; },
+    pause: async () => { if (mode != 'play') throw new HttpError(503, 'nothing playing'); setPaused(!pv.paused); return { paused: pv.paused }; },
     play: async (p) => {
       if (!isFormula(p)) { need(); if (!has(p)) throw new HttpError(404, 'not found'); if (!/\.gif$/i.test(p)) throw new HttpError(415, 'not a GIF'); }
       if (mode != 'play') throw new HttpError(503, 'nothing playing');
@@ -637,7 +653,8 @@ export async function simulate(src) {
     saveSet(n, t) { return wf(`/sets/${n.replace(/\.txt$/, '')}.txt`, t); },
     list: async (d) => (need(), L.list(d)),
     readText: async (p) => (W.card ? L.readText(p) : null),
-    readBytes: async (p) => (need(), L.readBytes(p)),
+    // (What the panel has just read, Now's mirror reads again: given from memory, not fetched twice.)
+    readBytes: async (p) => (need(), held?.[0] == p && held[1].length ? held[1] : L.readBytes(p)),
     stat: async (p) => (need(), L.stat(p)),
     // A rename: its prepared copy, Smooth motion line and "can't be prepared" line follow.
     async move(from, to) {
@@ -660,14 +677,17 @@ export async function simulate(src) {
   });
   gate(src);
   newPanel();
-  requestAnimationFrame(tick);
+  raf = requestAnimationFrame(tick);
+  // (`?desk`: a page that shows this panel itself, the site's desk scene: no mirror on Now.)
+  if (new URLSearchParams(location.search).has('desk')) app.noMirror = true;
   app.config = await src.config();
   start();
   window.opendmdDemo = world;
   const mo = new MutationObserver(() => lines(document.getElementById('view-settings')));
   mo.observe(document.getElementById('view-settings'), { childList: true, subtree: true });
   // Now's mirror gets the look too (a new one, once Now is up again).
-  on('status', () => { const m = document.getElementById('now-panel')?.preview?.p; if (m && m != mir) (mir = m).setOver(overFn); });
+  const hook = () => { const m = document.getElementById('now-panel')?.preview?.p; if (m && m != mir) (mir = m).setOver(overFn); };
+  bus.addEventListener('status', hook);
   // The schedule's clock moves on: applied again every 20 s (the app's scheduler).
   app.watch('demo', 20000, async () => apply());
   // "Use your own card…": the folder is local mode, with no player; this one stops.
@@ -676,8 +696,15 @@ export async function simulate(src) {
     live = false;
     gen++;
     app.unwatch('demo');
+    app.hold(false);
+    app.noMirror = false;
     mo.disconnect();
-    pv.clear();
+    bus.removeEventListener('status', hook);
+    cancelAnimationFrame(raf);
+    overFn = undefined;
+    mir = null;
+    pv.free();
+    pv = psi = fq = null;
     style.remove();
     document.documentElement.style.removeProperty('--demo-b');
     app.config = app.status = null;

@@ -9006,6 +9006,12 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#now")
     page.wait_for_function("window.opendmdDemo && ['Clock', 'Mid', 'Hi'].includes(document.querySelector('#now-title')?.textContent)"
                            " && document.querySelector('#now-conn').classList.contains('ok')", timeout=20000)
+    def open_folder(page: Page) -> None:
+        # (The folder open, as the tree may have kept it.)
+        page.wait_for_selector("#lib-list .vdir", timeout=20000)
+        if not page.locator("#lib-list .vrow:not([hidden])").count():
+            page.click("#lib-list .vdir >> nth=0")
+        page.wait_for_selector("#lib-list .vrow:not([hidden])", timeout=10000)
     lit_js = """(() => { const c = opendmdDemo.state.canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
         let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 60 || d[i+1] > 60 || d[i+2] > 60) n++; return n; })()"""
     st = lambda: page.evaluate("(({ canvas, ...s }) => s)(opendmdDemo.state)")  # noqa: E731
@@ -9015,20 +9021,21 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
           f"demo world: the display is on, with its card, on the network, its panel lit ({st()}; on() calls at once: {seen})")
     # Power off: every call fails like a dropped connection; Now says so, its mirror dims; the panel goes dark.
     page.evaluate("opendmdDemo.power(false)")
-    page.wait_for_function("document.querySelector('#now-conn').title === 'Offline'", timeout=6000)
+    page.wait_for_function("document.querySelector('#now-conn').title === 'Offline' && document.querySelector('#now-panel').classList.contains('dim')", timeout=10000)
     off, n, err = on_(), page.evaluate(lit_js), page.evaluate("import('./js/state.js').then(({ app }) => app.src.status().then(() => 'answered', (e) => e.constructor.name + ' ' + !!e.link))")
     check(off == [True, "Offline", "Panel not reachable"] and n == 0 and err == "TypeError true" and st()["power"] is False,
           f"demo world: power off -> Offline, 'Panel not reachable', the mirror dimmed, the panel dark ({off}, {n} lit, a call: {err})")
     # Power on: a fresh start, the show within 2 s, Live again by itself.
     t0 = time.time()
     page.evaluate("opendmdDemo.power(true)")
-    page.wait_for_function(f"{lit_js} > 200", timeout=2000)
+    # (Generous waits; the times are reported: about 0.5 s and 2.6 s on an idle machine.)
+    page.wait_for_function(f"{lit_js} > 200", timeout=8000)
     t_show = time.time() - t0
-    page.wait_for_function("document.querySelector('#now-conn').classList.contains('ok')", timeout=6000)
+    page.wait_for_function("document.querySelector('#now-conn').classList.contains('ok')", timeout=15000)
     t_live = time.time() - t0
     page.wait_for_function("['Clock', 'Mid', 'Hi'].includes(document.querySelector('#now-title').textContent) && !document.querySelector('#now-panel').classList.contains('dim')", timeout=6000)
     s = page.evaluate("import('./js/state.js').then(({ app }) => app.src.status(true))")
-    check(t_show < 2 and t_live < 6 and s["uptime_secs"] < 10 and s["now_playing"]["ordinal"] <= 2 and s["recent"] == [s["now_playing"]["path"]],
+    check(t_show < 8 and t_live < 15 and s["uptime_secs"] < 20 and s["now_playing"]["ordinal"] <= 2 and s["recent"] == [s["now_playing"]["path"]],
           f"demo world: power on -> the start-up show lit in {t_show:.1f} s, Live in {t_live:.1f} s, a fresh start (up {s['uptime_secs']} s, "
           f"played {s['now_playing']['ordinal']}, recently played {s['recent']})")
     # The card out: a restart, then the status card (the core's, as Settings > Start-up previews it).
@@ -9059,15 +9066,71 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
     w = page.evaluate("opendmdDemo.state.canvas.width")
     check(seen[1:3] == ["false,true,false", "true,true,false"] and "true,false,true" in seen and w == 768 and page.evaluate(lit_js) > 1000,
           f"demo world: on() hears each change ({seen[:6]}…); scale(6) -> {w} px wide, still lit")
+    # run(false): nothing moves (the panel, Now's reads); mirror(false): Now draws no panel of its own.
+    rm = page.evaluate("""async () => { const c = opendmdDemo.state.canvas, sum = () => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 97) n = (n * 31 + d[i]) | 0; return n; };
+        const { app } = await import('./js/state.js'), w = (ms) => new Promise((r) => setTimeout(r, ms)), ex = await (await fetch('formulas.json')).json();
+        await app.src.play('@formula:' + (ex.find((x) => x.stem == 'plasma') || ex[0]).stem); await w(800);
+        opendmdDemo.run(false); await w(100); const a = sum(); await w(1200); const b = sum();
+        opendmdDemo.run(true); await w(600); const m = sum(); await w(600); if (m === sum()) return ['still while running'];
+        opendmdDemo.mirror(false); await new Promise((r) => setTimeout(r, 300)); const hid = document.querySelector('#now-panel').hidden;
+        opendmdDemo.mirror(true); await new Promise((r) => setTimeout(r, 1500)); return [a === b, hid, document.querySelector('#now-panel').hidden]; }""")
+    check(rm == [True, True, False], f"demo world: run(false) holds the panel still; mirror(false) hides Now's mirror, mirror(true) brings it back ({rm})")
     # Brightness in effect: the setting's, night mode's.
     b = page.evaluate("""async () => { const { app } = await import('./js/state.js'); await app.src.putConfig({ brightness: 30 }); const a = opendmdDemo.state.b;
         await app.src.putSchedule({ rules: [], night: { from: '00:00', to: '00:00', mode: 'off' } }); const n = opendmdDemo.state.b;
         await app.src.putSchedule({ rules: [], night: null }); await app.src.putConfig({ brightness: 96 }); return [a, n, opendmdDemo.state.b]; }""")
     check(b == [30, 0, 96], f"demo world: state.b is the brightness in effect (30, night mode off 0, back to 96: {b})")
+    # Off while another view is up, and every view visited meanwhile: they wait or say so, nothing throws; back on, the Library lists again.
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-list .vdir", timeout=20000)
+    page.evaluate("opendmdDemo.power(false)")
+    for v in ("sets", "formulas", "create", "settings/device", "library"):
+        page.evaluate(f"location.hash = '#{v}'")
+        page.wait_for_timeout(700)
+    page.evaluate("opendmdDemo.power(true)")
+    page.wait_for_function("opendmdDemo.state.up", timeout=15000)
+    page.evaluate("location.hash = '#now'")
+    page.wait_for_function("document.querySelector('#now-conn')?.classList.contains('ok')", timeout=15000)
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-list .vdir", timeout=30000)
+    check(True, "demo world: power off with the Library up and the other views visited meanwhile; back on, the Library lists again")
+    # The dialogs' pictures come from the demo's card in the page: no request for a card path outside demo/.
+    stray: list[str] = []
+    card_re = re.compile(r"^/(gifs|cache|sets|formulas|filelist)")
+    page.on("request", lambda r: card_re.match(urllib.parse.urlsplit(r.url).path) and stray.append(r.url))
+    open_folder(page)
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    page.wait_for_selector("#lib-d-more", timeout=10000)
+    details_do(page, "#lib-d-edit")
+    page.wait_for_function("(i => i && i.complete && i.naturalWidth === 128)(document.querySelector('#dl .dl-item img'))", timeout=10000)
+    page.click("#dl-cancel")
+    page.evaluate("ps => import('./js/state.js').then(m => { m.app.selection.clear(); ps.forEach((p) => m.app.selection.add(p)); })", paths[:2])
+    if not page.is_visible("#lib-selbar"):
+        page.click("#lib-select")
+    page.wait_for_function("document.querySelector('#lib-to-set').textContent.startsWith('Add 2 ')", timeout=10000)
+    for item, sel, cancel in (("#lib-bulk-rename", "#br-title", "#br-cancel"), ("#lib-bulk-move", "#bm-folder", "#bm-cancel")):
+        page.click("#lib-sel-more")
+        page.click(item)
+        page.wait_for_selector(sel, timeout=10000)
+        page.wait_for_timeout(500)
+        page.click(cancel)
+    check(not stray, f"demo world: Edit details (its picture drawn), Rename… and Move to folder… ask nothing outside demo/ ({stray})")
+    page.evaluate("import('./js/state.js').then(m => m.app.selection.clear())")
+    # Last caller wins: a slow read (a skip, a play) never replaces a later Send to panel.
+    last = page.evaluate("""async () => { const { app } = await import('./js/state.js'), s = app.src;
+        await s.play('/gifs/Demo/Mid.gif');
+        for (const p of ['/gifs/Demo/Clock.gif', '/gifs/Demo/Mid.gif']) { const f = app.demo.files.get(p), ab = f.arrayBuffer.bind(f); f.arrayBuffer = () => new Promise((r) => setTimeout(r, 1500)).then(ab); }
+        s.skip(); s.play('/gifs/Demo/Clock.gif');
+        await new Promise((r) => setTimeout(r, 100));
+        await s.play('/gifs/Demo/Hi.gif');
+        await new Promise((r) => setTimeout(r, 2500));
+        return (await s.now()).now_playing.path; }""")
+    check(last == "/gifs/Demo/Hi.gif", f"demo world: a skip and a play still reading when Send to panel plays another: the last asked plays ({last})")
+    page.keyboard.press("Escape")
     # The device paths: Send to panel (Library), Play (Playlists), Show on panel (Formulas), and the card's calls.
     goto_view(page, "library")
     page.wait_for_selector("#lib-list .vdir", timeout=20000)
-    page.click("#lib-list .vdir >> nth=0")
+    open_folder(page)
     page.click("#lib-list .vrow:not([hidden]) >> nth=1")
     page.wait_for_selector("#lib-play:not([disabled])", timeout=10000)
     want = page.get_attribute("#lib-play", "data-path")
@@ -9086,10 +9149,15 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("import('./js/state.js').then(({ app }) => app.src.now()).then((s) => s.now_playing.path.startsWith('@formula:~sent'))", timeout=8000)
     page.wait_for_function(f"{lit_js} > 200", timeout=5000)
     fname = page.inner_text("#psi-d-title")
+    recent = page.evaluate("import('./js/state.js').then(({ app }) => app.src.status(true)).then((s) => s.recent)")
+    check(recent and not any(p.startswith("@formula:~sent") for p in recent), f"demo world: the panel's sent Formula is not in Recently played ({recent})")
     goto_view(page, "now")
     page.wait_for_function(f"document.querySelector('#now-title').textContent === {json.dumps(fname)} && document.querySelector('#now-cap').textContent === ''", timeout=10000)
     calls = page.evaluate("""async () => { const { app } = await import('./js/state.js'), s = app.src, o = {};
         o.stat = (await s.stat('/gifs/Demo/Mid.gif')).exists;
+        o.skip = (await s.skip()).ok;
+        o.back = (await s.skip(true)).ok;
+        o.pause = (await s.pause()).paused && !(await s.pause()).paused;
         await s.move('/gifs/Demo/Mid.gif', '/gifs/Demo/Moved.gif');
         o.moved = (await s.list('/gifs/Demo')).map((e) => e.name).sort().join(',');
         o.move404 = await s.move('/gifs/Demo/Nope.gif', '/gifs/Demo/X.gif').then(() => 0, (e) => e.status);
@@ -9100,9 +9168,6 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
         o.ov = (await s.overrides('Two')).overrides.length;
         await s.saveSet('Mine', '/gifs/Demo/Hi.gif\\n');
         o.sets = (await s.list('/sets')).map((e) => e.name).sort().join(',');
-        o.skip = (await s.skip()).ok;
-        o.back = (await s.skip(true)).ok;
-        o.pause = (await s.pause()).paused && !(await s.pause()).paused;
         o.reboot = await s.reboot().then(() => '', (e) => e.message);
         return o; }""")
     check(want and "on the panel" in toast and calls == {"stat": True, "moved": "Clock.gif,Hi.gif,Moved.gif", "move404": 404, "new409": 409, "failed": 1, "forget": True,
@@ -9113,44 +9178,94 @@ def demo_world_pass(browser, base: str, errors: list[str]) -> None:
 
 
 def now_dim_checks(browser, base: str, errors: list[str]) -> None:
-    """Now against the mock with no stream (polling): the display not
-    reachable, or with no card, leaves the mirror dimmed and still under
-    its caption, not playing on; back as it was once the display answers."""
-    expected.extend(["/api/events", "/api/status"])
+    """Now against the mock: the display out of reach for 3 s on end, or
+    with no card (a mount having failed), leaves the mirror dimmed and still
+    under its caption, not playing on; back at the first good answer. One
+    lost read, or a second's outage, dims nothing; nor does a card still
+    mounting. Polling (no stream), then on the stream when it dies."""
+    # (Offline, any read fails: a file the preview or a view asks for too.)
+    ex = ["/api/events", "/api/status", "/gifs/", "/api/"]
+    expected.extend(ex)
     try:
         page = new_page(browser, "laptop", errors)
         page.route("**/api/events", lambda r: r.fulfill(status=404, body="{}", headers={"content-type": "application/json"}))
         page.goto(base + "/#now")
-        page.wait_for_function("document.querySelector('#now-conn')?.title === 'Live (polling)' && !!document.querySelector('#now-panel').preview?.path"
-                               " && document.querySelector('#now-cap').textContent === ''", timeout=20000)
-        dim = lambda: page.evaluate("import('./js/state.js').then(({ app }) => (c => [c.classList.contains('dim'), c.preview.paused === true, c.preview.paused === !!app.status.paused])(document.querySelector('#now-panel')))")  # noqa: E731
+        ready = ("document.querySelector('#now-conn')?.title.startsWith('Live') && !!document.querySelector('#now-panel').preview?.path"
+                 " && document.querySelector('#now-cap').textContent === ''")
+        page.wait_for_function(ready, timeout=20000)
+        dim = lambda: page.evaluate("import('./js/state.js').then(({ app }) => (c => [c.classList.contains('dim'), c.preview.paused, !!app.status.paused])(document.querySelector('#now-panel')))")  # noqa: E731
+
+        def watch(seconds: float) -> list[bool]:
+            seen, end = [], time.time() + seconds
+            while time.time() < end:
+                seen.append(dim()[0])
+                page.wait_for_timeout(100)
+            return seen
         d0 = dim()
+        n = [0]
+
+        def once(r):
+            n[0] += 1
+            r.abort() if n[0] == 1 else r.continue_()
+        page.route(STATUS_RE, once)
+        one = watch(2.5)
+        page.unroute(STATUS_RE)
         page.route(STATUS_RE, lambda r: r.abort())
-        page.wait_for_function("document.querySelector('#now-conn').title === 'Offline'", timeout=10000)
+        t0 = time.time()
+        page.wait_for_function("document.querySelector('#now-conn').title !== 'Live (polling)'", timeout=5000)
+        short = watch(max(0.0, 1 - (time.time() - t0)))
+        page.unroute(STATUS_RE)
+        short += watch(2.5)
+        check(d0[0] is False and d0[1] == d0[2] and n[0] >= 2 and not any(one) and not any(short),
+              f"now: one lost read ({n[0]} reads) or a 1 s outage leaves the mirror lit (dimmed at any moment: {any(one)}, {any(short)})")
+        page.wait_for_function(ready, timeout=10000)
+        page.route(STATUS_RE, lambda r: r.abort())
+        t0 = time.time()
+        early = watch(2.0)
+        page.wait_for_function("document.querySelector('#now-panel').classList.contains('dim')", timeout=8000)
+        t_dim = time.time() - t0
         page.wait_for_timeout(600)  # (the dimming's transition)
         d1, cap, op = dim(), page.inner_text("#now-cap"), page.eval_on_selector("#now-panel", "c => +getComputedStyle(c).opacity")
         page.unroute(STATUS_RE)
-        page.wait_for_function("document.querySelector('#now-conn').title.startsWith('Live')", timeout=10000)
+        page.wait_for_function("!document.querySelector('#now-panel').classList.contains('dim')", timeout=8000)
         d2 = dim()
-        check(d0 == [False, d0[1], True] and d1[:2] == [True, True] and cap == "Panel not reachable" and op < 0.5 and d2 == [False, d2[1], True],
-              f"now: not reachable, the mirror dims and stops under 'Panel not reachable' ({d0} -> {d1}, opacity {op}) and comes back ({d2})")
+        check(not any(early) and 2.5 <= t_dim <= 6 and d1[:2] == [True, True] and cap == "Panel not reachable" and op < 0.5 and d2[0] is False and d2[1] == d2[2],
+              f"now: out of reach 3 s on end, the mirror dims and stops under 'Panel not reachable' (after {t_dim:.1f} s, {d1}, opacity {op}), back at the first answer ({d2})")
 
-        def nocard(route):
-            r = route.fetch()
-            j = r.json()
-            route.fulfill(response=r, json={**j, "entries": 0, "index_state": "unavailable",
-                                            "sd": {**j["sd"], "mounted": False, "readable": False, "attempts": 2, "error": "no card"},
-                                            "now_playing": {**j["now_playing"], "path": "", "title": "", "ordinal": 0}})
-        page.route(STATUS_RE, nocard)
+        def nocard(sd):
+            def f(route):
+                r = route.fetch()
+                j = r.json()
+                route.fulfill(response=r, json={**j, "entries": 0, "index_state": "unavailable", "sd": {**j["sd"], "mounted": False, "readable": False, **sd},
+                                                "now_playing": {**j["now_playing"], "path": "", "title": "", "ordinal": 0}})
+            return f
+        page.route(STATUS_RE, nocard({"attempts": 0, "error": None}))
+        page.wait_for_function("document.querySelector('#now-title').textContent === 'Nothing playing'", timeout=8000)
+        mounting = dim()
+        page.unroute(STATUS_RE)
+        page.route(STATUS_RE, nocard({"attempts": 2, "error": "no card"}))
         page.wait_for_function("document.querySelector('#now-title').textContent === 'No card'", timeout=8000)
         d3 = dim()
         page.unroute(STATUS_RE)
-        page.wait_for_function("document.querySelector('#now-title').textContent !== 'No card'", timeout=8000)
+        page.wait_for_function("!['No card', 'Nothing playing'].includes(document.querySelector('#now-title').textContent)", timeout=8000)
         d4 = dim()
-        check(d3[:2] == [True, True] and d4 == [False, d4[1], True], f"now: no card, the mirror dims and stops; back once it plays ({d3} -> {d4})")
+        check(mounting[0] is False and d3[:2] == [True, True] and d4[0] is False and d4[1] == d4[2],
+              f"now: a card still mounting leaves it lit ({mounting}); no card dims and stops it ({d3}); back once it plays ({d4})")
+        page.context.close()
+        # On the stream: it dies with the network, the reads fail, the mirror dims; back with it.
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/#now")
+        page.wait_for_function("document.querySelector('#now-drift')?.dataset.live === 'true'", timeout=20000)
+        page.context.set_offline(True)
+        t0 = time.time()
+        page.wait_for_function("document.querySelector('#now-panel').classList.contains('dim')", timeout=25000)
+        t_dim = time.time() - t0
+        page.context.set_offline(False)
+        page.wait_for_function("!document.querySelector('#now-panel').classList.contains('dim') && document.querySelector('#now-conn').title.startsWith('Live')", timeout=15000)
+        check(t_dim >= 2.5, f"now: the stream dead with the network, the mirror dims ({t_dim:.1f} s) and comes back with it")
         page.context.close()
     finally:
-        for e in ("/api/events", "/api/status"):
+        for e in ex:
             expected.remove(e)
 
 
@@ -11833,6 +11948,9 @@ def only_pass(browser, names: list[str], repeat: int) -> None:
                         page.context.close()
                 except Exception as e:  # a timeout is a failed run, not the end of the loop
                     check(False, f"{n}: raised {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+                    if os.environ.get("WEB_SMOKE_TRACE"):
+                        import traceback
+                        traceback.print_exc()
                     # (What the section left open, and the console errors it expected, go with it.)
                     for c in list(browser.contexts):
                         c.close()

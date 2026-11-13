@@ -29,6 +29,8 @@ const POLL_MS = 500, FULL_MS = 5000, SLOW_MS = 1500;
 // one; after a failure it is tried again in RETRY_MS (polling meanwhile),
 // after a live one ends in AGAIN_MS.
 const QUIET_MS = 10000, RETRY_MS = 30000, AGAIN_MS = 3000;
+// Unreachable this long on end, the preview dims (js/now.js `down`).
+const LOST_MS = 3000;
 
 // "Mega Drive · Consoles · Slide · by pixelkid42": the platform, category
 // and flags by name and the author, each once (no "Arcade · Arcade", no
@@ -111,8 +113,9 @@ export async function mount(el) {
 
 function mountDevice(el) {
   const canvas = h('canvas.panel', { id: 'now-panel', role: 'img', 'aria-label': 'Preview' });
-  // Settings › Panel › Mirror the panel (this browser's choice).
-  const mirror = () => store.get('follow', true);
+  // Settings › Panel › Mirror the panel (this browser's choice); `app.noMirror`:
+  // a page that shows the panel itself (the web demo's desk scene), no mirror drawn.
+  const mirror = () => !app.noMirror && store.get('follow', true);
   const cap = h('div.cap', { id: 'now-cap', role: 'status' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('b', { id: 'now-title' }, '…');
@@ -172,16 +175,26 @@ function mountDevice(el) {
   let base = null;   // this file's first sample, for the rate its position runs at
   let recentOrd = -1; // the file `recent` was fetched with; -2: firmware without it
 
-  // Not reachable (offline), or no card: the preview dims and stops where it was, under its caption.
-  let lost = false, nocard = false;
+  // Not reachable for LOST_MS on end (not a read or two lost on a marginal
+  // network), or no card: the preview dims and stops where it was, under its
+  // caption; back at the first good read or event.
+  let lost = false, nocard = false, downAt = null, downT = 0;
   const held = () => !!app.status?.paused || lost || nocard;
   const still = () => {
     canvas.classList.toggle('dim', lost || nocard);
+    canvas.hidden = !!app.noMirror;
     if (preview.paused !== held()) preview.setPaused(held());
+  };
+  const down = () => {
+    downAt ??= performance.now();
+    clearTimeout(downT);
+    const left = downAt + LOST_MS - performance.now();
+    if (left > 0) downT = setTimeout(down, left); else if (!lost) { lost = true; still(); }
   };
 
   let mirrored = mirror();
-  if (!mirrored) cap.textContent = 'Not mirroring the panel (Settings › Panel)';
+  const NOT = () => (app.noMirror ? '' : 'Not mirroring the panel (Settings › Panel)');
+  if (!mirrored) cap.textContent = NOT();
   const sendBright = debounce(async (v) => {
     try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
   }, 300);
@@ -358,7 +371,7 @@ function mountDevice(el) {
     if (b) clear(banner, b);
     sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
     sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
-    nocard = !sd.mounted && !np.path;
+    nocard = !sd.mounted && !np.path && !!(sd.attempts || sd.error);
     still();
     canvas.ariaLabel = 'Preview of ' + title.textContent;
     follow_(np.path, fkey(np.path, np));
@@ -367,6 +380,8 @@ function mountDevice(el) {
   const good = () => {
     if (failures && cap.textContent == UNREACH) cap.textContent = '';
     failures = 0;
+    clearTimeout(downT);
+    downAt = null;
     if (lost) { lost = false; still(); }
     conn.className = 'dot ok';
     conn.title = live ? 'Live' : 'Live (polling)';
@@ -397,9 +412,9 @@ function mountDevice(el) {
       good();
     } catch (e) {
       conn.className = 'dot bad';
-      conn.title = (lost = ++failures > 1) ? 'Offline' : 'Retrying';
+      conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
       if (shownPath) cap.textContent = UNREACH;
-      still();
+      down();
     } finally {
       // Polling (no stream): less often while a file goes to or from the card.
       if (!live && shown) app.watch('now', app.status?.transfer ? SLOW_MS : POLL_MS, poll);
@@ -491,12 +506,14 @@ function mountDevice(el) {
     if (big || ev.now_playing.ordinal !== was && recentOrd > -2) app.soon('now');
   }
 
+  // (The demo's desk scene switching the mirror off or on: js/demo.js `mirror`.)
+  on('mirror', () => { unfollow(); preview.clear(); mirrored = mirror(); cap.textContent = mirrored ? '' : NOT(); still(); if (shown) app.soon('now'); });
   render(app.status);
   return {
     show() {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
-      if (mirrored !== (mirrored = mirror())) { unfollow(); preview.clear(); cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
+      if (mirrored !== (mirrored = mirror())) { unfollow(); preview.clear(); cap.textContent = mirrored ? '' : NOT(); }
       shown = true;
       // A status read at the start (polling until the stream is live).
       app.watch('now', POLL_MS, poll);
@@ -507,6 +524,7 @@ function mountDevice(el) {
     },
     hide() {
       shown = false;
+      clearTimeout(downT);
       // (A Formula's frames stop; shown again, it starts again. A GIF stays loaded.)
       if (stopF || isFormula(shownPath)) unfollow();
       document.removeEventListener('visibilitychange', onVis);

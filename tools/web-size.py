@@ -550,7 +550,7 @@ LICENCES = {"licenses.txt"}
 # became a device — its own panel and player (playlist, transport, Show on
 # panel, Formulas), the device calls the Library, Playlists and Formulas
 # make, the status stream, and the world the site's desk scene drives
-# (power, card, network): ~6.5 -> ~11 KB gz.
+# (power, card, network, run, mirror): 6,514 -> 9,994 B gz.
 # 9 KB since formula-refs (2026-10-29): a look named `@formula:<stem>`
 # resolved from formulas.json, as the player has the bundled ones built in.
 DEMO_GZ_BUDGET = 12 * 1024
