@@ -336,6 +336,11 @@ fn the_examples_are_light_enough_for_the_panel() {
         // so are its two alternatives, Neon city and Wormhole run.
         let most = if ["Endless road", "Neon city", "Wormhole run"].contains(&e.name.as_str()) {
             80
+        } else if e.name == "Rift patrol" {
+            // A showcase too, the longest: a shooter that plays itself
+            // (four zones' palettes, the world's rules a line each, the
+            // column's edges).
+            100
         } else if e.name == "Time gate" {
             // 20 since `psi fmt` (2026-10-29): one statement a line (24
             // since the `frame { }` block's lines count).
@@ -623,6 +628,10 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Wormhole run", 0, 0x72b7572f97630448),
     ("Wormhole run", 1730, 0xe9ce3bd5322c9207),
     ("Wormhole run", 6420, 0xbea23f200e4f7996),
+    // formula-shooter (2026-11-13): a side-scrolling shooter.
+    ("Rift patrol", 0, 0x6a857b236cdded93),
+    ("Rift patrol", 1730, 0xe289c6c93e322a79),
+    ("Rift patrol", 6420, 0x48b17f203c45a81f),
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
