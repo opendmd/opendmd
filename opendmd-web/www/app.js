@@ -69,6 +69,8 @@ function noFormulas(el) {
 }
 
 function setSource(src) {
+  // (The view up lets go first: its watchers and streams belong to the old source.)
+  if (shown) ready[shown]?.hide?.();
   app.src = src;
   for (const k of Object.keys(mounted)) delete mounted[k], delete ready[k];
   for (const v of VIEWS) clear($('#view-' + v));

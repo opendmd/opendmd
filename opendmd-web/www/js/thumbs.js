@@ -71,7 +71,8 @@ function cutBytes(b, want, cap) {
 // Read `path` (its copy first) as far as `want` images: {gif, size}.
 // `extend(first frame)`: true reads on to a clip's worth (a dark start).
 async function fetchCut(path, want, cap, extend) {
-  if (!app.device) {
+  // (The web demo's display: its card is in memory, read as a folder's.)
+  if (!app.device || app.src.memory) {
     const b = await app.previewBytes(path);
     if (extend && await extend(cutBytes(b, want, cap))) return { gif: cutBytes(b, CLIP_FRAMES, CLIP_BYTES), size: b.length, more: true };
     return { gif: cutBytes(b, want, cap), size: b.length };

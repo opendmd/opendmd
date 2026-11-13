@@ -507,20 +507,49 @@ player sends those in preference.
 [opendmd.dev/demo](https://opendmd.dev/demo/) is this app with no
 player behind it. When nothing answers `GET /api/status` but a
 `demo/index.json` sits beside the page, the app loads that card instead of
-offering the folder picker: its files are fetched as they are read, writes
-stay in the page, and Now starts playing All files by itself. **Use your own card…** in the header swaps in a card folder.
+offering the folder picker: its files are fetched as they are read, and
+writes stay in the page. **Use your own card…** in the header swaps in a
+card folder (local mode, with Now's simulator).
 
-The demo has a player of its own in the page (`js/demo.js`, loaded only
-there): it answers the device's settings API (config, schedule, status) for
-the browser session, so **Settings** is the device's, every tab and control.
-What the settings change shows on the demo's panel on Now: brightness (the
-schedule's and night mode's too), colour, glow, the transition, the Formula
-look drawn over every frame, how long each GIF stays, the playlist,
-platforms and shuffle, and the schedule banner with Wake and Resume. Panel
-timing is tried and kept as on a player, with nothing to see. Firmware
-updates, WiFi and restarting keep their controls and say in a line that the
-demo can't do them. A new browser session starts from a new player's
-settings.
+The demo is a display of its own, simulated in the page (`js/demo.js`,
+loaded only there), so every view runs the code it runs on a display. Its
+panel is a canvas with the same renderer, playing the card's playlist with
+the firmware's dwell; Now mirrors it as it mirrors a real panel, with the
+remote control (Skip, Pause, Previous, Replay, Recently played). It answers
+the device's API in the page: the settings, the schedule and the status
+(kept for the browser session), the status stream, skip, pause and play, the
+card's files, renames and deletes, overrides, and the playback cache's
+records. So **Settings** is the device's, every tab and control; the Library
+has Send to panel, Add GIFs, Edit details and Delete; Playlists plays one;
+Formulas has Show on panel, Keep on the panel and the start-up show. What
+the settings change shows on the demo's panel: brightness (the schedule's
+and night mode's too), colour, glow, the transition, the Formula look drawn
+over every frame, how long each GIF stays, the playlist, platforms and
+shuffle, the start-up show, and the schedule banner with Wake and Resume.
+Panel timing is tried and kept as on a player, with nothing to see.
+Firmware updates, WiFi, restarting from Settings, testing the panel and
+Follow RePlayOS keep their controls and say in a line that the demo can't
+do them; a playlist's favourites and other per-GIF choices are kept but
+not played. Your Formulas stay in this browser, as in local mode (the
+demo's card is gone at a reload). A new browser session starts from a new
+player's settings.
+
+The demo's display also has a power switch, a card slot and a network, in
+compressed time, for the site's pages to drive (`window.opendmdDemo`):
+`state` (`power`, `card`, `up`: answering on the network, `b`: the
+brightness in effect, `canvas`: its panel), `power(on)`, `card(in)`,
+`scale(px per LED)`, `on(fn)` (called with the state now and on each
+change; returns a function that stops it), `run(on)` (false: everything
+stops, the panel, the status stream and the app's reads, for a page out of
+sight) and `mirror(on)` (false: Now draws no mirror, for a page that shows
+the panel itself; `?desk` in the address starts that way). Off, every call fails as a
+dropped connection does and the panel goes dark; on, it starts afresh (its
+clock and uptime from zero), plays the start-up show, then the playlist,
+and answers on the network a moment later, so the app reconnects by
+itself. The card out, it restarts and shows the status card ("No card" on
+Now); back in, it plays again. When the display has been out of reach for 3 s,
+or has no card, Now's mirror dims and stops under its caption, here as with
+a real display, and comes back at the first good answer.
 
 The Formula editor on the site (the demo's and `/f/`) has two aids the
 player's copy leaves out (`js/fcost.js`, imported only there, and its wasm

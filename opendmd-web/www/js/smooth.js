@@ -74,6 +74,8 @@ const writeList = (list) => app.src.writeFile(LIST, list.map((p) => p + '\n').jo
 // is in (the device ignores Range; asking costs nothing).
 async function isSmooth(path) {
   const m = await art();
+  // (The web demo's display: its card is in memory.)
+  if (app.src.memory) { const b = await app.src.readBytes(app.wasm.cachePathFor(path)).catch((e) => { if (e.status !== 404) throw e; }); return b ? !!m.smoothMarker(b.subarray(0, 1024)) : null; }
   // (A full stream queue is a 503 at once: asked again, `queued`.)
   const res = await queued(async () => {
     const r = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
