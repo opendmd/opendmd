@@ -236,7 +236,7 @@ export async function detail(box, it, bytes, pv, cap) {
       cap.textContent = 'Smooth motion preview';
       cap.dataset.shown = `${it.name} · smooth`;
       msg.textContent = '';
-    } catch (e) { msg.textContent = 'Preview: ' + (e.message || e); } finally { pvBtn.disabled = false; }
+    } catch { msg.textContent = 'Couldn’t make the smooth preview'; } finally { pvBtn.disabled = false; }
   }
 
   async function toggle() {
