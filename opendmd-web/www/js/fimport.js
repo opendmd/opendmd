@@ -19,7 +19,7 @@
 
 import { h, clear, store, toast } from './util.js';
 import { popup, closeMenu } from './overrides.js';
-import { sprites, palettes } from './fsprite.js';
+import { sprites, palettes, six, as } from './fsprite.js';
 
 const MB = 1 << 20, SIDE = 4096, WORK = 512, RW = 512, RH = 256, TIERS = [2, 4, 16];
 // A new key character after its colour's initial (js/fsprite.js addKey's).
@@ -28,12 +28,9 @@ const HEX = /^#([\da-f]{3}|[\da-f]{6})$/i;
 // Den 16, OpenDMD's own palette (the Studio's, opendmd-web/share/studio/palettes.js).
 const DEN = [0x0a0e2a, 0x161d52, 0x2e3a8c, 0x6447c8, 0x33d1ff, 0x8a4f1d, 0x14532d, 0x2f9e4f, 0xf7a531, 0xe8601c, 0xc92a2a, 0xff4f8b, 0xf1ebdd, 0x7c7f8a, 0xffffff];
 const say = (t) => Object.assign(new Error(t), { said: 1 });
-const six = (v) => (v.length == 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase();
 const rgbOf = (v) => parseInt(six(v).slice(1), 16);
 // A colour written: #rgb when it is one, else #rrggbb.
 const hx = (c) => { const s = c.toString(16).padStart(6, '0'); return '#' + (/^(.)\1(.)\2(.)\3$/.test(s) ? s[0] + s[2] + s[4] : s); };
-// As the one it replaces was written: #rgb when it fits, upper case kept (js/fsprite.js `as`).
-const as = (v, w) => { const x = six(v), y = w.length == 4 && /^#(.)\1(.)\2(.)\3$/.test(x) ? '#' + x[1] + x[3] + x[5] : x; return /[A-F]/.test(w) ? y.toUpperCase() : y; };
 
 // --- What a file is, by its first bytes (never its name or type).
 export function sniff(b) {
@@ -43,20 +40,27 @@ export function sniff(b) {
   if (at('GIF87a') || at('GIF89a')) return 'gif';
   if (at('RIFF') && at('WEBP', 8)) return 'webp';
   if (at('BM')) return 'bmp';
-  // An SVG: its root first (an XML declaration and comments before it), never an HTML page around one.
-  const t = new TextDecoder().decode(b.subarray(0, 4096)).replace(/^﻿/, '').replace(/^(\s+|<\?xml[^>]*\?>|<!--[\s\S]*?-->)*/, '');
+  // An SVG: its root first (an XML declaration and comments before it), never an HTML page around one
+  // (TextDecoder drops a byte order mark).
+  const t = new TextDecoder().decode(b.subarray(0, 4096)).replace(/^(\s+|<\?xml[^>]*\?>|<!--[\s\S]*?-->)*/, '');
   return /^<([\w.-]+:)?svg[\s>/]/.test(t) ? 'svg' : null;
 }
 
 // An SVG made safe to draw: no DOCTYPE or entities; parsed as XML (never
-// put in the page), its root an `svg` in the SVG namespace; no scripts,
-// foreign content, frames, objects, media or animation; no `on…`
-// attributes; links only to its own `#parts` (a PNG or JPEG `data:` image
-// in an <image>); no styles that load (`@import`, `url(` not `url(#`).
-// Sized at RW × RH at most, its own shape kept. {text, w, h}.
+// put in the page), its root an `svg` in the SVG namespace. Out: scripts,
+// foreign content, frames, objects, media, animation, styles, embedded
+// pictures (an <image> of any kind: a small file can hold a huge one), and
+// what multiplies the drawing (masks, markers, filters, clip paths,
+// patterns); `on…` attributes; links but to its own `#parts` (each written
+// again as a plain `href`); values that could load (`url(` not `url(#`,
+// `@import`, image-set, `image(`, `src(`, or a CSS escape). Then what it
+// draws is counted, every <use> through what it copies (the first of an
+// id, as the browser takes it; a loop is endless), refused past 20,000
+// parts: a picture is drawn in one go, and drawing that much would hold
+// the page up. Sized at RW × RH at most, its own shape kept. {text, w, h}.
 const NS = 'http://www.w3.org/2000/svg';
-const BAD = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'set', 'animate', 'animateMotion', 'animateTransform', 'handler', 'listener']);
-const LOADS = /url\(\s*['"]?\s*(?!#)|@import/i;
+const BAD = new Set(['script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'set', 'animate', 'animateMotion', 'animateTransform', 'handler', 'listener', 'style', 'image', 'feImage', 'filter', 'mask', 'marker', 'clipPath', 'pattern']);
+const LOADS = /url\(\s*['"]?\s*(?!#)|@import|image-set|image\(|src\(|\\/i;
 export function sanitize(text) {
   const no = () => say('This SVG can’t be read here');
   if (text.length > MB) throw say('This SVG is too big to read here: 1 MB at most');
@@ -67,25 +71,24 @@ export function sanitize(text) {
   const scrub = (e) => {
     for (const a of [...e.attributes]) {
       const n = a.localName.toLowerCase(), v = a.value.trim();
-      if (n.startsWith('on') || (n == 'href' && !(v[0] == '#' || (e.localName == 'image' && /^data:image\/(png|jpeg);base64,/i.test(v)))) || LOADS.test(v)) e.removeAttributeNode(a);
+      if (n == 'href' || n.startsWith('on') || LOADS.test(v)) e.removeAttributeNode(a);
+      if (n == 'href' && v[0] == '#' && !LOADS.test(v)) e.setAttribute('href', v);
     }
   };
   for (const e of [...r.querySelectorAll('*')]) {
-    if (e.namespaceURI != NS || BAD.has(e.localName) || (e.localName == 'style' && LOADS.test(e.textContent))) e.remove();
+    if (e.namespaceURI != NS || BAD.has(e.localName)) e.remove();
     else scrub(e);
   }
   scrub(r);
-  // What it would draw, every <use> copying what it points at counted
-  // through (a loop counts as endless): past 20,000 parts it is refused, as
-  // drawing it would hold the page up (a picture is drawn in one go).
-  const ids = new Map([...r.querySelectorAll('[id]')].map((e) => [e.id, e])), memo = new Map(), on = new Set();
+  const ids = new Map(), memo = new Map(), on = new Set();
+  for (const e of r.querySelectorAll('[id]')) if (!ids.has(e.id)) ids.set(e.id, e);
   const parts = (e) => {
     if (memo.has(e)) return memo.get(e);
     if (on.has(e)) return Infinity;
     on.add(e);
     let n = 1;
     for (const c of e.children) if ((n += parts(c)) > 2e4) break;
-    const t = e.localName == 'use' && ids.get((e.getAttribute('href') || e.getAttribute('xlink:href') || '').slice(1));
+    const t = e.localName == 'use' && ids.get((e.getAttribute('href') || '').slice(1));
     if (t) n += parts(t);
     on.delete(e);
     memo.set(e, n);
@@ -94,10 +97,12 @@ export function sanitize(text) {
   let big;
   try { big = parts(r) > 2e4; } catch { big = true; }
   if (big) throw say('This SVG is too complex to draw here');
-  const vb = (r.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number), dim = (k) => { const v = parseFloat(r.getAttribute(k)); return v > 0 && v < 1e5 ? v : 0; };
-  let [aw, ah] = vb.length == 4 && vb[2] > 0 && vb[3] > 0 ? vb.slice(2) : [dim('width'), dim('height')];
+  // (Its shape: the viewBox's when it is four sane numbers, else its width and height, else 300 × 150.)
+  const ok = (v) => v > 0 && v < 1e5, vb = (r.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number), dim = (k) => { const v = parseFloat(r.getAttribute(k)); return ok(v) ? v : 0; };
+  const good = vb.length == 4 && vb.every((v) => Math.abs(v) < 1e5) && ok(vb[2]) && ok(vb[3]);
+  let [aw, ah] = good ? vb.slice(2) : [dim('width'), dim('height')];
   if (!(aw && ah)) [aw, ah] = [300, 150];
-  if (!(vb.length == 4 && vb[2] > 0 && vb[3] > 0)) r.setAttribute('viewBox', `0 0 ${aw} ${ah}`);
+  if (!good) r.setAttribute('viewBox', `0 0 ${aw} ${ah}`);
   const z = Math.min(RW / aw, RH / ah), w = Math.max(1, Math.round(aw * z)), hh = Math.max(1, Math.round(ah * z));
   r.setAttribute('width', w);
   r.setAttribute('height', hh);
@@ -107,7 +112,22 @@ export function sanitize(text) {
 // A file's pixels, {w, h, d: RGBA}: sniffed; an SVG made safe first; one
 // way in for every kind (a blob URL, an image never in the page, its size
 // checked before it is drawn, drawn 1:1, read, the URL let go).
+// Whether this browser reads back what was drawn: a privacy setting may
+// add noise to it (Brave, Firefox's resist fingerprinting), and then no
+// picture would come in as it is. Tried once, on four pixels.
+let honest = null;
+function readsTrue() {
+  if (honest == null) {
+    const g = h('canvas', { width: 2, height: 2 }).getContext('2d', { willReadFrequently: true }), c = [0xff0000, 0x00ff00, 0x0000ff, 0xffffff];
+    c.forEach((v, i) => { g.fillStyle = hx(v); g.fillRect(i & 1, i >> 1, 1, 1); });
+    const d = g.getImageData(0, 0, 2, 2).data;
+    honest = c.every((v, i) => d[i * 4] == v >> 16 && d[i * 4 + 1] == (v >> 8 & 255) && d[i * 4 + 2] == (v & 255) && d[i * 4 + 3] == 255);
+  }
+  return honest;
+}
+
 export async function read(file) {
+  if (!readsTrue()) throw say('This browser changes what a page reads back from a picture (a privacy setting), so it can’t make a sprite from one here');
   if (file.size > 8 * MB) throw say('This picture is too big to read here: 8 MB at most');
   const b = new Uint8Array(await file.arrayBuffer()), k = sniff(b);
   if (!k) throw say('This file isn’t a picture OpenDMD can read: PNG, JPEG, GIF, WebP, BMP or SVG');
@@ -266,7 +286,7 @@ export function keyed(px, W, K, old = []) {
     if (chOf.has(c)) continue;
     let b = null;
     for (const x of oc) if (!kept.has(x.e) && D(c, x.c) <= NEAR && (!b || D(c, x.c) < D(c, b.c))) b = x;
-    if (b) keep(c, b, as(hx(c), b.e.v));
+    if (b) keep(c, b, as(six(hx(c)), b.e.v));
   }
   if (see && ot) taken.add(ot.ch);
   const fresh = [], free = (x) => (x && !taken.has(x) ? x : [...ABC].find((q) => !taken.has(q)));
@@ -286,13 +306,13 @@ export const cost = (K, w, hh) => 1 + K + hh * Math.ceil(w / (K <= 2 ? 32 : K <=
 
 // The picture `s` as a sprite by the settings `o` ({crop, W, H, fit, samp,
 // bg…, tier (0: the fewest that hold its colours), pal (colours) or none}),
-// over `old`'s key: {K, ents, rows}.
+// over `old`'s key: {K, n (its colours before any were merged), ents, rows}.
 export function make(s, o, old) {
   let px = opaque(fitIn(s, o.crop, o.W, o.H, o.fit, o.samp != 'sharp'), o);
   const n = new Set(px.filter((c) => c >= 0)).size, see = +px.includes(-1);
   const K = o.tier || TIERS.find((k) => k >= n + see) || 16, m = quantise(px, Math.max(1, K - see), o.pal);
   px = px.map((c) => (c < 0 ? c : m.get(c)));
-  return { K, ...keyed(px, o.W, K, old) };
+  return { K, n, ...keyed(px, o.W, K, old) };
 }
 
 // --- The dialog.
@@ -340,7 +360,11 @@ export async function open(file, kit) {
   if (s.w > WORK || s.h > WORK) { const z = Math.min(WORK / s.w, WORK / s.h), w = Math.max(1, Math.round(s.w * z)), hh = Math.max(1, Math.round(s.h * z)); s = { w, h: hh, d: resample(s, 0, 0, s.w, s.h, w, hh, true) }; }
   const { ta } = kit, src0 = ta.value, p0 = ta.selectionStart;
   const target = kit.name ? sprites(src0).find((o) => o.name == kit.name) : sprites(src0).find((o) => o.ok && o.s <= p0 && p0 <= o.e);
-  const R = store.get('psi.import', {}), o = { size: '32x32', W: 32, H: 32, lock: true, fit: 'fit', samp: 'smooth', tol: 10, thr: 50, one: 0xffffff, ...R, crop: { x: 0, y: 0, w: s.w, h: s.h }, tier: 0, pal: null };
+  // (The last settings, each held to what it may be.)
+  const R = store.get('psi.import', null) || {}, of = (v, L, d) => (L.includes(v) ? v : d);
+  const o = { size: of(R.size, [...Object.keys(SIZES), 'own'], '32x32'), W: clamp(R.W ?? 32, 1, 64), H: clamp(R.H ?? 32, 1, 32), lock: R.lock !== false, fit: of(R.fit, ['fill', 'fit', 'stretch'], 'fit'),
+    samp: of(R.samp, ['smooth', 'sharp'], 'smooth'), tol: clamp(R.tol ?? 10, 0, 100), thr: clamp(R.thr ?? 50, 0, 100), one: clamp(R.one ?? 0xffffff, 0, 0xffffff), crop: { x: 0, y: 0, w: s.w, h: s.h }, tier: 0, pal: null };
+  const kept = { size: o.size, W: o.W, H: o.H };
   if (s.w <= 64 && s.h <= 32) o.size = 'as';
   let alpha = false;
   for (let q = 3; q < s.d.length; q += 4) if (s.d[q] < 255) { alpha = true; break; }
@@ -358,13 +382,13 @@ export async function open(file, kit) {
   const wI = num('psi-imp-w', 'Width', 64, 'W'), hI = num('psi-imp-h', 'Height', 32, 'H');
   const sizeS = h('select', { id: 'psi-imp-size', 'aria-label': 'Size', onchange: () => { o.size = sizeS.value; run(); } }, [['as', 'As it is'], ...Object.keys(SIZES).map((k) => [k, k.replace('x', ' × ')]), ['own', 'Your size']].map(([k, t]) => h('option', { value: k }, t)));
   const lock = h('input', { type: 'checkbox', id: 'psi-imp-lock', checked: o.lock, onchange: () => { o.lock = lock.checked; } });
-  const tiers = h('div.row', { id: 'psi-imp-tier', role: 'group', 'aria-label': 'Colours' });
+  const tb = TIERS.map((k) => h('button.sm', { type: 'button', 'data-k': k, onclick: () => { o.tier = k; run(); } })), tiers = h('div.row', { id: 'psi-imp-tier', role: 'group', 'aria-label': 'Colours' }, tb);
   const bgx = h('span.row');
   const nameI = h('input', { type: 'text', id: 'psi-imp-name', value: name, maxLength: 24, 'aria-label': 'Name', spellcheck: false, oninput: () => run() });
   const repC = target && h('label', h('input', { type: 'checkbox', id: 'psi-imp-rep', checked: true, onchange: (e) => { rep = e.target.checked; nameI.value = rep ? target.name : name; run(); } }), `Replace ${target.name}`);
   const drawC = h('input', { type: 'checkbox', id: 'psi-imp-draw', checked: true, onchange: () => run() }), drawL = h('label', drawC, 'Draw it in the middle');
   const call = h('p.cap', { id: 'psi-imp-call' }), note = h('p.cap', { id: 'psi-imp-note', hidden: true }, 'The key holds the colours themselves: changing the palette later won’t change the sprite.');
-  const grid = h('canvas', { id: 'psi-imp-grid' }), pv = h('canvas', { id: 'psi-imp-pv', width: 128, height: 32, 'aria-label': 'On the panel' });
+  const grid = h('canvas', { id: 'psi-imp-grid', role: 'img' }), pv = h('canvas', { id: 'psi-imp-pv', width: 128, height: 32, 'aria-label': 'On the panel' });
   const costL = h('p.cap', { id: 'psi-imp-cost', 'aria-live': 'polite' });
   const go = h('button.pri', { id: 'psi-imp-go', onclick: () => add() });
   const el = h('div.menu.wide.psi-imp', { id: 'psi-imp', role: 'dialog', 'aria-label': 'A sprite from a picture' },
@@ -380,8 +404,14 @@ export async function open(file, kit) {
     h('div', h('div.psi-chk', grid), h('p.cap', 'On the panel'), pv)),
     // (The cost with the buttons, in sight however far the sheet is scrolled.)
     h('div.row.acts', costL, h('button', { id: 'psi-imp-cancel', onclick: closeMenu }, 'Cancel'), go));
-  // Enter: the dialog's button (Escape: closeMenu, the editor's text as it was).
-  el.addEventListener('keydown', (e) => { if (e.key == 'Enter' && e.target.localName != 'button' && e.target.localName != 'select' && !go.disabled) { e.preventDefault(); add(); } });
+  // Enter: the dialog's button, a number typed taken first (Escape: closeMenu, the editor's text as it was).
+  // Tab and Shift+Tab stay in the dialog.
+  el.addEventListener('keydown', (e) => {
+    if (e.key == 'Enter' && !/^(button|select)$/.test(e.target.localName)) { e.preventDefault(); if (e.target.type == 'number') e.target.dispatchEvent(new Event('change')); add(); }
+    if (e.key != 'Tab') return;
+    const f = [...el.querySelectorAll('button,input,select,canvas[tabindex]')].filter((x) => !x.disabled && x.offsetParent), a = f[0], b = f.at(-1);
+    if (e.shiftKey ? document.activeElement == a || document.activeElement == el : document.activeElement == b) { e.preventDefault(); (e.shiftKey ? b : a).focus(); }
+  });
 
   // The size: a preset, as it is (64 × 32 at most, its shape kept), or typed (the other side following its shape).
   function sized(k, v) {
@@ -406,16 +436,15 @@ export async function open(file, kit) {
 
   // The crop on the picture: dragged inside it, by a corner (44 px for a
   // finger), or drawn anew; arrow keys move it (Shift: by 10), Alt and arrows size it.
-  let z = 1, drag = null;
+  let z = 1, drag = null, bk = null;
   function paintSrc() {
-    z = Math.min(360 / s.w, 200 / s.h, Math.max(1, (innerWidth - 48) / s.w));
+    z = Math.min(Math.min(360, innerWidth - 48) / s.w, 200 / s.h);
     const dp = devicePixelRatio || 1, W = Math.round(s.w * z), H = Math.round(s.h * z), g = cv.getContext('2d'), c = o.crop;
     cv.width = W * dp; cv.height = H * dp; cv.style.width = W + 'px'; cv.style.height = H + 'px';
     g.scale(dp, dp);
-    const b = h('canvas', { width: s.w, height: s.h });
-    b.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(s.d), s.w, s.h), 0, 0);
+    if (!bk) { bk = h('canvas', { width: s.w, height: s.h }); bk.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(s.d), s.w, s.h), 0, 0); }
     g.imageSmoothingEnabled = z < 1;
-    g.drawImage(b, 0, 0, W, H);
+    g.drawImage(bk, 0, 0, W, H);
     g.fillStyle = '#000a';
     g.fillRect(0, 0, W, c.y * z); g.fillRect(0, (c.y + c.h) * z, W, H); g.fillRect(0, c.y * z, c.x * z, c.h * z); g.fillRect((c.x + c.w) * z, c.y * z, W, c.h * z);
     g.strokeStyle = '#fff'; g.lineWidth = 2; g.strokeRect(c.x * z, c.y * z, c.w * z, c.h * z);
@@ -466,17 +495,19 @@ export async function open(file, kit) {
     dims();
     if (bgWas !== o.bg) { bgWas = o.bg; bgRow(); }
     paintSrc();
-    store.set('psi.import', { size: o.size == 'as' ? R.size : o.size, W: o.W, H: o.H, lock: o.lock, fit: o.fit, samp: o.samp, tol: o.tol, thr: o.thr, one: o.one });
+    store.set('psi.import', { ...(o.size == 'as' ? kept : { size: o.size, W: o.W, H: o.H }), lock: o.lock, fit: o.fit, samp: o.samp, tol: o.tol, thr: o.thr, one: o.one });
     const on = rep && target;
     res = make(s, o, on ? target.key.ents : []);
     const K = res.ents.length;
-    clear(tiers, TIERS.map((k) => h('button.sm', { type: 'button', 'data-k': k, 'aria-pressed': String(k == res.K), onclick: () => { o.tier = k; run(); } }, `${k} colours · ${cost(k, o.W, o.H)}`)));
+    // (Each tier's cost as its key would be: the colours it holds, see-through counted.)
+    tb.forEach((b, i) => { const k = TIERS[i], t = `${k} colours · ${cost(k == res.K ? K : Math.min(k, res.n + 1), o.W, o.H)}`; b.setAttribute('aria-pressed', String(k == res.K)); if (b.textContent != t) b.textContent = t; });
     // The grid, on a checker where it is see-through.
     const cs = Math.max(3, Math.min(16, Math.floor(384 / o.W), Math.floor(240 / o.H))), dp = devicePixelRatio || 1, g = grid.getContext('2d'), col = new Map(res.ents.map((e) => [e.ch, HEX.test(e.v) ? six(e.v) : null]));
     grid.width = o.W * cs * dp; grid.height = o.H * cs * dp; grid.style.width = o.W * cs + 'px'; grid.style.height = o.H * cs + 'px';
     g.scale(dp, dp);
     res.rows.forEach((r, v) => [...r].forEach((ch, u) => { const c = col.get(ch); if (c) { g.fillStyle = c; g.fillRect(u * cs, v * cs, cs, cs); } }));
     grid.dataset.rows = res.rows.join('\n');
+    grid.ariaLabel = `The sprite, ${o.W} by ${o.H}`;
     // The new name: free and a name; replacing, the sprite's own.
     const nm = on ? target.name : nameI.value.trim();
     nameI.disabled = !!on;
@@ -496,23 +527,25 @@ export async function open(file, kit) {
     const sc = still(blk('pic'), x, y), c = cand && kit.still(cand);
     if (sc?.rgb) { const im = new ImageData(128, 32); for (let p = 0, q = 0; p < 12288; p += 3, q += 4) im.data.set([sc.rgb[p], sc.rgb[p + 1], sc.rgb[p + 2], 255], q); pv.getContext('2d').putImageData(im, 0, 0); }
     const pic = `This picture: ${cost(K, o.W, o.H).toLocaleString('en')} numbers.`;
-    const bad = !on && !/^[A-Za-z_]\w*$/.test(nm) ? 'A name starts with a letter, then letters, digits or _.' : c?.err && `It can’t go in: ${c.err}`;
+    const bad = !on && !/^[A-Za-z_]\w*$/.test(nm) ? 'A name starts with a letter, then letters, digits or _.' : !cand ? 'It can’t go in: the sprite isn’t in the text any more.'
+      : !c ? 'It can’t be tried just now: try again in a moment.' : c.err && `It can’t go in: ${c.err}`;
     go.textContent = on ? `Replace ${target.name}` : 'Add the sprite';
-    go.disabled = !!bad || !c;
+    go.disabled = !!bad;
     costL.classList.toggle('bad', !!bad);
-    if (bad) {
-      costL.textContent = `${pic} ${bad}`;
-      const m = bad;
-      if (c?.err && errAt !== m) { errAt = m; import('./psierr.js').then((P) => { const k = P.codeOf(m); if (k && costL.textContent.endsWith(m)) costL.append(` (${P.label(k)})`); }, () => {}); }
-    } else {
-      errAt = '';
-      costL.textContent = `${pic} The Formula would use ${c.i[19].toLocaleString('en')} of 1,024 · ${c.i[20]} of 127 colours`;
+    // (Said again only when it changes: the line is read out.)
+    const line = `${pic} ${bad || `The Formula would use ${c.i[19].toLocaleString('en')} of 1,024 · ${c.i[20]} of 127 colours`}`;
+    if (line !== errAt) {
+      errAt = costL.textContent = line;
+      if (c?.err) import('./psierr.js').then((P) => { const k = P.codeOf(c.err); if (k && costL.textContent === line) costL.append(` (${P.label(k)})`); }, () => {});
     }
     kit.peek(bad ? undefined : cand);
   }
   // The sprite alone on the panel: drawn at its place, black round it.
   const still = (b, x, y) => kit.still(`${b}\ndraw { spr(pic, ${x}, ${y}) }\ngray(0)`, true);
+  // (Tried again first: what is added is what the settings say now.)
   function add() {
+    cancelAnimationFrame(raf);
+    update();
     if (go.disabled || !cand) return;
     const d = diff(ta.value, cand);
     added = true;

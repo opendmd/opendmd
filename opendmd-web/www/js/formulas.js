@@ -588,8 +588,10 @@ function editor() {
   const file = (d, k) => [...(d?.files || [])].find((x) => k || /^image\//.test(x.type));
   ta.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   ta.addEventListener('drop', (e) => { const x = file(e.dataTransfer, 1); if (x) { e.preventDefault(); pic(x); } });
-  // (A picture pasted; text is pasted as ever.)
-  ta.addEventListener('paste', (e) => { const x = file(e.clipboardData); if (x) { e.preventDefault(); pic(x); } });
+  // (A picture pasted; text is pasted as ever, a picture beside it too, as a spreadsheet's copy puts one.)
+  ta.addEventListener('paste', (e) => { const x = !e.clipboardData?.getData('text/plain') && file(e.clipboardData); if (x) { e.preventDefault(); pic(x); } });
+  // A file dropped beside the code while the editor is up: not opened by the browser in place of the page.
+  for (const k of ['dragover', 'drop']) addEventListener(k, (e) => { if (ta.offsetParent && !e.defaultPrevented && e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
   const top = h('div.psi-top', canvas, trow, cap, under);
