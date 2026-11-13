@@ -2892,7 +2892,13 @@ def studio_frames_red(browser, base: str, site: Path, errors: list[str]) -> None
     page.mouse.click(*s_at(page, 66, 20))
     s_kept(page)
     packs = page.evaluate("window.__packs")
-    mem = page.evaluate("performance.memory ? performance.memory.usedJSHeapSize : 0")
+    # The page's own live heap and its array buffers, after a collection (performance.memory, unless Chrome runs with
+    # precise memory info, is a process-wide sample kept for up to 20 minutes: with the run's pages
+    # sharing renderers it could be another page's, from earlier).
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("HeapProfiler.collectGarbage")
+    use = cdp.send("Runtime.getHeapUsage")
+    mem = use["usedSize"] + use.get("embedderHeapUsedSize", 0) + use.get("backingStorageSize", 0)  # (the cels are array buffers: backing storage)
     check(packs == 1 and mem < 150 * 1024 * 1024, f"/studio/ frames red: 256 frames x 16 layers: an autosave after a stroke packs one cel ({packs}), {mem / 1e6:.0f} MB")
     page.click("#s-addf")
     page.wait_for_timeout(500)
@@ -3277,6 +3283,84 @@ def studio_layout(browser, base: str, site: Path, errors: list[str]) -> None:
     row = page.evaluate("""() => { const a = document.getElementById('s-send').getBoundingClientRect(), n = document.getElementById('s-name').getBoundingClientRect(), g = document.getElementById('s-gif').getBoundingClientRect();
         return [Math.abs(a.top - g.top) < 4, a.top < n.bottom]; }""")
     check(all(row), f"/studio/ review (1280 px): Send to panel on the name's row, beside Download GIF ({row})")
+    page.context.close()
+
+
+# --- the Studio's workspace (studio-float F0, FLOAT.md): one screen on a laptop or desktop ---
+# Boxes of the things a painter needs, the canvas's scale at Fit, and whether the page fits the
+# window but for its footer.
+S_WS = """() => { const r = (e) => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.right, b.bottom]; };
+    const inWin = (e) => { const [l, t, rr, b] = r(e); return e.getClientRects().length > 0 && l >= 0 && t >= 0 && rr <= innerWidth && b <= innerHeight; };
+    const meet = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+    const work = document.getElementById('s-work'), foot = document.querySelector('.foot');
+    const boxes = [...document.querySelectorAll('.s-tray, .s-bench > section, .s-panel')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+    return { fits: document.documentElement.scrollHeight - foot.offsetHeight <= innerHeight, scale: work.offsetWidth / 128,
+      tools: [...document.querySelectorAll('.s-tool')].every(inWin), canvas: inWin(document.getElementById('s-canvas')),
+      sw: inWin(document.getElementById('s-sw')), set: inWin(document.getElementById('s-set')),
+      lrows: (() => { const [l, t, rr] = r(document.getElementById('s-lrows')); return l >= 0 && rr <= innerWidth && t >= 0 && t < innerHeight - 40; })(),
+      covered: boxes.filter((e) => meet(r(e), r(work))).map((e) => e.className), work: r(work).map(Math.round),
+      chin: document.getElementById('s-z').closest('.s-chin, .s-tray')?.className.split(' ')[0],
+      bench: [...document.querySelectorAll('.s-bench > section')].map((s) => s.dataset.tab), wide: document.documentElement.scrollWidth - innerWidth }; }"""
+S_TWO = {"name": "Two", "frames": [200, 200], "colours": 2, "layers": [{"name": "A", "moves": True, "box": [0, 0, 4, 4], "k": 2}]}
+
+
+def studio_workspace(browser, base: str, site: Path, errors: list[str]) -> None:
+    """At 1280 x 800, 1440 x 900 and 1920 x 1080 the Studio is one screen:
+    the canvas, every tool, the piece's colours, the swatches and the layer
+    rows in the window without scrolling, the page no taller than the window
+    but for its footer; no tool or bench section over the canvas; Fit at 7x
+    on the laptop with the bench showing, 8x wider; zoom and the guides in
+    the chin. Below 1000 x 620 (live, by resizing) the page is as it was: the
+    bench in its order, zoom with the tools. Space on a focused button
+    presses it, not Play (a two-frame piece). The usual end checks."""
+    for (w, h), want in (((1280, 800), 7), ((1440, 900), 8), ((1920, 1080), 8)):
+        ctx = browser.new_context(viewport={"width": w, "height": h})
+        page = s_page(browser, base, site, errors, ctx=ctx)
+        page.evaluate(S_WHOLE, [S_TWO])
+        wait_js(page, "document.getElementById('studio').dataset.frames === 'yes'")
+        page.wait_for_timeout(200)
+        m = page.evaluate(S_WS)
+        check(m["fits"] and m["tools"] and m["canvas"] and m["sw"] and m["set"] and m["lrows"] and m["wide"] <= 0,
+              f"/studio/ workspace ({w}x{h}): one screen, the canvas, every tool, the colours, the swatches and the layers in the window ({m})")
+        check(not m["covered"] and m["scale"] == want and m["chin"] == "s-chin",
+              f"/studio/ workspace ({w}x{h}): nothing over the canvas, Fit at {want}x ({m['scale']}x), zoom and the guides in the chin ({m['covered']}, {m['chin']})")
+        if w == 1440:
+            # Space on a focused button presses it; Play is not started.
+            page.focus("#s-g-grid")
+            page.keyboard.press(" ")
+            page.wait_for_timeout(250)
+            grid = page.get_attribute("#s-g-grid", "aria-pressed")
+            playing = s_data(page).get("playing")
+            s_blur(page)
+            page.keyboard.press(" ")
+            page.wait_for_timeout(250)
+            played = s_data(page).get("playing")
+            page.keyboard.press(" ")
+            check(grid == "false" and playing != "yes" and played == "yes" and page.is_hidden("#s-grid"),
+                  f"/studio/ workspace: Space on a focused button presses it (Grid off: {grid}), Play not started ({playing}); Space elsewhere plays ({played})")
+            # Below the workspace size, live: the page as it was; and back.
+            page.set_viewport_size({"width": 900, "height": 700})
+            page.wait_for_timeout(300)
+            small = page.evaluate(S_WS)
+            disp = page.evaluate("getComputedStyle(document.getElementById('studio')).display")
+            page.set_viewport_size({"width": 1440, "height": 900})
+            page.wait_for_timeout(300)
+            again = page.evaluate(S_WS)
+            check(small["bench"] == ["colours", "layers", "stamps", "piece"] and small["chin"] == "s-tray" and disp == "block"
+                  and again["chin"] == "s-chin" and again["scale"] == 8 and again["fits"],
+                  f"/studio/ workspace: below 1000 x 620 the page is as it was (the bench in order, zoom with the tools: {small['bench']}, {small['chin']}, {disp}), and back ({again['chin']}, {again['scale']}x)")
+            hit = sorted({m.group(0) for m in HIDDEN_WORDS.finditer(page.inner_text("body"))})
+            off = [u for u in page.asked if not u.startswith(base) and not u.startswith(("blob:", "data:"))]
+            check(not hit and not off and not page.evaluate("window.__csp || []"),
+                  f"/studio/ workspace: none of the words users never see, nothing asked of another site, no CSP violation ({hit}, {off[:2]})")
+        ctx.close()
+    # A phone: as it was (no workspace; zoom with the tools; the four tabs).
+    page = s_page(browser, base, site, errors, "phone")
+    m = page.evaluate(S_WS)
+    page.click("#s-tabs [data-tab=layers]")
+    tabs = page.is_visible(".s-layers") and page.is_hidden(".s-colours")
+    check(m["chin"] == "s-tray" and tabs and m["wide"] <= 0 and page.evaluate("getComputedStyle(document.getElementById('studio')).display") == "flex",
+          f"/studio/ workspace (phone): as it was, zoom with the tools, the four tabs ({m['chin']}, {tabs})")
     page.context.close()
 
 
@@ -7978,6 +8062,7 @@ def main() -> int:
             studio_journal_z(browser, base, a.site, errors)
             studio_small_things(browser, base, a.site, errors)
             studio_layout(browser, base, a.site, errors)
+            studio_workspace(browser, base, a.site, errors)
             studio_library(browser, base, a.site, errors)
             studio_files(browser, base, a.site, errors)
             studio_stamps(browser, base, a.site, errors)
@@ -8068,6 +8153,7 @@ def main() -> int:
         studio_journal_z(browser, base, a.site, errors)
         studio_small_things(browser, base, a.site, errors)
         studio_layout(browser, base, a.site, errors)
+        studio_workspace(browser, base, a.site, errors)
         studio_library(browser, base, a.site, errors)
         studio_files(browser, base, a.site, errors)
         studio_stamps(browser, base, a.site, errors)

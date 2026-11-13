@@ -41,6 +41,8 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 const notes = $('s-notes'), root = $('studio'), cv = $('s-canvas'), ctx = cv.getContext('2d'), work = $('s-work'), scroll = $('s-scroll');
 const coarse = matchMedia('(pointer: coarse)').matches;
+// The workspace (studio.css): a window wide and tall enough for the canvas, the tools and the bench on one screen.
+const ws = matchMedia('(min-width:1000px) and (min-height:620px)');
 
 let store = null;
 let rec = null;            // the piece's record (its pixels packed only when saved)
@@ -513,8 +515,14 @@ function useSize(n) {
 // --- the view: zoom (Fit, then whole steps), the grid, the seam, LEDs ---
 let fitScale = () => 1;
 function layout() {
-  const cs = getComputedStyle(scroll);
-  const avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+  const cs = getComputedStyle(scroll), bench = root.querySelector('.s-bench');
+  let avail = scroll.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+  // The workspace: the bench (240 to 300 px wide) gives the canvas what it needs for a whole step at Fit.
+  if (ws.matches && bench.offsetWidth) {
+    const room = avail + bench.offsetWidth - 240, d = Math.min(300, 240 + room - Math.max(1, Math.min(8, Math.floor(room / W))) * W);
+    root.style.setProperty('--dock', `${d}px`);
+    avail = room + 240 - d;
+  }
   fitScale = () => Math.max(1, avail / W);
   let s = zoom ? ZOOMS[zoom - 1] : fitScale();
   if (!zoom && s > 4) s = Math.min(8, Math.floor(s));
@@ -1099,12 +1107,25 @@ async function main() {
   $('s-z-in').addEventListener('click', () => zoomBy(1));
   $('s-z-out').addEventListener('click', () => zoomBy(-1));
   new ResizeObserver(layout).observe(scroll);
+  // The workspace: zoom and the guides into the chin (view controls, beside PIXELS / LEDS), back to
+  // the tools below it; the Studio's top on the page, for its height.
+  const views = [$('s-z').parentNode, $('s-g-grid').parentNode];
+  const wsMode = () => {
+    if (ws.matches !== (views[0].parentNode === $('s-xy').parentNode)) {
+      if (ws.matches) $('s-xy').before(...views); else (root.querySelector('.s-tray>.s-pb') || root.querySelector('.s-tray')).append(...views);
+    }
+    root.style.setProperty('--top', `${root.getBoundingClientRect().top + scrollY}px`);
+  };
+  ws.addEventListener('change', wsMode);
+  addEventListener('resize', wsMode);
+  wsMode();
   const TOOLS = { b: 'pencil', e: 'eraser', l: 'line', r: 'rect', o: 'ellipse', g: 'fill', m: 'select', i: 'pick', s: 'stamp' };
   const CLIP = { c: 'copy', x: 'cut', v: 'paste' };
   const shapes = () => drag?.q && /line|rect|ellipse/.test(tool);
   document.addEventListener('keydown', (e) => {
     // Not in a field, nor behind an open sheet (Send to panel): the piece there is the one going out.
     if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
+    if (e.key === ' ' && e.target.closest('button, a[href], summary, [role=tab]')) return; // Space presses the control focused
     const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (mod && k === 'z') { e.preventDefault(); undo(e.shiftKey); }
     else if (mod && k === 'y') { e.preventDefault(); undo(true); }
