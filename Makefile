@@ -1622,7 +1622,10 @@ S3_SDK_iram-trim := $(S3_IRAM_SDK)
 S3_FEATURES_all-psram := $(S3_COMMON),psram-tls,psram-cold
 S3_SDK_all-psram := $(S3_TLS_SDK) $(S3_WIFI_SDK) $(S3_IRAM_SDK)
 S3_FEATURES_jit := psi-probe
-S3_FEATURES_carrier := $(S3_FEATURES_all-psram)
+# Not psram-cold: PSRAM buffers make the SD driver copy one sector per
+# command through a DMA bounce buffer (sdmmc_cmd.c), which would slow card
+# I/O on what should be a normal device.
+S3_FEATURES_carrier := $(S3_COMMON),psram-tls
 S3_SDK_carrier := $(S3_SDK_all-psram)
 S3_ENV_carrier := OPENDMD_CONNECT_ENABLED=0
 # The app spare each image must leave: the release's 64 KB for phase 2's,
