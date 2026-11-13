@@ -185,6 +185,33 @@ void hub75_scan_init(void);
  */
 uint32_t hub75_scan_row_us(void);
 
+/*
+ * The ESP32-S3 only (hub75_shim.cpp's end; not defined for the classic
+ * ESP32, never called there).
+ *
+ * The GDMA register hub75_scan_pos reads for the descriptor being sent:
+ * 0 OUT_DSCR (the default), 1 OUT_DSCR_BF0, 2 OUT_DSCR_BF1, 3 OUT_STATE's
+ * address. Before hub75_scan_init.
+ */
+void hub75_scan_set_source(uint8_t source);
+
+/*
+ * Have hub75_scan_init sample the address pins (A-D) beside each of those
+ * registers and log how often each agrees ("scan: register ... agrees with
+ * the address pins k/n"): bench and test builds. Before hub75_scan_init.
+ */
+void hub75_scan_set_pins_check(bool on);
+
+/*
+ * Power-safe (the brownout-loop guard): hub75_init does not start the panel
+ * (OE driven high, every other HUB75 pin undriven) and returns true; every
+ * other call is then a no-op. Before hub75_init.
+ */
+void hub75_set_power_safe(bool on);
+
+/* hub75_init's first step on the S3 (hub75_shim_s3.inc); nothing here. */
+#define HUB75_S3_INIT_HOOK
+
 #ifdef __cplusplus
 }
 #endif

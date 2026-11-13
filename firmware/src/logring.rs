@@ -384,7 +384,7 @@ impl log::Log for RingLogger {
         metadata.level() <= log::max_level()
     }
 
-    fn log(&self, record: &log::Record) {
+    fn log(&self, record: &log::Record) { #[cfg(esp32s3)] if crate::s3board::swallow(record) { return; } // (on this line: s3board.rs)
         if !self.enabled(record.metadata()) {
             return;
         }

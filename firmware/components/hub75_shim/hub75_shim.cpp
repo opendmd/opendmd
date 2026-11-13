@@ -19,7 +19,7 @@
 #include "soc/gpio_sig_map.h"
 #include "soc/soc_caps.h"
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-#include "soc/lcd_cam_struct.h"
+#include "hub75_shim_s3.inc"
 #endif
 
 static const char *TAG = "hub75_shim";
@@ -184,11 +184,11 @@ ESP_SYSTEM_INIT_FN(hub75_early_blank, CORE, BIT(0), 2) {
  */
 static inline uint32_t scan_desc_index(void) {
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-    /* The S3's LCD_CAM is fed by a GDMA channel, whose own register holds
-     * the descriptor it is on (GDMA's OUT_DSCR): not read yet (S3 port
-     * phase 1/2). hub75_scan_init never models the scan there, so this is
-     * not reached; the beam is not raced and panel_sync has no scan. */
-    return UINT32_MAX;
+    /* The S3's LCD_CAM is fed by a GDMA channel, whose own registers hold
+     * the descriptor it is on: OUT_DSCR by default, or OUT_DSCR_BF0/BF1 or
+     * OUT_STATE's address (hub75_scan_set_source); s3_scan_desc_index, at
+     * the end of this file. */
+    return s3_scan_desc_index();
 #else
     const uint32_t addr = getDev()->out_link_dscr;
     const uint32_t off = addr - s_scan_desc;
@@ -228,7 +228,7 @@ extern "C" void hub75_scan_init(void) {
         return;
     }
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-    ESP_LOGW(TAG, "scan: not modelled on the ESP32-S3 yet (GDMA): the beam is not raced");
+    s3_scan_init(); /* (at the end of this file) */
 #else
     const uint16_t rows = static_cast<uint16_t>(s_height / MATRIX_ROWS_IN_PARALLEL);
     if (s_panel->getCfg().double_buff || rows == 0) {
@@ -298,7 +298,7 @@ extern "C" void hub75_scan_init(void) {
 #endif
 }
 
-extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
+extern "C" bool hub75_init(const hub75_cfg_t *cfg) { HUB75_S3_INIT_HOOK /* (the S3: hub75_shim_s3.inc) */
     if (s_panel != nullptr) {
         return true;
     }
@@ -646,3 +646,273 @@ void hub75_dma_span(uint32_t *lo, uint32_t *hi, uint32_t *bytes, uint32_t *n, ui
         *dhi = *dlo + count * sizeof(HUB75_DMA_DESCRIPTOR_T);
     }
 }
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+/*
+ * --- The ESP32-S3 (hub75_shim_s3.inc declares these for the code above) ---
+ *
+ * The scan model on the S3. The library builds the same descriptor ring as
+ * on the classic (configureDMA: one descriptor of every colour plane per row
+ * pair, then one per extra pass of the higher planes; dma_descriptor_t, at
+ * most 4092 B each), fed to the LCD_CAM by a GDMA out-channel. The channel's
+ * registers name descriptors in the ring: OUT_DSCR ("the current outlink
+ * descriptor"), OUT_DSCR_BF0 and _BF1 (the last finished and the one before,
+ * by the TRM) and OUT_STATE's 18 low address bits. Which of them is the one
+ * being sent on silicon is the bench's to say (s3_pins_check); the racer
+ * reads one (hub75_scan_set_source, OUT_DSCR by default).
+ */
+
+/* Bus_Parallel16::dma_chan (private), by the idiom above. */
+struct DmaChanTag {
+    typedef gdma_channel_handle_t Bus_Parallel16::*type;
+    friend type get(DmaChanTag);
+};
+template struct Rob<DmaChanTag, &Bus_Parallel16::dma_chan>;
+
+/* The LCD's GDMA channel (gdma_get_channel_id), -1 until s3_scan_init. */
+static int s_gdma_ch = -1;
+static uint8_t s_scan_src = HUB75_S3_SRC_DSCR;
+static bool s_pins_check = false;
+static bool s_power_safe = false;
+/* A, B, C, D's GPIOs (hub75_init's config), for s3_pins_check. */
+static int8_t s_addr_pins[4] = {-1, -1, -1, -1};
+
+static const char *const S3_SRC_NAME[4] = {"OUT_DSCR", "OUT_DSCR_BF0", "OUT_DSCR_BF1", "OUT_STATE"};
+
+extern "C" void hub75_scan_set_source(uint8_t source) {
+    s_scan_src = source <= HUB75_S3_SRC_STATE ? source : HUB75_S3_SRC_DSCR;
+}
+
+extern "C" void hub75_scan_set_pins_check(bool on) {
+    s_pins_check = on;
+}
+
+extern "C" void hub75_set_power_safe(bool on) {
+    s_power_safe = on;
+}
+
+static bool s3_init_hook(const hub75_cfg_t *cfg) {
+    if (cfg == nullptr || s_panel != nullptr) {
+        return false;
+    }
+    s_addr_pins[0] = cfg->a;
+    s_addr_pins[1] = cfg->b;
+    s_addr_pins[2] = cfg->c;
+    s_addr_pins[3] = cfg->d;
+    if (!s_power_safe) {
+        return false;
+    }
+    // No driver, no DMA, and nothing driven into a panel that may have no
+    // supply (the bench's brownout loops, 2026-11-13: a driven line into an
+    // unpowered panel feeds it through its input clamps, ~20-40 mA a line):
+    // every HUB75 pin an input with no output path, OE pulled up (the
+    // panel's off level) by the pad's own pull-up, not driven high. Every
+    // other hub75_* call is a no-op with no panel. (hub75_early_blank has
+    // driven OE high from start-up to here, ~1 s, as on every boot; and
+    // hub75_blank, at a restart, does again until that restart.)
+    const int8_t pins[] = {cfg->r1, cfg->g1, cfg->b1, cfg->r2, cfg->g2, cfg->b2, cfg->a,
+                           cfg->b,  cfg->c,  cfg->d,  cfg->e,  cfg->lat, cfg->clk, cfg->oe};
+    for (const int8_t pin : pins) {
+        if (pin < 0 || !oe_pin_ok(static_cast<uint32_t>(pin))) {
+            continue;
+        }
+        const uint32_t p = static_cast<uint32_t>(pin);
+        gpio_ll_output_disable(&GPIO, p);
+        esp_rom_gpio_pad_select_gpio(p);
+        gpio_ll_input_enable(&GPIO, p);
+        gpio_ll_pulldown_dis(&GPIO, p);
+        if (pin == cfg->oe) {
+            gpio_ll_pullup_en(&GPIO, p);
+        } else {
+            gpio_ll_pullup_dis(&GPIO, p);
+        }
+    }
+    s_oe = cfg->oe;
+    ESP_LOGW(TAG, "power-safe: the panel driver is not started (every HUB75 pin an input, OE pulled up, nothing driven)");
+    return true;
+}
+
+/* A register's value as a descriptor index (UINT32_MAX outside the ring).
+ * No switch: a jump table would be flash rodata, and this runs from IRAM. */
+static IRAM_ATTR uint32_t s3_index_of(uint8_t src, uint32_t reg) {
+    uint32_t off = reg - s_scan_desc;
+    if (src == HUB75_S3_SRC_STATE) {
+        off &= 0x3FFFFu; /* 18 address bits: rebased onto the ring's */
+    }
+    const uint32_t idx = off / sizeof(HUB75_DMA_DESCRIPTOR_T);
+    return idx < s_scan_count ? idx : UINT32_MAX;
+}
+
+static IRAM_ATTR uint32_t s3_reg(uint8_t src) {
+    if (src == HUB75_S3_SRC_BF0) {
+        return GDMA.channel[s_gdma_ch].out.dscr_bf0;
+    }
+    if (src == HUB75_S3_SRC_BF1) {
+        return GDMA.channel[s_gdma_ch].out.dscr_bf1;
+    }
+    if (src == HUB75_S3_SRC_STATE) {
+        return GDMA.channel[s_gdma_ch].out.state.dscr_addr;
+    }
+    return GDMA.channel[s_gdma_ch].out.dscr;
+}
+
+/* In IRAM: hub75_scan_pos (IRAM) calls it while a Formula races the beam. */
+static IRAM_ATTR uint32_t s3_scan_desc_index(void) {
+    if (s_gdma_ch < 0) {
+        return UINT32_MAX;
+    }
+    return s3_index_of(s_scan_src, s3_reg(s_scan_src));
+}
+
+/*
+ * Which register is the descriptor being sent (S3 port phase 3, A2; bench
+ * and test builds only, hub75_scan_set_pins_check): the address lines A-D
+ * carry the row pair being shown (the first colour plane of a pair's first
+ * descriptor the pair before: the library's latch overlap), so each
+ * register's descriptor, as a row pair, is set beside the pins read back
+ * through their input path (enabled here; the LCD_CAM's output is
+ * untouched), a few hundred times over two refreshes or so. "pins a row
+ * ahead": the register lags the scan; "a row behind": it leads.
+ *
+ * What the bench should see (the default panel: 32 descriptors a pair, the
+ * first one every colour plane, the pins carrying the pair before for its
+ * first plane): the register that names the descriptor being sent agrees
+ * ~97% of the time, its misses counted as "ahead" (that first plane); one a
+ * descriptor early ~95%, with ~13 of 500 "behind"; one a descriptor late
+ * ~80%. The racer's register should be the ~97% one (NVS scan_reg).
+ *
+ * In the emulator the number means nothing: esp32sim drains the descriptors
+ * but does not loop the LCD_CAM's output back to GPIO_IN, so the pins read
+ * a constant and every register "agrees" ~1/16 of the time (~18-22/500).
+ * The emulator lanes check only that the lines are logged.
+ */
+static void s3_pins_check(uint32_t per_row) {
+    for (int b = 0; b < 4; b++) {
+        if (s_addr_pins[b] >= 0 && s_addr_pins[b] < 32) {
+            gpio_ll_input_enable(&GPIO, static_cast<uint32_t>(s_addr_pins[b]));
+        }
+    }
+    const uint32_t n = 500;
+    uint32_t agree[4] = {0, 0, 0, 0}, ahead[4] = {0, 0, 0, 0}, behind[4] = {0, 0, 0, 0},
+             unread[4] = {0, 0, 0, 0};
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t r[4];
+        r[0] = s3_reg(HUB75_S3_SRC_DSCR);
+        r[1] = s3_reg(HUB75_S3_SRC_BF0);
+        const uint32_t in = REG_READ(GPIO_IN_REG);
+        r[2] = s3_reg(HUB75_S3_SRC_BF1);
+        r[3] = s3_reg(HUB75_S3_SRC_STATE);
+        uint32_t addr = 0;
+        for (int b = 0; b < 4; b++) {
+            if (s_addr_pins[b] >= 0 && s_addr_pins[b] < 32) {
+                addr |= ((in >> s_addr_pins[b]) & 1U) << b;
+            }
+        }
+        for (uint8_t s = 0; s < 4; s++) {
+            const uint32_t idx = s3_index_of(s, r[s]);
+            if (idx == UINT32_MAX) {
+                unread[s]++;
+                continue;
+            }
+            const uint32_t row = (idx / per_row) & 15U;
+            if (row == addr) {
+                agree[s]++;
+            } else if (((row + 1) & 15U) == addr) {
+                ahead[s]++;
+            } else if (((addr + 1) & 15U) == row) {
+                behind[s]++;
+            }
+        }
+        esp_rom_delay_us(37); /* (prime to the ~625 us row pair) */
+    }
+    // One line a register. Bench: the "current" register ~97% (misses as
+    // "ahead"), one a descriptor early ~95% (~13 "behind"), one late ~80%;
+    // the emulator: ~1/16 for all four, meaningless (no pin loopback).
+    for (uint8_t s = 0; s < 4; s++) {
+        ESP_LOGI(TAG,
+                 "scan: register %s agrees with the address pins %u/%u (pins a row ahead %u, a row "
+                 "behind %u, outside the ring %u)%s",
+                 S3_SRC_NAME[s], (unsigned)agree[s], (unsigned)n, (unsigned)ahead[s],
+                 (unsigned)behind[s], (unsigned)unread[s], s == s_scan_src ? ": the racer's" : "");
+    }
+}
+
+/* hub75_scan_init on the S3: the classic's layout check and wrap timing,
+ * through the GDMA channel's register. */
+static void s3_scan_init(void) {
+    const uint16_t rows = static_cast<uint16_t>(s_height / MATRIX_ROWS_IN_PARALLEL);
+    if (s_panel->getCfg().double_buff || rows == 0) {
+        return;
+    }
+    Bus_Parallel16 &bus = s_panel->*get(BusTag());
+    HUB75_DMA_DESCRIPTOR_T *desc = bus.*get(DescTag());
+    const uint32_t count = bus.*get(DescCountTag());
+    const gdma_channel_handle_t chan = bus.*get(DmaChanTag());
+    int ch = -1;
+    if (chan == nullptr || gdma_get_channel_id(chan, &ch) != ESP_OK || ch < 0 ||
+        ch >= SOC_GDMA_PAIRS_PER_GROUP) {
+        ESP_LOGW(TAG, "scan: no GDMA channel for the LCD: the beam is not raced");
+        return;
+    }
+    s_gdma_ch = ch;
+    if (desc == nullptr || count == 0 || count % rows != 0) {
+        ESP_LOGW(TAG, "scan: layout not modelled");
+        return;
+    }
+    const uint32_t per_row = count / rows;
+    const uint32_t first = desc[0].dw0.length;
+    const uint32_t rest = per_row > 1 ? desc[1].dw0.length : 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint32_t want = (i % per_row) == 0 ? first : rest;
+        if (desc[i].dw0.length != want) {
+            ESP_LOGW(TAG, "scan: layout not modelled");
+            return;
+        }
+    }
+    s_scan_count = count;
+    s_scan_per_row = per_row;
+    s_scan_first = first;
+    s_scan_rest = rest;
+    s_scan_row_bytes = first + (per_row - 1) * rest;
+    s_scan_desc = reinterpret_cast<uint32_t>(desc);
+    if (s_pins_check) {
+        s3_pins_check(per_row);
+    }
+    // As the classic's: four wraps, the shortest of the three intervals,
+    // held to 0.67-2x the library's computed rate.
+    int64_t wraps[4] = {0, 0, 0, 0};
+    int seen = 0;
+    uint32_t last = scan_desc_index();
+    const int64_t give_up = esp_timer_get_time() + 150000;
+    while (seen < 4 && esp_timer_get_time() < give_up) {
+        const uint32_t idx = scan_desc_index();
+        if (idx != UINT32_MAX && last != UINT32_MAX && idx + count / 2 < last) {
+            wraps[seen++] = esp_timer_get_time();
+        }
+        if (idx != UINT32_MAX) {
+            last = idx;
+        }
+    }
+    if (seen < 4) {
+        ESP_LOGW(TAG, "scan: no refresh in 150 ms (%s, GDMA channel %d)", S3_SRC_NAME[s_scan_src], ch);
+        s_scan_desc = 0;
+        return;
+    }
+    uint32_t period = UINT32_MAX;
+    for (int i = 1; i < 4; i++) {
+        const uint32_t d = static_cast<uint32_t>(wraps[i] - wraps[i - 1]);
+        period = d < period ? d : period;
+    }
+    const int calc = s_panel->calculated_refresh_rate;
+    const uint32_t expect = calc > 0 ? 1000000u / static_cast<uint32_t>(calc) : 0;
+    if (expect == 0 || period * 3 < expect * 2 || period > expect * 2) {
+        ESP_LOGW(TAG, "scan: refresh %u us measured, %u us expected: implausible, not used",
+                 (unsigned)period, (unsigned)expect);
+        s_scan_desc = 0;
+        return;
+    }
+    s_scan_row_us = period / rows;
+    ESP_LOGI(TAG, "scan: %u descriptors, %u per row pair, refresh %u us (GDMA channel %d, racing on %s)",
+             (unsigned)count, (unsigned)per_row, (unsigned)period, ch, S3_SRC_NAME[s_scan_src]);
+}
+#endif /* CONFIG_IDF_TARGET_ESP32S3 */

@@ -333,7 +333,7 @@ pub fn this_boot_crashed() -> bool {
 
 /// Why this boot's restart was made, in plain words (`reset_note`, when
 /// `sdhealth` has none); `None` after a power-on.
-pub fn reset_note() -> Option<&'static str> {
+pub fn reset_note() -> Option<&'static str> { #[cfg(esp32s3)] if let Some(n) = crate::s3board::reset_note() { return Some(n); } // (power-safe first; on this line: s3board.rs)
     this_boot().and_then(|e| e.note())
 }
 
