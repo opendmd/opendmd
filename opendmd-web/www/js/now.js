@@ -16,7 +16,7 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn } from './util.js';
+import { h, clear, on, store, debounce, toast, label, niceName, flagName, isFlag, isFormula, brightSlider, drawn, unreachable } from './util.js';
 
 // The full status every FULL_MS (the card, the schedule, the filter…) and
 // whenever Recently played is wanted; the slim one (`?now=1`, one segment:
@@ -65,9 +65,7 @@ function editFor(p) {
   const q = p?.startsWith('@formula?') && new URLSearchParams(p.slice(9));
   if (q) return q.get('psb') && ['Formulas', async () => {
     // The saved or example Formula that compiles to what the panel plays.
-    await (await import('./looks.js')).psi();
-    const { path, num } = await import('./psikit.js');
-    const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && path({ src: x.src }) == p.split('&')[0]);
+    const f = await (await import('./nowpsi.js')).find(p), { num } = await import('./psikit.js');
     if (!f) { toast('That Formula isn’t saved here: open it where it was made'); return; }
     // (In memory, never in the address: js/formulas.js opens app.psiOpen.)
     app.psiOpen = { src: f.src, name: f.name || 'Formula' };
@@ -111,10 +109,10 @@ export async function mount(el) {
 }
 
 function mountDevice(el) {
-  const canvas = h('canvas.panel', { id: 'now-panel' });
+  const canvas = h('canvas.panel', { id: 'now-panel', role: 'img', 'aria-label': 'Preview' });
   // Settings › Panel › Mirror the panel (this browser's choice).
   const mirror = () => store.get('follow', true);
-  const cap = h('div.cap', { id: 'now-cap' });
+  const cap = h('div.cap', { id: 'now-cap', role: 'status' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('b', { id: 'now-title' }, '…');
   const unfilter = h('button.sm', { id: 'now-unfilter', hidden: true, onclick: () => app.src.putConfig({ platforms: '' }).then(() => { app.refreshConfig(); poll(); }, (e) => toast(e.message, 'bad')) }, 'Clear filter');
@@ -156,8 +154,16 @@ function mountDevice(el) {
     rc,
     lookControls(drift));
 
-  const preview = new PanelPreview(canvas, { wrap: el, onError: (m) => { cap.textContent = 'Preview: ' + m; } });
-  let shownPath = '';
+  // (Never the player's own words or a path: CLAUDE.md, the product model.)
+  const NO_GIF = 'Preview not available for this GIF', NO_F = 'Preview not available for this Formula', UNREACH = 'Panel not reachable';
+  const preview = new PanelPreview(canvas, { wrap: el, onError: () => { cap.textContent = NO_GIF; } });
+  // shownPath: what the preview follows (a path; for the panel's sent
+  // Formula with its start and this page's sends, js/psishow.js);
+  // fgen: the follow's generation (a Formula's frames stop when it moves on).
+  let shownPath = '', stopF = null, fgen = 0, restarts = 0, sentN = 0, frozen = null, run = {}, retry = null;
+  const fkey = (p, np) => (p?.startsWith('@formula:~sent') ? `${p} ${np.ordinal} ${restarts} ${sentN} ${np.title}` : p);
+  on('psisent', () => { sentN++; app.soon('now', 300); });
+  const unfollow = () => { fgen++; stopF?.(); stopF = null; shownPath = ''; };
   let failures = 0;
   let clocks = [];   // polled: [{rtt, off, hi, t}]: off = device ms - local ms, at most `hi`
   let pushed = [];   // from the stream: [{off, t}]: off at least this (less the trip)
@@ -193,13 +199,60 @@ function mountDevice(el) {
   // The preview fetches the file's prepared copy first (app.previewBytes):
   // fetching from gifs/Consoles costs the device a ~330 ms directory scan
   // that the panel feels; a copy's small directory costs ~6 ms.
-  async function follow_(path) {
-    if (!mirror() || !path || path === shownPath) return;
-    shownPath = path;
-    cap.textContent = 'Loading…';
+  // A Formula is drawn here by js/nowpsi.js (loaded then), at the panel's position.
+  // A transient failure (the panel not reachable, busy, not yet) is asked again at the next status.
+  async function follow_(path, key = path) {
+    if (!mirror() || !path || key === shownPath) return;
+    unfollow();
+    shownPath = key;
+    const g = fgen, alive = () => g === fgen;
+    // (Asked again: the caption stays as it was meanwhile.)
+    if (key !== retry) cap.textContent = 'Loading…';
+    retry = null;
+    // (Streaming, a status may be 3 s away: a sent Formula on its way asks sooner.)
+    const again = (e) => {
+      if (!alive() || !(e?.wait || unreachable(e))) return false;
+      shownPath = '';
+      retry = key;
+      cap.textContent = e.no ? NO_F : e.wait ? 'Loading…' : UNREACH;
+      if (e.wait && !e.no) app.soon('now', 300);
+      return true;
+    };
+    if (isFormula(path)) {
+      preview.clear();
+      const no = () => { if (alive()) cap.textContent = NO_F; };
+      try {
+        const m = await import('./nowpsi.js');
+        try {
+          const stop = await m.play(path, preview, { pos: () => pos(path), start: () => start(path), alive, fail: no });
+          if (!alive()) return stop();
+          stopF = stop;
+          cap.textContent = '';
+        } catch (e) { if (e instanceof m.Later) e.wait = 1; if (!again(e)) no(); }
+      } catch (e) { if (!again(e)) no(); }
+      return;
+    }
     try {
       if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = ''; sync(); soonPoll(); }
-    } catch (e) { cap.textContent = 'Preview: ' + e.message; }
+    } catch (e) { if (!again(e) && alive()) cap.textContent = NO_GIF; }
+  }
+  // The panel's ms into `p` now (from the last sample, on the device's
+  // clock), or null; paused, where it stopped (here first, if paused from here).
+  function pos(p) {
+    const off = offset();
+    if (!last || last.path !== p || off == null) return null;
+    if (last.paused) return (frozen = last.elapsed);
+    const e = last.elapsed + (performance.now() + off - last.t) * last.rate;
+    if (!app.status?.paused) { frozen = null; return e; }
+    return (frozen ??= e);
+  }
+  // When (page clock) the panel started `p`, or null: its position at
+  // the rate measured (at most 0.9: early rather than late, its content
+  // running a little behind its clock) and its pauses.
+  function start(p) {
+    const off = offset();
+    if (!last || last.path !== p || off == null) return null;
+    return last.t - off - last.elapsed / Math.min(0.9, last.rate) - run.paused - (run.at != null ? last.t - run.at : 0);
   }
 
   // One status sample, requested at local t0 and answered at t1; an event
@@ -220,10 +273,17 @@ function mountDevice(el) {
     const key = `${np.ordinal} ${np.path} ${s.paused}`;
     // (Its position going back with the same ordinal: a Formula retuned in
     // place, started over; measured afresh, never as a slow panel.)
-    if (base?.key !== key || np.elapsed_ms < base.e) base = { key, t: s.t_ms, e: np.elapsed_ms };
+    // (A reply older than the last sample, held up: not the panel going back.)
+    if (last && s.t_ms < last.t && s.t_ms + 5000 >= last.t) return;
+    if (base?.key !== key || np.elapsed_ms < base.e) { if (base?.key === key) restarts++; base = { key, t: s.t_ms, e: np.elapsed_ms }; }
+    // This run's pauses (ms; `at`: paused since, device clock), for start().
+    const rk = `${np.ordinal} ${np.path} ${restarts}`;
+    if (run.key !== rk) run = { key: rk, paused: 0, at: s.paused ? s.t_ms : null };
+    else if (s.paused && run.at == null) run.at = s.t_ms;
+    else if (!s.paused && run.at != null) { run.paused += s.t_ms - run.at; run.at = null; }
     const span = s.t_ms - base.t;
     const rate = span >= 2000 ? Math.min(1.1, Math.max(0.5, (np.elapsed_ms - base.e) / span)) : 1;
-    last = { path: np.path, elapsed: np.elapsed_ms, t: s.t_ms, frame: np.frame, rate };
+    last = { path: np.path, elapsed: np.elapsed_ms, t: s.t_ms, frame: np.frame, rate, paused: !!s.paused };
   }
 
   // The device's lead on this clock: the polled sample with the shortest
@@ -263,7 +323,7 @@ function mountDevice(el) {
     const empty = !np.path && !s.entries && s.index_state != 'building' && !unreadable && (sd.mounted || sd.attempts || sd.error);
     const pf = empty && sd.mounted && app.config?.platforms?.trim();
     unfilter.hidden = !pf;
-    title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
+    title.textContent = virt ? np.title || (isFormula(np.path) ? 'Formula' : '') : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
     tagsEl.textContent = np.path ? tags(np.path, e) : '';
     if (!app.tags && !tagsAsked && app.setNames?.has('.tags')) { tagsAsked = true; import('./tags.js').then((m) => m.tags()).catch(() => {}); }
@@ -290,11 +350,12 @@ function mountDevice(el) {
     sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
     sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
-    follow_(np.path);
+    canvas.ariaLabel = 'Preview of ' + title.textContent;
+    follow_(np.path, fkey(np.path, np));
   }
 
   const good = () => {
-    if (failures && preview.path) cap.textContent = '';
+    if (failures && cap.textContent == UNREACH) cap.textContent = '';
     failures = 0;
     conn.className = 'dot ok';
     conn.title = live ? 'Live' : 'Live (polling)';
@@ -326,7 +387,7 @@ function mountDevice(el) {
     } catch (e) {
       conn.className = 'dot bad';
       conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
-      if (preview.path) cap.textContent = 'Panel not reachable';
+      if (shownPath) cap.textContent = UNREACH;
     } finally {
       // Polling (no stream): less often while a file goes to or from the card.
       if (!live && shown) app.watch('now', app.status?.transfer ? SLOW_MS : POLL_MS, poll);
@@ -423,7 +484,7 @@ function mountDevice(el) {
     show() {
       if (fb.ov.path) fb.ov.load(fb.ov.path); // the Library may have changed it
       // Mirroring switched in Settings since.
-      if (mirrored !== (mirrored = mirror())) { preview.clear(); shownPath = ''; cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
+      if (mirrored !== (mirrored = mirror())) { unfollow(); preview.clear(); cap.textContent = mirrored ? '' : 'Not mirroring the panel (Settings › Panel)'; }
       shown = true;
       // A status read at the start (polling until the stream is live).
       app.watch('now', POLL_MS, poll);
@@ -434,6 +495,8 @@ function mountDevice(el) {
     },
     hide() {
       shown = false;
+      // (A Formula's frames stop; shown again, it starts again. A GIF stays loaded.)
+      if (stopF || isFormula(shownPath)) unfollow();
       document.removeEventListener('visibilitychange', onVis);
       document.removeEventListener('keydown', onKey);
       unlisten();

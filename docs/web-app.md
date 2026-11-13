@@ -57,7 +57,25 @@ button lands on them.
   and **Replay**, a grid of four on a phone, and a brightness slider. A
   **panel-look preview** of the same file plays alongside, kept in step with
   the panel by clock. It fetches the file's prepared copy first (cheap for
-  the device; one 404 when there is none) and can be switched off (Settings
+  the device; one 404 when there is none). A Formula on the panel is drawn
+  in the browser instead, at the panel's position (`js/nowpsi.js`, loaded
+  only then: pkg-psi over the Formula's text — a bundled one's from
+  `formulas.json`, one of yours from its `.psi`, an inline one matched to
+  a saved or bundled one; the panel's sent one, `@formula:~sent`, only
+  while it is this page's last Show on panel, else none); one it can't
+  find or compile says "Preview not available for this Formula", and one
+  the panel can't be asked for just now "Panel not reachable" (asked again
+  at the next status). A Formula that reads its seed (a `loop forever`
+  one) or the world (the clock, `since`/`was`; Endless road, Time gate,
+  the clocks) previews in step but not always the same picture: the
+  status doesn't carry the panel's seed (a follow-up: `now_playing` could
+  carry it cheaply). Which send the panel's `~sent` is, Now infers from
+  when it started (early rather than late: content time runs a little
+  behind the panel's clock; its pauses taken out) and its name, asked
+  again at each status; the proper follow-up is `now_playing` carrying
+  the send's identity (a counter or a CRC of the compiled bytes). Captions and
+  names are plain words, never a path or the player's error. The preview
+  can be switched off (Settings
   → Panel → *Mirror the panel on Now*, per browser). The device's figures
   (uptime, memory, late frames) are Settings → Device → Status. The LED-look controls (gain,
   bloom, gamma, flat: **Preview look**, this page's drawing only, never

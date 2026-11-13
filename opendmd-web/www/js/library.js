@@ -11,7 +11,7 @@ import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
 import { authorOf, addOne, offerPlaylist, targetMenu } from './gifs.js';
-import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE } from './util.js';
+import { h, clear, on, store, toast, label, niceName, flagName, isFlag, SITE, unreachable } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;
@@ -131,7 +131,8 @@ export async function mount(el) {
     side);
   el.append(grid);
 
-  const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'Preview: ' + m; } });
+  // (In plain words: the player's own error names the file's path.)
+  const NO = 'Preview not available for this GIF', pv = new PanelPreview(canvas, { onError: () => { cap.textContent = NO; } });
 
   async function preview(it) {
     current = it;
@@ -161,7 +162,7 @@ export async function mount(el) {
         if (gif) checkThumb(it.path, bytes);
         if (smoothBox && gif) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
-    } catch (err) { cap.textContent = 'Preview: ' + err.message; }
+    } catch (err) { cap.textContent = unreachable(err) ? 'Panel not reachable' : NO; }
   }
 
   function detailMenu(btn) {

@@ -8,7 +8,10 @@
 // ever shows its path.
 
 import wasm from './web.js';
-import { emit, toast, base, niceName } from './util.js';
+import { emit, toast, base, niceName, isFormula, formulaName, unreachable } from './util.js';
+
+// What a toast calls a file: a Formula by its name, a GIF by its file's.
+const name = (p) => (isFormula(p) ? formulaName(p) : base(p));
 
 // Root manifests with a name people know them by. Anything else shows its
 // file name.
@@ -217,10 +220,13 @@ export const app = {
   async play(path) {
     try {
       await this.src.play(path);
-      toast(`on the panel: ${path.startsWith('@formula?') ? 'Formula' : base(path)}`, 'ok');
+      toast(`on the panel: ${name(path)}`, 'ok');
       return true;
     } catch (e) {
-      toast(e.status === 501 ? e.message.replace(/^501: /, '') : e.status === 404 ? `${path}: not on the card` : e.status === 415 ? `${path}: not a GIF` : 'play: ' + e.message, 'bad');
+      // (In plain words: a Formula's 404/415 is the panel lacking it or unable to play it.)
+      const n = name(path), f = isFormula(path);
+      toast(e.status === 501 ? e.message.replace(/^501: /, '') : e.status === 404 ? (f ? `“${n}” isn’t on the panel` : `${n}: not on the card`)
+        : e.status === 415 ? (f ? `The panel can’t play “${n}”` : `${n}: not a GIF`) : unreachable(e) ? 'Panel not reachable' : `The panel couldn’t play “${n}”`, 'bad');
       return false;
     }
   },
